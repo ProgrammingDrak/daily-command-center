@@ -1,0 +1,46 @@
+[
+  {
+    "id": "decision-2026-03-30-001",
+    "date": "2026-03-30",
+    "context": "3 tasks were scheduled for 3/30 but the day included 4 formal meetings plus 3 instant meetings with Ben/Collins. Only 5 min free time available.",
+    "decision": "No scheduled tasks were completed. Meetings were effectively prioritized over all task work.",
+    "reasoning": "With 5 min free time and back-to-back calls, there was no viable window to start any of the 3 scheduled tasks. Implicit decision to let meetings run rather than block time for deep work.",
+    "outcome": null,
+    "tags": [
+      "scheduling",
+      "priority",
+      "meeting-load"
+    ],
+    "related_decisions": []
+  },
+  {
+    "id": "decision-2026-03-30-002",
+    "date": "2026-03-30",
+    "context": "Investor Count Stamping QA (due 2026-03-23) and HubSpot Workflows Review (due 2026-03-27) both have passed due dates and were carried into the 3/30 schedule but not completed.",
+    "decision": "Both overdue tasks deferred again -- 9 and 4 days overdue respectively as of 3/31.",
+    "reasoning": "Meeting load prevented completion. Recurring deferral across multiple days suggests tasks are either underestimated, lower priority in practice than in planning, or need to be broken into smaller chunks.",
+    "outcome": null,
+    "tags": [
+      "dropped-ball",
+      "recurring-deferral",
+      "task-estimation"
+    ],
+    "related_decisions": []
+  },
+  {
+    "id": "decision-2026-03-30-003",
+    "date": "2026-03-30",
+    "context": "Ben Mizes initiated 2 instant meetings (3:39 PM and another) after SOW Kickoff, with an instant meeting with Collins also at 3:14 PM. These were unplanned.",
+    "decision": "Drake accepted all instant meetings, consuming afternoon task time.",
+    "reasoning": "Instant meetings with CEO are implicitly higher priority than solo task work. SOW Kickoff likely generated immediate follow-ups needing real-time resolution.",
+    "outcome": null,
+    "tags": [
+      "scheduling",
+      "ceo-availability",
+      "interruption"
+    ],
+    "related_decisions": [
+      "decision-2026-03-30-001"
+    ]
+  }
+]
