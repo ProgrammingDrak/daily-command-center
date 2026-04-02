@@ -377,3 +377,51 @@ function closeUntaskedModal(){
   untaskedSessionData={durSec:null,type:null};
 }
 
+// ======== DRAGGABLE FLOAT TIMER ========
+(function(){
+  const el=document.getElementById("float-timer");
+  if(!el)return;
+
+  // Restore saved position
+  try{
+    const saved=localStorage.getItem("ft-pos");
+    if(saved){const {bottom,right}=JSON.parse(saved);el.style.bottom=bottom+"px";el.style.right=right+"px";}
+  }catch(e){}
+
+  let dragging=false,hasDragged=false,startX,startY,startRight,startBottom;
+
+  el.addEventListener("mousedown",e=>{
+    const panel=document.getElementById("ft-panel");
+    if(panel&&panel.style.display!=="none")return; // Don't drag when panel is open
+    dragging=true;hasDragged=false;
+    startX=e.clientX;startY=e.clientY;
+    startRight=parseInt(getComputedStyle(el).right)||30;
+    startBottom=parseInt(getComputedStyle(el).bottom)||30;
+  });
+
+  document.addEventListener("mousemove",e=>{
+    if(!dragging)return;
+    const dx=e.clientX-startX,dy=e.clientY-startY;
+    if(!hasDragged&&Math.abs(dx)<5&&Math.abs(dy)<5)return;
+    hasDragged=true;
+    el.style.right=Math.max(0,startRight-dx)+"px";
+    el.style.bottom=Math.max(0,startBottom-dy)+"px";
+  });
+
+  document.addEventListener("mouseup",()=>{
+    if(!dragging)return;
+    dragging=false;
+    if(hasDragged){
+      localStorage.setItem("ft-pos",JSON.stringify({
+        bottom:parseInt(el.style.bottom),
+        right:parseInt(el.style.right)
+      }));
+    }
+  });
+
+  // Suppress click when user actually dragged
+  el.addEventListener("click",e=>{
+    if(hasDragged){e.stopPropagation();hasDragged=false;}
+  },true);
+})();
+

@@ -196,23 +196,29 @@
         properties,
         sort_order: sortOrder || 0
       };
+      // Optimistic cache update BEFORE API call — so reads (e.g. loadNotes) are instant
+      // and don't race with the async API response. Same pattern as updateBlock().
+      const tmpId = 'tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      const optimistic = {
+        id: tmpId, ...payload,
+        properties,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        deleted_at: null
+      };
+      cacheSet(optimistic);
       try {
         const block = await apiPost("/api/blocks", payload);
+        // Swap optimistic entry for the real server block
+        _dayCache.delete(tmpId);
+        _globalCache.delete(tmpId);
         cacheSet(block);
         setSaved();
         return block;
       } catch (e) {
         walPush({ op: "create", data: payload });
         setError("Save failed — buffered for retry");
-        // Return optimistic block for UI
-        const optimistic = {
-          id: crypto.randomUUID(), ...payload,
-          properties,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          deleted_at: null
-        };
-        cacheSet(optimistic);
+        // Optimistic entry is already in cache — reconciled on next sync
         return optimistic;
       }
     },

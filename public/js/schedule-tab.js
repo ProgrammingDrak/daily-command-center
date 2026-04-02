@@ -127,12 +127,13 @@ function buildSchedule(){
   const chevSm='<svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>';
 
   // Determine if any task is currently active; if not, find the next upcoming one
+  const isToday = __state && __state.date === new Date().toISOString().split("T")[0];
   const _anyActive = activeItems.some(ev => isActive(ev));
   const _nextUpId = !_anyActive ? (activeItems.find(ev => pt(ev.start) >= now()) || {}).id : null;
 
   // Render active/upcoming items as full cards
   activeItems.forEach(ev=>{
-    const trueActive=isActive(ev),isNextUp=(!trueActive&&ev.id===_nextUpId),active=trueActive||isNextUp,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
+    const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday),active=trueActive||isNextUp,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
     const d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
     const el=document.createElement("div");el.className="tl-item";el.dataset.id=ev.id;

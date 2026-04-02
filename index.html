@@ -211,11 +211,10 @@
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Schedule</button>
   <button class="tab" data-tab="tasks">Task Menus <span class="badge" id="tasks-count" style="display:none">0</span></button>
-  <button class="tab" data-tab="upcoming">Upcoming <span class="badge" id="upcoming-count">0</span></button>
-  <button class="tab" data-tab="palog">Report Card</button>
   <button class="tab" data-tab="life" id="life-tab-btn">Life</button>
   <button class="tab" data-tab="engrams" id="engrams-tab-btn">Engrams <span class="badge" id="engrams-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
+  <button class="tab" data-tab="palog">Report Card</button>
 </div>
 
 <div class="tab-content active" id="tab-schedule">
@@ -251,7 +250,8 @@
   <div class="task-menus-nav">
     <button class="tm-tab active" data-tm="triage">Triage <span class="badge" id="triage-count">0</span></button>
     <button class="tm-tab" data-tm="trivial">Trivial <span class="badge" id="trivial-count" style="display:none">0</span></button>
-    <button class="tm-tab" data-tm="soon">Schedule Soon <span class="badge" id="soon-count" style="display:none">0</span></button>
+    <button class="tm-tab" data-tm="scheduled">Scheduled <span class="badge" id="scheduled-count" style="display:none">0</span></button>
+    <button class="tm-tab" data-tm="soon">Priority <span class="badge" id="soon-count" style="display:none">0</span></button>
     <button class="tm-tab" data-tm="backlog">Backlog <span class="badge" id="backlog-count">0</span></button>
     <button class="tm-tab" data-tm="repeatable">Repeatable</button>
   </div>
@@ -275,10 +275,15 @@
     <div id="triage-trivial"></div>
   </div>
 
-  <!-- Schedule Soon panel -->
+  <!-- Scheduled panel -->
+  <div class="tm-panel" id="tm-scheduled">
+    <div id="scheduled-board"></div>
+  </div>
+
+  <!-- Priority panel -->
   <div class="tm-panel" id="tm-soon">
     <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);line-height:1.5">
-      Tasks flagged for today, pushed from the schedule, or queued for later. Schedule them into your day.
+      Tasks pushed from the schedule or flagged for soon. Schedule them into your day.
     </div>
     <div id="soon-pushed-list" style="margin-bottom:14px"></div>
     <div class="board" id="consider-board"></div>
@@ -316,12 +321,6 @@
   </div>
 </div>
 
-<div class="tab-content" id="tab-upcoming">
-  <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);line-height:1.5">
-    Meetings for the next 10 business days. Add notes and action items to prep -- push them to the linked 1:1 doc when ready.
-  </div>
-  <div id="upcoming-board"></div>
-</div>
 
 <div class="tab-content" id="tab-palog">
   <div id="rc-content"><div style="color:var(--text-muted);padding:24px;text-align:center">Loading Report Card...</div></div>
@@ -451,7 +450,7 @@
     <div class="pomo-picker-list" id="pomo-picker-list"></div>
     <div class="pomo-picker-new">
       <input type="text" id="pomo-picker-new-title" placeholder="New task name...">
-      <select id="pomo-picker-new-dur"><option value="15">15m</option><option value="25" selected>25m</option><option value="30">30m</option><option value="45">45m</option><option value="60">1h</option></select>
+      <select id="pomo-picker-new-dur"><option value="15">15m</option><option value="30" selected>30m</option><option value="45">45m</option><option value="60">1h</option></select>
       <button id="pomo-picker-new-btn">+ Start</button>
     </div>
   </div>
@@ -603,6 +602,19 @@
     <div class="overflow-modal-body">
       <div class="overflow-new-task" id="overflow-new-task"></div>
       <div class="overflow-deficit" id="overflow-deficit"></div>
+      <!-- Pending new task section — shown only when overflow is triggered by quick-add -->
+      <div id="overflow-pending-section" style="display:none">
+        <div class="overflow-pending-label">New task — can't fit today:</div>
+        <div class="overflow-task-row overflow-task-row--pending">
+          <input type="checkbox" class="overflow-task-chk" id="overflow-pending-chk" data-id="" data-dur=""
+            onchange="updateOverflowDeficit();this.closest('.overflow-task-row').classList.toggle('checked',this.checked)" />
+          <span class="overflow-task-title" id="overflow-pending-title"></span>
+          <span class="overflow-task-dur" id="overflow-pending-dur"></span>
+          <span class="overflow-task-time overflow-task-time--muted">→ push to tomorrow</span>
+        </div>
+        <div class="overflow-pending-divider"></div>
+        <div class="overflow-pending-sub">Or free up time by pushing existing tasks below:</div>
+      </div>
       <div class="overflow-modal-sub" id="overflow-modal-sub">Check tasks to push to tomorrow until you've freed enough time.</div>
       <div id="overflow-task-list"></div>
     </div>

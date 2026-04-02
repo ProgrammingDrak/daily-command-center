@@ -3,6 +3,7 @@ let scheduled=JSON.parse(JSON.stringify(INIT_SCHED));
 let consider=JSON.parse(JSON.stringify(INIT_CONSIDER));
 let backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));
 let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, nextId=200, schedView="plan";
+function qaId(){return "qa-"+Date.now()+"-"+Math.random().toString(36).slice(2,7)}
 
 // ======== UTILS ========
 function pt(s){const[h,m]=s.split(":").map(Number);return h*60+m}

@@ -281,13 +281,18 @@ function getIncompleteSubtasks(taskId){
   const all=loadSubtasks();
   return(all[taskId]||[]).filter(s=>!s.done);
 }
-function executeSubtaskResolution(taskId, resolution){
-  const incomplete=getIncompleteSubtasks(taskId);
-  if(!incomplete.length)return;
+function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
+  const all=loadSubtasks();
+  const taskSubs=all[taskId]||[];
+  // If specific IDs provided, only process those; otherwise process all incomplete
+  const toProcess=subIds
+    ?taskSubs.filter(s=>!s.done&&subIds.includes(s.id))
+    :taskSubs.filter(s=>!s.done);
+  if(!toProcess.length)return;
   const ev=scheduled.find(e=>e.id===taskId);
   const parentTitle=ev?ev.title:"task";
   if(resolution==="individual"){
-    incomplete.forEach(st=>{
+    toProcess.forEach(st=>{
       const id="st-sched-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
       let lastEnd="17:00";if(scheduled.length)lastEnd=scheduled[scheduled.length-1].end;
       const s=pt(lastEnd),d=30,e=s+d;
@@ -296,12 +301,19 @@ function executeSubtaskResolution(taskId, resolution){
     saveScheduleOrder();recalcTimes();checkOverflow();
   } else if(resolution==="grouped"){
     const id="st-grp-"+Date.now();
-    const title=incomplete.map(s=>s.text).join(", ");
+    const title=toProcess.map(s=>s.text).join(", ");
     let lastEnd="17:00";if(scheduled.length)lastEnd=scheduled[scheduled.length-1].end;
-    const s=pt(lastEnd),d=incomplete.length*15,e=s+d;
+    const s=pt(lastEnd),d=toProcess.length*15,e=s+d;
     scheduled.push({id,title:"Remaining: "+title,start:fmt(s),end:fmt(e),type:"task",meta:ms(d)+" · Grouped from: "+parentTitle,detail:"",source:"manual",priority:"Medium"});
     saveScheduleOrder();recalcTimes();checkOverflow();
+  } else if(resolution==="move"&&moveTargetId){
+    if(!all[moveTargetId])all[moveTargetId]=[];
+    toProcess.forEach(st=>{
+      all[moveTargetId].push({id:"st-"+Date.now()+"-"+Math.random().toString(36).slice(2),text:st.text,done:false,created:new Date().toISOString()});
+    });
   }
-  const all=loadSubtasks();all[taskId]=[];saveSubtasks(all);
+  // Remove only the processed subtasks from source — leave others untouched
+  all[taskId]=taskSubs.filter(s=>!toProcess.some(p=>p.id===s.id));
+  saveSubtasks(all);
 }
 

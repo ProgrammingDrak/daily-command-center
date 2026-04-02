@@ -61,9 +61,6 @@
     __archiveDates = window.__PA_ARCHIVES__ ? Object.keys(window.__PA_ARCHIVES__).sort() : [];
     if (typeof initKeys === 'function') initKeys();
 
-    // Reload persisted UI state (done, pushed, deleted, order) from corrected keys
-    if (typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
-
     // Re-populate one-time objects that ran at load time with empty data
     const cats = (window.__ENGRAM_TAXONOMY__ && window.__ENGRAM_TAXONOMY__.categories) || [];
     cats.forEach(c => { ENGRAM_COLORS[c.id] = c.color; ENGRAM_ICONS[c.id] = c.icon; });
@@ -96,6 +93,10 @@
       console.log('[BlockStore] Loaded blocks for', viewDate, window.blockStore.debug());
     } catch(e) { console.warn("[BlockStore] Load failed (non-fatal):", e); }
   }
+
+  // Reload persisted UI state AFTER blockstore cache is populated —
+  // blockstore-backed features (addedTasks, etc.) need loadDay() to complete first
+  if (typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
 
   // Legacy hydration fallback — only needed if any USE_BLOCKSTORE flags are off
   if (window.USE_BLOCKSTORE && !Object.values(window.USE_BLOCKSTORE).every(v => v)) {

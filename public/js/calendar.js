@@ -104,6 +104,16 @@
 
   // ── Data Merging ──
   // Merge PA state schedule items with block overrides for a given date
+  function filterByCal(events) {
+    const calState = window._gcalSidebarState;
+    if (!calState || !calState.calendars || !calState.calendars.length) return events;
+    return events.filter(ev => {
+      if (!ev.gcal_calendar_id) return true; // not a GCal event — always show
+      const cal = calState.calendars.find(c => c.id === ev.gcal_calendar_id);
+      return !cal || !!cal.selected; // show if calendar not found in list, or is selected
+    });
+  }
+
   function getEventsForDate(ds) {
     const today = dateStr(new Date());
     const events = [];
@@ -131,7 +141,7 @@
           _raw: ev,
         });
       }
-      return events;
+      return filterByCal(events);
     }
 
     // For other dates, use range cache
@@ -198,7 +208,7 @@
       }
     }
 
-    return events;
+    return filterByCal(events);
   }
 
   // ── Overlap Resolution ──

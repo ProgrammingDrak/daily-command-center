@@ -624,14 +624,15 @@ function _flushDeferredRender() {
     render();
   }
 }
-function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduleSoon==='function')buildScheduleSoon();buildUpcoming();buildProgress();updateStats();updateSync();buildLife();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView()}
+function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();buildUpcoming();buildProgress();updateStats();updateSync();buildLife();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView()}
 function _updateTaskMenusBadge(){
   const badge=document.getElementById("tasks-count");if(!badge)return;
   // Sum up counts from sub-tab badges
   const tc=parseInt(document.getElementById("triage-count")?.textContent||"0")||0;
   const sc=parseInt(document.getElementById("soon-count")?.textContent||"0")||0;
   const bc=parseInt(document.getElementById("backlog-count")?.textContent||"0")||0;
-  const total=tc+sc+bc;
+  const schedc=parseInt(document.getElementById("scheduled-count")?.textContent||"0")||0;
+  const total=tc+sc+bc+schedc;
   badge.textContent=total;badge.style.display=total?"":"none";
 }
 

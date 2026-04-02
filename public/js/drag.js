@@ -21,6 +21,13 @@ function recalcTimes(){
   const firstOrig=INIT_SCHED.find(ev=>!isDone(ev));
   let cursor=firstOrig?pt(firstOrig.start):pt(active[0].start);
 
+  // On today's view: if the anchor is in the future (e.g. the only non-done item is an
+  // evening meeting and it's still afternoon), pull cursor back to now so that newly added
+  // tasks fill available time before the meeting rather than piling up after it.
+  if(typeof viewMode!=="undefined"&&viewMode==="today"&&typeof now==="function"){
+    cursor=Math.min(cursor,now());
+  }
+
   // Use INIT_SCHED for meeting blocks so times are always their original fixed values
   const blocks=INIT_SCHED
     .filter(isMeeting)
@@ -79,15 +86,30 @@ function dDrop(e,tid){
   const after=e.clientY>=e.currentTarget.getBoundingClientRect().top+e.currentTarget.getBoundingClientRect().height/2;
   const ti=active.findIndex(x=>x.id===tid);
   if(ti===-1)return;
-  active.splice(after?ti+1:ti,0,moved);
+  const insertIdx=after?ti+1:ti;
+  active.splice(insertIdx,0,moved);
 
   // Write the reordered active items back into scheduled, preserving done-item slots
   let ai=0;
   for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i]))scheduled[i]=active[ai++];}
 
+  // Clear pinned start on the moved task so cascade places it at its new position
+  if(moved._pinnedStart)delete moved._pinnedStart;
+
   // Recascade all times from the first task's anchor
   recalcTimes();
+
+  // If the moved item ended up further in the list than where it was dropped,
+  // a meeting blocked it — show a friendly toast so the user knows why
+  const sortedActive=scheduled.filter(ev=>!isDone(ev));
+  const actualIdx=sortedActive.findIndex(x=>x.id===dragId);
+  if(actualIdx>insertIdx){
+    if(typeof showToast==='function')showToast("Not enough time allotted for that task — placed after the meeting.","warn",4000);
+  }
+
   saveTaskOrder();
+  // Sync blockstore added_task times after drag reorder
+  if(typeof syncAddedTaskTimes==='function')syncAddedTaskTimes();
 
   log("reorder",dragId,old);
   document.querySelectorAll(".tl-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom"));

@@ -119,8 +119,8 @@
   .phi-doc{background:rgba(59,130,246,0.12);color:var(--accent-light)}
   .phi-dash{background:rgba(34,211,238,0.12);color:var(--cyan)}
   .tl-node{position:absolute;left:-20px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;border:3px solid var(--accent);background:var(--bg);z-index:2;transition:top 0.5s ease}
-  .tl-node.active.near-end{top:calc(100% - 8px)}
-  .tl-node.active.next-up{top:8px;transform:none}
+  .tl-node.active.near-end{top:auto;bottom:0;transform:none}
+  .tl-node.active.next-up{top:0;transform:none}
   .tl-node.has-prep{border-color:var(--amber)}
   .tl-node.done{background:var(--green);border-color:var(--green)}
   .tl-node.done::after{content:'\2713';position:absolute;top:-5px;left:-4px;font-size:8px;font-weight:700;color:white;width:12px;height:12px;display:flex;align-items:center;justify-content:center}
@@ -514,6 +514,20 @@
   .st-resolve-opt.selected{border-color:var(--accent);background:rgba(59,130,246,0.12)}
   .st-resolve-opt-title{font-size:11px;font-weight:600;color:var(--text)}
   .st-resolve-opt-desc{font-size:10px;color:var(--text-muted);margin-top:1px}
+  /* Per-subtask checklist + action buttons */
+  .st-subtask-list{display:flex;flex-direction:column;gap:3px;margin-bottom:9px}
+  .st-subtask-row{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:5px;cursor:pointer;transition:background 0.1s}
+  .st-subtask-row:hover{background:rgba(255,255,255,0.04)}
+  .st-subtask-chk{width:14px;height:14px;accent-color:var(--accent);cursor:pointer;flex-shrink:0}
+  .st-subtask-text{font-size:12px;color:var(--text);line-height:1.3;user-select:none}
+  .st-action-row{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px}
+  .st-act-btn{font-size:11px;font-weight:500;padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.04);color:var(--text-muted);cursor:pointer;transition:all 0.12s;white-space:nowrap}
+  .st-act-btn:hover{border-color:var(--accent);background:rgba(59,130,246,0.1);color:var(--accent)}
+  .st-move-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;padding:6px 8px;background:rgba(59,130,246,0.06);border-radius:6px;border:1px solid rgba(59,130,246,0.2)}
+  .st-move-select{flex:1;font-size:11px;padding:3px 6px;border-radius:4px;border:1px solid var(--border);background:var(--card);color:var(--text)}
+  .st-move-confirm-btn{font-size:11px;font-weight:600;padding:4px 10px;border-radius:5px;border:none;background:var(--accent);color:#fff;cursor:pointer;white-space:nowrap}
+  .st-move-confirm-btn:hover{opacity:0.85}
+  .st-hint{font-size:10px;color:var(--text-muted);font-style:italic;margin-top:4px}
   /* ---- Trivial Tasks section ---- */
   .triv-section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px}
   .triv-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
@@ -1008,6 +1022,12 @@
   .overflow-btn-push{padding:7px 16px;border-radius:6px;border:none;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer}
   .overflow-btn-push:hover{opacity:0.85}
   .overflow-btn-push:disabled{opacity:0.3;cursor:not-allowed}
+  /* Pending task (new task that triggered overflow) */
+  .overflow-pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--amber);margin-bottom:6px}
+  .overflow-task-row--pending{background:rgba(245,158,11,0.07);border-radius:6px;border:1px solid rgba(245,158,11,0.25);padding:8px 10px;margin-bottom:4px}
+  .overflow-pending-divider{height:1px;background:var(--border);margin:10px 0}
+  .overflow-pending-sub{font-size:11px;color:var(--text-muted);margin-bottom:6px}
+  .overflow-task-time--muted{color:var(--text-muted);font-style:italic}
 
   /* ======== QUICK-CAPTURE STRIP ======== */
   .qc-strip{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;margin-bottom:12px}
@@ -1358,7 +1378,7 @@
   .tm-panel.active{display:block}
 
   /* ======== FLOATING TIMER ======== */
-  .float-timer{position:fixed;bottom:20px;right:20px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+  .float-timer{position:fixed;bottom:30px;right:30px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;user-select:none}
   .ft-fab{width:48px;height:48px;border-radius:50%;background:var(--accent);border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(59,130,246,0.4);transition:transform 0.15s,box-shadow 0.15s;position:relative}
   .ft-fab:hover{transform:scale(1.08);box-shadow:0 6px 20px rgba(59,130,246,0.5)}
   .ft-fab-badge{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:var(--green);border:2px solid var(--bg)}
