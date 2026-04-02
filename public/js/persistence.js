@@ -451,18 +451,41 @@ function reloadPersistedEdits() {
   } catch(e) {}
   // Restore user-added tasks (quick-add, drawer-add)
   try {
-    const added = loadAddedTasks();
-    added.forEach(t => {
-      if (scheduled.find(e => e.id === t.id)) return; // already in schedule
-      const d = t.durMin || 30;
-      scheduled.push({
-        id: t.id, title: t.title, type: "task",
-        start: "00:00", end: fmt(d),
-        meta: t.meta || ("Custom task \u00b7 " + ms(d)),
-        detail: t.detail || "", source: t.source || "manual",
-        notionUrl: t.notionUrl || "", priority: t.priority || "High"
+    if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
+      // Load from SQLite via blockstore cache (loadDay() already ran before this point)
+      const addedBlocks=window.blockStore.getByType("added_task");
+      addedBlocks.forEach(block=>{
+        const p=block.properties||{};
+        const taskId=p.local_id;
+        if(!taskId||scheduled.find(e=>e.id===taskId))return;
+        const d=p.duration||30;
+        const hasStoredTime=p.start&&p.start!=="00:00";
+        const task={
+          id:taskId,title:p.title,type:"task",
+          start:p.start||"00:00",
+          end:p.end||fmt(d),
+          meta:p.meta||("Custom task \u00b7 "+ms(d)),
+          detail:p.detail||"",source:p.source||"manual",
+          notionUrl:p.notionUrl||"",priority:p.priority||"High"
+        };
+        // Pin the start time so recalcTimes() doesn't overwrite it
+        if(hasStoredTime)task._pinnedStart=p.start;
+        scheduled.push(task);
       });
-    });
+    } else {
+      const added = loadAddedTasks();
+      added.forEach(t => {
+        if (scheduled.find(e => e.id === t.id)) return; // already in schedule
+        const d = t.durMin || 30;
+        scheduled.push({
+          id: t.id, title: t.title, type: "task",
+          start: "00:00", end: fmt(d),
+          meta: t.meta || ("Custom task \u00b7 " + ms(d)),
+          detail: t.detail || "", source: t.source || "manual",
+          notionUrl: t.notionUrl || "", priority: t.priority || "High"
+        });
+      });
+    }
   } catch(e) {}
   // Restore saved task order (from drag reorder)
   try {

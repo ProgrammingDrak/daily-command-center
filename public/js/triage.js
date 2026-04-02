@@ -276,21 +276,80 @@ function openDoneModal(id, title, onConfirm, ev){
   const incomplete=getIncompleteSubtasks(id);
   const stSection=document.getElementById("dm-subtask-section");
   if(incomplete.length){
-    let opts=['<div class="st-resolve-section">',
-      '<div class="st-resolve-title">⚠ '+incomplete.length+' subtask'+(incomplete.length>1?'s':'')+' not completed — what should happen to them?</div>',
-      '<div class="st-resolve-opts">',
-        '<button class="st-resolve-opt selected" data-res="discard"><div><div class="st-resolve-opt-title">Discard</div><div class="st-resolve-opt-desc">Remove subtasks — task is done as-is</div></div></button>',
-        '<button class="st-resolve-opt" data-res="individual"><div><div class="st-resolve-opt-title">Create individual tasks</div><div class="st-resolve-opt-desc">Add one scheduled task per subtask</div></div></button>',
-        '<button class="st-resolve-opt" data-res="grouped"><div><div class="st-resolve-opt-title">Create grouped task</div><div class="st-resolve-opt-desc">Add one task containing all remaining subtasks</div></div></button>',
-      '</div></div>'].join('');
-    stSection.innerHTML=opts;
+    const listHtml=incomplete.map((st,i)=>{
+      const sid=st.id||('sub-'+i);
+      return '<label class="st-subtask-row" data-sub-id="'+sid+'">'+
+        '<input type="checkbox" class="st-subtask-chk" data-sub-id="'+sid+'" checked>'+
+        '<span class="st-subtask-text">'+st.text+'</span>'+
+      '</label>';
+    }).join('');
+    const moveOpts=scheduled
+      .filter(e=>!isMeeting(e)&&!isDone(e)&&e.id!==id)
+      .map(e=>'<option value="'+e.id+'">'+e.title+' ('+f12(e.start)+')</option>')
+      .join('');
+    stSection.innerHTML=
+      '<div class="st-resolve-section">'+
+        '<div class="st-resolve-title" id="st-resolve-title">⚠ '+incomplete.length+' subtask'+(incomplete.length>1?'s':'')+' not completed</div>'+
+        '<div class="st-subtask-list" id="st-subtask-list">'+listHtml+'</div>'+
+        '<div class="st-action-row">'+
+          '<button class="st-act-btn" data-act="discard" title="Remove checked subtasks">Discard</button>'+
+          '<button class="st-act-btn" data-act="individual" title="Schedule each as its own task">Schedule each</button>'+
+          '<button class="st-act-btn" data-act="grouped" title="Create one task from all checked">Group into task</button>'+
+          '<button class="st-act-btn" data-act="move" title="Add as subtasks of another task">Move to task ›</button>'+
+        '</div>'+
+        '<div class="st-move-row" id="st-move-row" style="display:none">'+
+          '<select class="st-move-select" id="st-move-select">'+
+            '<option value="">Pick a task…</option>'+
+            moveOpts+
+          '</select>'+
+          '<button class="st-move-confirm-btn" id="st-move-confirm">Move</button>'+
+        '</div>'+
+        '<div class="st-hint">Unchecked subtasks are discarded when you mark complete.</div>'+
+      '</div>';
     stSection.style.display="";
-    stSection.querySelectorAll(".st-resolve-opt").forEach(btn=>{
-      btn.addEventListener("click",()=>{
-        stSection.querySelectorAll(".st-resolve-opt").forEach(b=>b.classList.remove("selected"));
-        btn.classList.add("selected");
+
+    function getCheckedIds(){
+      return [...stSection.querySelectorAll('.st-subtask-chk:checked')].map(el=>el.dataset.subId);
+    }
+    function removeRows(subIds){
+      subIds.forEach(sid=>{
+        const row=stSection.querySelector('.st-subtask-row[data-sub-id="'+sid+'"]');
+        if(row)row.remove();
+      });
+      const rem=stSection.querySelectorAll('.st-subtask-chk').length;
+      if(!rem){stSection.innerHTML='';stSection.style.display='none';}
+      else{
+        const titleEl=document.getElementById('st-resolve-title');
+        if(titleEl)titleEl.textContent='⚠ '+rem+' subtask'+(rem>1?'s':'')+' not completed';
+      }
+    }
+    stSection.querySelectorAll('.st-act-btn').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const act=btn.dataset.act;
+        if(act==='move'){
+          const mr=document.getElementById('st-move-row');
+          if(mr)mr.style.display=mr.style.display==='none'?'':'none';
+          return;
+        }
+        const ids=getCheckedIds();
+        if(!ids.length){if(typeof showToast==='function')showToast('Check at least one subtask first.');return;}
+        executeSubtaskResolution(id,act,ids);
+        removeRows(ids);
       });
     });
+    const moveBtn=document.getElementById('st-move-confirm');
+    if(moveBtn){
+      moveBtn.addEventListener('click',()=>{
+        const targetId=document.getElementById('st-move-select').value;
+        if(!targetId){if(typeof showToast==='function')showToast('Pick a target task first.');return;}
+        const ids=getCheckedIds();
+        if(!ids.length){if(typeof showToast==='function')showToast('Check at least one subtask first.');return;}
+        executeSubtaskResolution(id,'move',ids,targetId);
+        removeRows(ids);
+        const mr=document.getElementById('st-move-row');
+        if(mr)mr.style.display='none';
+      });
+    }
   } else {
     stSection.innerHTML="";stSection.style.display="none";
   }
@@ -339,9 +398,12 @@ function confirmDoneModal(){
     if(parentId){triageParents[_dmId]=parentId;}else{delete triageParents[_dmId];}
     saveTriageParents(triageParents);
   }
-  // Pass captured text to callback so it doesn't need to re-read the DOM
-  const selRes=document.querySelector("#dm-subtask-section .st-resolve-opt.selected");
-  if(selRes) executeSubtaskResolution(_dmId, selRes.dataset.res);
+  // Discard any subtasks still shown in the list (unhandled ones are implicitly discarded on completion)
+  const remainingRows=document.querySelectorAll('#dm-subtask-section .st-subtask-row');
+  if(remainingRows.length){
+    const allSubs=loadSubtasks();
+    if(allSubs[_dmId]){allSubs[_dmId]=allSubs[_dmId].map(s=>({...s,done:true}));saveSubtasks(allSubs);}
+  }
   if(_dmCallback)_dmCallback(text);
   closeDoneModal();
 }
@@ -762,6 +824,106 @@ function buildTriageCard(item) {
 let TRIAGE_PARENTS_KEY = "pa-triage-parents-" + ((__state && __state.date) || "unknown");
 function loadTriageParents(){ try{return JSON.parse(localStorage.getItem(TRIAGE_PARENTS_KEY)||"{}")}catch(e){return{}} }
 function saveTriageParents(data){ if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return; localStorage.setItem(TRIAGE_PARENTS_KEY,JSON.stringify(data)); scheduleIDBSave(); }
+
+function buildScheduled() {
+  const el = document.getElementById("scheduled-board");
+  if (!el) return;
+
+  const today = __state && __state.date ? __state.date : new Date().toISOString().split("T")[0];
+  const todayLabel = new Date(today + "T12:00:00").toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric"});
+  const nowMins = now();
+
+  // All active items (not deleted, not pushed)
+  const active = scheduled.filter(ev => !isDeleted(ev) && !isPushed(ev));
+
+  // Past + incomplete → needs review
+  const needsReview = active.filter(ev => pt(ev.start) < nowMins && !isDone(ev));
+  // Current, future, and done items
+  const rest = active.filter(ev => pt(ev.start) >= nowMins || isDone(ev));
+
+  let html = "";
+
+  if (needsReview.length) {
+    html += '<div style="margin-bottom:16px">';
+    html += '<div class="tri-group-label"><span class="tri-dot" style="background:var(--amber)"></span>Needs Review <span style="opacity:0.6;font-weight:400;font-size:10px">(past · incomplete)</span></div>';
+    needsReview.forEach(ev => {
+      const c = cfg(ev.type);
+      html +=
+        '<div class="consider-card" style="margin-bottom:6px">' +
+          '<div class="cc-bar" style="background:' + c.color + '"></div>' +
+          '<div class="cc-body">' +
+            '<div class="cc-title">' + ev.title + '</div>' +
+            '<div class="cc-meta">' + f12(ev.start) + ' – ' + f12(ev.end) + ' · ' + ms(dur(ev)) + '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:4px;flex-shrink:0">' +
+            '<button class="cc-action sched-done-btn" data-id="' + ev.id + '" style="background:rgba(34,197,94,0.1);color:var(--green);border:1px solid rgba(34,197,94,0.2)" title="Mark complete">✓ Done</button>' +
+            '<button class="cc-action sched-push-btn" data-id="' + ev.id + '" title="Push to Priority tab">→ Priority</button>' +
+            '<button class="cc-action sched-backlog-btn" data-id="' + ev.id + '" title="Move to Backlog">Backlog</button>' +
+          '</div>' +
+        '</div>';
+    });
+    html += '</div>';
+  }
+
+  if (rest.length) {
+    html += '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px">' + todayLabel + '</div>';
+    rest.forEach(ev => {
+      const c = cfg(ev.type);
+      const done = isDone(ev);
+      html +=
+        '<div class="consider-card" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
+          '<div class="cc-bar" style="background:' + c.color + '"></div>' +
+          '<div class="cc-body">' +
+            '<div class="cc-title">' + (done ? '<s>' + ev.title + '</s>' : ev.title) + '</div>' +
+            '<div class="cc-meta">' + f12(ev.start) + ' – ' + f12(ev.end) + ' · ' + ms(dur(ev)) + '</div>' +
+          '</div>' +
+        '</div>';
+    });
+  }
+
+  if (!needsReview.length && !rest.length) {
+    html = '<div class="board-empty">Nothing on today\'s schedule yet.</div>';
+  }
+
+  el.innerHTML = html;
+
+  // Wire action buttons
+  el.querySelectorAll(".sched-done-btn").forEach(btn => {
+    btn.addEventListener("click", () => { toggleDone(btn.dataset.id); render(); });
+  });
+  el.querySelectorAll(".sched-push-btn").forEach(btn => {
+    btn.addEventListener("click", () => { pushTask(btn.dataset.id); }); // pushTask calls render() internally
+  });
+  el.querySelectorAll(".sched-backlog-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      const ev = scheduled.find(e => e.id === id);
+      if (!ev) return;
+      backlog.push({
+        id: "bl-" + Date.now(),
+        title: ev.title,
+        type: ev.type || "task",
+        durMin: dur(ev),
+        meta: ms(dur(ev)) + " · from schedule",
+        detail: ev.detail || "",
+        source: ev.source || "manual",
+        notionUrl: ev.notionUrl || "",
+        priority: ev.priority || "Low",
+        stage: "Backlog"
+      });
+      deletedSet.add(id);
+      saveDeletedState();
+      render();
+    });
+  });
+
+  // Update badge
+  const badge = document.getElementById("scheduled-count");
+  if (badge) {
+    badge.textContent = needsReview.length;
+    badge.style.display = needsReview.length ? "" : "none";
+  }
+}
 
 function buildScheduleSoon() {
   const list=document.getElementById("soon-pushed-list");

@@ -33,6 +33,7 @@ const TOMORROW_STATE_FILE = path.join(STATE_DIR, "tomorrow-state.json");
 const UPCOMING_FILE = path.join(STATE_DIR, "upcoming-meetings.json");
 const LOCAL_UI_STATE_FILE = path.join(STATE_DIR, "local-ui-state.json");
 const ARCHIVE_DIR = path.join(STATE_DIR, "archive");
+const DAYS_DIR = path.join(STATE_DIR, "days");
 // Second Brain (recent day states, engrams, globals)
 const BRAIN_DIR = path.join(DATA_DIR, "brain");
 const RECENT_DIR = path.join(BRAIN_DIR, "recent");
@@ -46,7 +47,7 @@ const USER_CONTEXT_FILE = path.join(DATA_DIR, "config", "user-context.yaml");
 const PA_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
 
 // Ensure directories exist
-[RECENT_DIR, ENGRAMS_DIR].forEach((dir) => {
+[RECENT_DIR, ENGRAMS_DIR, DAYS_DIR].forEach((dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
@@ -94,6 +95,9 @@ WATCHED_FILES.forEach((filePath) => {
     // File might not exist yet — that's fine
   }
 });
+
+// ── SQLite (initialized early for use in helpers) ──
+const db = blockDB.getDB();
 
 // ── Helpers ──
 function readJSON(filePath, fallback) {
@@ -157,18 +161,233 @@ function pruneRecent() {
   }
 }
 
+// ── Per-Day State Helpers ──
+
+function getTodayStr() {
+  // Get today's date in America/New_York timezone
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
+  return fmt.format(new Date()); // "YYYY-MM-DD"
+}
+
+function getETOffset(dateStr) {
+  // Compute the UTC offset for a date in America/New_York (e.g., "-04:00" for EDT, "-05:00" for EST)
+  const dt = new Date(dateStr + "T12:00:00Z");
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "shortOffset" }).formatToParts(dt);
+  const tzPart = parts.find(p => p.type === "timeZoneName");
+  if (tzPart) {
+    // "GMT-4" or "GMT-5" → "-04:00" or "-05:00"
+    const m = tzPart.value.match(/GMT([+-]?\d+)/);
+    if (m) {
+      const hrs = parseInt(m[1], 10);
+      return (hrs <= 0 ? "-" : "+") + String(Math.abs(hrs)).padStart(2, "0") + ":00";
+    }
+  }
+  return "-04:00"; // fallback EDT
+}
+
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function getDayFilePath(dateStr) {
+  return path.join(DAYS_DIR, dateStr + ".json");
+}
+
+function getMeetingsFromSQLite(dateStr) {
+  const offset = getETOffset(dateStr);
+  const rows = db.prepare(`
+    SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link
+    FROM blocks b
+    LEFT JOIN gcal_events g ON g.block_id = b.id
+    WHERE b.date = ? AND b.type = 'schedule_item' AND b.deleted_at IS NULL
+    ORDER BY b.sort_order ASC
+  `).all(dateStr);
+
+  const meetings = [];
+  const meetingTimeline = [];
+
+  for (const row of rows) {
+    let props;
+    try { props = JSON.parse(row.properties); } catch { continue; }
+    if (props.source !== "gcal" || props.all_day) continue;
+    if (!props.start || !props.end) continue;
+
+    // Parse attendees from gcal_events
+    let attendees = [];
+    if (row.attendees_json) {
+      try {
+        const raw = JSON.parse(row.attendees_json);
+        attendees = raw
+          .filter(a => !a.self && !a.resource)
+          .map(a => a.email);
+      } catch {}
+    }
+
+    const startISO = `${dateStr}T${props.start}:00${offset}`;
+    const endISO = `${dateStr}T${props.end}:00${offset}`;
+    const eventId = row.gcal_event_id || props.source_id || row.id;
+
+    meetings.push({
+      id: eventId,
+      title: props.title || "(No title)",
+      start: startISO,
+      end: endISO,
+      attendees,
+      calUrl: props.calUrl || row.html_link || null,
+      linkedDocUrl: null,
+      linkedDocTitle: null,
+      myResponseStatus: props.rsvp_status || null,
+    });
+
+    meetingTimeline.push({
+      id: "mtg-" + row.id,
+      type: "meeting",
+      label: props.title || "(No title)",
+      start: startISO,
+      end: endISO,
+      source: "calendar",
+      source_id: eventId,
+      category: "Meetings",
+      completed: false,
+    });
+  }
+
+  // Deduplicate by title + start (same event from multiple calendars)
+  const seen = new Map();
+  const dedupedMeetings = [];
+  const dedupedTimeline = [];
+  for (let i = 0; i < meetings.length; i++) {
+    const key = meetings[i].title + "|" + meetings[i].start;
+    const existing = seen.get(key);
+    if (existing !== undefined) {
+      // Keep the one where user accepted, or the first one
+      if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") {
+        dedupedMeetings[existing] = meetings[i];
+        dedupedTimeline[existing] = meetingTimeline[i];
+      }
+    } else {
+      seen.set(key, dedupedMeetings.length);
+      dedupedMeetings.push(meetings[i]);
+      dedupedTimeline.push(meetingTimeline[i]);
+    }
+  }
+
+  return { meetings: dedupedMeetings, meetingTimeline: dedupedTimeline };
+}
+
+function buildSkeletonState(dateStr) {
+  return {
+    date: dateStr,
+    last_updated_at: new Date().toISOString(),
+    last_updated_by: "skeleton",
+    watermarks: {},
+    triage: { open_items: [], resolved_items: [], cycle_count: 0 },
+    completions: { tasks: [] },
+    schedule: {
+      working_hours: { start: "07:00", end: "17:30" },
+      timeline: [],
+      tasks_scheduled: [],
+      tasks_couldnt_fit: [],
+      stats: {},
+    },
+  };
+}
+
+function buildDayResponse(dateStr) {
+  const dayFile = getDayFilePath(dateStr);
+
+  // Read enrichment from per-day JSON (or create skeleton)
+  let enrichment = readJSON(dayFile, null);
+  if (!enrichment) {
+    enrichment = buildSkeletonState(dateStr);
+    writeJSON(dayFile, enrichment);
+  }
+
+  // Live meetings from SQLite
+  const { meetings, meetingTimeline } = getMeetingsFromSQLite(dateStr);
+
+  // Merge: enrichment + live meetings
+  const result = { ...enrichment, date: dateStr, meetings };
+
+  // Merge meeting timeline entries into schedule.timeline
+  if (result.schedule && result.schedule.timeline) {
+    const existingSourceIds = new Set(
+      result.schedule.timeline.filter(t => t.source === "calendar").map(t => t.source_id)
+    );
+    for (const mtg of meetingTimeline) {
+      if (!existingSourceIds.has(mtg.source_id)) {
+        result.schedule.timeline.push(mtg);
+      }
+    }
+    result.schedule.timeline.sort((a, b) => a.start.localeCompare(b.start));
+  } else {
+    result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline };
+  }
+
+  return result;
+}
+
+function ensureSkeletonDays() {
+  const today = getTodayStr();
+
+  // Generate skeletons for next 14 days
+  for (let i = 0; i < 14; i++) {
+    const dateStr = addDays(today, i);
+    const dayFile = getDayFilePath(dateStr);
+    if (!fs.existsSync(dayFile)) {
+      writeJSON(dayFile, buildSkeletonState(dateStr));
+    }
+  }
+
+  // Archive days older than 14 days
+  if (fs.existsSync(DAYS_DIR)) {
+    const cutoffDate = addDays(today, -14);
+    for (const fname of fs.readdirSync(DAYS_DIR)) {
+      if (!fname.endsWith(".json")) continue;
+      const dateStr = fname.replace(".json", "");
+      if (dateStr < cutoffDate) {
+        const data = readJSON(path.join(DAYS_DIR, fname), null);
+        if (data) {
+          archiveDayState(dateStr, data);
+          // Also save to recent/ for brain
+          const recentFile = path.join(RECENT_DIR, fname);
+          writeJSON(recentFile, data);
+          updateManifest(dateStr);
+        }
+        fs.unlinkSync(path.join(DAYS_DIR, fname));
+        console.log(`[days] Archived and removed ${fname}`);
+      }
+    }
+  }
+
+  console.log(`[days] Skeleton check complete — ${today} + 13 days`);
+}
+
 // ── GET: State Endpoints (replace render-script injection) ──
 
-// Day state (the central hub)
+// Day state — per-day files with live calendar merge
 app.get("/api/state/day", (req, res) => {
-  const data = readJSON(DAY_STATE_FILE, null);
-  res.json(data);
+  try {
+    const dateStr = req.query.date || getTodayStr();
+    res.json(buildDayResponse(dateStr));
+  } catch (e) {
+    console.error("[api/state/day] Error:", e.message);
+    // Fallback: try legacy day-state.json
+    res.json(readJSON(DAY_STATE_FILE, null));
+  }
 });
 
-// Tomorrow pre-plan
+// Tomorrow — same logic, just +1 day
 app.get("/api/state/tomorrow", (req, res) => {
-  const data = readJSON(TOMORROW_STATE_FILE, null);
-  res.json(data);
+  try {
+    const tomorrowStr = addDays(getTodayStr(), 1);
+    res.json(buildDayResponse(tomorrowStr));
+  } catch (e) {
+    console.error("[api/state/tomorrow] Error:", e.message);
+    res.json(readJSON(TOMORROW_STATE_FILE, null));
+  }
 });
 
 // Upcoming meetings (next 10 business days)
@@ -406,17 +625,21 @@ app.post("/api/save-engram-index", (req, res) => {
 
 // ── POST: Ingest from Scheduled Tasks ──
 // Section-level merge: PA-owned sections overwrite, user-owned sections preserve
+// Writes to per-day file + legacy day-state.json for backward compatibility
 app.post("/api/ingest/day-state", (req, res) => {
   const incoming = req.body;
   if (!incoming || !incoming.date) {
     return res.status(400).json({ error: "Missing date in payload" });
   }
 
-  const existing = readJSON(DAY_STATE_FILE, {});
+  // Read from per-day file (primary) or legacy file (fallback)
+  const dayFile = getDayFilePath(incoming.date);
+  const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
 
   // PA-owned sections: overwrite from incoming
+  // Note: meetings excluded — they always come live from SQLite
   const PA_SECTIONS = [
-    "schedule", "triage", "meetings", "meetings_tomorrow", "watermarks",
+    "schedule", "triage", "watermarks",
     "notifications", "assessment", "sweep_stats", "meta", "report_card",
     "clean_tidy", "orchestrator", "mutations", "completions", "personal",
   ];
@@ -438,11 +661,9 @@ app.post("/api/ingest/day-state", (req, res) => {
     if (key in existing && !(key in incoming)) {
       merged[key] = existing[key];
     }
-    // If incoming has user section data AND existing doesn't, take incoming
     if (key in incoming && !(key in existing)) {
       merged[key] = incoming[key];
     }
-    // If both have it, keep existing (user wins)
   }
 
   // Always update top-level metadata
@@ -450,8 +671,17 @@ app.post("/api/ingest/day-state", (req, res) => {
   merged.last_updated_at = new Date().toISOString();
   merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
 
-  writeJSON(DAY_STATE_FILE, merged);
-  console.log(`[ingest] Merged day-state for ${incoming.date}`);
+  // Strip meetings from stored file — they come from SQLite on read
+  delete merged.meetings;
+  delete merged.meetings_tomorrow;
+
+  // Write to per-day file (primary)
+  writeJSON(dayFile, merged);
+
+  // Legacy dual-write for backward compatibility (until PA tasks fully migrated)
+  writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || [] });
+
+  console.log(`[ingest] Merged day-state for ${incoming.date} → ${dayFile}`);
   broadcast("ingest", { source: "day-state", date: incoming.date });
   res.json({ ok: true, date: incoming.date });
 });
@@ -513,8 +743,6 @@ app.use("/public", express.static(path.join(PROJECT_DIR, "public"), {
   },
 }));
 // ── Block API (SQLite-backed) ──
-// Initialize SQLite on startup
-const db = blockDB.getDB();
 
 // Validate date format
 function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }
@@ -963,5 +1191,21 @@ app.listen(PORT, () => {
   } else {
     console.log(`  GCal:       Not connected — visit /api/gcal/auth to connect`);
   }
+
+  // Bootstrap per-day skeleton files (rolling 14-day window)
+  try {
+    ensureSkeletonDays();
+    console.log(`  Days:       ${DAYS_DIR}`);
+  } catch (e) {
+    console.error(`  Days:       Bootstrap error — ${e.message}`);
+  }
+
+  // Re-check skeletons every 6 hours (handles midnight rollover)
+  setInterval(() => {
+    try { ensureSkeletonDays(); } catch (e) {
+      console.error("[days] Periodic skeleton error:", e.message);
+    }
+  }, 6 * 60 * 60 * 1000);
+
   console.log();
 });

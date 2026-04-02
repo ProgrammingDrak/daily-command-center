@@ -20,7 +20,9 @@ function updateClock(){
     document.getElementById("tz-label").textContent=_cachedTzStr;
   }
   const timeStr=h12+":"+String(m).padStart(2,"0")+ap.toLowerCase();
-  const nowEl=document.querySelector(".tl-now-time");if(nowEl)nowEl.textContent=timeStr;
+  // Only update the live time indicator on today's page — not on historical pages
+  const _isToday=window.__state&&window.__state.date===new Date().toISOString().split("T")[0];
+  const nowEl=document.querySelector(".tl-now-time");if(nowEl&&_isToday)nowEl.textContent=timeStr;
 }
 
 // ======== DATE NAVIGATION ========
