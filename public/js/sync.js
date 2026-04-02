@@ -56,26 +56,117 @@ function buildClip(){
   return t;
 }
 
-// ======== NOTES & ACTION ITEMS (localStorage) ========
+// ======== NOTES & ACTION ITEMS ========
+// Dual-mode: checks USE_BLOCKSTORE flags, falls back to localStorage
 let NOTES_KEY = "pa-notes-" + (__state ? __state.date : "unknown");
 let ACTIONS_KEY = "pa-actions-" + (__state ? __state.date : "unknown");
 let DISMISS_KEY = "pa-dismissed-" + (__state ? __state.date : "unknown");
 
-function loadNotes() { try { return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}"); } catch(e) { return {}; } }
-function saveNotes(data) { localStorage.setItem(NOTES_KEY, JSON.stringify(data)); scheduleIDBSave(); }
-function loadActions() { try { return JSON.parse(localStorage.getItem(ACTIONS_KEY) || "{}"); } catch(e) { return {}; } }
-function saveActions(data) { localStorage.setItem(ACTIONS_KEY, JSON.stringify(data)); scheduleIDBSave(); }
+function loadNotes() {
+  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
+    const noteBlocks = window.blockStore.getByType("note");
+    const result = {};
+    noteBlocks.forEach(b => {
+      const taskId = b.properties._sourceTaskId || b.parent_id;
+      result[taskId] = { html: b.properties.html, text: b.properties.text, _blockId: b.id };
+    });
+    return result;
+  }
+  try { return JSON.parse(localStorage.getItem(NOTES_KEY) || "{}"); } catch(e) { return {}; }
+}
+function saveNotes(data) {
+  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
+    // Save each changed note as a block
+    for (const [taskId, val] of Object.entries(data)) {
+      if (!val) continue;
+      const html = typeof val === "string" ? val : (val.html || "");
+      const text = typeof val === "string" ? val : (val.text || "");
+      if (val._blockId) {
+        window.blockStore.updateBlockDebounced(val._blockId, { html, text, _sourceTaskId: taskId });
+      } else {
+        // Create new note block
+        window.blockStore.createBlock("note", { html, text, _sourceTaskId: taskId }, {
+          parentId: window.blockStore.getDayRootId(),
+          date: window.blockStore.getCurrentDate()
+        }).then(block => { val._blockId = block.id; });
+      }
+    }
+    return;
+  }
+  localStorage.setItem(NOTES_KEY, JSON.stringify(data)); scheduleIDBSave();
+}
+
+function loadActions() {
+  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.actions && window.blockStore) {
+    const actionBlocks = window.blockStore.getByType("action_item");
+    const result = {};
+    actionBlocks.forEach(b => {
+      const taskId = b.properties._sourceTaskId || b.parent_id;
+      if (!result[taskId]) result[taskId] = [];
+      result[taskId].push({ ...b.properties, _blockId: b.id });
+    });
+    return result;
+  }
+  try { return JSON.parse(localStorage.getItem(ACTIONS_KEY) || "{}"); } catch(e) { return {}; }
+}
+function saveActions(data) {
+  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.actions && window.blockStore) {
+    for (const [taskId, items] of Object.entries(data)) {
+      if (!Array.isArray(items)) continue;
+      items.forEach((item, i) => {
+        if (item._blockId) {
+          window.blockStore.updateBlock(item._blockId, {
+            text: item.text, priority: item.priority, done: !!item.done,
+            _sourceTaskId: taskId,
+            ...(item._scheduled ? { scheduled: item._scheduled, scheduledAt: item._scheduledAt } : {}),
+            ...(item._notionQueued ? { _notionQueued: true, _notionQueuedAt: item._notionQueuedAt } : {})
+          });
+        } else {
+          window.blockStore.createBlock("action_item", {
+            text: item.text, priority: item.priority || "Medium", done: !!item.done,
+            _sourceTaskId: taskId, created: item.created || new Date().toISOString()
+          }, {
+            parentId: window.blockStore.getDayRootId(),
+            date: window.blockStore.getCurrentDate(),
+            sortOrder: i
+          }).then(block => { item._blockId = block.id; });
+        }
+      });
+    }
+    return;
+  }
+  localStorage.setItem(ACTIONS_KEY, JSON.stringify(data)); scheduleIDBSave();
+}
+
 function loadDismissed() { try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); } catch(e) { return {}; } }
-function saveDismissed(data) { localStorage.setItem(DISMISS_KEY, JSON.stringify(data)); scheduleIDBSave(); }
+function saveDismissed(data) {
+  if (window.USE_BLOCKSTORE && Object.values(window.USE_BLOCKSTORE).every(v => v)) return; // BlockStore handles persistence
+  localStorage.setItem(DISMISS_KEY, JSON.stringify(data)); scheduleIDBSave();
+}
 
 let DONE_KEY = "pa-done-" + (__state ? __state.date : "unknown");
 function loadDoneState() { try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}"); return { ids: d.ids || [], at: d.at || {} }; } catch(e) { return { ids: [], at: {} }; } }
-function saveDoneState() { localStorage.setItem(DONE_KEY, JSON.stringify({ ids: [...manualDone], at: doneAt })); scheduleIDBSave(); }
+function saveDoneState() {
+  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.done && window.blockStore) {
+    const dayRoot = window.blockStore.getDayRootId();
+    const root = window.blockStore.get(dayRoot);
+    if (root) {
+      const props = { ...root.properties, _done: { ids: [...manualDone], at: doneAt } };
+      window.blockStore.updateBlock(dayRoot, props);
+    }
+    return;
+  }
+  localStorage.setItem(DONE_KEY, JSON.stringify({ ids: [...manualDone], at: doneAt })); scheduleIDBSave();
+}
+
 let SESSIONS_KEY = "pa-sessions-" + (__state ? __state.date : "unknown");
 function loadSessions() { try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || "{}"); } catch(e) { return {}; } }
-function saveSessions(data) { localStorage.setItem(SESSIONS_KEY, JSON.stringify(data)); scheduleIDBSave(); }
+function saveSessions(data) {
+  if (window.USE_BLOCKSTORE && Object.values(window.USE_BLOCKSTORE).every(v => v)) return;
+  localStorage.setItem(SESSIONS_KEY, JSON.stringify(data)); scheduleIDBSave();
+}
 
-// ======== POMODORO STATE PERSISTENCE (localStorage) ========
+// ======== POMODORO STATE PERSISTENCE ========
 let POMO_STATE_KEY = "pa-pomo-state-" + (__state ? __state.date : "unknown");
 function savePomoState() {
   const data = {
@@ -85,7 +176,18 @@ function savePomoState() {
     taskTime: pomoState.taskTime, taskDone: pomoState.taskDone, stackedSessions: pomoState.stackedSessions,
     savedAt: Date.now()
   };
-  try { localStorage.setItem(POMO_STATE_KEY, JSON.stringify(data)); scheduleIDBSave(); } catch(e) {}
+  try { localStorage.setItem(POMO_STATE_KEY, JSON.stringify(data)); } catch(e) {}
+  // Also log sessions to BlockStore if flag is on
+  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.pomo && window.blockStore && pomoState.sessionLog.length) {
+    const lastSession = pomoState.sessionLog[pomoState.sessionLog.length - 1];
+    if (lastSession && !lastSession._blockSaved) {
+      window.blockStore.createBlock("pomo_session", {
+        title: lastSession.title || "", durSec: lastSession.durSec || 0,
+        type: lastSession.type || "work", time: lastSession.time || ""
+      }, { parentId: window.blockStore.getDayRootId(), date: window.blockStore.getCurrentDate() });
+      lastSession._blockSaved = true;
+    }
+  }
 }
 function loadPomoState() {
   try { const raw = localStorage.getItem(POMO_STATE_KEY); return raw ? JSON.parse(raw) : null; } catch(e) { return null; }
@@ -102,38 +204,55 @@ let currentNotesTaskId = null;
 const notesSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 const actionSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>';
 
-function notesCmd(cmd){ document.execCommand(cmd,false,null); document.getElementById("notes-editable").focus(); }
-function notesInsertCheckbox(){
-  const cb='<label style="cursor:pointer"><input type="checkbox" class="note-checkbox" onchange="notesCheckboxChanged()"> </label>';
-  document.execCommand('insertHTML',false,cb);
-  document.getElementById("notes-editable").focus();
-}
-function notesCheckboxChanged(){ if(currentNotesTaskId){ const notes=loadNotes(); const ed=document.getElementById("notes-editable"); notes[currentNotesTaskId]={html:ed.innerHTML,text:ed.innerText.trim()}; saveNotes(notes); } }
+// Legacy stubs (toolbar removed, block editor handles formatting)
+function notesCmd(cmd){}
+function notesInsertCheckbox(){}
+function notesCheckboxChanged(){}
+
+// Block editor instance for notes drawer (window-scoped so tabs.js can share it)
+window._notesBlockEditor=null;
 
 function openNotesDrawer(taskId, taskTitle) {
   currentNotesTaskId = taskId;
   document.getElementById("notes-drawer-task-title").textContent = taskTitle || "Notes";
   const notes = loadNotes();
   const val = notes[taskId];
-  const ed = document.getElementById("notes-editable");
-  if (val && typeof val === "object" && val.html) { ed.innerHTML = val.html; }
-  else if (typeof val === "string" && val) { ed.innerText = val; }
-  else { ed.innerHTML = ""; }
+  const container = document.getElementById("notes-block-editor");
+
+  // Determine initial blocks
+  let initialBlocks=null;
+  if(val && typeof val==="object" && val.blocks && val.blocks.length){
+    initialBlocks=val.blocks;
+  } else if(val && typeof val==="object" && val.html){
+    initialBlocks=migrateHtmlToBlocks(val.html);
+  } else if(typeof val==="string" && val){
+    initialBlocks=migrateHtmlToBlocks(val);
+  }
+
+  // Create or re-initialize block editor
+  if(window._notesBlockEditor) window._notesBlockEditor.destroy();
+  window._notesBlockEditor=createBlockEditor(container, initialBlocks);
+
   renderActionItems(taskId);
   document.getElementById("notes-action-input").style.display = "none";
   document.getElementById("notes-drawer-overlay").classList.add("open");
-  ed.focus();
+  window._notesBlockEditor.focus();
 }
 function closeNotesDrawer() {
-  if (currentNotesTaskId) {
+  if (currentNotesTaskId && window._notesBlockEditor) {
     const notes = loadNotes();
-    const ed = document.getElementById("notes-editable");
-    notes[currentNotesTaskId] = { html: ed.innerHTML, text: ed.innerText.trim() };
+    const blocks=window._notesBlockEditor.getBlocks();
+    notes[currentNotesTaskId] = {
+      blocks: blocks,
+      html: window._notesBlockEditor.toHtml(),
+      text: window._notesBlockEditor.toMarkdown()
+    };
     saveNotes(notes);
   }
   document.getElementById("notes-drawer-overlay").classList.remove("open");
   currentNotesTaskId = null;
-  render();
+  if(typeof _flushDeferredRender==='function')_flushDeferredRender();
+  else render();
 }
 function renderActionItems(taskId) {
   const actions = loadActions();
@@ -193,7 +312,13 @@ function deleteAction(taskId, idx) {
 // ======== ACTION ITEM SCHEDULING ========
 const PENDING_TASKS_KEY = "pa-pending-tasks";
 function loadPendingTasks(){ try{return JSON.parse(localStorage.getItem(PENDING_TASKS_KEY)||"[]")}catch(e){return[]} }
-function savePendingTasks(tasks){ localStorage.setItem(PENDING_TASKS_KEY,JSON.stringify(tasks)); scheduleIDBSave(); exportPendingTasks(); }
+function savePendingTasks(tasks){
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.pendingTasks&&window.blockStore){
+    exportPendingTasks();
+    return;
+  }
+  localStorage.setItem(PENDING_TASKS_KEY,JSON.stringify(tasks)); scheduleIDBSave(); exportPendingTasks();
+}
 
 function scheduleActionToday(taskId, idx){
   const actions=loadActions();

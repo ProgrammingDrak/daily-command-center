@@ -49,15 +49,11 @@ function openPomodoro(title,durMin){
   const modeWork=document.querySelector('.pomo-mode[data-pm="work"]');
   if(modeWork)modeWork.textContent="Focus ("+pomoState.workMin+"m)";
   pomoSetMode("work");
-  // Switch to Timer tab, Focus sub-tab
-  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
-  document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
-  document.getElementById("timer-tab-btn").classList.add("active");
-  document.getElementById("tab-timer").classList.add("active");
-  document.querySelectorAll(".pomo-sub-tab").forEach(t=>t.classList.toggle("active",t.dataset.psub==="focus"));
-  document.querySelectorAll(".pomo-sub-content").forEach(c=>c.classList.remove("active"));
-  document.getElementById("psub-focus").classList.add("active");
-  pomoRenderReport();buildMiniSchedule();buildSideConsider();buildSideBacklog();buildSideDone();
+  // Open floating timer panel
+  document.getElementById("ft-panel").style.display="flex";
+  document.getElementById("ft-fab").style.display="none";
+  document.getElementById("ft-mini").style.display="none";
+  pomoRenderReport();
   savePomoState();
 }
 
@@ -92,19 +88,41 @@ document.getElementById("pomo-sound").addEventListener("click",()=>{
 document.getElementById("pomo-task-check").addEventListener("click",()=>{
   openTaskCompletionModal(pomoState.title);
 });
-// Sub-tab switching
-document.querySelectorAll(".pomo-sub-tab").forEach(tab=>{
-  tab.addEventListener("click",()=>{
-    document.querySelectorAll(".pomo-sub-tab").forEach(t=>t.classList.remove("active"));
-    document.querySelectorAll(".pomo-sub-content").forEach(c=>c.classList.remove("active"));
-    tab.classList.add("active");
-    document.getElementById("psub-"+tab.dataset.psub).classList.add("active");
-    if(tab.dataset.psub==="report")pomoRenderReport();
-  });
-});
+// Note: Focus/Report sub-tabs removed — report is now a collapsible <details> in the floating panel
 
 // +1 minute button
 document.getElementById("pomo-add-min").addEventListener("click",()=>{
   pomoState.remaining+=60;pomoState.total+=60;pomoPaint();
+});
+
+// ======== FLOATING TIMER CONTROLS ========
+document.getElementById("ft-fab").addEventListener("click",()=>{
+  document.getElementById("ft-panel").style.display="flex";
+  document.getElementById("ft-fab").style.display="none";
+  document.getElementById("ft-mini").style.display="none";
+});
+document.getElementById("ft-panel-close").addEventListener("click",()=>{
+  document.getElementById("ft-panel").style.display="none";
+  if(pomoState.running){
+    document.getElementById("ft-mini").style.display="flex";
+    document.getElementById("ft-fab").style.display="none";
+    pomoPaint(); // update mini bar
+  } else {
+    document.getElementById("ft-mini").style.display="none";
+    document.getElementById("ft-fab").style.display="flex";
+  }
+});
+document.getElementById("ft-mini").addEventListener("click",()=>{
+  document.getElementById("ft-panel").style.display="flex";
+  document.getElementById("ft-mini").style.display="none";
+  document.getElementById("ft-fab").style.display="none";
+});
+document.getElementById("ft-mini-pause").addEventListener("click",(e)=>{
+  e.stopPropagation(); // don't open panel
+  document.getElementById("pomo-start").click(); // reuse existing start/pause logic
+});
+// Task card click opens picker
+document.getElementById("pomo-task-card").addEventListener("click",()=>{
+  openTaskPicker();
 });
 

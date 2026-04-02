@@ -237,9 +237,20 @@ let _dmCallback=null, _dmId=null, _dmEv=null, _dmSessions=[];
 function openDoneModal(id, title, onConfirm, ev){
   _dmId=id; _dmCallback=onConfirm; _dmEv=ev||null;
   document.getElementById("done-modal-title").textContent="Complete: "+title;
-  // Pre-populate notes (any notes saved for this item)
+  // Pre-populate notes via block editor
   const notes=loadNotes();
-  document.getElementById("dm-notes").value=notes[id]||"";
+  const noteVal=notes[id];
+  const dmNotesContainer=document.getElementById("dm-notes-editor");
+  let dmNoteBlocks=null;
+  if(noteVal && typeof noteVal==="object" && noteVal.blocks && noteVal.blocks.length){
+    dmNoteBlocks=noteVal.blocks;
+  } else if(noteVal && typeof noteVal==="object" && noteVal.html){
+    dmNoteBlocks=migrateHtmlToBlocks(noteVal.html);
+  } else if(typeof noteVal==="string" && noteVal){
+    dmNoteBlocks=migrateHtmlToBlocks(noteVal);
+  }
+  if(window._dmBlockEditor) window._dmBlockEditor.destroy();
+  window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks);
   // Pre-populate action items
   document.getElementById("dm-action-input").style.display="none";
   renderDmActions(id);
@@ -250,6 +261,10 @@ function openDoneModal(id, title, onConfirm, ev){
     const sessions=loadSessions();
     if(sessions[id] && sessions[id].length){
       _dmSessions=sessions[id].map(s=>({...s}));
+    } else if(typeof pomoState!=="undefined" && pomoState.taskTime && pomoState.taskTime[title] > 0){
+      const pomoSec=pomoState.taskTime[title];
+      const pomoMin=Math.max(1,Math.round(pomoSec/60));
+      _dmSessions=[{start:ev.start, durationMin:pomoMin, isPlanned:false, isFromTimer:true}];
     } else {
       _dmSessions=[{start:ev.start, durationMin:dur(ev), isPlanned:true}];
     }
@@ -293,19 +308,23 @@ function openDoneModal(id, title, onConfirm, ev){
     parentSection.style.display = "none";
   }
   document.getElementById("done-modal-overlay").classList.add("open");
-  setTimeout(()=>document.getElementById("dm-notes").focus(),80);
+  setTimeout(()=>{if(window._dmBlockEditor)window._dmBlockEditor.focus()},80);
 }
 function closeDoneModal(){
   document.getElementById("done-modal-overlay").classList.remove("open");
   _dmId=null; _dmCallback=null; _dmEv=null; _dmSessions=[];
+  if(typeof _flushDeferredRender==='function')_flushDeferredRender();
 }
 function confirmDoneModal(){
   if(!_dmId)return;
-  // Capture notes before any DOM changes
-  const text=document.getElementById("dm-notes").value;
+  // Capture notes from block editor
   const notes=loadNotes();
-  if(text.trim())notes[_dmId]=text; else delete notes[_dmId];
+  if(window._dmBlockEditor && !window._dmBlockEditor.isEmpty()){
+    const blocks=window._dmBlockEditor.getBlocks();
+    notes[_dmId]={blocks:blocks, html:window._dmBlockEditor.toHtml(), text:window._dmBlockEditor.toMarkdown()};
+  } else { delete notes[_dmId]; }
   saveNotes(notes);
+  const text=notes[_dmId]?notes[_dmId].text:"";
   // Save time sessions
   if(_dmSessions.length){
     const sessions=loadSessions();
@@ -334,8 +353,8 @@ function renderDmSessions(){
     const endMins=pt(s.start)+s.durationMin;
     const endStr=f12(fmt(endMins%1440));
     const startStr=f12(s.start);
-    const planned=s.isPlanned?' is-planned':'';
-    const badge=s.isPlanned?'<span class="dm-sess-badge">Planned</span>':'';
+    const planned=s.isPlanned?' is-planned':s.isFromTimer?' is-timer':'';
+    const badge=s.isPlanned?'<span class="dm-sess-badge">Planned</span>':s.isFromTimer?'<span class="dm-sess-badge" style="background:var(--green);color:#000">Timer</span>':'';
     const sh=parseInt(s.start.split(':')[0]),sm=parseInt(s.start.split(':')[1]);
     const sap=sh>=12?'PM':'AM',sh12=sh>12?sh-12:sh||12;
     return '<div class="dm-session-row'+planned+'" data-idx="'+i+'">'+
@@ -640,7 +659,7 @@ document.getElementById("notes-action-text").addEventListener("keydown", e => { 
 // ======== REVIEW BADGE & POPOVER ========
 let REVIEWED_KEY = "pa-reviewed-" + (__state ? __state.date : "unknown");
 function loadReviewed() { try { return JSON.parse(localStorage.getItem(REVIEWED_KEY) || "{}"); } catch(e) { return {}; } }
-function saveReviewed(data) { localStorage.setItem(REVIEWED_KEY, JSON.stringify(data)); scheduleIDBSave(); }
+function saveReviewed(data) { if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return; localStorage.setItem(REVIEWED_KEY, JSON.stringify(data)); scheduleIDBSave(); }
 
 let _reviewCurrent = null;
 function openReviewPopover(badge) {
@@ -742,8 +761,30 @@ function buildTriageCard(item) {
 // Triage parent linking
 let TRIAGE_PARENTS_KEY = "pa-triage-parents-" + ((__state && __state.date) || "unknown");
 function loadTriageParents(){ try{return JSON.parse(localStorage.getItem(TRIAGE_PARENTS_KEY)||"{}")}catch(e){return{}} }
-function saveTriageParents(data){ localStorage.setItem(TRIAGE_PARENTS_KEY,JSON.stringify(data)); scheduleIDBSave(); }
+function saveTriageParents(data){ if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return; localStorage.setItem(TRIAGE_PARENTS_KEY,JSON.stringify(data)); scheduleIDBSave(); }
 
+function buildScheduleSoon() {
+  const list=document.getElementById("soon-pushed-list");
+  if(!list)return;
+  const pushed=scheduled.filter(ev=>isPushed(ev));
+  if(!pushed.length){list.innerHTML='';return}
+  list.innerHTML='<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px">Pushed from Schedule</div>'+
+    pushed.map(ev=>{
+      const c=cfg(ev.type);
+      return '<div class="consider-card" style="margin-bottom:6px">'+
+        '<div class="cc-bar" style="background:'+c.color+'"></div>'+
+        '<div class="cc-body">'+
+          '<div class="cc-title">'+ev.title+'</div>'+
+          '<div class="cc-meta">'+ms(dur(ev))+' &middot; pushed from schedule</div>'+
+        '</div>'+
+        '<button class="cc-action" onclick="unpushTask(\''+ev.id+'\');render()" title="Restore to schedule" style="background:rgba(34,197,94,0.1);color:var(--green);border:1px solid rgba(34,197,94,0.2)">Restore</button>'+
+      '</div>';
+    }).join('');
+  // Update badge
+  const soonCount=pushed.length+consider.length;
+  const badge=document.getElementById("soon-count");
+  if(badge){badge.textContent=soonCount;badge.style.display=soonCount?"":"none"}
+}
 function buildTriage() {
   const dismissed = loadDismissed();
   const triageParents = loadTriageParents();
@@ -873,7 +914,7 @@ function buildTriage() {
   });
 
   // Wire notes buttons in triage (event delegation -- triage is rebuilt dynamically)
-  document.querySelectorAll("#tab-triage .notes-btn").forEach(nb => {
+  document.querySelectorAll("#tm-triage .notes-btn").forEach(nb => {
     nb.addEventListener("click", e => {
       e.stopPropagation();
       openNotesDrawer(nb.dataset.notesId, nb.dataset.notesTitle);
@@ -881,7 +922,7 @@ function buildTriage() {
   });
 
   // Wire review badges in triage
-  document.querySelectorAll("#tab-triage .review-badge").forEach(badge => {
+  document.querySelectorAll("#tm-triage .review-badge").forEach(badge => {
     badge.addEventListener("click", e => {
       e.stopPropagation();
       openReviewPopover(badge);
@@ -891,7 +932,7 @@ function buildTriage() {
   // Notifications with dismiss support
   const NOTIF_DISMISS_KEY = "pa-notif-dismissed-" + ((__state && __state.date) || "unknown");
   function loadNotifDismissed(){ try{return JSON.parse(localStorage.getItem(NOTIF_DISMISS_KEY)||"[]")}catch(e){return[]} }
-  function saveNotifDismissed(ids){ localStorage.setItem(NOTIF_DISMISS_KEY,JSON.stringify(ids)); scheduleIDBSave(); }
+  function saveNotifDismissed(ids){ if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return; localStorage.setItem(NOTIF_DISMISS_KEY,JSON.stringify(ids)); scheduleIDBSave(); }
 
   const notifEl = document.getElementById("triage-notifications");
   if (notifEl && INIT_NOTIFICATIONS.length) {

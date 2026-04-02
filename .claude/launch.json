@@ -3,9 +3,10 @@
   "configurations": [
     {
       "name": "daily-command-center",
-      "runtimeExecutable": "node",
+      "runtimeExecutable": "/usr/local/bin/node",
       "runtimeArgs": ["server.js"],
-      "port": 8090
+      "port": 8091,
+      "env": { "PORT": "8091" }
     }
   ]
 }

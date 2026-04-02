@@ -89,7 +89,8 @@ function transformState(state) {
         priority: item.priority || "",
         completed: item.completed || false,
         nested: false,
-        prep: prep
+        prep: prep,
+        prepStatus: matchedMeeting ? (matchedMeeting.prep_status || null) : null
       });
     });
   }

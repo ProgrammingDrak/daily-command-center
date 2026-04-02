@@ -80,8 +80,9 @@ function buildActualView(){
 // ======== SCHEDULE TAB ========
 function buildSchedule(){
   const tl=document.getElementById("timeline");tl.innerHTML="";
-  // Separate done vs pushed vs active vs deleted, preserving order within each group
-  const vis=scheduled.filter(ev=>!isDeleted(ev));
+  // Separate done vs pushed vs active vs deleted vs trivial-flagged
+  const trivFlags=loadTrivialFlags();
+  const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Phase 7: hide trivial-flagged from schedule
   const doneItems=vis.filter(isDone);
   const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
@@ -155,19 +156,17 @@ function buildSchedule(){
     detailMeta.push('<span>Duration: '+ms(d)+(changed?' (was '+ms(od)+')':'')+'</span>');
     detailMeta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
     if(detailMeta.length)detailParts.push('<div class="detail-meta">'+detailMeta.join('')+'</div>');
-    if(!isMeeting(ev)){
-      const trivChecked=!!loadTrivialFlags()[ev.id];
-      detailParts.push('<div class="triv-flag-row"><input type="checkbox" class="triv-flag-chk" id="triv-flag-'+ev.id+'"'+(trivChecked?' checked':'')+'>'+
-        '<label class="triv-flag-label" for="triv-flag-'+ev.id+'">⚡ Mark as trivial — stack with another task</label></div>');
-    }
+    // Subtasks and trivial tasks are now in the Add Items modal (openAddModal)
+    // Show a summary count in the detail panel if items exist
     if(!isMeeting(ev)){
       const subs=loadSubtasks()[ev.id]||[];
-      let stHtml='<div class="subtask-section"><div class="st-header">Subtasks'+(subs.length?' ('+subs.length+')':'')+'</div>';
-      subs.forEach(st=>{
-        stHtml+='<div class="subtask-item"><div class="st-check'+(st.done?' done':'')+('" data-stid="'+st.id+'" data-taskid="'+ev.id+'">')+(st.done?'✓':'')+'</div><span class="st-text'+(st.done?' done':'')+'">'+st.text+'</span><button class="st-del" data-stid="'+st.id+'" data-taskid="'+ev.id+'">✕</button></div>';
-      });
-      stHtml+='<div class="st-add-row"><input class="st-input" type="text" placeholder="Add subtask..." data-taskid="'+ev.id+'"><button class="st-add-btn" data-taskid="'+ev.id+'">+ Add</button></div></div>';
-      detailParts.push(stHtml);
+      const linkedTriv=getLinkedTrivialTasks(ev.id);
+      if(subs.length||linkedTriv.length){
+        let counts=[];
+        if(subs.length)counts.push(subs.length+' subtask'+(subs.length>1?'s':''));
+        if(linkedTriv.length)counts.push(linkedTriv.length+' trivial task'+(linkedTriv.length>1?'s':''));
+        detailParts.push('<div class="detail-meta" style="cursor:pointer" onclick="openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')"><span style="color:var(--cyan)">⚡ '+counts.join(', ')+'</span> <span style="font-size:10px;opacity:0.5">click to manage</span></div>');
+      }
     }
     const hasDetail=detailParts.length>0;
     const chevron='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;flex-shrink:0;opacity:0.4"><path d="M6 9l6 6 6-6"/></svg>';
@@ -202,7 +201,8 @@ function buildSchedule(){
     const prepTab=hasPrep?'<div class="edge-tab edge-prep" data-edge="prep">'+chevSm+' Prep '+ev.prep.length+'</div>':'';
     const fuTab=hasFu?'<div class="edge-tab edge-fu" data-edge="fu">'+ev.followups.length+' Actions '+chevSm+'</div>':'';
     const isTrivialFlagged=!isMeeting(ev)&&!!loadTrivialFlags()[ev.id];
-    const trivialTab=isTrivialFlagged?'<div class="edge-trivial">⚡ Trivial — stack with another task</div>':'';
+    // Phase 7: removed edge-trivial banner (replaced by link button on card)
+    const trivialTab='';
 
     // Prep-aware time label with hover tooltip
     let timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+f12(ev.start).replace(" ","<br>")+'<span class="et">'+f12(ev.end)+'</span>';
@@ -221,17 +221,19 @@ function buildSchedule(){
           '<button class="chk" title="Mark done">'+ckSvg+'</button>'+
           '<div class="chk-col">'+
             '<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>'+
-            (!isMeeting(ev)?'<button class="st-quick-btn" title="Add subtask">+sub</button>':'')+
+            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or trivial task" data-add-id="'+ev.id+'">+</button>':'')+
           '</div>'+
           '<div class="bar" style="background:'+c.color+'"></div>'+
           '<div class="body">'+
             '<div class="title-row"><span class="ttl">'+ev.title+'</span>'+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
             '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+colorMeta(ev)+
+              (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
             '</div>'+
           '</div>'+
           notesButton(ev)+
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+          (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Mark as trivial — move to triage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
           (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Move to tomorrow"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
           '<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
           '<div class="dur">'+
@@ -249,7 +251,15 @@ function buildSchedule(){
     // Event listeners
     el.querySelector(".chk").addEventListener("click",e=>{e.stopPropagation();openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);});
     el.querySelector(".chk-quick").addEventListener("click",e=>{e.stopPropagation();e.currentTarget.classList.add("flash");toggleDone(ev.id);});
-    const stqb=el.querySelector(".st-quick-btn");if(stqb)stqb.addEventListener("click",e=>{e.stopPropagation();const cw=el.querySelector(".card-wrap");if(!cw.querySelector(".detail-panel.open"))toggleDetail(cw);setTimeout(()=>{const inp=el.querySelector(".st-input");if(inp)inp.focus();},50);});
+    // + button opens task detail modal directly (no dropdown)
+    const addBtn=el.querySelector(".btn-add-menu");
+    if(addBtn)addBtn.addEventListener("click",e=>{
+      e.stopPropagation();
+      if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
+    });
+    // Trivial link button
+    const trivLink=el.querySelector(".btn-triv-link");
+    if(trivLink)trivLink.addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(ev.id);});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
     const stSpan=el.querySelector(".start-time");if(stSpan&&!isMeeting(ev)){stSpan.addEventListener("click",e=>{e.stopPropagation();openStartTimePicker(ev.id,stSpan);});}
     const dbadge=el.querySelector(".dbadge");
@@ -301,15 +311,12 @@ function buildSchedule(){
       setTimeout(()=>document.addEventListener("click",onOutside,true),0);
     });}
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
-    const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle)});
+    const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();pushTask(pb.dataset.pushId)});
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
-    const trivChk=el.querySelector(".triv-flag-chk");if(trivChk)trivChk.addEventListener("change",e=>{e.stopPropagation();toggleTrivialFlag(ev.id);});
-    el.querySelectorAll(".st-check").forEach(c=>c.addEventListener("click",e=>{e.stopPropagation();toggleSubtask(c.dataset.taskid,c.dataset.stid);}));
-    el.querySelectorAll(".st-del").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();deleteSubtask(b.dataset.taskid,b.dataset.stid);}));
-    el.querySelectorAll(".st-add-btn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();const inp=el.querySelector('.st-input[data-taskid="'+b.dataset.taskid+'"]');if(inp){addSubtask(b.dataset.taskid,inp.value);inp.value="";}}));
-    el.querySelectorAll(".st-input").forEach(inp=>inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.stopPropagation();addSubtask(inp.dataset.taskid,inp.value);inp.value="";}}));
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".triv-flag-chk")||e.target.closest(".triv-flag-row")||e.target.closest(".st-quick-btn"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    // Phase 7: removed old triv-flag-chk (replaced by btn-triv-link on card face)
+    // Subtask and trivial task management moved to Add Items modal (openAddModal)
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Edge tab toggle listeners
     el.querySelectorAll(".edge-tab").forEach(tab=>{
@@ -391,7 +398,7 @@ function buildSchedule(){
 // ======== CONSIDER FOR TODAY TAB ========
 function buildConsider(){
   const board=document.getElementById("consider-board");board.innerHTML="";
-  document.getElementById("consider-count").textContent=consider.length;
+  const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=consider.length;
   if(!consider.length){board.innerHTML='<div class="board-empty">Nothing flagged for today. Nice work, or add tasks via Notion.</div>';return}
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
   const sorted=[...consider].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
@@ -508,13 +515,19 @@ function addPS(track,s,e,title,color,done,tot){
 }
 
 // ======== STATS ========
+function _actualMin(ev){
+  // Get actual time worked: timer > saved sessions > planned duration
+  if(typeof pomoState!=="undefined" && pomoState.taskTime && pomoState.taskTime[ev.title]>0)
+    return Math.round(pomoState.taskTime[ev.title]/60);
+  try{const s=loadSessions();if(s[ev.id]&&s[ev.id].length)return s[ev.id].reduce((a,x)=>a+x.durationMin,0);}catch(e){}
+  return dur(ev);
+}
 function updateStats(){
-  const dc=scheduled.filter(isDone).length;
-  document.getElementById("s-done").textContent=dc;
-  document.getElementById("s-rem").textContent=scheduled.length-dc;
-  document.getElementById("s-changes").textContent=actionLog.length;
-  const remMin=scheduled.filter(ev=>!isDone(ev)).reduce((a,ev)=>a+dur(ev),0);
-  document.getElementById("s-est").textContent=ms(remMin);
+  const done=scheduled.filter(isDone), rem=scheduled.filter(ev=>!isDone(ev));
+  const remMin=rem.reduce((a,ev)=>a+dur(ev),0);
+  const doneMin=done.reduce((a,ev)=>a+_actualMin(ev),0);
+  document.getElementById("s-rem").textContent=rem.length+" / "+ms(remMin);
+  document.getElementById("s-done").textContent=done.length+" / "+ms(doneMin);
   if(scheduled.length){document.getElementById("s-end").textContent=f12(scheduled[scheduled.length-1].end).replace(" ","").toLowerCase()}
 }
 
@@ -539,34 +552,14 @@ function showStatPopover(statId, event) {
       const done = scheduled.filter(isDone);
       html = '<div class="sp-title">Completed Today</div>';
       if (!done.length) { html += '<div class="sp-empty">Nothing checked off yet.</div>'; break; }
-      html += done.map(ev => { const t = doneAt[ev.id] ? new Date(doneAt[ev.id]).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—'; return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(dur(ev))+'</span></div>'; }).join('');
-      break;
-    }
-    case 's-changes': {
-      const checks = actionLog.filter(a=>a.type==="checked").length;
-      const unchecks = actionLog.filter(a=>a.type==="unchecked").length;
-      const durs2 = Object.keys(durChanges).length;
-      const reorders = actionLog.filter(a=>a.type==="reorder").length;
-      const adds = actionLog.filter(a=>a.type==="scheduled"||a.type==="created").length;
-      html = '<div class="sp-title">Schedule Actions</div>';
-      if (!actionLog.length) { html += '<div class="sp-empty">No changes made yet.</div>'; }
-      else {
-        if (checks) html += '<div class="sp-row"><span class="sp-label">Tasks checked off</span><span class="sp-dur">'+checks+'</span></div>';
-        if (unchecks) html += '<div class="sp-row"><span class="sp-label">Tasks unchecked</span><span class="sp-dur">'+unchecks+'</span></div>';
-        if (durs2) html += '<div class="sp-row"><span class="sp-label">Duration adjustments</span><span class="sp-dur">'+durs2+'</span></div>';
-        if (reorders) html += '<div class="sp-row"><span class="sp-label">Reorders</span><span class="sp-dur">'+reorders+'</span></div>';
-        if (adds) html += '<div class="sp-row"><span class="sp-label">Tasks added</span><span class="sp-dur">'+adds+'</span></div>';
-      }
-      html += '<div class="sp-note">Changes sync to Notion when you click the Sync button below.</div>';
-      break;
-    }
-    case 's-est': {
-      const remT = scheduled.filter(ev => !isDone(ev));
-      html = '<div class="sp-title">Time Left in Schedule</div>';
-      if (!remT.length) { html += '<div class="sp-empty">No remaining tasks.</div>'; break; }
-      html += remT.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(dur(ev))+'</span></div>').join('');
-      const total = remT.reduce((a,ev)=>a+dur(ev),0);
-      html += '<div class="sp-note">Total: '+ms(total)+' across '+remT.length+' task'+(remT.length===1?'':'s')+'</div>';
+      html += done.map(ev => {
+        const t = doneAt[ev.id] ? new Date(doneAt[ev.id]).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
+        const actual=_actualMin(ev), planned=dur(ev);
+        const diff=actual-planned, diffLabel=diff>0?'+'+ms(diff):diff<0?'-'+ms(-diff):'';
+        return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(actual)+(diffLabel?' <span style="font-size:10px;opacity:0.6">('+diffLabel+')</span>':'')+'</span></div>';
+      }).join('');
+      const totalActual=done.reduce((a,ev)=>a+_actualMin(ev),0), totalPlanned=done.reduce((a,ev)=>a+dur(ev),0);
+      html+='<div class="sp-note">Actual: '+ms(totalActual)+' / Planned: '+ms(totalPlanned)+'</div>';
       break;
     }
     case 's-end': {

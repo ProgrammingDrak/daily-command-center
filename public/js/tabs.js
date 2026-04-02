@@ -4,7 +4,18 @@ document.querySelectorAll(".tab").forEach(tab=>{
     document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
     document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
     tab.classList.add("active");document.getElementById("tab-"+tab.dataset.tab).classList.add("active");
-    if(tab.dataset.tab==="timer"){buildMiniSchedule();buildSideConsider();buildSideBacklog();buildSideDone();}
+    if(tab.dataset.tab==="calendar"&&typeof buildCalendar==="function"){buildCalendar();}
+  });
+});
+
+// ======== TASK MENUS SUB-TABS ========
+document.querySelectorAll(".tm-tab").forEach(tab=>{
+  tab.addEventListener("click",()=>{
+    document.querySelectorAll(".tm-tab").forEach(t=>t.classList.remove("active"));
+    document.querySelectorAll(".tm-panel").forEach(p=>p.classList.remove("active"));
+    tab.classList.add("active");
+    const panel=document.getElementById("tm-"+tab.dataset.tm);
+    if(panel)panel.classList.add("active");
   });
 });
 
@@ -14,11 +25,11 @@ const UPCOMING_NOTES_KEY = "pa-upcoming-notes";
 const UPCOMING_ACTIONS_KEY = "pa-upcoming-actions";
 const PUSHED_DOCS_KEY = "pa-pushed-docs";
 function loadUpNotes(){try{return JSON.parse(localStorage.getItem(UPCOMING_NOTES_KEY)||"{}")}catch(e){return{}}}
-function saveUpNotes(d){localStorage.setItem(UPCOMING_NOTES_KEY,JSON.stringify(d));scheduleIDBSave()}
+function saveUpNotes(d){if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;localStorage.setItem(UPCOMING_NOTES_KEY,JSON.stringify(d));scheduleIDBSave()}
 function loadUpActions(){try{return JSON.parse(localStorage.getItem(UPCOMING_ACTIONS_KEY)||"{}")}catch(e){return{}}}
-function saveUpActions(d){localStorage.setItem(UPCOMING_ACTIONS_KEY,JSON.stringify(d));scheduleIDBSave()}
+function saveUpActions(d){if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;localStorage.setItem(UPCOMING_ACTIONS_KEY,JSON.stringify(d));scheduleIDBSave()}
 function loadPushedDocs(){try{return JSON.parse(localStorage.getItem(PUSHED_DOCS_KEY)||"{}")}catch(e){return{}}}
-function savePushedDocs(d){localStorage.setItem(PUSHED_DOCS_KEY,JSON.stringify(d));scheduleIDBSave()}
+function savePushedDocs(d){if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;localStorage.setItem(PUSHED_DOCS_KEY,JSON.stringify(d));scheduleIDBSave()}
 
 // Notes button for upcoming meetings (uses its own localStorage keys)
 function upNotesButton(mtg) {
@@ -40,11 +51,22 @@ function openUpcomingNotesDrawer(id, title) {
   currentNotesTaskId = id;
   document.getElementById("notes-drawer-task-title").textContent = title || "Meeting Notes";
   const notes = loadUpNotes();
-  const ed = document.getElementById("notes-editable");
   const val = notes[id];
-  if (val && typeof val === "object" && val.html) { ed.innerHTML = val.html; }
-  else if (typeof val === "string" && val) { ed.innerText = val; }
-  else { ed.innerHTML = ""; }
+  const container = document.getElementById("notes-block-editor");
+
+  // Determine initial blocks
+  let initialBlocks=null;
+  if(val && typeof val==="object" && val.blocks && val.blocks.length){
+    initialBlocks=val.blocks;
+  } else if(val && typeof val==="object" && val.html){
+    initialBlocks=migrateHtmlToBlocks(val.html);
+  } else if(typeof val==="string" && val){
+    initialBlocks=migrateHtmlToBlocks(val);
+  }
+
+  if(window._notesBlockEditor) window._notesBlockEditor.destroy();
+  window._notesBlockEditor=createBlockEditor(container, initialBlocks);
+
   // Render action items from upcoming store
   const actions = loadUpActions();
   const items = actions[id] || [];
@@ -66,7 +88,7 @@ function openUpcomingNotesDrawer(id, title) {
   window._upcomingNotesMode = true;
   window._upcomingNotesId = id;
   document.getElementById("notes-drawer-overlay").classList.add("open");
-  document.getElementById("notes-editable").focus();
+  window._notesBlockEditor.focus();
 }
 function toggleUpAction(id, idx) {
   const actions = loadUpActions();
@@ -173,8 +195,10 @@ const _origCloseNotesDrawer = closeNotesDrawer;
 closeNotesDrawer = function() {
   if (window._upcomingNotesMode && window._upcomingNotesId) {
     const notes = loadUpNotes();
-    const ed = document.getElementById("notes-editable");
-    notes[window._upcomingNotesId] = { html: ed.innerHTML, text: ed.innerText.trim() };
+    if(window._notesBlockEditor && !window._notesBlockEditor.isEmpty()){
+      const blocks=window._notesBlockEditor.getBlocks();
+      notes[window._upcomingNotesId]={blocks:blocks, html:window._notesBlockEditor.toHtml(), text:window._notesBlockEditor.toMarkdown()};
+    } else { delete notes[window._upcomingNotesId]; }
     saveUpNotes(notes);
     window._upcomingNotesMode = false;
     window._upcomingNotesId = null;
@@ -209,27 +233,49 @@ addActionItem = function(taskId) {
 // ======== SUBTASKS ========
 let SUBTASK_KEY = "pa-subtasks-" + ((__state && __state.date) ? __state.date : "unknown");
 function loadSubtasks(){try{return JSON.parse(localStorage.getItem(SUBTASK_KEY)||"{}")}catch(e){return{}}}
-function saveSubtasks(data){try{localStorage.setItem(SUBTASK_KEY,JSON.stringify(data));scheduleIDBSave()}catch(e){}}
+function saveSubtasks(data){
+  // Always persist subtasks — store on day_root like other per-day state
+  if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v)&&window.blockStore){
+    var dayRootId=window.blockStore.getDayRootId();
+    var root=window.blockStore.get(dayRootId);
+    if(root){window.blockStore.updateBlock(dayRootId,Object.assign({},root.properties,{_subtasks:data}));}
+    return;
+  }
+  try{localStorage.setItem(SUBTASK_KEY,JSON.stringify(data));scheduleIDBSave()}catch(e){}
+}
+// Also fix loadSubtasks to read from BlockStore
+var _origLoadSubtasks=loadSubtasks;
+loadSubtasks=function(){
+  if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v)&&window.blockStore){
+    var dayRootId=window.blockStore.getDayRootId();
+    var root=window.blockStore.get(dayRootId);
+    return(root&&root.properties._subtasks)||{};
+  }
+  return _origLoadSubtasks();
+};
 
 function addSubtask(taskId, text){
   if(!text.trim())return;
   const all=loadSubtasks();
   if(!all[taskId])all[taskId]=[];
-  all[taskId].push({id:"st-"+Date.now(),text:text.trim(),done:false});
-  saveSubtasks(all);render();
+  all[taskId].push({id:"st-"+Date.now(),text:text.trim(),done:false,created:new Date().toISOString()});
+  saveSubtasks(all);
+  render(); // Global guard in render() handles modal-open deferral
 }
 function toggleSubtask(taskId, stId){
   const all=loadSubtasks();
   if(!all[taskId])return;
   const st=all[taskId].find(s=>s.id===stId);
   if(st)st.done=!st.done;
-  saveSubtasks(all);render();
+  saveSubtasks(all);
+  render();
 }
 function deleteSubtask(taskId, stId){
   const all=loadSubtasks();
   if(!all[taskId])return;
   all[taskId]=all[taskId].filter(s=>s.id!==stId);
-  saveSubtasks(all);render();
+  saveSubtasks(all);
+  render();
 }
 function getIncompleteSubtasks(taskId){
   const all=loadSubtasks();

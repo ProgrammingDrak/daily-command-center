@@ -1,3 +1,22 @@
+// ======== SAVE STATUS + TOAST ========
+function updateSaveStatus(state, text) {
+  const el = document.getElementById("save-status");
+  if (!el) return;
+  el.className = "save-status save-status--" + state;
+  const textEl = el.querySelector(".save-status-text");
+  if (textEl) textEl.textContent = text || "";
+}
+
+function showToast(message, type = "error", duration = 5000) {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = "toast toast--" + type;
+  toast.innerHTML = `<span>${message}</span><button class="toast-close" onclick="this.parentElement.remove()">&times;</button>`;
+  container.appendChild(toast);
+  if (duration > 0) setTimeout(() => toast.remove(), duration);
+}
+
 // ======== DATE NAVIGATION ========
 // viewMode: "today" (editable, live) | "tomorrow" (editable, pre-plan) | "archive" (read-only)
 let viewMode = "today";
@@ -189,64 +208,81 @@ function collectGlobalState() {
   } catch(e) { return {}; }
 }
 
-// Debounced IndexedDB save — mirrors localStorage writes with 2s delay
+// ======== PERSISTENCE TIMERS ========
+// Phase 0 quick fix: reduced debounce for critical state + heartbeat + flush on unload
 let _idbTimer = null;
+let _expressTimer = null;
+let _heartbeatTimer = null;
+let _hasPendingChanges = false;
+
 function scheduleIDBSave() {
+  // Phase 6: Skip localStorage/IDB/Express sync entirely when all BlockStore flags are ON
+  // BlockStore writes directly to SQLite — no need for the old 3-tier system
+  if (window.USE_BLOCKSTORE && Object.values(window.USE_BLOCKSTORE).every(v => v)) {
+    return; // BlockStore handles all persistence now
+  }
+  _hasPendingChanges = true;
+  updateSaveStatus("saving", "Saving...");
   clearTimeout(_idbTimer);
   _idbTimer = setTimeout(() => {
     const date = (__state && __state.date) ? __state.date : "unknown";
     PaDB.saveDate(date, collectAllState());
     PaDB.saveGlobal('globals', collectGlobalState());
-  }, 2000);
-  scheduleFileDBSave();
+  }, 500);
+  scheduleExpressSave();
 }
 
-// ======== FILE DB PERSISTENCE (The Second Brain - Tier 3) ========
-const FILE_DB_SYNC_URL = "http://localhost:8091";
-let _fileDBTimer = null;
-let _fileDBAvailable = null; // null = unknown, true/false after first check
+// Durable persistence via Express server at :8090
+function scheduleExpressSave() {
+  clearTimeout(_expressTimer);
+  _expressTimer = setTimeout(() => {
+    flushToExpress();
+  }, 2000); // Reduced from 15000ms to 2000ms
+}
 
-async function checkFileDBHealth() {
+// Synchronous-ish Express flush — used by both debounce and beforeunload
+function flushToExpress() {
+  const date = (__state && __state.date) ? __state.date : "unknown";
+  if (date === "unknown") return;
+  _hasPendingChanges = false;
   try {
-    const res = await fetch(FILE_DB_SYNC_URL + "/api/health", { signal: AbortSignal.timeout(1000) });
-    _fileDBAvailable = res.ok;
-  } catch { _fileDBAvailable = false; }
-  return _fileDBAvailable;
+    // Use keepalive: true so fetch survives page unload
+    fetch("/api/save-day", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectAllState()),
+      keepalive: true
+    }).then(() => {
+      updateSaveStatus("ok", "All changes saved");
+    }).catch((e) => {
+      updateSaveStatus("error", "Save failed — retrying...");
+      console.warn("[Express Sync] save-day failed:", e.message);
+    });
+    fetch("/api/save-globals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectGlobalState()),
+      keepalive: true
+    }).catch(() => {});
+  } catch(e) {
+    updateSaveStatus("error", "Save failed");
+    console.warn("[Express Sync] Save failed:", e.message);
+  }
 }
 
-function scheduleFileDBSave() {
-  clearTimeout(_fileDBTimer);
-  _fileDBTimer = setTimeout(async () => {
-    if (_fileDBAvailable === false) return; // skip if known down
-    if (_fileDBAvailable === null) await checkFileDBHealth();
-    if (!_fileDBAvailable) return;
-
-    const date = (__state && __state.date) ? __state.date : "unknown";
-    if (date === "unknown") return;
-
-    try {
-      // Save day-state
-      await fetch(FILE_DB_SYNC_URL + "/api/save-day", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(collectAllState()),
-        signal: AbortSignal.timeout(3000)
-      });
-      // Save globals
-      await fetch(FILE_DB_SYNC_URL + "/api/save-globals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(collectGlobalState()),
-        signal: AbortSignal.timeout(3000)
-      });
-    } catch(e) {
-      console.warn("[File DB] Sync failed:", e.message);
-      _fileDBAvailable = false;
-      // Retry health check in 30s
-      setTimeout(() => { _fileDBAvailable = null; }, 30000);
+// Heartbeat: save every 2s while there are pending changes
+function startHeartbeat() {
+  if (_heartbeatTimer) return;
+  _heartbeatTimer = setInterval(() => {
+    if (_hasPendingChanges) {
+      const date = (__state && __state.date) ? __state.date : "unknown";
+      PaDB.saveDate(date, collectAllState());
+      PaDB.saveGlobal('globals', collectGlobalState());
+      flushToExpress();
     }
-  }, 5000); // 5s debounce (longer than IDB to reduce disk writes)
+  }, 2000);
 }
+startHeartbeat();
 
 // Write a state object back into localStorage for a given date
 function writeToLocalStorage(date, state) {
@@ -270,7 +306,16 @@ function writeToLocalStorage(date, state) {
   };
   for (const [key, val] of Object.entries(writes)) {
     if (val !== undefined && val !== null) {
-      try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+      try {
+        localStorage.setItem(key, JSON.stringify(val));
+      } catch(e) {
+        // Phase 0 fix: warn on quota exceeded instead of silent failure
+        if (e.name === 'QuotaExceededError') {
+          console.error("[Persistence] localStorage quota exceeded for key:", key);
+          // Force an immediate Express save as fallback
+          if (typeof flushToExpress === "function") flushToExpress();
+        }
+      }
     }
   }
 }
@@ -289,29 +334,27 @@ function writeGlobalsToLocalStorage(globals) {
   };
   for (const [key, val] of Object.entries(writes)) {
     if (val !== undefined && val !== null) {
-      try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+      try {
+        localStorage.setItem(key, JSON.stringify(val));
+      } catch(e) {
+        if (e.name === 'QuotaExceededError') {
+          console.error("[Persistence] localStorage quota exceeded for global key:", key);
+          if (typeof flushToExpress === "function") flushToExpress();
+        }
+      }
     }
   }
 }
 
 // ======== WATERFALL COLD-START RESTORATION ========
-// Priority: localStorage → IndexedDB → File DB (HTTP) → Second Brain (injected) → __PA_LOCAL__ (legacy)
+// Priority: localStorage → IndexedDB → Express API → Second Brain (injected) → __PA_LOCAL__ (legacy)
 
-async function fetchFileDBDate(date) {
+async function fetchExpressDate(date) {
   try {
-    const res = await fetch("/The Second Brain/recent/" + date + ".json", { signal: AbortSignal.timeout(2000) });
+    const res = await fetch("/api/brain/recent", { signal: AbortSignal.timeout(2000) });
     if (!res.ok) return null;
     const data = await res.json();
-    return (data && data.date) ? data : null;
-  } catch { return null; }
-}
-
-async function fetchFileDBGlobals() {
-  try {
-    const res = await fetch("/The Second Brain/globals.json", { signal: AbortSignal.timeout(2000) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return (data && data.savedAt) ? data : null;
+    return (data && data[date]) ? data[date] : null;
   } catch { return null; }
 }
 
@@ -334,15 +377,15 @@ async function hydrateFromStorage() {
     }
   } catch(e) { console.warn("[Second Brain] IndexedDB read failed:", e); }
 
-  // Tier 3: Try File DB (HTTP fetch from The Second Brain/recent/)
-  const fileState = await fetchFileDBDate(date);
-  if (fileState) {
-    console.log("[Second Brain] Restoring from File DB for " + date);
-    writeToLocalStorage(date, fileState);
+  // Tier 3: Try Express API (replaces old File DB at :8091)
+  const expressState = await fetchExpressDate(date);
+  if (expressState) {
+    console.log("[Second Brain] Restoring from Express API for " + date);
+    writeToLocalStorage(date, expressState);
     return;
   }
 
-  // Tier 4: Try Second Brain (injected by render script from file DB)
+  // Tier 4: Try Second Brain (injected at boot from Express API)
   if (window.__SECOND_BRAIN__ && window.__SECOND_BRAIN__[date]) {
     console.log("[Second Brain] Restoring from injected state for " + date);
     writeToLocalStorage(date, window.__SECOND_BRAIN__[date]);
@@ -360,7 +403,7 @@ async function hydrateFromStorage() {
   console.log("[Second Brain] No stored state found for " + date);
 }
 
-// Hydrate globals from IndexedDB / File DB / Second Brain if localStorage is empty
+// Hydrate globals from IndexedDB / Express API / Second Brain if localStorage is empty
 async function hydrateGlobals() {
   if (localStorage.getItem("pa-sticky-notes")) return; // already populated
 
@@ -374,17 +417,9 @@ async function hydrateGlobals() {
     }
   } catch(e) {}
 
-  // Try File DB (HTTP)
-  const fileGlobals = await fetchFileDBGlobals();
-  if (fileGlobals && fileGlobals.stickyNotes) {
-    console.log("[Second Brain] Restoring globals from File DB");
-    writeGlobalsToLocalStorage(fileGlobals);
-    return;
-  }
-
-  // Try Second Brain globals (injected by render script)
-  if (window.__SECOND_BRAIN_GLOBALS__) {
-    console.log("[Second Brain] Restoring globals from injected state");
+  // Try Express API globals (already fetched at boot into __SECOND_BRAIN_GLOBALS__)
+  if (window.__SECOND_BRAIN_GLOBALS__ && window.__SECOND_BRAIN_GLOBALS__.stickyNotes) {
+    console.log("[Second Brain] Restoring globals from Express API");
     writeGlobalsToLocalStorage(window.__SECOND_BRAIN_GLOBALS__);
   }
 }
@@ -489,11 +524,9 @@ async function switchToDate(dateStr) {
     newState = window.__PA_ARCHIVES__[dateStr];
     viewMode = "archive";
   } else {
-    // No injected archive — try File DB for this date
-    const fileState = await fetchFileDBDate(dateStr);
-    if (fileState) {
-      // File DB has edit data but may not have schedule/meetings.
-      // Build a minimal archive state so the view can render.
+    // No injected archive — try Express API for this date
+    const expressState = await fetchExpressDate(dateStr);
+    if (expressState) {
       newState = { date: dateStr, schedule: [], meetings: [], triage: {} };
       viewMode = "archive";
     } else {
@@ -516,14 +549,19 @@ async function switchToDate(dateStr) {
 
   initKeys();
 
-  // Seed localStorage from File DB or Second Brain for this date if localStorage is empty
+  // Load BlockStore data for the new date
+  if (window.blockStore) {
+    try {
+      await window.blockStore.loadDay(dateStr);
+    } catch(e) { console.warn("[BlockStore] loadDay failed for", dateStr, e); }
+  }
+
+  // Seed localStorage from Express API or Second Brain for this date if localStorage is empty
   if (!localStorage.getItem("pa-done-" + dateStr)) {
-    // Try File DB first (HTTP fetch)
-    const fileState = await fetchFileDBDate(dateStr);
-    if (fileState) {
-      writeToLocalStorage(dateStr, fileState);
+    const expressState = await fetchExpressDate(dateStr);
+    if (expressState) {
+      writeToLocalStorage(dateStr, expressState);
     } else {
-      // Fall back to injected Second Brain
       const sbState = window.__SECOND_BRAIN__ && window.__SECOND_BRAIN__[dateStr];
       if (sbState) {
         writeToLocalStorage(dateStr, sbState);

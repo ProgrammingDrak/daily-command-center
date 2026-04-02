@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Daily Command Center -- Drake Shadwell</title>
 <link rel="stylesheet" href="/public/css/dashboard.css">
+<link rel="stylesheet" href="/public/css/calendar.css">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -37,16 +38,7 @@
     </div>
     <div class="notes-drawer-body">
       <div class="notes-textarea-wrap">
-        <div class="notes-toolbar">
-          <button class="notes-tb-btn" onmousedown="event.preventDefault();notesCmd('bold')" title="Bold"><b>B</b></button>
-          <button class="notes-tb-btn" onmousedown="event.preventDefault();notesCmd('italic')" title="Italic"><i>I</i></button>
-          <button class="notes-tb-btn" onmousedown="event.preventDefault();notesCmd('underline')" title="Underline"><u>U</u></button>
-          <button class="notes-tb-btn" onmousedown="event.preventDefault();notesCmd('strikeThrough')" title="Strikethrough"><s>S</s></button>
-          <button class="notes-tb-btn" onmousedown="event.preventDefault();notesInsertCheckbox()" title="Checkbox">&#9745;</button>
-          <button class="notes-tb-btn" onmousedown="event.preventDefault();notesCmd('insertUnorderedList')" title="Bullet list">&bull; List</button>
-          <button class="notes-tb-btn" onmousedown="event.preventDefault();notesCmd('insertOrderedList')" title="Numbered list">1. List</button>
-        </div>
-        <div class="notes-editable" id="notes-editable" contenteditable="true" data-placeholder="Type notes here..."></div>
+        <div id="notes-block-editor"></div>
       </div>
       <div class="notes-action-bar">
         <button class="notes-add-action" id="notes-add-action">
@@ -162,8 +154,6 @@
 <div class="stats">
   <div class="stat" onclick="showStatPopover('s-rem',event)"><div class="v" style="color:var(--accent-light)" id="s-rem">--</div><div class="l">Remaining</div></div>
   <div class="stat" onclick="showStatPopover('s-done',event)"><div class="v" style="color:var(--green)" id="s-done">--</div><div class="l">Completed</div></div>
-  <div class="stat" onclick="showStatPopover('s-changes',event)"><div class="v" style="color:var(--amber)" id="s-changes">0</div><div class="l">Actions</div></div>
-  <div class="stat" onclick="showStatPopover('s-est',event)"><div class="v" style="color:var(--cyan)" id="s-est">--</div><div class="l">Time Left</div></div>
   <div class="stat" onclick="showStatPopover('s-end',event)"><div class="v" style="color:var(--green)" id="s-end">--</div><div class="l">Day Ends</div></div>
 </div>
 <div id="stat-popover"></div>
@@ -220,15 +210,12 @@
 
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Schedule</button>
-  <button class="tab" data-tab="triage">Triage <span class="badge" id="triage-count">0</span></button>
-  <button class="tab" data-tab="actions">Action Items <span class="badge" id="actions-count">0</span></button>
-  <button class="tab" data-tab="consider">Consider for Today <span class="badge" id="consider-count">0</span></button>
-  <button class="tab" data-tab="backlog">Backlog <span class="badge" id="backlog-count">0</span></button>
+  <button class="tab" data-tab="tasks">Task Menus <span class="badge" id="tasks-count" style="display:none">0</span></button>
   <button class="tab" data-tab="upcoming">Upcoming <span class="badge" id="upcoming-count">0</span></button>
-  <button class="tab" data-tab="palog">Last Run</button>
+  <button class="tab" data-tab="palog">Report Card</button>
   <button class="tab" data-tab="life" id="life-tab-btn">Life</button>
   <button class="tab" data-tab="engrams" id="engrams-tab-btn">Engrams <span class="badge" id="engrams-count" style="display:none">0</span></button>
-  <button class="tab" data-tab="timer" id="timer-tab-btn" style="margin-left:auto">Timer</button>
+  <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
 </div>
 
 <div class="tab-content active" id="tab-schedule">
@@ -260,58 +247,73 @@
   <div id="actual-view" style="display:none"></div>
 </div>
 
-<div class="tab-content" id="tab-actions">
-  <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);line-height:1.5">
-    Tasks, follow-ups, and action items created from meetings, triage, or manual entry. Schedule them today or queue for later.
-  </div>
-  <div class="ai-tab-add" style="display:flex;gap:6px;margin-bottom:14px">
-    <input type="text" id="ai-tab-text" placeholder="Add an action item..." style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px;outline:none">
-    <select id="ai-tab-priority" style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 6px;color:var(--text);font-size:12px;outline:none">
-      <option value="High">High</option><option value="Medium" selected>Medium</option><option value="Low">Low</option>
-    </select>
-    <button id="ai-tab-add-btn" style="background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">+ Add</button>
-  </div>
-  <div id="ai-tab-list"></div>
-</div>
-
-<div class="tab-content" id="tab-consider">
-  <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);line-height:1.5">Tasks flagged for today or that you've said need to get done. Click to expand, or schedule them into your day.</div>
-  <div class="board" id="consider-board"></div>
-</div>
-
-<div class="tab-content" id="tab-backlog">
-  <div class="new-task-row">
-    <input type="text" id="new-title" placeholder="New task name...">
-    <select id="new-type"><option value="task">Task</option><option value="focus">Focus</option><option value="meeting">Meeting</option><option value="oneone">1:1</option><option value="triage">Triage</option><option value="break">Break</option></select>
-    <select id="new-dur"><option value="15">15m</option><option value="30" selected>30m</option><option value="45">45m</option><option value="60">1h</option><option value="90">1.5h</option><option value="120">2h</option></select>
-    <button id="add-task-btn">+ Add</button>
-  </div>
-  <div class="board" id="backlog-board"></div>
-</div>
-
-<div class="tab-content" id="tab-triage">
-  <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);line-height:1.5">
-    Items needing your attention from Slack, Gmail, and Calendar sweeps. Sorted by priority and escalation level.
+<div class="tab-content" id="tab-tasks">
+  <div class="task-menus-nav">
+    <button class="tm-tab active" data-tm="triage">Triage <span class="badge" id="triage-count">0</span></button>
+    <button class="tm-tab" data-tm="trivial">Trivial <span class="badge" id="trivial-count" style="display:none">0</span></button>
+    <button class="tm-tab" data-tm="soon">Schedule Soon <span class="badge" id="soon-count" style="display:none">0</span></button>
+    <button class="tm-tab" data-tm="backlog">Backlog <span class="badge" id="backlog-count">0</span></button>
+    <button class="tm-tab" data-tm="repeatable">Repeatable</button>
   </div>
 
-  <!-- Notifications requiring approval -->
-  <div id="triage-notifications" style="margin-bottom:16px"></div>
+  <!-- Triage panel -->
+  <div class="tm-panel active" id="tm-triage">
+    <div id="triage-notifications" style="margin-bottom:16px"></div>
+    <div id="triage-high" style="margin-bottom:12px"></div>
+    <div id="triage-medium" style="margin-bottom:12px"></div>
+    <div id="triage-low" style="margin-bottom:12px"></div>
+    <details style="margin-top:16px">
+      <summary style="font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:8px 0">
+        Resolved Today <span id="triage-resolved-count" style="opacity:0.6">(0)</span>
+      </summary>
+      <div id="triage-resolved"></div>
+    </details>
+  </div>
 
-  <!-- Trivial Tasks -->
-  <div id="triage-trivial" style="margin-bottom:14px"></div>
+  <!-- Trivial panel -->
+  <div class="tm-panel" id="tm-trivial">
+    <div id="triage-trivial"></div>
+  </div>
 
-  <!-- Triage items grouped by priority -->
-  <div id="triage-high" style="margin-bottom:12px"></div>
-  <div id="triage-medium" style="margin-bottom:12px"></div>
-  <div id="triage-low" style="margin-bottom:12px"></div>
+  <!-- Schedule Soon panel -->
+  <div class="tm-panel" id="tm-soon">
+    <div style="margin-bottom:12px;font-size:12px;color:var(--text-muted);line-height:1.5">
+      Tasks flagged for today, pushed from the schedule, or queued for later. Schedule them into your day.
+    </div>
+    <div id="soon-pushed-list" style="margin-bottom:14px"></div>
+    <div class="board" id="consider-board"></div>
+    <div style="margin-top:16px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px">Action Items</div>
+      <div class="ai-tab-add" style="display:flex;gap:6px;margin-bottom:14px">
+        <input type="text" id="ai-tab-text" placeholder="Add an action item..." style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px;outline:none">
+        <select id="ai-tab-priority" style="background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 6px;color:var(--text);font-size:12px;outline:none">
+          <option value="High">High</option><option value="Medium" selected>Medium</option><option value="Low">Low</option>
+        </select>
+        <button id="ai-tab-add-btn" style="background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">+ Add</button>
+      </div>
+      <div id="ai-tab-list"></div>
+    </div>
+  </div>
 
-  <!-- Resolved items (collapsed by default) -->
-  <details style="margin-top:16px">
-    <summary style="font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:8px 0">
-      Resolved Today <span id="triage-resolved-count" style="opacity:0.6">(0)</span>
-    </summary>
-    <div id="triage-resolved"></div>
-  </details>
+  <!-- Backlog panel -->
+  <div class="tm-panel" id="tm-backlog">
+    <div class="new-task-row">
+      <input type="text" id="new-title" placeholder="New task name...">
+      <select id="new-type"><option value="task">Task</option><option value="focus">Focus</option><option value="meeting">Meeting</option><option value="oneone">1:1</option><option value="triage">Triage</option><option value="break">Break</option></select>
+      <select id="new-dur"><option value="15">15m</option><option value="30" selected>30m</option><option value="45">45m</option><option value="60">1h</option><option value="90">1.5h</option><option value="120">2h</option></select>
+      <button id="add-task-btn">+ Add</button>
+    </div>
+    <div class="board" id="backlog-board"></div>
+  </div>
+
+  <!-- Repeatable panel -->
+  <div class="tm-panel" id="tm-repeatable">
+    <div style="padding:32px;text-align:center;color:var(--text-muted);font-size:13px">
+      <div style="font-size:24px;margin-bottom:8px">🔄</div>
+      <div style="font-weight:600;margin-bottom:4px">Repeatable Tasks</div>
+      <div>Coming soon — recurring tasks and templates you use regularly.</div>
+    </div>
+  </div>
 </div>
 
 <div class="tab-content" id="tab-upcoming">
@@ -322,7 +324,9 @@
 </div>
 
 <div class="tab-content" id="tab-palog">
-  <div id="pa-log-content"><div style="color:var(--text-muted);padding:24px;text-align:center">Loading overnight review...</div></div>
+  <div id="rc-content"><div style="color:var(--text-muted);padding:24px;text-align:center">Loading Report Card...</div></div>
+  <div id="pa-log-content" style="display:none"></div>
+</div>
 
 <div class="tab-content" id="tab-life">
   <!-- Streak + mood chart row -->
@@ -439,138 +443,123 @@
   </div>
 </div>
 
-<div class="tab-content" id="tab-timer">
-  <div class="pomo-layout">
-    <!-- Mini sidebar with tabs (always visible) -->
-    <div class="pomo-sidebar" id="pomo-sidebar">
-      <div class="pomo-side-tabs">
-        <button class="pomo-side-tab active" data-side="schedule">Schedule</button>
-        <button class="pomo-side-tab" data-side="consider">Consider <span class="side-badge" id="side-consider-count">0</span></button>
-        <button class="pomo-side-tab" data-side="backlog">Backlog <span class="side-badge" id="side-backlog-count">0</span></button>
-        <button class="pomo-side-tab" data-side="done">Done <span class="side-badge side-badge-done" id="side-done-count">0</span></button>
-      </div>
-      <div class="pomo-side-panel active" id="side-schedule">
-        <div class="pomo-sidebar-hdr">Today's Schedule <span id="pomo-sidebar-count"></span></div>
-        <div id="pomo-mini-list"></div>
-      </div>
-      <div class="pomo-side-panel" id="side-consider">
-        <div class="pomo-sidebar-hdr">Consider for Today</div>
-        <div id="pomo-consider-list"></div>
-      </div>
-      <div class="pomo-side-panel" id="side-backlog">
-        <div class="pomo-sidebar-hdr">Backlog</div>
-        <div id="pomo-backlog-list"></div>
-      </div>
-      <div class="pomo-side-panel" id="side-done">
-        <div class="pomo-sidebar-hdr">Completed</div>
-        <div id="pomo-done-list"></div>
-      </div>
+<!-- Task picker overlay (global) -->
+<div class="pomo-picker-overlay" id="pomo-picker-overlay">
+  <div class="pomo-picker">
+    <div class="pomo-picker-hdr"><h3>Switch Task</h3><button class="pomo-picker-close" id="pomo-picker-close">&times;</button></div>
+    <div class="pomo-picker-search"><input type="text" id="pomo-picker-q" placeholder="Search tasks..."></div>
+    <div class="pomo-picker-list" id="pomo-picker-list"></div>
+    <div class="pomo-picker-new">
+      <input type="text" id="pomo-picker-new-title" placeholder="New task name...">
+      <select id="pomo-picker-new-dur"><option value="15">15m</option><option value="25" selected>25m</option><option value="30">30m</option><option value="45">45m</option><option value="60">1h</option></select>
+      <button id="pomo-picker-new-btn">+ Start</button>
     </div>
-    <!-- Main timer area -->
-    <div class="pomo-main">
-      <!-- Empty state (no task selected yet) -->
-      <div id="pomo-empty" class="pomo-empty">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>
-        <div>Pick a task from the schedule to start a pomodoro.</div>
+  </div>
+</div>
+
+<!-- Task completion modal (global) -->
+<div class="completion-modal-overlay" id="task-completion-modal-overlay">
+  <div class="completion-modal">
+    <div class="completion-modal-hdr">
+      <h3 id="completion-modal-title">Complete Task</h3>
+      <button class="completion-modal-close" id="completion-modal-close">&times;</button>
+    </div>
+    <div class="completion-modal-body" id="completion-modal-body"></div>
+    <div class="completion-actions" id="completion-actions"></div>
+  </div>
+</div>
+
+<!-- Untasked timer completion modal (global) -->
+<div class="completion-modal-overlay" id="untasked-modal-overlay">
+  <div class="completion-modal">
+    <div class="completion-modal-hdr">
+      <h3>What did you accomplish?</h3>
+      <button class="completion-modal-close" id="untasked-modal-close">&times;</button>
+    </div>
+    <div class="completion-modal-body" id="untasked-modal-body"></div>
+    <div class="completion-actions" id="untasked-actions"></div>
+  </div>
+</div>
+
+<!-- ======== FLOATING TIMER ======== -->
+<div class="float-timer" id="float-timer">
+  <!-- FAB button (default state) -->
+  <button class="ft-fab" id="ft-fab" title="Focus Timer">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>
+    <span class="ft-fab-badge" id="ft-fab-badge" style="display:none"></span>
+  </button>
+
+  <!-- Mini bar (shown when timer running + panel closed) -->
+  <div class="ft-mini" id="ft-mini" style="display:none">
+    <svg class="ft-mini-ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="2"/><circle id="ft-mini-arc" cx="18" cy="18" r="16" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="100.5" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 18 18)"/></svg>
+    <span class="ft-mini-time" id="ft-mini-time">--:--</span>
+    <span class="ft-mini-task" id="ft-mini-task">--</span>
+    <button class="ft-mini-pause" id="ft-mini-pause">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+    </button>
+  </div>
+
+  <!-- Expanded panel -->
+  <div class="ft-panel" id="ft-panel" style="display:none">
+    <div class="ft-panel-bar">
+      <span class="ft-panel-title">Focus Timer</span>
+      <button class="ft-panel-close" id="ft-panel-close">&times;</button>
+    </div>
+    <div class="ft-panel-body">
+      <!-- Empty state -->
+      <div id="pomo-empty" class="pomo-empty" style="padding:24px 0;text-align:center">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">Pick a task from the schedule or click below</div>
+        <button class="ft-pick-btn" onclick="openTaskPicker()" style="margin-top:10px;background:var(--accent);color:white;border:none;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:600;cursor:pointer">Choose a Task</button>
       </div>
       <!-- Active timer state -->
       <div id="pomo-active" style="display:none">
-        <div class="pomo-sub-tabs">
-          <button class="pomo-sub-tab active" data-psub="focus">Focus</button>
-          <button class="pomo-sub-tab" data-psub="report">Report</button>
+        <div class="pomo-task-card" id="pomo-task-card" style="margin-bottom:10px">
+          <span class="ptc-swap-hint">click to swap task</span>
+          <div class="ptc-check" id="pomo-task-check"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></div>
+          <div class="ptc-name" id="pomo-title">--</div>
+          <div class="ptc-pomo" id="pomo-session-count"></div>
         </div>
-
-        <!-- Focus sub-tab -->
-        <div class="pomo-sub-content active" id="psub-focus">
-          <div class="pomo-focus">
-            <button class="pomo-sound" id="pomo-sound">Sound: On</button>
-            <div class="pomo-task-card" id="pomo-task-card">
-              <span class="ptc-swap-hint">click to swap task</span>
-              <div class="ptc-check" id="pomo-task-check"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></div>
-              <div class="ptc-name" id="pomo-title">--</div>
-              <div class="ptc-pomo" id="pomo-session-count"></div>
-            </div>
-            <div class="pomo-modes" id="pomo-modes">
-              <button class="pomo-mode active" data-pm="work">Focus</button>
-              <button class="pomo-mode" data-pm="short">Short Break</button>
-              <button class="pomo-mode" data-pm="long">Long Break</button>
-            </div>
-            <div class="pomo-phase" id="pomo-phase">Focus</div>
-            <div class="pomo-ring">
-              <svg class="ring" viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="54"/><circle class="ring-fg" id="pomo-arc" cx="60" cy="60" r="54"/></svg>
-              <div class="pomo-display" id="pomo-display">--:--</div>
-            </div>
-            <button class="pomo-add-min" id="pomo-add-min"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg> 1 min</button>
-            <button class="pomo-start-big go" id="pomo-start"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> Start to Focus</button>
-            <div class="pomo-secondary">
-              <button class="pomo-sec-btn" id="pomo-reset">Reset</button>
-              <button class="pomo-sec-btn" id="pomo-skip">Skip</button>
-            </div>
-            <div class="pomo-dots"><div class="pomo-dot" id="pd0"></div><div class="pomo-dot" id="pd1"></div><div class="pomo-dot" id="pd2"></div><div class="pomo-dot" id="pd3"></div></div>
-          </div>
+        <div class="pomo-modes" id="pomo-modes" style="margin-bottom:8px">
+          <button class="pomo-mode active" data-pm="work">Focus</button>
+          <button class="pomo-mode" data-pm="short">Short Break</button>
+          <button class="pomo-mode" data-pm="long">Long Break</button>
         </div>
+        <div class="pomo-phase" id="pomo-phase" style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);text-align:center;margin-bottom:4px">Focus</div>
+        <div class="pomo-ring" style="width:160px;height:160px;margin:0 auto 8px">
+          <svg class="ring" viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="54"/><circle class="ring-fg" id="pomo-arc" cx="60" cy="60" r="54"/></svg>
+          <div class="pomo-display" id="pomo-display">--:--</div>
+        </div>
+        <button class="pomo-add-min" id="pomo-add-min" style="display:block;margin:0 auto 6px;font-size:11px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="10" height="10"><path d="M12 5v14M5 12h14"/></svg> 1 min</button>
+        <button class="pomo-start-big go" id="pomo-start" style="width:100%;margin-bottom:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> Start to Focus</button>
+        <div class="pomo-secondary" style="justify-content:center;margin-bottom:6px">
+          <button class="pomo-sec-btn" id="pomo-reset">Reset</button>
+          <button class="pomo-sec-btn" id="pomo-skip">Skip</button>
+        </div>
+        <div class="pomo-dots" style="justify-content:center;margin-bottom:8px"><div class="pomo-dot" id="pd0"></div><div class="pomo-dot" id="pd1"></div><div class="pomo-dot" id="pd2"></div><div class="pomo-dot" id="pd3"></div></div>
+        <button class="pomo-sound" id="pomo-sound" style="font-size:10px;padding:2px 8px">Sound: On</button>
 
-        <!-- Report sub-tab -->
-        <div class="pomo-sub-content" id="psub-report">
-          <div class="pomo-report">
-            <div class="pomo-stats-row">
-              <div class="pomo-stat"><div class="ps-val" id="ps-elapsed">00:00</div><div class="ps-label">Elapsed Time</div></div>
+        <!-- Collapsible report -->
+        <details class="ft-report" style="margin-top:10px">
+          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:4px 0">Session Report</summary>
+          <div class="pomo-report" style="padding:8px 0">
+            <div class="pomo-stats-row" style="gap:8px;margin-bottom:10px">
+              <div class="pomo-stat"><div class="ps-val" id="ps-elapsed">00:00</div><div class="ps-label">Elapsed</div></div>
               <div class="pomo-stat"><div class="ps-val" id="ps-sessions">0</div><div class="ps-label">Sessions</div></div>
-              <div class="pomo-stat"><div class="ps-val" id="ps-tasks">0</div><div class="ps-label">Tasks Worked</div></div>
-              <div class="pomo-stat"><div class="ps-val" id="ps-completed">0</div><div class="ps-label">Completed</div></div>
+              <div class="pomo-stat"><div class="ps-val" id="ps-tasks">0</div><div class="ps-label">Tasks</div></div>
+              <div class="pomo-stat"><div class="ps-val" id="ps-completed">0</div><div class="ps-label">Done</div></div>
             </div>
-            <div class="pomo-focus-section">
-              <div class="pomo-focus-header"><h3>Focus Time</h3></div>
-              <div class="pomo-focus-sub" id="pomo-focus-total">Total focus time 0m</div>
-              <div class="pomo-task-bars" id="pomo-task-bars"></div>
-              <div class="pomo-report-empty" id="pomo-bars-empty">Start a focus session to see per-task time here.</div>
-            </div>
-            <div class="pomo-log-section">
-              <div class="pomo-log-header">Session Log <span class="plh-total" id="pomo-total-time">0m focused today</span></div>
+            <div class="pomo-focus-sub" id="pomo-focus-total" style="font-size:10px;color:var(--text-muted);margin-bottom:6px">Total focus time 0m</div>
+            <div class="pomo-task-bars" id="pomo-task-bars"></div>
+            <div class="pomo-report-empty" id="pomo-bars-empty" style="font-size:11px">Start a focus session to see per-task time here.</div>
+            <div style="margin-top:8px">
+              <div class="pomo-log-header" style="font-size:11px">Session Log <span class="plh-total" id="pomo-total-time">0m focused today</span></div>
               <div class="pomo-log-entries" id="pomo-log-entries"></div>
-              <div class="pomo-report-empty" id="pomo-log-empty">No sessions yet.</div>
+              <div class="pomo-report-empty" id="pomo-log-empty" style="font-size:11px">No sessions yet.</div>
             </div>
           </div>
-        </div>
+        </details>
       </div>
-    </div>
-  </div>
-
-  <!-- Task picker overlay -->
-  <div class="pomo-picker-overlay" id="pomo-picker-overlay">
-    <div class="pomo-picker">
-      <div class="pomo-picker-hdr"><h3>Switch Task</h3><button class="pomo-picker-close" id="pomo-picker-close">&times;</button></div>
-      <div class="pomo-picker-search"><input type="text" id="pomo-picker-q" placeholder="Search tasks..."></div>
-      <div class="pomo-picker-list" id="pomo-picker-list"></div>
-      <div class="pomo-picker-new">
-        <input type="text" id="pomo-picker-new-title" placeholder="New task name...">
-        <select id="pomo-picker-new-dur"><option value="15">15m</option><option value="25" selected>25m</option><option value="30">30m</option><option value="45">45m</option><option value="60">1h</option></select>
-        <button id="pomo-picker-new-btn">+ Start</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Task completion modal -->
-  <div class="completion-modal-overlay" id="task-completion-modal-overlay">
-    <div class="completion-modal">
-      <div class="completion-modal-hdr">
-        <h3 id="completion-modal-title">Complete Task</h3>
-        <button class="completion-modal-close" id="completion-modal-close">&times;</button>
-      </div>
-      <div class="completion-modal-body" id="completion-modal-body"></div>
-      <div class="completion-actions" id="completion-actions"></div>
-    </div>
-  </div>
-
-  <!-- Untasked timer completion modal -->
-  <div class="completion-modal-overlay" id="untasked-modal-overlay">
-    <div class="completion-modal">
-      <div class="completion-modal-hdr">
-        <h3>What did you accomplish?</h3>
-        <button class="completion-modal-close" id="untasked-modal-close">&times;</button>
-      </div>
-      <div class="completion-modal-body" id="untasked-modal-body"></div>
-      <div class="completion-actions" id="untasked-actions"></div>
     </div>
   </div>
 </div>
@@ -634,7 +623,7 @@
     <div class="done-modal-body">
       <div class="done-modal-section">
         <div class="done-modal-label">Notes <span style="font-size:10px;color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0">(optional -- helps the EOD assessment)</span></div>
-        <textarea id="dm-notes" placeholder="What did you do? Any blockers, context, or outcomes worth capturing..."></textarea>
+        <div id="dm-notes-editor" class="dm-notes-editor"></div>
       </div>
       <div class="done-modal-section" id="dm-time-section" style="display:none">
         <div class="done-modal-label">
@@ -670,6 +659,47 @@
   </div>
 </div>
 
+<!-- Task Detail Modal (notes + subtasks + trivial tasks + action items) -->
+<div class="add-modal-overlay" id="add-modal-overlay">
+  <div class="add-modal">
+    <div class="add-modal-hdr">
+      <h3 id="add-modal-title">Task Details</h3>
+      <button class="pvb-close" id="add-modal-close">&times;</button>
+    </div>
+    <div class="add-modal-body">
+      <!-- Notes section -->
+      <div class="am-section">
+        <div class="am-section-label">Notes</div>
+        <div id="am-notes-block-editor" class="dm-notes-editor"></div>
+      </div>
+
+      <!-- Combined items list -->
+      <div class="am-section">
+        <div class="am-section-label">Items <span id="am-items-count" style="opacity:0.5;font-weight:400">(0)</span></div>
+        <div id="am-items-list"></div>
+      </div>
+
+      <!-- Add new item -->
+      <div class="am-add-section">
+        <div class="am-add-row">
+          <input id="am-item-input" type="text" placeholder="Add item...">
+          <select id="am-item-type" class="am-type-select">
+            <option value="subtask">Subtask</option>
+            <option value="trivial">⚡ Trivial</option>
+            <option value="action">Action Item</option>
+          </select>
+          <button id="am-item-add" class="am-add-btn">+ Add</button>
+        </div>
+        <button id="am-trivial-pick" class="am-pick-btn">📋 Attach existing trivial task</button>
+        <div id="am-trivial-picker" style="display:none"></div>
+      </div>
+    </div>
+    <div class="add-modal-footer">
+      <button class="dm-btn-cancel" id="add-modal-done">Done</button>
+    </div>
+  </div>
+</div>
+
 <!-- Delete task confirmation -->
 <div class="del-confirm-overlay" id="del-confirm-overlay">
   <div class="del-confirm-box">
@@ -700,6 +730,8 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-calendar"></div>
+
 <div class="footer">
   Data from Google Calendar + Notion &middot; Generated for Drake Shadwell &middot; <span id="gen-time">--</span>
 </div>
@@ -708,6 +740,7 @@
 <div class="sync-bar" id="sync-bar"></div>
 
 
+<script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>
 <script src="/public/js/persistence.js"></script>
 <script src="/public/js/state.js"></script>
@@ -720,13 +753,53 @@
 <script src="/public/js/schedule-tab.js"></script>
 <script src="/public/js/sync.js"></script>
 <script src="/public/js/triage.js"></script>
+<script src="/public/js/report-card.js"></script>
 <script src="/public/js/tabs.js"></script>
 <script src="/public/js/features.js"></script>
+<script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/life.js"></script>
 <script src="/public/js/engrams.js"></script>
+<script src="/public/js/block-store.js"></script>
+<script src="/public/js/gcal-client.js"></script>
+<script src="/public/js/calendar-sidebar.js"></script>
+<script src="/public/js/calendar-overlay.js"></script>
+<script src="/public/js/calendar.js"></script>
+<script src="/public/js/calendar-drag.js"></script>
+<script>
+// Feature flags — controls which features use the new BlockStore vs old localStorage.
+// Phase 5: All flags ON — BlockStore is now the primary data store.
+// Rollback: flip individual flags to false to revert specific features to localStorage.
+window.USE_BLOCKSTORE = {
+  done: true,
+  pushed: true,
+  deleted: true,
+  duration: true,
+  notes: true,
+  actions: true,
+  subtasks: true,
+  reorder: true,
+  pomo: true,
+  stickyNotes: true,
+  trivialTasks: true,
+  engrams: true,
+  mood: true,
+  lifeCaptures: true,
+  pendingTasks: true,
+  addedTasks: true
+};
+</script>
 <script src="/public/js/brain-backup.js"></script>
 <script src="/public/js/sse.js"></script>
-<script id="local-state-export" type="application/json">{}</script>
+
+<!-- Save status indicator -->
+<div id="save-status" class="save-status save-status--ok">
+  <span class="save-status-dot"></span>
+  <span class="save-status-text">All changes saved</span>
+</div>
+
+<!-- Error toast container -->
+<div id="toast-container" class="toast-container"></div>
+
 </body>
 </html>

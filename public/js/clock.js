@@ -1,13 +1,25 @@
 // ======== CLOCK ========
+let _cachedTzStr = null;
+let _lastTzMinute = -1;
+let _lastClockText = "";
 function updateClock(){
   const d=new Date(),h=d.getHours(),m=d.getMinutes(),ap=h>=12?"PM":"AM",h12=h>12?h-12:h||12;
-  const timeStr=h12+":"+String(m).padStart(2,"0")+ap.toLowerCase();
-  document.getElementById("clock").textContent=h12+":"+String(m).padStart(2,"0")+" "+ap;
-  try{const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;const abbr=d.toLocaleTimeString("en-US",{timeZoneName:"short"}).split(" ").pop();document.getElementById("tz-label").textContent=abbr+" ("+tz.split("/").pop().replace(/_/g," ")+")"}catch(e){document.getElementById("tz-label").textContent="Local Time"}
-  // Date label is now managed by updateDateNav; only set it here on initial load if not yet set
-  if (viewMode === "today") {
-    document.getElementById("date-label").textContent=d.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+  const clockText=h12+":"+String(m).padStart(2,"0")+" "+ap;
+  // Only update DOM if text changed (every minute, not every second)
+  if(clockText!==_lastClockText){
+    _lastClockText=clockText;
+    document.getElementById("clock").textContent=clockText;
+    if (viewMode === "today") {
+      document.getElementById("date-label").textContent=d.toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+    }
   }
+  // Cache timezone string — recalculate once per minute, not every second
+  if(m!==_lastTzMinute){
+    _lastTzMinute=m;
+    try{const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;const abbr=d.toLocaleTimeString("en-US",{timeZoneName:"short"}).split(" ").pop();_cachedTzStr=abbr+" ("+tz.split("/").pop().replace(/_/g," ")+")"}catch(e){_cachedTzStr="Local Time"}
+    document.getElementById("tz-label").textContent=_cachedTzStr;
+  }
+  const timeStr=h12+":"+String(m).padStart(2,"0")+ap.toLowerCase();
   const nowEl=document.querySelector(".tl-now-time");if(nowEl)nowEl.textContent=timeStr;
 }
 

@@ -2,16 +2,64 @@
 let ENGRAM_KEY = "pa-engrams-" + ((__state && __state.date) ? __state.date : "unknown");
 let MOOD_KEY = "pa-mood-" + ((__state && __state.date) ? __state.date : "unknown");
 
-function loadEngrams() { try { return JSON.parse(localStorage.getItem(ENGRAM_KEY) || "[]"); } catch(e) { return []; } }
-function saveEngrams(data) { localStorage.setItem(ENGRAM_KEY, JSON.stringify(data)); scheduleIDBSave(); }
-function loadMoodData() { try { return JSON.parse(localStorage.getItem(MOOD_KEY) || "{}"); } catch(e) { return {}; } }
-function saveMoodData(data) { localStorage.setItem(MOOD_KEY, JSON.stringify(data)); scheduleIDBSave(); }
+function loadEngrams() {
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.engrams&&window.blockStore){
+    return window.blockStore.getByType("engram").map(b=>({
+      tag:b.properties.tag, name:b.properties.name,
+      category:b.properties.category, context:b.properties.context, _blockId:b.id
+    }));
+  }
+  try { return JSON.parse(localStorage.getItem(ENGRAM_KEY) || "[]"); } catch(e) { return []; }
+}
+function saveEngrams(data) {
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.engrams&&window.blockStore){
+    data.forEach(e=>{
+      if(!e._blockId){
+        window.blockStore.createBlock("engram",{tag:e.tag,name:e.name,category:e.category||"",context:e.context||""},{
+          parentId:window.blockStore.getDayRootId(),date:window.blockStore.getCurrentDate()
+        }).then(b=>{e._blockId=b.id});
+      }
+    });
+    return;
+  }
+  localStorage.setItem(ENGRAM_KEY, JSON.stringify(data)); scheduleIDBSave();
+}
+function loadMoodData() {
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.mood&&window.blockStore){
+    const entries=window.blockStore.getByType("mood_entry").map(b=>({
+      mood:b.properties.mood, energy:b.properties.energy,
+      time:b.properties.time, note:b.properties.note, _blockId:b.id
+    }));
+    if(entries.length){
+      const avgMood=entries.reduce((s,e)=>s+e.mood,0)/entries.length;
+      const avgEnergy=entries.reduce((s,e)=>s+(e.energy||3),0)/entries.length;
+      return{entries,overall:avgMood,energy:avgEnergy};
+    }
+    return{};
+  }
+  try { return JSON.parse(localStorage.getItem(MOOD_KEY) || "{}"); } catch(e) { return {}; }
+}
+function saveMoodData(data) {
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.mood&&window.blockStore&&data.entries){
+    const lastEntry=data.entries[data.entries.length-1];
+    if(lastEntry&&!lastEntry._blockId){
+      window.blockStore.createBlock("mood_entry",{
+        mood:lastEntry.mood,energy:lastEntry.energy||3,time:lastEntry.time||"",note:lastEntry.note||""
+      },{parentId:window.blockStore.getDayRootId(),date:window.blockStore.getCurrentDate()})
+      .then(b=>{lastEntry._blockId=b.id});
+    }
+    return;
+  }
+  localStorage.setItem(MOOD_KEY, JSON.stringify(data)); scheduleIDBSave();
+}
 
-// Category color map
+// Category color map (populated at load time if taxonomy available, re-populated by boot.js after API fetch)
 const ENGRAM_COLORS = {};
-(window.__ENGRAM_TAXONOMY__ || {categories:[]}).categories.forEach(c => { ENGRAM_COLORS[c.id] = c.color; });
 const ENGRAM_ICONS = {};
-(window.__ENGRAM_TAXONOMY__ || {categories:[]}).categories.forEach(c => { ENGRAM_ICONS[c.id] = c.icon; });
+(function populateEngramMaps() {
+  const cats = (window.__ENGRAM_TAXONOMY__ && window.__ENGRAM_TAXONOMY__.categories) || [];
+  cats.forEach(c => { ENGRAM_COLORS[c.id] = c.color; ENGRAM_ICONS[c.id] = c.icon; });
+})();
 
 function slugify(str) { return str.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
 

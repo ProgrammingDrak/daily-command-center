@@ -38,7 +38,10 @@ function toggleDetail(itemEl){
 // ======== DEFERRED (push to tomorrow) ========
 let DEFERRED_KEY = "pa-deferred-" + ((__state && __state.date) ? __state.date : "unknown");
 function loadDeferred(){try{return JSON.parse(localStorage.getItem(DEFERRED_KEY)||"[]")}catch(e){return[]}}
-function saveDeferred(arr){localStorage.setItem(DEFERRED_KEY,JSON.stringify(arr));scheduleIDBSave()}
+function saveDeferred(arr){
+  if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;
+  localStorage.setItem(DEFERRED_KEY,JSON.stringify(arr));scheduleIDBSave();
+}
 
 // ======== PUSHED TO TOMORROW (UI state) ========
 let PUSHED_KEY = "pa-pushed-" + ((__state && __state.date) ? __state.date : "unknown");
@@ -49,12 +52,28 @@ let pushedAt = {};
   if(d.ids)d.ids.forEach(id=>pushedSet.add(id));
   if(d.at)Object.assign(pushedAt,d.at);}catch(e){}
 })();
-function savePushedState(){localStorage.setItem(PUSHED_KEY,JSON.stringify({ids:[...pushedSet],at:pushedAt}));scheduleIDBSave()}
+function savePushedState(){
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.pushed&&window.blockStore){
+    const dayRoot=window.blockStore.getDayRootId();
+    const root=window.blockStore.get(dayRoot);
+    if(root){window.blockStore.updateBlock(dayRoot,{...root.properties,_pushed:{ids:[...pushedSet],at:pushedAt}})}
+    return;
+  }
+  localStorage.setItem(PUSHED_KEY,JSON.stringify({ids:[...pushedSet],at:pushedAt}));scheduleIDBSave();
+}
 function isPushed(ev){return pushedSet.has(ev.id)}
 
 // ======== DURATION CHANGES PERSISTENCE ========
 let DUR_KEY = "pa-dur-" + ((__state && __state.date) ? __state.date : "unknown");
-function saveDurChanges(){try{localStorage.setItem(DUR_KEY,JSON.stringify(durChanges));scheduleIDBSave()}catch(e){}}
+function saveDurChanges(){
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.duration&&window.blockStore){
+    const dayRoot=window.blockStore.getDayRootId();
+    const root=window.blockStore.get(dayRoot);
+    if(root){window.blockStore.updateBlock(dayRoot,{...root.properties,_durChanges:durChanges})}
+    return;
+  }
+  try{localStorage.setItem(DUR_KEY,JSON.stringify(durChanges));scheduleIDBSave()}catch(e){}
+}
 function restoreDurChanges(){
   try{
     const raw=localStorage.getItem(DUR_KEY);if(!raw)return;
@@ -95,7 +114,15 @@ let deletedSet = new Set();
   try{const d=JSON.parse(localStorage.getItem(DELETED_KEY)||"[]");
   d.forEach(id=>deletedSet.add(id));}catch(e){}
 })();
-function saveDeletedState(){localStorage.setItem(DELETED_KEY,JSON.stringify([...deletedSet]));scheduleIDBSave()}
+function saveDeletedState(){
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.deleted&&window.blockStore){
+    const dayRoot=window.blockStore.getDayRootId();
+    const root=window.blockStore.get(dayRoot);
+    if(root){window.blockStore.updateBlock(dayRoot,{...root.properties,_deleted:[...deletedSet]})}
+    return;
+  }
+  localStorage.setItem(DELETED_KEY,JSON.stringify([...deletedSet]));scheduleIDBSave();
+}
 function isDeleted(ev){return deletedSet.has(ev.id)}
 
 let _delPendingId=null;
@@ -115,6 +142,7 @@ function openDeleteConfirm(id){
 function closeDeleteConfirm(){
   document.getElementById("del-confirm-overlay").classList.remove("open");
   _delPendingId=null;
+  if(typeof _flushDeferredRender==='function')_flushDeferredRender();
 }
 function confirmDeleteTask(){
   if(!_delPendingId)return;

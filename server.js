@@ -11,43 +11,39 @@
  * Port: 8090 (single process, replaces both 8090 + 8091)
  */
 
-require("dotenv").config();
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const blockDB = require("./db");
+const migration = require("./migrate");
+const gcalAuth = require("./gcal-auth");
+const gcalSync = require("./gcal-sync");
 
 const app = express();
 const PORT = process.env.PORT || 8090;
 
 // ── Path Configuration ──
-// PROJECT_DIR: where this server.js lives (local repo — serves HTML/CSS/JS)
+// Everything is local under data/ — no external dependencies
 const PROJECT_DIR = __dirname;
-// DATA_ROOT: the original DCC directory on Google Drive (The Second Brain, meeting-prep)
-// Falls back to __dirname for backwards compat if .env isn't set
-const DATA_ROOT = process.env.DATA_ROOT || PROJECT_DIR;
-// WORKSPACE_ROOT: the Clever PA workspace (contains .clever-pa/)
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || path.resolve(DATA_ROOT, "..", "..");
-// PA home: .clever-pa/
-const PA_HOME = path.join(WORKSPACE_ROOT, ".clever-pa");
-// The Second Brain: lives on Google Drive under the original DCC directory
-const BRAIN_DIR = path.join(DATA_ROOT, "The Second Brain");
-const RECENT_DIR = path.join(BRAIN_DIR, "recent");
-const ENGRAMS_DIR = path.join(BRAIN_DIR, "engrams");
-const GLOBALS_FILE = path.join(BRAIN_DIR, "globals.json");
-const MANIFEST_FILE = path.join(RECENT_DIR, "manifest.json");
-// PA state files
-const STATE_DIR = path.join(PA_HOME, "state");
+const DATA_DIR = path.join(PROJECT_DIR, "data");
+// State files (day-state, tomorrow-state, upcoming-meetings)
+const STATE_DIR = path.join(DATA_DIR, "state");
 const DAY_STATE_FILE = path.join(STATE_DIR, "day-state.json");
 const TOMORROW_STATE_FILE = path.join(STATE_DIR, "tomorrow-state.json");
 const UPCOMING_FILE = path.join(STATE_DIR, "upcoming-meetings.json");
 const LOCAL_UI_STATE_FILE = path.join(STATE_DIR, "local-ui-state.json");
 const ARCHIVE_DIR = path.join(STATE_DIR, "archive");
-// Meeting prep: lives on Google Drive under the original DCC directory
-const PREP_DIR = path.join(DATA_ROOT, "meeting-prep");
-// User config
-const USER_CONTEXT_FILE = path.join(PA_HOME, "user-context.yaml");
-// PA activity log
-const PA_LOG_FILE = path.join(WORKSPACE_ROOT, "claude-school", "pa-activity-log.md");
+// Second Brain (recent day states, engrams, globals)
+const BRAIN_DIR = path.join(DATA_DIR, "brain");
+const RECENT_DIR = path.join(BRAIN_DIR, "recent");
+const ENGRAMS_DIR = path.join(BRAIN_DIR, "engrams");
+const GLOBALS_FILE = path.join(BRAIN_DIR, "globals.json");
+const MANIFEST_FILE = path.join(RECENT_DIR, "manifest.json");
+// Meeting prep HTML files
+const PREP_DIR = path.join(DATA_DIR, "prep");
+// Config (user-context.yaml, PA activity log)
+const USER_CONTEXT_FILE = path.join(DATA_DIR, "config", "user-context.yaml");
+const PA_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
 
 // Ensure directories exist
 [RECENT_DIR, ENGRAMS_DIR].forEach((dir) => {
@@ -316,7 +312,7 @@ app.get("/api/pa-log", (req, res) => {
   }
   const raw = fs.readFileSync(PA_LOG_FILE, "utf8");
   const match = raw.match(
-    /(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/
+    /(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/
   );
   if (!match) {
     return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found in log.</div>' });
@@ -420,8 +416,9 @@ app.post("/api/ingest/day-state", (req, res) => {
 
   // PA-owned sections: overwrite from incoming
   const PA_SECTIONS = [
-    "schedule", "triage", "meetings", "watermarks", "notifications",
-    "assessment", "sweep_stats", "meta",
+    "schedule", "triage", "meetings", "meetings_tomorrow", "watermarks",
+    "notifications", "assessment", "sweep_stats", "meta", "report_card",
+    "clean_tidy", "orchestrator", "mutations", "completions", "personal",
   ];
   // User-owned sections: preserve existing, incoming doesn't overwrite
   const USER_SECTIONS = [
@@ -459,6 +456,34 @@ app.post("/api/ingest/day-state", (req, res) => {
   res.json({ ok: true, date: incoming.date });
 });
 
+// ── POST: Clean and Tidy Approval Actions ──
+app.post("/api/clean-tidy/approve", (req, res) => {
+  const { ids, action } = req.body;
+  if (!ids || !Array.isArray(ids) || !["approve", "deny"].includes(action)) {
+    return res.status(400).json({ error: "Expected { ids: string[], action: 'approve'|'deny' }" });
+  }
+  const state = readJSON(DAY_STATE_FILE, {});
+  const ct = state.clean_tidy || {};
+  const pending = ct.pending_approvals || [];
+  let changed = 0;
+  for (const item of pending) {
+    if (ids.includes(item.id) && item.status === "pending") {
+      item.status = action === "approve" ? "approved" : "denied";
+      item.resolved_at = new Date().toISOString();
+      changed++;
+    }
+  }
+  if (changed) {
+    state.clean_tidy = ct;
+    state.last_updated_at = new Date().toISOString();
+    state.last_updated_by = "dcc-approval";
+    writeJSON(DAY_STATE_FILE, state);
+    broadcast("ingest", { source: "clean-tidy-approval", changed });
+    console.log(`[clean-tidy] ${action}d ${changed} items`);
+  }
+  res.json({ ok: true, action, changed });
+});
+
 // ── GET: Health Check ──
 app.get("/api/health", (req, res) => {
   const manifest = readJSON(MANIFEST_FILE, { dates: [] });
@@ -469,7 +494,7 @@ app.get("/api/health", (req, res) => {
     port: PORT,
     sseClients: sseClients.size,
     brainDir: BRAIN_DIR,
-    paHome: PA_HOME,
+    dataDir: DATA_DIR,
     datesStored: manifest.dates.length,
     lastUpdated: manifest.lastUpdated || null,
     dayStateDate: dayState ? dayState.date : null,
@@ -478,15 +503,446 @@ app.get("/api/health", (req, res) => {
 });
 
 // ── Static File Serving ──
-// Serve modular CSS/JS from public/
-app.use("/public", express.static(path.join(PROJECT_DIR, "public")));
-// Serve other static assets (meeting-prep/, snapshots/, etc.) from project dir
-app.use(express.static(PROJECT_DIR, { extensions: ["html"] }));
+// Serve modular CSS/JS from public/ — no caching during development
+app.use("/public", express.static(path.join(PROJECT_DIR, "public"), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+  },
+}));
+// ── Block API (SQLite-backed) ──
+// Initialize SQLite on startup
+const db = blockDB.getDB();
+
+// Validate date format
+function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }
+
+// POST /api/blocks — Create block(s)
+app.post("/api/blocks", (req, res) => {
+  try {
+    const body = req.body;
+    // Support single or array
+    const items = Array.isArray(body) ? body : [body];
+    const results = [];
+    for (const item of items) {
+      results.push(blockDB.createBlock(db, item));
+    }
+    broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId });
+    res.json(results.length === 1 ? results[0] : results);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// PATCH /api/blocks/:id — Update block (full properties replacement)
+app.patch("/api/blocks/:id", (req, res) => {
+  try {
+    const result = blockDB.updateBlock(db, req.params.id, req.body);
+    broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId });
+    res.json(result);
+  } catch (e) {
+    const status = e.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: e.message });
+  }
+});
+
+// DELETE /api/blocks/:id — Soft-delete block
+app.delete("/api/blocks/:id", (req, res) => {
+  try {
+    const result = blockDB.deleteBlock(db, req.params.id);
+    broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId });
+    res.json(result);
+  } catch (e) {
+    const status = e.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: e.message });
+  }
+});
+
+// POST /api/blocks/batch — Atomic multi-block operation
+app.post("/api/blocks/batch", (req, res) => {
+  try {
+    const { operations, _clientId } = req.body;
+    if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" });
+    const result = blockDB.batchOp(db, operations);
+    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// GET /api/blocks?date=X or ?type=X,Y
+app.get("/api/blocks", (req, res) => {
+  try {
+    if (req.query.date) {
+      if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date format" });
+      // Ensure day_root exists
+      blockDB.ensureDayRoot(db, req.query.date);
+      const blocks = blockDB.getBlocksByDate(db, req.query.date);
+      res.json(blocks);
+    } else if (req.query.type) {
+      const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
+      if (!types.length) return res.status(400).json({ error: "No valid types specified" });
+      const blocks = blockDB.getBlocksByTypes(db, types);
+      res.json(blocks);
+    } else {
+      res.status(400).json({ error: "Provide ?date=YYYY-MM-DD or ?type=type1,type2" });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/blocks/range — Get blocks across a date range (for Calendar view)
+// IMPORTANT: Must be defined BEFORE /api/blocks/:id to avoid "range" matching as :id
+app.get("/api/blocks/range", (req, res) => {
+  try {
+    const { start, end } = req.query;
+    if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
+      return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
+    }
+    const blocks = blockDB.getBlocksByDateRange(db, start, end);
+    res.json(blocks);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/blocks/:id — Get single block
+app.get("/api/blocks/:id", (req, res) => {
+  const block = blockDB.getBlock(db, req.params.id);
+  if (!block) return res.status(404).json({ error: "Block not found" });
+  res.json(block);
+});
+
+// GET /api/blocks/:id/children — Get child blocks
+app.get("/api/blocks/:id/children", (req, res) => {
+  try {
+    const children = blockDB.getChildren(db, req.params.id);
+    res.json(children);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/blocks/reorder — Update sort_order for multiple blocks
+app.post("/api/blocks/reorder", (req, res) => {
+  try {
+    const { items, _clientId } = req.body;
+    if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array of {id, sort_order}" });
+    blockDB.reorderBlocks(db, items);
+    broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId });
+    res.json({ ok: true, reordered: items.length });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// GET /api/pa-state/range — Get PA states across a date range (for Calendar view)
+// IMPORTANT: Must be defined BEFORE /api/pa-state/:date to avoid "range" matching as :date
+app.get("/api/pa-state/range", (req, res) => {
+  try {
+    const { start, end } = req.query;
+    if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
+      return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
+    }
+    const states = blockDB.getPaStateRange(db, start, end);
+    const result = {};
+    for (const s of states) result[s.date] = s.state_json;
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/pa-state/:date — Get PA-owned state
+app.get("/api/pa-state/:date", (req, res) => {
+  if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" });
+  const state = blockDB.getPaState(db, req.params.date);
+  res.json(state || { date: req.params.date, state_json: null });
+});
+
+// POST /api/pa-state/ingest — Scheduled task writes PA state
+app.post("/api/pa-state/ingest", (req, res) => {
+  try {
+    const { date, ...stateData } = req.body;
+    if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
+    blockDB.savePaState(db, date, stateData);
+    broadcast("pa-state-changed", { date });
+    res.json({ ok: true, date });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/migrate — Run full migration
+app.post("/api/migrate", (req, res) => {
+  try {
+    const { localStorageDump, dryRun } = req.body || {};
+    const manifest = migration.runMigration(db, {
+      dryRun: !!dryRun,
+      localStorageDump: localStorageDump || null
+    });
+    res.json(manifest);
+  } catch (e) {
+    res.status(500).json({ error: e.message, stack: e.stack });
+  }
+});
+
+// POST /api/migrate/dry-run — Preview migration without committing
+app.post("/api/migrate/dry-run", (req, res) => {
+  try {
+    const { localStorageDump } = req.body || {};
+    const manifest = migration.runMigration(db, {
+      dryRun: true,
+      localStorageDump: localStorageDump || null
+    });
+    res.json(manifest);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/migrate/status — Check if migration has been run
+app.get("/api/migrate/status", (req, res) => {
+  try {
+    const blockCount = db.prepare("SELECT COUNT(*) as count FROM blocks WHERE deleted_at IS NULL").get();
+    const paCount = db.prepare("SELECT COUNT(*) as count FROM pa_state").get();
+    res.json({
+      migrated: blockCount.count > 1, // >1 because day_root auto-creates
+      blockCount: blockCount.count,
+      paStateCount: paCount.count
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/operations?block_id=X — Get operation history
+app.get("/api/operations", (req, res) => {
+  if (!req.query.block_id) return res.status(400).json({ error: "block_id required" });
+  const ops = blockDB.getOperations(db, req.query.block_id, parseInt(req.query.limit) || 50);
+  res.json(ops);
+});
+
+// ── Google Calendar Integration ──
+// Initialize GCal sync engine
+gcalSync.init(db, broadcast);
+
+// OAuth flow
+app.get("/api/gcal/auth", (req, res) => {
+  const url = gcalAuth.getAuthUrl();
+  if (!url) return res.status(500).json({ error: "No credentials configured. Place gcal-credentials.json in data/" });
+  res.redirect(url);
+});
+
+app.get("/api/gcal/callback", async (req, res) => {
+  try {
+    const { code } = req.query;
+    if (!code) return res.status(400).send("Missing auth code");
+    await gcalAuth.handleCallback(code);
+    // Start sync after auth
+    gcalSync.startPolling();
+    res.redirect("/?gcal=connected");
+  } catch (e) {
+    console.error("[gcal] OAuth callback error:", e.message);
+    res.status(500).send("OAuth error: " + e.message);
+  }
+});
+
+app.get("/api/gcal/status", (req, res) => {
+  res.json(gcalSync.getSyncStatus());
+});
+
+app.post("/api/gcal/disconnect", (req, res) => {
+  gcalAuth.deleteTokens();
+  gcalSync.stopPolling();
+  res.json({ ok: true });
+});
+
+// Calendar management
+app.get("/api/gcal/calendars", async (req, res) => {
+  try {
+    const calendars = gcalSync.getAllCalendars();
+    if (calendars.length) return res.json(calendars);
+    // If no cached calendars, try fetching
+    if (gcalAuth.isAuthenticated()) {
+      const auth = gcalAuth.getAuthClient();
+      const fetched = await gcalAuth.fetchAndCacheCalendars(auth);
+      gcalSync.cacheCalendarsToDb(fetched);
+      return res.json(gcalSync.getAllCalendars());
+    }
+    res.json([]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/gcal/calendars/:id/toggle", (req, res) => {
+  try {
+    const { selected } = req.body;
+    gcalSync.toggleCalendar(req.params.id, selected);
+    // Trigger sync for newly selected calendar
+    if (selected) {
+      gcalSync.syncAll().catch(e => console.error("[gcal] Toggle sync error:", e.message));
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Event details (joined block + gcal metadata)
+app.get("/api/gcal/event/:blockId", (req, res) => {
+  try {
+    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
+    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
+    const block = blockDB.getBlock(db, req.params.blockId);
+    res.json({
+      block: block || null,
+      gcal: {
+        ...gcalData,
+        attendees: JSON.parse(gcalData.attendees_json || "[]"),
+        conference: gcalData.conference_json ? JSON.parse(gcalData.conference_json) : null,
+        organizer: gcalData.organizer_json ? JSON.parse(gcalData.organizer_json) : null,
+        creator: gcalData.creator_json ? JSON.parse(gcalData.creator_json) : null,
+        recurrence: gcalData.recurrence_json ? JSON.parse(gcalData.recurrence_json) : null,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update event (title, time, description) → pushes to GCal
+app.patch("/api/gcal/event/:blockId", async (req, res) => {
+  try {
+    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
+    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
+    const result = await gcalSync.updateEvent(gcalData.gcal_event_id, gcalData.calendar_id, req.body);
+    broadcast("gcal-sync", { action: "update", blockId: req.params.blockId });
+    res.json({ ok: true, event: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Add attendee
+app.post("/api/gcal/event/:blockId/attendees", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "email required" });
+    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
+    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
+    const result = await gcalSync.addAttendee(gcalData.gcal_event_id, gcalData.calendar_id, email);
+    broadcast("gcal-sync", { action: "attendee-add", blockId: req.params.blockId });
+    res.json({ ok: true, event: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Remove attendee
+app.delete("/api/gcal/event/:blockId/attendees/:email", async (req, res) => {
+  try {
+    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
+    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
+    const result = await gcalSync.removeAttendee(gcalData.gcal_event_id, gcalData.calendar_id, req.params.email);
+    broadcast("gcal-sync", { action: "attendee-remove", blockId: req.params.blockId });
+    res.json({ ok: true, event: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// RSVP
+app.post("/api/gcal/event/:blockId/rsvp", async (req, res) => {
+  try {
+    const { response } = req.body;
+    if (!["accepted", "declined", "tentative"].includes(response)) {
+      return res.status(400).json({ error: "response must be accepted, declined, or tentative" });
+    }
+    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
+    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
+    const result = await gcalSync.rsvp(gcalData.gcal_event_id, gcalData.calendar_id, response);
+    broadcast("gcal-sync", { action: "rsvp", blockId: req.params.blockId });
+    res.json({ ok: true, event: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Create event
+app.post("/api/gcal/events", async (req, res) => {
+  try {
+    const { calendarId, ...eventData } = req.body;
+    if (!calendarId) return res.status(400).json({ error: "calendarId required" });
+    if (!eventData.title) return res.status(400).json({ error: "title required" });
+    const result = await gcalSync.createEvent(calendarId, eventData);
+    broadcast("gcal-sync", { action: "create" });
+    res.json({ ok: true, event: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete event
+app.delete("/api/gcal/event/:blockId", async (req, res) => {
+  try {
+    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
+    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
+    await gcalSync.deleteEvent(gcalData.gcal_event_id, gcalData.calendar_id);
+    broadcast("gcal-sync", { action: "delete", blockId: req.params.blockId });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Trigger manual sync
+app.post("/api/gcal/sync", async (req, res) => {
+  try {
+    await gcalSync.syncAll();
+    res.json({ ok: true, status: gcalSync.getSyncStatus() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Serve other static assets from project dir
+app.use(express.static(PROJECT_DIR, {
+  extensions: ["html"],
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+  },
+}));
 
 // Fallback: serve index.html for root
 app.get("/", (req, res) => {
   res.sendFile(path.join(PROJECT_DIR, "index.html"));
 });
+
+// ── Soft-delete purge (daily) ──
+// Purge blocks soft-deleted more than 30 days ago
+setInterval(() => {
+  try {
+    const purged = blockDB.purgeSoftDeleted(db, 30);
+    if (purged > 0) console.log(`[Purge] Removed ${purged} soft-deleted blocks older than 30 days`);
+  } catch (e) {
+    console.warn("[Purge] Error:", e.message);
+  }
+}, 24 * 60 * 60 * 1000); // Every 24 hours
+
+// Run once on startup too
+try {
+  const purged = blockDB.purgeSoftDeleted(db, 30);
+  if (purged > 0) console.log(`[Purge] Startup: removed ${purged} soft-deleted blocks`);
+} catch (e) {}
 
 // ── Start ──
 app.listen(PORT, () => {
@@ -495,6 +951,17 @@ app.listen(PORT, () => {
   console.log(`  Dashboard:  http://localhost:${PORT}`);
   console.log(`  API:        http://localhost:${PORT}/api/health`);
   console.log(`  SSE:        http://localhost:${PORT}/api/events`);
-  console.log(`  PA Home:    ${PA_HOME}`);
-  console.log(`  Brain Dir:  ${BRAIN_DIR}\n`);
+  console.log(`  Blocks API: http://localhost:${PORT}/api/blocks`);
+  console.log(`  Data Dir:   ${DATA_DIR}`);
+  console.log(`  SQLite DB:  ${path.join(DATA_DIR, "blocks.db")}`);
+  console.log(`  Brain Dir:  ${BRAIN_DIR}`);
+
+  // Start GCal sync if authenticated
+  if (gcalAuth.isAuthenticated()) {
+    console.log(`  GCal:       Connected — starting sync`);
+    gcalSync.startPolling();
+  } else {
+    console.log(`  GCal:       Not connected — visit /api/gcal/auth to connect`);
+  }
+  console.log();
 });

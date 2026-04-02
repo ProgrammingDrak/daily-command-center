@@ -16,16 +16,18 @@ function pomoFmt(s){const m=Math.floor(s/60),sec=s%60;return String(m).padStart(
 function pomoPaint(){
   const arc=document.getElementById("pomo-arc"),disp=document.getElementById("pomo-display");
   if(!arc||!disp)return;
-  // Total ticks in the ring
-  const totalTicks=Math.floor(POMO_C/POMO_UNIT);
-  const elapsed=pomoState.total-pomoState.remaining;
-  const litTicks=Math.round((elapsed/pomoState.total)*totalTicks);
-  // Foreground shows elapsed portion via stroke-dashoffset (reversed: full = 0 offset, empty = full offset)
-  arc.style.strokeDasharray=POMO_SEG+" "+POMO_GAP;
   const pct=pomoState.remaining/pomoState.total;
+  arc.style.strokeDasharray=POMO_SEG+" "+POMO_GAP;
   arc.style.strokeDashoffset=POMO_C*(1-pct);
   arc.style.stroke=pomoState.mode==="work"?"rgba(255,255,255,0.7)":pomoState.mode==="short"?"var(--green)":"var(--purple)";
   disp.textContent=pomoFmt(pomoState.remaining);
+  // Also paint mini bar
+  const miniArc=document.getElementById("ft-mini-arc");
+  const miniTime=document.getElementById("ft-mini-time");
+  const miniTask=document.getElementById("ft-mini-task");
+  if(miniArc){const mc=2*Math.PI*16;miniArc.style.strokeDashoffset=mc*(1-pct);miniArc.style.stroke=arc.style.stroke}
+  if(miniTime)miniTime.textContent=pomoFmt(pomoState.remaining);
+  if(miniTask)miniTask.textContent=pomoState.title||"--";
 }
 function pomoUpdateStartBtn(){
   const btn=document.getElementById("pomo-start");if(!btn)return;
@@ -138,11 +140,23 @@ function pomoTick(){
   pomoState.remaining--;pomoPaint();savePomoState();
 }
 function updateTimerBadge(){
-  const tabBtn=document.getElementById("timer-tab-btn");if(!tabBtn)return;
-  let badge=tabBtn.querySelector(".pomo-tab-badge");
-  if(pomoState.running){
-    if(!badge){badge=document.createElement("span");badge.className="pomo-tab-badge";tabBtn.appendChild(badge)}
-  }else{if(badge)badge.remove()}
+  // Update FAB badge
+  const fabBadge=document.getElementById("ft-fab-badge");
+  if(fabBadge) fabBadge.style.display=pomoState.running?"":"none";
+  // Show/hide mini bar vs FAB based on running state when panel is closed
+  const panel=document.getElementById("ft-panel");
+  const panelVisible=panel&&panel.style.display!=="none";
+  if(!panelVisible){
+    const mini=document.getElementById("ft-mini");
+    const fab=document.getElementById("ft-fab");
+    if(pomoState.running){
+      if(mini)mini.style.display="flex";
+      if(fab)fab.style.display="none";
+    }else{
+      if(mini)mini.style.display="none";
+      if(fab)fab.style.display="flex";
+    }
+  }
 }
 
 // ======== TASK COMPLETION MODAL ========

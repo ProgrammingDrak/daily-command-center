@@ -73,9 +73,10 @@ function buildSideDone(){
   // Group by completion time (hour buckets)
   const groups={};
   doneItems.forEach(ev=>{
-    const ts=doneAt[ev.id];
+    const raw=doneAt[ev.id];
+    const ts=raw instanceof Date?raw:(raw?new Date(raw):null);
     let label="Earlier";
-    if(ts){
+    if(ts&&!isNaN(ts)){
       const h=ts.getHours(),m=ts.getMinutes();
       const ap=h>=12?"PM":"AM",h12=h>12?h-12:h||12;
       label="Completed at "+h12+":"+String(m).padStart(2,"0")+" "+ap;

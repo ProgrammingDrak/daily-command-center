@@ -1,7 +1,13 @@
 // ======== LIFE TAB + QUICK CAPTURE ========
 
 function getLifeCaptures(){return JSON.parse(localStorage.getItem("pa-life-captures")||"[]")}
-function saveLifeCapture(entry){const c=getLifeCaptures();c.push(entry);localStorage.setItem("pa-life-captures",JSON.stringify(c));scheduleIDBSave()}
+function saveLifeCapture(entry){
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.lifeCaptures&&window.blockStore){
+    window.blockStore.createBlock("life_capture",{text:entry.text||"",category:entry.category||"",mood:entry.mood||0,context:entry.context||"",timestamp:entry.timestamp||new Date().toISOString()});
+    return;
+  }
+  const c=getLifeCaptures();c.push(entry);localStorage.setItem("pa-life-captures",JSON.stringify(c));scheduleIDBSave();
+}
 
 function moodColor(score){
   if(score>=9)return"var(--accent)";if(score>=7)return"var(--green)";

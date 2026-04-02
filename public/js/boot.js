@@ -65,10 +65,9 @@
     if (typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
 
     // Re-populate one-time objects that ran at load time with empty data
-    if (typeof ENGRAM_COLORS !== 'undefined' && window.__ENGRAM_TAXONOMY__ && window.__ENGRAM_TAXONOMY__.categories) {
-      window.__ENGRAM_TAXONOMY__.categories.forEach(c => { ENGRAM_COLORS[c.id] = c.color; ENGRAM_ICONS[c.id] = c.icon; });
-    }
-    if (typeof PREP_REGISTRY !== 'undefined' && window.__PREP_FILES__) {
+    const cats = (window.__ENGRAM_TAXONOMY__ && window.__ENGRAM_TAXONOMY__.categories) || [];
+    cats.forEach(c => { ENGRAM_COLORS[c.id] = c.color; ENGRAM_ICONS[c.id] = c.icon; });
+    if (window.__PREP_FILES__) {
       Object.entries(window.__PREP_FILES__).forEach(([k,v]) => { PREP_REGISTRY[k] = v; PREP_REGISTRY["meeting-prep/" + k] = v; });
     }
 
@@ -89,11 +88,32 @@
     setTimeout(() => loadEl.remove(), 3000);
   }
 
-  // Continue with existing hydration (IndexedDB, Second Brain file DB, etc.)
-  try {
-    await hydrateFromStorage();
-    await hydrateGlobals();
-  } catch(e) { console.warn("[Second Brain] Hydration error (non-fatal):", e); }
+  // Load BlockStore data for today (primary data source)
+  if (window.blockStore && viewDate) {
+    try {
+      await window.blockStore.loadDay(viewDate);
+      await window.blockStore.loadGlobals();
+      console.log('[BlockStore] Loaded blocks for', viewDate, window.blockStore.debug());
+    } catch(e) { console.warn("[BlockStore] Load failed (non-fatal):", e); }
+  }
+
+  // Legacy hydration fallback — only needed if any USE_BLOCKSTORE flags are off
+  if (window.USE_BLOCKSTORE && !Object.values(window.USE_BLOCKSTORE).every(v => v)) {
+    try {
+      await hydrateFromStorage();
+      await hydrateGlobals();
+    } catch(e) { console.warn("[Second Brain] Hydration error (non-fatal):", e); }
+  }
+
+  // Midnight date boundary: check every 60s if the date rolled over
+  setInterval(() => {
+    const now = new Date();
+    const todayStr = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+    if (__todayDate && todayStr !== __todayDate && viewMode === 'today') {
+      console.log('[Boot] Date rolled over to', todayStr, '— refreshing...');
+      location.reload();
+    }
+  }, 60000);
 
   // Trigger initial render with the loaded data
   if (typeof render === 'function') render();
@@ -101,6 +121,7 @@
   if (typeof buildNotifications === 'function') buildNotifications();
   if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();
   if (typeof buildLifeSection === 'function') buildLifeSection();
+  if (typeof buildReportCard === 'function') buildReportCard();
   if (typeof updateStats === 'function') updateStats();
   if (typeof updateDateNav === 'function') updateDateNav();
 })();

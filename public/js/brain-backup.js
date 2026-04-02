@@ -33,12 +33,26 @@ function exportLocalState() {
     pendingTasks: loadPendingTasks(),
     exported_at: new Date().toISOString()
   };
-  document.getElementById("local-state-export").textContent = JSON.stringify(data);
+  const el = document.getElementById("local-state-export");
+  if (el) el.textContent = JSON.stringify(data);
   // Also trigger IndexedDB save on export
   scheduleIDBSave();
 }
-// Export every 30 seconds and on unload
-setInterval(exportLocalState, 30000);
-window.addEventListener("beforeunload", exportLocalState);
-exportLocalState();
+// Export on tab close — flush all pending state immediately
+window.addEventListener("beforeunload", () => {
+  exportLocalState();
+  // Phase 0 fix: flush pending changes to Express with keepalive
+  // (keepalive requests survive page unload)
+  if (typeof flushToExpress === "function") {
+    flushToExpress();
+  }
+  // Also force an immediate IDB save (may or may not complete before unload)
+  const date = (__state && __state.date) ? __state.date : "unknown";
+  if (typeof PaDB !== "undefined" && date !== "unknown") {
+    try {
+      PaDB.saveDate(date, collectAllState());
+      PaDB.saveGlobal('globals', collectGlobalState());
+    } catch(e) {}
+  }
+});
 
