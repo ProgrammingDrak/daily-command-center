@@ -131,6 +131,7 @@
           priority: ev.priority,
           source: ev.source,
           detail: ev.detail,
+          gcal_calendar_id: ev.gcal_calendar_id,
           calUrl: ev.calUrl,
           notionUrl: ev.notionUrl,
           meta: ev.meta,

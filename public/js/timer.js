@@ -178,7 +178,7 @@ function openTaskCompletionModal(taskTitle){
     const c=cfg(s.type);
     const timeStr=f12(s.start)+" - "+f12(s.end);
     const isDoneItem=isDone(s);
-    html+='<div class="completion-item clickable" data-block-id="'+s.id+'"><span class="ci-bar" style="background:'+c.color+'"></span><div class="ci-body"><div class="ci-title">'+s.title+'</div><div class="ci-meta"><span>'+timeStr+'</span></div></div></div>';
+    html+='<div class="completion-item clickable" data-block-id="'+s.id+'"><span class="ci-bar" style="background:'+c.color+'"></span><div class="ci-body"><div class="ci-title">'+s.title+'</div>'+(s.detail?'<div class="ci-detail">'+s.detail+'</div>':'')+'<div class="ci-meta"><span>'+timeStr+'</span></div></div></div>';
   });
   html+='</div>';
 

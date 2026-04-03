@@ -289,6 +289,7 @@
   .completion-item .ci-time{font-size:11px;color:var(--text-muted);flex-shrink:0}
   .completion-item .ci-title{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .completion-item .ci-meta{font-size:10px;color:var(--text-muted);display:flex;gap:6px;margin-top:1px}
+  .completion-item .ci-detail{font-size:10px;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
   /* Conflict prompt */
   .conflict-prompt{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:12px;margin-bottom:12px}
