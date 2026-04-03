@@ -139,21 +139,27 @@ document.getElementById("pomo-sound").addEventListener("click",()=>{
   document.getElementById("pomo-sound").textContent="Sound: "+(pomoState.soundOn?"On":"Off");
   savePomoState();
 });
-// Task check on focus tab — ✓ marks done + opens picker, timer keeps running
+// Task check — opens completion modal, then picker on confirm
 document.getElementById("pomo-task-check").addEventListener("click",(e)=>{
-  e.stopPropagation(); // don't trigger task card's openTaskPicker
-  const task = scheduled.find(s=>s.title===pomoState.title && !s.nested);
-  if(task) toggleDone(task.id);
-  _pomoCompleteHook = { prevTitle: pomoState.title, capturedStart: pomoState.startedAt };
-  openTaskPicker(pomoState.title);
+  e.stopPropagation();
+  const capturedTitle = pomoState.title;
+  const capturedStart = pomoState.startedAt;
+  _completionModalCallback = (result) => {
+    if(result === true){
+      _pomoCompleteHook = { prevTitle: capturedTitle, capturedStart: capturedStart };
+      openTaskPicker(capturedTitle);
+    }
+  };
+  openTaskCompletionModal(capturedTitle);
 });
-// ⚡ Lightning complete — instant done, no modal, timer keeps running
+// ⚡ Lightning complete — instant done + open picker
 document.getElementById("pomo-task-lightning").addEventListener("click",(e)=>{
   e.stopPropagation();
   const task=scheduled.find(s=>s.title===pomoState.title && !s.nested);
   if(task) toggleDone(task.id);
   showToast("✓ "+pomoState.title+" completed");
-  savePomoState();
+  _pomoCompleteHook = { prevTitle: pomoState.title, capturedStart: pomoState.startedAt };
+  openTaskPicker(pomoState.title);
 });
 // Note: Focus/Report sub-tabs removed — report is now a collapsible <details> in the floating panel
 

@@ -160,6 +160,8 @@ function updateTimerBadge(){
 }
 
 // ======== TASK COMPLETION MODAL ========
+let _completionModalCallback = null;
+let _completionModalResult = null; // true=completed, false=kept, null=dismissed
 let currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null};
 
 function openTaskCompletionModal(taskTitle){
@@ -286,12 +288,18 @@ function attributeTimeAndClose(isCompleted){
   }
 
   pomoRenderReport();savePomoState();
+  _completionModalResult = isCompleted;
   closeCompletionModal();
 }
 
 function closeCompletionModal(){
   document.getElementById("task-completion-modal-overlay").classList.remove("open");
   currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null};
+  if(_completionModalCallback){
+    const cb=_completionModalCallback, result=_completionModalResult;
+    _completionModalCallback=null; _completionModalResult=null;
+    cb(result);
+  }
 }
 
 // ======== UNTASKED TIMER COMPLETION MODAL ========
