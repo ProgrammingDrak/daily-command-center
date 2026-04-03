@@ -350,7 +350,7 @@ function seedScheduleBlocksFromYAML(){
 
     if(!fs.existsSync(USER_CONTEXT_FILE)) return;
     const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8");
-    const match = raw.match(/\bblocks:\s*\n((?:\s+-[\s\S]*?)*)(?=\n\s{2}\S|\n\S|\s*$)/m);
+    const match = raw.match(/\bblocks:\s*\n((?:[ \t]+.*\n?)*)/m);
     if(!match) return;
     const blocks = [];
     let current = null;
@@ -365,7 +365,6 @@ function seedScheduleBlocksFromYAML(){
       else if(en && current) current.end = en[1];
     }
     const valid = blocks.filter(b => b.name && b.blockType && b.start && b.end);
-    const db = blockDB.getDB();
     valid.forEach((b, i) => {
       blockDB.createBlock(db, {
         type: "schedule_block",
