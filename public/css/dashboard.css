@@ -225,6 +225,13 @@
   .pomo-task-card .ptc-check.on{border-color:var(--green);background:var(--green);color:white}
   .pomo-task-card .ptc-name{flex:1;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pomo-task-card .ptc-pomo{font-size:10px;color:var(--red);display:flex;align-items:center;gap:2px;flex-shrink:0}
+  .ptc-lightning{width:20px;height:20px;border-radius:4px;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.3);color:rgb(251,191,36);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.12s}
+  .ptc-lightning:hover{background:rgba(251,191,36,0.28);border-color:rgba(251,191,36,0.6)}
+  .pomo-sec-btn.accent{background:rgba(59,130,246,0.15);border-color:var(--accent);color:var(--accent-light)}
+  .pomo-sec-btn.accent:hover{background:rgba(59,130,246,0.28)}
+  .pomo-stop-q{font-size:11px;color:var(--text);font-weight:500}
+  .pomo-distracted-btn{display:block;width:100%;margin:4px 0 6px;padding:5px 0;border-radius:6px;border:1px solid rgba(239,68,68,0.25);background:rgba(239,68,68,0.08);color:var(--red);font-size:10px;font-weight:600;cursor:pointer;transition:all 0.12s;text-align:center}
+  .pomo-distracted-btn:hover{background:rgba(239,68,68,0.18);border-color:rgba(239,68,68,0.5)}
   .pomo-modes{display:flex;gap:6px;margin-bottom:16px}
   .pomo-mode{padding:5px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-muted);transition:all 0.15s}
   .pomo-mode:hover{border-color:var(--accent);color:var(--accent-light)}

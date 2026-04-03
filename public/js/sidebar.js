@@ -191,6 +191,7 @@ function openTaskPicker(){
   setTimeout(()=>document.getElementById("pomo-picker-q").focus(),50);
 }
 function closeTaskPicker(){
+  _pomoCompleteHook = null;
   document.getElementById("pomo-picker-overlay").classList.remove("open");
 }
 function buildPickerList(query){

@@ -377,6 +377,15 @@ function closeUntaskedModal(){
   untaskedSessionData={durSec:null,type:null};
 }
 
+function openDistractionModal(){
+  const elapsedMin = pomoState.startedAt
+    ? Math.max(1, Math.round((Date.now()-pomoState.startedAt)/60000))
+    : 5;
+  document.getElementById("distraction-mins").value=elapsedMin;
+  document.getElementById("distraction-note").value="";
+  document.getElementById("distraction-modal-overlay").classList.add("open");
+}
+
 // ======== DRAGGABLE FLOAT TIMER ========
 (function(){
   const el=document.getElementById("float-timer");

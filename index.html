@@ -480,6 +480,32 @@
   </div>
 </div>
 
+<!-- Distraction modal (global) -->
+<div class="completion-modal-overlay" id="distraction-modal-overlay">
+  <div class="completion-modal">
+    <div class="completion-modal-hdr">
+      <h3>Log Distraction</h3>
+      <button class="completion-modal-close" id="distraction-modal-close">&times;</button>
+    </div>
+    <div class="completion-modal-body" style="padding:16px">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Timer paused. What pulled you away?</div>
+      <input type="text" id="distraction-note" placeholder="e.g. Slack, phone call, urgent request..."
+        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--text);margin-bottom:10px">
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Time lost</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+        <input type="number" id="distraction-mins" min="1" max="120" value="5"
+          style="width:60px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;color:var(--text)">
+        <span style="font-size:12px;color:var(--text-muted)">minutes</span>
+      </div>
+    </div>
+    <div class="completion-actions">
+      <button class="secondary" id="distraction-cancel">Cancel</button>
+      <button class="primary" id="distraction-log-resume">Log &amp; Resume</button>
+      <button class="secondary" id="distraction-log-stop">Log &amp; Stop</button>
+    </div>
+  </div>
+</div>
+
 <!-- ======== FLOATING TIMER ======== -->
 <div class="float-timer" id="float-timer">
   <!-- FAB button (default state) -->
@@ -516,6 +542,9 @@
         <div class="pomo-task-card" id="pomo-task-card" style="margin-bottom:10px">
           <span class="ptc-swap-hint">click to swap task</span>
           <div class="ptc-check" id="pomo-task-check"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></div>
+          <div class="ptc-lightning" id="pomo-task-lightning" title="Quick complete">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="13,2 3,14 12,14 11,22 21,10 12,10"/></svg>
+          </div>
           <div class="ptc-name" id="pomo-title">--</div>
           <div class="ptc-pomo" id="pomo-session-count"></div>
         </div>
@@ -531,10 +560,18 @@
         </div>
         <button class="pomo-add-min" id="pomo-add-min" style="display:block;margin:0 auto 6px;font-size:11px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="10" height="10"><path d="M12 5v14M5 12h14"/></svg> 1 min</button>
         <button class="pomo-start-big go" id="pomo-start" style="width:100%;margin-bottom:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> Start to Focus</button>
-        <div class="pomo-secondary" style="justify-content:center;margin-bottom:6px">
-          <button class="pomo-sec-btn" id="pomo-reset">Reset</button>
+        <div class="pomo-secondary" id="pomo-secondary" style="justify-content:center;margin-bottom:6px">
+          <button class="pomo-sec-btn" id="pomo-stop">Stop</button>
           <button class="pomo-sec-btn" id="pomo-skip">Skip</button>
         </div>
+        <div id="pomo-stop-confirm" style="display:none;text-align:center;margin-bottom:6px">
+          <div class="pomo-stop-q" id="pomo-stop-q">Done with this task?</div>
+          <div style="display:flex;gap:6px;justify-content:center;margin-top:6px">
+            <button class="pomo-sec-btn accent" id="pomo-stop-yes">Yes, complete it</button>
+            <button class="pomo-sec-btn" id="pomo-stop-no">No, keep it</button>
+          </div>
+        </div>
+        <button class="pomo-distracted-btn" id="pomo-distracted">⚡ I got distracted</button>
         <div class="pomo-dots" style="justify-content:center;margin-bottom:8px"><div class="pomo-dot" id="pd0"></div><div class="pomo-dot" id="pd1"></div><div class="pomo-dot" id="pd2"></div><div class="pomo-dot" id="pd3"></div></div>
         <button class="pomo-sound" id="pomo-sound" style="font-size:10px;padding:2px 8px">Sound: On</button>
 

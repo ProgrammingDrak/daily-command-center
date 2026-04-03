@@ -1,3 +1,5 @@
+let _pomoCompleteHook = null; // { prevTitle, capturedStart } — set by ✓, consumed by openPomodoro
+
 // ======== PREP VIEWER ========
 // Embedded prep content registry -- keyed by filename
 const PREP_REGISTRY={};
@@ -37,6 +39,14 @@ document.addEventListener("keydown",e=>{
 });
 
 function openPomodoro(title,durMin){
+  if(_pomoCompleteHook){
+    const {prevTitle, capturedStart} = _pomoCompleteHook;
+    _pomoCompleteHook = null;
+    if(capturedStart && prevTitle && prevTitle !== title){
+      const elapsed = Math.round((Date.now() - capturedStart) / 1000);
+      if(elapsed >= 60) pomoLogSession(prevTitle, elapsed, pomoState.mode);
+    }
+  }
   clearInterval(pomoState.iv);
   pomoState.title=title;pomoState.workMin=Math.min(durMin||25,120);pomoState.sessions=0;pomoState.taskDone=false;
   document.querySelectorAll(".pomo-dot").forEach(d=>d.className="pomo-dot");
@@ -71,9 +81,54 @@ document.getElementById("pomo-start").addEventListener("click",()=>{
   }
   pomoUpdateStartBtn();updateTimerBadge();savePomoState();
 });
-document.getElementById("pomo-reset").addEventListener("click",()=>{
-  clearInterval(pomoState.iv);pomoState.running=false;pomoState.startedAt=null;
-  pomoSetMode(pomoState.mode);updateTimerBadge();savePomoState();
+document.getElementById("pomo-stop").addEventListener("click",()=>{
+  clearInterval(pomoState.iv); pomoState.running=false; pomoState.startedAt=null;
+  pomoSetMode(pomoState.mode); updateTimerBadge(); savePomoState();
+  document.getElementById("pomo-stop-q").textContent='Done with "'+pomoState.title+'"?';
+  document.getElementById("pomo-secondary").style.display="none";
+  document.getElementById("pomo-stop-confirm").style.display="block";
+});
+document.getElementById("pomo-stop-yes").addEventListener("click",()=>{
+  const task=scheduled.find(s=>s.title===pomoState.title && !s.nested);
+  if(task) toggleDone(task.id);
+  showToast("✓ "+pomoState.title+" completed");
+  document.getElementById("pomo-stop-confirm").style.display="none";
+  document.getElementById("pomo-secondary").style.display="flex";
+});
+document.getElementById("pomo-stop-no").addEventListener("click",()=>{
+  document.getElementById("pomo-stop-confirm").style.display="none";
+  document.getElementById("pomo-secondary").style.display="flex";
+});
+// "I got distracted" button + modal handlers
+document.getElementById("pomo-distracted").addEventListener("click",()=>{
+  if(pomoState.running){
+    clearInterval(pomoState.iv); pomoState.running=false; pomoState.startedAt=null;
+    pomoUpdateStartBtn(); updateTimerBadge(); savePomoState();
+  }
+  openDistractionModal();
+});
+
+function closeDistractionModal(){ document.getElementById("distraction-modal-overlay").classList.remove("open"); }
+function logDistraction(){
+  const note=document.getElementById("distraction-note").value.trim()||"Distraction";
+  const mins=parseInt(document.getElementById("distraction-mins").value)||5;
+  pomoState.sessionLog.unshift({
+    title:"[Distracted] "+note,
+    durSec:mins*60, type:"distraction",
+    time:new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})
+  });
+  pomoRenderReport(); savePomoState();
+}
+
+document.getElementById("distraction-modal-close").addEventListener("click",closeDistractionModal);
+document.getElementById("distraction-cancel").addEventListener("click",closeDistractionModal);
+document.getElementById("distraction-log-resume").addEventListener("click",()=>{
+  logDistraction(); closeDistractionModal();
+  pomoState.iv=setInterval(pomoTick,1000); pomoState.running=true; pomoState.startedAt=Date.now();
+  pomoUpdateStartBtn(); updateTimerBadge(); savePomoState();
+});
+document.getElementById("distraction-log-stop").addEventListener("click",()=>{
+  logDistraction(); closeDistractionModal();
 });
 document.getElementById("pomo-skip").addEventListener("click",()=>{
   clearInterval(pomoState.iv);pomoState.running=false;pomoState.remaining=0;pomoState.startedAt=null;pomoTick();updateTimerBadge();savePomoState();
@@ -84,9 +139,21 @@ document.getElementById("pomo-sound").addEventListener("click",()=>{
   document.getElementById("pomo-sound").textContent="Sound: "+(pomoState.soundOn?"On":"Off");
   savePomoState();
 });
-// Task check on focus tab
-document.getElementById("pomo-task-check").addEventListener("click",()=>{
-  openTaskCompletionModal(pomoState.title);
+// Task check on focus tab — ✓ marks done + opens picker, timer keeps running
+document.getElementById("pomo-task-check").addEventListener("click",(e)=>{
+  e.stopPropagation(); // don't trigger task card's openTaskPicker
+  const task = scheduled.find(s=>s.title===pomoState.title && !s.nested);
+  if(task) toggleDone(task.id);
+  _pomoCompleteHook = { prevTitle: pomoState.title, capturedStart: pomoState.startedAt };
+  openTaskPicker();
+});
+// ⚡ Lightning complete — instant done, no modal, timer keeps running
+document.getElementById("pomo-task-lightning").addEventListener("click",(e)=>{
+  e.stopPropagation();
+  const task=scheduled.find(s=>s.title===pomoState.title && !s.nested);
+  if(task) toggleDone(task.id);
+  showToast("✓ "+pomoState.title+" completed");
+  savePomoState();
 });
 // Note: Focus/Report sub-tabs removed — report is now a collapsible <details> in the floating panel
 
