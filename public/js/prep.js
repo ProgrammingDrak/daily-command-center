@@ -82,6 +82,11 @@ document.getElementById("pomo-start").addEventListener("click",()=>{
   pomoUpdateStartBtn();updateTimerBadge();savePomoState();
 });
 document.getElementById("pomo-stop").addEventListener("click",()=>{
+  // Log elapsed focus time before resetting
+  if(pomoState.startedAt && pomoState.mode==="work"){
+    const elapsed=Math.round((Date.now()-pomoState.startedAt)/1000);
+    if(elapsed>=60) pomoLogSession(pomoState.title,elapsed,pomoState.mode);
+  }
   clearInterval(pomoState.iv); pomoState.running=false; pomoState.startedAt=null;
   pomoSetMode(pomoState.mode); updateTimerBadge(); savePomoState();
   document.getElementById("pomo-stop-q").textContent='Done with "'+pomoState.title+'"?';
@@ -101,22 +106,41 @@ document.getElementById("pomo-stop-no").addEventListener("click",()=>{
 });
 // "I got distracted" button + modal handlers
 document.getElementById("pomo-distracted").addEventListener("click",()=>{
+  const capturedStart = pomoState.startedAt;
   if(pomoState.running){
     clearInterval(pomoState.iv); pomoState.running=false; pomoState.startedAt=null;
     pomoUpdateStartBtn(); updateTimerBadge(); savePomoState();
   }
-  openDistractionModal();
+  openDistractionModal(capturedStart);
 });
 
 function closeDistractionModal(){ document.getElementById("distraction-modal-overlay").classList.remove("open"); }
 function logDistraction(){
-  const note=document.getElementById("distraction-note").value.trim()||"Distraction";
-  const mins=parseInt(document.getElementById("distraction-mins").value)||5;
+  // 1. Log the focused work time that was accumulated before distraction
+  if(_distractionCapturedStart){
+    const focusSec = Math.round((Date.now()-_distractionCapturedStart)/1000);
+    if(focusSec >= 60) pomoLogSession(pomoState.title, focusSec, "work");
+    _distractionCapturedStart = null;
+  }
+  // 2. Log the distraction itself
+  const noteInput = document.getElementById("distraction-note").value.trim();
+  const selectedTask = document.querySelector(".distraction-task-item.selected");
+  const title = selectedTask
+    ? selectedTask.dataset.title
+    : (noteInput || "Distraction");
+  const mins = parseInt(document.getElementById("distraction-mins").value) || 5;
+  const classify = document.querySelector(".distraction-classify-btn.active")?.dataset.classify || "break";
+  const type = classify === "focus" ? "work" : "distraction";
+  const prefix = type === "work" ? "" : "[Distracted] ";
   pomoState.sessionLog.unshift({
-    title:"[Distracted] "+note,
-    durSec:mins*60, type:"distraction",
-    time:new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})
+    title: prefix + title,
+    durSec: mins * 60,
+    type: type,
+    time: new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})
   });
+  if(type === "work"){
+    pomoState.taskTime[title] = (pomoState.taskTime[title]||0) + (mins*60);
+  }
   pomoRenderReport(); savePomoState();
 }
 
@@ -129,6 +153,17 @@ document.getElementById("distraction-log-resume").addEventListener("click",()=>{
 });
 document.getElementById("distraction-log-stop").addEventListener("click",()=>{
   logDistraction(); closeDistractionModal();
+});
+// Classify toggle
+document.querySelectorAll(".distraction-classify-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".distraction-classify-btn").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active");
+  });
+});
+// Clear task selection when typing in note
+document.getElementById("distraction-note").addEventListener("input", () => {
+  document.querySelectorAll(".distraction-task-item.selected").forEach(e=>e.classList.remove("selected"));
 });
 document.getElementById("pomo-skip").addEventListener("click",()=>{
   clearInterval(pomoState.iv);pomoState.running=false;pomoState.remaining=0;pomoState.startedAt=null;pomoTick();updateTimerBadge();savePomoState();

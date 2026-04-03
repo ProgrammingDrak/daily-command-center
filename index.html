@@ -492,9 +492,26 @@
       <button class="completion-modal-close" id="distraction-modal-close">&times;</button>
     </div>
     <div class="completion-modal-body" style="padding:16px">
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Timer paused. What pulled you away?</div>
-      <input type="text" id="distraction-note" placeholder="e.g. Slack, phone call, urgent request..."
-        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--text);margin-bottom:10px">
+      <!-- Focused time info banner -->
+      <div id="distraction-focus-info" class="distraction-focus-info" style="display:none"></div>
+
+      <!-- What was the distraction -->
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">What pulled you away?</div>
+      <input type="text" id="distraction-note" placeholder="Type a description..."
+        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--text);margin-bottom:8px">
+
+      <!-- Or pick existing task -->
+      <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">Or attribute to a task:</div>
+      <div id="distraction-task-list" class="distraction-task-list"></div>
+
+      <!-- Classify -->
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;margin-top:10px">Classify as:</div>
+      <div class="distraction-classify" style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="distraction-classify-btn active" data-classify="break">Break</button>
+        <button class="distraction-classify-btn" data-classify="focus">Focus</button>
+      </div>
+
+      <!-- Time lost -->
       <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Time lost</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
         <input type="number" id="distraction-mins" min="1" max="120" value="5"

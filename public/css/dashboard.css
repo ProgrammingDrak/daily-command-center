@@ -232,6 +232,16 @@
   .pomo-stop-q{font-size:11px;color:var(--text);font-weight:500}
   .pomo-distracted-btn{display:block;width:100%;margin:4px 0 6px;padding:5px 0;border-radius:6px;border:1px solid rgba(239,68,68,0.25);background:rgba(239,68,68,0.08);color:var(--red);font-size:10px;font-weight:600;cursor:pointer;transition:all 0.12s;text-align:center}
   .pomo-distracted-btn:hover{background:rgba(239,68,68,0.18);border-color:rgba(239,68,68,0.5)}
+  .distraction-focus-info{font-size:11px;color:var(--green);background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);border-radius:6px;padding:8px 10px;margin-bottom:12px}
+  .distraction-task-list{max-height:120px;overflow-y:auto;margin-bottom:8px}
+  .distraction-task-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:11px;color:var(--text);transition:background 0.1s;border:1px solid transparent}
+  .distraction-task-item:hover{background:rgba(255,255,255,0.04)}
+  .distraction-task-item.selected{background:rgba(59,130,246,0.15);border-color:rgba(59,130,246,0.3)}
+  .dti-bar{width:3px;height:16px;border-radius:2px;flex-shrink:0}
+  .dti-title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .distraction-classify-btn{padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-muted);transition:all 0.12s}
+  .distraction-classify-btn.active[data-classify="break"]{background:rgba(167,139,250,0.15);border-color:var(--purple);color:var(--purple)}
+  .distraction-classify-btn.active[data-classify="focus"]{background:rgba(59,130,246,0.15);border-color:var(--accent);color:var(--accent-light)}
   .pomo-modes{display:flex;gap:6px;margin-bottom:16px}
   .pomo-mode{padding:5px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--text-muted);transition:all 0.15s}
   .pomo-mode:hover{border-color:var(--accent);color:var(--accent-light)}
