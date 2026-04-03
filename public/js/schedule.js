@@ -1,5 +1,10 @@
 // ======== OVERFLOW DETECTION ========
 let EOD = (function(){
+  // Prefer last work-type block end
+  if(__state&&__state.schedule&&__state.schedule.blocks){
+    const wb=__state.schedule.blocks.filter(b=>b.type==='work');
+    if(wb.length) return pt(wb[wb.length-1].end);
+  }
   if(__state&&__state.schedule&&__state.schedule.end_time){
     const t=__state.schedule.end_time;
     return pt(t.length>5?t.substring(11,16):t);

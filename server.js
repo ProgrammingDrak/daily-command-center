@@ -326,7 +326,32 @@ function buildDayResponse(dateStr) {
     result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline };
   }
 
+  // Inject time blocks from user-context.yaml
+  result.schedule.blocks = parseScheduleBlocks();
+
   return result;
+}
+
+function parseScheduleBlocks(){
+  if(!fs.existsSync(USER_CONTEXT_FILE)) return [];
+  try {
+    const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8");
+    const match = raw.match(/\bblocks:\s*\n((?:\s+-[\s\S]*?)*)(?=\n\s{2}\S|\n\S|\s*$)/m);
+    if(!match) return [];
+    const blocks = [];
+    let current = null;
+    for(const line of match[1].split("\n")){
+      const nm = line.match(/^\s+-\s+name:\s+"?([^"\n]+)"?\s*$/);
+      const tp = line.match(/^\s+type:\s+(\w+)/);
+      const st = line.match(/^\s+start:\s+"?(\d{2}:\d{2})"?/);
+      const en = line.match(/^\s+end:\s+"?(\d{2}:\d{2})"?/);
+      if(nm){ current = { name: nm[1].trim() }; blocks.push(current); }
+      else if(tp && current) current.type = tp[1];
+      else if(st && current) current.start = st[1];
+      else if(en && current) current.end = en[1];
+    }
+    return blocks.filter(b => b.name && b.type && b.start && b.end);
+  } catch(e){ return []; }
 }
 
 function ensureSkeletonDays() {

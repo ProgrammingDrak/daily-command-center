@@ -1,0 +1,264 @@
+# The Most Clever Assistant -- User Context (slim config, single source of truth)
+# Every skill loads this file at startup. Keep it small.
+# Changes here affect all skills on next invocation.
+
+# --- Assistant identity ---
+assistant:
+  name: "The Most Clever Assistant"
+  soul_file: .clever-pa/SOUL.md
+
+identity:
+  name: Drake Shadwell
+  work_email: drake.shadwell@movewithclever.com
+  slack_user_id: U04Q67WRQMR
+  slack_team_id: T52A6J85B
+  notion_user_id: 257b8dcf-063b-464c-a0cc-25f0941f7b1e
+  timezone: America/New_York
+  working_hours: "09:00-17:30"
+
+# --- Task service ---
+task_service: notion
+notion_kanban_data_source: "collection://20bfcdf7-9b27-8110-80a9-000b90e20fd5"
+
+# --- Second Brain Inbox (Discord bot captures) ---
+# Set this to the Notion Inbox database ID created by the second-brain monorepo's setup script.
+# When set, /sweep discord-inbox will read new entries from this database into triage.
+notion_inbox_db_id: "9570665c-87d7-49be-8a92-f1dc67539910"
+
+# --- Second Brain databases (created 2026-03-29) ---
+second_brain:
+  inbox_db_id: "9570665c-87d7-49be-8a92-f1dc67539910"
+  tasks_db_id: "0195fafa-3f2e-494e-a4d8-fb250bf37d1c"
+  mood_db_id: "b75c1db7-faec-47c2-bdd4-4d4ec0dd4536"
+  journal_db_id: "6d1a10de-fadc-4d61-b2f6-d4943fa76021"
+  food_db_id: "705c23f5-2b2e-4089-ba31-ff8b968776b4"
+  habits_db_id: "c993a13a-268c-47ed-a999-6c92a52957ef"
+  health_db_id: "850669c1-6f75-417f-a281-0e53e1293f40"
+  daily_log_db_id: "27c2680a-f39d-41f4-a704-f63e7079d87f"
+
+# --- Journal tags (Daylio-style activity taxonomy) ---
+journal_tags:
+  entry_type:
+    - Random Thought
+    - Nighttime Recap
+    - Morning Check-in
+    - Therapy Thought
+    - A Thing Happened
+  love_language:
+    - "Acts of Devotion (R)"
+    - "Acts of Devotion (E)"
+    - "Quality Time (R)"
+    - "Quality Time (E)"
+    - "Words of Affirmation (R)"
+    - "Words of Affirmation (E)"
+    - "Gifts (R)"
+    - "Gifts (E)"
+    - "Physical Touch (R)"
+    - "Physical Touch (E)"
+  hobbies:
+    - Yoga (Light)
+    - Yoga (Heavy)
+    - Bicycle
+    - Tennis
+    - Exercise
+    - Walk
+    - Hike
+    - Juggling
+    - Escape Room
+    - Dungeons and Dragons
+    - Dined Out
+    - Snowboarding
+  food:
+    - Fast Food
+    - Homemade
+    - Restaurant
+    - Delivery
+    - No Meat
+    - No Sweets
+    - No Soda
+    - Monster
+    - Celsius
+    - Coffee
+    - Red Bull
+  social:
+    - Fae
+    - Chris Sousa
+    - Family
+    - Friends
+    - Party
+    - Partner
+    - Coitus
+    - Masturbation
+    - Lindsey Quibble
+    - Clever
+    - Concert
+    - Sidney Key
+    - Jesse Morrison
+    - Fox
+  bad_habits:
+    - Alcohol
+    - Smoking
+    - Snacking
+    - Nail Biting
+    - Procrastinating
+    - Doomscrolling
+    - Pornography
+  negative_emotions:
+    - Guilt
+    - Shame
+    - Drained
+    - Inadequate
+    - Bored
+    - Anxious
+    - Stressed
+    - Sad
+    - Desperate
+    - Angry
+    - Unsure
+    - Tired
+    - Paranoia
+    - Nervous
+    - Helpless
+    - Failure
+  positive_emotions:
+    - Happy
+    - Excited
+    - Grateful
+    - Relaxed
+    - Content
+    - Loved
+    - Appreciated
+    - Valuable
+    - Proud
+    - Accomplished
+    - Strong
+    - Blessed
+    - Support
+    - Connected
+
+# --- Jira (notification-only -- no auto-create) ---
+jira:
+  cloud_id: 4a67b715-3f4e-46b7-9d46-36a81ec6ddb4
+  site_url: https://listwithclever.atlassian.net
+  project_key: CO
+  project_id: "10236"
+  issue_type_id: "10412"
+  # PA will suggest Jira tickets via notifications but never auto-create.
+  # User creates tickets manually via the link provided.
+
+# --- File paths ---
+# The Daily Command Center app lives locally (off Google Drive) for performance.
+# All state files are written to the local app's data/ directory.
+# The app serves at http://localhost:8090 and accepts state updates via POST /api/ingest/day-state.
+paths:
+  workspace: "drafts/Drake and Claude Working Space"
+  pa_home: .clever-pa
+  # Local app data directory — the single source of truth for dashboard state
+  dcc_home: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center"
+  dcc_data: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center/data"
+  state_dir: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center/data/state"
+  state_file: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center/data/state/day-state.json"
+  tomorrow_state_file: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center/data/state/tomorrow-state.json"
+  upcoming_file: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center/data/state/upcoming-meetings.json"
+  brain_dir: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center/data/brain"
+  dcc_api: "http://localhost:8090"
+  # Legacy paths (still on Google Drive for shared access)
+  command_center: "Dashboards/Daily Command Center/index.html"
+  template: .clever-pa/templates/command-center-shell.html
+  meeting_prep: "/Users/drakeshadwell/Desktop/Off Drive Claude Work/daily-command-center/data/prep"
+  knowledge_dir: claude-school
+  personal_config: claude-school/drake-config.md
+  knowledge_file: claude-school/claude-school.md
+  people_file: claude-school/people.md
+  reference_file: claude-school/reference.md
+  friction_file: claude-school/friction.md
+  activity_log: claude-school/pa-activity-log.md
+  archive_page: null  # Set by board-cleanup on first run (Notion page ID)
+
+# --- Privacy ---
+privacy:
+  slack_exclude_channels:
+    - C0A2YDUD4N5  # #legal-offers
+    - C08KRSS69MH  # #privileged_clever_offers_1ho
+  gmail_exclude_senders: []
+  gmail_exclude_labels: []
+
+# --- Delivery ---
+delivery: cowork
+sentiment_analysis: true
+
+# --- Triage rhythm ---
+# 4 cycles per day: start-of-day (full), plus 3 incremental sweeps.
+# Times are approximate -- scheduled tasks have the exact cron.
+triage:
+  cycles_per_day: 4
+  escalation_thresholds:
+    attention_after_cycles: 2    # "attention" after 2 sweep cycles with no response
+    medium_after_cycles: 3       # "medium" after 3 cycles
+    high_after_hours: 8          # "high" if open 8+ hours
+    critical_after_hours: 24     # "critical" if open 24+ hours
+
+# --- Schedule preferences ---
+schedule:
+  buffer_after_meetings_minutes: 15  # Free time after meetings
+  min_task_block_minutes: 25         # Don't schedule tasks shorter than this
+  max_task_chunk_minutes: 90         # Split longer tasks into chunks
+  deep_work_preferred_slot: "morning"  # morning | afternoon
+  replan_behavior: "lock_completed_drop_incomplete"
+    # On replan: completed tasks stay, incomplete tasks go to couldn't-fit list.
+    # Does NOT try to squeeze missed morning tasks into the afternoon.
+  blocks:
+    - name: "Morning Work"
+      type: work
+      start: "09:00"
+      end: "12:00"
+    - name: "Lunch"
+      type: personal
+      start: "12:00"
+      end: "13:00"
+    - name: "Afternoon Work"
+      type: work
+      start: "13:00"
+      end: "17:30"
+    - name: "Personal"
+      type: personal
+      start: "17:30"
+      end: "21:00"
+
+# --- Board cleanup ---
+board_cleanup:
+  done_threshold_days: 45       # Auto-archive completed tasks older than this
+  backlog_threshold_days: 90    # Flag backlog items older than this (requires approval)
+  auto_archive_backlog: false   # Never auto-archive backlog without user approval
+
+# --- Knowledge manager ---
+knowledge:
+  daily_mode: "state_only"       # state_only | deep_scan
+    # state_only: reads from day-state.json only (cheap, ~10-12K tokens)
+    # deep_scan: also hits Slack/Gmail/Calendar (expensive, ~20-25K, manual only)
+  promotion_stability_days: 14   # Days an entry must be stable before promotion
+  promotion_min_references: 3    # Minimum session references before promotion
+  demotion_inactive_days: 60     # Flag for demotion after this many days unused
+  backup_retention_days: 7       # Keep last N days of knowledge file backups
+
+# --- Stakeholder notifications ---
+# When close-action-item runs, it notifies stakeholders via Slack.
+# The draft is placed in the command center for user review before sending.
+stakeholder_notifications:
+  require_approval: true         # Always show draft in command center first
+  auto_send: false               # Never auto-send without user approval
+
+# --- Partner companies ---
+partner_companies:
+  - Homeward
+  - Houzeo
+  - Opendoor
+  - Zoocasa
+
+# --- Colors (command center theming) ---
+colors:
+  primary: "#1a73e8"
+  accent: "#f4811f"
+  priority_high: "#e74c3c"
+  priority_medium: "#f39c12"
+  priority_low: "#95a5a6"

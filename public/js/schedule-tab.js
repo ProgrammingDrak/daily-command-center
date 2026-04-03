@@ -527,9 +527,24 @@ function updateStats(){
   const done=scheduled.filter(isDone), rem=scheduled.filter(ev=>!isDone(ev));
   const remMin=rem.reduce((a,ev)=>a+dur(ev),0);
   const doneMin=done.reduce((a,ev)=>a+_actualMin(ev),0);
-  document.getElementById("s-rem").textContent=rem.length+" / "+ms(remMin);
+  document.getElementById("s-time").textContent=remMin>0?ms(remMin):"0m";
+  document.getElementById("s-tasks").textContent=rem.length;
   document.getElementById("s-done").textContent=done.length+" / "+ms(doneMin);
-  if(scheduled.length){document.getElementById("s-end").textContent=f12(scheduled[scheduled.length-1].end).replace(" ","").toLowerCase()}
+  document.getElementById("s-block").textContent=getCurrentBlockEnd();
+}
+function getCurrentBlockEnd(){
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  if(!blocks.length){
+    if(scheduled.length) return f12(scheduled[scheduled.length-1].end).replace(" ","").toLowerCase();
+    return "--";
+  }
+  const now=new Date();
+  const nowMin=now.getHours()*60+now.getMinutes();
+  for(const b of blocks){
+    const bStart=pt(b.start),bEnd=pt(b.end);
+    if(nowMin>=bStart&&nowMin<bEnd) return f12(b.end).replace(" ","").toLowerCase();
+  }
+  return "Done";
 }
 
 // ======== STAT POPOVERS ========
@@ -542,11 +557,20 @@ function showStatPopover(statId, event) {
   if (wasOpen) { popover.style.display = 'none'; popover.dataset.openFor = ''; return; }
   let html = '';
   switch(statId) {
-    case 's-rem': {
+    case 's-time': {
+      const rem = scheduled.filter(ev => !isDone(ev));
+      html = '<div class="sp-title">Time Remaining</div>';
+      if (!rem.length) { html += '<div class="sp-empty">All tasks complete!</div>'; break; }
+      html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(dur(ev))+'</span></div>').join('');
+      const total = rem.reduce((a,ev) => a+dur(ev), 0);
+      html += '<div class="sp-note">Total: '+ms(total)+'</div>';
+      break;
+    }
+    case 's-tasks': {
       const rem = scheduled.filter(ev => !isDone(ev));
       html = '<div class="sp-title">Remaining Tasks</div>';
-      if (!rem.length) { html += '<div class="sp-empty">Nothing left — you\'re done!</div>'; break; }
-      html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(dur(ev))+'</span></div>').join('');
+      if (!rem.length) { html += '<div class="sp-empty">Nothing left!</div>'; break; }
+      html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span></div>').join('');
       break;
     }
     case 's-done': {
@@ -563,12 +587,27 @@ function showStatPopover(statId, event) {
       html+='<div class="sp-note">Actual: '+ms(totalActual)+' / Planned: '+ms(totalPlanned)+'</div>';
       break;
     }
-    case 's-end': {
-      const last = scheduled.length ? scheduled[scheduled.length-1] : null;
-      html = '<div class="sp-title">Last Scheduled Item</div>';
-      if (!last) { html += '<div class="sp-empty">No tasks scheduled.</div>'; break; }
-      html += '<div class="sp-row"><span class="sp-label">'+last.title+'</span><span class="sp-dur">ends '+f12(last.end).replace(' ','')+'</span></div>';
-      html += '<div class="sp-note">Your day wraps up when this task ends.</div>';
+    case 's-block': {
+      const blocks = (__state&&__state.schedule&&__state.schedule.blocks)||[];
+      if (!blocks.length) {
+        const last = scheduled.length ? scheduled[scheduled.length-1] : null;
+        html = '<div class="sp-title">Day Ends</div>';
+        if (!last) { html += '<div class="sp-empty">No tasks scheduled.</div>'; break; }
+        html += '<div class="sp-row"><span class="sp-label">'+last.title+'</span><span class="sp-dur">ends '+f12(last.end).replace(' ','')+'</span></div>';
+        break;
+      }
+      html = '<div class="sp-title">Time Blocks</div>';
+      const now = new Date();
+      const nowMin = now.getHours()*60+now.getMinutes();
+      html += blocks.map(b => {
+        const bStart=pt(b.start),bEnd=pt(b.end);
+        const isCurrent=nowMin>=bStart&&nowMin<bEnd;
+        const isPast=nowMin>=bEnd;
+        return '<div class="sp-row'+(isCurrent?' sp-active':'')+'" style="opacity:'+(isPast?'0.4':'1')+'">'
+          +'<span class="sp-time">'+f12(b.start).replace(' ','')+'–'+f12(b.end).replace(' ','')+'</span>'
+          +'<span class="sp-label">'+b.name+'</span>'
+          +'<span class="sp-dur">'+b.type+(isCurrent?' (now)':'')+'</span></div>';
+      }).join('');
       break;
     }
   }
