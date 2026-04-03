@@ -258,6 +258,7 @@
   .pomo-picker-hdr h3{font-size:14px;font-weight:700}
   .pomo-picker-close{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px;padding:4px 8px;border-radius:4px}
   .pomo-picker-close:hover{color:var(--text);background:rgba(255,255,255,0.06)}
+  .pomo-picker-completed{display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(34,197,94,0.1);border-bottom:1px solid rgba(34,197,94,0.2);color:var(--green);font-size:12px;font-weight:600}
   .pomo-picker-search{padding:8px 16px;border-bottom:1px solid var(--border)}
   .pomo-picker-search input{width:100%;background:var(--card);border:1px solid var(--border);border-radius:7px;padding:8px 12px;color:var(--text);font-size:13px;outline:none}
   .pomo-picker-search input:focus{border-color:var(--accent)}

@@ -145,7 +145,7 @@ document.getElementById("pomo-task-check").addEventListener("click",(e)=>{
   const task = scheduled.find(s=>s.title===pomoState.title && !s.nested);
   if(task) toggleDone(task.id);
   _pomoCompleteHook = { prevTitle: pomoState.title, capturedStart: pomoState.startedAt };
-  openTaskPicker();
+  openTaskPicker(pomoState.title);
 });
 // ⚡ Lightning complete — instant done, no modal, timer keeps running
 document.getElementById("pomo-task-lightning").addEventListener("click",(e)=>{
