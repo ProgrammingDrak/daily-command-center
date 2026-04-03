@@ -83,6 +83,7 @@ function transformState(state) {
         meta: (item.priority ? item.priority + " priority" : "") +
               (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
         detail: item.description || "", source: item.source || "manual",
+        gcal_calendar_id: item.gcal_calendar_id || "",
         notionUrl: item.source === "notion" && item.source_id ?
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
         calUrl: item.source === "calendar" ? item.calendar_link || "" : "",
