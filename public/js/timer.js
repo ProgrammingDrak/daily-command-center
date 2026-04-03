@@ -103,7 +103,7 @@ function pomoRenderReport(){
       if(logEmpty)logEmpty.style.display="none";
       logEntries.innerHTML=pomoState.sessionLog.map((e,idx)=>{
         const durMin=Math.round(e.durSec/60);
-        const dotColor=e.type==="work"?"var(--accent)":e.type==="short"?"var(--green)":"var(--purple)";
+        const dotColor=e.type==="work"?"var(--accent)":e.type==="short"?"var(--green)":e.type==="distraction"?"var(--red)":"var(--purple)";
         let entryHtml='<div class="pomo-log-entry"><span class="ple-dot" style="background:'+dotColor+'"></span><span class="ple-time">'+e.time+'</span><span class="ple-task">'+e.title+'</span><span class="ple-dur">'+durMin+'m</span></div>';
 
         // If this entry has a stacked-on field, show it as indented/nested
@@ -160,6 +160,8 @@ function updateTimerBadge(){
 }
 
 // ======== TASK COMPLETION MODAL ========
+let _completionModalCallback = null;
+let _completionModalResult = null; // true=completed, false=kept, null=dismissed
 let currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null};
 
 function openTaskCompletionModal(taskTitle){
@@ -286,12 +288,18 @@ function attributeTimeAndClose(isCompleted){
   }
 
   pomoRenderReport();savePomoState();
+  _completionModalResult = isCompleted;
   closeCompletionModal();
 }
 
 function closeCompletionModal(){
   document.getElementById("task-completion-modal-overlay").classList.remove("open");
   currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null};
+  if(_completionModalCallback){
+    const cb=_completionModalCallback, result=_completionModalResult;
+    _completionModalCallback=null; _completionModalResult=null;
+    cb(result);
+  }
 }
 
 // ======== UNTASKED TIMER COMPLETION MODAL ========
@@ -375,6 +383,56 @@ function attributeUntaskedTime(taskTitle,isCompleted){
 function closeUntaskedModal(){
   document.getElementById("untasked-modal-overlay").classList.remove("open");
   untaskedSessionData={durSec:null,type:null};
+}
+
+let _distractionCapturedStart = null;
+
+function openDistractionModal(capturedStart){
+  _distractionCapturedStart = capturedStart;
+  const elapsedMin = capturedStart
+    ? Math.max(1, Math.round((Date.now()-capturedStart)/60000))
+    : 0;
+  document.getElementById("distraction-mins").value = elapsedMin || 5;
+  document.getElementById("distraction-note").value = "";
+  // Show focused time info
+  const focusInfo = document.getElementById("distraction-focus-info");
+  if(focusInfo){
+    if(capturedStart){
+      const focusSec = Math.round((Date.now()-capturedStart)/1000);
+      const focusMin = Math.round(focusSec/60);
+      focusInfo.textContent = focusMin + "m focused on \"" + pomoState.title + "\" (timer still running)";
+      focusInfo.style.display = "block";
+    } else {
+      focusInfo.style.display = "none";
+    }
+  }
+  // Reset classify toggle to "break" default
+  document.querySelectorAll(".distraction-classify-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.classify === "break");
+  });
+  // Build task attribution list
+  buildDistractionTaskList();
+  document.getElementById("distraction-modal-overlay").classList.add("open");
+}
+
+function buildDistractionTaskList(){
+  const list = document.getElementById("distraction-task-list");
+  if(!list) return;
+  const tasks = [...scheduled.filter(s=>!s.nested), ...consider, ...backlog];
+  if(!tasks.length){ list.innerHTML=""; return; }
+  list.innerHTML = tasks.slice(0,6).map(t => {
+    const c = cfg(t.type);
+    return '<div class="distraction-task-item" data-title="'+t.title.replace(/"/g,'&quot;')+'">'
+      +'<span class="dti-bar" style="background:'+c.color+'"></span>'
+      +'<span class="dti-title">'+t.title+'</span></div>';
+  }).join('');
+  list.querySelectorAll(".distraction-task-item").forEach(el => {
+    el.addEventListener("click", () => {
+      list.querySelectorAll(".distraction-task-item").forEach(e=>e.classList.remove("selected"));
+      el.classList.toggle("selected");
+      document.getElementById("distraction-note").value = "";
+    });
+  });
 }
 
 // ======== DRAGGABLE FLOAT TIMER ========

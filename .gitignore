@@ -1,3 +1,16 @@
 node_modules/
 .env
+
+# Data directory — ignore by default, then whitelist what we need
 data/
+!data/blocks.db
+!data/state/
+!data/state/**
+
+# SQLite WAL files (transient, never commit)
+data/blocks.db-shm
+data/blocks.db-wal
+
+# Credentials (never commit)
+data/gcal-credentials.json
+data/gcal-tokens.json

@@ -183,14 +183,24 @@ document.querySelectorAll(".pomo-side-tab").forEach(tab=>{
 });
 
 // ======== TASK PICKER ========
-function openTaskPicker(){
+function openTaskPicker(completedTitle){
   const overlay=document.getElementById("pomo-picker-overlay");
+  const banner=document.getElementById("pomo-picker-completed");
+  const bannerTitle=document.getElementById("pomo-picker-completed-title");
+  if(completedTitle){
+    bannerTitle.textContent="Completed: "+completedTitle;
+    banner.style.display="flex";
+  }else{
+    banner.style.display="none";
+  }
   overlay.classList.add("open");
   document.getElementById("pomo-picker-q").value="";
   buildPickerList("");
   setTimeout(()=>document.getElementById("pomo-picker-q").focus(),50);
 }
 function closeTaskPicker(){
+  _pomoCompleteHook = null;
+  document.getElementById("pomo-picker-completed").style.display="none";
   document.getElementById("pomo-picker-overlay").classList.remove("open");
 }
 function buildPickerList(query){
