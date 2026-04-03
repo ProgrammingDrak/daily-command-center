@@ -52,7 +52,7 @@ function initKeys() {
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
   // Recalculate EOD from loaded state (prefer last work block end)
   if(__state && __state.schedule && __state.schedule.blocks){
-    const wb=__state.schedule.blocks.filter(b=>b.type==='work');
+    const wb=__state.schedule.blocks.filter(b=>(b.blockType||b.type)==='work');
     if(wb.length){ EOD = pt(wb[wb.length-1].end); }
   } else if (__state && __state.schedule && __state.schedule.end_time) {
     EOD = pt(__state.schedule.end_time);

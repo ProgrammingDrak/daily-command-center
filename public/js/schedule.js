@@ -2,7 +2,7 @@
 let EOD = (function(){
   // Prefer last work-type block end
   if(__state&&__state.schedule&&__state.schedule.blocks){
-    const wb=__state.schedule.blocks.filter(b=>b.type==='work');
+    const wb=__state.schedule.blocks.filter(b=>(b.blockType||b.type)==='work');
     if(wb.length) return pt(wb[wb.length-1].end);
   }
   if(__state&&__state.schedule&&__state.schedule.end_time){
@@ -255,6 +255,7 @@ function insertTaskNow(){
     savePendingTasks(pending);
     log("scheduled",id,"Quick-added: "+title);
     render();
+    checkBlockWarnings(newItem);
   } else {
     // Doesn't fit — stage as pending and open overflow modal (task NOT in scheduled yet)
     _pendingNewTask = {...newItem, _insertAt: insertAt};
@@ -277,6 +278,7 @@ function insertTaskFromDrawer(title, durMin){
   checkOverflow();
   log("scheduled",id,"Drawer-added: "+title);
   render();
+  checkBlockWarnings(newItem);
 }
 
 // ======== ACTIONS ========
@@ -396,5 +398,31 @@ function saveTaskOrder(){
     return;
   }
   localStorage.setItem(ORDER_KEY,JSON.stringify(order)); scheduleIDBSave();
+}
+
+// ======== BLOCK BOUNDARY WARNINGS ========
+function checkBlockWarnings(task){
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  if(!blocks.length||!task) return;
+  const taskStart=pt(task.start), taskEnd=pt(task.end);
+  for(const b of blocks){
+    const bStart=pt(b.start), bEnd=pt(b.end);
+    const bt=b.blockType||b.type;
+    // Protected boundary: warn if task overlaps a protected block
+    if(b.protected && taskStart<bEnd && taskEnd>bStart && bt==='personal'){
+      showToast("⚠ \""+task.title+"\" overlaps protected block \""+b.name+"\"","error",8000);
+    }
+    // Threshold warning: warn if remaining time in current block is low
+    if(b.warnThreshold && b.warnThreshold>0){
+      const now=new Date();
+      const nowMin=now.getHours()*60+now.getMinutes();
+      if(nowMin>=bStart && nowMin<bEnd){
+        const remaining=bEnd-nowMin;
+        if(remaining<=b.warnThreshold){
+          showToast("⏱ Only "+remaining+"m left in \""+b.name+"\"","error",6000);
+        }
+      }
+    }
+  }
 }
 

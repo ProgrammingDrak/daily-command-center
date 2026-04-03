@@ -606,8 +606,9 @@ function showStatPopover(statId, event) {
         return '<div class="sp-row'+(isCurrent?' sp-active':'')+'" style="opacity:'+(isPast?'0.4':'1')+'">'
           +'<span class="sp-time">'+f12(b.start).replace(' ','')+'–'+f12(b.end).replace(' ','')+'</span>'
           +'<span class="sp-label">'+b.name+'</span>'
-          +'<span class="sp-dur">'+b.type+(isCurrent?' (now)':'')+'</span></div>';
+          +'<span class="sp-dur">'+(b.blockType||b.type)+(isCurrent?' (now)':'')+'</span></div>';
       }).join('');
+      html += '<div class="sp-note" style="display:flex;justify-content:flex-end"><button class="sp-edit-btn" onclick="openBlockEditor()">✎ Edit Blocks</button></div>';
       break;
     }
   }
@@ -629,4 +630,166 @@ document.addEventListener('click', function(e) {
     document.querySelectorAll('.stat.sp-open').forEach(el => el.classList.remove('sp-open'));
   }
 });
+
+// ======== BLOCK EDITOR ========
+let _beBlocks = []; // working copy
+
+function openBlockEditor(){
+  // Close popover
+  const popover = document.getElementById('stat-popover');
+  if(popover){ popover.style.display='none'; popover.dataset.openFor=''; }
+  document.querySelectorAll('.stat.sp-open').forEach(el=>el.classList.remove('sp-open'));
+
+  // Deep copy current blocks as working set
+  const src = (__state&&__state.schedule&&__state.schedule.blocks)||[];
+  _beBlocks = JSON.parse(JSON.stringify(src));
+  renderBlockEditor();
+  document.getElementById("block-editor-overlay").classList.add("open");
+}
+
+function closeBlockEditor(){
+  document.getElementById("block-editor-overlay").classList.remove("open");
+  _beBlocks = [];
+}
+
+function renderBlockEditor(){
+  const body = document.getElementById("block-editor-body");
+  // Separate top-level and nested
+  const topLevel = _beBlocks.filter(b=>!b.parent_id);
+  let html = '';
+  topLevel.forEach((b,i) => {
+    const idx = _beBlocks.indexOf(b);
+    html += renderBlockRow(b, idx, false);
+    // Render children
+    const children = _beBlocks.filter(c=>c.parent_id===b.id);
+    children.forEach(c => {
+      const cidx = _beBlocks.indexOf(c);
+      html += renderBlockRow(c, cidx, true);
+    });
+    html += '<div class="be-add-sub" style="padding-left:20px"><button class="be-add" onclick="beAddChild('+idx+')">+ Add sub-block</button></div>';
+  });
+  html += '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px"><button class="be-add" onclick="beAddBlock()">+ Add Block</button></div>';
+  body.innerHTML = html;
+}
+
+function renderBlockRow(b, idx, nested){
+  const bt = b.blockType||b.type||'work';
+  const prot = b.protected ? 'on' : '';
+  const warn = b.warnThreshold||0;
+  return '<div class="be-row'+(nested?' nested':'')+'" data-idx="'+idx+'">'
+    +'<input class="be-input be-name" value="'+esc(b.name||'')+'" placeholder="Name" onchange="beUpdate('+idx+',&apos;name&apos;,this.value)">'
+    +'<select class="be-input be-type" onchange="beUpdate('+idx+',&apos;blockType&apos;,this.value)">'
+    +'<option value="work"'+(bt==='work'?' selected':'')+'>Work</option>'
+    +'<option value="personal"'+(bt==='personal'?' selected':'')+'>Personal</option></select>'
+    +'<input type="time" class="be-input be-time" value="'+(b.start||'09:00')+'" onchange="beUpdate('+idx+',&apos;start&apos;,this.value)">'
+    +'<input type="time" class="be-input be-time" value="'+(b.end||'17:00')+'" onchange="beUpdate('+idx+',&apos;end&apos;,this.value)">'
+    +'<span class="be-toggle '+prot+'" onclick="beToggleProtected('+idx+')" title="Protected boundary">🛡</span>'
+    +'<span class="be-warn"><input type="number" class="be-input be-warn-input" value="'+warn+'" min="0" max="60" placeholder="0" title="Warn threshold (minutes)" onchange="beUpdate('+idx+',&apos;warnThreshold&apos;,parseInt(this.value)||0)">m</span>'
+    +'<button class="be-del" onclick="beDelete('+idx+')" title="Delete">×</button>'
+    +'</div>';
+}
+
+function esc(s){ return s.replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+function beUpdate(idx, field, value){
+  if(_beBlocks[idx]) _beBlocks[idx][field] = value;
+}
+
+function beToggleProtected(idx){
+  if(!_beBlocks[idx]) return;
+  _beBlocks[idx].protected = !_beBlocks[idx].protected;
+  renderBlockEditor();
+}
+
+function beDelete(idx){
+  const b = _beBlocks[idx];
+  if(!b) return;
+  // Delete children too
+  _beBlocks = _beBlocks.filter(c => c.parent_id !== b.id);
+  _beBlocks.splice(_beBlocks.indexOf(b), 1);
+  renderBlockEditor();
+}
+
+function beAddBlock(){
+  _beBlocks.push({
+    id: '_new_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
+    parent_id: null, name:'', blockType:'work', start:'09:00', end:'17:00',
+    protected:false, warnThreshold:0, sort_order:_beBlocks.length, _isNew:true
+  });
+  renderBlockEditor();
+}
+
+function beAddChild(parentIdx){
+  const parent = _beBlocks[parentIdx];
+  if(!parent) return;
+  _beBlocks.push({
+    id: '_new_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
+    parent_id: parent.id, name:'', blockType:parent.blockType||'work',
+    start:parent.start, end:parent.end,
+    protected:false, warnThreshold:0, sort_order:_beBlocks.length, _isNew:true
+  });
+  renderBlockEditor();
+}
+
+async function saveBlockEditor(){
+  // Validate
+  for(const b of _beBlocks){
+    if(!b.name||!b.name.trim()){ showToast("Block name is required","error"); return; }
+    if(!b.start||!b.end){ showToast("Start and end times are required","error"); return; }
+    if(b.start>=b.end){ showToast(b.name+": start must be before end","error"); return; }
+    // Validate children fit within parent
+    if(b.parent_id){
+      const parent = _beBlocks.find(p=>p.id===b.parent_id);
+      if(parent && (b.start<parent.start||b.end>parent.end)){
+        showToast(b.name+" must fit within "+parent.name,"error"); return;
+      }
+    }
+  }
+
+  // Get current blocks from server state to diff
+  const current = (__state&&__state.schedule&&__state.schedule.blocks)||[];
+  const currentIds = new Set(current.map(b=>b.id));
+  const newIds = new Set(_beBlocks.map(b=>b.id));
+
+  // Delete removed blocks
+  for(const old of current){
+    if(!newIds.has(old.id)){
+      await blockStore.deleteBlock(old.id);
+    }
+  }
+
+  // Create or update
+  for(let i=0;i<_beBlocks.length;i++){
+    const b = _beBlocks[i];
+    const props = { name:b.name.trim(), blockType:b.blockType||'work', start:b.start, end:b.end, protected:!!b.protected, warnThreshold:b.warnThreshold||0 };
+    if(b._isNew || b.id.startsWith('_new_')){
+      await blockStore.createBlock("schedule_block", props, { parentId:b.parent_id, sortOrder:i });
+    } else {
+      await blockStore.updateBlock(b.id, props);
+    }
+  }
+
+  // Refresh state — re-fetch from API
+  try {
+    const resp = await fetch('/api/state/day');
+    const state = await resp.json();
+    if(state.schedule) __state.schedule = state.schedule;
+  } catch(e){}
+
+  // Recalculate EOD
+  const blocks = (__state&&__state.schedule&&__state.schedule.blocks)||[];
+  const wb = blocks.filter(b=>(b.blockType||b.type)==='work');
+  if(wb.length) EOD = pt(wb[wb.length-1].end);
+
+  updateStats();
+  closeBlockEditor();
+  showToast("Time blocks saved","success");
+}
+
+// Wire editor modal controls
+document.getElementById("block-editor-close").addEventListener("click",closeBlockEditor);
+document.getElementById("block-editor-cancel").addEventListener("click",closeBlockEditor);
+document.getElementById("block-editor-save").addEventListener("click",saveBlockEditor);
+document.getElementById("block-editor-overlay").addEventListener("click",e=>{if(e.target===e.currentTarget)closeBlockEditor()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("block-editor-overlay").classList.contains("open"))closeBlockEditor()});
 
