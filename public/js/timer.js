@@ -400,7 +400,7 @@ function openDistractionModal(capturedStart){
     if(capturedStart){
       const focusSec = Math.round((Date.now()-capturedStart)/1000);
       const focusMin = Math.round(focusSec/60);
-      focusInfo.textContent = focusMin + "m of focus time will be logged to \"" + pomoState.title + "\"";
+      focusInfo.textContent = focusMin + "m focused on \"" + pomoState.title + "\" (timer still running)";
       focusInfo.style.display = "block";
     } else {
       focusInfo.style.display = "none";

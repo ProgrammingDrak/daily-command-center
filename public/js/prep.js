@@ -104,24 +104,20 @@ document.getElementById("pomo-stop-no").addEventListener("click",()=>{
   document.getElementById("pomo-stop-confirm").style.display="none";
   document.getElementById("pomo-secondary").style.display="flex";
 });
-// "I got distracted" button + modal handlers
+// "I got distracted" button + modal handlers (timer keeps running)
 document.getElementById("pomo-distracted").addEventListener("click",()=>{
-  const capturedStart = pomoState.startedAt;
-  if(pomoState.running){
-    clearInterval(pomoState.iv); pomoState.running=false; pomoState.startedAt=null;
-    pomoUpdateStartBtn(); updateTimerBadge(); savePomoState();
-  }
-  openDistractionModal(capturedStart);
+  openDistractionModal(pomoState.startedAt);
 });
 
 function closeDistractionModal(){ document.getElementById("distraction-modal-overlay").classList.remove("open"); }
 function logDistraction(){
-  // 1. Log the focused work time that was accumulated before distraction
-  if(_distractionCapturedStart){
-    const focusSec = Math.round((Date.now()-_distractionCapturedStart)/1000);
+  // 1. Log the focused work time accumulated so far (timer is still running)
+  if(pomoState.startedAt && pomoState.mode==="work"){
+    const focusSec = Math.round((Date.now()-pomoState.startedAt)/1000);
     if(focusSec >= 60) pomoLogSession(pomoState.title, focusSec, "work");
-    _distractionCapturedStart = null;
+    pomoState.startedAt = Date.now(); // reset so timer continues fresh
   }
+  _distractionCapturedStart = null;
   // 2. Log the distraction itself
   const noteInput = document.getElementById("distraction-note").value.trim();
   const selectedTask = document.querySelector(".distraction-task-item.selected");
@@ -148,11 +144,15 @@ document.getElementById("distraction-modal-close").addEventListener("click",clos
 document.getElementById("distraction-cancel").addEventListener("click",closeDistractionModal);
 document.getElementById("distraction-log-resume").addEventListener("click",()=>{
   logDistraction(); closeDistractionModal();
-  pomoState.iv=setInterval(pomoTick,1000); pomoState.running=true; pomoState.startedAt=Date.now();
-  pomoUpdateStartBtn(); updateTimerBadge(); savePomoState();
+  // Timer is still running — just save state
+  savePomoState();
 });
 document.getElementById("distraction-log-stop").addEventListener("click",()=>{
-  logDistraction(); closeDistractionModal();
+  logDistraction();
+  // NOW stop the timer
+  clearInterval(pomoState.iv); pomoState.running=false; pomoState.startedAt=null;
+  pomoUpdateStartBtn(); updateTimerBadge(); savePomoState();
+  closeDistractionModal();
 });
 // Classify toggle
 document.querySelectorAll(".distraction-classify-btn").forEach(btn => {
