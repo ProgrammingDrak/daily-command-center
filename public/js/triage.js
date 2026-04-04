@@ -720,8 +720,17 @@ document.getElementById("notes-action-text").addEventListener("keydown", e => { 
 
 // ======== REVIEW BADGE & POPOVER ========
 let REVIEWED_KEY = "pa-reviewed-" + (__state ? __state.date : "unknown");
-function loadReviewed() { try { return JSON.parse(localStorage.getItem(REVIEWED_KEY) || "{}"); } catch(e) { return {}; } }
-function saveReviewed(data) { if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return; localStorage.setItem(REVIEWED_KEY, JSON.stringify(data)); scheduleIDBSave(); }
+function loadReviewed() {
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_reviewed", null);
+    if (v) return v;
+  }
+  try { return JSON.parse(localStorage.getItem(REVIEWED_KEY) || "{}"); } catch(e) { return {}; }
+}
+function saveReviewed(data) {
+  if (_bsSaveProp("_reviewed", data)) return;
+  localStorage.setItem(REVIEWED_KEY, JSON.stringify(data)); scheduleIDBSave();
+}
 
 let _reviewCurrent = null;
 function openReviewPopover(badge) {
@@ -822,8 +831,17 @@ function buildTriageCard(item) {
 }
 // Triage parent linking
 let TRIAGE_PARENTS_KEY = "pa-triage-parents-" + ((__state && __state.date) || "unknown");
-function loadTriageParents(){ try{return JSON.parse(localStorage.getItem(TRIAGE_PARENTS_KEY)||"{}")}catch(e){return{}} }
-function saveTriageParents(data){ if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return; localStorage.setItem(TRIAGE_PARENTS_KEY,JSON.stringify(data)); scheduleIDBSave(); }
+function loadTriageParents(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_triageParents", null);
+    if (v) return v;
+  }
+  try{return JSON.parse(localStorage.getItem(TRIAGE_PARENTS_KEY)||"{}")}catch(e){return{}}
+}
+function saveTriageParents(data){
+  if (_bsSaveProp("_triageParents", data)) return;
+  localStorage.setItem(TRIAGE_PARENTS_KEY,JSON.stringify(data)); scheduleIDBSave();
+}
 
 function buildScheduled() {
   const el = document.getElementById("scheduled-board");

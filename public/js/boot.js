@@ -98,6 +98,55 @@
   // blockstore-backed features (addedTasks, etc.) need loadDay() to complete first
   if (typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
 
+  // Cross-device pomodoro restore: if localStorage had no pomo state but blockStore does,
+  // restore it now (blockStore.loadDay() has populated the cache at this point)
+  if (window.blockStore && typeof pomoState !== 'undefined' && !pomoState.title) {
+    try {
+      const savedPomo = typeof loadPomoState === 'function' ? loadPomoState() : null;
+      if (savedPomo && savedPomo.title) {
+        pomoState.title = savedPomo.title;
+        pomoState.workMin = savedPomo.workMin || 25;
+        pomoState.mode = savedPomo.mode || "work";
+        pomoState.total = savedPomo.total || 25*60;
+        pomoState.remaining = savedPomo.remaining || 0;
+        pomoState.sessions = savedPomo.sessions || 0;
+        pomoState.soundOn = savedPomo.soundOn !== false;
+        pomoState.sessionLog = savedPomo.sessionLog || [];
+        pomoState.taskTime = savedPomo.taskTime || {};
+        pomoState.taskDone = savedPomo.taskDone || false;
+        pomoState.stackedSessions = savedPomo.stackedSessions || {};
+        const emptyEl = document.getElementById("pomo-empty");
+        const activeEl = document.getElementById("pomo-active");
+        if (emptyEl) emptyEl.style.display = "none";
+        if (activeEl) activeEl.style.display = "block";
+        const titleEl = document.getElementById("pomo-title");
+        if (titleEl) titleEl.textContent = savedPomo.title;
+        const modeWork = document.querySelector('.pomo-mode[data-pm="work"]');
+        if (modeWork) modeWork.textContent = "Focus (" + pomoState.workMin + "m)";
+        document.querySelectorAll(".pomo-mode").forEach(b => b.classList.toggle("active", b.dataset.pm === pomoState.mode));
+        const ph = document.getElementById("pomo-phase");
+        if (ph) ph.textContent = pomoState.mode === "work" ? "Focus" : pomoState.mode === "short" ? "Short Break" : "Long Break";
+        for (let i = 0; i < 4; i++) { const d = document.getElementById("pd" + i); if (d) d.className = i < pomoState.sessions ? "pomo-dot filled" : "pomo-dot"; }
+        const sndBtn = document.getElementById("pomo-sound");
+        if (sndBtn) sndBtn.textContent = "Sound: " + (pomoState.soundOn ? "On" : "Off");
+        if (savedPomo.running && savedPomo.savedAt) {
+          const elapsed = Math.floor((Date.now() - savedPomo.savedAt) / 1000);
+          pomoState.remaining = Math.max(0, pomoState.remaining - elapsed);
+          pomoState.running = true;
+          pomoState.startedAt = Date.now();
+          if (typeof pomoState.iv === 'undefined' || !pomoState.iv) {
+            pomoState.iv = setInterval(typeof pomoTick === 'function' ? pomoTick : () => {}, 1000);
+          }
+        }
+        if (typeof pomoPaint === 'function') pomoPaint();
+        if (typeof pomoUpdateStartBtn === 'function') pomoUpdateStartBtn();
+        if (typeof updateTimerBadge === 'function') updateTimerBadge();
+        if (typeof pomoRenderReport === 'function') pomoRenderReport();
+        console.log('[Boot] Restored pomodoro state from blockStore:', savedPomo.title);
+      }
+    } catch(e) { console.warn('[Boot] Pomo cross-device restore failed (non-fatal):', e); }
+  }
+
   // Legacy hydration fallback — only needed if any USE_BLOCKSTORE flags are off
   if (window.USE_BLOCKSTORE && !Object.values(window.USE_BLOCKSTORE).every(v => v)) {
     try {

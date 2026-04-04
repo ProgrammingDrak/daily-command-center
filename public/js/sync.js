@@ -138,14 +138,26 @@ function saveActions(data) {
   localStorage.setItem(ACTIONS_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
-function loadDismissed() { try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); } catch(e) { return {}; } }
+function loadDismissed() {
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_dismissed", null);
+    if (v) return v;
+  }
+  try { return JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}"); } catch(e) { return {}; }
+}
 function saveDismissed(data) {
-  if (window.USE_BLOCKSTORE && Object.values(window.USE_BLOCKSTORE).every(v => v)) return; // BlockStore handles persistence
+  if (_bsSaveProp("_dismissed", data)) return;
   localStorage.setItem(DISMISS_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
 let DONE_KEY = "pa-done-" + (__state ? __state.date : "unknown");
-function loadDoneState() { try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}"); return { ids: d.ids || [], at: d.at || {} }; } catch(e) { return { ids: [], at: {} }; } }
+function loadDoneState() {
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_done", null);
+    if (v) return { ids: v.ids || [], at: v.at || {} };
+  }
+  try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}"); return { ids: d.ids || [], at: d.at || {} }; } catch(e) { return { ids: [], at: {} }; }
+}
 function saveDoneState() {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.done && window.blockStore) {
     const dayRoot = window.blockStore.getDayRootId();
@@ -160,9 +172,15 @@ function saveDoneState() {
 }
 
 let SESSIONS_KEY = "pa-sessions-" + (__state ? __state.date : "unknown");
-function loadSessions() { try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || "{}"); } catch(e) { return {}; } }
+function loadSessions() {
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_sessions", null);
+    if (v) return v;
+  }
+  try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || "{}"); } catch(e) { return {}; }
+}
 function saveSessions(data) {
-  if (window.USE_BLOCKSTORE && Object.values(window.USE_BLOCKSTORE).every(v => v)) return;
+  if (_bsSaveProp("_sessions", data)) return;
   localStorage.setItem(SESSIONS_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
@@ -176,8 +194,11 @@ function savePomoState() {
     taskTime: pomoState.taskTime, taskDone: pomoState.taskDone, stackedSessions: pomoState.stackedSessions,
     savedAt: Date.now()
   };
+  // Always keep localStorage for same-device instant restore on reload
   try { localStorage.setItem(POMO_STATE_KEY, JSON.stringify(data)); } catch(e) {}
-  // Also log sessions to BlockStore if flag is on
+  // Also persist to day_root for cross-device sync
+  _bsSaveProp("_pomoState", data);
+  // Log sessions to BlockStore if flag is on
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.pomo && window.blockStore && pomoState.sessionLog.length) {
     const lastSession = pomoState.sessionLog[pomoState.sessionLog.length - 1];
     if (lastSession && !lastSession._blockSaved) {
@@ -190,7 +211,14 @@ function savePomoState() {
   }
 }
 function loadPomoState() {
-  try { const raw = localStorage.getItem(POMO_STATE_KEY); return raw ? JSON.parse(raw) : null; } catch(e) { return null; }
+  // Check localStorage first (fast, same-device)
+  try {
+    const raw = localStorage.getItem(POMO_STATE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  // Cross-device fallback: check day_root (populated after blockStore.loadDay())
+  const v = _bsProp("_pomoState", null);
+  return v || null;
 }
 
 // Restore checked state from localStorage (survives re-renders)

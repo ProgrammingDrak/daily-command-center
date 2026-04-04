@@ -338,9 +338,15 @@ function openStartTimePicker(id, anchorEl){
   pop.querySelector("#stp-input").focus();
 }
 let PINNED_KEY = "pa-pinned-starts-" + ((__state && __state.date) ? __state.date : "unknown");
-function loadPinnedStarts(){ try{return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}")}catch(e){return{}} }
+function loadPinnedStarts(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_pinnedStarts", null);
+    if (v) return v;
+  }
+  try{return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}")}catch(e){return{}}
+}
 function savePinnedStarts(data){
-  if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;
+  if (_bsSaveProp("_pinnedStarts", data)) return;
   localStorage.setItem(PINNED_KEY,JSON.stringify(data)); scheduleIDBSave();
 }
 
@@ -389,12 +395,27 @@ function resetAll(){scheduled=JSON.parse(JSON.stringify(INIT_SCHED));consider=JS
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");
-function loadTaskOrder(){ try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]} }
+function loadTaskOrder(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_taskOrder", null);
+    if (v && v.length) return v;
+  }
+  try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]}
+}
 function saveTaskOrder(){
   const order=scheduled.filter(ev=>!isDone(ev)).map(ev=>ev.id);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
-    const items=order.map((id,i)=>({id,sort_order:(i+1)*1000}));
-    window.blockStore.reorder(items).catch(()=>{});
+    // Save order to day_root for cross-device reads
+    _bsSaveProp("_taskOrder", order);
+    // Also update sort_order on added_task blocks (the only real blocks that exist)
+    const addedBlocks=window.blockStore.getByType("added_task");
+    if(addedBlocks.length){
+      const orderMap={};order.forEach((id,i)=>{orderMap[id]=i});
+      const items=addedBlocks
+        .filter(b=>b.properties&&orderMap[b.properties.local_id]!==undefined)
+        .map(b=>({id:b.id,sort_order:(orderMap[b.properties.local_id]+1)*1000}));
+      if(items.length)window.blockStore.reorder(items).catch(()=>{});
+    }
     return;
   }
   localStorage.setItem(ORDER_KEY,JSON.stringify(order)); scheduleIDBSave();

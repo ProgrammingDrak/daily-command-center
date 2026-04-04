@@ -1,6 +1,16 @@
 // ======== LIFE TAB + QUICK CAPTURE ========
 
-function getLifeCaptures(){return JSON.parse(localStorage.getItem("pa-life-captures")||"[]")}
+function getLifeCaptures(){
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.lifeCaptures&&window.blockStore){
+    return window.blockStore.getByType("life_capture").map(b=>({
+      text:b.properties.text||"",category:b.properties.category||"",
+      mood:b.properties.mood||0,context:b.properties.context||"",
+      timestamp:b.properties.timestamp||b.created_at,
+      type:b.properties.type||"shorthand",raw:b.properties.raw||b.properties.text||""
+    }));
+  }
+  try{return JSON.parse(localStorage.getItem("pa-life-captures")||"[]")}catch(e){return[]}
+}
 function saveLifeCapture(entry){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.lifeCaptures&&window.blockStore){
     window.blockStore.createBlock("life_capture",{text:entry.text||"",category:entry.category||"",mood:entry.mood||0,context:entry.context||"",timestamp:entry.timestamp||new Date().toISOString()});
