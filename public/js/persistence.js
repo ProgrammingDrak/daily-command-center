@@ -440,12 +440,23 @@ function reloadPersistedEdits() {
   pushedAt = {};
   deletedSet = new Set();
 
-  // Reload from localStorage for the (now current) date keys
-  try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}");
+  // Prefer blockStore day_root properties when USE_BLOCKSTORE is active (source of truth)
+  // Fall back to localStorage for each field if blockStore doesn't have it
+  let _bsRoot = null;
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const dayRootId = window.blockStore.getDayRootId();
+    _bsRoot = window.blockStore.get(dayRootId);
+  }
+
+  try {
+    const bsDone = _bsRoot && _bsRoot.properties && _bsRoot.properties._done;
+    const d = bsDone || JSON.parse(localStorage.getItem(DONE_KEY) || "{}");
     if (d.ids) d.ids.forEach(id => manualDone.add(id));
     if (d.at) Object.assign(doneAt, d.at);
   } catch(e) {}
-  try { const d = JSON.parse(localStorage.getItem(PUSHED_KEY) || "{}");
+  try {
+    const bsPushed = _bsRoot && _bsRoot.properties && _bsRoot.properties._pushed;
+    const d = bsPushed || JSON.parse(localStorage.getItem(PUSHED_KEY) || "{}");
     if (d.ids) d.ids.forEach(id => pushedSet.add(id));
     if (d.at) Object.assign(pushedAt, d.at);
   } catch(e) {}
@@ -550,13 +561,22 @@ async function switchToDate(dateStr) {
     newState = window.__PA_ARCHIVES__[dateStr];
     viewMode = "archive";
   } else {
-    // No injected archive — try Express API for this date
-    const expressState = await fetchExpressDate(dateStr);
-    if (expressState) {
-      newState = { date: dateStr, schedule: [], meetings: [], triage: {} };
-      viewMode = "archive";
-    } else {
-      return; // no data for this date anywhere
+    // No injected archive — fetch directly from the day API
+    try {
+      const r = await fetch("/api/state/day?date=" + dateStr, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) {
+        const dayState = await r.json();
+        if (dayState && dayState.date) {
+          newState = dayState;
+          viewMode = "archive";
+        } else {
+          return;
+        }
+      } else {
+        return;
+      }
+    } catch {
+      return;
     }
   }
 

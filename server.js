@@ -443,21 +443,44 @@ app.get("/api/state/upcoming", (req, res) => {
   res.json(data);
 });
 
-// Archive states (last 7 days)
+// Archive states (recent days + older archive)
 app.get("/api/state/archives", (req, res) => {
+  const todayStr = getTodayStr();
+  const tomorrowStr = addDays(todayStr, 1);
   const archives = {};
+
+  // Include recent past days from DAYS_DIR (within the 14-day active window)
+  if (fs.existsSync(DAYS_DIR)) {
+    const files = fs
+      .readdirSync(DAYS_DIR)
+      .filter((f) => f.endsWith(".json") && f.length === 15)
+      .sort();
+    for (const fname of files) {
+      const dateStr = fname.replace(".json", "");
+      if (dateStr !== todayStr && dateStr !== tomorrowStr && dateStr < todayStr) {
+        const data = readJSON(path.join(DAYS_DIR, fname), null);
+        if (data) archives[dateStr] = data;
+      }
+    }
+  }
+
+  // Also include older archive states (last 7)
   if (fs.existsSync(ARCHIVE_DIR)) {
     const files = fs
       .readdirSync(ARCHIVE_DIR)
-      .filter((f) => f.endsWith(".json") && f.length === 15) // YYYY-MM-DD.json
+      .filter((f) => f.endsWith(".json") && f.length === 15)
       .sort()
       .reverse()
       .slice(0, 7);
     for (const fname of files) {
-      const data = readJSON(path.join(ARCHIVE_DIR, fname), null);
-      if (data) archives[fname.replace(".json", "")] = data;
+      const dateStr = fname.replace(".json", "");
+      if (!archives[dateStr]) {
+        const data = readJSON(path.join(ARCHIVE_DIR, fname), null);
+        if (data) archives[dateStr] = data;
+      }
     }
   }
+
   res.json(archives);
 });
 
