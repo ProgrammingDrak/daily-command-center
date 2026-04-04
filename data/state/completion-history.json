@@ -1,0 +1,39 @@
+{
+  "2026-03-26": {
+    "date": "2026-03-26",
+    "completed_ids": [],
+    "titles": {},
+    "done_at": {},
+    "completion_rate": "0%",
+    "tasks_planned": 5,
+    "tasks_completed": 0,
+    "note": "Town Hall all-hands + heavy triage load (10 open items). 1 of 5 planned tasks was pre-completed on 3/24 (investor email). No tasks started or finished on 3/26.",
+    "source": "assess",
+    "finalized": true,
+    "updated_at": "2026-03-27T07:03:00-04:00"
+  },
+  "2026-03-27": {
+    "date": "2026-03-27",
+    "completed_ids": [],
+    "titles": {},
+    "done_at": {},
+    "completion_rate": "0%",
+    "tasks_planned": 2,
+    "tasks_completed": 0,
+    "source": "assess",
+    "finalized": true,
+    "updated_at": "2026-03-28T07:04:51.446983-04:00"
+  },
+  "2026-03-30": {
+    "date": "2026-03-30",
+    "completed_ids": [],
+    "titles": {},
+    "done_at": {},
+    "completion_rate": "0%",
+    "tasks_planned": 3,
+    "tasks_completed": 0,
+    "source": "assess",
+    "finalized": true,
+    "updated_at": "2026-03-31T07:12:23.085915-04:00"
+  }
+}

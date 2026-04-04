@@ -1,0 +1,758 @@
+{
+  "schema_version": "2.0",
+  "date": "2026-03-26",
+  "created_at": "2026-03-26T09:00:00-04:00",
+  "last_updated_at": "2026-03-27T07:03:00-04:00",
+  "last_updated_by": "assess",
+
+  "watermarks": {
+    "gmail": {
+      "last_sweep_at": "2026-03-26T10:30:00-04:00",
+      "last_message_id": "19d2a756ed8e9110"
+    },
+    "slack_dms": {
+      "channels": {
+        "D0649PEU17H": { "last_ts": "1774535196.000000" },
+        "D04Q9CT9DT4": { "last_ts": "1774476778.202579" },
+        "C0ANR6D8BMZ": { "last_ts": "1774484535.379209" },
+        "C0AN6UUKW8K": { "last_ts": "1774309939.201619" },
+        "C0ANGA1GLLE": { "last_ts": "1774468555.000000" },
+        "D05296652AZ": { "last_ts": "1774467934.751959" },
+        "C0APNFL5PPS": { "last_ts": "1774458432.248859" },
+        "D04TJE8H9B2": { "last_ts": "1774468368.382049" }
+      },
+      "last_sweep_at": "2026-03-26T10:30:00-04:00"
+    },
+    "slack_mentions": {
+      "last_search_ts": "1774535196",
+      "last_sweep_at": "2026-03-26T10:30:00-04:00"
+    },
+    "calendar": {
+      "last_sweep_at": "2026-03-26T10:30:00-04:00"
+    },
+    "notion_board": {
+      "last_sweep_at": "2026-03-26T10:30:00-04:00"
+    }
+  },
+
+  "schedule": {
+    "generated_at": "2026-03-26T09:15:00-04:00",
+    "working_hours": { "start": "09:00", "end": "17:30" },
+    "timeline": [
+      {
+        "id": "ooo-bod",
+        "type": "ooo",
+        "label": "OOO - BOD",
+        "start": "2026-03-26T08:45:00-04:00",
+        "end": "2026-03-26T09:00:00-04:00",
+        "source": "calendar",
+        "source_id": "05esfdmv4p1n2p01ahg9er1gq8_20260326T124500Z"
+      },
+      {
+        "id": "meeting-bullpen",
+        "type": "meeting",
+        "label": "The Bullpen! (BOD Standup)",
+        "start": "2026-03-26T09:00:00-04:00",
+        "end": "2026-03-26T09:15:00-04:00",
+        "source": "calendar",
+        "source_id": "ikebhiij4drkn2va7fd08ngocf_20260326T130000Z",
+        "estimated_minutes": 15,
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "triage-0915",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-26T09:15:00-04:00",
+        "end": "2026-03-26T09:30:00-04:00",
+        "source": "calendar",
+        "source_id": "ctpqm0n6l6ei4k5tgkjp7jp0p4_20260326T131500Z",
+        "estimated_minutes": 15,
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-investor-email",
+        "type": "task",
+        "label": "[OVERDUE] Format investor portal launch email in HTML template",
+        "start": "2026-03-26T09:30:00-04:00",
+        "end": "2026-03-26T10:15:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-8155-b179-e0ed2ac3dc39",
+        "priority": "High",
+        "estimated_minutes": 45,
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "task-investor-stamping",
+        "type": "task",
+        "label": "[OVERDUE] QA/fix investor count stamping workflow",
+        "start": "2026-03-26T10:15:00-04:00",
+        "end": "2026-03-26T11:00:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "priority": "Medium",
+        "estimated_minutes": 45,
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "triage-1100",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-26T11:00:00-04:00",
+        "end": "2026-03-26T11:15:00-04:00",
+        "source": "calendar",
+        "source_id": "5ud9gcba8j5obudt3uk32aua4c_20260326T150000Z",
+        "estimated_minutes": 15,
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-onboarding-email",
+        "type": "task",
+        "label": "Create new investor onboarding email for Amp portal",
+        "start": "2026-03-26T11:15:00-04:00",
+        "end": "2026-03-26T12:15:00-04:00",
+        "source": "notion",
+        "source_id": "32dfcdf7-9b27-8118-a579-e4f0866e5ee1",
+        "priority": "Medium",
+        "estimated_minutes": 60,
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "buffer-lunch",
+        "type": "free_time",
+        "label": "Buffer",
+        "start": "2026-03-26T12:15:00-04:00",
+        "end": "2026-03-26T12:30:00-04:00",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "ooo-lunch",
+        "type": "ooo",
+        "label": "OOO - Lunch",
+        "start": "2026-03-26T12:30:00-04:00",
+        "end": "2026-03-26T13:00:00-04:00",
+        "source": "calendar",
+        "source_id": "45mfckh8tm6fa4funs5qfnrm9f_20260326T163000Z"
+      },
+      {
+        "id": "triage-1300",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-26T13:00:00-04:00",
+        "end": "2026-03-26T13:15:00-04:00",
+        "source": "calendar",
+        "source_id": "7baenumisb58eqdc8qvhc49i8d_20260326T170000Z",
+        "estimated_minutes": 15,
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-hubspot-workflows",
+        "type": "task",
+        "label": "Review HubSpot workflows feeding Collins' queue",
+        "start": "2026-03-26T13:15:00-04:00",
+        "end": "2026-03-26T14:45:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "priority": "Medium",
+        "estimated_minutes": 90,
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "task-sunset-photos",
+        "type": "task",
+        "label": "Sunset pay-for-photos: prepare one-click removal for April 1",
+        "start": "2026-03-26T14:45:00-04:00",
+        "end": "2026-03-26T15:00:00-04:00",
+        "source": "notion",
+        "source_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "priority": "High",
+        "estimated_minutes": 15,
+        "category": "Admin",
+        "completed": false,
+        "notes": "April 1 deadline -- only 15m slot before Town Hall. May need more time; schedule remainder post-Town Hall."
+      },
+      {
+        "id": "meeting-townhall",
+        "type": "meeting",
+        "label": "Town Hall - All-Hands Meeting",
+        "start": "2026-03-26T15:00:00-04:00",
+        "end": "2026-03-26T16:00:00-04:00",
+        "source": "calendar",
+        "source_id": "oar2mf4i4o4gr684err52n5egg_20260326T190000Z",
+        "estimated_minutes": 60,
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "triage-1600",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-26T16:00:00-04:00",
+        "end": "2026-03-26T16:15:00-04:00",
+        "source": "calendar",
+        "source_id": "23mrn023htr5m8r3mnf4afoetj_20260326T200000Z",
+        "estimated_minutes": 15,
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-sunset-photos-pt2",
+        "type": "task",
+        "label": "Sunset pay-for-photos: continued (post-Town Hall)",
+        "start": "2026-03-26T16:15:00-04:00",
+        "end": "2026-03-26T17:00:00-04:00",
+        "source": "notion",
+        "source_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "priority": "High",
+        "estimated_minutes": 45,
+        "category": "Admin",
+        "completed": false
+      },
+      {
+        "id": "eod-triage",
+        "type": "focus_time",
+        "label": "EOD Email and Slack Triage",
+        "start": "2026-03-26T17:00:00-04:00",
+        "end": "2026-03-26T17:30:00-04:00",
+        "source": "calendar",
+        "source_id": "d6deda3315f449a7bdbcfd5739b8b7c3_20260326T210000Z",
+        "estimated_minutes": 30,
+        "category": "Triage",
+        "completed": false
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "32cfcdf7-9b27-8155-b179-e0ed2ac3dc39",
+        "title": "Format investor portal launch email in HTML template",
+        "url": "https://www.notion.so/32cfcdf79b278155b179e0ed2ac3dc39",
+        "priority": "High",
+        "estimated_minutes": 45,
+        "due_date": "2026-03-25",
+        "overdue": true,
+        "scheduled_start": "2026-03-26T09:30:00-04:00",
+        "scheduled_end": "2026-03-26T10:15:00-04:00",
+        "status": "today",
+        "completed": false
+      },
+      {
+        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0",
+        "priority": "Medium",
+        "estimated_minutes": 45,
+        "due_date": "2026-03-23",
+        "overdue": true,
+        "scheduled_start": "2026-03-26T10:15:00-04:00",
+        "scheduled_end": "2026-03-26T11:00:00-04:00",
+        "status": "today",
+        "completed": false
+      },
+      {
+        "task_id": "32dfcdf7-9b27-8118-a579-e4f0866e5ee1",
+        "title": "Create new investor onboarding email for Amp portal",
+        "url": "https://www.notion.so/32dfcdf79b278118a579e4f0866e5ee1",
+        "priority": "Medium",
+        "estimated_minutes": 60,
+        "due_date": null,
+        "overdue": false,
+        "scheduled_start": "2026-03-26T11:15:00-04:00",
+        "scheduled_end": "2026-03-26T12:15:00-04:00",
+        "status": "today",
+        "completed": false
+      },
+      {
+        "task_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "title": "Review HubSpot workflows feeding Collins' queue",
+        "url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e",
+        "priority": "Medium",
+        "estimated_minutes": 90,
+        "due_date": "2026-03-27",
+        "overdue": false,
+        "scheduled_start": "2026-03-26T13:15:00-04:00",
+        "scheduled_end": "2026-03-26T14:45:00-04:00",
+        "status": "today",
+        "completed": false
+      },
+      {
+        "task_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "title": "Sunset pay-for-photos: prepare one-click removal for April 1",
+        "url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
+        "priority": "High",
+        "estimated_minutes": 60,
+        "due_date": "2026-04-01",
+        "overdue": false,
+        "scheduled_start": "2026-03-26T14:45:00-04:00",
+        "scheduled_end": "2026-03-26T17:00:00-04:00",
+        "status": "today",
+        "completed": false,
+        "notes": "Split across pre/post Town Hall: 14:45-15:00 + 16:15-17:00"
+      }
+    ],
+    "tasks_couldnt_fit": [
+      {
+        "task_id": "328fcdf7-9b27-81e4-a982-ca26e9adfe6b",
+        "title": "Write spec for red countdown feature on investor portal",
+        "priority": "Medium",
+        "reason": "No room -- overdue tasks + Town Hall today"
+      },
+      {
+        "task_id": "328fcdf7-9b27-8198-a43c-fc44c852eb63",
+        "title": "Document Clever Offers team role responsibilities",
+        "priority": "Medium",
+        "reason": "Carried 2 days -- deprioritized behind overdue tasks"
+      }
+    ],
+    "stats": {
+      "total_tasks_scheduled": 5,
+      "total_estimated_hours": 4.0,
+      "total_meetings": 2,
+      "free_time_minutes": 15
+    }
+  },
+
+  "triage": {
+    "cycle_count": 2,
+    "open_items": [
+      {
+        "id": "slack-dm-elizabeth-calendly",
+        "type": "unanswered_dm",
+        "title": "Elizabeth Jackson -- HubSpot/Calendly integration broken",
+        "summary": "Elizabeth flagged that the Calendly-HubSpot integration (connected under Drake's account) is broken. Needs Drake to update Field Type to 'Multi-line text' for each property in the 'Details from Calendly Meetings' group in HubSpot settings. Luke Jungermann added to the DM to help.",
+        "link": "https://cleverrealestate.slack.com/archives/C0ANR6D8BMZ/p1774484505783119",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "Sent Wed 2026-03-25 20:21 ET. HubSpot property fields in 'Details from Calendly Meetings' group need Field Type changed to Multi-line text. Operational impact -- new Calendly bookings not creating contacts."
+      },
+      {
+        "id": "email-tim-gaasch-agent-forward",
+        "type": "email_needs_response",
+        "title": "Tim Gaasch -- Fwd: agent email re: Clever offers leads and fees",
+        "summary": "Tim forwarded an agent email about Clever RE practices regarding offers leads, fees, and a response from Clever. Flagged as IMPORTANT -- Tim is VP of Account Management. Likely wants Drake's input or awareness.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d27ac017e620f7",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "Sent Wed 2026-03-25 18:04 PT. IMPORTANT label. Tim Gaasch VP of Account Mgmt forwarded agent email re Clever RE contract with Jennifer Macgregor. Review during triage block."
+      },
+      {
+        "id": "slack-dm-steven-for-investors",
+        "type": "unanswered_dm",
+        "title": "Steven Nicastro -- For Investors page spec (field details)",
+        "summary": "Steven shared field spec for the new For Investors page Ben requested. Drake replied asking about SEO impact and form type. Steven responded with the field breakdown and said he's not worried about SEO. Waiting on Drake's next move -- review spec and advise on HubSpot form.",
+        "link": "https://cleverrealestate.slack.com/archives/C0APNFL5PPS/p1774458432248859",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Group DM: Drake, Steven, Mike P. Spec doc: https://docs.google.com/document/d/1fh4Py4qs22KuoOIKNWSvBy5zLuBPmxYphmJqMEwsBrM/edit. Current onboarding form (Google): https://docs.google.com/forms/d/e/1FAIpQLSeoQsei2PSr_kQ0Z66tp1urimkg9Wj5EY7EkSMjdCbyZ2f31w/viewform. Netlify draft: https://cleveroffers-investor-preview.netlify.app/"
+      },
+      {
+        "id": "slack-dm-kate-hc-alignment",
+        "type": "unanswered_dm",
+        "title": "Kate Mitchell -- HC/Offers alignment doc (review request)",
+        "summary": "Kate shared a Google Doc for HC and Offers alignment and asked Drake and Mike P to review and add clarifying questions. 3 days old with no reply.",
+        "link": "https://cleverrealestate.slack.com/archives/C0AN6UUKW8K/p1774309939201619",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "medium",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Sent 2026-03-23 19:52 ET -- 3 days old. Doc: https://docs.google.com/document/d/1Mu1kzCsQ9PHNEWxAqtrfQaIGDEGdPzdjYCDh6W2UaBg/edit. Group DM with Mike Provinzino."
+      },
+      {
+        "id": "email-griffin-quickbuy-process",
+        "type": "email_needs_response",
+        "title": "Griffin Amdur (quickBuy) -- RE: Process with Preliminary Offer",
+        "summary": "Griffin asked Drake to walk the quickBuy team through the process after a cash offer is made. Sent before yesterday's 12pm call with quickBuy (Griffin, Ana Aguiar, Cheryl Bowers, Jimmy Janevski). Drake should reply confirming it was covered or with a written summary.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d21bdf1a868334",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "medium",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Sent Tue 2026-03-24 21:26 UTC. quickBuy call occurred 2026-03-25 12pm. Should confirm whether process was covered on the call or send written follow-up."
+      },
+      {
+        "id": "email-qualia-ytd-pipeline",
+        "type": "email_fyi",
+        "title": "Qualia -- Closings: YTD Pipeline is Ready",
+        "summary": "Qualia sent the YTD Pipeline report for closings. Sent to Drake and Collins. Review when convenient.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d2a3c4a5fc325f",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "FYI -- YTD closings pipeline report. Review at EOD or during triage block."
+      },
+      {
+        "id": "email-confluence-digest-0326",
+        "type": "email_fyi",
+        "title": "Confluence -- Daily digest: Onboarding Projects updates",
+        "summary": "At least one user made updates to the 'Onboarding Projects' Confluence space. Francesca Flores likely made updates.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d29e4700ac7cb6",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "FYI -- may be relevant to investor portal onboarding email work."
+      },
+      {
+        "id": "email-gemini-nmgmt",
+        "type": "email_fyi",
+        "title": "Gemini notes -- NMGMT Huddle (Mar 25)",
+        "summary": "Auto-generated meeting notes from NMGMT Huddle on 2026-03-25. Review for any action items.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d25fa1867c3cf2",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "FYI -- review at EOD batch."
+      },
+      {
+        "id": "email-ramp-ach-brandi-brooks",
+        "type": "email_fyi",
+        "title": "Ramp -- ACH details from Brandi N. Brooks received",
+        "summary": "Ramp received ACH details from Brandi N. Brooks. No action required. Informational notification.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d2a5d406d47268",
+        "first_seen_at": "2026-03-26T10:30:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Received 09:37 ET. Automated Ramp payment notification. No action needed."
+      },
+      {
+        "id": "email-trustpilot-5star-review",
+        "type": "email_fyi",
+        "title": "Trustpilot -- New 5-star review from Mike Borowicz",
+        "summary": "Mike Borowicz left a 5-star review on Trustpilot: 'They handled everything. Great people and super friendly.' Sent via clever-team distribution.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d2a756ed8e9110",
+        "first_seen_at": "2026-03-26T10:30:00-04:00",
+        "last_seen_at": "2026-03-26T10:30:00-04:00",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Received 10:03 ET. FYI -- positive customer feedback via team distribution."
+      }
+    ],
+    "resolved_items": [
+      {
+        "id": "slack-dm-collins-buggy-link",
+        "type": "unanswered_dm",
+        "title": "Collins Okoye -- 'the link is buggy?'",
+        "summary": "Collins circled back on something from an earlier conversation and says a link is buggy. Drake replied in the channel at 10:20 ET.",
+        "link": "https://cleverrealestate.slack.com/archives/D0649PEU17H/p1774531176359569",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "resolved_at": "2026-03-26T10:30:00-04:00",
+        "resolution": "user_replied",
+        "notes": "Drake replied at 10:20 ET ('In my backlog! I need to do more with it'). Collins followed up at 10:26 ('Let me know if there's anything I can do to help'). Thread considered closed."
+      },
+      {
+        "id": "slack-dm-mitesh-agent-channon",
+        "type": "unanswered_dm",
+        "title": "Mitesh Patel -- Should I reach out to agent Channon re commission dispute?",
+        "summary": "Drake replied on 2026-03-25 at 15:54 ET: confirmed 50% referral fee, advised Mitesh not to preemptively offer 40% but can use it if she pushes back.",
+        "link": "https://cleverrealestate.slack.com/archives/C0ANGA1GLLE/p1774468310193659",
+        "first_seen_at": "2026-03-26T09:15:00-04:00",
+        "resolved_at": "2026-03-26T10:30:00-04:00",
+        "resolution": "user_replied",
+        "notes": "Drake's reply: 'You have the right approach. She is welcome to offer whatever commission she would like, but the referral fee for Clever Offers is the same 50%. I wouldn't bring the option to her about the 40% yet, but if she comes back complaining about it then we can make her the offer.'"
+      }
+    ],
+    "actions_taken": []
+  },
+
+  "meetings": [
+    {
+      "event_id": "ikebhiij4drkn2va7fd08ngocf_20260326T130000Z",
+      "title": "The Bullpen! (BOD Standup)",
+      "start": "2026-03-26T09:00:00-04:00",
+      "end": "2026-03-26T09:15:00-04:00",
+      "type": "recurring",
+      "attendees": ["Michael Provinzino", "Collins Okoye", "Jay Watson", "Arnold Mejica"],
+      "briefing_path": null,
+      "calendar_link": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjAzMjZUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+      "transcript_found": false,
+      "action_items_extracted": 0,
+      "reviewed": true,
+      "reviewed_at": "2026-03-27T07:03:00-04:00",
+      "reviewed_by": "batch"
+    },
+    {
+      "event_id": "oar2mf4i4o4gr684err52n5egg_20260326T190000Z",
+      "title": "Town Hall - All-Hands Meeting",
+      "start": "2026-03-26T15:00:00-04:00",
+      "end": "2026-03-26T16:00:00-04:00",
+      "type": "all_hands",
+      "attendees": ["Elizabeth Jackson", "Eliza Butler", "Mitesh Patel", "Reuben Segal", "Erin Kelley", "Drake Shadwell"],
+      "briefing_path": null,
+      "calendar_link": "https://www.google.com/calendar/event?eid=b2FyMm1mNGk0bzRncjY4NGVycjUybjVlZ2dfMjAyNjAzMjZUMTkwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+      "transcript_found": false,
+      "action_items_extracted": 0,
+      "reviewed": true,
+      "reviewed_at": "2026-03-27T07:03:00-04:00",
+      "reviewed_by": "batch"
+    }
+  ],
+
+  "assessment": {
+    "generated_at": "2026-03-27T07:03:00-04:00",
+    "wins": [],
+    "couldnt_fit": [
+      {
+        "task_id": "32cfcdf7-9b27-8155-b179-e0ed2ac3dc39",
+        "title": "Format investor portal launch email in HTML template for Ben",
+        "status": "pre_completed",
+        "note": "Already Done in Notion (completed 2026-03-24). Appeared in plan as overdue -- no action needed."
+      },
+      {
+        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "status": "not_started"
+      },
+      {
+        "task_id": "32dfcdf7-9b27-8118-a579-e4f0866e5ee1",
+        "title": "Create new investor onboarding email for Amp portal",
+        "status": "not_started"
+      },
+      {
+        "task_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "title": "Review HubSpot workflows feeding Collins' queue",
+        "status": "not_started"
+      },
+      {
+        "task_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "title": "Sunset pay-for-photos: prepare one-click removal for April 1",
+        "status": "not_started"
+      }
+    ],
+    "dropped_balls": [
+      {
+        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "due_date": "2026-03-23",
+        "reason": "4 days overdue. Scheduled 3/26 but not started. Still 'Tasks for Today' in Notion."
+      }
+    ],
+    "triage_health": {
+      "open_count": 10,
+      "high_priority_count": 2,
+      "stale_items": [
+        {
+          "id": "slack-dm-kate-hc-alignment",
+          "title": "Kate Mitchell -- HC/Offers alignment doc (review request)",
+          "age_hours": 84,
+          "escalation_level": "medium",
+          "note": "DM sent 2026-03-23 -- no reply for 3 days."
+        }
+      ],
+      "oldest_unresolved_hours": 84
+    },
+    "schedule_adherence": {
+      "tasks_planned": 5,
+      "tasks_completed": 0,
+      "completion_rate": "0%",
+      "meetings_attended": 2,
+      "buffer_used_minutes": 15,
+      "note": "Town Hall (1h) + heavy triage load (10 open items). Only 1 of 5 planned tasks was actually a real open task (investor email was pre-completed 3/24)."
+    },
+    "sweep_health": {
+      "total_sweeps": 2,
+      "productive_sweeps": 2,
+      "frequency_recommendations": [
+        "Slack mentions: 0 hits across both sweeps today. Consider reducing mention sweep frequency."
+      ]
+    }
+  },
+
+  "completions": {
+    "tasks": []
+  },
+
+  "sweep_stats": {
+    "gmail": { "hits": 2, "misses": 0, "by_hour": { "9": 1, "10": 1 } },
+    "slack_dms": { "hits": 2, "misses": 0, "by_hour": { "9": 1, "10": 1 } },
+    "slack_mentions": { "hits": 0, "misses": 2, "by_hour": { "9": 0, "10": 0 } },
+    "calendar": { "hits": 1, "misses": 1, "by_hour": { "9": 1, "10": 0 } },
+    "notion_board": { "hits": 1, "misses": 1, "by_hour": { "9": 1, "10": 0 } }
+  },
+
+  "notifications": [
+    {
+      "id": "board-health-hubspot-workflows-due-today",
+      "severity": "warning",
+      "title": "Deadline TODAY: Review HubSpot workflows feeding Collins' queue",
+      "body": "Due 2026-03-27. Not yet scheduled for today. Collins' queue ballooned from 150 to 300+ tasks. Key contacts: Collins, Luke Jungermann, Fran.",
+      "link": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e",
+      "requires_approval": false,
+      "created_at": "2026-03-27T07:03:00-04:00",
+      "source": "batch-review"
+    },
+    {
+      "id": "board-health-pay-for-photos-approaching",
+      "severity": "info",
+      "title": "Approaching deadline: Sunset pay-for-photos (April 1)",
+      "body": "Due in 5 days. Board status: Backlog -- not started. Ben's ask: one-click removal ready by April 1. Coordinate with Steph on Q2 deprecation.",
+      "link": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
+      "requires_approval": false,
+      "created_at": "2026-03-27T07:03:00-04:00",
+      "source": "batch-review"
+    }
+  ],
+
+  "meta": {
+    "skill_runs": [
+      {
+        "skill": "sweep-all",
+        "started_at": "2026-03-26T09:00:00-04:00",
+        "completed_at": "2026-03-26T09:15:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "plan-day",
+        "started_at": "2026-03-26T09:15:00-04:00",
+        "completed_at": "2026-03-26T09:15:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "render",
+        "started_at": "2026-03-26T09:16:00-04:00",
+        "completed_at": "2026-03-26T09:16:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-incremental",
+        "started_at": "2026-03-26T10:28:00-04:00",
+        "completed_at": "2026-03-26T10:30:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "render",
+        "started_at": "2026-03-26T10:31:00-04:00",
+        "completed_at": "2026-03-26T10:31:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "assess",
+        "started_at": "2026-03-27T07:03:00-04:00",
+        "completed_at": "2026-03-27T07:03:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "batch-review",
+        "started_at": "2026-03-27T07:03:00-04:00",
+        "completed_at": "2026-03-27T07:03:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "learn",
+        "started_at": "2026-03-27T07:03:00-04:00",
+        "completed_at": "2026-03-27T07:03:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "render",
+        "started_at": "2026-03-27T07:03:00-04:00",
+        "completed_at": "2026-03-27T07:03:00-04:00",
+        "status": "OK"
+      }
+    ]
+  },
+
+  "mutations": [
+    {
+      "timestamp": "2026-03-26T09:00:00-04:00",
+      "skill": "day-init",
+      "action": "day_initialized",
+      "summary": "New day. Archived 2026-03-25 state. Fresh state created for 2026-03-26. (7AM batch missed -- running full init.)"
+    },
+    {
+      "timestamp": "2026-03-26T09:15:00-04:00",
+      "skill": "sweep-all",
+      "action": "sweep_completed",
+      "summary": "Full morning sweep: 10 triage items (2 high, 5 medium, 3 low), 2 meetings, calendar pulled. Slack: Elizabeth Calendly fix needed, Collins buggy link (today), Mitesh agent decision, Steven For Investors, Kate HC alignment (3d old). Gmail: Tim Gaasch IMPORTANT forward, Griffin quickBuy, Qualia YTD."
+    },
+    {
+      "timestamp": "2026-03-26T09:15:00-04:00",
+      "skill": "plan-day",
+      "action": "plan_generated",
+      "summary": "5 tasks scheduled (4.0h): 2 overdue first, then onboarding email, HubSpot workflows review, sunset pay-for-photos. Town Hall 15:00-16:00. 2 tasks couldn't fit."
+    },
+    {
+      "timestamp": "2026-03-26T09:16:00-04:00",
+      "skill": "render",
+      "action": "command_center_rendered",
+      "summary": "Command center updated. Server on port 8742."
+    },
+    {
+      "timestamp": "2026-03-26T09:16:00-04:00",
+      "skill": "pa-morning",
+      "action": "morning_dm_sent",
+      "summary": "Slack DM sent to Drake (U04Q67WRQMR). Full batch: 2 meetings, 5 tasks, 10 triage items. 7AM batch was missed -- full sweep run at 9AM."
+    },
+    {
+      "timestamp": "2026-03-26T10:30:00-04:00",
+      "skill": "sweep-incremental",
+      "action": "sweep_completed",
+      "summary": "Mid-morning incremental sweep: 2 new items (Ramp ACH FYI, Trustpilot 5-star FYI), 2 auto-resolved (Collins buggy link -- Drake replied; Mitesh agent Channon -- Drake replied 3/25 15:54). 0 new mentions. Calendar unchanged. 3 DM channels not checked (no open triage items: D04Q9CT9DT4, D05296652AZ, D04TJE8H9B2)."
+    },
+    {
+      "timestamp": "2026-03-26T10:31:00-04:00",
+      "skill": "render",
+      "action": "command_center_rendered",
+      "summary": "Command center updated. 245.9 KB."
+    },
+    {
+      "timestamp": "2026-03-27T07:03:00-04:00",
+      "skill": "assess",
+      "action": "assessment_generated",
+      "summary": "EOD assessment for 2026-03-26: 0/5 tasks completed (0%). 4 couldn't fit (1 was pre-completed 3/24). 1 dropped ball: stamping QA (overdue since 3/23). 10 open triage items (2 high). 2 meetings attended. No new completions found in Notion backfill."
+    },
+    {
+      "timestamp": "2026-03-27T07:03:00-04:00",
+      "skill": "batch-review",
+      "action": "batch_review_completed",
+      "summary": "Reviewed 2 meetings (Bullpen BOD, Town Hall). 0 transcripts found. 0 action items created. Board health: 1 deadline today (HubSpot workflows, due 3/27), 1 approaching (pay-for-photos, due 4/1). 2 notifications added."
+    },
+    {
+      "timestamp": "2026-03-27T07:03:00-04:00",
+      "skill": "learn",
+      "action": "knowledge_updated",
+      "summary": "state_only mode. claude-school.md: promoted HubSpot workflows task to urgent (due today), flagged stamping QA as 4d overdue. No new people. No new reference entries. Backup created: claude-school-2026-03-26.md."
+    },
+    {
+      "timestamp": "2026-03-27T07:03:00-04:00",
+      "skill": "render",
+      "action": "command_center_rendered",
+      "summary": "Command center updated. 329.8 KB."
+    }
+  ]
+}

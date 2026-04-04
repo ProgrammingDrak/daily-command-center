@@ -1,0 +1,513 @@
+{
+  "date": "2026-04-01",
+  "last_updated_at": "2026-04-01T10:00:00.000000-04:00",
+  "last_updated_by": "plan-day",
+  "watermarks": {
+    "gmail": {
+      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00",
+      "last_message_id": null
+    },
+    "slack_dms": {
+      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00",
+      "channels": {}
+    },
+    "slack_mentions": {
+      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00",
+      "last_search_ts": "2026-04-01T13:55:00.000000+00:00"
+    },
+    "calendar": {
+      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00"
+    },
+    "notion_board": {
+      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00"
+    }
+  },
+  "meetings": [
+    {
+      "id": "ikebhiij4drkn2va7fd08ngocf_20260401T130000Z",
+      "title": "The Bullpen! (BOD Standup)",
+      "start": "2026-04-01T09:00:00-04:00",
+      "end": "2026-04-01T09:15:00-04:00",
+      "attendees": [
+        "michael.provinzino@movewithclever.com",
+        "collins.okoye@movewithclever.com",
+        "jay.watson@movewithclever.com",
+        "arnold.mejica@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjA0MDFUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    },
+    {
+      "id": "2h8qpfrlfmd5i97jvbqb2gll99_20260401T163000Z",
+      "title": "Offers - Sprint Planning",
+      "start": "2026-04-01T12:30:00-04:00",
+      "end": "2026-04-01T13:30:00-04:00",
+      "attendees": [
+        "ben@movewithclever.com",
+        "jeff.dinter@movewithclever.com",
+        "luke.jungermann@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=Mmg4cXBmcmxmbWQ1aTk3anZicWIyZ2xsOTlfMjAyNjA0MDFUMTYzMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    },
+    {
+      "id": "2loq3l6udd1eteluuoubne8gma_20260401T170000Z",
+      "title": "Offers: Investor Network - Weekly",
+      "start": "2026-04-01T13:00:00-04:00",
+      "end": "2026-04-01T14:00:00-04:00",
+      "attendees": [
+        "ben@movewithclever.com",
+        "luke.jungermann@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=MmxvcTNsNnVkZDFldGVsdXVvdWJuZThnbWFfMjAyNjA0MDFUMTcwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    },
+    {
+      "id": "37ncbg5lh3n2m8nkr3k101tch2",
+      "title": "Drake/Collins",
+      "start": "2026-04-01T14:45:00-04:00",
+      "end": "2026-04-01T15:45:00-04:00",
+      "attendees": [
+        "collins.okoye@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=MzduY2JnNWxoM24ybThua3IzazEwMXRjaDIgZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    },
+    {
+      "id": "5bp6k5fu79h69vugqsuks67n6m",
+      "title": "Eleanor / Drake - Coffee Chat",
+      "start": "2026-04-01T16:15:00-04:00",
+      "end": "2026-04-01T16:45:00-04:00",
+      "attendees": [
+        "eleanor@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=NWJwNms1ZnU3OWg2OXZ1Z3FzdWtzNjduNm0gZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    },
+    {
+      "id": "6eb8eomdq2c5bn6qtcjfn0f7lm_20260401T220000Z",
+      "title": "Mandatory Fun!",
+      "start": "2026-04-01T18:00:00-04:00",
+      "end": "2026-04-01T19:00:00-04:00",
+      "attendees": [
+        "luke.jungermann@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=NmViOGVvbWRxMmM1Ym42cXRjamZuMGY3bG1fMjAyNjA0MDFUMjIwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted",
+      "notes": "Team building -- no work talk!"
+    }
+  ],
+  "triage": {
+    "open_items": [
+      {
+        "id": "slack-offers-product-golive",
+        "type": "slack_mention",
+        "title": "Jeff Dinter -- 11 AM go-live email confirmation needed",
+        "summary": "Ryan McCue asks if go-live is on target. Jeff asks Drake: do we need your confirmation before sending the mass email, or can we flip it whenever?",
+        "link": "https://cleverrealestate.slack.com/archives/C097MM612UD",
+        "first_seen_at": "2026-04-01T09:55:00-04:00",
+        "last_seen_at": "2026-04-01T09:55:00-04:00",
+        "cycle_count": 1,
+        "escalation_level": "critical",
+        "priority": "high",
+        "notes": "TIME-SENSITIVE: 11 AM target. Reply to Jeff in #offers_product ASAP."
+      },
+      {
+        "id": "email-houzeo-19d2ff300b261f5c",
+        "type": "email_needs_response",
+        "title": "Jai Chavan (Houzeo) -- Re: Houzeo & Clever Performance Report",
+        "summary": "Jai asks 4 questions: (1) deal stage order, (2) Lost/Not Connected stages, (3) March lead quality, (4) remove pre-2025 fake data. Has attached .xlsx.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d2ff300b261f5c",
+        "first_seen_at": "2026-03-27T14:41:00-04:00",
+        "last_seen_at": "2026-04-01T09:55:00-04:00",
+        "cycle_count": 8,
+        "escalation_level": "critical",
+        "priority": "high",
+        "notes": "Carried over from previous days. Needs detailed data reply."
+      },
+      {
+        "id": "slack-cx-announcements",
+        "type": "slack_mention",
+        "title": "Jeff Dinter -- Cash offer program expansion announcement (CX)",
+        "summary": "Jeff posted announcement about Zoocasa + QuickBuy alongside Homeward in agent click-to-claim flow going live today. Tagged Drake and Ben.",
+        "link": "https://cleverrealestate.slack.com/archives/",
+        "first_seen_at": "2026-04-01T09:55:00-04:00",
+        "last_seen_at": "2026-04-01T09:55:00-04:00",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "medium",
+        "notes": "Review and respond if anything is missing for CX crew."
+      }
+    ],
+    "resolved_items": [],
+    "cycle_count": 1
+  },
+  "completions": {
+    "tasks": []
+  },
+  "schedule": {
+    "generated_at": "2026-04-01T10:00:00.000000-04:00",
+    "working_hours": {
+      "start": "09:00",
+      "end": "17:30"
+    },
+    "end_time": "17:30",
+    "timeline": [
+      {
+        "id": "block-deel",
+        "type": "time_block",
+        "label": "Review and Approve Hours in Deel",
+        "start": "2026-04-01T07:00:00-04:00",
+        "end": "2026-04-01T07:30:00-04:00",
+        "source": "calendar",
+        "source_id": "7khep6irb0f91sruvfdgr0uuf3_20260401T110000Z",
+        "category": "Admin",
+        "completed": false
+      },
+      {
+        "id": "task-investor-email",
+        "type": "task",
+        "label": "Create new investor onboarding email for Amp portal (1h)",
+        "start": "2026-04-01T07:30:00-04:00",
+        "end": "2026-04-01T08:30:00-04:00",
+        "source": "notion",
+        "source_id": "32dfcdf7-9b27-8118-a579-e4f0866e5ee1",
+        "priority": "Medium",
+        "category": "Deep Work",
+        "estimated_minutes": 60,
+        "completed": false,
+        "url": "https://www.notion.so/32dfcdf79b278118a579e4f0866e5ee1"
+      },
+      {
+        "id": "ooo-bod",
+        "type": "ooo",
+        "label": "OOO - BOD",
+        "start": "2026-04-01T08:45:00-04:00",
+        "end": "2026-04-01T09:00:00-04:00",
+        "source": "calendar",
+        "source_id": "05esfdmv4p1n2p01ahg9er1gq8_20260401T124500Z",
+        "completed": true
+      },
+      {
+        "id": "mtg-bullpen",
+        "type": "meeting",
+        "label": "The Bullpen! (BOD Standup)",
+        "start": "2026-04-01T09:00:00-04:00",
+        "end": "2026-04-01T09:15:00-04:00",
+        "source": "calendar",
+        "source_id": "ikebhiij4drkn2va7fd08ngocf_20260401T130000Z",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "triage-0915",
+        "type": "time_block",
+        "label": "Email & Slack Triage",
+        "start": "2026-04-01T09:15:00-04:00",
+        "end": "2026-04-01T09:30:00-04:00",
+        "source": "calendar",
+        "source_id": "ctpqm0n6l6ei4k5tgkjp7jp0p4_20260401T131500Z",
+        "category": "Triage",
+        "completed": false,
+        "notes": "URGENT: Reply to Jeff Dinter in #offers_product re: go-live email confirmation (11 AM target)"
+      },
+      {
+        "id": "task-pay-for-photos",
+        "type": "task",
+        "label": "\u26a0\ufe0f [DUE TODAY] Sunset pay-for-photos: prepare one-click removal (45m)",
+        "start": "2026-04-01T09:30:00-04:00",
+        "end": "2026-04-01T10:15:00-04:00",
+        "source": "notion",
+        "source_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "priority": "High",
+        "category": "Deep Work",
+        "estimated_minutes": 45,
+        "completed": false,
+        "url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
+        "notes": "Due April 1 -- per Ben, the agent email about photos sunset should NOT be sent. Cash offer partners email goes out today instead."
+      },
+      {
+        "id": "task-mike-p-question",
+        "type": "task",
+        "label": "Answer Mike Provinzino: Close Paid connection sync question (30m)",
+        "start": "2026-04-01T10:15:00-04:00",
+        "end": "2026-04-01T10:45:00-04:00",
+        "source": "notion",
+        "source_id": "333fcdf7-9b27-81fa-abf8-c8363123b8d1",
+        "priority": "High",
+        "estimated_minutes": 30,
+        "completed": false,
+        "url": "https://www.notion.so/333fcdf79b2781faabf8c8363123b8d1"
+      },
+      {
+        "id": "triage-1100",
+        "type": "time_block",
+        "label": "Email & Slack Triage",
+        "start": "2026-04-01T11:00:00-04:00",
+        "end": "2026-04-01T11:15:00-04:00",
+        "source": "calendar",
+        "source_id": "5ud9gcba8j5obudt3uk32aua4c_20260401T150000Z",
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-qa-investor",
+        "type": "task",
+        "label": "\u26a0\ufe0f [OVERDUE] QA/fix investor count stamping workflow (30m)",
+        "start": "2026-04-01T11:15:00-04:00",
+        "end": "2026-04-01T11:45:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "priority": "Medium",
+        "category": "Deep Work",
+        "estimated_minutes": 30,
+        "completed": false,
+        "url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0"
+      },
+      {
+        "id": "task-houzeo-reply",
+        "type": "task",
+        "label": "Reply to Jai Chavan (Houzeo) -- data export questions (30m)",
+        "start": "2026-04-01T11:45:00-04:00",
+        "end": "2026-04-01T12:15:00-04:00",
+        "source": "triage",
+        "priority": "High",
+        "category": "Triage",
+        "estimated_minutes": 30,
+        "completed": false,
+        "notes": "Answer 4 questions: deal stage order, Lost/Not Connected stages, March lead quality, pre-2025 data cleanup."
+      },
+      {
+        "id": "prep-sprint-planning",
+        "type": "prep",
+        "label": "Prep: Offers Sprint Planning",
+        "start": "2026-04-01T12:15:00-04:00",
+        "end": "2026-04-01T12:30:00-04:00",
+        "source": "scheduler",
+        "category": "Meetings",
+        "estimated_minutes": 15,
+        "completed": false
+      },
+      {
+        "id": "mtg-sprint-planning",
+        "type": "meeting",
+        "label": "Offers - Sprint Planning",
+        "start": "2026-04-01T12:30:00-04:00",
+        "end": "2026-04-01T13:30:00-04:00",
+        "source": "calendar",
+        "source_id": "2h8qpfrlfmd5i97jvbqb2gll99_20260401T163000Z",
+        "category": "Meetings",
+        "completed": false,
+        "notes": "With Ben, Jeff, Luke. QuickBuy launch day! Cash offer partner expansion go-live."
+      },
+      {
+        "id": "ooo-lunch",
+        "type": "ooo",
+        "label": "OOO - Lunch",
+        "start": "2026-04-01T12:30:00-04:00",
+        "end": "2026-04-01T13:00:00-04:00",
+        "source": "calendar",
+        "source_id": "45mfckh8tm6fa4funs5qfnrm9f_20260401T163000Z",
+        "completed": false
+      },
+      {
+        "id": "mtg-investor-network",
+        "type": "meeting",
+        "label": "Offers: Investor Network - Weekly",
+        "start": "2026-04-01T13:00:00-04:00",
+        "end": "2026-04-01T14:00:00-04:00",
+        "source": "calendar",
+        "source_id": "2loq3l6udd1eteluuoubne8gma_20260401T170000Z",
+        "category": "Meetings",
+        "completed": false,
+        "notes": "With Ben and Luke. Overlaps end of Sprint Planning."
+      },
+      {
+        "id": "block-pom3",
+        "type": "time_block",
+        "label": "POM3: BOOK MEETINGS HERE",
+        "start": "2026-04-01T14:00:00-04:00",
+        "end": "2026-04-01T17:00:00-04:00",
+        "source": "calendar",
+        "source_id": "erfaesoao08d1hb20hl8ldj9jv_20260401T180000Z",
+        "category": "Meetings",
+        "completed": false,
+        "nested_tasks": ["task-cx-review", "prep-collins"]
+      },
+      {
+        "id": "task-cx-review",
+        "type": "task",
+        "label": "Review Jeff's #cx-announcements re: cash offer expansion (15m)",
+        "start": "2026-04-01T14:00:00-04:00",
+        "end": "2026-04-01T14:15:00-04:00",
+        "source": "triage",
+        "priority": "Medium",
+        "estimated_minutes": 15,
+        "completed": false,
+        "notes": "Review and respond to Jeff's announcement in #cx-announcements about Zoocasa + QuickBuy."
+      },
+      {
+        "id": "prep-collins",
+        "type": "prep",
+        "label": "Prep: Drake/Collins 1:1",
+        "start": "2026-04-01T14:30:00-04:00",
+        "end": "2026-04-01T14:45:00-04:00",
+        "source": "scheduler",
+        "category": "Direct Reports",
+        "estimated_minutes": 15,
+        "completed": false
+      },
+      {
+        "id": "mtg-collins",
+        "type": "meeting",
+        "label": "Drake/Collins 1:1",
+        "start": "2026-04-01T14:45:00-04:00",
+        "end": "2026-04-01T15:45:00-04:00",
+        "source": "calendar",
+        "source_id": "37ncbg5lh3n2m8nkr3k101tch2",
+        "category": "Direct Reports",
+        "completed": false
+      },
+      {
+        "id": "prep-eleanor",
+        "type": "prep",
+        "label": "Prep: Eleanor / Drake Coffee Chat",
+        "start": "2026-04-01T15:45:00-04:00",
+        "end": "2026-04-01T16:00:00-04:00",
+        "source": "scheduler",
+        "estimated_minutes": 15,
+        "completed": false
+      },
+      {
+        "id": "triage-1600",
+        "type": "time_block",
+        "label": "Email & Slack Triage",
+        "start": "2026-04-01T16:00:00-04:00",
+        "end": "2026-04-01T16:15:00-04:00",
+        "source": "calendar",
+        "source_id": "23mrn023htr5m8r3mnf4afoetj_20260401T200000Z",
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "mtg-eleanor",
+        "type": "meeting",
+        "label": "Eleanor / Drake - Coffee Chat",
+        "start": "2026-04-01T16:15:00-04:00",
+        "end": "2026-04-01T16:45:00-04:00",
+        "source": "calendar",
+        "source_id": "5bp6k5fu79h69vugqsuks67n6m",
+        "completed": false
+      },
+      {
+        "id": "block-eod",
+        "type": "focus_time",
+        "label": "EOD Email and Slack Triage",
+        "start": "2026-04-01T17:00:00-04:00",
+        "end": "2026-04-01T17:30:00-04:00",
+        "source": "calendar",
+        "source_id": "d6deda3315f449a7bdbcfd5739b8b7c3_20260401T210000Z",
+        "category": "Triage",
+        "completed": false,
+        "notes": "Update Jira/Notion with progress. Set priorities for tomorrow."
+      },
+      {
+        "id": "mtg-mandatory-fun",
+        "type": "meeting",
+        "label": "Mandatory Fun!",
+        "start": "2026-04-01T18:00:00-04:00",
+        "end": "2026-04-01T19:00:00-04:00",
+        "source": "calendar",
+        "source_id": "6eb8eomdq2c5bn6qtcjfn0f7lm_20260401T220000Z",
+        "category": "Meetings",
+        "completed": false,
+        "notes": "Team building -- no work talk!"
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "32dfcdf7-9b27-8118-a579-e4f0866e5ee1",
+        "title": "Create new investor onboarding email for Amp portal",
+        "url": "https://www.notion.so/32dfcdf79b278118a579e4f0866e5ee1",
+        "priority": "Medium",
+        "estimated_minutes": 60,
+        "scheduled_start": "07:30",
+        "scheduled_end": "08:30",
+        "status": "pending"
+      },
+      {
+        "task_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "title": "Sunset pay-for-photos: prepare one-click removal for April 1",
+        "url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
+        "priority": "High",
+        "estimated_minutes": 45,
+        "due_date": "2026-04-01",
+        "scheduled_start": "09:30",
+        "scheduled_end": "10:15",
+        "status": "pending"
+      },
+      {
+        "task_id": "333fcdf7-9b27-81fa-abf8-c8363123b8d1",
+        "title": "Answer Mike Provinzino: Close Paid connection sync question",
+        "url": "https://www.notion.so/333fcdf79b2781faabf8c8363123b8d1",
+        "priority": "High",
+        "estimated_minutes": 30,
+        "scheduled_start": "10:15",
+        "scheduled_end": "10:45",
+        "status": "pending"
+      },
+      {
+        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0",
+        "priority": "Medium",
+        "estimated_minutes": 30,
+        "due_date": "2026-03-23",
+        "scheduled_start": "11:15",
+        "scheduled_end": "11:45",
+        "status": "pending"
+      }
+    ],
+    "tasks_couldnt_fit": [
+      {
+        "task_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "title": "Review HubSpot workflows feeding Collins' queue",
+        "url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e",
+        "priority": "Medium",
+        "reason": "2-hour task, no contiguous block available after meetings. Defer to tomorrow."
+      },
+      {
+        "task_id": "32dfcdf7-9b27-8134-ad00-e77ae27a5de6",
+        "title": "Analyze whether already-listed properties should be excluded from agent matching",
+        "url": "https://www.notion.so/32dfcdf79b278134ad00e77ae27a5de6",
+        "priority": "High",
+        "reason": "2-hour task overdue from 3/27. Heavy meeting day today. Defer to first morning slot tomorrow."
+      },
+      {
+        "task_id": "31ffcdf7-9b27-81a4-aa6d-c65bcc74515c",
+        "title": "Define Q2 metrics for tracking",
+        "url": "https://www.notion.so/31ffcdf79b2781a4aa6dc65bcc74515c",
+        "priority": "Medium",
+        "reason": "1-hour task. No remaining morning deep work slots. Defer to tomorrow."
+      }
+    ],
+    "stats": {
+      "total_tasks_scheduled": 4,
+      "total_estimated_hours": 2.75,
+      "total_meetings": 6,
+      "free_time_minutes": 30
+    }
+  }
+}

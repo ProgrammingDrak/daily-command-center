@@ -1,0 +1,548 @@
+{
+  "schema_version": "2.0",
+  "date": "2026-03-24",
+  "created_at": "2026-03-24T09:00:00-04:00",
+  "last_updated_at": "2026-03-24T19:58:00-04:00",
+  "last_updated_by": "migration-v1.0",
+
+  "watermarks": {
+    "gmail": {
+      "last_sweep_at": "2026-03-24T19:58:00-04:00",
+      "last_message_id": "19d20b37fb66c473"
+    },
+    "slack_dms": {
+      "channels": {
+        "C0AN6UUKW8K": { "last_ts": "1774309939.201619" },
+        "D04Q9CT9DT4": { "last_ts": "1774382104.863649" },
+        "D09694UPEKC": { "last_ts": "1774366910.708929" }
+      },
+      "last_sweep_at": "2026-03-24T19:58:00-04:00"
+    },
+    "slack_mentions": {
+      "last_search_ts": "1774379836",
+      "last_sweep_at": "2026-03-24T19:58:00-04:00"
+    },
+    "calendar": {
+      "last_sweep_at": "2026-03-24T09:00:00-04:00"
+    },
+    "notion_board": {
+      "last_sweep_at": "2026-03-24T09:00:00-04:00"
+    }
+  },
+
+  "schedule": {
+    "generated_at": "2026-03-24T09:00:00-04:00",
+    "working_hours": { "start": "09:00", "end": "17:30" },
+    "timeline": [
+      {
+        "id": "ooo-bod",
+        "type": "ooo",
+        "label": "OOO - BOD",
+        "start": "2026-03-24T08:45:00-04:00",
+        "end": "2026-03-24T09:00:00-04:00"
+      },
+      {
+        "id": "prep-bullpen",
+        "type": "prep",
+        "label": "Prep: The Bullpen! (BOD Standup)",
+        "start": "2026-03-24T08:45:00-04:00",
+        "end": "2026-03-24T09:00:00-04:00",
+        "priority": "High",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "meeting-bullpen",
+        "type": "meeting",
+        "label": "The Bullpen! (BOD Standup)",
+        "start": "2026-03-24T09:00:00-04:00",
+        "end": "2026-03-24T09:15:00-04:00",
+        "source": "calendar",
+        "source_id": "ikebhiij4drkn2va7fd08ngocf_20260324T130000Z",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "triage-0915",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-24T09:15:00-04:00",
+        "end": "2026-03-24T09:30:00-04:00",
+        "category": "Triage",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "task-investor-stamp",
+        "type": "task",
+        "label": "QA/fix investor count stamping workflow",
+        "start": "2026-03-24T09:30:00-04:00",
+        "end": "2026-03-24T10:00:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "priority": "Medium",
+        "estimated_minutes": 30,
+        "completed": false
+      },
+      {
+        "id": "task-hubspot-email",
+        "type": "task",
+        "label": "Draft and publish new HubSpot email replacing investor portal template",
+        "start": "2026-03-24T10:00:00-04:00",
+        "end": "2026-03-24T10:30:00-04:00",
+        "source": "notion",
+        "source_id": "32dfcdf7-9b27-814b-b2a5-e7b2303fc110",
+        "priority": "High",
+        "estimated_minutes": 30,
+        "completed": false
+      },
+      {
+        "id": "buffer-1030",
+        "type": "free_time",
+        "label": "Buffer / Overflow",
+        "start": "2026-03-24T10:30:00-04:00",
+        "end": "2026-03-24T11:00:00-04:00",
+        "estimated_minutes": 30
+      },
+      {
+        "id": "triage-1100",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-24T11:00:00-04:00",
+        "end": "2026-03-24T11:15:00-04:00",
+        "category": "Triage",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "task-offers-roles",
+        "type": "task",
+        "label": "Document Clever Offers team role responsibilities",
+        "start": "2026-03-24T11:15:00-04:00",
+        "end": "2026-03-24T13:00:00-04:00",
+        "source": "notion",
+        "source_id": "328fcdf7-9b27-8198-a43c-fc44c852eb63",
+        "priority": "Medium",
+        "category": "Deep Work",
+        "estimated_minutes": 105,
+        "completed": false
+      },
+      {
+        "id": "triage-1300",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-24T13:00:00-04:00",
+        "end": "2026-03-24T13:15:00-04:00",
+        "category": "Triage",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "buffer-1315",
+        "type": "free_time",
+        "label": "Buffer / Overflow",
+        "start": "2026-03-24T13:15:00-04:00",
+        "end": "2026-03-24T14:00:00-04:00",
+        "estimated_minutes": 45
+      },
+      {
+        "id": "pom3-block",
+        "type": "time_block",
+        "label": "POM3: BOOK MEETINGS HERE",
+        "start": "2026-03-24T14:00:00-04:00",
+        "end": "2026-03-24T17:00:00-04:00",
+        "category": "Meetings",
+        "estimated_minutes": 180
+      },
+      {
+        "id": "task-hubspot-workflows-p1",
+        "type": "task",
+        "label": "Review HubSpot workflows feeding Collins' queue (Part 1)",
+        "start": "2026-03-24T14:00:00-04:00",
+        "end": "2026-03-24T14:45:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "priority": "Medium",
+        "estimated_minutes": 45,
+        "completed": false
+      },
+      {
+        "id": "prep-offers-enrollment",
+        "type": "prep",
+        "label": "Prep: Clever Offers Enrollment Criteria Discussion",
+        "start": "2026-03-24T14:45:00-04:00",
+        "end": "2026-03-24T15:00:00-04:00",
+        "priority": "High",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "meeting-offers-enrollment",
+        "type": "meeting",
+        "label": "Clever Offers Enrollment Criteria Discussion",
+        "start": "2026-03-24T15:00:00-04:00",
+        "end": "2026-03-24T15:30:00-04:00",
+        "source": "calendar",
+        "source_id": "p0m9f6nrvnvlfnd168od64sgug",
+        "estimated_minutes": 30
+      },
+      {
+        "id": "task-hubspot-workflows-p2",
+        "type": "task",
+        "label": "Review HubSpot workflows feeding Collins' queue (Part 2)",
+        "start": "2026-03-24T15:30:00-04:00",
+        "end": "2026-03-24T16:00:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "priority": "Medium",
+        "estimated_minutes": 30,
+        "completed": false
+      },
+      {
+        "id": "triage-1600",
+        "type": "time_block",
+        "label": "Email and Slack Triage",
+        "start": "2026-03-24T16:00:00-04:00",
+        "end": "2026-03-24T16:15:00-04:00",
+        "category": "Triage",
+        "estimated_minutes": 15
+      },
+      {
+        "id": "task-hubspot-workflows-p3",
+        "type": "task",
+        "label": "Review HubSpot workflows feeding Collins' queue (Part 3)",
+        "start": "2026-03-24T16:15:00-04:00",
+        "end": "2026-03-24T17:00:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "priority": "Medium",
+        "estimated_minutes": 45,
+        "completed": false
+      },
+      {
+        "id": "eod-triage",
+        "type": "focus_time",
+        "label": "EOD Email and Slack Triage",
+        "start": "2026-03-24T17:00:00-04:00",
+        "end": "2026-03-24T17:30:00-04:00",
+        "estimated_minutes": 30
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "url": "https://www.notion.so/32cfcdf79b2781540001d46665998ed0",
+        "priority": "Medium",
+        "estimated_minutes": 30,
+        "due_date": "2026-03-23",
+        "scheduled_start": "2026-03-24T09:30:00-04:00",
+        "scheduled_end": "2026-03-24T10:00:00-04:00",
+        "status": "today",
+        "completed": false
+      },
+      {
+        "task_id": "32dfcdf7-9b27-814b-b2a5-e7b2303fc110",
+        "title": "Draft and publish new HubSpot email replacing investor portal template",
+        "url": "https://www.notion.so/32dfcdf79b27814bb2a5e7b2303fc110",
+        "priority": "High",
+        "estimated_minutes": 30,
+        "due_date": "2026-03-24",
+        "scheduled_start": "2026-03-24T10:00:00-04:00",
+        "scheduled_end": "2026-03-24T10:30:00-04:00",
+        "status": "today",
+        "completed": false
+      },
+      {
+        "task_id": "328fcdf7-9b27-8198-a43c-fc44c852eb63",
+        "title": "Document Clever Offers team role responsibilities",
+        "url": "https://www.notion.so/328fcdf79b2781988043cfc44c852eb63",
+        "priority": "Medium",
+        "estimated_minutes": 105,
+        "due_date": null,
+        "scheduled_start": "2026-03-24T11:15:00-04:00",
+        "scheduled_end": "2026-03-24T13:00:00-04:00",
+        "status": "today",
+        "completed": false
+      },
+      {
+        "task_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "title": "Review HubSpot workflows feeding Collins' queue",
+        "url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e",
+        "priority": "Medium",
+        "estimated_minutes": 120,
+        "due_date": "2026-03-27",
+        "scheduled_start": "2026-03-24T14:00:00-04:00",
+        "scheduled_end": "2026-03-24T17:00:00-04:00",
+        "status": "today",
+        "completed": false
+      }
+    ],
+    "tasks_couldnt_fit": [
+      {
+        "task_id": "32dfcdf7-9b27-8134-ad00-e77ae27a5de6",
+        "title": "Analyze whether already-listed properties should be excluded from agent matching",
+        "priority": "High",
+        "reason": "Scheduled for Wednesday 3/26 - due 3/27"
+      },
+      {
+        "task_id": "328fcdf7-9b27-819e-92f5-d1cdb6143c4d",
+        "title": "Review portal investor update data and define HubSpot properties for research",
+        "priority": "Low",
+        "reason": "Backlog - no due date, low priority"
+      }
+    ],
+    "stats": {
+      "total_tasks_scheduled": 4,
+      "total_estimated_hours": 4.75,
+      "total_meetings": 2,
+      "free_time_minutes": 75
+    }
+  },
+
+  "triage": {
+    "cycle_count": 3,
+    "open_items": [
+      {
+        "id": "slack-dm-kate-mitchell-C0AN6UUKW8K-1774309939",
+        "type": "unanswered_dm",
+        "title": "Kate Mitchell -- HC/Offers alignment doc",
+        "summary": "Shared Google Doc for HC and Offers alignment, asking Drake and Mike to edit",
+        "link": "https://cleverrealestate.slack.com/archives/C0AN6UUKW8K/p1774309939201619",
+        "first_seen_at": "2026-03-24T13:00:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 3,
+        "escalation_level": "medium",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Group DM with Justin Chavis and Mike Provinzino. ~7 hours open, 3rd cycle."
+      },
+      {
+        "id": "email-noah-nagel-19d1c59c6ef42279",
+        "type": "email_needs_response",
+        "title": "Noah Nagel (Three Doors) -- Add Jason Kukorola to dashboard",
+        "summary": "Noah replied thanking Drake and requesting an additional user (jkukorola@threedoors.com) be added to the lead dashboard",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d1c59c6ef42279",
+        "first_seen_at": "2026-03-24T13:00:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 3,
+        "escalation_level": "medium",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Task card already created on Notion board. New request: add jkukorola@threedoors.com as user."
+      },
+      {
+        "id": "slack-mention-C0ANGA1GLLE-1774363706",
+        "type": "slack_mention",
+        "title": "Collins Okoye -- Patrick Stuckwish QB opt-out",
+        "summary": "Collins looped Drake and Mitesh in on Patrick Stuckwish pushing back on presenting QuickBuy. FYI with possible follow-up needed.",
+        "link": "https://cleverrealestate.slack.com/archives/C0ANGA1GLLE/p1774363706744709",
+        "first_seen_at": "2026-03-24T15:00:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 2,
+        "escalation_level": "attention",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Group DM with Mitesh Patel. ~5 hours open."
+      },
+      {
+        "id": "slack-dm-ben-mizes-D04Q9CT9DT4-1774382104",
+        "type": "unanswered_dm",
+        "title": "Ben Mizes -- Offers AMP GitHub link + first projects",
+        "summary": "Ben shared GitHub repo link and suggested first projects: webhook receiver for deal stage changes, and adding conversion source to DealQue view",
+        "link": "https://cleverrealestate.slack.com/archives/D04Q9CT9DT4/p1774382104863649",
+        "first_seen_at": "2026-03-24T19:58:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "Ben sent project suggestions and GitHub link at 3:55 PM. Active conversation about Drake starting to code in AMP/Portal."
+      },
+      {
+        "id": "slack-dm-mike-provinzino-D09694UPEKC-1774366910",
+        "type": "unanswered_dm",
+        "title": "Mike Provinzino -- Investor Onboarding email template request",
+        "summary": "Mike asked Drake to help create a new email template for investor onboarding completion",
+        "link": "https://cleverrealestate.slack.com/archives/D09694UPEKC/p1774366910708929",
+        "first_seen_at": "2026-03-24T19:58:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Drake responded to Mike's meeting invite request but did not address the email template ask."
+      },
+      {
+        "id": "slack-mention-C0A3HDNFH1R-1774373527",
+        "type": "slack_mention",
+        "title": "Tim Gaasch -- OpenDoor going around Clever to agents",
+        "summary": "Tim flagged that OpenDoor is going directly to Clever agents for listings, bypassing the partnership.",
+        "link": "https://cleverrealestate.slack.com/archives/C0A3HDNFH1R/p1774373527741579",
+        "first_seen_at": "2026-03-24T19:58:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "In #pro-partner-success. Drake raised the issue in #network-mgmt-team but hasn't replied to Tim's original post."
+      },
+      {
+        "id": "slack-mention-C03RNES1AQM-1774379836",
+        "type": "slack_mention",
+        "title": "Collins Okoye -- Michael revised offer / Grayson follow-up",
+        "summary": "Collins recommends having Grayson chase down the revised offer for Michael directly rather than Collins emailing QuickBuy.",
+        "link": "https://cleverrealestate.slack.com/archives/C03RNES1AQM/p1774379836047759",
+        "first_seen_at": "2026-03-24T19:58:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "In #clever-offers thread. Collins is waiting for Drake's input on approach."
+      },
+      {
+        "id": "slack-mention-C03RNES1AQM-1774378980",
+        "type": "slack_mention",
+        "title": "Kate Mitchell -- Five9 call recording not available (60-day limit)",
+        "summary": "Kate informed Drake that the Sept 2025 call recording cannot be pulled because Five9 deletes recordings after 60 days",
+        "link": "https://cleverrealestate.slack.com/archives/C03RNES1AQM/p1774378980048249",
+        "first_seen_at": "2026-03-24T19:58:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "FYI -- may need acknowledgment. In thread about referral fee deal in #clever-offers."
+      },
+      {
+        "id": "slack-mention-C06R9AAJAG3-1774379719",
+        "type": "slack_mention",
+        "title": "Tim Gaasch -- OpenDoor clarification (not Offers leads)",
+        "summary": "Tim clarified that the OpenDoor issue is about corporate-owned listings, not Offers leads.",
+        "link": "https://cleverrealestate.slack.com/archives/C06R9AAJAG3/p1774379719547749",
+        "first_seen_at": "2026-03-24T19:58:00Z",
+        "last_seen_at": "2026-03-24T19:58:00Z",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "In #network-mgmt-team thread. Tim is responding to Drake's earlier question about OpenDoor obligations."
+      }
+    ],
+    "resolved_items": [
+      {
+        "id": "email-april-whatley-19d203ad8d87fb30",
+        "type": "email_needs_response",
+        "resolved_at": "2026-03-24T19:58:00Z",
+        "resolution": "auto_detected",
+        "notes": "Kristyn Grewell resolved the issue by adjusting April's profile. April acknowledged."
+      },
+      {
+        "id": "slack-mention-C03RNES1AQM-1774292187",
+        "type": "slack_mention",
+        "resolved_at": "2026-03-24T19:58:00Z",
+        "resolution": "auto_detected",
+        "notes": "Luke confirmed the new template doesn't include denial reasons. Ryan and Luke are working on a fix."
+      }
+    ],
+    "actions_taken": []
+  },
+
+  "meetings": [
+    {
+      "event_id": "ikebhiij4drkn2va7fd08ngocf_20260324T130000Z",
+      "title": "The Bullpen! (BOD Standup)",
+      "start": "2026-03-24T09:00:00-04:00",
+      "end": "2026-03-24T09:15:00-04:00",
+      "type": "recurring",
+      "attendees": ["Michael Provinzino", "Collins Okoye", "Jay Watson", "Arnold Mejica"],
+      "prep_task_id": "32dfcdf7-9b27-81a0-9501-e0a9fcef815c",
+      "prep_task_url": "https://www.notion.so/32dfcdf79b2781a09501e0a9fcef815c",
+      "briefing_path": null,
+      "calendar_link": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjAzMjRUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+      "transcript_found": false,
+      "action_items_extracted": false
+    },
+    {
+      "event_id": "p0m9f6nrvnvlfnd168od64sgug",
+      "title": "Clever Offers Enrollment Criteria Discussion",
+      "start": "2026-03-24T15:00:00-04:00",
+      "end": "2026-03-24T15:30:00-04:00",
+      "type": "generic",
+      "attendees": ["Ben Mizes", "Michael Provinzino"],
+      "prep_task_id": "32dfcdf7-9b27-815d-8c5d-d5fb50269958",
+      "prep_task_url": "https://www.notion.so/32dfcdf79b27815d8c5dd5fb50269958",
+      "briefing_path": "meeting-prep/meeting-prep-clever-offers-enrollment-2026-03-24.html",
+      "calendar_link": "https://www.google.com/calendar/event?eid=cDBtOWY2bnJ2bnZsZm5kMTY4b2Q2NHNndWcgZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
+      "transcript_found": false,
+      "action_items_extracted": false
+    }
+  ],
+
+  "assessment": null,
+
+  "completions": {
+    "tasks": []
+  },
+
+  "mutations": [
+    {
+      "timestamp": "2026-03-24T09:00:00-04:00",
+      "skill": "day-init",
+      "action": "day_initialized",
+      "summary": "Day folder created"
+    },
+    {
+      "timestamp": "2026-03-24T09:00:00-04:00",
+      "skill": "review-and-triage",
+      "action": "triage_ran",
+      "summary": "Morning communications sweep completed - 2 items surfaced, no new tasks created"
+    },
+    {
+      "timestamp": "2026-03-24T09:00:00-04:00",
+      "skill": "morning-scheduling",
+      "action": "plan_generated",
+      "summary": "Day plan generated: 4 tasks scheduled, 2 meetings, 1 meeting prep briefing created"
+    },
+    {
+      "timestamp": "2026-03-24T17:37:00-04:00",
+      "skill": "migration-v1.0",
+      "action": "state_consolidated",
+      "summary": "Migrated from 7 separate JSON files to consolidated day-state.json (v1.0 schema)"
+    }
+  ],
+
+  "notifications": [],
+
+  "sweep_stats": {
+    "gmail": { "hits": 1, "misses": 0, "by_hour": {} },
+    "slack_dms": { "hits": 1, "misses": 0, "by_hour": {} },
+    "slack_mentions": { "hits": 1, "misses": 0, "by_hour": {} },
+    "calendar": { "hits": 0, "misses": 0, "by_hour": {} },
+    "notion_board": { "hits": 0, "misses": 0, "by_hour": {} }
+  },
+
+  "meta": {
+    "skill_runs": [
+      {
+        "skill": "review-and-triage",
+        "started_at": "2026-03-24T09:00:00-04:00",
+        "completed_at": "2026-03-24T09:00:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "morning-scheduling",
+        "started_at": "2026-03-24T09:00:00-04:00",
+        "completed_at": "2026-03-24T09:00:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "hourly-inbox-triage",
+        "started_at": "2026-03-24T15:00:00-04:00",
+        "completed_at": "2026-03-24T15:00:00-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "hourly-inbox-triage",
+        "started_at": "2026-03-24T19:58:00-04:00",
+        "completed_at": "2026-03-24T19:58:00-04:00",
+        "status": "OK"
+      }
+    ]
+  }
+}
