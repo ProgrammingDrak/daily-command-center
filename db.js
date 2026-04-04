@@ -24,6 +24,14 @@ function initDB() {
   db.pragma("foreign_keys = ON");
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      username      TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS blocks (
       id          TEXT PRIMARY KEY,
       type        TEXT NOT NULL,
@@ -60,6 +68,10 @@ function initDB() {
       updated_at  TEXT NOT NULL
     );
   `);
+
+  // Add user_id columns to existing tables (idempotent — fails silently if already present)
+  try { db.exec("ALTER TABLE blocks ADD COLUMN user_id INTEGER REFERENCES users(id)"); } catch {}
+  try { db.exec("ALTER TABLE pa_state ADD COLUMN user_id INTEGER REFERENCES users(id)"); } catch {}
 
   return db;
 }
@@ -180,7 +192,7 @@ function validateBlock(type, properties) {
 
 // ── Block CRUD ──
 
-function createBlock(db, { id, type, parent_id, date, properties, sort_order }) {
+function createBlock(db, { id, type, parent_id, date, properties, sort_order, user_id }) {
   const blockId = id || crypto.randomUUID();
   const now = new Date().toISOString();
   const props = typeof properties === "string" ? properties : JSON.stringify(properties || {});
@@ -189,10 +201,10 @@ function createBlock(db, { id, type, parent_id, date, properties, sort_order }) 
   validateBlock(type, parsedProps);
 
   const stmt = db.prepare(`
-    INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(blockId, type, parent_id || null, date || null, props, sort_order || 0, now, now);
+  stmt.run(blockId, type, parent_id || null, date || null, props, sort_order || 0, user_id || null, now, now);
 
   // Log operation
   db.prepare(`
@@ -270,28 +282,30 @@ function parseBlock(row) {
   };
 }
 
-function getBlocksByDate(db, date) {
+function getBlocksByDate(db, date, userId) {
   const rows = db.prepare(`
-    SELECT * FROM blocks WHERE date = ? AND deleted_at IS NULL
+    SELECT * FROM blocks WHERE date = ? AND user_id = ? AND deleted_at IS NULL
     ORDER BY sort_order ASC, created_at ASC
-  `).all(date);
+  `).all(date, userId);
   return rows.map(parseBlock);
 }
 
-function getBlocksByTypes(db, types) {
+function getBlocksByTypes(db, types, userId) {
   const placeholders = types.map(() => "?").join(",");
   const rows = db.prepare(`
-    SELECT * FROM blocks WHERE type IN (${placeholders}) AND deleted_at IS NULL
+    SELECT * FROM blocks WHERE type IN (${placeholders}) AND user_id = ? AND deleted_at IS NULL
     ORDER BY sort_order ASC, created_at ASC
-  `).all(...types);
+  `).all(...types, userId);
   return rows.map(parseBlock);
 }
 
-function getChildren(db, parentId) {
+function getChildren(db, parentId, userId) {
+  const userFilter = userId ? "AND user_id = ?" : "";
+  const args = userId ? [parentId, userId] : [parentId];
   const rows = db.prepare(`
-    SELECT * FROM blocks WHERE parent_id = ? AND deleted_at IS NULL
+    SELECT * FROM blocks WHERE parent_id = ? ${userFilter} AND deleted_at IS NULL
     ORDER BY sort_order ASC, created_at ASC
-  `).all(parentId);
+  `).all(...args);
   return rows.map(parseBlock);
 }
 
@@ -370,7 +384,7 @@ function reorderBlocks(db, items) {
 
 // ── Day Root (auto-created) ──
 
-function ensureDayRoot(db, date) {
+function ensureDayRoot(db, date, userId) {
   const deterministicId = `day-root-${date}`;
   const existing = db.prepare("SELECT id FROM blocks WHERE id = ?").get(deterministicId);
   if (existing) return deterministicId;
@@ -380,24 +394,27 @@ function ensureDayRoot(db, date) {
     type: "day_root",
     date,
     properties: { date },
-    sort_order: 0
+    sort_order: 0,
+    user_id: userId || null
   });
   return deterministicId;
 }
 
 // ── PA State ──
 
-function savePaState(db, date, stateJson) {
+function savePaState(db, date, stateJson, userId) {
   const now = new Date().toISOString();
   db.prepare(`
-    INSERT INTO pa_state (date, state_json, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(date) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at
-  `).run(date, typeof stateJson === "string" ? stateJson : JSON.stringify(stateJson), now);
+    INSERT INTO pa_state (date, state_json, user_id, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET state_json = excluded.state_json, user_id = excluded.user_id, updated_at = excluded.updated_at
+  `).run(date, typeof stateJson === "string" ? stateJson : JSON.stringify(stateJson), userId || null, now);
 }
 
-function getPaState(db, date) {
-  const row = db.prepare("SELECT * FROM pa_state WHERE date = ?").get(date);
+function getPaState(db, date, userId) {
+  const row = userId
+    ? db.prepare("SELECT * FROM pa_state WHERE date = ? AND user_id = ?").get(date, userId)
+    : db.prepare("SELECT * FROM pa_state WHERE date = ?").get(date);
   if (!row) return null;
   return { ...row, state_json: JSON.parse(row.state_json) };
 }
@@ -422,19 +439,18 @@ function getOperations(db, blockId, limit = 50) {
 
 // ── Range Queries (for Calendar View) ──
 
-function getBlocksByDateRange(db, startDate, endDate) {
+function getBlocksByDateRange(db, startDate, endDate, userId) {
   const rows = db.prepare(`
-    SELECT * FROM blocks WHERE date >= ? AND date <= ? AND deleted_at IS NULL
+    SELECT * FROM blocks WHERE date >= ? AND date <= ? AND user_id = ? AND deleted_at IS NULL
     ORDER BY date ASC, sort_order ASC, created_at ASC
-  `).all(startDate, endDate);
+  `).all(startDate, endDate, userId);
   return rows.map(parseBlock);
 }
 
-function getPaStateRange(db, startDate, endDate) {
-  const rows = db.prepare(`
-    SELECT * FROM pa_state WHERE date >= ? AND date <= ?
-    ORDER BY date ASC
-  `).all(startDate, endDate);
+function getPaStateRange(db, startDate, endDate, userId) {
+  const rows = userId
+    ? db.prepare(`SELECT * FROM pa_state WHERE date >= ? AND date <= ? AND user_id = ? ORDER BY date ASC`).all(startDate, endDate, userId)
+    : db.prepare(`SELECT * FROM pa_state WHERE date >= ? AND date <= ? ORDER BY date ASC`).all(startDate, endDate);
   return rows.map(row => ({
     ...row,
     state_json: JSON.parse(row.state_json)

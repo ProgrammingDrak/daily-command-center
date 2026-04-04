@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Daily Command Center — Sign In</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card {
+      background: #1a1d2e;
+      border: 1px solid #2d3148;
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 380px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .logo-icon {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+
+    .logo h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #f1f5f9;
+      letter-spacing: -0.01em;
+    }
+
+    .logo p {
+      font-size: 13px;
+      color: #64748b;
+      margin-top: 4px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      letter-spacing: 0.01em;
+    }
+
+    input {
+      width: 100%;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 14px;
+      color: #e2e8f0;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+
+    input::placeholder { color: #475569; }
+
+    .btn {
+      width: 100%;
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 11px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: background 0.15s, transform 0.1s;
+      letter-spacing: 0.01em;
+    }
+
+    .btn:hover { background: #2563eb; }
+    .btn:active { transform: scale(0.99); }
+    .btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; transform: none; }
+
+    .error {
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      color: #fca5a5;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 16px;
+      display: none;
+    }
+
+    .error.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <div class="logo-icon">⚡</div>
+      <h1>Daily Command Center</h1>
+      <p>Sign in to continue</p>
+    </div>
+
+    <div class="error" id="error"></div>
+
+    <form id="loginForm">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" placeholder="drake" autocomplete="username" autofocus>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn" id="submitBtn">Sign In</button>
+    </form>
+  </div>
+
+  <script>
+    const form = document.getElementById("loginForm");
+    const errorEl = document.getElementById("error");
+    const btn = document.getElementById("submitBtn");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorEl.classList.remove("visible");
+      btn.disabled = true;
+      btn.textContent = "Signing in…";
+
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+          credentials: "include"
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          // Redirect to the app (or the originally requested page)
+          const params = new URLSearchParams(window.location.search);
+          window.location.href = params.get("next") || "/";
+        } else {
+          errorEl.textContent = data.error || "Sign in failed. Check your credentials.";
+          errorEl.classList.add("visible");
+          btn.disabled = false;
+          btn.textContent = "Sign In";
+        }
+      } catch {
+        errorEl.textContent = "Network error — is the server running?";
+        errorEl.classList.add("visible");
+        btn.disabled = false;
+        btn.textContent = "Sign In";
+      }
+    });
+  </script>
+</body>
+</html>
