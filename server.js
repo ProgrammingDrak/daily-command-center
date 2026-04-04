@@ -14,10 +14,15 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const Database = require("better-sqlite3");
+const session = require("express-session");
+const SqliteStore = require("better-sqlite3-session-store")(session);
 const blockDB = require("./db");
 const migration = require("./migrate");
 const gcalAuth = require("./gcal-auth");
 const gcalSync = require("./gcal-sync");
+const auth = require("./auth");
 
 const app = express();
 const PORT = process.env.PORT || 8090;
@@ -53,6 +58,82 @@ const PA_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
 
 // ── Middleware ──
 app.use(express.json({ limit: "5mb" }));
+
+// ── Session Setup ──
+// Read or generate a persistent session secret
+const secretFile = path.join(DATA_DIR, ".session-secret");
+let sessionSecret;
+if (fs.existsSync(secretFile)) {
+  sessionSecret = fs.readFileSync(secretFile, "utf8").trim();
+} else {
+  sessionSecret = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync(secretFile, sessionSecret, "utf8");
+}
+
+app.use(session({
+  store: new SqliteStore({
+    client: new Database(path.join(DATA_DIR, "sessions.db")),
+    expired: { clear: true, intervalMs: 15 * 60 * 1000 }
+  }),
+  secret: sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  name: "dcc_session",
+  cookie: {
+    httpOnly: true,
+    secure: false,           // localhost — no HTTPS needed
+    maxAge: 30 * 24 * 60 * 60 * 1000,  // 30 days
+    sameSite: "lax"
+  }
+}));
+
+// ── Auth Middleware ──
+// Public routes (no session required)
+const AUTH_PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/gcal/callback"]);
+
+// PA/scheduled-task endpoints — accessible from localhost without a session
+const PA_ENDPOINTS = new Set([
+  "/api/pa-state/ingest",
+  "/api/ingest/day-state",
+  "/api/clean-tidy/approve",
+]);
+
+function isLocalhost(req) {
+  const addr = req.socket.remoteAddress;
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+app.use((req, res, next) => {
+  if (AUTH_PUBLIC.has(req.path)) return next();
+  if (PA_ENDPOINTS.has(req.path) && isLocalhost(req)) return next();
+  if (!req.session.userId) {
+    if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" });
+    return res.redirect("/login");
+  }
+  next();
+});
+
+// ── Auth Routes ──
+app.get("/login", (req, res) => {
+  if (req.session.userId) return res.redirect("/");
+  res.sendFile(path.join(PROJECT_DIR, "login.html"));
+});
+
+app.post("/api/auth/login", (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: "Username and password required" });
+  const user = auth.findUserByUsername(blockDB.getDB(), username);
+  if (!user || !auth.verifyPassword(password, user.password_hash)) {
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+  req.session.userId = user.id;
+  req.session.username = user.username;
+  res.json({ ok: true, username: user.username });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
 
 // ── SSE: Server-Sent Events for live updates ──
 const sseClients = new Set();
@@ -195,15 +276,15 @@ function getDayFilePath(dateStr) {
   return path.join(DAYS_DIR, dateStr + ".json");
 }
 
-function getMeetingsFromSQLite(dateStr) {
+function getMeetingsFromSQLite(dateStr, userId) {
   const offset = getETOffset(dateStr);
   const rows = db.prepare(`
     SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link
     FROM blocks b
     LEFT JOIN gcal_events g ON g.block_id = b.id
-    WHERE b.date = ? AND b.type = 'schedule_item' AND b.deleted_at IS NULL
+    WHERE b.date = ? AND b.user_id = ? AND b.type = 'schedule_item' AND b.deleted_at IS NULL
     ORDER BY b.sort_order ASC
-  `).all(dateStr);
+  `).all(dateStr, userId);
 
   const meetings = [];
   const meetingTimeline = [];
@@ -295,7 +376,7 @@ function buildSkeletonState(dateStr) {
   };
 }
 
-function buildDayResponse(dateStr) {
+function buildDayResponse(dateStr, userId) {
   const dayFile = getDayFilePath(dateStr);
 
   // Read enrichment from per-day JSON (or create skeleton)
@@ -306,7 +387,7 @@ function buildDayResponse(dateStr) {
   }
 
   // Live meetings from SQLite
-  const { meetings, meetingTimeline } = getMeetingsFromSQLite(dateStr);
+  const { meetings, meetingTimeline } = getMeetingsFromSQLite(dateStr, userId);
 
   // Merge: enrichment + live meetings
   const result = { ...enrichment, date: dateStr, meetings };
@@ -327,25 +408,27 @@ function buildDayResponse(dateStr) {
   }
 
   // Read schedule blocks from SQLite
-  result.schedule.blocks = getScheduleBlocks();
+  result.schedule.blocks = getScheduleBlocks(userId);
 
   return result;
 }
 
-function getScheduleBlocks(){
+function getScheduleBlocks(userId){
   try {
     const db = blockDB.getDB();
-    const rows = db.prepare(
-      "SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL ORDER BY sort_order"
-    ).all();
+    const rows = userId
+      ? db.prepare("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND user_id=? AND deleted_at IS NULL ORDER BY sort_order").all(userId)
+      : db.prepare("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL ORDER BY sort_order").all();
     return rows.map(r => ({ ...JSON.parse(r.properties), id: r.id, parent_id: r.parent_id, sort_order: r.sort_order }));
   } catch(e){ return []; }
 }
 
-function seedScheduleBlocksFromYAML(){
+function seedScheduleBlocksFromYAML(userId){
   try {
     const db = blockDB.getDB();
-    const existing = db.prepare("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL").get();
+    const existing = userId
+      ? db.prepare("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND user_id=? AND deleted_at IS NULL").get(userId)
+      : db.prepare("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL").get();
     if(existing.cnt > 0) return; // already seeded
 
     if(!fs.existsSync(USER_CONTEXT_FILE)) return;
@@ -369,7 +452,8 @@ function seedScheduleBlocksFromYAML(){
       blockDB.createBlock(db, {
         type: "schedule_block",
         properties: { name: b.name, blockType: b.blockType, start: b.start, end: b.end, protected: false, warnThreshold: 0 },
-        sort_order: i
+        sort_order: i,
+        user_id: userId || null
       });
     });
     if(valid.length) console.log("[seed] Migrated " + valid.length + " schedule blocks from YAML to SQLite");
@@ -418,7 +502,7 @@ function ensureSkeletonDays() {
 app.get("/api/state/day", (req, res) => {
   try {
     const dateStr = req.query.date || getTodayStr();
-    res.json(buildDayResponse(dateStr));
+    res.json(buildDayResponse(dateStr, req.session.userId));
   } catch (e) {
     console.error("[api/state/day] Error:", e.message);
     // Fallback: try legacy day-state.json
@@ -430,7 +514,7 @@ app.get("/api/state/day", (req, res) => {
 app.get("/api/state/tomorrow", (req, res) => {
   try {
     const tomorrowStr = addDays(getTodayStr(), 1);
-    res.json(buildDayResponse(tomorrowStr));
+    res.json(buildDayResponse(tomorrowStr, req.session.userId));
   } catch (e) {
     console.error("[api/state/tomorrow] Error:", e.message);
     res.json(readJSON(TOMORROW_STATE_FILE, null));
@@ -798,11 +882,12 @@ function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }
 app.post("/api/blocks", (req, res) => {
   try {
     const body = req.body;
+    const userId = req.session.userId;
     // Support single or array
     const items = Array.isArray(body) ? body : [body];
     const results = [];
     for (const item of items) {
-      results.push(blockDB.createBlock(db, item));
+      results.push(blockDB.createBlock(db, { ...item, user_id: userId }));
     }
     broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId });
     res.json(results.length === 1 ? results[0] : results);
@@ -840,7 +925,12 @@ app.post("/api/blocks/batch", (req, res) => {
   try {
     const { operations, _clientId } = req.body;
     if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" });
-    const result = blockDB.batchOp(db, operations);
+    const userId = req.session.userId;
+    // Inject user_id into create operations
+    const opsWithUser = operations.map(op =>
+      op.op === "create" ? { ...op, user_id: userId } : op
+    );
+    const result = blockDB.batchOp(db, opsWithUser);
     broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId });
     res.json(result);
   } catch (e) {
@@ -851,16 +941,17 @@ app.post("/api/blocks/batch", (req, res) => {
 // GET /api/blocks?date=X or ?type=X,Y
 app.get("/api/blocks", (req, res) => {
   try {
+    const userId = req.session.userId;
     if (req.query.date) {
       if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date format" });
       // Ensure day_root exists
-      blockDB.ensureDayRoot(db, req.query.date);
-      const blocks = blockDB.getBlocksByDate(db, req.query.date);
+      blockDB.ensureDayRoot(db, req.query.date, userId);
+      const blocks = blockDB.getBlocksByDate(db, req.query.date, userId);
       res.json(blocks);
     } else if (req.query.type) {
       const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
       if (!types.length) return res.status(400).json({ error: "No valid types specified" });
-      const blocks = blockDB.getBlocksByTypes(db, types);
+      const blocks = blockDB.getBlocksByTypes(db, types, userId);
       res.json(blocks);
     } else {
       res.status(400).json({ error: "Provide ?date=YYYY-MM-DD or ?type=type1,type2" });
@@ -878,7 +969,7 @@ app.get("/api/blocks/range", (req, res) => {
     if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
       return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
     }
-    const blocks = blockDB.getBlocksByDateRange(db, start, end);
+    const blocks = blockDB.getBlocksByDateRange(db, start, end, req.session.userId);
     res.json(blocks);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -923,7 +1014,7 @@ app.get("/api/pa-state/range", (req, res) => {
     if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
       return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
     }
-    const states = blockDB.getPaStateRange(db, start, end);
+    const states = blockDB.getPaStateRange(db, start, end, req.session.userId);
     const result = {};
     for (const s of states) result[s.date] = s.state_json;
     res.json(result);
@@ -935,16 +1026,18 @@ app.get("/api/pa-state/range", (req, res) => {
 // GET /api/pa-state/:date — Get PA-owned state
 app.get("/api/pa-state/:date", (req, res) => {
   if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" });
-  const state = blockDB.getPaState(db, req.params.date);
+  const state = blockDB.getPaState(db, req.params.date, req.session.userId);
   res.json(state || { date: req.params.date, state_json: null });
 });
 
-// POST /api/pa-state/ingest — Scheduled task writes PA state
+// POST /api/pa-state/ingest — Scheduled task writes PA state (localhost only, no session needed)
 app.post("/api/pa-state/ingest", (req, res) => {
   try {
     const { date, ...stateData } = req.body;
     if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
-    blockDB.savePaState(db, date, stateData);
+    // PA tasks run as the default user (id=1)
+    const userId = req.session.userId || 1;
+    blockDB.savePaState(db, date, stateData, userId);
     broadcast("pa-state-changed", { date });
     res.json({ ok: true, date });
   } catch (e) {
@@ -960,6 +1053,12 @@ app.post("/api/migrate", (req, res) => {
       dryRun: !!dryRun,
       localStorageDump: localStorageDump || null
     });
+    if (!dryRun) {
+      // Associate any unmigrated (null user_id) blocks with current user
+      const userId = req.session.userId || 1;
+      db.prepare("UPDATE blocks SET user_id = ? WHERE user_id IS NULL").run(userId);
+      db.prepare("UPDATE pa_state SET user_id = ? WHERE user_id IS NULL").run(userId);
+    }
     res.json(manifest);
   } catch (e) {
     res.status(500).json({ error: e.message, stack: e.stack });
@@ -1219,6 +1318,21 @@ try {
   if (purged > 0) console.log(`[Purge] Startup: removed ${purged} soft-deleted blocks`);
 } catch (e) {}
 
+// ── Startup: Ensure default user and associate pre-auth data ──
+let defaultUserId = 1;
+try {
+  const defaultUser = auth.ensureDefaultUser(db);
+  defaultUserId = defaultUser.id;
+  // Associate any blocks/pa_state that predate auth (user_id IS NULL) with the default user
+  const orphanBlocks = db.prepare("UPDATE blocks SET user_id = ? WHERE user_id IS NULL").run(defaultUserId);
+  const orphanPA = db.prepare("UPDATE pa_state SET user_id = ? WHERE user_id IS NULL").run(defaultUserId);
+  if (orphanBlocks.changes > 0 || orphanPA.changes > 0) {
+    console.log(`[auth] Migrated ${orphanBlocks.changes} blocks + ${orphanPA.changes} pa_state rows → user ${defaultUserId}`);
+  }
+} catch (e) {
+  console.error("[auth] Startup error:", e.message);
+}
+
 // ── Start ──
 app.listen(PORT, () => {
   console.log(`\n  Daily Command Center`);
@@ -1230,6 +1344,7 @@ app.listen(PORT, () => {
   console.log(`  Data Dir:   ${DATA_DIR}`);
   console.log(`  SQLite DB:  ${path.join(DATA_DIR, "blocks.db")}`);
   console.log(`  Brain Dir:  ${BRAIN_DIR}`);
+  console.log(`  Auth:       Session-based — login at /login`);
 
   // Start GCal sync if authenticated
   if (gcalAuth.isAuthenticated()) {
@@ -1248,7 +1363,7 @@ app.listen(PORT, () => {
   }
 
   // Seed schedule blocks from YAML if not already in SQLite
-  try { seedScheduleBlocksFromYAML(); } catch(e) {
+  try { seedScheduleBlocksFromYAML(defaultUserId); } catch(e) {
     console.error(`  Blocks:     Seed error — ${e.message}`);
   }
 
