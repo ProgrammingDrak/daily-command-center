@@ -1,0 +1,974 @@
+{
+  "date": "2026-03-30",
+  "last_updated_at": "2026-03-31T07:19:24.420540-04:00",
+  "last_updated_by": "learn",
+  "watermarks": {
+    "gmail": {
+      "last_sweep_at": "2026-03-30T21:11:47.000000+00:00",
+      "last_message_id": "19d407e58eaa96bc"
+    },
+    "slack_dms": {
+      "last_sweep_at": "2026-03-30T21:11:47.000000+00:00",
+      "channels": {
+        "D04Q9CT9DT4": {
+          "last_ts": "1774894531.902409"
+        },
+        "D06NFGWS2KS": {
+          "last_ts": "1774621750.575039"
+        },
+        "D09694UPEKC": {
+          "last_ts": "1774902740.821999"
+        }
+      }
+    },
+    "slack_mentions": {
+      "last_sweep_at": "2026-03-30T21:11:47.000000+00:00",
+      "last_search_ts": "2026-03-30T21:11:47.000000+00:00"
+    },
+    "calendar": {
+      "last_sweep_at": "2026-03-30T21:11:47.000000+00:00"
+    },
+    "notion_board": {
+      "last_sweep_at": "2026-03-30T21:11:47.000000+00:00"
+    }
+  },
+  "meetings": [
+    {
+      "id": "0oh1l1vnelsdr9hg4cbeiq1vt3_20260330T140000Z",
+      "title": "Clever Offers SOW Kickoff",
+      "start": "2026-03-30T10:00:00-04:00",
+      "end": "2026-03-30T11:00:00-04:00",
+      "attendees": [
+        "mike.bennett@movewithclever.com",
+        "ben@movewithclever.com",
+        "jay.watson@movewithclever.com",
+        "collins.okoye@movewithclever.com",
+        "michael.provinzino@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=MG9oMWwxdm5lbHNkcjloZzRjYmVpcTF2dDNfMjAyNjAzMzBUMTQwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted",
+      "reviewed": true,
+      "reviewed_at": "2026-03-31T07:16:05.521579-04:00",
+      "reviewed_by": "batch",
+      "transcript_found": false,
+      "action_items_extracted": 0,
+      "review_notes": "No Gemini notes attached to calendar event. No Gmail/Slack transcript found. Attendees: Ben Mizes, Mike Bennett, Jay Watson, Collins Okoye, Mike Provinzino."
+    },
+    {
+      "id": "kr40nnpdbju1p9ql5kc8esj7rj_20260330T193000Z",
+      "title": "Collins / Drake - One on One",
+      "start": "2026-03-30T15:30:00-04:00",
+      "end": "2026-03-30T16:00:00-04:00",
+      "attendees": [
+        "collins.okoye@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=a3I0MG5ucGRianUxcDlxbDVrYzhlc2o3cmpfMjAyNjAzMzBUMTkzMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20",
+      "linkedDocUrl": "https://docs.google.com/document/d/1ffw1MFGtunS5mE3WX7oJoKQLSURRyyASyNQBTaZiZDI/edit",
+      "linkedDocTitle": "Notes - Collins / Drake - One on One",
+      "myResponseStatus": "accepted",
+      "reviewed": true,
+      "reviewed_at": "2026-03-31T07:16:05.521579-04:00",
+      "reviewed_by": "batch",
+      "transcript_found": false,
+      "action_items_extracted": 0,
+      "review_notes": "Notes doc exists at https://docs.google.com/document/d/1ffw1MFGtunS5mE3WX7oJoKQLSURRyyASyNQBTaZiZDI/edit but Google Drive not accessible. Review manually for action items."
+    },
+    {
+      "id": "lt5tf5dldil54tckgcna85fvs9_20260330T200000Z",
+      "title": "Mike <> Drake - One on One",
+      "start": "2026-03-30T16:00:00-04:00",
+      "end": "2026-03-30T16:30:00-04:00",
+      "attendees": [
+        "michael.provinzino@movewithclever.com"
+      ],
+      "calUrl": "https://www.google.com/calendar/event?eid=bHQ1dGY1ZGxkaWw1NHRja2djbmE4NWZ2czlfMjAyNjAzMzBUMjAwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20",
+      "linkedDocUrl": "https://docs.google.com/document/d/1KCL9WO8g3hx6gCZuXpNE3sZox1Vc56V8RUaliqJOQzo/edit",
+      "linkedDocTitle": "Notes - Mike <> Drake - One on One",
+      "myResponseStatus": "accepted",
+      "reviewed": true,
+      "reviewed_at": "2026-03-31T07:16:05.521579-04:00",
+      "reviewed_by": "batch",
+      "transcript_found": false,
+      "action_items_extracted": 0,
+      "review_notes": "Gemini notes doc at https://docs.google.com/document/d/1LRJp6mCkRC6vfh6dky_5mjxzeD98d_UlkHxtD5xeWBU/edit and manual notes at https://docs.google.com/document/d/1KCL9WO8g3hx6gCZuXpNE3sZox1Vc56V8RUaliqJOQzo/edit. Google Drive not accessible. Pre-existing Notion card found for main action item (Close Paid sync)."
+    }
+  ],
+  "triage": {
+    "open_items": [
+      {
+        "id": "email-qualia-19d2f62a8625802d",
+        "type": "email_fyi",
+        "title": "Qualia -- Closings: YTD Pipeline is Ready",
+        "summary": "Automated Qualia report: YTD closings pipeline is available for review.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d2f62a8625802d",
+        "first_seen_at": "2026-03-27T07:10:00-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 8,
+        "escalation_level": "critical",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Automated notification, no response needed. Review when convenient."
+      },
+      {
+        "id": "email-collins-19d2f4d9fd990168",
+        "type": "email_fyi",
+        "title": "Collins Okoye -- Re: Questions (Terri Foote cash offers call)",
+        "summary": "Collins confirmed he will call Terri Foote after Bullpen today re: her questions about cash offers.",
+        "link": "https://mail.google.com/mail/u/0/#all/19d2f4d9fd990168",
+        "first_seen_at": "2026-03-27T07:10:00-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 8,
+        "escalation_level": "critical",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Drake forwarded Terri Foote email (asking about cash offers) and asked Collins to call her post-Bullpen. Collins replied 'I can do that!' No action needed from Drake -- just follow up later to confirm the call happened."
+      },
+      {
+        "id": "email-houzeo-19d2ff300b261f5c",
+        "type": "email_needs_response",
+        "title": "Jai Chavan (Houzeo) -- Re: Houzeo & Clever Performance Report",
+        "summary": "Jai has questions about the partner data export file: asks about 2024 records, a 'Musdev Sura' name, and 2019 data. Drake is CC'd. This needs a response coordinated with Mara/Diana/Jamie/Francesca.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d2ff300b261f5c",
+        "first_seen_at": "2026-03-27T14:41:00-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 6,
+        "escalation_level": "critical",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "Partner (Houzeo) asking about data quality in the export Clever sent. Multiple Clever stakeholders CC'd: Diana, Francesca, Jamie, Ben. Need to align on answers before responding. No reply sent yet."
+      },
+      {
+        "id": "email-houzeo-meeting-19d2ff4188c36da8",
+        "type": "email_needs_response",
+        "title": "Jai Chavan (Houzeo) -- Meeting invite: [BLOCK] Buyer Leads Exported File Queries Mon Mar 30",
+        "summary": "Houzeo scheduled a 30-min meeting for Mon Mar 30 9:30-10am ET to go through data export questions. Needs accept or decline.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d2ff4188c36da8",
+        "first_seen_at": "2026-03-27T14:41:00-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 6,
+        "escalation_level": "critical",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Meeting was rescheduled by Jai Chavan to Tue Mar 31, 9:30 AM. Jai's reason: no one accepted in time. Updated invite sent 14:05 UTC. Google Sheet attached: https://docs.google.com/spreadsheets/d/1J6CQLK0qUGV_4tlvS2YF1M1N9kW147GvAmbWLvw_Itc/edit Jai rescheduled to Tue Mar 31 at same time after no-show today."
+      },
+      {
+        "id": "email-kate-gdoc-19d30d79412cbab6",
+        "type": "email_fyi",
+        "title": "Kate Mitchell -- Offers/HC alignment doc: no answer EOW",
+        "summary": "Kate replied to Drake's comment in the 'Offers and HC alignment questions' doc saying she won't have an answer by end of week.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d30d79412cbab6",
+        "first_seen_at": "2026-03-27T17:00:00-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 5,
+        "escalation_level": "critical",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Drake left a comment in the Offers/HC alignment doc. Kate replied: 'Not going to have an answer be eow.' Drake should expect this question to roll into next week. No action needed today."
+      },
+      {
+        "id": "email-deborah-bush-19d3bbc948e1e4f1",
+        "type": "email_needs_response",
+        "title": "Deborah Bush (Jason Mitchell Group) -- Re: Clever Offers Agent Guide",
+        "summary": "Partner agent asking where to send a seller client for a cash offer -- needs a direct reply with the Offers intake link or process.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d3bbc948e1e4f1",
+        "first_seen_at": "2026-03-30T08:46:49.694832-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 4,
+        "escalation_level": "medium",
+        "priority": "medium",
+        "priority_score": null,
+        "notes": "Deborah Bush is a CA Division President at Jason Mitchell Group (partner). Sent Sunday Mar 29. Simple question about cash offer intake -- quick reply should resolve."
+      },
+      {
+        "id": "email-movingstation-report-19d3e9dc47c951ee",
+        "type": "email_fyi",
+        "title": "Moving Station -- Broker Monthly Report (auto)",
+        "summary": "Automated broker monthly report from Moving Station for March 2026.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d3e9dc47c951ee",
+        "first_seen_at": "2026-03-30T08:46:49.694832-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 4,
+        "escalation_level": "medium",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Automated report. Addressees include Ben and Ethan Willoughby. Low priority FYI."
+      },
+      {
+        "id": "email-qualia-19d3ed5a17bfd7ec",
+        "type": "email_fyi",
+        "title": "Qualia -- Closings: YTD Pipeline is Ready (today)",
+        "summary": "Automated Qualia report: YTD closings pipeline package ready for review.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d3ed5a17bfd7ec",
+        "first_seen_at": "2026-03-30T09:13:49.044047-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 3,
+        "escalation_level": "medium",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "CATEGORY_UPDATES automated report from Qualia. Arrived ~9:01 AM. CC'd Collins."
+      },
+      {
+        "id": "email-ramp-bulk-bills-19d3f27b2c8f8106",
+        "type": "email_fyi",
+        "title": "Ramp -- 20 bill approval notifications (no action required)",
+        "summary": "Batch of 20 automated Ramp notifications: various agent bills (Panarelli, Joseph Paoletti, SoCal Homes, etc.) marked fully approved. All say 'No action required.' FYI only.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d3f27b2c8f8106",
+        "first_seen_at": "2026-03-30T10:31:00.000000-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 3,
+        "escalation_level": "medium",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Bulk Ramp billing batch. communictions@ramp.com. Received ~10:23-10:30am ET."
+      },
+      {
+        "id": "slack-dm-benmizes-D04Q9CT9DT4-1774877535302509",
+        "type": "unanswered_dm",
+        "title": "Ben Mizes -- QA portal changes / push strategy",
+        "summary": "Conversation evolved: Drake asked whether to push individual QA fixes or batch them. Ben clarified: make the changes via Claude but don't deploy to prod yet. Drake still needs to work through portal QA fixes.",
+        "link": "https://cleverrealestate.slack.com/archives/D04Q9CT9DT4/p1774877535302509",
+        "first_seen_at": "2026-03-30T10:31:00.000000-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 3,
+        "escalation_level": "medium",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "Latest Ben msg 1:54 PM ET: 'for those - yes I'd try and fix it now'. Active collaboration ongoing."
+      },
+      {
+        "id": "email-demetrius-jay-19d3fb234b9bf545",
+        "type": "email_fyi",
+        "title": "Jay Watson -- Demetrius Mathis assistant login (handled)",
+        "summary": "Demetrius Mathis (USA Property Hunters) asked Jay Watson to add his assistant Mia (cebbyqt30@gmail.com) to Clever portal. Jay replied 'Updated.' Drake was CC'd.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d3fb234b9bf545",
+        "first_seen_at": "2026-03-30T14:49:00.000000-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "FYI only. Jay handled. No action needed from Drake."
+      },
+      {
+        "id": "email-salesmsg-bundle-20260330",
+        "type": "email_fyi",
+        "title": "Salesmsg -- Active lead SMS conversations (9 notifications)",
+        "summary": "Multiple active SMS conversations with cash buyers (Ron Myers, Nick Novak, Lisa Stevens, Melinda). Auto-notifications only, no direct action needed.",
+        "link": "https://mail.google.com/mail/u/0/#search/from:notifications@salesmessage.com+is:unread",
+        "first_seen_at": "2026-03-30T14:49:00.000000-04:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 2,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Automated digests from Salesmsg. Nick Novak and Lisa Stevens are active. Check app.salesmessage.com if response needed."
+      },
+      {
+        "id": "email-collins-okoye-19d40599341492a0",
+        "type": "email_fyi",
+        "title": "Collins Okoye -- Calendar invite: Drake/Collins Wed Apr 1 2:45-3:45pm",
+        "summary": "Collins sent a calendar invite for a Drake/Collins 1:1 on Wednesday April 1st, 2:45-3:45 PM ET.",
+        "link": "https://mail.google.com/mail/u/0/#inbox/19d40599341492a0",
+        "first_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "last_seen_at": "2026-03-30T21:11:47.000000+00:00",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "low",
+        "priority_score": null,
+        "notes": "Calendar invite notification. Event is Wed Apr 1 2:45-3:45pm ET. FYI only."
+      }
+    ],
+    "resolved_items": [
+      {
+        "id": "slack-dm-benmizes-D04Q9CT9DT4-177482696900",
+        "type": "unanswered_dm",
+        "title": "Ben Mizes -- Q2 goals / roles and responsibilities",
+        "summary": "Ben sent a message Sunday evening laying out how he is thinking about Q2 goals and R&R -- appears to be sharing/seeking input, no reply yet.",
+        "link": "https://cleverrealestate.slack.com/archives/D04Q9CT9DT4/p177482696900",
+        "first_seen_at": "2026-03-30T08:46:49.694832-04:00",
+        "last_seen_at": "2026-03-30T10:31:00.000000-04:00",
+        "cycle_count": 2,
+        "escalation_level": "medium",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "Ben also mentioned restoring prod DB to local before running import (re: Friday coding session). Two separate threads. Q2 goals message is the higher priority one to acknowledge.",
+        "resolution": "user_replied",
+        "needs_review": true,
+        "evidence_summary": "Drake replied at 09:12 ET: \"Got it! I'll look this over today \u2705\"",
+        "evidence_link": "https://cleverrealestate.slack.com/archives/D04Q9CT9DT4/p1774876358279269"
+      },
+      {
+        "id": "slack-dm-mprovinzino-D09694UPEKC-1774883149902309",
+        "type": "unanswered_dm",
+        "title": "Mike Provinzino -- Close Paid connection sync question",
+        "summary": "Mike is asking whether it's safe to manually mark a connection 'Close Paid' when the deal is already 'Close Paid', and whether there should be automation syncing this transition.",
+        "link": "https://cleverrealestate.slack.com/archives/D09694UPEKC/p1774883149902309",
+        "first_seen_at": "2026-03-30T14:49:00.000000-04:00",
+        "last_seen_at": "2026-03-30T14:49:00.000000-04:00",
+        "cycle_count": 1,
+        "escalation_level": "normal",
+        "priority": "high",
+        "priority_score": null,
+        "notes": "Mike included a specific HubSpot example. Two questions: (1) safe to manually set? (2) should automation handle this? 1:1 with Drake at 4 PM today. Auto-task created.",
+        "auto_task_url": "https://www.notion.so/333fcdf79b2781faabf8c8363123b8d1",
+        "resolution": "user_replied",
+        "needs_review": true,
+        "evidence_summary": "Drake replied at 4:32 PM ET: 'Once I'm off with Ben, I'll hop on that'",
+        "evidence_link": "https://cleverrealestate.slack.com/archives/D09694UPEKC/p1774902740821999",
+        "closed_at": "2026-03-30T21:11:47.000000+00:00",
+        "closed_by": "sweep-slack-dms"
+      }
+    ],
+    "cycle_count": 1
+  },
+  "completions": {
+    "tasks": []
+  },
+  "schedule": {
+    "generated_at": "2026-03-30T09:16:26.440775-04:00",
+    "working_hours": {
+      "start": "09:00",
+      "end": "17:30"
+    },
+    "timeline": [
+      {
+        "id": "ooo-bod",
+        "type": "ooo",
+        "label": "OOO - BOD",
+        "start": "2026-03-30T08:45:00-04:00",
+        "end": "2026-03-30T09:00:00-04:00",
+        "source": "calendar",
+        "source_id": "05esfdmv4p1n2p01ahg9er1gq8_20260330T124500Z",
+        "completed": true
+      },
+      {
+        "id": "triage-0915",
+        "type": "time_block",
+        "label": "Email & Slack Triage",
+        "start": "2026-03-30T09:15:00-04:00",
+        "end": "2026-03-30T09:30:00-04:00",
+        "source": "calendar",
+        "source_id": "ctpqm0n6l6ei4k5tgkjp7jp0p4_20260330T131500Z",
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "mtg-houzeo",
+        "type": "meeting",
+        "label": "[BLOCK] Buyer Leads Exported File Queries (RSVP needed)",
+        "start": "2026-03-30T09:30:00-04:00",
+        "end": "2026-03-30T10:00:00-04:00",
+        "source": "calendar",
+        "source_id": "5qr0nvc8kkh6ukbrtjch2a9gil",
+        "category": "Meetings",
+        "notes": "Jai Chavan (Houzeo). Response status: needsAction.",
+        "completed": false
+      },
+      {
+        "id": "mtg-sow",
+        "type": "meeting",
+        "label": "Clever Offers SOW Kickoff",
+        "start": "2026-03-30T10:00:00-04:00",
+        "end": "2026-03-30T11:00:00-04:00",
+        "source": "calendar",
+        "source_id": "0oh1l1vnelsdr9hg4cbeiq1vt3_20260330T140000Z",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "triage-1100",
+        "type": "time_block",
+        "label": "Email & Slack Triage",
+        "start": "2026-03-30T11:00:00-04:00",
+        "end": "2026-03-30T11:15:00-04:00",
+        "source": "calendar",
+        "source_id": "5ud9gcba8j5obudt3uk32aua4c_20260330T150000Z",
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-qa-investor",
+        "type": "task",
+        "label": "[OVERDUE] QA/fix investor count stamping workflow (30m)",
+        "start": "2026-03-30T11:15:00-04:00",
+        "end": "2026-03-30T11:45:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "priority": "Medium",
+        "category": "Deep Work",
+        "estimated_minutes": 30,
+        "completed": false,
+        "url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0"
+      },
+      {
+        "id": "task-sunset-photos",
+        "type": "task",
+        "label": "Sunset pay-for-photos: prepare one-click removal for April 1 (45m)",
+        "start": "2026-03-30T11:45:00-04:00",
+        "end": "2026-03-30T12:30:00-04:00",
+        "source": "notion",
+        "source_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "priority": "High",
+        "category": "Deep Work",
+        "estimated_minutes": 45,
+        "completed": false,
+        "url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47"
+      },
+      {
+        "id": "ooo-lunch",
+        "type": "ooo",
+        "label": "OOO - Lunch",
+        "start": "2026-03-30T12:30:00-04:00",
+        "end": "2026-03-30T13:00:00-04:00",
+        "source": "calendar",
+        "source_id": "45mfckh8tm6fa4funs5qfnrm9f_20260330T163000Z",
+        "completed": false
+      },
+      {
+        "id": "triage-1300",
+        "type": "time_block",
+        "label": "Email & Slack Triage",
+        "start": "2026-03-30T13:00:00-04:00",
+        "end": "2026-03-30T13:15:00-04:00",
+        "source": "calendar",
+        "source_id": "7baenumisb58eqdc8qvhc49i8d_20260330T170000Z",
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-hs-workflows-p1",
+        "type": "task",
+        "label": "[OVERDUE] Review HubSpot workflows feeding Collins' queue (Part 1 of 2, 75m)",
+        "start": "2026-03-30T13:15:00-04:00",
+        "end": "2026-03-30T14:30:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "priority": "Medium",
+        "category": "Deep Work",
+        "estimated_minutes": 75,
+        "completed": false,
+        "url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e"
+      },
+      {
+        "id": "block-review-reports",
+        "type": "time_block",
+        "label": "Review Direct Reports Work",
+        "start": "2026-03-30T14:30:00-04:00",
+        "end": "2026-03-30T15:30:00-04:00",
+        "source": "calendar",
+        "source_id": "3u729an73726225k682ieokc7f_20260330T183000Z",
+        "category": "Management",
+        "completed": false
+      },
+      {
+        "id": "mtg-collins-1on1",
+        "type": "meeting",
+        "label": "Collins / Drake - One on One",
+        "start": "2026-03-30T15:30:00-04:00",
+        "end": "2026-03-30T16:00:00-04:00",
+        "source": "calendar",
+        "source_id": "kr40nnpdbju1p9ql5kc8esj7rj_20260330T193000Z",
+        "category": "Meetings",
+        "completed": false,
+        "linked_doc": "https://docs.google.com/document/d/1ffw1MFGtunS5mE3WX7oJoKQLSURRyyASyNQBTaZiZDI/edit"
+      },
+      {
+        "id": "mtg-mike-1on1",
+        "type": "meeting",
+        "label": "Mike <> Drake - One on One",
+        "start": "2026-03-30T16:00:00-04:00",
+        "end": "2026-03-30T16:30:00-04:00",
+        "source": "calendar",
+        "source_id": "lt5tf5dldil54tckgcna85fvs9_20260330T200000Z",
+        "category": "Meetings",
+        "completed": false,
+        "linked_doc": "https://docs.google.com/document/d/1KCL9WO8g3hx6gCZuXpNE3sZox1Vc56V8RUaliqJOQzo/edit"
+      },
+      {
+        "id": "task-hs-workflows-p2",
+        "type": "task",
+        "label": "[OVERDUE] Review HubSpot workflows feeding Collins' queue (Part 2 of 2, 30m)",
+        "start": "2026-03-30T16:30:00-04:00",
+        "end": "2026-03-30T17:00:00-04:00",
+        "source": "notion",
+        "source_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "priority": "Medium",
+        "category": "Deep Work",
+        "estimated_minutes": 30,
+        "completed": false,
+        "url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e"
+      },
+      {
+        "id": "triage-eod",
+        "type": "time_block",
+        "label": "EOD Email & Slack Triage",
+        "start": "2026-03-30T17:00:00-04:00",
+        "end": "2026-03-30T17:30:00-04:00",
+        "source": "calendar",
+        "source_id": "d6deda3315f449a7bdbcfd5739b8b7c3_20260330T210000Z",
+        "category": "Triage",
+        "completed": false
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0",
+        "priority": "Medium",
+        "estimated_minutes": 30,
+        "due": "2026-03-23",
+        "overdue": true,
+        "stage": "Tasks for Today",
+        "slot_start": "2026-03-30T11:15:00-04:00",
+        "slot_end": "2026-03-30T11:45:00-04:00"
+      },
+      {
+        "id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "title": "Sunset pay-for-photos: prepare one-click removal for April 1",
+        "url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
+        "priority": "High",
+        "estimated_minutes": 45,
+        "due": "2026-04-01",
+        "overdue": false,
+        "stage": "Next Sprint",
+        "slot_start": "2026-03-30T11:45:00-04:00",
+        "slot_end": "2026-03-30T12:30:00-04:00"
+      },
+      {
+        "id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "title": "Review HubSpot workflows feeding Collins' queue (Part 1 + Part 2)",
+        "url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e",
+        "priority": "Medium",
+        "estimated_minutes": 120,
+        "due": "2026-03-27",
+        "overdue": true,
+        "stage": "Next Sprint",
+        "slot_start": "2026-03-30T13:15:00-04:00",
+        "slot_end": "2026-03-30T17:00:00-04:00",
+        "notes": "Split: Part 1 13:15-14:30 (75m), Part 2 16:30-17:00 (30m). 15 min remaining unfitted."
+      }
+    ],
+    "tasks_couldnt_fit": [
+      {
+        "id": "331fcdf7-9b27-8129-bbf7-c55806338deb",
+        "title": "Finalize investor outreach message for iBuyer audit",
+        "url": "https://www.notion.so/331fcdf79b278129bbf7c55806338deb",
+        "priority": "Medium",
+        "estimated_minutes": 30,
+        "reason": "Status: Backlog (not flagged for today). Recommend promoting to Tasks for Today if urgent."
+      }
+    ],
+    "stats": {
+      "total_tasks_scheduled": 3,
+      "total_estimated_hours": 3.0,
+      "total_meetings": 4,
+      "free_time_minutes": 5,
+      "triage_items_needing_attention": [
+        "email-houzeo-19d2ff300b261f5c (high, unanswered)",
+        "slack-dm-benmizes-D04Q9CT9DT4-177482696900 (high, unanswered)"
+      ],
+      "notes": "Meeting prep skipped (token budget): SOW Kickoff (recurring), Collins 1:1 (recurring), Mike 1:1 (recurring). Run /meeting-prep for specific prep. Houzeo meeting at 9:30 needs RSVP."
+    }
+  },
+  "assessment": {
+    "generated_at": "2026-03-31T07:12:15.507157-04:00",
+    "wins": [],
+    "couldnt_fit": [
+      {
+        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "status": "not_started",
+        "notion_url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0"
+      },
+      {
+        "task_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
+        "title": "Sunset pay-for-photos: prepare one-click removal for April 1",
+        "status": "not_started",
+        "notion_url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47"
+      },
+      {
+        "task_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "title": "Review HubSpot workflows feeding Collins' queue (Part 1 + Part 2)",
+        "status": "not_started",
+        "notion_url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e"
+      },
+      {
+        "task_id": "finalize-investor-outreach",
+        "title": "Finalize investor outreach message for iBuyer audit",
+        "status": "not_started"
+      }
+    ],
+    "dropped_balls": [
+      {
+        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
+        "title": "QA/fix investor count stamping workflow",
+        "due_date": "2026-03-23",
+        "reason": "Still in 'Tasks for Today' status in Notion; originally due 2026-03-23, carried forward to 2026-03-30 schedule but not completed",
+        "notion_url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0"
+      },
+      {
+        "task_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
+        "title": "Review HubSpot workflows feeding Collins' queue",
+        "due_date": "2026-03-27",
+        "reason": "Still in Backlog; due 2026-03-27, scheduled but not completed; Collins' queue continues to grow",
+        "notion_url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e"
+      }
+    ],
+    "triage_health": {
+      "open_count": 13,
+      "high_priority_count": 2,
+      "stale_items": [
+        {
+          "id": "email-qualia-closings-1",
+          "title": "Qualia -- Closings: YTD Pipeline is Ready",
+          "cycle_count": 8
+        },
+        {
+          "id": "email-collins-terri-foote",
+          "title": "Collins Okoye -- Re: Questions (Terri Foote cash offers call)",
+          "cycle_count": 8
+        },
+        {
+          "id": "email-houzeo-19d2ff300b261f5c",
+          "title": "Jai Chavan (Houzeo) -- Re: Houzeo & Clever Performance Report",
+          "cycle_count": 6
+        },
+        {
+          "id": "cal-houzeo-block-meeting",
+          "title": "Jai Chavan (Houzeo) -- Meeting invite: [BLOCK] Buyer Leads Exported File Queries",
+          "cycle_count": 6
+        },
+        {
+          "id": "slack-kate-mitchell-offers-hc",
+          "title": "Kate Mitchell -- Offers/HC alignment doc: no answer EOW",
+          "cycle_count": 5
+        }
+      ],
+      "oldest_unresolved_hours": 48
+    },
+    "schedule_adherence": {
+      "tasks_planned": 3,
+      "tasks_completed": 0,
+      "completion_rate": "0%",
+      "meetings_attended": 3,
+      "buffer_used_minutes": 0,
+      "note": "Packed day with 3 meetings and only 5 min free time. No tasks were completed -- likely squeezed out by meetings."
+    },
+    "sweep_health": {
+      "total_sweeps": 5,
+      "productive_sweeps": 2,
+      "sources": {
+        "gmail": {
+          "hits": 5,
+          "misses": 0,
+          "productive": true
+        },
+        "slack_dms": {
+          "hits": 4,
+          "misses": 1,
+          "productive": true
+        },
+        "slack_mentions": {
+          "hits": 0,
+          "misses": 5,
+          "productive": false
+        },
+        "calendar": {
+          "hits": 1,
+          "misses": 4,
+          "productive": false
+        },
+        "notion_board": {
+          "hits": 0,
+          "misses": 5,
+          "productive": false
+        }
+      },
+      "frequency_recommendations": [
+        "slack_mentions: 0 hits all day -- consider reducing frequency or spot-checking vs sweeping",
+        "notion_board: 0 hits all day -- board may not be getting updated during the day"
+      ]
+    },
+    "personal_summary": null
+  },
+  "notifications": [
+    {
+      "timestamp": "2026-03-30T08:46:49.694832-04:00",
+      "source": "sweep-calendar",
+      "message": "[ACTION NEEDED] Houzeo [BLOCK] meeting at 9:30 AM today -- myResponseStatus is needsAction. Accept or decline.",
+      "requires_approval": false
+    },
+    {
+      "timestamp": "2026-03-30T14:49:00.000000-04:00",
+      "source": "sweep-calendar",
+      "message": "[BLOCK] Buyer Leads Exported File Queries rescheduled to Tue Mar 31 9:30 AM ET by Jai Chavan. Updated invite sent."
+    },
+    {
+      "id": "notify-assess-20260331",
+      "type": "assessment",
+      "title": "EOD Assessment: 0/3 tasks completed, 2 dropped balls",
+      "body": "0/3 tasks completed. 2 dropped balls (investor count stamping due 3/23, HubSpot workflows review due 3/27). 13 open triage items, 2 high priority. Heavy meeting day.",
+      "created_at": "2026-03-31T07:12:15.507157-04:00",
+      "requires_approval": false
+    },
+    {
+      "id": "bh-pay-for-photos-20260331",
+      "type": "board_health",
+      "severity": "warning",
+      "title": "Deadline tomorrow: Sunset pay-for-photos (Apr 1)",
+      "body": "Task is in Backlog and not scheduled. Ben's ask: 'ready to click a button and remove on April 1.' Needs to be done today.",
+      "link": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
+      "created_at": "2026-03-31T07:16:05.521579-04:00",
+      "requires_approval": false
+    },
+    {
+      "id": "bh-mike-close-paid-20260331",
+      "type": "board_health",
+      "severity": "warning",
+      "title": "High-priority unanswered: Close Paid connection sync (Mike P)",
+      "body": "High priority task created 3/30 -- not scheduled. Mike is waiting on Drake's answer about whether to manually mark connections Close Paid.",
+      "link": "https://www.notion.so/333fcdf79b2781faabf8c8363123b8d1",
+      "created_at": "2026-03-31T07:16:05.521579-04:00",
+      "requires_approval": false
+    },
+    {
+      "id": "br-collins-1on1-notes-20260331",
+      "type": "batch_review",
+      "severity": "info",
+      "title": "Collins 1:1 notes doc needs manual review",
+      "body": "Google Drive was not accessible during batch-review. Notes may contain action items.",
+      "link": "https://docs.google.com/document/d/1ffw1MFGtunS5mE3WX7oJoKQLSURRyyASyNQBTaZiZDI/edit",
+      "created_at": "2026-03-31T07:16:05.521579-04:00",
+      "requires_approval": false
+    },
+    {
+      "id": "br-mike-1on1-notes-20260331",
+      "type": "batch_review",
+      "severity": "info",
+      "title": "Mike 1:1 Gemini notes available for review",
+      "body": "Gemini auto-notes were generated but Google Drive was not accessible. Review for additional action items beyond the Close Paid sync question.",
+      "link": "https://docs.google.com/document/d/1LRJp6mCkRC6vfh6dky_5mjxzeD98d_UlkHxtD5xeWBU/edit",
+      "created_at": "2026-03-31T07:16:05.521579-04:00",
+      "requires_approval": false
+    }
+  ],
+  "sweep_stats": {
+    "gmail": {
+      "hits": 5,
+      "misses": 0,
+      "by_hour": {
+        "8": 1,
+        "9": 1,
+        "10": 1,
+        "14": 1,
+        "17": 1
+      }
+    },
+    "slack_dms": {
+      "hits": 4,
+      "misses": 1,
+      "by_hour": {
+        "8": 1,
+        "10": 1,
+        "14": 1,
+        "17": 1
+      }
+    },
+    "slack_mentions": {
+      "hits": 0,
+      "misses": 5,
+      "by_hour": {}
+    },
+    "calendar": {
+      "hits": 1,
+      "misses": 4,
+      "by_hour": {
+        "8": 1
+      }
+    },
+    "notion_board": {
+      "hits": 0,
+      "misses": 5,
+      "by_hour": {}
+    }
+  },
+  "mutations": [
+    {
+      "timestamp": "2026-03-30T08:42:54.413042-04:00",
+      "skill": "sweep",
+      "action": "day_initialized",
+      "summary": "New day. Archived 2026-03-27 state. Carried forward 5 open triage items."
+    },
+    {
+      "timestamp": "2026-03-30T08:46:49.694832-04:00",
+      "skill": "sweep-all",
+      "action": "sweep_completed",
+      "summary": "3 new items found (2 email, 1 slack-dm), 5 carried-forward items escalated, 0 resolved. Day rollover from 2026-03-27. 4 meetings loaded for today."
+    },
+    {
+      "timestamp": "2026-03-30T09:13:49.044047-04:00",
+      "skill": "sweep-all",
+      "action": "sweep_completed",
+      "summary": "1 new Gmail items, 0 Slack DMs, 0 Slack mentions, 0 calendar changes, 0 Notion changes. 8 existing items updated."
+    },
+    {
+      "timestamp": "2026-03-30T09:16:26.440775-04:00",
+      "skill": "plan-day",
+      "action": "plan_generated",
+      "summary": "3 tasks scheduled (3.0h), 4 meetings, 1 task couldn't fit. Meeting prep skipped (recurring meetings). Token budget guard active."
+    },
+    {
+      "timestamp": "2026-03-30T10:31:00.000000-04:00",
+      "skill": "sweep-all",
+      "action": "sweep_completed",
+      "summary": "2 new items found, 1 resolved, 0 updated (gmail:1 new, slack_dms:1 new/1 resolved, mentions:0, calendar:0, notion:0)"
+    },
+    {
+      "timestamp": "2026-03-30T14:49:00.000000-04:00",
+      "skill": "sweep-all",
+      "action": "sweep_completed",
+      "summary": "3 new items found (1 DM, 2 email-fyi), 0 resolved, 10 updated. [BLOCK] meeting removed (rescheduled). 1 Notion task auto-created for Mike Provinzino DM."
+    },
+    {
+      "timestamp": "2026-03-30T21:11:47.000000+00:00",
+      "skill": "sweep-all",
+      "action": "sweep_completed",
+      "summary": "1 new item (Collins invite), 1 resolved (Mike Provinzino DM replied), 3 updated (Ben, Salesmsg, Jai), all others cycle++. Sources: gmail(hit), slack_dms(hit), slack_mentions(miss), calendar(miss), notion(miss)."
+    },
+    {
+      "at": "2026-03-31T07:12:15.507157-04:00",
+      "skill": "assess",
+      "action": "assessment_generated"
+    },
+    {
+      "at": "2026-03-31T07:16:05.521579-04:00",
+      "skill": "batch-review",
+      "action": "batch_review_completed",
+      "summary": "Reviewed 3 meetings, 0 new action items created (1 pre-existing), 2 board health warnings."
+    },
+    {
+      "at": "2026-03-31T07:19:24.420540-04:00",
+      "skill": "learn",
+      "action": "knowledge_updated",
+      "summary": "claude-school.md recreated (was missing), people.md updated (Collins Okoye, Jay Watson, Jai Chavan), decisions.json: 3 new entries"
+    }
+  ],
+  "meta": {
+    "skill_runs": [
+      {
+        "skill": "sweep-gmail",
+        "started_at": "2026-03-30T08:46:49.694832-04:00",
+        "completed_at": "2026-03-30T08:46:49.694832-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-slack_dms",
+        "started_at": "2026-03-30T08:46:49.694832-04:00",
+        "completed_at": "2026-03-30T08:46:49.694832-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-slack_mentions",
+        "started_at": "2026-03-30T08:46:49.694832-04:00",
+        "completed_at": "2026-03-30T08:46:49.694832-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-calendar",
+        "started_at": "2026-03-30T08:46:49.694832-04:00",
+        "completed_at": "2026-03-30T08:46:49.694832-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-notion",
+        "started_at": "2026-03-30T08:46:49.694832-04:00",
+        "completed_at": "2026-03-30T08:46:49.694832-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-gmail",
+        "started_at": "2026-03-30T09:13:49.044047-04:00",
+        "completed_at": "2026-03-30T09:13:49.044047-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-slack_dms",
+        "started_at": "2026-03-30T09:13:49.044047-04:00",
+        "completed_at": "2026-03-30T09:13:49.044047-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-slack_mentions",
+        "started_at": "2026-03-30T09:13:49.044047-04:00",
+        "completed_at": "2026-03-30T09:13:49.044047-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-calendar",
+        "started_at": "2026-03-30T09:13:49.044047-04:00",
+        "completed_at": "2026-03-30T09:13:49.044047-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-notion_board",
+        "started_at": "2026-03-30T09:13:49.044047-04:00",
+        "completed_at": "2026-03-30T09:13:49.044047-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "plan-day",
+        "started_at": "2026-03-30T09:16:26.440775-04:00",
+        "completed_at": "2026-03-30T09:16:26.440775-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-all",
+        "started_at": "2026-03-30T10:28:00.000000-04:00",
+        "completed_at": "2026-03-30T10:31:00.000000-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-all",
+        "started_at": "2026-03-30T14:48:00.000000-04:00",
+        "completed_at": "2026-03-30T14:49:00.000000-04:00",
+        "status": "OK"
+      },
+      {
+        "skill": "sweep-all",
+        "started_at": "2026-03-30T21:09:00.000000+00:00",
+        "completed_at": "2026-03-30T21:11:47.000000+00:00",
+        "status": "OK"
+      },
+      {
+        "skill": "assess",
+        "started_at": "2026-03-31T07:12:15.507157-04:00",
+        "completed_at": "2026-03-31T07:12:15.507157-04:00",
+        "status": "completed",
+        "error": null
+      },
+      {
+        "skill": "batch-review",
+        "started_at": "2026-03-31T07:16:05.521579-04:00",
+        "completed_at": "2026-03-31T07:16:05.521579-04:00",
+        "status": "completed",
+        "error": null,
+        "summary": "3 meetings reviewed, 0 new tasks, 2 board warnings, Google Drive inaccessible"
+      },
+      {
+        "skill": "learn",
+        "started_at": "2026-03-31T07:19:24.420540-04:00",
+        "completed_at": "2026-03-31T07:19:24.420540-04:00",
+        "status": "completed",
+        "error": null,
+        "files_updated": [
+          "claude-school.md (recreated)",
+          "people.md (3 updates)",
+          "decisions.json (+3)"
+        ]
+      }
+    ]
+  }
+}
