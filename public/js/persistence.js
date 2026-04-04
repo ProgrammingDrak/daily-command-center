@@ -17,6 +17,24 @@ function showToast(message, type = "error", duration = 5000) {
   if (duration > 0) setTimeout(() => toast.remove(), duration);
 }
 
+// ── BlockStore day-root property helpers ──
+// Read a property from the current day's root block (returns def if unavailable)
+function _bsProp(key, def) {
+  if (!window.USE_BLOCKSTORE || !window.blockStore) return def;
+  const root = window.blockStore.get(window.blockStore.getDayRootId());
+  const v = root && root.properties[key];
+  return (v !== undefined && v !== null) ? v : def;
+}
+// Write a property to the current day's root block; returns false if blockStore unavailable
+function _bsSaveProp(key, value) {
+  if (!window.USE_BLOCKSTORE || !window.blockStore) return false;
+  const id = window.blockStore.getDayRootId();
+  const root = window.blockStore.get(id);
+  if (!root) return false;
+  window.blockStore.updateBlock(id, { ...root.properties, [key]: value });
+  return true;
+}
+
 // ======== DATE NAVIGATION ========
 // viewMode: "today" (editable, live) | "tomorrow" (editable, pre-plan) | "archive" (read-only)
 let viewMode = "today";
@@ -50,8 +68,11 @@ function initKeys() {
   ENGRAM_KEY = "pa-engrams-" + d;
   MOOD_KEY = "pa-mood-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
-  // Recalculate EOD from loaded state
-  if (__state && __state.schedule && __state.schedule.end_time) {
+  // Recalculate EOD from loaded state (prefer last work block end)
+  if(__state && __state.schedule && __state.schedule.blocks){
+    const wb=__state.schedule.blocks.filter(b=>(b.blockType||b.type)==='work');
+    if(wb.length){ EOD = pt(wb[wb.length-1].end); }
+  } else if (__state && __state.schedule && __state.schedule.end_time) {
     EOD = pt(__state.schedule.end_time);
   }
 }
@@ -437,18 +458,75 @@ function reloadPersistedEdits() {
   pushedAt = {};
   deletedSet = new Set();
 
-  // Reload from localStorage for the (now current) date keys
-  try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}");
-    if (d.ids) d.ids.forEach(id => manualDone.add(id));
-    if (d.at) Object.assign(doneAt, d.at);
-  } catch(e) {}
-  try { const d = JSON.parse(localStorage.getItem(PUSHED_KEY) || "{}");
-    if (d.ids) d.ids.forEach(id => pushedSet.add(id));
-    if (d.at) Object.assign(pushedAt, d.at);
-  } catch(e) {}
-  try { const d = JSON.parse(localStorage.getItem(DELETED_KEY) || "[]");
-    d.forEach(id => deletedSet.add(id));
-  } catch(e) {}
+  // Reload from blockStore day_root (primary) or localStorage (fallback)
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const dayRoot = window.blockStore.get(window.blockStore.getDayRootId());
+    if (dayRoot && dayRoot.properties) {
+      const done = dayRoot.properties._done || {};
+      if (done.ids) done.ids.forEach(id => manualDone.add(id));
+      if (done.at) Object.assign(doneAt, done.at);
+      const pushed = dayRoot.properties._pushed || {};
+      if (pushed.ids) pushed.ids.forEach(id => pushedSet.add(id));
+      if (pushed.at) Object.assign(pushedAt, pushed.at);
+      const deleted = dayRoot.properties._deleted || [];
+      deleted.forEach(id => deletedSet.add(id));
+      Object.assign(durChanges, dayRoot.properties._durChanges || {});
+    }
+    // One-time migration: if day_root has no _done but localStorage does, push all date state up
+    const dayRoot2 = window.blockStore.get(window.blockStore.getDayRootId());
+    if (dayRoot2 && !dayRoot2.properties._done && localStorage.getItem(DONE_KEY)) {
+      console.log('[Migrate] Promoting localStorage state to blockStore for', window.blockStore.getCurrentDate());
+      // Core state — these functions read manualDone/pushedSet/deletedSet/durChanges which
+      // were just loaded above from localStorage in the else-branch... but we're in the
+      // USE_BLOCKSTORE branch and they're empty. Load from LS now for migration only.
+      const _lsDone = (() => { try { return JSON.parse(localStorage.getItem(DONE_KEY)||"{}"); } catch(e) { return {}; } })();
+      const _lsPushed = (() => { try { return JSON.parse(localStorage.getItem(PUSHED_KEY)||"{}"); } catch(e) { return {}; } })();
+      const _lsDeleted = (() => { try { return JSON.parse(localStorage.getItem(DELETED_KEY)||"[]"); } catch(e) { return []; } })();
+      const _lsDur = (() => { try { return JSON.parse(localStorage.getItem(DUR_KEY)||"{}"); } catch(e) { return {}; } })();
+      const id = window.blockStore.getDayRootId();
+      const root = window.blockStore.get(id);
+      if (root) {
+        window.blockStore.updateBlock(id, {
+          ...root.properties,
+          _done: _lsDone,
+          _pushed: _lsPushed,
+          _deleted: _lsDeleted,
+          _durChanges: _lsDur,
+          // Also migrate other date-scoped state
+          _dismissed: (() => { try { return JSON.parse(localStorage.getItem(DISMISS_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _sessions: (() => { try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _reviewed: (() => { try { return JSON.parse(localStorage.getItem(REVIEWED_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _triageParents: (() => { try { return JSON.parse(localStorage.getItem(TRIAGE_PARENTS_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _pinnedStarts: (() => { try { return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _taskOrder: (() => { try { return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]"); } catch(e) { return []; } })(),
+          _subtasks: (() => { try { return JSON.parse(localStorage.getItem(SUBTASK_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _trivialFlags: (() => { try { return JSON.parse(localStorage.getItem(TRIV_FLAGS_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _pomoState: (() => { try { return JSON.parse(localStorage.getItem(POMO_STATE_KEY)||"null"); } catch(e) { return null; } })(),
+        });
+        // Apply loaded values to in-memory state
+        if (_lsDone.ids) _lsDone.ids.forEach(i => manualDone.add(i));
+        if (_lsDone.at) Object.assign(doneAt, _lsDone.at);
+        if (_lsPushed.ids) _lsPushed.ids.forEach(i => pushedSet.add(i));
+        if (_lsPushed.at) Object.assign(pushedAt, _lsPushed.at);
+        _lsDeleted.forEach(i => deletedSet.add(i));
+        Object.assign(durChanges, _lsDur);
+        console.log('[Migrate] localStorage → blockStore migration complete');
+      }
+    }
+  } else {
+    // Fallback: localStorage
+    try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}");
+      if (d.ids) d.ids.forEach(id => manualDone.add(id));
+      if (d.at) Object.assign(doneAt, d.at);
+    } catch(e) {}
+    try { const d = JSON.parse(localStorage.getItem(PUSHED_KEY) || "{}");
+      if (d.ids) d.ids.forEach(id => pushedSet.add(id));
+      if (d.at) Object.assign(pushedAt, d.at);
+    } catch(e) {}
+    try { const d = JSON.parse(localStorage.getItem(DELETED_KEY) || "[]");
+      d.forEach(id => deletedSet.add(id));
+    } catch(e) {}
+  }
   // Restore user-added tasks (quick-add, drawer-add)
   try {
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
@@ -504,7 +582,7 @@ function reloadPersistedEdits() {
       scheduled = [...done, ...active];
     }
   } catch(e) {}
-  // Restore pinned start times
+  // Restore pinned start times (from day_root._pinnedStarts or localStorage)
   try {
     const pins = loadPinnedStarts();
     Object.entries(pins).forEach(([id, timeStr]) => {
@@ -512,18 +590,30 @@ function reloadPersistedEdits() {
       ev._pinnedStart = timeStr;
     });
   } catch(e) {}
-  // Restore duration changes
+  // Apply duration changes to scheduled array
+  // durChanges already populated above from day_root or localStorage
   try {
-    const raw = localStorage.getItem(DUR_KEY); if (!raw) { recalcTimes(); return; }
-    const saved = JSON.parse(raw);
-    Object.entries(saved).forEach(([id, ch]) => {
-      const ev = scheduled.find(e => e.id === id); if (!ev) return;
-      const s = pt(ev.start);
-      ev.end = fmt(s + ch.current);
-      durChanges[id] = ch;
-    });
+    if (Object.keys(durChanges).length) {
+      Object.entries(durChanges).forEach(([id, ch]) => {
+        const ev = scheduled.find(e => e.id === id); if (!ev) return;
+        const s = pt(ev.start);
+        ev.end = fmt(s + ch.current);
+      });
+    } else if (!window.USE_BLOCKSTORE || !window.blockStore) {
+      // Legacy localStorage path when blockStore not available
+      const raw = localStorage.getItem(DUR_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        Object.entries(saved).forEach(([id, ch]) => {
+          const ev = scheduled.find(e => e.id === id); if (!ev) return;
+          const s = pt(ev.start);
+          ev.end = fmt(s + ch.current);
+          durChanges[id] = ch;
+        });
+      }
+    }
     recalcTimes();
-  } catch(e) {}
+  } catch(e) { recalcTimes(); }
 }
 
 async function switchToDate(dateStr) {

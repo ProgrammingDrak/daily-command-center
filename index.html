@@ -152,9 +152,10 @@
 </div>
 
 <div class="stats">
-  <div class="stat" onclick="showStatPopover('s-rem',event)"><div class="v" style="color:var(--accent-light)" id="s-rem">--</div><div class="l">Remaining</div></div>
+  <div class="stat" onclick="showStatPopover('s-time',event)"><div class="v" style="color:var(--accent-light)" id="s-time">--</div><div class="l">Time Left</div></div>
+  <div class="stat" onclick="showStatPopover('s-tasks',event)"><div class="v" style="color:var(--accent-light)" id="s-tasks">--</div><div class="l">Tasks</div></div>
   <div class="stat" onclick="showStatPopover('s-done',event)"><div class="v" style="color:var(--green)" id="s-done">--</div><div class="l">Completed</div></div>
-  <div class="stat" onclick="showStatPopover('s-end',event)"><div class="v" style="color:var(--green)" id="s-end">--</div><div class="l">Day Ends</div></div>
+  <div class="stat" onclick="showStatPopover('s-block',event)"><div class="v" style="color:var(--green)" id="s-block">--</div><div class="l">Block Ends</div></div>
 </div>
 <div id="stat-popover"></div>
 
@@ -523,6 +524,21 @@
       <button class="secondary" id="distraction-cancel">Cancel</button>
       <button class="primary" id="distraction-log-resume">Log &amp; Resume</button>
       <button class="secondary" id="distraction-log-stop">Log &amp; Stop</button>
+    </div>
+  </div>
+</div>
+
+<!-- Block editor modal -->
+<div class="completion-modal-overlay" id="block-editor-overlay">
+  <div class="completion-modal" style="max-width:480px">
+    <div class="completion-modal-hdr">
+      <h3>Edit Time Blocks</h3>
+      <button class="completion-modal-close" id="block-editor-close">&times;</button>
+    </div>
+    <div class="completion-modal-body" id="block-editor-body" style="padding:12px 16px;max-height:60vh;overflow-y:auto"></div>
+    <div class="completion-actions">
+      <button class="secondary" id="block-editor-cancel">Cancel</button>
+      <button class="primary" id="block-editor-save">Save</button>
     </div>
   </div>
 </div>

@@ -90,7 +90,7 @@
   }
 
   // ── Cache Helpers ──
-  const GLOBAL_TYPES = new Set(["sticky_note", "trivial_task", "life_capture", "pending_task"]);
+  const GLOBAL_TYPES = new Set(["sticky_note", "trivial_task", "life_capture", "pending_task", "schedule_block"]);
 
   function cacheSet(block) {
     if (GLOBAL_TYPES.has(block.type)) {

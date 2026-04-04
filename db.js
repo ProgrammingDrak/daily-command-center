@@ -152,6 +152,10 @@ const BLOCK_SCHEMAS = {
   added_task: {
     required: ["title"],
     optional: ["durMin", "detail", "source", "notionUrl", "priority", "meta"]
+  },
+  schedule_block: {
+    required: ["name", "blockType", "start", "end"],
+    optional: ["protected", "warnThreshold"]
   }
 };
 

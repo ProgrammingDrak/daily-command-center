@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "WebSearch",
+      "WebFetch(domain:konstantin.digital)",
+      "WebFetch(domain:editorjs.io)",
+      "WebFetch(domain:blog.nobaralabs.com)",
+      "Bash(cmd.exe /c \"where node\")",
+      "Bash(cmd /c \"where node 2>&1\")",
+      "Bash(npm rebuild:*)",
+      "Bash(lsof -ti:8091)",
+      "Bash(xargs kill:*)",
+      "Bash(powershell -Command \"Get-NetTCPConnection -LocalPort 8091 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_-Force -ErrorAction SilentlyContinue }\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 8396 /F)",
+      "Bash(powershell -Command \"Stop-Process -Id 8396 -Force\")",
+      "Bash(git -C \"C:\\\\Users\\\\offic\\\\Desktop\\\\Off Cloud Claude Work\\\\Repos\\\\Daily Command Center\" status --short node_modules)",
+      "Bash(chmod +x \"C:/Users/offic/Desktop/Off Cloud Claude Work/Repos/Daily Command Center/start.sh\")",
+      "Bash(grep -n \"buildScheduleSoon\\\\|function buildScheduleSoon\" \"/c/Users/offic/Desktop/Off Cloud Claude Work/Repos/Daily Command Center/public/js/\"*)",
+      "Bash(grep -n \"_updateTaskMenusBadge\" \"/c/Users/offic/Desktop/Off Cloud Claude Work/Repos/Daily Command Center/public/js/\"*)",
+      "Bash(dir \"C:\\\\Users\\\\offic\\\\Desktop\\\\Off Cloud Claude Work\\\\Repos\\\\Daily Command Center\" /s /b)",
+      "Bash(findstr /i \"audit\\\\|readable\\\\|notes\")",
+      "Bash(find 'C:/Users/offic/Desktop/Off Cloud Claude Work/Repos/Daily Command Center' -name *.html)",
+      "Bash(find 'C:/Users/offic/Desktop/Off Cloud Claude Work' -name *.html -not -path */node_modules/*)",
+      "Bash(python3 -c \":*)",
+      "Bash(curl -s http://localhost:8090/api/health)",
+      "Bash(curl -s \"http://localhost:8090/api/blocks?date=2026-04-02\")",
+      "Bash(python -c \"import json,sys; blocks=json.load\\(sys.stdin\\); added=[b for b in blocks if b.get\\(''''type''''\\)==''''added_task'''']; print\\(json.dumps\\(added, indent=2\\)\\)\")",
+      "Bash(for id:*)",
+      "Bash(do curl:*)",
+      "Bash(done)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X DELETE http://localhost:8090/api/blocks/a0000adf-e8ea-456c-bf73-0c17e3e10594)"
+    ]
+  }
+}

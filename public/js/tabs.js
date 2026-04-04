@@ -24,12 +24,69 @@ document.querySelectorAll(".tm-tab").forEach(tab=>{
 const UPCOMING_NOTES_KEY = "pa-upcoming-notes";
 const UPCOMING_ACTIONS_KEY = "pa-upcoming-actions";
 const PUSHED_DOCS_KEY = "pa-pushed-docs";
-function loadUpNotes(){try{return JSON.parse(localStorage.getItem(UPCOMING_NOTES_KEY)||"{}")}catch(e){return{}}}
-function saveUpNotes(d){if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;localStorage.setItem(UPCOMING_NOTES_KEY,JSON.stringify(d));scheduleIDBSave()}
-function loadUpActions(){try{return JSON.parse(localStorage.getItem(UPCOMING_ACTIONS_KEY)||"{}")}catch(e){return{}}}
-function saveUpActions(d){if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;localStorage.setItem(UPCOMING_ACTIONS_KEY,JSON.stringify(d));scheduleIDBSave()}
-function loadPushedDocs(){try{return JSON.parse(localStorage.getItem(PUSHED_DOCS_KEY)||"{}")}catch(e){return{}}}
-function savePushedDocs(d){if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;localStorage.setItem(PUSHED_DOCS_KEY,JSON.stringify(d));scheduleIDBSave()}
+
+// Debounced save of non-block globals to server (upcoming notes/actions, pushed docs)
+let _globalsPartialTimer = null;
+function _scheduleGlobalsPartialSave() {
+  clearTimeout(_globalsPartialTimer);
+  _globalsPartialTimer = setTimeout(() => {
+    const data = {
+      upcomingNotes: (() => { try { return JSON.parse(localStorage.getItem(UPCOMING_NOTES_KEY)||"{}"); } catch(e) { return {}; } })(),
+      upcomingActions: (() => { try { return JSON.parse(localStorage.getItem(UPCOMING_ACTIONS_KEY)||"{}"); } catch(e) { return {}; } })(),
+      pushedDocs: (() => { try { return JSON.parse(localStorage.getItem(PUSHED_DOCS_KEY)||"{}"); } catch(e) { return {}; } })(),
+    };
+    fetch("/api/save-globals", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(data), keepalive: true
+    }).catch(() => {});
+    // Update in-memory server globals so same-session reads are consistent
+    if (window.__SECOND_BRAIN_GLOBALS__) Object.assign(window.__SECOND_BRAIN_GLOBALS__, data);
+  }, 2000);
+}
+
+function loadUpNotes(){
+  const local = localStorage.getItem(UPCOMING_NOTES_KEY);
+  if (local) try { return JSON.parse(local); } catch(e) {}
+  // Cross-device: use server-loaded globals
+  const sg = window.__SECOND_BRAIN_GLOBALS__;
+  if (sg && sg.upcomingNotes) {
+    localStorage.setItem(UPCOMING_NOTES_KEY, JSON.stringify(sg.upcomingNotes));
+    return sg.upcomingNotes;
+  }
+  return {};
+}
+function saveUpNotes(d){
+  localStorage.setItem(UPCOMING_NOTES_KEY, JSON.stringify(d));
+  _scheduleGlobalsPartialSave();
+}
+function loadUpActions(){
+  const local = localStorage.getItem(UPCOMING_ACTIONS_KEY);
+  if (local) try { return JSON.parse(local); } catch(e) {}
+  const sg = window.__SECOND_BRAIN_GLOBALS__;
+  if (sg && sg.upcomingActions) {
+    localStorage.setItem(UPCOMING_ACTIONS_KEY, JSON.stringify(sg.upcomingActions));
+    return sg.upcomingActions;
+  }
+  return {};
+}
+function saveUpActions(d){
+  localStorage.setItem(UPCOMING_ACTIONS_KEY, JSON.stringify(d));
+  _scheduleGlobalsPartialSave();
+}
+function loadPushedDocs(){
+  const local = localStorage.getItem(PUSHED_DOCS_KEY);
+  if (local) try { return JSON.parse(local); } catch(e) {}
+  const sg = window.__SECOND_BRAIN_GLOBALS__;
+  if (sg && sg.pushedDocs) {
+    localStorage.setItem(PUSHED_DOCS_KEY, JSON.stringify(sg.pushedDocs));
+    return sg.pushedDocs;
+  }
+  return {};
+}
+function savePushedDocs(d){
+  localStorage.setItem(PUSHED_DOCS_KEY, JSON.stringify(d));
+  _scheduleGlobalsPartialSave();
+}
 
 // Notes button for upcoming meetings (uses its own localStorage keys)
 function upNotesButton(mtg) {

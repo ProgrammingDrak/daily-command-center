@@ -1,5 +1,10 @@
 // ======== OVERFLOW DETECTION ========
 let EOD = (function(){
+  // Prefer last work-type block end
+  if(__state&&__state.schedule&&__state.schedule.blocks){
+    const wb=__state.schedule.blocks.filter(b=>(b.blockType||b.type)==='work');
+    if(wb.length) return pt(wb[wb.length-1].end);
+  }
   if(__state&&__state.schedule&&__state.schedule.end_time){
     const t=__state.schedule.end_time;
     return pt(t.length>5?t.substring(11,16):t);
@@ -250,6 +255,7 @@ function insertTaskNow(){
     savePendingTasks(pending);
     log("scheduled",id,"Quick-added: "+title);
     render();
+    checkBlockWarnings(newItem);
   } else {
     // Doesn't fit — stage as pending and open overflow modal (task NOT in scheduled yet)
     _pendingNewTask = {...newItem, _insertAt: insertAt};
@@ -272,6 +278,7 @@ function insertTaskFromDrawer(title, durMin){
   checkOverflow();
   log("scheduled",id,"Drawer-added: "+title);
   render();
+  checkBlockWarnings(newItem);
 }
 
 // ======== ACTIONS ========
@@ -331,9 +338,15 @@ function openStartTimePicker(id, anchorEl){
   pop.querySelector("#stp-input").focus();
 }
 let PINNED_KEY = "pa-pinned-starts-" + ((__state && __state.date) ? __state.date : "unknown");
-function loadPinnedStarts(){ try{return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}")}catch(e){return{}} }
+function loadPinnedStarts(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_pinnedStarts", null);
+    if (v) return v;
+  }
+  try{return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}")}catch(e){return{}}
+}
 function savePinnedStarts(data){
-  if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;
+  if (_bsSaveProp("_pinnedStarts", data)) return;
   localStorage.setItem(PINNED_KEY,JSON.stringify(data)); scheduleIDBSave();
 }
 
@@ -382,14 +395,55 @@ function resetAll(){scheduled=JSON.parse(JSON.stringify(INIT_SCHED));consider=JS
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");
-function loadTaskOrder(){ try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]} }
+function loadTaskOrder(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_taskOrder", null);
+    if (v && v.length) return v;
+  }
+  try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]}
+}
 function saveTaskOrder(){
   const order=scheduled.filter(ev=>!isDone(ev)).map(ev=>ev.id);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
-    const items=order.map((id,i)=>({id,sort_order:(i+1)*1000}));
-    window.blockStore.reorder(items).catch(()=>{});
+    // Save order to day_root for cross-device reads
+    _bsSaveProp("_taskOrder", order);
+    // Also update sort_order on added_task blocks (the only real blocks that exist)
+    const addedBlocks=window.blockStore.getByType("added_task");
+    if(addedBlocks.length){
+      const orderMap={};order.forEach((id,i)=>{orderMap[id]=i});
+      const items=addedBlocks
+        .filter(b=>b.properties&&orderMap[b.properties.local_id]!==undefined)
+        .map(b=>({id:b.id,sort_order:(orderMap[b.properties.local_id]+1)*1000}));
+      if(items.length)window.blockStore.reorder(items).catch(()=>{});
+    }
     return;
   }
   localStorage.setItem(ORDER_KEY,JSON.stringify(order)); scheduleIDBSave();
+}
+
+// ======== BLOCK BOUNDARY WARNINGS ========
+function checkBlockWarnings(task){
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  if(!blocks.length||!task) return;
+  const taskStart=pt(task.start), taskEnd=pt(task.end);
+  for(const b of blocks){
+    const bStart=pt(b.start), bEnd=pt(b.end);
+    const bt=b.blockType||b.type;
+    // Protected boundary: warn if task overlaps a protected block
+    if(b.protected && taskStart<bEnd && taskEnd>bStart && bt==='personal'){
+      showToast("⚠ \""+task.title+"\" overlaps protected block \""+b.name+"\"","error",8000);
+    }
+    // Threshold warning: warn if remaining time in current block is low
+    if(b.warnThreshold && b.warnThreshold>0){
+      const now=new Date();
+      const nowMin=now.getHours()*60+now.getMinutes();
+      if(nowMin>=bStart && nowMin<bEnd){
+        const remaining=bEnd-nowMin;
+        if(remaining<=b.warnThreshold){
+          showToast("⏱ Only "+remaining+"m left in \""+b.name+"\"","error",6000);
+        }
+      }
+    }
+  }
 }
 

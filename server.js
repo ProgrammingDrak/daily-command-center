@@ -326,7 +326,54 @@ function buildDayResponse(dateStr) {
     result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline };
   }
 
+  // Read schedule blocks from SQLite
+  result.schedule.blocks = getScheduleBlocks();
+
   return result;
+}
+
+function getScheduleBlocks(){
+  try {
+    const db = blockDB.getDB();
+    const rows = db.prepare(
+      "SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL ORDER BY sort_order"
+    ).all();
+    return rows.map(r => ({ ...JSON.parse(r.properties), id: r.id, parent_id: r.parent_id, sort_order: r.sort_order }));
+  } catch(e){ return []; }
+}
+
+function seedScheduleBlocksFromYAML(){
+  try {
+    const db = blockDB.getDB();
+    const existing = db.prepare("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL").get();
+    if(existing.cnt > 0) return; // already seeded
+
+    if(!fs.existsSync(USER_CONTEXT_FILE)) return;
+    const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8");
+    const match = raw.match(/\bblocks:\s*\n((?:[ \t]+.*\n?)*)/m);
+    if(!match) return;
+    const blocks = [];
+    let current = null;
+    for(const line of match[1].split("\n")){
+      const nm = line.match(/^\s+-\s+name:\s+"?([^"\n]+)"?\s*$/);
+      const tp = line.match(/^\s+type:\s+(\w+)/);
+      const st = line.match(/^\s+start:\s+"?(\d{2}:\d{2})"?/);
+      const en = line.match(/^\s+end:\s+"?(\d{2}:\d{2})"?/);
+      if(nm){ current = { name: nm[1].trim() }; blocks.push(current); }
+      else if(tp && current) current.blockType = tp[1];
+      else if(st && current) current.start = st[1];
+      else if(en && current) current.end = en[1];
+    }
+    const valid = blocks.filter(b => b.name && b.blockType && b.start && b.end);
+    valid.forEach((b, i) => {
+      blockDB.createBlock(db, {
+        type: "schedule_block",
+        properties: { name: b.name, blockType: b.blockType, start: b.start, end: b.end, protected: false, warnThreshold: 0 },
+        sort_order: i
+      });
+    });
+    if(valid.length) console.log("[seed] Migrated " + valid.length + " schedule blocks from YAML to SQLite");
+  } catch(e){ console.error("[seed] Error seeding schedule blocks:", e.message); }
 }
 
 function ensureSkeletonDays() {
@@ -1198,6 +1245,11 @@ app.listen(PORT, () => {
     console.log(`  Days:       ${DAYS_DIR}`);
   } catch (e) {
     console.error(`  Days:       Bootstrap error — ${e.message}`);
+  }
+
+  // Seed schedule blocks from YAML if not already in SQLite
+  try { seedScheduleBlocksFromYAML(); } catch(e) {
+    console.error(`  Blocks:     Seed error — ${e.message}`);
   }
 
   // Re-check skeletons every 6 hours (handles midnight rollover)
