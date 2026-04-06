@@ -64,12 +64,17 @@
   /* ── Tomorrow Mode indicator ── */
   .view-tomorrow .header h1::after{content:" -- Tomorrow";font-size:14px;font-weight:400;color:var(--accent);margin-left:8px}
 
-  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;position:relative}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;position:relative}
   .stat{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:12px;text-align:center;cursor:pointer;transition:border-color 0.12s,background 0.12s}
   .stat:hover{border-color:rgba(255,255,255,0.15);background:var(--card-hover)}
   .stat.sp-open{border-color:rgba(59,130,246,0.5);background:rgba(59,130,246,0.06)}
   .stat .v{font-size:24px;font-weight:700;margin-bottom:1px}
   .stat .l{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
+  .stat-combined{display:flex;align-items:center;padding:0;cursor:default}
+  .stat-combined:hover{background:var(--card);border-color:var(--border)}
+  .stat-combined .stat-half{flex:1;padding:12px 8px;text-align:center;cursor:pointer;border-radius:8px;transition:background 0.12s}
+  .stat-combined .stat-half:hover{background:rgba(255,255,255,0.05)}
+  .stat-combined .stat-sep{width:1px;height:32px;background:var(--border);flex-shrink:0}
   #stat-popover{display:none;position:fixed;z-index:200;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;min-width:240px;max-width:320px;box-shadow:0 8px 28px rgba(0,0,0,0.5)}
   .sp-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:10px}
   .sp-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px}
@@ -1021,7 +1026,14 @@
   .tri-dismiss-actions button{flex:1;padding:8px 12px;border-radius:6px;border:none;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.12s}
 
   .footer{text-align:center;font-size:10px;color:var(--text-muted);padding-top:12px;border-top:1px solid var(--border);margin-top:20px}
-  @media(max-width:700px){.stats{grid-template-columns:repeat(3,1fr)} body{padding:14px 14px 110px} .tl{padding-left:85px}}
+  .tl-block-header{display:flex;align-items:center;gap:6px;padding:5px 0 3px 0;margin:10px 0 2px 0;border-top:1px solid var(--border);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
+  .tl-block-header:first-child{border-top:none;margin-top:0}
+  .block-hdr-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+  .block-hdr-name{font-size:11px;font-weight:600;color:var(--text);text-transform:none;letter-spacing:0}
+  .block-hdr-time{flex:1;opacity:0.55}
+  .block-hdr-edit{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 5px;border-radius:4px;opacity:0;transition:opacity 0.15s;line-height:1}
+  .tl-block-header:hover .block-hdr-edit{opacity:1}
+  @media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)} body{padding:14px 14px 110px} .tl{padding-left:85px}}
 
   /* Quick-add bar */
   .sched-quick-add{display:flex;align-items:center;gap:8px;padding:8px 0 10px;border-bottom:1px solid var(--border);margin-bottom:4px}

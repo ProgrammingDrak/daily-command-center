@@ -501,11 +501,11 @@ function seedScheduleBlocksFromYAML(userId, workspaceId) {
 
     if(!fs.existsSync(USER_CONTEXT_FILE)) return;
     const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8");
-    const match = raw.match(/\bblocks:\s*\n((?:[ \t]+.*\n?)*)/m);
+    const match = raw.match(/\bblocks:\s*\r?\n((?:[ \t]+.*\r?\n?)*)/m);
     if(!match) return;
     const blocks = [];
     let current = null;
-    for(const line of match[1].split("\n")){
+    for(const line of match[1].split(/\r?\n/)){
       const nm = line.match(/^\s+-\s+name:\s+"?([^"\n]+)"?\s*$/);
       const tp = line.match(/^\s+type:\s+(\w+)/);
       const st = line.match(/^\s+start:\s+"?(\d{2}:\d{2})"?/);
