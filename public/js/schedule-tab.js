@@ -86,6 +86,22 @@ function buildSchedule(){
   const doneItems=vis.filter(isDone);
   const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
+
+  // Schedule block section headers
+  const schedBlocks=((__state&&__state.schedule&&__state.schedule.blocks)||[]).slice().sort((a,b)=>a.start.localeCompare(b.start));
+  let blockPtr=0;
+  function parseHHMM(t){const[h,m]=t.split(':').map(Number);return h*60+m;}
+  function fmtBlk12(hhmm){const[h,m]=hhmm.split(':').map(Number);const a=h>=12?'PM':'AM',h12=h%12||12;return h12+':'+(m<10?'0':'')+m+' '+a;}
+  function injectBlockHeaders(beforeMin){
+    while(blockPtr<schedBlocks.length&&parseHHMM(schedBlocks[blockPtr].start)<=beforeMin){
+      const blk=schedBlocks[blockPtr];
+      const dot=blk.blockType==='work'?'var(--accent-light)':blk.blockType==='personal'?'var(--purple,#a78bfa)':'var(--text-muted)';
+      const hdr=document.createElement('div');hdr.className='tl-block-header';hdr.dataset.blockId=blk.id||'';
+      hdr.innerHTML='<span class="block-hdr-dot" style="background:'+dot+'"></span>'+'<span class="block-hdr-name">'+blk.name+'</span>'+'<span class="block-hdr-time">'+fmtBlk12(blk.start)+' \u2013 '+fmtBlk12(blk.end)+'</span>'+'<button class="block-hdr-edit" onclick="event.stopPropagation();openBlockEditor()" title="Edit time blocks">\u270E</button>';
+      tl.appendChild(hdr);blockPtr++;
+    }
+  }
+
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
 
@@ -133,6 +149,7 @@ function buildSchedule(){
 
   // Render active/upcoming items as full cards
   activeItems.forEach(ev=>{
+    injectBlockHeaders(pt(ev.start));
     const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday),active=trueActive||isNextUp,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
     const d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
@@ -372,6 +389,9 @@ function buildSchedule(){
 
     tl.appendChild(el);
   });
+
+  // Flush any remaining block headers after last active item
+  injectBlockHeaders(24*60);
 
   // Render pushed-to-tomorrow items at the bottom
   if(pushedItems.length){
