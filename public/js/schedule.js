@@ -189,6 +189,7 @@ function persistAddedTask(item){
       detail:item.detail||"",
       notionUrl:item.notionUrl||"",
       source:item.source||"manual",
+      tags:item.tags||[],
       added_at:new Date().toISOString()
     },{date});
     return;
@@ -228,7 +229,7 @@ function insertTaskNow(){
   const id=qaId();
   const newItem={id,title,type:"task",start:"00:00",end:fmt(durMin),
     meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",
-    notionUrl:"",priority:"High"};
+    notionUrl:"",priority:"High",tags:[]};
 
   // Calculate insertion position
   const activeIdx=scheduled.findIndex(isActive);

@@ -97,7 +97,7 @@ function buildSchedule(){
       const blk=schedBlocks[blockPtr];
       const dot=blk.blockType==='work'?'var(--accent-light)':blk.blockType==='personal'?'var(--purple,#a78bfa)':'var(--text-muted)';
       const hdr=document.createElement('div');hdr.className='tl-block-header';hdr.dataset.blockId=blk.id||'';
-      hdr.innerHTML='<span class="block-hdr-dot" style="background:'+dot+'"></span>'+'<span class="block-hdr-name">'+blk.name+'</span>'+'<span class="block-hdr-time">'+fmtBlk12(blk.start)+' \u2013 '+fmtBlk12(blk.end)+'</span>'+'<button class="block-hdr-edit" onclick="event.stopPropagation();openBlockEditor()" title="Edit time blocks">\u270E</button>';
+      hdr.innerHTML='<span class="block-hdr-dot" style="background:'+dot+'"></span>'+'<span class="block-hdr-name">'+blk.name+'</span>'+'<span class="block-hdr-time">'+fmtBlk12(blk.start)+' \u2013 '+fmtBlk12(blk.end)+'</span>'+'<button class="block-hdr-edit" onclick="event.stopPropagation();openBlockEditor(\''+(blk.id||'')+'\''+')" title="Edit time blocks">\u270E</button>';
       tl.appendChild(hdr);blockPtr++;
     }
   }
@@ -654,17 +654,44 @@ document.addEventListener('click', function(e) {
 // ======== BLOCK EDITOR ========
 let _beBlocks = []; // working copy
 
-function openBlockEditor(){
+function openBlockEditor(blockId){
   // Close popover
   const popover = document.getElementById('stat-popover');
   if(popover){ popover.style.display='none'; popover.dataset.openFor=''; }
   document.querySelectorAll('.stat.sp-open').forEach(el=>el.classList.remove('sp-open'));
 
-  // Deep copy current blocks as working set
-  const src = (__state&&__state.schedule&&__state.schedule.blocks)||[];
-  _beBlocks = JSON.parse(JSON.stringify(src));
+  // Read blocks from blockStore (has full props incl. acceptedTags), fall back to state
+  const raw = (window.blockStore && window.blockStore.getByType('schedule_block')) || [];
+  if(raw.length) {
+    _beBlocks = raw.map(b => ({
+      id: b.id,
+      parent_id: b.parent_id || null,
+      sort_order: b.sort_order || 0,
+      _isNew: false,
+      ...(b.properties || {})
+    }));
+  } else {
+    const src = (__state&&__state.schedule&&__state.schedule.blocks)||[];
+    _beBlocks = JSON.parse(JSON.stringify(src));
+  }
+
   renderBlockEditor();
   document.getElementById("block-editor-overlay").classList.add("open");
+
+  // Scroll to and briefly highlight the clicked block
+  if(blockId) {
+    const idx = _beBlocks.findIndex(b => b.id === blockId);
+    if(idx !== -1) {
+      setTimeout(() => {
+        const row = document.querySelector('.be-card[data-idx="'+idx+'"]');
+        if(row) {
+          row.scrollIntoView({ behavior:'smooth', block:'nearest' });
+          row.classList.add('be-row-highlight');
+          setTimeout(() => row.classList.remove('be-row-highlight'), 1500);
+        }
+      }, 60);
+    }
+  }
 }
 
 function closeBlockEditor(){
@@ -686,27 +713,173 @@ function renderBlockEditor(){
       const cidx = _beBlocks.indexOf(c);
       html += renderBlockRow(c, cidx, true);
     });
-    html += '<div class="be-add-sub" style="padding-left:20px"><button class="be-add" onclick="beAddChild('+idx+')">+ Add sub-block</button></div>';
+    html += '<div class="be-card-add-sub"><button onclick="beAddChild('+idx+')">+ Add sub-block</button></div>';
   });
-  html += '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px"><button class="be-add" onclick="beAddBlock()">+ Add Block</button></div>';
+  html += '<div class="be-add-root"><button onclick="beAddBlock()">+ Add Block</button></div>';
   body.innerHTML = html;
+  mountBlockEditorTagPickers();
+  beCheckOverlaps();
+}
+
+function mountBlockEditorTagPickers(){
+  document.querySelectorAll('.be-tag-picker').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    const b = _beBlocks[idx];
+    if(!b) return;
+    if(typeof createTagPicker === 'function') {
+      createTagPicker(el, b.acceptedTags || [], ids => {
+        if(_beBlocks[idx]) _beBlocks[idx].acceptedTags = ids;
+      });
+    }
+  });
+}
+
+function beDuration(start, end){
+  // Returns a "1h 30m" style string from two HH:MM values
+  if(!start||!end) return '';
+  const s = start.split(':').map(Number), e = end.split(':').map(Number);
+  const mins = (e[0]*60+e[1]) - (s[0]*60+s[1]);
+  if(mins <= 0) return '';
+  const h = Math.floor(mins/60), m = mins%60;
+  return h && m ? h+'h '+m+'m' : h ? h+'h' : m+'m';
 }
 
 function renderBlockRow(b, idx, nested){
   const bt = b.blockType||b.type||'work';
-  const prot = b.protected ? 'on' : '';
+  const prot = b.protected;
   const warn = b.warnThreshold||0;
-  return '<div class="be-row'+(nested?' nested':'')+'" data-idx="'+idx+'">'
-    +'<input class="be-input be-name" value="'+esc(b.name||'')+'" placeholder="Name" onchange="beUpdate('+idx+',&apos;name&apos;,this.value)">'
-    +'<select class="be-input be-type" onchange="beUpdate('+idx+',&apos;blockType&apos;,this.value)">'
-    +'<option value="work"'+(bt==='work'?' selected':'')+'>Work</option>'
-    +'<option value="personal"'+(bt==='personal'?' selected':'')+'>Personal</option></select>'
-    +'<input type="time" class="be-input be-time" value="'+(b.start||'09:00')+'" onchange="beUpdate('+idx+',&apos;start&apos;,this.value)">'
-    +'<input type="time" class="be-input be-time" value="'+(b.end||'17:00')+'" onchange="beUpdate('+idx+',&apos;end&apos;,this.value)">'
-    +'<span class="be-toggle '+prot+'" onclick="beToggleProtected('+idx+')" title="Protected boundary">🛡</span>'
-    +'<span class="be-warn"><input type="number" class="be-input be-warn-input" value="'+warn+'" min="0" max="60" placeholder="0" title="Warn threshold (minutes)" onchange="beUpdate('+idx+',&apos;warnThreshold&apos;,parseInt(this.value)||0)">m</span>'
-    +'<button class="be-del" onclick="beDelete('+idx+')" title="Delete">×</button>'
-    +'</div>';
+  const dur = beDuration(b.start||'09:00', b.end||'17:00');
+  const barClass = bt === 'personal' ? 'personal' : bt === 'break' ? 'break' : 'work';
+
+  return '<div class="be-card'+(nested?' nested':'')+'" data-idx="'+idx+'">'
+    +'<div class="be-card-inner">'
+      +'<div class="be-bar '+barClass+'"></div>'
+      +'<div class="be-card-content">'
+        // ── Row 1: name ──
+        +'<div class="be-row-name">'
+          +'<input class="be-card-name" value="'+esc(b.name||'')+'" placeholder="Block name" title="Block name" onchange="beUpdate('+idx+',&apos;name&apos;,this.value)">'
+          +'<button class="be-card-delete" onclick="beDelete('+idx+')" title="Delete block">\u00d7</button>'
+        +'</div>'
+        // ── Row 2: times + duration ──
+        +'<div class="be-row-time">'
+          +'<input type="time" class="be-card-time" value="'+(b.start||'09:00')+'" title="Start time" id="be-start-'+idx+'" onchange="beUpdate('+idx+',&apos;start&apos;,this.value);beRefreshDur('+idx+');beCheckOverlaps()">'
+          +'<span class="be-time-arrow">\u2192</span>'
+          +'<input type="time" class="be-card-time" value="'+(b.end||'17:00')+'" title="End time" id="be-end-'+idx+'" onchange="beUpdate('+idx+',&apos;end&apos;,this.value);beRefreshDur('+idx+');beCheckOverlaps()">'
+          +'<input class="be-dur-input" value="'+dur+'" title="Duration \u2014 edit to adjust end time" id="be-dur-'+idx+'" onchange="beDurChanged('+idx+',this.value)" placeholder="0m">'
+        +'</div>'
+        // ── Row 3: type, protected, warn ──
+        +'<div class="be-row-settings">'
+          +'<select class="be-type-select" title="Block category" onchange="beUpdate('+idx+',&apos;blockType&apos;,this.value);beUpdateBar('+idx+',this.value)">'
+            +'<option value="work"'+(bt==='work'?' selected':'')+'>Work</option>'
+            +'<option value="personal"'+(bt==='personal'?' selected':'')+'>Personal</option>'
+          +'</select>'
+          +'<button class="be-pill'+(prot?' active':'')+'" title="Protected boundary \u2014 tasks cannot overflow past the end of this block" onclick="beToggleProtected('+idx+')">'
+            +'<span class="be-pill-icon">\ud83d\udee1</span>'
+            +'<span class="be-pill-label">Protected</span>'
+          +'</button>'
+          +'<div class="be-warn-pill" title="Warn you this many minutes before the block ends (0 = off)">'
+            +'<span class="be-warn-icon">\u26a0\ufe0f</span>'
+            +'<span class="be-warn-label">Warn</span>'
+            +'<input type="number" class="be-warn-num" value="'+warn+'" min="0" max="120" placeholder="0" onchange="beUpdate('+idx+',&apos;warnThreshold&apos;,parseInt(this.value)||0)">'
+            +'<span class="be-warn-label">min</span>'
+          +'</div>'
+        +'</div>'
+        // ── Row 4: accepts tags (full width) ──
+        +'<div class="be-row-tags">'
+          +'<span class="be-tags-label">Accepts</span>'
+          +'<div class="be-tag-picker" data-idx="'+idx+'"></div>'
+        +'</div>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+}
+
+function beRefreshDur(idx){
+  const b = _beBlocks[idx];
+  if(!b) return;
+  const el = document.getElementById('be-dur-'+idx);
+  if(el) el.value = beDuration(b.start||'09:00', b.end||'17:00');
+}
+
+// Parse a duration string like "2h", "30m", "1h 30m", "1.5h" → total minutes
+function beParseDur(str){
+  if(!str) return 0;
+  str = str.trim().toLowerCase();
+  let mins = 0;
+  // "1.5h" style
+  const decMatch = str.match(/^(\d+\.?\d*)\s*h$/);
+  if(decMatch) return Math.round(parseFloat(decMatch[1]) * 60);
+  // "1h 30m" or "1h30m"
+  const hm = str.match(/(\d+)\s*h\s*(\d+)\s*m?/);
+  if(hm) return parseInt(hm[1])*60 + parseInt(hm[2]);
+  // "2h"
+  const hOnly = str.match(/^(\d+)\s*h$/);
+  if(hOnly) return parseInt(hOnly[1])*60;
+  // "45m" or just "45"
+  const mOnly = str.match(/^(\d+)\s*m?$/);
+  if(mOnly) return parseInt(mOnly[1]);
+  return 0;
+}
+
+// When duration input changes, update end time
+function beDurChanged(idx, val){
+  const b = _beBlocks[idx];
+  if(!b) return;
+  const mins = beParseDur(val);
+  if(mins <= 0) return;
+  const s = (b.start||'09:00').split(':').map(Number);
+  const endMins = s[0]*60 + s[1] + mins;
+  const eh = Math.floor(endMins/60), em = endMins%60;
+  const endStr = String(eh).padStart(2,'0')+':'+String(em).padStart(2,'0');
+  b.end = endStr;
+  const endEl = document.getElementById('be-end-'+idx);
+  if(endEl) endEl.value = endStr;
+  // Refresh the duration display to normalized format
+  const durEl = document.getElementById('be-dur-'+idx);
+  if(durEl) durEl.value = beDuration(b.start, b.end);
+  beCheckOverlaps();
+}
+
+// Check for overlapping blocks and show/hide warnings
+function beCheckOverlaps(){
+  // Sort top-level blocks by start time for comparison
+  const topLevel = _beBlocks.filter(b => !b.parent_id);
+  topLevel.sort((a,b) => (a.start||'').localeCompare(b.start||''));
+
+  // Clear all existing overlap warnings
+  document.querySelectorAll('.be-card').forEach(c => c.classList.remove('be-overlap'));
+  document.querySelectorAll('.be-overlap-warn').forEach(w => w.remove());
+
+  let hasOverlap = false;
+  for(let i = 0; i < topLevel.length - 1; i++){
+    const curr = topLevel[i], next = topLevel[i+1];
+    if(!curr.end || !next.start) continue;
+    if(curr.end > next.start){
+      hasOverlap = true;
+      // Mark both cards
+      const currIdx = _beBlocks.indexOf(curr);
+      const nextIdx = _beBlocks.indexOf(next);
+      const currCard = document.querySelector('.be-card[data-idx="'+currIdx+'"]');
+      const nextCard = document.querySelector('.be-card[data-idx="'+nextIdx+'"]');
+      if(currCard){
+        currCard.classList.add('be-overlap');
+        if(!currCard.querySelector('.be-overlap-warn')){
+          const w = document.createElement('div');
+          w.className = 'be-overlap-warn';
+          w.textContent = 'Overlaps with '+esc(next.name||'next block')+' (starts '+next.start+')';
+          currCard.querySelector('.be-card-content').appendChild(w);
+        }
+      }
+      if(nextCard) nextCard.classList.add('be-overlap');
+    }
+  }
+
+  // Toggle save button
+  const saveBtn = document.getElementById('block-editor-save');
+  if(saveBtn){
+    saveBtn.disabled = hasOverlap;
+    saveBtn.title = hasOverlap ? 'Fix overlapping blocks before saving' : '';
+  }
 }
 
 function esc(s){ return s.replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
@@ -719,6 +892,14 @@ function beToggleProtected(idx){
   if(!_beBlocks[idx]) return;
   _beBlocks[idx].protected = !_beBlocks[idx].protected;
   renderBlockEditor();
+}
+
+function beUpdateBar(idx, type){
+  const card = document.querySelector('.be-card[data-idx="'+idx+'"]');
+  if(!card) return;
+  const bar = card.querySelector('.be-bar');
+  if(!bar) return;
+  bar.className = 'be-bar ' + (type === 'personal' ? 'personal' : type === 'break' ? 'break' : 'work');
 }
 
 function beDelete(idx){
@@ -752,6 +933,15 @@ function beAddChild(parentIdx){
 }
 
 async function saveBlockEditor(){
+  // Check overlaps first
+  const topLevel = _beBlocks.filter(b => !b.parent_id);
+  topLevel.sort((a,b) => (a.start||'').localeCompare(b.start||''));
+  for(let i = 0; i < topLevel.length - 1; i++){
+    if(topLevel[i].end > topLevel[i+1].start){
+      showToast(topLevel[i].name+" overlaps with "+topLevel[i+1].name+" \u2014 fix before saving","error");
+      return;
+    }
+  }
   // Validate
   for(const b of _beBlocks){
     if(!b.name||!b.name.trim()){ showToast("Block name is required","error"); return; }
@@ -781,7 +971,7 @@ async function saveBlockEditor(){
   // Create or update
   for(let i=0;i<_beBlocks.length;i++){
     const b = _beBlocks[i];
-    const props = { name:b.name.trim(), blockType:b.blockType||'work', start:b.start, end:b.end, protected:!!b.protected, warnThreshold:b.warnThreshold||0 };
+    const props = { name:b.name.trim(), blockType:b.blockType||'work', start:b.start, end:b.end, protected:!!b.protected, warnThreshold:b.warnThreshold||0, acceptedTags:b.acceptedTags||[] };
     if(b._isNew || b.id.startsWith('_new_')){
       await blockStore.createBlock("schedule_block", props, { parentId:b.parent_id, sortOrder:i });
     } else {
@@ -811,5 +1001,6 @@ document.getElementById("block-editor-close").addEventListener("click",closeBloc
 document.getElementById("block-editor-cancel").addEventListener("click",closeBlockEditor);
 document.getElementById("block-editor-save").addEventListener("click",saveBlockEditor);
 document.getElementById("block-editor-overlay").addEventListener("click",e=>{if(e.target===e.currentTarget)closeBlockEditor()});
+document.getElementById("block-editor-manage-tags")?.addEventListener("click",()=>{ if(typeof openTagManager==='function') openTagManager(); });
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("block-editor-overlay").classList.contains("open"))closeBlockEditor()});
 

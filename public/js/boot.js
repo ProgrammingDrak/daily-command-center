@@ -90,6 +90,10 @@
     try {
       await window.blockStore.loadDay(viewDate);
       await window.blockStore.loadGlobals();
+      // Build the global tag index so tag-aware scheduling can resolve ancestors
+      if (typeof buildTagIndex === 'function') {
+        window.__TAGS__ = buildTagIndex(window.blockStore.getByType('tag'));
+      }
       console.log('[BlockStore] Loaded blocks for', viewDate, window.blockStore.debug());
     } catch(e) { console.warn("[BlockStore] Load failed (non-fatal):", e); }
   }

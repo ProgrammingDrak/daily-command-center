@@ -157,9 +157,41 @@ function openTrivialPicker(scheduleId, anchorEl){
 // ======== TASK DETAIL MODAL (Notes + Subtasks + Trivial + Action Items) ========
 let _addModalTaskId = null;
 
+function _persistTaskTags(taskId, tagIds) {
+  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.addedTasks && window.blockStore) {
+    // Check added_task blocks
+    var addedBlocks = window.blockStore.getByType('added_task');
+    var block = addedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId; });
+    if (block) {
+      window.blockStore.updateBlock(block.id, Object.assign({}, block.properties, {tags: tagIds}));
+      return;
+    }
+    // Check schedule_item blocks
+    var schedBlocks = window.blockStore.getByType('schedule_item');
+    var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
+    if (sBlock) {
+      window.blockStore.updateBlock(sBlock.id, Object.assign({}, sBlock.properties, {tags: tagIds}));
+      return;
+    }
+  }
+  // Fallback: IDB save
+  if (typeof scheduleIDBSave === 'function') scheduleIDBSave();
+}
+
 function openAddModal(taskId, taskTitle) {
   _addModalTaskId = taskId;
   document.getElementById('add-modal-title').textContent = taskTitle || 'Task Details';
+
+  // Initialize tag picker
+  var tagContainer = document.getElementById('am-tag-picker');
+  if (tagContainer && typeof createTagPicker === 'function') {
+    var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
+    var currentTags = (taskEntry && taskEntry.tags) ? taskEntry.tags : [];
+    createTagPicker(tagContainer, currentTags, function(newIds) {
+      if (taskEntry) taskEntry.tags = newIds;
+      _persistTaskTags(taskId, newIds);
+    });
+  }
 
   // Load notes into block editor
   var notes = loadNotes();
