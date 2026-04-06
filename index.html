@@ -531,11 +531,27 @@
   </div>
 </div>
 
+<!-- Tag manager modal -->
+<div class="completion-modal-overlay" id="tag-manager-overlay">
+  <div class="completion-modal" style="max-width:520px">
+    <div class="completion-modal-hdr">
+      <h3>Manage Tags</h3>
+      <button class="completion-modal-close" id="tag-manager-close">&times;</button>
+    </div>
+    <div class="completion-modal-body" id="tag-manager-body" style="padding:12px 16px;max-height:65vh;overflow-y:auto"></div>
+    <div class="completion-actions">
+      <button class="secondary" id="tag-manager-cancel">Close</button>
+      <button class="primary" id="tag-manager-add-root">+ New Tag</button>
+    </div>
+  </div>
+</div>
+
 <!-- Block editor modal -->
 <div class="completion-modal-overlay" id="block-editor-overlay">
-  <div class="completion-modal" style="max-width:480px">
+  <div class="completion-modal" style="max-width:560px">
     <div class="completion-modal-hdr">
-      <h3>Edit Time Blocks</h3>
+      <h3>Time Blocks</h3>
+      <button class="secondary" id="block-editor-manage-tags" style="font-size:11px;padding:3px 8px;margin-right:6px">Manage Tags</button>
       <button class="completion-modal-close" id="block-editor-close">&times;</button>
     </div>
     <div class="completion-modal-body" id="block-editor-body" style="padding:12px 16px;max-height:60vh;overflow-y:auto"></div>
@@ -756,6 +772,11 @@
       <button class="pvb-close" id="add-modal-close">&times;</button>
     </div>
     <div class="add-modal-body">
+      <!-- Tags section -->
+      <div class="am-section" id="am-tag-section">
+        <div class="am-section-label">Tags</div>
+        <div id="am-tag-picker" class="am-tag-picker-wrap"></div>
+      </div>
       <!-- Notes section -->
       <div class="am-section">
         <div class="am-section-label">Notes</div>
@@ -839,6 +860,7 @@
 <script src="/public/js/timer.js"></script>
 <script src="/public/js/prep.js"></script>
 <script src="/public/js/sidebar.js"></script>
+<script src="/public/js/tag-manager.js"></script>
 <script src="/public/js/schedule-tab.js"></script>
 <script src="/public/js/sync.js"></script>
 <script src="/public/js/triage.js"></script>

@@ -10,10 +10,115 @@ function dEnd(){dragId=null;document.querySelectorAll(".tl-item").forEach(el=>el
 function dOver(e,id){e.preventDefault();if(id===dragId)return;const r=e.currentTarget.getBoundingClientRect(),mid=r.top+r.height/2;e.currentTarget.classList.toggle("drag-over-top",e.clientY<mid);e.currentTarget.classList.toggle("drag-over-bottom",e.clientY>=mid)}
 function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom")}
 
+// ── Scheduling helpers ──
+
+// Build meeting blocks array from INIT_SCHED (used by both cascade variants)
+function _meetingBlocks(){
+  return INIT_SCHED
+    .filter(isMeeting)
+    .map(ev=>({s:pt(ev.start),e:pt(ev.end)}))
+    .sort((a,b)=>a.s-b.s);
+}
+
+// Return the earliest start >= cursor where duration d fits without overlapping any meeting
+function _freeStart(cursor, d, meetingBlocks){
+  let s=cursor, changed=true;
+  while(changed){
+    changed=false;
+    for(const b of meetingBlocks){
+      if(s<b.e&&s+d>b.s){s=b.e;changed=true;}
+    }
+  }
+  return s;
+}
+
+// Tag-aware helpers (used by recalcTimesTagAware)
+function getTagAncestors(tagId){
+  return (window.__TAGS__ && window.__TAGS__.getAncestors) ? window.__TAGS__.getAncestors(tagId) : [tagId];
+}
+
+function taskMatchesBlock(task, block){
+  const accepted = block.acceptedTags || [];
+  if(accepted.length === 0) return true;           // general block: accepts all
+  const taskTags = task.tags || [];
+  if(taskTags.length === 0) return false;           // untagged task: only general blocks
+  const taskSet = new Set(taskTags.flatMap(tid => getTagAncestors(tid)));
+  return accepted.some(id => taskSet.has(id));
+}
+
+// Tag-aware cascade: tasks are placed into the earliest matching schedule block.
+// Falls back to sequential placement when no block matches or block is full.
+function recalcTimesTagAware(schedBlocks){
+  const active = scheduled.filter(ev => !isDone(ev));
+  if(!active.length) return;
+
+  const firstOrig = INIT_SCHED.find(ev => !isDone(ev));
+  let fallbackCursor = firstOrig ? pt(firstOrig.start) : pt(active[0].start);
+  if(typeof viewMode !== "undefined" && viewMode === "today" && typeof now === "function"){
+    fallbackCursor = Math.min(fallbackCursor, now());
+  }
+
+  const meetings = _meetingBlocks();
+
+  // Per-block free-slot cursor (starts at block's start time)
+  const nextFree = {};
+  schedBlocks.forEach(b => { nextFree[b.id] = pt(b.start); });
+
+  active.forEach(ev => {
+    if(isMeeting(ev)){
+      fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
+      return;
+    }
+    const d = dur(ev);
+    if(ev._pinnedStart){
+      const ps = pt(ev._pinnedStart);
+      ev.start = ev._pinnedStart; ev.end = fmt(ps + d);
+      fallbackCursor = Math.max(fallbackCursor, ps + d);
+      return;
+    }
+
+    // Find the matching block with the earliest available slot that fits
+    let bestBlock = null, bestStart = Infinity;
+    for(const b of schedBlocks){
+      if(!taskMatchesBlock(ev, b)) continue;
+      const slotStart = _freeStart(nextFree[b.id] || pt(b.start), d, meetings);
+      const slotEnd = slotStart + d;
+      // Must fit within the block's time window
+      if(slotStart >= pt(b.start) && slotEnd <= pt(b.end)){
+        if(slotStart < bestStart){
+          bestStart = slotStart;
+          bestBlock = b;
+        }
+      }
+    }
+
+    if(bestBlock){
+      ev.start = fmt(bestStart); ev.end = fmt(bestStart + d);
+      nextFree[bestBlock.id] = bestStart + d;
+      fallbackCursor = Math.max(fallbackCursor, bestStart + d);
+    } else {
+      // No block matched or had room — use fallback sequential cascade
+      const s = _freeStart(fallbackCursor, d, meetings);
+      ev.start = fmt(s); ev.end = fmt(s + d);
+      fallbackCursor = s + d;
+    }
+  });
+
+  scheduled.sort((a, b) => pt(a.start) - pt(b.start));
+}
+
 // Recascade start/end times for all undone tasks, treating meetings as immovable blockers.
 // Tasks flow around meetings -- if a task would overlap a meeting it gets pushed to after it.
 // If a task finishes early (slot freed up), subsequent tasks pull earlier.
+// When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
 function recalcTimes(){
+  // Tag-aware mode: delegate when any block has accepted tags configured
+  const schedBlocks = (__state && __state.schedule && __state.schedule.blocks) || [];
+  if(schedBlocks.some(b => (b.acceptedTags || []).length > 0)){
+    recalcTimesTagAware(schedBlocks);
+    return;
+  }
+
   const active=scheduled.filter(ev=>!isDone(ev));
   if(!active.length)return;
 
@@ -28,23 +133,7 @@ function recalcTimes(){
     cursor=Math.min(cursor,now());
   }
 
-  // Use INIT_SCHED for meeting blocks so times are always their original fixed values
-  const blocks=INIT_SCHED
-    .filter(isMeeting)
-    .map(ev=>({s:pt(ev.start),e:pt(ev.end)}))
-    .sort((a,b)=>a.s-b.s);
-
-  // Return the earliest start >= cursor where duration d fits without overlapping any meeting
-  function freeStart(cursor,d){
-    let s=cursor,changed=true;
-    while(changed){
-      changed=false;
-      for(const b of blocks){
-        if(s<b.e&&s+d>b.s){s=b.e;changed=true;}
-      }
-    }
-    return s;
-  }
+  const meetings = _meetingBlocks();
 
   active.forEach(ev=>{
     if(isMeeting(ev)){
@@ -59,7 +148,7 @@ function recalcTimes(){
       cursor=Math.max(cursor,ps+d);
       return;
     }
-    const s=freeStart(cursor,d);
+    const s=_freeStart(cursor,d,meetings);
     ev.start=fmt(s);ev.end=fmt(s+d);
     cursor=s+d;
   });

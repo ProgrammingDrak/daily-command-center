@@ -279,7 +279,8 @@ const BLOCK_SCHEMAS = {
       // GCal integration fields
       "gcal_event_id", "gcal_calendar_id", "gcal_etag",
       "hangout_link", "location", "rsvp_status",
-      "attendee_count", "is_recurring", "all_day"
+      "attendee_count", "is_recurring", "all_day",
+      "tags"
     ]
   },
   consider_item: {
@@ -342,11 +343,15 @@ const BLOCK_SCHEMAS = {
   },
   added_task: {
     required: ["title"],
-    optional: ["durMin", "detail", "source", "notionUrl", "priority", "meta"]
+    optional: ["durMin", "detail", "source", "notionUrl", "priority", "meta", "tags"]
   },
   schedule_block: {
     required: ["name", "blockType", "start", "end"],
-    optional: ["protected", "warnThreshold"]
+    optional: ["protected", "warnThreshold", "acceptedTags"]
+  },
+  tag: {
+    required: ["name"],
+    optional: ["color", "description"]
   }
 };
 
