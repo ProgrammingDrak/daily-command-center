@@ -20,12 +20,14 @@ let _pollTimer = null;
 let _db = null;
 let _broadcast = null;
 let _syncInProgress = false;
+let _defaultUserId = null; // set by init() — used for scoping new blocks
 
 // ── Initialization ──
 
-function init(db, broadcastFn) {
+function init(db, broadcastFn, defaultUserId) {
   _db = db;
   _broadcast = broadcastFn;
+  _defaultUserId = defaultUserId || null;
 
   // Ensure gcal tables exist
   db.exec(`
@@ -102,9 +104,9 @@ function init(db, broadcastFn) {
 function startPolling(intervalMs = 60000) {
   if (_pollTimer) clearInterval(_pollTimer);
   // Do an initial sync immediately
-  syncAll().catch((e) => console.error("[gcal-sync] Initial sync error:", e.message));
+  syncAll(_defaultUserId).catch((e) => console.error("[gcal-sync] Initial sync error:", e.message));
   _pollTimer = setInterval(() => {
-    syncAll().catch((e) => console.error("[gcal-sync] Poll error:", e.message));
+    syncAll(_defaultUserId).catch((e) => console.error("[gcal-sync] Poll error:", e.message));
   }, intervalMs);
   console.log(`[gcal-sync] Polling started (every ${intervalMs / 1000}s)`);
 }
@@ -119,13 +121,14 @@ function stopPolling() {
 
 // ── Full Sync Cycle ──
 
-async function syncAll() {
+async function syncAll(userId) {
   if (_syncInProgress) return;
-  if (!gcalAuth.isAuthenticated()) return;
+  const uid = userId || _defaultUserId;
+  if (!gcalAuth.isAuthenticated(_db, uid)) return;
 
   _syncInProgress = true;
   try {
-    const auth = gcalAuth.getAuthClient();
+    const auth = gcalAuth.getAuthClient(_db, uid);
     if (!auth) return;
 
     // Get selected calendars
@@ -347,26 +350,32 @@ function upsertEvent(gcalEvent, calendarId) {
       gcal_etag: gcalEvent.etag,
     };
 
-    // Ensure day root exists
-    const dayRootId = `day-root-${dateStr}`;
+    // Derive workspace and user context for new blocks
+    const userId = _defaultUserId || null;
+    const workspaceId = userId ? `ws-${userId}` : null;
+
+    // Ensure day root exists (prefer workspace-scoped ID for non-default workspaces)
+    const dayRootId = workspaceId && workspaceId !== "ws-1"
+      ? `day-root-${workspaceId}-${dateStr}`
+      : `day-root-${dateStr}`;
     const dayRoot = _db.prepare("SELECT id FROM blocks WHERE id = ?").get(dayRootId);
     if (!dayRoot) {
       _db.prepare(`
-        INSERT INTO blocks (id, type, date, properties, sort_order, created_at, updated_at)
-        VALUES (?, 'day_root', ?, ?, 0, ?, ?)
-      `).run(dayRootId, dateStr, JSON.stringify({ date: dateStr }), now, now);
+        INSERT INTO blocks (id, type, date, properties, sort_order, user_id, workspace_id, created_at, updated_at)
+        VALUES (?, 'day_root', ?, ?, 0, ?, ?, ?, ?)
+      `).run(dayRootId, dateStr, JSON.stringify({ date: dateStr }), userId, workspaceId, now, now);
     }
 
-    // Insert or replace block (upsert)
+    // Insert or replace block (upsert) — preserve user_id/workspace_id on conflict
     _db.prepare(`
-      INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, created_at, updated_at)
-      VALUES (?, 'schedule_item', ?, ?, ?, ?, ?, ?)
+      INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at)
+      VALUES (?, 'schedule_item', ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         properties = excluded.properties,
         date = excluded.date,
         updated_at = excluded.updated_at,
         deleted_at = NULL
-    `).run(blockId, dayRootId, dateStr, JSON.stringify(props), toSortOrder(startTime), now, now);
+    `).run(blockId, dayRootId, dateStr, JSON.stringify(props), toSortOrder(startTime), userId, workspaceId, now, now);
   }
 
   // Update gcal_events metadata

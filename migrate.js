@@ -40,8 +40,17 @@ function deterministicId(type, ...parts) {
 /**
  * Run the full migration. Returns a manifest of what was migrated.
  * If dryRun=true, reads everything but doesn't write to SQLite.
+ *
+ * @param {object} db - better-sqlite3 database instance
+ * @param {object} opts
+ * @param {boolean} [opts.dryRun=false]
+ * @param {object|null} [opts.localStorageDump=null]
+ * @param {number|null} [opts.userId=null] - user_id to stamp on migrated blocks
+ * @param {string|null} [opts.workspaceId=null] - workspace_id to stamp on migrated blocks
  */
-function runMigration(db, { dryRun = false, localStorageDump = null } = {}) {
+function runMigration(db, { dryRun = false, localStorageDump = null, userId = null, workspaceId = null } = {}) {
+  const ctx = { userId, workspaceId };
+
   const manifest = {
     dryRun,
     startedAt: new Date().toISOString(),
@@ -69,7 +78,7 @@ function runMigration(db, { dryRun = false, localStorageDump = null } = {}) {
       // Load brain state for this date (user edits)
       let brainState = loadBrainState(date, localStorageDump);
       if (brainState) {
-        migrateDayUserState(db, date, brainState, dateManifest, dryRun);
+        migrateDayUserState(db, date, brainState, dateManifest, dryRun, ctx);
       }
     } catch (e) {
       manifest.errors.push({ date, error: e.message });
@@ -80,14 +89,14 @@ function runMigration(db, { dryRun = false, localStorageDump = null } = {}) {
 
   // Step 4: Migrate PA-owned state (schedule, triage, meetings)
   try {
-    migratePaState(db, manifest, dryRun);
+    migratePaState(db, manifest, dryRun, ctx);
   } catch (e) {
     manifest.errors.push({ source: "pa-state", error: e.message });
   }
 
   // Step 5: Migrate globals
   try {
-    migrateGlobals(db, manifest, localStorageDump, dryRun);
+    migrateGlobals(db, manifest, localStorageDump, dryRun, ctx);
   } catch (e) {
     manifest.errors.push({ source: "globals", error: e.message });
   }
@@ -169,14 +178,16 @@ function extractDateFromLocalStorage(date, dump) {
   return state;
 }
 
-function migrateDayUserState(db, date, state, dateManifest, dryRun) {
+function migrateDayUserState(db, date, state, dateManifest, dryRun, ctx = {}) {
+  const { userId = null, workspaceId = null } = ctx;
+
   if (dryRun) {
     // Count what would be migrated
     countUserState(state, dateManifest);
     return;
   }
 
-  const dayRootId = blockDB.ensureDayRoot(db, date);
+  const dayRootId = blockDB.ensureDayRoot(db, date, userId, workspaceId);
 
   // Migrate done/pushed/deleted state — these become properties on schedule_item blocks
   // We'll create lightweight marker blocks that record the user's state changes.
@@ -195,7 +206,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
         blockDB.createBlock(db, {
           id, type: "note", parent_id: dayRootId, date,
           properties: { html, text, _sourceTaskId: taskId },
-          sort_order: 0
+          sort_order: 0,
+          user_id: userId,
+          workspace_id: workspaceId
         });
       }
       dateManifest.notes++;
@@ -221,7 +234,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
               ...(item.scheduled ? { scheduled: item.scheduled } : {}),
               ...(item.scheduledAt ? { scheduledAt: item.scheduledAt } : {})
             },
-            sort_order: i
+            sort_order: i,
+            user_id: userId,
+            workspace_id: workspaceId
           });
         }
         dateManifest.actions++;
@@ -244,7 +259,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
               done: !!sub.done,
               _sourceTaskId: taskId
             },
-            sort_order: i
+            sort_order: i,
+            user_id: userId,
+            workspace_id: workspaceId
           });
         }
         dateManifest.subtasks++;
@@ -267,7 +284,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
             category: engram.category || "",
             context: engram.context || ""
           },
-          sort_order: i
+          sort_order: i,
+          user_id: userId,
+          workspace_id: workspaceId
         });
       }
       dateManifest.engrams++;
@@ -288,7 +307,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
             time: entry.time || "",
             note: entry.note || ""
           },
-          sort_order: i
+          sort_order: i,
+          user_id: userId,
+          workspace_id: workspaceId
         });
       }
       dateManifest.moods++;
@@ -307,7 +328,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
           sessions: state.pomo.sessions || 0,
           taskTime: state.pomo.taskTime || {}
         },
-        sort_order: 0
+        sort_order: 0,
+        user_id: userId,
+        workspace_id: workspaceId
       });
     }
     state.pomo.sessionLog.forEach((session, i) => {
@@ -321,7 +344,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
             type: session.type || "work",
             time: session.time || ""
           },
-          sort_order: i
+          sort_order: i,
+          user_id: userId,
+          workspace_id: workspaceId
         });
       }
       dateManifest.sessions++;
@@ -346,7 +371,9 @@ function migrateDayUserState(db, date, state, dateManifest, dryRun) {
             priority: task.priority || "Medium",
             meta: task.meta || ""
           },
-          sort_order: i
+          sort_order: i,
+          user_id: userId,
+          workspace_id: workspaceId
         });
       }
       dateManifest.addedTasks++;
@@ -408,12 +435,14 @@ function countUserState(state, dateManifest) {
     (dateManifest.done > 0 ? 1 : 0);
 }
 
-function migratePaState(db, manifest, dryRun) {
+function migratePaState(db, manifest, dryRun, ctx = {}) {
+  const { userId = null, workspaceId = null } = ctx;
+
   // Migrate current day-state
   const dayState = readJSON(DAY_STATE_FILE, null);
   if (dayState && dayState.date) {
     if (!dryRun) {
-      blockDB.savePaState(db, dayState.date, dayState);
+      blockDB.savePaState(db, dayState.date, dayState, userId, workspaceId);
     }
     manifest.paState.dates++;
   }
@@ -426,7 +455,7 @@ function migratePaState(db, manifest, dryRun) {
       const archState = readJSON(path.join(ARCHIVE_DIR, f), null);
       if (archState) {
         if (!dryRun) {
-          blockDB.savePaState(db, m[1], archState);
+          blockDB.savePaState(db, m[1], archState, userId, workspaceId);
         }
         manifest.paState.dates++;
       }
@@ -434,7 +463,8 @@ function migratePaState(db, manifest, dryRun) {
   }
 }
 
-function migrateGlobals(db, manifest, localStorageDump, dryRun) {
+function migrateGlobals(db, manifest, localStorageDump, dryRun, ctx = {}) {
+  const { userId = null, workspaceId = null } = ctx;
   const globals = readJSON(GLOBALS_FILE, {});
 
   // Also check localStorage dump for globals
@@ -468,7 +498,9 @@ function migrateGlobals(db, manifest, localStorageDump, dryRun) {
           html: note.html || "",
           text: note.text || note.html?.replace(/<[^>]*>/g, "") || ""
         },
-        sort_order: i
+        sort_order: i,
+        user_id: userId,
+        workspace_id: workspaceId
       });
     });
   }
@@ -489,7 +521,9 @@ function migrateGlobals(db, manifest, localStorageDump, dryRun) {
           done: !!task.done,
           ...(task.doneAt ? { doneAt: task.doneAt } : {})
         },
-        sort_order: i
+        sort_order: i,
+        user_id: userId,
+        workspace_id: workspaceId
       });
     });
   }
@@ -511,7 +545,9 @@ function migrateGlobals(db, manifest, localStorageDump, dryRun) {
           mood: cap.mood || 0,
           context: cap.context || ""
         },
-        sort_order: i
+        sort_order: i,
+        user_id: userId,
+        workspace_id: workspaceId
       });
     });
   }
@@ -536,7 +572,9 @@ function migrateGlobals(db, manifest, localStorageDump, dryRun) {
           status: task.status || "queued",
           ...(task.created_at ? { created_at: task.created_at } : {})
         },
-        sort_order: i
+        sort_order: i,
+        user_id: userId,
+        workspace_id: workspaceId
       });
     });
   }
