@@ -9,6 +9,7 @@
  */
 
 const Database = require("better-sqlite3");
+const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
@@ -69,9 +70,96 @@ function initDB() {
     );
   `);
 
+  // ── Workspace tables (Phase 1) ──
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id         TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      slug       TEXT NOT NULL UNIQUE,
+      owner_id   INTEGER NOT NULL REFERENCES users(id),
+      plan       TEXT NOT NULL DEFAULT 'free',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS workspace_members (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+      user_id      INTEGER NOT NULL REFERENCES users(id),
+      role         TEXT NOT NULL DEFAULT 'viewer',
+      invited_by   INTEGER REFERENCES users(id),
+      accepted_at  TEXT,
+      created_at   TEXT NOT NULL,
+      UNIQUE(workspace_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS page_shares (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      block_id     TEXT NOT NULL REFERENCES blocks(id),
+      token        TEXT NOT NULL UNIQUE,
+      access_level TEXT NOT NULL DEFAULT 'view',
+      created_by   INTEGER REFERENCES users(id),
+      expires_at   TEXT,
+      created_at   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS gcal_tokens (
+      user_id      INTEGER PRIMARY KEY REFERENCES users(id),
+      credentials  TEXT NOT NULL,
+      tokens       TEXT,
+      calendars    TEXT,
+      updated_at   TEXT NOT NULL
+    );
+  `);
+
   // Add user_id columns to existing tables (idempotent — fails silently if already present)
   try { db.exec("ALTER TABLE blocks ADD COLUMN user_id INTEGER REFERENCES users(id)"); } catch {}
   try { db.exec("ALTER TABLE pa_state ADD COLUMN user_id INTEGER REFERENCES users(id)"); } catch {}
+
+  // Add workspace_id columns (Phase 1 — idempotent)
+  try { db.exec("ALTER TABLE blocks ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)"); } catch {}
+  try { db.exec("ALTER TABLE pa_state ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)"); } catch {}
+  // GCal tables may not exist yet (created by gcal-sync.js) — these are no-ops until they exist
+  try { db.exec("ALTER TABLE gcal_events ADD COLUMN user_id INTEGER REFERENCES users(id)"); } catch {}
+  try { db.exec("ALTER TABLE gcal_sync_state ADD COLUMN user_id INTEGER REFERENCES users(id)"); } catch {}
+  try { db.exec("ALTER TABLE gcal_calendars ADD COLUMN user_id INTEGER REFERENCES users(id)"); } catch {}
+
+  // Workspace indexes
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_blocks_workspace_date ON blocks(workspace_id, date) WHERE deleted_at IS NULL"); } catch {}
+
+  // ── pa_state PK rebuild (Phase 3 — one-time, guarded) ──
+  // Changes PK from single (date) → composite (date, workspace_id).
+  // Required for ON CONFLICT(date, workspace_id) to correctly scope PA state per workspace.
+  const paStatePk = db.pragma("table_info(pa_state)").filter(c => c.pk > 0).map(c => c.name);
+  if (!paStatePk.includes("workspace_id")) {
+    // Auto-backup before destructive change
+    try { fs.copyFileSync(DB_PATH, DB_PATH + ".pre-workspace-migration"); } catch {}
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE pa_state_new (
+          date         TEXT NOT NULL,
+          state_json   TEXT NOT NULL,
+          user_id      INTEGER REFERENCES users(id),
+          workspace_id TEXT NOT NULL DEFAULT 'ws-1',
+          updated_at   TEXT NOT NULL,
+          PRIMARY KEY (date, workspace_id)
+        )
+      `);
+      // COALESCE handles: already-set workspace_id > derive from user_id > fall back to ws-1
+      db.exec(`
+        INSERT INTO pa_state_new (date, state_json, user_id, workspace_id, updated_at)
+        SELECT date, state_json, user_id,
+          COALESCE(workspace_id, 'ws-' || user_id, 'ws-1'),
+          updated_at
+        FROM pa_state
+      `);
+      db.exec("DROP TABLE pa_state");
+      db.exec("ALTER TABLE pa_state_new RENAME TO pa_state");
+    })();
+    console.log("[db] pa_state schema upgraded to composite PK (date, workspace_id)");
+  }
+
+  try { db.exec("CREATE INDEX IF NOT EXISTS idx_pa_state_workspace ON pa_state(workspace_id, date)"); } catch {}
 
   return db;
 }
@@ -80,6 +168,97 @@ let _db = null;
 function getDB() {
   if (!_db) _db = initDB();
   return _db;
+}
+
+// ── Workspace Bootstrap ──
+
+/**
+ * Migrates GCal flat files → gcal_tokens table (one-time, per user).
+ * Only runs if gcal-credentials.json exists and no DB row exists for the user.
+ * The flat files are single-user, so we only migrate to the first user.
+ */
+function _migrateGcalFilesToDb(db, users, now) {
+  const credPath = path.join(__dirname, "data", "gcal-credentials.json");
+  if (!fs.existsSync(credPath)) return;
+
+  const credentials = fs.readFileSync(credPath, "utf8");
+  const tokensPath = path.join(__dirname, "data", "gcal-tokens.json");
+  const calendarsPath = path.join(__dirname, "data", "gcal-calendars.json");
+
+  for (const user of users) {
+    const existing = db.prepare("SELECT user_id FROM gcal_tokens WHERE user_id = ?").get(user.id);
+    if (existing) continue; // already migrated
+
+    let tokens = null;
+    let calendars = null;
+    try { if (fs.existsSync(tokensPath)) tokens = fs.readFileSync(tokensPath, "utf8"); } catch {}
+    try { if (fs.existsSync(calendarsPath)) calendars = fs.readFileSync(calendarsPath, "utf8"); } catch {}
+
+    db.prepare(`
+      INSERT INTO gcal_tokens (user_id, credentials, tokens, calendars, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(user.id, credentials, tokens, calendars, now);
+    console.log(`[workspace] Migrated GCal tokens to DB for user '${user.username}'`);
+    break; // Flat files have no user context — only migrate to the first user
+  }
+}
+
+/**
+ * Ensures every user has a workspace and that all their blocks/pa_state rows
+ * have workspace_id stamped. Idempotent — safe to call on every startup.
+ *
+ * Also performs one-time GCal token file → DB migration.
+ */
+function ensureWorkspacesForAllUsers(db) {
+  const users = db.prepare("SELECT * FROM users").all();
+  if (users.length === 0) return;
+
+  const now = new Date().toISOString();
+
+  db.transaction(() => {
+    for (const user of users) {
+      const workspaceId = `ws-${user.id}`;
+
+      // Create workspace if not exists
+      const existingWs = db.prepare("SELECT id FROM workspaces WHERE id = ?").get(workspaceId);
+      if (!existingWs) {
+        db.prepare(`
+          INSERT INTO workspaces (id, name, slug, owner_id, plan, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'free', ?, ?)
+        `).run(workspaceId, `${user.username}'s workspace`, user.username, user.id, now, now);
+        console.log(`[workspace] Created workspace ${workspaceId} for user '${user.username}'`);
+      }
+
+      // Create owner membership if not exists
+      const existingMember = db.prepare(
+        "SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?"
+      ).get(workspaceId, user.id);
+      if (!existingMember) {
+        db.prepare(`
+          INSERT INTO workspace_members (workspace_id, user_id, role, accepted_at, created_at)
+          VALUES (?, ?, 'owner', ?, ?)
+        `).run(workspaceId, user.id, now, now);
+      }
+
+      // Stamp blocks that belong to this user but lack workspace_id
+      const blocksUpdated = db.prepare(
+        "UPDATE blocks SET workspace_id = ? WHERE user_id = ? AND workspace_id IS NULL"
+      ).run(workspaceId, user.id);
+      if (blocksUpdated.changes > 0) {
+        console.log(`[workspace] Stamped workspace_id on ${blocksUpdated.changes} blocks for '${user.username}'`);
+      }
+
+      // Stamp pa_state rows that belong to this user but lack workspace_id
+      const paUpdated = db.prepare(
+        "UPDATE pa_state SET workspace_id = ? WHERE user_id = ? AND workspace_id IS NULL"
+      ).run(workspaceId, user.id);
+      if (paUpdated.changes > 0) {
+        console.log(`[workspace] Stamped workspace_id on ${paUpdated.changes} pa_state rows for '${user.username}'`);
+      }
+    }
+
+    _migrateGcalFilesToDb(db, users, now);
+  })();
 }
 
 // ── Block Type Validation ──
@@ -192,7 +371,7 @@ function validateBlock(type, properties) {
 
 // ── Block CRUD ──
 
-function createBlock(db, { id, type, parent_id, date, properties, sort_order, user_id }) {
+function createBlock(db, { id, type, parent_id, date, properties, sort_order, user_id, workspace_id }) {
   const blockId = id || crypto.randomUUID();
   const now = new Date().toISOString();
   const props = typeof properties === "string" ? properties : JSON.stringify(properties || {});
@@ -201,10 +380,10 @@ function createBlock(db, { id, type, parent_id, date, properties, sort_order, us
   validateBlock(type, parsedProps);
 
   const stmt = db.prepare(`
-    INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(blockId, type, parent_id || null, date || null, props, sort_order || 0, user_id || null, now, now);
+  stmt.run(blockId, type, parent_id || null, date || null, props, sort_order || 0, user_id || null, workspace_id || null, now, now);
 
   // Log operation
   db.prepare(`
@@ -282,28 +461,26 @@ function parseBlock(row) {
   };
 }
 
-function getBlocksByDate(db, date, userId) {
-  const rows = db.prepare(`
-    SELECT * FROM blocks WHERE date = ? AND user_id = ? AND deleted_at IS NULL
-    ORDER BY sort_order ASC, created_at ASC
-  `).all(date, userId);
+function getBlocksByDate(db, date, workspaceId) {
+  const rows = workspaceId
+    ? db.prepare(`SELECT * FROM blocks WHERE date = ? AND workspace_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`).all(date, workspaceId)
+    : db.prepare(`SELECT * FROM blocks WHERE date = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`).all(date);
   return rows.map(parseBlock);
 }
 
-function getBlocksByTypes(db, types, userId) {
+function getBlocksByTypes(db, types, workspaceId) {
   const placeholders = types.map(() => "?").join(",");
-  const rows = db.prepare(`
-    SELECT * FROM blocks WHERE type IN (${placeholders}) AND user_id = ? AND deleted_at IS NULL
-    ORDER BY sort_order ASC, created_at ASC
-  `).all(...types, userId);
+  const rows = workspaceId
+    ? db.prepare(`SELECT * FROM blocks WHERE type IN (${placeholders}) AND workspace_id = ? AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`).all(...types, workspaceId)
+    : db.prepare(`SELECT * FROM blocks WHERE type IN (${placeholders}) AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`).all(...types);
   return rows.map(parseBlock);
 }
 
-function getChildren(db, parentId, userId) {
-  const userFilter = userId ? "AND user_id = ?" : "";
-  const args = userId ? [parentId, userId] : [parentId];
+function getChildren(db, parentId, workspaceId) {
+  const wsFilter = workspaceId ? "AND workspace_id = ?" : "";
+  const args = workspaceId ? [parentId, workspaceId] : [parentId];
   const rows = db.prepare(`
-    SELECT * FROM blocks WHERE parent_id = ? ${userFilter} AND deleted_at IS NULL
+    SELECT * FROM blocks WHERE parent_id = ? ${wsFilter} AND deleted_at IS NULL
     ORDER BY sort_order ASC, created_at ASC
   `).all(...args);
   return rows.map(parseBlock);
@@ -384,36 +561,47 @@ function reorderBlocks(db, items) {
 
 // ── Day Root (auto-created) ──
 
-function ensureDayRoot(db, date, userId) {
-  const deterministicId = `day-root-${date}`;
-  const existing = db.prepare("SELECT id FROM blocks WHERE id = ?").get(deterministicId);
-  if (existing) return deterministicId;
+function ensureDayRoot(db, date, userId, workspaceId) {
+  // New workspaces get a workspace-scoped ID; ws-1 (original) falls back to legacy format
+  const newId = workspaceId ? `day-root-${workspaceId}-${date}` : `day-root-${date}`;
+  const legacyId = `day-root-${date}`;
+
+  // Check new-format ID first
+  if (db.prepare("SELECT id FROM blocks WHERE id = ?").get(newId)) return newId;
+  // Backward compat: fall back to legacy ID for ws-1 (original single-user data)
+  if (workspaceId === "ws-1" && db.prepare("SELECT id FROM blocks WHERE id = ?").get(legacyId)) return legacyId;
 
   createBlock(db, {
-    id: deterministicId,
+    id: newId,
     type: "day_root",
     date,
     properties: { date },
     sort_order: 0,
-    user_id: userId || null
+    user_id: userId || null,
+    workspace_id: workspaceId || null
   });
-  return deterministicId;
+  return newId;
 }
 
 // ── PA State ──
 
-function savePaState(db, date, stateJson, userId) {
+function savePaState(db, date, stateJson, userId, workspaceId) {
   const now = new Date().toISOString();
+  // Derive workspaceId from userId if not provided (backward compat)
+  const wsId = workspaceId || (userId ? `ws-${userId}` : "ws-1");
   db.prepare(`
-    INSERT INTO pa_state (date, state_json, user_id, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(date) DO UPDATE SET state_json = excluded.state_json, user_id = excluded.user_id, updated_at = excluded.updated_at
-  `).run(date, typeof stateJson === "string" ? stateJson : JSON.stringify(stateJson), userId || null, now);
+    INSERT INTO pa_state (date, state_json, user_id, workspace_id, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(date, workspace_id) DO UPDATE SET
+      state_json = excluded.state_json,
+      user_id    = excluded.user_id,
+      updated_at = excluded.updated_at
+  `).run(date, typeof stateJson === "string" ? stateJson : JSON.stringify(stateJson), userId || null, wsId, now);
 }
 
-function getPaState(db, date, userId) {
-  const row = userId
-    ? db.prepare("SELECT * FROM pa_state WHERE date = ? AND user_id = ?").get(date, userId)
+function getPaState(db, date, workspaceId) {
+  const row = workspaceId
+    ? db.prepare("SELECT * FROM pa_state WHERE date = ? AND workspace_id = ?").get(date, workspaceId)
     : db.prepare("SELECT * FROM pa_state WHERE date = ?").get(date);
   if (!row) return null;
   return { ...row, state_json: JSON.parse(row.state_json) };
@@ -439,17 +627,16 @@ function getOperations(db, blockId, limit = 50) {
 
 // ── Range Queries (for Calendar View) ──
 
-function getBlocksByDateRange(db, startDate, endDate, userId) {
-  const rows = db.prepare(`
-    SELECT * FROM blocks WHERE date >= ? AND date <= ? AND user_id = ? AND deleted_at IS NULL
-    ORDER BY date ASC, sort_order ASC, created_at ASC
-  `).all(startDate, endDate, userId);
+function getBlocksByDateRange(db, startDate, endDate, workspaceId) {
+  const rows = workspaceId
+    ? db.prepare(`SELECT * FROM blocks WHERE date >= ? AND date <= ? AND workspace_id = ? AND deleted_at IS NULL ORDER BY date ASC, sort_order ASC, created_at ASC`).all(startDate, endDate, workspaceId)
+    : db.prepare(`SELECT * FROM blocks WHERE date >= ? AND date <= ? AND deleted_at IS NULL ORDER BY date ASC, sort_order ASC, created_at ASC`).all(startDate, endDate);
   return rows.map(parseBlock);
 }
 
-function getPaStateRange(db, startDate, endDate, userId) {
-  const rows = userId
-    ? db.prepare(`SELECT * FROM pa_state WHERE date >= ? AND date <= ? AND user_id = ? ORDER BY date ASC`).all(startDate, endDate, userId)
+function getPaStateRange(db, startDate, endDate, workspaceId) {
+  const rows = workspaceId
+    ? db.prepare(`SELECT * FROM pa_state WHERE date >= ? AND date <= ? AND workspace_id = ? ORDER BY date ASC`).all(startDate, endDate, workspaceId)
     : db.prepare(`SELECT * FROM pa_state WHERE date >= ? AND date <= ? ORDER BY date ASC`).all(startDate, endDate);
   return rows.map(row => ({
     ...row,
@@ -480,5 +667,6 @@ module.exports = {
   getOperations,
   parseBlock,
   getBlocksByDateRange,
-  getPaStateRange
+  getPaStateRange,
+  ensureWorkspacesForAllUsers
 };

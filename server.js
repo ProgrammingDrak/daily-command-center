@@ -81,7 +81,7 @@ app.use(session({
   name: "dcc_session",
   cookie: {
     httpOnly: true,
-    secure: false,           // localhost — no HTTPS needed
+    secure: process.env.NODE_ENV === "production",  // true in production (HTTPS required)
     maxAge: 30 * 24 * 60 * 60 * 1000,  // 30 days
     sameSite: "lax"
   }
@@ -89,9 +89,9 @@ app.use(session({
 
 // ── Auth Middleware ──
 // Public routes (no session required)
-const AUTH_PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/gcal/callback"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
 
-// PA/scheduled-task endpoints — accessible from localhost without a session
+// PA/scheduled-task endpoints — accessible from localhost OR with bearer token
 const PA_ENDPOINTS = new Set([
   "/api/pa-state/ingest",
   "/api/ingest/day-state",
@@ -103,13 +103,38 @@ function isLocalhost(req) {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
+function hasPaToken(req) {
+  const paToken = process.env.SECRET_PA_TOKEN;
+  if (!paToken) return false; // token not configured — localhost-only mode
+  const authHeader = req.headers.authorization || "";
+  const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  return bearer === paToken;
+}
+
 app.use((req, res, next) => {
   if (AUTH_PUBLIC.has(req.path)) return next();
-  if (PA_ENDPOINTS.has(req.path) && isLocalhost(req)) return next();
+  if (PA_ENDPOINTS.has(req.path) && (isLocalhost(req) || hasPaToken(req))) return next();
   if (!req.session.userId) {
     if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" });
     return res.redirect("/login");
   }
+  next();
+});
+
+// ── Workspace Middleware ──
+// Resolves req.workspaceId for all authenticated requests (single DB hit, cached in session).
+// In Phase 1–2 this is set but not yet used by queries (Phase 3 switches queries over).
+app.use((req, res, next) => {
+  if (!req.session.userId) return next();
+  if (req.session.workspaceId) {
+    req.workspaceId = req.session.workspaceId;
+    return next();
+  }
+  const ws = db.prepare(
+    "SELECT workspace_id FROM workspace_members WHERE user_id = ? AND role = 'owner' LIMIT 1"
+  ).get(req.session.userId);
+  req.workspaceId = ws ? ws.workspace_id : `ws-${req.session.userId}`;
+  req.session.workspaceId = req.workspaceId; // cache — cleared on login/logout
   next();
 });
 
@@ -128,6 +153,7 @@ app.post("/api/auth/login", (req, res) => {
   }
   req.session.userId = user.id;
   req.session.username = user.username;
+  req.session.workspaceId = null; // resolved fresh on next request
   res.json({ ok: true, username: user.username });
 });
 
@@ -135,8 +161,22 @@ app.post("/api/auth/logout", (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));
 });
 
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    const result = auth.registerUser(blockDB.getDB(), { username, password });
+    req.session.userId = result.user.id;
+    req.session.username = result.user.username;
+    req.session.workspaceId = result.workspaceId;
+    res.status(201).json({ ok: true, username: result.user.username, workspaceId: result.workspaceId });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // ── SSE: Server-Sent Events for live updates ──
-const sseClients = new Set();
+// Keyed by workspaceId so broadcasts are scoped to the right workspace.
+const sseClients = new Map(); // workspaceId → Set<res>
 
 app.get("/api/events", (req, res) => {
   res.writeHead(200, {
@@ -145,13 +185,35 @@ app.get("/api/events", (req, res) => {
     Connection: "keep-alive",
   });
   res.write("data: connected\n\n");
-  sseClients.add(res);
-  req.on("close", () => sseClients.delete(res));
+  const wsId = req.workspaceId || "__global";
+  if (!sseClients.has(wsId)) sseClients.set(wsId, new Set());
+  sseClients.get(wsId).add(res);
+  req.on("close", () => {
+    const clients = sseClients.get(wsId);
+    if (clients) {
+      clients.delete(res);
+      if (clients.size === 0) sseClients.delete(wsId);
+    }
+  });
 });
 
-function broadcast(eventType, data) {
+/**
+ * Broadcast an SSE event.
+ * @param {string} eventType
+ * @param {object} data
+ * @param {string} [workspaceId] — if provided, only clients in that workspace receive it.
+ *                                  If omitted, all clients receive it (file-watcher events).
+ */
+function broadcast(eventType, data, workspaceId) {
   const payload = JSON.stringify({ type: eventType, ...data });
-  for (const client of sseClients) {
+  let targets;
+  if (workspaceId) {
+    targets = sseClients.get(workspaceId) || new Set();
+  } else {
+    targets = new Set();
+    for (const s of sseClients.values()) s.forEach(c => targets.add(c));
+  }
+  for (const client of targets) {
     client.write(`data: ${payload}\n\n`);
   }
 }
@@ -276,15 +338,17 @@ function getDayFilePath(dateStr) {
   return path.join(DAYS_DIR, dateStr + ".json");
 }
 
-function getMeetingsFromSQLite(dateStr, userId) {
+function getMeetingsFromSQLite(dateStr, userId, workspaceId) {
   const offset = getETOffset(dateStr);
+  const filterCol = workspaceId ? "b.workspace_id" : "b.user_id";
+  const filterVal = workspaceId || userId;
   const rows = db.prepare(`
     SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link
     FROM blocks b
     LEFT JOIN gcal_events g ON g.block_id = b.id
-    WHERE b.date = ? AND b.user_id = ? AND b.type = 'schedule_item' AND b.deleted_at IS NULL
+    WHERE b.date = ? AND ${filterCol} = ? AND b.type = 'schedule_item' AND b.deleted_at IS NULL
     ORDER BY b.sort_order ASC
-  `).all(dateStr, userId);
+  `).all(dateStr, filterVal);
 
   const meetings = [];
   const meetingTimeline = [];
@@ -376,7 +440,7 @@ function buildSkeletonState(dateStr) {
   };
 }
 
-function buildDayResponse(dateStr, userId) {
+function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
 
   // Read enrichment from per-day JSON (or create skeleton)
@@ -387,7 +451,7 @@ function buildDayResponse(dateStr, userId) {
   }
 
   // Live meetings from SQLite
-  const { meetings, meetingTimeline } = getMeetingsFromSQLite(dateStr, userId);
+  const { meetings, meetingTimeline } = getMeetingsFromSQLite(dateStr, userId, workspaceId);
 
   // Merge: enrichment + live meetings
   const result = { ...enrichment, date: dateStr, meetings };
@@ -408,26 +472,30 @@ function buildDayResponse(dateStr, userId) {
   }
 
   // Read schedule blocks from SQLite
-  result.schedule.blocks = getScheduleBlocks(userId);
+  result.schedule.blocks = getScheduleBlocks(userId, workspaceId);
 
   return result;
 }
 
-function getScheduleBlocks(userId){
+function getScheduleBlocks(userId, workspaceId) {
   try {
     const db = blockDB.getDB();
-    const rows = userId
-      ? db.prepare("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND user_id=? AND deleted_at IS NULL ORDER BY sort_order").all(userId)
+    const filterCol = workspaceId ? "workspace_id" : (userId ? "user_id" : null);
+    const filterVal = workspaceId || userId;
+    const rows = filterCol
+      ? db.prepare(`SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND ${filterCol}=? AND deleted_at IS NULL ORDER BY sort_order`).all(filterVal)
       : db.prepare("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL ORDER BY sort_order").all();
     return rows.map(r => ({ ...JSON.parse(r.properties), id: r.id, parent_id: r.parent_id, sort_order: r.sort_order }));
   } catch(e){ return []; }
 }
 
-function seedScheduleBlocksFromYAML(userId){
+function seedScheduleBlocksFromYAML(userId, workspaceId) {
   try {
     const db = blockDB.getDB();
-    const existing = userId
-      ? db.prepare("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND user_id=? AND deleted_at IS NULL").get(userId)
+    const filterCol = workspaceId ? "workspace_id" : (userId ? "user_id" : null);
+    const filterVal = workspaceId || userId;
+    const existing = filterCol
+      ? db.prepare(`SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND ${filterCol}=? AND deleted_at IS NULL`).get(filterVal)
       : db.prepare("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL").get();
     if(existing.cnt > 0) return; // already seeded
 
@@ -453,7 +521,8 @@ function seedScheduleBlocksFromYAML(userId){
         type: "schedule_block",
         properties: { name: b.name, blockType: b.blockType, start: b.start, end: b.end, protected: false, warnThreshold: 0 },
         sort_order: i,
-        user_id: userId || null
+        user_id: userId || null,
+        workspace_id: workspaceId || null
       });
     });
     if(valid.length) console.log("[seed] Migrated " + valid.length + " schedule blocks from YAML to SQLite");
@@ -502,7 +571,7 @@ function ensureSkeletonDays() {
 app.get("/api/state/day", (req, res) => {
   try {
     const dateStr = req.query.date || getTodayStr();
-    res.json(buildDayResponse(dateStr, req.session.userId));
+    res.json(buildDayResponse(dateStr, req.session.userId, req.workspaceId));
   } catch (e) {
     console.error("[api/state/day] Error:", e.message);
     // Fallback: try legacy day-state.json
@@ -514,7 +583,7 @@ app.get("/api/state/day", (req, res) => {
 app.get("/api/state/tomorrow", (req, res) => {
   try {
     const tomorrowStr = addDays(getTodayStr(), 1);
-    res.json(buildDayResponse(tomorrowStr, req.session.userId));
+    res.json(buildDayResponse(tomorrowStr, req.session.userId, req.workspaceId));
   } catch (e) {
     console.error("[api/state/tomorrow] Error:", e.message);
     res.json(readJSON(TOMORROW_STATE_FILE, null));
@@ -878,6 +947,16 @@ app.use("/public", express.static(path.join(PROJECT_DIR, "public"), {
 // Validate date format
 function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }
 
+// Ownership guard: returns 404 if the block belongs to a different workspace.
+// Allows blocks with no workspace_id (pre-migration rows) through, for backward compat.
+function assertBlockOwnership(block, workspaceId) {
+  if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) {
+    const err = new Error("Block not found");
+    err.statusCode = 404;
+    throw err;
+  }
+}
+
 // POST /api/blocks — Create block(s)
 app.post("/api/blocks", (req, res) => {
   try {
@@ -887,9 +966,9 @@ app.post("/api/blocks", (req, res) => {
     const items = Array.isArray(body) ? body : [body];
     const results = [];
     for (const item of items) {
-      results.push(blockDB.createBlock(db, { ...item, user_id: userId }));
+      results.push(blockDB.createBlock(db, { ...item, user_id: userId, workspace_id: req.workspaceId }));
     }
-    broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId });
+    broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, req.workspaceId);
     res.json(results.length === 1 ? results[0] : results);
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -899,11 +978,14 @@ app.post("/api/blocks", (req, res) => {
 // PATCH /api/blocks/:id — Update block (full properties replacement)
 app.patch("/api/blocks/:id", (req, res) => {
   try {
+    const existing = blockDB.getBlock(db, req.params.id);
+    if (!existing) return res.status(404).json({ error: "Block not found" });
+    assertBlockOwnership(existing, req.workspaceId);
     const result = blockDB.updateBlock(db, req.params.id, req.body);
-    broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId });
+    broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
     res.json(result);
   } catch (e) {
-    const status = e.message.includes("not found") ? 404 : 400;
+    const status = e.statusCode || (e.message.includes("not found") ? 404 : 400);
     res.status(status).json({ error: e.message });
   }
 });
@@ -911,11 +993,14 @@ app.patch("/api/blocks/:id", (req, res) => {
 // DELETE /api/blocks/:id — Soft-delete block
 app.delete("/api/blocks/:id", (req, res) => {
   try {
+    const existing = blockDB.getBlock(db, req.params.id);
+    if (!existing) return res.status(404).json({ error: "Block not found" });
+    assertBlockOwnership(existing, req.workspaceId);
     const result = blockDB.deleteBlock(db, req.params.id);
-    broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId });
+    broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId);
     res.json(result);
   } catch (e) {
-    const status = e.message.includes("not found") ? 404 : 400;
+    const status = e.statusCode || (e.message.includes("not found") ? 404 : 400);
     res.status(status).json({ error: e.message });
   }
 });
@@ -926,12 +1011,12 @@ app.post("/api/blocks/batch", (req, res) => {
     const { operations, _clientId } = req.body;
     if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" });
     const userId = req.session.userId;
-    // Inject user_id into create operations
+    // Inject user_id + workspace_id into create operations
     const opsWithUser = operations.map(op =>
-      op.op === "create" ? { ...op, user_id: userId } : op
+      op.op === "create" ? { ...op, user_id: userId, workspace_id: req.workspaceId } : op
     );
     const result = blockDB.batchOp(db, opsWithUser);
-    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId });
+    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId);
     res.json(result);
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -945,13 +1030,13 @@ app.get("/api/blocks", (req, res) => {
     if (req.query.date) {
       if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date format" });
       // Ensure day_root exists
-      blockDB.ensureDayRoot(db, req.query.date, userId);
-      const blocks = blockDB.getBlocksByDate(db, req.query.date, userId);
+      blockDB.ensureDayRoot(db, req.query.date, userId, req.workspaceId);
+      const blocks = blockDB.getBlocksByDate(db, req.query.date, req.workspaceId);
       res.json(blocks);
     } else if (req.query.type) {
       const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
       if (!types.length) return res.status(400).json({ error: "No valid types specified" });
-      const blocks = blockDB.getBlocksByTypes(db, types, userId);
+      const blocks = blockDB.getBlocksByTypes(db, types, req.workspaceId);
       res.json(blocks);
     } else {
       res.status(400).json({ error: "Provide ?date=YYYY-MM-DD or ?type=type1,type2" });
@@ -969,7 +1054,7 @@ app.get("/api/blocks/range", (req, res) => {
     if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
       return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
     }
-    const blocks = blockDB.getBlocksByDateRange(db, start, end, req.session.userId);
+    const blocks = blockDB.getBlocksByDateRange(db, start, end, req.workspaceId);
     res.json(blocks);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -980,16 +1065,21 @@ app.get("/api/blocks/range", (req, res) => {
 app.get("/api/blocks/:id", (req, res) => {
   const block = blockDB.getBlock(db, req.params.id);
   if (!block) return res.status(404).json({ error: "Block not found" });
+  try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); }
   res.json(block);
 });
 
 // GET /api/blocks/:id/children — Get child blocks
 app.get("/api/blocks/:id/children", (req, res) => {
   try {
+    const parent = blockDB.getBlock(db, req.params.id);
+    if (!parent) return res.status(404).json({ error: "Block not found" });
+    assertBlockOwnership(parent, req.workspaceId);
     const children = blockDB.getChildren(db, req.params.id);
     res.json(children);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    const status = e.statusCode || 500;
+    res.status(status).json({ error: e.message });
   }
 });
 
@@ -998,11 +1088,17 @@ app.post("/api/blocks/reorder", (req, res) => {
   try {
     const { items, _clientId } = req.body;
     if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array of {id, sort_order}" });
+    // Verify all blocks belong to this workspace before reordering
+    for (const item of items) {
+      const block = blockDB.getBlock(db, item.id);
+      if (block) assertBlockOwnership(block, req.workspaceId);
+    }
     blockDB.reorderBlocks(db, items);
-    broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId });
+    broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId);
     res.json({ ok: true, reordered: items.length });
   } catch (e) {
-    res.status(400).json({ error: e.message });
+    const status = e.statusCode || 400;
+    res.status(status).json({ error: e.message });
   }
 });
 
@@ -1014,7 +1110,7 @@ app.get("/api/pa-state/range", (req, res) => {
     if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
       return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
     }
-    const states = blockDB.getPaStateRange(db, start, end, req.session.userId);
+    const states = blockDB.getPaStateRange(db, start, end, req.workspaceId);
     const result = {};
     for (const s of states) result[s.date] = s.state_json;
     res.json(result);
@@ -1026,18 +1122,28 @@ app.get("/api/pa-state/range", (req, res) => {
 // GET /api/pa-state/:date — Get PA-owned state
 app.get("/api/pa-state/:date", (req, res) => {
   if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" });
-  const state = blockDB.getPaState(db, req.params.date, req.session.userId);
+  const state = blockDB.getPaState(db, req.params.date, req.workspaceId);
   res.json(state || { date: req.params.date, state_json: null });
 });
 
-// POST /api/pa-state/ingest — Scheduled task writes PA state (localhost only, no session needed)
+// POST /api/pa-state/ingest — Scheduled task writes PA state (localhost or bearer token, no session needed)
 app.post("/api/pa-state/ingest", (req, res) => {
   try {
     const { date, ...stateData } = req.body;
     if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
-    // PA tasks run as the default user (id=1)
-    const userId = req.session.userId || 1;
-    blockDB.savePaState(db, date, stateData, userId);
+    // Resolve user: from session (web request) or from X-Workspace-Id header (PA task on cloud)
+    // Falls back to workspace ws-1 (default user) for localhost scheduled tasks
+    let userId = req.session.userId || null;
+    let workspaceId = req.workspaceId || null;
+    if (!userId) {
+      const wsHeader = req.headers["x-workspace-id"];
+      workspaceId = wsHeader || "ws-1";
+      const owner = db.prepare(
+        "SELECT user_id FROM workspace_members WHERE workspace_id = ? AND role = 'owner' LIMIT 1"
+      ).get(workspaceId);
+      userId = owner ? owner.user_id : 1;
+    }
+    blockDB.savePaState(db, date, stateData, userId, workspaceId);
     broadcast("pa-state-changed", { date });
     res.json({ ok: true, date });
   } catch (e) {
@@ -1049,15 +1155,20 @@ app.post("/api/pa-state/ingest", (req, res) => {
 app.post("/api/migrate", (req, res) => {
   try {
     const { localStorageDump, dryRun } = req.body || {};
+    const userId = req.session.userId || 1;
+    const workspaceId = req.workspaceId || `ws-${userId}`;
     const manifest = migration.runMigration(db, {
       dryRun: !!dryRun,
-      localStorageDump: localStorageDump || null
+      localStorageDump: localStorageDump || null,
+      userId,
+      workspaceId
     });
     if (!dryRun) {
-      // Associate any unmigrated (null user_id) blocks with current user
-      const userId = req.session.userId || 1;
-      db.prepare("UPDATE blocks SET user_id = ? WHERE user_id IS NULL").run(userId);
-      db.prepare("UPDATE pa_state SET user_id = ? WHERE user_id IS NULL").run(userId);
+      // Associate any still-unmigrated (null) blocks with current user + workspace
+      db.prepare("UPDATE blocks SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
+        .run(userId, workspaceId);
+      db.prepare("UPDATE pa_state SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
+        .run(userId, workspaceId);
     }
     res.json(manifest);
   } catch (e) {
@@ -1102,8 +1213,7 @@ app.get("/api/operations", (req, res) => {
 });
 
 // ── Google Calendar Integration ──
-// Initialize GCal sync engine
-gcalSync.init(db, broadcast);
+// GCal sync engine is initialized in the startup block (after defaultUserId is resolved)
 
 // OAuth flow
 app.get("/api/gcal/auth", (req, res) => {
@@ -1318,17 +1428,24 @@ try {
   if (purged > 0) console.log(`[Purge] Startup: removed ${purged} soft-deleted blocks`);
 } catch (e) {}
 
-// ── Startup: Ensure default user and associate pre-auth data ──
+// ── Startup: Ensure default user, associate pre-auth data, bootstrap workspaces ──
 let defaultUserId = 1;
 try {
-  const defaultUser = auth.ensureDefaultUser(db);
-  defaultUserId = defaultUser.id;
-  // Associate any blocks/pa_state that predate auth (user_id IS NULL) with the default user
-  const orphanBlocks = db.prepare("UPDATE blocks SET user_id = ? WHERE user_id IS NULL").run(defaultUserId);
-  const orphanPA = db.prepare("UPDATE pa_state SET user_id = ? WHERE user_id IS NULL").run(defaultUserId);
-  if (orphanBlocks.changes > 0 || orphanPA.changes > 0) {
-    console.log(`[auth] Migrated ${orphanBlocks.changes} blocks + ${orphanPA.changes} pa_state rows → user ${defaultUserId}`);
+  const defaultUser = auth.ensureDefaultUser(db); // returns null in production
+  if (defaultUser) {
+    defaultUserId = defaultUser.id;
+    const defaultWorkspaceId = `ws-${defaultUserId}`;
+    // Associate any blocks/pa_state that predate auth (user_id IS NULL) with the default user + workspace
+    const orphanBlocks = db.prepare("UPDATE blocks SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
+      .run(defaultUserId, defaultWorkspaceId);
+    const orphanPA = db.prepare("UPDATE pa_state SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
+      .run(defaultUserId, defaultWorkspaceId);
+    if (orphanBlocks.changes > 0 || orphanPA.changes > 0) {
+      console.log(`[auth] Migrated ${orphanBlocks.changes} blocks + ${orphanPA.changes} pa_state rows → user ${defaultUserId} / ${defaultWorkspaceId}`);
+    }
   }
+  // Ensure every user has a workspace and all data rows have workspace_id stamped
+  blockDB.ensureWorkspacesForAllUsers(db);
 } catch (e) {
   console.error("[auth] Startup error:", e.message);
 }
@@ -1346,8 +1463,9 @@ app.listen(PORT, () => {
   console.log(`  Brain Dir:  ${BRAIN_DIR}`);
   console.log(`  Auth:       Session-based — login at /login`);
 
-  // Start GCal sync if authenticated
-  if (gcalAuth.isAuthenticated()) {
+  // Start GCal sync if authenticated (pass db + userId for DB-backed token check)
+  gcalSync.init(db, broadcast, defaultUserId);
+  if (gcalAuth.isAuthenticated(db, defaultUserId)) {
     console.log(`  GCal:       Connected — starting sync`);
     gcalSync.startPolling();
   } else {
@@ -1363,7 +1481,7 @@ app.listen(PORT, () => {
   }
 
   // Seed schedule blocks from YAML if not already in SQLite
-  try { seedScheduleBlocksFromYAML(defaultUserId); } catch(e) {
+  try { seedScheduleBlocksFromYAML(defaultUserId, `ws-${defaultUserId}`); } catch(e) {
     console.error(`  Blocks:     Seed error — ${e.message}`);
   }
 
