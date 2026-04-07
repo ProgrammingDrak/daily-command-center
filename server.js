@@ -174,7 +174,17 @@ function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: 
 async function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
   let enrichment = readJSON(dayFile, null);
-  if (!enrichment) { enrichment = buildSkeletonState(dateStr); writeJSON(dayFile, enrichment); }
+  const isSkeleton = !enrichment || !enrichment.schedule || !enrichment.schedule.timeline || enrichment.schedule.timeline.length === 0;
+  if (isSkeleton) {
+    const paRow = await blockDB.getPaState(dateStr, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
+    if (paRow && paRow.state_json && paRow.state_json.schedule && paRow.state_json.schedule.timeline && paRow.state_json.schedule.timeline.length > 0) {
+      enrichment = paRow.state_json;
+      writeJSON(dayFile, enrichment);
+    } else if (!enrichment) {
+      enrichment = buildSkeletonState(dateStr);
+      writeJSON(dayFile, enrichment);
+    }
+  }
   const { meetings, meetingTimeline } = await getMeetingsFromDB(dateStr, userId, workspaceId);
   const result = { ...enrichment, date: dateStr, meetings };
   if (result.schedule && result.schedule.timeline) {
