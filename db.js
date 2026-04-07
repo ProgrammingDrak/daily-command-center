@@ -46,6 +46,7 @@ async function ensureWorkspacesForAllUsers() {
   try {
     await client.query("BEGIN");
     for (const user of users) {
+      if (!user.username) continue; // skip users without a DCC username (e.g. audit-angel users)
       const workspaceId = `ws-${user.id}`;
       const { rows: wsRows } = await client.query("SELECT id FROM workspaces WHERE id = $1", [workspaceId]);
       if (wsRows.length === 0) {
