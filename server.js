@@ -1,23 +1,24 @@
 /**
- * Daily Command Center — Express API Server
+ * Daily Command Center — Express API Server (Postgres-backed)
  *
  * Single server that:
- *  - Serves the dashboard as static files (replaces npx http-server)
- *  - Provides REST API for reading all state data (replaces Python render injection)
- *  - Handles dashboard state persistence (replaces sync-server.js)
+ *  - Serves the dashboard as static files
+ *  - Provides REST API for reading all state data
+ *  - Handles dashboard state persistence
  *  - Broadcasts live updates via Server-Sent Events
  *  - Watches state files for changes from scheduled tasks
  *
- * Port: 8090 (single process, replaces both 8090 + 8091)
+ * Port: 8090
  */
 
+require("dotenv/config");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const Database = require("better-sqlite3");
 const session = require("express-session");
-const SqliteStore = require("better-sqlite3-session-store")(session);
+const pgSession = require("connect-pg-simple")(session);
+const pool = require("./pg-pool");
 const blockDB = require("./db");
 const migration = require("./migrate");
 const gcalAuth = require("./gcal-auth");
@@ -27,11 +28,8 @@ const auth = require("./auth");
 const app = express();
 const PORT = process.env.PORT || 8090;
 
-// ── Path Configuration ──
-// Everything is local under data/ — no external dependencies
 const PROJECT_DIR = __dirname;
 const DATA_DIR = path.join(PROJECT_DIR, "data");
-// State files (day-state, tomorrow-state, upcoming-meetings)
 const STATE_DIR = path.join(DATA_DIR, "state");
 const DAY_STATE_FILE = path.join(STATE_DIR, "day-state.json");
 const TOMORROW_STATE_FILE = path.join(STATE_DIR, "tomorrow-state.json");
@@ -39,1458 +37,313 @@ const UPCOMING_FILE = path.join(STATE_DIR, "upcoming-meetings.json");
 const LOCAL_UI_STATE_FILE = path.join(STATE_DIR, "local-ui-state.json");
 const ARCHIVE_DIR = path.join(STATE_DIR, "archive");
 const DAYS_DIR = path.join(STATE_DIR, "days");
-// Second Brain (recent day states, engrams, globals)
 const BRAIN_DIR = path.join(DATA_DIR, "brain");
 const RECENT_DIR = path.join(BRAIN_DIR, "recent");
 const ENGRAMS_DIR = path.join(BRAIN_DIR, "engrams");
 const GLOBALS_FILE = path.join(BRAIN_DIR, "globals.json");
 const MANIFEST_FILE = path.join(RECENT_DIR, "manifest.json");
-// Meeting prep HTML files
 const PREP_DIR = path.join(DATA_DIR, "prep");
-// Config (user-context.yaml, PA activity log)
 const USER_CONTEXT_FILE = path.join(DATA_DIR, "config", "user-context.yaml");
 const PA_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
 
-// Ensure directories exist
-[RECENT_DIR, ENGRAMS_DIR, DAYS_DIR].forEach((dir) => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+[RECENT_DIR, ENGRAMS_DIR, DAYS_DIR].forEach((dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); });
 
-// ── Middleware ──
 app.use(express.json({ limit: "5mb" }));
 
 // ── Session Setup ──
-// Read or generate a persistent session secret
 const secretFile = path.join(DATA_DIR, ".session-secret");
 let sessionSecret;
-if (fs.existsSync(secretFile)) {
-  sessionSecret = fs.readFileSync(secretFile, "utf8").trim();
-} else {
-  sessionSecret = crypto.randomBytes(32).toString("hex");
-  fs.writeFileSync(secretFile, sessionSecret, "utf8");
-}
+if (fs.existsSync(secretFile)) { sessionSecret = fs.readFileSync(secretFile, "utf8").trim(); }
+else { sessionSecret = crypto.randomBytes(32).toString("hex"); fs.writeFileSync(secretFile, sessionSecret, "utf8"); }
 
 app.use(session({
-  store: new SqliteStore({
-    client: new Database(path.join(DATA_DIR, "sessions.db")),
-    expired: { clear: true, intervalMs: 15 * 60 * 1000 }
-  }),
-  secret: sessionSecret,
-  resave: false,
-  saveUninitialized: false,
-  name: "dcc_session",
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",  // true in production (HTTPS required)
-    maxAge: 30 * 24 * 60 * 60 * 1000,  // 30 days
-    sameSite: "lax"
-  }
+  store: new pgSession({ pool: pool, tableName: "session", createTableIfMissing: true, pruneSessionInterval: 15 * 60 }),
+  secret: sessionSecret, resave: false, saveUninitialized: false, name: "dcc_session",
+  cookie: { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: "lax" }
 }));
 
 // ── Auth Middleware ──
-// Public routes (no session required)
 const AUTH_PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
-
-// PA/scheduled-task endpoints — accessible from localhost OR with bearer token
-const PA_ENDPOINTS = new Set([
-  "/api/pa-state/ingest",
-  "/api/ingest/day-state",
-  "/api/clean-tidy/approve",
-]);
-
-function isLocalhost(req) {
-  const addr = req.socket.remoteAddress;
-  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
-}
-
-function hasPaToken(req) {
-  const paToken = process.env.SECRET_PA_TOKEN;
-  if (!paToken) return false; // token not configured — localhost-only mode
-  const authHeader = req.headers.authorization || "";
-  const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  return bearer === paToken;
-}
+const PA_ENDPOINTS = new Set(["/api/pa-state/ingest", "/api/ingest/day-state", "/api/clean-tidy/approve"]);
+function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
+function hasPaToken(req) { const paToken = process.env.SECRET_PA_TOKEN; if (!paToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === paToken : false; }
 
 app.use((req, res, next) => {
   if (AUTH_PUBLIC.has(req.path)) return next();
   if (PA_ENDPOINTS.has(req.path) && (isLocalhost(req) || hasPaToken(req))) return next();
-  if (!req.session.userId) {
-    if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" });
-    return res.redirect("/login");
-  }
+  if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
   next();
 });
 
 // ── Workspace Middleware ──
-// Resolves req.workspaceId for all authenticated requests (single DB hit, cached in session).
-// In Phase 1–2 this is set but not yet used by queries (Phase 3 switches queries over).
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   if (!req.session.userId) return next();
-  if (req.session.workspaceId) {
-    req.workspaceId = req.session.workspaceId;
-    return next();
-  }
-  const ws = db.prepare(
-    "SELECT workspace_id FROM workspace_members WHERE user_id = ? AND role = 'owner' LIMIT 1"
-  ).get(req.session.userId);
-  req.workspaceId = ws ? ws.workspace_id : `ws-${req.session.userId}`;
-  req.session.workspaceId = req.workspaceId; // cache — cleared on login/logout
-  next();
+  if (req.session.workspaceId) { req.workspaceId = req.session.workspaceId; return next(); }
+  try {
+    const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id = $1 AND role = 'owner' LIMIT 1", [req.session.userId]);
+    req.workspaceId = rows[0] ? rows[0].workspace_id : `ws-${req.session.userId}`;
+    req.session.workspaceId = req.workspaceId;
+    next();
+  } catch (err) { next(err); }
 });
 
 // ── Auth Routes ──
-app.get("/login", (req, res) => {
-  if (req.session.userId) return res.redirect("/");
-  res.sendFile(path.join(PROJECT_DIR, "login.html"));
-});
+app.get("/login", (req, res) => { if (req.session.userId) return res.redirect("/"); res.sendFile(path.join(PROJECT_DIR, "login.html")); });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-  const user = auth.findUserByUsername(blockDB.getDB(), username);
-  if (!user || !auth.verifyPassword(password, user.password_hash)) {
-    return res.status(401).json({ error: "Invalid username or password" });
-  }
-  req.session.userId = user.id;
-  req.session.username = user.username;
-  req.session.workspaceId = null; // resolved fresh on next request
+  const user = await auth.findUserByUsername(username);
+  if (!user || !auth.verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
+  req.session.userId = user.id; req.session.username = user.username; req.session.workspaceId = null;
   res.json({ ok: true, username: user.username });
 });
 
-app.post("/api/auth/logout", (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
-});
+app.post("/api/auth/logout", (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
 
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   try {
     const { username, password } = req.body || {};
-    const result = auth.registerUser(blockDB.getDB(), { username, password });
-    req.session.userId = result.user.id;
-    req.session.username = result.user.username;
-    req.session.workspaceId = result.workspaceId;
+    const result = await auth.registerUser({ username, password });
+    req.session.userId = result.user.id; req.session.username = result.user.username; req.session.workspaceId = result.workspaceId;
     res.status(201).json({ ok: true, username: result.user.username, workspaceId: result.workspaceId });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// ── SSE: Server-Sent Events for live updates ──
-// Keyed by workspaceId so broadcasts are scoped to the right workspace.
-const sseClients = new Map(); // workspaceId → Set<res>
-
+// ── SSE ──
+const sseClients = new Map();
 app.get("/api/events", (req, res) => {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   res.write("data: connected\n\n");
   const wsId = req.workspaceId || "__global";
   if (!sseClients.has(wsId)) sseClients.set(wsId, new Set());
   sseClients.get(wsId).add(res);
-  req.on("close", () => {
-    const clients = sseClients.get(wsId);
-    if (clients) {
-      clients.delete(res);
-      if (clients.size === 0) sseClients.delete(wsId);
-    }
-  });
+  req.on("close", () => { const clients = sseClients.get(wsId); if (clients) { clients.delete(res); if (clients.size === 0) sseClients.delete(wsId); } });
 });
 
-/**
- * Broadcast an SSE event.
- * @param {string} eventType
- * @param {object} data
- * @param {string} [workspaceId] — if provided, only clients in that workspace receive it.
- *                                  If omitted, all clients receive it (file-watcher events).
- */
 function broadcast(eventType, data, workspaceId) {
   const payload = JSON.stringify({ type: eventType, ...data });
   let targets;
-  if (workspaceId) {
-    targets = sseClients.get(workspaceId) || new Set();
-  } else {
-    targets = new Set();
-    for (const s of sseClients.values()) s.forEach(c => targets.add(c));
-  }
-  for (const client of targets) {
-    client.write(`data: ${payload}\n\n`);
-  }
+  if (workspaceId) { targets = sseClients.get(workspaceId) || new Set(); }
+  else { targets = new Set(); for (const s of sseClients.values()) s.forEach(c => targets.add(c)); }
+  for (const client of targets) { client.write(`data: ${payload}\n\n`); }
 }
 
 // ── File Watching ──
-// Watch key state files and broadcast SSE on change
-const WATCHED_FILES = [DAY_STATE_FILE, TOMORROW_STATE_FILE, UPCOMING_FILE];
-const watchDebounce = {};
-
-WATCHED_FILES.forEach((filePath) => {
-  try {
-    fs.watch(filePath, { persistent: false }, (eventType) => {
-      // Debounce: ignore rapid successive changes
-      const now = Date.now();
-      if (watchDebounce[filePath] && now - watchDebounce[filePath] < 1000) return;
-      watchDebounce[filePath] = now;
-      const name = path.basename(filePath, ".json");
-      console.log(`[watch] ${name} changed, broadcasting SSE`);
-      broadcast("file-changed", { file: name });
-    });
-  } catch {
-    // File might not exist yet — that's fine
-  }
+[DAY_STATE_FILE, TOMORROW_STATE_FILE, UPCOMING_FILE].forEach((filePath) => {
+  const watchDebounce = {};
+  try { fs.watch(filePath, { persistent: false }, () => { const now = Date.now(); if (watchDebounce[filePath] && now - watchDebounce[filePath] < 1000) return; watchDebounce[filePath] = now; broadcast("file-changed", { file: path.basename(filePath, ".json") }); }); } catch {}
 });
 
-// ── SQLite (initialized early for use in helpers) ──
-const db = blockDB.getDB();
-
 // ── Helpers ──
-function readJSON(filePath, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return fallback;
-  }
-}
+function readJSON(filePath, fallback) { try { return JSON.parse(fs.readFileSync(filePath, "utf8")); } catch { return fallback; } }
+function writeJSON(filePath, data) { fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8"); }
+function updateManifest(date) { const m = readJSON(MANIFEST_FILE, { dates: [] }); if (!m.dates.includes(date)) { m.dates.unshift(date); m.dates.sort().reverse(); } m.lastUpdated = new Date().toISOString(); writeJSON(MANIFEST_FILE, m); }
+const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+function archiveDayState(date, data) { const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (!match) return; const [, year, mm] = match; const month = parseInt(mm, 10); const quarter = Math.ceil(month / 3); const monthFolder = `${mm}-${MONTH_NAMES[month]}`; const destDir = path.join(BRAIN_DIR, "archive", year, `Q${quarter}`, monthFolder); if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true }); const destFile = path.join(destDir, `${date}.json`); const existing = readJSON(destFile, {}); writeJSON(destFile, { ...existing, ...data, source: "api-save", savedAt: new Date().toISOString() }); }
+function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; if (!fs.existsSync(RECENT_DIR)) return; for (const fname of fs.readdirSync(RECENT_DIR)) { if (!fname.endsWith(".json") || fname === "manifest.json") continue; const ts = new Date(fname.replace(".json", "") + "T00:00:00").getTime(); if (ts && ts < cutoff) { fs.unlinkSync(path.join(RECENT_DIR, fname)); } } }
+function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
+function getETOffset(dateStr) { const dt = new Date(dateStr + "T12:00:00Z"); const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "shortOffset" }).formatToParts(dt); const tzPart = parts.find(p => p.type === "timeZoneName"); if (tzPart) { const m = tzPart.value.match(/GMT([+-]?\d+)/); if (m) { const hrs = parseInt(m[1], 10); return (hrs <= 0 ? "-" : "+") + String(Math.abs(hrs)).padStart(2, "0") + ":00"; } } return "-04:00"; }
+function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
 
-function writeJSON(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
-}
-
-function updateManifest(date) {
-  const manifest = readJSON(MANIFEST_FILE, { dates: [] });
-  if (!manifest.dates.includes(date)) {
-    manifest.dates.unshift(date);
-    manifest.dates.sort().reverse();
-  }
-  manifest.lastUpdated = new Date().toISOString();
-  writeJSON(MANIFEST_FILE, manifest);
-}
-
-const MONTH_NAMES = [
-  "", "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-function archiveDayState(date, data) {
-  // Dual-write to archive/{year}/Q{n}/{MM}-{MonthName}/{date}.json
-  const ARCHIVE_ROOT = path.join(BRAIN_DIR, "archive");
-  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return;
-  const [, year, mm] = match;
-  const month = parseInt(mm, 10);
-  const quarter = Math.ceil(month / 3);
-  const monthFolder = `${mm}-${MONTH_NAMES[month]}`;
-  const destDir = path.join(ARCHIVE_ROOT, year, `Q${quarter}`, monthFolder);
-  if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-  const destFile = path.join(destDir, `${date}.json`);
-  // Merge with existing (preserve fields not in new data)
-  const existing = readJSON(destFile, {});
-  const merged = { ...existing, ...data, source: "api-save", savedAt: new Date().toISOString() };
-  writeJSON(destFile, merged);
-  console.log(`[archive] Wrote ${date} to ${year}/Q${quarter}/${monthFolder}/`);
-}
-
-function pruneRecent() {
-  // Remove recent/ files older than 30 days
-  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  if (!fs.existsSync(RECENT_DIR)) return;
-  for (const fname of fs.readdirSync(RECENT_DIR)) {
-    if (!fname.endsWith(".json") || fname === "manifest.json") continue;
-    const dateStr = fname.replace(".json", "");
-    const ts = new Date(dateStr + "T00:00:00").getTime();
-    if (ts && ts < cutoff) {
-      fs.unlinkSync(path.join(RECENT_DIR, fname));
-      console.log(`[prune] Removed old recent file: ${fname}`);
-    }
-  }
-}
-
-// ── Per-Day State Helpers ──
-
-function getTodayStr() {
-  // Get today's date in America/New_York timezone
-  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" });
-  return fmt.format(new Date()); // "YYYY-MM-DD"
-}
-
-function getETOffset(dateStr) {
-  // Compute the UTC offset for a date in America/New_York (e.g., "-04:00" for EDT, "-05:00" for EST)
-  const dt = new Date(dateStr + "T12:00:00Z");
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "shortOffset" }).formatToParts(dt);
-  const tzPart = parts.find(p => p.type === "timeZoneName");
-  if (tzPart) {
-    // "GMT-4" or "GMT-5" → "-04:00" or "-05:00"
-    const m = tzPart.value.match(/GMT([+-]?\d+)/);
-    if (m) {
-      const hrs = parseInt(m[1], 10);
-      return (hrs <= 0 ? "-" : "+") + String(Math.abs(hrs)).padStart(2, "0") + ":00";
-    }
-  }
-  return "-04:00"; // fallback EDT
-}
-
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + "T12:00:00Z");
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-function getDayFilePath(dateStr) {
-  return path.join(DAYS_DIR, dateStr + ".json");
-}
-
-function getMeetingsFromSQLite(dateStr, userId, workspaceId) {
+async function getMeetingsFromDB(dateStr, userId, workspaceId) {
   const offset = getETOffset(dateStr);
-  const filterCol = workspaceId ? "b.workspace_id" : "b.user_id";
-  const filterVal = workspaceId || userId;
-  const rows = db.prepare(`
-    SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link
-    FROM blocks b
-    LEFT JOIN gcal_events g ON g.block_id = b.id
-    WHERE b.date = ? AND ${filterCol} = ? AND b.type = 'schedule_item' AND b.deleted_at IS NULL
-    ORDER BY b.sort_order ASC
-  `).all(dateStr, filterVal);
-
-  const meetings = [];
-  const meetingTimeline = [];
-
+  const { rows } = workspaceId
+    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.workspace_id = $2 AND b.type = 'schedule_item' AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
+    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.user_id = $2 AND b.type = 'schedule_item' AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
+  const meetings = [], meetingTimeline = [];
   for (const row of rows) {
-    let props;
-    try { props = JSON.parse(row.properties); } catch { continue; }
-    if (props.source !== "gcal" || props.all_day) continue;
-    if (!props.start || !props.end) continue;
-
-    // Parse attendees from gcal_events
+    const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;
+    if (!props || props.source !== "gcal" || props.all_day || !props.start || !props.end) continue;
     let attendees = [];
-    if (row.attendees_json) {
-      try {
-        const raw = JSON.parse(row.attendees_json);
-        attendees = raw
-          .filter(a => !a.self && !a.resource)
-          .map(a => a.email);
-      } catch {}
-    }
-
-    const startISO = `${dateStr}T${props.start}:00${offset}`;
-    const endISO = `${dateStr}T${props.end}:00${offset}`;
+    if (row.attendees_json) { const parsed = Array.isArray(row.attendees_json) ? row.attendees_json : []; attendees = parsed.filter(a => !a.self && !a.resource).map(a => a.email); }
+    const startISO = `${dateStr}T${props.start}:00${offset}`, endISO = `${dateStr}T${props.end}:00${offset}`;
     const eventId = row.gcal_event_id || props.source_id || row.id;
-
-    meetings.push({
-      id: eventId,
-      title: props.title || "(No title)",
-      start: startISO,
-      end: endISO,
-      attendees,
-      calUrl: props.calUrl || row.html_link || null,
-      linkedDocUrl: null,
-      linkedDocTitle: null,
-      myResponseStatus: props.rsvp_status || null,
-    });
-
-    meetingTimeline.push({
-      id: "mtg-" + row.id,
-      type: "meeting",
-      label: props.title || "(No title)",
-      start: startISO,
-      end: endISO,
-      source: "calendar",
-      source_id: eventId,
-      category: "Meetings",
-      completed: false,
-    });
+    meetings.push({ id: eventId, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null });
+    meetingTimeline.push({ id: "mtg-" + row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "calendar", source_id: eventId, category: "Meetings", completed: false });
   }
-
-  // Deduplicate by title + start (same event from multiple calendars)
-  const seen = new Map();
-  const dedupedMeetings = [];
-  const dedupedTimeline = [];
-  for (let i = 0; i < meetings.length; i++) {
-    const key = meetings[i].title + "|" + meetings[i].start;
-    const existing = seen.get(key);
-    if (existing !== undefined) {
-      // Keep the one where user accepted, or the first one
-      if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") {
-        dedupedMeetings[existing] = meetings[i];
-        dedupedTimeline[existing] = meetingTimeline[i];
-      }
-    } else {
-      seen.set(key, dedupedMeetings.length);
-      dedupedMeetings.push(meetings[i]);
-      dedupedTimeline.push(meetingTimeline[i]);
-    }
-  }
-
+  const seen = new Map(), dedupedMeetings = [], dedupedTimeline = [];
+  for (let i = 0; i < meetings.length; i++) { const key = meetings[i].title + "|" + meetings[i].start; const existing = seen.get(key); if (existing !== undefined) { if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") { dedupedMeetings[existing] = meetings[i]; dedupedTimeline[existing] = meetingTimeline[i]; } } else { seen.set(key, dedupedMeetings.length); dedupedMeetings.push(meetings[i]); dedupedTimeline.push(meetingTimeline[i]); } }
   return { meetings: dedupedMeetings, meetingTimeline: dedupedTimeline };
 }
 
-function buildSkeletonState(dateStr) {
-  return {
-    date: dateStr,
-    last_updated_at: new Date().toISOString(),
-    last_updated_by: "skeleton",
-    watermarks: {},
-    triage: { open_items: [], resolved_items: [], cycle_count: 0 },
-    completions: { tasks: [] },
-    schedule: {
-      working_hours: { start: "07:00", end: "17:30" },
-      timeline: [],
-      tasks_scheduled: [],
-      tasks_couldnt_fit: [],
-      stats: {},
-    },
-  };
-}
+function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
-function buildDayResponse(dateStr, userId, workspaceId) {
+async function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
-
-  // Read enrichment from per-day JSON (or create skeleton)
   let enrichment = readJSON(dayFile, null);
-  if (!enrichment) {
-    enrichment = buildSkeletonState(dateStr);
-    writeJSON(dayFile, enrichment);
-  }
-
-  // Live meetings from SQLite
-  const { meetings, meetingTimeline } = getMeetingsFromSQLite(dateStr, userId, workspaceId);
-
-  // Merge: enrichment + live meetings
+  if (!enrichment) { enrichment = buildSkeletonState(dateStr); writeJSON(dayFile, enrichment); }
+  const { meetings, meetingTimeline } = await getMeetingsFromDB(dateStr, userId, workspaceId);
   const result = { ...enrichment, date: dateStr, meetings };
-
-  // Merge meeting timeline entries into schedule.timeline
   if (result.schedule && result.schedule.timeline) {
-    const existingSourceIds = new Set(
-      result.schedule.timeline.filter(t => t.source === "calendar").map(t => t.source_id)
-    );
-    for (const mtg of meetingTimeline) {
-      if (!existingSourceIds.has(mtg.source_id)) {
-        result.schedule.timeline.push(mtg);
-      }
-    }
+    const existingSourceIds = new Set(result.schedule.timeline.filter(t => t.source === "calendar").map(t => t.source_id));
+    for (const mtg of meetingTimeline) { if (!existingSourceIds.has(mtg.source_id)) result.schedule.timeline.push(mtg); }
     result.schedule.timeline.sort((a, b) => a.start.localeCompare(b.start));
-  } else {
-    result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline };
-  }
-
-  // Read schedule blocks from SQLite
-  result.schedule.blocks = getScheduleBlocks(userId, workspaceId);
-
+  } else { result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline }; }
+  result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
   return result;
 }
 
-function getScheduleBlocks(userId, workspaceId) {
+async function getScheduleBlocks(userId, workspaceId) {
   try {
-    const db = blockDB.getDB();
-    const filterCol = workspaceId ? "workspace_id" : (userId ? "user_id" : null);
-    const filterVal = workspaceId || userId;
-    const rows = filterCol
-      ? db.prepare(`SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND ${filterCol}=? AND deleted_at IS NULL ORDER BY sort_order`).all(filterVal)
-      : db.prepare("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL ORDER BY sort_order").all();
-    return rows.map(r => ({ ...JSON.parse(r.properties), id: r.id, parent_id: r.parent_id, sort_order: r.sort_order }));
-  } catch(e){ return []; }
+    const { rows } = workspaceId
+      ? await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND workspace_id=$1 AND deleted_at IS NULL ORDER BY sort_order", [workspaceId])
+      : userId ? await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND user_id=$1 AND deleted_at IS NULL ORDER BY sort_order", [userId])
+      : await pool.query("SELECT id, parent_id, sort_order, properties FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL ORDER BY sort_order");
+    return rows.map(r => { const props = typeof r.properties === "string" ? JSON.parse(r.properties) : r.properties; return { ...props, id: r.id, parent_id: r.parent_id, sort_order: r.sort_order }; });
+  } catch(e) { return []; }
 }
 
-function seedScheduleBlocksFromYAML(userId, workspaceId) {
+async function seedScheduleBlocksFromYAML(userId, workspaceId) {
   try {
-    const db = blockDB.getDB();
-    const filterCol = workspaceId ? "workspace_id" : (userId ? "user_id" : null);
-    const filterVal = workspaceId || userId;
-    const existing = filterCol
-      ? db.prepare(`SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND ${filterCol}=? AND deleted_at IS NULL`).get(filterVal)
-      : db.prepare("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL").get();
-    if(existing.cnt > 0) return; // already seeded
-
-    if(!fs.existsSync(USER_CONTEXT_FILE)) return;
+    const { rows: [existing] } = workspaceId
+      ? await pool.query("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND workspace_id=$1 AND deleted_at IS NULL", [workspaceId])
+      : userId ? await pool.query("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND user_id=$1 AND deleted_at IS NULL", [userId])
+      : await pool.query("SELECT COUNT(*) as cnt FROM blocks WHERE type='schedule_block' AND deleted_at IS NULL");
+    if (parseInt(existing.cnt) > 0) return;
+    if (!fs.existsSync(USER_CONTEXT_FILE)) return;
     const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8");
     const match = raw.match(/\bblocks:\s*\r?\n((?:[ \t]+.*\r?\n?)*)/m);
-    if(!match) return;
-    const blocks = [];
-    let current = null;
-    for(const line of match[1].split(/\r?\n/)){
-      const nm = line.match(/^\s+-\s+name:\s+"?([^"\n]+)"?\s*$/);
-      const tp = line.match(/^\s+type:\s+(\w+)/);
-      const st = line.match(/^\s+start:\s+"?(\d{2}:\d{2})"?/);
-      const en = line.match(/^\s+end:\s+"?(\d{2}:\d{2})"?/);
-      if(nm){ current = { name: nm[1].trim() }; blocks.push(current); }
-      else if(tp && current) current.blockType = tp[1];
-      else if(st && current) current.start = st[1];
-      else if(en && current) current.end = en[1];
+    if (!match) return;
+    const blocks = []; let current = null;
+    for (const line of match[1].split(/\r?\n/)) {
+      const nm = line.match(/^\s+-\s+name:\s+"?([^"\n]+)"?\s*$/); const tp = line.match(/^\s+type:\s+(\w+)/);
+      const st = line.match(/^\s+start:\s+"?(\d{2}:\d{2})"?/); const en = line.match(/^\s+end:\s+"?(\d{2}:\d{2})"?/);
+      if (nm) { current = { name: nm[1].trim() }; blocks.push(current); }
+      else if (tp && current) current.blockType = tp[1]; else if (st && current) current.start = st[1]; else if (en && current) current.end = en[1];
     }
     const valid = blocks.filter(b => b.name && b.blockType && b.start && b.end);
-    valid.forEach((b, i) => {
-      blockDB.createBlock(db, {
-        type: "schedule_block",
-        properties: { name: b.name, blockType: b.blockType, start: b.start, end: b.end, protected: false, warnThreshold: 0 },
-        sort_order: i,
-        user_id: userId || null,
-        workspace_id: workspaceId || null
-      });
-    });
-    if(valid.length) console.log("[seed] Migrated " + valid.length + " schedule blocks from YAML to SQLite");
-  } catch(e){ console.error("[seed] Error seeding schedule blocks:", e.message); }
+    for (let i = 0; i < valid.length; i++) { await blockDB.createBlock({ type: "schedule_block", properties: { name: valid[i].name, blockType: valid[i].blockType, start: valid[i].start, end: valid[i].end, protected: false, warnThreshold: 0 }, sort_order: i, user_id: userId || null, workspace_id: workspaceId || null }); }
+    if (valid.length) console.log("[seed] Migrated " + valid.length + " schedule blocks from YAML");
+  } catch(e) { console.error("[seed] Error seeding schedule blocks:", e.message); }
 }
 
 function ensureSkeletonDays() {
   const today = getTodayStr();
-
-  // Generate skeletons for next 14 days
-  for (let i = 0; i < 14; i++) {
-    const dateStr = addDays(today, i);
-    const dayFile = getDayFilePath(dateStr);
-    if (!fs.existsSync(dayFile)) {
-      writeJSON(dayFile, buildSkeletonState(dateStr));
-    }
-  }
-
-  // Archive days older than 14 days
-  if (fs.existsSync(DAYS_DIR)) {
-    const cutoffDate = addDays(today, -14);
-    for (const fname of fs.readdirSync(DAYS_DIR)) {
-      if (!fname.endsWith(".json")) continue;
-      const dateStr = fname.replace(".json", "");
-      if (dateStr < cutoffDate) {
-        const data = readJSON(path.join(DAYS_DIR, fname), null);
-        if (data) {
-          archiveDayState(dateStr, data);
-          // Also save to recent/ for brain
-          const recentFile = path.join(RECENT_DIR, fname);
-          writeJSON(recentFile, data);
-          updateManifest(dateStr);
-        }
-        fs.unlinkSync(path.join(DAYS_DIR, fname));
-        console.log(`[days] Archived and removed ${fname}`);
-      }
-    }
-  }
-
-  console.log(`[days] Skeleton check complete — ${today} + 13 days`);
+  for (let i = 0; i < 14; i++) { const dateStr = addDays(today, i); const dayFile = getDayFilePath(dateStr); if (!fs.existsSync(dayFile)) writeJSON(dayFile, buildSkeletonState(dateStr)); }
+  if (fs.existsSync(DAYS_DIR)) { const cutoffDate = addDays(today, -14); for (const fname of fs.readdirSync(DAYS_DIR)) { if (!fname.endsWith(".json")) continue; const dateStr = fname.replace(".json", ""); if (dateStr < cutoffDate) { const data = readJSON(path.join(DAYS_DIR, fname), null); if (data) { archiveDayState(dateStr, data); writeJSON(path.join(RECENT_DIR, fname), data); updateManifest(dateStr); } fs.unlinkSync(path.join(DAYS_DIR, fname)); } } }
 }
 
-// ── GET: State Endpoints (replace render-script injection) ──
+// ── State Endpoints ──
+app.get("/api/state/day", async (req, res) => { try { res.json(await buildDayResponse(req.query.date || getTodayStr(), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(DAY_STATE_FILE, null)); } });
+app.get("/api/state/tomorrow", async (req, res) => { try { res.json(await buildDayResponse(addDays(getTodayStr(), 1), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(TOMORROW_STATE_FILE, null)); } });
+app.get("/api/state/upcoming", (req, res) => { res.json(readJSON(UPCOMING_FILE, [])); });
+app.get("/api/state/archives", (req, res) => { const archives = {}; if (fs.existsSync(ARCHIVE_DIR)) { for (const fname of fs.readdirSync(ARCHIVE_DIR).filter(f => f.endsWith(".json") && f.length === 15).sort().reverse().slice(0, 7)) { const data = readJSON(path.join(ARCHIVE_DIR, fname), null); if (data) archives[fname.replace(".json", "")] = data; } } res.json(archives); });
+app.get("/api/state/local", (req, res) => { res.json(readJSON(LOCAL_UI_STATE_FILE, null)); });
 
-// Day state — per-day files with live calendar merge
-app.get("/api/state/day", (req, res) => {
-  try {
-    const dateStr = req.query.date || getTodayStr();
-    res.json(buildDayResponse(dateStr, req.session.userId, req.workspaceId));
-  } catch (e) {
-    console.error("[api/state/day] Error:", e.message);
-    // Fallback: try legacy day-state.json
-    res.json(readJSON(DAY_STATE_FILE, null));
-  }
-});
-
-// Tomorrow — same logic, just +1 day
-app.get("/api/state/tomorrow", (req, res) => {
-  try {
-    const tomorrowStr = addDays(getTodayStr(), 1);
-    res.json(buildDayResponse(tomorrowStr, req.session.userId, req.workspaceId));
-  } catch (e) {
-    console.error("[api/state/tomorrow] Error:", e.message);
-    res.json(readJSON(TOMORROW_STATE_FILE, null));
-  }
-});
-
-// Upcoming meetings (next 10 business days)
-app.get("/api/state/upcoming", (req, res) => {
-  const data = readJSON(UPCOMING_FILE, []);
-  res.json(data);
-});
-
-// Archive states (last 7 days)
-app.get("/api/state/archives", (req, res) => {
-  const archives = {};
-  if (fs.existsSync(ARCHIVE_DIR)) {
-    const files = fs
-      .readdirSync(ARCHIVE_DIR)
-      .filter((f) => f.endsWith(".json") && f.length === 15) // YYYY-MM-DD.json
-      .sort()
-      .reverse()
-      .slice(0, 7);
-    for (const fname of files) {
-      const data = readJSON(path.join(ARCHIVE_DIR, fname), null);
-      if (data) archives[fname.replace(".json", "")] = data;
-    }
-  }
-  res.json(archives);
-});
-
-// Local UI state (notes, actions, dismissed — extracted from previous session)
-app.get("/api/state/local", (req, res) => {
-  const data = readJSON(LOCAL_UI_STATE_FILE, null);
-  res.json(data);
-});
-
-// ── GET: Second Brain Endpoints ──
-
-// Recent day states (for date picker and history)
-app.get("/api/brain/recent", (req, res) => {
-  const data = {};
-  if (fs.existsSync(RECENT_DIR)) {
-    for (const fname of fs.readdirSync(RECENT_DIR).sort()) {
-      if (!fname.endsWith(".json") || fname === "manifest.json") continue;
-      const entry = readJSON(path.join(RECENT_DIR, fname), null);
-      if (entry) data[fname.replace(".json", "")] = entry;
-    }
-  }
-  res.json(data);
-});
-
-// Global state (sticky notes, life captures)
-app.get("/api/brain/globals", (req, res) => {
-  const data = readJSON(GLOBALS_FILE, {});
-  res.json(data);
-});
-
-// Engram data (index + taxonomy + co-occurrence)
+// ── Brain Endpoints ──
+app.get("/api/brain/recent", (req, res) => { const data = {}; if (fs.existsSync(RECENT_DIR)) { for (const fname of fs.readdirSync(RECENT_DIR).sort()) { if (!fname.endsWith(".json") || fname === "manifest.json") continue; const entry = readJSON(path.join(RECENT_DIR, fname), null); if (entry) data[fname.replace(".json", "")] = entry; } } res.json(data); });
+app.get("/api/brain/globals", (req, res) => { res.json(readJSON(GLOBALS_FILE, {})); });
 app.get("/api/brain/engrams", (req, res) => {
-  const indexFile = path.join(ENGRAMS_DIR, "index.json");
-  const taxonomyFile = path.join(ENGRAMS_DIR, "taxonomy.json");
-  const cooccurrenceFile = path.join(ENGRAMS_DIR, "co-occurrence.json");
-
-  const index = readJSON(indexFile, {});
-  const cooccurrence = readJSON(cooccurrenceFile, {});
-
-  let taxonomy = readJSON(taxonomyFile, null);
-  if (!taxonomy) {
-    // Create default taxonomy (same as render script)
-    taxonomy = {
-      categories: [
-        { id: "activity", label: "Activities", icon: "\u26a1", color: "#3b82f6" },
-        { id: "people", label: "People", icon: "\ud83d\udc64", color: "#8b5cf6" },
-        { id: "book", label: "Books", icon: "\ud83d\udcda", color: "#f59e0b" },
-        { id: "media", label: "Media", icon: "\ud83c\udfac", color: "#ec4899" },
-        { id: "meeting", label: "Meetings", icon: "\ud83d\udcc5", color: "#06b6d4" },
-        { id: "project", label: "Projects", icon: "\ud83c\udfd7\ufe0f", color: "#10b981" },
-        { id: "place", label: "Places", icon: "\ud83d\udccd", color: "#ef4444" },
-        { id: "topic", label: "Topics", icon: "\ud83d\udca1", color: "#f97316" },
-        { id: "wellness", label: "Wellness", icon: "\ud83c\udf3f", color: "#22c55e" },
-        { id: "custom", label: "Custom", icon: "\ud83c\udff7\ufe0f", color: "#6b7280" },
-      ],
-    };
-    writeJSON(taxonomyFile, taxonomy);
-  }
-
+  const index = readJSON(path.join(ENGRAMS_DIR, "index.json"), {}); const cooccurrence = readJSON(path.join(ENGRAMS_DIR, "co-occurrence.json"), {});
+  let taxonomy = readJSON(path.join(ENGRAMS_DIR, "taxonomy.json"), null);
+  if (!taxonomy) { taxonomy = { categories: [ { id: "activity", label: "Activities", icon: "\u26a1", color: "#3b82f6" }, { id: "people", label: "People", icon: "\ud83d\udc64", color: "#8b5cf6" }, { id: "book", label: "Books", icon: "\ud83d\udcda", color: "#f59e0b" }, { id: "media", label: "Media", icon: "\ud83c\udfac", color: "#ec4899" }, { id: "meeting", label: "Meetings", icon: "\ud83d\udcc5", color: "#06b6d4" }, { id: "project", label: "Projects", icon: "\ud83c\udfd7\ufe0f", color: "#10b981" }, { id: "place", label: "Places", icon: "\ud83d\udccd", color: "#ef4444" }, { id: "topic", label: "Topics", icon: "\ud83d\udca1", color: "#f97316" }, { id: "wellness", label: "Wellness", icon: "\ud83c\udf3f", color: "#22c55e" }, { id: "custom", label: "Custom", icon: "\ud83c\udff7\ufe0f", color: "#6b7280" } ] }; writeJSON(path.join(ENGRAMS_DIR, "taxonomy.json"), taxonomy); }
   res.json({ index, taxonomy, cooccurrence });
 });
+app.get("/api/brain/tags", (req, res) => { if (!fs.existsSync(USER_CONTEXT_FILE)) return res.json({}); try { const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8"); const match = raw.match(/^journal_tags:\s*\n([\s\S]*?)(?=^\S|\Z)/m); if (!match) return res.json({}); const tags = {}; let currentKey = null; for (const line of match[1].split("\n")) { const keyMatch = line.match(/^\s{2}(\w+):\s*$/); const itemMatch = line.match(/^\s{4}-\s+"?([^"]+)"?\s*$/); if (keyMatch) { currentKey = keyMatch[1]; tags[currentKey] = []; } else if (itemMatch && currentKey) tags[currentKey].push(itemMatch[1]); } res.json(tags); } catch (e) { res.json({}); } });
+app.get("/api/prep", (req, res) => { if (!fs.existsSync(PREP_DIR)) return res.json({}); const files = {}; for (const fname of fs.readdirSync(PREP_DIR)) { if (!fname.endsWith(".html")) continue; try { files[fname] = fs.readFileSync(path.join(PREP_DIR, fname), "utf8"); } catch {} } res.json(files); });
+app.get("/api/prep/:filename", (req, res) => { const fp = path.join(PREP_DIR, req.params.filename); if (!fs.existsSync(fp)) return res.status(404).json({ error: "Not found" }); res.type("html").send(fs.readFileSync(fp, "utf8")); });
+app.get("/api/pa-log", (req, res) => { if (!fs.existsSync(PA_LOG_FILE)) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">pa-activity-log.md not found.</div>' }); const raw = fs.readFileSync(PA_LOG_FILE, "utf8"); const match = raw.match(/(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/); if (!match) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found.</div>' }); const ts = match[2], body = match[3].trim(); const lines = body.split("\n"), parts = []; let inUl = false; for (const line of lines) { const stripped = line.trim(); if (stripped.startsWith("- ")) { if (!inUl) { parts.push('<ul style="margin:4px 0 8px 16px;padding:0;list-style:disc">'); inUl = true; } parts.push(`<li style="margin:3px 0;font-size:12px;line-height:1.5">${stripped.slice(2).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</li>`); } else { if (inUl) { parts.push("</ul>"); inUl = false; } if (!stripped) parts.push('<div style="height:6px"></div>'); else parts.push(`<div style="font-size:12px;line-height:1.5;margin:2px 0">${stripped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</div>`); } } if (inUl) parts.push("</ul>"); res.json({ html: `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">Last off-peak sweep ran <strong style="color:var(--text)">${ts}</strong></div><div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">${parts.join("\n")}</div></div>`, timestamp: ts }); });
 
-// Journal tags from user-context.yaml
-app.get("/api/brain/tags", (req, res) => {
-  if (!fs.existsSync(USER_CONTEXT_FILE)) return res.json({});
-  try {
-    const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8");
-    // Simple YAML extraction for journal_tags (avoids PyYAML dependency)
-    // The tags section is a YAML map of arrays. Parse it minimally.
-    const match = raw.match(/^journal_tags:\s*\n([\s\S]*?)(?=^\S|\Z)/m);
-    if (!match) return res.json({});
+// ── POST: State Persistence ──
+app.post("/api/save-day", (req, res) => { const body = req.body, date = body.date; if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Missing or invalid date" }); body.savedAt = new Date().toISOString(); writeJSON(path.join(RECENT_DIR, `${date}.json`), body); updateManifest(date); archiveDayState(date, body); pruneRecent(); broadcast("save", { source: "day", date }); res.json({ ok: true, date }); });
+app.post("/api/save-globals", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(GLOBALS_FILE, body); broadcast("save", { source: "globals" }); res.json({ ok: true }); });
+app.post("/api/save-engram-index", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(path.join(ENGRAMS_DIR, "index.json"), body); broadcast("save", { source: "engrams" }); res.json({ ok: true }); });
 
-    const tags = {};
-    let currentKey = null;
-    for (const line of match[1].split("\n")) {
-      const keyMatch = line.match(/^\s{2}(\w+):\s*$/);
-      const itemMatch = line.match(/^\s{4}-\s+"?([^"]+)"?\s*$/);
-      if (keyMatch) {
-        currentKey = keyMatch[1];
-        tags[currentKey] = [];
-      } else if (itemMatch && currentKey) {
-        tags[currentKey].push(itemMatch[1]);
-      }
-    }
-    res.json(tags);
-  } catch (e) {
-    console.error("[tags] Error parsing user-context.yaml:", e.message);
-    res.json({});
-  }
-});
-
-// Meeting prep HTML files
-app.get("/api/prep", (req, res) => {
-  if (!fs.existsSync(PREP_DIR)) return res.json({});
-  const files = {};
-  for (const fname of fs.readdirSync(PREP_DIR)) {
-    if (!fname.endsWith(".html")) continue;
-    try {
-      files[fname] = fs.readFileSync(path.join(PREP_DIR, fname), "utf8");
-    } catch {
-      // skip unreadable files
-    }
-  }
-  res.json(files);
-});
-
-// Single prep file by name
-app.get("/api/prep/:filename", (req, res) => {
-  const filePath = path.join(PREP_DIR, req.params.filename);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Not found" });
-  res.type("html").send(fs.readFileSync(filePath, "utf8"));
-});
-
-// PA activity log — most recent overnight-oracle entry
-app.get("/api/pa-log", (req, res) => {
-  if (!fs.existsSync(PA_LOG_FILE)) {
-    return res.json({ html: '<div style="color:var(--text-muted);padding:24px">pa-activity-log.md not found.</div>' });
-  }
-  const raw = fs.readFileSync(PA_LOG_FILE, "utf8");
-  const match = raw.match(
-    /(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/
-  );
-  if (!match) {
-    return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found in log.</div>' });
-  }
-
-  const ts = match[2];
-  const body = match[3].trim();
-
-  // Convert markdown-ish body to HTML (mirrors render script logic)
-  const lines = body.split("\n");
-  const parts = [];
-  let inUl = false;
-  for (const line of lines) {
-    const stripped = line.trim();
-    if (stripped.startsWith("- ")) {
-      if (!inUl) {
-        parts.push('<ul style="margin:4px 0 8px 16px;padding:0;list-style:disc">');
-        inUl = true;
-      }
-      const item = stripped.slice(2).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-      parts.push(`  <li style="margin:3px 0;font-size:12px;line-height:1.5">${item}</li>`);
-    } else {
-      if (inUl) {
-        parts.push("</ul>");
-        inUl = false;
-      }
-      if (!stripped) {
-        parts.push('<div style="height:6px"></div>');
-      } else {
-        const fmt = stripped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-        parts.push(`<div style="font-size:12px;line-height:1.5;margin:2px 0">${fmt}</div>`);
-      }
-    }
-  }
-  if (inUl) parts.push("</ul>");
-
-  const html = `<div style="margin-bottom:12px">
-  <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">
-    Last off-peak sweep ran <strong style="color:var(--text)">${ts}</strong>
-  </div>
-  <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">
-    ${parts.join("\n")}
-  </div>
-</div>`;
-
-  res.json({ html, timestamp: ts });
-});
-
-// ── POST: Dashboard State Persistence (from sync-server.js) ──
-
-// Save day-state to The Second Brain
-app.post("/api/save-day", (req, res) => {
-  const body = req.body;
-  const date = body.date;
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: "Missing or invalid date (expected YYYY-MM-DD)" });
-  }
-  body.savedAt = new Date().toISOString();
-  const filePath = path.join(RECENT_DIR, `${date}.json`);
-  writeJSON(filePath, body);
-  updateManifest(date);
-  // Dual-write to archive (mirrors render script behavior)
-  archiveDayState(date, body);
-  // Prune recent files older than 30 days (runs on save, lightweight)
-  pruneRecent();
-  console.log(`[sync] Saved day-state: ${date}`);
-  broadcast("save", { source: "day", date });
-  res.json({ ok: true, date, file: `recent/${date}.json` });
-});
-
-// Save globals
-app.post("/api/save-globals", (req, res) => {
-  const body = req.body;
-  body.savedAt = new Date().toISOString();
-  writeJSON(GLOBALS_FILE, body);
-  console.log("[sync] Saved globals");
-  broadcast("save", { source: "globals" });
-  res.json({ ok: true, file: "globals.json" });
-});
-
-// Save engram index
-app.post("/api/save-engram-index", (req, res) => {
-  const body = req.body;
-  body.savedAt = new Date().toISOString();
-  const engramIndexFile = path.join(ENGRAMS_DIR, "index.json");
-  writeJSON(engramIndexFile, body);
-  console.log("[sync] Saved engram index");
-  broadcast("save", { source: "engrams" });
-  res.json({ ok: true, file: "engrams/index.json" });
-});
-
-// ── POST: Ingest from Scheduled Tasks ──
-// Section-level merge: PA-owned sections overwrite, user-owned sections preserve
-// Writes to per-day file + legacy day-state.json for backward compatibility
 app.post("/api/ingest/day-state", (req, res) => {
-  const incoming = req.body;
-  if (!incoming || !incoming.date) {
-    return res.status(400).json({ error: "Missing date in payload" });
-  }
-
-  // Read from per-day file (primary) or legacy file (fallback)
-  const dayFile = getDayFilePath(incoming.date);
-  const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
-
-  // PA-owned sections: overwrite from incoming
-  // Note: meetings excluded — they always come live from SQLite
-  const PA_SECTIONS = [
-    "schedule", "triage", "watermarks",
-    "notifications", "assessment", "sweep_stats", "meta", "report_card",
-    "clean_tidy", "orchestrator", "mutations", "completions", "personal",
-  ];
-  // User-owned sections: preserve existing, incoming doesn't overwrite
-  const USER_SECTIONS = [
-    "done", "pushed", "deleted", "durChanges", "notes", "actions",
-    "sessions", "mood", "reviewed", "subtasks",
-  ];
-
+  const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
+  const dayFile = getDayFilePath(incoming.date); const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
+  const PA_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep_stats", "meta", "report_card", "clean_tidy", "orchestrator", "mutations", "completions", "personal"];
+  const USER_SECTIONS = ["done", "pushed", "deleted", "durChanges", "notes", "actions", "sessions", "mood", "reviewed", "subtasks"];
   const merged = { ...existing };
-
-  // Overwrite PA sections from incoming
-  for (const key of PA_SECTIONS) {
-    if (key in incoming) merged[key] = incoming[key];
-  }
-
-  // Preserve user sections (don't overwrite with incoming)
-  for (const key of USER_SECTIONS) {
-    if (key in existing && !(key in incoming)) {
-      merged[key] = existing[key];
-    }
-    if (key in incoming && !(key in existing)) {
-      merged[key] = incoming[key];
-    }
-  }
-
-  // Always update top-level metadata
-  merged.date = incoming.date;
-  merged.last_updated_at = new Date().toISOString();
-  merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
-
-  // Strip meetings from stored file — they come from SQLite on read
-  delete merged.meetings;
-  delete merged.meetings_tomorrow;
-
-  // Write to per-day file (primary)
-  writeJSON(dayFile, merged);
-
-  // Legacy dual-write for backward compatibility (until PA tasks fully migrated)
-  writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || [] });
-
-  console.log(`[ingest] Merged day-state for ${incoming.date} → ${dayFile}`);
-  broadcast("ingest", { source: "day-state", date: incoming.date });
-  res.json({ ok: true, date: incoming.date });
+  for (const key of PA_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }
+  for (const key of USER_SECTIONS) { if (key in existing && !(key in incoming)) merged[key] = existing[key]; if (key in incoming && !(key in existing)) merged[key] = incoming[key]; }
+  merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
+  delete merged.meetings; delete merged.meetings_tomorrow;
+  writeJSON(dayFile, merged); writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || [] });
+  broadcast("ingest", { source: "day-state", date: incoming.date }); res.json({ ok: true, date: incoming.date });
 });
 
-// ── POST: Clean and Tidy Approval Actions ──
 app.post("/api/clean-tidy/approve", (req, res) => {
-  const { ids, action } = req.body;
-  if (!ids || !Array.isArray(ids) || !["approve", "deny"].includes(action)) {
-    return res.status(400).json({ error: "Expected { ids: string[], action: 'approve'|'deny' }" });
-  }
-  const state = readJSON(DAY_STATE_FILE, {});
-  const ct = state.clean_tidy || {};
-  const pending = ct.pending_approvals || [];
-  let changed = 0;
-  for (const item of pending) {
-    if (ids.includes(item.id) && item.status === "pending") {
-      item.status = action === "approve" ? "approved" : "denied";
-      item.resolved_at = new Date().toISOString();
-      changed++;
-    }
-  }
-  if (changed) {
-    state.clean_tidy = ct;
-    state.last_updated_at = new Date().toISOString();
-    state.last_updated_by = "dcc-approval";
-    writeJSON(DAY_STATE_FILE, state);
-    broadcast("ingest", { source: "clean-tidy-approval", changed });
-    console.log(`[clean-tidy] ${action}d ${changed} items`);
-  }
+  const { ids, action } = req.body; if (!ids || !Array.isArray(ids) || !["approve", "deny"].includes(action)) return res.status(400).json({ error: "Expected { ids, action }" });
+  const state = readJSON(DAY_STATE_FILE, {}); const ct = state.clean_tidy || {}; const pending = ct.pending_approvals || []; let changed = 0;
+  for (const item of pending) { if (ids.includes(item.id) && item.status === "pending") { item.status = action === "approve" ? "approved" : "denied"; item.resolved_at = new Date().toISOString(); changed++; } }
+  if (changed) { state.clean_tidy = ct; state.last_updated_at = new Date().toISOString(); state.last_updated_by = "dcc-approval"; writeJSON(DAY_STATE_FILE, state); broadcast("ingest", { source: "clean-tidy-approval", changed }); }
   res.json({ ok: true, action, changed });
 });
 
-// ── GET: Health Check ──
-app.get("/api/health", (req, res) => {
-  const manifest = readJSON(MANIFEST_FILE, { dates: [] });
-  const dayState = readJSON(DAY_STATE_FILE, null);
-  res.json({
-    status: "ok",
-    server: "daily-command-center",
-    port: PORT,
-    sseClients: sseClients.size,
-    brainDir: BRAIN_DIR,
-    dataDir: DATA_DIR,
-    datesStored: manifest.dates.length,
-    lastUpdated: manifest.lastUpdated || null,
-    dayStateDate: dayState ? dayState.date : null,
-    uptime: process.uptime(),
-  });
-});
+app.get("/api/health", (req, res) => { const m = readJSON(MANIFEST_FILE, { dates: [] }); const ds = readJSON(DAY_STATE_FILE, null); res.json({ status: "ok", server: "daily-command-center", port: PORT, sseClients: sseClients.size, dataDir: DATA_DIR, datesStored: m.dates.length, lastUpdated: m.lastUpdated || null, dayStateDate: ds ? ds.date : null, uptime: process.uptime() }); });
 
-// ── Static File Serving ──
-// Serve modular CSS/JS from public/ — no caching during development
-app.use("/public", express.static(path.join(PROJECT_DIR, "public"), {
-  etag: false,
-  lastModified: false,
-  setHeaders: (res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.setHeader("Pragma", "no-cache");
-  },
-}));
-// ── Block API (SQLite-backed) ──
+app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 
-// Validate date format
+// ── Block API ──
 function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }
+function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
 
-// Ownership guard: returns 404 if the block belongs to a different workspace.
-// Allows blocks with no workspace_id (pre-migration rows) through, for backward compat.
-function assertBlockOwnership(block, workspaceId) {
-  if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) {
-    const err = new Error("Block not found");
-    err.statusCode = 404;
-    throw err;
-  }
-}
+app.post("/api/blocks", async (req, res) => { try { const body = req.body, userId = req.session.userId; const items = Array.isArray(body) ? body : [body]; const results = []; for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: req.workspaceId })); broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, req.workspaceId); res.json(results.length === 1 ? results[0] : results); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.patch("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.updateBlock(req.params.id, req.body); broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
+app.delete("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.deleteBlock(req.params.id); broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id] }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
+app.post("/api/blocks/batch", async (req, res) => { try { const { operations, _clientId } = req.body; if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" }); const opsWithUser = operations.map(op => op.op === "create" ? { ...op, user_id: req.session.userId, workspace_id: req.workspaceId } : op); const result = await blockDB.batchOp(opsWithUser); broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get("/api/blocks", async (req, res) => { try { if (req.query.date) { if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" }); await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId); res.json(await blockDB.getBlocksByDate(req.query.date, req.workspaceId)); } else if (req.query.type) { const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t)); if (!types.length) return res.status(400).json({ error: "No valid types" }); res.json(await blockDB.getBlocksByTypes(types, req.workspaceId)); } else { res.status(400).json({ error: "Provide ?date= or ?type=" }); } } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/blocks/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); res.json(await blockDB.getBlocksByDateRange(start, end, req.workspaceId)); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.getBlock(req.params.id); if (!block) return res.status(404).json({ error: "Block not found" }); try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); } res.json(block); });
+app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
+app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 
-// POST /api/blocks — Create block(s)
-app.post("/api/blocks", (req, res) => {
-  try {
-    const body = req.body;
-    const userId = req.session.userId;
-    // Support single or array
-    const items = Array.isArray(body) ? body : [body];
-    const results = [];
-    for (const item of items) {
-      results.push(blockDB.createBlock(db, { ...item, user_id: userId, workspace_id: req.workspaceId }));
-    }
-    broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, req.workspaceId);
-    res.json(results.length === 1 ? results[0] : results);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
+// ── PA State API ──
+app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
+app.post("/api/pa-state/ingest", async (req, res) => { try { const { date, ...stateData } = req.body; if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" }); let userId = req.session.userId || null, workspaceId = req.workspaceId || null; if (!userId) { workspaceId = req.headers["x-workspace-id"] || "ws-1"; const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]); userId = rows[0] ? rows[0].user_id : 1; } await blockDB.savePaState(date, stateData, userId, workspaceId); broadcast("pa-state-changed", { date }); res.json({ ok: true, date }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
-// PATCH /api/blocks/:id — Update block (full properties replacement)
-app.patch("/api/blocks/:id", (req, res) => {
-  try {
-    const existing = blockDB.getBlock(db, req.params.id);
-    if (!existing) return res.status(404).json({ error: "Block not found" });
-    assertBlockOwnership(existing, req.workspaceId);
-    const result = blockDB.updateBlock(db, req.params.id, req.body);
-    broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    const status = e.statusCode || (e.message.includes("not found") ? 404 : 400);
-    res.status(status).json({ error: e.message });
-  }
-});
+// ── Migration (legacy) ──
+app.post("/api/migrate", async (req, res) => { res.json({ ok: true, message: "Data is now in Postgres." }); });
+app.post("/api/migrate/dry-run", async (req, res) => { res.json({ ok: true, message: "Data is now in Postgres." }); });
+app.get("/api/migrate/status", async (req, res) => { try { const { rows: [bc] } = await pool.query("SELECT COUNT(*) as count FROM blocks WHERE deleted_at IS NULL"); const { rows: [pc] } = await pool.query("SELECT COUNT(*) as count FROM pa_state"); res.json({ migrated: parseInt(bc.count) > 1, blockCount: parseInt(bc.count), paStateCount: parseInt(pc.count) }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/operations", async (req, res) => { if (!req.query.block_id) return res.status(400).json({ error: "block_id required" }); res.json(await blockDB.getOperations(req.query.block_id, parseInt(req.query.limit) || 50)); });
 
-// DELETE /api/blocks/:id — Soft-delete block
-app.delete("/api/blocks/:id", (req, res) => {
-  try {
-    const existing = blockDB.getBlock(db, req.params.id);
-    if (!existing) return res.status(404).json({ error: "Block not found" });
-    assertBlockOwnership(existing, req.workspaceId);
-    const result = blockDB.deleteBlock(db, req.params.id);
-    broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    const status = e.statusCode || (e.message.includes("not found") ? 404 : 400);
-    res.status(status).json({ error: e.message });
-  }
-});
+// ── GCal ──
+app.get("/api/gcal/auth", async (req, res) => { const userId = req.session.userId || 1; const url = await gcalAuth.getAuthUrl(userId); if (!url) return res.status(500).json({ error: "No credentials configured" }); res.redirect(url); });
+app.get("/api/gcal/callback", async (req, res) => { try { const { code } = req.query; if (!code) return res.status(400).send("Missing auth code"); await gcalAuth.handleCallback(code, req.session.userId || 1); gcalSync.startPolling(); res.redirect("/?gcal=connected"); } catch (e) { res.status(500).send("OAuth error: " + e.message); } });
+app.get("/api/gcal/status", async (req, res) => { res.json(await gcalSync.getSyncStatus()); });
+app.post("/api/gcal/disconnect", async (req, res) => { await gcalAuth.deleteTokens(req.session.userId || 1); gcalSync.stopPolling(); res.json({ ok: true }); });
+app.get("/api/gcal/calendars", async (req, res) => { try { const userId = req.session.userId || 1; const calendars = await gcalSync.getAllCalendars(); if (calendars.length) return res.json(calendars); if (await gcalAuth.isAuthenticated(userId)) { const authClient = await gcalAuth.getAuthClient(userId); const fetched = await gcalAuth.fetchAndCacheCalendars(authClient); await gcalSync.cacheCalendarsToDb(fetched); return res.json(await gcalSync.getAllCalendars()); } res.json([]); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/api/gcal/calendars/:id/toggle", async (req, res) => { try { await gcalSync.toggleCalendar(req.params.id, req.body.selected); if (req.body.selected) gcalSync.syncAll().catch(e => console.error("[gcal] Toggle sync error:", e.message)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.get("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const block = await blockDB.getBlock(req.params.blockId); res.json({ block: block || null, gcal: { ...gcalData, attendees: gcalData.attendees_json || [], conference: gcalData.conference_json || null, organizer: gcalData.organizer_json || null, creator: gcalData.creator_json || null, recurrence: gcalData.recurrence_json || null } }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.patch("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.updateEvent(gcalData.gcal_event_id, gcalData.calendar_id, req.body); broadcast("gcal-sync", { action: "update", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/api/gcal/event/:blockId/attendees", async (req, res) => { try { const { email } = req.body; if (!email) return res.status(400).json({ error: "email required" }); const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.addAttendee(gcalData.gcal_event_id, gcalData.calendar_id, email); broadcast("gcal-sync", { action: "attendee-add", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.delete("/api/gcal/event/:blockId/attendees/:email", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.removeAttendee(gcalData.gcal_event_id, gcalData.calendar_id, req.params.email); broadcast("gcal-sync", { action: "attendee-remove", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/api/gcal/event/:blockId/rsvp", async (req, res) => { try { const { response } = req.body; if (!["accepted", "declined", "tentative"].includes(response)) return res.status(400).json({ error: "Invalid response" }); const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.rsvp(gcalData.gcal_event_id, gcalData.calendar_id, response); broadcast("gcal-sync", { action: "rsvp", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/api/gcal/events", async (req, res) => { try { const { calendarId, ...eventData } = req.body; if (!calendarId || !eventData.title) return res.status(400).json({ error: "calendarId and title required" }); const result = await gcalSync.createEvent(calendarId, eventData); broadcast("gcal-sync", { action: "create" }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.delete("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); await gcalSync.deleteEvent(gcalData.gcal_event_id, gcalData.calendar_id); broadcast("gcal-sync", { action: "delete", blockId: req.params.blockId }); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/api/gcal/sync", async (req, res) => { try { await gcalSync.syncAll(); res.json({ ok: true, status: await gcalSync.getSyncStatus() }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
-// POST /api/blocks/batch — Atomic multi-block operation
-app.post("/api/blocks/batch", (req, res) => {
-  try {
-    const { operations, _clientId } = req.body;
-    if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" });
-    const userId = req.session.userId;
-    // Inject user_id + workspace_id into create operations
-    const opsWithUser = operations.map(op =>
-      op.op === "create" ? { ...op, user_id: userId, workspace_id: req.workspaceId } : op
-    );
-    const result = blockDB.batchOp(db, opsWithUser);
-    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
+// ── Static + Fallback ──
+app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
+app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });
 
-// GET /api/blocks?date=X or ?type=X,Y
-app.get("/api/blocks", (req, res) => {
-  try {
-    const userId = req.session.userId;
-    if (req.query.date) {
-      if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date format" });
-      // Ensure day_root exists
-      blockDB.ensureDayRoot(db, req.query.date, userId, req.workspaceId);
-      const blocks = blockDB.getBlocksByDate(db, req.query.date, req.workspaceId);
-      res.json(blocks);
-    } else if (req.query.type) {
-      const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
-      if (!types.length) return res.status(400).json({ error: "No valid types specified" });
-      const blocks = blockDB.getBlocksByTypes(db, types, req.workspaceId);
-      res.json(blocks);
-    } else {
-      res.status(400).json({ error: "Provide ?date=YYYY-MM-DD or ?type=type1,type2" });
-    }
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/blocks/range — Get blocks across a date range (for Calendar view)
-// IMPORTANT: Must be defined BEFORE /api/blocks/:id to avoid "range" matching as :id
-app.get("/api/blocks/range", (req, res) => {
-  try {
-    const { start, end } = req.query;
-    if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
-      return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
-    }
-    const blocks = blockDB.getBlocksByDateRange(db, start, end, req.workspaceId);
-    res.json(blocks);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/blocks/:id — Get single block
-app.get("/api/blocks/:id", (req, res) => {
-  const block = blockDB.getBlock(db, req.params.id);
-  if (!block) return res.status(404).json({ error: "Block not found" });
-  try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); }
-  res.json(block);
-});
-
-// GET /api/blocks/:id/children — Get child blocks
-app.get("/api/blocks/:id/children", (req, res) => {
-  try {
-    const parent = blockDB.getBlock(db, req.params.id);
-    if (!parent) return res.status(404).json({ error: "Block not found" });
-    assertBlockOwnership(parent, req.workspaceId);
-    const children = blockDB.getChildren(db, req.params.id);
-    res.json(children);
-  } catch (e) {
-    const status = e.statusCode || 500;
-    res.status(status).json({ error: e.message });
-  }
-});
-
-// POST /api/blocks/reorder — Update sort_order for multiple blocks
-app.post("/api/blocks/reorder", (req, res) => {
-  try {
-    const { items, _clientId } = req.body;
-    if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array of {id, sort_order}" });
-    // Verify all blocks belong to this workspace before reordering
-    for (const item of items) {
-      const block = blockDB.getBlock(db, item.id);
-      if (block) assertBlockOwnership(block, req.workspaceId);
-    }
-    blockDB.reorderBlocks(db, items);
-    broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId);
-    res.json({ ok: true, reordered: items.length });
-  } catch (e) {
-    const status = e.statusCode || 400;
-    res.status(status).json({ error: e.message });
-  }
-});
-
-// GET /api/pa-state/range — Get PA states across a date range (for Calendar view)
-// IMPORTANT: Must be defined BEFORE /api/pa-state/:date to avoid "range" matching as :date
-app.get("/api/pa-state/range", (req, res) => {
-  try {
-    const { start, end } = req.query;
-    if (!start || !end || !isValidDate(start) || !isValidDate(end)) {
-      return res.status(400).json({ error: "Provide ?start=YYYY-MM-DD&end=YYYY-MM-DD" });
-    }
-    const states = blockDB.getPaStateRange(db, start, end, req.workspaceId);
-    const result = {};
-    for (const s of states) result[s.date] = s.state_json;
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/pa-state/:date — Get PA-owned state
-app.get("/api/pa-state/:date", (req, res) => {
-  if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" });
-  const state = blockDB.getPaState(db, req.params.date, req.workspaceId);
-  res.json(state || { date: req.params.date, state_json: null });
-});
-
-// POST /api/pa-state/ingest — Scheduled task writes PA state (localhost or bearer token, no session needed)
-app.post("/api/pa-state/ingest", (req, res) => {
-  try {
-    const { date, ...stateData } = req.body;
-    if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
-    // Resolve user: from session (web request) or from X-Workspace-Id header (PA task on cloud)
-    // Falls back to workspace ws-1 (default user) for localhost scheduled tasks
-    let userId = req.session.userId || null;
-    let workspaceId = req.workspaceId || null;
-    if (!userId) {
-      const wsHeader = req.headers["x-workspace-id"];
-      workspaceId = wsHeader || "ws-1";
-      const owner = db.prepare(
-        "SELECT user_id FROM workspace_members WHERE workspace_id = ? AND role = 'owner' LIMIT 1"
-      ).get(workspaceId);
-      userId = owner ? owner.user_id : 1;
-    }
-    blockDB.savePaState(db, date, stateData, userId, workspaceId);
-    broadcast("pa-state-changed", { date });
-    res.json({ ok: true, date });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/migrate — Run full migration
-app.post("/api/migrate", (req, res) => {
-  try {
-    const { localStorageDump, dryRun } = req.body || {};
-    const userId = req.session.userId || 1;
-    const workspaceId = req.workspaceId || `ws-${userId}`;
-    const manifest = migration.runMigration(db, {
-      dryRun: !!dryRun,
-      localStorageDump: localStorageDump || null,
-      userId,
-      workspaceId
-    });
-    if (!dryRun) {
-      // Associate any still-unmigrated (null) blocks with current user + workspace
-      db.prepare("UPDATE blocks SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
-        .run(userId, workspaceId);
-      db.prepare("UPDATE pa_state SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
-        .run(userId, workspaceId);
-    }
-    res.json(manifest);
-  } catch (e) {
-    res.status(500).json({ error: e.message, stack: e.stack });
-  }
-});
-
-// POST /api/migrate/dry-run — Preview migration without committing
-app.post("/api/migrate/dry-run", (req, res) => {
-  try {
-    const { localStorageDump } = req.body || {};
-    const manifest = migration.runMigration(db, {
-      dryRun: true,
-      localStorageDump: localStorageDump || null
-    });
-    res.json(manifest);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/migrate/status — Check if migration has been run
-app.get("/api/migrate/status", (req, res) => {
-  try {
-    const blockCount = db.prepare("SELECT COUNT(*) as count FROM blocks WHERE deleted_at IS NULL").get();
-    const paCount = db.prepare("SELECT COUNT(*) as count FROM pa_state").get();
-    res.json({
-      migrated: blockCount.count > 1, // >1 because day_root auto-creates
-      blockCount: blockCount.count,
-      paStateCount: paCount.count
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/operations?block_id=X — Get operation history
-app.get("/api/operations", (req, res) => {
-  if (!req.query.block_id) return res.status(400).json({ error: "block_id required" });
-  const ops = blockDB.getOperations(db, req.query.block_id, parseInt(req.query.limit) || 50);
-  res.json(ops);
-});
-
-// ── Google Calendar Integration ──
-// GCal sync engine is initialized in the startup block (after defaultUserId is resolved)
-
-// OAuth flow
-app.get("/api/gcal/auth", (req, res) => {
-  const url = gcalAuth.getAuthUrl();
-  if (!url) return res.status(500).json({ error: "No credentials configured. Place gcal-credentials.json in data/" });
-  res.redirect(url);
-});
-
-app.get("/api/gcal/callback", async (req, res) => {
-  try {
-    const { code } = req.query;
-    if (!code) return res.status(400).send("Missing auth code");
-    await gcalAuth.handleCallback(code);
-    // Start sync after auth
-    gcalSync.startPolling();
-    res.redirect("/?gcal=connected");
-  } catch (e) {
-    console.error("[gcal] OAuth callback error:", e.message);
-    res.status(500).send("OAuth error: " + e.message);
-  }
-});
-
-app.get("/api/gcal/status", (req, res) => {
-  res.json(gcalSync.getSyncStatus());
-});
-
-app.post("/api/gcal/disconnect", (req, res) => {
-  gcalAuth.deleteTokens();
-  gcalSync.stopPolling();
-  res.json({ ok: true });
-});
-
-// Calendar management
-app.get("/api/gcal/calendars", async (req, res) => {
-  try {
-    const calendars = gcalSync.getAllCalendars();
-    if (calendars.length) return res.json(calendars);
-    // If no cached calendars, try fetching
-    if (gcalAuth.isAuthenticated()) {
-      const auth = gcalAuth.getAuthClient();
-      const fetched = await gcalAuth.fetchAndCacheCalendars(auth);
-      gcalSync.cacheCalendarsToDb(fetched);
-      return res.json(gcalSync.getAllCalendars());
-    }
-    res.json([]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/gcal/calendars/:id/toggle", (req, res) => {
-  try {
-    const { selected } = req.body;
-    gcalSync.toggleCalendar(req.params.id, selected);
-    // Trigger sync for newly selected calendar
-    if (selected) {
-      gcalSync.syncAll().catch(e => console.error("[gcal] Toggle sync error:", e.message));
-    }
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// Event details (joined block + gcal metadata)
-app.get("/api/gcal/event/:blockId", (req, res) => {
-  try {
-    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
-    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
-    const block = blockDB.getBlock(db, req.params.blockId);
-    res.json({
-      block: block || null,
-      gcal: {
-        ...gcalData,
-        attendees: JSON.parse(gcalData.attendees_json || "[]"),
-        conference: gcalData.conference_json ? JSON.parse(gcalData.conference_json) : null,
-        organizer: gcalData.organizer_json ? JSON.parse(gcalData.organizer_json) : null,
-        creator: gcalData.creator_json ? JSON.parse(gcalData.creator_json) : null,
-        recurrence: gcalData.recurrence_json ? JSON.parse(gcalData.recurrence_json) : null,
-      },
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Update event (title, time, description) → pushes to GCal
-app.patch("/api/gcal/event/:blockId", async (req, res) => {
-  try {
-    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
-    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
-    const result = await gcalSync.updateEvent(gcalData.gcal_event_id, gcalData.calendar_id, req.body);
-    broadcast("gcal-sync", { action: "update", blockId: req.params.blockId });
-    res.json({ ok: true, event: result });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Add attendee
-app.post("/api/gcal/event/:blockId/attendees", async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: "email required" });
-    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
-    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
-    const result = await gcalSync.addAttendee(gcalData.gcal_event_id, gcalData.calendar_id, email);
-    broadcast("gcal-sync", { action: "attendee-add", blockId: req.params.blockId });
-    res.json({ ok: true, event: result });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Remove attendee
-app.delete("/api/gcal/event/:blockId/attendees/:email", async (req, res) => {
-  try {
-    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
-    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
-    const result = await gcalSync.removeAttendee(gcalData.gcal_event_id, gcalData.calendar_id, req.params.email);
-    broadcast("gcal-sync", { action: "attendee-remove", blockId: req.params.blockId });
-    res.json({ ok: true, event: result });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// RSVP
-app.post("/api/gcal/event/:blockId/rsvp", async (req, res) => {
-  try {
-    const { response } = req.body;
-    if (!["accepted", "declined", "tentative"].includes(response)) {
-      return res.status(400).json({ error: "response must be accepted, declined, or tentative" });
-    }
-    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
-    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
-    const result = await gcalSync.rsvp(gcalData.gcal_event_id, gcalData.calendar_id, response);
-    broadcast("gcal-sync", { action: "rsvp", blockId: req.params.blockId });
-    res.json({ ok: true, event: result });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Create event
-app.post("/api/gcal/events", async (req, res) => {
-  try {
-    const { calendarId, ...eventData } = req.body;
-    if (!calendarId) return res.status(400).json({ error: "calendarId required" });
-    if (!eventData.title) return res.status(400).json({ error: "title required" });
-    const result = await gcalSync.createEvent(calendarId, eventData);
-    broadcast("gcal-sync", { action: "create" });
-    res.json({ ok: true, event: result });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Delete event
-app.delete("/api/gcal/event/:blockId", async (req, res) => {
-  try {
-    const gcalData = gcalSync.getGcalEventByBlockId(req.params.blockId);
-    if (!gcalData) return res.status(404).json({ error: "GCal event not found" });
-    await gcalSync.deleteEvent(gcalData.gcal_event_id, gcalData.calendar_id);
-    broadcast("gcal-sync", { action: "delete", blockId: req.params.blockId });
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Trigger manual sync
-app.post("/api/gcal/sync", async (req, res) => {
-  try {
-    await gcalSync.syncAll();
-    res.json({ ok: true, status: gcalSync.getSyncStatus() });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Serve other static assets from project dir
-app.use(express.static(PROJECT_DIR, {
-  extensions: ["html"],
-  etag: false,
-  lastModified: false,
-  setHeaders: (res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.setHeader("Pragma", "no-cache");
-  },
-}));
-
-// Fallback: serve index.html for root
-app.get("/", (req, res) => {
-  res.sendFile(path.join(PROJECT_DIR, "index.html"));
-});
-
-// ── Soft-delete purge (daily) ──
-// Purge blocks soft-deleted more than 30 days ago
-setInterval(() => {
-  try {
-    const purged = blockDB.purgeSoftDeleted(db, 30);
-    if (purged > 0) console.log(`[Purge] Removed ${purged} soft-deleted blocks older than 30 days`);
-  } catch (e) {
-    console.warn("[Purge] Error:", e.message);
-  }
-}, 24 * 60 * 60 * 1000); // Every 24 hours
-
-// Run once on startup too
-try {
-  const purged = blockDB.purgeSoftDeleted(db, 30);
-  if (purged > 0) console.log(`[Purge] Startup: removed ${purged} soft-deleted blocks`);
-} catch (e) {}
-
-// ── Startup: Ensure default user, associate pre-auth data, bootstrap workspaces ──
+// ── Startup ──
 let defaultUserId = 1;
-try {
-  const defaultUser = auth.ensureDefaultUser(db); // returns null in production
-  if (defaultUser) {
-    defaultUserId = defaultUser.id;
-    const defaultWorkspaceId = `ws-${defaultUserId}`;
-    // Associate any blocks/pa_state that predate auth (user_id IS NULL) with the default user + workspace
-    const orphanBlocks = db.prepare("UPDATE blocks SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
-      .run(defaultUserId, defaultWorkspaceId);
-    const orphanPA = db.prepare("UPDATE pa_state SET user_id = ?, workspace_id = ? WHERE user_id IS NULL")
-      .run(defaultUserId, defaultWorkspaceId);
-    if (orphanBlocks.changes > 0 || orphanPA.changes > 0) {
-      console.log(`[auth] Migrated ${orphanBlocks.changes} blocks + ${orphanPA.changes} pa_state rows → user ${defaultUserId} / ${defaultWorkspaceId}`);
-    }
-  }
-  // Ensure every user has a workspace and all data rows have workspace_id stamped
-  blockDB.ensureWorkspacesForAllUsers(db);
-} catch (e) {
-  console.error("[auth] Startup error:", e.message);
-}
-
-// ── Start ──
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n  Daily Command Center`);
-  console.log(`  ────────────────────`);
+  console.log(`  --------------------`);
   console.log(`  Dashboard:  http://localhost:${PORT}`);
-  console.log(`  API:        http://localhost:${PORT}/api/health`);
-  console.log(`  SSE:        http://localhost:${PORT}/api/events`);
-  console.log(`  Blocks API: http://localhost:${PORT}/api/blocks`);
-  console.log(`  Data Dir:   ${DATA_DIR}`);
-  console.log(`  SQLite DB:  ${path.join(DATA_DIR, "blocks.db")}`);
-  console.log(`  Brain Dir:  ${BRAIN_DIR}`);
-  console.log(`  Auth:       Session-based — login at /login`);
+  console.log(`  Database:   Postgres (via DATABASE_URL)`);
+  console.log(`  Auth:       Session-based -- login at /login`);
 
-  // Start GCal sync if authenticated (pass db + userId for DB-backed token check)
-  gcalSync.init(db, broadcast, defaultUserId);
-  if (gcalAuth.isAuthenticated(db, defaultUserId)) {
-    console.log(`  GCal:       Connected — starting sync`);
-    gcalSync.startPolling();
-  } else {
-    console.log(`  GCal:       Not connected — visit /api/gcal/auth to connect`);
-  }
-
-  // Bootstrap per-day skeleton files (rolling 14-day window)
   try {
-    ensureSkeletonDays();
-    console.log(`  Days:       ${DAYS_DIR}`);
-  } catch (e) {
-    console.error(`  Days:       Bootstrap error — ${e.message}`);
-  }
+    const defaultUser = await auth.ensureDefaultUser();
+    if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE pa_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
+    await blockDB.ensureWorkspacesForAllUsers();
+  } catch (e) { console.error("[auth] Startup error:", e.message); }
 
-  // Seed schedule blocks from YAML if not already in SQLite
-  try { seedScheduleBlocksFromYAML(defaultUserId, `ws-${defaultUserId}`); } catch(e) {
-    console.error(`  Blocks:     Seed error — ${e.message}`);
-  }
+  try { await gcalSync.init(broadcast, defaultUserId); if (await gcalAuth.isAuthenticated(defaultUserId)) { console.log(`  GCal:       Connected`); gcalSync.startPolling(); } else { console.log(`  GCal:       Not connected`); } } catch (e) { console.error("[gcal] Init error:", e.message); }
 
-  // Re-check skeletons every 6 hours (handles midnight rollover)
-  setInterval(() => {
-    try { ensureSkeletonDays(); } catch (e) {
-      console.error("[days] Periodic skeleton error:", e.message);
-    }
-  }, 6 * 60 * 60 * 1000);
+  try { ensureSkeletonDays(); } catch (e) {}
+  try { await seedScheduleBlocksFromYAML(defaultUserId, `ws-${defaultUserId}`); } catch(e) {}
+  try { const purged = await blockDB.purgeSoftDeleted(30); if (purged > 0) console.log(`[Purge] Startup: removed ${purged}`); } catch(e) {}
 
+  setInterval(() => { try { ensureSkeletonDays(); } catch (e) {} }, 6 * 60 * 60 * 1000);
+  setInterval(async () => { try { await blockDB.purgeSoftDeleted(30); } catch (e) {} }, 24 * 60 * 60 * 1000);
   console.log();
 });

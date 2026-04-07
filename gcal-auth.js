@@ -1,20 +1,15 @@
 /**
- * gcal-auth.js — Google Calendar OAuth 2.0 Module
+ * gcal-auth.js — Google Calendar OAuth 2.0 Module (Postgres-backed)
  *
  * Handles the full OAuth lifecycle:
  *  - Generating consent URL
  *  - Exchanging auth code for tokens
- *  - Persisting and refreshing tokens
+ *  - Persisting and refreshing tokens (Postgres)
  *  - Providing authenticated API clients
  */
 
 const { google } = require("googleapis");
-const fs = require("fs");
-const path = require("path");
-
-const CREDENTIALS_PATH = path.join(__dirname, "data", "gcal-credentials.json");
-const TOKENS_PATH = path.join(__dirname, "data", "gcal-tokens.json");
-const CALENDARS_PATH = path.join(__dirname, "data", "gcal-calendars.json");
+const pool = require("./pg-pool");
 
 const SCOPES = [
   "https://www.googleapis.com/auth/calendar",
@@ -24,206 +19,88 @@ const SCOPES = [
 const APP_URL = process.env.APP_URL || "http://localhost:8090";
 const REDIRECT_URI = `${APP_URL}/api/gcal/callback`;
 
-// ── Credential Loading (file-based — legacy fallback) ──
-
-function loadCredentials() {
-  if (!fs.existsSync(CREDENTIALS_PATH)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf8"));
-  } catch {
-    return null;
-  }
+async function loadTokens(userId) {
+  if (!userId) return null;
+  const { rows } = await pool.query("SELECT tokens FROM gcal_tokens WHERE user_id = $1", [userId]);
+  if (!rows[0] || !rows[0].tokens) return null;
+  return typeof rows[0].tokens === "string" ? JSON.parse(rows[0].tokens) : rows[0].tokens;
 }
 
-function loadTokens() {
-  if (!fs.existsSync(TOKENS_PATH)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(TOKENS_PATH, "utf8"));
-  } catch {
-    return null;
-  }
+async function loadCredentials(userId) {
+  if (!userId) return null;
+  const { rows } = await pool.query("SELECT credentials FROM gcal_tokens WHERE user_id = $1", [userId]);
+  if (!rows[0] || !rows[0].credentials) return null;
+  return typeof rows[0].credentials === "string" ? JSON.parse(rows[0].credentials) : rows[0].credentials;
 }
 
-function saveTokens(tokens) {
-  fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2), "utf8");
-}
-
-function deleteTokens() {
-  if (fs.existsSync(TOKENS_PATH)) fs.unlinkSync(TOKENS_PATH);
-}
-
-// ── DB-backed Token Functions (per-user, Phase 3) ──
-
-function loadTokensDb(db, userId) {
-  if (!db || !userId) return loadTokens(); // file fallback
-  const row = db.prepare("SELECT tokens FROM gcal_tokens WHERE user_id = ?").get(userId);
-  if (!row || !row.tokens) return null;
-  try { return JSON.parse(row.tokens); } catch { return null; }
-}
-
-function loadCredentialsDb(db, userId) {
-  if (!db || !userId) return loadCredentials(); // file fallback
-  const row = db.prepare("SELECT credentials FROM gcal_tokens WHERE user_id = ?").get(userId);
-  if (!row || !row.credentials) return loadCredentials(); // file fallback
-  try { return JSON.parse(row.credentials); } catch { return loadCredentials(); }
-}
-
-function saveTokensDb(db, userId, tokens) {
-  if (!db || !userId) { saveTokens(tokens); return; }
+async function saveTokens(userId, tokens) {
+  if (!userId) return;
   const now = new Date().toISOString();
-  const existing = db.prepare("SELECT user_id FROM gcal_tokens WHERE user_id = ?").get(userId);
-  if (existing) {
-    db.prepare("UPDATE gcal_tokens SET tokens = ?, updated_at = ? WHERE user_id = ?")
-      .run(JSON.stringify(tokens), now, userId);
+  const { rows } = await pool.query("SELECT user_id FROM gcal_tokens WHERE user_id = $1", [userId]);
+  if (rows.length > 0) {
+    await pool.query("UPDATE gcal_tokens SET tokens = $1, updated_at = $2 WHERE user_id = $3", [tokens, now, userId]);
   } else {
-    // No row yet — file fallback for credentials
-    const creds = loadCredentials();
-    db.prepare(`INSERT INTO gcal_tokens (user_id, credentials, tokens, updated_at) VALUES (?, ?, ?, ?)`)
-      .run(userId, creds ? JSON.stringify(creds) : "{}", JSON.stringify(tokens), now);
+    await pool.query(`INSERT INTO gcal_tokens (user_id, credentials, tokens, updated_at) VALUES ($1, $2, $3, $4)`, [userId, {}, tokens, now]);
   }
-  saveTokens(tokens); // keep file in sync as fallback during transition
 }
 
-function deleteTokensDb(db, userId) {
-  if (db && userId) {
-    db.prepare("UPDATE gcal_tokens SET tokens = NULL, updated_at = ? WHERE user_id = ?")
-      .run(new Date().toISOString(), userId);
-  }
-  deleteTokens(); // also clear file
+async function deleteTokens(userId) {
+  if (!userId) return;
+  await pool.query("UPDATE gcal_tokens SET tokens = NULL, updated_at = $1 WHERE user_id = $2", [new Date().toISOString(), userId]);
 }
 
-function isAuthenticatedDb(db, userId) {
-  const tokens = loadTokensDb(db, userId);
+async function isAuthenticated(userId) {
+  const tokens = await loadTokens(userId);
   return !!(tokens && tokens.refresh_token);
 }
 
-// ── OAuth Client ──
-
-function createOAuthClient(db, userId) {
-  const creds = db && userId ? loadCredentialsDb(db, userId) : loadCredentials();
+async function createOAuthClient(userId) {
+  const creds = await loadCredentials(userId);
   if (!creds) return null;
-
-  // Support both "installed" and "web" credential types
   const config = creds.installed || creds.web;
   if (!config) return null;
-
-  return new google.auth.OAuth2(
-    config.client_id,
-    config.client_secret,
-    REDIRECT_URI
-  );
+  return new google.auth.OAuth2(config.client_id, config.client_secret, REDIRECT_URI);
 }
 
-function getAuthUrl(db, userId) {
-  const client = createOAuthClient(db, userId);
+async function getAuthUrl(userId) {
+  const client = await createOAuthClient(userId);
   if (!client) return null;
-
-  return client.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: SCOPES,
-  });
+  return client.generateAuthUrl({ access_type: "offline", prompt: "consent", scope: SCOPES });
 }
 
-async function handleCallback(code, db, userId) {
-  const client = createOAuthClient(db, userId);
+async function handleCallback(code, userId) {
+  const client = await createOAuthClient(userId);
   if (!client) throw new Error("No credentials configured");
-
   const { tokens } = await client.getToken(code);
-  if (db && userId) {
-    saveTokensDb(db, userId, tokens);
-  } else {
-    saveTokens(tokens);
-  }
+  await saveTokens(userId, tokens);
   return tokens;
 }
 
-function getAuthClient(db, userId) {
-  const client = createOAuthClient(db, userId);
+async function getAuthClient(userId) {
+  const client = await createOAuthClient(userId);
   if (!client) return null;
-
-  const tokens = db && userId ? loadTokensDb(db, userId) : loadTokens();
+  const tokens = await loadTokens(userId);
   if (!tokens) return null;
-
   client.setCredentials(tokens);
-
-  // Auto-refresh and persist new tokens
   client.on("tokens", (newTokens) => {
-    if (db && userId) {
-      const existing = loadTokensDb(db, userId) || {};
-      saveTokensDb(db, userId, { ...existing, ...newTokens });
-    } else {
-      const existing = loadTokens() || {};
-      saveTokens({ ...existing, ...newTokens });
-    }
+    loadTokens(userId).then((existing) => {
+      saveTokens(userId, { ...(existing || {}), ...newTokens });
+    }).catch((err) => console.error("[gcal-auth] Token refresh save error:", err.message));
   });
-
   return client;
-}
-
-function isAuthenticated(db, userId) {
-  if (db && userId) return isAuthenticatedDb(db, userId);
-  const tokens = loadTokens();
-  return !!(tokens && tokens.refresh_token);
-}
-
-// ── Calendar List Cache ──
-
-function loadCalendarList() {
-  if (!fs.existsSync(CALENDARS_PATH)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(CALENDARS_PATH, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function saveCalendarList(calendars) {
-  fs.writeFileSync(CALENDARS_PATH, JSON.stringify(calendars, null, 2), "utf8");
 }
 
 async function fetchAndCacheCalendars(auth) {
   const calendar = google.calendar({ version: "v3", auth });
   const res = await calendar.calendarList.list();
-  const items = (res.data.items || []).map((c) => ({
-    id: c.id,
-    summary: c.summary,
-    description: c.description || "",
-    backgroundColor: c.backgroundColor,
-    foregroundColor: c.foregroundColor,
-    primary: !!c.primary,
-    accessRole: c.accessRole,
-    selected: c.selected !== false, // default to selected
+  return (res.data.items || []).map((c) => ({
+    id: c.id, summary: c.summary, description: c.description || "",
+    backgroundColor: c.backgroundColor, foregroundColor: c.foregroundColor,
+    primary: !!c.primary, accessRole: c.accessRole, selected: c.selected !== false,
   }));
-  saveCalendarList({ calendars: items, fetchedAt: new Date().toISOString() });
-  return items;
 }
 
-// ── Export ──
-
 module.exports = {
-  // File-based (legacy / fallback)
-  loadCredentials,
-  loadTokens,
-  saveTokens,
-  deleteTokens,
-  // DB-backed (per-user, Phase 3+)
-  loadTokensDb,
-  loadCredentialsDb,
-  saveTokensDb,
-  deleteTokensDb,
-  isAuthenticatedDb,
-  // OAuth (accept optional db/userId for DB-backed operation)
-  createOAuthClient,
-  getAuthUrl,
-  handleCallback,
-  getAuthClient,
-  isAuthenticated,
-  // Calendar cache
-  loadCalendarList,
-  saveCalendarList,
-  fetchAndCacheCalendars,
-  CREDENTIALS_PATH,
-  TOKENS_PATH,
-  CALENDARS_PATH,
+  loadTokens, loadCredentials, saveTokens, deleteTokens, isAuthenticated,
+  createOAuthClient, getAuthUrl, handleCallback, getAuthClient, fetchAndCacheCalendars,
 };
