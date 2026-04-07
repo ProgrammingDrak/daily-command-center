@@ -26,6 +26,7 @@ const gcalSync = require("./gcal-sync");
 const auth = require("./auth");
 
 const app = express();
+app.set("trust proxy", 1); // required for secure cookies behind Railway's reverse proxy
 const PORT = process.env.PORT || 8090;
 
 const PROJECT_DIR = __dirname;
