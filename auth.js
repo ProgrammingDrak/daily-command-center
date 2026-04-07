@@ -33,11 +33,13 @@ function verifyPassword(password, hash) {
  * Returns the user row, or null in production (where no default user is seeded).
  */
 function ensureDefaultUser(db) {
-  if (process.env.NODE_ENV === "production") return null;
-  const existing = findUserByUsername(db, "drake");
+  const username = process.env.SEED_USERNAME || (process.env.NODE_ENV !== "production" ? "drake" : null);
+  const password = process.env.SEED_PASSWORD || (process.env.NODE_ENV !== "production" ? "clever123" : null);
+  if (!username || !password) return null;
+  const existing = findUserByUsername(db, username);
   if (existing) return existing;
-  console.log("[auth] Creating default user 'drake'");
-  return createUser(db, { username: "drake", password: "clever123" });
+  console.log(`[auth] Creating default user '${username}'`);
+  return createUser(db, { username, password });
 }
 
 /**
