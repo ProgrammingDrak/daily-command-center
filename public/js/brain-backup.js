@@ -40,6 +40,12 @@ function exportLocalState() {
 }
 // Export on tab close — flush all pending state immediately
 window.addEventListener("beforeunload", () => {
+  // Save timer state on tab close (crash safety — timer no longer saves every tick)
+  if (typeof savePomoState === "function" && typeof pomoState !== "undefined" && pomoState.running) {
+    pomoState.running = false;
+    clearInterval(pomoState.iv);
+    savePomoState();
+  }
   exportLocalState();
   // Phase 0 fix: flush pending changes to Express with keepalive
   // (keepalive requests survive page unload)
@@ -53,6 +59,13 @@ window.addEventListener("beforeunload", () => {
       PaDB.saveDate(date, collectAllState());
       PaDB.saveGlobal('globals', collectGlobalState());
     } catch(e) {}
+  }
+});
+
+// Save pomo state when tab becomes hidden (safety net — timer no longer saves every tick)
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && typeof savePomoState === "function" && typeof pomoState !== "undefined" && pomoState.running) {
+    savePomoState();
   }
 });
 

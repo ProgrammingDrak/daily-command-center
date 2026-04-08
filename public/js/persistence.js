@@ -3,8 +3,9 @@ function updateSaveStatus(state, text) {
   const el = document.getElementById("save-status");
   if (!el) return;
   el.className = "save-status save-status--" + state;
-  const textEl = el.querySelector(".save-status-text");
-  if (textEl) textEl.textContent = text || "";
+  el.title = text || "";
+  const tooltip = document.getElementById("save-status-tooltip");
+  if (tooltip) tooltip.textContent = text || "";
 }
 
 function showToast(message, type = "error", duration = 5000) {
@@ -243,7 +244,7 @@ function scheduleIDBSave() {
     return; // BlockStore handles all persistence now
   }
   _hasPendingChanges = true;
-  updateSaveStatus("saving", "Saving...");
+  updateSaveStatus("saving", "Syncing changes...");
   clearTimeout(_idbTimer);
   _idbTimer = setTimeout(() => {
     const date = (__state && __state.date) ? __state.date : "unknown";
@@ -274,9 +275,9 @@ function flushToExpress() {
       body: JSON.stringify(collectAllState()),
       keepalive: true
     }).then(() => {
-      updateSaveStatus("ok", "All changes saved");
+      updateSaveStatus("ok", "All changes synced");
     }).catch((e) => {
-      updateSaveStatus("error", "Save failed — retrying...");
+      updateSaveStatus("error", "Sync failed — retrying...");
       console.warn("[Express Sync] save-day failed:", e.message);
     });
     fetch("/api/save-globals", {
@@ -286,7 +287,7 @@ function flushToExpress() {
       keepalive: true
     }).catch(() => {});
   } catch(e) {
-    updateSaveStatus("error", "Save failed");
+    updateSaveStatus("error", "Sync failed");
     console.warn("[Express Sync] Save failed:", e.message);
   }
 }
@@ -304,6 +305,82 @@ function startHeartbeat() {
   }, 2000);
 }
 startHeartbeat();
+
+// ======== RECONNECT SYNC ========
+// When the browser comes back online or the tab regains focus, reconcile
+// local state with the server. Most-recent-wins per key using savedAt timestamps.
+
+async function reconcileWithServer() {
+  const date = (__state && __state.date) ? __state.date : "unknown";
+  if (date === "unknown") return;
+
+  // 1. Flush any pending local changes first
+  if (_hasPendingChanges) {
+    flushToExpress();
+    // Short delay to let the flush land before pulling
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  // 2. Fetch the latest server state
+  let serverState = null;
+  try {
+    const res = await fetch("/api/brain/recent", { signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      const data = await res.json();
+      serverState = data[date] || null;
+    }
+  } catch(e) {
+    console.warn("[Reconnect Sync] Could not reach server:", e.message);
+    updateSaveStatus("error", "Server unreachable — working offline");
+    return;
+  }
+  if (!serverState) return;
+
+  // 3. Compare timestamps — merge server state into local where server is newer
+  const localState = collectAllState();
+  const localTime = localState.collectedAt ? new Date(localState.collectedAt).getTime() : 0;
+  const serverTime = serverState.savedAt ? new Date(serverState.savedAt).getTime() : 0;
+
+  if (serverTime > localTime) {
+    // Server has newer data — merge it in
+    console.log("[Reconnect Sync] Server state is newer (" + serverState.savedAt + "), merging...");
+    // Write server state to localStorage (safe — writeToLocalStorage is non-destructive per key)
+    writeToLocalStorage(date, serverState);
+    // Reload in-memory state from the now-updated localStorage
+    if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
+    if (typeof render === "function") render();
+    if (typeof buildTriage === "function") buildTriage();
+    if (typeof updateStats === "function") updateStats();
+    updateSaveStatus("ok", "Synced with server");
+    console.log("[Reconnect Sync] Merge complete");
+  } else {
+    // Local is same or newer — push local to server
+    console.log("[Reconnect Sync] Local state is current, pushing to server");
+    flushToExpress();
+  }
+}
+
+// Trigger sync when browser comes back online
+window.addEventListener("online", () => {
+  console.log("[Reconnect Sync] Browser is online — reconciling...");
+  updateSaveStatus("saving", "Reconnecting...");
+  reconcileWithServer();
+});
+
+// Trigger sync when tab regains visibility (covers sleep/wake, tab switch)
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    // Small delay to avoid thrashing on rapid tab switches
+    setTimeout(() => {
+      if (!document.hidden) reconcileWithServer();
+    }, 1000);
+  }
+});
+
+// Show offline indicator when network drops
+window.addEventListener("offline", () => {
+  updateSaveStatus("error", "Offline — changes saved locally");
+});
 
 // Write a state object back into localStorage for a given date
 function writeToLocalStorage(date, state) {

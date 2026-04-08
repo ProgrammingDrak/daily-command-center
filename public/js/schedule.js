@@ -303,40 +303,13 @@ function setDurAbsolute(id,newMin){
 }
 // ======== START TIME ADJUSTMENT ========
 function openStartTimePicker(id, anchorEl){
-  document.querySelectorAll(".start-time-popover").forEach(p=>p.remove());
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const pop=document.createElement("div");pop.className="start-time-popover";
-  const curHH=ev.start.substring(0,2),curMM=ev.start.substring(3,5);
-  pop.innerHTML=
-    '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:2px">Start Time</div>'+
-    '<input type="time" id="stp-input" value="'+curHH+':'+curMM+'">'+
-    '<div class="stp-btns">'+
-      '<button class="stp-btn stp-clear" id="stp-clear">Auto</button>'+
-      '<button class="stp-btn stp-set" id="stp-set">Set</button>'+
-    '</div>';
-  document.body.appendChild(pop);
-  const rect=anchorEl.getBoundingClientRect();
-  pop.style.top=Math.min(rect.bottom+4,window.innerHeight-pop.offsetHeight-8)+"px";
-  pop.style.left=Math.min(rect.left,window.innerWidth-pop.offsetWidth-8)+"px";
-  pop.querySelector("#stp-set").addEventListener("click",()=>{
-    const val=pop.querySelector("#stp-input").value;
-    if(!val)return;
-    pinStartTime(id,val);
-    pop.remove();
-  });
-  pop.querySelector("#stp-clear").addEventListener("click",()=>{
-    unpinStartTime(id);
-    pop.remove();
-  });
-  pop.querySelector("#stp-input").addEventListener("keydown",e=>{
-    if(e.key==="Enter"){pop.querySelector("#stp-set").click();}
-    if(e.key==="Escape"){pop.remove();}
-  });
-  setTimeout(()=>{
-    function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl){pop.remove();document.removeEventListener("click",onOutside,true);}}
-    document.addEventListener("click",onOutside,true);
-  },10);
-  pop.querySelector("#stp-input").focus();
+  // Use the same clock face picker as the complete modal
+  if(typeof openClockPicker==='function'){
+    openClockPicker(ev.start, anchorEl, function(timeStr){
+      pinStartTime(id, timeStr);
+    });
+  }
 }
 let PINNED_KEY = "pa-pinned-starts-" + ((__state && __state.date) ? __state.date : "unknown");
 function loadPinnedStarts(){

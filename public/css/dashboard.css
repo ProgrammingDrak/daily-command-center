@@ -451,7 +451,7 @@
   .pomo-dots{display:flex;gap:6px;margin-bottom:8px}
   .pomo-dot{width:10px;height:10px;border-radius:50%;border:2px solid var(--border);background:transparent;transition:all 0.2s}
   .pomo-dot.filled{background:var(--green);border-color:var(--green)}
-  .pomo-sound{position:absolute;top:16px;right:16px;background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text-muted);font-size:10px;cursor:pointer;transition:all 0.15s}
+  .pomo-sound{display:inline-block;margin-left:auto;background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text-muted);font-size:10px;cursor:pointer;transition:all 0.15s}
   .pomo-sound:hover{border-color:var(--accent);color:var(--accent-light)}
   .pomo-bottom-opts{display:flex;gap:16px;margin-top:4px}
   .pomo-bottom-opt{font-size:10px;color:var(--text-muted);display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;transition:color 0.12s}
@@ -1362,24 +1362,34 @@
 
   /* ── Save Status Indicator ── */
   .save-status{
-    position:fixed;top:10px;right:12px;
-    display:flex;align-items:center;gap:0;
-    padding:0;z-index:9000;
-    background:none;border:none;backdrop-filter:none
+    position:fixed;top:12px;right:12px;
+    display:flex;align-items:center;
+    z-index:9000;cursor:default
   }
   .save-status-dot{
     width:8px;height:8px;border-radius:50%;
     transition:background 0.3s
   }
-  .save-status-text{display:none}
+  .save-status-tooltip{
+    position:absolute;right:16px;top:50%;transform:translateY(-50%);
+    background:rgba(15,23,42,0.95);border:1px solid var(--border);
+    border-radius:6px;padding:4px 10px;font-size:11px;font-weight:500;
+    white-space:nowrap;pointer-events:none;
+    opacity:0;transition:opacity 0.15s;
+    backdrop-filter:blur(8px)
+  }
+  .save-status:hover .save-status-tooltip{opacity:1}
   .save-status--ok .save-status-dot{background:var(--green)}
+  .save-status--ok .save-status-tooltip{color:var(--text-muted)}
   .save-status--saving .save-status-dot{
     background:transparent;
     border:2px solid var(--amber);border-top-color:transparent;
     width:8px;height:8px;box-sizing:border-box;
     animation:spin-dot 0.6s linear infinite
   }
+  .save-status--saving .save-status-tooltip{color:var(--amber)}
   .save-status--error .save-status-dot{background:var(--red);animation:pulse-dot 2s infinite}
+  .save-status--error .save-status-tooltip{color:var(--red)}
   @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:0.3}}
   @keyframes spin-dot{to{transform:rotate(360deg)}}
 

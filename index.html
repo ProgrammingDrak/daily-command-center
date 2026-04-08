@@ -628,8 +628,7 @@
           </div>
         </div>
         <button class="pomo-distracted-btn" id="pomo-distracted">⚡ I got distracted</button>
-        <div class="pomo-dots" style="justify-content:center;margin-bottom:8px"><div class="pomo-dot" id="pd0"></div><div class="pomo-dot" id="pd1"></div><div class="pomo-dot" id="pd2"></div><div class="pomo-dot" id="pd3"></div></div>
-        <button class="pomo-sound" id="pomo-sound" style="font-size:10px;padding:2px 8px">Sound: On</button>
+        <div class="pomo-dots" style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:8px"><div class="pomo-dot" id="pd0"></div><div class="pomo-dot" id="pd1"></div><div class="pomo-dot" id="pd2"></div><div class="pomo-dot" id="pd3"></div><button class="pomo-sound" id="pomo-sound" style="font-size:10px;padding:2px 8px;margin-left:12px">Sound: On</button></div>
 
         <!-- Collapsible report -->
         <details class="ft-report" style="margin-top:10px">
@@ -903,10 +902,10 @@ window.USE_BLOCKSTORE = {
 <script src="/public/js/brain-backup.js"></script>
 <script src="/public/js/sse.js"></script>
 
-<!-- Save status indicator -->
-<div id="save-status" class="save-status save-status--ok">
+<!-- Save status indicator (top-right dot with tooltip) -->
+<div id="save-status" class="save-status save-status--ok" title="All changes synced">
   <span class="save-status-dot"></span>
-  <span class="save-status-text">All changes saved</span>
+  <span class="save-status-tooltip" id="save-status-tooltip">All changes synced</span>
 </div>
 
 <!-- Error toast container -->

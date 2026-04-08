@@ -499,11 +499,20 @@ function addDmSession(){
 function removeDmSession(idx){_dmSessions.splice(idx,1);renderDmSessions()}
 
 // ======== CLOCK FACE PICKER ========
-let _clockIdx=null,_clockH=12,_clockM=0,_clockMode='hour';
-function openClockPicker(idx,anchor){
+let _clockIdx=null,_clockH=12,_clockM=0,_clockMode='hour',_clockCallback=null;
+function openClockPicker(idx,anchor,callback){
   _clockIdx=idx;
-  const parts=_dmSessions[idx].start.split(':').map(Number);
-  _clockH=parts[0];_clockM=parts[1];_clockMode='hour';
+  _clockCallback=callback||null;
+  // Support both done-modal sessions (idx into _dmSessions) and external callers (callback with initial time)
+  if(_clockCallback && typeof idx==='string'){
+    // External mode: idx is a time string like "14:30"
+    const parts=idx.split(':').map(Number);
+    _clockH=parts[0];_clockM=parts[1];
+  } else {
+    const parts=_dmSessions[idx].start.split(':').map(Number);
+    _clockH=parts[0];_clockM=parts[1];
+  }
+  _clockMode='hour';
   const overlay=document.getElementById('dm-clock-overlay');
   const popup=document.getElementById('dm-clock-popup');
   // Position near the anchor
@@ -515,13 +524,21 @@ function openClockPicker(idx,anchor){
 }
 function closeClockPicker(){
   document.getElementById('dm-clock-overlay').classList.remove('open');
-  _clockIdx=null;
+  _clockIdx=null;_clockCallback=null;
 }
 function confirmClockPicker(){
   if(_clockIdx===null)return;
-  _dmSessions[_clockIdx].start=String(_clockH).padStart(2,'0')+':'+String(_clockM).padStart(2,'0');
-  closeClockPicker();
-  renderDmSessions();
+  const timeStr=String(_clockH).padStart(2,'0')+':'+String(_clockM).padStart(2,'0');
+  if(_clockCallback){
+    // External caller (e.g. card start time picker)
+    _clockCallback(timeStr);
+    closeClockPicker();
+  } else {
+    // Done-modal session mode
+    _dmSessions[_clockIdx].start=timeStr;
+    closeClockPicker();
+    renderDmSessions();
+  }
 }
 function renderClockFace(){
   const nums=document.getElementById('dm-clock-nums');
@@ -574,7 +591,7 @@ function renderClockFace(){
       el.className='dm-clock-num outer '+sel;
       el.style.left=x+'px';el.style.top=y+'px';
       el.textContent=String(m).padStart(2,'0');
-      el.addEventListener('click',function(){_clockM=m;renderClockFace()});
+      el.addEventListener('click',function(){_clockM=m;confirmClockPicker()});
       nums.appendChild(el);
     });
     innerMins.forEach(m=>{
@@ -587,7 +604,7 @@ function renderClockFace(){
       el.className='dm-clock-num '+sel;
       el.style.left=x+'px';el.style.top=y+'px';
       el.textContent=String(m).padStart(2,'0');
-      el.addEventListener('click',function(){_clockM=m;renderClockFace()});
+      el.addEventListener('click',function(){_clockM=m;confirmClockPicker()});
       nums.appendChild(el);
     });
     // Center label showing selected time
