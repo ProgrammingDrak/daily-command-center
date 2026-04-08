@@ -186,7 +186,9 @@ function saveSessions(data) {
 
 // ======== POMODORO STATE PERSISTENCE ========
 let POMO_STATE_KEY = "pa-pomo-state-" + (__state ? __state.date : "unknown");
-function savePomoState() {
+// localOnly=true: only write to localStorage (used by per-second ticks to avoid hammering Railway).
+// localOnly=false (default): write to localStorage + BlockStore/Railway (used by pause/stop/start/mode changes).
+function savePomoState(localOnly) {
   const data = {
     title: pomoState.title, workMin: pomoState.workMin, mode: pomoState.mode,
     total: pomoState.total, remaining: pomoState.remaining, running: pomoState.running,
@@ -196,6 +198,8 @@ function savePomoState() {
   };
   // Always keep localStorage for same-device instant restore on reload
   try { localStorage.setItem(POMO_STATE_KEY, JSON.stringify(data)); } catch(e) {}
+  // Skip server persist during per-second ticks — only sync on meaningful events
+  if (localOnly) return;
   // Also persist to day_root for cross-device sync
   _bsSaveProp("_pomoState", data);
   // Log sessions to BlockStore if flag is on
@@ -210,6 +214,10 @@ function savePomoState() {
     }
   }
 }
+// Flush pomo state to server on tab close so mid-timer state isn't lost
+window.addEventListener("beforeunload", function() {
+  if (pomoState && pomoState.running) savePomoState();
+});
 function loadPomoState() {
   // Check localStorage first (fast, same-device)
   try {

@@ -137,7 +137,7 @@ function pomoTick(){
     pomoState.startedAt=null;
     return;
   }
-  pomoState.remaining--;pomoPaint();savePomoState();
+  pomoState.remaining--;pomoPaint();savePomoState(true);
 }
 function updateTimerBadge(){
   // Update FAB badge

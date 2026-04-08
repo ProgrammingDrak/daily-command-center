@@ -37,7 +37,8 @@
   }
 
   // Refresh PA-owned state only (schedule, triage, meetings)
-  // Does NOT touch user blocks — those are in SQLite and never overwritten
+  // Does NOT touch user blocks — those are in SQLite and never overwritten.
+  // Also reloads BlockStore cache so cross-tab edits are picked up.
   async function refreshPaState(){
     if(isEditing()){
       pendingPaUpdate = true;
@@ -60,6 +61,16 @@
         INIT_BACKLOG = __data.bklog;
         INIT_TRIAGE = __data.triageItems;
         INIT_NOTIFICATIONS = __data.notifications;
+
+        // Reset working arrays from fresh server data (same as switchToDate)
+        scheduled = JSON.parse(JSON.stringify(INIT_SCHED));
+        consider = JSON.parse(JSON.stringify(INIT_CONSIDER));
+        backlog = JSON.parse(JSON.stringify(INIT_BACKLOG));
+
+        // Reload BlockStore cache so reloadPersistedEdits() reads fresh cross-tab data
+        if(window.blockStore && viewDate) {
+          try { await window.blockStore.loadDay(viewDate); } catch(e) {}
+        }
 
         // Re-apply user edits from blocks (Phase 4+) or localStorage (Phase 0-3)
         if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
@@ -88,9 +99,13 @@
   // Handle block changes from another tab
   async function handleBlockEvent(msg){
     if(!window.blockStore) return;
-    // Let BlockStore handle cross-tab sync
+    // Let BlockStore handle cross-tab sync (updates in-memory cache)
     await window.blockStore.handleBlocksChanged(msg);
     console.log('[SSE] Block update from another source:', msg.action, msg.blockIds?.length || 0, 'blocks');
+    // Re-apply persisted edits from updated cache and re-render UI
+    if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
+    if(typeof render === 'function') render();
+    if(typeof updateStats === 'function') updateStats();
   }
 
   function connect(){

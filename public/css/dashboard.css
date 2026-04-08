@@ -1362,24 +1362,26 @@
 
   /* ── Save Status Indicator ── */
   .save-status{
-    position:fixed;bottom:0;left:0;right:0;
-    display:flex;align-items:center;justify-content:center;gap:6px;
-    padding:6px 16px;font-size:11px;font-weight:500;
-    z-index:9000;transition:all 0.3s ease;
-    background:rgba(15,23,42,0.92);border-top:1px solid var(--border);
-    backdrop-filter:blur(8px)
+    position:fixed;top:10px;right:12px;
+    display:flex;align-items:center;gap:0;
+    padding:0;z-index:9000;
+    background:none;border:none;backdrop-filter:none
   }
   .save-status-dot{
-    width:6px;height:6px;border-radius:50%;
+    width:8px;height:8px;border-radius:50%;
     transition:background 0.3s
   }
+  .save-status-text{display:none}
   .save-status--ok .save-status-dot{background:var(--green)}
-  .save-status--ok .save-status-text{color:var(--text-muted)}
-  .save-status--saving .save-status-dot{background:var(--amber);animation:pulse-dot 1s infinite}
-  .save-status--saving .save-status-text{color:var(--amber)}
-  .save-status--error .save-status-dot{background:var(--red)}
-  .save-status--error .save-status-text{color:var(--red)}
+  .save-status--saving .save-status-dot{
+    background:transparent;
+    border:2px solid var(--amber);border-top-color:transparent;
+    width:8px;height:8px;box-sizing:border-box;
+    animation:spin-dot 0.6s linear infinite
+  }
+  .save-status--error .save-status-dot{background:var(--red);animation:pulse-dot 2s infinite}
   @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:0.3}}
+  @keyframes spin-dot{to{transform:rotate(360deg)}}
 
   /* ── Error Toast ── */
   .toast-container{
