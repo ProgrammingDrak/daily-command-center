@@ -194,6 +194,7 @@ function savePomoState(localOnly) {
     total: pomoState.total, remaining: pomoState.remaining, running: pomoState.running,
     sessions: pomoState.sessions, soundOn: pomoState.soundOn, sessionLog: pomoState.sessionLog,
     taskTime: pomoState.taskTime, taskDone: pomoState.taskDone, stackedSessions: pomoState.stackedSessions,
+    pivotTasks: pomoState.pivotTasks||[],
     savedAt: Date.now()
   };
   // Always keep localStorage for same-device instant restore on reload

@@ -64,6 +64,7 @@ function openPomodoro(title,durMin){
   document.getElementById("ft-fab").style.display="none";
   document.getElementById("ft-mini").style.display="none";
   pomoRenderReport();
+  if(typeof paintPivotTasks==='function')paintPivotTasks();
   savePomoState();
 }
 

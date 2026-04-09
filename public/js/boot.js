@@ -119,6 +119,7 @@
         pomoState.taskTime = savedPomo.taskTime || {};
         pomoState.taskDone = savedPomo.taskDone || false;
         pomoState.stackedSessions = savedPomo.stackedSessions || {};
+        pomoState.pivotTasks = savedPomo.pivotTasks || [];
         const emptyEl = document.getElementById("pomo-empty");
         const activeEl = document.getElementById("pomo-active");
         if (emptyEl) emptyEl.style.display = "none";
@@ -143,6 +144,7 @@
           }
         }
         if (typeof pomoPaint === 'function') pomoPaint();
+        if (typeof paintPivotTasks === 'function') paintPivotTasks();
         if (typeof pomoUpdateStartBtn === 'function') pomoUpdateStartBtn();
         if (typeof updateTimerBadge === 'function') updateTimerBadge();
         if (typeof pomoRenderReport === 'function') pomoRenderReport();
