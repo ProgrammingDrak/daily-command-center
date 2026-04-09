@@ -629,6 +629,45 @@ function deleteStickyNote(id){
   updateSnBadge();
 }
 
+// ======== SHARED TASK LIST RENDERER ========
+// Builds consistent .completion-item.clickable HTML for a list of tasks.
+// Used by openUntaskedModal, and available for Phase 4 pivot task picker.
+function buildTaskListHtml(tasks) {
+  if (!tasks || !tasks.length) {
+    return '<div style="font-size:11px;color:var(--text-muted);padding:8px">No tasks available.</div>';
+  }
+  return tasks.map(function(t) {
+    var c = (typeof cfg === 'function') ? cfg(t.type) : {color:'var(--text-muted)',tag:t.type||''};
+    var timeStr = (t.start && t.end) ? ('<span>' + (typeof f12==='function'?f12(t.start):t.start) + ' \u2013 ' + (typeof f12==='function'?f12(t.end):t.end) + '</span>') : '';
+    return '<div class="completion-item clickable" data-task-id="' + (t.id||'').replace(/"/g,'&quot;') + '" data-task-title="' + (t.title||'').replace(/"/g,'&quot;') + '">' +
+      '<span class="ci-bar" style="background:' + c.color + '"></span>' +
+      '<div class="ci-body">' +
+        '<div class="ci-title">' + (t.title||'') + '</div>' +
+        '<div class="ci-meta"><span>' + (c.tag||'') + '</span>' + timeStr + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// Persist a title change for a scheduled task across blockStore / localStorage.
+function _persistTaskTitle(taskId, newTitle) {
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    var addedBlocks = window.blockStore.getByType('added_task');
+    var block = addedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId; });
+    if (block) {
+      window.blockStore.updateBlock(block.id, Object.assign({}, block.properties, {title: newTitle}));
+      return;
+    }
+    var schedBlocks = window.blockStore.getByType('schedule_item');
+    var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
+    if (sBlock) {
+      window.blockStore.updateBlock(sBlock.id, Object.assign({}, sBlock.properties, {title: newTitle}));
+      return;
+    }
+  }
+  if (typeof scheduleIDBSave === 'function') scheduleIDBSave();
+}
+
 // Check if any modal/overlay is currently open
 function _anyModalOpen() {
   var overlays = document.querySelectorAll('.done-modal-overlay.open, .add-modal-overlay.open, .del-confirm-overlay.open, .sn-overlay.open, .notes-drawer-overlay.open, .overflow-modal-overlay.open, .jm-overlay.open');

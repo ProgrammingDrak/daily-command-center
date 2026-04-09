@@ -4,7 +4,7 @@ const pomoSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 const POMO_C=2*Math.PI*54;
 // Each tick segment = 5.65 on, 2.83 gap. Total ticks ~ 40.
 const POMO_SEG=5.65,POMO_GAP=2.83,POMO_UNIT=POMO_SEG+POMO_GAP;
-let pomoState={title:"",workMin:25,mode:"work",total:25*60,remaining:25*60,running:false,iv:null,sessions:0,soundOn:true,sessionLog:[],taskTime:{},startedAt:null,taskDone:false,stackedSessions:{}};
+let pomoState={title:"",workMin:25,mode:"work",total:25*60,remaining:25*60,running:false,iv:null,sessions:0,soundOn:true,sessionLog:[],taskTime:{},startedAt:null,taskDone:false,stackedSessions:{},pivotTasks:[]};
 
 function pomoBeep(){
   if(!pomoState.soundOn)return;
@@ -311,17 +311,9 @@ function openUntaskedModal(durSec,type){
   const bodyEl=document.getElementById("untasked-modal-body");
   const actionsEl=document.getElementById("untasked-actions");
 
-  let html='<div class="completion-section"><div class="completion-section-title">Current Tasks</div>';
   const allTasks=[...scheduled.filter(s=>!isDone(s)&&!s.nested),...consider,...backlog];
-
-  if(allTasks.length===0){
-    html+='<div style="font-size:11px;color:var(--text-muted);padding:8px">No tasks available.</div>';
-  }else{
-    allTasks.forEach(t=>{
-      const c=cfg(t.type);
-      html+='<div class="completion-item clickable" data-task-title="'+t.title.replace(/"/g,'&quot;')+'"><span class="ci-bar" style="background:'+c.color+'"></span><div class="ci-body"><div class="ci-title">'+t.title+'</div><div class="ci-meta"><span>'+c.tag+'</span></div></div></div>';
-    });
-  }
+  let html='<div class="completion-section"><div class="completion-section-title">Current Tasks</div>';
+  html+=buildTaskListHtml(allTasks);
   html+='</div>';
 
   // Custom input
@@ -482,4 +474,88 @@ function buildDistractionTaskList(){
     if(hasDragged){e.stopPropagation();hasDragged=false;}
   },true);
 })();
+
+// ======== WHEN BLOCKED — PIVOT TASKS ========
+function paintPivotTasks(){
+  const list=document.getElementById("pivot-tasks-list");
+  if(!list)return;
+  list.innerHTML=pomoState.pivotTasks.map((t,i)=>
+    '<div class="pivot-card">'+
+      '<button class="pivot-swap" data-pivot-idx="'+i+'" title="Make this my focus">\u21c4</button>'+
+      '<span class="pivot-title">'+t.title+'</span>'+
+      '<button class="pivot-remove" data-pivot-idx="'+i+'" title="Remove">&times;</button>'+
+    '</div>'
+  ).join('');
+  list.querySelectorAll('.pivot-swap').forEach(btn=>btn.addEventListener('click',e=>{
+    e.stopPropagation();swapWithPivot(parseInt(btn.dataset.pivotIdx));
+  }));
+  list.querySelectorAll('.pivot-remove').forEach(btn=>btn.addEventListener('click',e=>{
+    e.stopPropagation();removePivotTask(parseInt(btn.dataset.pivotIdx));
+  }));
+}
+
+function swapWithPivot(idx){
+  if(idx<0||idx>=pomoState.pivotTasks.length)return;
+  const oldPrimary={title:pomoState.title};
+  const pivot=pomoState.pivotTasks[idx];
+  pomoState.title=pivot.title;
+  pomoState.pivotTasks[idx]=oldPrimary;
+  const titleEl=document.getElementById("pomo-title");
+  if(titleEl)titleEl.textContent=pomoState.title;
+  const miniTask=document.getElementById("ft-mini-task");
+  if(miniTask)miniTask.textContent=pomoState.title;
+  if(typeof showToast==="function")showToast("Swapped to: "+pomoState.title,"success");
+  savePomoState();
+  paintPivotTasks();
+}
+
+function removePivotTask(idx){
+  pomoState.pivotTasks.splice(idx,1);
+  savePomoState();
+  paintPivotTasks();
+}
+
+function openPivotPicker(){
+  const overlay=document.getElementById("pivot-picker-overlay");
+  const body=document.getElementById("pivot-picker-body");
+  if(!overlay||!body)return;
+  const taken=new Set([pomoState.title,...pomoState.pivotTasks.map(t=>t.title)]);
+  const available=[
+    ...(typeof scheduled!=="undefined"?scheduled.filter(s=>!(typeof isDone==="function"?isDone(s):false)&&!s.nested&&!taken.has(s.title)):[]),
+    ...(typeof consider!=="undefined"?consider.filter(t=>!taken.has(t.title)):[]),
+    ...(typeof backlog!=="undefined"?backlog.filter(t=>!taken.has(t.title)):[])
+  ];
+  body.innerHTML=(typeof buildTaskListHtml==="function")
+    ?buildTaskListHtml(available)
+    :'<div style="font-size:11px;color:var(--text-muted);padding:8px">No tasks available.</div>';
+  body.querySelectorAll('.completion-item.clickable').forEach(el=>{
+    el.addEventListener('click',()=>{
+      if(pomoState.pivotTasks.length>=3){
+        if(typeof showToast==="function")showToast("Max 3 pivot tasks","info");
+        return;
+      }
+      pomoState.pivotTasks.push({title:el.dataset.taskTitle,id:el.dataset.taskId||''});
+      savePomoState();
+      paintPivotTasks();
+      closePivotPicker();
+    });
+  });
+  overlay.style.display='';
+}
+
+function closePivotPicker(){
+  const overlay=document.getElementById("pivot-picker-overlay");
+  if(overlay)overlay.style.display='none';
+}
+
+document.addEventListener('DOMContentLoaded',function(){
+  const addBtn=document.getElementById("pivot-add-btn");
+  if(addBtn)addBtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    const overlay=document.getElementById("pivot-picker-overlay");
+    if(overlay&&overlay.style.display!=='none'){closePivotPicker();}else{openPivotPicker();}
+  });
+  const cancelBtn=document.getElementById("pivot-picker-cancel");
+  if(cancelBtn)cancelBtn.addEventListener('click',function(e){e.stopPropagation();closePivotPicker();});
+});
 

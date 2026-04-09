@@ -493,6 +493,25 @@
   .dur-popover,.be-dur-popover{position:fixed;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.45);z-index:9999;min-width:148px}
   .be-dur-preset-btn{border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:10px;padding:2px 4px;margin-left:2px;opacity:0.6;transition:opacity 0.12s}
   .be-dur-preset-btn:hover{opacity:1;color:var(--accent-light)}
+  input.ttl-edit{display:inline-block;vertical-align:baseline;box-sizing:border-box;border-radius:0}
+  /* ---- When Blocked: pivot tasks ---- */
+  #pivot-section{margin:6px 0 4px}
+  .pivot-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+  .pivot-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)}
+  .pivot-add-btn{border:none;background:rgba(251,191,36,0.15);color:var(--amber,#fbbf24);border-radius:4px;cursor:pointer;font-size:14px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;padding:0;line-height:1}
+  .pivot-add-btn:hover{background:rgba(251,191,36,0.3)}
+  .pivot-card{display:flex;align-items:center;gap:6px;background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.18);border-radius:6px;padding:5px 7px;margin-bottom:4px}
+  .pivot-swap{background:none;border:none;color:var(--amber,#fbbf24);cursor:pointer;font-size:14px;padding:0;opacity:0.7;flex-shrink:0;line-height:1}
+  .pivot-swap:hover{opacity:1}
+  .pivot-title{flex:1;font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pivot-remove{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;padding:0;opacity:0.5;flex-shrink:0;line-height:1}
+  .pivot-remove:hover{opacity:1;color:var(--red,#ef4444)}
+  #pivot-picker-overlay{border:1px solid var(--border);border-radius:7px;padding:8px;background:var(--card);margin-top:4px}
+  .pivot-picker-body{max-height:180px;overflow-y:auto;margin-bottom:6px}
+  .pivot-picker-body .completion-item{padding:5px 7px;border-radius:5px;cursor:pointer}
+  .pivot-picker-body .completion-item:hover{background:rgba(255,255,255,0.05)}
+  .pivot-picker-cancel{width:100%;font-size:11px;padding:5px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer}
+  .pivot-picker-cancel:hover{background:rgba(255,255,255,0.08)}
   .dur-presets{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
   .dur-preset{padding:6px 0;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:all 0.12s}
   .dur-preset:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
