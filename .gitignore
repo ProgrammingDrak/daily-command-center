@@ -14,3 +14,4 @@ data/blocks.db-wal
 # Credentials (never commit)
 data/gcal-credentials.json
 data/gcal-tokens.json
+.gstack/

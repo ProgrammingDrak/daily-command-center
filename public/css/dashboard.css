@@ -1620,70 +1620,126 @@
 
   /* ============================================================
      MOBILE — 480px and below
-     All desktop layout unchanged. These rules only activate on
-     small-screen viewports (phones).
+     Designed mobile-first. Every rule is intentional.
      ============================================================ */
   @media(max-width:480px){
-    /* --- Base / body --- */
-    body{padding:10px 10px 90px;font-size:14px}
 
-    /* --- Header --- */
-    /* Use flex-wrap so children reflow into 2 rows:
-       Row 1: h1 (flex:1) + Notes/Brain buttons (shrink)
-       Row 2: date-nav (full width)                          */
-    .header{flex-wrap:wrap;align-items:center;gap:4px 10px;margin-bottom:12px;padding-bottom:10px}
-    /* Make the left inner div transparent to flex layout */
+    /* ── Base ─────────────────────────────────────────────────── */
+    body{padding:10px 12px 100px;font-size:14px}
+
+    /* ── Header ───────────────────────────────────────────────────
+       Grid layout: two rows
+         Row 1: app title (col 1) | action buttons (col 2)
+         Row 2: date nav (full width, both cols)
+       display:contents on inner div exposes h1 + date-nav to grid.
+    ────────────────────────────────────────────────────────────── */
+    .header{
+      display:grid;
+      grid-template-columns:1fr auto;
+      grid-template-rows:auto auto;
+      gap:8px 10px;
+      align-items:center;
+      margin-bottom:14px;
+      padding-bottom:12px;
+    }
     .header>div:first-child{display:contents}
-    .header h1{font-size:17px;order:1;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    /* Subtitle: hide on mobile */
+    .header h1{
+      grid-column:1;grid-row:1;
+      font-size:15px;font-weight:700;letter-spacing:-0.3px;
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+      align-self:center;
+    }
     .header .hdr-sub{display:none}
-    /* date-nav takes full second row */
-    .header .date-nav{order:3;width:100%;margin-top:0}
-    /* Right div (Notes + Brain + Clock) sits beside h1 */
-    .header>div:last-child{order:2;flex-shrink:0;display:flex;align-items:center;gap:6px}
+    .header .date-nav{
+      grid-column:1/-1;grid-row:2;
+      display:flex;align-items:center;gap:4px;
+      margin-top:0;
+    }
+    .header>div:last-child{
+      grid-column:2;grid-row:1;
+      display:flex;align-items:center;gap:6px;flex-shrink:0;
+    }
     .time-now{display:none}
+    /* Compact Notes + Brain buttons */
+    .sn-btn{padding:5px 8px;font-size:11px;gap:4px}
+    /* Date nav: let the date label shrink on very narrow screens */
+    .dn-date{font-size:12px;padding:2px 6px}
+    .dn-arrow{width:28px;height:28px}
+    .dn-quick{padding:3px 8px;font-size:10px}
 
-    /* --- Stats row: 2 cols, smaller values --- */
-    .stats{grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:12px}
+    /* ── Stats ────────────────────────────────────────────────────
+       stat-combined (Time Left | Tasks) spans full first row.
+       Completed + Block Ends share the second row.
+       Prevents the broken "lone stat on row 2" bug.
+    ────────────────────────────────────────────────────────────── */
+    .stats{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:6px;
+      margin-bottom:12px;
+    }
+    .stat-combined{grid-column:1/-1}
+    .stat-combined .stat-half{padding:10px 12px}
     .stat .v{font-size:18px}
     .stat .l{font-size:9px}
-    .stat-combined .stat-half{padding:8px 4px}
 
-    /* --- Quick-capture strip: wrap to 2 rows --- */
-    .qc-strip{flex-wrap:wrap;gap:6px;padding:8px}
-    .qc-mood-group{width:100%;justify-content:space-around}
-    .qc-mood{width:40px;height:40px;font-size:20px}
-    .qc-input{width:100%;min-width:0;font-size:12px}
-    .qc-btn,.qc-btn-journal{padding:8px 12px;font-size:12px;min-height:38px}
+    /* ── Progress bar ─────────────────────────────────────────── */
+    .progress-wrap{margin-bottom:10px}
+
+    /* ── Quick-capture strip ──────────────────────────────────────
+       Row 1: mood emoji row (full width, evenly spaced)
+       Row 2: text input (full width)
+       Row 3: Log + Entry buttons (split evenly)
+    ────────────────────────────────────────────────────────────── */
+    .qc-strip{flex-wrap:wrap;gap:8px;padding:10px 12px;margin-bottom:12px}
+    .qc-mood-group{width:100%;display:flex;justify-content:space-between;gap:0}
+    .qc-mood{flex:1;height:44px;font-size:20px;border-radius:8px}
+    .qc-input{width:100%;min-width:0;font-size:13px;padding:9px 10px}
+    .qc-btn{flex:1;padding:9px 12px;font-size:12px;font-weight:600;min-height:40px}
+    .qc-btn-journal{flex:1;padding:9px 12px;font-size:12px;font-weight:600;min-height:40px}
     .qc-status{display:none}
 
-    /* --- Tab bar: horizontal scroll, no wrap --- */
-    .tabs{overflow-x:auto;overflow-y:hidden;white-space:nowrap;display:flex;gap:0;-webkit-overflow-scrolling:touch;scrollbar-width:none;margin-bottom:14px;padding-bottom:0}
+    /* ── Tab bar ──────────────────────────────────────────────────
+       Horizontal scroll; no wrap; hides scrollbar chrome.
+    ────────────────────────────────────────────────────────────── */
+    .tabs{
+      overflow-x:auto;overflow-y:hidden;
+      -webkit-overflow-scrolling:touch;
+      scrollbar-width:none;
+      display:flex;gap:0;
+      margin-bottom:14px;padding-bottom:0;
+      border-bottom:1px solid var(--border);
+    }
     .tabs::-webkit-scrollbar{display:none}
-    .tab{flex-shrink:0;padding:10px 14px;font-size:12px;white-space:nowrap}
+    .tab{flex-shrink:0;padding:9px 13px;font-size:12px;white-space:nowrap}
 
-    /* --- Source row: stack/truncate --- */
-    .source-row{flex-wrap:wrap;gap:4px;font-size:10px;margin-bottom:8px}
-    .source-row>span:last-child{width:100%;margin-top:2px;font-size:10px}
-
-    /* --- Sched view toggle (Plan/Actual) + hint: collapse hint --- */
+    /* ── Schedule tab: source row ─────────────────────────────── */
+    .source-row{
+      display:flex;align-items:center;flex-wrap:wrap;
+      gap:4px;font-size:10px;margin-bottom:8px;
+    }
+    /* Plan/Actual toggle gets its own row (flush left) */
+    .source-row>span:last-child{
+      width:100%;margin-top:2px;
+      display:flex;align-items:center;
+    }
     .sched-view-toggle{display:inline-flex}
-    .svt-btn{padding:5px 10px;font-size:11px;min-height:34px}
+    .svt-btn{padding:5px 10px;font-size:11px;min-height:36px}
     .sched-drag-hint{display:none}
 
-    /* --- Quick-add bar: stack vertically --- */
-    .sched-quick-add{flex-wrap:wrap;gap:6px}
+    /* ── Quick-add bar ────────────────────────────────────────── */
+    .sched-quick-add{flex-wrap:wrap;gap:6px;padding:8px 0 10px}
     .sched-quick-add input{width:100%;min-width:0}
-    .sched-quick-add select{flex:1;min-height:38px}
-    .sched-quick-add button{flex:1;min-height:38px;font-size:13px}
+    .sched-quick-add select{flex:1;min-height:40px}
+    .sched-quick-add button{flex:1;min-height:40px;font-size:13px;white-space:nowrap}
     .qa-hint{display:none}
 
-    /* --- Timeline left-gutter --- */
-    .tl{padding-left:54px}
-    .tl::before{left:10px}
-    .tl-node{left:-54px;width:44px;font-size:9px}
+    /* ── Timeline gutter ──────────────────────────────────────── */
+    .tl{padding-left:52px}
+    .tl::before{left:8px}
+    .tl-node{left:-52px;width:42px;font-size:9px}
 
-    /* --- Task cards: bigger tap targets, hide noise on mobile --- */
+    /* ── Task cards ───────────────────────────────────────────── */
     .card{padding:10px 8px;gap:6px;min-height:52px;align-items:flex-start}
     .chk{width:32px;height:32px;border-radius:7px;flex-shrink:0;margin-top:2px}
     .chk svg{width:16px;height:16px}
@@ -1694,12 +1750,12 @@
     .tinline{font-size:10px}
     .meta{font-size:10px;gap:4px}
 
-    /* --- Duration control: bigger tap targets --- */
+    /* ── Duration controls ────────────────────────────────────── */
     .dur{gap:2px}
     .dbtn{width:30px;height:30px;font-size:16px;border-radius:6px}
     .dbadge{width:56px;font-size:11px;padding:4px 0}
 
-    /* --- Card action buttons: larger --- */
+    /* ── Card action buttons ──────────────────────────────────── */
     .pomo-btn{width:30px;height:30px;margin-left:2px}
     .pomo-btn svg{width:15px;height:15px}
     .btn-del-task{width:28px;height:28px}
@@ -1708,37 +1764,34 @@
     .btn-add-menu{width:28px;height:28px;font-size:15px}
     .notes-btn{width:28px;height:28px}
 
-    /* --- Focus banner: compact on mobile --- */
+    /* ── Focus banner ─────────────────────────────────────────── */
     .focus-banner{padding:7px 10px;gap:6px}
     .fb-label{display:none}
     .fb-title{font-size:12px}
     .fb-status{display:none}
     .fb-open-timer{padding:4px 10px;min-height:34px}
 
-    /* --- Task Queue Panel: full-width, shorter max-height --- */
+    /* ── Task Queue Panel ─────────────────────────────────────── */
     .task-queue-panel{margin-top:14px;border-radius:8px}
     .tqp-header{padding:10px 12px}
     .tqp-tab{padding:9px 4px;font-size:11px;min-height:40px}
     .tqp-panel{max-height:220px;padding:8px 10px}
     .tqp-sched-btn{min-height:32px;padding:4px 8px;font-size:10px}
 
-    /* --- Task menus sub-tabs --- */
+    /* ── Task Menus sub-tabs ──────────────────────────────────── */
     .task-menus-nav{overflow-x:auto;white-space:nowrap;display:flex;gap:0;scrollbar-width:none;-webkit-overflow-scrolling:touch}
     .task-menus-nav::-webkit-scrollbar{display:none}
     .tm-tab{flex-shrink:0;padding:9px 12px;font-size:11px;min-height:40px}
 
-    /* --- Board cards (consider/backlog) --- */
+    /* ── Board cards ──────────────────────────────────────────── */
     .board-card{padding:10px 8px;gap:6px}
     .add-btn{min-height:34px;padding:4px 10px;font-size:11px}
 
-    /* --- Float timer panel: full-width on mobile --- */
+    /* ── Float timer panel ────────────────────────────────────── */
     #float-timer{right:8px!important;bottom:8px!important}
     .ft-panel{width:min(320px,96vw)!important;right:8px!important;bottom:56px!important}
 
-    /* --- Triage cards --- */
+    /* ── Triage cards ─────────────────────────────────────────── */
     .tri-card{padding:10px}
     .tri-title{font-size:13px}
-
-    /* --- Progress bar --- */
-    .progress-wrap{margin-bottom:10px}
   }

@@ -31,7 +31,9 @@
       "Bash(do curl:*)",
       "Bash(done)",
       "Bash(python -m json.tool)",
-      "Bash(curl -s -X DELETE http://localhost:8090/api/blocks/a0000adf-e8ea-456c-bf73-0c17e3e10594)"
+      "Bash(curl -s -X DELETE http://localhost:8090/api/blocks/a0000adf-e8ea-456c-bf73-0c17e3e10594)",
+      "Skill(design-review)",
+      "Skill(design-review:*)"
     ]
   }
 }
