@@ -1628,9 +1628,19 @@
     body{padding:10px 10px 90px;font-size:14px}
 
     /* --- Header --- */
-    .header{flex-direction:column;gap:10px;margin-bottom:14px;padding-bottom:10px}
-    .header h1{font-size:18px}
-    .header>div:last-child{width:100%;justify-content:space-between}
+    /* Use flex-wrap so children reflow into 2 rows:
+       Row 1: h1 (flex:1) + Notes/Brain buttons (shrink)
+       Row 2: date-nav (full width)                          */
+    .header{flex-wrap:wrap;align-items:center;gap:4px 10px;margin-bottom:12px;padding-bottom:10px}
+    /* Make the left inner div transparent to flex layout */
+    .header>div:first-child{display:contents}
+    .header h1{font-size:17px;order:1;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    /* Subtitle: hide on mobile */
+    .header .hdr-sub{display:none}
+    /* date-nav takes full second row */
+    .header .date-nav{order:3;width:100%;margin-top:0}
+    /* Right div (Notes + Brain + Clock) sits beside h1 */
+    .header>div:last-child{order:2;flex-shrink:0;display:flex;align-items:center;gap:6px}
     .time-now{display:none}
 
     /* --- Stats row: 2 cols, smaller values --- */
