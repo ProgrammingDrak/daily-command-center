@@ -1625,7 +1625,12 @@
   @media(max-width:480px){
 
     /* ── Base ─────────────────────────────────────────────────── */
-    body{padding:10px 12px 100px;font-size:14px}
+    body{
+      padding:10px 12px;
+      /* Safe area: accommodate home indicator + FAB space */
+      padding-bottom:max(100px, calc(80px + env(safe-area-inset-bottom, 0px)));
+      font-size:14px;
+    }
 
     /* ── Header ───────────────────────────────────────────────────
        Grid layout: two rows
@@ -1637,15 +1642,16 @@
       display:grid;
       grid-template-columns:1fr auto;
       grid-template-rows:auto auto;
-      gap:8px 10px;
+      gap:6px 10px;
       align-items:center;
       margin-bottom:14px;
       padding-bottom:12px;
+      border-bottom:1px solid var(--border);
     }
     .header>div:first-child{display:contents}
     .header h1{
       grid-column:1;grid-row:1;
-      font-size:15px;font-weight:700;letter-spacing:-0.3px;
+      font-size:16px;font-weight:700;letter-spacing:-0.3px;
       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
       align-self:center;
     }
@@ -1657,20 +1663,36 @@
     }
     .header>div:last-child{
       grid-column:2;grid-row:1;
-      display:flex;align-items:center;gap:6px;flex-shrink:0;
+      display:flex;align-items:center;gap:4px;flex-shrink:0;
     }
     .time-now{display:none}
-    /* Compact Notes + Brain buttons */
-    .sn-btn{padding:5px 8px;font-size:11px;gap:4px}
-    /* Date nav: let the date label shrink on very narrow screens */
-    .dn-date{font-size:12px;padding:2px 6px}
-    .dn-arrow{width:28px;height:28px}
-    .dn-quick{padding:3px 8px;font-size:10px}
+
+    /* ── Header action buttons: 44px touch targets ─────────────── */
+    .sn-btn{
+      min-height:44px;min-width:44px;padding:0 8px;font-size:11px;
+      display:inline-flex;align-items:center;justify-content:center;gap:4px;
+    }
+
+    /* ── Date nav: 44px touch targets ──────────────────────────── */
+    .dn-arrow{
+      width:44px;height:44px;
+      border-radius:8px;font-size:18px;
+      display:flex;align-items:center;justify-content:center;
+    }
+    .dn-date{
+      min-height:44px;flex:1;
+      padding:0 10px;font-size:12px;
+      display:inline-flex;align-items:center;justify-content:center;
+      border:1px solid var(--border);border-radius:8px;
+    }
+    .dn-quick{
+      min-height:44px;padding:0 10px;font-size:10px;
+      display:inline-flex;align-items:center;justify-content:center;
+    }
 
     /* ── Stats ────────────────────────────────────────────────────
        stat-combined (Time Left | Tasks) spans full first row.
        Completed + Block Ends share the second row.
-       Prevents the broken "lone stat on row 2" bug.
     ────────────────────────────────────────────────────────────── */
     .stats{
       display:grid;
@@ -1683,24 +1705,36 @@
     .stat .v{font-size:18px}
     .stat .l{font-size:9px}
 
-    /* ── Progress bar ─────────────────────────────────────────── */
+    /* ── Stat popover: full width on mobile ─────────────────────── */
+    #stat-popover{
+      left:12px!important;right:12px!important;
+      width:auto!important;max-width:none!important;
+    }
+
+    /* ── Progress bar ────────────────────────────────────────────── */
     .progress-wrap{margin-bottom:10px}
 
     /* ── Quick-capture strip ──────────────────────────────────────
        Row 1: mood emoji row (full width, evenly spaced)
        Row 2: text input (full width)
-       Row 3: Log + Entry buttons (split evenly)
+       Row 3: Log + Entry buttons (split evenly, 44px tall)
     ────────────────────────────────────────────────────────────── */
     .qc-strip{flex-wrap:wrap;gap:8px;padding:10px 12px;margin-bottom:12px}
     .qc-mood-group{width:100%;display:flex;justify-content:space-between;gap:0}
     .qc-mood{flex:1;height:44px;font-size:20px;border-radius:8px}
-    .qc-input{width:100%;min-width:0;font-size:13px;padding:9px 10px}
-    .qc-btn{flex:1;padding:9px 12px;font-size:12px;font-weight:600;min-height:40px}
-    .qc-btn-journal{flex:1;padding:9px 12px;font-size:12px;font-weight:600;min-height:40px}
+    .qc-input{width:100%;min-width:0;min-height:44px;font-size:13px;padding:0 10px}
+    .qc-btn{
+      flex:1;padding:0 12px;font-size:12px;font-weight:600;
+      min-height:44px;display:inline-flex;align-items:center;justify-content:center;
+    }
+    .qc-btn-journal{
+      flex:1;padding:0 12px;font-size:12px;font-weight:600;
+      min-height:44px;display:inline-flex;align-items:center;justify-content:center;
+    }
     .qc-status{display:none}
 
     /* ── Tab bar ──────────────────────────────────────────────────
-       Horizontal scroll; no wrap; hides scrollbar chrome.
+       Horizontal scroll; 44px tall; hides scrollbar chrome.
     ────────────────────────────────────────────────────────────── */
     .tabs{
       overflow-x:auto;overflow-y:hidden;
@@ -1711,27 +1745,35 @@
       border-bottom:1px solid var(--border);
     }
     .tabs::-webkit-scrollbar{display:none}
-    .tab{flex-shrink:0;padding:9px 13px;font-size:12px;white-space:nowrap}
+    .tab{
+      flex-shrink:0;padding:0 14px;font-size:12px;white-space:nowrap;
+      min-height:44px;display:inline-flex;align-items:center;
+    }
 
     /* ── Schedule tab: source row ─────────────────────────────── */
     .source-row{
       display:flex;align-items:center;flex-wrap:wrap;
       gap:4px;font-size:10px;margin-bottom:8px;
     }
-    /* Plan/Actual toggle gets its own row (flush left) */
     .source-row>span:last-child{
-      width:100%;margin-top:2px;
+      width:100%;margin-top:4px;
       display:flex;align-items:center;
     }
     .sched-view-toggle{display:inline-flex}
-    .svt-btn{padding:5px 10px;font-size:11px;min-height:36px}
+    .svt-btn{
+      padding:0 12px;font-size:11px;
+      min-height:44px;display:inline-flex;align-items:center;justify-content:center;
+    }
     .sched-drag-hint{display:none}
 
     /* ── Quick-add bar ────────────────────────────────────────── */
     .sched-quick-add{flex-wrap:wrap;gap:6px;padding:8px 0 10px}
-    .sched-quick-add input{width:100%;min-width:0}
-    .sched-quick-add select{flex:1;min-height:40px}
-    .sched-quick-add button{flex:1;min-height:40px;font-size:13px;white-space:nowrap}
+    .sched-quick-add input{width:100%;min-width:0;min-height:44px}
+    .sched-quick-add select{flex:1;min-height:44px}
+    .sched-quick-add button{
+      flex:1;min-height:44px;font-size:13px;white-space:nowrap;
+      display:inline-flex;align-items:center;justify-content:center;
+    }
     .qa-hint{display:none}
 
     /* ── Timeline gutter ──────────────────────────────────────── */
@@ -1741,7 +1783,7 @@
 
     /* ── Task cards ───────────────────────────────────────────── */
     .card{padding:10px 8px;gap:6px;min-height:52px;align-items:flex-start}
-    .chk{width:32px;height:32px;border-radius:7px;flex-shrink:0;margin-top:2px}
+    .chk{width:36px;height:36px;border-radius:8px;flex-shrink:0;margin-top:2px}
     .chk svg{width:16px;height:16px}
     .chk-col{gap:1px}
     .chk-quick{display:none}
@@ -1752,40 +1794,65 @@
 
     /* ── Duration controls ────────────────────────────────────── */
     .dur{gap:2px}
-    .dbtn{width:30px;height:30px;font-size:16px;border-radius:6px}
+    .dbtn{width:34px;height:34px;font-size:16px;border-radius:6px}
     .dbadge{width:56px;font-size:11px;padding:4px 0}
 
     /* ── Card action buttons ──────────────────────────────────── */
-    .pomo-btn{width:30px;height:30px;margin-left:2px}
+    .pomo-btn{width:34px;height:34px;margin-left:2px}
     .pomo-btn svg{width:15px;height:15px}
-    .btn-del-task{width:28px;height:28px}
-    .btn-push-tmr{width:28px;height:28px}
-    .btn-triv-link{width:28px;height:28px}
-    .btn-add-menu{width:28px;height:28px;font-size:15px}
-    .notes-btn{width:28px;height:28px}
+    .btn-del-task,.btn-push-tmr,.btn-triv-link,.btn-add-menu,.notes-btn{
+      width:34px;height:34px;
+    }
+    .btn-add-menu{font-size:15px}
 
     /* ── Focus banner ─────────────────────────────────────────── */
-    .focus-banner{padding:7px 10px;gap:6px}
+    .focus-banner{padding:10px 12px;gap:8px}
     .fb-label{display:none}
-    .fb-title{font-size:12px}
+    .fb-title{font-size:13px}
     .fb-status{display:none}
-    .fb-open-timer{padding:4px 10px;min-height:34px}
+    .fb-open-timer{
+      padding:0 12px;min-height:44px;
+      display:inline-flex;align-items:center;justify-content:center;
+    }
 
     /* ── Task Queue Panel ─────────────────────────────────────── */
     .task-queue-panel{margin-top:14px;border-radius:8px}
-    .tqp-header{padding:10px 12px}
-    .tqp-tab{padding:9px 4px;font-size:11px;min-height:40px}
+    /* Header row: give collapse toggle a generous hit area */
+    .tqp-header{padding:8px 12px;min-height:44px;display:flex;align-items:center}
+    .tqp-toggle{
+      min-width:44px;min-height:44px;
+      padding:0;font-size:13px;
+      display:inline-flex;align-items:center;justify-content:center;
+      /* Negative margin to expand hit area without displacing siblings */
+      margin:-6px -8px -6px auto;
+    }
+    .tqp-tab{
+      padding:0 10px;font-size:11px;
+      min-height:44px;display:inline-flex;align-items:center;justify-content:center;
+    }
     .tqp-panel{max-height:220px;padding:8px 10px}
-    .tqp-sched-btn{min-height:32px;padding:4px 8px;font-size:10px}
+    .tqp-sched-btn{
+      min-height:44px;padding:0 12px;font-size:11px;
+      display:inline-flex;align-items:center;justify-content:center;
+    }
 
     /* ── Task Menus sub-tabs ──────────────────────────────────── */
-    .task-menus-nav{overflow-x:auto;white-space:nowrap;display:flex;gap:0;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+    .task-menus-nav{
+      overflow-x:auto;white-space:nowrap;display:flex;gap:0;
+      scrollbar-width:none;-webkit-overflow-scrolling:touch;
+    }
     .task-menus-nav::-webkit-scrollbar{display:none}
-    .tm-tab{flex-shrink:0;padding:9px 12px;font-size:11px;min-height:40px}
+    .tm-tab{
+      flex-shrink:0;padding:0 14px;font-size:11px;
+      min-height:44px;display:inline-flex;align-items:center;
+    }
 
     /* ── Board cards ──────────────────────────────────────────── */
     .board-card{padding:10px 8px;gap:6px}
-    .add-btn{min-height:34px;padding:4px 10px;font-size:11px}
+    .add-btn{
+      min-height:44px;padding:0 12px;font-size:11px;
+      display:inline-flex;align-items:center;justify-content:center;
+    }
 
     /* ── Float timer panel ────────────────────────────────────── */
     #float-timer{right:8px!important;bottom:8px!important}
@@ -1794,4 +1861,10 @@
     /* ── Triage cards ─────────────────────────────────────────── */
     .tri-card{padding:10px}
     .tri-title{font-size:13px}
+
+    /* ── Date picker: full-width sheet on mobile ─────────────── */
+    .date-picker-drop{
+      position:fixed;left:12px;right:12px;width:auto;
+      top:auto;margin-top:0;
+    }
   }
