@@ -490,6 +490,46 @@
   .dur{display:flex;align-items:center;gap:4px;flex-shrink:0;position:relative}
   .dbadge{font-size:12px;font-weight:600;color:var(--text);background:rgba(255,255,255,0.06);padding:3px 0;border-radius:5px;width:68px;text-align:center;font-variant-numeric:tabular-nums;cursor:pointer;transition:background 0.12s,color 0.12s;box-sizing:border-box;flex-shrink:0}
   .dbadge:hover{background:rgba(59,130,246,0.15);color:var(--accent-light)}
+  /* ---- Focus Banner ---- */
+  .focus-banner{display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25);border-radius:8px;margin-bottom:10px}
+  .focus-banner.running{background:rgba(59,130,246,0.14);border-color:rgba(59,130,246,0.4)}
+  .fb-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);flex-shrink:0;transition:background 0.3s}
+  .focus-banner.running .fb-dot{background:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,0.2);animation:fb-pulse 2s ease-in-out infinite}
+  @keyframes fb-pulse{0%,100%{box-shadow:0 0 0 3px rgba(59,130,246,0.2)}50%{box-shadow:0 0 0 6px rgba(59,130,246,0.0)}}
+  .fb-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);flex-shrink:0}
+  .fb-title{font-size:13px;font-weight:700;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fb-status{font-size:11px;color:var(--text-muted);flex-shrink:0}
+  .fb-open-timer{background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 7px;flex-shrink:0}
+  .fb-open-timer:hover{border-color:var(--accent);color:var(--accent)}
+  /* ---- Task Queue Panel ---- */
+  .task-queue-panel{margin-top:20px;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .tqp-header{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--card);cursor:pointer;user-select:none}
+  .tqp-header:hover{background:rgba(255,255,255,0.03)}
+  .tqp-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)}
+  .tqp-counts{font-size:11px;color:var(--text-muted);flex:1}
+  .tqp-toggle{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:11px;padding:0;line-height:1;transition:transform 0.2s}
+  .task-queue-panel.collapsed .tqp-toggle{transform:rotate(-90deg)}
+  .tqp-body{border-top:1px solid var(--border)}
+  .task-queue-panel.collapsed .tqp-body{display:none}
+  .tqp-tabs{display:flex;gap:0;border-bottom:1px solid var(--border)}
+  .tqp-tab{flex:1;background:none;border:none;border-bottom:2px solid transparent;padding:7px 4px;font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;transition:all 0.12s}
+  .tqp-tab.active{color:var(--text);border-bottom-color:var(--accent)}
+  .tqp-tab:hover:not(.active){color:var(--text);background:rgba(255,255,255,0.03)}
+  .tqp-panel{display:none;padding:10px 12px;max-height:320px;overflow-y:auto}
+  .tqp-panel.active{display:block}
+  .tqp-empty{font-size:11px;color:var(--text-muted);padding:12px 0;text-align:center}
+  .tqp-triage-card{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
+  .tqp-triage-card:last-child{border-bottom:none}
+  .tqp-tri-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:5px}
+  .tqp-tri-title{font-size:12px;color:var(--text);flex:1;line-height:1.4}
+  .tqp-tri-meta{font-size:10px;color:var(--text-muted);flex-shrink:0}
+  .tqp-task-card{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
+  .tqp-task-card:last-child{border-bottom:none}
+  .tqp-task-bar{width:3px;height:28px;border-radius:2px;flex-shrink:0}
+  .tqp-task-title{font-size:12px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tqp-task-meta{font-size:10px;color:var(--text-muted);flex-shrink:0}
+  .tqp-sched-btn{background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);border-radius:4px;color:var(--accent);font-size:10px;cursor:pointer;padding:2px 7px;white-space:nowrap}
+  .tqp-sched-btn:hover{background:rgba(59,130,246,0.2)}
   .dur-popover,.be-dur-popover{position:fixed;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.45);z-index:9999;min-width:148px}
   .be-dur-preset-btn{border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:10px;padding:2px 4px;margin-left:2px;opacity:0.6;transition:opacity 0.12s}
   .be-dur-preset-btn:hover{opacity:1;color:var(--accent-light)}

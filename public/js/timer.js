@@ -28,6 +28,7 @@ function pomoPaint(){
   if(miniArc){const mc=2*Math.PI*16;miniArc.style.strokeDashoffset=mc*(1-pct);miniArc.style.stroke=arc.style.stroke}
   if(miniTime)miniTime.textContent=pomoFmt(pomoState.remaining);
   if(miniTask)miniTask.textContent=pomoState.title||"--";
+  if(typeof updateFocusBanner==="function")updateFocusBanner();
 }
 function pomoUpdateStartBtn(){
   const btn=document.getElementById("pomo-start");if(!btn)return;

@@ -629,6 +629,144 @@ function deleteStickyNote(id){
   updateSnBadge();
 }
 
+// ======== FOCUS BANNER ========
+function updateFocusBanner(){
+  const banner=document.getElementById("focus-banner");
+  if(!banner)return;
+  const title=(typeof pomoState!=="undefined"&&pomoState.title&&pomoState.title!=="--")?pomoState.title:null;
+  if(!title){banner.style.display="none";return;}
+  banner.style.display="flex";
+  const running=(typeof pomoState!=="undefined"&&pomoState.running);
+  banner.classList.toggle("running",running);
+  const fbTitle=document.getElementById("fb-title");
+  if(fbTitle)fbTitle.textContent=title;
+  const fbStatus=document.getElementById("fb-status");
+  if(fbStatus){
+    if(running){
+      const rem=(typeof pomoFmt==="function")?pomoFmt(pomoState.remaining):"";
+      fbStatus.textContent=rem?" · "+rem+" left":"";
+    }else{
+      fbStatus.textContent="· Paused";
+    }
+  }
+}
+
+// ======== TASK QUEUE PANEL ========
+function buildTaskQueuePanel(){
+  const triagePanel=document.getElementById("tqp-panel-triage");
+  const priorityPanel=document.getElementById("tqp-panel-priority");
+  const backlogPanel=document.getElementById("tqp-panel-backlog");
+  const counts=document.getElementById("tqp-counts");
+  if(!triagePanel||!priorityPanel||!backlogPanel)return;
+
+  // ---- Triage ----
+  const dismissed=(typeof loadDismissed==="function")?loadDismissed():{};
+  const priColors={high:"var(--red)",medium:"var(--amber)",low:"var(--text-muted)"};
+  const activeTriage=(typeof INIT_TRIAGE!=="undefined")?INIT_TRIAGE.filter(i=>!dismissed[i.id]):[];
+  const tqpTriageBadge=document.getElementById("tqp-triage-count");
+  if(tqpTriageBadge)tqpTriageBadge.textContent=activeTriage.length;
+  if(!activeTriage.length){
+    triagePanel.innerHTML='<div class="tqp-empty">No triage items \u2014 you\'re clear.</div>';
+  }else{
+    triagePanel.innerHTML=activeTriage.map(item=>{
+      const dotColor=priColors[item.priority]||"var(--text-muted)";
+      return '<div class="tqp-triage-card">'+
+        '<span class="tqp-tri-dot" style="background:'+dotColor+'"></span>'+
+        '<span class="tqp-tri-title">'+item.title+'</span>'+
+        '<span class="tqp-tri-meta">'+(item.priority||"")+'</span>'+
+      '</div>';
+    }).join('');
+  }
+
+  // ---- Priority (consider) ----
+  const priorityTasks=(typeof consider!=="undefined")?consider:[];
+  const tqpPrioBadge=document.getElementById("tqp-priority-count");
+  if(tqpPrioBadge){tqpPrioBadge.textContent=priorityTasks.length;tqpPrioBadge.style.display=priorityTasks.length?"":"none";}
+  if(!priorityTasks.length){
+    priorityPanel.innerHTML='<div class="tqp-empty">No priority tasks.</div>';
+  }else{
+    const priOrder={High:0,Medium:1,Low:2};
+    const sorted=[...priorityTasks].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+    priorityPanel.innerHTML=sorted.map(t=>{
+      const c=(typeof cfg==="function")?cfg(t.type):{color:"var(--text-muted)",tag:t.type||""};
+      const durStr=(typeof ms==="function")?ms(t.durMin):t.durMin+"m";
+      return '<div class="tqp-task-card">'+
+        '<div class="tqp-task-bar" style="background:'+c.color+'"></div>'+
+        '<span class="tqp-task-title">'+t.title+'</span>'+
+        '<span class="tqp-task-meta">'+durStr+'</span>'+
+        '<button class="tqp-sched-btn" data-tqp-add-id="'+t.id+'" title="Add to schedule">+ Schedule</button>'+
+      '</div>';
+    }).join('');
+    priorityPanel.querySelectorAll('.tqp-sched-btn').forEach(btn=>{
+      btn.addEventListener('click',e=>{
+        e.stopPropagation();
+        if(typeof addToSchedule==='function')addToSchedule(btn.dataset.tqpAddId);
+      });
+    });
+  }
+
+  // ---- Backlog ----
+  const backlogTasks=(typeof backlog!=="undefined")?backlog:[];
+  const tqpBacklogBadge=document.getElementById("tqp-backlog-count");
+  if(tqpBacklogBadge)tqpBacklogBadge.textContent=backlogTasks.length;
+  if(!backlogTasks.length){
+    backlogPanel.innerHTML='<div class="tqp-empty">Backlog is empty.</div>';
+  }else{
+    const priOrder={High:0,Medium:1,Low:2};
+    const sorted=[...backlogTasks].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+    backlogPanel.innerHTML=sorted.map(t=>{
+      const c=(typeof cfg==="function")?cfg(t.type):{color:"var(--text-muted)",tag:t.type||""};
+      const durStr=(typeof ms==="function")?ms(t.durMin):t.durMin+"m";
+      return '<div class="tqp-task-card">'+
+        '<div class="tqp-task-bar" style="background:'+c.color+'"></div>'+
+        '<span class="tqp-task-title">'+t.title+'</span>'+
+        '<span class="tqp-task-meta">'+durStr+'</span>'+
+        '<button class="tqp-sched-btn" data-tqp-add-id="'+t.id+'" title="Add to schedule">+ Schedule</button>'+
+      '</div>';
+    }).join('');
+    backlogPanel.querySelectorAll('.tqp-sched-btn').forEach(btn=>{
+      btn.addEventListener('click',e=>{
+        e.stopPropagation();
+        if(typeof addToSchedule==='function')addToSchedule(btn.dataset.tqpAddId);
+      });
+    });
+  }
+
+  // Summary counts in header
+  if(counts)counts.textContent=
+    (activeTriage.length?""+activeTriage.length+" triage":"")+(activeTriage.length&&priorityTasks.length?" · ":"")+
+    (priorityTasks.length?priorityTasks.length+" priority":"")+
+    ((activeTriage.length||priorityTasks.length)&&backlogTasks.length?" · ":"")+
+    (backlogTasks.length?backlogTasks.length+" backlog":"");
+}
+
+// Wire TQP tab switching and collapse toggle (runs once after DOM load)
+document.addEventListener('DOMContentLoaded',function(){
+  // Tab switching
+  document.querySelectorAll('.tqp-tab').forEach(function(tab){
+    tab.addEventListener('click',function(){
+      document.querySelectorAll('.tqp-tab').forEach(function(t){t.classList.remove('active');});
+      document.querySelectorAll('.tqp-panel').forEach(function(p){p.classList.remove('active');});
+      tab.classList.add('active');
+      var panel=document.getElementById('tqp-panel-'+tab.dataset.tqp);
+      if(panel)panel.classList.add('active');
+    });
+  });
+  // Collapse toggle
+  var hdr=document.getElementById('tqp-header');
+  if(hdr)hdr.addEventListener('click',function(e){
+    if(e.target.closest('.tqp-tab'))return;
+    var panel=document.querySelector('.task-queue-panel');
+    if(panel){
+      panel.classList.toggle('collapsed');
+      var collapsed=panel.classList.contains('collapsed');
+      try{localStorage.setItem('tqp-collapsed',collapsed?'1':'0');}catch(ex){}
+    }
+  });
+  // Restore collapse state
+  try{if(localStorage.getItem('tqp-collapsed')==='1'){var p=document.querySelector('.task-queue-panel');if(p)p.classList.add('collapsed');}}catch(ex){}
+});
+
 // ======== SHARED TASK LIST RENDERER ========
 // Builds consistent .completion-item.clickable HTML for a list of tasks.
 // Used by openUntaskedModal, and available for Phase 4 pivot task picker.
@@ -695,7 +833,7 @@ function _flushDeferredRender() {
     render();
   }
 }
-function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();buildUpcoming();buildProgress();updateStats();updateSync();buildLife();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView()}
+function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();buildUpcoming();buildProgress();updateStats();updateSync();buildLife();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();updateFocusBanner();buildTaskQueuePanel();}
 function _updateTaskMenusBadge(){
   const badge=document.getElementById("tasks-count");if(!badge)return;
   // Sum up counts from sub-tab badges

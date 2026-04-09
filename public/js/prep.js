@@ -65,6 +65,7 @@ function openPomodoro(title,durMin){
   document.getElementById("ft-mini").style.display="none";
   pomoRenderReport();
   if(typeof paintPivotTasks==='function')paintPivotTasks();
+  if(typeof updateFocusBanner==='function')updateFocusBanner();
   savePomoState();
 }
 
