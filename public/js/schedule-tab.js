@@ -766,6 +766,7 @@ function renderBlockRow(b, idx, nested){
           +'<span class="be-time-arrow">\u2192</span>'
           +'<input type="time" class="be-card-time" value="'+(b.end||'17:00')+'" title="End time" id="be-end-'+idx+'" onchange="beUpdate('+idx+',&apos;end&apos;,this.value);beRefreshDur('+idx+');beCheckOverlaps()">'
           +'<input class="be-dur-input" value="'+dur+'" title="Duration \u2014 edit to adjust end time" id="be-dur-'+idx+'" onchange="beDurChanged('+idx+',this.value)" placeholder="0m">'
+          +'<button class="be-dur-preset-btn" title="Duration presets" onclick="beOpenDurPresets('+idx+',this)">&#9662;</button>'
         +'</div>'
         // ── Row 3: type, protected, warn ──
         +'<div class="be-row-settings">'
@@ -835,6 +836,52 @@ function beDurChanged(idx, val){
   const endEl = document.getElementById('be-end-'+idx);
   if(endEl) endEl.value = endStr;
   // Refresh the duration display to normalized format
+  const durEl = document.getElementById('be-dur-'+idx);
+  if(durEl) durEl.value = beDuration(b.start, b.end);
+  beCheckOverlaps();
+}
+
+// Duration preset popover for block editor
+function beOpenDurPresets(idx, btn){
+  // Close any existing preset popover
+  document.querySelectorAll('.be-dur-popover').forEach(p=>p.remove());
+  const presets = [30, 60, 90, 120, 180, 240];
+  const b = _beBlocks[idx];
+  if(!b) return;
+  // Current duration in minutes
+  const curMins = beParseDur(beDuration(b.start||'09:00', b.end||'17:00'));
+  const pop = document.createElement('div');
+  pop.className = 'be-dur-popover';
+  const grid = document.createElement('div');
+  grid.className = 'dur-presets';
+  presets.forEach(m => {
+    const pbtn = document.createElement('button');
+    pbtn.className = 'dur-preset' + (m === curMins ? ' dur-current' : '');
+    pbtn.textContent = ms(m);
+    pbtn.addEventListener('click', e => { e.stopPropagation(); pop.remove(); beSetDurPreset(idx, m); });
+    grid.appendChild(pbtn);
+  });
+  pop.appendChild(grid);
+  // Position relative to button
+  const rect = btn.getBoundingClientRect();
+  pop.style.position = 'fixed';
+  pop.style.top = (rect.bottom + 4) + 'px';
+  pop.style.left = rect.left + 'px';
+  pop.style.zIndex = '9999';
+  document.body.appendChild(pop);
+  function onOutside(e){ if(!pop.contains(e.target) && e.target !== btn){ pop.remove(); document.removeEventListener('click', onOutside, true); } }
+  setTimeout(() => document.addEventListener('click', onOutside, true), 0);
+}
+
+function beSetDurPreset(idx, mins){
+  const b = _beBlocks[idx];
+  if(!b) return;
+  const s = (b.start||'09:00').split(':').map(Number);
+  const endMins = s[0]*60 + s[1] + mins;
+  const eh = Math.floor(endMins/60), em = endMins%60;
+  b.end = String(eh).padStart(2,'0') + ':' + String(em).padStart(2,'0');
+  const endEl = document.getElementById('be-end-'+idx);
+  if(endEl) endEl.value = b.end;
   const durEl = document.getElementById('be-dur-'+idx);
   if(durEl) durEl.value = beDuration(b.start, b.end);
   beCheckOverlaps();
@@ -993,6 +1040,7 @@ async function saveBlockEditor(){
 
   updateStats();
   closeBlockEditor();
+  render();
   showToast("Time blocks saved","success");
 }
 
