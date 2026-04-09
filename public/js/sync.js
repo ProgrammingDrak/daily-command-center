@@ -361,10 +361,16 @@ function scheduleActionToday(taskId, idx){
   if(!actions[taskId]||!actions[taskId][idx])return;
   const item=actions[taskId][idx];
   if(item._scheduled)return;
+  // Duplicate check: bail if a non-done task with the same title already exists
+  if(typeof scheduled!=="undefined"&&scheduled.some(s=>s.title===item.text&&!(typeof isDone==="function"?isDone(s):false))){
+    if(typeof showToast==="function")showToast("Already in today's schedule","info");
+    return;
+  }
   insertTaskFromDrawer(item.text, 30);
   item._scheduled=true;
   item._scheduledAt=new Date().toISOString();
   saveActions(actions);
+  if(typeof showToast==="function")showToast("Added to today's schedule","success");
   // Re-render whichever list is showing
   if(document.getElementById("done-modal-overlay").classList.contains("open")) renderDmActions(taskId);
   else renderActionItems(taskId);
@@ -394,6 +400,7 @@ function queueActionForLater(taskId, idx){
   item._notionQueued=true;
   item._notionQueuedAt=new Date().toISOString();
   saveActions(actions);
+  if(typeof showToast==="function")showToast("Queued for Priority review","success");
   if(document.getElementById("done-modal-overlay").classList.contains("open")) renderDmActions(taskId);
   else renderActionItems(taskId);
 }

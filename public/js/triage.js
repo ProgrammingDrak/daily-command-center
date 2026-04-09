@@ -118,7 +118,7 @@ function buildAITabCard(item){
       '</div>'+
     '</div>'+
     '<div class="ai-tab-actions">'+
-      (!isDone?'<button class="ai-tab-btn sched ai-tab-sched-btn" data-ai-title="'+item.title.replace(/"/g,'&quot;')+'" data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'">+ Today</button>':'')+
+      (!isDone?'<button class="ai-tab-btn sched ai-tab-sched-btn" data-ai-title="'+item.title.replace(/"/g,'&quot;')+'" data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'">+ Urgent</button>':'')+
       '<button class="ai-tab-btn del ai-tab-del-btn" data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'">&times;</button>'+
     '</div>'+
   '</div>';
@@ -636,9 +636,9 @@ function renderDmActions(id){
       '<span class="ai-text"'+(item.done?' style="text-decoration:line-through;opacity:0.5"':'')+'>'+item.text+'</span>'+
       '<span class="ai-pri ai-pri-'+item.priority+'">'+item.priority+'</span>'+
       (item._scheduled?'<span class="ai-sched-btn queued">Scheduled</span>':
-        '<span class="ai-sched-btn" onclick="event.stopPropagation();scheduleActionToday(\''+id+'\','+idx+')" title="Add to today\'s schedule">Today</span>')+
+        '<span class="ai-sched-btn" onclick="event.stopPropagation();scheduleActionToday(\''+id+'\','+idx+')" title="Add to today\'s schedule">Urgent</span>')+
       (item._notionQueued?'<span class="ai-sched-btn later queued">Queued</span>':
-        '<span class="ai-sched-btn later" onclick="event.stopPropagation();queueActionForLater(\''+id+'\','+idx+')" title="Create as Notion task for later">Later</span>')+
+        '<span class="ai-sched-btn later" onclick="event.stopPropagation();queueActionForLater(\''+id+'\','+idx+')" title="Queue for Priority review">Schedule</span>')+
       '<span class="ai-del" onclick="deleteDmAction(\''+id+'\','+idx+')">&times;</span>'+
     '</div>'
   ).join('');

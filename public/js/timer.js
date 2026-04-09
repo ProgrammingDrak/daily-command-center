@@ -311,17 +311,9 @@ function openUntaskedModal(durSec,type){
   const bodyEl=document.getElementById("untasked-modal-body");
   const actionsEl=document.getElementById("untasked-actions");
 
-  let html='<div class="completion-section"><div class="completion-section-title">Current Tasks</div>';
   const allTasks=[...scheduled.filter(s=>!isDone(s)&&!s.nested),...consider,...backlog];
-
-  if(allTasks.length===0){
-    html+='<div style="font-size:11px;color:var(--text-muted);padding:8px">No tasks available.</div>';
-  }else{
-    allTasks.forEach(t=>{
-      const c=cfg(t.type);
-      html+='<div class="completion-item clickable" data-task-title="'+t.title.replace(/"/g,'&quot;')+'"><span class="ci-bar" style="background:'+c.color+'"></span><div class="ci-body"><div class="ci-title">'+t.title+'</div><div class="ci-meta"><span>'+c.tag+'</span></div></div></div>';
-    });
-  }
+  let html='<div class="completion-section"><div class="completion-section-title">Current Tasks</div>';
+  html+=buildTaskListHtml(allTasks);
   html+='</div>';
 
   // Custom input

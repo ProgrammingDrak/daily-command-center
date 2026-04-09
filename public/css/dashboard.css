@@ -493,6 +493,7 @@
   .dur-popover,.be-dur-popover{position:fixed;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.45);z-index:9999;min-width:148px}
   .be-dur-preset-btn{border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:10px;padding:2px 4px;margin-left:2px;opacity:0.6;transition:opacity 0.12s}
   .be-dur-preset-btn:hover{opacity:1;color:var(--accent-light)}
+  input.ttl-edit{display:inline-block;vertical-align:baseline;box-sizing:border-box;border-radius:0}
   .dur-presets{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
   .dur-preset{padding:6px 0;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;text-align:center;transition:all 0.12s}
   .dur-preset:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}

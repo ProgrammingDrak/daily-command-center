@@ -334,7 +334,45 @@ function buildSchedule(){
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Phase 7: removed old triv-flag-chk (replaced by btn-triv-link on card face)
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+
+    // Inline title edit — click title to rename, blur/Enter to save
+    if(!isMeeting(ev)){
+      const ttlSpan=el.querySelector(".ttl");
+      if(ttlSpan){
+        ttlSpan.style.cursor="text";
+        ttlSpan.setAttribute("title","Click to rename");
+        ttlSpan.addEventListener("click",e=>{
+          e.stopPropagation();
+          const inp=document.createElement("input");
+          inp.type="text";
+          inp.className="ttl-edit";
+          inp.value=ev.title;
+          inp.style.cssText="background:transparent;border:none;border-bottom:1px solid var(--accent);color:inherit;font:inherit;font-size:inherit;outline:none;padding:0 2px;min-width:60px;max-width:260px;width:"+(Math.max(60,ttlSpan.offsetWidth+20))+"px";
+          ttlSpan.replaceWith(inp);
+          inp.focus();inp.select();
+          let saved=false;
+          function save(){
+            if(saved)return;saved=true;
+            const newTitle=inp.value.trim();
+            if(newTitle&&newTitle!==ev.title){
+              const task=scheduled.find(s=>s.id===ev.id);
+              if(task){
+                task.title=newTitle;
+                if(typeof _persistTaskTitle==="function")_persistTaskTitle(ev.id,newTitle);
+                if(typeof showToast==="function")showToast("Title updated","success");
+              }
+            }
+            render();
+          }
+          inp.addEventListener("keydown",e2=>{
+            if(e2.key==="Enter"){e2.preventDefault();save();}
+            if(e2.key==="Escape"){saved=true;render();}
+          });
+          inp.addEventListener("blur",save);
+        });
+      }
+    }
 
     // Edge tab toggle listeners
     el.querySelectorAll(".edge-tab").forEach(tab=>{
