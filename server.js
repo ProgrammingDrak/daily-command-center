@@ -240,7 +240,46 @@ function ensureSkeletonDays() {
 app.get("/api/state/day", async (req, res) => { try { res.json(await buildDayResponse(req.query.date || getTodayStr(), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(DAY_STATE_FILE, null)); } });
 app.get("/api/state/tomorrow", async (req, res) => { try { res.json(await buildDayResponse(addDays(getTodayStr(), 1), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(TOMORROW_STATE_FILE, null)); } });
 app.get("/api/state/upcoming", (req, res) => { res.json(readJSON(UPCOMING_FILE, [])); });
-app.get("/api/state/archives", (req, res) => { const archives = {}; if (fs.existsSync(ARCHIVE_DIR)) { for (const fname of fs.readdirSync(ARCHIVE_DIR).filter(f => f.endsWith(".json") && f.length === 15).sort().reverse().slice(0, 7)) { const data = readJSON(path.join(ARCHIVE_DIR, fname), null); if (data) archives[fname.replace(".json", "")] = data; } } res.json(archives); });
+app.get("/api/state/archives", async (req, res) => {
+  try {
+    // Query Postgres for all dates that have blocks (the source of truth since the migration)
+    const result = await pool.query(
+      "SELECT DISTINCT date FROM blocks WHERE deleted_at IS NULL AND date IS NOT NULL AND date < CURRENT_DATE ORDER BY date DESC LIMIT 90"
+    );
+    const archives = {};
+    for (const row of result.rows) {
+      // pg returns date as a Date object; format as YYYY-MM-DD
+      const d = row.date instanceof Date
+        ? row.date.toISOString().split("T")[0]
+        : String(row.date).split("T")[0];
+      // Lightweight stub — the frontend only needs the key for nav;
+      // switchToDate() fetches full data via /api/state/day?date=...
+      archives[d] = { date: d };
+    }
+    // Also include any legacy flat-file archives not yet in Postgres
+    if (fs.existsSync(ARCHIVE_DIR)) {
+      for (const fname of fs.readdirSync(ARCHIVE_DIR).filter(f => f.endsWith(".json") && f.length === 15)) {
+        const dateStr = fname.replace(".json", "");
+        if (!archives[dateStr]) {
+          const data = readJSON(path.join(ARCHIVE_DIR, fname), null);
+          if (data) archives[dateStr] = data;
+        }
+      }
+    }
+    res.json(archives);
+  } catch (e) {
+    console.error("[archives] Postgres query failed, falling back to flat files:", e.message);
+    // Fallback to the old flat-file approach
+    const archives = {};
+    if (fs.existsSync(ARCHIVE_DIR)) {
+      for (const fname of fs.readdirSync(ARCHIVE_DIR).filter(f => f.endsWith(".json") && f.length === 15).sort().reverse().slice(0, 7)) {
+        const data = readJSON(path.join(ARCHIVE_DIR, fname), null);
+        if (data) archives[fname.replace(".json", "")] = data;
+      }
+    }
+    res.json(archives);
+  }
+});
 app.get("/api/state/local", (req, res) => { res.json(readJSON(LOCAL_UI_STATE_FILE, null)); });
 
 // ── Brain Endpoints ──

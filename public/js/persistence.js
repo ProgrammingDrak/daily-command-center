@@ -448,6 +448,15 @@ function writeGlobalsToLocalStorage(globals) {
 // Priority: localStorage → IndexedDB → Express API → Second Brain (injected) → __PA_LOCAL__ (legacy)
 
 async function fetchExpressDate(date) {
+  // Tier A: Try the day state API (Postgres-backed, always has the data)
+  try {
+    const dayRes = await fetch("/api/state/day?date=" + encodeURIComponent(date), { signal: AbortSignal.timeout(4000) });
+    if (dayRes.ok) {
+      const dayData = await dayRes.json();
+      if (dayData && dayData.date) return dayData;
+    }
+  } catch {}
+  // Tier B: Fall back to Second Brain recent cache
   try {
     const res = await fetch("/api/brain/recent", { signal: AbortSignal.timeout(2000) });
     if (!res.ok) return null;
@@ -711,13 +720,26 @@ async function switchToDate(dateStr) {
     newState = { date: __tomorrowDate, schedule: window.__PA_TOMORROW__.schedule };
     viewMode = "tomorrow";
   } else if (window.__PA_ARCHIVES__ && window.__PA_ARCHIVES__[dateStr]) {
-    newState = window.__PA_ARCHIVES__[dateStr];
+    const cached = window.__PA_ARCHIVES__[dateStr];
+    // If the archive entry has full schedule data, use it directly;
+    // otherwise treat it as a navigation stub and fetch from the server
+    if (cached.schedule && cached.schedule.timeline && cached.schedule.timeline.length > 0) {
+      newState = cached;
+    } else {
+      const expressState = await fetchExpressDate(dateStr);
+      if (expressState) {
+        window.__PA_ARCHIVES__[dateStr] = expressState; // cache for next time
+        newState = expressState;
+      } else {
+        newState = cached; // fall back to whatever we have
+      }
+    }
     viewMode = "archive";
   } else {
     // No injected archive — try Express API for this date
     const expressState = await fetchExpressDate(dateStr);
     if (expressState) {
-      newState = { date: dateStr, schedule: [], meetings: [], triage: {} };
+      newState = expressState;
       viewMode = "archive";
     } else {
       return; // no data for this date anywhere
