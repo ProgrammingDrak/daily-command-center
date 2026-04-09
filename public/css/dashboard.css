@@ -1617,3 +1617,118 @@
   .ft-panel-body .pomo-stat{padding:6px 8px}
   .ft-panel-body .ps-val{font-size:16px}
   .ft-panel-body .ps-label{font-size:9px}
+
+  /* ============================================================
+     MOBILE — 480px and below
+     All desktop layout unchanged. These rules only activate on
+     small-screen viewports (phones).
+     ============================================================ */
+  @media(max-width:480px){
+    /* --- Base / body --- */
+    body{padding:10px 10px 90px;font-size:14px}
+
+    /* --- Header --- */
+    .header{flex-direction:column;gap:10px;margin-bottom:14px;padding-bottom:10px}
+    .header h1{font-size:18px}
+    .header>div:last-child{width:100%;justify-content:space-between}
+    .time-now{display:none}
+
+    /* --- Stats row: 2 cols, smaller values --- */
+    .stats{grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:12px}
+    .stat .v{font-size:18px}
+    .stat .l{font-size:9px}
+    .stat-combined .stat-half{padding:8px 4px}
+
+    /* --- Quick-capture strip: wrap to 2 rows --- */
+    .qc-strip{flex-wrap:wrap;gap:6px;padding:8px}
+    .qc-mood-group{width:100%;justify-content:space-around}
+    .qc-mood{width:40px;height:40px;font-size:20px}
+    .qc-input{width:100%;min-width:0;font-size:12px}
+    .qc-btn,.qc-btn-journal{padding:8px 12px;font-size:12px;min-height:38px}
+    .qc-status{display:none}
+
+    /* --- Tab bar: horizontal scroll, no wrap --- */
+    .tabs{overflow-x:auto;overflow-y:hidden;white-space:nowrap;display:flex;gap:0;-webkit-overflow-scrolling:touch;scrollbar-width:none;margin-bottom:14px;padding-bottom:0}
+    .tabs::-webkit-scrollbar{display:none}
+    .tab{flex-shrink:0;padding:10px 14px;font-size:12px;white-space:nowrap}
+
+    /* --- Source row: stack/truncate --- */
+    .source-row{flex-wrap:wrap;gap:4px;font-size:10px;margin-bottom:8px}
+    .source-row>span:last-child{width:100%;margin-top:2px;font-size:10px}
+
+    /* --- Sched view toggle (Plan/Actual) + hint: collapse hint --- */
+    .sched-view-toggle{display:inline-flex}
+    .svt-btn{padding:5px 10px;font-size:11px;min-height:34px}
+    .sched-drag-hint{display:none}
+
+    /* --- Quick-add bar: stack vertically --- */
+    .sched-quick-add{flex-wrap:wrap;gap:6px}
+    .sched-quick-add input{width:100%;min-width:0}
+    .sched-quick-add select{flex:1;min-height:38px}
+    .sched-quick-add button{flex:1;min-height:38px;font-size:13px}
+    .qa-hint{display:none}
+
+    /* --- Timeline left-gutter --- */
+    .tl{padding-left:54px}
+    .tl::before{left:10px}
+    .tl-node{left:-54px;width:44px;font-size:9px}
+
+    /* --- Task cards: bigger tap targets, hide noise on mobile --- */
+    .card{padding:10px 8px;gap:6px;min-height:52px;align-items:flex-start}
+    .chk{width:32px;height:32px;border-radius:7px;flex-shrink:0;margin-top:2px}
+    .chk svg{width:16px;height:16px}
+    .chk-col{gap:1px}
+    .chk-quick{display:none}
+    .grip{display:none}
+    .ttl{font-size:13px}
+    .tinline{font-size:10px}
+    .meta{font-size:10px;gap:4px}
+
+    /* --- Duration control: bigger tap targets --- */
+    .dur{gap:2px}
+    .dbtn{width:30px;height:30px;font-size:16px;border-radius:6px}
+    .dbadge{width:56px;font-size:11px;padding:4px 0}
+
+    /* --- Card action buttons: larger --- */
+    .pomo-btn{width:30px;height:30px;margin-left:2px}
+    .pomo-btn svg{width:15px;height:15px}
+    .btn-del-task{width:28px;height:28px}
+    .btn-push-tmr{width:28px;height:28px}
+    .btn-triv-link{width:28px;height:28px}
+    .btn-add-menu{width:28px;height:28px;font-size:15px}
+    .notes-btn{width:28px;height:28px}
+
+    /* --- Focus banner: compact on mobile --- */
+    .focus-banner{padding:7px 10px;gap:6px}
+    .fb-label{display:none}
+    .fb-title{font-size:12px}
+    .fb-status{display:none}
+    .fb-open-timer{padding:4px 10px;min-height:34px}
+
+    /* --- Task Queue Panel: full-width, shorter max-height --- */
+    .task-queue-panel{margin-top:14px;border-radius:8px}
+    .tqp-header{padding:10px 12px}
+    .tqp-tab{padding:9px 4px;font-size:11px;min-height:40px}
+    .tqp-panel{max-height:220px;padding:8px 10px}
+    .tqp-sched-btn{min-height:32px;padding:4px 8px;font-size:10px}
+
+    /* --- Task menus sub-tabs --- */
+    .task-menus-nav{overflow-x:auto;white-space:nowrap;display:flex;gap:0;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+    .task-menus-nav::-webkit-scrollbar{display:none}
+    .tm-tab{flex-shrink:0;padding:9px 12px;font-size:11px;min-height:40px}
+
+    /* --- Board cards (consider/backlog) --- */
+    .board-card{padding:10px 8px;gap:6px}
+    .add-btn{min-height:34px;padding:4px 10px;font-size:11px}
+
+    /* --- Float timer panel: full-width on mobile --- */
+    #float-timer{right:8px!important;bottom:8px!important}
+    .ft-panel{width:min(320px,96vw)!important;right:8px!important;bottom:56px!important}
+
+    /* --- Triage cards --- */
+    .tri-card{padding:10px}
+    .tri-title{font-size:13px}
+
+    /* --- Progress bar --- */
+    .progress-wrap{margin-bottom:10px}
+  }
