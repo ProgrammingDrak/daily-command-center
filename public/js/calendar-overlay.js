@@ -335,7 +335,7 @@
     if (window.blockStore) {
       const blocks = window.blockStore._rangeCache.get(dateStr)?.blocks || [];
       return blocks
-        .filter(b => b.type === "action_item" && b.parent_id === eventId)
+        .filter(b => ((b.type==="action_item"||b.type==="block")&&((b.properties||{}).tags||[]).includes("action-item")) && b.parent_id === eventId)
         .map(b => b.properties);
     }
     try {
@@ -374,7 +374,7 @@
       if (existing) {
         window.blockStore.updateBlockDebounced(existing.id, { html, text, updatedAt: new Date().toISOString() });
       } else {
-        window.blockStore.createBlock("note", { html, text, updatedAt: new Date().toISOString() }, { parentId: eventId, date: dateStr });
+        window.blockStore.createBlock("block", { html, text, updatedAt: new Date().toISOString() }, { parentId: eventId, date: dateStr });
       }
     }
     // Also save to localStorage as fallback

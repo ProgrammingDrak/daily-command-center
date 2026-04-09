@@ -77,35 +77,20 @@ async function ensureWorkspacesForAllUsers() {
 
 // ── Block Type Validation ──
 
-const BLOCK_SCHEMAS = {
-  day_root: { required: ["date"], optional: [] },
-  schedule_item: { required: ["title", "type"], optional: ["start", "end", "priority", "source", "source_id", "done", "doneAt", "pushed", "pushedAt", "deleted", "deletedAt", "durOriginal", "durCurrent", "pinnedStart", "calUrl", "notionUrl", "completed", "detail", "meta", "estimated_minutes", "calendar_link", "prep", "gcal_event_id", "gcal_calendar_id", "gcal_etag", "hangout_link", "location", "rsvp_status", "attendee_count", "is_recurring", "all_day", "tags"] },
-  consider_item: { required: ["title"], optional: ["durMin", "priority", "source", "reason", "url", "task_id", "estimated_minutes"] },
-  triage_item: { required: ["title"], optional: ["type", "summary", "link", "priority", "escalation_level", "cycle_count", "notes", "first_seen_at", "last_seen_at", "dismissed"] },
-  note: { required: ["html", "text"], optional: ["updatedAt"] },
-  action_item: { required: ["text"], optional: ["priority", "done", "created", "scheduled", "scheduledAt"] },
-  subtask: { required: ["text"], optional: ["done"] },
-  pomo_state: { required: [], optional: ["title", "workMin", "mode", "total", "remaining", "running", "sessions", "soundOn", "sessionLog", "taskTime"] },
-  pomo_session: { required: ["durSec", "type"], optional: ["title", "time", "stackedOn"] },
-  engram: { required: ["tag", "name"], optional: ["category", "context"] },
-  mood_entry: { required: ["mood"], optional: ["time", "energy", "note"] },
-  sticky_note: { required: ["html", "text"], optional: ["updatedAt"] },
-  trivial_task: { required: ["text"], optional: ["done", "doneAt"] },
-  life_capture: { required: ["text"], optional: ["category", "mood", "context", "timestamp"] },
-  pending_task: { required: ["title"], optional: ["priority", "source_task", "source_task_id", "status", "created_at"] },
-  added_task: { required: ["title"], optional: ["durMin", "detail", "source", "notionUrl", "priority", "meta", "tags"] },
-  schedule_block: { required: ["name", "blockType", "start", "end"], optional: ["protected", "warnThreshold", "acceptedTags"] },
-  tag: { required: ["name"], optional: ["color", "description"] }
-};
-
-const VALID_TYPES = new Set(Object.keys(BLOCK_SCHEMAS));
+// ── Unified Block Architecture ──
+// All user data uses type = 'block'. Properties JSONB is freeform.
+// Code interprets blocks by checking property presence, not type labels.
+// Legacy type names ('added_task', 'schedule_item', etc.) accepted for backward compat.
+const BLOCK_SCHEMAS = { block: { required: [], optional: [] }, day_root: { required: ["date"], optional: [] } };
+const VALID_TYPES = new Set(["block", "day_root",
+  // Legacy types — accepted during migration transition, all treated as 'block'
+  "schedule_item", "consider_item", "triage_item", "note", "action_item", "subtask",
+  "pomo_state", "pomo_session", "engram", "mood_entry", "sticky_note", "trivial_task",
+  "life_capture", "pending_task", "added_task", "schedule_block", "tag"
+]);
 
 function validateBlock(type, properties) {
   if (!VALID_TYPES.has(type)) throw new Error(`Unknown block type: ${type}`);
-  const schema = BLOCK_SCHEMAS[type];
-  for (const field of schema.required) {
-    if (properties[field] === undefined || properties[field] === null) throw new Error(`Block type '${type}' requires field '${field}'`);
-  }
   const size = JSON.stringify(properties).length;
   if (size > 100000) throw new Error(`Block properties exceed 100KB limit (${size} bytes)`);
 }

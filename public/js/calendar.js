@@ -177,7 +177,7 @@
     // Also load schedule_item blocks from the block store
     if (cached && cached.blocks) {
       for (const b of cached.blocks) {
-        if (b.type === "schedule_item" && b.properties) {
+        if ((b.type === "schedule_item" || b.type === "block") && b.properties && (b.properties.start || b.properties.scheduled_dates)) {
           const p = b.properties;
           // Don't duplicate if already from PA state
           if (events.some(e => e.id === b.id)) continue;

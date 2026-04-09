@@ -699,7 +699,7 @@ function openBlockEditor(blockId){
   document.querySelectorAll('.stat.sp-open').forEach(el=>el.classList.remove('sp-open'));
 
   // Read blocks from blockStore (has full props incl. acceptedTags), fall back to state
-  const raw = (window.blockStore && window.blockStore.getByType('schedule_block')) || [];
+  const raw = (window.blockStore && [...window.blockStore.getByType('schedule_block'),...window.blockStore.getByType('block').filter(b=>(b.properties||{}).blockType&&(b.properties||{}).start&&(b.properties||{}).end&&(b.properties||{}).name)]) || [];
   if(raw.length) {
     _beBlocks = raw.map(b => ({
       id: b.id,
@@ -1058,7 +1058,7 @@ async function saveBlockEditor(){
     const b = _beBlocks[i];
     const props = { name:b.name.trim(), blockType:b.blockType||'work', start:b.start, end:b.end, protected:!!b.protected, warnThreshold:b.warnThreshold||0, acceptedTags:b.acceptedTags||[] };
     if(b._isNew || b.id.startsWith('_new_')){
-      await blockStore.createBlock("schedule_block", props, { parentId:b.parent_id, sortOrder:i });
+      await blockStore.createBlock("block", props, { parentId:b.parent_id, sortOrder:i });
     } else {
       await blockStore.updateBlock(b.id, props);
     }

@@ -4,7 +4,7 @@ let MOOD_KEY = "pa-mood-" + ((__state && __state.date) ? __state.date : "unknown
 
 function loadEngrams() {
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.engrams&&window.blockStore){
-    return window.blockStore.getByType("engram").map(b=>({
+    return [...window.blockStore.getByType("engram"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).tag&&(b.properties||{}).name&&!(b.properties||{}).scheduled_dates)].map(b=>({
       tag:b.properties.tag, name:b.properties.name,
       category:b.properties.category, context:b.properties.context, _blockId:b.id
     }));
@@ -15,7 +15,7 @@ function saveEngrams(data) {
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.engrams&&window.blockStore){
     data.forEach(e=>{
       if(!e._blockId){
-        window.blockStore.createBlock("engram",{tag:e.tag,name:e.name,category:e.category||"",context:e.context||""},{
+        window.blockStore.createBlock("block",{tag:e.tag,name:e.name,category:e.category||"",context:e.context||""},{
           parentId:window.blockStore.getDayRootId(),date:window.blockStore.getCurrentDate()
         }).then(b=>{e._blockId=b.id});
       }
@@ -26,7 +26,7 @@ function saveEngrams(data) {
 }
 function loadMoodData() {
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.mood&&window.blockStore){
-    const entries=window.blockStore.getByType("mood_entry").map(b=>({
+    const entries=[...window.blockStore.getByType("mood_entry"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).mood!==undefined&&!(b.properties||{}).scheduled_dates)].map(b=>({
       mood:b.properties.mood, energy:b.properties.energy,
       time:b.properties.time, note:b.properties.note, _blockId:b.id
     }));
@@ -43,7 +43,7 @@ function saveMoodData(data) {
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.mood&&window.blockStore&&data.entries){
     const lastEntry=data.entries[data.entries.length-1];
     if(lastEntry&&!lastEntry._blockId){
-      window.blockStore.createBlock("mood_entry",{
+      window.blockStore.createBlock("block",{
         mood:lastEntry.mood,energy:lastEntry.energy||3,time:lastEntry.time||"",note:lastEntry.note||""
       },{parentId:window.blockStore.getDayRootId(),date:window.blockStore.getCurrentDate()})
       .then(b=>{lastEntry._blockId=b.id});

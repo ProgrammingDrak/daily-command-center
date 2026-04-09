@@ -66,18 +66,18 @@ function buildActionItemsTab(){
   if(badge)badge.textContent=open.length;
 
   if(!all.length){
-    list.innerHTML='<div class="ai-tab-empty">No action items yet. They\'ll appear here when you add follow-ups from meetings, triage, or the notes drawer.</div>';
+    list.innerHTML='<div class="board-empty">No action items yet. They\'ll appear here when you add follow-ups from meetings, triage, or the task bar.</div>';
     return;
   }
 
   let html='';
   if(open.length){
-    html+='<div class="ai-tab-group"><div class="ai-tab-group-label">Open ('+open.length+')</div>';
+    html+='<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:6px">Open ('+open.length+')</div>';
     html+=open.map(item=>buildAITabCard(item)).join('');
     html+='</div>';
   }
   if(done.length){
-    html+='<div class="ai-tab-group"><div class="ai-tab-group-label">Completed ('+done.length+')</div>';
+    html+='<div><div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:6px">Completed ('+done.length+')</div>';
     html+=done.map(item=>buildAITabCard(item)).join('');
     html+='</div>';
   }
@@ -107,20 +107,22 @@ function buildActionItemsTab(){
 function buildAITabCard(item){
   const isDone=item.done||item.status==="done";
   const age=item.created_at?timeAgo(item.created_at):"";
-  return '<div class="ai-tab-card'+(isDone?" done":"")+'" data-ai-id="'+item.id+'">'+
-    '<div class="ai-tab-chk" data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'">'+(isDone?"\u2713":"")+'</div>'+
-    '<div class="ai-tab-body">'+
-      '<div class="ai-tab-title">'+item.title+'</div>'+
-      '<div class="ai-tab-meta">'+
-        '<span class="ai-tab-pri ai-tab-pri-'+(item.priority||"Medium")+'">'+(item.priority||"Medium")+'</span>'+
-        (item._sourceLabel?'<span class="ai-tab-source">'+item._sourceLabel+'</span>':'')+
+  const priCls=item.priority==="High"?"pri-hi":item.priority==="Low"?"pri-lo":"pri-med";
+  const barColor=isDone?"var(--green)":item.priority==="High"?"#ef4444":item.priority==="Low"?"#64748b":"#a78bfa";
+  const dataAttrs='data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'"';
+  return '<div class="board-card'+(isDone?" board-card-done":"")+'" style="'+(isDone?"opacity:0.5":"")+'" data-ai-id="'+item.id+'">'+
+    '<div class="bar" style="background:'+barColor+'"></div>'+
+    '<div class="body">'+
+      '<div class="title-row"><span class="ttl"'+(isDone?' style="text-decoration:line-through"':'')+'>'+item.title+'</span></div>'+
+      '<div class="meta">'+
+        '<span class="'+priCls+'">'+(item.priority||"Medium")+'</span>'+
+        (item._sourceLabel?'<span>'+item._sourceLabel+'</span>':'')+
         (age?'<span>'+age+'</span>':'')+
       '</div>'+
     '</div>'+
-    '<div class="ai-tab-actions">'+
-      (!isDone?'<button class="ai-tab-btn sched ai-tab-sched-btn" data-ai-title="'+item.title.replace(/"/g,'&quot;')+'" data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'">+ Urgent</button>':'')+
-      '<button class="ai-tab-btn del ai-tab-del-btn" data-ai-id="'+item.id+'" data-ai-source="'+(item._source||"")+'" data-ai-task-id="'+(item._taskId||"")+'" data-ai-idx="'+(item._idx!=null?item._idx:"")+'">&times;</button>'+
-    '</div>'+
+    '<div class="ai-tab-chk" '+dataAttrs+' style="width:24px;height:24px;border:2px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:12px;'+(isDone?'background:var(--green);border-color:var(--green);color:white':'color:var(--text-muted)')+'">'+(isDone?"\u2713":"")+'</div>'+
+    (!isDone?'<button class="add-btn ai-tab-sched-btn" data-ai-title="'+item.title.replace(/"/g,'&quot;')+'" '+dataAttrs+'><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Schedule</button>':'')+
+    '<button class="btn-del-task ai-tab-del-btn" '+dataAttrs+' title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
   '</div>';
 }
 
@@ -193,23 +195,21 @@ function deleteAITabItem(id,source,taskId,idx){
   buildActionItemsTab();
 }
 
-function addAITabItem(){
-  const inp=document.getElementById("ai-tab-text");
-  const title=inp.value.trim();
+function addAITabItem(titleArg, priorityArg){
+  const title=titleArg||"";
   if(!title)return;
-  const priority=document.getElementById("ai-tab-priority").value;
+  const priority=priorityArg||"High";
   const pending=loadPendingTasks();
   pending.push({
     id:"pending-"+(Date.now()),
     title:title,
     priority:priority,
-    source_task:"Manual entry",
-    source_task_id:"manual",
+    source_task:"Task bar",
+    source_task_id:"taskbar",
     created_at:new Date().toISOString(),
     status:"queued"
   });
   savePendingTasks(pending);
-  inp.value="";
   buildActionItemsTab();
 }
 
@@ -687,10 +687,6 @@ function dismissTriage(triageId, note, trivial) {
   buildTriage();
 }
 
-// Wire up quick-add bar
-document.getElementById("qa-add").addEventListener("click", insertTaskNow);
-document.getElementById("qa-title").addEventListener("keydown", e=>{ if(e.key==="Enter") insertTaskNow(); });
-
 // Wire up overflow modal
 document.getElementById("overflow-modal-close").addEventListener("click", closeOverflowModal);
 document.getElementById("overflow-work-late").addEventListener("click", workLateOverflow);
@@ -826,24 +822,30 @@ function buildTriageCard(item) {
     const hrs = Math.round((Date.now() - new Date(item.firstSeen).getTime()) / 3600000);
     ageParts.push(hrs > 0 ? hrs + "h ago" : "just now");
   }
-  return '<div class="tri-card' + (isDismissed ? ' dismissed' : '') + '" data-tri-id="' + item.id + '">' +
-    '<div class="tri-card-header">' +
-      '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
-      '<button class="tri-quick" data-dismiss-id="' + item.id + '" title="Quick complete (no notes)">&#9889;</button>' +
-      triIcon(item.type) +
-      '<span class="tri-title">' + item.title + '</span>' +
-      triEscBadge(item.escalation) +
-      notesButton({id: item.id, title: item.title}) +
+  const triTypeColors = {unanswered_dm:"#a78bfa",email_needs_response:"#f87171",slack_mention:"#22d3ee",calendar_event:"#f97316"};
+  const barColor = isDismissed ? "var(--green)" : (triTypeColors[item.type] || "#a78bfa");
+  const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
+  const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
+  return '<div class="board-card' + (isDismissed ? ' board-card-done' : '') + '" data-tri-id="' + item.id + '" style="' + (isDismissed ? 'opacity:0.5' : '') + '">' +
+    '<div class="bar" style="background:' + barColor + '"></div>' +
+    '<div class="body">' +
+      '<div class="title-row">' +
+        '<span class="ttl">' + t.emoji + ' ' + item.title + '</span>' +
+        triEscBadge(item.escalation) +
+      '</div>' +
+      '<div class="meta">' +
+        '<span class="' + priCls + '">' + (item.priority || 'medium') + '</span>' +
+        (item.link ? '<a href="' + item.link + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">Open</a>' : '') +
+        (item.auto_task_url ? '<a href="' + item.auto_task_url + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a855f7);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
+        (item.draft_id ? '<span style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700">' + (item.draft_type === 'gmail' ? 'DRAFT' : 'MSG') + '</span>' : '') +
+        '<span>' + ageParts.join(' \u00b7 ') + '</span>' +
+        (isDismissed ? '<span style="color:var(--green)">\u2713 ' + (dismissed[item.id].trivial ? 'Dismissed' : dismissed[item.id].note || 'Resolved') + '</span>' : '') +
+      '</div>' +
+      (item.summary ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">' + item.summary + '</div>' : '') +
     '</div>' +
-    (item.summary ? '<div class="tri-summary">' + item.summary + '</div>' : '') +
-    '<div class="tri-meta">' +
-      (item.link ? '<a href="' + item.link + '" target="_blank">Open in source</a>' : '') +
-      (item.auto_task_url ? '<a href="' + item.auto_task_url + '" target="_blank" style="background:var(--purple-bg);color:var(--purple);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
-      (item.draft_id ? '<span style="background:var(--cyan-bg);color:var(--cyan);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700">' + (item.draft_type === 'gmail' ? 'DRAFT EMAIL' : 'DRAFT MSG') + '</span>' : '') +
-      '<span>' + ageParts.join(' \u00b7 ') + '</span>' +
-      (item.notes ? '<span>' + item.notes + '</span>' : '') +
-      (isDismissed ? '<span style="color:var(--green)">\u2713 ' + (dismissed[item.id].trivial ? 'Dismissed' : dismissed[item.id].note || 'Resolved') + '</span>' : '') +
-    '</div>' +
+    notesButton({id: item.id, title: item.title}) +
+    '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
+    '<button class="tri-quick" data-dismiss-id="' + item.id + '" title="Quick complete">&#9889;</button>' +
   '</div>';
 }
 // Triage parent linking
@@ -867,13 +869,8 @@ function buildScheduled() {
   const today = __state && __state.date ? __state.date : new Date().toISOString().split("T")[0];
   const todayLabel = new Date(today + "T12:00:00").toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric"});
   const nowMins = now();
-
-  // All active items (not deleted, not pushed)
   const active = scheduled.filter(ev => !isDeleted(ev) && !isPushed(ev));
-
-  // Past + incomplete → needs review
   const needsReview = active.filter(ev => pt(ev.start) < nowMins && !isDone(ev));
-  // Current, future, and done items
   const rest = active.filter(ev => pt(ev.start) >= nowMins || isDone(ev));
 
   let html = "";
@@ -884,17 +881,15 @@ function buildScheduled() {
     needsReview.forEach(ev => {
       const c = cfg(ev.type);
       html +=
-        '<div class="consider-card" style="margin-bottom:6px">' +
-          '<div class="cc-bar" style="background:' + c.color + '"></div>' +
-          '<div class="cc-body">' +
-            '<div class="cc-title">' + ev.title + '</div>' +
-            '<div class="cc-meta">' + f12(ev.start) + ' – ' + f12(ev.end) + ' · ' + ms(dur(ev)) + '</div>' +
+        '<div class="board-card" style="margin-bottom:6px">' +
+          '<div class="bar" style="background:' + c.color + '"></div>' +
+          '<div class="body">' +
+            '<div class="title-row"><span class="ttl">' + ev.title + '</span></div>' +
+            '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
-          '<div style="display:flex;gap:4px;flex-shrink:0">' +
-            '<button class="cc-action sched-done-btn" data-id="' + ev.id + '" style="background:rgba(34,197,94,0.1);color:var(--green);border:1px solid rgba(34,197,94,0.2)" title="Mark complete">✓ Done</button>' +
-            '<button class="cc-action sched-push-btn" data-id="' + ev.id + '" title="Push to Priority tab">→ Priority</button>' +
-            '<button class="cc-action sched-backlog-btn" data-id="' + ev.id + '" title="Move to Backlog">Backlog</button>' +
-          '</div>' +
+          '<button class="add-btn sched-done-btn" data-id="' + ev.id + '" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>' +
+          '<button class="add-btn sched-push-btn" data-id="' + ev.id + '">Priority</button>' +
+          '<button class="add-btn sched-backlog-btn" data-id="' + ev.id + '" style="background:rgba(255,255,255,0.06);color:var(--text-muted)">Backlog</button>' +
         '</div>';
     });
     html += '</div>';
@@ -906,11 +901,11 @@ function buildScheduled() {
       const c = cfg(ev.type);
       const done = isDone(ev);
       html +=
-        '<div class="consider-card" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
-          '<div class="cc-bar" style="background:' + c.color + '"></div>' +
-          '<div class="cc-body">' +
-            '<div class="cc-title">' + (done ? '<s>' + ev.title + '</s>' : ev.title) + '</div>' +
-            '<div class="cc-meta">' + f12(ev.start) + ' – ' + f12(ev.end) + ' · ' + ms(dur(ev)) + '</div>' +
+        '<div class="board-card" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
+          '<div class="bar" style="background:' + c.color + '"></div>' +
+          '<div class="body">' +
+            '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + ev.title + '</span></div>' +
+            '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
         '</div>';
     });
@@ -922,42 +917,26 @@ function buildScheduled() {
 
   el.innerHTML = html;
 
-  // Wire action buttons
   el.querySelectorAll(".sched-done-btn").forEach(btn => {
     btn.addEventListener("click", () => { toggleDone(btn.dataset.id); render(); });
   });
   el.querySelectorAll(".sched-push-btn").forEach(btn => {
-    btn.addEventListener("click", () => { pushTask(btn.dataset.id); }); // pushTask calls render() internally
+    btn.addEventListener("click", () => { pushTask(btn.dataset.id); });
   });
   el.querySelectorAll(".sched-backlog-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const id = btn.dataset.id;
       const ev = scheduled.find(e => e.id === id);
       if (!ev) return;
-      backlog.push({
-        id: "bl-" + Date.now(),
-        title: ev.title,
-        type: ev.type || "task",
-        durMin: dur(ev),
-        meta: ms(dur(ev)) + " · from schedule",
-        detail: ev.detail || "",
-        source: ev.source || "manual",
-        notionUrl: ev.notionUrl || "",
-        priority: ev.priority || "Low",
-        stage: "Backlog"
-      });
-      deletedSet.add(id);
-      saveDeletedState();
-      render();
+      backlog.push({id:"bl-"+Date.now(),title:ev.title,type:ev.type||"task",durMin:dur(ev),
+        meta:ms(dur(ev))+" · from schedule",detail:ev.detail||"",source:ev.source||"manual",
+        notionUrl:ev.notionUrl||"",priority:ev.priority||"Low",stage:"Backlog"});
+      deletedSet.add(id);saveDeletedState();render();
     });
   });
 
-  // Update badge
   const badge = document.getElementById("scheduled-count");
-  if (badge) {
-    badge.textContent = needsReview.length;
-    badge.style.display = needsReview.length ? "" : "none";
-  }
+  if (badge) { badge.textContent = needsReview.length; badge.style.display = needsReview.length ? "" : "none"; }
 }
 
 function buildScheduleSoon() {
@@ -968,13 +947,13 @@ function buildScheduleSoon() {
   list.innerHTML='<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px">Pushed from Schedule</div>'+
     pushed.map(ev=>{
       const c=cfg(ev.type);
-      return '<div class="consider-card" style="margin-bottom:6px">'+
-        '<div class="cc-bar" style="background:'+c.color+'"></div>'+
-        '<div class="cc-body">'+
-          '<div class="cc-title">'+ev.title+'</div>'+
-          '<div class="cc-meta">'+ms(dur(ev))+' &middot; pushed from schedule</div>'+
+      return '<div class="board-card" style="margin-bottom:6px">'+
+        '<div class="bar" style="background:'+c.color+'"></div>'+
+        '<div class="body">'+
+          '<div class="title-row"><span class="ttl">'+ev.title+'</span></div>'+
+          '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span><span>pushed from schedule</span></div>'+
         '</div>'+
-        '<button class="cc-action" onclick="unpushTask(\''+ev.id+'\');render()" title="Restore to schedule" style="background:rgba(34,197,94,0.1);color:var(--green);border:1px solid rgba(34,197,94,0.2)">Restore</button>'+
+        '<button class="add-btn" onclick="unpushTask(\''+ev.id+'\');render()" title="Restore to schedule" style="background:rgba(34,197,94,0.15);color:var(--green)">Restore</button>'+
       '</div>';
     }).join('');
   // Update badge

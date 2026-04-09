@@ -165,7 +165,7 @@
       if (window.blockStore && window.blockStore.getRangeCache(ds)) {
         const cached = window.blockStore.getRangeCache(ds);
         if ((cached.paState && cached.paState.schedule && cached.paState.schedule.timeline && cached.paState.schedule.timeline.length) ||
-          (cached.blocks && cached.blocks.some(b => b.type === "schedule_item"))) {
+          (cached.blocks && cached.blocks.some(b => b.type === "schedule_item" || (b.type === "block" && ((b.properties||{}).start || (b.properties||{}).scheduled_dates))))) {
           cls.push("has-events");
         }
       }

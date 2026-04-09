@@ -153,7 +153,7 @@ async function upsertEvent(gcalEvent, calendarId) {
       await pool.query(`INSERT INTO blocks (id, type, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1, 'day_root', $2, $3, 0, $4, $5, $6, $7)`, [dayRootId, dateStr, { date: dateStr }, userId, workspaceId, now, now]);
     }
     await pool.query(
-      `INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1, 'schedule_item', $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1, 'block', $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT(id) DO UPDATE SET properties = EXCLUDED.properties, date = EXCLUDED.date, updated_at = EXCLUDED.updated_at, deleted_at = NULL`,
       [blockId, dayRootId, dateStr, props, toSortOrder(startTime), userId, workspaceId, now, now]
     );

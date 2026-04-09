@@ -64,7 +64,7 @@ let DISMISS_KEY = "pa-dismissed-" + (__state ? __state.date : "unknown");
 
 function loadNotes() {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.notes && window.blockStore) {
-    const noteBlocks = window.blockStore.getByType("note");
+    const noteBlocks = [...window.blockStore.getByType("note"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).html&&(b.properties||{}).text&&b.parent_id)];
     const result = {};
     noteBlocks.forEach(b => {
       const taskId = b.properties._sourceTaskId || b.parent_id;
@@ -85,7 +85,7 @@ function saveNotes(data) {
         window.blockStore.updateBlockDebounced(val._blockId, { html, text, _sourceTaskId: taskId });
       } else {
         // Create new note block
-        window.blockStore.createBlock("note", { html, text, _sourceTaskId: taskId }, {
+        window.blockStore.createBlock("block", { html, text, _sourceTaskId: taskId }, {
           parentId: window.blockStore.getDayRootId(),
           date: window.blockStore.getCurrentDate()
         }).then(block => { val._blockId = block.id; });
@@ -98,7 +98,7 @@ function saveNotes(data) {
 
 function loadActions() {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.actions && window.blockStore) {
-    const actionBlocks = window.blockStore.getByType("action_item");
+    const actionBlocks = [...window.blockStore.getByType("action_item"),...window.blockStore.getByType("block").filter(b=>((b.properties||{}).tags||[]).includes("action-item"))];
     const result = {};
     actionBlocks.forEach(b => {
       const taskId = b.properties._sourceTaskId || b.parent_id;
@@ -122,9 +122,10 @@ function saveActions(data) {
             ...(item._notionQueued ? { _notionQueued: true, _notionQueuedAt: item._notionQueuedAt } : {})
           });
         } else {
-          window.blockStore.createBlock("action_item", {
+          window.blockStore.createBlock("block", {
             text: item.text, priority: item.priority || "Medium", done: !!item.done,
-            _sourceTaskId: taskId, created: item.created || new Date().toISOString()
+            _sourceTaskId: taskId, created: item.created || new Date().toISOString(),
+            tags:["action-item"]
           }, {
             parentId: window.blockStore.getDayRootId(),
             date: window.blockStore.getCurrentDate(),
@@ -207,7 +208,7 @@ function savePomoState(localOnly) {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.pomo && window.blockStore && pomoState.sessionLog.length) {
     const lastSession = pomoState.sessionLog[pomoState.sessionLog.length - 1];
     if (lastSession && !lastSession._blockSaved) {
-      window.blockStore.createBlock("pomo_session", {
+      window.blockStore.createBlock("block", {
         title: lastSession.title || "", durSec: lastSession.durSec || 0,
         type: lastSession.type || "work", time: lastSession.time || ""
       }, { parentId: window.blockStore.getDayRootId(), date: window.blockStore.getCurrentDate() });

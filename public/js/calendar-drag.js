@@ -149,7 +149,7 @@
 
     // Also create a block for persistence
     if (window.blockStore) {
-      await window.blockStore.createBlock("schedule_item", {
+      await window.blockStore.createBlock("block", {
         title: dragState.taskTitle,
         type: dragState.taskType || "task",
         start: startStr,

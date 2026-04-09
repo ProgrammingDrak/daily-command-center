@@ -151,8 +151,8 @@ function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json")
 async function getMeetingsFromDB(dateStr, userId, workspaceId) {
   const offset = getETOffset(dateStr);
   const { rows } = workspaceId
-    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.workspace_id = $2 AND b.type = 'schedule_item' AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
-    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.user_id = $2 AND b.type = 'schedule_item' AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
+    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
+    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
   const meetings = [], meetingTimeline = [];
   for (const row of rows) {
     const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;

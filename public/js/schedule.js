@@ -176,9 +176,9 @@ function saveAddedTasks(tasks){
 }
 function persistAddedTask(item){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
-    // Write to SQLite via blockstore — will be reloaded via getByType("added_task") on refresh
+    // Write to blockstore — will be reloaded via property-based query on refresh
     const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null);
-    window.blockStore.createBlock("added_task",{
+    window.blockStore.createBlock("block",{
       local_id:item.id,
       title:item.title,
       duration:dur(item),
@@ -205,7 +205,7 @@ function persistAddedTask(item){
 // After recalcTimes changes positions (e.g. drag reorder), sync blockstore added_task blocks
 function syncAddedTaskTimes(){
   if(!window.USE_BLOCKSTORE||!window.USE_BLOCKSTORE.addedTasks||!window.blockStore)return;
-  const addedBlocks=window.blockStore.getByType("added_task");
+  const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).local_id&&(b.properties||{}).start)];
   addedBlocks.forEach(block=>{
     const p=block.properties||{};
     const ev=scheduled.find(e=>e.id===p.local_id);
@@ -216,16 +216,10 @@ function syncAddedTaskTimes(){
   });
 }
 
-function insertTaskNow(){
-  const inp=document.getElementById("qa-title");
-  const title=inp.value.trim();
-  if(!title){
-    inp.classList.add("qa-error");
-    setTimeout(()=>inp.classList.remove("qa-error"),400);
-    inp.focus();
-    return;
-  }
-  const durMin=parseInt(document.getElementById("qa-dur").value);
+function insertTaskNow(titleArg, durMinArg){
+  const title=titleArg||(function(){const inp=document.getElementById("qa-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
+  if(!title)return;
+  const durMin=durMinArg||30;
   const id=qaId();
   const newItem={id,title,type:"task",start:"00:00",end:fmt(durMin),
     meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",
@@ -243,16 +237,14 @@ function insertTaskNow(){
   scheduled.splice(scheduled.indexOf(newItem), 1);
   recalcTimes(); // restore cascade without the new item
 
-  inp.value="";
-
   if(simulatedEnd <= EOD){
     // Fits — commit for real
     scheduled.splice(insertAt, 0, newItem);
     recalcTimes();
     persistAddedTask(newItem);
     const pending=loadPendingTasks();
-    pending.push({id,title,priority:"High",source_task:"Urgent bar",
-      source_task_id:"urgent",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
+    pending.push({id,title,priority:"High",source_task:"Task bar",
+      source_task_id:"taskbar",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
     savePendingTasks(pending);
     log("scheduled",id,"Quick-added: "+title);
     render();
@@ -358,12 +350,145 @@ function addFollowupToSchedule(fu,parentId){
   if(parent&&parent.followups){parent.followups=parent.followups.filter(f=>f.id!==fu.id)}
   recalcTimes();checkOverflow();log("scheduled",fu.id,"Action item: "+fu.title);render()
 }
-function addNewTask(){
-  const title=document.getElementById("new-title").value.trim();if(!title)return;
-  const type=document.getElementById("new-type").value,durMin=parseInt(document.getElementById("new-dur").value);
-  backlog.push({id:"custom-"+(nextId++),title,type,durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:""});
-  log("created","custom","New: "+title);document.getElementById("new-title").value="";render()
+function addNewTask(titleArg, durMinArg){
+  const title=titleArg||(function(){const inp=document.getElementById("new-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
+  if(!title)return;
+  const durMin=durMinArg||30;
+  backlog.push({id:"custom-"+(nextId++),title,type:"task",durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:""});
+  log("created","custom","New backlog: "+title);render()
 }
+// ======== UNIVERSAL TASK ADD BAR ========
+function addTaskUniversal(barEl){
+  const inp=barEl.querySelector(".tab-title");
+  const title=inp.value.trim();
+  if(!title){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();return}
+  const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
+  const dest=barEl.querySelector(".tab-dest").value;
+  inp.value="";
+  switch(dest){
+    case"schedule":insertTaskNow(title,durMin);break;
+    case"backlog":addNewTask(title,durMin);break;
+    case"priority":{
+      const itemProps={title,priority:"High",tags:["action-item"],
+        source_task:"Task bar",source_task_id:"taskbar",
+        created_at:new Date().toISOString(),status:"queued"};
+      // Write to both localStorage (for legacy readers) and blockStore (unified)
+      const pending=JSON.parse(localStorage.getItem("pa-pending-tasks")||"[]");
+      pending.push({id:"pending-"+Date.now(),...itemProps});
+      localStorage.setItem("pa-pending-tasks",JSON.stringify(pending));
+      if(typeof savePendingTasks==="function")savePendingTasks(pending);
+      if(window.blockStore)window.blockStore.createBlock("block",itemProps);
+      if(typeof buildActionItemsTab==="function")buildActionItemsTab();
+      render();break;
+    }
+    case"trivial":{
+      if(typeof addTrivialTask==="function")addTrivialTask(title);
+      break;
+    }
+  }
+}
+// Wire up all task-add bars
+document.querySelectorAll(".task-add-bar").forEach(bar=>{
+  bar.querySelector(".tab-add").addEventListener("click",()=>addTaskUniversal(bar));
+  bar.querySelector(".tab-title").addEventListener("keydown",e=>{if(e.key==="Enter")addTaskUniversal(bar)});
+});
+
+// ======== UNIFIED BLOCK QUERY HELPERS ========
+// All user data is type='block'. These helpers filter by property presence.
+function _allBlocks(){
+  if(!window.blockStore)return[];
+  // Get from both caches — unified blocks may be in either
+  const byType=window.blockStore.getByType("block");
+  // Also include legacy types during migration transition
+  const legacyTypes=["added_task","schedule_item","trivial_task","action_item","pending_task",
+    "sticky_note","life_capture","engram","mood_entry","pomo_session","schedule_block","tag","note"];
+  const legacy=legacyTypes.flatMap(t=>{try{return window.blockStore.getByType(t)}catch(e){return[]}});
+  // Dedupe by id
+  const seen=new Set();const result=[];
+  [...byType,...legacy].forEach(b=>{if(!seen.has(b.id)){seen.add(b.id);result.push(b)}});
+  return result;
+}
+
+function getScheduledBlocks(date){
+  return _allBlocks().filter(b=>{
+    const p=b.properties||{};
+    // Unified: check scheduled_dates
+    if(p.scheduled_dates&&p.scheduled_dates[date])return true;
+    // Legacy: added_task/schedule_item blocks have start/end + date on the block itself
+    if(b.date===date&&p.start&&p.end)return true;
+    return false;
+  });
+}
+
+function getBacklogBlocks(){
+  return _allBlocks().filter(b=>{
+    const p=b.properties||{};
+    if(!p.title)return false;
+    if(p.status==="archived"||p.status==="done")return false;
+    // No scheduled_dates means backlog material
+    if(p.scheduled_dates&&Object.keys(p.scheduled_dates).length>0)return false;
+    // Legacy added_task/schedule_item blocks with start/end are scheduled, not backlog
+    if(p.start&&p.end)return false;
+    // Must not be trivial, action-item, pinned, or other special blocks
+    const tags=p.tags||[];
+    if(tags.includes("trivial")||tags.includes("action-item")||tags.includes("pinned"))return false;
+    // Must not be non-task blocks (notes, engrams, etc.)
+    if(p.html&&!p.title)return false; // notes
+    if(p.mood!==undefined&&!p.title)return false; // mood-only
+    if(p.tag&&p.name&&!p.title)return false; // engram without title
+    return true;
+  });
+}
+
+function getBlocksByTag(tag){
+  return _allBlocks().filter(b=>{
+    const tags=(b.properties||{}).tags||[];
+    return tags.includes(tag);
+  });
+}
+
+function findBlockByTitle(title){
+  if(!title)return null;
+  const lower=title.toLowerCase().trim();
+  return _allBlocks().find(b=>{
+    const t=(b.properties||{}).title;
+    return t&&t.toLowerCase().trim()===lower&&(b.properties||{}).status!=="archived";
+  })||null;
+}
+
+function scheduleBlockOnDate(id, date, start, end){
+  if(!window.blockStore)return;
+  const block=window.blockStore.get(id);
+  if(!block)return;
+  const p={...(block.properties||{})};
+  if(!p.scheduled_dates)p.scheduled_dates={};
+  p.scheduled_dates[date]={start,end,done:false,pinned:false};
+  window.blockStore.updateBlock(id,p);
+}
+
+function unscheduleBlockFromDate(id, date){
+  if(!window.blockStore)return;
+  const block=window.blockStore.get(id);
+  if(!block)return;
+  const p={...(block.properties||{})};
+  if(p.scheduled_dates){
+    delete p.scheduled_dates[date];
+    if(Object.keys(p.scheduled_dates).length===0)delete p.scheduled_dates;
+  }
+  window.blockStore.updateBlock(id,p);
+}
+
+function markDoneOnDate(id, date){
+  if(!window.blockStore)return;
+  const block=window.blockStore.get(id);
+  if(!block)return;
+  const p={...(block.properties||{})};
+  if(p.scheduled_dates&&p.scheduled_dates[date]){
+    p.scheduled_dates[date]={...p.scheduled_dates[date],done:true,done_at:new Date().toISOString()};
+    window.blockStore.updateBlock(id,p);
+  }
+}
+
 function undoLast(){if(!actionLog.length)return;const a=actionLog.pop();if(a.type==="checked")manualDone.delete(a.id);else if(a.type==="unchecked")manualDone.add(a.id);else if(a.type==="reorder"&&a.detail)scheduled=JSON.parse(a.detail);render()}
 function resetAll(){scheduled=JSON.parse(JSON.stringify(INIT_SCHED));consider=JSON.parse(JSON.stringify(INIT_CONSIDER));backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));manualDone.clear();doneAt={};actionLog=[];durChanges={};render()}
 
@@ -381,8 +506,8 @@ function saveTaskOrder(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
     // Save order to day_root for cross-device reads
     _bsSaveProp("_taskOrder", order);
-    // Also update sort_order on added_task blocks (the only real blocks that exist)
-    const addedBlocks=window.blockStore.getByType("added_task");
+    // Also update sort_order on task blocks
+    const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).local_id&&(b.properties||{}).start)];
     if(addedBlocks.length){
       const orderMap={};order.forEach((id,i)=>{orderMap[id]=i});
       const items=addedBlocks

@@ -617,7 +617,7 @@ function reloadPersistedEdits() {
   try {
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
       // Load from SQLite via blockstore cache (loadDay() already ran before this point)
-      const addedBlocks=window.blockStore.getByType("added_task");
+      const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).local_id&&(b.properties||{}).start)];
       addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id;

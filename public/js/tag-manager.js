@@ -52,7 +52,7 @@ function buildTagIndex(tagBlocks) {
 // ── Refresh tag index from blockStore ──
 function refreshTagIndex() {
   if (window.blockStore && typeof buildTagIndex === 'function') {
-    window.__TAGS__ = buildTagIndex(window.blockStore.getByType('tag'));
+    window.__TAGS__ = buildTagIndex([...window.blockStore.getByType('tag'),...window.blockStore.getByType('block').filter(b=>(b.properties||{}).name&&(b.properties||{}).color!==undefined)]);
   }
 }
 
@@ -217,7 +217,7 @@ async function tmSaveEditor() {
     await window.blockStore.updateBlock(_tmEditState.tagId, props);
   } else {
     // Create new
-    await window.blockStore.createBlock('tag', props, {
+    await window.blockStore.createBlock("block", props, {
       parentId: _tmEditState.parentId || null,
       date: null
     });
@@ -363,7 +363,7 @@ function toggleTagDropdown(containerEl, selected, onChange) {
           const name = filter.trim();
           if (!name) return;
           // Create the tag via blockStore
-          await window.blockStore.createBlock('tag', { name: name, color: '#4A90D9', description: '' }, { parentId: null, date: null });
+          await window.blockStore.createBlock("block", { name: name, color: '#4A90D9', description: '' }, { parentId: null, date: null });
           refreshTagIndex();
           // Find the newly created tag
           const newIdx = window.__TAGS__;

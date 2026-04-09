@@ -8,15 +8,24 @@ document.querySelectorAll(".tab").forEach(tab=>{
   });
 });
 
-// ======== TASK MENUS SUB-TABS ========
-document.querySelectorAll(".tm-tab").forEach(tab=>{
-  tab.addEventListener("click",()=>{
-    document.querySelectorAll(".tm-tab").forEach(t=>t.classList.remove("active"));
-    document.querySelectorAll(".tm-panel").forEach(p=>p.classList.remove("active"));
-    tab.classList.add("active");
-    const panel=document.getElementById("tm-"+tab.dataset.tm);
-    if(panel)panel.classList.add("active");
+// ======== TASK MENUS ACCORDION ========
+const TM_ACCORDION_KEY="pa-tm-accordion-state";
+function _loadAccordionState(){try{return JSON.parse(localStorage.getItem(TM_ACCORDION_KEY)||"{}")}catch(e){return{}}}
+function _saveAccordionState(){
+  const state={};
+  document.querySelectorAll(".tm-section").forEach(d=>{state[d.id]=d.open});
+  localStorage.setItem(TM_ACCORDION_KEY,JSON.stringify(state));
+}
+// Restore saved open/closed state on load
+(function(){
+  const saved=_loadAccordionState();
+  document.querySelectorAll(".tm-section").forEach(d=>{
+    if(saved[d.id]!==undefined)d.open=saved[d.id];
   });
+})();
+// Persist on toggle
+document.querySelectorAll(".tm-section").forEach(d=>{
+  d.addEventListener("toggle",_saveAccordionState);
 });
 
 // ======== RENDER ========

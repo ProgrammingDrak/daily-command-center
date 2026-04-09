@@ -2,7 +2,7 @@
 
 function getLifeCaptures(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.lifeCaptures&&window.blockStore){
-    return window.blockStore.getByType("life_capture").map(b=>({
+    return [...window.blockStore.getByType("life_capture"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).category&&(b.properties||{}).text&&!(b.properties||{}).scheduled_dates&&!((b.properties||{}).tags||[]).includes("pinned"))].map(b=>({
       text:b.properties.text||"",category:b.properties.category||"",
       mood:b.properties.mood||0,context:b.properties.context||"",
       timestamp:b.properties.timestamp||b.created_at,
@@ -13,7 +13,7 @@ function getLifeCaptures(){
 }
 function saveLifeCapture(entry){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.lifeCaptures&&window.blockStore){
-    window.blockStore.createBlock("life_capture",{text:entry.text||"",category:entry.category||"",mood:entry.mood||0,context:entry.context||"",timestamp:entry.timestamp||new Date().toISOString()});
+    window.blockStore.createBlock("block",{text:entry.text||"",category:entry.category||"",mood:entry.mood||0,context:entry.context||"",timestamp:entry.timestamp||new Date().toISOString()});
     return;
   }
   const c=getLifeCaptures();c.push(entry);localStorage.setItem("pa-life-captures",JSON.stringify(c));scheduleIDBSave();

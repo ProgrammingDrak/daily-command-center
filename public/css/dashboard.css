@@ -627,11 +627,7 @@
   .add-btn{padding:6px 12px;border-radius:7px;border:1px solid var(--accent);background:rgba(59,130,246,0.1);color:var(--accent-light);font-size:11px;font-weight:600;cursor:pointer;transition:all 0.12s;white-space:nowrap;display:flex;align-items:center;gap:4px}
   .add-btn:hover{background:var(--accent);color:white}
   .board-empty{text-align:center;padding:40px;color:var(--text-muted);font-size:13px}
-  .new-task-row{display:flex;gap:8px;margin-bottom:16px}
-  .new-task-row input,.new-task-row select{background:var(--card);border:1px solid var(--border);border-radius:7px;padding:8px 12px;color:var(--text);font-size:13px;outline:none}
-  .new-task-row input:focus,.new-task-row select:focus{border-color:var(--accent)} .new-task-row input{flex:1} .new-task-row select{width:120px}
-  .new-task-row button{padding:8px 16px;border-radius:7px;border:none;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer}
-  .new-task-row button:hover{background:var(--accent-light)}
+  /* .new-task-row removed — replaced by universal .task-add-bar */
 
   .pri-hi{color:var(--red)} .pri-med{color:var(--amber)} .pri-lo{color:var(--green)}
   .stage-badge{font-size:9px;padding:1px 6px;border-radius:4px;font-weight:600}
@@ -721,31 +717,12 @@
   .st-move-confirm-btn:hover{opacity:0.85}
   .st-hint{font-size:10px;color:var(--text-muted);font-style:italic;margin-top:4px}
   /* ---- Trivial Tasks section ---- */
-  .triv-section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px}
-  .triv-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  /* Old .triv-* standalone styles removed — trivial tasks now use .board-card */
   .triv-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--cyan,#22d3ee);display:flex;align-items:center;gap:6px}
   .triv-desc{font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.4}
   .triv-add-btn{padding:3px 9px;border-radius:5px;border:1px solid rgba(34,211,238,0.3);background:transparent;color:var(--cyan,#22d3ee);font-size:10px;font-weight:600;cursor:pointer;transition:all 0.12s}
   .triv-add-btn:hover{background:rgba(34,211,238,0.1)}
   .triv-input-row{display:flex;gap:6px;margin-bottom:8px}
-  .triv-input{flex:1;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:5px;padding:5px 8px;color:var(--text);font-size:12px;outline:none}
-  .triv-input:focus{border-color:var(--cyan,#22d3ee)}
-  .triv-input-ok{padding:4px 10px;border-radius:5px;border:1px solid rgba(34,211,238,0.4);background:rgba(34,211,238,0.1);color:var(--cyan,#22d3ee);font-size:11px;font-weight:600;cursor:pointer}
-  .triv-item{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px}
-  .triv-item:last-child{border-bottom:none}
-  .triv-check{width:14px;height:14px;border-radius:3px;border:2px solid var(--border);flex-shrink:0;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.1s}
-  .triv-check:hover{border-color:var(--cyan,#22d3ee)}
-  .triv-check.done{border-color:var(--cyan,#22d3ee);background:var(--cyan,#22d3ee)}
-  .triv-text{flex:1;color:var(--text)}
-  .triv-text.done{text-decoration:line-through;opacity:0.45}
-  .triv-del{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;opacity:0;transition:opacity 0.1s;padding:0 2px}
-  .triv-item:hover .triv-del{opacity:0.5}
-  .triv-done-section{margin-top:6px}
-  .triv-done-toggle{font-size:10px;color:var(--text-muted);cursor:pointer;background:none;border:none;padding:0}
-  .triv-done-toggle:hover{color:var(--text)}
-  .triv-flag-row{display:flex;align-items:center;gap:8px;padding:6px 0;margin-top:4px;border-top:1px solid var(--border)}
-  .triv-flag-label{font-size:11px;color:var(--text-muted)}
-  .triv-flag-chk{accent-color:var(--cyan,#22d3ee);width:13px;height:13px;cursor:pointer}
 
   .edge-panel{max-height:0;overflow:hidden;transition:max-height 0.25s ease;margin-top:-1px;border-radius:0 0 7px 7px}
   .edge-panel.open{max-height:400px}
@@ -845,10 +822,7 @@
   /* ---- Triage tab ---- */
   .tri-group-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);padding:4px 0 8px;display:flex;align-items:center;gap:6px}
   .tri-group-label .tri-dot{width:8px;height:8px;border-radius:50%}
-  .tri-card{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:12px 14px;margin-bottom:6px;transition:background 0.12s;cursor:default}
-  .tri-card:hover{background:var(--card-hover)}
-  .tri-card-header{display:flex;align-items:center;gap:10px;margin-bottom:4px}
-  .tri-card-header .tri-icon{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+  /* Old .tri-card container styles removed — triage cards now use .board-card */
   .tri-icon-dm{background:rgba(59,130,246,0.12);color:var(--accent-light)}
   .tri-icon-email{background:rgba(239,68,68,0.12);color:var(--red)}
   .tri-icon-mention{background:rgba(249,115,22,0.12);color:var(--orange)}
@@ -1074,28 +1048,7 @@
   .tri-compact-parent{font-size:9px;padding:1px 6px;border-radius:4px;background:rgba(167,139,250,0.15);color:var(--purple);font-weight:600;white-space:nowrap}
 
   /* Action Items tab */
-  .ai-tab-card{background:var(--card);border:1px solid var(--border);border-radius:9px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:10px;transition:opacity 0.2s}
-  .ai-tab-card.done{opacity:0.4}
-  .ai-tab-card .ai-tab-chk{width:18px;height:18px;border-radius:4px;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;margin-top:1px;transition:all 0.12s;font-size:11px;color:transparent}
-  .ai-tab-card .ai-tab-chk:hover{border-color:var(--green);color:var(--green)}
-  .ai-tab-card.done .ai-tab-chk{border-color:var(--green);background:var(--green);color:white}
-  .ai-tab-body{flex:1;min-width:0}
-  .ai-tab-title{font-size:13px;font-weight:500;margin-bottom:3px}
-  .ai-tab-card.done .ai-tab-title{text-decoration:line-through;color:var(--text-muted)}
-  .ai-tab-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:10px;color:var(--text-muted)}
-  .ai-tab-source{padding:1px 6px;border-radius:4px;background:rgba(167,139,250,0.12);color:var(--purple);font-weight:600}
-  .ai-tab-pri{padding:1px 6px;border-radius:4px;font-weight:600}
-  .ai-tab-pri-High{background:rgba(239,68,68,0.12);color:var(--red)}
-  .ai-tab-pri-Medium{background:rgba(245,158,11,0.12);color:var(--amber)}
-  .ai-tab-pri-Low{background:rgba(100,116,139,0.15);color:var(--text-muted)}
-  .ai-tab-actions{display:flex;gap:4px;flex-shrink:0;align-items:center}
-  .ai-tab-btn{font-size:10px;padding:3px 8px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;white-space:nowrap;transition:all 0.12s}
-  .ai-tab-btn:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.08)}
-  .ai-tab-btn.sched{border-color:var(--green);color:var(--green)} .ai-tab-btn.sched:hover{background:rgba(34,197,94,0.08)}
-  .ai-tab-btn.del{border-color:transparent;color:var(--text-muted);opacity:0.4} .ai-tab-btn.del:hover{opacity:1;color:var(--red);border-color:rgba(239,68,68,0.3)}
-  .ai-tab-group{margin-bottom:16px}
-  .ai-tab-group-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
-  .ai-tab-empty{text-align:center;padding:40px;color:var(--text-muted);font-size:13px}
+  /* Old .ai-tab-* styles removed — action items now use .board-card */
   .tri-card.dismissed .tri-title{text-decoration:line-through;color:var(--text-muted)}
 
   /* Triage dismiss modal */
@@ -1186,15 +1139,15 @@
   @media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)} body{padding:14px 14px 110px} .tl{padding-left:85px}}
 
   /* Quick-add bar */
-  .sched-quick-add{display:flex;align-items:center;gap:8px;padding:8px 0 10px;border-bottom:1px solid var(--border);margin-bottom:4px}
-  .sched-quick-add input{flex:1;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px;outline:none}
-  .sched-quick-add input:focus{border-color:var(--accent)}
-  .sched-quick-add input.qa-error{border-color:var(--red);animation:qa-shake 0.3s ease}
+  /* ======== UNIVERSAL TASK ADD BAR ======== */
+  .task-add-bar{display:flex;align-items:center;gap:8px;padding:8px 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px}
+  .task-add-bar .tab-title{flex:1;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 10px;color:var(--text);font-size:13px;outline:none}
+  .task-add-bar .tab-title:focus{border-color:var(--accent)}
+  .task-add-bar .tab-title.tab-error{border-color:var(--red);animation:qa-shake 0.3s ease}
   @keyframes qa-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
-  .sched-quick-add select{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 8px;color:var(--text);font-size:13px;outline:none}
-  .sched-quick-add button{background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
-  .sched-quick-add button:hover{opacity:0.85}
-  .qa-hint{font-size:11px;color:var(--text-muted);white-space:nowrap}
+  .task-add-bar .tab-dur,.task-add-bar .tab-dest{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 8px;color:var(--text);font-size:13px;outline:none}
+  .task-add-bar .tab-add{background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .task-add-bar .tab-add:hover{opacity:0.85}
 
   /* Overflow modal */
   .overflow-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:460;justify-content:center;align-items:center;padding:24px}
@@ -1516,13 +1469,7 @@
   .triv-picker-opt:hover{background:rgba(34,211,238,0.08);color:var(--cyan,#22d3ee)}
 
   /* Flagged schedule items in triage trivial section */
-  .triv-subheader{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin:8px 0 4px;padding-bottom:2px;border-bottom:1px solid rgba(255,255,255,0.04)}
-  .triv-flagged-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px}
-  .triv-flagged-item:last-child{border-bottom:none}
-  .triv-flagged-bar{width:3px;height:24px;border-radius:2px;flex-shrink:0}
-  .triv-flagged-body{flex:1;min-width:0}
-  .triv-flagged-title{display:block;font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .triv-flagged-meta{display:block;font-size:10px;color:var(--text-muted);margin-top:1px}
+  /* Old .triv-flagged-* and .triv-subheader styles removed — now use .board-card */
   .triv-restore-btn{padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:10px;font-weight:600;cursor:pointer;transition:all 0.12s;flex-shrink:0}
   .triv-restore-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(59,130,246,0.08)}
   .triv-flagged-done-btn{width:22px;height:22px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.12s;flex-shrink:0}
@@ -1578,15 +1525,38 @@
   .am-pick-opt{padding:8px 12px;font-size:12px;color:var(--text);cursor:pointer;transition:background 0.1s;border:1px solid var(--border);border-radius:6px;margin-top:4px}
   .am-pick-opt:hover{background:rgba(34,211,238,0.08);border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee)}
 
-  /* ======== TASK MENUS SUB-TABS ======== */
-  .task-menus-nav{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px;overflow-x:auto}
-  .tm-tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer;white-space:nowrap;transition:color 0.12s,border-color 0.12s;position:relative}
-  .tm-tab:hover{color:var(--text)}
-  .tm-tab.active{color:var(--accent-light);border-bottom-color:var(--accent)}
-  .tm-tab .badge{font-size:10px;padding:1px 5px;border-radius:8px;background:rgba(255,255,255,0.08);color:var(--text-muted);margin-left:4px;font-weight:500}
-  .tm-tab.active .badge{background:rgba(59,130,246,0.15);color:var(--accent-light)}
-  .tm-panel{display:none}
-  .tm-panel.active{display:block}
+  /* ======== TASK MENUS ACCORDION ======== */
+  .tm-accordion{display:flex;flex-direction:column;gap:4px}
+  .tm-section{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--card)}
+  .tm-section-header{
+    display:flex;align-items:center;gap:8px;
+    padding:10px 14px;cursor:pointer;
+    font-size:13px;font-weight:600;color:var(--text);
+    background:var(--card);user-select:none;
+    list-style:none;transition:background 0.12s;
+  }
+  .tm-section-header::-webkit-details-marker{display:none}
+  .tm-section-header::marker{display:none;content:""}
+  .tm-section-header:hover{background:rgba(255,255,255,0.03)}
+  .tm-chevron{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:16px;height:16px;flex-shrink:0;
+    transition:transform 0.15s ease;
+  }
+  .tm-chevron::before{
+    content:"";display:block;width:0;height:0;
+    border-left:5px solid var(--text-muted);
+    border-top:4px solid transparent;
+    border-bottom:4px solid transparent;
+  }
+  details[open]>.tm-section-header .tm-chevron{transform:rotate(90deg)}
+  .tm-section-header .badge{
+    font-size:10px;padding:1px 6px;border-radius:8px;
+    background:rgba(255,255,255,0.08);color:var(--text-muted);
+    margin-left:auto;font-weight:500;
+  }
+  details[open]>.tm-section-header .badge{background:rgba(59,130,246,0.15);color:var(--accent-light)}
+  .tm-section-body{padding:12px 14px;border-top:1px solid var(--border)}
 
   /* ======== FLOATING TIMER ======== */
   .float-timer{position:fixed;bottom:30px;right:30px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;user-select:none}
@@ -1766,15 +1736,14 @@
     }
     .sched-drag-hint{display:none}
 
-    /* ── Quick-add bar ────────────────────────────────────────── */
-    .sched-quick-add{flex-wrap:wrap;gap:6px;padding:8px 0 10px}
-    .sched-quick-add input{width:100%;min-width:0;min-height:44px}
-    .sched-quick-add select{flex:1;min-height:44px}
-    .sched-quick-add button{
+    /* ── Task add bar (mobile) ────────────────────────────────── */
+    .task-add-bar{flex-wrap:wrap;gap:6px;padding:8px 0 10px}
+    .task-add-bar .tab-title{width:100%;min-width:0;min-height:44px}
+    .task-add-bar .tab-dur,.task-add-bar .tab-dest{flex:1;min-height:44px}
+    .task-add-bar .tab-add{
       flex:1;min-height:44px;font-size:13px;white-space:nowrap;
       display:inline-flex;align-items:center;justify-content:center;
     }
-    .qa-hint{display:none}
 
     /* ── Timeline gutter ──────────────────────────────────────── */
     .tl{padding-left:52px}
@@ -1836,16 +1805,9 @@
       display:inline-flex;align-items:center;justify-content:center;
     }
 
-    /* ── Task Menus sub-tabs ──────────────────────────────────── */
-    .task-menus-nav{
-      overflow-x:auto;white-space:nowrap;display:flex;gap:0;
-      scrollbar-width:none;-webkit-overflow-scrolling:touch;
-    }
-    .task-menus-nav::-webkit-scrollbar{display:none}
-    .tm-tab{
-      flex-shrink:0;padding:0 14px;font-size:11px;
-      min-height:44px;display:inline-flex;align-items:center;
-    }
+    /* ── Task Menus accordion (mobile) ────────────────────────── */
+    .tm-section-header{padding:12px 14px;font-size:12px;min-height:44px}
+    .tm-section-body{padding:10px 10px}
 
     /* ── Board cards ──────────────────────────────────────────── */
     .board-card{padding:10px 8px;gap:6px}

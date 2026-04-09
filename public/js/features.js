@@ -4,7 +4,7 @@ let TRIV_FLAGS_KEY = "pa-trivial-flags-" + ((__state && __state.date) ? __state.
 
 function loadTrivialTasks(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    return window.blockStore.getByType("trivial_task").map(b=>({
+    return (window.blockStore.getByType("trivial_task")||[]).concat(window.blockStore.getByType("block").filter(b=>(b.properties||{}).tags&&b.properties.tags.includes("trivial"))).map(b=>({
       id:b.id, text:b.properties.text, done:!!b.properties.done,
       createdAt:b.created_at, doneAt:b.properties.doneAt||null,
       linkedTo:b.properties.linkedTo||null, _blockId:b.id
@@ -36,7 +36,7 @@ function saveTrivialFlags(f){
 function addTrivialTask(text){
   if(!text.trim())return;
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    window.blockStore.createBlock("trivial_task",{text:text.trim(),done:false}).then(()=>buildTrivialTasks());
+    window.blockStore.createBlock("block",{text:text.trim(),done:false,tags:["trivial"]}).then(()=>buildTrivialTasks());
     return;
   }
   const tasks=loadTrivialTasks();
@@ -86,7 +86,7 @@ function getLinkedTrivialTasks(scheduleId){
 function addLinkedTrivialTask(scheduleId, text){
   if(!text.trim())return;
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    window.blockStore.createBlock("trivial_task",{text:text.trim(),done:false,linkedTo:scheduleId}).then(()=>{
+    window.blockStore.createBlock("block",{text:text.trim(),done:false,linkedTo:scheduleId,tags:["trivial"]}).then(()=>{
       if(typeof buildSchedule==='function')buildSchedule();
       if(typeof buildTrivialTasks==='function')buildTrivialTasks();
     });
@@ -159,15 +159,15 @@ let _addModalTaskId = null;
 
 function _persistTaskTags(taskId, tagIds) {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.addedTasks && window.blockStore) {
-    // Check added_task blocks
-    var addedBlocks = window.blockStore.getByType('added_task');
+    // Check added_task blocks (legacy + new "block" type with scheduled_dates)
+    var addedBlocks = (window.blockStore.getByType('added_task')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).scheduled_dates;}));
     var block = addedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId; });
     if (block) {
       window.blockStore.updateBlock(block.id, Object.assign({}, block.properties, {tags: tagIds}));
       return;
     }
-    // Check schedule_item blocks
-    var schedBlocks = window.blockStore.getByType('schedule_item');
+    // Check schedule_item blocks (legacy + new "block" type)
+    var schedBlocks = (window.blockStore.getByType('schedule_item')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).start||(b.properties||{}).end;}));
     var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
     if (sBlock) {
       window.blockStore.updateBlock(sBlock.id, Object.assign({}, sBlock.properties, {tags: tagIds}));
@@ -378,103 +378,59 @@ function buildTrivialTasks(){
   const el=document.getElementById("triage-trivial");if(!el)return;
   const tasks=loadTrivialTasks();
   const flags=loadTrivialFlags();
-
-  // Phase 7b: Get flagged schedule items
   const flaggedScheduleItems=(typeof scheduled!=='undefined'?scheduled:[]).filter(ev=>flags[ev.id]);
-
-  // Split tasks: unlinked active, linked (shown on cards), done
-  const unlinked=tasks.filter(t=>!t.done&&!t.linkedTo);
-  const active=unlinked; // unlinked active tasks show in triage
+  const active=tasks.filter(t=>!t.done&&!t.linkedTo);
   const done=tasks.filter(t=>t.done);
-
   const totalCount=flaggedScheduleItems.length+active.length;
   const trivBadge=document.getElementById("trivial-count");
   if(trivBadge){trivBadge.textContent=totalCount;trivBadge.style.display=totalCount?"":"none"}
-  let html='<div class="triv-section">'+
-    '<div class="triv-header">'+
-      '<div class="triv-title">⚡ Trivial Tasks <span style="opacity:0.6;font-weight:400;font-size:10px">('+totalCount+')</span></div>'+
-      '<button class="triv-add-btn" id="triv-add-btn">+ Add</button>'+
-    '</div>'+
-    '<div class="triv-desc">Quick things to remember — stack with larger tasks when possible.</div>'+
-    '<div id="triv-input-row" class="triv-input-row" style="display:none">'+
-      '<input class="triv-input" id="triv-input" type="text" placeholder="Add a trivial task...">'+
-      '<button class="triv-input-ok" id="triv-input-ok">Add</button>'+
-    '</div>';
 
-  // Phase 7b: Show flagged schedule items first
-  if(flaggedScheduleItems.length){
-    html+='<div class="triv-subheader">From Schedule</div>';
-    flaggedScheduleItems.forEach(ev=>{
-      const c=typeof cfg==='function'?cfg(ev.type):{color:'var(--text-muted)',tag:ev.type};
-      html+='<div class="triv-flagged-item" data-tid="'+ev.id+'">'+
-        '<div class="triv-flagged-bar" style="background:'+c.color+'"></div>'+
-        '<div class="triv-flagged-body">'+
-          '<span class="triv-flagged-title">'+ev.title+'</span>'+
-          '<span class="triv-flagged-meta">'+ms(dur(ev))+' · '+(typeof srcTag==='function'?srcTag(ev.source):'')+'</span>'+
-        '</div>'+
-        '<button class="triv-restore-btn" data-tid="'+ev.id+'" title="Restore to schedule">Restore</button>'+
-        '<button class="triv-flagged-done-btn" data-tid="'+ev.id+'" title="Mark done">✓</button>'+
-      '</div>';
-    });
-  }
+  el.innerHTML="";
+  if(!totalCount&&!done.length){el.innerHTML='<div class="board-empty">No trivial tasks. Use the task bar above to add one.</div>';return}
 
-  if(active.length||flaggedScheduleItems.length){
-    if(flaggedScheduleItems.length&&active.length)html+='<div class="triv-subheader">Quick Tasks</div>';
-    active.forEach(t=>{
-      html+='<div class="triv-item" data-tid="'+t.id+'">'+
-        '<div class="triv-check" data-tid="'+t.id+'"></div>'+
-        '<span class="triv-text">'+t.text+'</span>'+
-        '<button class="triv-del" data-tid="'+t.id+'">✕</button>'+
-      '</div>';
-    });
-  }
-  if(!totalCount){
-    html+='<div style="font-size:11px;color:var(--text-muted);padding:4px 0">No trivial tasks.</div>';
-  }
+  // Flagged schedule items
+  flaggedScheduleItems.forEach(ev=>{
+    const c=typeof cfg==='function'?cfg(ev.type):{color:'var(--text-muted)',tag:ev.type};
+    const card=document.createElement("div");card.className="board-card";
+    card.innerHTML='<div class="bar" style="background:'+c.color+'"></div>'+
+      '<div class="body"><div class="title-row"><span class="ttl">'+ev.title+'</span>'+(typeof srcTag==='function'?srcTag(ev.source):'')+'</div>'+
+      '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span></div></div>'+
+      '<button class="add-btn triv-restore-btn" data-tid="'+ev.id+'">Restore</button>'+
+      '<button class="add-btn triv-flagged-done-btn" data-tid="'+ev.id+'" style="background:var(--green)">Done</button>';
+    card.querySelector(".triv-restore-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(ev.id)});
+    card.querySelector(".triv-flagged-done-btn").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id)});
+    el.appendChild(card);
+  });
 
+  // Active trivial tasks
+  active.forEach(t=>{
+    const card=document.createElement("div");card.className="board-card";
+    card.innerHTML='<div class="bar" style="background:var(--purple,#a78bfa)"></div>'+
+      '<div class="body"><div class="title-row"><span class="ttl">'+t.text+'</span></div>'+
+      '<div class="meta"><span class="tag tag-task">Trivial</span></div></div>'+
+      '<button class="add-btn triv-check-btn" data-tid="'+t.id+'" style="background:var(--green)">Done</button>'+
+      '<button class="btn-del-task triv-del-btn" data-tid="'+t.id+'" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>';
+    card.querySelector(".triv-check-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
+    card.querySelector(".triv-del-btn").addEventListener("click",e=>{e.stopPropagation();deleteTrivialTask(t.id)});
+    el.appendChild(card);
+  });
+
+  // Done section
   if(done.length){
-    html+='<div class="triv-done-section">'+
-      '<button class="triv-done-toggle" id="triv-done-toggle">▸ Done ('+done.length+')</button>'+
-      '<div id="triv-done-list" style="display:none">';
+    const doneWrap=document.createElement("details");doneWrap.style.cssText="margin-top:12px";
+    doneWrap.innerHTML='<summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:6px 0">Done ('+done.length+')</summary>';
+    const doneList=document.createElement("div");
     done.forEach(t=>{
-      html+='<div class="triv-item" data-tid="'+t.id+'">'+
-        '<div class="triv-check done" data-tid="'+t.id+'">✓</div>'+
-        '<span class="triv-text done">'+t.text+'</span>'+
-        '<button class="triv-del" data-tid="'+t.id+'">✕</button>'+
-      '</div>';
+      const card=document.createElement("div");card.className="board-card";card.style.opacity="0.5";
+      card.innerHTML='<div class="bar" style="background:var(--green)"></div>'+
+        '<div class="body"><div class="title-row"><span class="ttl" style="text-decoration:line-through">'+t.text+'</span></div></div>'+
+        '<button class="btn-del-task triv-del-btn" data-tid="'+t.id+'" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>';
+      card.querySelector(".triv-del-btn").addEventListener("click",e=>{e.stopPropagation();deleteTrivialTask(t.id)});
+      doneList.appendChild(card);
     });
-    html+='</div></div>';
+    doneWrap.appendChild(doneList);
+    el.appendChild(doneWrap);
   }
-
-  html+='</div>';
-  el.innerHTML=html;
-
-  el.querySelector("#triv-add-btn").addEventListener("click",()=>{
-    const row=el.querySelector("#triv-input-row");
-    row.style.display="flex";
-    el.querySelector("#triv-input").focus();
-  });
-  el.querySelector("#triv-input-ok").addEventListener("click",()=>{
-    const inp=el.querySelector("#triv-input");
-    addTrivialTask(inp.value);
-    inp.value="";
-  });
-  el.querySelector("#triv-input").addEventListener("keydown",e=>{
-    if(e.key==="Enter"){const inp=e.currentTarget;addTrivialTask(inp.value);inp.value="";}
-    if(e.key==="Escape"){el.querySelector("#triv-input-row").style.display="none";}
-  });
-  el.querySelectorAll(".triv-check").forEach(c=>c.addEventListener("click",()=>toggleTrivialTask(c.dataset.tid)));
-  el.querySelectorAll(".triv-del").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();deleteTrivialTask(b.dataset.tid);}));
-  // Phase 7b: Restore and done buttons for flagged schedule items
-  el.querySelectorAll(".triv-restore-btn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(b.dataset.tid);}));
-  el.querySelectorAll(".triv-flagged-done-btn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();toggleDone(b.dataset.tid);}));
-  const doneToggle=el.querySelector("#triv-done-toggle");
-  if(doneToggle)doneToggle.addEventListener("click",()=>{
-    const dl=el.querySelector("#triv-done-list");
-    const open=dl.style.display==="block";
-    dl.style.display=open?"none":"block";
-    doneToggle.textContent=(open?"▸":"▾")+" Done ("+done.length+")";
-  });
 }
 
 // ======== STICKY NOTES ========
@@ -483,7 +439,7 @@ let snEditingId = null;
 
 function loadStickyNotes(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
-    return window.blockStore.getByType("sticky_note").map(b=>({
+    return [...window.blockStore.getByType("sticky_note"),...window.blockStore.getByType("block").filter(b=>((b.properties||{}).tags||[]).includes("pinned")&&(b.properties||{}).html)].map(b=>({
       id:b.id, html:b.properties.html, text:b.properties.text,
       createdAt:b.created_at, updatedAt:b.updated_at, _blockId:b.id
     })).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)); // newest first
@@ -591,7 +547,7 @@ function saveStickyNote(){
       }
     } else {
       // Create new sticky note block
-      window.blockStore.createBlock("sticky_note",{html,text}).then(()=>{
+      window.blockStore.createBlock("block",{html,text,tags:["pinned"]}).then(()=>{
         closeStickyEditor();
         renderStickyNotesList();
         updateSnBadge();
@@ -790,14 +746,13 @@ function buildTaskListHtml(tasks) {
 // Persist a title change for a scheduled task across blockStore / localStorage.
 function _persistTaskTitle(taskId, newTitle) {
   if (window.USE_BLOCKSTORE && window.blockStore) {
-    var addedBlocks = window.blockStore.getByType('added_task');
-    var block = addedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId; });
+    var allBlocks = [].concat(window.blockStore.getByType('added_task'),window.blockStore.getByType('schedule_item'),window.blockStore.getByType('block'));
+    var block = allBlocks.find(function(b) { return (b.properties||{}).local_id === taskId; });
     if (block) {
       window.blockStore.updateBlock(block.id, Object.assign({}, block.properties, {title: newTitle}));
       return;
     }
-    var schedBlocks = window.blockStore.getByType('schedule_item');
-    var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
+    var sBlock = allBlocks.find(function(b) { return b.id === taskId; });
     if (sBlock) {
       window.blockStore.updateBlock(sBlock.id, Object.assign({}, sBlock.properties, {title: newTitle}));
       return;
@@ -855,10 +810,7 @@ document.getElementById("btn-copy").addEventListener("click",function(){
 });
 document.getElementById("btn-undo").addEventListener("click",undoLast);
 document.getElementById("btn-reset").addEventListener("click",resetAll);
-document.getElementById("add-task-btn").addEventListener("click",addNewTask);
-document.getElementById("ai-tab-add-btn").addEventListener("click",addAITabItem);
-document.getElementById("ai-tab-text").addEventListener("keydown",e=>{if(e.key==="Enter")addAITabItem();});
-document.getElementById("new-title").addEventListener("keydown",e=>{if(e.key==="Enter")addNewTask()});
+// Old add-task-btn, ai-tab-add-btn, new-title wiring removed — handled by universal task-add bar
 
 
 // ======== PREP FILES (loaded from API) ========

@@ -89,6 +89,82 @@ function restoreDurChanges(){
   }catch(e){}
 }
 // restoreDurChanges() is called by reloadPersistedEdits() during boot — no inline call needed
+// ======== SCHEDULE PUSHED TASK ON TOMORROW ========
+// Normalize time: handles both "HH:MM" and ISO "2026-04-10T18:00:00-04:00" formats
+function _toHHMM(s){
+  if(!s)return"00:00";
+  if(s.includes("T")){const d=new Date(s);return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}
+  return s;
+}
+async function schedulePushedOnTomorrow(ev){
+  if(!window.blockStore||!window.__PA_TOMORROW__||!__tomorrowDate)return;
+  const tomorrow=window.__PA_TOMORROW__;
+  const tDate=__tomorrowDate;
+
+  // Get tomorrow's meetings as blocker intervals
+  const tTimeline=(tomorrow.schedule&&tomorrow.schedule.timeline)||[];
+  const tMeetings=tTimeline
+    .filter(e=>e.type==="meeting"||e.type==="oneone")
+    .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
+    .sort((a,b)=>a.s-b.s);
+
+  // Work hours from schedule blocks
+  const tBlocks=(tomorrow.schedule&&tomorrow.schedule.blocks)||[];
+  const dayStart=tBlocks.length?pt(tBlocks[0].start):7*60;
+  const dayEnd=tBlocks.length?pt(tBlocks[tBlocks.length-1].end):17*60+30;
+
+  // Fetch existing tasks on tomorrow to avoid double-booking
+  let existingBlockers=[];
+  try{
+    const tBlks=await fetch("/api/blocks?date="+tDate).then(r=>r.json());
+    // Duplicate check — skip if already pushed this task
+    if(tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id))return;
+    existingBlockers=tBlks
+      .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
+      .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
+  }catch(e){}
+
+  const allBlockers=[...tMeetings,...existingBlockers].sort((a,b)=>a.s-b.s);
+  const d=dur(ev)||30;
+  const slot=_freeStart(dayStart,d,allBlockers);
+
+  // Don't schedule past end of day + 1hr buffer
+  if(slot+d>dayEnd+60){
+    if(typeof showToast==="function")showToast("No free slot on tomorrow's schedule","error");
+    return;
+  }
+
+  const startTime=fmt(slot);
+  const endTime=fmt(slot+d);
+
+  await window.blockStore.createBlock("block",{
+    local_id:ev.id,
+    title:ev.title,
+    duration:d,
+    start:startTime,
+    end:endTime,
+    priority:ev.priority||"High",
+    meta:ev.meta||"",
+    detail:ev.detail||"",
+    notionUrl:ev.notionUrl||"",
+    source:ev.source||"pushed",
+    tags:ev.tags||[],
+    added_at:new Date().toISOString(),
+    pushed_from:(__state&&__state.date)||"unknown"
+  },{date:tDate});
+
+  if(typeof showToast==="function")showToast("Scheduled tomorrow at "+f12(startTime),"success");
+}
+
+async function unschedulePushedFromTomorrow(id){
+  if(!window.blockStore||!__tomorrowDate)return;
+  try{
+    const tBlks=await fetch("/api/blocks?date="+__tomorrowDate).then(r=>r.json());
+    const match=tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===id);
+    if(match)await window.blockStore.deleteBlock(match.id);
+  }catch(e){}
+}
+
 function pushTask(id){
   pushedSet.add(id);pushedAt[id]=new Date().toISOString();
   // Also save to deferred array for scheduler pickup
@@ -98,6 +174,8 @@ function pushTask(id){
     deferred.push({...ev,deferred_from:(__state&&__state.date)||"unknown",deferred_at:new Date().toISOString()});
     saveDeferred(deferred);
   }
+  // Actually schedule the task on tomorrow
+  if(ev)schedulePushedOnTomorrow(ev);
   savePushedState();log("pushed",id,"Pushed to tomorrow: "+(ev?ev.title:id));render();
 }
 function unpushTask(id){
@@ -105,6 +183,8 @@ function unpushTask(id){
   // Remove from deferred array too
   const deferred=loadDeferred().filter(d=>d.id!==id);
   saveDeferred(deferred);
+  // Remove from tomorrow's schedule
+  unschedulePushedFromTomorrow(id);
   savePushedState();render();
 }
 

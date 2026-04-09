@@ -90,10 +90,18 @@
   }
 
   // ── Cache Helpers ──
-  const GLOBAL_TYPES = new Set(["sticky_note", "trivial_task", "life_capture", "pending_task", "schedule_block", "tag"]);
+  // Unified block architecture: all user data is type='block'.
+  // Cache partitioning: blocks WITH a date go in dayCache, blocks WITHOUT go in globalCache.
+  // Legacy type names also route to globalCache for backward compat during migration.
+  const LEGACY_GLOBAL_TYPES = new Set(["sticky_note", "trivial_task", "life_capture", "pending_task", "schedule_block", "tag"]);
 
   function cacheSet(block) {
-    if (GLOBAL_TYPES.has(block.type)) {
+    // Unified: partition by date presence. No-date blocks are global.
+    if (block.type === "block" && !block.date) {
+      _globalCache.set(block.id, block);
+    } else if (block.type === "block" && block.date) {
+      _dayCache.set(block.id, block);
+    } else if (LEGACY_GLOBAL_TYPES.has(block.type)) {
       _globalCache.set(block.id, block);
     } else {
       _dayCache.set(block.id, block);
@@ -317,12 +325,17 @@
       }
     },
 
-    // Load global blocks (sticky notes, trivial tasks, etc.)
+    // Load global blocks (unified blocks without dates + legacy global types)
     async loadGlobals() {
-      const types = [...GLOBAL_TYPES].join(",");
+      const types = ["block", ...LEGACY_GLOBAL_TYPES].join(",");
       try {
         const blocks = await apiGet("/api/blocks?type=" + types);
-        for (const b of blocks) _globalCache.set(b.id, b);
+        for (const b of blocks) {
+          // Unified blocks without date go to global cache; with date go to day cache
+          if (b.type === "block" && !b.date) _globalCache.set(b.id, b);
+          else if (b.type === "block" && b.date) _dayCache.set(b.id, b);
+          else _globalCache.set(b.id, b); // legacy global types
+        }
         return blocks;
       } catch (e) {
         console.error("[BlockStore] loadGlobals failed:", e);
@@ -344,7 +357,13 @@
     // ── Query Cache ──
 
     getByType(type) {
-      const source = GLOBAL_TYPES.has(type) ? _globalCache : _dayCache;
+      // Unified: 'block' type searches BOTH caches (global + day)
+      if (type === "block") {
+        return [..._globalCache.values(), ..._dayCache.values()]
+          .filter(b => b.type === "block" && !b.deleted_at)
+          .sort((a, b) => a.sort_order - b.sort_order);
+      }
+      const source = LEGACY_GLOBAL_TYPES.has(type) ? _globalCache : _dayCache;
       return [...source.values()].filter(b => b.type === type && !b.deleted_at)
         .sort((a, b) => a.sort_order - b.sort_order);
     },
