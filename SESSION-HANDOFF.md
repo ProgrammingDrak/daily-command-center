@@ -1,110 +1,74 @@
-# Session Handoff — Workspace Architecture Migration
+# Session Handoff — DCC Phase 2 Complete
 
-**Date:** 2026-04-06
-**Branch:** `claude/eager-mendel`
-**PR URL:** https://github.com/ProgrammingDrak/daily-command-center/pull/new/claude/eager-mendel
-**Commit:** `d29a2ea` — feat: workspace-based multi-user architecture (Phases 1-4)
-**Plan file:** `C:\Users\offic\.claude\plans\ancient-wibbling-dewdrop.md`
-
----
-
-## What Was Built
-
-The app was migrated from a single-user architecture (hardcoded `drake` / `user_id` isolation) to a workspace-based multi-user architecture. The block data model is unchanged — only an isolation layer was added on top of it.
-
-**Core change:** `user_id` → `workspace_id` as the primary isolation key. `user_id` stays on blocks as audit trail. Sharing later = insert a row into `workspace_members`. No future schema migration needed.
+**Date:** 2026-04-08
+**Branch:** `main`
+**Commits:** `4713d8a` (Phase 2 fixes), `e98d59d` (deploy workflow fix)
+**Deploy:** Live on Railway (succeeded via GitHub Actions)
+**Plan file:** `C:\Users\offic\.claude\plans\rosy-nibbling-dewdrop.md`
 
 ---
 
-## All Files Changed
+## What Was Done (Phase 2: Block Editor & Timeline Sync)
 
-| File | What Changed |
-|------|-------------|
-| `db.js` | New tables, additive ALTERs, pa_state PK rebuild, ensureWorkspacesForAllUsers, all query functions use workspaceId |
-| `auth.js` | ensureDefaultUser gated on NODE_ENV, registerUser() added |
-| `server.js` | Workspace middleware, cookie fix, ownership guards, PA bearer token, registration route, SSE Map, orphan sweep |
-| `gcal-auth.js` | Dynamic REDIRECT_URI via APP_URL, DB-backed token functions |
-| `gcal-sync.js` | Per-user auth client, blocks stamped with user_id + workspace_id |
-| `migrate.js` | runMigration accepts userId + workspaceId, all createBlock + savePaState calls stamped |
+- **#5 — Block editor changes not reflecting in timeline:** Added `render()` call after `closeBlockEditor()` in `saveBlockEditor()` (`schedule-tab.js:1043`). Root cause was that save → state refresh → close modal never triggered a timeline rebuild.
+- **#6 — Delete button does nothing:** Resolved by #5. The delete logic (`beDelete()` → `saveBlockEditor()` → `blockStore.deleteBlock()`) was correct — the timeline just never re-rendered.
+- **#2 — Duration presets in block editor:** Added `beOpenDurPresets()` and `beSetDurPreset()` functions with a `▾` trigger button on each duration input. Popover shows 6 presets (30m, 1h, 1.5h, 2h, 3h, 4h). Reuses existing `.dur-presets`/`.dur-preset` CSS classes.
+- **Deploy fix:** Updated `.github/workflows/deploy.yml` to include `--service daily-command-center` flag (Railway project has multiple services). Also rotated the `RAILWAY_TOKEN` GitHub secret.
 
----
-
-## New DB Schema (all additive)
-
-```sql
-workspaces          (id TEXT PK, name, slug UNIQUE, owner_id, plan, created_at, updated_at)
-workspace_members   (id PK, workspace_id, user_id, role, invited_by, accepted_at, created_at)
-page_shares         (id PK, block_id, token UNIQUE, access_level, created_by, expires_at, created_at)
-gcal_tokens         (user_id INTEGER PK, credentials, tokens, calendars, updated_at)
-blocks.workspace_id TEXT  (new column)
-pa_state.workspace_id TEXT  (new column; PK rebuilt to (date, workspace_id))
-gcal_events.user_id, gcal_sync_state.user_id, gcal_calendars.user_id  (new columns)
-```
+### Also done (non-code)
+- Updated `Claude School/skills/session-handoff/SKILL.md`:
+  - Added QA requirement note in "Detailed Next Steps" section
+  - Added auto-trigger rule: handoff is now mandatory after any push/deploy of a completed phase
 
 ---
 
-## Key Architecture Decisions (locked)
+## Files Modified This Session
 
-1. **SQLite stays** — no Postgres migration needed. Workspace isolation is column-based filtering, not separate DBs.
-2. **Default user** — `ensureDefaultUser()` only runs when `NODE_ENV !== 'production'`. Cloud deploy starts clean with no pre-seeded accounts.
-3. **Registration** — API-only. `POST /api/auth/register`. No UI page.
-4. **Sharing** — `workspace_members` and `page_shares` tables exist and are empty. Adding sharing later = just a UI + route, no migration.
-5. **Railway deployment** — Separate plan. This branch ends at Phase 4.
-
----
-
-## QA Checklist (run before merging PR)
-
-### Basic startup
-- [ ] `node server.js` — no errors; `[db] pa_state schema upgraded` appears once (first run only)
-- [ ] `[auth] Creating default user 'drake'` appears on first run
-- [ ] Startup orphan sweep log: `Migrated N blocks + N pa_state rows → user 1 / ws-1`
-
-### DB verification (run via sqlite3 or a DB viewer on `data/blocks.db`)
-```sql
-SELECT * FROM workspaces;                                              -- 1 row: id='ws-1', slug='drake'
-SELECT * FROM workspace_members;                                       -- 1 row: role='owner'
-SELECT COUNT(*) FROM blocks WHERE workspace_id IS NULL;                -- 0
-SELECT COUNT(*) FROM pa_state WHERE workspace_id IS NULL;              -- 0
-SELECT user_id, length(credentials) FROM gcal_tokens;                  -- 1 row if gcal was connected
-PRAGMA table_info(pa_state);                                           -- pk=1 on BOTH date AND workspace_id
-```
-
-### Auth flows
-- [ ] Login as `drake` / `clever123` → dashboard loads correctly
-- [ ] `req.workspaceId` = `ws-1` on every authenticated request (add `console.log` temporarily)
-- [ ] `POST /api/auth/register` with `{ username: "testuser", password: "testpass1" }` → 201, creates workspace `ws-2`
-- [ ] Login/logout clears `req.session.workspaceId`
-
-### Block security
-- [ ] `GET /api/blocks/:id` with a block ID belonging to a different workspace → 404
-- [ ] `PATCH /api/blocks/:id` same → 404
-- [ ] `DELETE /api/blocks/:id` same → 404
-
-### Migration
-- [ ] `POST /api/migrate?dry=true` → manifest with counts, no DB writes, no errors
-- [ ] `POST /api/migrate` → completes cleanly, all blocks stamped with `workspace_id = 'ws-1'`
-- [ ] Run again → idempotent, same counts, no duplicates
-
-### GCal (if connected)
-- [ ] Rename `data/gcal-tokens.json` → `data/gcal-tokens.json.bak`; restart server → GCal still syncs (reads from `gcal_tokens` table)
-- [ ] OAuth callback URL controlled by `APP_URL` env var
-
-### SSE workspace isolation
-- [ ] Open two browser windows in the same login — block change in one appears in both (same workspace)
-- [ ] Open a second incognito session (different user) — block change in first does NOT fire in second
+| File | Change |
+|------|--------|
+| `public/js/schedule-tab.js` | +1 line (`render()` at 1043), +1 line (preset button in template at 769), +46 lines (two new functions at 844-889) |
+| `public/css/dashboard.css` | +2 lines (`.be-dur-popover` shared style, `.be-dur-preset-btn` trigger button) |
+| `.github/workflows/deploy.yml` | Added `--service daily-command-center` to `railway up` command |
+| `Claude School/skills/session-handoff/SKILL.md` | Added auto-trigger rule + QA checklist reminder |
 
 ---
 
-## What's Next
+## Current State
 
-**Immediate next step: Review + merge this PR.**
+- **Git:** Clean working tree on `main`, commit `e98d59d`
+- **Deploy:** Live on Railway, GitHub Actions deploy workflow now working
+- **Tests:** No automated test suite exists for this project
+- **Server:** Runs locally on port 8090 (`node server.js`), requires PostgreSQL via `DATABASE_URL`
 
-After merge, the logical next project is **Railway deployment** — a separate plan covering:
-- `Dockerfile` or `nixpacks` config
-- Volume mount for `data/blocks.db` (persistent SQLite)
-- Environment variables: `NODE_ENV=production`, `APP_URL=https://your-app.railway.app`, `SECRET_SESSION_KEY`, `SECRET_PA_TOKEN`
-- GCal OAuth: update redirect URI in Google Cloud Console to production URL
-- First-run user registration (no default user in production)
+---
 
-Open a new plan with `/autoplan` when ready to tackle deployment.
+## What's Next (Phase 3: Task System — Items #4, #7, #1)
+
+Per the plan at `rosy-nibbling-dewdrop.md`, Phase 3 covers:
+
+| # | Item | What |
+|---|------|------|
+| 4 | Today/Later → Urgent/Schedule with feedback | Rename triage buttons, add toast confirmations, duplicate check |
+| 7 | Completion modal add-task matches "+" button | Extract shared `buildTaskListHtml()` utility for consistent task rendering |
+| 1 | Title editable by clicking | Inline edit on task card titles with `stopPropagation()` isolation |
+
+**Key files to modify:** `triage.js`, `timer.js`, `features.js`, `schedule-tab.js`, `dashboard.css`
+
+**QA requirement (NON-NEGOTIABLE):** Every completed phase MUST end with a QA checklist (pre-deploy and post-deploy) before moving to the next phase.
+
+---
+
+## Architecture Context
+
+- **Rendering flow:** `render()` → `requestAnimationFrame(_doRender)` → `buildSchedule()` + all other builders. Deferred while modals in `_anyModalOpen()` are open (but block editor is NOT in that check).
+- **Block editor save flow:** `saveBlockEditor()` → `blockStore.create/update/deleteBlock()` → `fetch('/api/state/day')` → `updateStats()` → `closeBlockEditor()` → `render()` → toast.
+- **Duration helpers:** `ms(m)` in `state.js` formats minutes. `beDuration(start, end)` and `beParseDur(val)` in `schedule-tab.js` handle block editor durations.
+- **Toast pattern:** `showToast(message, type)` — use for all user feedback.
+
+---
+
+## Drake's Preferences (this session)
+
+- Every phase must end with a pre-deploy and post-deploy QA checklist
+- Session handoff is mandatory after push/deploy — don't wait to be asked
+- Deploy via GitHub Actions → Railway is the standard flow
