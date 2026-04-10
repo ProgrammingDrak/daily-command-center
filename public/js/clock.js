@@ -18,6 +18,12 @@ function updateClock(){
     _lastTzMinute=m;
     try{const tz=Intl.DateTimeFormat().resolvedOptions().timeZone;const abbr=d.toLocaleTimeString("en-US",{timeZoneName:"short"}).split(" ").pop();_cachedTzStr=abbr+" ("+tz.split("/").pop().replace(/_/g," ")+")"}catch(e){_cachedTzStr="Local Time"}
     document.getElementById("tz-label").textContent=_cachedTzStr;
+    // PIN 1: re-render once per minute so the pinned-active aging color
+    // (blue \u2192 yellow \u2192 red) stays fresh without user interaction.
+    // No-op when nothing is pinned.
+    if(typeof getPinnedActiveId==="function"&&getPinnedActiveId()&&typeof render==="function"){
+      render();
+    }
   }
   const timeStr=h12+":"+String(m).padStart(2,"0")+ap.toLowerCase();
   // Only update the live time indicator on today's page — not on historical pages

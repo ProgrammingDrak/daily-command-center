@@ -64,6 +64,38 @@ function savePushedState(){
 }
 function isPushed(ev){return pushedSet.has(ev.id)}
 
+// ======== PINNED ACTIVE TASK (PIN 1) ========
+// Separate from _pinnedStart (schedule.js) — this is a *single* task id
+// the user has "pinned as active" via clicking its timeline dot. It
+// overrides auto-derived next-up in buildSchedule, and drives the
+// .tl-node aging colors (blue within window → yellow past end → red >60m past).
+let PINNED_ACTIVE_KEY = "pa-pinned-active-" + ((__state && __state.date) ? __state.date : "unknown");
+let _pinnedActiveId = null;
+(function loadPinnedActive(){
+  try { _pinnedActiveId = JSON.parse(localStorage.getItem(PINNED_ACTIVE_KEY) || "null"); } catch(e) { _pinnedActiveId = null; }
+})();
+function getPinnedActiveId(){ return _pinnedActiveId; }
+function setPinnedActiveId(id){
+  _pinnedActiveId = id || null;
+  try { localStorage.setItem(PINNED_ACTIVE_KEY, JSON.stringify(_pinnedActiveId)); } catch(e) {}
+}
+function clearPinnedActiveId(){ setPinnedActiveId(null); }
+function togglePinnedActiveId(id){
+  if (_pinnedActiveId === id) clearPinnedActiveId();
+  else setPinnedActiveId(id);
+  log("pin-active", id, _pinnedActiveId ? "Pinned active" : "Unpinned active");
+  if (typeof render === "function") render();
+}
+// Aging state for the pinned task: "blue" | "yellow" | "red" | null
+function getPinnedAgingState(ev){
+  if (!ev || _pinnedActiveId !== ev.id) return null;
+  const endMin = pt(ev.end);
+  const nowMin = now();
+  if (nowMin < endMin) return "blue";
+  if (nowMin - endMin <= 60) return "yellow";
+  return "red";
+}
+
 // ======== DURATION CHANGES PERSISTENCE ========
 let DUR_KEY = "pa-dur-" + ((__state && __state.date) ? __state.date : "unknown");
 function saveDurChanges(){

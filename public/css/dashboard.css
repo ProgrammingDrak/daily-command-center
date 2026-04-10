@@ -234,6 +234,12 @@
   .tl-node.done{background:var(--green);border-color:var(--green)}
   .tl-node.done::after{content:'\2713';position:absolute;top:-5px;left:-4px;font-size:8px;font-weight:700;color:white;width:12px;height:12px;display:flex;align-items:center;justify-content:center}
   .tl-node.active{background:var(--accent);border-color:var(--accent);width:auto;height:auto;min-width:12px;padding:1px 5px;font-size:9px;font-weight:700;color:white;font-variant-numeric:tabular-nums;border-width:2px;left:-20px;display:flex;align-items:center;justify-content:center}
+  /* PIN 1: pinned-active ring + blue \u2192 yellow \u2192 red aging */
+  .tl-node.active.pinned{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent)}
+  .tl-node.active.aging-yellow{background:var(--amber);border-color:var(--amber);color:var(--bg)}
+  .tl-node.active.aging-red{background:var(--red);border-color:var(--red);color:white}
+  .tl-node.active.pinned.aging-yellow{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--amber)}
+  .tl-node.active.pinned.aging-red{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--red)}
   .card-active{border-color:rgba(59,130,246,0.4)!important;background:rgba(59,130,246,0.04)!important;box-shadow:inset 3px 0 0 var(--accent)}
   .tl-now-time{white-space:nowrap;line-height:1}
   .tl-node.upcoming{background:var(--bg);border-color:var(--border)}

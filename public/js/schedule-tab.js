@@ -145,12 +145,21 @@ function buildSchedule(){
   // Determine if any task is currently active; if not, find the next upcoming one
   const isToday = __state && __state.date === new Date().toISOString().split("T")[0];
   const _anyActive = activeItems.some(ev => isActive(ev));
-  const _nextUpId = !_anyActive ? (activeItems.find(ev => pt(ev.start) >= now()) || {}).id : null;
+  // PIN 1: a user-pinned active task overrides the auto-derived next-up
+  const _pinnedActiveId = (typeof getPinnedActiveId === "function") ? getPinnedActiveId() : null;
+  const _pinnedActiveExists = !!(_pinnedActiveId && activeItems.some(ev => ev.id === _pinnedActiveId));
+  const _nextUpId = (!_anyActive && !_pinnedActiveExists)
+    ? (activeItems.find(ev => pt(ev.start) >= now()) || {}).id
+    : null;
 
   // Render active/upcoming items as full cards
   activeItems.forEach(ev=>{
     injectBlockHeaders(pt(ev.start));
-    const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday),active=trueActive||isNextUp,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
+    const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday);
+    // PIN 1: pinned-active state overlays the auto-derived states
+    const isPinnedActive = isToday && _pinnedActiveId === ev.id;
+    const pinnedAging = isPinnedActive && typeof getPinnedAgingState === "function" ? getPinnedAgingState(ev) : null;
+    const active=trueActive||isNextUp||isPinnedActive,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
     const d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
     const el=document.createElement("div");el.className="tl-item";el.dataset.id=ev.id;
@@ -231,7 +240,7 @@ function buildSchedule(){
 
     el.innerHTML=
       timeHtml+
-      '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(nearEnd?' near-end':'')+(isNextUp?' next-up':'')+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
+      '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(nearEnd?' near-end':'')+(isNextUp?' next-up':'')+(isPinnedActive?' pinned':'')+(pinnedAging==='yellow'?' aging-yellow':'')+(pinnedAging==='red'?' aging-red':'')+'" data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
         '<div class="card'+(active?' card-active':'')+'">'+
@@ -331,6 +340,13 @@ function buildSchedule(){
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();pushTask(pb.dataset.pushId)});
+    // PIN 1: click the timeline dot to pin this task as "active"
+    const tnode=el.querySelector(".tl-node");
+    if(tnode&&!isMeeting(ev)){
+      tnode.style.cursor="pointer";
+      tnode.title="Click to pin as your active task";
+      tnode.addEventListener("click",e=>{e.stopPropagation();if(typeof togglePinnedActiveId==="function")togglePinnedActiveId(ev.id);});
+    }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Phase 7: removed old triv-flag-chk (replaced by btn-triv-link on card face)
     // Subtask and trivial task management moved to Add Items modal (openAddModal)

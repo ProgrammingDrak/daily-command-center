@@ -69,6 +69,9 @@ function initKeys() {
   ENGRAM_KEY = "pa-engrams-" + d;
   MOOD_KEY = "pa-mood-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
+  // PIN 1: rebind the pinned-active-task key and reload state on date change
+  PINNED_ACTIVE_KEY = "pa-pinned-active-" + d;
+  try { _pinnedActiveId = JSON.parse(localStorage.getItem(PINNED_ACTIVE_KEY) || "null"); } catch(e) { _pinnedActiveId = null; }
   // Recalculate EOD from loaded state (prefer last work block end)
   if(__state && __state.schedule && __state.schedule.blocks){
     const wb=__state.schedule.blocks.filter(b=>(b.blockType||b.type)==='work');
