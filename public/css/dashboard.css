@@ -207,7 +207,7 @@
 
   .tab-content{display:none} .tab-content.active{display:block}
 
-  .tl{position:relative;padding-left:28px}
+  .tl{position:relative;padding-left:16px}
   .tl-item{position:relative;margin-bottom:8px;transition:transform 0.12s,opacity 0.2s}
   .tl-item:hover{transform:translateX(3px)}
   .tl-item.dragging{opacity:0.35}
@@ -227,13 +227,13 @@
   .phi-task{background:rgba(167,139,250,0.12);color:var(--purple)}
   .phi-doc{background:rgba(59,130,246,0.12);color:var(--accent-light)}
   .phi-dash{background:rgba(34,211,238,0.12);color:var(--cyan)}
-  .tl-node{position:absolute;left:-20px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;border:3px solid var(--accent);background:var(--bg);z-index:2;transition:top 0.5s ease}
+  .tl-node{position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;border:3px solid var(--accent);background:var(--bg);z-index:2;transition:top 0.5s ease}
   .tl-node.active.near-end{top:auto;bottom:0;transform:none}
   .tl-node.active.next-up{top:0;transform:none}
   .tl-node.has-prep{border-color:var(--amber)}
   .tl-node.done{background:var(--green);border-color:var(--green)}
   .tl-node.done::after{content:'\2713';position:absolute;top:-5px;left:-4px;font-size:8px;font-weight:700;color:white;width:12px;height:12px;display:flex;align-items:center;justify-content:center}
-  .tl-node.active{background:var(--accent);border-color:var(--accent);width:auto;height:auto;min-width:12px;padding:1px 5px;font-size:9px;font-weight:700;color:white;font-variant-numeric:tabular-nums;border-width:2px;left:-32px;display:flex;align-items:center;justify-content:center}
+  .tl-node.active{background:var(--accent);border-color:var(--accent);width:auto;height:auto;min-width:12px;padding:1px 5px;font-size:9px;font-weight:700;color:white;font-variant-numeric:tabular-nums;border-width:2px;left:-20px;display:flex;align-items:center;justify-content:center}
   .card-active{border-color:rgba(59,130,246,0.4)!important;background:rgba(59,130,246,0.04)!important;box-shadow:inset 3px 0 0 var(--accent)}
   .tl-now-time{white-space:nowrap;line-height:1}
   .tl-node.upcoming{background:var(--bg);border-color:var(--border)}
