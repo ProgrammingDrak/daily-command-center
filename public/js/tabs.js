@@ -17,16 +17,18 @@ document.querySelectorAll(".tab").forEach(tab=>{
 });
 
 // PIN 9: initial mount of the mini-month sidebar into the Task Menu split
-// view at script load. The tasks tab is not active by default, but the
-// mount point exists in the DOM so this is safe. If the user opens the
-// Task Menu tab later, the switcher above re-renders the sidebar with
-// the latest _gcalSidebarState.
-(function(){
+// view. Must run AFTER calendar-sidebar.js (which loads later in index.html
+// and exposes window.renderCalendarSidebar). DOMContentLoaded guarantees
+// all <script> tags have been parsed. The tasks tab is not active by
+// default, but the mount point exists in the DOM at this point. The tab
+// switcher above re-renders the sidebar on every subsequent tasks click
+// so _gcalSidebarState stays fresh.
+document.addEventListener("DOMContentLoaded",function(){
   if(typeof renderCalendarSidebar==="function"){
     var _tmMount=document.getElementById("tm-cal-mount");
     if(_tmMount)_tmMount.innerHTML=renderCalendarSidebar();
   }
-})();
+});
 
 // ======== TASK MENU ACCORDION ========
 const TM_ACCORDION_KEY="pa-tm-accordion-state";
