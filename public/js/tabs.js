@@ -5,10 +5,30 @@ document.querySelectorAll(".tab").forEach(tab=>{
     document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
     tab.classList.add("active");document.getElementById("tab-"+tab.dataset.tab).classList.add("active");
     if(tab.dataset.tab==="calendar"&&typeof buildCalendar==="function"){buildCalendar();}
+    // PIN 9: mount the mini-month sidebar into the Task Menu split view
+    // whenever the user activates the tasks tab. Cheap (just string
+    // concatenation); picks up the current _gcalSidebarState from
+    // calendar-sidebar.js's async IIFE each time.
+    if(tab.dataset.tab==="tasks"&&typeof renderCalendarSidebar==="function"){
+      var _tmMount=document.getElementById("tm-cal-mount");
+      if(_tmMount)_tmMount.innerHTML=renderCalendarSidebar();
+    }
   });
 });
 
-// ======== TASK MENUS ACCORDION ========
+// PIN 9: initial mount of the mini-month sidebar into the Task Menu split
+// view at script load. The tasks tab is not active by default, but the
+// mount point exists in the DOM so this is safe. If the user opens the
+// Task Menu tab later, the switcher above re-renders the sidebar with
+// the latest _gcalSidebarState.
+(function(){
+  if(typeof renderCalendarSidebar==="function"){
+    var _tmMount=document.getElementById("tm-cal-mount");
+    if(_tmMount)_tmMount.innerHTML=renderCalendarSidebar();
+  }
+})();
+
+// ======== TASK MENU ACCORDION ========
 const TM_ACCORDION_KEY="pa-tm-accordion-state";
 function _loadAccordionState(){try{return JSON.parse(localStorage.getItem(TM_ACCORDION_KEY)||"{}")}catch(e){return{}}}
 function _saveAccordionState(){

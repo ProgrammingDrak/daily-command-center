@@ -1148,7 +1148,7 @@
   .block-hdr-time{flex:1;opacity:0.55}
   .block-hdr-edit{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 5px;border-radius:4px;opacity:0;transition:opacity 0.15s;line-height:1}
   .tl-block-header:hover .block-hdr-edit{opacity:1}
-  @media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)} body{padding:14px 14px 110px} .tl{padding-left:85px}}
+  @media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)} body{padding:14px 14px 110px} .tl{padding-left:85px} .tm-tasks-split{grid-template-columns:1fr} .tm-tasks-right{position:static}}
 
   /* Quick-add bar */
   /* ======== UNIVERSAL TASK ADD BAR ======== */
@@ -1580,6 +1580,13 @@
   }
   .acc-btn:hover{color:var(--accent);border-color:var(--accent)}
 
+  /* PIN 9: Task Menu split view — accordion on left, mini-month calendar on right */
+  .tm-tasks-split{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;align-items:start}
+  .tm-tasks-left{min-width:0}
+  .tm-tasks-right{min-width:0;position:sticky;top:12px}
+  #tm-cal-mount{min-height:320px}
+  #tm-cal-mount .cal-sidebar{width:100%;min-width:0;border-right:none}
+
   /* ======== FLOATING TIMER ======== */
   .float-timer{position:fixed;bottom:30px;right:30px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;user-select:none}
   .ft-fab{width:48px;height:48px;border-radius:50%;background:var(--accent);border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(59,130,246,0.4);transition:transform 0.15s,box-shadow 0.15s;position:relative}
@@ -1826,7 +1833,7 @@
       display:inline-flex;align-items:center;justify-content:center;
     }
 
-    /* ── Task Menus accordion (mobile) ────────────────────────── */
+    /* ── Task Menu accordion (mobile) ────────────────────────── */
     .tm-section-header{padding:12px 14px;font-size:12px;min-height:44px}
     .tm-section-body{padding:10px 10px}
 
