@@ -341,6 +341,106 @@ app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.get
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 
+// PIN 3: apply a top-level block diff forward across all future days that
+// already have blocks. Matches each target block by (name, blockType); skips
+// any day where the current values no longer equal the diff's originalValues
+// so per-day customizations on future days are preserved. Nested children are
+// NOT propagated in v1 — the client's diff already filters to top-level only.
+app.post("/api/blocks/apply-forward", async (req, res) => {
+  try {
+    const { fromDate, diff } = req.body || {};
+    if (!fromDate || !isValidDate(fromDate)) return res.status(400).json({ error: "Invalid fromDate" });
+    if (!diff || typeof diff !== "object") return res.status(400).json({ error: "Missing diff" });
+    const updates = Array.isArray(diff.updates) ? diff.updates : [];
+    const creates = Array.isArray(diff.creates) ? diff.creates : [];
+    const deletes = Array.isArray(diff.deletes) ? diff.deletes : [];
+    const userId = req.session.userId || null;
+    const workspaceId = req.workspaceId || null;
+
+    // Distinct future dates that have non-deleted blocks in this workspace
+    const futureDatesResult = await pool.query(
+      "SELECT DISTINCT date FROM blocks WHERE deleted_at IS NULL AND date > $1 AND ($2::text IS NULL OR workspace_id = $2) ORDER BY date ASC",
+      [fromDate, workspaceId]
+    );
+    const futureDates = futureDatesResult.rows.map(r => r.date instanceof Date ? r.date.toISOString().split("T")[0] : String(r.date).split("T")[0]);
+
+    const PROP_KEYS = ["name","blockType","start","end","protected","warnThreshold","acceptedTags"];
+    function sameProps(current, expected){
+      for (const k of PROP_KEYS){
+        const cv = current[k] === undefined ? null : current[k];
+        const ev = expected[k] === undefined ? null : expected[k];
+        if (JSON.stringify(cv) !== JSON.stringify(ev)) return false;
+      }
+      return true;
+    }
+
+    let daysUpdated = 0;
+    let daysSkipped = 0;
+    let blocksUpdated = 0;
+    let blocksCreated = 0;
+    let blocksDeleted = 0;
+    let skippedCount = 0;
+    const skippedDates = [];
+
+    for (const date of futureDates) {
+      const dayBlocks = await blockDB.getBlocksByDate(date, workspaceId);
+      // Top-level "block" type only; ignore nested children + other types
+      const topBlocks = dayBlocks.filter(b => b.type === "block" && !b.parent_id);
+      let dayTouched = false;
+      let daySkipped = 0;
+
+      // Updates
+      for (const u of updates) {
+        const target = topBlocks.find(b => (b.properties||{}).name === u.match.name && (b.properties||{}).blockType === u.match.blockType);
+        if (!target) { daySkipped++; continue; }
+        if (!sameProps(target.properties || {}, u.originalValues)) { daySkipped++; continue; }
+        const merged = Object.assign({}, target.properties || {}, u.newValues);
+        await blockDB.updateBlock(target.id, { properties: merged });
+        blocksUpdated++;
+        dayTouched = true;
+      }
+
+      // Creates
+      for (const c of creates) {
+        const newName = c.block && c.block.properties && c.block.properties.name;
+        const existing = topBlocks.find(b => (b.properties||{}).name === newName);
+        if (existing) continue; // dedupe: a same-named block is already here
+        await blockDB.createBlock({
+          type: "block",
+          parent_id: null,
+          date: date,
+          properties: c.block.properties,
+          sort_order: c.block.sort_order || 0,
+          user_id: userId,
+          workspace_id: workspaceId
+        });
+        blocksCreated++;
+        dayTouched = true;
+      }
+
+      // Deletes
+      for (const d of deletes) {
+        const target = topBlocks.find(b => (b.properties||{}).name === d.match.name && (b.properties||{}).blockType === d.match.blockType);
+        if (!target) { daySkipped++; continue; }
+        if (!sameProps(target.properties || {}, d.originalValues)) { daySkipped++; continue; }
+        await blockDB.deleteBlock(target.id);
+        blocksDeleted++;
+        dayTouched = true;
+      }
+
+      if (dayTouched) daysUpdated++;
+      else if (daySkipped > 0) { daysSkipped++; skippedDates.push(date); }
+      skippedCount += daySkipped;
+    }
+
+    broadcast("blocks-changed", { action: "apply-forward", fromDate, daysUpdated }, workspaceId);
+    res.json({ daysUpdated, daysSkipped, blocksUpdated, blocksCreated, blocksDeleted, skippedCount, skippedDates });
+  } catch (e) {
+    console.error("[apply-forward] error:", e && e.message ? e.message : e);
+    res.status(500).json({ error: e && e.message ? e.message : String(e) });
+  }
+});
+
 // ── PA State API ──
 app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });

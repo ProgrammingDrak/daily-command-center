@@ -627,6 +627,11 @@
   .del-confirm-actions .del-cancel:hover{color:var(--text)}
   .del-confirm-actions .del-go{background:var(--red,#ef4444);color:white}
   .del-confirm-actions .del-go:hover{opacity:0.85}
+  /* PIN 3: block-save confirm modal — three buttons, both affirmatives are
+     non-destructive so override the red .del-go to accent blue and allow wrap */
+  .bs-confirm-box .del-confirm-actions{flex-wrap:wrap;gap:6px}
+  .bs-confirm-box .del-confirm-actions .del-go{background:var(--accent);white-space:nowrap}
+  .bs-confirm-box .del-confirm-actions .del-go:hover{opacity:0.85}
   .compact-row .src-tag{font-size:7px;padding:0 4px;opacity:0.4}
 
   .divider{margin:14px 0;display:flex;align-items:center;gap:8px}

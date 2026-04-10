@@ -943,6 +943,24 @@
   </div>
 </div>
 
+<!-- PIN 3: block-save confirm (today only vs today + future) -->
+<div class="del-confirm-overlay" id="bs-confirm-overlay">
+  <div class="del-confirm-box bs-confirm-box">
+    <div class="del-confirm-title">Apply these changes where?</div>
+    <div class="del-confirm-msg">
+      "Today only" updates this day. "Today + future days" also applies
+      your top-level block changes to every future day that still matches
+      the original values. Nested sub-blocks stay per-day and are not
+      touched on future days.
+    </div>
+    <div class="del-confirm-actions">
+      <button class="del-cancel" id="bs-confirm-cancel">Cancel</button>
+      <button class="del-go" id="bs-confirm-today">Today only</button>
+      <button class="del-go" id="bs-confirm-future" style="margin-left:6px">Today + future days</button>
+    </div>
+  </div>
+</div>
+
 <!-- Clock face picker -->
 <div class="dm-clock-overlay" id="dm-clock-overlay">
   <div class="dm-clock-popup" id="dm-clock-popup">

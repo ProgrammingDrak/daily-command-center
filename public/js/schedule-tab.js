@@ -707,6 +707,7 @@ document.addEventListener('click', function(e) {
 
 // ======== BLOCK EDITOR ========
 let _beBlocks = []; // working copy
+let _beOriginal = []; // PIN 3: pristine snapshot captured at open(), used for diff on save
 
 function openBlockEditor(blockId){
   // Close popover
@@ -728,6 +729,9 @@ function openBlockEditor(blockId){
     const src = (__state&&__state.schedule&&__state.schedule.blocks)||[];
     _beBlocks = JSON.parse(JSON.stringify(src));
   }
+
+  // PIN 3: capture pristine snapshot for diff-on-save copy-forward flow
+  _beOriginal = JSON.parse(JSON.stringify(_beBlocks));
 
   renderBlockEditor();
   document.getElementById("block-editor-overlay").classList.add("open");
@@ -751,6 +755,7 @@ function openBlockEditor(blockId){
 function closeBlockEditor(){
   document.getElementById("block-editor-overlay").classList.remove("open");
   _beBlocks = [];
+  _beOriginal = []; // PIN 3: drop snapshot
 }
 
 function renderBlockEditor(){
@@ -1105,6 +1110,125 @@ function beAddChild(parentIdx){
   renderBlockEditor();
 }
 
+// PIN 3: deep-compare _beBlocks vs _beOriginal for "no net change" early-exit.
+// Sort by id so children reorder doesn't create false diffs.
+function _beBlocksEqual(a, b){
+  if (a.length !== b.length) return false;
+  var sa = [...a].sort(function(x,y){return (x.id||'').localeCompare(y.id||'');});
+  var sb = [...b].sort(function(x,y){return (x.id||'').localeCompare(y.id||'');});
+  return JSON.stringify(sa) === JSON.stringify(sb);
+}
+
+// PIN 3: build the update/create/delete diff between _beOriginal and _beBlocks.
+// Top-level blocks only. Nested children are NOT propagated forward in v1.
+function _computeBlockDiff(){
+  var origTop = _beOriginal.filter(function(b){return !b.parent_id;});
+  var curTop  = _beBlocks.filter(function(b){return !b.parent_id;});
+  var origById = {};
+  origTop.forEach(function(b){origById[b.id]=b;});
+  var curById = {};
+  curTop.forEach(function(b){curById[b.id]=b;});
+
+  var PROP_KEYS = ['name','blockType','start','end','protected','warnThreshold','acceptedTags'];
+  function props(b){
+    return {
+      name: b.name || '',
+      blockType: b.blockType || 'work',
+      start: b.start || '',
+      end: b.end || '',
+      protected: !!b.protected,
+      warnThreshold: b.warnThreshold || 0,
+      acceptedTags: b.acceptedTags || []
+    };
+  }
+
+  var updates = [], creates = [], deletes = [];
+
+  // Updates: same id, any changed prop
+  curTop.forEach(function(c){
+    if (c._isNew || (typeof c.id === 'string' && c.id.indexOf('_new_') === 0)) return;
+    var o = origById[c.id];
+    if (!o) return;
+    var cp = props(c), op = props(o);
+    var changed = false;
+    for (var k = 0; k < PROP_KEYS.length; k++){
+      var key = PROP_KEYS[k];
+      if (JSON.stringify(cp[key]) !== JSON.stringify(op[key])){ changed = true; break; }
+    }
+    if (changed){
+      updates.push({
+        id: c.id,
+        match: { name: op.name, blockType: op.blockType, sort_order: o.sort_order || 0 },
+        originalValues: op,
+        newValues: cp
+      });
+    }
+  });
+
+  // Creates: in current, not in original
+  curTop.forEach(function(c){
+    if (!origById[c.id]){
+      creates.push({
+        block: {
+          type: 'block',
+          properties: props(c),
+          sort_order: c.sort_order || 0
+        }
+      });
+    }
+  });
+
+  // Deletes: in original, not in current
+  origTop.forEach(function(o){
+    if (!curById[o.id]){
+      deletes.push({
+        match: { name: o.name || '', blockType: o.blockType || 'work', sort_order: o.sort_order || 0 },
+        originalValues: props(o)
+      });
+    }
+  });
+
+  return { updates: updates, creates: creates, deletes: deletes };
+}
+
+// PIN 3: the existing single-day write flow, extracted so both "today only"
+// and "today + future" confirm-modal paths can reuse it.
+async function _applyBlocksToday(){
+  var current = (__state && __state.schedule && __state.schedule.blocks) || [];
+  var newIds = new Set(_beBlocks.map(function(b){return b.id;}));
+  for (var i = 0; i < current.length; i++){
+    var old = current[i];
+    if (!newIds.has(old.id)) await blockStore.deleteBlock(old.id);
+  }
+  for (var j = 0; j < _beBlocks.length; j++){
+    var b = _beBlocks[j];
+    var bProps = {
+      name: (b.name || '').trim(),
+      blockType: b.blockType || 'work',
+      start: b.start,
+      end: b.end,
+      protected: !!b.protected,
+      warnThreshold: b.warnThreshold || 0,
+      acceptedTags: b.acceptedTags || []
+    };
+    if (b._isNew || (typeof b.id === 'string' && b.id.indexOf('_new_') === 0)){
+      await blockStore.createBlock('block', bProps, { parentId: b.parent_id, sortOrder: j });
+    } else {
+      await blockStore.updateBlock(b.id, bProps);
+    }
+  }
+  // Refresh state
+  try {
+    var resp = await fetch('/api/state/day');
+    var state = await resp.json();
+    if (state.schedule) __state.schedule = state.schedule;
+  } catch(e){}
+  var blocks = (__state && __state.schedule && __state.schedule.blocks) || [];
+  var wb = blocks.filter(function(b){return (b.blockType||b.type)==='work';});
+  if (wb.length) EOD = pt(wb[wb.length-1].end);
+  updateStats();
+}
+
 async function saveBlockEditor(){
   // Check overlaps first
   const topLevel = _beBlocks.filter(b => !b.parent_id);
@@ -1129,45 +1253,85 @@ async function saveBlockEditor(){
     }
   }
 
-  // Get current blocks from server state to diff
-  const current = (__state&&__state.schedule&&__state.schedule.blocks)||[];
-  const currentIds = new Set(current.map(b=>b.id));
-  const newIds = new Set(_beBlocks.map(b=>b.id));
-
-  // Delete removed blocks
-  for(const old of current){
-    if(!newIds.has(old.id)){
-      await blockStore.deleteBlock(old.id);
-    }
+  // PIN 3: no net change -> close silently without prompting
+  if (_beBlocksEqual(_beBlocks, _beOriginal)){
+    closeBlockEditor();
+    showToast("No changes","success");
+    return;
   }
 
-  // Create or update
-  for(let i=0;i<_beBlocks.length;i++){
-    const b = _beBlocks[i];
-    const props = { name:b.name.trim(), blockType:b.blockType||'work', start:b.start, end:b.end, protected:!!b.protected, warnThreshold:b.warnThreshold||0, acceptedTags:b.acceptedTags||[] };
-    if(b._isNew || b.id.startsWith('_new_')){
-      await blockStore.createBlock("block", props, { parentId:b.parent_id, sortOrder:i });
-    } else {
-      await blockStore.updateBlock(b.id, props);
-    }
-  }
+  // PIN 3: prompt for scope (today only vs today + future days)
+  _openBsConfirm();
+}
 
-  // Refresh state — re-fetch from API
+// PIN 3: confirm-modal open/close helpers
+function _openBsConfirm(){
+  var overlay = document.getElementById('bs-confirm-overlay');
+  if (overlay) overlay.classList.add('open');
+}
+function _closeBsConfirm(){
+  var overlay = document.getElementById('bs-confirm-overlay');
+  if (overlay) overlay.classList.remove('open');
+}
+
+// PIN 3: "Today only" path — existing single-day write flow.
+async function _onBsConfirmTodayOnly(){
+  _closeBsConfirm();
   try {
-    const resp = await fetch('/api/state/day');
-    const state = await resp.json();
-    if(state.schedule) __state.schedule = state.schedule;
-  } catch(e){}
+    await _applyBlocksToday();
+    closeBlockEditor();
+    render();
+    showToast("Time blocks saved","success");
+  } catch(e){
+    showToast("Save failed: "+(e&&e.message||e),"error");
+  }
+}
 
-  // Recalculate EOD
-  const blocks = (__state&&__state.schedule&&__state.schedule.blocks)||[];
-  const wb = blocks.filter(b=>(b.blockType||b.type)==='work');
-  if(wb.length) EOD = pt(wb[wb.length-1].end);
+// PIN 3: "Today + future days" path — apply to today, then POST the diff to
+// /api/blocks/apply-forward so the server can ripple the changes to every
+// future day that still matches the original values.
+async function _onBsConfirmTodayAndFuture(){
+  _closeBsConfirm();
+  var diff;
+  try { diff = _computeBlockDiff(); }
+  catch(e){ showToast("Could not compute diff: "+(e&&e.message||e),"error"); return; }
 
-  updateStats();
-  closeBlockEditor();
-  render();
-  showToast("Time blocks saved","success");
+  try {
+    await _applyBlocksToday();
+
+    var fromDate = (typeof __state !== 'undefined' && __state && __state.date) ? __state.date : null;
+    if (!fromDate){
+      closeBlockEditor();
+      render();
+      showToast("Saved today, but could not propagate: unknown current date","error");
+      return;
+    }
+    var resp = await fetch('/api/blocks/apply-forward', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromDate: fromDate, diff: diff })
+    });
+    if (!resp.ok){
+      var msg = 'HTTP '+resp.status;
+      try { var j = await resp.json(); msg = j.error || msg; } catch(e){}
+      closeBlockEditor();
+      render();
+      showToast("Saved today; propagate failed: "+msg,"error");
+      return;
+    }
+    var res = await resp.json();
+    closeBlockEditor();
+    render();
+    var summary = "Updated today + "+(res.daysUpdated||0)+" future day"+
+      ((res.daysUpdated||0)===1?"":"s");
+    if (res.skippedCount && res.skippedCount > 0){
+      summary += " ("+res.skippedCount+" customized block"+
+        (res.skippedCount===1?"":"s")+" skipped)";
+    }
+    showToast(summary,"success");
+  } catch(e){
+    showToast("Save failed: "+(e&&e.message||e),"error");
+  }
 }
 
 // Wire editor modal controls
@@ -1177,4 +1341,10 @@ document.getElementById("block-editor-save").addEventListener("click",saveBlockE
 document.getElementById("block-editor-overlay").addEventListener("click",e=>{if(e.target===e.currentTarget)closeBlockEditor()});
 document.getElementById("block-editor-manage-tags")?.addEventListener("click",()=>{ if(typeof openTagManager==='function') openTagManager(); });
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("block-editor-overlay").classList.contains("open"))closeBlockEditor()});
+
+// PIN 3: wire the copy-forward confirm modal buttons
+document.getElementById("bs-confirm-cancel")?.addEventListener("click", _closeBsConfirm);
+document.getElementById("bs-confirm-today")?.addEventListener("click", _onBsConfirmTodayOnly);
+document.getElementById("bs-confirm-future")?.addEventListener("click", _onBsConfirmTodayAndFuture);
+document.getElementById("bs-confirm-overlay")?.addEventListener("click", e=>{ if(e.target===e.currentTarget) _closeBsConfirm(); });
 
