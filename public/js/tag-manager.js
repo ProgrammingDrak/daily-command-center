@@ -358,7 +358,7 @@ function toggleTagDropdown(containerEl, selected, onChange) {
       if (!exactMatch) {
         const createLi = document.createElement('li');
         createLi.className = 'tag-picker-create';
-        createLi.innerHTML = '+ Create \u201c' + escHtml(filter.trim()) + '\u201d';
+        createLi.innerHTML = '+ Add Tag';
         createLi.addEventListener('click', async () => {
           const name = filter.trim();
           if (!name) return;
