@@ -1570,6 +1570,16 @@
   details[open]>.tm-section-header .badge{background:rgba(59,130,246,0.15);color:var(--accent-light)}
   .tm-section-body{padding:12px 14px;border-top:1px solid var(--border)}
 
+  /* PIN 4: expand/collapse-all strip above accordions */
+  .acc-controls{display:flex;justify-content:flex-end;gap:6px;margin:4px 0 6px}
+  .acc-btn{
+    font-size:10px;padding:3px 8px;border-radius:6px;
+    background:var(--card);border:1px solid var(--border);
+    color:var(--text-muted);cursor:pointer;
+    transition:color 0.12s,border-color 0.12s;
+  }
+  .acc-btn:hover{color:var(--accent);border-color:var(--accent)}
+
   /* ======== FLOATING TIMER ======== */
   .float-timer{position:fixed;bottom:30px;right:30px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;user-select:none}
   .ft-fab{width:48px;height:48px;border-radius:50%;background:var(--accent);border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(59,130,246,0.4);transition:transform 0.15s,box-shadow 0.15s;position:relative}

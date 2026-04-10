@@ -696,16 +696,25 @@ function buildTaskQueuePanel(){
     (backlogTasks.length?backlogTasks.length+" backlog":"");
 }
 
-// Wire TQP tab switching and collapse toggle (runs once after DOM load)
+// Wire TQP collapse toggle + accordion expand/collapse-all (runs once after DOM load)
 document.addEventListener('DOMContentLoaded',function(){
-  // Tab switching
-  document.querySelectorAll('.tqp-tab').forEach(function(tab){
-    tab.addEventListener('click',function(){
-      document.querySelectorAll('.tqp-tab').forEach(function(t){t.classList.remove('active');});
-      document.querySelectorAll('.tqp-panel').forEach(function(p){p.classList.remove('active');});
-      tab.classList.add('active');
-      var panel=document.getElementById('tqp-panel-'+tab.dataset.tqp);
-      if(panel)panel.classList.add('active');
+  // PIN 4: expand/collapse-all controls for both accordions.
+  // The Task Queue panel and Task Menus tab each have an .acc-controls strip
+  // with two buttons. data-acc-scope points at a container selector; the
+  // handler iterates its descendant .tm-section <details> elements and sets
+  // .open accordingly. One synthetic 'toggle' dispatch kicks the tabs.js
+  // persistence listener so the new state is saved to pa-tm-accordion-state.
+  document.querySelectorAll('.acc-btn').forEach(function(btn){
+    btn.addEventListener('click',function(e){
+      e.stopPropagation();
+      var scope=document.querySelector(btn.dataset.accScope);
+      if(!scope)return;
+      var wantOpen=btn.dataset.accAction==='expand';
+      scope.querySelectorAll('details.tm-section').forEach(function(d){
+        d.open=wantOpen;
+      });
+      var anyDetails=scope.querySelector('details.tm-section');
+      if(anyDetails)anyDetails.dispatchEvent(new Event('toggle',{bubbles:false}));
     });
   });
   // Collapse toggle
