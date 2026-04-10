@@ -804,8 +804,17 @@ function renderBlockRow(b, idx, nested){
   const warn = b.warnThreshold||0;
   const dur = beDuration(b.start||'09:00', b.end||'17:00');
   const barClass = bt === 'personal' ? 'personal' : bt === 'break' ? 'break' : 'work';
+  // PIN 6: only top-level blocks are draggable (nested children stay grouped under their parent)
+  const dragAttrs = nested ? '' : (
+    ' draggable="true"'
+    +' ondragstart="beDragStart(event,'+idx+')"'
+    +' ondragover="beDragOver(event,'+idx+')"'
+    +' ondragleave="beDragLeave(event,'+idx+')"'
+    +' ondrop="beDragDrop(event,'+idx+')"'
+    +' ondragend="beDragEnd(event)"'
+  );
 
-  return '<div class="be-card'+(nested?' nested':'')+'" data-idx="'+idx+'">'
+  return '<div class="be-card'+(nested?' nested':'')+'" data-idx="'+idx+'"'+dragAttrs+'>'
     +'<div class="be-card-inner">'
       +'<div class="be-bar '+barClass+'"></div>'
       +'<div class="be-card-content">'
@@ -814,11 +823,11 @@ function renderBlockRow(b, idx, nested){
           +'<input class="be-card-name" value="'+esc(b.name||'')+'" placeholder="Block name" title="Block name" onchange="beUpdate('+idx+',&apos;name&apos;,this.value)">'
           +'<button class="be-card-delete" onclick="beDelete('+idx+')" title="Delete block">\u00d7</button>'
         +'</div>'
-        // ── Row 2: times + duration ──
+        // ── Row 2: times + duration — PIN 6: clock-face picker instead of native time inputs ──
         +'<div class="be-row-time">'
-          +'<input type="time" class="be-card-time" value="'+(b.start||'09:00')+'" title="Start time" id="be-start-'+idx+'" onchange="beUpdate('+idx+',&apos;start&apos;,this.value);beRefreshDur('+idx+');beCheckOverlaps()">'
+          +'<button type="button" class="be-card-time" title="Start time" id="be-start-'+idx+'" onclick="beOpenTimePicker('+idx+',&apos;start&apos;,this)">'+f12(b.start||'09:00')+'</button>'
           +'<span class="be-time-arrow">\u2192</span>'
-          +'<input type="time" class="be-card-time" value="'+(b.end||'17:00')+'" title="End time" id="be-end-'+idx+'" onchange="beUpdate('+idx+',&apos;end&apos;,this.value);beRefreshDur('+idx+');beCheckOverlaps()">'
+          +'<button type="button" class="be-card-time" title="End time" id="be-end-'+idx+'" onclick="beOpenTimePicker('+idx+',&apos;end&apos;,this)">'+f12(b.end||'17:00')+'</button>'
           +'<input class="be-dur-input" value="'+dur+'" title="Duration \u2014 edit to adjust end time" id="be-dur-'+idx+'" onchange="beDurChanged('+idx+',this.value)" placeholder="0m">'
           +'<button class="be-dur-preset-btn" title="Duration presets" onclick="beOpenDurPresets('+idx+',this)">&#9662;</button>'
         +'</div>'
@@ -967,7 +976,7 @@ function beCheckOverlaps(){
         if(!currCard.querySelector('.be-overlap-warn')){
           const w = document.createElement('div');
           w.className = 'be-overlap-warn';
-          w.textContent = 'Overlaps with '+esc(next.name||'next block')+' (starts '+next.start+')';
+          w.textContent = 'Overlaps with '+esc(next.name||'next block')+' (starts '+f12(next.start)+')';
           currCard.querySelector('.be-card-content').appendChild(w);
         }
       }
@@ -987,6 +996,69 @@ function esc(s){ return s.replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
 function beUpdate(idx, field, value){
   if(_beBlocks[idx]) _beBlocks[idx][field] = value;
+}
+
+// ─── PIN 6: Clock-face picker + auto-reflow ─────────────────────────────────
+function beOpenTimePicker(idx, field, anchorEl){
+  const b = _beBlocks[idx];
+  if(!b) return;
+  const current = (field === 'start' ? b.start : b.end) || '09:00';
+  if(typeof openClockPicker !== 'function') return;
+  openClockPicker(current, anchorEl, function(timeStr){
+    if(!_beBlocks[idx]) return;
+    _beBlocks[idx][field] = timeStr;
+    beSortBlocks();
+    renderBlockEditor(); // full rebuild — mounts pickers fresh, checks overlaps
+  });
+}
+
+// Sort top-level blocks by start time in place. Children remain grouped under
+// their parent because renderBlockEditor iterates top-level first, then attaches
+// each parent's children immediately after it.
+function beSortBlocks(){
+  const top = _beBlocks.filter(b => !b.parent_id);
+  top.sort((a,b) => (a.start || '').localeCompare(b.start || ''));
+  const children = _beBlocks.filter(b => b.parent_id);
+  _beBlocks = [...top, ...children];
+}
+
+// ─── PIN 6: Drag-and-drop top-level blocks ──────────────────────────────────
+let _beDragIdx = null;
+function beDragStart(e, idx){
+  _beDragIdx = idx;
+  if(e.dataTransfer){ e.dataTransfer.effectAllowed = 'move'; }
+  if(e.currentTarget) e.currentTarget.classList.add('be-dragging');
+}
+function beDragOver(e, idx){
+  if(_beDragIdx === null || _beDragIdx === idx) return;
+  e.preventDefault();
+  if(e.dataTransfer){ e.dataTransfer.dropEffect = 'move'; }
+  if(e.currentTarget) e.currentTarget.classList.add('be-drag-over');
+}
+function beDragLeave(e){
+  if(e.currentTarget) e.currentTarget.classList.remove('be-drag-over');
+}
+function beDragDrop(e, targetIdx){
+  e.preventDefault();
+  if(e.currentTarget) e.currentTarget.classList.remove('be-drag-over');
+  if(_beDragIdx === null || _beDragIdx === targetIdx) return;
+  const dragged = _beBlocks[_beDragIdx];
+  const target = _beBlocks[targetIdx];
+  _beDragIdx = null;
+  if(!dragged || !target) return;
+  // Only top-level blocks can be reordered via drag (children stay grouped)
+  if(dragged.parent_id || target.parent_id) return;
+  // Snap dragged block's start to the target's end; preserve dragged duration
+  const duration = pt(dragged.end) - pt(dragged.start);
+  dragged.start = target.end;
+  dragged.end = fmt(pt(target.end) + duration);
+  beSortBlocks();
+  renderBlockEditor();
+}
+function beDragEnd(e){
+  _beDragIdx = null;
+  document.querySelectorAll('.be-card.be-dragging').forEach(el => el.classList.remove('be-dragging'));
+  document.querySelectorAll('.be-card.be-drag-over').forEach(el => el.classList.remove('be-drag-over'));
 }
 
 function beToggleProtected(idx){
