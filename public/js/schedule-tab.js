@@ -243,7 +243,7 @@ function buildSchedule(){
           '</div>'+
           '<div class="bar" style="background:'+c.color+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row"><span class="ttl">'+ev.title+'</span>'+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
+            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
             '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+colorMeta(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
