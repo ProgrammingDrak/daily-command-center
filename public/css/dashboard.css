@@ -208,7 +208,6 @@
   .tab-content{display:none} .tab-content.active{display:block}
 
   .tl{position:relative;padding-left:28px}
-  .tl::before{content:'';position:absolute;left:14px;top:0;bottom:0;width:2px;background:var(--border)}
   .tl-item{position:relative;margin-bottom:8px;transition:transform 0.12s,opacity 0.2s}
   .tl-item:hover{transform:translateX(3px)}
   .tl-item.dragging{opacity:0.35}
@@ -1747,7 +1746,6 @@
 
     /* ── Timeline gutter ──────────────────────────────────────── */
     .tl{padding-left:52px}
-    .tl::before{left:8px}
     .tl-node{left:-52px;width:42px;font-size:9px}
 
     /* ── Task cards ───────────────────────────────────────────── */
