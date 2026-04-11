@@ -441,6 +441,74 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
   }
 });
 
+// ── Delegated Items API (PIN 10.A) ──
+// Wraps blockDB CRUD, stamping properties.kind = "delegated_item" on create.
+// GET list uses a dedicated db query; mutations reuse the generic
+// createBlock/updateBlock/deleteBlock primitives. PATCH and DELETE both
+// verify the target's kind discriminator so these routes can't be used
+// to modify tags or other type:"block" data.
+app.get("/api/delegated-items", async (req, res) => {
+  try {
+    const items = await blockDB.getDelegatedItems(req.workspaceId);
+    res.json(items);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/delegated-items", async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.properties || typeof body.properties !== "object") {
+      return res.status(400).json({ error: "properties required" });
+    }
+    const props = { ...body.properties, kind: "delegated_item" };
+    if (!props.title || typeof props.title !== "string" || !props.title.trim()) {
+      return res.status(400).json({ error: "properties.title required" });
+    }
+    const created = await blockDB.createBlock({
+      type: "block",
+      parent_id: null,
+      date: null,
+      properties: props,
+      sort_order: 0,
+      user_id: req.session.userId,
+      workspace_id: req.workspaceId
+    });
+    broadcast("blocks-changed", { action: "delegated-create", blockIds: [created.id] }, req.workspaceId);
+    res.json(created);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.patch("/api/delegated-items/:id", async (req, res) => {
+  try {
+    const existing = await blockDB.getBlock(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Delegated item not found" });
+    assertBlockOwnership(existing, req.workspaceId);
+    if ((existing.properties || {}).kind !== "delegated_item") {
+      return res.status(404).json({ error: "Delegated item not found" });
+    }
+    const incoming = (req.body && req.body.properties) || {};
+    // Preserve kind discriminator — clients cannot unset it via PATCH
+    const merged = { ...existing.properties, ...incoming, kind: "delegated_item" };
+    const result = await blockDB.updateBlock(req.params.id, { properties: merged });
+    broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id] }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+app.delete("/api/delegated-items/:id", async (req, res) => {
+  try {
+    const existing = await blockDB.getBlock(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Delegated item not found" });
+    assertBlockOwnership(existing, req.workspaceId);
+    if ((existing.properties || {}).kind !== "delegated_item") {
+      return res.status(404).json({ error: "Delegated item not found" });
+    }
+    const result = await blockDB.deleteBlock(req.params.id);
+    broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id] }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
 // ── PA State API ──
 app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });

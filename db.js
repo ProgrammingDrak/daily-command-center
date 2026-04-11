@@ -163,6 +163,29 @@ async function getBlocksByTypes(types, workspaceId) {
   return rows.map(parseBlock);
 }
 
+// PIN 10.A: delegated items are type="block" with properties.kind="delegated_item".
+// Sorted by checkInAt ascending (nulls last) so upcoming check-ins surface first.
+async function getDelegatedItems(workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(
+        `SELECT * FROM blocks
+         WHERE type = 'block'
+           AND properties->>'kind' = 'delegated_item'
+           AND workspace_id = $1
+           AND deleted_at IS NULL
+         ORDER BY (properties->>'checkInAt') ASC NULLS LAST, created_at DESC`,
+        [workspaceId]
+      )
+    : await pool.query(
+        `SELECT * FROM blocks
+         WHERE type = 'block'
+           AND properties->>'kind' = 'delegated_item'
+           AND deleted_at IS NULL
+         ORDER BY (properties->>'checkInAt') ASC NULLS LAST, created_at DESC`
+      );
+  return rows.map(parseBlock);
+}
+
 async function getChildren(parentId, workspaceId) {
   const { rows } = workspaceId
     ? await pool.query(`SELECT * FROM blocks WHERE parent_id = $1 AND workspace_id = $2 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`, [parentId, workspaceId])
@@ -289,6 +312,7 @@ module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
   getBlocksByDate, getBlocksByTypes, getChildren, getBlock,
+  getDelegatedItems,
   batchOp, reorderBlocks, ensureDayRoot,
   savePaState, getPaState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getPaStateRange, ensureWorkspacesForAllUsers
