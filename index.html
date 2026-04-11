@@ -217,6 +217,7 @@
   <button class="tab" data-tab="tasks">Task Menu <span class="badge" id="tasks-count" style="display:none">0</span></button>
   <button class="tab" data-tab="life" id="life-tab-btn">Life</button>
   <button class="tab" data-tab="engrams" id="engrams-tab-btn">Engrams <span class="badge" id="engrams-count" style="display:none">0</span></button>
+  <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="palog">Report Card</button>
 </div>
@@ -974,6 +975,22 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-delegated">
+  <div class="delegated-header">
+    <h2 class="delegated-title">Delegated</h2>
+    <button class="primary" id="delegated-new-btn">+ New delegated item</button>
+  </div>
+  <div class="delegated-filter-bar">
+    <button class="delegated-filter-btn active" data-filter="all">All</button>
+    <button class="delegated-filter-btn" data-filter="upcoming">Upcoming</button>
+    <button class="delegated-filter-btn" data-filter="overdue">Overdue</button>
+    <button class="delegated-filter-btn" data-filter="done">Done</button>
+  </div>
+  <div class="delegated-list" id="delegated-list">
+    <div class="delegated-empty">No delegated items yet. Click "+ New delegated item" to create one.</div>
+  </div>
+</div>
+
 <div class="tab-content" id="tab-calendar"></div>
 
 <div class="footer">
@@ -1011,6 +1028,7 @@
 <script src="/public/js/calendar-overlay.js"></script>
 <script src="/public/js/calendar.js"></script>
 <script src="/public/js/calendar-drag.js"></script>
+<script src="/public/js/delegated.js"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.
 // Phase 5: All flags ON — BlockStore is now the primary data store.

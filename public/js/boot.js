@@ -178,6 +178,7 @@
   if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();
   if (typeof buildLifeSection === 'function') buildLifeSection();
   if (typeof buildReportCard === 'function') buildReportCard();
+  if (typeof buildDelegated === 'function') buildDelegated();
   if (typeof updateStats === 'function') updateStats();
   if (typeof updateDateNav === 'function') updateDateNav();
   // Refresh stats every 60s to keep "Block Ends" current

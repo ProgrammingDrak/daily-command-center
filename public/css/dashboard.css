@@ -1873,3 +1873,26 @@
       top:auto;margin-top:0;
     }
   }
+
+/* ── Delegated tab (PIN 10.A) ─────────────────────────────── */
+.delegated-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:12px;flex-wrap:wrap}
+.delegated-title{font-size:16px;font-weight:700;margin:0}
+.delegated-filter-bar{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.delegated-filter-btn{font-size:11px;padding:4px 10px;border-radius:12px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;transition:color 0.12s,border-color 0.12s,background 0.12s}
+.delegated-filter-btn:hover{color:var(--accent);border-color:var(--accent)}
+.delegated-filter-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.delegated-list{display:flex;flex-direction:column;gap:6px}
+.delegated-empty{padding:24px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--card);border:1px dashed var(--border);border-radius:8px}
+.delegated-card{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:border-color 0.12s}
+.delegated-card:hover{border-color:var(--accent)}
+.delegated-card.done{opacity:0.55}
+.delegated-card-icon{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:50%;font-size:13px;flex-shrink:0;border:1px solid var(--border)}
+.delegated-card-body{flex:1;min-width:0}
+.delegated-card-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.delegated-card-meta{display:flex;gap:10px;font-size:11px;color:var(--text-muted);margin-top:2px;flex-wrap:wrap}
+.delegated-card-when{font-variant-numeric:tabular-nums}
+.delegated-card-channel{text-transform:capitalize}
+.delegated-card-actions{display:flex;gap:4px;flex-shrink:0}
+.delegated-card-actions button{font-size:10px;padding:3px 8px;border-radius:5px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;transition:border-color 0.12s,color 0.12s}
+.delegated-card-actions .delegated-edit:hover{border-color:var(--accent);color:var(--accent)}
+.delegated-card-actions .delegated-delete:hover{border-color:var(--red);color:var(--red)}
