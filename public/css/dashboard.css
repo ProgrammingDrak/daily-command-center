@@ -1153,7 +1153,7 @@
   .block-hdr-time{flex:1;opacity:0.55}
   .block-hdr-edit{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 5px;border-radius:4px;opacity:0;transition:opacity 0.15s;line-height:1}
   .tl-block-header:hover .block-hdr-edit{opacity:1}
-  @media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)} body{padding:14px 14px 110px} .tl{padding-left:85px}}
+  @media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)} body{padding:14px 14px 110px}}
 
   /* Quick-add bar */
   /* ======== UNIVERSAL TASK ADD BAR ======== */
@@ -1788,10 +1788,6 @@
       flex:1;min-height:44px;font-size:13px;white-space:nowrap;
       display:inline-flex;align-items:center;justify-content:center;
     }
-
-    /* ── Timeline gutter ──────────────────────────────────────── */
-    .tl{padding-left:52px}
-    .tl-node{left:-52px;width:42px;font-size:9px}
 
     /* ── Task cards ───────────────────────────────────────────── */
     .card{padding:10px 8px;gap:6px;min-height:52px;align-items:flex-start}
