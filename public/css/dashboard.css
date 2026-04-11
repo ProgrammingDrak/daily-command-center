@@ -1913,3 +1913,16 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .delegated-modal-actions button.primary:hover{opacity:0.9}
 .delegated-modal-actions button.secondary{background:var(--card);color:var(--text-muted)}
 .delegated-modal-actions button.secondary:hover{color:var(--text);border-color:var(--accent)}
+
+/* Delegate button: circular icon on backlog cards + pill on tag editor (PIN 10.A-4) */
+.delegate-btn{
+  width:26px;height:26px;border-radius:50%;
+  background:var(--card);border:1px solid var(--border);
+  color:var(--text-muted);cursor:pointer;font-size:12px;
+  display:flex;align-items:center;justify-content:center;
+  transition:border-color 0.12s,color 0.12s;
+  flex-shrink:0;
+}
+.delegate-btn:hover{border-color:var(--accent);color:var(--accent)}
+.tm-delegate-btn{background:var(--card);border:1px solid var(--border);color:var(--text-muted);font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;transition:border-color 0.12s,color 0.12s}
+.tm-delegate-btn:hover{border-color:var(--accent);color:var(--accent)}

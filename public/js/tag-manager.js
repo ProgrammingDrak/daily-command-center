@@ -184,6 +184,7 @@ function tmOpenEditor(tagId, parentId, name = '', color = '#4A90D9', description
     '<input id="tm-color" class="tm-color-input" type="color" value="' + color + '" title="Tag color" />' +
     '<input id="tm-desc" class="tm-input" type="text" placeholder="Description (optional)" value="' + escHtml(description) + '" maxlength="200" />' +
     '<div class="tm-editor-btns">' +
+      (tagId ? '<button class="secondary tm-delegate-btn" onclick="tmOpenDelegateFromTag()">' + (_tmTagHasDelegate(tagId) ? 'Delegated \u2713' : 'Delegate') + '</button>' : '') +
       '<button class="secondary" onclick="tmCancelEditor()">Cancel</button>' +
       '<button class="primary" onclick="tmSaveEditor()">Save</button>' +
     '</div>';
@@ -415,6 +416,37 @@ function escHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// PIN 10.A: returns true if any delegated_item is linked to this tag.
+function _tmTagHasDelegate(tagId) {
+  if (!window.blockStore || !tagId) return false;
+  return window.blockStore.getByType("block")
+    .some(b => (b.properties || {}).kind === "delegated_item" &&
+               (b.properties || {}).linkedTagId === tagId);
+}
+
+// PIN 10.A: open the delegated modal from the tag editor. If a linked
+// delegated_item already exists, edit it; otherwise pre-fill a new one
+// with a suggested title derived from the tag name.
+function tmOpenDelegateFromTag() {
+  if (!_tmEditState || !_tmEditState.tagId) return;
+  const tagId = _tmEditState.tagId;
+  const existing = window.blockStore
+    ? window.blockStore.getByType("block").find(b =>
+        (b.properties || {}).kind === "delegated_item" &&
+        (b.properties || {}).linkedTagId === tagId)
+    : null;
+  if (existing) {
+    if (typeof openDelegatedModal === "function") openDelegatedModal(existing.id);
+  } else {
+    const nameEl = document.getElementById("tm-name");
+    const tagName = nameEl ? nameEl.value.trim() : "";
+    if (typeof openDelegatedModal === "function") openDelegatedModal(null, {
+      title: tagName ? ("Follow up: " + tagName) : "",
+      linkedTagId: tagId
+    });
+  }
 }
 
 // ── Wire up modal close buttons after DOM is ready ──

@@ -560,14 +560,36 @@ function buildBacklog(){
       (bHasDetail?bChev:'')+
       notesButton({id: t.id, title: t.title})+
       '<button class="pomo-btn" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+      '<button class="delegate-btn" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(_scheduleTaskHasDelegate(t.id)?'Edit delegated item linked to this task':'Delegate this task')+'">'+(_scheduleTaskHasDelegate(t.id)?'\u2713':'\u2191')+'</button>'+
       '<button class="add-btn" data-id="'+t.id+'"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Schedule</button>'+
       (bHasDetail?'<div class="detail-panel" style="width:100%;padding-left:14px"><div class="detail-inner">'+bDetailParts.join('')+'</div></div>':'');
     const bnb=el.querySelector(".notes-btn");if(bnb)bnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(bnb.dataset.notesId,bnb.dataset.notesTitle)});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
+    el.querySelector(".delegate-btn").addEventListener("click",e=>{
+      e.stopPropagation();
+      const btn=e.currentTarget;
+      const taskId=btn.dataset.id;
+      const taskTitle=btn.dataset.title;
+      const existing=window.blockStore
+        ? window.blockStore.getByType("block").find(b=>(b.properties||{}).kind==="delegated_item"&&(b.properties||{}).linkedBlockId===taskId)
+        : null;
+      if(existing && typeof openDelegatedModal==="function"){
+        openDelegatedModal(existing.id);
+      } else if(typeof openDelegatedModal==="function"){
+        openDelegatedModal(null,{title:"Follow up: "+taskTitle,linkedBlockId:taskId});
+      }
+    });
     el.querySelector(".add-btn").addEventListener("click",e=>{e.stopPropagation();addToSchedule(t.id)});
-    el.addEventListener("click",e=>{if(e.target.closest(".add-btn")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn"))return;const panel=el.querySelector(".detail-panel");if(panel){panel.classList.toggle("open");const chev=el.querySelector(":scope > svg");if(chev)chev.style.transform=panel.classList.contains("open")?"rotate(180deg)":""}});
+    el.addEventListener("click",e=>{if(e.target.closest(".add-btn")||e.target.closest(".pomo-btn")||e.target.closest(".delegate-btn")||e.target.closest(".notes-btn"))return;const panel=el.querySelector(".detail-panel");if(panel){panel.classList.toggle("open");const chev=el.querySelector(":scope > svg");if(chev)chev.style.transform=panel.classList.contains("open")?"rotate(180deg)":""}});
     board.appendChild(el);
   });
+}
+
+// PIN 10.A: returns true if any delegated_item is linked to this backlog task id.
+function _scheduleTaskHasDelegate(taskId){
+  if(!window.blockStore) return false;
+  return window.blockStore.getByType("block")
+    .some(b=>(b.properties||{}).kind==="delegated_item" && (b.properties||{}).linkedBlockId===taskId);
 }
 
 // ======== PROGRESS ========

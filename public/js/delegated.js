@@ -9,15 +9,14 @@
 
 (function(){
   let _currentFilter = "all";
-  // Local cache refreshed after mutations. On initial load we read from
-  // blockStore.getByType("block"); after any create/update/delete we
-  // refetch /api/delegated-items and cache the list here to avoid a
-  // stale blockStore read path.
-  let _cachedDelegatedItems = null;
 
   // ── Data access ──
+  // Single source of truth: window.blockStore.getByType("block"). After any
+  // mutation we call refreshDelegatedItems() which calls
+  // blockStore.loadGlobals() to refresh the global cache from the server.
+  // This keeps delegated.js's list view, tag-manager's "Delegated ✓" badge,
+  // and schedule-tab's backlog "✓" marker all consistent with one fetch.
   function getAllDelegatedItems() {
-    if (_cachedDelegatedItems) return _cachedDelegatedItems.slice().sort(sortByCheckIn);
     if (!window.blockStore) return [];
     return window.blockStore.getByType("block")
       .filter(b => (b.properties || {}).kind === "delegated_item")
@@ -280,13 +279,18 @@
     }
   }
 
-  // ── Refresh helper exposed for commit 3/4 + SSE listeners ──
+  // ── Refresh helper: reloads the blockStore global cache so every
+  //    consumer (this module's list, tag-manager, schedule-tab backlog)
+  //    picks up new/updated/deleted delegated items in the same pass.
+  //    Also re-runs buildBacklog() so the backlog cards' "↑/✓" Delegate
+  //    button state stays in sync without a full page reload.
   async function refreshDelegatedItems() {
     try {
-      const resp = await fetch("/api/delegated-items");
-      if (!resp.ok) throw new Error("fetch failed");
-      _cachedDelegatedItems = await resp.json();
+      if (window.blockStore && typeof window.blockStore.loadGlobals === "function") {
+        await window.blockStore.loadGlobals();
+      }
       renderDelegatedList();
+      if (typeof buildBacklog === "function") buildBacklog();
     } catch (e) {
       console.warn("[delegated] refresh failed:", e && e.message ? e.message : e);
     }
@@ -331,6 +335,4 @@
   window.refreshDelegatedItems = refreshDelegatedItems;
   window.openDelegatedModal = openDelegatedModal;
   window.deleteDelegatedItem = deleteDelegatedItem;
-  // Internal caches exposed so commit 3 handlers can update them after mutations
-  window._delegatedSetCache = function(list) { _cachedDelegatedItems = list; };
 })();
