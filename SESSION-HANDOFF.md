@@ -1,10 +1,10 @@
-# Session Handoff — DCC Phase 1 + 2 + 3 + Phase 4.10.A shipped
+# Session Handoff — DCC Phase 1 + 2 + 3 + Phase 4.10.A shipped (+ PIN 8 second follow-up)
 
 **Date:** 2026-04-11
 **Branch:** `main`
-**HEAD:** `6477ab9 feat(delegated): mark-as-delegated affordance on tags + backlog (PIN 10.A-4)`
+**HEAD:** `d8d8584 fix(schedule): tighten timeline gutter on mobile viewports (PIN 8 follow-up)`
 **Base when Phase 1 started:** `e182593`
-**Commits ahead of `origin/main`:** 14 (all local, nothing pushed)
+**Commits ahead of `origin/main`:** 16 (all local, nothing pushed)
 **Session plan files:**
 - Phase 1 + 2: `C:\Users\offic\.claude\plans\velvety-sauteeing-globe.md`
 - Phase 3: `C:\Users\offic\.claude\plans\giggly-forging-adleman.md`
@@ -20,6 +20,8 @@ The 2026-04-10 session shipped Phase 1 (PINs 2, 7, 8 + gutter follow-up), Phase 
 
 This session (2026-04-11) picked up from there and shipped **Phase 4.10.A** — the first of 5 sub-phases for PIN 10 Delegated. 4 more atomic commits. Data model, server CRUD, tab skeleton, modal, and mark-as-delegated affordances on both tag-manager and backlog cards. No AI drafting, no email/Slack send, no scheduler — those land in 10.B–E. Nothing pushed. Drake's runtime QA of Phase 4.10.A is pending.
 
+During Drake's Phase 4.10.A eyeball QA on a narrow viewport, a **PIN 8 follow-up visual bug** surfaced: two pre-PIN-8 mobile media-query overrides (`.tl{padding-left:85px}` at `dashboard.css:1156` and `.tl{padding-left:52px}` + `.tl-node{left:-52px;width:42px;font-size:9px}` inside the 480px block at `:1792-1794`) were never tightened when `9ce3bd7` tightened the desktop base rules. On viewports ≤700px, the old wide gutter reappeared with ~85px of dead space between the dots and the card edges. Fixed in `d8d8584` by stripping the `.tl` clause from the 700px block and deleting the leftover 480px rules. Verified via `preview_inspect` at desktop (1400), tablet (680), and mobile (375) — all three now return the base `padding-left:16px` / `left:-14px` values. `.tl::before` still absent (PIN 8 line removal intact). `.tl-node.active` unchanged at `-20px` via specificity. Not related to 4.10.A — committed separately.
+
 ---
 
 ## The 10 pins — current status
@@ -33,7 +35,7 @@ This session (2026-04-11) picked up from there and shipped **Phase 4.10.A** — 
 | 5 | — | "Move to Tomorrow" arrow actually schedules | **Verified no-op** — Drake's runtime QA passed clean |
 | 6 | Red | Draggable time blocks + auto-reflow + AM/PM + unified clock picker | **Shipped** (ce9c31d) |
 | 7 | Yellow | Inline "+ Add Tag" when tag doesn't exist | **Shipped** (fa0851e) |
-| 8 | — | Remove timeline gutter line (+ tighten padding) | **Shipped** (d317599 + 9ce3bd7) |
+| 8 | — | Remove timeline gutter line (+ tighten padding) | **Shipped** (d317599 + 9ce3bd7 + d8d8584 mobile follow-up) |
 | 9 | Blue | Calendar right of Task Menu; "Task Menus" → "Task Menu" | **Shipped** (f6a27c6 + 28e287c fix) |
 | 10 | — | Delegated / Check-in tab (full scope) | **Phase 4.10.A shipped** (76b8733 → 6477ab9). 10.B–E not started. |
 
@@ -42,6 +44,7 @@ This session (2026-04-11) picked up from there and shipped **Phase 4.10.A** — 
 ## Commit chain (stacked on e182593)
 
 ```
+d8d8584 fix(schedule): tighten timeline gutter on mobile viewports (PIN 8 follow-up)
 6477ab9 feat(delegated): mark-as-delegated affordance on tags + backlog (PIN 10.A-4)
 cc27d53 feat(delegated): create/edit/delete modal (PIN 10.A-3)
 bb683be feat(delegated): tab skeleton + delegated.js module + list view (PIN 10.A-2)
@@ -67,8 +70,10 @@ Each pin is atomic and revertable individually. Phase 4.10.A commits stack 4 ato
 
 ### Phase 1 quick wins
 
-**PIN 8 — Delete timeline gutter line + tighten gutter** (`d317599`, `9ce3bd7`)
+**PIN 8 — Delete timeline gutter line + tighten gutter** (`d317599`, `9ce3bd7`, `d8d8584`)
 Removed `.tl::before` at `dashboard.css:211` and the mobile override at `:1750`. After Drake's screenshot showed the 28px padding felt like dead space without the line, tightened `.tl { padding-left: 28px → 16px }`, `.tl-node { left: -20 → -14 }` (re-centered in the new gutter), and `.tl-node.active { left: -32 → -20 }` (active pill stays anchored at the same viewport x-position). Dots, click states, and the active "now" pill are unchanged visually.
+
+**Second follow-up (`d8d8584`)** — surfaced during Phase 4.10.A eyeball QA when Drake was viewing on a narrow viewport and saw ~85px of dead space on the left of every card row. Root cause: two pre-PIN-8 mobile media-query overrides were never tightened by `9ce3bd7`. `dashboard.css:1156` had `@media(max-width:700px){... .tl{padding-left:85px}}` — stripped just the `.tl` clause, kept `.stats` and `body` rules intact. `dashboard.css:1792-1794` inside `@media(max-width:480px)` had `.tl{padding-left:52px}` + `.tl-node{left:-52px;width:42px;font-size:9px}` — deleted both rules (the `.tl-node` rule was leftover wide time-label styling from before PIN 8, superseded by `.tl-node.active` at `:242`). Verified via `preview_inspect` at 1400px/680px/375px — all three now return the base `padding-left:16px` / `left:-14px` / `width:12px`. `.tl::before` still absent. `.tl-node.active` still at `-20px` via specificity. `.tl-compact .tl-node` at `:590` unaffected (different selector).
 
 **PIN 2 — Hover reveals full task title** (`b92d556`)
 `public/js/schedule-tab.js:246` — added `title="..."` attribute on the `.ttl` span, escaped via the global `escHtml()` from `tag-manager.js:412` (script load order at `index.html:948-949` guarantees availability).
