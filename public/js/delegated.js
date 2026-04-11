@@ -138,13 +138,146 @@
     });
   }
 
-  // ── Stubs replaced in commit 3 ──
-  function openDelegatedModal(idOrNull) {
-    if (typeof showToast === "function") showToast("Delegated modal coming in next commit", "info");
+  // ── Modal (commit 3) ──
+  // openDelegatedModal(idOrNull, prefill)
+  //   idOrNull: string block id to edit, or null to create a new item
+  //   prefill: optional object with {title, linkedTagId, linkedBlockId}
+  //     used by commit 4's mark-as-delegated affordances to seed the form
+  function openDelegatedModal(idOrNull, prefill) {
+    const overlay = document.getElementById("delegated-modal-overlay");
+    if (!overlay) return;
+    prefill = prefill || {};
+    const item = idOrNull ? getAllDelegatedItems().find(i => i.id === idOrNull) : null;
+    const p = item ? (item.properties || {}) : {};
+
+    document.getElementById("dm-id").value = idOrNull || "";
+    document.getElementById("dm-title").value = p.title || prefill.title || "";
+    document.getElementById("dm-delegatee-name").value = (p.delegatee && p.delegatee.name) || "";
+    document.getElementById("dm-delegatee-email").value = (p.delegatee && p.delegatee.email) || "";
+    document.getElementById("dm-channel").value = p.channel || "manual";
+    // datetime-local wants "YYYY-MM-DDTHH:MM" in local time. If we stored an
+    // ISO string with timezone info, convert by subtracting tz offset so the
+    // input displays the same wall-clock time the user originally picked.
+    document.getElementById("dm-check-in-at").value = isoToDatetimeLocal(p.checkInAt);
+    document.getElementById("dm-cadence").value = p.checkInCadence || "once";
+    document.getElementById("dm-notes").value = p.notes || "";
+    document.getElementById("dm-linked-tag-id").value = p.linkedTagId || prefill.linkedTagId || "";
+    document.getElementById("dm-linked-block-id").value = p.linkedBlockId || prefill.linkedBlockId || "";
+    document.getElementById("delegated-modal-title").textContent = idOrNull ? "Edit delegated item" : "New delegated item";
+    document.getElementById("dm-mark-checked").style.display = (idOrNull && !p.lastCheckedAt) ? "" : "none";
+
+    overlay.classList.add("open");
+    // Focus the title field for quick create
+    setTimeout(() => { const t = document.getElementById("dm-title"); if (t) t.focus(); }, 20);
   }
 
-  function deleteDelegatedItem(id) {
-    if (typeof showToast === "function") showToast("Delete coming in next commit", "info");
+  function closeDelegatedModal() {
+    const overlay = document.getElementById("delegated-modal-overlay");
+    if (overlay) overlay.classList.remove("open");
+  }
+
+  // Convert an ISO string (possibly with offset) to the YYYY-MM-DDTHH:MM
+  // form that <input type="datetime-local"> expects, using LOCAL time.
+  function isoToDatetimeLocal(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    const pad = n => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+           "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  async function saveDelegatedItem() {
+    const id = document.getElementById("dm-id").value || null;
+    const title = document.getElementById("dm-title").value.trim();
+    if (!title) { if (typeof showToast === "function") showToast("Title is required", "error"); return; }
+    const checkInAtLocal = document.getElementById("dm-check-in-at").value;
+    // datetime-local gives "YYYY-MM-DDTHH:MM" in local time — convert to ISO
+    // (UTC) via the Date constructor which interprets it as local.
+    const checkInAt = checkInAtLocal ? new Date(checkInAtLocal).toISOString() : null;
+
+    const nameVal = document.getElementById("dm-delegatee-name").value.trim();
+    const emailVal = document.getElementById("dm-delegatee-email").value.trim();
+    const properties = {
+      title,
+      delegatee: {
+        name: nameVal || null,
+        email: emailVal || null,
+        slackUserId: null
+      },
+      channel: document.getElementById("dm-channel").value || "manual",
+      checkInAt,
+      checkInCadence: document.getElementById("dm-cadence").value || "once",
+      notes: document.getElementById("dm-notes").value.trim() || "",
+      linkedTagId: document.getElementById("dm-linked-tag-id").value || null,
+      linkedBlockId: document.getElementById("dm-linked-block-id").value || null
+    };
+
+    try {
+      let resp;
+      if (id) {
+        resp = await fetch("/api/delegated-items/" + id, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ properties })
+        });
+      } else {
+        resp = await fetch("/api/delegated-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ properties })
+        });
+      }
+      if (!resp.ok) {
+        let err;
+        try { err = (await resp.json()).error; } catch(e) { err = resp.statusText; }
+        throw new Error(err || "Save failed");
+      }
+      closeDelegatedModal();
+      await refreshDelegatedItems();
+      if (typeof showToast === "function") showToast(id ? "Delegated item updated" : "Delegated item created", "success");
+    } catch (e) {
+      if (typeof showToast === "function") showToast("Save failed: " + (e.message || e), "error");
+    }
+  }
+
+  async function deleteDelegatedItem(id) {
+    if (!id) return;
+    if (typeof window.confirm === "function" && !window.confirm("Delete this delegated item? This cannot be undone.")) return;
+    try {
+      const resp = await fetch("/api/delegated-items/" + id, { method: "DELETE" });
+      if (!resp.ok) {
+        let err;
+        try { err = (await resp.json()).error; } catch(e) { err = resp.statusText; }
+        throw new Error(err || "Delete failed");
+      }
+      await refreshDelegatedItems();
+      if (typeof showToast === "function") showToast("Delegated item deleted", "success");
+    } catch (e) {
+      if (typeof showToast === "function") showToast("Delete failed: " + (e.message || e), "error");
+    }
+  }
+
+  async function markDelegatedItemChecked() {
+    const id = document.getElementById("dm-id").value;
+    if (!id) return;
+    try {
+      const resp = await fetch("/api/delegated-items/" + id, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties: { lastCheckedAt: new Date().toISOString() } })
+      });
+      if (!resp.ok) {
+        let err;
+        try { err = (await resp.json()).error; } catch(e) { err = resp.statusText; }
+        throw new Error(err || "Update failed");
+      }
+      closeDelegatedModal();
+      await refreshDelegatedItems();
+      if (typeof showToast === "function") showToast("Marked as checked-in", "success");
+    } catch (e) {
+      if (typeof showToast === "function") showToast("Update failed: " + (e.message || e), "error");
+    }
   }
 
   // ── Refresh helper exposed for commit 3/4 + SSE listeners ──
@@ -171,6 +304,18 @@
         _currentFilter = btn.dataset.filter || "all";
         renderDelegatedList();
       });
+    });
+
+    // Modal wiring (PIN 10.A commit 3)
+    const cancelBtn = document.getElementById("dm-cancel");
+    const saveBtn = document.getElementById("dm-save");
+    const checkBtn = document.getElementById("dm-mark-checked");
+    const overlay = document.getElementById("delegated-modal-overlay");
+    if (cancelBtn) cancelBtn.addEventListener("click", closeDelegatedModal);
+    if (saveBtn) saveBtn.addEventListener("click", saveDelegatedItem);
+    if (checkBtn) checkBtn.addEventListener("click", markDelegatedItemChecked);
+    if (overlay) overlay.addEventListener("click", e => {
+      if (e.target === overlay) closeDelegatedModal();
     });
   }
 

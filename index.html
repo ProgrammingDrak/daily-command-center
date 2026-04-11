@@ -962,6 +962,46 @@
   </div>
 </div>
 
+<!-- PIN 10.A: delegated item create/edit modal -->
+<div class="delegated-modal-overlay" id="delegated-modal-overlay">
+  <div class="delegated-modal-box">
+    <h3 class="delegated-modal-title" id="delegated-modal-title">New delegated item</h3>
+    <form id="delegated-modal-form" onsubmit="return false">
+      <input type="hidden" id="dm-id" />
+      <input type="hidden" id="dm-linked-tag-id" />
+      <input type="hidden" id="dm-linked-block-id" />
+      <label class="delegated-modal-label">Title<span class="dm-req">*</span></label>
+      <input type="text" id="dm-title" class="delegated-modal-input" maxlength="200" placeholder="Follow up on Q2 review" />
+      <label class="delegated-modal-label">Delegatee name</label>
+      <input type="text" id="dm-delegatee-name" class="delegated-modal-input" maxlength="100" placeholder="Alice Carter" />
+      <label class="delegated-modal-label">Delegatee email</label>
+      <input type="email" id="dm-delegatee-email" class="delegated-modal-input" maxlength="200" placeholder="alice@example.com" />
+      <label class="delegated-modal-label">Channel</label>
+      <select id="dm-channel" class="delegated-modal-input">
+        <option value="manual" selected>Manual (I'll contact them myself)</option>
+        <option value="email">Email (activates in Phase 10.C)</option>
+        <option value="slack">Slack (activates in Phase 10.C)</option>
+      </select>
+      <label class="delegated-modal-label">Check-in at</label>
+      <input type="datetime-local" id="dm-check-in-at" class="delegated-modal-input" />
+      <label class="delegated-modal-label">Cadence</label>
+      <select id="dm-cadence" class="delegated-modal-input">
+        <option value="once" selected>Once</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+      </select>
+      <label class="delegated-modal-label">Notes</label>
+      <textarea id="dm-notes" class="delegated-modal-input" rows="3" maxlength="1000" placeholder="Context / background"></textarea>
+      <div class="delegated-modal-actions">
+        <button type="button" class="secondary" id="dm-cancel">Cancel</button>
+        <button type="button" class="secondary" id="dm-mark-checked" style="display:none">Mark as checked-in</button>
+        <button type="button" class="primary" id="dm-save">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Clock face picker -->
 <div class="dm-clock-overlay" id="dm-clock-overlay">
   <div class="dm-clock-popup" id="dm-clock-popup">
