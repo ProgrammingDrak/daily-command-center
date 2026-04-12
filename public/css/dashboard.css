@@ -1789,29 +1789,78 @@
       display:inline-flex;align-items:center;justify-content:center;
     }
 
-    /* ── Task cards ───────────────────────────────────────────── */
-    .card{padding:10px 8px;gap:6px;min-height:52px;align-items:flex-start}
-    .chk{width:36px;height:36px;border-radius:8px;flex-shrink:0;margin-top:2px}
-    .chk svg{width:16px;height:16px}
-    .chk-col{gap:1px}
+    /* ── Schedule timeline ────────────────────────────────────────
+       .tl has padding-left:16px (PIN 8). The old wide-gutter absolute
+       positions on .tl-compact are now off-screen — hide or reset them.
+    ──────────────────────────────────────────────────────────────── */
+    .tl-item:hover{transform:none}   /* no translateX on touch */
+    /* Compact (done/pushed) items: absolute tl-time goes off-screen
+       with 16px gutter — the time is already in .c-time, hide the gutter copy */
+    .tl-compact .tl-time{display:none}
+    .tl-compact .tl-node{left:-12px;width:10px;height:10px}
+
+    /* ── Task cards — 2-row card layout ───────────────────────────
+       Row 1: [checkbox] [bar] [title + time + badge]
+       Row 2: [pomo][push][del]                [− dur +]
+    ──────────────────────────────────────────────────────────────── */
+    .card{
+      flex-wrap:wrap;
+      padding:10px 8px 8px;
+      column-gap:6px;
+      row-gap:0;
+      min-height:0;
+      align-items:flex-start;
+    }
+    /* Row 1: chk (44px) + bar (3px) + body (fills remaining → wraps actions) */
+    .chk{width:44px;height:44px;border-radius:10px;flex-shrink:0;margin-top:0}
+    .chk svg{width:18px;height:18px}
+    .chk-col{display:none}         /* hide the add-menu col on mobile */
     .chk-quick{display:none}
     .grip{display:none}
-    .ttl{font-size:13px}
-    .tinline{font-size:10px}
-    .meta{font-size:10px;gap:4px}
+    .bar{flex-shrink:0;align-self:stretch;min-height:44px}
+    /* Body: flex:1 on same line as chk+bar — fills the row so action buttons wrap */
+    .body{flex:1 1 0px;min-width:0;padding-bottom:6px}
+    .ttl{font-size:14px;white-space:normal;overflow:visible;max-width:100%}
+    .tinline{font-size:11px;display:block;margin-top:2px}
+    .meta{font-size:10px;gap:4px;margin-top:3px}
+    /* Type badge — clear and legible */
+    .tag{font-size:10px;padding:3px 8px}
 
-    /* ── Duration controls ────────────────────────────────────── */
-    .dur{gap:2px}
-    .dbtn{width:34px;height:34px;font-size:16px;border-radius:6px}
-    .dbadge{width:56px;font-size:11px;padding:4px 0}
-
-    /* ── Card action buttons ──────────────────────────────────── */
-    .pomo-btn{width:34px;height:34px;margin-left:2px}
-    .pomo-btn svg{width:15px;height:15px}
-    .btn-del-task,.btn-push-tmr,.btn-triv-link,.btn-add-menu,.notes-btn{
-      width:34px;height:34px;
+    /* ── Duration controls (right side of action row) ─────────── */
+    .dur{gap:4px;margin-left:auto;align-items:center;padding-top:2px}
+    .dbtn{
+      width:44px;height:44px;
+      font-size:20px;font-weight:700;
+      border-radius:8px;border:1px solid var(--border);
     }
-    .btn-add-menu{font-size:15px}
+    .dbadge{width:48px;font-size:12px;padding:4px 0;text-align:center}
+
+    /* ── Card action buttons (row 2, wraps below body) ──────────── */
+    /* Always visible on mobile — no hover-only opacity trick */
+    .notes-btn{width:40px;height:40px;margin-top:2px;border-radius:8px;flex-shrink:0}
+    .notes-btn svg{width:15px;height:15px}
+    .pomo-btn{
+      width:40px;height:40px;
+      margin-left:0;margin-top:2px;
+      border-radius:8px;flex-shrink:0;
+      opacity:0.75;
+    }
+    .pomo-btn:active{opacity:1}
+    .pomo-btn svg{width:16px;height:16px}
+    .btn-triv-link{display:none}   /* hide on mobile — reduces clutter */
+    .btn-add-menu{display:none}    /* hide on mobile — reduces clutter */
+    .btn-push-tmr{
+      width:40px;height:40px;margin-top:2px;
+      border-radius:8px;flex-shrink:0;
+      opacity:0.75!important;      /* always visible, no hover-only */
+    }
+    .btn-push-tmr:active{opacity:1!important}
+    .btn-del-task{
+      width:40px;height:40px;margin-top:2px;
+      border-radius:8px;flex-shrink:0;
+      opacity:0.75!important;      /* always visible, no hover-only */
+    }
+    .btn-del-task:active{opacity:1!important}
 
     /* ── Focus banner ─────────────────────────────────────────── */
     .focus-banner{padding:10px 12px;gap:8px}
