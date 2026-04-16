@@ -164,6 +164,12 @@
             // During Phase 3-4 coexistence, still handle old saves
             // Once Phase 5 removes old persistence, this case goes away
             break;
+
+          // Vault (markdown-on-disk) events — forwarded to listeners via document events
+          case 'vault-changed':
+          case 'vault-sync-status':
+            document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
+            break;
         }
       } catch(err) { /* ignore parse errors */ }
     };

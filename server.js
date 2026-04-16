@@ -24,6 +24,8 @@ const migration = require("./migrate");
 const gcalAuth = require("./gcal-auth");
 const gcalSync = require("./gcal-sync");
 const auth = require("./auth");
+const VaultStore = require("./vault-store");
+const SyncManager = require("./sync-manager");
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind Railway's reverse proxy
@@ -46,8 +48,25 @@ const MANIFEST_FILE = path.join(RECENT_DIR, "manifest.json");
 const PREP_DIR = path.join(DATA_DIR, "prep");
 const USER_CONTEXT_FILE = path.join(DATA_DIR, "config", "user-context.yaml");
 const PA_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
+// ── Vault configuration (Phase 1) ──
+// VAULT_REPO_URL: https URL of the private GitHub repo that backs the vault.
+//                 If unset, the vault runs local-only (no push/pull).
+// VAULT_GITHUB_PAT: fine-grained PAT with contents:write on the vault repo.
+//                   Injected into the clone URL as x-access-token.
+// VAULT_BRANCH: git branch (default "main").
+// VAULT_DIR: filesystem path to the working copy. Defaults to ./vault
+//            (gitignored). On Railway, the container filesystem is
+//            ephemeral — clone happens on every cold boot.
+const VAULT_DIR = process.env.VAULT_DIR || path.join(PROJECT_DIR, "vault");
+const VAULT_INDEX_FILE = path.join(DATA_DIR, ".vault-index.json");
+const SYNC_QUEUE_FILE = path.join(DATA_DIR, ".sync-queue.json");
+const VAULT_REPO_URL = process.env.VAULT_REPO_URL || null;
+const VAULT_BRANCH = process.env.VAULT_BRANCH || "main";
 
 [RECENT_DIR, ENGRAMS_DIR, DAYS_DIR].forEach((dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); });
+
+let vault = null;
+let syncMgr = null;
 
 app.use(express.json({ limit: "5mb" }));
 
@@ -536,12 +555,119 @@ app.post("/api/gcal/events", async (req, res) => { try { const { calendarId, ...
 app.delete("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); await gcalSync.deleteEvent(gcalData.gcal_event_id, gcalData.calendar_id); broadcast("gcal-sync", { action: "delete", blockId: req.params.blockId }); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post("/api/gcal/sync", async (req, res) => { try { await gcalSync.syncAll(); res.json({ ok: true, status: await gcalSync.getSyncStatus() }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
+// ── Vault API (Phase 1) ──
+// The vault is a git-backed markdown store that holds long-term memory.
+// Postgres is working memory (intraday state). These endpoints expose the
+// in-memory VaultStore index and typed graph; writes route through the
+// SyncManager for durable commit+push.
+function vaultReady(res) {
+  if (!vault || !vault.ready) { res.status(503).json({ error: "vault not ready" }); return false; }
+  return true;
+}
+
+app.get("/api/vault/status", (req, res) => {
+  const sync = syncMgr ? syncMgr.getStatus() : { status: "disabled" };
+  res.json({
+    vault: vault && vault.ready ? vault.indexSummary() : { ready: false },
+    sync,
+    remote: VAULT_REPO_URL ? "configured" : "none",
+  });
+});
+
+app.get("/api/vault/nodes", (req, res) => {
+  if (!vaultReady(res)) return;
+  const { type, subtype, has, since } = req.query;
+  res.json(vault.list({ type, subtype, hasField: has, sinceDate: since }));
+});
+
+app.get("/api/vault/node/*", (req, res) => {
+  if (!vaultReady(res)) return;
+  const slug = req.params[0];
+  const node = vault.get(slug);
+  if (!node) return res.status(404).json({ error: "not found" });
+  res.json(node);
+});
+
+app.put("/api/vault/node/*", async (req, res) => {
+  if (!vaultReady(res)) return;
+  const slug = req.params[0];
+  const { frontmatter, body, message } = req.body || {};
+  try {
+    const node = await vault.write(slug, { frontmatter: frontmatter || {}, body: body || "" });
+    if (syncMgr) syncMgr.notifyChange({ slug, message });
+    res.json(node);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/vault/node/*", async (req, res) => {
+  if (!vaultReady(res)) return;
+  const slug = req.params[0];
+  try {
+    const removed = await vault.delete(slug);
+    if (!removed) return res.status(404).json({ error: "not found" });
+    if (syncMgr) syncMgr.notifyChange({ slug, message: `delete ${slug}` });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get("/api/vault/graph/*", (req, res) => {
+  if (!vaultReady(res)) return;
+  const slug = req.params[0];
+  res.json(vault.graph(slug));
+});
+
+app.post("/api/vault/flush", async (req, res) => {
+  if (!syncMgr) return res.status(503).json({ error: "sync disabled" });
+  try { await syncMgr.flushAndPush(); res.json(syncMgr.getStatus()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Static + Fallback ──
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });
 
 // ── Startup ──
 let defaultUserId = 1;
+
+async function initVault() {
+  let remoteUrl = VAULT_REPO_URL;
+  if (remoteUrl && process.env.VAULT_GITHUB_PAT && remoteUrl.startsWith("https://github.com/")) {
+    // Inject PAT for non-interactive auth (Railway env). Never log this.
+    remoteUrl = remoteUrl.replace("https://github.com/", `https://x-access-token:${process.env.VAULT_GITHUB_PAT}@github.com/`);
+  }
+  syncMgr = new SyncManager({
+    vaultDir: VAULT_DIR,
+    queueFile: SYNC_QUEUE_FILE,
+    remoteUrl,
+    branch: VAULT_BRANCH,
+  });
+  syncMgr.on("status", (s) => broadcast("vault-sync-status", s));
+  await syncMgr.init();
+  vault = new VaultStore({ vaultDir: VAULT_DIR, indexFile: VAULT_INDEX_FILE });
+  vault.on("vault-changed", (evt) => {
+    broadcast("vault-changed", evt);
+    if (evt.source !== "local") {
+      // External edit (Obsidian via git pull or manual). No commit needed.
+      return;
+    }
+  });
+  await vault.init();
+  const summary = vault.indexSummary();
+  console.log(`  Vault:      ${summary.totalNodes} nodes, ${summary.totalEdges} edges (${VAULT_REPO_URL ? "remote" : "local-only"})`);
+}
+
+async function shutdown() {
+  try { if (syncMgr) await syncMgr.close(); } catch (e) { console.error("[sync] shutdown:", e.message); }
+  try { if (vault) await vault.close(); } catch (e) { console.error("[vault] shutdown:", e.message); }
+  process.exit(0);
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
+
 app.listen(PORT, async () => {
   console.log(`\n  Daily Command Center`);
   console.log(`  --------------------`);
@@ -556,6 +682,8 @@ app.listen(PORT, async () => {
   } catch (e) { console.error("[auth] Startup error:", e.message); }
 
   try { await gcalSync.init(broadcast, defaultUserId); if (await gcalAuth.isAuthenticated(defaultUserId)) { console.log(`  GCal:       Connected`); gcalSync.startPolling(); } else { console.log(`  GCal:       Not connected`); } } catch (e) { console.error("[gcal] Init error:", e.message); }
+
+  try { await initVault(); } catch (e) { console.error("[vault] Init error:", e.message); }
 
   try { ensureSkeletonDays(); } catch (e) {}
   try { await seedScheduleBlocksFromYAML(defaultUserId, `ws-${defaultUserId}`); } catch(e) {}

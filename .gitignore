@@ -15,3 +15,7 @@ data/blocks.db-wal
 data/gcal-credentials.json
 data/gcal-tokens.json
 .gstack/
+
+# Vault — owned by its own git repo, never tracked here
+vault/
+
