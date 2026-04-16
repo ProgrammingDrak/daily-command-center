@@ -70,7 +70,10 @@ class SyncManager extends EventEmitter {
     if (this.remoteUrl) {
       const git = simpleGit({ timeout: { block: GIT_TIMEOUT } });
       try {
-        await git.clone(this.remoteUrl, this.vaultDir, ["--branch", this.branch]);
+        // --single-branch so we only fetch the vault branch's objects.
+        // Matters when the vault is an orphan branch on the same repo as DCC
+        // code — without this, the clone would also pull main's history.
+        await git.clone(this.remoteUrl, this.vaultDir, ["--branch", this.branch, "--single-branch"]);
         console.log("[sync] cloned vault from remote");
       } catch (e) {
         console.warn("[sync] clone failed, initializing empty repo:", e.message);
