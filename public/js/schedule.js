@@ -366,27 +366,131 @@ function addTaskUniversal(barEl){
   const dest=barEl.querySelector(".tab-dest").value;
   inp.value="";
   switch(dest){
-    case"schedule":insertTaskNow(title,durMin);break;
+    case"schedule":openSchedulePicker(title,durMin);break;
     case"backlog":addNewTask(title,durMin);break;
-    case"priority":{
-      const itemProps={title,priority:"High",tags:["action-item"],
-        source_task:"Task bar",source_task_id:"taskbar",
-        created_at:new Date().toISOString(),status:"queued"};
-      // Write to both localStorage (for legacy readers) and blockStore (unified)
-      const pending=JSON.parse(localStorage.getItem("pa-pending-tasks")||"[]");
-      pending.push({id:"pending-"+Date.now(),...itemProps});
-      localStorage.setItem("pa-pending-tasks",JSON.stringify(pending));
-      if(typeof savePendingTasks==="function")savePendingTasks(pending);
-      if(window.blockStore)window.blockStore.createBlock("block",itemProps);
-      if(typeof buildActionItemsTab==="function")buildActionItemsTab();
-      render();break;
-    }
+    case"urgent":insertTaskNow(title,durMin);break;
     case"trivial":{
       if(typeof addTrivialTask==="function")addTrivialTask(title);
       break;
     }
   }
 }
+
+// ======== SCHEDULE-AT PICKER ========
+// Opens a small modal to pick a date+time for a new task. If the date is today,
+// the task is inserted into the live schedule with a pinned start time. If the
+// date is different, the task is persisted to the blockstore under that date so
+// it appears when navigating to that day.
+let _schedPickerTitle="",_schedPickerDur=30;
+function openSchedulePicker(title,durMin){
+  _schedPickerTitle=title;
+  _schedPickerDur=durMin||30;
+  const overlay=document.getElementById("sched-picker-overlay");
+  if(!overlay){
+    // Fallback if modal markup isn't present: schedule after current.
+    insertTaskNow(title,durMin);
+    return;
+  }
+  const titleEl=document.getElementById("sched-picker-title");
+  if(titleEl)titleEl.textContent=title;
+  const input=document.getElementById("sched-picker-when");
+  if(input){
+    // Default to the next round half-hour today
+    const now=new Date();
+    const base=new Date(now.getTime()+30*60000);
+    base.setSeconds(0,0);
+    const rounded=new Date(Math.ceil(base.getTime()/(15*60000))*(15*60000));
+    const pad=n=>String(n).padStart(2,"0");
+    input.value=rounded.getFullYear()+"-"+pad(rounded.getMonth()+1)+"-"+pad(rounded.getDate())
+      +"T"+pad(rounded.getHours())+":"+pad(rounded.getMinutes());
+  }
+  overlay.classList.add("open");
+  setTimeout(()=>{if(input)input.focus()},0);
+}
+function closeSchedulePicker(){
+  const overlay=document.getElementById("sched-picker-overlay");
+  if(overlay)overlay.classList.remove("open");
+  _schedPickerTitle="";_schedPickerDur=30;
+}
+function confirmSchedulePicker(){
+  const input=document.getElementById("sched-picker-when");
+  if(!input||!input.value||!_schedPickerTitle){closeSchedulePicker();return}
+  const when=new Date(input.value);
+  if(isNaN(when.getTime())){closeSchedulePicker();return}
+  const pad=n=>String(n).padStart(2,"0");
+  const dateStr=when.getFullYear()+"-"+pad(when.getMonth()+1)+"-"+pad(when.getDate());
+  const timeStr=pad(when.getHours())+":"+pad(when.getMinutes());
+  const title=_schedPickerTitle,durMin=_schedPickerDur;
+  closeSchedulePicker();
+  const currentDate=(typeof viewDate!=="undefined"&&viewDate)
+    ?viewDate:((__state&&__state.date)?__state.date:null);
+  if(dateStr===currentDate){
+    // Same day: insert into schedule and pin the start time to the chosen time
+    const id=qaId();
+    const s=pt(timeStr);
+    const newItem={id,title,type:"task",start:timeStr,end:fmt(s+durMin),
+      meta:"Custom task · "+ms(durMin),detail:"",source:"manual",
+      notionUrl:"",priority:"High",tags:[],_pinnedStart:timeStr};
+    // Insert in chronological order based on pinned start
+    let insertAt=scheduled.findIndex(ev=>pt(ev.start)>=s);
+    if(insertAt===-1)insertAt=scheduled.length;
+    scheduled.splice(insertAt,0,newItem);
+    const pins=loadPinnedStarts();pins[id]=timeStr;savePinnedStarts(pins);
+    recalcTimes();
+    persistAddedTask(newItem);
+    const pending=loadPendingTasks();
+    pending.push({id,title,priority:"High",source_task:"Task bar",
+      source_task_id:"taskbar",created_at:new Date().toISOString(),
+      status:"scheduled",_scheduled:true});
+    savePendingTasks(pending);
+    log("scheduled",id,"Scheduled at "+timeStr+": "+title);
+    checkOverflow();render();
+    checkBlockWarnings(newItem);
+  } else {
+    // Different day: persist to blockstore for that target date
+    const id=qaId();
+    const newItem={id,title,type:"task",start:timeStr,end:fmt(pt(timeStr)+durMin),
+      meta:"Custom task · "+ms(durMin),detail:"",source:"manual",
+      notionUrl:"",priority:"High",tags:[]};
+    if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
+      window.blockStore.createBlock("block",{
+        local_id:id,title,duration:durMin,start:timeStr,end:newItem.end,
+        priority:"High",meta:newItem.meta,detail:"",notionUrl:"",
+        source:"manual",tags:[],_pinnedStart:timeStr,
+        added_at:new Date().toISOString()
+      },{date:dateStr});
+      log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
+      render();
+    } else {
+      // Fallback: store in a per-date localStorage bucket so it's not lost
+      const key="pa-added-tasks-"+dateStr;
+      let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){arr=[]}
+      arr.push({id,title,durMin,priority:"High",source:"manual",meta:newItem.meta,
+        detail:"",notionUrl:"",start:timeStr,end:newItem.end,
+        _pinnedStart:timeStr,addedAt:new Date().toISOString()});
+      localStorage.setItem(key,JSON.stringify(arr));
+      log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
+    }
+  }
+}
+
+// Wire up schedule-picker controls (buttons + Enter/Escape keys)
+(function(){
+  const overlay=document.getElementById("sched-picker-overlay");
+  if(!overlay)return;
+  const closeBtn=document.getElementById("sched-picker-close");
+  const cancelBtn=document.getElementById("sched-picker-cancel");
+  const confirmBtn=document.getElementById("sched-picker-confirm");
+  const input=document.getElementById("sched-picker-when");
+  if(closeBtn)closeBtn.addEventListener("click",closeSchedulePicker);
+  if(cancelBtn)cancelBtn.addEventListener("click",closeSchedulePicker);
+  if(confirmBtn)confirmBtn.addEventListener("click",confirmSchedulePicker);
+  overlay.addEventListener("click",e=>{if(e.target===overlay)closeSchedulePicker()});
+  if(input)input.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){e.preventDefault();confirmSchedulePicker()}
+    else if(e.key==="Escape"){e.preventDefault();closeSchedulePicker()}
+  });
+})();
 // Wire up all task-add bars
 document.querySelectorAll(".task-add-bar").forEach(bar=>{
   bar.querySelector(".tab-add").addEventListener("click",()=>addTaskUniversal(bar));
