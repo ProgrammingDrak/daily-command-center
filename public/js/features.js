@@ -536,10 +536,12 @@ function saveStickyNote(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
     // BlockStore path: create or update block directly
     if(snEditingId){
-      // Find the block and update it
+      // Find the block and update it — merge with existing props so the
+      // "pinned" tag (the marker loadStickyNotes() looks for) isn't wiped out.
       const existing=window.blockStore.get(snEditingId);
       if(existing){
-        window.blockStore.updateBlock(snEditingId,{html,text}).then(()=>{
+        const mergedProps={...(existing.properties||{}),html,text};
+        window.blockStore.updateBlock(snEditingId,mergedProps).then(()=>{
           closeStickyEditor();
           renderStickyNotesList();
           updateSnBadge();

@@ -96,12 +96,17 @@
   const LEGACY_GLOBAL_TYPES = new Set(["sticky_note", "trivial_task", "life_capture", "pending_task", "schedule_block", "tag"]);
 
   function cacheSet(block) {
-    // Unified: partition by date presence. No-date blocks are global.
-    if (block.type === "block" && !block.date) {
+    // Remove any prior entry in either cache so a block can migrate between
+    // global and day partitions without leaving a stale duplicate behind.
+    _dayCache.delete(block.id);
+    _globalCache.delete(block.id);
+    const props = block.properties || {};
+    // Pinned blocks (sticky notes) are globally scoped even when the server
+    // stored a date — otherwise loadDay() on date navigation would evict them.
+    const isPinned = block.type === "block" && Array.isArray(props.tags) && props.tags.includes("pinned");
+    if (LEGACY_GLOBAL_TYPES.has(block.type) || isPinned) {
       _globalCache.set(block.id, block);
-    } else if (block.type === "block" && block.date) {
-      _dayCache.set(block.id, block);
-    } else if (LEGACY_GLOBAL_TYPES.has(block.type)) {
+    } else if (block.type === "block" && !block.date) {
       _globalCache.set(block.id, block);
     } else {
       _dayCache.set(block.id, block);
@@ -317,7 +322,9 @@
       _dayCache.clear();
       try {
         const blocks = await apiGet("/api/blocks?date=" + dateStr);
-        for (const b of blocks) _dayCache.set(b.id, b);
+        // Route through cacheSet so pinned/global blocks land in _globalCache
+        // rather than being evicted on the next date switch.
+        for (const b of blocks) cacheSet(b);
         return blocks;
       } catch (e) {
         console.error("[BlockStore] loadDay failed:", e);
@@ -330,12 +337,9 @@
       const types = ["block", ...LEGACY_GLOBAL_TYPES].join(",");
       try {
         const blocks = await apiGet("/api/blocks?type=" + types);
-        for (const b of blocks) {
-          // Unified blocks without date go to global cache; with date go to day cache
-          if (b.type === "block" && !b.date) _globalCache.set(b.id, b);
-          else if (b.type === "block" && b.date) _dayCache.set(b.id, b);
-          else _globalCache.set(b.id, b); // legacy global types
-        }
+        // Route through cacheSet so pinned blocks (sticky notes stored with a
+        // stale date) are classified as global and survive date navigation.
+        for (const b of blocks) cacheSet(b);
         return blocks;
       } catch (e) {
         console.error("[BlockStore] loadGlobals failed:", e);
