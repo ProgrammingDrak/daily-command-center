@@ -255,7 +255,7 @@
     <select class="tab-dest">
       <option value="schedule" selected>Schedule</option>
       <option value="backlog">Backlog</option>
-      <option value="priority">Priority</option>
+      <option value="urgent">Urgent</option>
       <option value="trivial">Trivial</option>
     </select>
     <button class="tab-add">+ Add</button>
@@ -317,7 +317,7 @@
     <select class="tab-dest">
       <option value="backlog" selected>Backlog</option>
       <option value="schedule">Schedule</option>
-      <option value="priority">Priority</option>
+      <option value="urgent">Urgent</option>
       <option value="trivial">Trivial</option>
     </select>
     <button class="tab-add">+ Add</button>
@@ -832,6 +832,26 @@
     <div class="overflow-modal-footer">
       <button class="overflow-btn-late" id="overflow-work-late">I'm working late</button>
       <button class="overflow-btn-push" id="overflow-push-btn" disabled>Push selected to tomorrow</button>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule-at picker: pick a date/time to schedule a new task -->
+<div class="sched-picker-overlay" id="sched-picker-overlay">
+  <div class="sched-picker">
+    <div class="sched-picker-hdr">
+      <h3>Schedule task</h3>
+      <button class="pvb-close" id="sched-picker-close">&times;</button>
+    </div>
+    <div class="sched-picker-body">
+      <div class="sched-picker-title" id="sched-picker-title"></div>
+      <label class="sched-picker-label" for="sched-picker-when">When</label>
+      <input id="sched-picker-when" type="datetime-local" class="sched-picker-input" />
+      <div class="sched-picker-hint">Pick the date and time when this task should start.</div>
+    </div>
+    <div class="sched-picker-footer">
+      <button class="sched-picker-cancel" id="sched-picker-cancel">Cancel</button>
+      <button class="sched-picker-confirm" id="sched-picker-confirm">Schedule</button>
     </div>
   </div>
 </div>

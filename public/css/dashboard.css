@@ -1198,6 +1198,24 @@
   .overflow-pending-sub{font-size:11px;color:var(--text-muted);margin-bottom:6px}
   .overflow-task-time--muted{color:var(--text-muted);font-style:italic}
 
+  /* ======== SCHEDULE-AT PICKER MODAL ======== */
+  .sched-picker-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:470;justify-content:center;align-items:center;padding:24px}
+  .sched-picker-overlay.open{display:flex}
+  .sched-picker{background:var(--bg);border:1px solid var(--border);border-radius:12px;width:380px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.6)}
+  .sched-picker-hdr{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .sched-picker-hdr h3{font-size:14px;font-weight:700;margin:0;color:var(--accent-light)}
+  .sched-picker-body{padding:16px;display:flex;flex-direction:column;gap:8px}
+  .sched-picker-title{font-size:13px;color:var(--text);font-weight:600;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px}
+  .sched-picker-label{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-top:4px}
+  .sched-picker-input{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:13px;outline:none;color-scheme:dark}
+  .sched-picker-input:focus{border-color:var(--accent)}
+  .sched-picker-hint{font-size:11px;color:var(--text-muted)}
+  .sched-picker-footer{padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+  .sched-picker-cancel{padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:13px;cursor:pointer}
+  .sched-picker-cancel:hover{color:var(--text);background:rgba(255,255,255,0.05)}
+  .sched-picker-confirm{padding:7px 16px;border-radius:6px;border:none;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer}
+  .sched-picker-confirm:hover{opacity:0.85}
+
   /* ======== QUICK-CAPTURE STRIP ======== */
   .qc-strip{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;margin-bottom:12px}
   .qc-mood-group{display:flex;gap:4px;flex-shrink:0}
