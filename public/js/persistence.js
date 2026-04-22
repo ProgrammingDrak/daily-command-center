@@ -619,8 +619,11 @@ function reloadPersistedEdits() {
   // Restore user-added tasks (quick-add, drawer-add)
   try {
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
-      // Load from SQLite via blockstore cache (loadDay() already ran before this point)
-      const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).local_id&&(b.properties||{}).start)];
+      // Load from SQLite via blockstore cache (loadDay() already ran before this point).
+      // Filter by date: loadGlobals() pulls every type="block" row regardless of date,
+      // so without this check manual tasks from other days bleed onto today's schedule.
+      const currentDate=window.blockStore.getCurrentDate();
+      const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).local_id&&(b.properties||{}).start&&(!b.date||b.date===currentDate))];
       addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id;
