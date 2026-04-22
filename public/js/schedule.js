@@ -275,7 +275,19 @@ function insertTaskFromDrawer(title, durMin){
 }
 
 // ======== ACTIONS ========
-function toggleDone(id){if(manualDone.has(id)){manualDone.delete(id);delete doneAt[id];log("unchecked",id)}else{manualDone.add(id);doneAt[id]=new Date();log("checked",id)};saveDoneState();render()}
+function toggleDone(id){
+  const nowDone=!manualDone.has(id);
+  if(nowDone){manualDone.add(id);doneAt[id]=new Date();log("checked",id)}
+  else{manualDone.delete(id);delete doneAt[id];log("unchecked",id)}
+  saveDoneState();render();
+  const ev=scheduled.find(e=>e.id===id);
+  if(ev&&ev.source==="notion"&&ev.source_id){
+    const action=nowDone?"complete":"uncomplete";
+    fetch("/api/tasks/"+encodeURIComponent(ev.source_id)+"/"+action,{method:"POST"})
+      .then(r=>r.ok?null:r.json().then(j=>Promise.reject(j)))
+      .catch(err=>{if(typeof showToast==="function")showToast("Notion update failed: "+(err&&err.error||"unknown"),"error")});
+  }
+}
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   const c=dur(ev),n=Math.max(15,c+delta);if(n===c)return;

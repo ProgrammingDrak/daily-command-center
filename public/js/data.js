@@ -89,6 +89,7 @@ function transformState(state) {
         calUrl: item.source === "calendar" ? item.calendar_link || "" : "",
         priority: item.priority || "",
         completed: item.completed || false,
+        source_id: item.source_id || "",
         nested: false,
         prep: prep,
         prepStatus: matchedMeeting ? (matchedMeeting.prep_status || null) : null

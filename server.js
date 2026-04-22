@@ -26,6 +26,7 @@ const gcalSync = require("./gcal-sync");
 const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
+const notionClient = require("./notion-client");
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind Railway's reverse proxy
@@ -458,6 +459,25 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
     console.error("[apply-forward] error:", e && e.message ? e.message : e);
     res.status(500).json({ error: e && e.message ? e.message : String(e) });
   }
+});
+
+// ── Notion task write-back ──
+// Closes/reopens a Notion Kanban Board page when the user toggles done in DCC.
+// source_id is the Notion page UUID (with or without dashes).
+app.post("/api/tasks/:sourceId/complete", async (req, res) => {
+  if (!notionClient.isEnabled()) return res.status(503).json({ error: "Notion not configured" });
+  try {
+    await notionClient.completeTask(req.params.sourceId);
+    res.json({ ok: true });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+app.post("/api/tasks/:sourceId/uncomplete", async (req, res) => {
+  if (!notionClient.isEnabled()) return res.status(503).json({ error: "Notion not configured" });
+  try {
+    await notionClient.uncompleteTask(req.params.sourceId);
+    res.json({ ok: true });
+  } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
 // ── Delegated Items API (PIN 10.A) ──

@@ -10,6 +10,7 @@
     "migrate-data": "node sqlite-to-pg.js"
   },
   "dependencies": {
+    "@notionhq/client": "^5.20.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.8.0",
     "chokidar": "^3.6.0",
