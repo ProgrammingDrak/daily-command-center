@@ -617,8 +617,9 @@ function markDoneOnDate(id, date){
   }
 }
 
-function undoLast(){if(!actionLog.length)return;const a=actionLog.pop();if(a.type==="checked")manualDone.delete(a.id);else if(a.type==="unchecked")manualDone.add(a.id);else if(a.type==="reorder"&&a.detail)scheduled=JSON.parse(a.detail);render()}
-function resetAll(){scheduled=JSON.parse(JSON.stringify(INIT_SCHED));consider=JSON.parse(JSON.stringify(INIT_CONSIDER));backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));manualDone.clear();doneAt={};actionLog=[];durChanges={};render()}
+// undoLast() and resetAll() removed Phase 6 -- both broken; see features.js.
+// actionLog still populated by log() because sync.js builds the "Copy for Claude"
+// activity report from it (sync.js:5-15) -- that path is alive.
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");

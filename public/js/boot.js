@@ -153,13 +153,8 @@
     } catch(e) { console.warn('[Boot] Pomo cross-device restore failed (non-fatal):', e); }
   }
 
-  // Legacy hydration fallback — only needed if any USE_BLOCKSTORE flags are off
-  if (window.USE_BLOCKSTORE && !Object.values(window.USE_BLOCKSTORE).every(v => v)) {
-    try {
-      await hydrateFromStorage();
-      await hydrateGlobals();
-    } catch(e) { console.warn("[Second Brain] Hydration error (non-fatal):", e); }
-  }
+  // (Phase 6 cleanup) Removed legacy hydrateFromStorage/hydrateGlobals gate.
+  // BlockStore.loadDay() above is the single source of state hydration now.
 
   // Midnight date boundary: check every 60s if the date rolled over
   setInterval(() => {

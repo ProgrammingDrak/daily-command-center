@@ -302,7 +302,7 @@ app.get("/api/state/archives", async (req, res) => {
 app.get("/api/state/local", (req, res) => { res.json(readJSON(LOCAL_UI_STATE_FILE, null)); });
 
 // ── Brain Endpoints ──
-app.get("/api/brain/recent", (req, res) => { const data = {}; if (fs.existsSync(RECENT_DIR)) { for (const fname of fs.readdirSync(RECENT_DIR).sort()) { if (!fname.endsWith(".json") || fname === "manifest.json") continue; const entry = readJSON(path.join(RECENT_DIR, fname), null); if (entry) data[fname.replace(".json", "")] = entry; } } res.json(data); });
+// /api/brain/recent retired with reconcileWithServer (Phase 6).
 app.get("/api/brain/globals", (req, res) => { res.json(readJSON(GLOBALS_FILE, {})); });
 app.get("/api/brain/engrams", (req, res) => {
   const index = readJSON(path.join(ENGRAMS_DIR, "index.json"), {}); const cooccurrence = readJSON(path.join(ENGRAMS_DIR, "co-occurrence.json"), {});
@@ -316,7 +316,8 @@ app.get("/api/prep/:filename", (req, res) => { const fp = path.join(PREP_DIR, re
 app.get("/api/pa-log", (req, res) => { if (!fs.existsSync(PA_LOG_FILE)) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">pa-activity-log.md not found.</div>' }); const raw = fs.readFileSync(PA_LOG_FILE, "utf8"); const match = raw.match(/(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/); if (!match) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found.</div>' }); const ts = match[2], body = match[3].trim(); const lines = body.split("\n"), parts = []; let inUl = false; for (const line of lines) { const stripped = line.trim(); if (stripped.startsWith("- ")) { if (!inUl) { parts.push('<ul style="margin:4px 0 8px 16px;padding:0;list-style:disc">'); inUl = true; } parts.push(`<li style="margin:3px 0;font-size:12px;line-height:1.5">${stripped.slice(2).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</li>`); } else { if (inUl) { parts.push("</ul>"); inUl = false; } if (!stripped) parts.push('<div style="height:6px"></div>'); else parts.push(`<div style="font-size:12px;line-height:1.5;margin:2px 0">${stripped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</div>`); } } if (inUl) parts.push("</ul>"); res.json({ html: `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">Last off-peak sweep ran <strong style="color:var(--text)">${ts}</strong></div><div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">${parts.join("\n")}</div></div>`, timestamp: ts }); });
 
 // ── POST: State Persistence ──
-app.post("/api/save-day", (req, res) => { const body = req.body, date = body.date; if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Missing or invalid date" }); body.savedAt = new Date().toISOString(); writeJSON(path.join(RECENT_DIR, `${date}.json`), body); updateManifest(date); archiveDayState(date, body); pruneRecent(); broadcast("save", { source: "day", date }); res.json({ ok: true, date }); });
+// /api/save-day retired Phase 6 -- BlockStore is the source of truth, no client calls this.
+// /api/brain/recent (legacy reconcileWithServer endpoint) similarly retired.
 app.post("/api/save-globals", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(GLOBALS_FILE, body); broadcast("save", { source: "globals" }); res.json({ ok: true }); });
 app.post("/api/save-engram-index", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(path.join(ENGRAMS_DIR, "index.json"), body); broadcast("save", { source: "engrams" }); res.json({ ok: true }); });
 

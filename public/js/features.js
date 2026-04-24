@@ -819,8 +819,10 @@ document.getElementById("btn-copy").addEventListener("click",function(){
     setTimeout(()=>{b.classList.remove("copied");b.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> Copy for Claude'},2000)
   });
 });
-document.getElementById("btn-undo").addEventListener("click",undoLast);
-document.getElementById("btn-reset").addEventListener("click",resetAll);
+// btn-undo and btn-reset removed Phase 6 -- both were broken-but-wired:
+// undoLast() handled only 3 of 8 actionLog types; resetAll() wiped `scheduled`
+// without touching BlockStore / pushedSet / deletedSet, leaving inconsistent UI.
+// A real undo stack is a feature project, not tech debt; ship that separately.
 // Old add-task-btn, ai-tab-add-btn, new-title wiring removed — handled by universal task-add bar
 
 
