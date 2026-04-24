@@ -103,6 +103,11 @@ function closeOverflowModal(){
   _overflowDeficit=0;
   _overflowItems=[];
   _pendingNewTask=null; // discard any uncommitted task — nothing added to schedule
+  // A task committed by a non-urgent path (e.g. the Schedule picker) before the
+  // overflow check triggered would have queued a deferred render while this
+  // modal was open. Flush it now that the modal is closed so the task actually
+  // appears on the timeline.
+  if(typeof _flushDeferredRender==='function')_flushDeferredRender();
 }
 
 function pushSelectedToTomorrow(){
@@ -118,11 +123,12 @@ function pushSelectedToTomorrow(){
   if(!checked.length && !pushPendingTask && !_pendingNewTask){ closeOverflowModal(); return; }
 
   if(_pendingNewTask && !pushPendingTask){
-    // User didn't push the new task — commit it (they freed up enough room via other pushes)
+    // User didn't push the new task -- commit it (they freed up enough room via other pushes)
     const item = (({_insertAt,...rest})=>rest)(_pendingNewTask);
     const insertAt = _pendingNewTask._insertAt;
     scheduled.splice(insertAt, 0, item);
     recalcTimes();
+    if(item._pinnedStart){const pins=loadPinnedStarts();pins[item.id]=item._pinnedStart;savePinnedStarts(pins);}
     persistAddedTask(item);
     const pending=loadPendingTasks();
     pending.push({id:item.id,title:item.title,priority:"High",source_task:"Urgent bar",
@@ -144,6 +150,7 @@ function workLateOverflow(){
     const insertAt = _pendingNewTask._insertAt;
     scheduled.splice(insertAt, 0, item);
     recalcTimes();
+    if(item._pinnedStart){const pins=loadPinnedStarts();pins[item.id]=item._pinnedStart;savePinnedStarts(pins);}
     persistAddedTask(item);
     const pending=loadPendingTasks();
     pending.push({id:item.id,title:item.title,priority:"High",source_task:"Urgent bar",
@@ -223,36 +230,51 @@ function insertTaskNow(titleArg, durMinArg){
   if(!title)return;
   const durMin=durMinArg||30;
   const id=qaId();
-  const newItem={id,title,type:"task",start:"00:00",end:fmt(durMin),
+
+  // Pin start to the next free 15-minute slot from now, stepping past any
+  // meeting block. Without a pin, recalcTimes() would cascade from the first
+  // undone task -- which on an empty/sparse day collapses the urgent task to
+  // 00:00.
+  const roundTo15=m=>Math.ceil(m/15)*15;
+  const meetings=_meetingBlocks();
+  const startMin=_freeStart(roundTo15(now()),durMin,meetings);
+  const startStr=fmt(startMin);
+
+  const newItem={id,title,type:"task",start:startStr,end:fmt(startMin+durMin),
     meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",
-    notionUrl:"",priority:"High",tags:[]};
+    notionUrl:"",priority:"High",tags:[],_pinnedStart:startStr};
 
   // Calculate insertion position
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt = activeIdx !== -1 ? activeIdx + 1 :
     (()=>{const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));return fi.length?fi[0].i:scheduled.length;})();
 
-  // Simulate placement: temporarily add, cascade, read result, then remove
+  // Simulate placement: temporarily add, cascade, read the worst end among
+  // user-controllable tasks, then remove. Checking only newItem.end would miss
+  // cases where the pinned insert bumps a later task past EOD.
   scheduled.splice(insertAt, 0, newItem);
   recalcTimes();
-  const simulatedEnd = pt(newItem.end);
+  const simulatedEnd=scheduled
+    .filter(ev=>!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev)&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break")
+    .reduce((max,ev)=>Math.max(max,pt(ev.end)),0);
   scheduled.splice(scheduled.indexOf(newItem), 1);
   recalcTimes(); // restore cascade without the new item
 
   if(simulatedEnd <= EOD){
-    // Fits — commit for real
+    // Fits -- commit for real
     scheduled.splice(insertAt, 0, newItem);
     recalcTimes();
+    const pins=loadPinnedStarts();pins[id]=startStr;savePinnedStarts(pins);
     persistAddedTask(newItem);
     const pending=loadPendingTasks();
     pending.push({id,title,priority:"High",source_task:"Task bar",
       source_task_id:"taskbar",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
     savePendingTasks(pending);
-    log("scheduled",id,"Quick-added: "+title);
+    log("scheduled",id,"Quick-added at "+startStr+": "+title);
     render();
     checkBlockWarnings(newItem);
   } else {
-    // Doesn't fit — stage as pending and open overflow modal (task NOT in scheduled yet)
+    // Doesn't fit -- stage as pending and open overflow modal (task NOT in scheduled yet)
     _pendingNewTask = {...newItem, _insertAt: insertAt};
     const deficit = simulatedEnd - EOD;
     openOverflowModal(deficit);

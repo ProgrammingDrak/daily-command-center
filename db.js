@@ -97,9 +97,23 @@ function validateBlock(type, properties) {
 
 // ── Block CRUD ──
 
+// Postgres returns DATE columns as JS Date objects, which JSON-stringify to
+// "YYYY-MM-DDT00:00:00.000Z". Clients compare block.date to the "YYYY-MM-DD"
+// they pass in, so round-tripping the timestamp would silently drop every
+// same-day block. Normalize to the bare date string here.
+function normalizeDate(v) {
+  if (!v) return v;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return String(v).slice(0, 10);
+}
+
 function parseBlock(row) {
   if (!row) return null;
-  return { ...row, properties: typeof row.properties === "string" ? JSON.parse(row.properties) : (row.properties || {}) };
+  return {
+    ...row,
+    date: normalizeDate(row.date),
+    properties: typeof row.properties === "string" ? JSON.parse(row.properties) : (row.properties || {}),
+  };
 }
 
 async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, client) {
@@ -133,7 +147,7 @@ async function updateBlock(id, { properties, sort_order, parent_id, date }) {
   const newDate = date !== undefined ? date : existing.date;
   await pool.query(`UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6`, [newProps, newSortOrder, newParentId, newDate, now, id]);
   await pool.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, newProps, now]);
-  return { id, type: existing.type, parent_id: newParentId, date: newDate, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
+  return { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
 }
 
 async function deleteBlock(id) {
