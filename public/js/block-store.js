@@ -11,12 +11,17 @@
   "use strict";
 
   const CLIENT_ID = crypto.randomUUID();
-  const WAL_KEY = "blockstore-wal"; // write-ahead log in sessionStorage
+  const WAL_KEY = "blockstore-wal"; // durable write-ahead log in localStorage
+  const WAL_LEGACY_SESSION_KEY = "blockstore-wal"; // same name, older sessionStorage home
 
   // ── Partitioned Cache ──
   let _dayCache = new Map();   // id → block (cleared on date switch)
   let _globalCache = new Map(); // id → block (persistent across dates)
   let _currentDate = null;
+  // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
+  // Resolved from the block list returned by loadDay() so callsites can look up
+  // the cached root reliably, not a naive "day-root-<date>" that misses.
+  let _currentDayRootId = null;
 
   // ── Save Status Helpers ──
   function setSaving() {
@@ -30,22 +35,50 @@
     if (typeof showToast === "function") showToast(msg || "Save failed — will retry", "error");
   }
 
-  // ── Write-Ahead Log (sessionStorage) ──
+  // ── Write-Ahead Log (localStorage) ──
+  // Every mutation pushes an entry before the fetch fires and removes it only on
+  // server ack. localStorage survives tab close, reloads mid-flight, and browser
+  // crashes, so pending writes replay on next boot instead of being lost.
   function walPush(entry) {
+    const entryId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ("w-" + Date.now() + "-" + Math.random().toString(36).slice(2));
     try {
-      const wal = JSON.parse(sessionStorage.getItem(WAL_KEY) || "[]");
-      wal.push({ ...entry, timestamp: new Date().toISOString() });
-      sessionStorage.setItem(WAL_KEY, JSON.stringify(wal));
+      const wal = JSON.parse(localStorage.getItem(WAL_KEY) || "[]");
+      wal.push({ ...entry, _walId: entryId, timestamp: new Date().toISOString() });
+      localStorage.setItem(WAL_KEY, JSON.stringify(wal));
+    } catch {}
+    return entryId;
+  }
+
+  function walRemove(entryId) {
+    if (!entryId) return;
+    try {
+      const wal = JSON.parse(localStorage.getItem(WAL_KEY) || "[]");
+      const next = wal.filter(e => e._walId !== entryId);
+      if (next.length === 0) localStorage.removeItem(WAL_KEY);
+      else localStorage.setItem(WAL_KEY, JSON.stringify(next));
     } catch {}
   }
 
-  function walClear() {
-    try { sessionStorage.removeItem(WAL_KEY); } catch {}
+  function walGet() {
+    try { return JSON.parse(localStorage.getItem(WAL_KEY) || "[]"); } catch { return []; }
   }
 
-  function walGet() {
-    try { return JSON.parse(sessionStorage.getItem(WAL_KEY) || "[]"); } catch { return []; }
+  // Migrate any entries left over from the sessionStorage era. Older clients
+  // that still have a session open will already have populated the sessionStorage
+  // WAL; move that content so it gets replayed alongside new localStorage entries.
+  function walMigrateFromSession() {
+    try {
+      const legacy = sessionStorage.getItem(WAL_LEGACY_SESSION_KEY);
+      if (!legacy) return;
+      const legacyEntries = JSON.parse(legacy);
+      if (!Array.isArray(legacyEntries) || !legacyEntries.length) { sessionStorage.removeItem(WAL_LEGACY_SESSION_KEY); return; }
+      const current = JSON.parse(localStorage.getItem(WAL_KEY) || "[]");
+      const merged = [...current, ...legacyEntries.map(e => ({ ...e, _walId: e._walId || ((crypto && crypto.randomUUID) ? crypto.randomUUID() : ("w-" + Date.now() + "-" + Math.random().toString(36).slice(2))) }))];
+      localStorage.setItem(WAL_KEY, JSON.stringify(merged));
+      sessionStorage.removeItem(WAL_LEGACY_SESSION_KEY);
+    } catch {}
   }
+  walMigrateFromSession();
 
   // ── API Helpers ──
   async function apiPost(url, body) {
@@ -158,12 +191,18 @@
     }
   }
 
-  // ── WAL Replay (on reconnect) ──
+  // ── WAL Replay (on reconnect / boot) ──
+  // Replays every pending mutation and removes each entry on its own success.
+  // Failures stay queued so the next reconnect (or next boot) can retry them --
+  // a partial failure no longer wipes the unreplayed entries.
+  let _replaying = false;
   async function replayWAL() {
+    if (_replaying) return; // avoid overlapping replays (SSE reconnect + boot)
     const entries = walGet();
     if (!entries.length) return;
+    _replaying = true;
     console.log("[BlockStore] Replaying", entries.length, "buffered writes...");
-    const failures = [];
+    let succeeded = 0, failed = 0;
     for (const entry of entries) {
       try {
         switch (entry.op) {
@@ -180,17 +219,20 @@
             await apiPost("/api/blocks/batch", entry.data);
             break;
         }
+        walRemove(entry._walId);
+        succeeded++;
       } catch (e) {
-        failures.push({ ...entry, error: e.message });
+        failed++;
+        console.warn("[BlockStore] WAL replay failed for", entry.op, entry.id || "", e.message);
       }
     }
-    walClear();
-    if (failures.length) {
-      console.warn("[BlockStore] WAL replay had", failures.length, "failures:", failures);
-      setError(failures.length + " edits could not be saved");
-    } else {
-      console.log("[BlockStore] WAL replay complete");
+    _replaying = false;
+    if (failed === 0) {
+      console.log("[BlockStore] WAL replay complete (", succeeded, "writes )");
       setSaved();
+    } else {
+      console.warn("[BlockStore] WAL replay:", succeeded, "ok,", failed, "still queued for retry");
+      setError(failed + " edits pending — will retry");
     }
   }
 
@@ -220,18 +262,20 @@
         deleted_at: null
       };
       cacheSet(optimistic);
+      // Pre-write to WAL so the mutation survives a mid-flight reload / close.
+      const walId = walPush({ op: "create", data: payload });
       try {
         const block = await apiPost("/api/blocks", payload);
         // Swap optimistic entry for the real server block
         _dayCache.delete(tmpId);
         _globalCache.delete(tmpId);
         cacheSet(block);
+        walRemove(walId);
         setSaved();
         return block;
       } catch (e) {
-        walPush({ op: "create", data: payload });
         setError("Save failed — buffered for retry");
-        // Optimistic entry is already in cache — reconciled on next sync
+        // Entry stays in WAL; optimistic entry is already in cache.
         return optimistic;
       }
     },
@@ -243,14 +287,17 @@
       const existing = cacheGet(id);
       const optimistic = existing ? { ...existing, properties, updated_at: new Date().toISOString() } : null;
       if (optimistic) cacheSet(optimistic);
+      // Pre-write to WAL so the mutation survives a mid-flight reload / close.
+      const walId = walPush({ op: "update", id, data: { properties } });
       try {
         const block = await apiPatch("/api/blocks/" + id, { properties });
         cacheSet(block); // Replace optimistic with server response
+        walRemove(walId);
         setSaved();
         return block;
       } catch (e) {
-        walPush({ op: "update", id, data: { properties } });
         setError("Save failed — buffered for retry");
+        // Entry stays in WAL; replayed on next connect.
         return optimistic || existing;
       }
     },
@@ -268,12 +315,13 @@
     // Soft-delete a block
     async deleteBlock(id) {
       setSaving();
+      const walId = walPush({ op: "delete", id });
       try {
         await apiDelete("/api/blocks/" + id);
         cacheDelete(id);
+        walRemove(walId);
         setSaved();
       } catch (e) {
-        walPush({ op: "delete", id });
         setError("Delete failed — buffered for retry");
         cacheDelete(id);
       }
@@ -282,6 +330,7 @@
     // Atomic multi-block operation
     async batchOp(operations) {
       setSaving();
+      const walId = walPush({ op: "batch", data: { operations } });
       try {
         const result = await apiPost("/api/blocks/batch", { operations });
         if (result.blocks) {
@@ -289,10 +338,10 @@
             if (block.id) cacheSet(block);
           }
         }
+        walRemove(walId);
         setSaved();
         return result;
       } catch (e) {
-        walPush({ op: "batch", data: { operations } });
         setError("Batch save failed — buffered for retry");
         return { blocks: [] };
       }
@@ -319,12 +368,18 @@
     // Load all blocks for a date (replaces the 11-fetch waterfall)
     async loadDay(dateStr) {
       _currentDate = dateStr;
+      _currentDayRootId = null;
       _dayCache.clear();
       try {
         const blocks = await apiGet("/api/blocks?date=" + dateStr);
         // Route through cacheSet so pinned/global blocks land in _globalCache
         // rather than being evicted on the next date switch.
         for (const b of blocks) cacheSet(b);
+        // Resolve the real day_root id (may be workspace-prefixed server-side).
+        // saveDoneState / reloadPersistedEdits / child-block parentId all depend
+        // on this being the id the server actually stored.
+        const root = blocks.find(b => b.type === "day_root");
+        if (root) _currentDayRootId = root.id;
         return blocks;
       } catch (e) {
         console.error("[BlockStore] loadDay failed:", e);
@@ -388,6 +443,10 @@
     },
 
     getDayRootId() {
+      if (_currentDayRootId) return _currentDayRootId;
+      // Fallback for the narrow window between setting _currentDate and loadDay
+      // populating the cache. Also matches the legacy naming for workspaces that
+      // never got the workspace-prefix migration (server falls back to this id).
       return "day-root-" + _currentDate;
     },
 
@@ -484,5 +543,22 @@
   if (walGet().length > 0) {
     setTimeout(() => replayWAL(), 2000);
   }
+
+  // Replay triggers beyond SSE reconnect, so a pending write doesn't have to
+  // wait on EventSource's backoff to reach the server:
+  //  - 'online' fires the instant the browser regains connectivity.
+  //  - 'visibilitychange' catches the "tab was backgrounded, now we're back"
+  //    case, where SSE may have been paused by the browser.
+  //  - Periodic sweep is a safety net for flaky connections where neither
+  //    event fires reliably.
+  window.addEventListener("online", () => {
+    if (walGet().length > 0) replayWAL();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && walGet().length > 0) replayWAL();
+  });
+  setInterval(() => {
+    if (navigator.onLine !== false && walGet().length > 0) replayWAL();
+  }, 30000);
 
 })();
