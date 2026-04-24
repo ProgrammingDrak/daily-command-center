@@ -1,11 +1,10 @@
 node_modules/
 .env
 
-# Data directory — ignore by default, then whitelist what we need
-data/
-!data/blocks.db
-!data/state/
-!data/state/**
+# Data directory — tracked by default; ignore specific local-only paths
+data/.session-secret
+data/.sync-queue.json
+data/.vault-index.json
 
 # SQLite WAL files (transient, never commit)
 data/blocks.db-shm
@@ -14,6 +13,10 @@ data/blocks.db-wal
 # Credentials (never commit)
 data/gcal-credentials.json
 data/gcal-tokens.json
+
+# Brain subdirs: archive/ is tracked for cross-machine review; the rest is local
+data/brain/recent/
+data/brain/engrams/
 .gstack/
 
 # Vault — owned by its own git repo, never tracked here
