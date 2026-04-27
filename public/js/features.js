@@ -799,7 +799,7 @@ function _flushDeferredRender() {
     render();
   }
 }
-function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();buildUpcoming();buildProgress();updateStats();updateSync();buildLife();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();updateFocusBanner();buildTaskQueuePanel();}
+function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();buildUpcoming();buildProgress();updateStats();updateSync();buildLife();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();updateFocusBanner();}
 function _updateTaskMenusBadge(){
   const badge=document.getElementById("tasks-count");if(!badge)return;
   // Sum up counts from sub-tab badges

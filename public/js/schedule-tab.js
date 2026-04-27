@@ -545,7 +545,18 @@ function buildBacklog(){
     const bHasDetail=bDetailParts.length>0;
     const bChev='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;flex-shrink:0;opacity:0.4"><path d="M6 9l6 6 6-6"/></svg>';
 
-    const el=document.createElement("div");el.className="board-card";el.style.cssText="flex-wrap:wrap;cursor:pointer";
+    const el=document.createElement("div");el.className="board-card";el.style.cssText="flex-wrap:wrap;cursor:grab";
+    el.draggable=true;
+    el.addEventListener("dragstart",e=>{
+      dragId=t.id;
+      window._dragFromBacklog=true;
+      try{e.dataTransfer.setData("text/plain",t.id);e.dataTransfer.effectAllowed="move"}catch(_){}
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend",()=>{
+      window._dragFromBacklog=false;
+      el.classList.remove("dragging");
+    });
     el.innerHTML=
       '<div class="bar" style="background:'+c.color+'"></div>'+
       '<div class="body">'+

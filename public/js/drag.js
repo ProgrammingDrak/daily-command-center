@@ -160,7 +160,17 @@ function recalcTimes(){
 
 function dDrop(e,tid){
   e.preventDefault();
-  if(!dragId||dragId===tid)return;
+  if(!dragId)return;
+
+  // External drag from the Tasks drawer backlog: add to schedule instead of reordering.
+  if(window._dragFromBacklog){
+    window._dragFromBacklog=false;
+    const id=dragId; dragId=null;
+    if(typeof addToSchedule==="function") addToSchedule(id);
+    return;
+  }
+
+  if(dragId===tid)return;
   const old=JSON.stringify(scheduled);
 
   // Operate only on the active (undone) sublist -- these are the only draggable items
