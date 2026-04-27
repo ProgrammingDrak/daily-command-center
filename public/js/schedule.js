@@ -372,10 +372,13 @@ function addToSchedule(blId){
 function addFollowupToSchedule(fu,parentId){
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+(fu.durMin||30);
-  scheduled.push({id:fu.id||"fu-"+(nextId++),title:fu.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:"task",meta:(fu.durMin||30)+"min \u00b7 Action item from "+parentId,detail:fu.detail||"",source:fu.source||"notion",notionUrl:fu.href||"",priority:fu.priority||"Medium"});
+  const newItem={id:fu.id||"fu-"+(nextId++),title:fu.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:"task",meta:(fu.durMin||30)+"min \u00b7 Action item from "+parentId,detail:fu.detail||"",source:fu.source||"notion",notionUrl:fu.href||"",priority:fu.priority||"Medium"};
+  scheduled.push(newItem);
   // Remove from parent followups
   const parent=scheduled.find(x=>x.id===parentId);
   if(parent&&parent.followups){parent.followups=parent.followups.filter(f=>f.id!==fu.id)}
+  // Persist so the followup-as-scheduled-task survives reload (parity with insertTaskNow / addToSchedule).
+  if(typeof persistAddedTask==="function")persistAddedTask(newItem);
   recalcTimes();checkOverflow();log("scheduled",fu.id,"Action item: "+fu.title);render()
 }
 // ======== BACKLOG PERSISTENCE ========
