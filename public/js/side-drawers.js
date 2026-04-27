@@ -74,11 +74,22 @@
     if(d?.classList.contains("open")) closeCal(); else openCal();
   }
 
+  function openTasksToTrivial(){
+    openTasks();
+    const sec = document.getElementById("tm-trivial-section");
+    if(sec){
+      sec.open = true;
+      // Scroll into view inside the drawer's scroll container after the slide animation settles.
+      setTimeout(() => sec.scrollIntoView({behavior:"smooth", block:"start"}), 240);
+    }
+  }
+
   function init(){
     document.getElementById("tasks-drawer-handle")?.addEventListener("click", toggleTasks);
     document.getElementById("tasks-drawer-close")?.addEventListener("click", () => closeTasks());
     document.getElementById("calendar-drawer-handle")?.addEventListener("click", toggleCal);
     document.getElementById("calendar-drawer-close")?.addEventListener("click", () => closeCal());
+    document.getElementById("float-trivial")?.addEventListener("click", openTasksToTrivial);
 
     const bd = document.getElementById("side-drawer-backdrop");
     if(bd){

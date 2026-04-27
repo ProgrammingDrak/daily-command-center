@@ -384,6 +384,14 @@ function buildTrivialTasks(){
   const totalCount=flaggedScheduleItems.length+active.length;
   const trivBadge=document.getElementById("trivial-count");
   if(trivBadge){trivBadge.textContent=totalCount;trivBadge.style.display=totalCount?"":"none"}
+  // Floating purple Trivial bubble: at-a-glance count, hidden when zero
+  const trivFab=document.getElementById("float-trivial");
+  if(trivFab){
+    const lbl=document.getElementById("float-trivial-count");
+    if(lbl)lbl.textContent=totalCount>99?"99+":String(totalCount);
+    trivFab.dataset.overflow=totalCount>99?"true":"false";
+    trivFab.style.display=totalCount>0?"":"none";
+  }
 
   el.innerHTML="";
   if(!totalCount&&!done.length){el.innerHTML='<div class="board-empty">No trivial tasks. Use the task bar above to add one.</div>';return}
