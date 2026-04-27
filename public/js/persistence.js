@@ -63,6 +63,7 @@ function initKeys() {
   REVIEWED_KEY = "pa-reviewed-" + d;
   ADDED_KEY = "pa-added-tasks-" + d;
   PINNED_KEY = "pa-pinned-starts-" + d;
+  LOCKED_KEY = "pa-locked-tasks-" + d;
   ORDER_KEY = "pa-task-order-" + d;
   SUBTASK_KEY = "pa-subtasks-" + d;
   TRIV_FLAGS_KEY = "pa-trivial-flags-" + d;
@@ -707,6 +708,8 @@ function reloadPersistedEdits() {
     // Hydrate the backlog from blockstore -- it's not date-scoped, lives in
     // type="block" with kind="backlog" and persists across reloads.
     if (typeof hydrateBacklogFromBlocks === "function") hydrateBacklogFromBlocks();
+    // Hydrate per-day lock flags onto in-memory scheduled items.
+    if (typeof hydrateLockedTasks === "function") hydrateLockedTasks();
     recalcTimes();
   } catch(e) { recalcTimes(); }
 }

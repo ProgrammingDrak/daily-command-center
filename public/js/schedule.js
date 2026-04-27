@@ -357,6 +357,45 @@ function unpinStartTime(id){
   recalcTimes();checkOverflow();render();
 }
 
+// ======== TASK LOCK ========
+// Locked tasks behave like meetings: immovable in the cascade and not draggable.
+// Unlike _pinnedStart (which a drag clears), _locked is sticky -- the user
+// must explicitly unlock to move the task.
+let LOCKED_KEY = "pa-locked-tasks-" + ((__state && __state.date) ? __state.date : "unknown");
+function loadLockedSet(){
+  if(window.USE_BLOCKSTORE && window.blockStore){
+    const v=_bsProp("_lockedTasks",null);
+    if(v)return Array.isArray(v)?v:Object.keys(v);
+  }
+  try{return JSON.parse(localStorage.getItem(LOCKED_KEY)||"[]")}catch(e){return[]}
+}
+function saveLockedSet(ids){
+  if(_bsSaveProp("_lockedTasks",ids))return;
+  localStorage.setItem(LOCKED_KEY,JSON.stringify(ids));scheduleIDBSave();
+}
+function toggleLock(id){
+  const ev=scheduled.find(e=>e.id===id);if(!ev||isMeeting(ev))return;
+  const set=new Set(loadLockedSet());
+  if(ev._locked){
+    delete ev._locked;
+    set.delete(id);
+    log("unlock",id,"Unlocked: "+ev.title);
+  } else {
+    ev._locked=true;
+    set.add(id);
+    log("lock",id,"Locked at "+ev.start+": "+ev.title);
+  }
+  saveLockedSet([...set]);
+  recalcTimes();checkOverflow();render();
+}
+// Apply persisted locks to in-memory schedule items (called on boot + date switch).
+function hydrateLockedTasks(){
+  const ids=loadLockedSet();
+  if(!ids||!ids.length)return;
+  const idSet=new Set(ids);
+  scheduled.forEach(ev=>{ if(idSet.has(ev.id)) ev._locked=true; });
+}
+
 function addToSchedule(blId){
   let idx=consider.findIndex(b=>b.id===blId),task,fromBacklog=false;
   if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}

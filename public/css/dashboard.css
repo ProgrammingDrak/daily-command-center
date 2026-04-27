@@ -1566,6 +1566,16 @@
   .btn-triv-link::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
   .btn-triv-link:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
 
+  /* Lock button: same icon-button affordance as the trivial/push buttons. */
+  .btn-lock{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0;position:relative}
+  .tl-item:hover .btn-lock{opacity:0.6}
+  .btn-lock:hover{opacity:1!important;color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
+  .btn-lock.locked{opacity:1!important;color:var(--amber,#f59e0b);background:rgba(245,158,11,0.15)}
+  .btn-lock::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
+  .btn-lock:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
+  /* Locked timeline row: subtle amber-edge so the user can see at a glance which tasks won't move. */
+  .tl-item.locked .card{border-left:2px solid var(--amber,#f59e0b)}
+
   /* Linked trivial tasks section on schedule card */
   .card-triv-section{border-top:1px solid var(--border);padding-top:8px;margin-top:6px}
   .card-triv-header{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--cyan,#22d3ee);margin-bottom:6px}
