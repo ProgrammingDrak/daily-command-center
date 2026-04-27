@@ -57,7 +57,7 @@
   // ── Actions ──
   function actBacklog(item, priorDay){
     if (typeof backlog === "undefined") return;
-    backlog.push({
+    const entry = {
       id: "carry-" + (typeof nextId !== "undefined" ? nextId++ : Date.now()),
       title: item.title,
       type: "task",
@@ -66,7 +66,9 @@
       detail: "",
       source: item.source,
       notionUrl: item.notionUrl
-    });
+    };
+    backlog.push(entry);
+    if (typeof persistBacklogItem === "function") persistBacklogItem(entry);
     if (typeof log === "function") log("created","carry","Carried over: "+item.title);
     if (typeof render === "function") render();
   }

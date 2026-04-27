@@ -358,11 +358,15 @@ function unpinStartTime(id){
 }
 
 function addToSchedule(blId){
-  let idx=consider.findIndex(b=>b.id===blId),task;
-  if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0]}
+  let idx=consider.findIndex(b=>b.id===blId),task,fromBacklog=false;
+  if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+task.durMin;
-  scheduled.push({id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority});
+  const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority};
+  scheduled.push(newItem);
+  if(fromBacklog)deleteBacklogBlock(blId);
+  // Persist as a scheduled block so the move survives reload (the backlog block is gone now).
+  if(typeof persistAddedTask==="function")persistAddedTask(newItem);
   recalcTimes();checkOverflow();log("scheduled",task.id,"Added: "+task.title);render()
 }
 function addFollowupToSchedule(fu,parentId){
@@ -374,11 +378,69 @@ function addFollowupToSchedule(fu,parentId){
   if(parent&&parent.followups){parent.followups=parent.followups.filter(f=>f.id!==fu.id)}
   recalcTimes();checkOverflow();log("scheduled",fu.id,"Action item: "+fu.title);render()
 }
+// ======== BACKLOG PERSISTENCE ========
+// Backlog items live in window.blockStore as type="block" with kind="backlog".
+// Hydrated on boot via hydrateBacklogFromBlocks() (called from persistence.js).
+function persistBacklogItem(item){
+  if(!window.blockStore)return;
+  try{
+    window.blockStore.createBlock("block",{
+      local_id:item.id,
+      kind:"backlog",
+      title:item.title,
+      durMin:item.durMin,
+      type:item.type||"task",
+      meta:item.meta||"",
+      detail:item.detail||"",
+      source:item.source||"manual",
+      notionUrl:item.notionUrl||"",
+      priority:item.priority||"",
+      stage:item.stage||"",
+      added_at:new Date().toISOString()
+    });
+  }catch(e){console.warn("[backlog] persist failed:",e)}
+}
+function deleteBacklogBlock(localId){
+  if(!window.blockStore)return;
+  try{
+    const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).kind==="backlog"&&(b.properties||{}).local_id===localId);
+    if(block)window.blockStore.deleteBlock(block.id).catch(()=>{});
+  }catch(e){console.warn("[backlog] delete failed:",e)}
+}
+function hydrateBacklogFromBlocks(){
+  if(!window.blockStore)return;
+  let added=0;
+  window.blockStore.getByType("block").forEach(b=>{
+    const p=b.properties||{};
+    if(p.kind!=="backlog")return;
+    if(p.status==="archived"||p.status==="done")return;
+    if(!p.title)return;
+    const localId=p.local_id||("blk-"+b.id);
+    if(backlog.find(x=>x.id===localId))return;
+    backlog.push({
+      id:localId,
+      title:p.title,
+      type:p.type||"task",
+      durMin:p.durMin||30,
+      meta:p.meta||("Custom task \u00b7 "+ms(p.durMin||30)),
+      detail:p.detail||"",
+      source:p.source||"manual",
+      notionUrl:p.notionUrl||"",
+      priority:p.priority||"",
+      stage:p.stage||""
+    });
+    added++;
+  });
+  return added;
+}
+
 function addNewTask(titleArg, durMinArg){
   const title=titleArg||(function(){const inp=document.getElementById("new-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
   if(!title)return;
   const durMin=durMinArg||30;
-  backlog.push({id:"custom-"+(nextId++),title,type:"task",durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:""});
+  const item={id:"custom-"+(nextId++),title,type:"task",durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:""};
+  backlog.push(item);
+  persistBacklogItem(item);
   log("created","custom","New backlog: "+title);render()
 }
 // ======== UNIVERSAL TASK ADD BAR ========

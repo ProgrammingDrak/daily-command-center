@@ -704,6 +704,9 @@ function reloadPersistedEdits() {
         });
       }
     }
+    // Hydrate the backlog from blockstore -- it's not date-scoped, lives in
+    // type="block" with kind="backlog" and persists across reloads.
+    if (typeof hydrateBacklogFromBlocks === "function") hydrateBacklogFromBlocks();
     recalcTimes();
   } catch(e) { recalcTimes(); }
 }
