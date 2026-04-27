@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node server.js",
     "schema": "node pg-schema.js",
-    "migrate-data": "node sqlite-to-pg.js"
+    "migrate-data": "node sqlite-to-pg.js",
+    "backup": "bash scripts/db-backup.sh"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

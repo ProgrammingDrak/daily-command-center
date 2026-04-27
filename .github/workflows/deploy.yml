@@ -4,12 +4,91 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      acknowledge_db_risk:
+        description: "I've taken a pg_dump backup and want to proceed despite DB-touching changes"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: DB-risk guardrail
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          ACK: ${{ github.event.inputs.acknowledge_db_risk }}
+        run: |
+          set -uo pipefail
+
+          if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "::warning::No previous commit to diff against; skipping DB-risk check."
+            exit 0
+          fi
+          if ! git rev-parse --quiet --verify "${BEFORE}^{commit}" >/dev/null; then
+            echo "::warning::Previous commit ${BEFORE} not reachable (force-push?); skipping check."
+            exit 0
+          fi
+
+          DB_PATHS='^(pg-schema\.js|migrate\.js|migrate-to-unified-blocks\.js|sqlite-to-pg\.js|db\.js|migrations/.*)$'
+          KEYWORD_RX='^\+.*\b(DROP[[:space:]]+(TABLE|COLUMN|INDEX|DATABASE)|TRUNCATE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE)\b'
+
+          CHANGED="$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || true)"
+          PATH_HITS="$(printf '%s\n' "$CHANGED" | grep -E "$DB_PATHS" || true)"
+
+          DIFF_BODY="$(git diff "$BEFORE" "$AFTER" -- '*.js' '*.sql' 2>/dev/null || true)"
+          KEYWORD_HITS="$(printf '%s\n' "$DIFF_BODY" | grep -iE "$KEYWORD_RX" || true)"
+
+          if [ -z "$PATH_HITS" ] && [ -z "$KEYWORD_HITS" ]; then
+            echo "DB-risk guardrail: no risky changes detected. Proceeding."
+            exit 0
+          fi
+
+          if printf '%s' "${COMMIT_MSG:-}" | grep -qE '\[(migration-ok|db-ok)\]'; then
+            echo "DB-risk acknowledged via [migration-ok] tag in commit message. Proceeding."
+            exit 0
+          fi
+          if [ "${ACK:-false}" = "true" ]; then
+            echo "DB-risk acknowledged via workflow_dispatch input. Proceeding."
+            exit 0
+          fi
+
+          echo "::error title=DB-risk guardrail blocked deploy::Database-touching changes detected without acknowledgement."
+          echo ""
+          echo "DETECTED CHANGES:"
+          if [ -n "$PATH_HITS" ]; then
+            echo "  Migration/schema files modified:"
+            printf '%s\n' "$PATH_HITS" | sed 's/^/    /'
+          fi
+          if [ -n "$KEYWORD_HITS" ]; then
+            echo "  Destructive SQL patterns in diff:"
+            printf '%s\n' "$KEYWORD_HITS" | head -20 | sed 's/^/    /'
+          fi
+          cat <<'NOTE'
+
+          BEFORE PROCEEDING:
+            1. Back up production:
+                 pg_dump "$DATABASE_URL" > backup-$(date +%F-%H%M).sql
+            2. Verify the migration is non-destructive
+               (additive columns nullable, no DROPs, no DELETEs).
+            3. Re-trigger this deploy by EITHER:
+                 a) Amending the commit message to include [migration-ok], OR
+                 b) Re-running this workflow via "workflow_dispatch" with
+                    acknowledge_db_risk=true (Actions tab -> this workflow ->
+                    Run workflow -> check the box).
+
+          False positive (e.g. comment-only change to a flagged file)?
+          Still tag with [migration-ok] so the bypass is auditable in git log.
+          NOTE
+          exit 1
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli

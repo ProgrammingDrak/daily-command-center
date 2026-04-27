@@ -49,10 +49,10 @@ function taskMatchesBlock(task, block){
 // Tag-aware cascade: tasks are placed into the earliest matching schedule block.
 // Falls back to sequential placement when no block matches or block is full.
 function recalcTimesTagAware(schedBlocks){
-  const active = scheduled.filter(ev => !isDone(ev));
+  const active = scheduled.filter(ev => !isDone(ev) && !isDeleted(ev));
   if(!active.length) return;
 
-  const firstOrig = INIT_SCHED.find(ev => !isDone(ev));
+  const firstOrig = INIT_SCHED.find(ev => !isDone(ev) && !isDeleted(ev));
   let fallbackCursor = firstOrig ? pt(firstOrig.start) : pt(active[0].start);
   if(typeof viewMode !== "undefined" && viewMode === "today" && typeof now === "function"){
     fallbackCursor = Math.min(fallbackCursor, now());
@@ -119,11 +119,11 @@ function recalcTimes(){
     return;
   }
 
-  const active=scheduled.filter(ev=>!isDone(ev));
+  const active=scheduled.filter(ev=>!isDone(ev)&&!isDeleted(ev));
   if(!active.length)return;
 
   // Anchor: first undone item's ORIGINAL start time -- stable regardless of drag order
-  const firstOrig=INIT_SCHED.find(ev=>!isDone(ev));
+  const firstOrig=INIT_SCHED.find(ev=>!isDone(ev)&&!isDeleted(ev));
   let cursor=firstOrig?pt(firstOrig.start):pt(active[0].start);
 
   // On today's view: if the anchor is in the future (e.g. the only non-done item is an
@@ -160,7 +160,17 @@ function recalcTimes(){
 
 function dDrop(e,tid){
   e.preventDefault();
-  if(!dragId||dragId===tid)return;
+  if(!dragId)return;
+
+  // External drag from the Tasks drawer backlog: add to schedule instead of reordering.
+  if(window._dragFromBacklog){
+    window._dragFromBacklog=false;
+    const id=dragId; dragId=null;
+    if(typeof addToSchedule==="function") addToSchedule(id);
+    return;
+  }
+
+  if(dragId===tid)return;
   const old=JSON.stringify(scheduled);
 
   // Operate only on the active (undone) sublist -- these are the only draggable items
