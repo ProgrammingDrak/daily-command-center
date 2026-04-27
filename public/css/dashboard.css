@@ -1263,6 +1263,28 @@
   .side-drawer-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:454;opacity:0;transition:opacity 200ms ease;pointer-events:none}
   .side-drawer-backdrop.show{display:block;opacity:1;pointer-events:auto}
 
+  /* ======== COMPACT BACKLOG CARD (in Tasks drawer) ======== */
+  /* Default: title + duration + chevron only -- enough to read and drag.
+     Click to expand -> shows detail (description, links, source/priority chips)
+     and an action row (Today / Later / notes / pomo / delegate). */
+  .bc-card{flex-direction:column;align-items:stretch;padding:0;cursor:grab;overflow:hidden}
+  .bc-card .bc-row{display:flex;align-items:center;gap:10px;padding:8px 10px;min-width:0}
+  .bc-card .bc-row .bar{width:3px;align-self:stretch;border-radius:2px;flex-shrink:0}
+  .bc-card .bc-title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:var(--text);font-weight:600}
+  .bc-card .bc-dur{font-size:11px;color:var(--text-muted);flex-shrink:0}
+  .bc-card .bc-chev{flex-shrink:0;opacity:0.4;transition:transform 180ms ease}
+  .bc-card.expanded .bc-chev{transform:rotate(180deg)}
+  .bc-card .bc-expand{display:none;border-top:1px solid var(--border);padding:10px 12px;flex-direction:column;gap:8px;cursor:default}
+  .bc-card.expanded .bc-expand{display:flex}
+  .bc-card .bc-expand .detail-inner{display:flex;flex-direction:column;gap:6px}
+  .bc-card .bc-actions{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+  .bc-card .bc-act{padding:5px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:11px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+  .bc-card .bc-act:hover{background:rgba(255,255,255,0.05)}
+  .bc-card .bc-act-today{background:var(--accent);border-color:var(--accent);color:white}
+  .bc-card .bc-act-today:hover{opacity:0.85;background:var(--accent)}
+  .bc-card .bc-act-later:hover{border-color:var(--accent-light);color:var(--accent-light)}
+  .bc-card .bc-act-icon{width:26px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+
   /* Desktop: drawers push the timeline by widening body padding */
   @media (min-width:1024px){
     body{transition:padding 220ms ease}

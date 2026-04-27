@@ -531,22 +531,23 @@ function buildBacklog(){
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
     const tSrcTag=srcTag(t.source);
-    // Detail panel for backlog
-    const bDetailParts=[];
-    if(t.detail)bDetailParts.push('<div class="detail-summary">'+t.detail+'</div>');
-    const bLinks=[];
-    if(t.notionUrl)bLinks.push('<a href="'+t.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
-    if(bLinks.length)bDetailParts.push('<div class="detail-links">'+bLinks.join('')+'</div>');
-    const bMeta=[];
-    if(t.priority)bMeta.push('<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">Priority: '+t.priority+'</span>');
-    if(t.stage)bMeta.push('<span>Stage: '+t.stage+'</span>');
-    bMeta.push('<span>Est: '+ms(t.durMin)+'</span>');
-    if(bMeta.length)bDetailParts.push('<div class="detail-meta">'+bMeta.join('')+'</div>');
-    const bHasDetail=bDetailParts.length>0;
-    const bChev='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform 0.2s;flex-shrink:0;opacity:0.4"><path d="M6 9l6 6 6-6"/></svg>';
 
-    const el=document.createElement("div");el.className="board-card";el.style.cssText="flex-wrap:wrap;cursor:grab";
-    el.draggable=true;
+    // Expandable detail content (description + links + meta line) + delegate state for the chip below.
+    const detailParts=[];
+    if(t.detail)detailParts.push('<div class="detail-summary">'+t.detail+'</div>');
+    const links=[];
+    if(t.notionUrl)links.push('<a href="'+t.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
+    if(links.length)detailParts.push('<div class="detail-links">'+links.join('')+'</div>');
+    const metaParts=[];
+    metaParts.push('<span class="tag '+c.cls+'">'+c.tag+'</span>');
+    if(t.priority)metaParts.push('<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>');
+    if(t.stage)metaParts.push('<span class="stage-badge '+stageClass+'">'+t.stage+'</span>');
+    if(tSrcTag)metaParts.push(tSrcTag);
+    detailParts.push('<div class="detail-meta">'+metaParts.join('')+'</div>');
+
+    const isDelegated=_scheduleTaskHasDelegate(t.id);
+
+    const el=document.createElement("div");el.className="board-card bc-card";el.draggable=true;
     el.addEventListener("dragstart",e=>{
       dragId=t.id;
       window._dragFromBacklog=true;
@@ -557,23 +558,25 @@ function buildBacklog(){
       window._dragFromBacklog=false;
       el.classList.remove("dragging");
     });
+
     el.innerHTML=
-      '<div class="bar" style="background:'+c.color+'"></div>'+
-      '<div class="body">'+
-        '<div class="title-row"><span class="ttl">'+t.title+'</span>'+tSrcTag+'</div>'+
-        '<div class="meta">'+
-          '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
-          (t.stage?'<span class="stage-badge '+stageClass+'">'+t.stage+'</span>':'')+
-          '<span>'+ms(t.durMin)+'</span>'+
-          (t.priority?'<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>':'')+
-        '</div>'+
+      '<div class="bc-row">'+
+        '<div class="bar" style="background:'+c.color+'"></div>'+
+        '<div class="bc-title" title="'+t.title.replace(/"/g,'&quot;')+'">'+t.title+'</div>'+
+        '<span class="bc-dur">'+ms(t.durMin)+'</span>'+
+        '<svg class="bc-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>'+
       '</div>'+
-      (bHasDetail?bChev:'')+
-      notesButton({id: t.id, title: t.title})+
-      '<button class="pomo-btn" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
-      '<button class="delegate-btn" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(_scheduleTaskHasDelegate(t.id)?'Edit delegated item linked to this task':'Delegate this task')+'">'+(_scheduleTaskHasDelegate(t.id)?'\u2713':'\u2191')+'</button>'+
-      '<button class="add-btn" data-id="'+t.id+'"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Schedule</button>'+
-      (bHasDetail?'<div class="detail-panel" style="width:100%;padding-left:14px"><div class="detail-inner">'+bDetailParts.join('')+'</div></div>':'');
+      '<div class="bc-expand">'+
+        '<div class="detail-inner">'+detailParts.join('')+'</div>'+
+        '<div class="bc-actions">'+
+          '<button class="add-btn bc-act bc-act-today" data-id="'+t.id+'" title="Add to today\u2019s schedule"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Today</button>'+
+          '<button class="bc-act bc-act-later" data-id="'+t.id+'" title="Schedule for a later date">Later\u2026</button>'+
+          notesButton({id: t.id, title: t.title})+
+          '<button class="pomo-btn bc-act-icon" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+          '<button class="delegate-btn bc-act-icon" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(isDelegated?'Edit delegated item linked to this task':'Delegate this task')+'">'+(isDelegated?'\u2713':'\u2191')+'</button>'+
+        '</div>'+
+      '</div>';
+
     const bnb=el.querySelector(".notes-btn");if(bnb)bnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(bnb.dataset.notesId,bnb.dataset.notesTitle)});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     el.querySelector(".delegate-btn").addEventListener("click",e=>{
@@ -590,8 +593,16 @@ function buildBacklog(){
         openDelegatedModal(null,{title:"Follow up: "+taskTitle,linkedBlockId:taskId});
       }
     });
-    el.querySelector(".add-btn").addEventListener("click",e=>{e.stopPropagation();addToSchedule(t.id)});
-    el.addEventListener("click",e=>{if(e.target.closest(".add-btn")||e.target.closest(".pomo-btn")||e.target.closest(".delegate-btn")||e.target.closest(".notes-btn"))return;const panel=el.querySelector(".detail-panel");if(panel){panel.classList.toggle("open");const chev=el.querySelector(":scope > svg");if(chev)chev.style.transform=panel.classList.contains("open")?"rotate(180deg)":""}});
+    el.querySelector(".bc-act-today").addEventListener("click",e=>{e.stopPropagation();addToSchedule(t.id)});
+    el.querySelector(".bc-act-later").addEventListener("click",e=>{
+      e.stopPropagation();
+      if(typeof openSchedulePicker==="function") openSchedulePicker(t.title, t.durMin);
+    });
+    // Click anywhere on the title row toggles the expanded panel.
+    el.querySelector(".bc-row").addEventListener("click",e=>{
+      if(e.target.closest("button")||e.target.closest("a"))return;
+      el.classList.toggle("expanded");
+    });
     board.appendChild(el);
   });
 }
