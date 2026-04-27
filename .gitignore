@@ -22,3 +22,6 @@ data/brain/engrams/
 # Vault — owned by its own git repo, never tracked here
 vault/
 
+# pg_dump output (created by scripts/db-backup.sh)
+backups/
+
