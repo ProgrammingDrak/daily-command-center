@@ -566,14 +566,23 @@ function renderClockFace(){
       });
       nums.appendChild(el);
     }
-    // AM/PM indicator
-    const lbl=document.createElement('div');
-    lbl.className='dm-clock-ring-label';
-    lbl.style.left=(cx-10)+'px';lbl.style.top=(cy-6)+'px';
-    lbl.textContent=_clockH>=12?'PM':'AM';
-    lbl.style.fontSize='11px';lbl.style.cursor='pointer';lbl.style.color='var(--accent)';
-    lbl.addEventListener('click',function(){_clockH=(_clockH+12)%24;renderClockFace()});
-    nums.appendChild(lbl);
+    // AM/PM toggle: both options visible side-by-side, active one in accent.
+    const ampm=document.createElement('div');
+    ampm.className='dm-clock-ampm';
+    ampm.style.left=(cx-26)+'px';
+    ampm.style.top=(cy-9)+'px';
+    const isPM=_clockH>=12;
+    const am=document.createElement('span');
+    am.className='dm-clock-ampm-opt'+(isPM?'':' active');
+    am.textContent='AM';
+    am.addEventListener('click',function(e){e.stopPropagation();if(_clockH>=12){_clockH-=12;renderClockFace();}});
+    const pm=document.createElement('span');
+    pm.className='dm-clock-ampm-opt'+(isPM?' active':'');
+    pm.textContent='PM';
+    pm.addEventListener('click',function(e){e.stopPropagation();if(_clockH<12){_clockH+=12;renderClockFace();}});
+    ampm.appendChild(am);
+    ampm.appendChild(pm);
+    nums.appendChild(ampm);
     // Hand
     const hAngle=(_clockH%12)*30-90;
     hand.style.height='60px';hand.style.transform='rotate('+hAngle+'deg)';hand.style.marginTop='-60px';hand.style.display='block';

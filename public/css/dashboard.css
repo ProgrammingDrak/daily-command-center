@@ -1115,6 +1115,10 @@
   .dm-clock-num.outer{font-size:11px;font-weight:500;color:var(--text);width:28px;height:28px}
   .dm-clock-num.outer.sel{background:var(--accent);color:white}
   .dm-clock-ring-label{position:absolute;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);pointer-events:none}
+  .dm-clock-ampm{position:absolute;display:flex;gap:8px;font-size:11px;font-weight:700;letter-spacing:0.5px;user-select:none}
+  .dm-clock-ampm-opt{cursor:pointer;color:var(--text-muted);padding:1px 3px;border-radius:3px;transition:color 0.1s,background 0.1s}
+  .dm-clock-ampm-opt:hover{color:var(--text);background:rgba(255,255,255,0.06)}
+  .dm-clock-ampm-opt.active{color:var(--accent-light,var(--accent));background:rgba(59,130,246,0.15)}
   .dm-clock-actions{position:absolute;bottom:-40px;left:50%;transform:translateX(-50%);display:flex;gap:6px}
   .dm-clock-actions button{padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:600;cursor:pointer}
   .dm-clock-actions .clk-ok{background:var(--accent);color:white}
