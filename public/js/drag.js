@@ -58,7 +58,18 @@ function recalcTimesTagAware(schedBlocks){
     fallbackCursor = Math.min(fallbackCursor, now());
   }
 
-  const meetings = _meetingBlocks();
+  // Pass 1: place pinned/locked tasks and collect them as blockers alongside meetings.
+  const blockers = _meetingBlocks().slice();
+  active.forEach(ev => {
+    if(isMeeting(ev)) return;
+    if(ev._pinnedStart || ev._locked){
+      const d = dur(ev);
+      const ps = pt(ev._pinnedStart || ev.start);
+      ev.start = fmt(ps); ev.end = fmt(ps + d);
+      blockers.push({s: ps, e: ps + d});
+    }
+  });
+  blockers.sort((a, b) => a.s - b.s);
 
   // Per-block free-slot cursor (starts at block's start time)
   const nextFree = {};
@@ -69,19 +80,17 @@ function recalcTimesTagAware(schedBlocks){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
-    const d = dur(ev);
-    if(ev._pinnedStart){
-      const ps = pt(ev._pinnedStart);
-      ev.start = ev._pinnedStart; ev.end = fmt(ps + d);
-      fallbackCursor = Math.max(fallbackCursor, ps + d);
+    if(ev._pinnedStart || ev._locked){
+      fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
+    const d = dur(ev);
 
     // Find the matching block with the earliest available slot that fits
     let bestBlock = null, bestStart = Infinity;
     for(const b of schedBlocks){
       if(!taskMatchesBlock(ev, b)) continue;
-      const slotStart = _freeStart(nextFree[b.id] || pt(b.start), d, meetings);
+      const slotStart = _freeStart(nextFree[b.id] || pt(b.start), d, blockers);
       const slotEnd = slotStart + d;
       // Must fit within the block's time window
       if(slotStart >= pt(b.start) && slotEnd <= pt(b.end)){
@@ -98,7 +107,7 @@ function recalcTimesTagAware(schedBlocks){
       fallbackCursor = Math.max(fallbackCursor, bestStart + d);
     } else {
       // No block matched or had room — use fallback sequential cascade
-      const s = _freeStart(fallbackCursor, d, meetings);
+      const s = _freeStart(fallbackCursor, d, blockers);
       ev.start = fmt(s); ev.end = fmt(s + d);
       fallbackCursor = s + d;
     }
@@ -107,9 +116,10 @@ function recalcTimesTagAware(schedBlocks){
   scheduled.sort((a, b) => pt(a.start) - pt(b.start));
 }
 
-// Recascade start/end times for all undone tasks, treating meetings as immovable blockers.
-// Tasks flow around meetings -- if a task would overlap a meeting it gets pushed to after it.
-// If a task finishes early (slot freed up), subsequent tasks pull earlier.
+// Recascade start/end times for all undone tasks, treating meetings and any
+// pinned (or locked) task as immovable. Unpinned tasks flow around all of
+// them so inserting an Urgent task at a fixed time bumps later tasks
+// forward.
 // When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
 function recalcTimes(){
   // Tag-aware mode: delegate when any block has accepted tags configured
@@ -122,6 +132,20 @@ function recalcTimes(){
   const active=scheduled.filter(ev=>!isDone(ev)&&!isDeleted(ev));
   if(!active.length)return;
 
+  // Pass 1: place pinned/locked tasks at their pinned start and add them to the
+  // blockers list alongside meetings. Locked tasks pin to their current start.
+  const blockers=_meetingBlocks().slice();
+  active.forEach(ev=>{
+    if(isMeeting(ev))return;            // already represented in _meetingBlocks()
+    if(ev._pinnedStart||ev._locked){
+      const d=dur(ev);
+      const ps=pt(ev._pinnedStart||ev.start);
+      ev.start=fmt(ps);ev.end=fmt(ps+d);
+      blockers.push({s:ps,e:ps+d});
+    }
+  });
+  blockers.sort((a,b)=>a.s-b.s);
+
   // Anchor: first undone item's ORIGINAL start time -- stable regardless of drag order
   const firstOrig=INIT_SCHED.find(ev=>!isDone(ev)&&!isDeleted(ev));
   let cursor=firstOrig?pt(firstOrig.start):pt(active[0].start);
@@ -133,22 +157,18 @@ function recalcTimes(){
     cursor=Math.min(cursor,now());
   }
 
-  const meetings = _meetingBlocks();
-
+  // Pass 2: cascade non-pinned, non-locked, non-meeting tasks around all blockers.
   active.forEach(ev=>{
     if(isMeeting(ev)){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
-    const d=dur(ev);
-    // Respect pinned start times
-    if(ev._pinnedStart){
-      const ps=pt(ev._pinnedStart);
-      ev.start=ev._pinnedStart;ev.end=fmt(ps+d);
-      cursor=Math.max(cursor,ps+d);
+    if(ev._pinnedStart||ev._locked){
+      cursor=Math.max(cursor,pt(ev.end));
       return;
     }
-    const s=_freeStart(cursor,d,meetings);
+    const d=dur(ev);
+    const s=_freeStart(cursor,d,blockers);
     ev.start=fmt(s);ev.end=fmt(s+d);
     cursor=s+d;
   });

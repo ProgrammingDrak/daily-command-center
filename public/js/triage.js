@@ -928,9 +928,11 @@ function buildScheduled() {
       const id = btn.dataset.id;
       const ev = scheduled.find(e => e.id === id);
       if (!ev) return;
-      backlog.push({id:"bl-"+Date.now(),title:ev.title,type:ev.type||"task",durMin:dur(ev),
+      const entry={id:"bl-"+Date.now(),title:ev.title,type:ev.type||"task",durMin:dur(ev),
         meta:ms(dur(ev))+" · from schedule",detail:ev.detail||"",source:ev.source||"manual",
-        notionUrl:ev.notionUrl||"",priority:ev.priority||"Low",stage:"Backlog"});
+        notionUrl:ev.notionUrl||"",priority:ev.priority||"Low",stage:"Backlog"};
+      backlog.push(entry);
+      if(typeof persistBacklogItem==="function")persistBacklogItem(entry);
       deletedSet.add(id);saveDeletedState();render();
     });
   });
