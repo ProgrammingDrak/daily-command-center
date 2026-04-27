@@ -389,6 +389,10 @@ function addTaskUniversal(barEl){
   const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
   inp.value="";
+  // Snap the type back to Urgent so successive adds always default to Urgent
+  // rather than sticking on whatever the user last picked.
+  const destSel=barEl.querySelector(".tab-dest");
+  if(destSel)destSel.value="urgent";
   switch(dest){
     case"schedule":openSchedulePicker(title,durMin);break;
     case"backlog":addNewTask(title,durMin);break;
