@@ -53,7 +53,9 @@ function recalcTimesTagAware(schedBlocks){
   if(!active.length) return;
 
   const firstOrig = INIT_SCHED.find(ev => !isDone(ev) && !isDeleted(ev));
-  let fallbackCursor = firstOrig ? pt(firstOrig.start) : pt(active[0].start);
+  const tagAnchorCandidates = active.map(ev => pt(ev.start));
+  if(firstOrig) tagAnchorCandidates.push(pt(firstOrig.start));
+  let fallbackCursor = Math.min.apply(null, tagAnchorCandidates);
   if(typeof viewMode !== "undefined" && viewMode === "today" && typeof now === "function"){
     fallbackCursor = Math.min(fallbackCursor, now());
   }
@@ -146,9 +148,14 @@ function recalcTimes(){
   });
   blockers.sort((a,b)=>a.s-b.s);
 
-  // Anchor: first undone item's ORIGINAL start time -- stable regardless of drag order
+  // Anchor: earliest known start across original schedule + active items, so
+  // unpinned tasks fill morning slots even when INIT_SCHED's first item is a
+  // late event (e.g. an evening "Personal" block) and the user has only
+  // user-added tasks earlier in the day.
   const firstOrig=INIT_SCHED.find(ev=>!isDone(ev)&&!isDeleted(ev));
-  let cursor=firstOrig?pt(firstOrig.start):pt(active[0].start);
+  const anchorCandidates=active.map(ev=>pt(ev.start));
+  if(firstOrig)anchorCandidates.push(pt(firstOrig.start));
+  let cursor=Math.min.apply(null,anchorCandidates);
 
   // On today's view: if the anchor is in the future (e.g. the only non-done item is an
   // evening meeting and it's still afternoon), pull cursor back to now so that newly added
@@ -212,8 +219,15 @@ function dDrop(e,tid){
   let ai=0;
   for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i]))scheduled[i]=active[ai++];}
 
-  // Clear pinned start on the moved task so cascade places it at its new position
-  if(moved._pinnedStart)delete moved._pinnedStart;
+  // Clear pinned start on the moved task so cascade places it at its new position.
+  // Also drop the persisted pin so the drag effect survives reload.
+  if(moved._pinnedStart){
+    delete moved._pinnedStart;
+    if(typeof loadPinnedStarts==="function"&&typeof savePinnedStarts==="function"){
+      const pins=loadPinnedStarts();
+      if(pins[moved.id]){delete pins[moved.id];savePinnedStarts(pins);}
+    }
+  }
 
   // Recascade all times from the first task's anchor
   recalcTimes();
