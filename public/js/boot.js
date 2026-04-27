@@ -181,6 +181,7 @@
   if (typeof buildDelegated === 'function') buildDelegated();
   if (typeof updateStats === 'function') updateStats();
   if (typeof updateDateNav === 'function') updateDateNav();
+  if (typeof initCarryoverReview === 'function') initCarryoverReview();
   // Refresh stats every 60s to keep "Block Ends" current
   setInterval(() => { if(typeof updateStats === 'function') updateStats(); }, 60000);
 })();

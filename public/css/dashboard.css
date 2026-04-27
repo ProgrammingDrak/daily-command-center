@@ -1216,6 +1216,29 @@
   .sched-picker-confirm{padding:7px 16px;border-radius:6px;border:none;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer}
   .sched-picker-confirm:hover{opacity:0.85}
 
+  /* ======== CARRYOVER REVIEW MODAL ======== */
+  .carryover-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:465;justify-content:center;align-items:center;padding:24px}
+  .carryover-overlay.open{display:flex}
+  .carryover{background:var(--bg);border:1px solid var(--border);border-radius:12px;width:520px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.6)}
+  .carryover-hdr{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+  .carryover-hdr h3{font-size:14px;font-weight:700;margin:0;color:var(--accent-light)}
+  .carryover-body{padding:14px 16px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
+  .carryover-hint{font-size:12px;color:var(--text-muted)}
+  .carryover-list{display:flex;flex-direction:column;gap:6px}
+  .carryover-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px}
+  .carryover-row-info{flex:1;min-width:0}
+  .carryover-row-title{font-size:13px;color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .carryover-row-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
+  .carryover-row-actions{display:flex;gap:4px;flex-shrink:0}
+  .carryover-btn{padding:5px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .carryover-btn:hover{color:var(--text);background:rgba(255,255,255,0.05)}
+  .carryover-btn-backlog:hover{border-color:var(--accent);color:var(--accent-light)}
+  .carryover-btn-schedule:hover{border-color:var(--green);color:var(--green)}
+  .carryover-btn-drop:hover{border-color:var(--red);color:var(--red)}
+  .carryover-footer{padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end}
+  .carryover-skip{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:12px;cursor:pointer}
+  .carryover-skip:hover{color:var(--text);background:rgba(255,255,255,0.05)}
+
   /* ======== QUICK-CAPTURE STRIP ======== */
   .qc-strip{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:9px;margin-bottom:12px}
   .qc-mood-group{display:flex;gap:4px;flex-shrink:0}
