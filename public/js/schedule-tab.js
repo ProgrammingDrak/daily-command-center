@@ -263,7 +263,7 @@ function buildSchedule(){
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Mark as trivial — move to triage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
-          (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Move to tomorrow"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+          (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
           '<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
           '<div class="dur">'+
             '<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>'+
@@ -341,7 +341,7 @@ function buildSchedule(){
     });}
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
-    const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();pushTask(pb.dataset.pushId)});
+    const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});
     const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId)});
     // PIN 1: click the timeline dot to pin this task as "active"
     const tnode=el.querySelector(".tl-node");

@@ -128,29 +128,51 @@ function _toHHMM(s){
   if(s.includes("T")){const d=new Date(s);return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}
   return s;
 }
-async function schedulePushedOnTomorrow(ev){
-  if(!window.blockStore||!window.__PA_TOMORROW__||!__tomorrowDate)return;
-  const tomorrow=window.__PA_TOMORROW__;
-  const tDate=__tomorrowDate;
+// Compute today's local-date string ("YYYY-MM-DD") based on the wall clock,
+// independent of the currently-viewed date.
+function _actualTodayStr(){
+  const n=new Date();
+  return n.getFullYear()+"-"+String(n.getMonth()+1).padStart(2,"0")+"-"+String(n.getDate()).padStart(2,"0");
+}
 
-  // Get tomorrow's meetings as blocker intervals
-  const tTimeline=(tomorrow.schedule&&tomorrow.schedule.timeline)||[];
+// Pretty label for a date string: "today" | "tomorrow" | "Apr 22"
+function _prettyDateLabel(dateStr){
+  if(!dateStr)return dateStr||"";
+  if(dateStr===_actualTodayStr())return"today";
+  if(dateStr===__tomorrowDate)return"tomorrow";
+  try{return new Date(dateStr+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}catch(e){return dateStr}
+}
+
+// Schedule `ev` (a task) onto an arbitrary `targetDate`. Picks a free slot from
+// the day's existing meetings + already-scheduled blocks. Used by push-to-tomorrow
+// and the generalized rescheduler.
+async function schedulePushedOnDate(ev,targetDate,opts){
+  opts=opts||{};
+  if(!window.blockStore||!targetDate)return null;
+
+  // Resolve target state (for meeting times + work-hour bounds)
+  let targetState=null;
+  if(targetDate===__todayDate&&window.__PA_STATE__)targetState=window.__PA_STATE__;
+  else if(targetDate===__tomorrowDate&&window.__PA_TOMORROW__)targetState=window.__PA_TOMORROW__;
+  if(!targetState){
+    try{const r=await fetch("/api/state/day?date="+encodeURIComponent(targetDate));targetState=await r.json()}catch(e){}
+  }
+
+  const tTimeline=(targetState&&targetState.schedule&&targetState.schedule.timeline)||[];
   const tMeetings=tTimeline
     .filter(e=>e.type==="meeting"||e.type==="oneone")
     .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
     .sort((a,b)=>a.s-b.s);
 
-  // Work hours from schedule blocks
-  const tBlocks=(tomorrow.schedule&&tomorrow.schedule.blocks)||[];
+  const tBlocks=(targetState&&targetState.schedule&&targetState.schedule.blocks)||[];
   const dayStart=tBlocks.length?pt(tBlocks[0].start):7*60;
   const dayEnd=tBlocks.length?pt(tBlocks[tBlocks.length-1].end):17*60+30;
 
-  // Fetch existing tasks on tomorrow to avoid double-booking
+  // Fetch existing blocks on the target date so we don't double-book
   let existingBlockers=[];
   try{
-    const tBlks=await fetch("/api/blocks?date="+tDate).then(r=>r.json());
-    // Duplicate check — skip if already pushed this task
-    if(tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id))return;
+    const tBlks=await fetch("/api/blocks?date="+targetDate).then(r=>r.json());
+    if(tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id))return null;
     existingBlockers=tBlks
       .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
       .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
@@ -158,18 +180,24 @@ async function schedulePushedOnTomorrow(ev){
 
   const allBlockers=[...tMeetings,...existingBlockers].sort((a,b)=>a.s-b.s);
   const d=dur(ev)||30;
-  const slot=_freeStart(dayStart,d,allBlockers);
 
-  // Don't schedule past end of day + 1hr buffer
+  // When dropping onto today, anchor to "now" so we don't slot into the morning past.
+  let cursor=dayStart;
+  if(targetDate===_actualTodayStr()){
+    const round15=m=>Math.ceil(m/15)*15;
+    cursor=Math.max(dayStart,round15(now()));
+  }
+  const slot=_freeStart(cursor,d,allBlockers);
+
   if(slot+d>dayEnd+60){
-    if(typeof showToast==="function")showToast("No free slot on tomorrow's schedule","error");
-    return;
+    if(!opts.silent&&typeof showToast==="function")showToast("No free slot on "+_prettyDateLabel(targetDate)+"'s schedule","error");
+    return null;
   }
 
   const startTime=fmt(slot);
   const endTime=fmt(slot+d);
 
-  await window.blockStore.createBlock("block",{
+  const block=await window.blockStore.createBlock("block",{
     local_id:ev.id,
     title:ev.title,
     duration:d,
@@ -183,18 +211,75 @@ async function schedulePushedOnTomorrow(ev){
     tags:ev.tags||[],
     added_at:new Date().toISOString(),
     pushed_from:(__state&&__state.date)||"unknown"
-  },{date:tDate});
+  },{date:targetDate});
 
-  if(typeof showToast==="function")showToast("Scheduled tomorrow at "+f12(startTime),"success");
+  if(!opts.silent&&typeof showToast==="function")showToast("Scheduled "+_prettyDateLabel(targetDate)+" at "+f12(startTime),"success");
+  return block;
+}
+
+async function schedulePushedOnTomorrow(ev){
+  if(!__tomorrowDate)return null;
+  return schedulePushedOnDate(ev,__tomorrowDate);
+}
+
+async function unscheduleTaskFromDate(id,dateStr){
+  if(!window.blockStore||!dateStr)return;
+  try{
+    const blks=await fetch("/api/blocks?date="+dateStr).then(r=>r.json());
+    const match=blks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===id);
+    if(match)await window.blockStore.deleteBlock(match.id);
+  }catch(e){}
 }
 
 async function unschedulePushedFromTomorrow(id){
-  if(!window.blockStore||!__tomorrowDate)return;
-  try{
-    const tBlks=await fetch("/api/blocks?date="+__tomorrowDate).then(r=>r.json());
-    const match=tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===id);
-    if(match)await window.blockStore.deleteBlock(match.id);
-  }catch(e){}
+  if(!__tomorrowDate)return;
+  return unscheduleTaskFromDate(id,__tomorrowDate);
+}
+
+// Move a task off of the currently-viewed date and onto `targetDate`. Used by
+// the reschedule popover (Today / Tomorrow / custom date) on every task card.
+async function rescheduleTaskToDate(id,targetDate,opts){
+  opts=opts||{};
+  if(!targetDate)return;
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return;
+  const fromDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  if(fromDate===targetDate){
+    if(typeof showToast==="function")showToast("Already on "+_prettyDateLabel(targetDate),"error");
+    return;
+  }
+
+  const block=await schedulePushedOnDate(ev,targetDate,{silent:true});
+  if(!block)return; // schedulePushedOnDate already toasted the failure
+
+  // Remove from the source date.
+  // Manual / pushed tasks live as blockstore blocks on `fromDate` -- delete the source.
+  // Native schedule items (meetings, etc.) come from INIT_SCHED -- mark as pushed instead.
+  if(window.blockStore&&(ev.source==="manual"||ev.source==="pushed")){
+    try{
+      const src=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id&&(!b.date||b.date===fromDate));
+      if(src)await window.blockStore.deleteBlock(src.id);
+    }catch(e){}
+    // Drop any local "added task" mirror for this id on the source date
+    try{
+      const added=loadAddedTasks().filter(t=>t.id!==id);
+      saveAddedTasks(added);
+    }catch(e){}
+  }
+  pushedSet.add(id);pushedAt[id]=new Date().toISOString();
+  const deferred=loadDeferred();
+  if(!deferred.find(d=>d.id===id)){
+    deferred.push({...ev,deferred_from:fromDate||"unknown",deferred_at:new Date().toISOString(),pushed_to:targetDate});
+    saveDeferred(deferred);
+  }
+  savePushedState();
+  log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
+
+  if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+
+  if(typeof recalcTimes==="function")recalcTimes();
+  render();
+  return block;
 }
 
 function pushTask(id){
@@ -278,4 +363,130 @@ function confirmDeleteTask(){
 document.getElementById("del-cancel").addEventListener("click",closeDeleteConfirm);
 document.getElementById("del-go").addEventListener("click",confirmDeleteTask);
 document.getElementById("del-confirm-overlay").addEventListener("click",function(e){if(e.target===this)closeDeleteConfirm()});
+
+// ======== RESCHEDULE POPOVER ========
+// Click the per-card "→" button to open this popover. Replaces the old
+// hard-coded push-to-tomorrow with quick options for today/tomorrow/custom.
+function openReschedulePopover(id,anchorEl){
+  const ev=scheduled.find(e=>e.id===id);if(!ev)return;
+  // Close any existing popovers
+  document.querySelectorAll(".resched-popover,.dur-popover").forEach(p=>p.remove());
+  document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
+  document.body.classList.remove("dur-open");
+
+  const today=(typeof _actualTodayStr==="function")?_actualTodayStr():null;
+  const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+
+  const pop=document.createElement("div");
+  pop.className="dur-popover resched-popover";
+  pop.innerHTML=
+    '<div class="resched-header">Move "'+ev.title.replace(/"/g,'&quot;')+'" to…</div>'+
+    '<div class="resched-quick">'+
+      '<button class="resched-btn" data-target="today"'+(currentDate===today?' disabled':'')+'>Today</button>'+
+      '<button class="resched-btn" data-target="tomorrow"'+((!__tomorrowDate||currentDate===__tomorrowDate)?' disabled':'')+'>Tomorrow</button>'+
+    '</div>'+
+    '<div class="resched-custom">'+
+      '<input type="date" class="resched-date-input" />'+
+      '<button class="resched-go">Move</button>'+
+    '</div>';
+
+  function closePop(){
+    pop.remove();
+    document.removeEventListener("click",onOutside,true);
+    document.removeEventListener("keydown",onKey,true);
+  }
+  function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl)closePop()}
+  function onKey(e){if(e.key==="Escape")closePop()}
+
+  // Quick buttons
+  pop.querySelectorAll(".resched-btn").forEach(btn=>{
+    btn.addEventListener("click",e=>{
+      e.stopPropagation();
+      if(btn.disabled)return;
+      const target=btn.dataset.target;
+      let dateStr=null;
+      if(target==="today")dateStr=today;
+      else if(target==="tomorrow")dateStr=__tomorrowDate;
+      if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
+      closePop();
+      rescheduleTaskToDate(id,dateStr);
+    });
+  });
+  // Custom date
+  const dateInput=pop.querySelector(".resched-date-input");
+  // Default to two days out (or tomorrow's tomorrow) so it differs from the quick buttons
+  const seed=new Date();seed.setDate(seed.getDate()+2);
+  const pad=n=>String(n).padStart(2,"0");
+  dateInput.value=seed.getFullYear()+"-"+pad(seed.getMonth()+1)+"-"+pad(seed.getDate());
+  pop.querySelector(".resched-go").addEventListener("click",e=>{
+    e.stopPropagation();
+    const v=dateInput.value;
+    if(!v||!/^\d{4}-\d{2}-\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid date","error");return}
+    closePop();
+    rescheduleTaskToDate(id,v);
+  });
+  dateInput.addEventListener("keydown",e=>{
+    if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
+  });
+
+  // Position
+  const rect=anchorEl.getBoundingClientRect();
+  pop.style.top=(rect.bottom+6)+"px";
+  // Right-align with the button so the popover hugs the card's right edge
+  pop.style.right=(window.innerWidth-rect.right)+"px";
+  pop.style.minWidth="220px";
+  document.body.appendChild(pop);
+  setTimeout(()=>document.addEventListener("click",onOutside,true),0);
+  document.addEventListener("keydown",onKey,true);
+}
+
+// ======== COMPLETION DATE CONFIRM ========
+// Asks the user whether a completed-on-a-past-day task was actually finished today
+// or back on its scheduled date. Future-date completions skip this and silently
+// roll forward to today (handled in toggleDone).
+let _cdcId=null,_cdcSourceDate=null,_cdcTodayStr=null;
+function openCompletionDateConfirm(id,sourceDate,todayStr){
+  const ev=scheduled.find(e=>e.id===id);
+  const title=ev?ev.title:"this task";
+  _cdcId=id;_cdcSourceDate=sourceDate;_cdcTodayStr=todayStr;
+
+  let overlay=document.getElementById("cdc-overlay");
+  if(!overlay){
+    overlay=document.createElement("div");
+    overlay.id="cdc-overlay";
+    overlay.className="cdc-overlay";
+    overlay.innerHTML=
+      '<div class="cdc-box">'+
+        '<div class="cdc-title" id="cdc-title">When was this completed?</div>'+
+        '<div class="cdc-msg" id="cdc-msg"></div>'+
+        '<div class="cdc-actions">'+
+          '<button class="cdc-btn cdc-btn-source" id="cdc-source"></button>'+
+          '<button class="cdc-btn cdc-btn-today" id="cdc-today">Today</button>'+
+        '</div>'+
+        '<button class="cdc-cancel" id="cdc-cancel">Cancel</button>'+
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click",e=>{if(e.target===overlay)closeCompletionDateConfirm()});
+    document.getElementById("cdc-cancel").addEventListener("click",closeCompletionDateConfirm);
+    document.getElementById("cdc-today").addEventListener("click",()=>{
+      const id=_cdcId,today=_cdcTodayStr;
+      closeCompletionDateConfirm();
+      if(id&&today)toggleDone(id,{markOnDate:today,bringToToday:true});
+    });
+    document.getElementById("cdc-source").addEventListener("click",()=>{
+      const id=_cdcId,src=_cdcSourceDate;
+      closeCompletionDateConfirm();
+      if(id&&src)toggleDone(id,{markOnDate:src});
+    });
+  }
+  document.getElementById("cdc-title").textContent='When was "'+(title||"this task")+'" completed?';
+  document.getElementById("cdc-msg").textContent="This task was scheduled for "+_prettyDateLabel(sourceDate)+". Mark it done on which date?";
+  document.getElementById("cdc-source").textContent="On "+_prettyDateLabel(sourceDate);
+  overlay.classList.add("open");
+}
+function closeCompletionDateConfirm(){
+  const overlay=document.getElementById("cdc-overlay");
+  if(overlay)overlay.classList.remove("open");
+  _cdcId=null;_cdcSourceDate=null;_cdcTodayStr=null;
+}
 
