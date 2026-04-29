@@ -602,6 +602,13 @@ function renderStickyNotesList(){
 
 function openStickyNotes(){
   document.getElementById("sn-overlay").classList.add("open");
+  // Reset the create-task bar so it doesn't carry stale state from a prior session.
+  const taskBar=document.getElementById("task-add-sticky");
+  if(taskBar){
+    taskBar.style.display="none";
+    const t=taskBar.querySelector(".tab-title");
+    if(t){ t.value=""; t.classList.remove("tab-error"); }
+  }
   renderStickyNotesList();
 }
 function closeStickyNotes(){
@@ -682,6 +689,38 @@ function deleteStickyNote(id){
   renderStickyNotesList();
   updateSnBadge();
 }
+
+// Create-task bar inside the sticky notes panel. Mirrors the notes-drawer
+// pattern: the .task-add-bar markup is auto-wired to addTaskUniversal at
+// script load (schedule.js); here we just toggle visibility and collapse
+// the bar after a successful add.
+function toggleSnCreateTask(){
+  const bar=document.getElementById("task-add-sticky");
+  if(!bar) return;
+  const visible=bar.style.display!=="none";
+  if(visible){ bar.style.display="none"; return; }
+  bar.style.display="flex";
+  const inp=bar.querySelector(".tab-title");
+  if(inp) inp.focus();
+}
+(function wireSnCreateTask(){
+  const bar=document.getElementById("task-add-sticky");
+  if(!bar) return;
+  const titleInp=bar.querySelector(".tab-title");
+  const addBtn=bar.querySelector(".tab-add");
+  // addTaskUniversal clears .tab-title on success and adds .tab-error on
+  // empty input. Run after it (microtask) and collapse the bar if the input
+  // was cleared.
+  const collapseIfAdded=()=>{
+    Promise.resolve().then(()=>{
+      if(titleInp && !titleInp.value && !titleInp.classList.contains("tab-error")){
+        bar.style.display="none";
+      }
+    });
+  };
+  addBtn && addBtn.addEventListener("click", collapseIfAdded);
+  titleInp && titleInp.addEventListener("keydown", e=>{ if(e.key==="Enter") collapseIfAdded(); });
+})();
 
 // ======== FOCUS BANNER ========
 function updateFocusBanner(){

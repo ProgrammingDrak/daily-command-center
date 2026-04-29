@@ -894,6 +894,7 @@
   .sn-new-btn{border-color:var(--accent);color:var(--accent-light)}
   .sn-new-btn:hover{background:rgba(59,130,246,0.12)}
   .sn-list{flex:1;overflow-y:auto;padding:12px}
+  #task-add-sticky{margin:8px 12px 0;padding:8px 0;border-bottom:none;flex-wrap:wrap}
   .sn-empty{color:var(--text-muted);font-size:12px;text-align:center;padding:32px 0}
   .sn-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px}
   .sn-card-stale{border-color:var(--amber);background:rgba(245,158,11,0.06)}

@@ -151,8 +151,27 @@
       <div class="sn-bar-title">📌 Sticky Notes</div>
       <div class="sn-bar-actions">
         <button class="sn-new-btn" onclick="newStickyNote()">+ New Note</button>
+        <button class="sn-new-btn" id="sn-create-task" onclick="toggleSnCreateTask()" title="Create a task">+ Create Task</button>
         <button class="sn-close-btn" onclick="closeStickyNotes()">✕ Close</button>
       </div>
+    </div>
+    <div class="task-add-bar" id="task-add-sticky" style="display:none">
+      <input class="tab-title" type="text" placeholder="+ Add a task..." />
+      <select class="tab-dur">
+        <option value="15">15m</option>
+        <option value="30" selected>30m</option>
+        <option value="45">45m</option>
+        <option value="60">1h</option>
+        <option value="90">1.5h</option>
+        <option value="120">2h</option>
+      </select>
+      <select class="tab-dest">
+        <option value="schedule">Schedule</option>
+        <option value="backlog">Backlog</option>
+        <option value="urgent" selected>Urgent</option>
+        <option value="trivial">Trivial</option>
+      </select>
+      <button class="tab-add">+ Add</button>
     </div>
     <div class="sn-list" id="sn-list"></div>
   </div>
