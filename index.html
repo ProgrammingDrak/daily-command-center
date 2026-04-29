@@ -150,26 +150,11 @@
     <div class="sn-bar">
       <div class="sn-bar-title">📌 Sticky Notes</div>
       <div class="sn-bar-actions">
-        <button class="sn-new-btn" onclick="openStickyEditor(null)">+ New Note</button>
+        <button class="sn-new-btn" onclick="newStickyNote()">+ New Note</button>
         <button class="sn-close-btn" onclick="closeStickyNotes()">✕ Close</button>
       </div>
     </div>
     <div class="sn-list" id="sn-list"></div>
-    <div class="sn-editor-wrap" id="sn-editor-wrap">
-      <div class="sn-toolbar">
-        <button class="sn-tb-btn" onmousedown="event.preventDefault();snCmd('bold')" title="Bold"><b>B</b></button>
-        <button class="sn-tb-btn" onmousedown="event.preventDefault();snCmd('italic')" title="Italic"><i>I</i></button>
-        <button class="sn-tb-btn" onmousedown="event.preventDefault();snCmd('underline')" title="Underline"><u>U</u></button>
-        <button class="sn-tb-btn" onmousedown="event.preventDefault();snCmd('strikeThrough')" title="Strikethrough"><s>S</s></button>
-        <button class="sn-tb-btn" onmousedown="event.preventDefault();snCmd('insertUnorderedList')" title="Bullet list">• List</button>
-        <button class="sn-tb-btn" onmousedown="event.preventDefault();snCmd('insertOrderedList')" title="Numbered list">1. List</button>
-      </div>
-      <div class="sn-editable" id="sn-editable" contenteditable="true" data-placeholder="Write your note..."></div>
-      <div class="sn-editor-footer">
-        <button class="sn-cancel-btn" onclick="closeStickyEditor()">Cancel</button>
-        <button class="sn-save-btn" onclick="saveStickyNote()">Save</button>
-      </div>
-    </div>
   </div>
 </div>
 

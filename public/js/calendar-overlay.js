@@ -65,17 +65,24 @@
       }
     }
 
-    // Wire up notes editing
-    const notesEl = document.getElementById("cal-overlay-notes-editor");
-    if (notesEl) {
-      notesEl.addEventListener("input", function () {
-        saveOverlayNotes(eventId, dateStr, this.innerHTML, this.innerText);
-      });
-    }
+    // Mount the shared block editor for notes
+    mountOverlayNotesEditor(eventId, dateStr);
   }
 
   function calCloseOverlay(e) {
     if (e && e.target !== e.currentTarget) return;
+    // Flush pending notes-editor saves and tear down the editor before closing
+    // so unsaved keystrokes don't get lost and document-level listeners on the
+    // editor don't leak.
+    if (_overlayNotesSaveTimer) { clearTimeout(_overlayNotesSaveTimer); _overlayNotesSaveTimer = null; }
+    if (window._calOverlayBlockEditor && currentOverlayId && currentOverlayDate) {
+      try {
+        const ed = window._calOverlayBlockEditor;
+        saveOverlayNotes(currentOverlayId, currentOverlayDate, ed.toHtml(), ed.toMarkdown(), ed.getBlocks());
+        ed.destroy();
+      } catch (err) {}
+      window._calOverlayBlockEditor = null;
+    }
     const overlay = document.getElementById("cal-overlay-bg");
     if (overlay) overlay.classList.remove("open");
     currentOverlayId = null;
@@ -239,19 +246,10 @@
       </div>`;
     }
 
-    // Notes
-    const notes = loadNotesForEvent(ev.id, dateStr);
-    const notesContent = notes ? notes.html || "" : "";
+    // Notes — uses the shared block editor (same as notes drawer / done modal)
     let notesHTML = `<div class="cal-overlay-section">
       <div class="cal-overlay-section-title">Notes</div>
-      <div class="cal-overlay-toolbar">
-        <button onmousedown="event.preventDefault();document.execCommand('bold')"><b>B</b></button>
-        <button onmousedown="event.preventDefault();document.execCommand('italic')"><i>I</i></button>
-        <button onmousedown="event.preventDefault();document.execCommand('underline')"><u>U</u></button>
-        <button onmousedown="event.preventDefault();document.execCommand('insertUnorderedList')">&bull; List</button>
-      </div>
-      <div class="cal-overlay-notes" id="cal-overlay-notes-editor" contenteditable="true"
-        data-placeholder="Add notes...">${notesContent}</div>
+      <div class="cal-overlay-notes" id="cal-overlay-notes-editor"></div>
     </div>`;
 
     // Action Items
@@ -367,20 +365,22 @@
 
   // ── Save Operations ──
 
-  function saveOverlayNotes(eventId, dateStr, html, text) {
+  function saveOverlayNotes(eventId, dateStr, html, text, blocks) {
+    const props = { html, text, updatedAt: new Date().toISOString() };
+    if (blocks) props.blocks = blocks;
     if (window.blockStore) {
-      const blocks = window.blockStore._rangeCache.get(dateStr)?.blocks || [];
-      const existing = blocks.find(b => b.type === "note" && b.parent_id === eventId);
+      const cacheBlocks = window.blockStore._rangeCache.get(dateStr)?.blocks || [];
+      const existing = cacheBlocks.find(b => b.type === "note" && b.parent_id === eventId);
       if (existing) {
-        window.blockStore.updateBlockDebounced(existing.id, { html, text, updatedAt: new Date().toISOString() });
+        window.blockStore.updateBlockDebounced(existing.id, props);
       } else {
-        window.blockStore.createBlock("block", { html, text, updatedAt: new Date().toISOString() }, { parentId: eventId, date: dateStr });
+        window.blockStore.createBlock("block", props, { parentId: eventId, date: dateStr });
       }
     }
     // Also save to localStorage as fallback
     try {
       const notes = JSON.parse(localStorage.getItem("pa-notes-" + dateStr) || "{}");
-      notes[eventId] = { html, text };
+      notes[eventId] = blocks ? { html, text, blocks } : { html, text };
       localStorage.setItem("pa-notes-" + dateStr, JSON.stringify(notes));
     } catch {}
   }
@@ -476,15 +476,40 @@
       if (ev) {
         const body = document.getElementById("cal-overlay-body");
         if (body) body.innerHTML = renderOverlayContent(ev, currentOverlayDate);
-        // Re-wire notes
-        const notesEl = document.getElementById("cal-overlay-notes-editor");
-        if (notesEl) {
-          notesEl.addEventListener("input", function () {
-            saveOverlayNotes(currentOverlayId, currentOverlayDate, this.innerHTML, this.innerText);
-          });
-        }
+        mountOverlayNotesEditor(currentOverlayId, currentOverlayDate);
       }
     }
+  }
+
+  // ── Notes editor mount (shared block editor) ──
+  let _overlayNotesSaveTimer = null;
+  function mountOverlayNotesEditor(eventId, dateStr) {
+    const container = document.getElementById("cal-overlay-notes-editor");
+    if (!container || typeof window.createBlockEditor !== "function") return;
+
+    const notes = loadNotesForEvent(eventId, dateStr);
+    let initialBlocks = null;
+    if (notes && notes.blocks && notes.blocks.length) initialBlocks = notes.blocks;
+    else if (notes && notes.html) initialBlocks = window.migrateHtmlToBlocks(notes.html);
+
+    if (window._calOverlayBlockEditor) {
+      try { window._calOverlayBlockEditor.destroy(); } catch (e) {}
+    }
+    const editor = window.createBlockEditor(container, initialBlocks);
+    window._calOverlayBlockEditor = editor;
+
+    const flushSave = () => {
+      if (_overlayNotesSaveTimer) { clearTimeout(_overlayNotesSaveTimer); _overlayNotesSaveTimer = null; }
+      const html = editor.toHtml();
+      const text = editor.toMarkdown();
+      const blocks = editor.getBlocks();
+      saveOverlayNotes(eventId, dateStr, html, text, blocks);
+    };
+    container.addEventListener("input", () => {
+      if (_overlayNotesSaveTimer) clearTimeout(_overlayNotesSaveTimer);
+      _overlayNotesSaveTimer = setTimeout(flushSave, 350);
+    });
+    container.addEventListener("blur", flushSave, true);
   }
 
   // ── Helpers ──
