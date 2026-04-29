@@ -979,9 +979,11 @@
   .dm-notes-editor{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 6px;min-height:80px;max-height:200px;overflow-y:auto}
   .dm-notes-editor:focus-within{border-color:var(--accent)}
 
-  .notes-action-bar{display:flex;gap:8px}
+  .notes-action-bar{display:flex;gap:8px;flex-wrap:wrap}
   .notes-add-action{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:12px;font-weight:600;cursor:pointer;transition:all 0.12s}
   .notes-add-action:hover{border-color:var(--purple);color:var(--purple);background:rgba(167,139,250,0.06)}
+  .notes-add-action.notes-create-task:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.08)}
+  #task-add-notes{padding:8px 0 0;border-bottom:none;margin-bottom:0;flex-wrap:wrap}
   .notes-action-items{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
   .notes-ai-header{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px;display:flex;justify-content:space-between}
   .notes-ai-count{opacity:0.6;font-weight:400}

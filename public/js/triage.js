@@ -722,6 +722,8 @@ document.getElementById("notes-drawer-close").addEventListener("click", closeNot
 document.getElementById("notes-drawer-overlay").addEventListener("click", e => { if (e.target === e.currentTarget) closeNotesDrawer(); });
 document.getElementById("notes-add-action").addEventListener("click", () => {
   document.getElementById("notes-action-input").style.display = "flex";
+  const taskBar = document.getElementById("task-add-notes");
+  if (taskBar) taskBar.style.display = "none";
   document.getElementById("notes-action-text").focus();
 });
 document.getElementById("notes-action-cancel").addEventListener("click", () => {
@@ -739,6 +741,36 @@ document.getElementById("notes-action-today").addEventListener("click", () => {
 });
 document.getElementById("notes-action-save").addEventListener("click", () => { if (currentNotesTaskId) addActionItem(currentNotesTaskId); });
 document.getElementById("notes-action-text").addEventListener("keydown", e => { if (e.key === "Enter" && currentNotesTaskId) addActionItem(currentNotesTaskId); });
+
+// Create-task bar inside the notes drawer. The .task-add-bar markup is
+// auto-wired to addTaskUniversal at script load (schedule.js); here we just
+// toggle visibility and collapse the bar after a successful add.
+(function wireNotesCreateTask(){
+  const bar = document.getElementById("task-add-notes");
+  const btn = document.getElementById("notes-create-task");
+  if (!bar || !btn) return;
+  const titleInp = bar.querySelector(".tab-title");
+  const addBtn = bar.querySelector(".tab-add");
+  btn.addEventListener("click", () => {
+    const visible = bar.style.display !== "none";
+    if (visible) { bar.style.display = "none"; return; }
+    bar.style.display = "flex";
+    document.getElementById("notes-action-input").style.display = "none";
+    titleInp && titleInp.focus();
+  });
+  // addTaskUniversal clears .tab-title on success and adds .tab-error on
+  // empty input. Run after it (microtask) and collapse the bar if the input
+  // was cleared.
+  const collapseIfAdded = () => {
+    Promise.resolve().then(() => {
+      if (titleInp && !titleInp.value && !titleInp.classList.contains("tab-error")) {
+        bar.style.display = "none";
+      }
+    });
+  };
+  addBtn && addBtn.addEventListener("click", collapseIfAdded);
+  titleInp && titleInp.addEventListener("keydown", e => { if (e.key === "Enter") collapseIfAdded(); });
+})();
 
 // ======== REVIEW BADGE & POPOVER ========
 let REVIEWED_KEY = "pa-reviewed-" + (__state ? __state.date : "unknown");

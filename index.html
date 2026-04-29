@@ -45,6 +45,28 @@
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
           Add Action Item
         </button>
+        <button class="notes-add-action notes-create-task" id="notes-create-task">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          Create Task
+        </button>
+      </div>
+      <div class="task-add-bar" id="task-add-notes" style="display:none">
+        <input class="tab-title" type="text" placeholder="+ Add a task..." />
+        <select class="tab-dur">
+          <option value="15">15m</option>
+          <option value="30" selected>30m</option>
+          <option value="45">45m</option>
+          <option value="60">1h</option>
+          <option value="90">1.5h</option>
+          <option value="120">2h</option>
+        </select>
+        <select class="tab-dest">
+          <option value="schedule">Schedule</option>
+          <option value="backlog">Backlog</option>
+          <option value="urgent" selected>Urgent</option>
+          <option value="trivial">Trivial</option>
+        </select>
+        <button class="tab-add">+ Add</button>
       </div>
       <div class="notes-action-items" id="notes-action-items">
         <div class="notes-ai-header">Action Items <span class="notes-ai-count" id="notes-ai-count">(0)</span></div>
