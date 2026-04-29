@@ -884,21 +884,20 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 8px 6px;
   color: var(--text);
   font-size: 13px;
   line-height: 1.5;
   outline: none;
 }
 
-.cal-overlay-notes:focus {
+.cal-overlay-notes:focus-within {
   border-color: var(--accent);
 }
 
-.cal-overlay-notes:empty::before {
-  content: attr(data-placeholder);
-  color: var(--text-muted);
-  pointer-events: none;
+.cal-overlay-notes .nb-editor {
+  min-height: 64px;
+  padding: 0;
 }
 
 /* Action items in overlay */
@@ -1070,32 +1069,6 @@
 
 .cal-prop-link:hover {
   text-decoration: underline;
-}
-
-/* Notes toolbar in overlay */
-.cal-overlay-toolbar {
-  display: flex;
-  gap: 2px;
-  padding: 4px;
-  border-bottom: 1px solid var(--border);
-  background: var(--card);
-  border-radius: 6px 6px 0 0;
-}
-
-.cal-overlay-toolbar button {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  padding: 3px 6px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: all 0.12s;
-}
-
-.cal-overlay-toolbar button:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
 }
 
 /* Add buttons */

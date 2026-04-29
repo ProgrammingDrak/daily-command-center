@@ -273,6 +273,12 @@ function openNotesDrawer(taskId, taskTitle) {
 
   renderActionItems(taskId);
   document.getElementById("notes-action-input").style.display = "none";
+  const taskBar = document.getElementById("task-add-notes");
+  if (taskBar) {
+    taskBar.style.display = "none";
+    const t = taskBar.querySelector(".tab-title");
+    if (t) { t.value = ""; t.classList.remove("tab-error"); }
+  }
   document.getElementById("notes-drawer-overlay").classList.add("open");
   window._notesBlockEditor.focus();
 }

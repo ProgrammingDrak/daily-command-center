@@ -175,6 +175,12 @@ function openUpcomingNotesDrawer(id, title) {
     ).join('');
   }
   document.getElementById("notes-action-input").style.display = "none";
+  const taskBar = document.getElementById("task-add-notes");
+  if (taskBar) {
+    taskBar.style.display = "none";
+    const t = taskBar.querySelector(".tab-title");
+    if (t) { t.value = ""; t.classList.remove("tab-error"); }
+  }
   // Override save/add handlers for upcoming store
   window._upcomingNotesMode = true;
   window._upcomingNotesId = id;

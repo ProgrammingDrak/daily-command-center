@@ -443,12 +443,20 @@ function buildTrivialTasks(){
 
 // ======== STICKY NOTES ========
 const SN_KEY = "pa-sticky-notes";
-let snEditingId = null;
+
+// Per-card editor instances: id → BlockEditor. Reused so we don't tear down
+// editors during incremental re-renders unless they're truly stale.
+const _snEditors = new Map();
+// Tracks pending autosave timers per note id.
+const _snSaveTimers = new Map();
+// Last-saved signature per note (so we don't re-render an editor whose
+// content already matches the persisted state, which would steal focus).
+const _snLastSig = new Map();
 
 function loadStickyNotes(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
-    return [...window.blockStore.getByType("sticky_note"),...window.blockStore.getByType("block").filter(b=>((b.properties||{}).tags||[]).includes("pinned")&&(b.properties||{}).html)].map(b=>({
-      id:b.id, html:b.properties.html, text:b.properties.text,
+    return [...window.blockStore.getByType("sticky_note"),...window.blockStore.getByType("block").filter(b=>((b.properties||{}).tags||[]).includes("pinned")&&(b.properties||{}).html!==undefined)].map(b=>({
+      id:b.id, html:b.properties.html||"", text:b.properties.text||"", blocks:b.properties.blocks||null,
       createdAt:b.created_at, updatedAt:b.updated_at, _blockId:b.id
     })).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)); // newest first
   }
@@ -473,10 +481,82 @@ function updateSnBadge(){
   else{badge.style.display="none";}
 }
 
+function _snInitialBlocks(n){
+  if(n.blocks && n.blocks.length) return n.blocks;
+  if(n.html) return migrateHtmlToBlocks(n.html);
+  return null;
+}
+
+function _snEditorIsEmpty(editor){
+  if(!editor) return true;
+  if(editor.isEmpty()) return true;
+  return !editor.toMarkdown().trim();
+}
+
+function _snFlushSave(id){
+  if(_snSaveTimers.has(id)){
+    clearTimeout(_snSaveTimers.get(id));
+    _snSaveTimers.delete(id);
+  }
+  const editor=_snEditors.get(id);
+  if(editor) _snPersist(id, editor);
+}
+
+function _snFlushAll(){
+  for(const id of [..._snSaveTimers.keys()]) _snFlushSave(id);
+}
+
+function _snPersist(id, editor){
+  if(!editor) return;
+  const blocks=editor.getBlocks();
+  const html=editor.toHtml();
+  const text=editor.toMarkdown();
+  const sig=html;
+  if(_snLastSig.get(id)===sig) return; // no change
+  _snLastSig.set(id, sig);
+
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
+    const existing=window.blockStore.get(id);
+    if(existing){
+      const mergedProps={...(existing.properties||{}), html, text, blocks};
+      // updateBlockDebounced bumps the cache immediately and persists after a
+      // small delay; safe to call for every keystroke.
+      window.blockStore.updateBlockDebounced(id, mergedProps, 200);
+    }
+    updateSnBadge();
+    return;
+  }
+
+  // localStorage path
+  const notes=loadStickyNotes();
+  const idx=notes.findIndex(n=>n.id===id);
+  if(idx===-1) return;
+  notes[idx].html=html;
+  notes[idx].text=text;
+  notes[idx].blocks=blocks;
+  notes[idx].updatedAt=new Date().toISOString();
+  saveStickyNotes(notes);
+  updateSnBadge();
+}
+
 function renderStickyNotesList(){
   const list=document.getElementById("sn-list");if(!list)return;
+  // Flush any pending edits before tearing down editors so nothing is lost
+  // on re-render (e.g., when "+ New Note" or Delete triggers a refresh).
+  _snFlushAll();
   const notes=loadStickyNotes();
+
+  // We're about to wipe the list DOM, which orphans every existing editor
+  // (and leaks their document-level listeners — see block-editor.js). Destroy
+  // them all first; we'll recreate fresh editors below.
+  for(const [id, ed] of [..._snEditors]){
+    try{ed.destroy()}catch(e){}
+    _snEditors.delete(id);
+    _snLastSig.delete(id);
+  }
+
   if(!notes.length){list.innerHTML='<div class="sn-empty">No notes yet. Hit "+ New Note" to add one.</div>';return;}
+
   const now=Date.now();
   list.innerHTML="";
   notes.forEach(n=>{
@@ -485,19 +565,38 @@ function renderStickyNotesList(){
     const ageDays=Math.floor(ageMs/(24*60*60*1000));
     const card=document.createElement("div");
     card.className="sn-card"+(stale?" sn-card-stale":"");
+    card.dataset.snid=n.id;
     card.innerHTML=
       (stale?'<div class="sn-stale-banner">⚠ This note is '+ageDays+' days old — keep or delete?</div>':'')+
-      '<div class="sn-card-body">'+n.html+'</div>'+
+      '<div class="sn-card-body" data-sn-mount></div>'+
       '<div class="sn-card-meta">'+
         '<span class="sn-card-ts">'+(n.updatedAt!==n.createdAt?"edited ":"")+snRelTime(n.updatedAt||n.createdAt)+'</span>'+
         '<div class="sn-card-btns">'+
-          '<button class="sn-edit-btn" data-snid="'+n.id+'">Edit</button>'+
           '<button class="sn-del-btn" data-snid="'+n.id+'">Delete</button>'+
         '</div>'+
       '</div>';
-    card.querySelector(".sn-edit-btn").addEventListener("click",()=>openStickyEditor(n.id));
-    card.querySelector(".sn-del-btn").addEventListener("click",()=>deleteStickyNote(n.id));
     list.appendChild(card);
+
+    // Mount the shared block editor inside the card body so each card behaves
+    // exactly like the notes editor in the done modal / notes drawer / add modal.
+    const mount=card.querySelector('[data-sn-mount]');
+    const editor=createBlockEditor(mount, _snInitialBlocks(n));
+    _snEditors.set(n.id, editor);
+    _snLastSig.set(n.id, editor.toHtml());
+
+    // Auto-save: debounced on input, immediate on blur — same persistence
+    // pattern as updateBlockDebounced uses elsewhere.
+    mount.addEventListener('input', ()=>{
+      if(_snSaveTimers.has(n.id)) clearTimeout(_snSaveTimers.get(n.id));
+      _snSaveTimers.set(n.id, setTimeout(()=>{
+        _snSaveTimers.delete(n.id);
+        _snPersist(n.id, editor);
+      }, 350));
+    });
+    // Capture-phase blur catches focus leaving any inner contenteditable.
+    mount.addEventListener('blur', ()=>{ _snFlushSave(n.id); }, true);
+
+    card.querySelector(".sn-del-btn").addEventListener("click",()=>deleteStickyNote(n.id));
   });
 }
 
@@ -506,82 +605,71 @@ function openStickyNotes(){
   renderStickyNotesList();
 }
 function closeStickyNotes(){
-  document.getElementById("sn-overlay").classList.remove("open");
-  closeStickyEditor();
-  if(typeof _flushDeferredRender==='function')_flushDeferredRender();
+  // Flush any pending edits before closing so nothing is lost.
+  _snFlushAll();
+  // Drop any sticky notes that were created but left empty — saves the user
+  // from accumulating empty cards after clicking "+ New Note" by accident.
+  _snPruneEmpty().then(()=>{
+    document.getElementById("sn-overlay").classList.remove("open");
+    if(typeof _flushDeferredRender==='function')_flushDeferredRender();
+  });
 }
 
-function openStickyEditor(id){
-  snEditingId=id;
-  const wrap=document.getElementById("sn-editor-wrap");
-  const ed=document.getElementById("sn-editable");
-  wrap.classList.add("open");
-  if(id){
-    const notes=loadStickyNotes();
-    const n=notes.find(x=>x.id===id);
-    if(n)ed.innerHTML=n.html;
-  } else {
-    ed.innerHTML="";
-  }
-  ed.focus();
-}
-function closeStickyEditor(){
-  snEditingId=null;
-  const wrap=document.getElementById("sn-editor-wrap");
-  if(wrap)wrap.classList.remove("open");
-  const ed=document.getElementById("sn-editable");
-  if(ed)ed.innerHTML="";
-}
-
-function snCmd(cmd){document.execCommand(cmd,false,null);document.getElementById("sn-editable").focus();}
-
-function saveStickyNote(){
-  const ed=document.getElementById("sn-editable");
-  const html=ed.innerHTML.trim();
-  const text=ed.innerText.trim();
-  if(!text){closeStickyEditor();return;}
-
-  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
-    // BlockStore path: create or update block directly
-    if(snEditingId){
-      // Find the block and update it — merge with existing props so the
-      // "pinned" tag (the marker loadStickyNotes() looks for) isn't wiped out.
-      const existing=window.blockStore.get(snEditingId);
-      if(existing){
-        const mergedProps={...(existing.properties||{}),html,text};
-        window.blockStore.updateBlock(snEditingId,mergedProps).then(()=>{
-          closeStickyEditor();
-          renderStickyNotesList();
-          updateSnBadge();
-        });
-      }
-    } else {
-      // Create new sticky note block
-      window.blockStore.createBlock("block",{html,text,tags:["pinned"]}).then(()=>{
-        closeStickyEditor();
-        renderStickyNotesList();
-        updateSnBadge();
-      });
-    }
-    return;
-  }
-
-  // localStorage path (fallback)
+async function _snPruneEmpty(){
   const notes=loadStickyNotes();
-  const now=new Date().toISOString();
-  if(snEditingId){
-    const idx=notes.findIndex(n=>n.id===snEditingId);
-    if(idx!==-1){notes[idx].html=html;notes[idx].text=text;notes[idx].updatedAt=now;}
+  const empties=notes.filter(n=>{
+    const ed=_snEditors.get(n.id);
+    if(ed) return _snEditorIsEmpty(ed);
+    return !((n.text||"").trim()) && !((n.html||"").replace(/<[^>]+>/g,'').trim());
+  });
+  if(!empties.length) return;
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
+    for(const n of empties){
+      try{ await window.blockStore.deleteBlock(n.id); }catch(e){}
+    }
   } else {
-    notes.unshift({id:"sn-"+Date.now(),html,text,createdAt:now,updatedAt:now});
+    const remaining=loadStickyNotes().filter(n=>!empties.find(e=>e.id===n.id));
+    saveStickyNotes(remaining);
   }
-  saveStickyNotes(notes);
-  closeStickyEditor();
-  renderStickyNotesList();
+  // Tear down their editors
+  empties.forEach(n=>{
+    const ed=_snEditors.get(n.id);
+    if(ed){ try{ed.destroy()}catch(e){} _snEditors.delete(n.id); }
+    _snLastSig.delete(n.id);
+  });
   updateSnBadge();
 }
 
+function newStickyNote(){
+  const now=new Date().toISOString();
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
+    window.blockStore.createBlock("block",{html:"",text:"",blocks:[],tags:["pinned"]}).then(block=>{
+      renderStickyNotesList();
+      updateSnBadge();
+      const newId=block && block.id;
+      const ed=newId?_snEditors.get(newId):null;
+      if(ed) ed.focus();
+    });
+    return;
+  }
+  // localStorage fallback
+  const notes=loadStickyNotes();
+  const id="sn-"+Date.now();
+  notes.unshift({id,html:"",text:"",blocks:[],createdAt:now,updatedAt:now});
+  saveStickyNotes(notes);
+  renderStickyNotesList();
+  updateSnBadge();
+  const ed=_snEditors.get(id);
+  if(ed) ed.focus();
+}
+
 function deleteStickyNote(id){
+  // Cancel any pending save and forget the editor before deleting.
+  if(_snSaveTimers.has(id)){ clearTimeout(_snSaveTimers.get(id)); _snSaveTimers.delete(id); }
+  const ed=_snEditors.get(id);
+  if(ed){ try{ed.destroy()}catch(e){} _snEditors.delete(id); }
+  _snLastSig.delete(id);
+
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.stickyNotes&&window.blockStore){
     window.blockStore.deleteBlock(id).then(()=>{
       renderStickyNotesList();
