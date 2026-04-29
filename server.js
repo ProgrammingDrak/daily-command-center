@@ -528,6 +528,9 @@ app.delete("/api/delegated-items/:id", async (req, res) => {
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
 });
 
+// ── Evaluation API (task scoring engine) ──
+app.use(require("./evaluation/routes")(blockDB));
+
 // ── PA State API ──
 app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
