@@ -1250,7 +1250,7 @@
   .side-drawer-right .side-drawer-body{right:0;border-left:1px solid var(--border);transform:translateX(100%);box-shadow:-8px 0 28px rgba(0,0,0,0.45)}
   .side-drawer-left .side-drawer-body{left:0;border-right:1px solid var(--border);transform:translateX(-100%);box-shadow:8px 0 28px rgba(0,0,0,0.45)}
   .side-drawer.open .side-drawer-body{transform:translateX(0)}
-  .side-drawer-handle{position:fixed;top:50%;transform:translateY(-50%);width:32px;min-height:96px;padding:14px 6px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;font-size:12px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;z-index:455;transition:background 150ms ease,color 150ms ease}
+  .side-drawer-handle{position:fixed;top:140px;width:32px;min-height:96px;padding:14px 6px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;font-size:12px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;z-index:455;transition:background 150ms ease,color 150ms ease}
   .side-drawer-right .side-drawer-handle{right:0;border-right:none;border-radius:8px 0 0 8px}
   .side-drawer-left .side-drawer-handle{left:0;border-left:none;border-radius:0 8px 8px 0;writing-mode:vertical-lr}
   .side-drawer-handle:hover{background:var(--card-hover,rgba(255,255,255,0.05));color:var(--text)}
