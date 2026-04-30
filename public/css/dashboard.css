@@ -9,6 +9,14 @@
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:20px 24px 120px}
   a{color:var(--accent-light);text-decoration:none} a:hover{text-decoration:underline}
 
+  /* ── Themed scrollbars (shared across app) ── */
+  *{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;transition:background 0.12s}
+  ::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+  ::-webkit-scrollbar-corner{background:transparent}
+
   .header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--border)}
   .header h1{font-size:24px;font-weight:700;letter-spacing:-0.5px}
   .header .date{font-size:13px;color:var(--text-muted);margin-top:2px}
@@ -1729,7 +1737,10 @@
   .ft-mini-task{font-size:12px;color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ft-mini-pause{width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,0.08);border:none;color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 0.12s}
   .ft-mini-pause:hover{background:rgba(255,255,255,0.15)}
-  .ft-panel{width:320px;max-height:80vh;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);overflow:hidden;display:flex;flex-direction:column}
+  .ft-panel{position:relative;width:320px;height:580px;min-width:300px;min-height:360px;max-width:90vw;max-height:90vh;background:var(--card);border:1px solid var(--border);border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);overflow:hidden;display:flex;flex-direction:column}
+  .ft-resize-grip{position:absolute;top:4px;left:4px;width:14px;height:14px;cursor:nwse-resize;z-index:5;display:flex;align-items:flex-start;justify-content:flex-start}
+  .ft-resize-grip::before{content:"";width:9px;height:9px;border-top:2px solid var(--text-muted);border-left:2px solid var(--text-muted);border-radius:3px 0 0 0;opacity:0.4;transition:opacity 0.12s}
+  .ft-resize-grip:hover::before{opacity:0.9;border-color:var(--text)}
   .ft-panel-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)}
   .ft-panel-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)}
   .ft-panel-close{background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:0 4px;line-height:1;transition:color 0.12s}

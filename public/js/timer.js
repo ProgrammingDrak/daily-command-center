@@ -476,6 +476,56 @@ function buildDistractionTaskList(){
   },true);
 })();
 
+// ======== RESIZABLE FLOAT-TIMER PANEL ========
+(function(){
+  const panel=document.getElementById("ft-panel");
+  const grip=document.getElementById("ft-resize-grip");
+  if(!panel||!grip)return;
+
+  // Restore saved size
+  try{
+    const saved=localStorage.getItem("ft-panel-size");
+    if(saved){
+      const {width,height}=JSON.parse(saved);
+      if(width)panel.style.width=width+"px";
+      if(height)panel.style.height=height+"px";
+    }
+  }catch(e){}
+
+  let resizing=false,startX,startY,startW,startH;
+
+  grip.addEventListener("mousedown",e=>{
+    e.preventDefault();e.stopPropagation();
+    resizing=true;
+    startX=e.clientX;startY=e.clientY;
+    const r=panel.getBoundingClientRect();
+    startW=r.width;startH=r.height;
+    document.body.style.userSelect="none";
+  });
+
+  document.addEventListener("mousemove",e=>{
+    if(!resizing)return;
+    // Top-left grip: drag up-left grows the panel (subtract deltas)
+    const dx=e.clientX-startX,dy=e.clientY-startY;
+    const minW=300,minH=360;
+    const maxW=window.innerWidth-40,maxH=window.innerHeight-40;
+    panel.style.width=Math.max(minW,Math.min(maxW,startW-dx))+"px";
+    panel.style.height=Math.max(minH,Math.min(maxH,startH-dy))+"px";
+  });
+
+  document.addEventListener("mouseup",()=>{
+    if(!resizing)return;
+    resizing=false;
+    document.body.style.userSelect="";
+    try{
+      localStorage.setItem("ft-panel-size",JSON.stringify({
+        width:parseInt(panel.style.width),
+        height:parseInt(panel.style.height)
+      }));
+    }catch(e){}
+  });
+})();
+
 // ======== WHEN BLOCKED — PIVOT TASKS ========
 function paintPivotTasks(){
   const list=document.getElementById("pivot-tasks-list");
