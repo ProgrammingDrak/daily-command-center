@@ -39,13 +39,26 @@ document.addEventListener("keydown",e=>{
 });
 
 function openPomodoro(title,durMin){
+  // Capture previous session state for mid-switch logging and time carry-over
+  const prevTitle = pomoState.title;
+  const prevStartedAt = pomoState.startedAt;
+  const prevRemaining = pomoState.remaining;
+  const prevTotal = pomoState.total;
+  const prevMode = pomoState.mode;
+  const wasRunning = pomoState.running;
+  const isSwitch = wasRunning && prevTitle && prevTitle !== title && prevMode === "work";
+
   if(_pomoCompleteHook){
-    const {prevTitle, capturedStart} = _pomoCompleteHook;
+    const {prevTitle: hookPrev, capturedStart} = _pomoCompleteHook;
     _pomoCompleteHook = null;
-    if(capturedStart && prevTitle && prevTitle !== title){
+    if(capturedStart && hookPrev && hookPrev !== title){
       const elapsed = Math.round((Date.now() - capturedStart) / 1000);
-      if(elapsed >= 60) pomoLogSession(prevTitle, elapsed, pomoState.mode);
+      if(elapsed >= 60) pomoLogSession(hookPrev, elapsed, pomoState.mode);
     }
+  } else if(isSwitch && prevStartedAt){
+    // Direct task switch mid-timer: log elapsed time on previous task
+    const elapsed = Math.round((Date.now() - prevStartedAt) / 1000);
+    if(elapsed >= 60) pomoLogSession(prevTitle, elapsed, prevMode);
   }
   clearInterval(pomoState.iv);
   pomoState.title=title;pomoState.workMin=Math.min(durMin||25,120);pomoState.sessions=0;pomoState.taskDone=false;
@@ -59,6 +72,12 @@ function openPomodoro(title,durMin){
   const modeWork=document.querySelector('.pomo-mode[data-pm="work"]');
   if(modeWork)modeWork.textContent="Focus ("+pomoState.workMin+"m)";
   pomoSetMode("work");
+  // Carry over remaining time from previous task switch (continue the focus block)
+  if(isSwitch && prevRemaining > 0){
+    pomoState.remaining = prevRemaining;
+    pomoState.total = prevTotal;
+    pomoPaint();
+  }
   // Open floating timer panel
   document.getElementById("ft-panel").style.display="flex";
   document.getElementById("ft-fab").style.display="none";
@@ -66,6 +85,12 @@ function openPomodoro(title,durMin){
   pomoRenderReport();
   if(typeof paintPivotTasks==='function')paintPivotTasks();
   if(typeof updateFocusBanner==='function')updateFocusBanner();
+  // Auto-start the timer
+  pomoState.iv=setInterval(pomoTick,1000);
+  pomoState.running=true;
+  pomoState.startedAt=Date.now();
+  pomoUpdateStartBtn();
+  updateTimerBadge();
   savePomoState();
 }
 
@@ -203,6 +228,19 @@ document.getElementById("pomo-task-lightning").addEventListener("click",(e)=>{
 // +1 minute button
 document.getElementById("pomo-add-min").addEventListener("click",()=>{
   pomoState.remaining+=60;pomoState.total+=60;pomoPaint();
+});
+
+// Reset button — log elapsed work, then restart full duration for the current task
+document.getElementById("pomo-reset").addEventListener("click",()=>{
+  if(pomoState.startedAt && pomoState.mode==="work"){
+    const elapsed=Math.round((Date.now()-pomoState.startedAt)/1000);
+    if(elapsed>=60) pomoLogSession(pomoState.title,elapsed,pomoState.mode);
+  }
+  const durations={work:pomoState.workMin*60,short:5*60,long:15*60};
+  pomoState.total=durations[pomoState.mode]||pomoState.workMin*60;
+  pomoState.remaining=pomoState.total;
+  if(pomoState.running) pomoState.startedAt=Date.now();
+  pomoPaint();savePomoState();
 });
 
 // ======== FLOATING TIMER CONTROLS ========

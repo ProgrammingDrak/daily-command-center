@@ -713,7 +713,10 @@
           <svg class="ring" viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="54"/><circle class="ring-fg" id="pomo-arc" cx="60" cy="60" r="54"/></svg>
           <div class="pomo-display" id="pomo-display">--:--</div>
         </div>
-        <button class="pomo-add-min" id="pomo-add-min" style="display:block;margin:0 auto 6px;font-size:11px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="10" height="10"><path d="M12 5v14M5 12h14"/></svg> 1 min</button>
+        <div style="display:flex;gap:6px;justify-content:center;margin-bottom:6px">
+          <button class="pomo-add-min" id="pomo-add-min" style="font-size:11px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="10" height="10"><path d="M12 5v14M5 12h14"/></svg> 1 min</button>
+          <button class="pomo-add-min" id="pomo-reset" title="Reset timer to full duration" style="font-size:11px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="10" height="10"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Reset</button>
+        </div>
         <button class="pomo-start-big go" id="pomo-start" style="width:100%;margin-bottom:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> Start to Focus</button>
         <div class="pomo-secondary" id="pomo-secondary" style="justify-content:center;margin-bottom:6px">
           <button class="pomo-sec-btn" id="pomo-stop">Stop</button>
