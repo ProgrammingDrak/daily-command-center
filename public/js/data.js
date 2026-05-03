@@ -16,6 +16,58 @@ function colorMeta(ev){
   return ev.meta.replace(ev.priority+' priority','<span class="'+priCls(ev.priority)+'">'+ev.priority+' priority</span>');
 }
 
+// ── Category (root tag) color for a task ──
+// Walks the first tag up to its root and returns the root tag's color, or null
+// if the task is untagged or the tag index isn't loaded yet. Callers fall back
+// to the legacy type color (cfg(ev.type).color) when this returns null.
+function taskTagColor(ev){
+  const tags=(ev&&ev.tags)||[];
+  if(!tags.length)return null;
+  const idx=window.__TAGS__;
+  if(!idx||!idx.byId||!idx.getAncestors)return null;
+  const ancestors=idx.getAncestors(tags[0]);
+  const rootId=ancestors[ancestors.length-1];
+  const rootTag=idx.byId.get(rootId);
+  return rootTag?((rootTag.properties||{}).color||null):null;
+}
+
+// ── Per-card tag-row collapse state ──
+// localStorage key: cardTagsExpanded:<taskId> ('1' = expanded, absent = collapsed).
+// Default collapsed so cards stay compact; users opt in per-card.
+function isTagsExpanded(taskId){
+  try{return localStorage.getItem('cardTagsExpanded:'+taskId)==='1'}catch(e){return false}
+}
+function toggleTagsExpanded(taskId){
+  try{
+    if(isTagsExpanded(taskId))localStorage.removeItem('cardTagsExpanded:'+taskId);
+    else localStorage.setItem('cardTagsExpanded:'+taskId,'1');
+  }catch(e){}
+}
+
+// ── Tag chip row HTML for a task card ──
+// When collapsed: small toggle pill showing the tag count.
+// When expanded: same toggle followed by one chip per tag (using the existing
+// .tag-chip CSS for visual consistency with the picker).
+function taskTagChipsHtml(ev){
+  const tags=(ev&&ev.tags)||[];
+  if(!tags.length)return'';
+  const idx=window.__TAGS__;
+  if(!idx||!idx.byId)return'';
+  const expanded=isTagsExpanded(ev.id);
+  const tagIcon='<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.83z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>';
+  const toggleBtn='<button class="card-tags-toggle'+(expanded?' expanded':'')+'" data-tags-toggle-id="'+ev.id+'" title="'+(expanded?'Hide tags':'Show '+tags.length+' tag'+(tags.length>1?'s':''))+'">'+tagIcon+(expanded?'':'<span class="card-tags-count">'+tags.length+'</span>')+'</button>';
+  if(!expanded)return toggleBtn;
+  const chips=tags.map(id=>{
+    const tag=idx.byId.get(id);
+    if(!tag)return'';
+    const props=tag.properties||{};
+    const color=props.color||'var(--accent)';
+    const name=props.name||'';
+    return'<span class="tag-chip card-tag-chip" style="--chip-color:'+color+'">'+(typeof escHtml==='function'?escHtml(name):name)+'</span>';
+  }).filter(Boolean).join('');
+  return toggleBtn+chips;
+}
+
 // ======== DATA (fetched from API at boot) ========
 // The Express server at /api/* provides all state data.
 // The async boot loader below fetches everything before init.

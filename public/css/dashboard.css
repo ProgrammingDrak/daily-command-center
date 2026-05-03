@@ -166,6 +166,14 @@
   .tag-add-btn{background:none;border:1px dashed var(--border);color:var(--text-muted);cursor:pointer;font-size:10px;padding:2px 7px;border-radius:10px;white-space:nowrap}
   .tag-add-btn:hover{border-color:var(--accent-light);color:var(--accent-light)}
 
+  /* Per-card tag toggle + chips (lives in .meta on schedule cards) */
+  .card-tags-toggle{display:inline-flex;align-items:center;gap:3px;background:none;border:1px solid var(--border);color:var(--text-muted);padding:1px 6px;border-radius:9px;font-size:9px;font-weight:600;cursor:pointer;line-height:1.4}
+  .card-tags-toggle:hover{color:var(--text);border-color:var(--accent-light)}
+  .card-tags-toggle.expanded{color:var(--accent-light);border-color:var(--accent-light)}
+  .card-tags-toggle svg{width:9px;height:9px}
+  .card-tags-count{font-size:9px;opacity:0.85}
+  .card-tag-chip{font-size:9px;padding:1px 6px}
+
   /* Tag picker dropdown */
   .tag-picker-dropdown{position:absolute;top:calc(100% + 4px);left:0;z-index:600;background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,0.5);min-width:200px;max-width:280px;padding:6px 0}
   .tag-picker-search{display:block;width:calc(100% - 16px);margin:4px 8px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:4px 7px}

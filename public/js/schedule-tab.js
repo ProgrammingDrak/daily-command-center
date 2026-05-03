@@ -121,7 +121,7 @@ function buildSchedule(){
       '<div class="tl-node"></div>'+
       '<div class="compact-row">'+
         '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
-        '<div class="bar" style="background:'+c.color+'"></div>'+
+        '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
         '<span class="c-title">'+ev.title+'</span>'+
         reviewBadgeHtml+
         evSrcTag+
@@ -132,8 +132,31 @@ function buildSchedule(){
     tl.appendChild(el);
   });
 
+  // Render trivial tasks completed on the viewed date as compact rows
+  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+  const doneTrivials=(typeof loadTrivialTasks==='function'?loadTrivialTasks():[])
+    .filter(t=>t.done&&t.doneAt&&new Date(t.doneAt).toISOString().split("T")[0]===viewDate);
+  doneTrivials.forEach(t=>{
+    const dt=new Date(t.doneAt);
+    const hhmm=String(dt.getHours()).padStart(2,"0")+":"+String(dt.getMinutes()).padStart(2,"0");
+    const timeStr=f12(hhmm);
+    const el=document.createElement("div");el.className="tl-compact";el.dataset.trivId=t.id;
+    el.innerHTML=
+      '<div class="tl-time">'+timeStr.replace(/ (AM|PM)/,"")+'</div>'+
+      '<div class="tl-node"></div>'+
+      '<div class="compact-row">'+
+        '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
+        '<div class="bar" style="background:var(--purple,#a78bfa)"></div>'+
+        '<span class="c-title">'+t.text+'</span>'+
+        '<span class="tag tag-task" style="background:rgba(167,139,250,0.15);color:var(--purple,#a78bfa)">Trivial</span>'+
+        '<span class="c-time">'+timeStr+'</span>'+
+      '</div>';
+    el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
+    tl.appendChild(el);
+  });
+
   // Divider between done and active
-  if(doneItems.length&&activeItems.length){
+  if((doneItems.length||doneTrivials.length)&&activeItems.length){
     const d=document.createElement("div");d.className="divider";d.innerHTML='<span>Up Next</span>';tl.appendChild(d);
   }
 
@@ -251,12 +274,13 @@ function buildSchedule(){
             '<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>'+
             (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or trivial task" data-add-id="'+ev.id+'">+</button>':'')+
           '</div>'+
-          '<div class="bar" style="background:'+c.color+'"></div>'+
+          '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
             '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+colorMeta(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
+              taskTagChipsHtml(ev)+
             '</div>'+
           '</div>'+
           notesButton(ev)+
@@ -289,6 +313,8 @@ function buildSchedule(){
     // Trivial link button
     const trivLink=el.querySelector(".btn-triv-link");
     if(trivLink)trivLink.addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(ev.id);});
+    const tagToggle=el.querySelector(".card-tags-toggle");
+    if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
     const stSpan=el.querySelector(".start-time");if(stSpan&&!isMeeting(ev)){stSpan.addEventListener("click",e=>{e.stopPropagation();openStartTimePicker(ev.id,stSpan);});}
     const dbadge=el.querySelector(".dbadge");

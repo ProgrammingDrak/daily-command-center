@@ -49,7 +49,10 @@ function toggleTrivialTask(id){
     const block=window.blockStore.get(id);
     if(block){
       const newDone=!block.properties.done;
-      window.blockStore.updateBlock(id,{...block.properties,done:newDone,doneAt:newDone?new Date().toISOString():null}).then(()=>buildTrivialTasks());
+      window.blockStore.updateBlock(id,{...block.properties,done:newDone,doneAt:newDone?new Date().toISOString():null}).then(()=>{
+        buildTrivialTasks();
+        if(typeof buildSchedule==='function')buildSchedule();
+      });
     }
     return;
   }
@@ -58,6 +61,7 @@ function toggleTrivialTask(id){
   if(t){t.done=!t.done;t.doneAt=t.done?new Date().toISOString():null;}
   saveTrivialTasks(tasks);
   buildTrivialTasks();
+  if(typeof buildSchedule==='function')buildSchedule();
 }
 function deleteTrivialTask(id){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){

@@ -108,6 +108,18 @@
 | 15 | Multi-calendar account sync | Multiple OAuth tokens, per-account calendars in sidebar |
 | 16 | Conflict check on WAL replay | Before replaying a queued mutation, compare its `updated_at` to the server block's `updated_at`; skip the replay if the server is newer so a stale local queue doesn't clobber a cross-machine edit. Small lift, prevents silent data loss in multi-device use. |
 
+### Phase 7 - Task Grouping (in progress, rolling out incrementally)
+
+The umbrella vision is to give the user multiple lenses for grouping tasks. Each lens
+is a separate increment so we don't boil the ocean.
+
+| # | Note | What |
+|---|------|------|
+| Categories | UX upgrade on existing tag system | Tags get visual prominence on task cards (color stripe + chips) so the type of task is distinguishable at a glance. Sort/filter by category. The existing tag-block matching (`acceptedTags` on schedule blocks, ancestor-aware tag tree, `recalcTimesTagAware`) is already wired -- this is purely a visualization + selection layer. **Active increment.** |
+| Pomodoro Groups | Contiguous task sessions | A user-defined group of tasks that share a session: drag/push as a unit, complete as a unit, optionally framed in pomodoro intervals (user does not have to actually run pomodoros). Touches `scheduled[]`, `recalcTimes`, drag, overflow, persistence. Likely supersedes Phase 5 #10 "session groups". |
+| Projects | Persistent parent of subtasks across days | Today's "subtasks" stay; on top of them, a "Project" is a long-lived block whose subtasks are what get scheduled day-to-day. Sets up the substrate for the Expected Value / Thinking in Bets methodology -- eventually each project carries probability of success, expected value of outcomes, and required inputs (time, money), so the system can rank what's worth doing. **Visual:** subtasks rendered indented under their parent project on the agenda so the hierarchy reads at a glance; same indent treatment should apply to the existing subtask concept. |
+| Commute / Buffer Time | Pre-event buffer with travel mode | Allow attaching a buffer/commute interval before a task or meeting so the agenda shows "leave by" vs "event starts". User picks the commute mode (walk / bike / car / transit / rideshare / etc.) so the buffer has visual + semantic meaning, and downstream features (e.g. driving-mode pomodoro suppression, weather-aware nudges) have something to hook into. |
+
 ---
 
 ## Architecture Notes
