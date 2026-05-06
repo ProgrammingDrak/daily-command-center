@@ -26,6 +26,7 @@ const gcalSync = require("./gcal-sync");
 const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
+const slotStore = require("./slot-store");
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind Railway's reverse proxy
@@ -555,6 +556,85 @@ app.post("/api/gcal/events", async (req, res) => { try { const { calendarId, ...
 app.delete("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); await gcalSync.deleteEvent(gcalData.gcal_event_id, gcalData.calendar_id); broadcast("gcal-sync", { action: "delete", blockId: req.params.blockId }); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post("/api/gcal/sync", async (req, res) => { try { await gcalSync.syncAll(); res.json({ ok: true, status: await gcalSync.getSyncStatus() }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
+// ── Slot Rewards API ──
+app.get("/api/slot/state", async (req, res) => {
+  try {
+    res.json(await slotStore.getState(req.workspaceId, req.session.userId));
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/rewards", async (req, res) => {
+  try {
+    const reward = await slotStore.createReward(req.workspaceId, req.body || {});
+    broadcast("slot-changed", { action: "reward-create" }, req.workspaceId);
+    res.status(201).json(reward);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.put("/api/slot/rewards/:id", async (req, res) => {
+  try {
+    const reward = await slotStore.updateReward(req.workspaceId, req.params.id, req.body || {});
+    broadcast("slot-changed", { action: "reward-update" }, req.workspaceId);
+    res.json(reward);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/slot/rewards/:id", async (req, res) => {
+  try {
+    const result = await slotStore.deleteReward(req.workspaceId, req.params.id);
+    broadcast("slot-changed", { action: "reward-delete" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/earn-task", async (req, res) => {
+  try {
+    const result = await slotStore.earnTaskCredit(req.workspaceId, req.session.userId, req.body || {});
+    if (result.awarded) broadcast("slot-changed", { action: "credit-earned" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/spin", async (req, res) => {
+  try {
+    const spin = await slotStore.spin(req.workspaceId, req.session.userId);
+    broadcast("slot-changed", { action: "spin" }, req.workspaceId);
+    res.json(spin);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/spins/:id/confirm", async (req, res) => {
+  try {
+    const spin = await slotStore.confirmSpin(req.workspaceId, req.params.id);
+    broadcast("slot-changed", { action: "spin-confirm" }, req.workspaceId);
+    res.json(spin);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/bank-builders/confirm", async (req, res) => {
+  try {
+    const result = await slotStore.confirmPendingBankBuilders(req.workspaceId);
+    broadcast("slot-changed", { action: "bank-builders-confirm" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
 // ── Vault API (Phase 1) ──
 // The vault is a git-backed markdown store that holds long-term memory.
 // Postgres is working memory (intraday state). These endpoints expose the
@@ -684,6 +764,7 @@ app.listen(PORT, async () => {
   try { await gcalSync.init(broadcast, defaultUserId); if (await gcalAuth.isAuthenticated(defaultUserId)) { console.log(`  GCal:       Connected`); gcalSync.startPolling(); } else { console.log(`  GCal:       Not connected`); } } catch (e) { console.error("[gcal] Init error:", e.message); }
 
   try { await initVault(); } catch (e) { console.error("[vault] Init error:", e.message); }
+  try { await slotStore.ensureSchema(); } catch (e) { console.error("[slots] Schema error:", e.message); }
 
   try { ensureSkeletonDays(); } catch (e) {}
   try { await seedScheduleBlocksFromYAML(defaultUserId, `ws-${defaultUserId}`); } catch(e) {}

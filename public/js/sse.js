@@ -170,6 +170,10 @@
           case 'vault-sync-status':
             document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
             break;
+
+          case 'slot-changed':
+            document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
+            break;
         }
       } catch(err) { /* ignore parse errors */ }
     };
