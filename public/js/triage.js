@@ -690,8 +690,13 @@ function closeDismissModal() {
 }
 function dismissTriage(triageId, note, trivial) {
   const dismissed = loadDismissed();
+  const wasDismissed = !!dismissed[triageId];
   dismissed[triageId] = { note: note || (trivial ? "Trivial -- dismissed" : ""), dismissed_at: new Date().toISOString(), trivial: !!trivial };
   saveDismissed(dismissed);
+  if(!wasDismissed&&window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
+    const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId)||{id:triageId,title:"Triage item completed"};
+    window.SlotRewards.earnTaskCredit({id:"triage-"+triageId,title:item.title||"Triage item completed"});
+  }
   closeDismissModal();
   buildTriage();
 }

@@ -173,6 +173,72 @@ CREATE TABLE IF NOT EXISTS gcal_calendars (
   updated_at       TIMESTAMPTZ,
   user_id          INTEGER REFERENCES users(id)
 );
+
+-- ── Slot Rewards ──
+CREATE TABLE IF NOT EXISTS slot_accounts (
+  workspace_id        TEXT PRIMARY KEY REFERENCES workspaces(id),
+  user_id             INTEGER REFERENCES users(id),
+  point_balance       INTEGER NOT NULL DEFAULT 0,
+  bank_balance_cents  INTEGER NOT NULL DEFAULT 0,
+  settings            JSONB NOT NULL DEFAULT '{}',
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS slot_rewards (
+  id                    SERIAL PRIMARY KEY,
+  workspace_id           TEXT NOT NULL REFERENCES workspaces(id),
+  title                  TEXT NOT NULL,
+  kind                   TEXT NOT NULL,
+  sponsor_type           TEXT NOT NULL DEFAULT 'self',
+  weight                 INTEGER NOT NULL DEFAULT 1,
+  active                 BOOLEAN NOT NULL DEFAULT TRUE,
+  sponsor_active         BOOLEAN NOT NULL DEFAULT TRUE,
+  value_cents            INTEGER NOT NULL DEFAULT 0,
+  bank_delta_cents       INTEGER NOT NULL DEFAULT 0,
+  requires_confirmation  BOOLEAN NOT NULL DEFAULT FALSE,
+  cooldown_days          INTEGER NOT NULL DEFAULT 0,
+  unlock_threshold_cents INTEGER NOT NULL DEFAULT 0,
+  notes                  TEXT NOT NULL DEFAULT '',
+  last_won_at            TIMESTAMPTZ,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id, title)
+);
+
+CREATE TABLE IF NOT EXISTS slot_point_ledger (
+  id           SERIAL PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  user_id      INTEGER REFERENCES users(id),
+  delta        INTEGER NOT NULL,
+  source_type  TEXT NOT NULL,
+  source_key   TEXT NOT NULL,
+  description  TEXT NOT NULL DEFAULT '',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_point_ledger_source
+  ON slot_point_ledger(workspace_id, source_type, source_key);
+
+CREATE TABLE IF NOT EXISTS slot_spins (
+  id                  SERIAL PRIMARY KEY,
+  workspace_id        TEXT NOT NULL REFERENCES workspaces(id),
+  user_id             INTEGER REFERENCES users(id),
+  cost_credits        INTEGER NOT NULL DEFAULT 1,
+  reward_id           INTEGER REFERENCES slot_rewards(id),
+  reward_snapshot     JSONB NOT NULL,
+  status              TEXT NOT NULL DEFAULT 'awarded',
+  bank_delta_cents    INTEGER NOT NULL DEFAULT 0,
+  bank_reserved_cents INTEGER NOT NULL DEFAULT 0,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  confirmed_at        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_slot_rewards_workspace
+  ON slot_rewards(workspace_id, active, kind);
+
+CREATE INDEX IF NOT EXISTS idx_slot_spins_workspace
+  ON slot_spins(workspace_id, created_at DESC);
 `;
 
 async function createSchema() {

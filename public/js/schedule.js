@@ -299,7 +299,18 @@ function insertTaskFromDrawer(title, durMin){
 }
 
 // ======== ACTIONS ========
-function toggleDone(id){if(manualDone.has(id)){manualDone.delete(id);delete doneAt[id];log("unchecked",id)}else{manualDone.add(id);doneAt[id]=new Date();log("checked",id)};saveDoneState();render()}
+function toggleDone(id){
+  const wasDone=manualDone.has(id);
+  if(wasDone){manualDone.delete(id);delete doneAt[id];log("unchecked",id)}
+  else{
+    manualDone.add(id);doneAt[id]=new Date();log("checked",id);
+    if(window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
+      const ev=scheduled.find(e=>e.id===id)||{id};
+      window.SlotRewards.earnTaskCredit(ev);
+    }
+  }
+  saveDoneState();render()
+}
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   const c=dur(ev),n=Math.max(15,c+delta);if(n===c)return;

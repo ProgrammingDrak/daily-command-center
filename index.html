@@ -245,6 +245,7 @@
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Vault <span class="badge" id="vault-count" style="display:none">0</span></button>
+  <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="palog">Report Card</button>
 </div>
 
@@ -1080,6 +1081,105 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-slots">
+  <div class="slots-shell">
+    <div class="slots-topline">
+      <div>
+        <h2 class="slots-title">Task House Jackpot</h2>
+        <div class="slots-subtitle">Complete tasks, earn credits, build the bank, and let the house reels decide.</div>
+      </div>
+      <div class="slots-balances">
+        <div class="slots-balance"><span>Credits</span><strong id="slot-credit-balance">0</strong></div>
+        <div class="slots-balance slots-bank">
+          <span>Piggy Bank</span>
+          <strong id="slot-bank-balance">$0.00</strong>
+          <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" style="display:none">
+            <span class="slot-wolf">WOLF</span>
+            <span class="slot-balloon" id="slot-pending-balloon">$0.00</span>
+            <span class="slot-pop-label">transfer & pop</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="slots-grid">
+      <section class="slots-machine">
+        <div class="slot-reels" id="slot-reels">
+          <div class="slot-cell" data-symbol="hat">HAT</div>
+          <div class="slot-cell" data-symbol="straw">STRAW</div>
+          <div class="slot-cell" data-symbol="stick">STICK</div>
+          <div class="slot-cell" data-symbol="brick">BRICK</div>
+          <div class="slot-cell" data-symbol="bank">BANK</div>
+          <div class="slot-cell" data-symbol="care">CARE</div>
+          <div class="slot-cell" data-symbol="treat">TREAT</div>
+          <div class="slot-cell" data-symbol="bonus">BONUS</div>
+          <div class="slot-cell" data-symbol="house">HOUSE</div>
+          <div class="slot-cell" data-symbol="wild">WILD</div>
+          <div class="slot-cell" data-symbol="tools">TOOLS</div>
+          <div class="slot-cell" data-symbol="star">STAR</div>
+          <div class="slot-cell" data-symbol="straw">STRAW</div>
+          <div class="slot-cell" data-symbol="stick">STICK</div>
+          <div class="slot-cell" data-symbol="brick">BRICK</div>
+        </div>
+        <div class="slot-result" id="slot-result">Ready when you are.</div>
+        <div class="slot-actions">
+          <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
+          <button class="slot-refresh-btn" id="slot-refresh-btn" type="button">Refresh</button>
+        </div>
+        <div class="slot-cap-row">
+          <span id="slot-daily-cap">Daily bank cap: $0.00 / $50.00</span>
+          <span id="slot-weekly-cap">Weekly bank cap: $0.00 / $150.00</span>
+        </div>
+        <div class="slot-history" id="slot-history"></div>
+      </section>
+      <section class="slots-panel">
+        <div class="slots-panel-hdr">
+          <h3>Outcome Pool</h3>
+          <button id="slot-add-reward-btn" class="slot-small-btn" type="button">Add reward</button>
+        </div>
+        <div class="slot-reward-form" id="slot-reward-form" style="display:none">
+          <input id="slot-form-title" type="text" placeholder="Reward title">
+          <div class="slot-form-grid">
+            <select id="slot-form-kind">
+              <option value="miss">no prize</option>
+              <option value="free">free</option>
+              <option value="small_paid">small paid</option>
+              <option value="bank_gated">bank gated</option>
+              <option value="bank_builder">bank builder</option>
+              <option value="sponsor">sponsor</option>
+              <option value="choice">choice</option>
+              <option value="reroll">reroll</option>
+            </select>
+            <select id="slot-form-sponsor">
+              <option value="self">self</option>
+              <option value="accountability_partner">accountability partner</option>
+              <option value="romantic_partner">romantic partner</option>
+              <option value="either_partner">either partner</option>
+            </select>
+            <input id="slot-form-weight" type="number" min="0" step="1" placeholder="Weight">
+            <input id="slot-form-value" type="number" min="0" step="1" placeholder="Value $">
+            <input id="slot-form-bank" type="number" min="0" step="1" placeholder="Bank add $">
+            <input id="slot-form-cooldown" type="number" min="0" step="1" placeholder="Cooldown days">
+          </div>
+          <label class="slot-check"><input id="slot-form-active" type="checkbox" checked> Active</label>
+          <label class="slot-check"><input id="slot-form-sponsor-active" type="checkbox"> Sponsor opted in</label>
+          <label class="slot-check"><input id="slot-form-confirm" type="checkbox"> Require confirmation</label>
+          <textarea id="slot-form-notes" placeholder="Notes"></textarea>
+          <div class="slot-form-actions">
+            <button id="slot-save-reward-btn" class="slot-small-btn primary" type="button">Save</button>
+            <button id="slot-cancel-reward-btn" class="slot-small-btn" type="button">Cancel</button>
+          </div>
+        </div>
+        <div class="slot-filter-row">
+          <button class="slot-filter active" data-slot-filter="eligible" type="button">Eligible</button>
+          <button class="slot-filter" data-slot-filter="locked" type="button">Locked</button>
+          <button class="slot-filter" data-slot-filter="all" type="button">All</button>
+        </div>
+        <div class="slot-reward-list" id="slot-reward-list"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <div class="footer">
   Data from Google Calendar + Notion &middot; Generated for Drake Shadwell &middot; <span id="gen-time">--</span>
 </div>
@@ -1117,6 +1217,7 @@
 <script src="/public/js/calendar-drag.js"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/vault-tab.js"></script>
+<script src="/public/js/slots.js"></script>
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script>
