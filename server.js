@@ -8,7 +8,7 @@
  *  - Broadcasts live updates via Server-Sent Events
  *  - Watches state files for changes from scheduled tasks
  *
- * Port: 8090
+ * Port: process.env.PORT || 8090
  */
 
 require("dotenv/config");
@@ -29,7 +29,7 @@ const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
 
 const app = express();
-app.set("trust proxy", 1); // required for secure cookies behind Railway's reverse proxy
+app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
 const PORT = process.env.PORT || 8090;
 
 const PROJECT_DIR = __dirname;
@@ -56,7 +56,7 @@ const PA_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
 //                   Injected into the clone URL as x-access-token.
 // VAULT_BRANCH: git branch (default "main").
 // VAULT_DIR: filesystem path to the working copy. Defaults to ./vault
-//            (gitignored). On Railway, the container filesystem is
+//            (gitignored). On Render, the container filesystem is
 //            ephemeral — clone happens on every cold boot.
 const VAULT_DIR = process.env.VAULT_DIR || path.join(PROJECT_DIR, "vault");
 const VAULT_INDEX_FILE = path.join(DATA_DIR, ".vault-index.json");
@@ -72,10 +72,19 @@ let syncMgr = null;
 app.use(express.json({ limit: "5mb" }));
 
 // ── Session Setup ──
-const secretFile = path.join(DATA_DIR, ".session-secret");
-let sessionSecret;
-if (fs.existsSync(secretFile)) { sessionSecret = fs.readFileSync(secretFile, "utf8").trim(); }
-else { sessionSecret = crypto.randomBytes(32).toString("hex"); fs.writeFileSync(secretFile, sessionSecret, "utf8"); }
+function getSessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  if (process.env.NODE_ENV === "production") {
+    console.warn("[session] SESSION_SECRET is not set; generated sessions will be invalidated on restart.");
+  }
+  const secretFile = path.join(DATA_DIR, ".session-secret");
+  if (fs.existsSync(secretFile)) return fs.readFileSync(secretFile, "utf8").trim();
+  const generatedSecret = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync(secretFile, generatedSecret, "utf8");
+  return generatedSecret;
+}
+
+const sessionSecret = getSessionSecret();
 
 app.use(session({
   store: new pgSession({ pool: pool, tableName: "session", createTableIfMissing: true, pruneSessionInterval: 15 * 60 }),
@@ -84,7 +93,7 @@ app.use(session({
 }));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
 const PA_ENDPOINTS = new Set(["/api/pa-state/ingest", "/api/ingest/day-state", "/api/clean-tidy/approve"]);
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 function hasPaToken(req) { const paToken = process.env.SECRET_PA_TOKEN; if (!paToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === paToken : false; }
@@ -343,7 +352,26 @@ app.post("/api/clean-tidy/approve", (req, res) => {
   res.json({ ok: true, action, changed });
 });
 
-app.get("/api/health", (req, res) => { const m = readJSON(MANIFEST_FILE, { dates: [] }); const ds = readJSON(DAY_STATE_FILE, null); res.json({ status: "ok", server: "daily-command-center", port: PORT, sseClients: sseClients.size, dataDir: DATA_DIR, datesStored: m.dates.length, lastUpdated: m.lastUpdated || null, dayStateDate: ds ? ds.date : null, uptime: process.uptime() }); });
+app.get("/api/health", async (req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    const m = readJSON(MANIFEST_FILE, { dates: [] });
+    const ds = readJSON(DAY_STATE_FILE, null);
+    res.json({
+      status: "ok",
+      server: "daily-command-center",
+      database: "ok",
+      port: PORT,
+      sseClients: sseClients.size,
+      datesStored: m.dates.length,
+      lastUpdated: m.lastUpdated || null,
+      dayStateDate: ds ? ds.date : null,
+      uptime: process.uptime(),
+    });
+  } catch (e) {
+    res.status(503).json({ status: "error", server: "daily-command-center", database: "error" });
+  }
+});
 
 app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 

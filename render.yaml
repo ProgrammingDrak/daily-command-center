@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: daily-command-center
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run start:render
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.22.0
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SEED_USERNAME
+        sync: false
+      - key: SEED_PASSWORD
+        sync: false
+      - key: SECRET_PA_TOKEN
+        sync: false
+      - key: VAULT_REPO_URL
+        sync: false
+      - key: VAULT_GITHUB_PAT
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false

@@ -16,8 +16,16 @@ const SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
 ];
 
-const APP_URL = process.env.APP_URL || "http://localhost:8090";
-const REDIRECT_URI = `${APP_URL}/api/gcal/callback`;
+const APP_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:8090";
+const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${APP_URL}/api/gcal/callback`;
+
+function getEnvOAuthConfig() {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) return null;
+  return {
+    client_id: process.env.GOOGLE_CLIENT_ID,
+    client_secret: process.env.GOOGLE_CLIENT_SECRET,
+  };
+}
 
 async function loadTokens(userId) {
   if (!userId) return null;
@@ -56,8 +64,7 @@ async function isAuthenticated(userId) {
 
 async function createOAuthClient(userId) {
   const creds = await loadCredentials(userId);
-  if (!creds) return null;
-  const config = creds.installed || creds.web;
+  const config = (creds && (creds.installed || creds.web)) || getEnvOAuthConfig();
   if (!config) return null;
   return new google.auth.OAuth2(config.client_id, config.client_secret, REDIRECT_URI);
 }

@@ -1,4 +1,4 @@
-name: Deploy to Railway
+name: Render deploy guardrails
 
 on:
   push:
@@ -13,7 +13,7 @@ on:
         default: false
 
 jobs:
-  deploy:
+  guardrails:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
             exit 0
           fi
           if ! git rev-parse --quiet --verify "${BEFORE}^{commit}" >/dev/null; then
-            echo "::warning::Previous commit ${BEFORE} not reachable (force-push?); skipping check."
+            echo "::warning::Previous commit ${BEFORE} not reachable; skipping DB-risk check."
             exit 0
           fi
 
@@ -48,16 +48,16 @@ jobs:
           KEYWORD_HITS="$(printf '%s\n' "$DIFF_BODY" | grep -iE "$KEYWORD_RX" || true)"
 
           if [ -z "$PATH_HITS" ] && [ -z "$KEYWORD_HITS" ]; then
-            echo "DB-risk guardrail: no risky changes detected. Proceeding."
+            echo "DB-risk guardrail: no risky changes detected. Render auto-deploy can proceed."
             exit 0
           fi
 
           if printf '%s' "${COMMIT_MSG:-}" | grep -qE '\[(migration-ok|db-ok)\]'; then
-            echo "DB-risk acknowledged via [migration-ok] tag in commit message. Proceeding."
+            echo "DB-risk acknowledged via commit tag. Render auto-deploy can proceed."
             exit 0
           fi
           if [ "${ACK:-false}" = "true" ]; then
-            echo "DB-risk acknowledged via workflow_dispatch input. Proceeding."
+            echo "DB-risk acknowledged via workflow_dispatch input. Render auto-deploy can proceed."
             exit 0
           fi
 
@@ -77,23 +77,8 @@ jobs:
           BEFORE PROCEEDING:
             1. Back up production:
                  pg_dump "$DATABASE_URL" > backup-$(date +%F-%H%M).sql
-            2. Verify the migration is non-destructive
-               (additive columns nullable, no DROPs, no DELETEs).
-            3. Re-trigger this deploy by EITHER:
-                 a) Amending the commit message to include [migration-ok], OR
-                 b) Re-running this workflow via "workflow_dispatch" with
-                    acknowledge_db_risk=true (Actions tab -> this workflow ->
-                    Run workflow -> check the box).
-
-          False positive (e.g. comment-only change to a flagged file)?
-          Still tag with [migration-ok] so the bypass is auditable in git log.
+            2. Verify the migration is non-destructive.
+            3. Re-trigger by adding [migration-ok] to the commit message or
+               using workflow_dispatch with acknowledge_db_risk=true.
           NOTE
           exit 1
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy
-        run: railway up --detach --service daily-command-center
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

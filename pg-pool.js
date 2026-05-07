@@ -2,9 +2,9 @@
  * pg-pool.js — Postgres connection pool (replaces better-sqlite3 getDB())
  *
  * Uses DATABASE_URL from environment. Works for:
- *   - Railway production (internal networking)
- *   - Local dev (Railway public TCP endpoint)
- *   - Claude skills (same connection string)
+ *   - Render production with a Supabase Postgres connection string
+ *   - Local dev with any reachable Postgres endpoint
+ *   - Claude/Codex skills using the same connection string
  */
 
 const { Pool } = require("pg");

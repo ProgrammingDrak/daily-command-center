@@ -6,9 +6,13 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "start:render": "node pg-schema.js && node server.js",
     "schema": "node pg-schema.js",
     "migrate-data": "node sqlite-to-pg.js",
     "backup": "bash scripts/db-backup.sh"
+  },
+  "engines": {
+    "node": ">=20 <23"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

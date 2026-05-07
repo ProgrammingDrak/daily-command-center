@@ -18,6 +18,7 @@ data/gcal-tokens.json
 data/brain/recent/
 data/brain/engrams/
 .gstack/
+supabase/.temp/
 
 # Vault — owned by its own git repo, never tracked here
 vault/
