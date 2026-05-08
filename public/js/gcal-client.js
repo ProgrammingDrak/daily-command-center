@@ -24,11 +24,11 @@
     return res.json();
   };
 
-  gcal.toggleCalendar = async function (calendarId, selected) {
+  gcal.toggleCalendar = async function (calendarId, selected, accountKey) {
     const res = await fetch(`/api/gcal/calendars/${encodeURIComponent(calendarId)}/toggle`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selected }),
+      body: JSON.stringify({ selected, accountKey }),
     });
     return res.json();
   };

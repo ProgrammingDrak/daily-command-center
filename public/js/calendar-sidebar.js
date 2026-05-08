@@ -20,6 +20,7 @@
   function renderGcalSection() {
     // Check cached status (async check happens on load)
     const cached = window._gcalSidebarState || { connected: false, calendars: [], loading: true };
+    const hasWork = !!(cached.accounts || []).find(a => a.key === "work");
 
     if (!cached.connected) {
       return `<div class="cal-sidebar-section gcal-sidebar-section">
@@ -35,15 +36,21 @@
     let calListHTML = "";
     if (cached.calendars && cached.calendars.length) {
       for (const cal of cached.calendars) {
+        const accountKey = cal.account_key || "default";
+        const accountLabel = accountKey === "work" ? "work" : "personal";
         calListHTML += `<label class="gcal-cal-item">
-          <input type="checkbox" ${cal.selected ? "checked" : ""} onchange="gcalToggleCal('${cal.id}', this.checked)">
+          <input type="checkbox" ${cal.selected ? "checked" : ""} onchange="gcalToggleCal(${JSON.stringify(cal.id)}, this.checked, ${JSON.stringify(accountKey)})">
           <span class="gcal-cal-dot" style="background:${cal.background_color || "#4285f4"}"></span>
-          <span class="gcal-cal-name">${cal.summary}${cal.is_primary ? " (primary)" : ""}</span>
+          <span class="gcal-cal-name">${cal.summary}${cal.is_primary ? " (primary)" : ""} <span style="color:var(--text-muted)">(${accountLabel})</span></span>
         </label>`;
       }
     }
 
     const syncInfo = cached.lastSync ? `<span style="font-size:9px;color:var(--text-muted)">Synced ${formatAgo(cached.lastSync)}</span>` : "";
+    const workConnect = hasWork ? "" : `<a href="/api/gcal/auth?account=work" class="gcal-connect-btn" style="margin-top:8px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+      Connect Work Calendar
+    </a>`;
 
     return `<div class="cal-sidebar-section gcal-sidebar-section">
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -54,6 +61,7 @@
       </div>
       ${syncInfo}
       <div class="gcal-cal-list">${calListHTML}</div>
+      ${workConnect}
     </div>`;
   }
 
@@ -81,6 +89,7 @@
       const lastSync = status.calendars && status.calendars[0] ? status.calendars[0].lastSyncAt : null;
       window._gcalSidebarState = {
         connected: status.connected,
+        accounts: status.accounts || [],
         calendars: calendars,
         lastSync,
         loading: false,
@@ -98,12 +107,12 @@
     }
   })();
 
-  window.gcalToggleCal = async function (calId, selected) {
+  window.gcalToggleCal = async function (calId, selected, accountKey) {
     if (!window.gcal) return;
-    await window.gcal.toggleCalendar(calId, selected);
+    await window.gcal.toggleCalendar(calId, selected, accountKey);
     // Update cached state
     if (window._gcalSidebarState && window._gcalSidebarState.calendars) {
-      const cal = window._gcalSidebarState.calendars.find(c => c.id === calId);
+      const cal = window._gcalSidebarState.calendars.find(c => c.id === calId && (!accountKey || (c.account_key || "default") === accountKey));
       if (cal) cal.selected = selected ? 1 : 0;
     }
     if (typeof buildCalendar === "function") buildCalendar();

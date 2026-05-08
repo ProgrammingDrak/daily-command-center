@@ -111,6 +111,16 @@ CREATE TABLE IF NOT EXISTS gcal_tokens (
   updated_at  TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS gcal_account_tokens (
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  account_key   TEXT NOT NULL,
+  account_email TEXT,
+  credentials   JSONB NOT NULL DEFAULT '{}',
+  tokens        JSONB,
+  updated_at    TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (user_id, account_key)
+);
+
 -- ── GCal Events ──
 CREATE TABLE IF NOT EXISTS gcal_events (
   gcal_event_id    TEXT NOT NULL,
@@ -142,6 +152,7 @@ CREATE TABLE IF NOT EXISTS gcal_events (
   raw_json         JSONB,
   synced_at        TIMESTAMPTZ NOT NULL,
   local_modified   BOOLEAN DEFAULT FALSE,
+  account_key      TEXT NOT NULL DEFAULT 'default',
   user_id          INTEGER REFERENCES users(id),
   PRIMARY KEY (gcal_event_id, calendar_id)
 );
@@ -157,6 +168,7 @@ CREATE TABLE IF NOT EXISTS gcal_sync_state (
   sync_token  TEXT,
   last_sync_at TIMESTAMPTZ,
   full_sync   BOOLEAN DEFAULT TRUE,
+  account_key TEXT NOT NULL DEFAULT 'default',
   user_id     INTEGER REFERENCES users(id)
 );
 
@@ -171,6 +183,8 @@ CREATE TABLE IF NOT EXISTS gcal_calendars (
   access_role      TEXT,
   selected         BOOLEAN DEFAULT TRUE,
   updated_at       TIMESTAMPTZ,
+  account_key      TEXT NOT NULL DEFAULT 'default',
+  account_email    TEXT,
   user_id          INTEGER REFERENCES users(id)
 );
 
