@@ -67,8 +67,6 @@ function initKeys() {
   ORDER_KEY = "pa-task-order-" + d;
   SUBTASK_KEY = "pa-subtasks-" + d;
   TRIV_FLAGS_KEY = "pa-trivial-flags-" + d;
-  ENGRAM_KEY = "pa-engrams-" + d;
-  MOOD_KEY = "pa-mood-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
   // PIN 1: rebind the pinned-active-task key and reload state on date change
   PINNED_ACTIVE_KEY = "pa-pinned-active-" + d;
@@ -209,8 +207,6 @@ function collectAllState() {
       reviewed: JSON.parse(localStorage.getItem("pa-reviewed-" + d) || "[]"),
       subtasks: JSON.parse(localStorage.getItem("pa-subtasks-" + d) || "{}"),
       trivialFlags: JSON.parse(localStorage.getItem("pa-trivial-flags-" + d) || "{}"),
-      engrams: JSON.parse(localStorage.getItem("pa-engrams-" + d) || "[]"),
-      mood: JSON.parse(localStorage.getItem("pa-mood-" + d) || "{}"),
       pendingTasks: JSON.parse(localStorage.getItem(PENDING_TASKS_KEY) || "[]"),
       addedTasks: loadAddedTasks(),
       collectedAt: new Date().toISOString()
@@ -223,7 +219,6 @@ function collectGlobalState() {
   try {
     return {
       stickyNotes: JSON.parse(localStorage.getItem("pa-sticky-notes") || "[]"),
-      lifeCaptures: JSON.parse(localStorage.getItem("pa-life-captures") || "[]"),
       trivialTasks: JSON.parse(localStorage.getItem("pa-trivial-tasks") || "[]"),
       upcomingNotes: JSON.parse(localStorage.getItem("pa-upcoming-notes") || "{}"),
       upcomingActions: JSON.parse(localStorage.getItem("pa-upcoming-actions") || "{}"),
@@ -403,8 +398,6 @@ function writeToLocalStorage(date, state) {
     ["pa-reviewed-" + date]: state.reviewed,
     ["pa-subtasks-" + date]: state.subtasks,
     ["pa-trivial-flags-" + date]: state.trivialFlags,
-    ["pa-engrams-" + date]: state.engrams,
-    ["pa-mood-" + date]: state.mood,
   };
   for (const [key, val] of Object.entries(writes)) {
     if (val !== undefined && val !== null) {
@@ -427,7 +420,6 @@ function writeGlobalsToLocalStorage(globals) {
   if (!globals) return;
   const writes = {
     "pa-sticky-notes": globals.stickyNotes,
-    "pa-life-captures": globals.lifeCaptures,
     "pa-trivial-tasks": globals.trivialTasks,
     "pa-upcoming-notes": globals.upcomingNotes,
     "pa-upcoming-actions": globals.upcomingActions,

@@ -77,21 +77,6 @@ Comprehensive verification that all features work after the migration to local r
 - [ ] **Undo**: Click "Undo". Last action reverses (uncheck, re-check, or restore order).
 - [ ] **Reset All**: Click "Reset". Schedule/consider/backlog restore to initial API state.
 
-## 7. LIFE TAB
-
-- [ ] **Life tab display**: Click "Life" tab. Shows mood chart, food log, habits, health, journal entries, tags, correlations (from state data).
-- [ ] **Quick capture mood**: Click a mood emoji in the strip. "Saved" flash appears. Capture logged.
-- [ ] **Quick capture shorthand**: Type "m:7 f:salad h:ran 3mi" in input, click "Log". Capture logged.
-- [ ] **Journal modal**: Click "Entry" button. Modal opens with mood selection (5 emojis), tag sections from user-context.yaml, and free-text note. Save creates journal + mood captures.
-
-## 8. ENGRAMS TAB
-
-- [ ] **Mood/energy capture**: Click mood face, click energy face, optionally add note, click "Log". Entry saved with timestamp.
-- [ ] **Tag this day**: Type in tag input (autocomplete from index). Select category. Click "Add". Tag chip appears.
-- [ ] **Remove engram tag**: Click X on an engram chip. Tag removed.
-- [ ] **Engram Explorer**: Lists all tags sorted by occurrence. Filter by category buttons work.
-- [ ] **Engram detail**: Click a tag in Explorer. Shows occurrence count, avg mood, avg energy, related tags, date timeline.
-
 ## 9. SIDEBAR (Timer Tab)
 
 - [ ] **Mini schedule**: Timer tab sidebar shows remaining tasks with color bars, times, pomodoro start buttons.
@@ -133,16 +118,12 @@ Comprehensive verification that all features work after the migration to local r
 - [ ] `GET /api/state/local` — returns local-ui-state.json (or null)
 - [ ] `GET /api/brain/recent` — returns all recent day states
 - [ ] `GET /api/brain/globals` — returns globals.json
-- [ ] `GET /api/brain/engrams` — returns index + taxonomy + co-occurrence
-- [ ] `GET /api/brain/tags` — returns journal tags from user-context.yaml
 - [ ] `GET /api/prep` — returns all meeting prep HTML files
 - [ ] `GET /api/prep/:filename` — returns single prep file
-- [ ] `GET /api/pa-log` — returns most recent overnight review as HTML
 - [ ] `GET /api/health` — returns status with SSE clients, dates, uptime
 - [ ] `GET /api/events` — SSE stream connects
 - [ ] `POST /api/save-day` — saves to brain/recent/ + brain/archive/ (dual-write)
 - [ ] `POST /api/save-globals` — saves globals.json
-- [ ] `POST /api/save-engram-index` — saves engram index
 - [ ] `POST /api/ingest/day-state` — section-level merge (PA sections overwrite, user sections preserved)
 
 ## 15. SCHEDULED TASKS

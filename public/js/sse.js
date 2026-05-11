@@ -47,10 +47,9 @@
     }
     showIndicator("Updating...", "var(--accent)");
     try {
-      const [dayState, upcoming, paLog] = await Promise.all([
+      const [dayState, upcoming] = await Promise.all([
         fetch('/api/state/day').then(r => r.json()).catch(() => null),
         fetch('/api/state/upcoming').then(r => r.json()).catch(() => []),
-        fetch('/api/pa-log').then(r => r.json()).catch(() => null),
       ]);
       if(dayState){
         window.__PA_STATE__ = dayState;
@@ -78,14 +77,9 @@
         if(typeof render === 'function') render();
         if(typeof buildTriage === 'function') buildTriage();
         if(typeof buildNotifications === 'function') buildNotifications();
-        if(typeof buildReportCard === 'function') buildReportCard();
         if(typeof updateStats === 'function') updateStats();
       }
       if(upcoming) window.__PA_UPCOMING__ = upcoming;
-      if(paLog && paLog.html){
-        const el = document.getElementById('pa-log-content');
-        if(el) el.innerHTML = paLog.html;
-      }
       showIndicator("Updated!", "var(--green)");
       setTimeout(hideIndicator, 1500);
       console.log('[SSE] PA state refreshed');

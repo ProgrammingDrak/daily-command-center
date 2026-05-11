@@ -4,7 +4,6 @@
 function exportLocalState() {
   const date = (__state && __state.date) || "unknown";
   const d = date;
-  const captures = JSON.parse(localStorage.getItem("pa-life-captures") || "[]");
   const data = {
     date: d,
     notes: loadNotes(),
@@ -20,10 +19,7 @@ function exportLocalState() {
     reviewed: JSON.parse(localStorage.getItem("pa-reviewed-" + d) || "[]"),
     subtasks: JSON.parse(localStorage.getItem("pa-subtasks-" + d) || "{}"),
     trivialFlags: JSON.parse(localStorage.getItem("pa-trivial-flags-" + d) || "{}"),
-    engrams: JSON.parse(localStorage.getItem("pa-engrams-" + d) || "[]"),
-    mood: JSON.parse(localStorage.getItem("pa-mood-" + d) || "{}"),
     // Global keys (non-date-specific)
-    "pa-life-captures": captures,
     stickyNotes: JSON.parse(localStorage.getItem("pa-sticky-notes") || "[]"),
     trivialTasks: JSON.parse(localStorage.getItem("pa-trivial-tasks") || "[]"),
     upcomingNotes: JSON.parse(localStorage.getItem("pa-upcoming-notes") || "{}"),

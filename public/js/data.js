@@ -75,15 +75,11 @@ window.__PA_STATE__ = null;
 window.__PA_UPCOMING__ = [];
 
 // These globals are populated by the async boot loader from the API.
-window.__PA_TAGS__ = {};
 window.__PA_TOMORROW__ = null;
 window.__PA_ARCHIVES__ = {};
 window.__PA_LOCAL__ = null;
 window.__SECOND_BRAIN__ = {};
 window.__SECOND_BRAIN_GLOBALS__ = {};
-window.__ENGRAM_INDEX__ = {};
-window.__ENGRAM_TAXONOMY__ = {};
-window.__ENGRAM_COOCCURRENCE__ = {};
 
 function transformState(state) {
   if (!state) return { sched: [], consider: [], bklog: [], triageItems: [], notifications: [] };
@@ -129,6 +125,7 @@ function transformState(state) {
 
       sched.push({
         id: item.id || "tl-" + sched.length,
+        meetingBlockId: item.block_id || item.blockId || "",
         title: item.label || "Untitled",
         start: startStr, end: endStr,
         type: typeMap[item.type] || "task",
