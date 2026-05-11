@@ -103,7 +103,7 @@
   }
 
   // ── Data Merging ──
-  // Merge PA state schedule items with block overrides for a given date
+  // Merge DCC state schedule items with block overrides for a given date
   function filterByCal(events) {
     const calState = window._gcalSidebarState;
     if (!calState || !calState.calendars || !calState.calendars.length) return events;
@@ -147,8 +147,8 @@
 
     // For other dates, use range cache
     const cached = window.blockStore ? window.blockStore.getRangeCache(ds) : null;
-    if (cached && cached.paState && cached.paState.schedule && cached.paState.schedule.timeline) {
-      for (const item of cached.paState.schedule.timeline) {
+    if (cached && cached.dccState && cached.dccState.schedule && cached.dccState.schedule.timeline) {
+      for (const item of cached.dccState.schedule.timeline) {
         const start = item.start ? new Date(item.start) : null;
         const end = item.end ? new Date(item.end) : null;
         if (!start || !end) continue;
@@ -179,7 +179,7 @@
       for (const b of cached.blocks) {
         if ((b.type === "schedule_item" || b.type === "block") && b.properties && (b.properties.start || b.properties.scheduled_dates)) {
           const p = b.properties;
-          // Don't duplicate if already from PA state
+          // Don't duplicate if already from DCC state
           if (events.some(e => e.id === b.id)) continue;
           events.push({
             id: b.id,

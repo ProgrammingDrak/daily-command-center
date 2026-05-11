@@ -1,13 +1,13 @@
 // ======== LIVE UPDATES VIA SERVER-SENT EVENTS ========
 // Reworked for block-based persistence (Phase 3).
-// Separates PA-state events (schedule/triage from scheduled tasks) from
+// Separates DCC-state events (schedule/triage from scheduled tasks) from
 // block events (user data changes from other tabs).
-// User blocks are NEVER overwritten by SSE — only PA-owned state refreshes.
+// User blocks are NEVER overwritten by SSE — only DCC-owned state refreshes.
 (function(){
   let sse = null;
   let reconnectTimer = null;
   let indicator = null;
-  let pendingPaUpdate = false;
+  let pendingDccUpdate = false;
 
   function isEditing(){
     const active = document.activeElement;
@@ -36,12 +36,12 @@
     if(indicator){ indicator.style.opacity = "0"; setTimeout(() => { if(indicator) indicator.remove(); indicator = null; }, 300); }
   }
 
-  // Refresh PA-owned state only (schedule, triage, meetings)
+  // Refresh DCC-owned state only (schedule, triage, meetings)
   // Does NOT touch user blocks — those are in SQLite and never overwritten.
   // Also reloads BlockStore cache so cross-tab edits are picked up.
-  async function refreshPaState(){
+  async function refreshDccState(){
     if(isEditing()){
-      pendingPaUpdate = true;
+      pendingDccUpdate = true;
       showIndicator("Update pending...");
       return;
     }
@@ -52,7 +52,7 @@
         fetch('/api/state/upcoming').then(r => r.json()).catch(() => []),
       ]);
       if(dayState){
-        window.__PA_STATE__ = dayState;
+        window.__DCC_STATE__ = dayState;
         __state = dayState;
         __data = transformState(__state);
         INIT_SCHED = __data.sched;
@@ -79,12 +79,12 @@
         if(typeof buildNotifications === 'function') buildNotifications();
         if(typeof updateStats === 'function') updateStats();
       }
-      if(upcoming) window.__PA_UPCOMING__ = upcoming;
+      if(upcoming) window.__DCC_UPCOMING__ = upcoming;
       showIndicator("Updated!", "var(--green)");
       setTimeout(hideIndicator, 1500);
-      console.log('[SSE] PA state refreshed');
+      console.log('[SSE] DCC state refreshed');
     } catch(e) {
-      console.error('[SSE] PA refresh failed:', e);
+      console.error('[SSE] DCC refresh failed:', e);
       showIndicator("Update failed", "var(--red)");
       setTimeout(hideIndicator, 3000);
     }
@@ -119,18 +119,18 @@
         console.log('[SSE] Event:', msg.type, msg.source || msg.file || '');
 
         switch(msg.type) {
-          // PA-owned state changed (scheduled task ran, file watcher triggered)
+          // DCC-owned state changed (scheduled task ran, file watcher triggered)
           case 'file-changed':
           case 'ingest':
-            refreshPaState();
+            refreshDccState();
             break;
 
-          // PA state updated via new block API
-          case 'pa-state-changed':
-            refreshPaState();
-            // Also notify BlockStore if it's tracking PA state
+          // DCC state updated via refresh/state APIs
+          case 'dcc-state-changed':
+            refreshDccState();
+            // Also notify BlockStore if it's tracking DCC state
             if(window.blockStore) {
-              window.blockStore.handlePaStateChanged(msg);
+              window.blockStore.handleDccStateChanged(msg);
             }
             break;
 
@@ -181,14 +181,14 @@
 
   connect();
 
-  // Check for pending PA updates when user stops editing
+  // Check for pending DCC updates when user stops editing
   document.addEventListener('focusout', function(){
-    if(pendingPaUpdate){
+    if(pendingDccUpdate){
       setTimeout(function(){
         if(!isEditing()){
-          pendingPaUpdate = false;
+          pendingDccUpdate = false;
           hideIndicator();
-          refreshPaState();
+          refreshDccState();
         }
       }, 500);
     }
@@ -196,6 +196,6 @@
 
   // Fallback: poll every 5 minutes in case SSE fails
   setInterval(function(){
-    if(!sse || sse.readyState === EventSource.CLOSED) refreshPaState();
+    if(!sse || sse.readyState === EventSource.CLOSED) refreshDccState();
   }, 5 * 60 * 1000);
 })();

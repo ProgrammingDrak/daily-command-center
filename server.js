@@ -27,6 +27,8 @@ const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
+const meetingAutomation = require("./meeting-automation");
+const dccIntelligence = require("./dcc-intelligence");
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
@@ -48,7 +50,7 @@ const GLOBALS_FILE = path.join(BRAIN_DIR, "globals.json");
 const MANIFEST_FILE = path.join(RECENT_DIR, "manifest.json");
 const PREP_DIR = path.join(DATA_DIR, "prep");
 const USER_CONTEXT_FILE = path.join(DATA_DIR, "config", "user-context.yaml");
-const PA_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
+const DCC_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
 // ── Vault configuration (Phase 1) ──
 // VAULT_REPO_URL: https URL of the private GitHub repo that backs the vault.
 //                 If unset, the vault runs local-only (no push/pull).
@@ -94,13 +96,13 @@ app.use(session({
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
-const PA_ENDPOINTS = new Set(["/api/pa-state/ingest", "/api/ingest/day-state", "/api/clean-tidy/approve"]);
+const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve"]);
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
-function hasPaToken(req) { const paToken = process.env.SECRET_PA_TOKEN; if (!paToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === paToken : false; }
+function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
 
 app.use((req, res, next) => {
   if (AUTH_PUBLIC.has(req.path)) return next();
-  if (PA_ENDPOINTS.has(req.path) && (isLocalhost(req) || hasPaToken(req))) return next();
+  if (DCC_ENDPOINTS.has(req.path) && (isLocalhost(req) || hasDccToken(req))) return next();
   if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
   next();
 });
@@ -191,23 +193,23 @@ async function getMeetingsFromDB(dateStr, userId, workspaceId) {
     const startISO = `${dateStr}T${props.start}:00${offset}`, endISO = `${dateStr}T${props.end}:00${offset}`;
     const eventId = row.gcal_event_id || props.source_id || row.id;
     meetings.push({ id: eventId, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null });
-    meetingTimeline.push({ id: "mtg-" + row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "calendar", source_id: eventId, category: "Meetings", completed: false });
+    meetingTimeline.push({ id: "mtg-" + row.id, block_id: row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "calendar", source_id: eventId, category: "Meetings", completed: false });
   }
   const seen = new Map(), dedupedMeetings = [], dedupedTimeline = [];
   for (let i = 0; i < meetings.length; i++) { const key = meetings[i].title + "|" + meetings[i].start; const existing = seen.get(key); if (existing !== undefined) { if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") { dedupedMeetings[existing] = meetings[i]; dedupedTimeline[existing] = meetingTimeline[i]; } } else { seen.set(key, dedupedMeetings.length); dedupedMeetings.push(meetings[i]); dedupedTimeline.push(meetingTimeline[i]); } }
   return { meetings: dedupedMeetings, meetingTimeline: dedupedTimeline };
 }
 
-function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
+function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, sweep: { source_health: [], readers: [], open_item_count: 0, meetings_count: 0 }, glymphatic_brief: { history: [], current: null }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
 async function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
   let enrichment = readJSON(dayFile, null);
   const isSkeleton = !enrichment || !enrichment.schedule || !enrichment.schedule.timeline || enrichment.schedule.timeline.length === 0;
   if (isSkeleton) {
-    const paRow = await blockDB.getPaState(dateStr, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
-    if (paRow && paRow.state_json && paRow.state_json.schedule && paRow.state_json.schedule.timeline && paRow.state_json.schedule.timeline.length > 0) {
-      enrichment = paRow.state_json;
+    const dccRow = await blockDB.getDccState(dateStr, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
+    if (dccRow && dccRow.state_json) {
+      enrichment = dccRow.state_json;
       writeJSON(dayFile, enrichment);
     } else if (!enrichment) {
       enrichment = buildSkeletonState(dateStr);
@@ -266,8 +268,16 @@ function ensureSkeletonDays() {
 }
 
 // ── State Endpoints ──
-app.get("/api/state/day", async (req, res) => { try { res.json(await buildDayResponse(req.query.date || getTodayStr(), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(DAY_STATE_FILE, null)); } });
-app.get("/api/state/tomorrow", async (req, res) => { try { res.json(await buildDayResponse(addDays(getTodayStr(), 1), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(TOMORROW_STATE_FILE, null)); } });
+app.get("/api/state/day", async (req, res) => {
+  const dateStr = req.query.date || getTodayStr();
+  try { res.json(await buildDayResponse(dateStr, req.session.userId, req.workspaceId)); }
+  catch (e) { res.json(readJSON(getDayFilePath(dateStr), readJSON(DAY_STATE_FILE, null))); }
+});
+app.get("/api/state/tomorrow", async (req, res) => {
+  const dateStr = addDays(getTodayStr(), 1);
+  try { res.json(await buildDayResponse(dateStr, req.session.userId, req.workspaceId)); }
+  catch (e) { res.json(readJSON(getDayFilePath(dateStr), readJSON(TOMORROW_STATE_FILE, null))); }
+});
 app.get("/api/state/upcoming", (req, res) => { res.json(readJSON(UPCOMING_FILE, [])); });
 app.get("/api/state/archives", async (req, res) => {
   try {
@@ -323,25 +333,27 @@ app.get("/api/brain/engrams", (req, res) => {
 app.get("/api/brain/tags", (req, res) => { if (!fs.existsSync(USER_CONTEXT_FILE)) return res.json({}); try { const raw = fs.readFileSync(USER_CONTEXT_FILE, "utf8"); const match = raw.match(/^journal_tags:\s*\n([\s\S]*?)(?=^\S|\Z)/m); if (!match) return res.json({}); const tags = {}; let currentKey = null; for (const line of match[1].split("\n")) { const keyMatch = line.match(/^\s{2}(\w+):\s*$/); const itemMatch = line.match(/^\s{4}-\s+"?([^"]+)"?\s*$/); if (keyMatch) { currentKey = keyMatch[1]; tags[currentKey] = []; } else if (itemMatch && currentKey) tags[currentKey].push(itemMatch[1]); } res.json(tags); } catch (e) { res.json({}); } });
 app.get("/api/prep", (req, res) => { if (!fs.existsSync(PREP_DIR)) return res.json({}); const files = {}; for (const fname of fs.readdirSync(PREP_DIR)) { if (!fname.endsWith(".html")) continue; try { files[fname] = fs.readFileSync(path.join(PREP_DIR, fname), "utf8"); } catch {} } res.json(files); });
 app.get("/api/prep/:filename", (req, res) => { const fp = path.join(PREP_DIR, req.params.filename); if (!fs.existsSync(fp)) return res.status(404).json({ error: "Not found" }); res.type("html").send(fs.readFileSync(fp, "utf8")); });
-app.get("/api/pa-log", (req, res) => { if (!fs.existsSync(PA_LOG_FILE)) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">pa-activity-log.md not found.</div>' }); const raw = fs.readFileSync(PA_LOG_FILE, "utf8"); const match = raw.match(/(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/); if (!match) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found.</div>' }); const ts = match[2], body = match[3].trim(); const lines = body.split("\n"), parts = []; let inUl = false; for (const line of lines) { const stripped = line.trim(); if (stripped.startsWith("- ")) { if (!inUl) { parts.push('<ul style="margin:4px 0 8px 16px;padding:0;list-style:disc">'); inUl = true; } parts.push(`<li style="margin:3px 0;font-size:12px;line-height:1.5">${stripped.slice(2).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</li>`); } else { if (inUl) { parts.push("</ul>"); inUl = false; } if (!stripped) parts.push('<div style="height:6px"></div>'); else parts.push(`<div style="font-size:12px;line-height:1.5;margin:2px 0">${stripped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</div>`); } } if (inUl) parts.push("</ul>"); res.json({ html: `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">Last off-peak sweep ran <strong style="color:var(--text)">${ts}</strong></div><div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">${parts.join("\n")}</div></div>`, timestamp: ts }); });
+app.get("/api/dcc-log", (req, res) => { if (!fs.existsSync(DCC_LOG_FILE)) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">dcc activity log not found.</div>' }); const raw = fs.readFileSync(DCC_LOG_FILE, "utf8"); const match = raw.match(/(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant|dcc-refresh)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/); if (!match) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found.</div>' }); const ts = match[2], body = match[3].trim(); const lines = body.split("\n"), parts = []; let inUl = false; for (const line of lines) { const stripped = line.trim(); if (stripped.startsWith("- ")) { if (!inUl) { parts.push('<ul style="margin:4px 0 8px 16px;padding:0;list-style:disc">'); inUl = true; } parts.push(`<li style="margin:3px 0;font-size:12px;line-height:1.5">${stripped.slice(2).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</li>`); } else { if (inUl) { parts.push("</ul>"); inUl = false; } if (!stripped) parts.push('<div style="height:6px"></div>'); else parts.push(`<div style="font-size:12px;line-height:1.5;margin:2px 0">${stripped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</div>`); } } if (inUl) parts.push("</ul>"); res.json({ html: `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">Last DCC sweep ran <strong style="color:var(--text)">${ts}</strong></div><div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">${parts.join("\n")}</div></div>`, timestamp: ts }); });
 
 // ── POST: State Persistence ──
 app.post("/api/save-day", (req, res) => { const body = req.body, date = body.date; if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "Missing or invalid date" }); body.savedAt = new Date().toISOString(); writeJSON(path.join(RECENT_DIR, `${date}.json`), body); updateManifest(date); archiveDayState(date, body); pruneRecent(); broadcast("save", { source: "day", date }); res.json({ ok: true, date }); });
 app.post("/api/save-globals", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(GLOBALS_FILE, body); broadcast("save", { source: "globals" }); res.json({ ok: true }); });
 app.post("/api/save-engram-index", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(path.join(ENGRAMS_DIR, "index.json"), body); broadcast("save", { source: "engrams" }); res.json({ ok: true }); });
 
-app.post("/api/ingest/day-state", (req, res) => {
+app.post("/api/ingest/day-state", async (req, res) => {
   const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
   const dayFile = getDayFilePath(incoming.date); const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
-  const PA_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep_stats", "meta", "report_card", "clean_tidy", "orchestrator", "mutations", "completions", "personal"];
+  const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "clean_tidy", "orchestrator", "mutations", "completions", "personal"];
   const USER_SECTIONS = ["done", "pushed", "deleted", "durChanges", "notes", "actions", "sessions", "mood", "reviewed", "subtasks"];
   const merged = { ...existing };
-  for (const key of PA_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }
+  for (const key of DCC_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }
   for (const key of USER_SECTIONS) { if (key in existing && !(key in incoming)) merged[key] = existing[key]; if (key in incoming && !(key in existing)) merged[key] = incoming[key]; }
   merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
   delete merged.meetings; delete merged.meetings_tomorrow;
   writeJSON(dayFile, merged); writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || [] });
-  broadcast("ingest", { source: "day-state", date: incoming.date }); res.json({ ok: true, date: incoming.date });
+  try { await blockDB.saveDccState(incoming.date, merged, req.session.userId || null, req.workspaceId || req.headers["x-workspace-id"] || "ws-1"); } catch(e) { console.error("[dcc-state ingest] save failed:", e.message); }
+  broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, req.workspaceId || req.headers["x-workspace-id"]);
+  res.json({ ok: true, date: incoming.date });
 });
 
 app.post("/api/clean-tidy/approve", (req, res) => {
@@ -557,16 +569,159 @@ app.delete("/api/delegated-items/:id", async (req, res) => {
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
 });
 
-// ── PA State API ──
-app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
-app.post("/api/pa-state/ingest", async (req, res) => { try { const { date, ...stateData } = req.body; if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" }); let userId = req.session.userId || null, workspaceId = req.workspaceId || null; if (!userId) { workspaceId = req.headers["x-workspace-id"] || "ws-1"; const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]); userId = rows[0] ? rows[0].user_id : 1; } await blockDB.savePaState(date, stateData, userId, workspaceId); broadcast("pa-state-changed", { date }); res.json({ ok: true, date }); } catch (e) { res.status(500).json({ error: e.message }); } });
+// ── DCC State API ──
+app.get("/api/dcc-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getDccStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/dcc-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getDccState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
+app.post("/api/dcc-state/ingest", async (req, res) => { try { const { date, ...stateData } = req.body; if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" }); let userId = req.session.userId || null, workspaceId = req.workspaceId || null; if (!userId) { workspaceId = req.headers["x-workspace-id"] || "ws-1"; const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]); userId = rows[0] ? rows[0].user_id : 1; } await blockDB.saveDccState(date, stateData, userId, workspaceId); broadcast("dcc-state-changed", { date }, workspaceId); res.json({ ok: true, date }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+app.post("/api/dcc/refresh", async (req, res) => {
+  try {
+    const date = (req.body && req.body.date) || req.query.date || getTodayStr();
+    if (!isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
+    const workspaceId = req.workspaceId || req.headers["x-workspace-id"] || (req.session.userId ? `ws-${req.session.userId}` : "ws-1");
+    let userId = req.session.userId || null;
+    if (!userId) {
+      const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]);
+      userId = rows[0] ? rows[0].user_id : 1;
+    }
+    const currentState = await buildDayResponse(date, userId, workspaceId);
+    const refreshed = await dccIntelligence.refreshDccState({
+      date,
+      state: currentState,
+      pool,
+      blockDB,
+      workspaceId,
+      userId,
+      dataDir: DATA_DIR,
+    });
+    writeJSON(getDayFilePath(date), refreshed.state);
+    if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, refreshed.state);
+    await blockDB.saveDccState(date, refreshed.state, userId, workspaceId);
+    broadcast("dcc-state-changed", { date, source: "dcc-refresh" }, workspaceId);
+    res.json({ ok: true, date, state: refreshed.state, sweep: refreshed.sweep, brief: refreshed.brief });
+  } catch (e) {
+    console.error("[dcc-refresh] error:", e && e.stack ? e.stack : e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/dcc/deep-sweep/ingest", async (req, res) => {
+  try {
+    const packet = (req.body && req.body.packet) || req.body || {};
+    const date = (req.body && req.body.date) || packet.date || getTodayStr();
+    if (!isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
+    const workspaceId = req.workspaceId || req.headers["x-workspace-id"] || (req.session.userId ? `ws-${req.session.userId}` : "ws-1");
+    let userId = req.session.userId || null;
+    if (!userId) {
+      const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]);
+      userId = rows[0] ? rows[0].user_id : 1;
+    }
+    const currentState = await buildDayResponse(date, userId, workspaceId);
+    const ingestedState = dccIntelligence.ingestDeepSweepPacket({
+      date,
+      state: currentState,
+      packet,
+      source: (req.body && req.body.source) || packet.source || "deep-sweep",
+    });
+    const refreshed = await dccIntelligence.refreshDccState({
+      date,
+      state: ingestedState,
+      pool,
+      blockDB,
+      workspaceId,
+      userId,
+      dataDir: DATA_DIR,
+    });
+    writeJSON(getDayFilePath(date), refreshed.state);
+    if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, refreshed.state);
+    await blockDB.saveDccState(date, refreshed.state, userId, workspaceId);
+    broadcast("dcc-state-changed", { date, source: "deep-sweep-ingest" }, workspaceId);
+    res.json({
+      ok: true,
+      date,
+      state: refreshed.state,
+      sweep: refreshed.sweep,
+      brief: refreshed.brief,
+      deep_sweep: refreshed.state.deep_sweep,
+    });
+  } catch (e) {
+    console.error("[deep-sweep-ingest] error:", e && e.stack ? e.stack : e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ── Migration (legacy) ──
 app.post("/api/migrate", async (req, res) => { res.json({ ok: true, message: "Data is now in Postgres." }); });
 app.post("/api/migrate/dry-run", async (req, res) => { res.json({ ok: true, message: "Data is now in Postgres." }); });
-app.get("/api/migrate/status", async (req, res) => { try { const { rows: [bc] } = await pool.query("SELECT COUNT(*) as count FROM blocks WHERE deleted_at IS NULL"); const { rows: [pc] } = await pool.query("SELECT COUNT(*) as count FROM pa_state"); res.json({ migrated: parseInt(bc.count) > 1, blockCount: parseInt(bc.count), paStateCount: parseInt(pc.count) }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/migrate/status", async (req, res) => { try { const { rows: [bc] } = await pool.query("SELECT COUNT(*) as count FROM blocks WHERE deleted_at IS NULL"); const { rows: [dc] } = await pool.query("SELECT COUNT(*) as count FROM dcc_state"); res.json({ migrated: parseInt(bc.count) > 1, blockCount: parseInt(bc.count), dccStateCount: parseInt(dc.count) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/operations", async (req, res) => { if (!req.query.block_id) return res.status(400).json({ error: "block_id required" }); res.json(await blockDB.getOperations(req.query.block_id, parseInt(req.query.limit) || 50)); });
+
+// ── Meeting Automation ──
+app.get("/api/meetings/:blockId/automation", async (req, res) => {
+  try {
+    res.json(await meetingAutomation.getAutomation(req.params.blockId, req.workspaceId));
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/meetings/:blockId/prep", async (req, res) => {
+  try {
+    const result = await meetingAutomation.generatePrep(req.params.blockId, {
+      workspaceId: req.workspaceId,
+      userId: req.session.userId,
+      extraSources: Array.isArray(req.body?.sources) ? req.body.sources : [],
+    });
+    broadcast("blocks-changed", { action: "meeting-prep", blockIds: [req.params.blockId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/meetings/:blockId/transcript/ingest", async (req, res) => {
+  try {
+    const result = await meetingAutomation.ingestTranscript(req.params.blockId, {
+      workspaceId: req.workspaceId,
+      userId: req.session.userId,
+      transcriptText: req.body?.transcriptText || req.body?.text || "",
+      sources: Array.isArray(req.body?.sources) ? req.body.sources : [],
+    });
+    broadcast("blocks-changed", { action: "meeting-transcript", blockIds: [req.params.blockId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/meetings/:blockId/actions/approve", async (req, res) => {
+  try {
+    const result = await meetingAutomation.approveActions(req.params.blockId, {
+      workspaceId: req.workspaceId,
+      userId: req.session.userId,
+      actionIds: Array.isArray(req.body?.actionIds) ? req.body.actionIds : [],
+    });
+    broadcast("blocks-changed", { action: "meeting-actions-approved", blockIds: [req.params.blockId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/automation/morning", async (req, res) => {
+  try {
+    const date = req.query.date || getTodayStr();
+    if (!isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
+    const result = await meetingAutomation.runMorning(date, {
+      workspaceId: req.workspaceId,
+      userId: req.session.userId,
+    });
+    broadcast("blocks-changed", { action: "meeting-morning-prep", date }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
 
 // ── GCal ──
 app.get("/api/gcal/auth", async (req, res) => { const userId = req.session.userId || 1; const account = gcalAuth.normalizeAccountKey(req.query.account); const url = await gcalAuth.getAuthUrl(userId, account); if (!url) return res.status(500).json({ error: "No credentials configured" }); res.redirect(url); });
@@ -590,6 +745,16 @@ app.get("/api/slot/state", async (req, res) => {
     res.json(await slotStore.getState(req.workspaceId, req.session.userId));
   } catch (e) {
     res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.put("/api/slot/settings", async (req, res) => {
+  try {
+    const account = await slotStore.updateSettings(req.workspaceId, req.session.userId, req.body || {});
+    broadcast("slot-changed", { action: "settings-update" }, req.workspaceId);
+    res.json(account);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
   }
 });
 
@@ -784,8 +949,9 @@ app.listen(PORT, async () => {
   console.log(`  Auth:       Session-based -- login at /login`);
 
   try {
+    await blockDB.ensureDccStateTable();
     const defaultUser = await auth.ensureDefaultUser();
-    if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE pa_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
+    if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE dcc_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
     await blockDB.ensureWorkspacesForAllUsers();
   } catch (e) { console.error("[auth] Startup error:", e.message); }
 

@@ -20,17 +20,17 @@
     ]);
 
     // Populate window globals (same shape the rest of the app expects)
-    window.__PA_STATE__ = dayState;
-    window.__PA_UPCOMING__ = upcoming;
-    window.__PA_ARCHIVES__ = archives;
-    window.__PA_TOMORROW__ = tomorrow;
-    window.__PA_LOCAL__ = local;
+    window.__DCC_STATE__ = dayState;
+    window.__DCC_UPCOMING__ = upcoming;
+    window.__DCC_ARCHIVES__ = archives;
+    window.__DCC_TOMORROW__ = tomorrow;
+    window.__DCC_LOCAL__ = local;
     window.__SECOND_BRAIN__ = brainRecent;
     window.__SECOND_BRAIN_GLOBALS__ = brainGlobals;
     window.__PREP_FILES__ = prepFiles;
 
     // Re-initialize state from fetched data
-    __state = window.__PA_STATE__ || null;
+    __state = window.__DCC_STATE__ || null;
     __data = transformState(__state);
     INIT_SCHED = __data.sched;
     INIT_CONSIDER = __data.consider;
@@ -45,9 +45,9 @@
     backlog = JSON.parse(JSON.stringify(INIT_BACKLOG));
 
     // Re-derive date constants and archive index
-    __todayDate = (window.__PA_STATE__ && window.__PA_STATE__.date) || null;
-    __tomorrowDate = (window.__PA_TOMORROW__ && window.__PA_TOMORROW__.date) || null;
-    __archiveDates = window.__PA_ARCHIVES__ ? Object.keys(window.__PA_ARCHIVES__).sort() : [];
+    __todayDate = (window.__DCC_STATE__ && window.__DCC_STATE__.date) || null;
+    __tomorrowDate = (window.__DCC_TOMORROW__ && window.__DCC_TOMORROW__.date) || null;
+    __archiveDates = window.__DCC_ARCHIVES__ ? Object.keys(window.__DCC_ARCHIVES__).sort() : [];
     if (typeof initKeys === 'function') initKeys();
 
     if (window.__PREP_FILES__) {

@@ -5,6 +5,7 @@ document.querySelectorAll(".tab").forEach(tab=>{
     document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
     tab.classList.add("active");document.getElementById("tab-"+tab.dataset.tab).classList.add("active");
     if(tab.dataset.tab==="calendar"&&typeof buildCalendar==="function"){buildCalendar();}
+    if(tab.dataset.tab==="glymphatic"&&typeof buildGlymphaticBrief==="function"){buildGlymphaticBrief();}
     // PIN 9: mount the mini-month sidebar into the Task Menu split view
     // whenever the user activates the tasks tab. Cheap (just string
     // concatenation); picks up the current _gcalSidebarState from
@@ -234,7 +235,7 @@ function buildUpcoming() {
   const board = document.getElementById("upcoming-board");
   if (!board) return;
   board.innerHTML = "";
-  const upcoming = window.__PA_UPCOMING__ || [];
+  const upcoming = window.__DCC_UPCOMING__ || [];
   const countEl = document.getElementById("upcoming-count");
   if (countEl) countEl.textContent = upcoming.length;
   if (!upcoming.length) {

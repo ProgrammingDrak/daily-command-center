@@ -207,6 +207,9 @@ function buildSchedule(){
     detailMeta.push('<span>Duration: '+ms(d)+(changed?' (was '+ms(od)+')':'')+'</span>');
     detailMeta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
     if(detailMeta.length)detailParts.push('<div class="detail-meta">'+detailMeta.join('')+'</div>');
+    if(isMeeting(ev)&&typeof meetingAutomationPanelHtml==="function"){
+      detailParts.push(meetingAutomationPanelHtml(ev));
+    }
     // Subtasks and trivial tasks are now in the Add Items modal (openAddModal)
     // Show a summary count in the detail panel if items exist
     if(!isMeeting(ev)){
@@ -251,7 +254,6 @@ function buildSchedule(){
     // Edge tabs HTML
     const prepTab=hasPrep?'<div class="edge-tab edge-prep" data-edge="prep">'+chevSm+' Prep '+ev.prep.length+'</div>':'';
     const fuTab=hasFu?'<div class="edge-tab edge-fu" data-edge="fu">'+ev.followups.length+' Actions '+chevSm+'</div>':'';
-    const isTrivialFlagged=!isMeeting(ev)&&!!loadTrivialFlags()[ev.id];
     // Phase 7: removed edge-trivial banner (replaced by link button on card)
     const trivialTab='';
 
@@ -284,10 +286,10 @@ function buildSchedule(){
             '</div>'+
           '</div>'+
           notesButton(ev)+
+          (isMeeting(ev)?'<button class="btn-meeting-auto" data-meeting-auto-id="'+(ev.meetingBlockId||ev.id)+'" data-tooltip="Meeting prep and follow-ups"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="M5.6 5.6l2.8 2.8"/><path d="M15.6 15.6l2.8 2.8"/><path d="M18.4 5.6l-2.8 2.8"/><path d="M8.4 15.6l-2.8 2.8"/></svg></button>':'')+
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
-          (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Mark as trivial — move to triage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
-          (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Move to tomorrow"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+          (!isMeeting(ev)?'<button class="btn-move-menu" data-move-id="'+ev.id+'" data-tooltip="Move to..."><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
           '<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
           '<div class="dur">'+
             '<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>'+
@@ -310,9 +312,6 @@ function buildSchedule(){
       e.stopPropagation();
       if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
     });
-    // Trivial link button
-    const trivLink=el.querySelector(".btn-triv-link");
-    if(trivLink)trivLink.addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(ev.id);});
     const tagToggle=el.querySelector(".card-tags-toggle");
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
@@ -367,7 +366,8 @@ function buildSchedule(){
     });}
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
-    const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();pushTask(pb.dataset.pushId)});
+    const maBtn=el.querySelector(".btn-meeting-auto");if(maBtn)maBtn.addEventListener("click",e=>{e.stopPropagation();const panel=el.querySelector(".detail-panel");if(panel&&!panel.classList.contains("open")){panel.classList.add("open");const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform="rotate(180deg)";}if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(maBtn.dataset.meetingAutoId);});
+    const mvBtn=el.querySelector(".btn-move-menu");if(mvBtn)mvBtn.addEventListener("click",e=>{e.stopPropagation();openMoveMenu(mvBtn.dataset.moveId,mvBtn);});
     const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId)});
     // PIN 1: click the timeline dot to pin this task as "active"
     const tnode=el.querySelector(".tl-node");
@@ -377,9 +377,8 @@ function buildSchedule(){
       tnode.addEventListener("click",e=>{e.stopPropagation();if(typeof togglePinnedActiveId==="function")togglePinnedActiveId(ev.id);});
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
-    // Phase 7: removed old triv-flag-chk (replaced by btn-triv-link on card face)
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-lock")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){
@@ -497,15 +496,57 @@ function buildSchedule(){
       tl.appendChild(el);
     });
   }
+  if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels();
+}
+
+// ======== MOVE-TO POPOVER ========
+function openMoveMenu(id, anchorEl){
+  document.querySelectorAll(".move-menu-popup").forEach(p=>p.remove());
+  const items=[
+    {label:"Tomorrow",  action:()=>moveTaskToTomorrow(id)},
+    {label:"Today",     action:()=>moveTaskToToday(id)},
+    {label:"Next week", action:()=>moveTaskToNextWeek(id)},
+    {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
+    {label:"Backlog",   action:()=>moveTaskToBacklog(id)},
+    {label:"Priority",  action:()=>moveTaskToPriority(id)}
+  ];
+  const pop=document.createElement("div");
+  pop.className="move-menu-popup";
+  items.forEach(it=>{
+    const b=document.createElement("button");
+    b.type="button";
+    b.className="move-menu-item";
+    b.textContent=it.label;
+    b.addEventListener("click",e=>{e.stopPropagation();closePop();it.action();});
+    pop.appendChild(b);
+  });
+  function closePop(){
+    pop.remove();
+    document.removeEventListener("click",onOutside,true);
+    document.removeEventListener("keydown",onEsc,true);
+  }
+  function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl)closePop();}
+  function onEsc(e){if(e.key==="Escape")closePop();}
+  const rect=anchorEl.getBoundingClientRect();
+  pop.style.top=(rect.bottom+6)+"px";
+  pop.style.right=(window.innerWidth-rect.right)+"px";
+  document.body.appendChild(pop);
+  setTimeout(()=>{
+    document.addEventListener("click",onOutside,true);
+    document.addEventListener("keydown",onEsc,true);
+  },0);
 }
 
 // ======== CONSIDER FOR TODAY TAB ========
 function buildConsider(){
   const board=document.getElementById("consider-board");board.innerHTML="";
-  const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=consider.length;
-  if(!consider.length){board.innerHTML='<div class="board-empty">Nothing flagged for today. Nice work, or add tasks via Notion.</div>';return}
+  // Surface backlog items flagged Priority alongside Notion-driven consider items.
+  const fromBacklog=backlog.filter(t=>t.stage==="Priority");
+  const merged=consider.concat(fromBacklog);
+  const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=merged.length;
+  if(!merged.length){board.innerHTML='<div class="board-empty">Nothing flagged for today. Nice work, or add tasks via Notion.</div>';return}
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
-  const sorted=[...consider].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+  const sorted=[...merged].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
   sorted.forEach(t=>{
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
@@ -551,11 +592,13 @@ function buildConsider(){
 // ======== BACKLOG TAB ========
 function buildBacklog(){
   const board=document.getElementById("backlog-board");board.innerHTML="";
-  document.getElementById("backlog-count").textContent=backlog.length;
-  if(!backlog.length){board.innerHTML='<div class="board-empty">No backlog items. Add tasks above or check your Notion board.</div>';return}
+  // Priority-stage items are surfaced in the Priority drawer via buildConsider, not here.
+  const items=backlog.filter(t=>t.stage!=="Priority");
+  document.getElementById("backlog-count").textContent=items.length;
+  if(!items.length){board.innerHTML='<div class="board-empty">No backlog items. Add tasks above or check your Notion board.</div>';return}
   // Sort: High > Medium > Low
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
-  const sorted=[...backlog].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+  const sorted=[...items].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
   sorted.forEach(t=>{
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";

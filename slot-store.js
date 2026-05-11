@@ -4,6 +4,15 @@ const pool = require("./pg-pool");
 const DEFAULT_SPIN_COST = 1;
 const DAILY_BANK_CAP_CENTS = 5000;
 const WEEKLY_BANK_CAP_CENTS = 15000;
+const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
+const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
+const DEFAULT_SCORING_RATIONALE = [
+  "Task Tokens are automatic so task entry stays lightweight.",
+  "Every completed task earns at least 1 Task Token.",
+  "Longer tasks, high-priority work, urgent work, and logged focus sessions can earn more.",
+  "Tiny or trivial tasks are capped so the slot machine rewards real progress without making small chores feel useless.",
+  "A single task can award up to 5 Task Tokens."
+].join("\n");
 
 const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partner", "either_partner"]);
 const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "bank_builder", "sponsor", "choice", "reroll"]);
@@ -258,6 +267,26 @@ async function ensureAccount(workspaceId, userId) {
   return rows[0];
 }
 
+function normalizeSlotSettings(settings = {}) {
+  const raw = settings && typeof settings === "object" ? settings : {};
+  return {
+    ...raw,
+    spin_cost: clampInt(raw.spin_cost || DEFAULT_SPIN_COST, 1, 25),
+    monthly_goal_cents: clampInt(raw.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000),
+    shortfall_penalty: String(raw.shortfall_penalty || DEFAULT_SHORTFALL_PENALTY),
+    scoring_rationale: String(raw.scoring_rationale || DEFAULT_SCORING_RATIONALE),
+  };
+}
+
+function accountWithSettings(account) {
+  if (!account) return account;
+  return { ...account, settings: normalizeSlotSettings(account.settings) };
+}
+
+function getSpinCost(account) {
+  return normalizeSlotSettings(account && account.settings).spin_cost;
+}
+
 async function seedRewards(workspaceId) {
   for (const r of DEFAULT_REWARDS) {
     await pool.query(
@@ -293,15 +322,14 @@ function normalizeRewardInput(body) {
   };
 }
 
-function rowToReward(row, account, bankUsage) {
-  const bankBalance = account ? account.bank_balance_cents : 0;
+function rowToReward(row, account, bankUsage, fundingAvailableCents) {
+  const bankBalance = Number.isFinite(fundingAvailableCents) ? fundingAvailableCents : (account ? account.bank_balance_cents : 0);
   const threshold = Math.max(row.value_cents || 0, row.unlock_threshold_cents || 0);
   const sponsorLocked = row.sponsor_type !== "self" && !row.sponsor_active;
   const paidLocked = ["small_paid", "bank_gated"].includes(row.kind) && threshold > bankBalance;
   const cooldownLocked = row.cooldown_days > 0 && row.last_won_at && Date.now() - new Date(row.last_won_at).getTime() < row.cooldown_days * 86400000;
   const bankCapLocked = row.kind === "bank_builder" && bankUsage && (
-    bankUsage.today + row.bank_delta_cents > DAILY_BANK_CAP_CENTS ||
-    bankUsage.week + row.bank_delta_cents > WEEKLY_BANK_CAP_CENTS
+    bankUsage.month + row.bank_delta_cents > bankUsage.monthlyGoal
   );
   return {
     ...row,
@@ -316,7 +344,7 @@ function rowToReward(row, account, bankUsage) {
   };
 }
 
-async function getBankUsage(workspaceId) {
+async function getBankUsage(workspaceId, settings = {}) {
   const { rows: [today] } = await pool.query(
     `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
      FROM slot_spins
@@ -333,7 +361,24 @@ async function getBankUsage(workspaceId) {
        AND created_at >= date_trunc('week', NOW())`,
     [workspaceId]
   );
-  return { today: today.cents, week: week.cents, dailyCap: DAILY_BANK_CAP_CENTS, weeklyCap: WEEKLY_BANK_CAP_CENTS };
+  const { rows: [month] } = await pool.query(
+    `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
+     FROM slot_spins
+     WHERE workspace_id = $1 AND status IN ('pending','confirmed')
+       AND reward_snapshot->>'kind' = 'bank_builder'
+       AND created_at >= date_trunc('month', NOW())`,
+    [workspaceId]
+  );
+  const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000);
+  return {
+    today: today.cents,
+    week: week.cents,
+    month: month.cents,
+    dailyCap: DAILY_BANK_CAP_CENTS,
+    weeklyCap: WEEKLY_BANK_CAP_CENTS,
+    monthlyGoal,
+    monthlyRemaining: Math.max(0, monthlyGoal - month.cents),
+  };
 }
 
 async function getPendingBankDeposit(workspaceId) {
@@ -352,11 +397,17 @@ async function getPendingBankDeposit(workspaceId) {
 }
 
 async function getState(workspaceId, userId) {
-  const account = await ensureAccount(workspaceId, userId);
-  const bankUsage = await getBankUsage(workspaceId);
+  const account = accountWithSettings(await ensureAccount(workspaceId, userId));
+  const spinCost = getSpinCost(account);
+  const bankUsage = await getBankUsage(workspaceId, account.settings);
   const pendingBankDeposit = await getPendingBankDeposit(workspaceId);
+  const funding = {
+    ready: account.bank_balance_cents || 0,
+    pending: pendingBankDeposit.cents || 0,
+    total: (account.bank_balance_cents || 0) + (pendingBankDeposit.cents || 0),
+  };
   const { rows: rewardRows } = await pool.query("SELECT * FROM slot_rewards WHERE workspace_id = $1 ORDER BY active DESC, kind, title", [workspaceId]);
-  const rewards = rewardRows.map(r => rowToReward(r, account, bankUsage));
+  const rewards = rewardRows.map(r => rowToReward(r, account, bankUsage, funding.total));
   const { rows: spins } = await pool.query(
     "SELECT * FROM slot_spins WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 25",
     [workspaceId]
@@ -367,8 +418,44 @@ async function getState(workspaceId, userId) {
     spins,
     bankUsage,
     pendingBankDeposit,
-    constants: { spinCost: DEFAULT_SPIN_COST },
+    funding,
+    constants: {
+      spinCost,
+      maxTaskCredits: 5,
+      monthlyGoalCents: account.settings.monthly_goal_cents,
+      shortfallPenalty: account.settings.shortfall_penalty,
+      scoringRationale: account.settings.scoring_rationale,
+    },
   };
+}
+
+async function updateSettings(workspaceId, userId, body = {}) {
+  const account = accountWithSettings(await ensureAccount(workspaceId, userId));
+  const current = account.settings || {};
+  const next = {
+    ...current,
+    spin_cost: clampInt(body.spin_cost || body.spinCost || current.spin_cost || DEFAULT_SPIN_COST, 1, 25),
+    monthly_goal_cents: clampInt(
+      body.monthly_goal_cents || body.monthlyGoalCents || current.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS,
+      100,
+      1000000
+    ),
+    shortfall_penalty: String(
+      body.shortfall_penalty != null ? body.shortfall_penalty :
+      body.shortfallPenalty != null ? body.shortfallPenalty :
+      current.shortfall_penalty || DEFAULT_SHORTFALL_PENALTY
+    ).trim() || DEFAULT_SHORTFALL_PENALTY,
+    scoring_rationale: String(
+      body.scoring_rationale != null ? body.scoring_rationale :
+      body.scoringRationale != null ? body.scoringRationale :
+      current.scoring_rationale || DEFAULT_SCORING_RATIONALE
+    ).trim() || DEFAULT_SCORING_RATIONALE,
+  };
+  const { rows } = await pool.query(
+    "UPDATE slot_accounts SET settings=$2, updated_at=NOW() WHERE workspace_id=$1 RETURNING *",
+    [workspaceId, next]
+  );
+  return accountWithSettings(rows[0]);
 }
 
 async function createReward(workspaceId, body) {
@@ -404,25 +491,66 @@ async function deleteReward(workspaceId, id) {
   return { ok: true };
 }
 
+function clampInt(value, min, max) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizePriority(priority) {
+  return String(priority || "").trim().toLowerCase();
+}
+
+function calculateTaskCompletionCredits(body = {}) {
+  const durationMin = clampInt(body.duration_min || body.dur_min || body.durMin || 0, 0, 480);
+  const focusMin = clampInt(body.focus_minutes || body.focusMin || 0, 0, 480);
+  const priority = normalizePriority(body.priority);
+  const source = String(body.source || "").trim().toLowerCase();
+  const type = String(body.type || "").trim().toLowerCase();
+  const tags = Array.isArray(body.tags) ? body.tags.map(t => String(t).toLowerCase()) : [];
+
+  if (type === "meeting" || type === "ooo") return 0;
+
+  let credits = 1;
+
+  if (durationMin >= 45) credits += 1;
+  if (durationMin >= 90) credits += 1;
+  if (durationMin >= 150) credits += 1;
+
+  if (["high", "urgent", "critical", "p1"].includes(priority)) credits += 1;
+  if (["urgent", "critical", "p1"].includes(priority)) credits += 1;
+
+  if (focusMin >= 25) credits += 1;
+  if (focusMin >= 90) credits += 1;
+
+  if (source.includes("trivial") || tags.includes("trivial") || durationMin > 0 && durationMin <= 15) {
+    credits = Math.min(credits, priority === "high" ? 2 : 1);
+  }
+
+  return Math.max(1, Math.min(credits, 5));
+}
+
 async function earnTaskCredit(workspaceId, userId, body) {
   await ensureAccount(workspaceId, userId);
   const sourceKey = String(body.source_key || body.task_id || "").trim();
   if (!sourceKey) throw new Error("source_key required");
   const description = String(body.description || body.title || "Task completed");
+  const credits = calculateTaskCompletionCredits(body);
+  if (credits < 1) return { awarded: false, account: (await getState(workspaceId, userId)).account };
   const { rows } = await pool.query(
     `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description)
-     VALUES ($1,$2,1,'task_complete',$3,$4)
+     VALUES ($1,$2,$3,'task_complete',$4,$5)
      ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
      RETURNING *`,
-    [workspaceId, userId || null, sourceKey, description]
+    [workspaceId, userId || null, credits, sourceKey, description]
   );
   let awarded = false;
   if (rows[0]) {
     awarded = true;
-    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + 1, updated_at=NOW() WHERE workspace_id=$1", [workspaceId]);
+    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, credits]);
   }
   const state = await getState(workspaceId, userId);
-  return { awarded, account: state.account };
+  return { awarded, credits: awarded ? credits : 0, account: state.account };
 }
 
 function chooseWeighted(rewards) {
@@ -438,8 +566,9 @@ function chooseWeighted(rewards) {
 
 async function spin(workspaceId, userId) {
   const state = await getState(workspaceId, userId);
-  if (state.account.point_balance < DEFAULT_SPIN_COST) {
-    const err = new Error("Not enough credits");
+  const spinCost = state.constants.spinCost;
+  if (state.account.point_balance < spinCost) {
+    const err = new Error("Not enough Task Tokens");
     err.statusCode = 400;
     throw err;
   }
@@ -460,17 +589,18 @@ async function spin(workspaceId, userId) {
   try {
     await client.query("BEGIN");
     const { rows: [account] } = await client.query(
-      "SELECT point_balance FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      "SELECT point_balance, settings FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
       [workspaceId]
     );
-    if (!account || account.point_balance < DEFAULT_SPIN_COST) throw new Error("Not enough credits");
-    await client.query("UPDATE slot_accounts SET point_balance = point_balance - $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, DEFAULT_SPIN_COST]);
+    const lockedSpinCost = getSpinCost(account);
+    if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough Task Tokens");
+    await client.query("UPDATE slot_accounts SET point_balance = point_balance - $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, lockedSpinCost]);
     const { rows } = await client.query(
       `INSERT INTO slot_spins
        (workspace_id,user_id,cost_credits,reward_id,reward_snapshot,status,bank_delta_cents,bank_reserved_cents)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       RETURNING *`,
-      [workspaceId, userId || null, DEFAULT_SPIN_COST, selected.id, selected, status, selected.bank_delta_cents || 0, bankReserved]
+      RETURNING *`,
+      [workspaceId, userId || null, lockedSpinCost, selected.id, selected, status, selected.bank_delta_cents || 0, bankReserved]
     );
     await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
     await client.query("COMMIT");
@@ -501,6 +631,7 @@ async function confirmSpin(workspaceId, spinId) {
       accountUpdate = "bank_balance_cents = bank_balance_cents + $2,";
       params.push(spinRow.bank_delta_cents);
     } else if (["small_paid", "bank_gated"].includes(snapshot.kind) && spinRow.bank_reserved_cents > 0) {
+      await sweepPendingBankBuildersInTx(client, workspaceId);
       accountUpdate = "bank_balance_cents = GREATEST(0, bank_balance_cents - $2),";
       params.push(spinRow.bank_reserved_cents);
     }
@@ -521,37 +652,42 @@ async function confirmSpin(workspaceId, spinId) {
   }
 }
 
+async function sweepPendingBankBuildersInTx(client, workspaceId) {
+  const { rows } = await client.query(
+    `SELECT id, bank_delta_cents
+     FROM slot_spins
+     WHERE workspace_id=$1
+       AND status='pending'
+       AND reward_snapshot->>'kind' = 'bank_builder'
+     FOR UPDATE`,
+    [workspaceId]
+  );
+  const cents = rows.reduce((sum, row) => sum + (row.bank_delta_cents || 0), 0);
+  if (cents > 0) {
+    await client.query(
+      "UPDATE slot_accounts SET bank_balance_cents = bank_balance_cents + $2, updated_at=NOW() WHERE workspace_id=$1",
+      [workspaceId, cents]
+    );
+    await client.query(
+      `UPDATE slot_spins
+       SET status='confirmed', confirmed_at=NOW()
+       WHERE workspace_id=$1
+         AND status='pending'
+         AND reward_snapshot->>'kind' = 'bank_builder'`,
+      [workspaceId]
+    );
+  }
+  return { cents, count: rows.length };
+}
+
 async function confirmPendingBankBuilders(workspaceId) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows } = await client.query(
-      `SELECT id, bank_delta_cents
-       FROM slot_spins
-       WHERE workspace_id=$1
-         AND status='pending'
-         AND reward_snapshot->>'kind' = 'bank_builder'
-       FOR UPDATE`,
-      [workspaceId]
-    );
-    const cents = rows.reduce((sum, row) => sum + (row.bank_delta_cents || 0), 0);
-    if (cents > 0) {
-      await client.query(
-        "UPDATE slot_accounts SET bank_balance_cents = bank_balance_cents + $2, updated_at=NOW() WHERE workspace_id=$1",
-        [workspaceId, cents]
-      );
-      await client.query(
-        `UPDATE slot_spins
-         SET status='confirmed', confirmed_at=NOW()
-         WHERE workspace_id=$1
-           AND status='pending'
-           AND reward_snapshot->>'kind' = 'bank_builder'`,
-        [workspaceId]
-      );
-    }
+    const { cents, count } = await sweepPendingBankBuildersInTx(client, workspaceId);
     const { rows: [account] } = await client.query("SELECT * FROM slot_accounts WHERE workspace_id=$1", [workspaceId]);
     await client.query("COMMIT");
-    return { confirmed_cents: cents, confirmed_count: rows.length, account };
+    return { confirmed_cents: cents, confirmed_count: count, account };
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -569,6 +705,7 @@ function notFound(message) {
 module.exports = {
   ensureSchema,
   getState,
+  updateSettings,
   createReward,
   updateReward,
   deleteReward,

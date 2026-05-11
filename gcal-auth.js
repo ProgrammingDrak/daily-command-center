@@ -14,6 +14,7 @@ const pool = require("./pg-pool");
 const SCOPES = [
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/gmail.readonly",
 ];
 
 const APP_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:8090";
@@ -76,6 +77,11 @@ function decodeState(state) {
   if (!state) return {};
   try { return JSON.parse(Buffer.from(String(state), "base64url").toString("utf8")); }
   catch { return {}; }
+}
+
+function hasAllScopes(tokens) {
+  const granted = new Set(String(tokens && tokens.scope || "").split(/\s+/).filter(Boolean));
+  return SCOPES.every((scope) => granted.has(scope));
 }
 
 async function loadAccountTokens(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
@@ -191,9 +197,12 @@ async function getAuthUrl(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
   const key = normalizeAccountKey(accountKey);
   const client = await createOAuthClient(userId, key);
   if (!client) return null;
+  const tokens = await loadAccountTokens(userId, key);
+  const needsConsent = !tokens || !tokens.refresh_token || !hasAllScopes(tokens);
   return client.generateAuthUrl({
     access_type: "offline",
-    prompt: "consent select_account",
+    include_granted_scopes: true,
+    prompt: needsConsent ? "consent select_account" : "select_account",
     scope: SCOPES,
     state: encodeState(userId, key),
     ...(accountEmailFor(key) ? { login_hint: accountEmailFor(key) } : {}),

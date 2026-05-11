@@ -138,7 +138,7 @@ function renderDatePicker() {
     if (navigable.has(ds)) cls.push("has-data");
     if (ds === __todayDate) cls.push("today");
     if (ds === viewDate) cls.push("active");
-    if (ds === __tomorrowDate && window.__PA_TOMORROW__) cls.push("tomorrow-plan");
+    if (ds === __tomorrowDate && window.__DCC_TOMORROW__) cls.push("tomorrow-plan");
     html += '<div class="' + cls.join(" ") + '" onclick="dpSelect(\'' + ds + '\')">' + day + '</div>';
   }
 

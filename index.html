@@ -197,6 +197,7 @@
 
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
+  <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Vault <span class="badge" id="vault-count" style="display:none">0</span></button>
@@ -219,6 +220,7 @@
         <button class="svt-btn active" data-view="plan">Plan</button>
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
+      <button class="ma-morning-btn" id="ma-morning-btn" type="button" title="Generate prep for today's meetings">Morning prep</button>
       <span class="sched-drag-hint" style="margin-left:10px">Drag to reorder &middot; +/- to adjust time &middot; Check to complete</span>
     </span>
   </div>
@@ -242,6 +244,10 @@
   </div>
   <div class="tl" id="timeline"></div>
   <div id="actual-view" style="display:none"></div>
+</div>
+
+<div class="tab-content" id="tab-glymphatic">
+  <div id="glymphatic-brief-root"></div>
 </div>
 
 <!-- Floating Trivial bubble: at-a-glance count of available trivial tasks -->
@@ -920,17 +926,23 @@
     <div class="slots-topline">
       <div>
         <h2 class="slots-title">Task House Jackpot</h2>
-        <div class="slots-subtitle">Complete tasks, earn credits, build the bank, and let the house reels decide.</div>
+        <div class="slots-subtitle">Complete tasks, earn Task Tokens, build the bank, and let the house reels decide.</div>
       </div>
       <div class="slots-balances">
-        <div class="slots-balance"><span>Credits</span><strong id="slot-credit-balance">0</strong></div>
+        <div class="slots-balance"><span>Task Tokens</span><strong id="slot-credit-balance">0</strong></div>
         <div class="slots-balance slots-bank">
           <span>Piggy Bank</span>
-          <strong id="slot-bank-balance">$0.00</strong>
-          <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" style="display:none">
-            <span class="slot-wolf">WOLF</span>
-            <span class="slot-balloon" id="slot-pending-balloon">$0.00</span>
-            <span class="slot-pop-label">transfer & pop</span>
+          <button id="slot-pending-deposit" class="slot-pending-deposit" type="button">
+            <strong id="slot-bank-balance">$0.00</strong>
+            <span class="slot-bank-meter"><span id="slot-bank-fill"></span></span>
+            <span class="slot-bank-breakdown">
+              <span>Ready <b id="slot-bank-ready">$0.00</b></span>
+              <span>To sweep <b id="slot-bank-pending">$0.00</b></span>
+              <span>Total usable <b id="slot-bank-total">$0.00</b></span>
+              <span>This month <b id="slot-bank-month">$0.00 / $0.00</b></span>
+              <span>At risk <b id="slot-bank-shortfall">$0.00</b></span>
+            </span>
+            <span class="slot-pop-label" id="slot-bank-action-label">No sweep pending</span>
           </button>
         </div>
       </div>
@@ -958,10 +970,48 @@
         <div class="slot-actions">
           <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
           <button class="slot-refresh-btn" id="slot-refresh-btn" type="button">Refresh</button>
+          <button class="slot-refresh-btn" id="slot-rules-toggle" type="button">Rules &amp; cost</button>
+        </div>
+        <div class="slot-rules-panel" id="slot-rules-panel" style="display:none">
+          <div class="slot-rules-grid">
+            <label class="slot-setting-field">
+              <span>Spin cost</span>
+              <input id="slot-spin-cost" type="number" min="1" max="25" step="1">
+            </label>
+            <label class="slot-setting-field">
+              <span>Monthly goal $</span>
+              <input id="slot-monthly-goal" type="number" min="1" max="10000" step="1">
+            </label>
+            <div class="slot-setting-note">
+              <strong id="slot-current-cost">1 Task Token per spin</strong>
+              <span id="slot-current-goal">Monthly goal: $0.00</span>
+            </div>
+          </div>
+          <div class="slot-rule-list">
+            <div><strong>Task scoring</strong></div>
+            <div>Base completion: +1 Task Token</div>
+            <div>Longer tasks: bonuses at 45m, 90m, and 150m</div>
+            <div>Priority: High, Urgent, Critical, or P1 tasks get bonuses</div>
+            <div>Focus time: logged sessions can add bonuses at 25m and 90m</div>
+            <div>Tiny or trivial tasks are capped; max award is 5 Task Tokens</div>
+            <div>Bank-builder prizes can fill this month's goal, then stop until next month</div>
+          </div>
+          <label class="slot-rationale-field">
+            <span>Shortfall consequence</span>
+            <textarea id="slot-shortfall-penalty"></textarea>
+          </label>
+          <label class="slot-rationale-field">
+            <span>Rationale</span>
+            <textarea id="slot-scoring-rationale"></textarea>
+          </label>
+          <div class="slot-form-actions">
+            <button id="slot-save-settings-btn" class="slot-small-btn primary" type="button">Save settings</button>
+          </div>
         </div>
         <div class="slot-cap-row">
           <span id="slot-daily-cap">Daily bank cap: $0.00 / $50.00</span>
           <span id="slot-weekly-cap">Weekly bank cap: $0.00 / $150.00</span>
+          <span id="slot-shortfall-line">Shortfall consequence: --</span>
         </div>
         <div class="slot-history" id="slot-history"></div>
       </section>
@@ -1034,10 +1084,12 @@
 <script src="/public/js/sidebar.js"></script>
 <script src="/public/js/tag-manager.js"></script>
 <script src="/public/js/schedule-tab.js"></script>
+<script src="/public/js/meeting-automation.js"></script>
 <script src="/public/js/sync.js"></script>
 <script src="/public/js/triage.js"></script>
 <script src="/public/js/tabs.js"></script>
 <script src="/public/js/features.js"></script>
+<script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js"></script>

@@ -4,8 +4,8 @@
  * Reads data from:
  *   1. data/brain/recent/*.json (per-day user state: done, notes, actions, etc.)
  *   2. data/brain/globals.json (sticky notes, trivial tasks, life captures, etc.)
- *   3. data/state/day-state.json (PA-owned schedule/triage for today)
- *   4. data/state/archive/*.json (PA-owned state for past days)
+ *   3. data/state/day-state.json (DCC-owned schedule/triage for today)
+ *   4. data/state/archive/*.json (DCC-owned state for past days)
  *   5. Browser localStorage dump (sent via POST body)
  *
  * Creates corresponding blocks in SQLite with deterministic IDs (idempotent).
@@ -57,7 +57,7 @@ function runMigration(db, { dryRun = false, localStorageDump = null, userId = nu
     dates: [],
     globals: { stickyNotes: 0, trivialTasks: 0, lifeCaptures: 0, pendingTasks: 0 },
     perDate: {},
-    paState: { dates: 0 },
+    dccState: { dates: 0 },
     errors: [],
     totalBlocks: 0
   };
@@ -87,11 +87,11 @@ function runMigration(db, { dryRun = false, localStorageDump = null, userId = nu
     manifest.totalBlocks += dateManifest.blocks;
   }
 
-  // Step 4: Migrate PA-owned state (schedule, triage, meetings)
+  // Step 4: Migrate DCC-owned state (schedule, triage, meetings)
   try {
-    migratePaState(db, manifest, dryRun, ctx);
+    migrateDccState(db, manifest, dryRun, ctx);
   } catch (e) {
-    manifest.errors.push({ source: "pa-state", error: e.message });
+    manifest.errors.push({ source: "dcc-state", error: e.message });
   }
 
   // Step 5: Migrate globals
@@ -435,16 +435,16 @@ function countUserState(state, dateManifest) {
     (dateManifest.done > 0 ? 1 : 0);
 }
 
-function migratePaState(db, manifest, dryRun, ctx = {}) {
+function migrateDccState(db, manifest, dryRun, ctx = {}) {
   const { userId = null, workspaceId = null } = ctx;
 
   // Migrate current day-state
   const dayState = readJSON(DAY_STATE_FILE, null);
   if (dayState && dayState.date) {
     if (!dryRun) {
-      blockDB.savePaState(db, dayState.date, dayState, userId, workspaceId);
+      blockDB.saveDccState(dayState.date, dayState, userId, workspaceId);
     }
-    manifest.paState.dates++;
+    manifest.dccState.dates++;
   }
 
   // Migrate archived day-states
@@ -455,9 +455,9 @@ function migratePaState(db, manifest, dryRun, ctx = {}) {
       const archState = readJSON(path.join(ARCHIVE_DIR, f), null);
       if (archState) {
         if (!dryRun) {
-          blockDB.savePaState(db, m[1], archState, userId, workspaceId);
+          blockDB.saveDccState(m[1], archState, userId, workspaceId);
         }
-        manifest.paState.dates++;
+        manifest.dccState.dates++;
       }
     }
   }
