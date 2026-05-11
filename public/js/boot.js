@@ -8,7 +8,7 @@
 
   try {
     // Fetch all data endpoints in parallel
-    const [dayState, upcoming, archives, tomorrow, local, brainRecent, brainGlobals, engrams, tags, prepFiles, paLog] = await Promise.all([
+    const [dayState, upcoming, archives, tomorrow, local, brainRecent, brainGlobals, prepFiles] = await Promise.all([
       fetch('/api/state/day').then(r => r.json()).catch(() => null),
       fetch('/api/state/upcoming').then(r => r.json()).catch(() => []),
       fetch('/api/state/archives').then(r => r.json()).catch(() => ({})),
@@ -16,10 +16,7 @@
       fetch('/api/state/local').then(r => r.json()).catch(() => null),
       fetch('/api/brain/recent').then(r => r.json()).catch(() => ({})),
       fetch('/api/brain/globals').then(r => r.json()).catch(() => ({})),
-      fetch('/api/brain/engrams').then(r => r.json()).catch(() => ({ index: {}, taxonomy: {}, cooccurrence: {} })),
-      fetch('/api/brain/tags').then(r => r.json()).catch(() => ({})),
       fetch('/api/prep').then(r => r.json()).catch(() => ({})),
-      fetch('/api/pa-log').then(r => r.json()).catch(() => ({ html: '<div style="color:var(--text-muted);padding:24px">Could not load PA log.</div>' })),
     ]);
 
     // Populate window globals (same shape the rest of the app expects)
@@ -30,15 +27,7 @@
     window.__PA_LOCAL__ = local;
     window.__SECOND_BRAIN__ = brainRecent;
     window.__SECOND_BRAIN_GLOBALS__ = brainGlobals;
-    window.__ENGRAM_INDEX__ = engrams.index || {};
-    window.__ENGRAM_TAXONOMY__ = engrams.taxonomy || {};
-    window.__ENGRAM_COOCCURRENCE__ = engrams.cooccurrence || {};
-    window.__PA_TAGS__ = tags;
     window.__PREP_FILES__ = prepFiles;
-
-    // Inject PA log HTML
-    const paLogEl = document.getElementById('pa-log-content');
-    if (paLogEl && paLog.html) paLogEl.innerHTML = paLog.html;
 
     // Re-initialize state from fetched data
     __state = window.__PA_STATE__ || null;
@@ -61,9 +50,6 @@
     __archiveDates = window.__PA_ARCHIVES__ ? Object.keys(window.__PA_ARCHIVES__).sort() : [];
     if (typeof initKeys === 'function') initKeys();
 
-    // Re-populate one-time objects that ran at load time with empty data
-    const cats = (window.__ENGRAM_TAXONOMY__ && window.__ENGRAM_TAXONOMY__.categories) || [];
-    cats.forEach(c => { ENGRAM_COLORS[c.id] = c.color; ENGRAM_ICONS[c.id] = c.icon; });
     if (window.__PREP_FILES__) {
       Object.entries(window.__PREP_FILES__).forEach(([k,v]) => { PREP_REGISTRY[k] = v; PREP_REGISTRY["meeting-prep/" + k] = v; });
     }
@@ -176,8 +162,6 @@
   if (typeof buildTriage === 'function') buildTriage();
   if (typeof buildNotifications === 'function') buildNotifications();
   if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();
-  if (typeof buildLifeSection === 'function') buildLifeSection();
-  if (typeof buildReportCard === 'function') buildReportCard();
   if (typeof buildDelegated === 'function') buildDelegated();
   if (typeof updateStats === 'function') updateStats();
   if (typeof updateDateNav === 'function') updateDateNav();

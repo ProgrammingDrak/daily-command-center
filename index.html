@@ -195,58 +195,12 @@
   </div>
 </div>
 
-<!-- Quick-capture strip (always visible above tabs) -->
-<div class="qc-strip">
-  <div class="qc-mood-group">
-    <button class="qc-mood" data-score="2" title="Awful">😞</button>
-    <button class="qc-mood" data-score="4" title="Bad">😕</button>
-    <button class="qc-mood" data-score="6" title="Meh">😐</button>
-    <button class="qc-mood" data-score="8" title="Good">🙂</button>
-    <button class="qc-mood" data-score="10" title="Great">😄</button>
-  </div>
-  <input class="qc-input" id="qc-input" type="text" placeholder="m:7  f:salad  h:ran 3mi  j:thought  e:6  x:tylenol">
-  <button class="qc-btn" id="qc-send">Log</button>
-  <button class="qc-btn-journal" id="qc-journal-btn" title="Full journal entry">📓 Entry</button>
-  <span class="qc-status" id="qc-status">✓ Saved</span>
-</div>
-
-<!-- Journal entry modal (Daylio-style: mood + tags + note) -->
-<div class="jm-overlay" id="jm-overlay">
-  <div class="jm-box">
-    <div class="jm-header"><h3>📓 Journal Entry</h3><button class="jm-close" id="jm-close">✕</button></div>
-    <div class="jm-body">
-      <div class="jm-section">
-        <div class="jm-section-title">How are you feeling?</div>
-        <div class="jm-mood-row">
-          <button class="jm-mood" data-score="2">😞</button>
-          <button class="jm-mood" data-score="4">😕</button>
-          <button class="jm-mood" data-score="6">😐</button>
-          <button class="jm-mood" data-score="8">🙂</button>
-          <button class="jm-mood" data-score="10">😄</button>
-        </div>
-      </div>
-      <div id="jm-tags-container"><!-- Tags rendered by JS from __PA_TAGS__ --></div>
-      <div class="jm-section">
-        <div class="jm-section-title">Note (optional)</div>
-        <textarea class="jm-note" id="jm-note" placeholder="What's on your mind?"></textarea>
-      </div>
-    </div>
-    <div class="jm-footer">
-      <button class="jm-cancel" id="jm-cancel">Cancel</button>
-      <button class="jm-save" id="jm-save">Save Entry</button>
-    </div>
-  </div>
-</div>
-
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
-  <button class="tab" data-tab="life" id="life-tab-btn">Life</button>
-  <button class="tab" data-tab="engrams" id="engrams-tab-btn">Engrams <span class="badge" id="engrams-count" style="display:none">0</span></button>
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Vault <span class="badge" id="vault-count" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
-  <button class="tab" data-tab="palog">Report Card</button>
 </div>
 
 <div class="tab-content active" id="tab-schedule">
@@ -425,126 +379,6 @@
 
 <div class="side-drawer-backdrop" id="side-drawer-backdrop"></div>
 
-
-<div class="tab-content" id="tab-palog">
-  <div id="rc-content"><div style="color:var(--text-muted);padding:24px;text-align:center">Loading Report Card...</div></div>
-  <div id="pa-log-content" style="display:none"></div>
-</div>
-
-<div class="tab-content" id="tab-life">
-  <!-- Streak + mood chart row -->
-  <div class="life-grid">
-    <div class="life-card life-card-full">
-      <h4>Mood <span class="life-streak" id="life-streak" style="display:none">🔥 <span id="streak-count">0</span> days</span></h4>
-      <div class="mood-chart" id="mood-chart">
-        <div class="life-empty">No mood data yet. Tap a mood emoji above to start tracking.</div>
-      </div>
-    </div>
-
-    <div class="life-card">
-      <h4>🍽️ Food</h4>
-      <ul class="life-list" id="life-food"><li class="life-empty">No food logged today</li></ul>
-    </div>
-
-    <div class="life-card">
-      <h4>✅ Habits</h4>
-      <div id="life-habits"><div class="life-empty">No habits logged today</div></div>
-    </div>
-
-    <div class="life-card">
-      <h4>🏥 Health</h4>
-      <ul class="life-list" id="life-health"><li class="life-empty">No health entries today</li></ul>
-    </div>
-
-    <div class="life-card">
-      <h4>📓 Journal</h4>
-      <ul class="life-list" id="life-journal"><li class="life-empty">No journal entries today</li></ul>
-    </div>
-
-    <!-- Today's selected tags -->
-    <div class="life-card life-card-full" id="life-tags-card" style="display:none">
-      <h4>🏷️ Today's Tags</h4>
-      <div id="life-tags-display"></div>
-    </div>
-
-    <!-- Correlations / insights -->
-    <div class="life-card life-card-full" id="life-insights-card" style="display:none">
-      <h4>💡 Insights</h4>
-      <div id="life-insights"><div class="life-empty">Need 7+ days of mood data for insights</div></div>
-    </div>
-  </div>
-</div>
-
-<!-- ======== ENGRAMS TAB ======== -->
-<div class="tab-content" id="tab-engrams">
-  <div class="engram-layout">
-    <!-- Mood capture row -->
-    <div class="engram-card">
-      <h4 style="margin-bottom:8px">How are you feeling?</h4>
-      <div class="mood-row">
-        <div class="mood-faces" id="engram-mood-faces">
-          <button class="mood-face" data-mood="1" title="Awful">😫</button>
-          <button class="mood-face" data-mood="2" title="Bad">😔</button>
-          <button class="mood-face" data-mood="3" title="Meh">😐</button>
-          <button class="mood-face" data-mood="4" title="Good">😊</button>
-          <button class="mood-face" data-mood="5" title="Rad">🤩</button>
-        </div>
-        <div style="width:1px;background:var(--border);margin:0 12px;align-self:stretch"></div>
-        <div class="mood-energy" id="engram-energy-faces">
-          <button class="mood-face" data-energy="1" title="Exhausted">🪫</button>
-          <button class="mood-face" data-energy="2" title="Tired">😴</button>
-          <button class="mood-face" data-energy="3" title="Steady">⚡</button>
-          <button class="mood-face" data-energy="4" title="Energized">🔥</button>
-          <button class="mood-face" data-energy="5" title="Wired">⚡⚡</button>
-        </div>
-      </div>
-      <div id="engram-mood-note-row" style="display:none;margin-top:8px;display:flex;gap:6px">
-        <input type="text" id="engram-mood-note" placeholder="Optional note..." style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text)">
-        <button onclick="saveMoodEntry()" style="background:var(--accent);color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;font-weight:600">Log</button>
-      </div>
-      <div id="engram-mood-timeline" style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap"></div>
-    </div>
-
-    <!-- Engram tag input -->
-    <div class="engram-card">
-      <h4 style="margin-bottom:8px">Tag this day</h4>
-      <div style="display:flex;gap:6px;margin-bottom:8px">
-        <div style="flex:1;position:relative">
-          <input type="text" id="engram-tag-input" placeholder="Type to search or create a tag..." autocomplete="off" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text)">
-          <div id="engram-autocomplete" style="display:none;position:absolute;top:100%;left:0;right:0;margin-top:2px;background:var(--card);border:1px solid var(--border);border-radius:8px;max-height:200px;overflow-y:auto;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.3)"></div>
-        </div>
-        <select id="engram-cat-select" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;color:var(--text)">
-          <option value="activity">⚡ Activity</option>
-          <option value="people">👤 People</option>
-          <option value="book">📚 Book</option>
-          <option value="media">🎬 Media</option>
-          <option value="meeting">📅 Meeting</option>
-          <option value="project">🏗️ Project</option>
-          <option value="place">📍 Place</option>
-          <option value="topic">💡 Topic</option>
-          <option value="wellness">🌿 Wellness</option>
-          <option value="custom">🏷️ Custom</option>
-        </select>
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:10px">
-        <input type="text" id="engram-context-input" placeholder="Context note (optional)" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text)">
-        <button onclick="addEngram()" style="background:var(--green);color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;font-weight:600">Add</button>
-      </div>
-
-      <!-- Today's engram chips -->
-      <div id="engram-chips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-    </div>
-
-    <!-- Engram Explorer -->
-    <div class="engram-card">
-      <h4 style="margin-bottom:8px">Explorer</h4>
-      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap" id="engram-category-filters"></div>
-      <div id="engram-explorer-list" style="max-height:400px;overflow-y:auto">
-        <div style="color:var(--text-muted);font-size:12px;padding:12px">Add engram tags to start building your knowledge graph.</div>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- Task picker overlay (global) -->
 <div class="pomo-picker-overlay" id="pomo-picker-overlay">
@@ -1202,13 +1036,10 @@
 <script src="/public/js/schedule-tab.js"></script>
 <script src="/public/js/sync.js"></script>
 <script src="/public/js/triage.js"></script>
-<script src="/public/js/report-card.js"></script>
 <script src="/public/js/tabs.js"></script>
 <script src="/public/js/features.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/boot.js"></script>
-<script src="/public/js/life.js"></script>
-<script src="/public/js/engrams.js"></script>
 <script src="/public/js/block-store.js"></script>
 <script src="/public/js/gcal-client.js"></script>
 <script src="/public/js/calendar-sidebar.js"></script>
@@ -1236,9 +1067,6 @@ window.USE_BLOCKSTORE = {
   pomo: true,
   stickyNotes: true,
   trivialTasks: true,
-  engrams: true,
-  mood: true,
-  lifeCaptures: true,
   pendingTasks: true,
   addedTasks: true
 };
