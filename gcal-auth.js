@@ -214,8 +214,12 @@ async function listAuthenticatedAccounts(userId) {
 }
 
 async function createOAuthClient(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
-  const creds = await loadAccountCredentials(userId, accountKey);
-  const config = (creds && (creds.installed || creds.web)) || getEnvOAuthConfig();
+  const key = normalizeAccountKey(accountKey);
+  const accountCreds = await loadAccountCredentials(userId, key);
+  const defaultCreds = key === DEFAULT_ACCOUNT_KEY ? null : await loadCredentials(userId);
+  const config = (accountCreds && (accountCreds.installed || accountCreds.web)) ||
+    (defaultCreds && (defaultCreds.installed || defaultCreds.web)) ||
+    getEnvOAuthConfig();
   if (!config) return null;
   return new google.auth.OAuth2(config.client_id, config.client_secret, REDIRECT_URI);
 }
