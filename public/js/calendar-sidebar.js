@@ -6,6 +6,30 @@
 
   let sidebarTaskTab = "consider";
 
+  function escapeHtml(value) {
+    return String(value || "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[ch]));
+  }
+
+  function getGcalAccountDisplay(accountKey, cached, calendars) {
+    const key = accountKey || "default";
+    const account = (cached.accounts || []).find(a => (a.key || "default") === key);
+    const email = (account && account.email) || (calendars.find(cal => cal.account_email) || {}).account_email || "";
+    const label = (account && account.label) || (key === "work" ? "Work Google" : "Personal Google");
+    return { label, email };
+  }
+
+  function gcalAccountSortRank(accountKey) {
+    if (!accountKey || accountKey === "default") return 0;
+    if (accountKey === "work") return 1;
+    return 2;
+  }
+
   function renderCalendarSidebar() {
     return `<div class="cal-sidebar">
       ${renderMiniMonth()}
@@ -35,15 +59,36 @@
     // Connected: show calendar checkboxes and sync status
     let calListHTML = "";
     if (cached.calendars && cached.calendars.length) {
+      const gcalGroups = new Map();
       for (const cal of cached.calendars) {
         const accountKey = cal.account_key || "default";
-        const accountLabel = accountKey === "work" ? "work" : "personal";
-        calListHTML += `<label class="gcal-cal-item">
-          <input type="checkbox" ${cal.selected ? "checked" : ""} onchange="gcalToggleCal(${JSON.stringify(cal.id)}, this.checked, ${JSON.stringify(accountKey)})">
-          <span class="gcal-cal-dot" style="background:${cal.background_color || "#4285f4"}"></span>
-          <span class="gcal-cal-name">${cal.summary}${cal.is_primary ? " (primary)" : ""} <span style="color:var(--text-muted)">(${accountLabel})</span></span>
-        </label>`;
+        if (!gcalGroups.has(accountKey)) {
+          gcalGroups.set(accountKey, { accountKey, calendars: [] });
+        }
+        gcalGroups.get(accountKey).calendars.push(cal);
       }
+
+      calListHTML = Array.from(gcalGroups.values())
+        .sort((a, b) => gcalAccountSortRank(a.accountKey) - gcalAccountSortRank(b.accountKey) || a.accountKey.localeCompare(b.accountKey))
+        .map(group => {
+          const account = getGcalAccountDisplay(group.accountKey, cached, group.calendars);
+          const calendarsHTML = group.calendars.map(cal => {
+            const accountKey = cal.account_key || "default";
+            return `<label class="gcal-cal-item">
+              <input type="checkbox" ${cal.selected ? "checked" : ""} onchange="gcalToggleCal(${JSON.stringify(cal.id)}, this.checked, ${JSON.stringify(accountKey)})">
+              <span class="gcal-cal-dot" style="background:${cal.background_color || "#4285f4"}"></span>
+              <span class="gcal-cal-name">${escapeHtml(cal.summary)}${cal.is_primary ? ` <span class="gcal-cal-primary">(primary)</span>` : ""}</span>
+            </label>`;
+          }).join("");
+
+          return `<div class="gcal-account-group">
+            <div class="gcal-account-header">
+              <span class="gcal-account-title">${escapeHtml(account.label)}</span>
+              ${account.email ? `<span class="gcal-account-email">${escapeHtml(account.email)}</span>` : ""}
+            </div>
+            <div class="gcal-account-calendars">${calendarsHTML}</div>
+          </div>`;
+        }).join("");
     }
 
     const syncInfo = cached.lastSync ? `<span style="font-size:9px;color:var(--text-muted)">Synced ${formatAgo(cached.lastSync)}</span>` : "";
