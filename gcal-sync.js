@@ -15,6 +15,8 @@ const gcalAuth = require("./gcal-auth");
 const pool = require("./pg-pool");
 
 const syncState = new Map();
+const calendarListRefreshAt = new Map();
+const CALENDAR_LIST_REFRESH_MS = 15 * 60 * 1000;
 let _pollTimer = null;
 let _broadcast = null;
 let _syncInProgress = false;
@@ -52,11 +54,9 @@ async function syncAll(userId) {
     for (const account of accounts) {
       const auth = await gcalAuth.getAuthClient(uid, account.key);
       if (!auth) continue;
+      const fetched = await refreshCalendarsIfDue(auth, account);
       let calendars = await getSelectedCalendars(account.key);
       if (!calendars.length) {
-        const fetched = await gcalAuth.fetchAndCacheCalendars(auth);
-        await cacheCalendarsToDb(fetched, account);
-        calendars = await getSelectedCalendars(account.key);
         if (!calendars.length && fetched.length) {
           const primary = fetched.find((c) => c.primary) || fetched[0];
           await pool.query("UPDATE gcal_calendars SET selected = TRUE WHERE id = $1 AND account_key = $2", [primary.id, account.key]);
@@ -67,6 +67,16 @@ async function syncAll(userId) {
     }
     if (totalChanged > 0 && _broadcast) _broadcast("gcal-sync", { changed: totalChanged, timestamp: new Date().toISOString() });
   } finally { _syncInProgress = false; }
+}
+
+async function refreshCalendarsIfDue(auth, account, force = false) {
+  const accountKey = gcalAuth.normalizeAccountKey(account.key);
+  const lastRefresh = calendarListRefreshAt.get(accountKey) || 0;
+  if (!force && Date.now() - lastRefresh < CALENDAR_LIST_REFRESH_MS) return [];
+  const fetched = await gcalAuth.fetchAndCacheCalendars(auth);
+  await cacheCalendarsToDb(fetched, account);
+  calendarListRefreshAt.set(accountKey, Date.now());
+  return fetched;
 }
 
 function syncKey(accountKey, calendarId) {
@@ -97,7 +107,7 @@ async function syncCalendar(auth, calendarId, accountKey = gcalAuth.DEFAULT_ACCO
         syncState.set(syncKey(account, calendarId), { syncToken: res.data.nextSyncToken, fullSync: false });
         await pool.query(
           `INSERT INTO gcal_sync_state (calendar_id, sync_token, last_sync_at, full_sync, account_key) VALUES ($1, $2, $3, FALSE, $4)
-           ON CONFLICT(calendar_id) DO UPDATE SET sync_token = EXCLUDED.sync_token, last_sync_at = EXCLUDED.last_sync_at, full_sync = FALSE, account_key = EXCLUDED.account_key`,
+           ON CONFLICT(calendar_id, account_key) DO UPDATE SET sync_token = EXCLUDED.sync_token, last_sync_at = EXCLUDED.last_sync_at, full_sync = FALSE`,
           [calendarId, res.data.nextSyncToken, new Date().toISOString(), account]
         );
       }
@@ -118,12 +128,12 @@ async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_
   const account = gcalAuth.normalizeAccountKey(accountKey);
   const now = new Date().toISOString();
   if (gcalEvent.status === "cancelled") {
-    const { rows } = await pool.query("SELECT block_id FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2", [gcalEvent.id, calendarId]);
+    const { rows } = await pool.query("SELECT block_id FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEvent.id, calendarId, account]);
     if (rows[0] && rows[0].block_id) {
       const { rows: br } = await pool.query("SELECT * FROM blocks WHERE id = $1 AND deleted_at IS NULL", [rows[0].block_id]);
       if (br.length > 0) await pool.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, rows[0].block_id]);
     }
-    await pool.query("DELETE FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2", [gcalEvent.id, calendarId]);
+    await pool.query("DELETE FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEvent.id, calendarId, account]);
     return;
   }
   const isAllDay = !!(gcalEvent.start && gcalEvent.start.date);
@@ -135,7 +145,7 @@ async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_
     startTime = String(startDt.getHours()).padStart(2, "0") + ":" + String(startDt.getMinutes()).padStart(2, "0");
     endTime = String(endDt.getHours()).padStart(2, "0") + ":" + String(endDt.getMinutes()).padStart(2, "0");
   }
-  const { rows: gcalRows } = await pool.query("SELECT * FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2", [gcalEvent.id, calendarId]);
+  const { rows: gcalRows } = await pool.query("SELECT * FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEvent.id, calendarId, account]);
   const existingGcal = gcalRows[0];
   if (existingGcal && existingGcal.local_modified) { await updateGcalEventRow(gcalEvent, calendarId, existingGcal.block_id, now, account); return; }
 
@@ -178,7 +188,7 @@ async function updateGcalEventRow(gcalEvent, calendarId, blockId, now, accountKe
   await pool.query(
     `INSERT INTO gcal_events (gcal_event_id, block_id, calendar_id, etag, summary, description, location, start_time, end_time, start_date, end_date, all_day, status, html_link, hangout_link, attendees_json, conference_json, organizer_json, creator_json, recurrence_json, recurring_event_id, visibility, transparency, ical_uid, color_id, reminders_json, raw_json, synced_at, local_modified, account_key)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,FALSE,$29)
-     ON CONFLICT(gcal_event_id, calendar_id) DO UPDATE SET block_id=EXCLUDED.block_id, etag=EXCLUDED.etag, summary=EXCLUDED.summary, description=EXCLUDED.description, location=EXCLUDED.location, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time, start_date=EXCLUDED.start_date, end_date=EXCLUDED.end_date, all_day=EXCLUDED.all_day, status=EXCLUDED.status, html_link=EXCLUDED.html_link, hangout_link=EXCLUDED.hangout_link, attendees_json=EXCLUDED.attendees_json, conference_json=EXCLUDED.conference_json, organizer_json=EXCLUDED.organizer_json, creator_json=EXCLUDED.creator_json, recurrence_json=EXCLUDED.recurrence_json, recurring_event_id=EXCLUDED.recurring_event_id, visibility=EXCLUDED.visibility, transparency=EXCLUDED.transparency, ical_uid=EXCLUDED.ical_uid, color_id=EXCLUDED.color_id, reminders_json=EXCLUDED.reminders_json, raw_json=EXCLUDED.raw_json, synced_at=EXCLUDED.synced_at, account_key=EXCLUDED.account_key`,
+     ON CONFLICT(gcal_event_id, calendar_id, account_key) DO UPDATE SET block_id=EXCLUDED.block_id, etag=EXCLUDED.etag, summary=EXCLUDED.summary, description=EXCLUDED.description, location=EXCLUDED.location, start_time=EXCLUDED.start_time, end_time=EXCLUDED.end_time, start_date=EXCLUDED.start_date, end_date=EXCLUDED.end_date, all_day=EXCLUDED.all_day, status=EXCLUDED.status, html_link=EXCLUDED.html_link, hangout_link=EXCLUDED.hangout_link, attendees_json=EXCLUDED.attendees_json, conference_json=EXCLUDED.conference_json, organizer_json=EXCLUDED.organizer_json, creator_json=EXCLUDED.creator_json, recurrence_json=EXCLUDED.recurrence_json, recurring_event_id=EXCLUDED.recurring_event_id, visibility=EXCLUDED.visibility, transparency=EXCLUDED.transparency, ical_uid=EXCLUDED.ical_uid, color_id=EXCLUDED.color_id, reminders_json=EXCLUDED.reminders_json, raw_json=EXCLUDED.raw_json, synced_at=EXCLUDED.synced_at`,
     [gcalEvent.id, blockId, calendarId, gcalEvent.etag||null, gcalEvent.summary||null, gcalEvent.description||null, gcalEvent.location||null,
      isAllDay?null:gcalEvent.start.dateTime, isAllDay?null:gcalEvent.end.dateTime, isAllDay?gcalEvent.start.date:null, isAllDay?gcalEvent.end.date:null,
      isAllDay, gcalEvent.status||"confirmed", gcalEvent.htmlLink||null, meetLink,
@@ -207,8 +217,8 @@ async function updateEvent(gcalEventId, calendarId, changes) {
   await upsertEvent(res.data, calendarId, accountKey); return res.data;
 }
 
-async function addAttendee(gcalEventId, calendarId, email) {
-  const accountKey = await accountKeyForCalendar(calendarId);
+async function addAttendee(gcalEventId, calendarId, email, accountKey = null) {
+  accountKey = accountKey || await accountKeyForCalendar(calendarId);
   const auth = await gcalAuth.getAuthClient(_defaultUserId, accountKey);
   if (!auth) throw new Error("Not authenticated");
   const calendar = google.calendar({ version: "v3", auth });
@@ -220,8 +230,8 @@ async function addAttendee(gcalEventId, calendarId, email) {
   await upsertEvent(res.data, calendarId, accountKey); return res.data;
 }
 
-async function removeAttendee(gcalEventId, calendarId, email) {
-  const accountKey = await accountKeyForCalendar(calendarId);
+async function removeAttendee(gcalEventId, calendarId, email, accountKey = null) {
+  accountKey = accountKey || await accountKeyForCalendar(calendarId);
   const auth = await gcalAuth.getAuthClient(_defaultUserId, accountKey);
   if (!auth) throw new Error("Not authenticated");
   const calendar = google.calendar({ version: "v3", auth });
@@ -231,8 +241,8 @@ async function removeAttendee(gcalEventId, calendarId, email) {
   await upsertEvent(res.data, calendarId, accountKey); return res.data;
 }
 
-async function rsvp(gcalEventId, calendarId, response) {
-  const accountKey = await accountKeyForCalendar(calendarId);
+async function rsvp(gcalEventId, calendarId, response, accountKey = null) {
+  accountKey = accountKey || await accountKeyForCalendar(calendarId);
   const auth = await gcalAuth.getAuthClient(_defaultUserId, accountKey);
   if (!auth) throw new Error("Not authenticated");
   const calendar = google.calendar({ version: "v3", auth });
@@ -260,22 +270,26 @@ async function createEvent(calendarId, eventData) {
   await upsertEvent(res.data, calendarId, accountKey); return res.data;
 }
 
-async function deleteEvent(gcalEventId, calendarId) {
-  const accountKey = await accountKeyForCalendar(calendarId);
+async function deleteEvent(gcalEventId, calendarId, accountKey = null) {
+  accountKey = accountKey || await accountKeyForCalendar(calendarId);
   const auth = await gcalAuth.getAuthClient(_defaultUserId, accountKey);
   if (!auth) throw new Error("Not authenticated");
   const calendar = google.calendar({ version: "v3", auth });
   await calendar.events.delete({ calendarId, eventId: gcalEventId, sendUpdates: "all" });
-  const { rows } = await pool.query("SELECT block_id FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2", [gcalEventId, calendarId]);
+  const account = gcalAuth.normalizeAccountKey(accountKey);
+  const { rows } = await pool.query("SELECT block_id FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEventId, calendarId, account]);
   if (rows[0] && rows[0].block_id) {
     const now = new Date().toISOString();
     await pool.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, rows[0].block_id]);
   }
-  await pool.query("DELETE FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2", [gcalEventId, calendarId]);
+  await pool.query("DELETE FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEventId, calendarId, account]);
 }
 
-async function getGcalEvent(gcalEventId, calendarId) {
-  const { rows } = await pool.query("SELECT * FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2", [gcalEventId, calendarId]);
+async function getGcalEvent(gcalEventId, calendarId, accountKey = null) {
+  const account = accountKey ? gcalAuth.normalizeAccountKey(accountKey) : null;
+  const { rows } = account
+    ? await pool.query("SELECT * FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEventId, calendarId, account])
+    : await pool.query("SELECT * FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2", [gcalEventId, calendarId]);
   return rows[0] || null;
 }
 
@@ -314,7 +328,7 @@ async function cacheCalendarsToDb(calendars, account = { key: gcalAuth.DEFAULT_A
     await pool.query(
       `INSERT INTO gcal_calendars (id, summary, description, background_color, foreground_color, is_primary, access_role, selected, updated_at, account_key, account_email)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       ON CONFLICT(id) DO UPDATE SET summary=EXCLUDED.summary, description=EXCLUDED.description, background_color=EXCLUDED.background_color, foreground_color=EXCLUDED.foreground_color, is_primary=EXCLUDED.is_primary, access_role=EXCLUDED.access_role, updated_at=EXCLUDED.updated_at, account_key=EXCLUDED.account_key, account_email=EXCLUDED.account_email`,
+       ON CONFLICT(id, account_key) DO UPDATE SET summary=EXCLUDED.summary, description=EXCLUDED.description, background_color=EXCLUDED.background_color, foreground_color=EXCLUDED.foreground_color, is_primary=EXCLUDED.is_primary, access_role=EXCLUDED.access_role, updated_at=EXCLUDED.updated_at, account_email=EXCLUDED.account_email`,
       [cal.id, cal.summary, cal.description||"", cal.backgroundColor||"#4285f4", cal.foregroundColor||"#ffffff", !!cal.primary, cal.accessRole||"reader", cal.selected!==false, now, accountKey, account.email || null]
     );
   }

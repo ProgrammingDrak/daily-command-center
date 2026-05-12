@@ -181,7 +181,7 @@ async function run() {
         reminders_json: toJsonb(r.reminders_json),
         raw_json: toJsonb(r.raw_json),
       }),
-      conflictKey: "gcal_event_id, calendar_id",
+      conflictKey: "gcal_event_id, calendar_id, account_key",
     });
   } catch (e) {
     if (e.message.includes("no such table")) {
@@ -197,7 +197,7 @@ async function run() {
         ...r,
         full_sync: !!r.full_sync,
       }),
-      conflictKey: "calendar_id",
+      conflictKey: "calendar_id, account_key",
     });
   } catch (e) {
     if (e.message.includes("no such table")) {
@@ -217,7 +217,7 @@ async function run() {
         is_primary: !!r.is_primary,
         selected: !!r.selected,
       }),
-      conflictKey: "id",
+      conflictKey: "id, account_key",
     });
   } catch (e) {
     if (e.message.includes("no such table")) {

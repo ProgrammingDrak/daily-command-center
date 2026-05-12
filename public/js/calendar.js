@@ -109,7 +109,8 @@
     if (!calState || !calState.calendars || !calState.calendars.length) return events;
     return events.filter(ev => {
       if (!ev.gcal_calendar_id) return true; // not a GCal event — always show
-      const cal = calState.calendars.find(c => c.id === ev.gcal_calendar_id);
+      const accountKey = ev.gcal_account_key || "default";
+      const cal = calState.calendars.find(c => c.id === ev.gcal_calendar_id && (c.account_key || "default") === accountKey);
       return !cal || !!cal.selected; // show if calendar not found in list, or is selected
     });
   }
@@ -132,6 +133,7 @@
           source: ev.source,
           detail: ev.detail,
           gcal_calendar_id: ev.gcal_calendar_id,
+          gcal_account_key: ev.gcal_account_key,
           calUrl: ev.calUrl,
           notionUrl: ev.notionUrl,
           meta: ev.meta,
@@ -167,6 +169,8 @@
           detail: item.detail || item.description,
           calUrl: item.calendar_link,
           notionUrl: item.notion_url,
+          gcal_calendar_id: item.gcal_calendar_id,
+          gcal_account_key: item.gcal_account_key,
           date: ds,
           done: !!item.completed,
           pushed: false,
@@ -204,6 +208,7 @@
             all_day: p.all_day,
             gcal_event_id: p.gcal_event_id,
             gcal_calendar_id: p.gcal_calendar_id,
+            gcal_account_key: p.gcal_account_key,
           });
         }
       }
