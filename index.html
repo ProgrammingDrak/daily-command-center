@@ -199,7 +199,6 @@
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
-  <button class="tab" data-tab="vault" id="vault-tab-btn">Vault <span class="badge" id="vault-count" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
 </div>
 
@@ -887,34 +886,6 @@
 
 <div class="tab-content" id="tab-calendar"></div>
 
-<div class="tab-content" id="tab-vault">
-  <div class="vault-toolbar" style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px">
-    <strong>Vault</strong>
-    <span id="vault-status-pill" class="vault-status vault-status--unknown" style="font-size:10px;padding:2px 8px;border-radius:10px;background:var(--bg-elev)">unknown</span>
-    <span id="vault-summary" style="color:var(--text-muted)"></span>
-    <span style="flex:1"></span>
-    <label style="font-size:11px;color:var(--text-muted)">Type:
-      <select id="vault-type-filter" style="background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px">
-        <option value="">all</option>
-        <option value="task">task</option>
-        <option value="meal">meal</option>
-        <option value="meeting">meeting</option>
-        <option value="workout">workout</option>
-        <option value="journal">journal</option>
-        <option value="creative">creative</option>
-        <option value="daily">daily</option>
-        <option value="tag">tag</option>
-      </select>
-    </label>
-    <button id="vault-refresh-btn" class="btn-sm" style="font-size:11px">Refresh</button>
-    <button id="vault-flush-btn" class="btn-sm" style="font-size:11px" title="Commit and push now">Sync now</button>
-  </div>
-  <div style="display:flex;height:calc(100% - 48px)">
-    <div id="vault-list" style="width:40%;min-width:280px;overflow-y:auto;border-right:1px solid var(--border);font-size:12px"></div>
-    <div id="vault-detail" style="flex:1;overflow-y:auto;padding:12px;font-size:12px"></div>
-  </div>
-</div>
-
 <div class="tab-content" id="tab-slots">
   <div class="slots-shell">
     <div class="slots-topline">
@@ -1047,7 +1018,6 @@
 <script src="/public/js/calendar.js"></script>
 <script src="/public/js/calendar-drag.js"></script>
 <script src="/public/js/delegated.js"></script>
-<script src="/public/js/vault-tab.js"></script>
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/side-drawers.js"></script>
