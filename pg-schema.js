@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS gcal_events (
   local_modified   BOOLEAN DEFAULT FALSE,
   account_key      TEXT NOT NULL DEFAULT 'default',
   user_id          INTEGER REFERENCES users(id),
-  PRIMARY KEY (gcal_event_id, calendar_id)
+  PRIMARY KEY (gcal_event_id, calendar_id, account_key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_gcal_events_block
@@ -164,17 +164,18 @@ CREATE INDEX IF NOT EXISTS idx_gcal_events_start
 
 -- ── GCal Sync State ──
 CREATE TABLE IF NOT EXISTS gcal_sync_state (
-  calendar_id TEXT PRIMARY KEY,
+  calendar_id TEXT NOT NULL,
   sync_token  TEXT,
   last_sync_at TIMESTAMPTZ,
   full_sync   BOOLEAN DEFAULT TRUE,
   account_key TEXT NOT NULL DEFAULT 'default',
-  user_id     INTEGER REFERENCES users(id)
+  user_id     INTEGER REFERENCES users(id),
+  PRIMARY KEY (calendar_id, account_key)
 );
 
 -- ── GCal Calendars ──
 CREATE TABLE IF NOT EXISTS gcal_calendars (
-  id               TEXT PRIMARY KEY,
+  id               TEXT NOT NULL,
   summary          TEXT,
   description      TEXT,
   background_color TEXT,
@@ -185,7 +186,8 @@ CREATE TABLE IF NOT EXISTS gcal_calendars (
   updated_at       TIMESTAMPTZ,
   account_key      TEXT NOT NULL DEFAULT 'default',
   account_email    TEXT,
-  user_id          INTEGER REFERENCES users(id)
+  user_id          INTEGER REFERENCES users(id),
+  PRIMARY KEY (id, account_key)
 );
 
 -- ── Slot Rewards ──

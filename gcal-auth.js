@@ -57,6 +57,39 @@ async function ensureMultiAccountSchema() {
       ADD COLUMN IF NOT EXISTS account_key TEXT NOT NULL DEFAULT 'default';
     ALTER TABLE gcal_events
       ADD COLUMN IF NOT EXISTS account_key TEXT NOT NULL DEFAULT 'default';
+
+    DO $$
+    BEGIN
+      ALTER TABLE gcal_calendars DROP CONSTRAINT IF EXISTS gcal_calendars_pkey;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'gcal_calendars_account_pkey'
+          AND conrelid = 'gcal_calendars'::regclass
+      ) THEN
+        ALTER TABLE gcal_calendars
+          ADD CONSTRAINT gcal_calendars_account_pkey PRIMARY KEY (id, account_key);
+      END IF;
+
+      ALTER TABLE gcal_sync_state DROP CONSTRAINT IF EXISTS gcal_sync_state_pkey;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'gcal_sync_state_account_pkey'
+          AND conrelid = 'gcal_sync_state'::regclass
+      ) THEN
+        ALTER TABLE gcal_sync_state
+          ADD CONSTRAINT gcal_sync_state_account_pkey PRIMARY KEY (calendar_id, account_key);
+      END IF;
+
+      ALTER TABLE gcal_events DROP CONSTRAINT IF EXISTS gcal_events_pkey;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'gcal_events_account_pkey'
+          AND conrelid = 'gcal_events'::regclass
+      ) THEN
+        ALTER TABLE gcal_events
+          ADD CONSTRAINT gcal_events_account_pkey PRIMARY KEY (gcal_event_id, calendar_id, account_key);
+      END IF;
+    END $$;
   `);
 }
 
@@ -226,11 +259,17 @@ async function getAuthClient(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
 
 async function fetchAndCacheCalendars(auth) {
   const calendar = google.calendar({ version: "v3", auth });
-  const res = await calendar.calendarList.list();
-  return (res.data.items || []).map((c) => ({
+  const items = [];
+  let pageToken = null;
+  do {
+    const res = await calendar.calendarList.list({ maxResults: 250, pageToken: pageToken || undefined });
+    items.push(...(res.data.items || []));
+    pageToken = res.data.nextPageToken || null;
+  } while (pageToken);
+  return items.map((c) => ({
     id: c.id, summary: c.summary, description: c.description || "",
     backgroundColor: c.backgroundColor, foregroundColor: c.foregroundColor,
-    primary: !!c.primary, accessRole: c.accessRole, selected: c.selected !== false,
+    primary: !!c.primary, accessRole: c.accessRole, selected: true,
   }));
 }
 

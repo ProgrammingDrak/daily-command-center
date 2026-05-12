@@ -649,9 +649,10 @@
 
     const calendars = await window.gcal.getCalendars();
     const selected = calendars.filter(c => c.selected);
-    const calendarId = selected.length === 1
-      ? selected[0].id
-      : (selected.find(c => c.is_primary) || selected[0])?.id;
+    const targetCalendar = selected.length === 1
+      ? selected[0]
+      : (selected.find(c => c.is_primary) || selected[0]);
+    const calendarId = targetCalendar?.id;
 
     if (!calendarId) {
       alert("No calendar selected");
@@ -667,6 +668,7 @@
       date: dateStr,
       start: startTime,
       end: endTime,
+      accountKey: targetCalendar.account_key || "default",
     });
 
     // Rebuild calendar
