@@ -115,6 +115,22 @@
     });
   }
 
+  function dedupeGcalEvents(events) {
+    const seen = new Set();
+    return events.filter(ev => {
+      if (ev.source !== "gcal" && ev.source !== "calendar" && !ev.gcal_calendar_id) return true;
+      const key = [
+        String(ev.title || "Untitled").trim().toLowerCase().replace(/\s+/g, " "),
+        ev.date || "",
+        ev.start || "",
+        ev.end || "",
+      ].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function getEventsForDate(ds) {
     const today = dateStr(new Date());
     const events = [];
@@ -144,7 +160,7 @@
           _raw: ev,
         });
       }
-      return filterByCal(events);
+      return filterByCal(dedupeGcalEvents(events));
     }
 
     // For other dates, use range cache
@@ -214,7 +230,7 @@
       }
     }
 
-    return filterByCal(events);
+    return filterByCal(dedupeGcalEvents(events));
   }
 
   // ── Overlap Resolution ──

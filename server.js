@@ -180,8 +180,8 @@ function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json")
 async function getMeetingsFromDB(dateStr, userId, workspaceId) {
   const offset = getETOffset(dateStr);
   const { rows } = workspaceId
-    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
-    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
+    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
+    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
   const meetings = [], meetingTimeline = [];
   for (const row of rows) {
     const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;
@@ -190,12 +190,31 @@ async function getMeetingsFromDB(dateStr, userId, workspaceId) {
     if (row.attendees_json) { const parsed = Array.isArray(row.attendees_json) ? row.attendees_json : []; attendees = parsed.filter(a => !a.self && !a.resource).map(a => a.email); }
     const startISO = `${dateStr}T${props.start}:00${offset}`, endISO = `${dateStr}T${props.end}:00${offset}`;
     const eventId = row.gcal_event_id || props.source_id || row.id;
-    meetings.push({ id: eventId, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null, gcal_calendar_id: props.gcal_calendar_id || null, gcal_account_key: props.gcal_account_key || "default" });
-    meetingTimeline.push({ id: "mtg-" + row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "calendar", source_id: eventId, category: "Meetings", completed: false, gcal_calendar_id: props.gcal_calendar_id || null, gcal_account_key: props.gcal_account_key || "default" });
+    const dedupeKey = calendarDedupeKey({ ical_uid: row.ical_uid, title: props.title, start: startISO, end: endISO });
+    meetings.push({ id: eventId, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null, gcal_calendar_id: props.gcal_calendar_id || null, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
+    meetingTimeline.push({ id: "mtg-" + row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "calendar", source_id: eventId, category: "Meetings", completed: false, gcal_calendar_id: props.gcal_calendar_id || null, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
   }
   const seen = new Map(), dedupedMeetings = [], dedupedTimeline = [];
-  for (let i = 0; i < meetings.length; i++) { const key = meetings[i].title + "|" + meetings[i].start; const existing = seen.get(key); if (existing !== undefined) { if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") { dedupedMeetings[existing] = meetings[i]; dedupedTimeline[existing] = meetingTimeline[i]; } } else { seen.set(key, dedupedMeetings.length); dedupedMeetings.push(meetings[i]); dedupedTimeline.push(meetingTimeline[i]); } }
+  for (let i = 0; i < meetings.length; i++) { const key = meetings[i].dedupeKey; const existing = seen.get(key); if (existing !== undefined) { if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") { dedupedMeetings[existing] = meetings[i]; dedupedTimeline[existing] = meetingTimeline[i]; } } else { seen.set(key, dedupedMeetings.length); dedupedMeetings.push(meetings[i]); dedupedTimeline.push(meetingTimeline[i]); } }
   return { meetings: dedupedMeetings, meetingTimeline: dedupedTimeline };
+}
+
+function calendarDedupeKey(item) {
+  const start = item.start || "";
+  const end = item.end || "";
+  const title = String(item.title || item.label || "(No title)").trim().toLowerCase().replace(/\s+/g, " ");
+  return (item.ical_uid ? `ical:${item.ical_uid}` : `title:${title}`) + `|${start}|${end}`;
+}
+
+function dedupeCalendarTimeline(timeline) {
+  const seen = new Set();
+  return (timeline || []).filter(item => {
+    if (item.source !== "calendar" && item.source !== "gcal") return true;
+    const key = item.dedupeKey || calendarDedupeKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
@@ -219,6 +238,7 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   if (result.schedule && result.schedule.timeline) {
     const existingSourceIds = new Set(result.schedule.timeline.filter(t => t.source === "calendar").map(t => t.source_id));
     for (const mtg of meetingTimeline) { if (!existingSourceIds.has(mtg.source_id)) result.schedule.timeline.push(mtg); }
+    result.schedule.timeline = dedupeCalendarTimeline(result.schedule.timeline);
     result.schedule.timeline.sort((a, b) => a.start.localeCompare(b.start));
   } else { result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline }; }
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
