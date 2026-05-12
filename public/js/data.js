@@ -151,6 +151,7 @@ function transformState(state) {
               (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
         detail: item.description || "", source: item.source || "manual",
         gcal_calendar_id: item.gcal_calendar_id || "",
+        gcal_calendar_name: item.gcal_calendar_name || "",
         gcal_account_key: item.gcal_account_key || "",
         notionUrl: item.source === "notion" && item.source_id ?
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
