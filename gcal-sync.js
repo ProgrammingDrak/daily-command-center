@@ -192,9 +192,9 @@ async function updateGcalEventRow(gcalEvent, calendarId, blockId, now, accountKe
     [gcalEvent.id, blockId, calendarId, gcalEvent.etag||null, gcalEvent.summary||null, gcalEvent.description||null, gcalEvent.location||null,
      isAllDay?null:gcalEvent.start.dateTime, isAllDay?null:gcalEvent.end.dateTime, isAllDay?gcalEvent.start.date:null, isAllDay?gcalEvent.end.date:null,
      isAllDay, gcalEvent.status||"confirmed", gcalEvent.htmlLink||null, meetLink,
-     gcalEvent.attendees||[], gcalEvent.conferenceData||null, gcalEvent.organizer||null, gcalEvent.creator||null, gcalEvent.recurrence||null,
+     jsonbParam(gcalEvent.attendees || []), jsonbParam(gcalEvent.conferenceData), jsonbParam(gcalEvent.organizer), jsonbParam(gcalEvent.creator), jsonbParam(gcalEvent.recurrence),
      gcalEvent.recurringEventId||null, gcalEvent.visibility||null, gcalEvent.transparency||null, gcalEvent.iCalUID||null, gcalEvent.colorId||null,
-     gcalEvent.reminders||null, gcalEvent, new Date().toISOString(), account]
+     jsonbParam(gcalEvent.reminders), jsonbParam(gcalEvent), new Date().toISOString(), account]
   );
 }
 
@@ -336,6 +336,7 @@ async function cacheCalendarsToDb(calendars, account = { key: gcalAuth.DEFAULT_A
 
 function toSortOrder(startTime) { if (!startTime) return 0; const [h, m] = startTime.split(":").map(Number); return h * 100 + m; }
 function toRFC3339(dateStr, timeStr) { return new Date(`${dateStr}T${timeStr}:00`).toISOString(); }
+function jsonbParam(value) { return value == null ? null : JSON.stringify(value); }
 function safeParseJSON(val, fallback) { if (Array.isArray(val)) return val; if (typeof val === "object" && val !== null) return val; if (!val) return fallback; try { return JSON.parse(val); } catch { return fallback; } }
 
 async function getSyncStatus() {
