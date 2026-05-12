@@ -81,13 +81,31 @@ window.__PA_LOCAL__ = null;
 window.__SECOND_BRAIN__ = {};
 window.__SECOND_BRAIN_GLOBALS__ = {};
 
+function calendarStateDedupeKey(item) {
+  const start = item.start || "";
+  const end = item.end || "";
+  const title = String(item.title || item.label || "Untitled").trim().toLowerCase().replace(/\s+/g, " ");
+  return (item.dedupeKey || "title:" + title + "|" + start + "|" + end);
+}
+
+function dedupeCalendarStateTimeline(timeline) {
+  const seen = new Set();
+  return (timeline || []).filter(item => {
+    if (item.source !== "calendar" && item.source !== "gcal") return true;
+    const key = calendarStateDedupeKey(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function transformState(state) {
   if (!state) return { sched: [], consider: [], bklog: [], triageItems: [], notifications: [] };
   const sched = [], consider = [], bklog = [], triageItems = [], notifications = [];
 
   // Timeline -> INIT_SCHED
   if (state.schedule && state.schedule.timeline) {
-    state.schedule.timeline.forEach(item => {
+    dedupeCalendarStateTimeline(state.schedule.timeline).forEach(item => {
       const typeMap = {meeting:"meeting", task:"task", prep:"task", time_block:"triage",
         focus_time:"focus", free_time:"break", ooo:"ooo"};
       const start = item.start ? new Date(item.start) : null;
@@ -133,6 +151,7 @@ function transformState(state) {
               (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
         detail: item.description || "", source: item.source || "manual",
         gcal_calendar_id: item.gcal_calendar_id || "",
+        gcal_account_key: item.gcal_account_key || "",
         notionUrl: item.source === "notion" && item.source_id ?
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
         calUrl: item.source === "calendar" ? item.calendar_link || "" : "",
