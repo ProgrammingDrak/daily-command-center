@@ -1151,8 +1151,52 @@
 .gcal-cal-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
   margin-top: 8px;
+}
+
+.gcal-account-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gcal-account-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.gcal-account-group:first-child .gcal-account-header {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.gcal-account-title {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.gcal-account-email {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gcal-account-calendars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .gcal-cal-item {
@@ -1176,9 +1220,15 @@
   flex-shrink: 0;
 }
 .gcal-cal-name {
+  min-width: 0;
   overflow: hidden;
+  flex: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.gcal-cal-primary {
+  color: var(--text-muted);
 }
 
 .gcal-sync-btn {
