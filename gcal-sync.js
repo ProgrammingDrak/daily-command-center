@@ -101,7 +101,24 @@ async function syncCalendar(auth, calendarId, accountKey = gcalAuth.DEFAULT_ACCO
     do {
       if (pageToken) params.pageToken = pageToken;
       const res = await calendar.events.list(params);
-      for (const event of res.data.items || []) { await upsertEvent(event, calendarId, account); changedCount++; }
+      for (const event of res.data.items || []) {
+        try {
+          await upsertEvent(event, calendarId, account);
+          changedCount++;
+        } catch (err) {
+          console.error("[gcal-sync] Event import error:", {
+            accountKey: account,
+            calendarId,
+            eventId: event && event.id,
+            summary: event && event.summary,
+            message: err.message,
+            detail: err.detail,
+            where: err.where,
+            code: err.code,
+          });
+          throw err;
+        }
+      }
       pageToken = res.data.nextPageToken;
       if (res.data.nextSyncToken) {
         syncState.set(syncKey(account, calendarId), { syncToken: res.data.nextSyncToken, fullSync: false });
@@ -163,19 +180,19 @@ async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_
   let blockId;
   if (existingGcal && existingGcal.block_id) {
     blockId = existingGcal.block_id;
-    await pool.query(`UPDATE blocks SET properties = $1, date = $2, updated_at = $3 WHERE id = $4 AND deleted_at IS NULL`, [props, dateStr, now, blockId]);
+    await pool.query(`UPDATE blocks SET properties = $1, date = $2, updated_at = $3 WHERE id = $4 AND deleted_at IS NULL`, [jsonbParam(props), dateStr, now, blockId]);
   } else {
     blockId = "gcal-" + crypto.createHash("sha256").update(gcalEvent.id + calendarId + account).digest("hex").slice(0, 24);
     const userId = _defaultUserId || null; const workspaceId = userId ? `ws-${userId}` : null;
     const dayRootId = workspaceId && workspaceId !== "ws-1" ? `day-root-${workspaceId}-${dateStr}` : `day-root-${dateStr}`;
     const { rows: dr } = await pool.query("SELECT id FROM blocks WHERE id = $1", [dayRootId]);
     if (dr.length === 0) {
-      await pool.query(`INSERT INTO blocks (id, type, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1, 'day_root', $2, $3, 0, $4, $5, $6, $7)`, [dayRootId, dateStr, { date: dateStr }, userId, workspaceId, now, now]);
+      await pool.query(`INSERT INTO blocks (id, type, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1, 'day_root', $2, $3, 0, $4, $5, $6, $7)`, [dayRootId, dateStr, jsonbParam({ date: dateStr }), userId, workspaceId, now, now]);
     }
     await pool.query(
       `INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1, 'block', $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT(id) DO UPDATE SET properties = EXCLUDED.properties, date = EXCLUDED.date, updated_at = EXCLUDED.updated_at, deleted_at = NULL`,
-      [blockId, dayRootId, dateStr, props, toSortOrder(startTime), userId, workspaceId, now, now]
+      [blockId, dayRootId, dateStr, jsonbParam(props), toSortOrder(startTime), userId, workspaceId, now, now]
     );
   }
   await updateGcalEventRow(gcalEvent, calendarId, blockId, now, account);
