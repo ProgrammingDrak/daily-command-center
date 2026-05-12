@@ -149,6 +149,7 @@
           source: ev.source,
           detail: ev.detail,
           gcal_calendar_id: ev.gcal_calendar_id,
+          gcal_calendar_name: ev.gcal_calendar_name,
           gcal_account_key: ev.gcal_account_key,
           calUrl: ev.calUrl,
           notionUrl: ev.notionUrl,
@@ -186,6 +187,7 @@
           calUrl: item.calendar_link,
           notionUrl: item.notion_url,
           gcal_calendar_id: item.gcal_calendar_id,
+          gcal_calendar_name: item.gcal_calendar_name,
           gcal_account_key: item.gcal_account_key,
           date: ds,
           done: !!item.completed,
@@ -224,6 +226,7 @@
             all_day: p.all_day,
             gcal_event_id: p.gcal_event_id,
             gcal_calendar_id: p.gcal_calendar_id,
+            gcal_calendar_name: p.gcal_calendar_name,
             gcal_account_key: p.gcal_account_key,
           });
         }

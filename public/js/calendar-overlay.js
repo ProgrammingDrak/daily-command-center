@@ -7,6 +7,16 @@
   let currentOverlayId = null;
   let currentOverlayDate = null;
 
+  function escapeHtml(value) {
+    return String(value || "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[ch]));
+  }
+
   function renderOverlayShell() {
     return `<div class="cal-overlay-bg" id="cal-overlay-bg" onclick="calCloseOverlay(event)">
       <div class="cal-overlay" onclick="event.stopPropagation()">
@@ -129,10 +139,11 @@
       </div>`;
     }
 
-    if (ev.source) {
+    const sourceLabel = ev.gcal_calendar_name || ((ev.source === "gcal" || ev.source === "calendar") && ev.gcal_calendar_id ? "Google Calendar" : ev.source);
+    if (sourceLabel) {
       propsHTML += `<div class="cal-prop-row">
         <div class="cal-prop-label">Source</div>
-        <div class="cal-prop-value">${ev.source}</div>
+        <div class="cal-prop-value">${escapeHtml(sourceLabel)}</div>
       </div>`;
     }
 

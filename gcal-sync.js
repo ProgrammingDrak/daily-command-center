@@ -34,7 +34,7 @@ async function init(broadcastFn, defaultUserId) {
 
 function startPolling(intervalMs = 60000) {
   if (_pollTimer) clearInterval(_pollTimer);
-  syncAll(_defaultUserId).catch((e) => console.error("[gcal-sync] Initial sync error:", e.message));
+  syncAll(_defaultUserId, { forceFull: true }).catch((e) => console.error("[gcal-sync] Initial sync error:", e.message));
   _pollTimer = setInterval(() => { syncAll(_defaultUserId).catch((e) => console.error("[gcal-sync] Poll error:", e.message)); }, intervalMs);
   console.log(`[gcal-sync] Polling started (every ${intervalMs / 1000}s)`);
 }
@@ -43,7 +43,7 @@ function stopPolling() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; console.log("[gcal-sync] Polling stopped"); }
 }
 
-async function syncAll(userId) {
+async function syncAll(userId, options = {}) {
   if (_syncInProgress) return;
   const uid = userId || _defaultUserId;
   const accounts = await gcalAuth.listAuthenticatedAccounts(uid);
@@ -63,7 +63,7 @@ async function syncAll(userId) {
         }
       }
       const selectedCals = await getSelectedCalendars(account.key);
-      for (const cal of selectedCals) { totalChanged += await syncCalendar(auth, cal.id, account.key); }
+      for (const cal of selectedCals) { totalChanged += await syncCalendar(auth, cal.id, account.key, cal.summary, options); }
     }
     if (totalChanged > 0 && _broadcast) _broadcast("gcal-sync", { changed: totalChanged, timestamp: new Date().toISOString() });
   } finally { _syncInProgress = false; }
@@ -83,17 +83,20 @@ function syncKey(accountKey, calendarId) {
   return `${gcalAuth.normalizeAccountKey(accountKey)}:${calendarId}`;
 }
 
-async function syncCalendar(auth, calendarId, accountKey = gcalAuth.DEFAULT_ACCOUNT_KEY) {
+async function syncCalendar(auth, calendarId, accountKey = gcalAuth.DEFAULT_ACCOUNT_KEY, calendarName = null, options = {}) {
   const account = gcalAuth.normalizeAccountKey(accountKey);
   const calendar = google.calendar({ version: "v3", auth });
   const state = syncState.get(syncKey(account, calendarId)) || { syncToken: null, fullSync: true };
   let params = { calendarId, maxResults: 250, singleEvents: true, orderBy: "startTime" };
-  if (state.syncToken && !state.fullSync) {
+  const seenEventIds = new Set();
+  let fullSyncWindow = null;
+  if (state.syncToken && !state.fullSync && !options.forceFull) {
     params.syncToken = state.syncToken; delete params.orderBy; delete params.singleEvents;
   } else {
     const now = new Date(); const past = new Date(now); past.setDate(past.getDate() - 30);
     const future = new Date(now); future.setDate(future.getDate() + 60);
     params.timeMin = past.toISOString(); params.timeMax = future.toISOString();
+    fullSyncWindow = { startDate: params.timeMin.slice(0, 10), endDate: params.timeMax.slice(0, 10) };
   }
   let changedCount = 0;
   try {
@@ -102,8 +105,9 @@ async function syncCalendar(auth, calendarId, accountKey = gcalAuth.DEFAULT_ACCO
       if (pageToken) params.pageToken = pageToken;
       const res = await calendar.events.list(params);
       for (const event of res.data.items || []) {
+        if (event && event.id && event.status !== "cancelled") seenEventIds.add(event.id);
         try {
-          await upsertEvent(event, calendarId, account);
+          await upsertEvent(event, calendarId, account, calendarName);
           changedCount++;
         } catch (err) {
           console.error("[gcal-sync] Event import error:", {
@@ -129,20 +133,53 @@ async function syncCalendar(auth, calendarId, accountKey = gcalAuth.DEFAULT_ACCO
         );
       }
     } while (pageToken);
+    if (fullSyncWindow) {
+      changedCount += await pruneMissingEvents(calendarId, account, fullSyncWindow, Array.from(seenEventIds));
+    }
   } catch (err) {
     if (err.code === 410) {
       console.log(`[gcal-sync] Sync token expired for ${calendarId}, doing full sync`);
       syncState.set(syncKey(account, calendarId), { syncToken: null, fullSync: true });
       await pool.query("UPDATE gcal_sync_state SET sync_token = NULL, full_sync = TRUE WHERE calendar_id = $1 AND account_key = $2", [calendarId, account]);
-      return syncCalendar(auth, calendarId, account);
+      return syncCalendar(auth, calendarId, account, calendarName, { ...options, forceFull: true });
     }
     throw err;
   }
   return changedCount;
 }
 
-async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_ACCOUNT_KEY) {
+async function pruneMissingEvents(calendarId, accountKey, window, seenEventIds) {
   const account = gcalAuth.normalizeAccountKey(accountKey);
+  const { rows } = await pool.query(
+    `SELECT g.gcal_event_id, g.block_id
+     FROM gcal_events g
+     JOIN blocks b ON b.id = g.block_id
+     WHERE g.calendar_id = $1
+       AND g.account_key = $2
+       AND b.deleted_at IS NULL
+       AND b.date BETWEEN $3::date AND $4::date
+       AND NOT (g.gcal_event_id = ANY($5::text[]))`,
+    [calendarId, account, window.startDate, window.endDate, seenEventIds]
+  );
+  if (!rows.length) return 0;
+
+  const now = new Date().toISOString();
+  const blockIds = rows.map(row => row.block_id).filter(Boolean);
+  const eventIds = rows.map(row => row.gcal_event_id);
+  if (blockIds.length) {
+    await pool.query("UPDATE blocks SET deleted_at = $1, updated_at = $1 WHERE id = ANY($2::text[])", [now, blockIds]);
+  }
+  await pool.query(
+    "DELETE FROM gcal_events WHERE calendar_id = $1 AND account_key = $2 AND gcal_event_id = ANY($3::text[])",
+    [calendarId, account, eventIds]
+  );
+  console.log(`[gcal-sync] Pruned ${rows.length} stale event(s) from ${calendarId} (${account})`);
+  return rows.length;
+}
+
+async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_ACCOUNT_KEY, calendarName = null) {
+  const account = gcalAuth.normalizeAccountKey(accountKey);
+  const sourceCalendarName = calendarName || await getCalendarSummary(calendarId, account);
   const now = new Date().toISOString();
   if (gcalEvent.status === "cancelled") {
     const { rows } = await pool.query("SELECT block_id FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEvent.id, calendarId, account]);
@@ -174,7 +211,8 @@ async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_
     source: "gcal", source_id: gcalEvent.id, calUrl: gcalEvent.htmlLink, detail: gcalEvent.description || "",
     hangout_link: meetLink, location: gcalEvent.location || "", rsvp_status: myResponse,
     attendee_count: attendees.length, is_recurring: !!gcalEvent.recurringEventId, all_day: isAllDay ? 1 : 0,
-    gcal_event_id: gcalEvent.id, gcal_calendar_id: calendarId, gcal_account_key: account, gcal_etag: gcalEvent.etag,
+    gcal_event_id: gcalEvent.id, gcal_calendar_id: calendarId, gcal_calendar_name: sourceCalendarName,
+    gcal_account_key: account, gcal_etag: gcalEvent.etag,
   };
 
   let blockId;
@@ -318,6 +356,14 @@ async function getGcalEventByBlockId(blockId) {
 async function accountKeyForCalendar(calendarId) {
   const { rows } = await pool.query("SELECT account_key FROM gcal_calendars WHERE id = $1 LIMIT 1", [calendarId]);
   return rows[0]?.account_key || gcalAuth.DEFAULT_ACCOUNT_KEY;
+}
+
+async function getCalendarSummary(calendarId, accountKey = gcalAuth.DEFAULT_ACCOUNT_KEY) {
+  const { rows } = await pool.query(
+    "SELECT summary FROM gcal_calendars WHERE id = $1 AND account_key = $2 LIMIT 1",
+    [calendarId, gcalAuth.normalizeAccountKey(accountKey)]
+  );
+  return rows[0]?.summary || "";
 }
 
 async function getSelectedCalendars(accountKey = null) {
