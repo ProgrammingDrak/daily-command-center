@@ -556,13 +556,14 @@ function buildConsider(){
 // ======== BACKLOG TAB ========
 function buildBacklog(){
   const board=document.getElementById("backlog-board");board.innerHTML="";
-  document.getElementById("backlog-count").textContent=backlog.length;
-  if(!backlog.length){board.innerHTML='<div class="board-empty">No backlog items. Add tasks above or check your Notion board.</div>';return}
+  const bankItems=backlog.filter(t=>typeof isTaskBankBacklogDeleted==="function"?!isTaskBankBacklogDeleted(t.id):true);
+  document.getElementById("backlog-count").textContent=bankItems.length;
+  if(!bankItems.length){board.innerHTML='<div class="board-empty">No backlog items. Add tasks above or check your Notion board.</div>';return}
   // Sort: High > Medium > Low
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
   const filtered=(typeof taskBankMatches==="function")
-    ? backlog.filter(t=>taskBankMatches(t,["title","detail","priority","stage","source"]))
-    : [...backlog];
+    ? bankItems.filter(t=>taskBankMatches(t,["title","detail","priority","stage","source"]))
+    : [...bankItems];
   if(!filtered.length){board.innerHTML='<div class="board-empty">No backlog items match that search.</div>';return}
   const sorted=(typeof taskBankSort==="function")
     ? taskBankSort(filtered)
@@ -620,6 +621,7 @@ function buildBacklog(){
         (typeof renderTaskBankBacklogEditForm==="function"?renderTaskBankBacklogEditForm(t):"")+
       '</div>';
 
+    if(el.querySelector("[data-bank-edit-id]"))el.classList.add("expanded");
     const bnb=el.querySelector(".notes-btn");if(bnb)bnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(bnb.dataset.notesId,bnb.dataset.notesTitle)});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     el.querySelector(".delegate-btn").addEventListener("click",e=>{
