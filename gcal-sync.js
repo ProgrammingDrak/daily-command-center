@@ -50,8 +50,8 @@ async function syncAll(userId, options = {}) {
   const accounts = await gcalAuth.listAuthenticatedAccounts(uid);
   if (!accounts.length) return;
   _syncInProgress = true;
+  let totalChanged = 0;
   try {
-    let totalChanged = 0;
     for (const account of accounts) {
       const auth = await gcalAuth.getAuthClient(uid, account.key);
       if (!auth) continue;
@@ -67,6 +67,7 @@ async function syncAll(userId, options = {}) {
       for (const cal of selectedCals) { totalChanged += await syncCalendar(auth, cal.id, account.key, cal.summary, options); }
     }
     if (totalChanged > 0 && _broadcast) _broadcast("gcal-sync", { changed: totalChanged, timestamp: new Date().toISOString() });
+    return totalChanged;
   } finally { _syncInProgress = false; }
 }
 
@@ -390,12 +391,20 @@ async function toggleCalendar(calendarId, selected, accountKey = null) {
 async function cacheCalendarsToDb(calendars, account = { key: gcalAuth.DEFAULT_ACCOUNT_KEY, email: null }) {
   const now = new Date().toISOString();
   const accountKey = gcalAuth.normalizeAccountKey(account.key);
+  const fetchedIds = [];
   for (const cal of calendars) {
+    fetchedIds.push(cal.id);
     await pool.query(
       `INSERT INTO gcal_calendars (id, summary, description, background_color, foreground_color, is_primary, access_role, selected, updated_at, account_key, account_email)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT(id, account_key) DO UPDATE SET summary=EXCLUDED.summary, description=EXCLUDED.description, background_color=EXCLUDED.background_color, foreground_color=EXCLUDED.foreground_color, is_primary=EXCLUDED.is_primary, access_role=EXCLUDED.access_role, updated_at=EXCLUDED.updated_at, account_email=EXCLUDED.account_email`,
       [cal.id, cal.summary, cal.description||"", cal.backgroundColor||"#4285f4", cal.foregroundColor||"#ffffff", !!cal.primary, cal.accessRole||"reader", cal.selected!==false, now, accountKey, account.email || null]
+    );
+  }
+  if (fetchedIds.length) {
+    await pool.query(
+      "UPDATE gcal_calendars SET selected = FALSE, updated_at = $2 WHERE account_key = $1 AND NOT (id = ANY($3::text[]))",
+      [accountKey, now, fetchedIds]
     );
   }
 }

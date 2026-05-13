@@ -7,7 +7,7 @@
 
 const pool = require("./pg-pool");
 
-const RUN_KEY = "calendar-state-gcal-authoritative-20260513";
+const RUN_KEY = "calendar-state-gcal-authoritative-20260513-v2";
 const LOOKBACK_DAYS = 90;
 const LOOKAHEAD_DAYS = 365;
 
@@ -199,6 +199,53 @@ async function fullSyncAuthenticatedUsers(gcalSync) {
   return { syncedUsers, changedEvents };
 }
 
+async function pruneOrphanedGcalBlocks(startDate, endDate) {
+  const { rows } = await pool.query(`
+    SELECT b.id AS block_id, g.gcal_event_id, g.calendar_id, g.account_key
+    FROM blocks b
+    LEFT JOIN gcal_events g ON g.block_id = b.id
+    LEFT JOIN gcal_calendars c ON c.id = g.calendar_id AND c.account_key = g.account_key
+    WHERE b.date >= $1::date
+      AND b.date <= $2::date
+      AND b.deleted_at IS NULL
+      AND b.type IN ('schedule_item', 'block')
+      AND (
+        b.properties->>'source' = 'gcal'
+        OR b.properties ? 'gcal_event_id'
+        OR b.properties ? 'gcal_calendar_id'
+      )
+      AND (
+        g.block_id IS NULL
+        OR c.id IS NULL
+      )
+  `, [startDate, endDate]);
+
+  if (!rows.length) return { orphanBlocksRemoved: 0, orphanEventRowsRemoved: 0 };
+
+  const now = new Date().toISOString();
+  const blockIds = rows.map(row => row.block_id).filter(Boolean);
+  const eventRows = rows.filter(row => row.gcal_event_id && row.calendar_id && row.account_key);
+
+  if (blockIds.length) {
+    await pool.query(
+      "UPDATE blocks SET deleted_at = $1, updated_at = $1 WHERE id = ANY($2::text[])",
+      [now, blockIds]
+    );
+  }
+
+  let orphanEventRowsRemoved = 0;
+  for (const row of eventRows) {
+    const result = await pool.query(
+      "DELETE FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3",
+      [row.gcal_event_id, row.calendar_id, row.account_key]
+    );
+    orphanEventRowsRemoved += result.rowCount || 0;
+  }
+
+  console.log(`[calendar-cleanup] Pruned ${blockIds.length} orphan GCal block(s), ${orphanEventRowsRemoved} orphan event row(s)`);
+  return { orphanBlocksRemoved: blockIds.length, orphanEventRowsRemoved };
+}
+
 async function rewritePaStateWindow(startDate, endDate) {
   const { rows } = await pool.query(
     `SELECT date, state_json, user_id, workspace_id
@@ -247,38 +294,29 @@ async function rewritePaStateWindow(startDate, endDate) {
 
 async function runOnce({ gcalSync, now = new Date() }) {
   await ensureMaintenanceTable();
-  const lockResult = await pool.query("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [RUN_KEY]);
-  if (!lockResult.rows[0]?.locked) {
-    console.log("[calendar-cleanup] Another cleanup runner owns the lock; skipping.");
-    return null;
+  const existing = await pool.query("SELECT ran_at, result FROM maintenance_runs WHERE key = $1", [RUN_KEY]);
+  if (existing.rows.length) {
+    console.log(`[calendar-cleanup] Already ran at ${existing.rows[0].ran_at.toISOString()}; skipping.`);
+    return existing.rows[0].result;
   }
 
-  try {
-    const existing = await pool.query("SELECT ran_at, result FROM maintenance_runs WHERE key = $1", [RUN_KEY]);
-    if (existing.rows.length) {
-      console.log(`[calendar-cleanup] Already ran at ${existing.rows[0].ran_at.toISOString()}; skipping.`);
-      return existing.rows[0].result;
-    }
+  const { startDate, endDate } = dateWindow(now);
+  const backupName = `pa_state_calendar_cleanup_backup_${now.toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
+  console.log(`[calendar-cleanup] Window ${startDate} to ${endDate}`);
+  await pool.query(`CREATE TABLE ${backupName} AS SELECT * FROM pa_state`);
+  console.log(`[calendar-cleanup] Backup table created: ${backupName}`);
 
-    const { startDate, endDate } = dateWindow(now);
-    const backupName = `pa_state_calendar_cleanup_backup_${now.toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
-    console.log(`[calendar-cleanup] Window ${startDate} to ${endDate}`);
-    await pool.query(`CREATE TABLE ${backupName} AS SELECT * FROM pa_state`);
-    console.log(`[calendar-cleanup] Backup table created: ${backupName}`);
+  const syncStats = await fullSyncAuthenticatedUsers(gcalSync);
+  const orphanStats = await pruneOrphanedGcalBlocks(startDate, endDate);
+  const stateStats = await rewritePaStateWindow(startDate, endDate);
+  const result = { backupName, startDate, endDate, ...syncStats, ...orphanStats, ...stateStats };
 
-    const syncStats = await fullSyncAuthenticatedUsers(gcalSync);
-    const stateStats = await rewritePaStateWindow(startDate, endDate);
-    const result = { backupName, startDate, endDate, ...syncStats, ...stateStats };
-
-    await pool.query(
-      "INSERT INTO maintenance_runs (key, ran_at, result) VALUES ($1, NOW(), $2)",
-      [RUN_KEY, result]
-    );
-    console.log(`[calendar-cleanup] Done ${JSON.stringify(result)}`);
-    return result;
-  } finally {
-    await pool.query("SELECT pg_advisory_unlock(hashtext($1))", [RUN_KEY]);
-  }
+  await pool.query(
+    "INSERT INTO maintenance_runs (key, ran_at, result) VALUES ($1, NOW(), $2) ON CONFLICT (key) DO NOTHING",
+    [RUN_KEY, result]
+  );
+  console.log(`[calendar-cleanup] Done ${JSON.stringify(result)}`);
+  return result;
 }
 
 module.exports = { runOnce };

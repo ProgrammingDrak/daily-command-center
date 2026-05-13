@@ -108,10 +108,11 @@
     const calState = window._gcalSidebarState;
     if (!calState || !calState.calendars || !calState.calendars.length) return events;
     return events.filter(ev => {
-      if (!ev.gcal_calendar_id) return true; // not a GCal event — always show
+      if (!isLiveGcalEvent(ev)) return true;
+      if (!ev.gcal_calendar_id) return false;
       const accountKey = ev.gcal_account_key || "default";
       const cal = calState.calendars.find(c => c.id === ev.gcal_calendar_id && (c.account_key || "default") === accountKey);
-      return !cal || !!cal.selected; // show if calendar not found in list, or is selected
+      return !!cal && !!cal.selected;
     });
   }
 
