@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: daily-command-center
+    name: daily-command-center-personal
     runtime: node
     plan: free
     buildCommand: npm ci

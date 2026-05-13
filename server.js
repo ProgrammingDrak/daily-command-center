@@ -353,6 +353,9 @@ app.post("/api/clean-tidy/approve", (req, res) => {
 });
 
 app.get("/api/health", async (req, res) => {
+  const dbConfig = typeof pool.getConfigStatus === "function"
+    ? pool.getConfigStatus()
+    : { configured: !!process.env.DATABASE_URL };
   try {
     await pool.query("SELECT 1");
     const m = readJSON(MANIFEST_FILE, { dates: [] });
@@ -361,6 +364,7 @@ app.get("/api/health", async (req, res) => {
       status: "ok",
       server: "daily-command-center",
       database: "ok",
+      databaseConfigured: dbConfig.configured,
       port: PORT,
       sseClients: sseClients.size,
       datesStored: m.dates.length,
@@ -369,7 +373,13 @@ app.get("/api/health", async (req, res) => {
       uptime: process.uptime(),
     });
   } catch (e) {
-    res.status(503).json({ status: "error", server: "daily-command-center", database: "error" });
+    res.status(503).json({
+      status: "error",
+      server: "daily-command-center",
+      database: "error",
+      databaseConfigured: dbConfig.configured,
+      databaseError: typeof pool.describeError === "function" ? pool.describeError(e) : (e.code || e.name || "DatabaseError"),
+    });
   }
 });
 

@@ -4,8 +4,9 @@
   "description": "Drake's Daily Command Center — standalone Express dashboard",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "check:db": "node scripts/check-db.js",
+    "start": "npm run check:db && node pg-schema.js && node server.js",
+    "dev": "npm run start",
     "start:render": "node pg-schema.js && node server.js",
     "schema": "node pg-schema.js",
     "migrate-data": "node sqlite-to-pg.js",
