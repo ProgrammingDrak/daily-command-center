@@ -20,9 +20,9 @@ Comprehensive verification that all features work after the migration to local r
 - [ ] **Add from consider/backlog**: Click "Schedule" on a Consider or Backlog item. Appends to schedule, recalculates times.
 - [ ] **Overflow detection**: Add enough tasks to exceed EOD. Overflow modal opens showing deficit, task checkboxes to push. "Push Selected" works. "Work Late" extends EOD.
 - [ ] **Plan/Actual toggle**: Click "Plan" vs "Actual" buttons. Plan shows editable timeline. Actual shows planned vs actual comparison.
-- [ ] **Detail panel expand**: Click a task card body. Detail panel expands with description, links, trivial checkbox, subtasks.
+- [ ] **Detail panel expand**: Click a task card body. Detail panel expands with description, links, side project marker, subtasks.
 - [ ] **Subtasks**: Click "+sub", add subtask text, press Enter. Checkbox toggles done. X deletes. Incomplete subtasks prompt resolution in Done Modal.
-- [ ] **Trivial flag**: Check "Mark as trivial" in detail panel. Visual indicator appears on card.
+- [ ] **Side project marker**: Click "Move to side projects" on a task card. Task leaves the schedule and appears in Side Projects.
 - [ ] **Prep edge tab**: Click "Prep N" above a meeting. Prep items expand. Local files open in Prep Viewer overlay; external links open in new tab.
 - [ ] **Follow-up actions edge tab**: Click "N Actions" below a meeting. Action items expand with "Schedule" buttons.
 
@@ -39,9 +39,9 @@ Comprehensive verification that all features work after the migration to local r
 ## 3. TRIAGE
 
 - [ ] **Triage display**: Click "Triage" tab. Items grouped by priority (High/Medium/Low) with escalation indicators, cycle counts, source badges, links.
-- [ ] **Dismiss triage item**: Click dismiss button. Modal opens. "Trivial" instant dismiss, or add note and save. Item moves to Resolved section.
+- [ ] **Dismiss triage item**: Click dismiss button. Modal opens. Use instant dismiss, or add note and save. Item moves to Resolved section.
 - [ ] **Complete triage item**: Click done on triage item. Done Modal opens (without time sessions). Parent-task linking dropdown works.
-- [ ] **Trivial tasks section**: Click "+ Add" in trivial tasks. Type text, Enter. Checkbox toggles, X deletes. Done items collapsible.
+- [ ] **Side projects section**: Add a side project from the task bar or move a task into Side Projects. Checkbox toggles, X deletes. Done items collapse.
 - [ ] **Notifications**: If state.notifications exist, notification cards render in triage tab.
 
 ## 4. POMODORO TIMER

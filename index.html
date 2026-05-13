@@ -64,7 +64,6 @@
           <option value="backlog">Backlog</option>
           <option value="urgent" selected>Urgent</option>
           <option value="side_project">Side Project</option>
-          <option value="trivial">Trivial</option>
         </select>
         <button class="tab-add">+ Add</button>
       </div>
@@ -170,7 +169,6 @@
         <option value="backlog">Backlog</option>
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
-        <option value="trivial">Trivial</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -236,10 +234,10 @@
       <option value="backlog">Backlog</option>
       <option value="urgent" selected>Urgent</option>
       <option value="side_project">Side Project</option>
-      <option value="trivial">Trivial</option>
     </select>
     <button class="tab-add">+ Add</button>
   </div>
+  <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
   <div class="tl" id="timeline"></div>
   <div id="actual-view" style="display:none"></div>
 </div>
@@ -253,10 +251,6 @@
     <button class="sidecar-tab" id="side-projects-tab" type="button">
       <span>Side Projects</span>
       <span class="badge" id="side-projects-count" style="display:none">0</span>
-    </button>
-    <button class="sidecar-tab" id="trivial-tab" type="button">
-      <span>Trivial</span>
-      <span class="badge" id="trivial-tab-count" style="display:none">0</span>
     </button>
   </div>
   <div class="side-drawer-body">
@@ -279,7 +273,6 @@
         <option value="schedule">Schedule</option>
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
-        <option value="trivial">Trivial</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -363,17 +356,6 @@
           </summary>
           <div class="tm-section-body" id="tm-backlog">
             <div class="board" id="backlog-board"></div>
-          </div>
-        </details>
-
-        <details class="tm-section" id="tm-trivial-section">
-          <summary class="tm-section-header">
-            <span class="tm-chevron"></span>
-            Trivial
-            <span class="badge" id="trivial-count" style="display:none">0</span>
-          </summary>
-          <div class="tm-section-body" id="tm-trivial">
-            <div id="triage-trivial"></div>
           </div>
         </details>
 
@@ -635,7 +617,7 @@
       <textarea id="tri-dismiss-note" placeholder="e.g., Replied to Ben, Delegated to Collins, Created a task..."></textarea>
     </div>
     <div class="tri-dismiss-actions">
-      <button class="tri-notif-btn" id="tri-dismiss-trivial" style="background:rgba(100,116,139,0.15);color:var(--text-muted);border:none">Trivial -- just dismiss</button>
+      <button class="tri-notif-btn" id="tri-dismiss-trivial" style="background:rgba(100,116,139,0.15);color:var(--text-muted);border:none">Just dismiss</button>
       <button class="tri-notif-btn approve" id="tri-dismiss-save">Resolve with note</button>
     </div>
   </div>
@@ -751,7 +733,7 @@
   </div>
 </div>
 
-<!-- Task Detail Modal (notes + subtasks + trivial tasks + action items) -->
+<!-- Task Detail Modal (notes + subtasks + side projects + action items) -->
 <div class="add-modal-overlay" id="add-modal-overlay">
   <div class="add-modal">
     <div class="add-modal-hdr">
@@ -782,12 +764,10 @@
           <input id="am-item-input" type="text" placeholder="Add item...">
           <select id="am-item-type" class="am-type-select">
             <option value="subtask">Subtask</option>
-            <option value="trivial">⚡ Trivial</option>
             <option value="action">Action Item</option>
           </select>
           <button id="am-item-add" class="am-add-btn">+ Add</button>
         </div>
-        <button id="am-trivial-pick" class="am-pick-btn">📋 Attach existing trivial task</button>
         <div id="am-trivial-picker" style="display:none"></div>
       </div>
     </div>

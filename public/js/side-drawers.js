@@ -1,5 +1,5 @@
 // ======== SIDE DRAWERS ========
-// Right edge: Tasks drawer (Triage / Scheduled / Priority / Backlog / Trivial)
+// Right edge: Tasks drawer (Triage / Scheduled / Priority / Backlog / Side Projects)
 // On desktop the drawer pushes the body padding so the Itinerary timeline
 // stays visible. On tablet/mobile it overlays the content with a backdrop.
 
@@ -54,14 +54,65 @@
       setTimeout(() => sec.scrollIntoView({behavior:"smooth", block:"start"}), 240);
     }
   }
-  function openTasksToTrivial(){ openTasksToSection("tm-trivial-section"); }
   function openTasksToSideProjects(){ openTasksToSection("tm-side-projects-section"); }
+
+  function moveDraggedTaskToSideProjects(){
+    if(typeof dragId === "undefined" || !dragId) return false;
+
+    const scheduledTask = (typeof scheduled !== "undefined" ? scheduled : []).find(ev => ev.id === dragId);
+    if(scheduledTask && typeof toggleTrivialFlag === "function"){
+      if(!loadTrivialFlags()[scheduledTask.id]) toggleTrivialFlag(scheduledTask.id);
+      if(typeof showToast === "function") showToast("Moved to Side Projects", "success");
+      return true;
+    }
+
+    const backlogTask = (typeof backlog !== "undefined" ? backlog : []).find(t => t.id === dragId);
+    if(backlogTask && typeof addSideProjectTask === "function"){
+      addSideProjectTask(backlogTask.title, backlogTask.durMin || 30);
+      if(typeof deleteTaskBankBacklogTask === "function") deleteTaskBankBacklogTask(backlogTask.id);
+      window._dragFromBacklog = false;
+      if(typeof showToast === "function") showToast("Moved to Side Projects", "success");
+      return true;
+    }
+
+    const priorityTask = (typeof consider !== "undefined" ? consider : []).find(t => t.id === dragId);
+    if(priorityTask && typeof addSideProjectTask === "function"){
+      addSideProjectTask(priorityTask.title, priorityTask.durMin || 30);
+      if(typeof showToast === "function") showToast("Added to Side Projects", "success");
+      return true;
+    }
+
+    return false;
+  }
+
+  function bindSideProjectDropTarget(el){
+    if(!el) return;
+    el.addEventListener("dragover", e => {
+      if(typeof dragId !== "undefined" && dragId){
+        e.preventDefault();
+        el.classList.add("drag-over");
+      }
+    });
+    el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
+    el.addEventListener("drop", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      el.classList.remove("drag-over");
+      if(moveDraggedTaskToSideProjects()){
+        dragId = null;
+        document.querySelectorAll(".dragging").forEach(node => node.classList.remove("dragging"));
+        if(typeof render === "function") render();
+        openTasksToSideProjects();
+      }
+    });
+  }
 
   function init(){
     document.getElementById("tasks-drawer-handle")?.addEventListener("click", toggleTasks);
     document.getElementById("tasks-drawer-close")?.addEventListener("click", () => closeTasks());
-    document.getElementById("trivial-tab")?.addEventListener("click", openTasksToTrivial);
     document.getElementById("side-projects-tab")?.addEventListener("click", openTasksToSideProjects);
+    bindSideProjectDropTarget(document.getElementById("side-projects-tab"));
+    bindSideProjectDropTarget(document.getElementById("tm-side-projects-section"));
 
     const bd = document.getElementById("side-drawer-backdrop");
     if(bd){
@@ -75,6 +126,15 @@
         const d = document.getElementById("tasks-drawer");
         if(d?.classList.contains("open")) closeTasks();
       }
+    });
+
+    document.addEventListener("pointerdown", e => {
+      const d = document.getElementById("tasks-drawer");
+      if(!d?.classList.contains("open")) return;
+      if(e.target.closest("#tasks-drawer .side-drawer-body")) return;
+      if(e.target.closest("#tasks-drawer-handle")) return;
+      if(e.target.closest(".sidecar-tabs")) return;
+      closeTasks();
     });
 
     window.addEventListener("resize", () => { syncBackdrop(); syncBodyClasses(); });

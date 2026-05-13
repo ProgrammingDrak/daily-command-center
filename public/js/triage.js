@@ -658,13 +658,14 @@ function closeDismissModal() {
 function dismissTriage(triageId, note, trivial) {
   const dismissed = loadDismissed();
   const wasDismissed = !!dismissed[triageId];
-  dismissed[triageId] = { note: note || (trivial ? "Trivial -- dismissed" : ""), dismissed_at: new Date().toISOString(), trivial: !!trivial };
+  dismissed[triageId] = { note: note || (trivial ? "Dismissed" : ""), dismissed_at: new Date().toISOString(), trivial: !!trivial };
   saveDismissed(dismissed);
   if(!wasDismissed&&window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
     const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId)||{id:triageId,title:"Triage item completed"};
-    window.SlotRewards.earnTaskCredit({id:"triage-"+triageId,title:item.title||"Triage item completed"});
+    window.SlotRewards.earnTaskCredit(triageTaskPayload(item));
   }
   closeDismissModal();
+  if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   buildTriage();
 }
 
@@ -874,6 +875,139 @@ function saveTriageParents(data){
   localStorage.setItem(TRIAGE_PARENTS_KEY,JSON.stringify(data)); scheduleIDBSave();
 }
 
+let TRIAGE_SCHEDULED_KEY = "pa-triage-scheduled-" + ((__state && __state.date) || "unknown");
+function loadTriageScheduled(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_triageScheduled", null);
+    if (v) return v;
+  }
+  try{return JSON.parse(localStorage.getItem(TRIAGE_SCHEDULED_KEY)||"{}")}catch(e){return{}}
+}
+function saveTriageScheduled(data){
+  if (_bsSaveProp("_triageScheduled", data)) return;
+  localStorage.setItem(TRIAGE_SCHEDULED_KEY,JSON.stringify(data)); scheduleIDBSave();
+}
+function triagePriorityLabel(priority){
+  const p=String(priority||"medium").toLowerCase();
+  if(p==="high"||p==="urgent"||p==="critical")return"High";
+  if(p==="low")return"Low";
+  return"Medium";
+}
+function triageDuration(item){
+  return Math.max(15,parseInt(item&&(
+    item.estimated_minutes||item.estimatedMinutes||item.durMin||item.duration_minutes||item.durationMinutes
+  )||30,10)||30);
+}
+function triageTaskPayload(item){
+  const durMin=triageDuration(item);
+  return {
+    id:"triage-"+(item.id||Date.now()),
+    task_id:"triage-"+(item.id||Date.now()),
+    title:item.title||"Triage item completed",
+    type:"task",
+    priority:triagePriorityLabel(item.priority),
+    source:"triage",
+    tags:["triage"],
+    duration_minutes:durMin,
+    durMin:durMin,
+    urgent:String(item.priority||"").toLowerCase()==="high"
+  };
+}
+function triagePointsChip(item){
+  const payload=triageTaskPayload(item);
+  const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
+    ? window.TaskPoints.estimate(payload)
+    : {eligible:true,awardPoints:7,durationMinutes:payload.duration_minutes,effortTier:"medium",attentionTier:"normal"};
+  if(!scoring.eligible||scoring.awardPoints<=0)return"";
+  const title="Completing this triage item earns about "+scoring.awardPoints+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention.";
+  return '<span class="points-chip'+(scoring.awardPoints>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+scoring.awardPoints+' pts</span>';
+}
+function activeTriageItems(){
+  const dismissed=loadDismissed();
+  const scheduledTriage=loadTriageScheduled();
+  return (INIT_TRIAGE||[]).filter(i=>!dismissed[i.id]&&!scheduledTriage[i.id]);
+}
+function scheduleTriageItem(triageId){
+  const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
+  if(!item)return;
+  const scheduledTriage=loadTriageScheduled();
+  if(scheduledTriage[triageId]){
+    if(typeof showToast==="function")showToast("Already scheduled","info");
+    return;
+  }
+  const existing=scheduled.find(ev=>ev.triageId===triageId||(!isDone(ev)&&!isDeleted(ev)&&ev.source==="triage"&&ev.title===item.title));
+  if(existing){
+    scheduledTriage[triageId]={taskId:existing.id,scheduled_at:new Date().toISOString(),title:item.title};
+    saveTriageScheduled(scheduledTriage);
+    if(typeof showToast==="function")showToast("Already on the schedule","info");
+    buildScheduleTriage();
+    buildTriage();
+    return;
+  }
+  const durMin=triageDuration(item);
+  const newTask=insertTaskFromDrawer(item.title,durMin,{
+    priority:triagePriorityLabel(item.priority),
+    source:"triage",
+    meta:"Triage item",
+    detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
+    tags:["triage"],
+    triageId:triageId
+  });
+  scheduledTriage[triageId]={taskId:newTask&&newTask.id,scheduled_at:new Date().toISOString(),title:item.title};
+  saveTriageScheduled(scheduledTriage);
+  if(typeof showToast==="function")showToast("Triage item scheduled","success");
+  buildScheduleTriage();
+  buildTriage();
+}
+function buildScheduleTriageCard(item){
+  const pri=triagePriorityLabel(item.priority);
+  const priCls=pri==="High"?"pri-hi":pri==="Low"?"pri-lo":"pri-med";
+  const barColor=pri==="High"?"var(--red)":pri==="Low"?"var(--text-muted)":"var(--amber)";
+  const safeTitle=(item.title||"Triage item").replace(/"/g,'&quot;');
+  return '<div class="board-card schedule-triage-card" data-schedule-triage-id="'+item.id+'">'+
+    '<div class="bar" style="background:'+barColor+'"></div>'+
+    '<div class="body">'+
+      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
+      '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+'<span>'+ms(triageDuration(item))+'</span>'+
+        (item.link?'<a href="'+item.link+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">Open</a>':'')+
+      '</div>'+
+      (item.summary?'<div class="schedule-triage-summary">'+item.summary+'</div>':'')+
+    '</div>'+
+    '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
+    '<button class="add-btn schedule-triage-done" data-triage-id="'+item.id+'" data-triage-title="'+safeTitle+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
+    '<button class="tri-quick schedule-triage-quick" data-triage-id="'+item.id+'" title="Quick complete">&#9889;</button>'+
+  '</div>';
+}
+function buildScheduleTriage(){
+  const el=document.getElementById("schedule-triage-section");
+  if(!el)return;
+  const items=activeTriageItems();
+  if(!items.length||schedView==="actual"){
+    el.style.display="none";
+    el.innerHTML="";
+    return;
+  }
+  el.style.display="";
+  el.innerHTML=
+    '<div class="schedule-triage-header">'+
+      '<div><span class="schedule-triage-kicker">Triage</span><span class="schedule-triage-count">'+items.length+'</span></div>'+
+      '<span class="schedule-triage-sub">Needs attention before it disappears into the day</span>'+
+    '</div>'+
+    '<div class="schedule-triage-list">'+items.map(buildScheduleTriageCard).join('')+'</div>';
+  el.querySelectorAll(".schedule-triage-schedule").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();scheduleTriageItem(btn.dataset.triageId);});
+  });
+  el.querySelectorAll(".schedule-triage-done").forEach(btn=>{
+    btn.addEventListener("click",e=>{
+      e.stopPropagation();
+      openDoneModal(btn.dataset.triageId,btn.dataset.triageTitle,(noteText)=>dismissTriage(btn.dataset.triageId,noteText||"",false),null);
+    });
+  });
+  el.querySelectorAll(".schedule-triage-quick").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();dismissTriage(btn.dataset.triageId,"",false);});
+  });
+}
+
 function buildScheduled() {
   const el = document.getElementById("scheduled-board");
   if (!el) return;
@@ -994,7 +1128,8 @@ function buildTriage() {
   const priColors = {high:"var(--red)", medium:"var(--amber)", low:"var(--text-muted)"};
 
   // Split into active vs completed (dismissed)
-  const active = INIT_TRIAGE.filter(i => !dismissed[i.id]);
+  const scheduledTriage = loadTriageScheduled();
+  const active = INIT_TRIAGE.filter(i => !dismissed[i.id] && !scheduledTriage[i.id]);
   const completed = INIT_TRIAGE.filter(i => !!dismissed[i.id]);
 
   const high = active.filter(i => i.priority === "high");

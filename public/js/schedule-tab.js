@@ -5,6 +5,7 @@ document.querySelectorAll(".svt-btn").forEach(btn=>{
     document.querySelectorAll(".svt-btn").forEach(b=>b.classList.toggle("active",b.dataset.view===schedView));
     document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
     document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
+    if(typeof buildScheduleTriage==="function")buildScheduleTriage();
     if(schedView==="actual")buildActualView();
   });
 });
@@ -80,9 +81,10 @@ function buildActualView(){
 // ======== SCHEDULE TAB ========
 function buildSchedule(){
   const tl=document.getElementById("timeline");tl.innerHTML="";
-  // Separate done vs pushed vs active vs deleted vs trivial-flagged
+  if(typeof buildScheduleTriage==="function")buildScheduleTriage();
+  // Separate done vs pushed vs active vs deleted vs side-project-marked
   const trivFlags=loadTrivialFlags();
-  const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Phase 7: hide trivial-flagged from schedule
+  const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Hide side-project-marked items from the schedule
   const doneItems=vis.filter(isDone);
   const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
@@ -148,7 +150,7 @@ function buildSchedule(){
     tl.appendChild(el);
   });
 
-  // Render trivial tasks completed on the viewed date as compact rows
+  // Render side projects completed on the viewed date as compact rows
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   const doneTrivials=(typeof loadTrivialTasks==='function'?loadTrivialTasks():[])
     .filter(t=>t.done&&t.doneAt&&new Date(t.doneAt).toISOString().split("T")[0]===viewDate);
@@ -162,9 +164,9 @@ function buildSchedule(){
       '<div class="tl-node"></div>'+
       '<div class="compact-row">'+
         '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
-        '<div class="bar" style="background:var(--purple,#a78bfa)"></div>'+
+        '<div class="bar" style="background:var(--cyan,#22d3ee)"></div>'+
         '<span class="c-title">'+t.text+'</span>'+
-        '<span class="tag tag-task" style="background:rgba(167,139,250,0.15);color:var(--purple,#a78bfa)">Trivial</span>'+
+        '<span class="tag tag-task" style="background:rgba(34,211,238,0.15);color:var(--cyan,#22d3ee)">Side Project</span>'+
         '<span class="c-time">'+timeStr+'</span>'+
       '</div>';
     el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
@@ -226,7 +228,7 @@ function buildSchedule(){
     detailMeta.push('<span>Duration: '+ms(d)+(changed?' (was '+ms(od)+')':'')+'</span>');
     detailMeta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
     if(detailMeta.length)detailParts.push('<div class="detail-meta">'+detailMeta.join('')+'</div>');
-    // Subtasks and trivial tasks are now in the Add Items modal (openAddModal)
+    // Subtasks and side projects are now in the Add Items modal (openAddModal)
     // Show a summary count in the detail panel if items exist
     if(!isMeeting(ev)){
       const subs=loadSubtasks()[ev.id]||[];
@@ -234,7 +236,7 @@ function buildSchedule(){
       if(subs.length||linkedTriv.length){
         let counts=[];
         if(subs.length)counts.push(subs.length+' subtask'+(subs.length>1?'s':''));
-        if(linkedTriv.length)counts.push(linkedTriv.length+' trivial task'+(linkedTriv.length>1?'s':''));
+        if(linkedTriv.length)counts.push(linkedTriv.length+' side project'+(linkedTriv.length>1?'s':''));
         detailParts.push('<div class="detail-meta" style="cursor:pointer" onclick="openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')"><span style="color:var(--cyan)">⚡ '+counts.join(', ')+'</span> <span style="font-size:10px;opacity:0.5">click to manage</span></div>');
       }
     }
@@ -271,7 +273,7 @@ function buildSchedule(){
     const prepTab=hasPrep?'<div class="edge-tab edge-prep" data-edge="prep">'+chevSm+' Prep '+ev.prep.length+'</div>':'';
     const fuTab=hasFu?'<div class="edge-tab edge-fu" data-edge="fu">'+ev.followups.length+' Actions '+chevSm+'</div>':'';
     const isTrivialFlagged=!isMeeting(ev)&&!!loadTrivialFlags()[ev.id];
-    // Phase 7: removed edge-trivial banner (replaced by link button on card)
+    // Side-project marker lives as an icon button on the card.
     const trivialTab='';
 
     // Prep-aware time label with hover tooltip
@@ -291,7 +293,7 @@ function buildSchedule(){
           '<button class="chk" title="Mark done">'+ckSvg+'</button>'+
           '<div class="chk-col">'+
             '<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>'+
-            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or trivial task" data-add-id="'+ev.id+'">+</button>':'')+
+            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or side project" data-add-id="'+ev.id+'">+</button>':'')+
           '</div>'+
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
@@ -305,7 +307,7 @@ function buildSchedule(){
           notesButton(ev)+
           (!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty)?'<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Bounty locked here: this task pays 2x points':"Place today's bounty here")+'">'+(isBounty?'<span>2x</span>':bountySvg)+'</button>':'')+
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
-          (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Mark as trivial — move to triage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
+          (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Move to side projects"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
           (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Move to tomorrow"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
           '<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
@@ -330,7 +332,7 @@ function buildSchedule(){
       e.stopPropagation();
       if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
     });
-    // Trivial link button
+    // Side-project link button
     const trivLink=el.querySelector(".btn-triv-link");
     if(trivLink)trivLink.addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(ev.id);});
     const tagToggle=el.querySelector(".card-tags-toggle");
@@ -398,8 +400,7 @@ function buildSchedule(){
       tnode.addEventListener("click",e=>{e.stopPropagation();if(typeof togglePinnedActiveId==="function")togglePinnedActiveId(ev.id);});
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
-    // Phase 7: removed old triv-flag-chk (replaced by btn-triv-link on card face)
-    // Subtask and trivial task management moved to Add Items modal (openAddModal)
+    // Subtask and side project management moved to Add Items modal (openAddModal)
     el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-bounty")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-lock")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Inline title edit — click title to rename, blur/Enter to save
@@ -634,6 +635,7 @@ function buildBacklog(){
         '<div class="detail-inner">'+detailParts.join('')+'</div>'+
         '<div class="bc-actions">'+
           '<button class="add-btn bc-act bc-act-today" data-id="'+t.id+'" title="Add to today\u2019s schedule"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Today</button>'+
+          '<button class="bc-act bc-act-side" data-id="'+t.id+'" title="Move to side projects">Side Project</button>'+
           '<button class="bc-act bc-act-later" data-id="'+t.id+'" title="Schedule for a later date">Later\u2026</button>'+
           notesButton({id: t.id, title: t.title})+
           '<button class="pomo-btn bc-act-icon" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
@@ -662,6 +664,12 @@ function buildBacklog(){
       }
     });
     el.querySelector(".bc-act-today").addEventListener("click",e=>{e.stopPropagation();addToSchedule(t.id)});
+    el.querySelector(".bc-act-side").addEventListener("click",e=>{
+      e.stopPropagation();
+      if(typeof addSideProjectTask==="function")addSideProjectTask(t.title,t.durMin||30);
+      if(typeof deleteTaskBankBacklogTask==="function")deleteTaskBankBacklogTask(t.id);
+      if(typeof showToast==="function")showToast("Moved to Side Projects","success");
+    });
     el.querySelector(".bc-act-later").addEventListener("click",e=>{
       e.stopPropagation();
       if(typeof openSchedulePicker==="function") openSchedulePicker(t.title, t.durMin);
