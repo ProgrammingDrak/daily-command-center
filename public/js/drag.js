@@ -12,10 +12,14 @@ function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-b
 
 // ── Scheduling helpers ──
 
-// Build meeting blocks array from INIT_SCHED (used by both cascade variants)
+function isFixedTimeBlock(ev){
+  return isMeeting(ev)||ev.type==="ooo"||ev.type==="break"||ev.source==="calendar"||ev.source==="gcal";
+}
+
+// Build fixed blocker array from INIT_SCHED (used by both cascade variants)
 function _meetingBlocks(){
   return INIT_SCHED
-    .filter(isMeeting)
+    .filter(isFixedTimeBlock)
     .map(ev=>({s:pt(ev.start),e:pt(ev.end)}))
     .sort((a,b)=>a.s-b.s);
 }
@@ -63,7 +67,7 @@ function recalcTimesTagAware(schedBlocks){
   // Pass 1: place pinned/locked tasks and collect them as blockers alongside meetings.
   const blockers = _meetingBlocks().slice();
   active.forEach(ev => {
-    if(isMeeting(ev)) return;
+    if(isFixedTimeBlock(ev)) return;
     if(ev._pinnedStart || ev._locked){
       const d = dur(ev);
       const ps = pt(ev._pinnedStart || ev.start);
@@ -78,7 +82,7 @@ function recalcTimesTagAware(schedBlocks){
   schedBlocks.forEach(b => { nextFree[b.id] = pt(b.start); });
 
   active.forEach(ev => {
-    if(isMeeting(ev)){
+    if(isFixedTimeBlock(ev)){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
@@ -138,7 +142,7 @@ function recalcTimes(){
   // blockers list alongside meetings. Locked tasks pin to their current start.
   const blockers=_meetingBlocks().slice();
   active.forEach(ev=>{
-    if(isMeeting(ev))return;            // already represented in _meetingBlocks()
+    if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
     if(ev._pinnedStart||ev._locked){
       const d=dur(ev);
       const ps=pt(ev._pinnedStart||ev.start);
@@ -166,7 +170,7 @@ function recalcTimes(){
 
   // Pass 2: cascade non-pinned, non-locked, non-meeting tasks around all blockers.
   active.forEach(ev=>{
-    if(isMeeting(ev)){
+    if(isFixedTimeBlock(ev)){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }

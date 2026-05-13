@@ -31,6 +31,7 @@ const slotStore = require("./slot-store");
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
 const PORT = process.env.PORT || 8090;
+const APP_TIME_ZONE = process.env.DCC_TIME_ZONE || process.env.APP_TIME_ZONE || "America/New_York";
 const LOCAL_AUTH_ENABLED = process.env.NODE_ENV !== "production" && process.env.DCC_LOCAL_AUTH === "1";
 const LOCAL_AUTH_USERNAME = process.env.SEED_USERNAME || "drake";
 const LOCAL_AUTH_PASSWORD = process.env.SEED_PASSWORD || "clever123";
@@ -191,23 +192,45 @@ function updateManifest(date) { const m = readJSON(MANIFEST_FILE, { dates: [] })
 const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 function archiveDayState(date, data) { const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (!match) return; const [, year, mm] = match; const month = parseInt(mm, 10); const quarter = Math.ceil(month / 3); const monthFolder = `${mm}-${MONTH_NAMES[month]}`; const destDir = path.join(BRAIN_DIR, "archive", year, `Q${quarter}`, monthFolder); if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true }); const destFile = path.join(destDir, `${date}.json`); const existing = readJSON(destFile, {}); writeJSON(destFile, { ...existing, ...data, source: "api-save", savedAt: new Date().toISOString() }); }
 function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; if (!fs.existsSync(RECENT_DIR)) return; for (const fname of fs.readdirSync(RECENT_DIR)) { if (!fname.endsWith(".json") || fname === "manifest.json") continue; const ts = new Date(fname.replace(".json", "") + "T00:00:00").getTime(); if (ts && ts < cutoff) { fs.unlinkSync(path.join(RECENT_DIR, fname)); } } }
-function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
-function getETOffset(dateStr) { const dt = new Date(dateStr + "T12:00:00Z"); const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "shortOffset" }).formatToParts(dt); const tzPart = parts.find(p => p.type === "timeZoneName"); if (tzPart) { const m = tzPart.value.match(/GMT([+-]?\d+)/); if (m) { const hrs = parseInt(m[1], 10); return (hrs <= 0 ? "-" : "+") + String(Math.abs(hrs)).padStart(2, "0") + ":00"; } } return "-04:00"; }
+function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
+function getETOffset(dateStr) { const dt = new Date(dateStr + "T12:00:00Z"); const parts = new Intl.DateTimeFormat("en-US", { timeZone: APP_TIME_ZONE, timeZoneName: "shortOffset" }).formatToParts(dt); const tzPart = parts.find(p => p.type === "timeZoneName"); if (tzPart) { const m = tzPart.value.match(/GMT([+-]?\d+)/); if (m) { const hrs = parseInt(m[1], 10); return (hrs <= 0 ? "-" : "+") + String(Math.abs(hrs)).padStart(2, "0") + ":00"; } } return "-04:00"; }
 function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
+function zonedDateTimeParts(value, timeZone = APP_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}
+function zonedDateTimeISO(value) {
+  const parts = zonedDateTimeParts(value);
+  return parts ? `${parts.date}T${parts.time}:00${getETOffset(parts.date)}` : null;
+}
 
 async function getMeetingsFromDB(dateStr, userId, workspaceId) {
   const offset = getETOffset(dateStr);
   const { rows } = workspaceId
-    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid, c.summary AS calendar_summary FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id LEFT JOIN gcal_calendars c ON c.id = g.calendar_id AND c.account_key = g.account_key WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
-    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid, c.summary AS calendar_summary FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id LEFT JOIN gcal_calendars c ON c.id = g.calendar_id AND c.account_key = g.account_key WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
+    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid, g.start_time AS gcal_start_time, g.end_time AS gcal_end_time, c.summary AS calendar_summary FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id LEFT JOIN gcal_calendars c ON c.id = g.calendar_id AND c.account_key = g.account_key WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
+    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid, g.start_time AS gcal_start_time, g.end_time AS gcal_end_time, c.summary AS calendar_summary FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id LEFT JOIN gcal_calendars c ON c.id = g.calendar_id AND c.account_key = g.account_key WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
   const meetings = [], meetingTimeline = [];
   for (const row of rows) {
     const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;
     if (!props || props.source !== "gcal" || props.all_day || !props.start || !props.end) continue;
     let attendees = [];
     if (row.attendees_json) { const parsed = Array.isArray(row.attendees_json) ? row.attendees_json : []; attendees = parsed.filter(a => !a.self && !a.resource).map(a => a.email); }
-    const startISO = `${dateStr}T${props.start}:00${offset}`, endISO = `${dateStr}T${props.end}:00${offset}`;
+    const startISO = zonedDateTimeISO(row.gcal_start_time) || `${dateStr}T${props.start}:00${offset}`;
+    const endISO = zonedDateTimeISO(row.gcal_end_time) || `${dateStr}T${props.end}:00${offset}`;
     const eventId = row.gcal_event_id || props.source_id || row.id;
     const calendarName = props.gcal_calendar_name || row.calendar_summary || null;
     const dedupeKey = calendarDedupeKey({ ical_uid: row.ical_uid, title: props.title, start: startISO, end: endISO });
@@ -256,8 +279,16 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   const { meetings, meetingTimeline } = await getMeetingsFromDB(dateStr, userId, workspaceId);
   const result = { ...enrichment, date: dateStr, meetings };
   if (result.schedule && result.schedule.timeline) {
-    const existingSourceIds = new Set(result.schedule.timeline.filter(t => t.source === "calendar").map(t => t.source_id));
-    for (const mtg of meetingTimeline) { if (!existingSourceIds.has(mtg.source_id)) result.schedule.timeline.push(mtg); }
+    const correctedBySourceId = new Map(meetingTimeline.filter(mtg => mtg.source_id).map(mtg => [mtg.source_id, mtg]));
+    result.schedule.timeline = result.schedule.timeline.map(item => {
+      if ((item.source === "calendar" || item.source === "gcal") && item.source_id && correctedBySourceId.has(item.source_id)) {
+        const corrected = correctedBySourceId.get(item.source_id);
+        correctedBySourceId.delete(item.source_id);
+        return { ...item, ...corrected, id: item.id || corrected.id, completed: !!(item.completed || corrected.completed) };
+      }
+      return item;
+    });
+    for (const mtg of correctedBySourceId.values()) result.schedule.timeline.push(mtg);
     result.schedule.timeline = dedupeCalendarTimeline(result.schedule.timeline);
     result.schedule.timeline.sort((a, b) => a.start.localeCompare(b.start));
   } else { result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline }; }
