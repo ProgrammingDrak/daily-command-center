@@ -219,12 +219,13 @@ function notesButton(ev) {
   const actions = loadActions();
   const n = notes[ev.id];
   const hasNotes = n && (typeof n === "string" ? n.trim() : (n.text && n.text.trim()));
+  const hasSeedNotes = !hasNotes && typeof calendarSeedNoteForTask === "function" && !!calendarSeedNoteForTask(ev.id, ev);
   const actionItems = actions[ev.id] || [];
   const hasActions = actionItems.length > 0;
   const openCount = actionItems.filter(a => !a.done).length;
   let cls = "notes-btn";
   if (hasActions) cls += " has-actions";
-  else if (hasNotes) cls += " has-notes";
+  else if (hasNotes || hasSeedNotes) cls += " has-notes";
   let badge = hasActions ? '<span class="action-badge">' + actionSvg + ' ' + openCount + '</span>' : '';
   return '<button class="' + cls + '" data-notes-id="' + ev.id + '" data-notes-title="' + (ev.title || "").replace(/"/g, '&quot;') + '" title="Notes & Action Items">' + notesSvg + '</button>' + badge;
 }
@@ -241,14 +242,7 @@ function openDoneModal(id, title, onConfirm, ev){
   const notes=loadNotes();
   const noteVal=notes[id];
   const dmNotesContainer=document.getElementById("dm-notes-editor");
-  let dmNoteBlocks=null;
-  if(noteVal && typeof noteVal==="object" && noteVal.blocks && noteVal.blocks.length){
-    dmNoteBlocks=noteVal.blocks;
-  } else if(noteVal && typeof noteVal==="object" && noteVal.html){
-    dmNoteBlocks=migrateHtmlToBlocks(noteVal.html);
-  } else if(typeof noteVal==="string" && noteVal){
-    dmNoteBlocks=migrateHtmlToBlocks(noteVal);
-  }
+  let dmNoteBlocks=typeof noteBlocksForTask === "function" ? noteBlocksForTask(id, noteVal, ev) : null;
   if(window._dmBlockEditor) window._dmBlockEditor.destroy();
   window._dmBlockEditor=createBlockEditor(dmNotesContainer, dmNoteBlocks);
   // Pre-populate action items

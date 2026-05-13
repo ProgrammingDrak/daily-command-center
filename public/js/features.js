@@ -200,14 +200,8 @@ function openAddModal(taskId, taskTitle) {
   // Load notes into block editor
   var notes = loadNotes();
   var noteVal = notes[taskId];
-  var initialBlocks=null;
-  if(noteVal && typeof noteVal==="object" && noteVal.blocks && noteVal.blocks.length){
-    initialBlocks=noteVal.blocks;
-  } else if(noteVal && typeof noteVal==="object" && noteVal.html){
-    initialBlocks=migrateHtmlToBlocks(noteVal.html);
-  } else if(typeof noteVal==="string" && noteVal){
-    initialBlocks=migrateHtmlToBlocks(noteVal);
-  }
+  var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
+  var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks);
 
