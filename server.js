@@ -997,86 +997,13 @@ app.delete("/api/delegated-items/:id", async (req, res) => {
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
 });
 
-// ── DCC State API ──
-app.get("/api/dcc-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getDccStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.get("/api/dcc-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getDccState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
-app.post("/api/dcc-state/ingest", async (req, res) => { try { const { date, ...stateData } = req.body; if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" }); let userId = req.session.userId || null, workspaceId = req.workspaceId || null; if (!userId) { workspaceId = req.headers["x-workspace-id"] || "ws-1"; const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]); userId = rows[0] ? rows[0].user_id : 1; } await blockDB.saveDccState(date, stateData, userId, workspaceId); broadcast("dcc-state-changed", { date }, workspaceId); res.json({ ok: true, date }); } catch (e) { res.status(500).json({ error: e.message }); } });
+// ── Evaluation API (task scoring engine) ──
+app.use(require("./evaluation/routes")(blockDB));
 
-app.post("/api/dcc/refresh", async (req, res) => {
-  try {
-    const date = (req.body && req.body.date) || req.query.date || getTodayStr();
-    if (!isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
-    const workspaceId = req.workspaceId || req.headers["x-workspace-id"] || (req.session.userId ? `ws-${req.session.userId}` : "ws-1");
-    let userId = req.session.userId || null;
-    if (!userId) {
-      const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]);
-      userId = rows[0] ? rows[0].user_id : 1;
-    }
-    const currentState = await buildDayResponse(date, userId, workspaceId);
-    const refreshed = await dccIntelligence.refreshDccState({
-      date,
-      state: currentState,
-      pool,
-      blockDB,
-      workspaceId,
-      userId,
-      dataDir: DATA_DIR,
-    });
-    writeJSON(getDayFilePath(date), refreshed.state);
-    if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, refreshed.state);
-    await blockDB.saveDccState(date, refreshed.state, userId, workspaceId);
-    broadcast("dcc-state-changed", { date, source: "dcc-refresh" }, workspaceId);
-    res.json({ ok: true, date, state: refreshed.state, sweep: refreshed.sweep, brief: refreshed.brief });
-  } catch (e) {
-    console.error("[dcc-refresh] error:", e && e.stack ? e.stack : e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/dcc/deep-sweep/ingest", async (req, res) => {
-  try {
-    const packet = (req.body && req.body.packet) || req.body || {};
-    const date = (req.body && req.body.date) || packet.date || getTodayStr();
-    if (!isValidDate(date)) return res.status(400).json({ error: "Valid date required" });
-    const workspaceId = req.workspaceId || req.headers["x-workspace-id"] || (req.session.userId ? `ws-${req.session.userId}` : "ws-1");
-    let userId = req.session.userId || null;
-    if (!userId) {
-      const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]);
-      userId = rows[0] ? rows[0].user_id : 1;
-    }
-    const currentState = await buildDayResponse(date, userId, workspaceId);
-    const ingestedState = dccIntelligence.ingestDeepSweepPacket({
-      date,
-      state: currentState,
-      packet,
-      source: (req.body && req.body.source) || packet.source || "deep-sweep",
-    });
-    const refreshed = await dccIntelligence.refreshDccState({
-      date,
-      state: ingestedState,
-      pool,
-      blockDB,
-      workspaceId,
-      userId,
-      dataDir: DATA_DIR,
-    });
-    writeJSON(getDayFilePath(date), refreshed.state);
-    if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, refreshed.state);
-    await blockDB.saveDccState(date, refreshed.state, userId, workspaceId);
-    broadcast("dcc-state-changed", { date, source: "deep-sweep-ingest" }, workspaceId);
-    res.json({
-      ok: true,
-      date,
-      state: refreshed.state,
-      sweep: refreshed.sweep,
-      brief: refreshed.brief,
-      deep_sweep: refreshed.state.deep_sweep,
-    });
-  } catch (e) {
-    console.error("[deep-sweep-ingest] error:", e && e.stack ? e.stack : e);
-    res.status(500).json({ error: e.message });
-  }
-});
+// ── PA State API ──
+app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
+app.post("/api/pa-state/ingest", async (req, res) => { try { const { date, ...stateData } = req.body; if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" }); let userId = req.session.userId || null, workspaceId = req.workspaceId || null; if (!userId) { workspaceId = req.headers["x-workspace-id"] || "ws-1"; const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]); userId = rows[0] ? rows[0].user_id : 1; } await blockDB.savePaState(date, stateData, userId, workspaceId); broadcast("pa-state-changed", { date }); res.json({ ok: true, date }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ── Migration (legacy) ──
 app.post("/api/migrate", async (req, res) => { res.json({ ok: true, message: "Data is now in Postgres." }); });
