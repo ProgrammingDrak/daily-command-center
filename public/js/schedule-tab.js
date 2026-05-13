@@ -5,6 +5,7 @@ document.querySelectorAll(".svt-btn").forEach(btn=>{
     document.querySelectorAll(".svt-btn").forEach(b=>b.classList.toggle("active",b.dataset.view===schedView));
     document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
     document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
+    if(typeof buildScheduleTriage==="function")buildScheduleTriage();
     if(schedView==="actual")buildActualView();
   });
 });
@@ -80,6 +81,7 @@ function buildActualView(){
 // ======== SCHEDULE TAB ========
 function buildSchedule(){
   const tl=document.getElementById("timeline");tl.innerHTML="";
+  if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   // Separate done vs pushed vs active vs deleted vs side-project-marked
   const trivFlags=loadTrivialFlags();
   const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Hide side-project-marked items from the schedule

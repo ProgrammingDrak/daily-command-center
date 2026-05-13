@@ -865,6 +865,28 @@
   .actual-card .act-diff.over{color:var(--red)} .actual-card .act-diff.under{color:var(--green)} .actual-card .act-diff.match{color:var(--text-muted)}
   .actual-empty{text-align:center;padding:40px;color:var(--text-muted);font-size:13px}
 
+  /* ---- Schedule triage ---- */
+  .schedule-triage-section{margin:0 0 14px 0;padding:10px 0 12px;border-bottom:1px solid rgba(255,255,255,0.06)}
+  .schedule-triage-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+  .schedule-triage-kicker{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--amber)}
+  .schedule-triage-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-left:7px;border-radius:999px;background:rgba(245,158,11,0.14);color:var(--amber);font-size:10px;font-weight:800}
+  .schedule-triage-sub{font-size:11px;color:var(--text-muted);white-space:nowrap}
+  .schedule-triage-list{display:flex;flex-direction:column;gap:6px}
+  .schedule-triage-card{padding:10px 12px;gap:10px}
+  .schedule-triage-card .ttl{font-size:13px}
+  .schedule-triage-summary{font-size:11px;color:var(--text-muted);line-height:1.4;margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .schedule-triage-card:hover .tri-quick{opacity:0.45}
+  .schedule-triage-card .schedule-triage-schedule{background:rgba(59,130,246,0.12);color:var(--accent-light)}
+  .schedule-triage-card .add-btn{white-space:nowrap}
+  @media(max-width:720px){
+    .schedule-triage-header{align-items:flex-start;flex-direction:column;gap:3px}
+    .schedule-triage-sub{white-space:normal}
+    .schedule-triage-card{align-items:flex-start;flex-wrap:wrap}
+    .schedule-triage-card .body{flex-basis:calc(100% - 18px)}
+    .schedule-triage-card .add-btn{flex:1;justify-content:center}
+    .schedule-triage-card .tri-quick{opacity:0.55}
+  }
+
   /* ---- Triage tab ---- */
   .tri-group-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);padding:4px 0 8px;display:flex;align-items:center;gap:6px}
   .tri-group-label .tri-dot{width:8px;height:8px;border-radius:50%}
