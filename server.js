@@ -418,6 +418,227 @@ app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: fals
 // ── Block API ──
 function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }
 function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
+const RESPONSIBILITY_KINDS = new Set(["responsibility_item", "responsibility_trigger"]);
+
+function cadenceDays(props) {
+  const n = Number(props.cadenceDays || props.cadence_days || 0);
+  if (n > 0) return n;
+  const raw = String(props.cadence || "").toLowerCase();
+  if (raw === "daily") return 1;
+  if (raw === "weekly") return 7;
+  if (raw === "biweekly") return 14;
+  if (raw === "monthly") return 30;
+  if (raw === "quarterly") return 90;
+  const m = raw.match(/(\d+)/);
+  return m ? Math.max(1, parseInt(m[1], 10)) : 7;
+}
+
+function responsibilityScore(props, at = new Date()) {
+  if (!props || props.status === "archived" || props.status === "done") return 0;
+  const days = cadenceDays(props);
+  const anchor = props.lastCompletedAt || props.createdAt || props.created_at || props.added_at;
+  const start = anchor ? new Date(anchor) : at;
+  const elapsedDays = Math.max(0, (at - start) / 86400000);
+  const base = days ? Math.round((elapsedDays / days) * 100) : 0;
+  const boost = Number(props.importanceBoost || props.boost || 0);
+  return Math.max(0, Math.min(100, base + boost));
+}
+
+function normalizeResponsibility(block) {
+  const properties = block.properties || {};
+  const importanceScore = responsibilityScore(properties);
+  return { ...block, properties: { ...properties, importanceScore } };
+}
+
+function taskDuration(props) {
+  return Math.max(15, Number(props.estimatedMinutes || props.duration || props.durationMin || 30));
+}
+
+async function getResponsibilityBlocks(workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(
+        `SELECT * FROM blocks
+         WHERE type = 'block'
+           AND properties->>'kind' IN ('responsibility_item','responsibility_trigger')
+           AND workspace_id = $1
+           AND deleted_at IS NULL
+         ORDER BY created_at ASC`,
+        [workspaceId]
+      )
+    : await pool.query(
+        `SELECT * FROM blocks
+         WHERE type = 'block'
+           AND properties->>'kind' IN ('responsibility_item','responsibility_trigger')
+           AND deleted_at IS NULL
+         ORDER BY created_at ASC`
+      );
+  return rows.map(blockDB.parseBlock).map(normalizeResponsibility);
+}
+
+async function getResponsibilityBlock(id, workspaceId) {
+  const block = await blockDB.getBlock(id);
+  if (!block) return null;
+  assertBlockOwnership(block, workspaceId);
+  if (!RESPONSIBILITY_KINDS.has((block.properties || {}).kind)) return null;
+  return normalizeResponsibility(block);
+}
+
+async function findResponsibilityBySlug(slug, workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(
+        `SELECT * FROM blocks
+         WHERE type='block' AND properties->>'kind'='responsibility_item'
+           AND properties->>'slug'=$1 AND workspace_id=$2 AND deleted_at IS NULL
+         LIMIT 1`,
+        [slug, workspaceId]
+      )
+    : await pool.query(
+        `SELECT * FROM blocks
+         WHERE type='block' AND properties->>'kind'='responsibility_item'
+           AND properties->>'slug'=$1 AND deleted_at IS NULL
+         LIMIT 1`,
+        [slug]
+      );
+  return rows[0] ? normalizeResponsibility(blockDB.parseBlock(rows[0])) : null;
+}
+
+async function upsertResponsibility({ properties, userId, workspaceId }) {
+  const slug = properties.slug || String(properties.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const existing = slug ? await findResponsibilityBySlug(slug, workspaceId) : null;
+  const nowIso = new Date().toISOString();
+  const props = {
+    kind: "responsibility_item",
+    title: properties.title,
+    slug,
+    domain: properties.domain || "professional",
+    area: properties.area || "general",
+    cadenceDays: Number(properties.cadenceDays || 7),
+    capacityBucket: properties.capacityBucket || "work_admin",
+    estimatedMinutes: Number(properties.estimatedMinutes || 30),
+    status: properties.status || "active",
+    defaultSubtasks: Array.isArray(properties.defaultSubtasks) ? properties.defaultSubtasks : [],
+    createdAt: properties.createdAt || nowIso,
+    updatedAt: nowIso,
+    ...properties
+  };
+  if (existing) {
+    return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...existing.properties, ...props, createdAt: existing.properties.createdAt || props.createdAt } }));
+  }
+  return normalizeResponsibility(await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null }));
+}
+
+function defaultSubtasksForResponsibility(props, alertProps = {}) {
+  const configured = Array.isArray(props.defaultSubtasks) ? props.defaultSubtasks.filter(Boolean) : [];
+  if (configured.length) return configured;
+  if (alertProps.alertType === "offers_amp_zero_expected_matches") {
+    return [
+      "Open AMP deal link",
+      "Open HubSpot deal link",
+      "Check Matching & Delays config for the listed combo",
+      "Record root cause or resolution note",
+      "Escalate/update product team if config or automation needs a fix"
+    ];
+  }
+  return ["Review current state", "Record outcome", "Decide next action"];
+}
+
+function hhmmToMinutes(s) {
+  if (!s || !/^\d{2}:\d{2}$/.test(s)) return 0;
+  const [h, m] = s.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function minutesToHHMM(mins) {
+  const m = ((mins % 1440) + 1440) % 1440;
+  return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+}
+
+function firstFreeSlot(start, duration, blockers, dayEnd) {
+  let cursor = start;
+  for (const b of blockers.sort((a, b) => a.s - b.s)) {
+    if (cursor + duration <= b.s) return cursor;
+    if (cursor < b.e) cursor = b.e;
+  }
+  return cursor + duration <= dayEnd + 60 ? cursor : null;
+}
+
+async function scheduleResponsibilityTask({ responsibility, date, userId, workspaceId, sourceProps = {}, force = false }) {
+  const props = responsibility.properties || {};
+  const dateStr = date && isValidDate(date) ? date : getTodayStr();
+  const duration = taskDuration({ ...props, ...sourceProps });
+  const blocks = await blockDB.getBlocksByDate(dateStr, workspaceId);
+  const existing = blocks.find(b => {
+    const p = b.properties || {};
+    return p.responsibilityId === responsibility.id && p.kind === "responsibility_task" && !p.completedAt;
+  });
+  if (existing && !force) return { block: existing, created: false, duplicate: true };
+  const dayBlocks = await getScheduleBlocks(userId, workspaceId);
+  const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
+  const dayStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
+  const dayEnd = workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60;
+  const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
+  const blockers = blocks
+    .filter(b => (b.properties || {}).start && (b.properties || {}).end)
+    .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
+  const slot = firstFreeSlot(Math.max(dayStart, nowMin), duration, blockers, dayEnd) || Math.max(dayStart, nowMin);
+  const localId = "resp-task-" + crypto.randomUUID().slice(0, 12);
+  const title = sourceProps.title || props.nextTaskTitle || props.title;
+  const score = responsibilityScore(props);
+  const taskProps = {
+    kind: "responsibility_task",
+    local_id: localId,
+    title,
+    duration,
+    start: minutesToHHMM(slot),
+    end: minutesToHHMM(slot + duration),
+    priority: score >= 90 ? "High" : score >= 60 ? "Medium" : "Low",
+    meta: "Responsibility · " + (props.area || props.domain || "general") + " · " + duration + "m",
+    detail: sourceProps.detail || props.description || "",
+    source: "responsibility",
+    tags: ["responsibility", props.domain, props.area, props.capacityBucket].filter(Boolean),
+    responsibilityId: responsibility.id,
+    responsibilityTitle: props.title,
+    capacityBucket: props.capacityBucket || null,
+    responsibilityScore: score,
+    alertKey: sourceProps.alertKey || null,
+    alertType: sourceProps.alertType || null,
+    ampUrl: sourceProps.ampUrl || null,
+    hubspotUrl: sourceProps.hubspotUrl || null,
+    createdAt: new Date().toISOString()
+  };
+  const block = await blockDB.createBlock({ type: "block", date: dateStr, properties: taskProps, sort_order: slot, user_id: userId || null, workspace_id: workspaceId || null });
+
+  const subtasks = defaultSubtasksForResponsibility(props, sourceProps);
+  if (subtasks.length) {
+    const rootId = await blockDB.ensureDayRoot(dateStr, userId, workspaceId);
+    const root = await blockDB.getBlock(rootId);
+    const rootProps = root.properties || {};
+    const allSubtasks = { ...(rootProps._subtasks || {}) };
+    allSubtasks[localId] = subtasks.map((text, i) => ({ id: "st-" + Date.now() + "-" + i, text, done: false, created: new Date().toISOString() }));
+    await blockDB.updateBlock(rootId, { properties: { ...rootProps, _subtasks: allSubtasks } });
+  }
+  return { block, created: true };
+}
+
+function parseOffersAmpAlert(text) {
+  const raw = text || "";
+  if (!/Offers AMP Error|zero expected matches|New deal entered the AMP with zero expected matches/i.test(raw)) return null;
+  const ampUrl = (raw.match(/https?:\/\/amp\.listwithclever\.dev\/deals\/\d+/i) || [null])[0];
+  const hubspotUrl = (raw.match(/https?:\/\/app\.hubspot\.com\/contacts\/3298701\/record\/0-3\/\d+/i) || [null])[0];
+  const address = (raw.match(/Address:\s*([^\n]+)/i) || [null, ""])[1].trim();
+  const config = (raw.match(/Config lookup:\s*([^\n]+)/i) || [null, ""])[1].trim();
+  const alertKey = hubspotUrl || ampUrl || crypto.createHash("sha1").update(raw).digest("hex").slice(0, 16);
+  return {
+    alertType: "offers_amp_zero_expected_matches",
+    alertKey,
+    title: "Investigate Offers AMP zero expected matches" + (address ? ": " + address.split(",")[0] : ""),
+    detail: [address && "Address: " + address, ampUrl && "AMP: " + ampUrl, hubspotUrl && "HubSpot: " + hubspotUrl, config && "Config lookup: " + config].filter(Boolean).join("\n"),
+    ampUrl,
+    hubspotUrl,
+    address,
+    config
+  };
+}
 
 app.post("/api/blocks", async (req, res) => { try { const body = req.body, userId = req.session.userId; const items = Array.isArray(body) ? body : [body]; const results = []; for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: req.workspaceId })); broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, req.workspaceId); res.json(results.length === 1 ? results[0] : results); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.patch("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.updateBlock(req.params.id, req.body); broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
@@ -428,6 +649,192 @@ app.get("/api/blocks/range", async (req, res) => { try { const { start, end } = 
 app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.getBlock(req.params.id); if (!block) return res.status(404).json({ error: "Block not found" }); try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); } res.json(block); });
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
+
+// ── Responsibilities API ──
+app.get("/api/responsibilities", async (req, res) => {
+  try {
+    const items = await getResponsibilityBlocks(req.workspaceId);
+    res.json({ items });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/responsibilities", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const incoming = body.properties || body;
+    if (!incoming.title || !String(incoming.title).trim()) return res.status(400).json({ error: "title required" });
+    const created = await upsertResponsibility({
+      userId: req.session.userId,
+      workspaceId: req.workspaceId,
+      properties: { ...incoming, title: String(incoming.title).trim() }
+    });
+    broadcast("blocks-changed", { action: "responsibility-upsert", blockIds: [created.id] }, req.workspaceId);
+    res.json(created);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.patch("/api/responsibilities/:id", async (req, res) => {
+  try {
+    const existing = await getResponsibilityBlock(req.params.id, req.workspaceId);
+    if (!existing) return res.status(404).json({ error: "Responsibility not found" });
+    const incoming = (req.body && req.body.properties) || req.body || {};
+    const merged = { ...existing.properties, ...incoming, kind: existing.properties.kind, updatedAt: new Date().toISOString() };
+    const updated = normalizeResponsibility(await blockDB.updateBlock(req.params.id, { properties: merged }));
+    broadcast("blocks-changed", { action: "responsibility-update", blockIds: [updated.id] }, req.workspaceId);
+    res.json(updated);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+app.delete("/api/responsibilities/:id", async (req, res) => {
+  try {
+    const existing = await getResponsibilityBlock(req.params.id, req.workspaceId);
+    if (!existing) return res.status(404).json({ error: "Responsibility not found" });
+    const result = await blockDB.deleteBlock(req.params.id);
+    broadcast("blocks-changed", { action: "responsibility-delete", blockIds: [req.params.id] }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+app.post("/api/responsibilities/:id/schedule", async (req, res) => {
+  try {
+    const responsibility = await getResponsibilityBlock(req.params.id, req.workspaceId);
+    if (!responsibility || responsibility.properties.kind !== "responsibility_item") return res.status(404).json({ error: "Responsibility not found" });
+    const result = await scheduleResponsibilityTask({
+      responsibility,
+      date: (req.body && req.body.date) || getTodayStr(),
+      userId: req.session.userId,
+      workspaceId: req.workspaceId,
+      sourceProps: (req.body && req.body.task) || {},
+      force: !!(req.body && req.body.force)
+    });
+    broadcast("blocks-changed", { action: "responsibility-schedule", blockIds: [result.block.id] }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+app.post("/api/responsibilities/:id/complete", async (req, res) => {
+  try {
+    const responsibility = await getResponsibilityBlock(req.params.id, req.workspaceId);
+    if (!responsibility || responsibility.properties.kind !== "responsibility_item") return res.status(404).json({ error: "Responsibility not found" });
+    const at = (req.body && req.body.completedAt) || new Date().toISOString();
+    const updated = normalizeResponsibility(await blockDB.updateBlock(req.params.id, {
+      properties: {
+        ...responsibility.properties,
+        lastCompletedAt: at,
+        updatedAt: at,
+        lastCompletedTaskId: req.body && req.body.taskId || null
+      }
+    }));
+    broadcast("blocks-changed", { action: "responsibility-complete", blockIds: [updated.id] }, req.workspaceId);
+    res.json(updated);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+app.post("/api/responsibilities/auto-schedule", async (req, res) => {
+  try {
+    const threshold = Number((req.body && req.body.threshold) || 70);
+    const limit = Math.max(1, Math.min(10, Number((req.body && req.body.limit) || 3)));
+    const buckets = Array.isArray(req.body && req.body.capacityBuckets) ? new Set(req.body.capacityBuckets) : null;
+    const items = (await getResponsibilityBlocks(req.workspaceId))
+      .filter(b => (b.properties || {}).kind === "responsibility_item")
+      .filter(b => (b.properties || {}).status !== "archived")
+      .filter(b => !buckets || buckets.has((b.properties || {}).capacityBucket))
+      .filter(b => responsibilityScore(b.properties) >= threshold)
+      .sort((a, b) => responsibilityScore(b.properties) - responsibilityScore(a.properties))
+      .slice(0, limit);
+    const scheduled = [];
+    for (const item of items) {
+      const result = await scheduleResponsibilityTask({
+        responsibility: item,
+        date: (req.body && req.body.date) || getTodayStr(),
+        userId: req.session.userId,
+        workspaceId: req.workspaceId
+      });
+      scheduled.push(result);
+    }
+    broadcast("blocks-changed", { action: "responsibility-auto-schedule", blockIds: scheduled.map(s => s.block.id) }, req.workspaceId);
+    res.json({ scheduled });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post("/api/responsibilities/capture", async (req, res) => {
+  try {
+    const text = String((req.body && (req.body.text || req.body.rawCapture)) || "");
+    if (!text.trim()) return res.status(400).json({ error: "text required" });
+    const alert = parseOffersAmpAlert(text);
+    if (alert) {
+      const responsibility = await upsertResponsibility({
+        userId: req.session.userId,
+        workspaceId: req.workspaceId,
+        properties: {
+          title: "Product Development: Bug Management",
+          slug: "product-development-bug-management",
+          domain: "professional",
+          area: "bug_management",
+          cadenceDays: 7,
+          capacityBucket: "work_admin",
+          estimatedMinutes: 30,
+          status: "active",
+          defaultSubtasks: defaultSubtasksForResponsibility({}, alert)
+        }
+      });
+      const triggerSlug = "offers-amp-zero-expected-matches";
+      const existingTrigger = (await pool.query(
+        `SELECT id FROM blocks WHERE type='block' AND properties->>'kind'='responsibility_trigger' AND properties->>'slug'=$1 AND ($2::text IS NULL OR workspace_id=$2) AND deleted_at IS NULL LIMIT 1`,
+        [triggerSlug, req.workspaceId || null]
+      )).rows[0];
+      if (!existingTrigger) {
+        await blockDB.createBlock({
+          type: "block",
+          parent_id: responsibility.id,
+          properties: {
+            kind: "responsibility_trigger",
+            slug: triggerSlug,
+            title: "Offers AMP zero expected matches",
+            channel: "#offers_product",
+            responsibilityId: responsibility.id,
+            alertType: "offers_amp_zero_expected_matches",
+            createdAt: new Date().toISOString()
+          },
+          user_id: req.session.userId,
+          workspace_id: req.workspaceId
+        });
+      }
+      const existing = alert.alertKey
+        ? (await pool.query(
+            `SELECT * FROM blocks WHERE type='block' AND properties->>'kind'='responsibility_task' AND properties->>'alertKey'=$1 AND ($2::text IS NULL OR workspace_id=$2) AND deleted_at IS NULL LIMIT 1`,
+            [alert.alertKey, req.workspaceId || null]
+          )).rows[0]
+        : null;
+      if (existing) return res.json({ responsibility, task: blockDB.parseBlock(existing), duplicate: true });
+      const task = await scheduleResponsibilityTask({
+        responsibility,
+        date: (req.body && req.body.date) || getTodayStr(),
+        userId: req.session.userId,
+        workspaceId: req.workspaceId,
+        sourceProps: alert,
+        force: true
+      });
+      res.json({ responsibility, task: task.block, duplicate: false, parsed: alert });
+      return;
+    }
+    const responsibility = await upsertResponsibility({
+      userId: req.session.userId,
+      workspaceId: req.workspaceId,
+      properties: {
+        title: text.split(/\r?\n/)[0].slice(0, 120),
+        rawCapture: text,
+        domain: "other",
+        area: "inbox",
+        status: "inbox",
+        cadenceDays: 7,
+        capacityBucket: "work_admin",
+        estimatedMinutes: 30
+      }
+    });
+    res.json({ responsibility, duplicate: false, parsed: null });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // PIN 3: apply a top-level block diff forward across all future days that
 // already have blocks. Matches each target block by (name, blockType); skips

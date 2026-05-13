@@ -16,6 +16,7 @@ document.querySelectorAll(".tab").forEach(tab=>{
     // PIN 10.A: render the delegated list on tab activation so the UI
     // reflects any blocks-changed SSE events that fired while the tab was hidden.
     if(tab.dataset.tab==="delegated"&&typeof renderDelegatedList==="function"){renderDelegatedList();}
+    if(tab.dataset.tab==="responsibilities"&&typeof renderResponsibilities==="function"){renderResponsibilities();}
   });
 });
 
@@ -388,12 +389,16 @@ function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
   if(!toProcess.length)return;
   const ev=scheduled.find(e=>e.id===taskId);
   const parentTitle=ev?ev.title:"task";
-  if(resolution==="individual"){
+  if(resolution==="complete"){
+    toProcess.forEach(st=>{st.done=true;});
+  } else if(resolution==="individual"||resolution==="spinoff"){
     toProcess.forEach(st=>{
       const id="st-sched-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
       let lastEnd="17:00";if(scheduled.length)lastEnd=scheduled[scheduled.length-1].end;
       const s=pt(lastEnd),d=30,e=s+d;
-      scheduled.push({id,title:st.text,start:fmt(s),end:fmt(e),type:"task",meta:"30min · From: "+parentTitle,detail:"",source:"manual",priority:"Medium"});
+      const newItem={id,title:st.text,start:fmt(s),end:fmt(e),type:"task",meta:"30min · From: "+parentTitle,detail:"",source:"manual",priority:"Medium"};
+      scheduled.push(newItem);
+      if(typeof persistAddedTask==="function")persistAddedTask(newItem);
     });
     saveScheduleOrder();recalcTimes();checkOverflow();
   } else if(resolution==="grouped"){
@@ -401,7 +406,9 @@ function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
     const title=toProcess.map(s=>s.text).join(", ");
     let lastEnd="17:00";if(scheduled.length)lastEnd=scheduled[scheduled.length-1].end;
     const s=pt(lastEnd),d=toProcess.length*15,e=s+d;
-    scheduled.push({id,title:"Remaining: "+title,start:fmt(s),end:fmt(e),type:"task",meta:ms(d)+" · Grouped from: "+parentTitle,detail:"",source:"manual",priority:"Medium"});
+    const newItem={id,title:"Remaining: "+title,start:fmt(s),end:fmt(e),type:"task",meta:ms(d)+" · Grouped from: "+parentTitle,detail:"",source:"manual",priority:"Medium"};
+    scheduled.push(newItem);
+    if(typeof persistAddedTask==="function")persistAddedTask(newItem);
     saveScheduleOrder();recalcTimes();checkOverflow();
   } else if(resolution==="move"&&moveTargetId){
     if(!all[moveTargetId])all[moveTargetId]=[];
@@ -409,8 +416,11 @@ function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
       all[moveTargetId].push({id:"st-"+Date.now()+"-"+Math.random().toString(36).slice(2),text:st.text,done:false,created:new Date().toISOString()});
     });
   }
-  // Remove only the processed subtasks from source — leave others untouched
-  all[taskId]=taskSubs.filter(s=>!toProcess.some(p=>p.id===s.id));
+  if(resolution==="complete"){
+    all[taskId]=taskSubs;
+  } else {
+    // Remove only the processed subtasks from source — leave others untouched
+    all[taskId]=taskSubs.filter(s=>!toProcess.some(p=>p.id===s.id));
+  }
   saveSubtasks(all);
 }
-

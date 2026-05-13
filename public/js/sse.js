@@ -100,6 +100,7 @@
     if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
     if(typeof render === 'function') render();
     if(typeof updateStats === 'function') updateStats();
+    if(typeof loadResponsibilities === 'function') loadResponsibilities();
   }
 
   function connect(){

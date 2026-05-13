@@ -1888,6 +1888,42 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .delegated-modal-actions button.primary:hover{opacity:0.9}
 .delegated-modal-actions button.secondary{background:var(--card);color:var(--text-muted)}
 .delegated-modal-actions button.secondary:hover{color:var(--text);border-color:var(--accent)}
+.resp-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.delegated-header .primary{font-size:12px;padding:8px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-weight:600}
+.delegated-header .primary:hover{background:var(--accent-light)}
+.resp-small-btn{font-size:12px;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text-muted);cursor:pointer}
+.resp-small-btn:hover{border-color:var(--accent);color:var(--accent-light)}
+.resp-capture{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-bottom:12px}
+.resp-capture textarea{min-height:72px;resize:vertical;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;font-size:13px;padding:10px;line-height:1.4}
+.resp-capture textarea:focus{outline:none;border-color:var(--accent)}
+.resp-capture button{align-self:stretch;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:white;padding:0 16px;cursor:pointer;font-weight:600}
+.responsibilities-list{display:flex;flex-direction:column;gap:8px}
+.resp-card{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:12px;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;transition:border-color 0.12s,background 0.12s}
+.resp-card:hover{border-color:rgba(96,165,250,0.45);background:var(--card-hover)}
+.resp-score{width:54px;height:54px;border-radius:50%;border:4px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;background:var(--bg)}
+.resp-score.low{border-color:var(--text-muted);color:var(--text-muted)}
+.resp-score.med{border-color:var(--amber);color:var(--amber)}
+.resp-score.high{border-color:var(--red);color:var(--red)}
+.resp-title-row{display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap}
+.resp-title{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.resp-chip{font-size:10px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--border);border-radius:999px;padding:2px 7px;color:var(--text-muted);background:rgba(255,255,255,0.03)}
+.resp-chip.domain{border-color:rgba(96,165,250,0.35);color:var(--accent-light)}
+.resp-meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;font-size:11px;color:var(--text-muted)}
+.resp-subtasks{margin-top:6px;font-size:11px;color:var(--text-muted);line-height:1.45}
+.resp-card-actions{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.resp-card-actions button{font-size:10px;padding:4px 8px;border-radius:5px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer}
+.resp-card-actions button:hover{border-color:var(--accent);color:var(--accent-light)}
+.resp-card-actions .danger:hover{border-color:var(--red);color:var(--red)}
+.resp-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.st-act-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.st-act-btn.primary:hover{background:var(--accent-light);color:#fff}
+.st-resolve-section.blocking{border:1px solid rgba(245,158,11,0.45);border-radius:8px;padding:10px;background:rgba(245,158,11,0.07)}
+@media(max-width:700px){
+  .resp-capture{grid-template-columns:1fr}
+  .resp-card{grid-template-columns:1fr}
+  .resp-score{width:44px;height:44px;font-size:14px}
+  .resp-card-actions{justify-content:flex-start}
+}
 
 /* Delegate button: circular icon on backlog cards + pill on tag editor (PIN 10.A-4) */
 .delegate-btn{

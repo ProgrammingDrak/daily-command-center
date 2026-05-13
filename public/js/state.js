@@ -266,7 +266,7 @@ function confirmDeleteTask(){
   // For DCC-native tasks, the deletedSet alone isn't enough: the underlying block stays
   // in SQLite and keeps getting rehydrated by loadGlobals(). Soft-delete the block too
   // so it's actually gone.
-  if(ev&&ev.source==="manual"&&window.blockStore){
+  if(ev&&(ev.source==="manual"||ev.source==="responsibility")&&window.blockStore){
     const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id);
     if(block)window.blockStore.deleteBlock(block.id).catch(()=>{});
   }
@@ -278,4 +278,3 @@ function confirmDeleteTask(){
 document.getElementById("del-cancel").addEventListener("click",closeDeleteConfirm);
 document.getElementById("del-go").addEventListener("click",confirmDeleteTask);
 document.getElementById("del-confirm-overlay").addEventListener("click",function(e){if(e.target===this)closeDeleteConfirm()});
-
