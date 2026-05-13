@@ -146,6 +146,7 @@
         if (sidebar) {
           sidebar.outerHTML = renderGcalSection();
         }
+        if (typeof buildCalendar === "function") buildCalendar();
       }
     } catch {
       window._gcalSidebarState = { connected: false, calendars: [], loading: false };
