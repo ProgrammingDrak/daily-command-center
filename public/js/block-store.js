@@ -216,8 +216,8 @@
   function isPermanentReplayFailure(entry, err) {
     if (!entry || !err) return false;
     if (err.status === 401 || err.status === 403) return false;
+    if (err.status === 400) return true;
     if ((entry.op === "update" || entry.op === "delete") && err.status === 404) return true;
-    if (entry.op === "batch" && err.status === 400 && /Block not found|invalid input syntax/i.test(err.message || "")) return true;
     return false;
   }
 
