@@ -207,21 +207,19 @@ document.getElementById("pomo-task-check").addEventListener("click",(e)=>{
   const capturedTitle = pomoState.title;
   const capturedStart = pomoState.startedAt;
   _completionModalCallback = (result) => {
-    if(result === true){
+    if(result && result.completed === true && result.startNext === true){
       _pomoCompleteHook = { prevTitle: capturedTitle, capturedStart: capturedStart };
       openTaskPicker(capturedTitle);
     }
   };
   openTaskCompletionModal(capturedTitle);
 });
-// ⚡ Lightning complete — instant done + open picker
+// ⚡ Lightning complete — instant done, no forced task switch
 document.getElementById("pomo-task-lightning").addEventListener("click",(e)=>{
   e.stopPropagation();
   const task=scheduled.find(s=>s.title===pomoState.title && !s.nested);
   if(task) toggleDone(task.id);
   showToast("✓ "+pomoState.title+" completed");
-  _pomoCompleteHook = { prevTitle: pomoState.title, capturedStart: pomoState.startedAt };
-  openTaskPicker(pomoState.title);
 });
 // Note: Focus/Report sub-tabs removed — report is now a collapsible <details> in the floating panel
 
@@ -270,7 +268,8 @@ document.getElementById("ft-mini-pause").addEventListener("click",(e)=>{
   document.getElementById("pomo-start").click(); // reuse existing start/pause logic
 });
 // Task card click opens picker
-document.getElementById("pomo-task-card").addEventListener("click",()=>{
+document.getElementById("pomo-task-card").addEventListener("click",(e)=>{
+  if(e.target.closest("#pomo-task-check,#pomo-task-lightning,button,a,input,select,textarea"))return;
   openTaskPicker();
 });
 

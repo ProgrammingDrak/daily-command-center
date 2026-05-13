@@ -162,11 +162,11 @@ function updateTimerBadge(){
 
 // ======== TASK COMPLETION MODAL ========
 let _completionModalCallback = null;
-let _completionModalResult = null; // true=completed, false=kept, null=dismissed
-let currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null};
+let _completionModalResult = null; // {completed,startNext} or null=dismissed
+let currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null,stackedTask:false,startNext:false};
 
 function openTaskCompletionModal(taskTitle){
-  currentCompletionData={taskTitle,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null};
+  currentCompletionData={taskTitle,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null,stackedTask:false,startNext:false};
   const overlay=document.getElementById("task-completion-modal-overlay");
   const titleEl=document.getElementById("completion-modal-title");
   const bodyEl=document.getElementById("completion-modal-body");
@@ -174,8 +174,10 @@ function openTaskCompletionModal(taskTitle){
 
   titleEl.textContent="Complete: "+taskTitle;
 
+  let html='<div style="font-size:12px;color:var(--text-muted);line-height:1.4;margin-bottom:14px">Complete now, or optionally pick a schedule block / recorded session to attribute time first.</div>';
+
   // Build time blocks section
-  let html='<div class="completion-section"><div class="completion-section-title">Today\'s Schedule</div>';
+  html+='<div class="completion-section"><div class="completion-section-title">Today\'s Schedule</div>';
   const scheduleItems=scheduled.filter(s=>!s.nested);
   scheduleItems.forEach(s=>{
     const c=cfg(s.type);
@@ -211,7 +213,7 @@ function openTaskCompletionModal(taskTitle){
         if(block.title!==taskTitle){
           showConflictPrompt(taskTitle,block,bodyEl);
         }else{
-          proceedWithCompletion();
+          selectCompletionItem(el);
         }
       }else if(pomoIdx!==undefined){
         currentCompletionData.sessionIndex=parseInt(pomoIdx);
@@ -219,16 +221,23 @@ function openTaskCompletionModal(taskTitle){
         if(pomo.title&&pomo.title!==taskTitle){
           showConflictPrompt(taskTitle,{title:pomo.title},bodyEl);
         }else{
-          proceedWithCompletion();
+          selectCompletionItem(el);
         }
       }
     });
   });
 
-  actionsEl.innerHTML='<button class="secondary" id="comp-cancel">Cancel</button>';
+  actionsEl.innerHTML='<button class="secondary" id="comp-cancel">Cancel</button><button class="secondary" id="comp-done-next">Complete + Switch</button><button class="primary" id="comp-done">Complete</button>';
   document.getElementById("comp-cancel").addEventListener("click",()=>closeCompletionModal());
+  document.getElementById("comp-done").addEventListener("click",()=>attributeTimeAndClose(true,false));
+  document.getElementById("comp-done-next").addEventListener("click",()=>attributeTimeAndClose(true,true));
 
   overlay.classList.add("open");
+}
+
+function selectCompletionItem(el){
+  el.closest(".completion-modal-body")?.querySelectorAll(".completion-item.selected").forEach(item=>item.classList.remove("selected"));
+  el.classList.add("selected");
 }
 
 function showConflictPrompt(newTask,existingBlock,container){
@@ -253,18 +262,22 @@ function proceedWithCompletion(){
 
   bodyEl.innerHTML='<div style="text-align:center;padding:20px;color:var(--text-muted)"><div style="font-size:12px;margin-bottom:12px">Did you complete this task, or should it stay on your list?</div></div>';
 
-  actionsEl.innerHTML='<button class="secondary" id="comp-keep">Keep on List</button><button class="primary" id="comp-done">Completed</button>';
+  actionsEl.innerHTML='<button class="secondary" id="comp-keep">Keep on List</button><button class="secondary" id="comp-done-next">Complete + Switch</button><button class="primary" id="comp-done">Complete</button>';
 
   document.getElementById("comp-keep").addEventListener("click",()=>{
     attributeTimeAndClose(false);
   });
   document.getElementById("comp-done").addEventListener("click",()=>{
-    attributeTimeAndClose(true);
+    attributeTimeAndClose(true,false);
+  });
+  document.getElementById("comp-done-next").addEventListener("click",()=>{
+    attributeTimeAndClose(true,true);
   });
 }
 
-function attributeTimeAndClose(isCompleted){
+function attributeTimeAndClose(isCompleted,startNext){
   const taskTitle=currentCompletionData.taskTitle;
+  currentCompletionData.startNext=!!startNext;
 
   if(currentCompletionData.sessionIndex!==null){
     const entry=pomoState.sessionLog[currentCompletionData.sessionIndex];
@@ -289,13 +302,13 @@ function attributeTimeAndClose(isCompleted){
   }
 
   pomoRenderReport();savePomoState();
-  _completionModalResult = isCompleted;
+  _completionModalResult = { completed: isCompleted, startNext: !!startNext };
   closeCompletionModal();
 }
 
 function closeCompletionModal(){
   document.getElementById("task-completion-modal-overlay").classList.remove("open");
-  currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null};
+  currentCompletionData={taskTitle:null,selectedTimeBlock:null,selectedPomodoro:null,sessionIndex:null,stackedTask:false,startNext:false};
   if(_completionModalCallback){
     const cb=_completionModalCallback, result=_completionModalResult;
     _completionModalCallback=null; _completionModalResult=null;
@@ -443,11 +456,16 @@ function buildDistractionTaskList(){
 
   el.addEventListener("mousedown",e=>{
     const panel=document.getElementById("ft-panel");
-    if(panel&&panel.style.display!=="none")return; // Don't drag when panel is open
+    const panelOpen=panel&&panel.style.display!=="none";
+    const isPanelDrag=panelOpen&&e.target.closest(".ft-panel-bar")&&!e.target.closest("button,a,input,select,textarea,.ft-resize-grip");
+    const isClosedDrag=!panelOpen&&e.target.closest(".ft-fab,.ft-mini");
+    if(!isPanelDrag&&!isClosedDrag)return;
+    e.preventDefault();
     dragging=true;hasDragged=false;
     startX=e.clientX;startY=e.clientY;
     startRight=parseInt(getComputedStyle(el).right)||30;
     startBottom=parseInt(getComputedStyle(el).bottom)||30;
+    document.body.style.userSelect="none";
   });
 
   document.addEventListener("mousemove",e=>{
@@ -455,13 +473,17 @@ function buildDistractionTaskList(){
     const dx=e.clientX-startX,dy=e.clientY-startY;
     if(!hasDragged&&Math.abs(dx)<5&&Math.abs(dy)<5)return;
     hasDragged=true;
-    el.style.right=Math.max(0,startRight-dx)+"px";
-    el.style.bottom=Math.max(0,startBottom-dy)+"px";
+    const r=el.getBoundingClientRect();
+    const maxRight=Math.max(0,window.innerWidth-r.width);
+    const maxBottom=Math.max(0,window.innerHeight-r.height);
+    el.style.right=Math.min(maxRight,Math.max(0,startRight-dx))+"px";
+    el.style.bottom=Math.min(maxBottom,Math.max(0,startBottom-dy))+"px";
   });
 
   document.addEventListener("mouseup",()=>{
     if(!dragging)return;
     dragging=false;
+    document.body.style.userSelect="";
     if(hasDragged){
       localStorage.setItem("ft-pos",JSON.stringify({
         bottom:parseInt(el.style.bottom),
