@@ -105,6 +105,11 @@ function buildSchedule(){
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
   const bountySvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+  const pointsChip=ev=>{
+    if(isMeeting(ev)||ev.type==="ooo"||ev.type==="break")return "";
+    const pts=(typeof isBountyTask==="function"&&isBountyTask(ev.id))?2:1;
+    return '<span class="points-chip'+(pts>1?' bonus':'')+'" title="Completing this task earns '+pts+' slot credit'+(pts===1?'':'s')+'">'+pts+' pt'+(pts===1?'':'s')+'</span>';
+  };
 
   // Render done items as compact one-liners
   const completionsData = (__state && __state.completions && __state.completions.tasks) || [];
@@ -283,7 +288,7 @@ function buildSchedule(){
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip">Bounty x2</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
-            '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+colorMeta(ev)+
+            '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
               taskTagChipsHtml(ev)+
