@@ -21,9 +21,6 @@ const pgSession = require("connect-pg-simple")(session);
 const pool = require("./pg-pool");
 const blockDB = require("./db");
 const migration = require("./migrate");
-const gcalAuth = require("./gcal-auth");
-const gcalSync = require("./gcal-sync");
-const calendarStateCleanup = require("./calendar-state-cleanup");
 const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
@@ -44,7 +41,6 @@ const DATA_DIR = path.join(PROJECT_DIR, "data");
 const STATE_DIR = path.join(DATA_DIR, "state");
 const DAY_STATE_FILE = path.join(STATE_DIR, "day-state.json");
 const TOMORROW_STATE_FILE = path.join(STATE_DIR, "tomorrow-state.json");
-const UPCOMING_FILE = path.join(STATE_DIR, "upcoming-meetings.json");
 const LOCAL_UI_STATE_FILE = path.join(STATE_DIR, "local-ui-state.json");
 const ARCHIVE_DIR = path.join(STATE_DIR, "archive");
 const DAYS_DIR = path.join(STATE_DIR, "days");
@@ -103,7 +99,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register"]);
 const PA_ENDPOINTS = new Set(["/api/pa-state/ingest", "/api/ingest/day-state", "/api/clean-tidy/approve"]);
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 function hasPaToken(req) { const paToken = process.env.SECRET_PA_TOKEN; if (!paToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === paToken : false; }
@@ -181,7 +177,7 @@ function broadcast(eventType, data, workspaceId) {
 }
 
 // ── File Watching ──
-[DAY_STATE_FILE, TOMORROW_STATE_FILE, UPCOMING_FILE].forEach((filePath) => {
+[DAY_STATE_FILE, TOMORROW_STATE_FILE].forEach((filePath) => {
   const watchDebounce = {};
   try { fs.watch(filePath, { persistent: false }, () => { const now = Date.now(); if (watchDebounce[filePath] && now - watchDebounce[filePath] < 1000) return; watchDebounce[filePath] = now; broadcast("file-changed", { file: path.basename(filePath, ".json") }); }); } catch {}
 });
@@ -194,91 +190,8 @@ const MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
 function archiveDayState(date, data) { const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/); if (!match) return; const [, year, mm] = match; const month = parseInt(mm, 10); const quarter = Math.ceil(month / 3); const monthFolder = `${mm}-${MONTH_NAMES[month]}`; const destDir = path.join(BRAIN_DIR, "archive", year, `Q${quarter}`, monthFolder); if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true }); const destFile = path.join(destDir, `${date}.json`); const existing = readJSON(destFile, {}); writeJSON(destFile, { ...existing, ...data, source: "api-save", savedAt: new Date().toISOString() }); }
 function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; if (!fs.existsSync(RECENT_DIR)) return; for (const fname of fs.readdirSync(RECENT_DIR)) { if (!fname.endsWith(".json") || fname === "manifest.json") continue; const ts = new Date(fname.replace(".json", "") + "T00:00:00").getTime(); if (ts && ts < cutoff) { fs.unlinkSync(path.join(RECENT_DIR, fname)); } } }
 function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
-function getETOffset(dateStr) { const dt = new Date(dateStr + "T12:00:00Z"); const parts = new Intl.DateTimeFormat("en-US", { timeZone: APP_TIME_ZONE, timeZoneName: "shortOffset" }).formatToParts(dt); const tzPart = parts.find(p => p.type === "timeZoneName"); if (tzPart) { const m = tzPart.value.match(/GMT([+-]?\d+)/); if (m) { const hrs = parseInt(m[1], 10); return (hrs <= 0 ? "-" : "+") + String(Math.abs(hrs)).padStart(2, "0") + ":00"; } } return "-04:00"; }
 function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
-function zonedDateTimeParts(value, timeZone = APP_TIME_ZONE) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date).reduce((acc, part) => {
-    if (part.type !== "literal") acc[part.type] = part.value;
-    return acc;
-  }, {});
-  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
-}
-function zonedDateTimeISO(value) {
-  const parts = zonedDateTimeParts(value);
-  return parts ? `${parts.date}T${parts.time}:00${getETOffset(parts.date)}` : null;
-}
-
-async function getMeetingsFromDB(dateStr, userId, workspaceId) {
-  const offset = getETOffset(dateStr);
-  const { rows } = workspaceId
-    ? await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid, g.start_time AS gcal_start_time, g.end_time AS gcal_end_time, c.summary AS calendar_summary FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id LEFT JOIN gcal_calendars c ON c.id = g.calendar_id AND c.account_key = g.account_key WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, workspaceId])
-    : await pool.query(`SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link, g.ical_uid, g.start_time AS gcal_start_time, g.end_time AS gcal_end_time, c.summary AS calendar_summary FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id LEFT JOIN gcal_calendars c ON c.id = g.calendar_id AND c.account_key = g.account_key WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`, [dateStr, userId]);
-  const meetings = [], meetingTimeline = [];
-  for (const row of rows) {
-    const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;
-    if (!props || props.source !== "gcal" || props.all_day || !props.start || !props.end) continue;
-    let attendees = [];
-    if (row.attendees_json) { const parsed = Array.isArray(row.attendees_json) ? row.attendees_json : []; attendees = parsed.filter(a => !a.self && !a.resource).map(a => a.email); }
-    const startISO = zonedDateTimeISO(row.gcal_start_time) || `${dateStr}T${props.start}:00${offset}`;
-    const endISO = zonedDateTimeISO(row.gcal_end_time) || `${dateStr}T${props.end}:00${offset}`;
-    const eventId = row.gcal_event_id || props.source_id || row.id;
-    const calendarName = props.gcal_calendar_name || row.calendar_summary || null;
-    const dedupeKey = calendarDedupeKey({ ical_uid: row.ical_uid, title: props.title, start: startISO, end: endISO });
-    const description = props.detail || props.description || "";
-    meetings.push({ id: eventId, event_id: eventId, block_id: row.id, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null, description, gcal_calendar_id: props.gcal_calendar_id || null, gcal_calendar_name: calendarName, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
-    meetingTimeline.push({ id: row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "gcal", source_id: eventId, category: "Meetings", completed: false, description, notes: description, calendar_link: props.calUrl || row.html_link || null, hangout_link: props.hangout_link || null, location: props.location || "", rsvp_status: props.rsvp_status || null, attendee_count: props.attendee_count || attendees.length, is_recurring: !!props.is_recurring, all_day: !!props.all_day, gcal_event_id: eventId, gcal_calendar_id: props.gcal_calendar_id || null, gcal_calendar_name: calendarName, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
-  }
-  const seen = new Map(), dedupedMeetings = [], dedupedTimeline = [];
-  for (let i = 0; i < meetings.length; i++) { const key = meetings[i].dedupeKey; const existing = seen.get(key); if (existing !== undefined) { if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") { dedupedMeetings[existing] = meetings[i]; dedupedTimeline[existing] = meetingTimeline[i]; } } else { seen.set(key, dedupedMeetings.length); dedupedMeetings.push(meetings[i]); dedupedTimeline.push(meetingTimeline[i]); } }
-  return { meetings: dedupedMeetings, meetingTimeline: dedupedTimeline };
-}
-
-function calendarDedupeKey(item) {
-  const start = item.start || "";
-  const end = item.end || "";
-  const title = String(item.title || item.label || "(No title)").trim().toLowerCase().replace(/\s+/g, " ");
-  return (item.ical_uid ? `ical:${item.ical_uid}` : `title:${title}`) + `|${start}|${end}`;
-}
-
-function dedupeCalendarTimeline(timeline) {
-  const seen = new Set();
-  return (timeline || []).filter(item => {
-    if (!isCalendarTimelineItem(item)) return true;
-    const key = item.dedupeKey || calendarDedupeKey(item);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function isCalendarTimelineItem(item) {
-  return !!item && (item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id || !!item.gcal_event_id);
-}
-
-function reconcileCalendarTimeline(timeline, meetingTimeline) {
-  const correctedBySourceId = new Map(meetingTimeline.filter(mtg => mtg.source_id).map(mtg => [mtg.source_id, mtg]));
-  const correctedByDedupeKey = new Map(meetingTimeline.map(mtg => [mtg.dedupeKey || calendarDedupeKey(mtg), mtg]));
-  const reconciled = (timeline || []).map(item => {
-    if (!isCalendarTimelineItem(item)) return item;
-    const corrected = (item.source_id && correctedBySourceId.get(item.source_id)) || correctedByDedupeKey.get(item.dedupeKey || calendarDedupeKey(item));
-    if (!corrected) return null;
-    if (corrected.source_id) correctedBySourceId.delete(corrected.source_id);
-    return { ...item, ...corrected, id: corrected.id || item.id, completed: !!(item.completed || corrected.completed) };
-  }).filter(Boolean);
-  for (const mtg of correctedBySourceId.values()) reconciled.push(mtg);
-  return dedupeCalendarTimeline(reconciled).sort((a, b) => String(a.start || "").localeCompare(String(b.start || "")));
-}
 
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
@@ -296,11 +209,9 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
       writeJSON(dayFile, enrichment);
     }
   }
-  const { meetings, meetingTimeline } = await getMeetingsFromDB(dateStr, userId, workspaceId);
-  const result = { ...enrichment, date: dateStr, meetings };
-  if (result.schedule && result.schedule.timeline) {
-    result.schedule.timeline = reconcileCalendarTimeline(result.schedule.timeline, meetingTimeline);
-  } else { result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline }; }
+  const result = { ...enrichment, date: dateStr };
+  if (!result.schedule) result.schedule = { timeline: [] };
+  if (!Array.isArray(result.schedule.timeline)) result.schedule.timeline = [];
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
   return result;
 }
@@ -348,7 +259,7 @@ function ensureSkeletonDays() {
 // ── State Endpoints ──
 app.get("/api/state/day", async (req, res) => { try { res.json(await buildDayResponse(req.query.date || getTodayStr(), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(DAY_STATE_FILE, null)); } });
 app.get("/api/state/tomorrow", async (req, res) => { try { res.json(await buildDayResponse(addDays(getTodayStr(), 1), req.session.userId, req.workspaceId)); } catch (e) { res.json(readJSON(TOMORROW_STATE_FILE, null)); } });
-app.get("/api/state/upcoming", (req, res) => { res.json(readJSON(UPCOMING_FILE, [])); });
+app.get("/api/state/upcoming", (req, res) => { res.json([]); });
 app.get("/api/state/archives", async (req, res) => {
   try {
     // Query Postgres for all dates that have blocks (the source of truth since the migration)
@@ -1054,17 +965,6 @@ app.get("/api/pa-state/range", async (req, res) => {
     for (const s of states) {
       const dateStr = s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).split("T")[0];
       let state = s.state_json;
-      if (state && state.schedule && Array.isArray(state.schedule.timeline)) {
-        const { meetings, meetingTimeline } = await getMeetingsFromDB(dateStr, req.session.userId, req.workspaceId);
-        state = {
-          ...state,
-          meetings,
-          schedule: {
-            ...state.schedule,
-            timeline: reconcileCalendarTimeline(state.schedule.timeline, meetingTimeline),
-          },
-        };
-      }
       result[dateStr] = state;
     }
     res.json(result);
@@ -1078,22 +978,6 @@ app.post("/api/migrate", async (req, res) => { res.json({ ok: true, message: "Da
 app.post("/api/migrate/dry-run", async (req, res) => { res.json({ ok: true, message: "Data is now in Postgres." }); });
 app.get("/api/migrate/status", async (req, res) => { try { const { rows: [bc] } = await pool.query("SELECT COUNT(*) as count FROM blocks WHERE deleted_at IS NULL"); const { rows: [pc] } = await pool.query("SELECT COUNT(*) as count FROM pa_state"); res.json({ migrated: parseInt(bc.count) > 1, blockCount: parseInt(bc.count), paStateCount: parseInt(pc.count) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/operations", async (req, res) => { if (!req.query.block_id) return res.status(400).json({ error: "block_id required" }); res.json(await blockDB.getOperations(req.query.block_id, parseInt(req.query.limit) || 50)); });
-
-// ── GCal ──
-app.get("/api/gcal/auth", async (req, res) => { const userId = req.session.userId || 1; const account = gcalAuth.normalizeAccountKey(req.query.account); const url = await gcalAuth.getAuthUrl(userId, account); if (!url) return res.status(500).json({ error: "No credentials configured" }); res.redirect(url); });
-app.get("/api/gcal/callback", async (req, res) => { try { const { code, state } = req.query; if (!code) return res.status(400).send("Missing auth code"); const parsed = gcalAuth.decodeState(state); const userId = parsed.userId || req.session.userId || 1; const account = gcalAuth.normalizeAccountKey(parsed.accountKey); await gcalAuth.handleCallback(code, userId, account); gcalSync.startPolling(); res.redirect(`/?gcal=connected&account=${encodeURIComponent(account)}`); } catch (e) { res.status(500).send("OAuth error: " + e.message); } });
-app.get("/api/gcal/status", async (req, res) => { res.json(await gcalSync.getSyncStatus()); });
-app.post("/api/gcal/disconnect", async (req, res) => { const account = gcalAuth.normalizeAccountKey(req.query.account || req.body?.account); await gcalAuth.deleteAccountTokens(req.session.userId || 1, account); if (!(await gcalAuth.listAuthenticatedAccounts(req.session.userId || 1)).length) gcalSync.stopPolling(); res.json({ ok: true }); });
-app.get("/api/gcal/calendars", async (req, res) => { try { const userId = req.session.userId || 1; const accounts = await gcalAuth.listAuthenticatedAccounts(userId); for (const account of accounts) { const authClient = await gcalAuth.getAuthClient(userId, account.key); if (!authClient) continue; const fetched = await gcalAuth.fetchAndCacheCalendars(authClient); await gcalSync.cacheCalendarsToDb(fetched, account); } res.json(await gcalSync.getAllCalendars()); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post("/api/gcal/calendars/:id/toggle", async (req, res) => { try { await gcalSync.toggleCalendar(req.params.id, req.body.selected, req.body.accountKey); if (req.body.selected) gcalSync.syncAll().catch(e => console.error("[gcal] Toggle sync error:", e.message)); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.get("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const block = await blockDB.getBlock(req.params.blockId); res.json({ block: block || null, gcal: { ...gcalData, attendees: gcalData.attendees_json || [], conference: gcalData.conference_json || null, organizer: gcalData.organizer_json || null, creator: gcalData.creator_json || null, recurrence: gcalData.recurrence_json || null } }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.patch("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.updateEvent(gcalData.gcal_event_id, gcalData.calendar_id, { ...req.body, accountKey: gcalData.account_key }); broadcast("gcal-sync", { action: "update", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post("/api/gcal/event/:blockId/attendees", async (req, res) => { try { const { email } = req.body; if (!email) return res.status(400).json({ error: "email required" }); const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.addAttendee(gcalData.gcal_event_id, gcalData.calendar_id, email, gcalData.account_key); broadcast("gcal-sync", { action: "attendee-add", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.delete("/api/gcal/event/:blockId/attendees/:email", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.removeAttendee(gcalData.gcal_event_id, gcalData.calendar_id, req.params.email, gcalData.account_key); broadcast("gcal-sync", { action: "attendee-remove", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post("/api/gcal/event/:blockId/rsvp", async (req, res) => { try { const { response } = req.body; if (!["accepted", "declined", "tentative"].includes(response)) return res.status(400).json({ error: "Invalid response" }); const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); const result = await gcalSync.rsvp(gcalData.gcal_event_id, gcalData.calendar_id, response, gcalData.account_key); broadcast("gcal-sync", { action: "rsvp", blockId: req.params.blockId }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post("/api/gcal/events", async (req, res) => { try { const { calendarId, ...eventData } = req.body; if (!calendarId || !eventData.title) return res.status(400).json({ error: "calendarId and title required" }); const result = await gcalSync.createEvent(calendarId, eventData); broadcast("gcal-sync", { action: "create" }); res.json({ ok: true, event: result }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.delete("/api/gcal/event/:blockId", async (req, res) => { try { const gcalData = await gcalSync.getGcalEventByBlockId(req.params.blockId); if (!gcalData) return res.status(404).json({ error: "GCal event not found" }); await gcalSync.deleteEvent(gcalData.gcal_event_id, gcalData.calendar_id, gcalData.account_key); broadcast("gcal-sync", { action: "delete", blockId: req.params.blockId }); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post("/api/gcal/sync", async (req, res) => { try { await gcalSync.syncAll(undefined, { forceFull: req.query.full === "1" || !!req.body?.full }); res.json({ ok: true, status: await gcalSync.getSyncStatus() }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ── Slot Rewards API ──
 app.get("/api/slot/state", async (req, res) => {
@@ -1303,16 +1187,6 @@ app.listen(PORT, async () => {
       await blockDB.ensureWorkspacesForAllUsers();
     } catch (e) { console.error("[auth] Startup error:", e.message); }
   }
-
-  try {
-    await gcalSync.init(broadcast, defaultUserId);
-    const gcalAccounts = await gcalAuth.listAuthenticatedAccounts(defaultUserId);
-    if (gcalAccounts.length) {
-      console.log(`  GCal:       Connected (${gcalAccounts.map(a => a.key).join(", ")})`);
-      try { await calendarStateCleanup.runOnce({ gcalSync }); } catch (e) { console.error("[calendar-cleanup] Startup cleanup error:", e.message); }
-      gcalSync.startPolling();
-    } else { console.log(`  GCal:       Not connected`); }
-  } catch (e) { console.error("[gcal] Init error:", e.message); }
 
   try { await initVault(); } catch (e) { console.error("[vault] Init error:", e.message); }
   try { await slotStore.ensureSchema(); } catch (e) { console.error("[slots] Schema error:", e.message); }

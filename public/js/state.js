@@ -36,13 +36,13 @@ function isActive(ev){return!manualDone.has(ev.id)&&now()>=pt(ev.start)&&now()<p
 function log(type,id,detail){actionLog.push({type,id,detail,ts:new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",hour12:true})})}
 
 // ======== SOURCE TAGS ========
-const SRC_LABELS={gcal:"Calendar",notion:"Notion",gmail:"Gmail"};
-const SRC_CLS={gcal:"src-gcal",notion:"src-notion",gmail:"src-gmail"};
+const SRC_LABELS={notion:"Notion",gmail:"Gmail"};
+const SRC_CLS={notion:"src-notion",gmail:"src-gmail"};
 function srcTag(sources){
   if(!sources)return'';
   const list=Array.isArray(sources)?sources:[sources];
   if(list.length>1)return'<span class="src-tag src-multi"><span class="src-icon" style="background:var(--amber)"></span>'+list.map(s=>SRC_LABELS[s]||s).join(" + ")+'</span>';
-  const s=list[0];return'<span class="src-tag '+(SRC_CLS[s]||"src-gcal")+'"><span class="src-icon" style="background:'+(s==="notion"?"var(--purple)":s==="gmail"?"#f87171":"var(--accent-light)")+'"></span>'+(SRC_LABELS[s]||s)+'</span>';
+  const s=list[0];return'<span class="src-tag '+(SRC_CLS[s]||"src-multi")+'"><span class="src-icon" style="background:'+(s==="notion"?"var(--purple)":s==="gmail"?"#f87171":"var(--amber)")+'"></span>'+(SRC_LABELS[s]||s)+'</span>';
 }
 
 // ======== DETAIL PANEL ========
@@ -152,7 +152,7 @@ async function schedulePushedOnTomorrow(ev){
   // Get tomorrow's meetings as blocker intervals
   const tTimeline=(tomorrow.schedule&&tomorrow.schedule.timeline)||[];
   const tMeetings=tTimeline
-    .filter(e=>e.type==="meeting"||e.type==="oneone"||e.type==="ooo"||e.type==="break"||e.source==="calendar"||e.source==="gcal")
+    .filter(e=>e.type==="meeting"||e.type==="oneone"||e.type==="ooo"||e.type==="break")
     .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
     .sort((a,b)=>a.s-b.s);
 
@@ -263,7 +263,6 @@ function openDeleteConfirm(id){
   const src=ev.source||"unknown";
   let msg="This removes the task from today's schedule.";
   if(src==="notion")msg+=" The task will remain on your Notion board and can be rescheduled.";
-  else if(src==="gcal"||src==="calendar")msg+=" The calendar event still exists in Google Calendar.";
   else msg+=" This task only exists in today's schedule and will be permanently removed.";
   document.getElementById("del-confirm-msg").textContent=msg;
   document.getElementById("del-confirm-overlay").classList.add("open");

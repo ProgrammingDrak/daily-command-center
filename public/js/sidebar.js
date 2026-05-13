@@ -27,7 +27,6 @@ function buildMiniSchedule(){
         }
       });
     }
-    if(ev.calUrl)detParts.push('<a href="'+ev.calUrl+'" target="_blank" style="font-size:9px;color:var(--accent-light);text-decoration:none;display:inline-flex;align-items:center;gap:2px" onclick="event.stopPropagation()">Open in Calendar</a>');
     if(ev.notionUrl)detParts.push('<a href="'+ev.notionUrl+'" target="_blank" style="font-size:9px;color:var(--purple);text-decoration:none;display:inline-flex;align-items:center;gap:2px;margin-left:6px" onclick="event.stopPropagation()">Open in Notion</a>');
     const hasDetail=detParts.length>0;
 

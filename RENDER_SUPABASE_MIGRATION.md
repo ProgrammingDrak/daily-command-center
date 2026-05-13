@@ -41,21 +41,10 @@ DATABASE_URL="$SUPABASE_DATABASE_URL" npm run migrate-data
    - `SECRET_PA_TOKEN`: token for PA ingest endpoints.
    - `VAULT_REPO_URL` and `VAULT_GITHUB_PAT`: optional vault sync.
    - `APP_URL`: optional. Render automatically provides `RENDER_EXTERNAL_URL`, but set `APP_URL` if you use a custom domain.
-   - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: optional Google Calendar sync fallback if OAuth credentials are not already stored in Postgres.
 
 Render generates `SESSION_SECRET` automatically. Do not overwrite it unless rotating sessions intentionally.
 
-## 4. Google Calendar redirect
-
-After Render gives you the production URL, set the OAuth redirect URI in Google Cloud to:
-
-```text
-https://YOUR-RENDER-SERVICE.onrender.com/api/gcal/callback
-```
-
-Use that same URL for `GOOGLE_REDIRECT_URI` on Render.
-
-## 5. Deployment behavior
+## 4. Deployment behavior
 
 Render runs:
 

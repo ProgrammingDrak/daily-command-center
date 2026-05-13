@@ -81,29 +81,8 @@ window.__PA_LOCAL__ = null;
 window.__SECOND_BRAIN__ = {};
 window.__SECOND_BRAIN_GLOBALS__ = {};
 
-function calendarStateDedupeKey(item) {
-  const start = item.start || "";
-  const end = item.end || "";
-  const title = String(item.title || item.label || "Untitled").trim().toLowerCase().replace(/\s+/g, " ");
-  const sourceId = item.gcal_event_id || item.source_id;
-  return sourceId
-    ? [item.gcal_account_key || "default", item.gcal_calendar_id || "", sourceId].join("|")
-    : (item.dedupeKey || "title:" + title + "|" + start + "|" + end);
-}
-
-function isCalendarStateItem(item) {
+function isRetiredCalendarStateItem(item) {
   return !!item && (item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id || !!item.gcal_event_id);
-}
-
-function dedupeCalendarStateTimeline(timeline) {
-  const seen = new Set();
-  return (timeline || []).filter(item => {
-    if (!isCalendarStateItem(item)) return true;
-    const key = calendarStateDedupeKey(item);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function transformState(state) {
@@ -112,7 +91,7 @@ function transformState(state) {
 
   // Timeline -> INIT_SCHED
   if (state.schedule && state.schedule.timeline) {
-    dedupeCalendarStateTimeline(state.schedule.timeline).forEach(item => {
+    state.schedule.timeline.filter(item => !isRetiredCalendarStateItem(item)).forEach(item => {
       const typeMap = {meeting:"meeting", task:"task", prep:"task", time_block:"triage",
         focus_time:"focus", free_time:"break", ooo:"ooo"};
       const start = item.start ? new Date(item.start) : null;
@@ -122,8 +101,8 @@ function transformState(state) {
       const endStr = String(end.getHours()).padStart(2,"0") + ":" + String(end.getMinutes()).padStart(2,"0");
       // Match meeting prep data from state.meetings[]
       const meetings = (state.meetings || []);
-      const eventId = item.source_id || item.gcal_event_id;
-      const matchedMeeting = isCalendarStateItem(item) && eventId ?
+      const eventId = item.source_id;
+      const matchedMeeting = eventId ?
         meetings.find(m => m.event_id === eventId || m.id === eventId) : null;
 
       // Build prep array from matched meeting data
@@ -135,12 +114,8 @@ function transformState(state) {
         if (matchedMeeting.prep_task_url) {
           prep.push({type:"task", title:"Prep Task (Notion)", href: matchedMeeting.prep_task_url, status:""});
         }
-        if (matchedMeeting.calendar_link) {
-          prep.push({type:"doc", title:"Calendar Event", href: matchedMeeting.calendar_link, status:""});
-        }
       }
 
-      // Merge calendar attachments into prep array
       if (item.attachments && item.attachments.length) {
         item.attachments.forEach(att => {
           if (!prep.some(p => p.href === att.href)) {
@@ -159,7 +134,6 @@ function transformState(state) {
               (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
         detail: item.detail || item.description || item.notes || "", source: item.source || "manual",
         source_id: item.source_id || "",
-        gcal_event_id: item.gcal_event_id || item.source_id || "",
         notes: item.notes || item.description || item.detail || "",
         hangout_link: item.hangout_link || "",
         location: item.location || "",
@@ -167,12 +141,8 @@ function transformState(state) {
         attendee_count: item.attendee_count || 0,
         is_recurring: item.is_recurring || false,
         all_day: item.all_day || false,
-        gcal_calendar_id: item.gcal_calendar_id || "",
-        gcal_calendar_name: item.gcal_calendar_name || "",
-        gcal_account_key: item.gcal_account_key || "",
         notionUrl: item.source === "notion" && item.source_id ?
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
-        calUrl: isCalendarStateItem(item) ? item.calendar_link || "" : "",
         priority: item.priority || "",
         completed: item.completed || false,
         nested: false,
