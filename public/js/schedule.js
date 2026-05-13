@@ -469,7 +469,7 @@ function persistBacklogItem(item){
       priority:item.priority||"",
       stage:item.stage||"",
       added_at:new Date().toISOString()
-    });
+    },{date:null});
   }catch(e){console.warn("[backlog] persist failed:",e)}
 }
 function deleteBacklogBlock(localId){
@@ -499,7 +499,11 @@ function hydrateBacklogFromBlocks(){
       source:p.source||"manual",
       notionUrl:p.notionUrl||"",
       priority:p.priority||"",
-      stage:p.stage||""
+      stage:p.stage||"",
+      createdAt:b.created_at||p.added_at||"",
+      updatedAt:b.updated_at||p.updated_at||"",
+      _blockId:b.id,
+      sortOrder:b.sort_order
     });
     added++;
   });

@@ -7,7 +7,7 @@ function loadTrivialTasks(){
     return (window.blockStore.getByType("trivial_task")||[]).concat(window.blockStore.getByType("block").filter(b=>(b.properties||{}).tags&&b.properties.tags.includes("trivial"))).map(b=>({
       id:b.id, text:b.properties.text, done:!!b.properties.done,
       createdAt:b.created_at, doneAt:b.properties.doneAt||null,
-      linkedTo:b.properties.linkedTo||null, _blockId:b.id
+      updatedAt:b.updated_at, linkedTo:b.properties.linkedTo||null, _blockId:b.id
     }));
   }
   try{return JSON.parse(localStorage.getItem(TRIV_KEY)||"[]")}catch(e){return[]}
@@ -36,7 +36,7 @@ function saveTrivialFlags(f){
 function addTrivialTask(text){
   if(!text.trim())return;
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    window.blockStore.createBlock("block",{text:text.trim(),done:false,tags:["trivial"]}).then(()=>buildTrivialTasks());
+    window.blockStore.createBlock("block",{text:text.trim(),done:false,tags:["trivial"]},{date:null}).then(()=>buildTrivialTasks());
     return;
   }
   const tasks=loadTrivialTasks();
@@ -90,7 +90,7 @@ function getLinkedTrivialTasks(scheduleId){
 function addLinkedTrivialTask(scheduleId, text){
   if(!text.trim())return;
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    window.blockStore.createBlock("block",{text:text.trim(),done:false,linkedTo:scheduleId,tags:["trivial"]}).then(()=>{
+    window.blockStore.createBlock("block",{text:text.trim(),done:false,linkedTo:scheduleId,tags:["trivial"]},{date:null}).then(()=>{
       if(typeof buildSchedule==='function')buildSchedule();
       if(typeof buildTrivialTasks==='function')buildTrivialTasks();
     });
@@ -377,8 +377,12 @@ function buildTrivialTasks(){
   const tasks=loadTrivialTasks();
   const flags=loadTrivialFlags();
   const flaggedScheduleItems=(typeof scheduled!=='undefined'?scheduled:[]).filter(ev=>flags[ev.id]);
-  const active=tasks.filter(t=>!t.done&&!t.linkedTo);
-  const done=tasks.filter(t=>t.done);
+  const activeRaw=tasks.filter(t=>!t.done&&!t.linkedTo);
+  const doneRaw=tasks.filter(t=>t.done);
+  const active=(typeof taskBankSort==="function"?taskBankSort(activeRaw.map(t=>({priority:"Low",...t}))):activeRaw)
+    .filter(t=>typeof taskBankMatches==="function"?taskBankMatches(t,["text"]):true);
+  const done=(typeof taskBankSort==="function"?taskBankSort(doneRaw.map(t=>({priority:"Low",...t}))):doneRaw)
+    .filter(t=>typeof taskBankMatches==="function"?taskBankMatches(t,["text"]):true);
   const totalCount=flaggedScheduleItems.length+active.length;
   const trivBadge=document.getElementById("trivial-count");
   if(trivBadge){trivBadge.textContent=totalCount;trivBadge.style.display=totalCount?"":"none"}
@@ -392,7 +396,12 @@ function buildTrivialTasks(){
   }
 
   el.innerHTML="";
-  if(!totalCount&&!done.length){el.innerHTML='<div class="board-empty">No trivial tasks. Use the task bar above to add one.</div>';return}
+  if(!totalCount&&!done.length){
+    const hasSearch=window.taskBankState&&window.taskBankState.query;
+    const rawCount=flaggedScheduleItems.length+activeRaw.length+doneRaw.length;
+    el.innerHTML='<div class="board-empty">'+(hasSearch&&rawCount?'No trivial tasks match that search.':'No trivial tasks. Use the task bar above to add one.')+'</div>';
+    return;
+  }
 
   // Flagged schedule items
   flaggedScheduleItems.forEach(ev=>{
@@ -412,12 +421,16 @@ function buildTrivialTasks(){
   active.forEach(t=>{
     const card=document.createElement("div");card.className="board-card";
     card.innerHTML='<div class="bar" style="background:var(--purple,#a78bfa)"></div>'+
-      '<div class="body"><div class="title-row"><span class="ttl">'+t.text+'</span></div>'+
+      '<div class="body"><div class="title-row">'+(typeof renderTaskBankTrivialTitle==="function"?renderTaskBankTrivialTitle(t):'<span class="ttl">'+t.text+'</span>')+'</div>'+
       '<div class="meta"><span class="tag tag-task">Trivial</span></div></div>'+
       '<button class="add-btn triv-check-btn" data-tid="'+t.id+'" style="background:var(--green)">Done</button>'+
+      '<button class="task-bank-icon-btn triv-edit-btn" data-tid="'+t.id+'" title="Edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
       '<button class="btn-del-task triv-del-btn" data-tid="'+t.id+'" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>';
     card.querySelector(".triv-check-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
+    const editBtn=card.querySelector(".triv-edit-btn");
+    if(editBtn)editBtn.addEventListener("click",e=>{e.stopPropagation();if(typeof startTaskBankTrivialEdit==="function")startTaskBankTrivialEdit(t.id)});
     card.querySelector(".triv-del-btn").addEventListener("click",e=>{e.stopPropagation();deleteTrivialTask(t.id)});
+    if(typeof bindTaskBankTrivialEdit==="function")bindTaskBankTrivialEdit(card,t);
     el.appendChild(card);
   });
 

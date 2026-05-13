@@ -279,6 +279,21 @@
         <button type="button" class="acc-btn" data-acc-scope="#tasks-drawer" data-acc-action="expand">Expand all</button>
         <button type="button" class="acc-btn" data-acc-scope="#tasks-drawer" data-acc-action="collapse">Collapse all</button>
       </div>
+      <div class="task-bank-tools" id="task-bank-tools">
+        <div class="task-bank-search">
+          <input type="search" id="task-bank-search" placeholder="Search task bank...">
+        </div>
+        <label class="task-bank-sort">
+          <span>Sort</span>
+          <select id="task-bank-sort">
+            <option value="priority">Priority</option>
+            <option value="title">Title</option>
+            <option value="duration">Duration</option>
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+          </select>
+        </label>
+      </div>
       <div class="tm-accordion">
 
         <details class="tm-section" id="tm-triage-section" open>
@@ -1062,6 +1077,7 @@
 <script src="/public/js/triage.js"></script>
 <script src="/public/js/tabs.js"></script>
 <script src="/public/js/features.js"></script>
+<script src="/public/js/task-bank.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/responsibilities.js"></script>
 <script src="/public/js/boot.js"></script>
