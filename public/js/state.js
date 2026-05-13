@@ -3,6 +3,7 @@ let scheduled=JSON.parse(JSON.stringify(INIT_SCHED));
 let consider=JSON.parse(JSON.stringify(INIT_CONSIDER));
 let backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));
 let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, nextId=200, schedView="plan";
+let dailyBounty=null;
 function qaId(){return "qa-"+Date.now()+"-"+Math.random().toString(36).slice(2,7)}
 
 // ======== UTILS ========
@@ -58,6 +59,52 @@ function loadDeferred(){try{return JSON.parse(localStorage.getItem(DEFERRED_KEY)
 function saveDeferred(arr){
   if(window.USE_BLOCKSTORE&&Object.values(window.USE_BLOCKSTORE).every(v=>v))return;
   localStorage.setItem(DEFERRED_KEY,JSON.stringify(arr));scheduleIDBSave();
+}
+
+// ======== DAILY BOUNTY ========
+// One immutable "today succeeds if this gets done" marker. Completion pays 2 slot credits.
+let BOUNTY_KEY = "pa-bounty-" + ((__state && __state.date) ? __state.date : "unknown");
+function loadBountyState(){
+  if(window.USE_BLOCKSTORE&&window.blockStore){
+    const v=_bsProp("_bounty",null);
+    if(v&&v.taskId)return v;
+  }
+  try{return JSON.parse(localStorage.getItem(BOUNTY_KEY)||"null")}catch(e){return null}
+}
+function saveBountyState(){
+  if(dailyBounty&&dailyBounty.taskId){
+    const ev=scheduled.find(e=>e.id===dailyBounty.taskId);
+    if(ev)dailyBounty.taskTitle=ev.title;
+  }
+  if(_bsSaveProp("_bounty",dailyBounty))return;
+  if(dailyBounty)localStorage.setItem(BOUNTY_KEY,JSON.stringify(dailyBounty));
+  else localStorage.removeItem(BOUNTY_KEY);
+  scheduleIDBSave();
+}
+function hydrateBountyState(){dailyBounty=loadBountyState();}
+function getDailyBounty(){return dailyBounty;}
+function isBountyTask(id){return !!(dailyBounty&&String(dailyBounty.taskId)===String(id))}
+function placeBounty(id){
+  if(typeof viewMode!=="undefined"&&viewMode==="archive"){
+    if(typeof showToast==="function")showToast("Archived days are read-only","info");
+    return;
+  }
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||isMeeting(ev))return;
+  if(dailyBounty&&dailyBounty.taskId){
+    const title=(scheduled.find(e=>e.id===dailyBounty.taskId)||dailyBounty).title||dailyBounty.taskTitle||"today's bounty";
+    if(typeof showToast==="function")showToast("Bounty is locked on "+title,"info");
+    return;
+  }
+  if(isDone(ev)){
+    if(typeof showToast==="function")showToast("Pick an unfinished task for the bounty","info");
+    return;
+  }
+  dailyBounty={taskId:ev.id,taskTitle:ev.title,placedAt:new Date().toISOString()};
+  saveBountyState();
+  log("bounty",ev.id,"Bounty placed: "+ev.title);
+  if(typeof showToast==="function")showToast("Bounty locked: "+ev.title+" pays 2 credits","success");
+  render();
 }
 
 // ======== PUSHED TO TOMORROW (UI state) ========

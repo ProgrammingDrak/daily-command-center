@@ -4,6 +4,26 @@ const pool = require("./pg-pool");
 const DEFAULT_SPIN_COST = 1;
 const DAILY_BANK_CAP_CENTS = 5000;
 const WEEKLY_BANK_CAP_CENTS = 15000;
+const SCREEN_BANK_BUILDER_HIT_RATE = 0.33;
+const SCREEN_BANK_BUILDER_PERCENT = 0.0022;
+const SLOT_ROWS = 3;
+const SLOT_COLS = 5;
+const SLOT_CELL_COUNT = SLOT_ROWS * SLOT_COLS;
+const FILLER_SYMBOLS = ["STRAW", "STICK", "BRICK", "HAT", "TOOLS", "HOUSE"];
+const TEASER_SYMBOLS = ["CARE", "TREAT", "JACKPOT", "PLEDGE", "PICK", "REROLL"];
+const PAYLINES = [
+  [0, 1, 2], [1, 2, 3], [2, 3, 4],
+  [5, 6, 7], [6, 7, 8], [7, 8, 9],
+  [10, 11, 12], [11, 12, 13], [12, 13, 14],
+  [0, 6, 12], [2, 6, 10], [4, 8, 12], [2, 8, 14],
+];
+const BANK_SCREEN_COUNT_WEIGHTS = [
+  [1, 55],
+  [2, 30],
+  [3, 10],
+  [4, 4],
+  [5, 1],
+];
 
 const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partner", "either_partner"]);
 const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "bank_builder", "sponsor", "choice", "reroll"]);
@@ -347,7 +367,7 @@ async function getBankUsage(workspaceId) {
     `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
      FROM slot_spins
      WHERE workspace_id = $1 AND status IN ('pending','confirmed')
-       AND reward_snapshot->>'kind' = 'bank_builder'
+       AND bank_delta_cents > 0
        AND created_at >= date_trunc('day', NOW())`,
     [workspaceId]
   );
@@ -355,7 +375,7 @@ async function getBankUsage(workspaceId) {
     `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
      FROM slot_spins
      WHERE workspace_id = $1 AND status IN ('pending','confirmed')
-       AND reward_snapshot->>'kind' = 'bank_builder'
+       AND bank_delta_cents > 0
        AND created_at >= date_trunc('week', NOW())`,
     [workspaceId]
   );
@@ -371,7 +391,12 @@ async function getPendingBankDeposit(workspaceId) {
      FROM slot_spins
      WHERE workspace_id = $1
        AND status = 'pending'
-       AND reward_snapshot->>'kind' = 'bank_builder'`,
+       AND bank_delta_cents > 0
+       AND bank_reserved_cents = 0
+       AND (
+         reward_snapshot->>'kind' = 'bank_builder'
+         OR reward_snapshot->>'source_type' = 'slot_screen_bank_builder'
+       )`,
     [workspaceId]
   );
   return { cents: pending.cents, count: pending.count, oldest_at: pending.oldest_at };
@@ -393,7 +418,11 @@ async function getState(workspaceId, userId) {
     spins,
     bankUsage,
     pendingBankDeposit,
-    constants: { spinCost: DEFAULT_SPIN_COST },
+    constants: {
+      spinCost: DEFAULT_SPIN_COST,
+      screenBankBuilderHitRate: SCREEN_BANK_BUILDER_HIT_RATE,
+      screenBankBuilderPercent: SCREEN_BANK_BUILDER_PERCENT,
+    },
   };
 }
 
@@ -434,21 +463,24 @@ async function earnTaskCredit(workspaceId, userId, body) {
   await ensureAccount(workspaceId, userId);
   const sourceKey = String(body.source_key || body.task_id || "").trim();
   if (!sourceKey) throw new Error("source_key required");
-  const description = String(body.description || body.title || "Task completed");
+  const isBounty = body.bounty === true;
+  const delta = isBounty ? 2 : 1;
+  const baseDescription = String(body.description || body.title || "Task completed");
+  const description = isBounty ? `${baseDescription} (bounty)` : baseDescription;
   const { rows } = await pool.query(
     `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description)
-     VALUES ($1,$2,1,'task_complete',$3,$4)
+     VALUES ($1,$2,$3,'task_complete',$4,$5)
      ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
      RETURNING *`,
-    [workspaceId, userId || null, sourceKey, description]
+    [workspaceId, userId || null, delta, sourceKey, description]
   );
   let awarded = false;
   if (rows[0]) {
     awarded = true;
-    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + 1, updated_at=NOW() WHERE workspace_id=$1", [workspaceId]);
+    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
   }
   const state = await getState(workspaceId, userId);
-  return { awarded, account: state.account };
+  return { awarded, delta: rows[0] ? rows[0].delta : 0, account: state.account };
 }
 
 function chooseWeighted(rewards) {
@@ -460,6 +492,132 @@ function chooseWeighted(rewards) {
     if (roll <= 0) return r;
   }
   return rewards[rewards.length - 1];
+}
+
+function rewardSymbol(row) {
+  if (!row || row.kind === "miss") return "BUILD";
+  if (row.kind === "bank_gated") return (row.value_cents || row.unlock_threshold_cents || 0) >= 20000 ? "JACKPOT" : "GOLD";
+  if (row.kind === "small_paid") return "TREAT";
+  if (row.kind === "bank_builder") return "BANK";
+  if (row.kind === "sponsor") return "PLEDGE";
+  if (row.kind === "choice") return "PICK";
+  if (row.kind === "reroll") return "REROLL";
+  return "CARE";
+}
+
+function weightedBankScreenCount() {
+  const total = BANK_SCREEN_COUNT_WEIGHTS.reduce((sum, row) => sum + row[1], 0);
+  let roll = crypto.randomInt(total) + 1;
+  for (const [count, weight] of BANK_SCREEN_COUNT_WEIGHTS) {
+    roll -= weight;
+    if (roll <= 0) return count;
+  }
+  return 1;
+}
+
+function shouldHitScreenBankBuilder(selected, eligible) {
+  if (selected.kind === "bank_builder") return true;
+  const totalWeight = eligible.reduce((sum, r) => sum + r.weight, 0);
+  const bankBuilderWeight = eligible
+    .filter(r => r.kind === "bank_builder")
+    .reduce((sum, r) => sum + r.weight, 0);
+  const selectedBankRate = totalWeight > 0 ? bankBuilderWeight / totalWeight : 0;
+  if (selectedBankRate >= SCREEN_BANK_BUILDER_HIT_RATE) return false;
+  const extraRate = (SCREEN_BANK_BUILDER_HIT_RATE - selectedBankRate) / (1 - selectedBankRate);
+  return crypto.randomInt(1000000) < Math.floor(extraRate * 1000000);
+}
+
+function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
+  const board = Array.from({ length: SLOT_CELL_COUNT }, () => FILLER_SYMBOLS[crypto.randomInt(FILLER_SYMBOLS.length)]);
+  const protectedCells = new Set();
+  const selectedSymbol = rewardSymbol(selected);
+  const isMiss = selected.kind === "miss";
+
+  if (!isMiss && selected.kind !== "bank_builder") {
+    const line = PAYLINES[crypto.randomInt(PAYLINES.length)];
+    line.forEach(i => {
+      board[i] = selectedSymbol;
+      protectedCells.add(i);
+    });
+  } else {
+    for (let i = 0; i < 4; i++) {
+      board[crypto.randomInt(SLOT_CELL_COUNT)] = TEASER_SYMBOLS[crypto.randomInt(TEASER_SYMBOLS.length)];
+    }
+  }
+
+  if (screenBankHit) {
+    const openCells = Array.from({ length: SLOT_CELL_COUNT }, (_, i) => i).filter(i => !protectedCells.has(i));
+    const bankCount = Math.min(weightedBankScreenCount(), openCells.length);
+    for (let i = 0; i < bankCount; i++) {
+      const pick = crypto.randomInt(openCells.length);
+      board[openCells[pick]] = "BANK";
+      openCells.splice(pick, 1);
+    }
+  }
+
+  const payout = calculateScreenBankPayout(board, account, bankUsage);
+  return { board, payout };
+}
+
+function calculateScreenBankPayout(board, account, bankUsage) {
+  const positions = [];
+  for (let i = 0; i < board.length; i++) {
+    if (board[i] === "BANK") positions.push(i);
+  }
+
+  const horizontalGroups = [];
+  for (let row = 0; row < SLOT_ROWS; row++) {
+    let run = [];
+    for (let col = 0; col < SLOT_COLS; col++) {
+      const idx = row * SLOT_COLS + col;
+      if (board[idx] === "BANK") run.push(idx);
+      if (board[idx] !== "BANK" || col === SLOT_COLS - 1) {
+        if (run.length >= 2) horizontalGroups.push([...run]);
+        run = [];
+      }
+    }
+  }
+
+  const verticalGroups = [];
+  for (let col = 0; col < SLOT_COLS; col++) {
+    let run = [];
+    for (let row = 0; row < SLOT_ROWS; row++) {
+      const idx = row * SLOT_COLS + col;
+      if (board[idx] === "BANK") run.push(idx);
+      if (board[idx] !== "BANK" || row === SLOT_ROWS - 1) {
+        if (run.length >= 2) verticalGroups.push([...run]);
+        run = [];
+      }
+    }
+  }
+
+  const baseCents = Math.floor(((account && account.bank_balance_cents) || 0) * SCREEN_BANK_BUILDER_PERCENT);
+  const baseUnits = positions.length;
+  const horizontalBonusUnits = horizontalGroups.reduce((sum, group) => sum + group.length * (group.length - 1), 0);
+  const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
+  const units = baseUnits + horizontalBonusUnits + verticalBonusUnits;
+  const rawCents = baseCents * units;
+  const remainingCap = Math.max(0, Math.min(
+    DAILY_BANK_CAP_CENTS - ((bankUsage && bankUsage.today) || 0),
+    WEEKLY_BANK_CAP_CENTS - ((bankUsage && bankUsage.week) || 0)
+  ));
+  const cents = Math.min(rawCents, remainingCap);
+
+  return {
+    source_type: "slot_screen_bank_builder",
+    positions,
+    horizontal_groups: horizontalGroups,
+    vertical_groups: verticalGroups,
+    base_cents: baseCents,
+    base_units: baseUnits,
+    horizontal_bonus_units: horizontalBonusUnits,
+    vertical_bonus_units: verticalBonusUnits,
+    units,
+    raw_cents: rawCents,
+    cents,
+    capped: cents < rawCents,
+    percent: SCREEN_BANK_BUILDER_PERCENT,
+  };
 }
 
 async function spin(workspaceId, userId) {
@@ -476,9 +634,17 @@ async function spin(workspaceId, userId) {
     throw err;
   }
   const selected = chooseWeighted(eligible);
+  const screen = buildSpinScreen(selected, state.account, state.bankUsage, shouldHitScreenBankBuilder(selected, eligible));
+  const bankDelta = screen.payout.cents || 0;
+  const selectedSnapshot = {
+    ...selected,
+    source_type: bankDelta > 0 ? "slot_screen_bank_builder" : selected.source_type,
+    screen_board: screen.board,
+    bank_screen_payout: screen.payout,
+  };
   const status = selected.kind === "miss"
-    ? "miss"
-    : selected.requires_confirmation || selected.kind === "bank_builder" || ["small_paid", "bank_gated", "sponsor", "choice"].includes(selected.kind)
+    ? bankDelta > 0 ? "pending" : "miss"
+    : selected.requires_confirmation || selected.kind === "bank_builder" || bankDelta > 0 || ["small_paid", "bank_gated", "sponsor", "choice"].includes(selected.kind)
     ? "pending"
     : "awarded";
   const bankReserved = ["small_paid", "bank_gated"].includes(selected.kind) ? Math.max(selected.value_cents, selected.unlock_threshold_cents) : 0;
@@ -496,7 +662,7 @@ async function spin(workspaceId, userId) {
        (workspace_id,user_id,cost_credits,reward_id,reward_snapshot,status,bank_delta_cents,bank_reserved_cents)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING *`,
-      [workspaceId, userId || null, DEFAULT_SPIN_COST, selected.id, selected, status, selected.bank_delta_cents || 0, bankReserved]
+      [workspaceId, userId || null, DEFAULT_SPIN_COST, selected.id, selectedSnapshot, status, bankDelta, bankReserved]
     );
     await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
     await client.query("COMMIT");
@@ -523,12 +689,14 @@ async function confirmSpin(workspaceId, spinId) {
     const snapshot = spinRow.reward_snapshot || {};
     let accountUpdate = "";
     const params = [workspaceId];
-    if (snapshot.kind === "bank_builder" && spinRow.bank_delta_cents > 0) {
-      accountUpdate = "bank_balance_cents = bank_balance_cents + $2,";
-      params.push(spinRow.bank_delta_cents);
-    } else if (["small_paid", "bank_gated"].includes(snapshot.kind) && spinRow.bank_reserved_cents > 0) {
-      accountUpdate = "bank_balance_cents = GREATEST(0, bank_balance_cents - $2),";
-      params.push(spinRow.bank_reserved_cents);
+    const bankDelta = spinRow.bank_delta_cents > 0 ? spinRow.bank_delta_cents : 0;
+    const reservedDelta = ["small_paid", "bank_gated"].includes(snapshot.kind) && spinRow.bank_reserved_cents > 0
+      ? spinRow.bank_reserved_cents
+      : 0;
+    const netBankDelta = bankDelta - reservedDelta;
+    if (netBankDelta !== 0) {
+      accountUpdate = "bank_balance_cents = GREATEST(0, bank_balance_cents + $2),";
+      params.push(netBankDelta);
     }
     if (accountUpdate) {
       await client.query(`UPDATE slot_accounts SET ${accountUpdate} updated_at=NOW() WHERE workspace_id=$1`, params);
@@ -556,7 +724,12 @@ async function confirmPendingBankBuilders(workspaceId) {
        FROM slot_spins
        WHERE workspace_id=$1
          AND status='pending'
-         AND reward_snapshot->>'kind' = 'bank_builder'
+         AND bank_delta_cents > 0
+         AND bank_reserved_cents = 0
+         AND (
+           reward_snapshot->>'kind' = 'bank_builder'
+           OR reward_snapshot->>'source_type' = 'slot_screen_bank_builder'
+         )
        FOR UPDATE`,
       [workspaceId]
     );
@@ -571,7 +744,12 @@ async function confirmPendingBankBuilders(workspaceId) {
          SET status='confirmed', confirmed_at=NOW()
          WHERE workspace_id=$1
            AND status='pending'
-           AND reward_snapshot->>'kind' = 'bank_builder'`,
+           AND bank_delta_cents > 0
+           AND bank_reserved_cents = 0
+           AND (
+             reward_snapshot->>'kind' = 'bank_builder'
+             OR reward_snapshot->>'source_type' = 'slot_screen_bank_builder'
+           )`,
         [workspaceId]
       );
     }
