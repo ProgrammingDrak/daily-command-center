@@ -106,9 +106,17 @@ function buildSchedule(){
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
   const bountySvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
   const pointsChip=ev=>{
-    if(isMeeting(ev)||ev.type==="ooo"||ev.type==="break")return "";
-    const pts=(typeof isBountyTask==="function"&&isBountyTask(ev.id))?2:1;
-    return '<span class="points-chip'+(pts>1?' bonus':'')+'" title="Completing this task earns '+pts+' slot credit'+(pts===1?'':'s')+'">'+pts+' pt'+(pts===1?'':'s')+'</span>';
+    const bounty=typeof isBountyTask==="function"&&isBountyTask(ev.id);
+    const payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
+      ? window.TaskPoints.buildPayload(ev,{bounty})
+      : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty};
+    const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
+      ? window.TaskPoints.estimate(payload)
+      : {eligible:!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break",awardPoints:bounty?28:14,durationMinutes:60,effortTier:"medium",attentionTier:"normal"};
+    if(!scoring.eligible||scoring.awardPoints<=0)return "";
+    const pts=scoring.awardPoints;
+    const title="Completing this task earns about "+pts+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention"+(bounty?", bounty x2":"")+".";
+    return '<span class="points-chip'+(bounty||pts>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+pts+' pts</span>';
   };
 
   // Render done items as compact one-liners
@@ -295,7 +303,7 @@ function buildSchedule(){
             '</div>'+
           '</div>'+
           notesButton(ev)+
-          (!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty)?'<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Bounty locked here: this task pays 2 credits':"Place today's bounty here")+'">'+(isBounty?'<span>2x</span>':bountySvg)+'</button>':'')+
+          (!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty)?'<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Bounty locked here: this task pays 2x points':"Place today's bounty here")+'">'+(isBounty?'<span>2x</span>':bountySvg)+'</button>':'')+
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Mark as trivial — move to triage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+

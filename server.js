@@ -25,6 +25,7 @@ const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
+const evaluationRoutes = require("./evaluation/routes");
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
@@ -156,6 +157,8 @@ app.post("/api/auth/register", async (req, res) => {
     res.status(201).json({ ok: true, username: result.user.username, workspaceId: result.workspaceId });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+app.use(evaluationRoutes(blockDB));
 
 // ── SSE ──
 const sseClients = new Map();

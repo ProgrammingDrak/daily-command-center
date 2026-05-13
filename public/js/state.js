@@ -62,7 +62,7 @@ function saveDeferred(arr){
 }
 
 // ======== DAILY BOUNTY ========
-// One immutable "today succeeds if this gets done" marker. Completion pays 2 slot credits.
+// One immutable "today succeeds if this gets done" marker. Completion pays 2x points.
 let BOUNTY_KEY = "pa-bounty-" + ((__state && __state.date) ? __state.date : "unknown");
 function loadBountyState(){
   if(window.USE_BLOCKSTORE&&window.blockStore){
@@ -103,7 +103,7 @@ function placeBounty(id){
   dailyBounty={taskId:ev.id,taskTitle:ev.title,placedAt:new Date().toISOString()};
   saveBountyState();
   log("bounty",ev.id,"Bounty placed: "+ev.title);
-  if(typeof showToast==="function")showToast("Bounty locked: "+ev.title+" pays 2 credits","success");
+  if(typeof showToast==="function")showToast("Bounty locked: "+ev.title+" pays 2x points","success");
   render();
 }
 

@@ -979,10 +979,10 @@
     <div class="slots-topline">
       <div>
         <h2 class="slots-title">Task House Jackpot</h2>
-        <div class="slots-subtitle">Complete tasks, earn credits, build the bank, and let the house reels decide.</div>
+        <div class="slots-subtitle">Complete tasks, earn points, build the bank, and let the house reels decide.</div>
       </div>
       <div class="slots-balances">
-        <div class="slots-balance"><span>Credits</span><strong id="slot-credit-balance">0</strong></div>
+        <div class="slots-balance"><span>Points</span><strong id="slot-credit-balance">0</strong></div>
         <div class="slots-balance slots-bank">
           <span>Piggy Bank</span>
           <strong id="slot-bank-balance">$0.00</strong>
@@ -1018,6 +1018,7 @@
           <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
           <button class="slot-refresh-btn" id="slot-refresh-btn" type="button">Refresh</button>
         </div>
+        <div class="slot-spin-cost" id="slot-spin-cost">10 pts per spin</div>
         <div class="slot-cap-row">
           <span id="slot-daily-cap">Daily bank cap: $0.00 / $50.00</span>
           <span id="slot-weekly-cap">Weekly bank cap: $0.00 / $150.00</span>
@@ -1068,6 +1069,45 @@
         <div class="slot-reward-list" id="slot-reward-list"></div>
       </section>
     </div>
+    <section class="ev-calculator" id="ev-calculator">
+      <div class="ev-header">
+        <div>
+          <h3>EV Calculator</h3>
+          <p>Informational only. These results do not change task points, spins, rewards, or balances.</p>
+        </div>
+        <button id="ev-calculate" class="slot-small-btn primary" type="button">Calculate</button>
+      </div>
+      <div class="ev-grid">
+        <label>Category
+          <select id="ev-category">
+            <option value="work">Work</option>
+            <option value="financial">Financial</option>
+            <option value="personal">Personal</option>
+            <option value="health">Health</option>
+            <option value="relationship">Relationship</option>
+            <option value="learning">Learning</option>
+          </select>
+        </label>
+        <label>Time hours
+          <input id="ev-time" type="number" min="0" step="0.25" value="1">
+        </label>
+        <label>Energy
+          <input id="ev-energy" type="number" min="0" step="1" value="1">
+        </label>
+        <label>Attention
+          <input id="ev-attention" type="number" min="0" step="1" value="1">
+        </label>
+        <label>Money risk
+          <input id="ev-money" type="number" min="0" step="1" value="0">
+        </label>
+      </div>
+      <div class="ev-outcomes-head">
+        <span>Outcome</span><span>Probability %</span><span>Value units</span><span></span>
+      </div>
+      <div class="ev-outcomes" id="ev-outcomes"></div>
+      <button id="ev-add-outcome" class="slot-small-btn" type="button">Add outcome</button>
+      <div class="ev-result" id="ev-result"></div>
+    </section>
   </div>
 </div>
 
@@ -1083,6 +1123,7 @@
 <script src="/public/js/data.js"></script>
 <script src="/public/js/persistence.js"></script>
 <script src="/public/js/state.js"></script>
+<script src="/public/js/points.js"></script>
 <script src="/public/js/schedule.js"></script>
 <script src="/public/js/drag.js"></script>
 <script src="/public/js/clock.js"></script>
@@ -1102,6 +1143,7 @@
 <script src="/public/js/block-store.js"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/slots.js"></script>
+<script src="/public/js/ev-calculator.js"></script>
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script>

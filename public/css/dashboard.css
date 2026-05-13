@@ -1993,6 +1993,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @keyframes slotBankFlow{0%{opacity:0;transform:translate(0,0) scale(0.7)}18%{opacity:1;transform:translate(0,0) scale(1.35)}100%{opacity:0;transform:translate(var(--slot-flow-x),var(--slot-flow-y)) scale(0.35)}}
 .slot-result{min-height:44px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,196,87,0.24);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.4;color:var(--text)}
 .slot-actions{display:flex;gap:8px;margin-top:12px}
+.slot-spin-cost{margin-top:7px;font-size:11px;color:var(--text-muted);text-align:center}
 .slot-spin-btn,.slot-refresh-btn,.slot-small-btn,.slot-mini{border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-muted);cursor:pointer;font-family:inherit;font-weight:700;transition:border-color 0.12s,color 0.12s,background 0.12s}
 .slot-spin-btn{flex:1;background:var(--accent);border-color:var(--accent);color:white;font-size:14px;padding:10px 14px}
 .slot-spin-btn:disabled{opacity:0.45;cursor:not-allowed}
@@ -2040,9 +2041,34 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-delete-confirm span{margin-right:auto;white-space:nowrap;color:var(--text)}
 .slot-delete-confirm .slot-mini{position:relative;z-index:1}
 .slot-empty{padding:18px;text-align:center;color:var(--text-muted);font-size:12px;border:1px dashed var(--border);border-radius:8px}
+.ev-calculator{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px}
+.ev-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
+.ev-header h3{margin:0;font-size:15px;color:var(--text)}
+.ev-header p{margin:4px 0 0;color:var(--text-muted);font-size:12px}
+.ev-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.ev-grid label{display:flex;flex-direction:column;gap:5px;color:var(--text-muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.4px}
+.ev-grid input,.ev-grid select,.ev-outcome-row input{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;padding:8px 9px;outline:none}
+.ev-grid input:focus,.ev-grid select:focus,.ev-outcome-row input:focus{border-color:var(--accent)}
+.ev-outcomes-head,.ev-outcome-row{display:grid;grid-template-columns:1.3fr 120px 120px 34px;gap:8px;align-items:center}
+.ev-outcomes-head{font-size:10px;color:var(--text-muted);font-weight:800;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px}
+.ev-outcomes{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+.ev-remove-outcome{height:32px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-muted);cursor:pointer;font-weight:800}
+.ev-remove-outcome:hover{border-color:var(--red);color:var(--red)}
+.ev-result{margin-top:12px;min-height:36px;color:var(--text-muted);font-size:12px}
+.ev-result-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.ev-result-grid div{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px}
+.ev-result-grid span{display:block;font-size:10px;color:var(--text-muted);font-weight:800;text-transform:uppercase}
+.ev-result-grid strong{display:block;margin-top:4px;color:var(--text);font-size:15px;font-variant-numeric:tabular-nums}
+.ev-result-grid strong.positive{color:var(--green)}
+.ev-result-grid strong.negative{color:var(--red)}
+.ev-warnings{margin:10px 0 0;padding-left:18px;color:var(--amber)}
+.ev-ok{margin-top:10px;color:var(--green)}
+.ev-error{color:var(--red)}
 @media (max-width: 900px){
   .slots-grid{grid-template-columns:1fr}
   .slot-form-grid{grid-template-columns:1fr 1fr}
+  .ev-grid,.ev-result-grid{grid-template-columns:1fr 1fr}
+  .ev-outcomes-head,.ev-outcome-row{grid-template-columns:1fr 84px 84px 34px}
 }
 @media (max-width: 560px){
   .slot-reels{gap:4px;padding:8px}
@@ -2052,4 +2078,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .slot-delete-confirm{position:static;order:10;width:100%;box-sizing:border-box;margin-top:4px}
   .slot-delete-confirm:before{display:none}
   .slot-form-grid{grid-template-columns:1fr}
+  .ev-grid,.ev-result-grid{grid-template-columns:1fr}
+  .ev-outcomes-head{display:none}
+  .ev-outcome-row{grid-template-columns:1fr 1fr 1fr 34px}
 }
