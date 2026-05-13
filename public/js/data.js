@@ -149,7 +149,8 @@ function transformState(state) {
         type: typeMap[item.type] || "task",
         meta: (item.priority ? item.priority + " priority" : "") +
               (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
-        detail: item.description || "", source: item.source || "manual",
+        detail: item.detail || item.description || item.notes || "", source: item.source || "manual",
+        notes: item.notes || item.description || item.detail || "",
         gcal_calendar_id: item.gcal_calendar_id || "",
         gcal_calendar_name: item.gcal_calendar_name || "",
         gcal_account_key: item.gcal_account_key || "",

@@ -96,6 +96,34 @@ function saveNotes(data) {
   localStorage.setItem(NOTES_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
+function calendarSeedNoteForTask(taskId, ev) {
+  const pools = [];
+  if (ev) pools.push([ev]);
+  if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) pools.push(scheduled);
+  if (typeof INIT_SCHED !== "undefined" && Array.isArray(INIT_SCHED)) pools.push(INIT_SCHED);
+  for (const pool of pools) {
+    const item = pool.find(e => e && e.id === taskId);
+    if (!item) continue;
+    const isCalendar = item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id;
+    if (!isCalendar) continue;
+    const seed = item.notes || item.detail || item.description || "";
+    if (typeof seed === "string" && seed.trim()) return seed;
+  }
+  return "";
+}
+
+function noteBlocksForTask(taskId, noteVal, ev) {
+  if(noteVal && typeof noteVal==="object" && noteVal.blocks && noteVal.blocks.length){
+    return noteVal.blocks;
+  } else if(noteVal && typeof noteVal==="object" && noteVal.html){
+    return migrateHtmlToBlocks(noteVal.html);
+  } else if(typeof noteVal==="string" && noteVal){
+    return migrateHtmlToBlocks(noteVal);
+  }
+  const seed = calendarSeedNoteForTask(taskId, ev);
+  return seed ? migrateHtmlToBlocks(seed) : null;
+}
+
 function loadActions() {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.actions && window.blockStore) {
     const actionBlocks = [...window.blockStore.getByType("action_item"),...window.blockStore.getByType("block").filter(b=>((b.properties||{}).tags||[]).includes("action-item"))];
@@ -257,15 +285,7 @@ function openNotesDrawer(taskId, taskTitle) {
   const val = notes[taskId];
   const container = document.getElementById("notes-block-editor");
 
-  // Determine initial blocks
-  let initialBlocks=null;
-  if(val && typeof val==="object" && val.blocks && val.blocks.length){
-    initialBlocks=val.blocks;
-  } else if(val && typeof val==="object" && val.html){
-    initialBlocks=migrateHtmlToBlocks(val.html);
-  } else if(typeof val==="string" && val){
-    initialBlocks=migrateHtmlToBlocks(val);
-  }
+  const initialBlocks=noteBlocksForTask(taskId, val);
 
   // Create or re-initialize block editor
   if(window._notesBlockEditor) window._notesBlockEditor.destroy();

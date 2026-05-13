@@ -6,10 +6,26 @@ let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, nextId=200, sc
 function qaId(){return "qa-"+Date.now()+"-"+Math.random().toString(36).slice(2,7)}
 
 // ======== UTILS ========
-function pt(s){const[h,m]=s.split(":").map(Number);return h*60+m}
+function pt(s){
+  if(s instanceof Date)return s.getHours()*60+s.getMinutes();
+  if(typeof s==="number")return s;
+  const raw=String(s||"").trim();
+  if(!raw)return 0;
+  if(raw.includes("T")){
+    const d=new Date(raw);
+    if(!Number.isNaN(d.getTime()))return d.getHours()*60+d.getMinutes();
+  }
+  const m=raw.match(/(\d{1,2}):(\d{2})(?:\s*([AP]M))?/i);
+  if(!m)return 0;
+  let h=parseInt(m[1],10),min=parseInt(m[2],10);
+  const ap=m[3]?m[3].toUpperCase():null;
+  if(ap==="AM")h=h===12?0:h;
+  else if(ap==="PM")h=h===12?12:(h<12?h+12:h);
+  return ((h%24)+24)%24*60+min;
+}
 function fmt(mins){return String(Math.floor(mins/60)).padStart(2,"0")+":"+String(mins%60).padStart(2,"0")}
 function ms(m){return m>=60?Math.floor(m/60)+"h"+(m%60?" "+m%60+"m":""):m+"m"}
-function f12(s){const[h,m]=s.split(":").map(Number);const a=h>=12?"PM":"AM";return(h>12?h-12:h||12)+":"+String(m).padStart(2,"0")+" "+a}
+function f12(s){const mins=pt(s),h=Math.floor(mins/60)%24,m=mins%60,a=h>=12?"PM":"AM",h12=h%12||12;return h12+":"+String(m).padStart(2,"0")+" "+a}
 function dur(ev){return pt(ev.end)-pt(ev.start)}
 function origDur(id){const o=INIT_SCHED.find(e=>e.id===id);return o?dur(o):0}
 function isMeeting(ev){return ev.type==="meeting"||ev.type==="oneone"}
