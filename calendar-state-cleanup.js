@@ -7,9 +7,10 @@
 
 const pool = require("./pg-pool");
 
-const RUN_KEY = "calendar-state-gcal-authoritative-20260513-v2";
+const RUN_KEY = "calendar-state-gcal-authoritative-20260513-v3";
 const LOOKBACK_DAYS = 90;
 const LOOKAHEAD_DAYS = 365;
+const GENERATED_CALENDAR_RE_SQL = "(time\\s*blocking|daily command center|dcc generated|dcc time|codex packet)";
 
 function parseJson(value, fallback) {
   if (!value) return fallback;
@@ -246,6 +247,20 @@ async function pruneOrphanedGcalBlocks(startDate, endDate) {
   return { orphanBlocksRemoved: blockIds.length, orphanEventRowsRemoved };
 }
 
+async function unselectGeneratedPlanningCalendars() {
+  const result = await pool.query(
+    `UPDATE gcal_calendars
+     SET selected = FALSE, updated_at = NOW()
+     WHERE selected = TRUE
+       AND summary ~* $1`,
+    [GENERATED_CALENDAR_RE_SQL]
+  );
+  if (result.rowCount) {
+    console.log(`[calendar-cleanup] Unselected ${result.rowCount} generated planning calendar(s)`);
+  }
+  return { generatedCalendarsUnselected: result.rowCount || 0 };
+}
+
 async function rewritePaStateWindow(startDate, endDate) {
   const { rows } = await pool.query(
     `SELECT date, state_json, user_id, workspace_id
@@ -307,9 +322,10 @@ async function runOnce({ gcalSync, now = new Date() }) {
   console.log(`[calendar-cleanup] Backup table created: ${backupName}`);
 
   const syncStats = await fullSyncAuthenticatedUsers(gcalSync);
+  const generatedCalendarStats = await unselectGeneratedPlanningCalendars();
   const orphanStats = await pruneOrphanedGcalBlocks(startDate, endDate);
   const stateStats = await rewritePaStateWindow(startDate, endDate);
-  const result = { backupName, startDate, endDate, ...syncStats, ...orphanStats, ...stateStats };
+  const result = { backupName, startDate, endDate, ...syncStats, ...generatedCalendarStats, ...orphanStats, ...stateStats };
 
   await pool.query(
     "INSERT INTO maintenance_runs (key, ran_at, result) VALUES ($1, NOW(), $2) ON CONFLICT (key) DO NOTHING",

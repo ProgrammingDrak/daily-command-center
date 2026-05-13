@@ -18,6 +18,7 @@ const syncState = new Map();
 const calendarListRefreshAt = new Map();
 const CALENDAR_LIST_REFRESH_MS = 15 * 60 * 1000;
 const APP_TIME_ZONE = process.env.DCC_TIME_ZONE || process.env.APP_TIME_ZONE || "America/New_York";
+const GENERATED_CALENDAR_RE = /\b(time\s*blocking|daily command center|dcc generated|dcc time|codex packet)\b/i;
 let _pollTimer = null;
 let _broadcast = null;
 let _syncInProgress = false;
@@ -394,11 +395,12 @@ async function cacheCalendarsToDb(calendars, account = { key: gcalAuth.DEFAULT_A
   const fetchedIds = [];
   for (const cal of calendars) {
     fetchedIds.push(cal.id);
+    const defaultSelected = cal.selected !== false && !GENERATED_CALENDAR_RE.test(cal.summary || "");
     await pool.query(
       `INSERT INTO gcal_calendars (id, summary, description, background_color, foreground_color, is_primary, access_role, selected, updated_at, account_key, account_email)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        ON CONFLICT(id, account_key) DO UPDATE SET summary=EXCLUDED.summary, description=EXCLUDED.description, background_color=EXCLUDED.background_color, foreground_color=EXCLUDED.foreground_color, is_primary=EXCLUDED.is_primary, access_role=EXCLUDED.access_role, updated_at=EXCLUDED.updated_at, account_email=EXCLUDED.account_email`,
-      [cal.id, cal.summary, cal.description||"", cal.backgroundColor||"#4285f4", cal.foregroundColor||"#ffffff", !!cal.primary, cal.accessRole||"reader", cal.selected!==false, now, accountKey, account.email || null]
+      [cal.id, cal.summary, cal.description||"", cal.backgroundColor||"#4285f4", cal.foregroundColor||"#ffffff", !!cal.primary, cal.accessRole||"reader", defaultSelected, now, accountKey, account.email || null]
     );
   }
   if (fetchedIds.length) {
