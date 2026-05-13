@@ -12,6 +12,7 @@
 
   const CLIENT_ID = crypto.randomUUID();
   const WAL_KEY = "blockstore-wal"; // durable write-ahead log in localStorage
+  const WAL_DEAD_LETTER_KEY = "blockstore-wal-dead-letter";
   const WAL_LEGACY_SESSION_KEY = "blockstore-wal"; // same name, older sessionStorage home
 
   // ── Partitioned Cache ──
@@ -64,6 +65,16 @@
     try { return JSON.parse(localStorage.getItem(WAL_KEY) || "[]"); } catch { return []; }
   }
 
+  function walMoveToDeadLetter(entry, reason) {
+    if (!entry) return;
+    try {
+      const dead = JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY) || "[]");
+      dead.push({ ...entry, deadLetteredAt: new Date().toISOString(), reason: reason || "permanent failure" });
+      localStorage.setItem(WAL_DEAD_LETTER_KEY, JSON.stringify(dead.slice(-50)));
+    } catch {}
+    walRemove(entry._walId);
+  }
+
   // Migrate any entries left over from the sessionStorage era. Older clients
   // that still have a session open will already have populated the sessionStorage
   // WAL; move that content so it gets replayed alongside new localStorage entries.
@@ -90,7 +101,9 @@
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `API error ${res.status}`);
+      const e = new Error(err.error || `API error ${res.status}`);
+      e.status = res.status;
+      throw e;
     }
     return res.json();
   }
@@ -103,7 +116,9 @@
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `API error ${res.status}`);
+      const e = new Error(err.error || `API error ${res.status}`);
+      e.status = res.status;
+      throw e;
     }
     return res.json();
   }
@@ -112,7 +127,9 @@
     const res = await fetch(url + "?_clientId=" + CLIENT_ID, { method: "DELETE" });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `API error ${res.status}`);
+      const e = new Error(err.error || `API error ${res.status}`);
+      e.status = res.status;
+      throw e;
     }
     return res.json();
   }
@@ -196,6 +213,14 @@
   // Replays every pending mutation and removes each entry on its own success.
   // Failures stay queued so the next reconnect (or next boot) can retry them --
   // a partial failure no longer wipes the unreplayed entries.
+  function isPermanentReplayFailure(entry, err) {
+    if (!entry || !err) return false;
+    if (err.status === 401 || err.status === 403) return false;
+    if ((entry.op === "update" || entry.op === "delete") && err.status === 404) return true;
+    if (entry.op === "batch" && err.status === 400 && /Block not found|invalid input syntax/i.test(err.message || "")) return true;
+    return false;
+  }
+
   let _replaying = false;
   async function replayWAL() {
     if (_replaying) return; // avoid overlapping replays (SSE reconnect + boot)
@@ -203,7 +228,7 @@
     if (!entries.length) return;
     _replaying = true;
     console.log("[BlockStore] Replaying", entries.length, "buffered writes...");
-    let succeeded = 0, failed = 0;
+    let succeeded = 0, failed = 0, dropped = 0;
     for (const entry of entries) {
       try {
         switch (entry.op) {
@@ -223,16 +248,22 @@
         walRemove(entry._walId);
         succeeded++;
       } catch (e) {
+        if (isPermanentReplayFailure(entry, e)) {
+          walMoveToDeadLetter(entry, `${e.status || "error"} ${e.message || ""}`.trim());
+          dropped++;
+          console.warn("[BlockStore] WAL replay moved stale entry to dead-letter:", entry.op, entry.id || "", e.message);
+          continue;
+        }
         failed++;
         console.warn("[BlockStore] WAL replay failed for", entry.op, entry.id || "", e.message);
       }
     }
     _replaying = false;
     if (failed === 0) {
-      console.log("[BlockStore] WAL replay complete (", succeeded, "writes )");
+      console.log("[BlockStore] WAL replay complete (", succeeded, "writes,", dropped, "stale dropped )");
       setSaved();
     } else {
-      console.warn("[BlockStore] WAL replay:", succeeded, "ok,", failed, "still queued for retry");
+      console.warn("[BlockStore] WAL replay:", succeeded, "ok,", dropped, "stale dropped,", failed, "still queued for retry");
       setError(failed + " edits pending — will retry");
     }
   }
@@ -529,7 +560,8 @@
         currentDate: _currentDate,
         dayCacheSize: _dayCache.size,
         globalCacheSize: _globalCache.size,
-        walEntries: walGet().length
+        walEntries: walGet().length,
+        deadLetterEntries: (() => { try { return JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY) || "[]").length; } catch { return 0; } })()
       };
     }
   };
