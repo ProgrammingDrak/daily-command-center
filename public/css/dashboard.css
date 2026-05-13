@@ -1275,6 +1275,11 @@
   .side-drawer-handle:hover{background:var(--card-hover,rgba(255,255,255,0.05));color:var(--text)}
   .side-drawer.open .side-drawer-handle{display:none}
   .side-drawer-handle-label{display:inline-flex;align-items:center;gap:6px}
+  .sidecar-tabs{position:fixed;top:244px;right:0;z-index:455;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+  .sidecar-tab{min-height:102px;width:30px;padding:12px 5px;background:rgba(15,23,42,0.92);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;writing-mode:vertical-rl;font-size:11px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;transition:background 150ms ease,color 150ms ease,border-color 150ms ease}
+  .sidecar-tab:hover{background:var(--card-hover,rgba(255,255,255,0.05));color:var(--text);border-color:var(--accent)}
+  .sidecar-tab .badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,0.16);color:var(--accent-light);letter-spacing:0;text-transform:none}
+  .side-drawer.open .sidecar-tabs{display:none}
   .side-drawer-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
   .side-drawer-header h3{font-size:14px;font-weight:700;margin:0;color:var(--accent-light)}
   .side-drawer-close{background:transparent;border:none;color:var(--text-muted);font-size:22px;line-height:1;cursor:pointer;padding:0 4px}
@@ -1331,10 +1336,13 @@
   @media (max-width:1023px){
     .side-drawer-body{width:min(92vw,360px)}
     .side-drawer-handle{min-height:80px;width:28px;font-size:11px}
+    .sidecar-tabs{top:226px}
+    .sidecar-tab{min-height:88px;width:28px;font-size:10px}
   }
   @media (max-width:600px){
     .side-drawer-body{width:min(96vw,340px)}
     .side-drawer-handle-label .badge{display:none}
+    .sidecar-tab .badge{display:none !important}
   }
 
   /* ── Prep Status Flags (schedule cards) ── */
@@ -1545,11 +1553,6 @@
   .ft-fab:hover{transform:scale(1.08);box-shadow:0 6px 20px rgba(59,130,246,0.5)}
   .ft-fab-badge{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:var(--green);border:2px solid var(--bg)}
 
-  /* Floating Trivial bubble (sits to the left of the focus-timer FAB) */
-  .float-trivial{position:fixed;bottom:30px;right:92px;z-index:1000;width:48px;height:48px;border-radius:50%;background:var(--purple,#a78bfa);border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(167,139,250,0.45);transition:transform 0.15s,box-shadow 0.15s;font-weight:700}
-  .float-trivial:hover{transform:scale(1.08);box-shadow:0 6px 20px rgba(167,139,250,0.55)}
-  .float-trivial-count{font-size:18px;line-height:1}
-  .float-trivial[data-overflow="true"] .float-trivial-count{font-size:14px}
   .ft-mini{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:24px;padding:6px 12px 6px 8px;box-shadow:0 4px 16px rgba(0,0,0,0.3);cursor:pointer;min-width:200px;transition:box-shadow 0.15s}
   .ft-mini:hover{box-shadow:0 6px 20px rgba(0,0,0,0.4)}
   .ft-mini-ring{width:28px;height:28px;flex-shrink:0}
@@ -1890,8 +1893,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .resp-small-btn{font-size:12px;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text-muted);cursor:pointer}
 .resp-small-btn:hover{border-color:var(--accent);color:var(--accent-light)}
 .resp-capture{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-bottom:12px}
-.resp-capture textarea{min-height:72px;resize:vertical;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;font-size:13px;padding:10px;line-height:1.4}
-.resp-capture textarea:focus{outline:none;border-color:var(--accent)}
+.resp-capture-editor .nb-editor{min-height:72px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;font-size:13px;padding:8px 6px;line-height:1.4;overflow-y:auto}
+.resp-capture-editor .nb-editor:focus-within{border-color:var(--accent)}
 .resp-capture button{align-self:stretch;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:white;padding:0 16px;cursor:pointer;font-weight:600}
 .responsibilities-list{display:flex;flex-direction:column;gap:8px}
 .resp-card{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:12px;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;transition:border-color 0.12s,background 0.12s}

@@ -4,6 +4,7 @@
 (function(){
   let _items = [];
   let _filter = "active";
+  let _captureEditor = null;
 
   function esc(s){
     if(s==null)return "";
@@ -187,13 +188,15 @@
 
   async function captureResponsibility(){
     const el=document.getElementById("resp-capture-text");
-    const text=el?el.value.trim():"";
+    const editor=_captureEditor || window._respCaptureBlockEditor;
+    const text=editor?editor.toMarkdown().trim():(el&&"value" in el?el.value.trim():"");
     if(!text){if(typeof showToast==="function")showToast("Paste something to capture first","error");return;}
     try{
       const res=await fetch("/api/responsibilities/capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
       if(!res.ok)throw new Error((await res.json()).error||res.statusText);
       const data=await res.json();
-      if(el)el.value="";
+      if(editor)editor.setBlocks(null);
+      else if(el&&"value" in el)el.value="";
       await loadResponsibilities();
       if(data.task&&data.task.properties&&data.task.properties.local_id){
         if(typeof showToast==="function")showToast(data.duplicate?"Alert already captured":"Alert captured and scheduled","success");
@@ -229,6 +232,14 @@
   }
 
   function bindResponsibilities(){
+    const captureMount=document.getElementById("resp-capture-text");
+    if(captureMount && typeof createBlockEditor==="function"){
+      if(window._respCaptureBlockEditor)window._respCaptureBlockEditor.destroy();
+      _captureEditor=createBlockEditor(captureMount,null,{
+        placeholder:captureMount.dataset.placeholder||"Paste a responsibility, Slack alert text, or screenshot OCR here..."
+      });
+      window._respCaptureBlockEditor=_captureEditor;
+    }
     document.querySelectorAll(".resp-filter-btn").forEach(btn=>{
       btn.addEventListener("click",()=>{
         document.querySelectorAll(".resp-filter-btn").forEach(b=>b.classList.remove("active"));

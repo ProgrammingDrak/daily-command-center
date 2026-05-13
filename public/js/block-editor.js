@@ -50,7 +50,7 @@ function blockClass(block){
   return cls;
 }
 
-function createBlockEl(block){
+function createBlockEl(block, placeholder){
   if(block.type==='image'){
     const el=document.createElement('div');
     el.className='nb-attachment';
@@ -83,9 +83,10 @@ function createBlockEl(block){
   el.innerHTML=
     '<div class="nb-handle" draggable="true" title="Drag to reorder">\u2807</div>'+
     '<div class="nb-prefix">'+renderPrefix(block)+'</div>'+
-    '<div class="nb-content" contenteditable="true" data-placeholder="Type \'/\' for commands..."></div>';
+    '<div class="nb-content" contenteditable="true"></div>';
 
   const content=el.querySelector('.nb-content');
+  content.dataset.placeholder=placeholder||"Type '/' for commands...";
   content.innerHTML=block.content||'';
 
   return el;
@@ -195,8 +196,10 @@ function createSlashMenu(){
 
 // ======== Main editor factory ========
 
-window.createBlockEditor=function(containerEl, initialBlocks){
+window.createBlockEditor=function(containerEl, initialBlocks, options){
   const editor={};
+  options=options||{};
+  const placeholder=options.placeholder||containerEl.dataset.placeholder||"Type '/' for commands...";
   const container=document.createElement('div');
   container.className='nb-editor';
   containerEl.innerHTML='';
@@ -239,7 +242,7 @@ window.createBlockEditor=function(containerEl, initialBlocks){
     } else {
       blocks.push(block);
     }
-    const el=createBlockEl(block);
+    const el=createBlockEl(block, placeholder);
     if(block.type==='image'){
       attachmentRail.appendChild(el);
       updateAttachmentRail();
