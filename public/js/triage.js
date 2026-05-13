@@ -31,7 +31,7 @@ function getAllActionItems(){
   const upActions=loadUpActions();
   const fromUpcoming=[];
   Object.entries(upActions).forEach(([mtgId,items])=>{
-    const upcoming=(window.__PA_UPCOMING__||[]);
+    const upcoming=(window.__DCC_UPCOMING__||[]);
     const mtg=upcoming.find(m=>m.id===mtgId);
     const mtgTitle=mtg?mtg.title:mtgId;
     items.forEach((item,idx)=>{

@@ -1,8 +1,11 @@
 {
   "date": "2026-05-11",
-  "last_updated_at": "2026-05-02T17:58:19.632Z",
-  "last_updated_by": "skeleton",
-  "watermarks": {},
+  "last_updated_at": "2026-05-11T12:00:00.000Z",
+  "last_updated_by": "codex-calendar-planning",
+  "watermarks": {
+    "calendar_sync": "Pulled all visible calendars for Monday 2026-05-11: Drake's Plans, Work, Fae's Plans, Family, Hearthstone, US Holidays.",
+    "calendar_scope_note": "Fae's Plans, Family, and US Holidays had no events in this window."
+  },
   "triage": {
     "open_items": [],
     "resolved_items": [],
@@ -12,13 +15,450 @@
     "tasks": []
   },
   "schedule": {
+    "generated_at": "2026-05-11T12:00:00.000Z",
     "working_hours": {
       "start": "07:00",
-      "end": "17:30"
+      "end": "21:00"
     },
-    "timeline": [],
+    "end_time": "21:00",
+    "timeline": [
+      {
+        "id": "cal-crafting-claude",
+        "type": "meeting",
+        "label": "Crafting: Claude",
+        "start": "2026-05-11T07:00:00-04:00",
+        "end": "2026-05-11T08:15:00-04:00",
+        "source": "calendar",
+        "source_id": "a47eb56abb684dcb864d99af55c0c922",
+        "gcal_calendar_id": "official.drakeshadwell@gmail.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=YTQ3ZWI1NmFiYjY4NGRjYjg2NGQ5OWFmNTVjMGM5MjIgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false,
+        "description": "Agent Handbook Daily Command Center - Get a way that I can talk to Claude/Codex naturally and it grabs everything I need and helps me schedule like an actual personal assistant."
+      },
+      {
+        "id": "plan-transition-0815",
+        "type": "time_block",
+        "label": "Reset, notes, and first pass over work calendar",
+        "start": "2026-05-11T08:15:00-04:00",
+        "end": "2026-05-11T08:45:00-04:00",
+        "source": "codex",
+        "category": "Planning",
+        "completed": false,
+        "notes": "Capture outputs from Crafting: Claude and identify what the untitled work calendar blocks need from Gmail/docs."
+      },
+      {
+        "id": "work-ooo-bod",
+        "type": "ooo",
+        "label": "OOO - BOD",
+        "start": "2026-05-11T08:45:00-04:00",
+        "end": "2026-05-11T09:00:00-04:00",
+        "source": "calendar",
+        "source_id": "05esfdmv4p1n2p01ahg9er1gq8_20260511T124500Z",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=MDVlc2ZkbXY0cDFuMnAwMWFoZzllcjFncThfMjAyNjA1MTFUMTI0NTAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+        "category": "Work",
+        "completed": false
+      },
+      {
+        "id": "prep-0900",
+        "type": "time_block",
+        "label": "Morning prep and evidence sweep",
+        "start": "2026-05-11T09:00:00-04:00",
+        "end": "2026-05-11T10:00:00-04:00",
+        "source": "codex",
+        "category": "Prep",
+        "completed": false,
+        "notes": "Use attendee/title-scoped Gmail and calendar evidence for the day's work blocks. Convert anything actionable into review-first proposed actions."
+      },
+      {
+        "id": "work-private-1000",
+        "type": "meeting",
+        "label": "Work calendar block (private)",
+        "start": "2026-05-11T10:00:00-04:00",
+        "end": "2026-05-11T11:00:00-04:00",
+        "source": "calendar",
+        "source_id": "0oh1l1vnelsdr9hg4cbeiq1vt3_20260511T140000Z",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=MG9oMWwxdm5lbHNkcjloZzRjYmVpcTF2dDNfMjAyNjA1MTFUMTQwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "focus-dcc-1100",
+        "type": "focus_time",
+        "label": "Deep work: DCC schedule automation",
+        "start": "2026-05-11T11:00:00-04:00",
+        "end": "2026-05-11T12:00:00-04:00",
+        "source": "codex",
+        "category": "Deep Work",
+        "completed": false,
+        "notes": "Move the automation layer toward reliable meeting prep, transcript intake, and action-item approval."
+      },
+      {
+        "id": "work-private-1200",
+        "type": "meeting",
+        "label": "Work calendar block (private)",
+        "start": "2026-05-11T12:00:00-04:00",
+        "end": "2026-05-11T12:30:00-04:00",
+        "source": "calendar",
+        "source_id": "70hb9adn8rbavg9flt38h5v432",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=NzBoYjlhZG44cmJhdmc5Zmx0MzhoNXY0MzIgZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "work-lunch",
+        "type": "ooo",
+        "label": "OOO - Lunch",
+        "start": "2026-05-11T12:30:00-04:00",
+        "end": "2026-05-11T13:00:00-04:00",
+        "source": "calendar",
+        "source_id": "45mfckh8tm6fa4funs5qfnrm9f_20260511T163000Z",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=NDVtZmNraDh0bTZmYTRmdW5zNXFmbnJtOWZfMjAyNjA1MTFUMTYzMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+        "category": "Personal",
+        "completed": false
+      },
+      {
+        "id": "work-private-1300",
+        "type": "meeting",
+        "label": "Work calendar block (private)",
+        "start": "2026-05-11T13:00:00-04:00",
+        "end": "2026-05-11T13:15:00-04:00",
+        "source": "calendar",
+        "source_id": "7baenumisb58eqdc8qvhc49i8d_20260511T170000Z",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=N2JhZW51bWlzYjU4ZXFkYzhxdmhjNDlpOGRfMjAyNjA1MTFUMTcwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "admin-1315",
+        "type": "time_block",
+        "label": "Admin and action-item sweep",
+        "start": "2026-05-11T13:15:00-04:00",
+        "end": "2026-05-11T13:30:00-04:00",
+        "source": "codex",
+        "category": "Admin",
+        "completed": false
+      },
+      {
+        "id": "work-private-1330",
+        "type": "meeting",
+        "label": "Work calendar block (private)",
+        "start": "2026-05-11T13:30:00-04:00",
+        "end": "2026-05-11T14:00:00-04:00",
+        "source": "calendar",
+        "source_id": "4epvggdm1b0kj4l03v3juu9ufk",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=NGVwdmdnZG0xYjBrajRsMDN2M2p1dTl1ZmsgZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "focus-1400",
+        "type": "focus_time",
+        "label": "Protected execution block",
+        "start": "2026-05-11T14:00:00-04:00",
+        "end": "2026-05-11T14:30:00-04:00",
+        "source": "codex",
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "work-private-1430",
+        "type": "meeting",
+        "label": "Work calendar block (private)",
+        "start": "2026-05-11T14:30:00-04:00",
+        "end": "2026-05-11T15:00:00-04:00",
+        "source": "calendar",
+        "source_id": "5nd04ip8qrgi6rjnmv279b9q7i",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=NW5kMDRpcDhxcmdpNnJqbm12Mjc5YjlxN2kgZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "followups-1500",
+        "type": "time_block",
+        "label": "Follow-ups and itinerary cleanup",
+        "start": "2026-05-11T15:00:00-04:00",
+        "end": "2026-05-11T15:30:00-04:00",
+        "source": "codex",
+        "category": "Follow-up",
+        "completed": false,
+        "notes": "Review any meeting notes/transcripts and approve proposed action items into the itinerary."
+      },
+      {
+        "id": "work-private-1530",
+        "type": "meeting",
+        "label": "Work calendar block (private)",
+        "start": "2026-05-11T15:30:00-04:00",
+        "end": "2026-05-11T16:00:00-04:00",
+        "source": "calendar",
+        "source_id": "6o9fmb057bn1o21d1nij53ddcv",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=Nm85Zm1iMDU3Ym4xbzIxZDFuaWo1M2RkY3YgZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "focus-1600",
+        "type": "focus_time",
+        "label": "Protected execution block",
+        "start": "2026-05-11T16:00:00-04:00",
+        "end": "2026-05-11T17:00:00-04:00",
+        "source": "codex",
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "work-private-1700",
+        "type": "meeting",
+        "label": "Work calendar block (private)",
+        "start": "2026-05-11T17:00:00-04:00",
+        "end": "2026-05-11T17:30:00-04:00",
+        "source": "calendar",
+        "source_id": "d6deda3315f449a7bdbcfd5739b8b7c3_20260511T210000Z",
+        "gcal_calendar_id": "drake.shadwell@movewithclever.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=ZDZkZWRhMzMxNWY0NDlhN2JkYmNmZDU3MzliOGI3YzNfMjAyNjA1MTFUMjEwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
+        "category": "Meetings",
+        "completed": false
+      },
+      {
+        "id": "transition-1730",
+        "type": "free_time",
+        "label": "Shutdown and family transition",
+        "start": "2026-05-11T17:30:00-04:00",
+        "end": "2026-05-11T19:00:00-04:00",
+        "source": "codex",
+        "category": "Personal",
+        "completed": false
+      },
+      {
+        "id": "cal-dinner-and-show",
+        "type": "time_block",
+        "label": "Dinner and a Show",
+        "start": "2026-05-11T19:00:00-04:00",
+        "end": "2026-05-11T21:00:00-04:00",
+        "source": "calendar",
+        "source_id": "70f29930c62f40f0bfb0acaa466013d7_20260511T230000Z",
+        "gcal_calendar_id": "d714038466cf93f7606215c82fd9d2316381a4a0093178468e5d8ba7cc2d8d70@group.calendar.google.com",
+        "calendar_link": "https://www.google.com/calendar/event?eid=NzBmMjk5MzBjNjJmNDBmMGJmYjBhY2FhNDY2MDEzZDdfMjAyNjA1MTFUMjMwMDAwWiBkNzE0MDM4NDY2Y2Y5M2Y3NjA2MjE1YzgyZmQ5ZDIzMTYzODFhNGEwMDkzMTc4NDY4ZTVkOGJhN2NjMmQ4ZDcwQGc&ctz=America/New_York",
+        "category": "Personal",
+        "completed": false,
+        "description": "Dinner: Show: Season 1, Episode 1 - 3 of AtLA Side Activity."
+      }
+    ],
     "tasks_scheduled": [],
     "tasks_couldnt_fit": [],
-    "stats": {}
+    "stats": {
+      "calendar_events": 12,
+      "work_calendar_events": 9,
+      "personal_calendar_events": 2,
+      "generated_blocks": 7,
+      "total_timeline_items": 19,
+      "free_minutes_before_2100": 0
+    }
+  },
+  "glymphatic_brief": {
+    "current": {
+      "id": "glymphatic-2026-05-11-midday",
+      "date": "2026-05-11",
+      "title": "Midday Focus Brief",
+      "generated_at": "2026-05-11T11:35:00-04:00",
+      "summary": "DCC is the highest-leverage lane today: yesterday's review exposed source-of-truth friction, today's itinerary has a real schedule, and the active DCC diff is already warm.",
+      "retro": {
+        "window_hours": 48,
+        "window_label": "Past 48 hours",
+        "summary": "Recent activity clustered around making DCC a reliable planning surface, exploring Keepsakes as a modular cozy investigation game, and keeping brain sync/review infrastructure from losing context.",
+        "conversations": [
+          {
+            "title": "Keepsakes concept and engine shape",
+            "when": "2026-05-10",
+            "source": "Codex",
+            "summary": "Explored the franchise name, cozy tone, room/object mechanics, and a scalable engine where many objects can be movable without making puzzle objects obvious."
+          },
+          {
+            "title": "DCC visual planning workflow",
+            "when": "2026-05-11",
+            "source": "Codex",
+            "summary": "Shifted from prose recommendations toward an approval-based visual brief that can add proposed tasks into the itinerary."
+          },
+          {
+            "title": "Brain sync and glymphatic hygiene",
+            "when": "2026-05-10 to 2026-05-11",
+            "source": "Codex",
+            "summary": "Clarified pull/push reporting, generated daily review artifacts, and kept routing packets brain-safe rather than raw-transcript heavy."
+          }
+        ],
+        "questions": [
+          {
+            "question": "What should I work on today?",
+            "when": "2026-05-11",
+            "answer": "DCC schedule automation had the strongest evidence because it matched the calendar block, active diff, and source-of-truth friction from the prior review."
+          },
+          {
+            "question": "How should the Glymphatic Brief work visually?",
+            "when": "2026-05-11",
+            "answer": "It should show lessons, disregarded items, and suggested tasks with recommended times, plus approval controls that push tasks into the itinerary."
+          },
+          {
+            "question": "What should the Keepsakes engine and structure become?",
+            "when": "2026-05-10",
+            "answer": "A small first-room prototype that can scale into larger spaces through reusable placement, interaction, asset, and story systems."
+          }
+        ],
+        "project_progress": [
+          {
+            "project": "daily-command-center",
+            "status": "active",
+            "progress": "Added a Brief tab and seeded the first Glymphatic Brief structure; current work is moving toward assistant-generated schedule proposals."
+          },
+          {
+            "project": "keepsakes",
+            "status": "warm",
+            "progress": "Prototype placement and interaction code is actively changing, but it remains secondary until DCC has a clean checkpoint."
+          },
+          {
+            "project": "claude-brain",
+            "status": "maintenance",
+            "progress": "Generated 2026-05-10 and 2026-05-11 review artifacts; Daily-Life-Journal remains missing, causing inbox fallback."
+          },
+          {
+            "project": "offers_amp",
+            "status": "background",
+            "progress": "Recent visible activity was limited to cleanup/git hygiene, not a primary focus candidate today."
+          }
+        ],
+        "communications": [
+          {
+            "subject": "External communications",
+            "status": "not captured",
+            "summary": "No Gmail/Slack outbound summary was available to this local run. Future briefs should ingest connector evidence or sweep-suite reader output."
+          },
+          {
+            "subject": "Brain sync",
+            "status": "completed",
+            "summary": "A 2026-05-11 brainupdate reported pull already current, push everything up to date, and no local changes at that moment."
+          }
+        ],
+        "meetings": [
+          {
+            "title": "Crafting: Claude",
+            "when": "2026-05-11 7:00 AM",
+            "status": "calendar evidence only",
+            "summary": "Calendar description points at Agent Handbook / DCC work: natural conversation with Claude/Codex that gathers needed context and schedules like an actual personal assistant."
+          },
+          {
+            "title": "Work calendar blocks",
+            "when": "2026-05-11",
+            "status": "private titles",
+            "summary": "Several private work blocks are present, but no transcript or meeting notes were available in this local evidence pass."
+          }
+        ]
+      },
+      "triage": {
+        "summary": "Gmail, Slack, Discord, and other readers should surface conversations needing attention here. A triage drafting pass should create reviewable drafts in place, then link both the source conversation and the draft for approval.",
+        "items": []
+      },
+      "lessons": [
+        {
+          "text": "Early-day glymphatic runs should be treated as source-readiness and focus-orientation checks, not final productivity reviews.",
+          "destination": "daily-glymphatic-review backlog"
+        },
+        {
+          "text": "Daily review confidence improves materially once DCC has timeline items instead of a skeleton day.",
+          "destination": "brain/friction.md"
+        },
+        {
+          "text": "Suggested tasks need to live where the itinerary lives, with approval controls instead of prose-only recommendations.",
+          "destination": "DCC enhancement backlog"
+        }
+      ],
+      "disregarded": [
+        {
+          "text": "Do not make Keepsakes the main work lane before DCC reaches a clean checkpoint.",
+          "reason": "High creative value, lower immediate systems value."
+        },
+        {
+          "text": "Do not treat Offers AMP cleanup as a primary focus block today.",
+          "reason": "Only background git hygiene was visible."
+        },
+        {
+          "text": "Do not file durable brain lessons from a partial pre-noon review.",
+          "reason": "End-of-day evidence is not complete."
+        }
+      ],
+      "suggested_tasks": [
+        {
+          "id": "dcc-automation-checkpoint",
+          "title": "DCC automation checkpoint",
+          "priority": "High",
+          "confidence": "high",
+          "duration_minutes": 60,
+          "recommended_start": "11:45",
+          "reason": "Stabilize the current automation diff and make sure today's itinerary remains a trustworthy source of truth."
+        },
+        {
+          "id": "dcc-brief-panel-v1",
+          "title": "Ship Glymphatic Brief panel v1",
+          "priority": "High",
+          "confidence": "high",
+          "duration_minutes": 45,
+          "recommended_start": "13:15",
+          "reason": "Turn the review output into an approval surface with lessons, disregarded items, and scheduleable recommendations."
+        },
+        {
+          "id": "daily-life-journal-mount",
+          "title": "Mount Daily-Life-Journal locally",
+          "priority": "Medium",
+          "confidence": "high",
+          "duration_minutes": 30,
+          "recommended_start": "15:00",
+          "reason": "Both recent glymphatic reviews fell back into the brain inbox because the journal repo is missing."
+        },
+        {
+          "id": "keepsakes-prototype-evening",
+          "title": "Keepsakes placement prototype pass",
+          "priority": "Medium",
+          "confidence": "medium",
+          "duration_minutes": 60,
+          "recommended_start": "16:00",
+          "reason": "Keep creative momentum, but only after DCC has a checkpoint."
+        }
+      ]
+    },
+    "history": [
+      {
+        "id": "glymphatic-2026-05-10",
+        "date": "2026-05-10",
+        "summary": "Filed lessons that DCC skeleton days weaken reviews, Daily-Life-Journal fallback needs fixing, and sync reports must state pull/local/push outcomes separately.",
+        "lessons": [
+          { "text": "Sync reports must lead with the final remote state." },
+          { "text": "DCC skeleton days limit daily review confidence." },
+          { "text": "Daily-Life-Journal unavailable forces inbox fallback." }
+        ],
+        "disregarded": [
+          { "text": "No open project retrospective cleanup was needed." }
+        ],
+        "suggested_tasks": [
+          { "id": "mount-journal", "title": "Clone or mount Daily-Life-Journal", "duration_minutes": 30 }
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "summary": "Monday 2026-05-11 plan created from all visible calendars. Real calendar events are preserved, private work blocks are labeled private, and gaps are assigned to prep, deep work, follow-up, and transition blocks.",
+    "calendar_accounts_checked": [
+      "official.drakeshadwell@gmail.com",
+      "drake.shadwell@movewithclever.com",
+      "mcmahan.miranda@gmail.com",
+      "family04073672545498795261@group.calendar.google.com",
+      "d714038466cf93f7606215c82fd9d2316381a4a0093178468e5d8ba7cc2d8d70@group.calendar.google.com",
+      "en.usa#holiday@group.v.calendar.google.com"
+    ]
   }
 }

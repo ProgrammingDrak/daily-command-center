@@ -192,8 +192,8 @@ function _toHHMM(s){
   return s;
 }
 async function schedulePushedOnTomorrow(ev){
-  if(!window.blockStore||!window.__PA_TOMORROW__||!__tomorrowDate)return;
-  const tomorrow=window.__PA_TOMORROW__;
+  if(!window.blockStore||!window.__DCC_TOMORROW__||!__tomorrowDate)return;
+  const tomorrow=window.__DCC_TOMORROW__;
   const tDate=__tomorrowDate;
 
   // Get tomorrow's meetings as blocker intervals
@@ -248,8 +248,146 @@ async function schedulePushedOnTomorrow(ev){
     pushed_from:(__state&&__state.date)||"unknown"
   },{date:tDate});
 
-  if(typeof showToast==="function")showToast("Scheduled tomorrow at "+f12(startTime),"success");
+  if(typeof showToast==="function")showToast("Moved to tomorrow at "+f12(startTime),"success");
 }
+
+// ======== MOVE-TO MENU HELPERS ========
+// Schedule a task on an arbitrary date at the next free slot.
+// Returns the start time string on success, null on failure (no slot, dedupe, or no blockstore).
+async function _scheduleTaskOnDate(ev, dateStr, dayContext){
+  if(!window.blockStore||!dateStr)return null;
+  let tMeetings=[];
+  let dayStart=8*60, dayEnd=17*60+30;
+  if(dayContext){
+    const tTimeline=(dayContext.schedule&&dayContext.schedule.timeline)||[];
+    tMeetings=tTimeline
+      .filter(e=>e.type==="meeting"||e.type==="oneone")
+      .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
+      .sort((a,b)=>a.s-b.s);
+    const tBlocks=(dayContext.schedule&&dayContext.schedule.blocks)||[];
+    if(tBlocks.length){dayStart=pt(tBlocks[0].start);dayEnd=pt(tBlocks[tBlocks.length-1].end);}
+  }
+  let existingBlockers=[];
+  try{
+    const tBlks=await fetch("/api/blocks?date="+dateStr).then(r=>r.json());
+    if(tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id))return null;
+    existingBlockers=tBlks
+      .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
+      .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
+  }catch(e){}
+  const allBlockers=[...tMeetings,...existingBlockers].sort((a,b)=>a.s-b.s);
+  const d=dur(ev)||30;
+  const slot=_freeStart(dayStart,d,allBlockers);
+  if(slot+d>dayEnd+60){
+    if(typeof showToast==="function")showToast("No free slot on "+dateStr,"error");
+    return null;
+  }
+  const startTime=fmt(slot);
+  await window.blockStore.createBlock("block",{
+    local_id:ev.id,
+    title:ev.title,
+    duration:d,
+    start:startTime,
+    end:fmt(slot+d),
+    priority:ev.priority||"Medium",
+    meta:ev.meta||"",
+    detail:ev.detail||"",
+    notionUrl:ev.notionUrl||"",
+    source:ev.source||"moved",
+    tags:ev.tags||[],
+    added_at:new Date().toISOString(),
+    moved_from:(__state&&__state.date)||"unknown"
+  },{date:dateStr});
+  return startTime;
+}
+
+function _nextSundayDate(){
+  const now=new Date();
+  const dow=now.getDay();
+  const daysAhead=dow===0?7:(7-dow);
+  const next=new Date(now);
+  next.setDate(now.getDate()+daysAhead);
+  const pad=n=>String(n).padStart(2,"0");
+  return next.getFullYear()+"-"+pad(next.getMonth()+1)+"-"+pad(next.getDate());
+}
+
+function _purgeManualBlock(ev){
+  if(!ev||ev.source!=="manual"||!window.blockStore)return;
+  const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===ev.id);
+  if(block)window.blockStore.deleteBlock(block.id).catch(()=>{});
+}
+
+async function moveTaskToToday(id){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return;
+  const viewDate=(__state&&__state.date)||null;
+  const todayDate=(typeof __todayDate!=="undefined"&&__todayDate)||new Date().toISOString().slice(0,10);
+  if(viewDate===todayDate){
+    deletedSet.add(id);saveDeletedState();
+    _purgeManualBlock(ev);
+    insertTaskNow(ev.title,dur(ev)||30);
+    if(typeof showToast==="function")showToast("Moved to today's next free slot","success");
+    return;
+  }
+  const startTime=await _scheduleTaskOnDate(ev,todayDate,(window.__DCC_STATE__&&window.__DCC_STATE__.date===todayDate)?window.__DCC_STATE__:null);
+  if(!startTime)return;
+  deletedSet.add(id);saveDeletedState();
+  _purgeManualBlock(ev);
+  if(typeof showToast==="function")showToast("Moved to today at "+f12(startTime),"success");
+  render();
+}
+
+function moveTaskToTomorrow(id){pushTask(id);}
+
+async function moveTaskToNextWeek(id){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return;
+  const sunday=_nextSundayDate();
+  const startTime=await _scheduleTaskOnDate(ev,sunday,null);
+  if(!startTime)return;
+  deletedSet.add(id);saveDeletedState();
+  _purgeManualBlock(ev);
+  if(typeof showToast==="function")showToast("Moved to Sunday at "+f12(startTime),"success");
+  render();
+}
+
+function moveTaskToTrivial(id){
+  const flags=loadTrivialFlags();
+  if(!flags[id]){
+    flags[id]=true;
+    saveTrivialFlags(flags);
+  }
+  if(typeof buildSchedule==='function')buildSchedule();
+  if(typeof buildTrivialTasks==='function')buildTrivialTasks();
+  if(typeof updateStats==='function')updateStats();
+  if(typeof showToast==="function")showToast("Moved to trivial","success");
+}
+
+function _moveTaskToBacklogStage(id,stage,toastMsg){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return;
+  const entry={
+    id:"bl-"+Date.now(),
+    title:ev.title,
+    type:ev.type||"task",
+    durMin:dur(ev),
+    meta:ms(dur(ev))+" · from schedule",
+    detail:ev.detail||"",
+    source:ev.source||"manual",
+    notionUrl:ev.notionUrl||"",
+    priority:ev.priority||(stage==="Priority"?"High":"Low"),
+    stage:stage
+  };
+  backlog.push(entry);
+  if(typeof persistBacklogItem==="function")persistBacklogItem(entry);
+  deletedSet.add(id);saveDeletedState();
+  _purgeManualBlock(ev);
+  if(typeof showToast==="function")showToast(toastMsg,"success");
+  render();
+}
+
+function moveTaskToBacklog(id){_moveTaskToBacklogStage(id,"Backlog","Moved to backlog");}
+function moveTaskToPriority(id){_moveTaskToBacklogStage(id,"Priority","Moved to priority");}
 
 async function unschedulePushedFromTomorrow(id){
   if(!window.blockStore||!__tomorrowDate)return;

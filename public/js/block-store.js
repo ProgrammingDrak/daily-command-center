@@ -402,13 +402,13 @@
       }
     },
 
-    // Load PA-owned state for a date
-    async loadPaState(dateStr) {
+    // Load DCC-owned state for a date
+    async loadDccState(dateStr) {
       try {
-        const result = await apiGet("/api/pa-state/" + dateStr);
+        const result = await apiGet("/api/dcc-state/" + dateStr);
         return result?.state_json || null;
       } catch (e) {
-        console.error("[BlockStore] loadPaState failed:", e);
+        console.error("[BlockStore] loadDccState failed:", e);
         return null;
       }
     },
@@ -450,14 +450,14 @@
       return "day-root-" + _currentDate;
     },
 
-    // ── Range Loading ──
-    _rangeCache: new Map(), // dateStr → { blocks: [], paState: null }
+    // ── Range Loading (for Calendar View) ──
+    _rangeCache: new Map(), // dateStr -> { blocks: [], dccState: null }
 
     async loadDateRange(startDate, endDate) {
       try {
-        const [blocks, paStates] = await Promise.all([
+        const [blocks, dccStates] = await Promise.all([
           apiGet(`/api/blocks/range?start=${startDate}&end=${endDate}`),
-          apiGet(`/api/pa-state/range?start=${startDate}&end=${endDate}`)
+          apiGet(`/api/dcc-state/range?start=${startDate}&end=${endDate}`)
         ]);
         // Group blocks by date
         const byDate = {};
@@ -473,14 +473,14 @@
           const ds = d.toISOString().slice(0, 10);
           this._rangeCache.set(ds, {
             blocks: byDate[ds] || [],
-            paState: paStates[ds] || null
+            dccState: dccStates[ds] || null
           });
           d.setDate(d.getDate() + 1);
         }
-        return { blocks, paStates };
+        return { blocks, dccStates };
       } catch (e) {
         console.error("[BlockStore] loadDateRange failed:", e);
-        return { blocks: [], paStates: {} };
+        return { blocks: [], dccStates: {} };
       }
     },
 
@@ -509,11 +509,11 @@
       }
     },
 
-    // Called by SSE when PA state changes
-    async handlePaStateChanged(event) {
+    // Called by SSE when DCC state changes
+    async handleDccStateChanged(event) {
       // Only refresh if it's for the current date
       if (event.date === _currentDate || !event.date) {
-        return await this.loadPaState(event.date || _currentDate);
+        return await this.loadDccState(event.date || _currentDate);
       }
       return null;
     },

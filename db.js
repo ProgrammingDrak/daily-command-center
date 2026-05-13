@@ -37,8 +37,8 @@ async function ensureWorkspacesForAllUsers() {
       }
       const blocksResult = await client.query("UPDATE blocks SET workspace_id = $1 WHERE user_id = $2 AND workspace_id IS NULL", [workspaceId, user.id]);
       if (blocksResult.rowCount > 0) console.log(`[workspace] Stamped workspace_id on ${blocksResult.rowCount} blocks for '${user.username}'`);
-      const paResult = await client.query("UPDATE pa_state SET workspace_id = $1 WHERE user_id = $2 AND workspace_id IS NULL", [workspaceId, user.id]);
-      if (paResult.rowCount > 0) console.log(`[workspace] Stamped workspace_id on ${paResult.rowCount} pa_state rows for '${user.username}'`);
+      const dccResult = await client.query("UPDATE dcc_state SET workspace_id = $1 WHERE user_id = $2 AND workspace_id IS NULL", [workspaceId, user.id]);
+      if (dccResult.rowCount > 0) console.log(`[workspace] Stamped workspace_id on ${dccResult.rowCount} dcc_state rows for '${user.username}'`);
     }
     await client.query("COMMIT");
   } catch (err) {
@@ -249,23 +249,48 @@ async function ensureDayRoot(date, userId, workspaceId) {
   return newId;
 }
 
-// ── PA State ──
+// ── DCC State ──
 
-async function savePaState(date, stateJson, userId, workspaceId) {
+async function ensureDccStateTable() {
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.dcc_state') IS NULL AND to_regclass('public.pa_state') IS NOT NULL THEN
+        ALTER TABLE pa_state RENAME TO dcc_state;
+      END IF;
+      IF to_regclass('public.idx_pa_state_workspace') IS NOT NULL AND to_regclass('public.idx_dcc_state_workspace') IS NULL THEN
+        ALTER INDEX idx_pa_state_workspace RENAME TO idx_dcc_state_workspace;
+      END IF;
+    END $$;
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcc_state (
+      date         DATE NOT NULL,
+      state_json   JSONB NOT NULL,
+      user_id      INTEGER REFERENCES users(id),
+      workspace_id TEXT NOT NULL DEFAULT 'ws-1',
+      updated_at   TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (date, workspace_id)
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_dcc_state_workspace ON dcc_state(workspace_id, date)");
+}
+
+async function saveDccState(date, stateJson, userId, workspaceId) {
   const now = new Date().toISOString();
   const wsId = workspaceId || (userId ? `ws-${userId}` : "ws-1");
   const stateObj = typeof stateJson === "string" ? JSON.parse(stateJson) : stateJson;
   await pool.query(
-    `INSERT INTO pa_state (date, state_json, user_id, workspace_id, updated_at) VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at) VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT(date, workspace_id) DO UPDATE SET state_json = EXCLUDED.state_json, user_id = EXCLUDED.user_id, updated_at = EXCLUDED.updated_at`,
     [date, stateObj, userId || null, wsId, now]
   );
 }
 
-async function getPaState(date, workspaceId) {
+async function getDccState(date, workspaceId) {
   const { rows } = workspaceId
-    ? await pool.query("SELECT * FROM pa_state WHERE date = $1 AND workspace_id = $2", [date, workspaceId])
-    : await pool.query("SELECT * FROM pa_state WHERE date = $1", [date]);
+    ? await pool.query("SELECT * FROM dcc_state WHERE date = $1 AND workspace_id = $2", [date, workspaceId])
+    : await pool.query("SELECT * FROM dcc_state WHERE date = $1", [date]);
   if (rows.length === 0) return null;
   const row = rows[0];
   return { ...row, state_json: typeof row.state_json === "string" ? JSON.parse(row.state_json) : row.state_json };
@@ -289,10 +314,10 @@ async function getBlocksByDateRange(startDate, endDate, workspaceId) {
   return rows.map(parseBlock);
 }
 
-async function getPaStateRange(startDate, endDate, workspaceId) {
+async function getDccStateRange(startDate, endDate, workspaceId) {
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM pa_state WHERE date >= $1 AND date <= $2 AND workspace_id = $3 ORDER BY date ASC`, [startDate, endDate, workspaceId])
-    : await pool.query(`SELECT * FROM pa_state WHERE date >= $1 AND date <= $2 ORDER BY date ASC`, [startDate, endDate]);
+    ? await pool.query(`SELECT * FROM dcc_state WHERE date >= $1 AND date <= $2 AND workspace_id = $3 ORDER BY date ASC`, [startDate, endDate, workspaceId])
+    : await pool.query(`SELECT * FROM dcc_state WHERE date >= $1 AND date <= $2 ORDER BY date ASC`, [startDate, endDate]);
   return rows.map(row => ({ ...row, state_json: typeof row.state_json === "string" ? JSON.parse(row.state_json) : row.state_json }));
 }
 
@@ -302,6 +327,6 @@ module.exports = {
   getBlocksByDate, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, reorderBlocks, ensureDayRoot,
-  savePaState, getPaState, purgeSoftDeleted, getOperations,
-  parseBlock, getBlocksByDateRange, getPaStateRange, ensureWorkspacesForAllUsers
+  ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
+  parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers
 };

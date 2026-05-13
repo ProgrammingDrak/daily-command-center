@@ -71,13 +71,13 @@ function taskTagChipsHtml(ev){
 // ======== DATA (fetched from API at boot) ========
 // The Express server at /api/* provides all state data.
 // The async boot loader below fetches everything before init.
-window.__PA_STATE__ = null;
-window.__PA_UPCOMING__ = [];
+window.__DCC_STATE__ = null;
+window.__DCC_UPCOMING__ = [];
 
 // These globals are populated by the async boot loader from the API.
-window.__PA_TOMORROW__ = null;
-window.__PA_ARCHIVES__ = {};
-window.__PA_LOCAL__ = null;
+window.__DCC_TOMORROW__ = null;
+window.__DCC_ARCHIVES__ = {};
+window.__DCC_LOCAL__ = null;
 window.__SECOND_BRAIN__ = {};
 window.__SECOND_BRAIN_GLOBALS__ = {};
 
@@ -193,7 +193,7 @@ function transformState(state) {
   return { sched, consider, bklog, triageItems, notifications };
 }
 
-let __state = window.__PA_STATE__ || null;
+let __state = window.__DCC_STATE__ || null;
 let __data = transformState(__state);
 let INIT_SCHED = __data.sched;
 let INIT_CONSIDER = __data.consider;

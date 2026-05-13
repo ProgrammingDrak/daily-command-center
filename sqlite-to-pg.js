@@ -66,6 +66,32 @@ async function migrateTable(sqliteDb, tableName, { columns, transform, conflictK
   return inserted;
 }
 
+async function migrateStateTable(sqliteDb) {
+  const table = sqliteDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('dcc_state', 'pa_state') ORDER BY CASE name WHEN 'dcc_state' THEN 0 ELSE 1 END LIMIT 1").get();
+  if (!table) {
+    console.log("  [dcc_state] No state table found in SQLite — skipping");
+    return 0;
+  }
+  const sourceName = table.name;
+  const rows = sqliteDb.prepare(`SELECT * FROM ${sourceName}`).all();
+  if (rows.length === 0) {
+    console.log(`  [${sourceName}] 0 rows — skipping`);
+    return 0;
+  }
+  let inserted = 0;
+  for (const row of rows) {
+    await pool.query(
+      `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (date, workspace_id) DO NOTHING`,
+      [row.date, toJsonb(row.state_json) ?? "{}", row.user_id, row.workspace_id, row.updated_at]
+    );
+    inserted++;
+  }
+  console.log(`  [dcc_state] ${inserted}/${rows.length} rows migrated from ${sourceName}`);
+  return inserted;
+}
+
 async function run() {
   console.log("[migrate] Opening SQLite:", DB_PATH);
   const sqliteDb = new Database(DB_PATH, { readonly: true });
@@ -130,15 +156,8 @@ async function run() {
     conflictKey: "id",
   });
 
-  // 7. pa_state
-  await migrateTable(sqliteDb, "pa_state", {
-    columns: ["date", "state_json", "user_id", "workspace_id", "updated_at"],
-    transform: (r) => ({
-      ...r,
-      state_json: toJsonb(r.state_json) ?? "{}",
-    }),
-    conflictKey: "date, workspace_id",
-  });
+  // 7. dcc_state
+  await migrateStateTable(sqliteDb);
 
   // Reset sequences for SERIAL columns to max(id) + 1
   console.log("\n[migrate] Resetting SERIAL sequences...");

@@ -42,11 +42,11 @@ let viewMode = "today";
 let viewDate = __state ? __state.date : null;
 
 // Compute the "today" date string from injected state
-let __todayDate = (window.__PA_STATE__ && window.__PA_STATE__.date) || null;
-let __tomorrowDate = (window.__PA_TOMORROW__ && window.__PA_TOMORROW__.date) || null;
+let __todayDate = (window.__DCC_STATE__ && window.__DCC_STATE__.date) || null;
+let __tomorrowDate = (window.__DCC_TOMORROW__ && window.__DCC_TOMORROW__.date) || null;
 
 // Available archive dates (for date picker dots)
-let __archiveDates = window.__PA_ARCHIVES__ ? Object.keys(window.__PA_ARCHIVES__).sort() : [];
+let __archiveDates = window.__DCC_ARCHIVES__ ? Object.keys(window.__DCC_ARCHIVES__).sort() : [];
 
 function initKeys() {
   const d = (__state && __state.date) ? __state.date : "unknown";
@@ -445,7 +445,7 @@ function writeGlobalsToLocalStorage(globals) {
 }
 
 // ======== WATERFALL COLD-START RESTORATION ========
-// Priority: localStorage → IndexedDB → Express API → Second Brain (injected) → __PA_LOCAL__ (legacy)
+// Priority: localStorage -> IndexedDB -> Express API -> Second Brain (injected) -> __DCC_LOCAL__ (legacy)
 
 async function fetchExpressDate(date) {
   // Tier A: Try the day state API (Postgres-backed, always has the data)
@@ -499,10 +499,10 @@ async function hydrateFromStorage() {
     return;
   }
 
-  // Legacy fallback: Try __PA_LOCAL__
-  const local = window.__PA_LOCAL__;
+  // Legacy fallback: Try __DCC_LOCAL__
+  const local = window.__DCC_LOCAL__;
   if (local && local.date === date) {
-    console.log("[Second Brain] Restoring from __PA_LOCAL__ sidecar for " + date);
+    console.log("[Second Brain] Restoring from __DCC_LOCAL__ sidecar for " + date);
     writeToLocalStorage(date, local);
     return;
   }
@@ -739,14 +739,14 @@ async function switchToDate(dateStr) {
 
   let newState = null;
   if (dateStr === __todayDate) {
-    newState = window.__PA_STATE__;
+    newState = window.__DCC_STATE__;
     viewMode = "today";
-  } else if (dateStr === __tomorrowDate && window.__PA_TOMORROW__) {
+  } else if (dateStr === __tomorrowDate && window.__DCC_TOMORROW__) {
     // Build a synthetic state from the tomorrow pre-plan
-    newState = { date: __tomorrowDate, schedule: window.__PA_TOMORROW__.schedule };
+    newState = { date: __tomorrowDate, schedule: window.__DCC_TOMORROW__.schedule };
     viewMode = "tomorrow";
-  } else if (window.__PA_ARCHIVES__ && window.__PA_ARCHIVES__[dateStr]) {
-    const cached = window.__PA_ARCHIVES__[dateStr];
+  } else if (window.__DCC_ARCHIVES__ && window.__DCC_ARCHIVES__[dateStr]) {
+    const cached = window.__DCC_ARCHIVES__[dateStr];
     // If the archive entry has full schedule data, use it directly;
     // otherwise treat it as a navigation stub and fetch from the server
     if (cached.schedule && cached.schedule.timeline && cached.schedule.timeline.length > 0) {
@@ -754,7 +754,7 @@ async function switchToDate(dateStr) {
     } else {
       const expressState = await fetchExpressDate(dateStr);
       if (expressState) {
-        window.__PA_ARCHIVES__[dateStr] = expressState; // cache for next time
+        window.__DCC_ARCHIVES__[dateStr] = expressState; // cache for next time
         newState = expressState;
       } else {
         newState = cached; // fall back to whatever we have
