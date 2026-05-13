@@ -10,6 +10,26 @@ const {
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
 const DAILY_BANK_CAP_CENTS = 5000;
 const WEEKLY_BANK_CAP_CENTS = 15000;
+const SCREEN_BANK_BUILDER_HIT_RATE = 0.65;
+const SCREEN_BANK_BUILDER_PERCENT = 0.0022;
+const SLOT_ROWS = 3;
+const SLOT_COLS = 5;
+const SLOT_CELL_COUNT = SLOT_ROWS * SLOT_COLS;
+const FILLER_SYMBOLS = ["STRAW", "STICK", "BRICK", "HAT", "TOOLS", "HOUSE"];
+const TEASER_SYMBOLS = ["CARE", "TREAT", "JACKPOT", "PLEDGE", "PICK", "REROLL"];
+const PAYLINES = [
+  [0, 1, 2], [1, 2, 3], [2, 3, 4],
+  [5, 6, 7], [6, 7, 8], [7, 8, 9],
+  [10, 11, 12], [11, 12, 13], [12, 13, 14],
+  [0, 6, 12], [2, 6, 10], [4, 8, 12], [2, 8, 14],
+];
+const BANK_SCREEN_COUNT_WEIGHTS = [
+  [1, 55],
+  [2, 30],
+  [3, 10],
+  [4, 4],
+  [5, 1],
+];
 const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
 const DEFAULT_SCORING_RATIONALE = [
