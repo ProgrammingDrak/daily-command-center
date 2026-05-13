@@ -165,8 +165,6 @@ app.post("/api/auth/register", async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-app.use(evaluationRoutes(blockDB));
-
 // ── SSE ──
 const sseClients = new Map();
 app.get("/api/events", (req, res) => {
