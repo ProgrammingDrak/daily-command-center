@@ -865,6 +865,28 @@
   .actual-card .act-diff.over{color:var(--red)} .actual-card .act-diff.under{color:var(--green)} .actual-card .act-diff.match{color:var(--text-muted)}
   .actual-empty{text-align:center;padding:40px;color:var(--text-muted);font-size:13px}
 
+  /* ---- Schedule triage ---- */
+  .schedule-triage-section{margin:0 0 14px 0;padding:10px 0 12px;border-bottom:1px solid rgba(255,255,255,0.06)}
+  .schedule-triage-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+  .schedule-triage-kicker{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--amber)}
+  .schedule-triage-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-left:7px;border-radius:999px;background:rgba(245,158,11,0.14);color:var(--amber);font-size:10px;font-weight:800}
+  .schedule-triage-sub{font-size:11px;color:var(--text-muted);white-space:nowrap}
+  .schedule-triage-list{display:flex;flex-direction:column;gap:6px}
+  .schedule-triage-card{padding:10px 12px;gap:10px}
+  .schedule-triage-card .ttl{font-size:13px}
+  .schedule-triage-summary{font-size:11px;color:var(--text-muted);line-height:1.4;margin-top:4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .schedule-triage-card:hover .tri-quick{opacity:0.45}
+  .schedule-triage-card .schedule-triage-schedule{background:rgba(59,130,246,0.12);color:var(--accent-light)}
+  .schedule-triage-card .add-btn{white-space:nowrap}
+  @media(max-width:720px){
+    .schedule-triage-header{align-items:flex-start;flex-direction:column;gap:3px}
+    .schedule-triage-sub{white-space:normal}
+    .schedule-triage-card{align-items:flex-start;flex-wrap:wrap}
+    .schedule-triage-card .body{flex-basis:calc(100% - 18px)}
+    .schedule-triage-card .add-btn{flex:1;justify-content:center}
+    .schedule-triage-card .tri-quick{opacity:0.55}
+  }
+
   /* ---- Triage tab ---- */
   .tri-group-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);padding:4px 0 8px;display:flex;align-items:center;gap:6px}
   .tri-group-label .tri-dot{width:8px;height:8px;border-radius:50%}
@@ -1285,6 +1307,7 @@
   .sidecar-tabs{position:fixed;top:244px;right:0;z-index:455;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
   .sidecar-tab{min-height:102px;width:30px;padding:12px 5px;background:rgba(15,23,42,0.92);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;writing-mode:vertical-rl;font-size:11px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;transition:background 150ms ease,color 150ms ease,border-color 150ms ease}
   .sidecar-tab:hover{background:var(--card-hover,rgba(255,255,255,0.05));color:var(--text);border-color:var(--accent)}
+  .sidecar-tab.drag-over{background:rgba(34,211,238,0.14);color:var(--cyan,#22d3ee);border-color:var(--cyan,#22d3ee)}
   .sidecar-tab .badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,0.16);color:var(--accent-light);letter-spacing:0;text-transform:none}
   .side-drawer.open .sidecar-tabs{display:none}
   .side-drawer-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
@@ -1330,6 +1353,7 @@
   .bc-card .bc-act:hover{background:rgba(255,255,255,0.05)}
   .bc-card .bc-act-today{background:var(--accent);border-color:var(--accent);color:white}
   .bc-card .bc-act-today:hover{opacity:0.85;background:var(--accent)}
+  .bc-card .bc-act-side:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee)}
   .bc-card .bc-act-later:hover{border-color:var(--accent-light);color:var(--accent-light)}
   .bc-card .bc-act-icon{width:26px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 
@@ -1524,6 +1548,7 @@
   .tm-section-header::-webkit-details-marker{display:none}
   .tm-section-header::marker{display:none;content:""}
   .tm-section-header:hover{background:rgba(255,255,255,0.03)}
+  .tm-section.drag-over{outline:2px dashed var(--cyan,#22d3ee);outline-offset:2px}
   .tm-chevron{
     display:inline-flex;align-items:center;justify-content:center;
     width:16px;height:16px;flex-shrink:0;

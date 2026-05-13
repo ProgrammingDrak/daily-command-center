@@ -68,6 +68,7 @@ function initKeys() {
   SUBTASK_KEY = "pa-subtasks-" + d;
   TRIV_FLAGS_KEY = "pa-trivial-flags-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
+  if (typeof TRIAGE_SCHEDULED_KEY !== "undefined") TRIAGE_SCHEDULED_KEY = "pa-triage-scheduled-" + d;
   BOUNTY_KEY = "pa-bounty-" + d;
   // PIN 1: rebind the pinned-active-task key and reload state on date change
   PINNED_ACTIVE_KEY = "pa-pinned-active-" + d;
@@ -586,6 +587,7 @@ function reloadPersistedEdits() {
           _sessions: (() => { try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)||"{}"); } catch(e) { return {}; } })(),
           _reviewed: (() => { try { return JSON.parse(localStorage.getItem(REVIEWED_KEY)||"{}"); } catch(e) { return {}; } })(),
           _triageParents: (() => { try { return JSON.parse(localStorage.getItem(TRIAGE_PARENTS_KEY)||"{}"); } catch(e) { return {}; } })(),
+          _triageScheduled: (() => { try { return JSON.parse(localStorage.getItem(TRIAGE_SCHEDULED_KEY)||"{}"); } catch(e) { return {}; } })(),
           _pinnedStarts: (() => { try { return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}"); } catch(e) { return {}; } })(),
           _taskOrder: (() => { try { return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]"); } catch(e) { return []; } })(),
           _subtasks: (() => { try { return JSON.parse(localStorage.getItem(SUBTASK_KEY)||"{}"); } catch(e) { return {}; } })(),
@@ -646,6 +648,7 @@ function reloadPersistedEdits() {
           responsibilityScore:p.responsibilityScore||null,
           alertKey:p.alertKey||null,
           alertType:p.alertType||null,
+          triageId:p.triageId||null,
           ampUrl:p.ampUrl||"",
           hubspotUrl:p.hubspotUrl||""
         };
@@ -663,7 +666,8 @@ function reloadPersistedEdits() {
           start: "00:00", end: fmt(d),
           meta: t.meta || ("Custom task \u00b7 " + ms(d)),
           detail: t.detail || "", source: t.source || "manual",
-          notionUrl: t.notionUrl || "", priority: t.priority || "High"
+          notionUrl: t.notionUrl || "", priority: t.priority || "High",
+          triageId: t.triageId || null
         });
       });
     }

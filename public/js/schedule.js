@@ -204,6 +204,7 @@ function persistAddedTask(item){
       responsibilityScore:item.responsibilityScore||null,
       alertKey:item.alertKey||null,
       alertType:item.alertType||null,
+      triageId:item.triageId||null,
       ampUrl:item.ampUrl||null,
       hubspotUrl:item.hubspotUrl||null,
       added_at:new Date().toISOString()
@@ -213,7 +214,7 @@ function persistAddedTask(item){
   // Fallback: localStorage
   const added=loadAddedTasks();
   if(!added.find(t=>t.id===item.id)){
-    added.push({id:item.id,title:item.title,durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",addedAt:new Date().toISOString()});
+    added.push({id:item.id,title:item.title,durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",triageId:item.triageId||null,addedAt:new Date().toISOString()});
     saveAddedTasks(added);
   }
 }
@@ -290,11 +291,13 @@ function insertTaskNow(titleArg, durMinArg){
   }
 }
 
-function insertTaskFromDrawer(title, durMin){
+function insertTaskFromDrawer(title, durMin, opts){
+  opts=opts||{};
   const id=qaId();
   const newItem={id,title,type:"task",start:"00:00",end:fmt(durMin),
-    meta:"Action item \u00b7 "+ms(durMin),detail:"",source:"manual",
-    notionUrl:"",priority:"High"};
+    meta:(opts.meta||"Action item")+" \u00b7 "+ms(durMin),detail:opts.detail||"",source:opts.source||"manual",
+    notionUrl:opts.notionUrl||"",priority:opts.priority||"High",
+    tags:opts.tags||[],triageId:opts.triageId||null};
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt = activeIdx !== -1 ? activeIdx + 1 :
     (()=>{const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));return fi.length?fi[0].i:scheduled.length;})();
@@ -305,6 +308,7 @@ function insertTaskFromDrawer(title, durMin){
   log("scheduled",id,"Drawer-added: "+title);
   render();
   checkBlockWarnings(newItem);
+  return newItem;
 }
 
 // ======== ACTIONS ========
@@ -540,7 +544,7 @@ function addTaskUniversal(barEl){
       break;
     }
     case"trivial":{
-      if(typeof addTrivialTask==="function")addTrivialTask(title);
+      if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
     }
   }
@@ -705,7 +709,7 @@ function getBacklogBlocks(){
     if(p.start&&p.end)return false;
     // Must not be trivial, action-item, pinned, or other special blocks
     const tags=p.tags||[];
-    if(tags.includes("trivial")||tags.includes("action-item")||tags.includes("pinned"))return false;
+    if(tags.includes("trivial")||tags.includes("side-project")||tags.includes("action-item")||tags.includes("pinned"))return false;
     // Must not be non-task blocks (notes, engrams, etc.)
     if(p.html&&!p.title)return false; // notes
     if(p.mood!==undefined&&!p.title)return false; // mood-only

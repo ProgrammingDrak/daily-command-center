@@ -1,4 +1,4 @@
-// ======== TRIVIAL TASKS ========
+// ======== SIDE PROJECTS ========
 const TRIV_KEY = "pa-trivial-tasks";
 let TRIV_FLAGS_KEY = "pa-trivial-flags-" + ((__state && __state.date) ? __state.date : "unknown");
 
@@ -54,7 +54,7 @@ function saveTrivialFlags(f){
 
 function addTrivialTask(text, kind, durMin){
   if(!text.trim())return;
-  kind=kind||"trivial";
+  kind=kind||"side_project";
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
     const props={text:text.trim(),done:false,kind,tags:[smallTaskTag(kind)]};
     if(durMin)props.durMin=durMin;
@@ -98,13 +98,13 @@ function toggleTrivialFlag(evId){
   const flags=loadTrivialFlags();
   if(flags[evId])delete flags[evId];else flags[evId]=true;
   saveTrivialFlags(flags);
-  // Phase 7: rebuild schedule (hides/shows flagged items) and triage (shows flagged items)
+  // Rebuild schedule (hides/shows side-project items) and side-project reminders.
   if(typeof buildSchedule==='function')buildSchedule();
   if(typeof buildTrivialTasks==='function')buildTrivialTasks();
   if(typeof updateStats==='function')updateStats();
 }
 
-// Phase 7c: Link/unlink trivial tasks to schedule items
+// Link/unlink small side tasks to schedule items. Internal names stay legacy-compatible.
 function getLinkedTrivialTasks(scheduleId){
   const tasks=loadTrivialTasks();
   return tasks.filter(t=>smallTaskKind(t)==="trivial"&&t.linkedTo===scheduleId);
@@ -156,13 +156,13 @@ function unlinkTrivialFromSchedule(trivialId){
   if(t){delete t.linkedTo;saveTrivialTasks(tasks);}
 }
 
-// Phase 7d: Trivial task picker dropdown
+// Side project picker dropdown for schedule details.
 function openTrivialPicker(scheduleId, anchorEl){
   document.querySelectorAll(".triv-picker-popup").forEach(p=>p.remove());
   const tasks=loadTrivialTasks().filter(t=>smallTaskKind(t)==="trivial"&&!t.done&&!t.linkedTo);
   if(!tasks.length){
     const pop=document.createElement("div");pop.className="triv-picker-popup";
-    pop.innerHTML='<div style="padding:8px;font-size:11px;color:var(--text-muted)">No unlinked trivial tasks. Add one first.</div>';
+    pop.innerHTML='<div style="padding:8px;font-size:11px;color:var(--text-muted)">No unlinked side projects. Add one first.</div>';
     anchorEl.parentElement.appendChild(pop);
     setTimeout(()=>document.addEventListener("click",()=>pop.remove(),{once:true}),10);
     return;
@@ -181,7 +181,7 @@ function openTrivialPicker(scheduleId, anchorEl){
   setTimeout(()=>document.addEventListener("click",()=>pop.remove(),{once:true}),10);
 }
 
-// ======== TASK DETAIL MODAL (Notes + Subtasks + Trivial + Action Items) ========
+// ======== TASK DETAIL MODAL (Notes + Subtasks + Side Projects + Action Items) ========
 let _addModalTaskId = null;
 
 function _persistTaskTags(taskId, tagIds) {
@@ -268,7 +268,7 @@ function renderModalItems(taskId) {
     items.push({ type: 'subtask', id: st.id, text: st.text, done: !!st.done, created: st.created || '2000-01-01' });
   });
 
-  // Linked trivial tasks
+  // Linked side project items
   var linked = getLinkedTrivialTasks(taskId);
   linked.forEach(function(t) {
     items.push({ type: 'trivial', id: t.id, text: t.text, done: !!t.done, created: t.createdAt || '2000-01-01' });
@@ -285,13 +285,13 @@ function renderModalItems(taskId) {
   document.getElementById('am-items-count').textContent = '(' + items.length + ')';
 
   if (!items.length) {
-    list.innerHTML = '<div class="am-empty">No items yet. Add subtasks, trivial tasks, or action items below.</div>';
+    list.innerHTML = '<div class="am-empty">No items yet. Add subtasks or action items below.</div>';
     return;
   }
 
   // Render in order added (by creation time)
   var tagColors = { subtask: 'var(--text-muted)', trivial: 'var(--cyan)', action: 'var(--amber)' };
-  var tagLabels = { subtask: 'Sub', trivial: '⚡ Triv', action: 'Action' };
+  var tagLabels = { subtask: 'Sub', trivial: 'Side', action: 'Action' };
 
   list.innerHTML = items.map(function(item) {
     return '<div class="am-item" data-type="' + item.type + '" data-id="' + item.id + '">' +
@@ -341,7 +341,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (e.target === e.currentTarget) closeAddModal();
   });
 
-  // Add item (subtask, trivial, or action — based on type dropdown)
+  // Add item (subtask, side project, or action -- based on type dropdown)
   function addModalItem() {
     var inp = document.getElementById('am-item-input');
     var typeSelect = document.getElementById('am-item-type');
@@ -372,12 +372,13 @@ document.addEventListener('DOMContentLoaded', function() {
     if (e.key === 'Enter') addModalItem();
   });
 
-  // Pick existing trivial task
-  document.getElementById('am-trivial-pick').addEventListener('click', function() {
+  // Legacy linked side-items may still exist, but new side projects live in the Side Projects lane.
+  var pickExistingSideItem = document.getElementById('am-trivial-pick');
+  if (pickExistingSideItem) pickExistingSideItem.addEventListener('click', function() {
     var picker = document.getElementById('am-trivial-picker');
     var tasks = loadTrivialTasks().filter(function(t) { return !t.done && !t.linkedTo; });
     if (!tasks.length) {
-      picker.innerHTML = '<div class="am-empty">No unlinked trivial tasks available.</div>';
+      picker.innerHTML = '<div class="am-empty">No unlinked side items available.</div>';
       picker.style.display = '';
       return;
     }
@@ -481,25 +482,17 @@ function buildTrivialTasks(){
   const tasks=loadTrivialTasks();
   const flags=loadTrivialFlags();
   const flaggedScheduleItems=(typeof scheduled!=='undefined'?scheduled:[]).filter(ev=>flags[ev.id]);
-  const trivialTasks=tasks.filter(t=>smallTaskKind(t)==="trivial");
-  const sideProjectTasks=tasks.filter(t=>smallTaskKind(t)==="side_project");
-  const trivialCount=_renderSmallTaskSection({
-    containerId:"triage-trivial",
-    label:"Trivial",
-    kind:"trivial",
-    accent:"var(--purple,#a78bfa)",
-    tasks:trivialTasks,
-    extras:flaggedScheduleItems
-  });
+  const sideProjectTasks=tasks.filter(t=>!t.linkedTo);
   const sideProjectsCount=_renderSmallTaskSection({
     containerId:"triage-side-projects",
     label:"Side Project",
     kind:"side_project",
     accent:"var(--cyan,#22d3ee)",
-    tasks:sideProjectTasks
+    tasks:sideProjectTasks,
+    extras:flaggedScheduleItems
   });
-  _setSmallTaskBadge("trivial-count",trivialCount);
-  _setSmallTaskBadge("trivial-tab-count",trivialCount);
+  _setSmallTaskBadge("trivial-count",0);
+  _setSmallTaskBadge("trivial-tab-count",0);
   _setSmallTaskBadge("side-projects-section-count",sideProjectsCount);
   _setSmallTaskBadge("side-projects-count",sideProjectsCount);
 }
