@@ -1,154 +1,78 @@
 {
-  "date": "2026-04-01",
-  "last_updated_at": "2026-04-01T10:00:00.000000-04:00",
-  "last_updated_by": "plan-day",
+  "date": "2026-05-13",
+  "last_updated_at": "2026-05-13T03:40:35Z",
+  "last_updated_by": "codex-tomorrow-packet",
   "watermarks": {
-    "gmail": {
-      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00",
-      "last_message_id": null
-    },
-    "slack_dms": {
-      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00",
-      "channels": {}
-    },
-    "slack_mentions": {
-      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00",
-      "last_search_ts": "2026-04-01T13:55:00.000000+00:00"
-    },
     "calendar": {
-      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00"
+      "last_at": "2026-05-13T03:40:35Z",
+      "last_id": "google-calendar:primary:2026-05-13"
     },
-    "notion_board": {
-      "last_sweep_at": "2026-04-01T13:55:00.000000+00:00"
+    "gmail": {
+      "last_at": "2026-05-13T03:40:35Z",
+      "last_id": "gmail:scan:2026-05-13"
+    },
+    "slack": {
+      "status": "blocked",
+      "detail": "Sweep Suite documents Slack reader tools, but Slack MCP tools were not exposed in this Codex session."
     }
   },
-  "meetings": [
-    {
-      "id": "ikebhiij4drkn2va7fd08ngocf_20260401T130000Z",
-      "title": "The Bullpen! (BOD Standup)",
-      "start": "2026-04-01T09:00:00-04:00",
-      "end": "2026-04-01T09:15:00-04:00",
-      "attendees": [
-        "michael.provinzino@movewithclever.com",
-        "collins.okoye@movewithclever.com",
-        "jay.watson@movewithclever.com",
-        "arnold.mejica@movewithclever.com"
-      ],
-      "calUrl": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjA0MDFUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-      "linkedDocUrl": null,
-      "linkedDocTitle": null,
-      "myResponseStatus": "accepted"
-    },
-    {
-      "id": "2h8qpfrlfmd5i97jvbqb2gll99_20260401T163000Z",
-      "title": "Offers - Sprint Planning",
-      "start": "2026-04-01T12:30:00-04:00",
-      "end": "2026-04-01T13:30:00-04:00",
-      "attendees": [
-        "ben@movewithclever.com",
-        "jeff.dinter@movewithclever.com",
-        "luke.jungermann@movewithclever.com"
-      ],
-      "calUrl": "https://www.google.com/calendar/event?eid=Mmg4cXBmcmxmbWQ1aTk3anZicWIyZ2xsOTlfMjAyNjA0MDFUMTYzMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-      "linkedDocUrl": null,
-      "linkedDocTitle": null,
-      "myResponseStatus": "accepted"
-    },
-    {
-      "id": "2loq3l6udd1eteluuoubne8gma_20260401T170000Z",
-      "title": "Offers: Investor Network - Weekly",
-      "start": "2026-04-01T13:00:00-04:00",
-      "end": "2026-04-01T14:00:00-04:00",
-      "attendees": [
-        "ben@movewithclever.com",
-        "luke.jungermann@movewithclever.com"
-      ],
-      "calUrl": "https://www.google.com/calendar/event?eid=MmxvcTNsNnVkZDFldGVsdXVvdWJuZThnbWFfMjAyNjA0MDFUMTcwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-      "linkedDocUrl": null,
-      "linkedDocTitle": null,
-      "myResponseStatus": "accepted"
-    },
-    {
-      "id": "37ncbg5lh3n2m8nkr3k101tch2",
-      "title": "Drake/Collins",
-      "start": "2026-04-01T14:45:00-04:00",
-      "end": "2026-04-01T15:45:00-04:00",
-      "attendees": [
-        "collins.okoye@movewithclever.com"
-      ],
-      "calUrl": "https://www.google.com/calendar/event?eid=MzduY2JnNWxoM24ybThua3IzazEwMXRjaDIgZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
-      "linkedDocUrl": null,
-      "linkedDocTitle": null,
-      "myResponseStatus": "accepted"
-    },
-    {
-      "id": "5bp6k5fu79h69vugqsuks67n6m",
-      "title": "Eleanor / Drake - Coffee Chat",
-      "start": "2026-04-01T16:15:00-04:00",
-      "end": "2026-04-01T16:45:00-04:00",
-      "attendees": [
-        "eleanor@movewithclever.com"
-      ],
-      "calUrl": "https://www.google.com/calendar/event?eid=NWJwNms1ZnU3OWg2OXZ1Z3FzdWtzNjduNm0gZHJha2Uuc2hhZHdlbGxAbW92ZXdpdGhjbGV2ZXIuY29t&ctz=America/New_York",
-      "linkedDocUrl": null,
-      "linkedDocTitle": null,
-      "myResponseStatus": "accepted"
-    },
-    {
-      "id": "6eb8eomdq2c5bn6qtcjfn0f7lm_20260401T220000Z",
-      "title": "Mandatory Fun!",
-      "start": "2026-04-01T18:00:00-04:00",
-      "end": "2026-04-01T19:00:00-04:00",
-      "attendees": [
-        "luke.jungermann@movewithclever.com"
-      ],
-      "calUrl": "https://www.google.com/calendar/event?eid=NmViOGVvbWRxMmM1Ym42cXRjamZuMGY3bG1fMjAyNjA0MDFUMjIwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-      "linkedDocUrl": null,
-      "linkedDocTitle": null,
-      "myResponseStatus": "accepted",
-      "notes": "Team building -- no work talk!"
-    }
-  ],
   "triage": {
     "open_items": [
       {
-        "id": "slack-offers-product-golive",
-        "type": "slack_mention",
-        "title": "Jeff Dinter -- 11 AM go-live email confirmation needed",
-        "summary": "Ryan McCue asks if go-live is on target. Jeff asks Drake: do we need your confirmation before sending the mass email, or can we flip it whenever?",
-        "link": "https://cleverrealestate.slack.com/archives/C097MM612UD",
-        "first_seen_at": "2026-04-01T09:55:00-04:00",
-        "last_seen_at": "2026-04-01T09:55:00-04:00",
-        "cycle_count": 1,
-        "escalation_level": "critical",
+        "id": "dcc:2026-05-13:dcc-source-recovery",
+        "type": "system",
+        "sub_type": "dcc_recovery",
+        "source_ref": "/Users/drakeshadwell/portable-programming/Repos/daily-command-center",
+        "title": "DCC source recovery: confirm cloned repo, packet path, and live app boot",
+        "summary": "DCC repo was missing during recent daily reviews and was cloned tonight. Verify the app boots, sees the 2026-05-13 packet, and no longer produces skeleton days.",
         "priority": "high",
-        "notes": "TIME-SENSITIVE: 11 AM target. Reply to Jeff in #offers_product ASAP."
-      },
-      {
-        "id": "email-houzeo-19d2ff300b261f5c",
-        "type": "email_needs_response",
-        "title": "Jai Chavan (Houzeo) -- Re: Houzeo & Clever Performance Report",
-        "summary": "Jai asks 4 questions: (1) deal stage order, (2) Lost/Not Connected stages, (3) March lead quality, (4) remove pre-2025 fake data. Has attached .xlsx.",
-        "link": "https://mail.google.com/mail/u/0/#inbox/19d2ff300b261f5c",
-        "first_seen_at": "2026-03-27T14:41:00-04:00",
-        "last_seen_at": "2026-04-01T09:55:00-04:00",
-        "cycle_count": 8,
-        "escalation_level": "critical",
-        "priority": "high",
-        "notes": "Carried over from previous days. Needs detailed data reply."
-      },
-      {
-        "id": "slack-cx-announcements",
-        "type": "slack_mention",
-        "title": "Jeff Dinter -- Cash offer program expansion announcement (CX)",
-        "summary": "Jeff posted announcement about Zoocasa + QuickBuy alongside Homeward in agent click-to-claim flow going live today. Tagged Drake and Ben.",
-        "link": "https://cleverrealestate.slack.com/archives/",
-        "first_seen_at": "2026-04-01T09:55:00-04:00",
-        "last_seen_at": "2026-04-01T09:55:00-04:00",
-        "cycle_count": 1,
         "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "This closes the repeated review blocker called out in the 2026-05-12 retrospective."
+      },
+      {
+        "id": "sweep:2026-05-13:slack-connector-gap",
+        "type": "system",
+        "sub_type": "connector_gap",
+        "source_ref": "/Users/drakeshadwell/portable-programming/claude-brain/plugins/local/sweep-suite/skills/read-slack/SKILL.md",
+        "title": "Sweep Suite Slack reader exists, but Slack tools are not callable here",
+        "summary": "The local read-slack skill names Slack MCP tools and expects Slack user/config state, but tool discovery returned no Slack tools and sweep-suite config/state are empty.",
+        "priority": "high",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "Resolve before relying on automated Slack DMs/mentions in the daily packet."
+      },
+      {
+        "id": "audit-angel:2026-05-13:review-dirty-export",
+        "type": "project",
+        "sub_type": "dirty_worktree",
+        "source_ref": "/Users/drakeshadwell/portable-programming/Repos/audit-angel",
+        "title": "Audit Angel has uncommitted slideshow/export changes to review",
+        "summary": "Local git status shows modified public/index.html and public/js/export.js after the HTML slideshow export work.",
         "priority": "medium",
-        "notes": "Review and respond if anything is missing for CX crew."
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "Do a quick QA pass, then either commit or intentionally park."
+      },
+      {
+        "id": "hyhh:2026-05-13:browser-data-safety",
+        "type": "project",
+        "sub_type": "data_safety",
+        "source_ref": "/Users/drakeshadwell/portable-programming/claude-brain/projects/hold-your-hand-handbook",
+        "title": "HYHH call tracker: protect browser-local data before more schema/UI changes",
+        "summary": "Tuesday's recovery showed the call tracker browser database is production state. Any further IndexedDB changes should start with export/backup and blocked-upgrade handling.",
+        "priority": "medium",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "Reference: 2026-05-12 retrospective F1 and F2."
       }
     ],
     "resolved_items": [],
@@ -157,357 +81,297 @@
   "completions": {
     "tasks": []
   },
+  "notifications": [
+    {
+      "id": "sources:2026-05-13",
+      "type": "source_readiness",
+      "title": "Source scan for Wednesday packet",
+      "body": "Calendar scanned successfully. Gmail scanned successfully, but connected mailbox produced no actionable Clever/work mail in focused searches. Slack was not callable from this Codex session despite local Sweep Suite documentation.",
+      "priority": "medium",
+      "created_at": "2026-05-13T03:40:35Z"
+    }
+  ],
+  "assessment": {
+    "day_theme": "Restore DCC as the working source of truth, then spend the cleanest focus blocks on active project follow-through.",
+    "hard_commitments": [
+      "07:00-08:30 Crafting: Claude or 3D Print?",
+      "19:00-21:00 Escape Room"
+    ],
+    "must_do": [
+      "Verify DCC repo/app boot and confirm this 2026-05-13 packet renders instead of a skeleton.",
+      "Resolve the Sweep Suite Slack path enough to know whether daily packets can read DMs/mentions automatically.",
+      "Review Audit Angel's uncommitted slideshow/export changes and decide commit vs. park.",
+      "Keep HYHH browser-local data protected before any more tracker schema or artifact-link work."
+    ],
+    "nice_to_do": [
+      "Seed Sweep Suite user-context with known Slack user ID and the next reader configuration once connector access is clear.",
+      "Turn today's manual packet shape into a repeatable DCC packet routine."
+    ],
+    "risks": [
+      "Without Slack access, the packet can miss DMs and mentions.",
+      "Gmail connector appears to be pointed at a mailbox with mostly newsletters, not work obligations.",
+      "DCC data can regress to skeleton days if the repo/app path is not kept materialized."
+    ]
+  },
   "schedule": {
-    "generated_at": "2026-04-01T10:00:00.000000-04:00",
     "working_hours": {
-      "start": "09:00",
+      "start": "07:00",
       "end": "17:30"
     },
-    "end_time": "17:30",
     "timeline": [
       {
-        "id": "block-deel",
-        "type": "time_block",
-        "label": "Review and Approve Hours in Deel",
-        "start": "2026-04-01T07:00:00-04:00",
-        "end": "2026-04-01T07:30:00-04:00",
+        "id": "cal-d931f1ecf8a348e1b8f73b41652c2068",
+        "type": "meeting",
+        "label": "Crafting: Claude or 3D Print?",
+        "start": "2026-05-13T07:00:00-04:00",
+        "end": "2026-05-13T08:30:00-04:00",
         "source": "calendar",
-        "source_id": "7khep6irb0f91sruvfdgr0uuf3_20260401T110000Z",
-        "category": "Admin",
+        "source_id": "d931f1ecf8a348e1b8f73b41652c2068",
+        "category": "Meetings",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=ZDkzMWYxZWNmOGEzNDhlMWI4ZjczYjQxNjUyYzIwNjggb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "d931f1ecf8a348e1b8f73b41652c2068"
+      },
+      {
+        "id": "task-2026-05-13-dcc-review",
+        "type": "task",
+        "label": "DCC morning review and source check",
+        "description": "Open DCC, confirm Wednesday packet renders, note any skeleton/day-state issues, and make the first adjustment before starting project work.",
+        "start": "2026-05-13T08:30:00-04:00",
+        "end": "2026-05-13T08:50:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-13:dcc-review",
+        "priority": "high",
+        "estimated_minutes": 20,
+        "category": "Planning",
         "completed": false
       },
       {
-        "id": "task-investor-email",
+        "id": "task-2026-05-13-sweep-slack",
         "type": "task",
-        "label": "Create new investor onboarding email for Amp portal (1h)",
-        "start": "2026-04-01T07:30:00-04:00",
-        "end": "2026-04-01T08:30:00-04:00",
-        "source": "notion",
-        "source_id": "32dfcdf7-9b27-8118-a579-e4f0866e5ee1",
-        "priority": "Medium",
-        "category": "Deep Work",
+        "label": "Fix Sweep Suite Slack/DCC packet path",
+        "description": "Find why read-slack MCP tools are documented but not callable here; seed missing config only after confirming the correct credential layer.",
+        "start": "2026-05-13T08:50:00-04:00",
+        "end": "2026-05-13T10:20:00-04:00",
+        "source": "codex-packet",
+        "source_id": "sweep:2026-05-13:slack-connector-gap",
+        "priority": "high",
+        "estimated_minutes": 90,
+        "category": "Systems",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-13-1020",
+        "type": "free_time",
+        "label": "Reset / notes",
+        "description": "Short buffer after source plumbing.",
+        "start": "2026-05-13T10:20:00-04:00",
+        "end": "2026-05-13T10:35:00-04:00",
+        "source": "codex-packet",
+        "category": "Break",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-hyhh",
+        "type": "task",
+        "label": "HYHH tracker follow-through with backup-first guardrails",
+        "description": "Continue only after preserving/exporting browser-local call tracker state. Prioritize any remaining artifact-link or documentation-upload polish from Tuesday.",
+        "start": "2026-05-13T10:35:00-04:00",
+        "end": "2026-05-13T12:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "hyhh:2026-05-13:browser-data-safety",
+        "priority": "medium",
+        "estimated_minutes": 85,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-13-lunch",
+        "type": "free_time",
+        "label": "Lunch / admin buffer",
+        "description": "Unscheduled buffer so the afternoon does not start already overdrawn.",
+        "start": "2026-05-13T12:00:00-04:00",
+        "end": "2026-05-13T12:45:00-04:00",
+        "source": "codex-packet",
+        "category": "Break",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-audit-angel",
+        "type": "task",
+        "label": "Audit Angel slideshow/export QA",
+        "description": "Review dirty changes in public/index.html and public/js/export.js, run the lightest useful verification, then commit or explicitly defer.",
+        "start": "2026-05-13T12:45:00-04:00",
+        "end": "2026-05-13T14:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "audit-angel:2026-05-13:review-dirty-export",
+        "priority": "medium",
+        "estimated_minutes": 90,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-sweep-phase3",
+        "type": "task",
+        "label": "Sweep Suite reader preflight",
+        "description": "Use the Phase 3 brief to confirm Calendar/Notion access, define the task-board DB input needed, and avoid wiring life/brain readers back into scope.",
+        "start": "2026-05-13T14:15:00-04:00",
+        "end": "2026-05-13T15:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "sweep-suite:phase-3-brief",
+        "priority": "medium",
         "estimated_minutes": 60,
-        "completed": false,
-        "url": "https://www.notion.so/32dfcdf79b278118a579e4f0866e5ee1"
-      },
-      {
-        "id": "ooo-bod",
-        "type": "ooo",
-        "label": "OOO - BOD",
-        "start": "2026-04-01T08:45:00-04:00",
-        "end": "2026-04-01T09:00:00-04:00",
-        "source": "calendar",
-        "source_id": "05esfdmv4p1n2p01ahg9er1gq8_20260401T124500Z",
-        "completed": true
-      },
-      {
-        "id": "mtg-bullpen",
-        "type": "meeting",
-        "label": "The Bullpen! (BOD Standup)",
-        "start": "2026-04-01T09:00:00-04:00",
-        "end": "2026-04-01T09:15:00-04:00",
-        "source": "calendar",
-        "source_id": "ikebhiij4drkn2va7fd08ngocf_20260401T130000Z",
-        "category": "Meetings",
+        "category": "Systems",
         "completed": false
       },
       {
-        "id": "triage-0915",
-        "type": "time_block",
-        "label": "Email & Slack Triage",
-        "start": "2026-04-01T09:15:00-04:00",
-        "end": "2026-04-01T09:30:00-04:00",
-        "source": "calendar",
-        "source_id": "ctpqm0n6l6ei4k5tgkjp7jp0p4_20260401T131500Z",
-        "category": "Triage",
-        "completed": false,
-        "notes": "URGENT: Reply to Jeff Dinter in #offers_product re: go-live email confirmation (11 AM target)"
-      },
-      {
-        "id": "task-pay-for-photos",
+        "id": "task-2026-05-13-inbox-buffer",
         "type": "task",
-        "label": "\u26a0\ufe0f [DUE TODAY] Sunset pay-for-photos: prepare one-click removal (45m)",
-        "start": "2026-04-01T09:30:00-04:00",
-        "end": "2026-04-01T10:15:00-04:00",
-        "source": "notion",
-        "source_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
-        "priority": "High",
-        "category": "Deep Work",
-        "estimated_minutes": 45,
-        "completed": false,
-        "url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
-        "notes": "Due April 1 -- per Ben, the agent email about photos sunset should NOT be sent. Cash offer partners email goes out today instead."
-      },
-      {
-        "id": "task-mike-p-question",
-        "type": "task",
-        "label": "Answer Mike Provinzino: Close Paid connection sync question (30m)",
-        "start": "2026-04-01T10:15:00-04:00",
-        "end": "2026-04-01T10:45:00-04:00",
-        "source": "notion",
-        "source_id": "333fcdf7-9b27-81fa-abf8-c8363123b8d1",
-        "priority": "High",
-        "estimated_minutes": 30,
-        "completed": false,
-        "url": "https://www.notion.so/333fcdf79b2781faabf8c8363123b8d1"
-      },
-      {
-        "id": "triage-1100",
-        "type": "time_block",
-        "label": "Email & Slack Triage",
-        "start": "2026-04-01T11:00:00-04:00",
-        "end": "2026-04-01T11:15:00-04:00",
-        "source": "calendar",
-        "source_id": "5ud9gcba8j5obudt3uk32aua4c_20260401T150000Z",
+        "label": "Inbox/manual Slack triage buffer",
+        "description": "Because Slack is unavailable to Codex and Gmail found no work-mail obligations, use this slot for manual scan or quick replies if needed.",
+        "start": "2026-05-13T15:15:00-04:00",
+        "end": "2026-05-13T16:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "manual-triage:2026-05-13",
+        "priority": "medium",
+        "estimated_minutes": 60,
         "category": "Triage",
         "completed": false
       },
       {
-        "id": "task-qa-investor",
+        "id": "task-2026-05-13-dcc-closeout",
         "type": "task",
-        "label": "\u26a0\ufe0f [OVERDUE] QA/fix investor count stamping workflow (30m)",
-        "start": "2026-04-01T11:15:00-04:00",
-        "end": "2026-04-01T11:45:00-04:00",
-        "source": "notion",
-        "source_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
-        "priority": "Medium",
-        "category": "Deep Work",
-        "estimated_minutes": 30,
-        "completed": false,
-        "url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0"
-      },
-      {
-        "id": "task-houzeo-reply",
-        "type": "task",
-        "label": "Reply to Jai Chavan (Houzeo) -- data export questions (30m)",
-        "start": "2026-04-01T11:45:00-04:00",
-        "end": "2026-04-01T12:15:00-04:00",
-        "source": "triage",
-        "priority": "High",
-        "category": "Triage",
-        "estimated_minutes": 30,
-        "completed": false,
-        "notes": "Answer 4 questions: deal stage order, Lost/Not Connected stages, March lead quality, pre-2025 data cleanup."
-      },
-      {
-        "id": "prep-sprint-planning",
-        "type": "prep",
-        "label": "Prep: Offers Sprint Planning",
-        "start": "2026-04-01T12:15:00-04:00",
-        "end": "2026-04-01T12:30:00-04:00",
-        "source": "scheduler",
-        "category": "Meetings",
-        "estimated_minutes": 15,
+        "label": "DCC closeout: preserve actuals and update next packet inputs",
+        "description": "Before evening plans, mark what moved/done/blocked so tomorrow's review does not have to reconstruct the day from transcripts.",
+        "start": "2026-05-13T16:15:00-04:00",
+        "end": "2026-05-13T17:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-13:closeout",
+        "priority": "high",
+        "estimated_minutes": 60,
+        "category": "Planning",
         "completed": false
       },
       {
-        "id": "mtg-sprint-planning",
+        "id": "cal-2f209782dd3c42b799efcb5cdbdc3b36",
         "type": "meeting",
-        "label": "Offers - Sprint Planning",
-        "start": "2026-04-01T12:30:00-04:00",
-        "end": "2026-04-01T13:30:00-04:00",
+        "label": "Escape Room",
+        "start": "2026-05-13T19:00:00-04:00",
+        "end": "2026-05-13T21:00:00-04:00",
         "source": "calendar",
-        "source_id": "2h8qpfrlfmd5i97jvbqb2gll99_20260401T163000Z",
-        "category": "Meetings",
+        "source_id": "2f209782dd3c42b799efcb5cdbdc3b36",
+        "category": "Personal",
         "completed": false,
-        "notes": "With Ben, Jeff, Luke. QuickBuy launch day! Cash offer partner expansion go-live."
-      },
-      {
-        "id": "ooo-lunch",
-        "type": "ooo",
-        "label": "OOO - Lunch",
-        "start": "2026-04-01T12:30:00-04:00",
-        "end": "2026-04-01T13:00:00-04:00",
-        "source": "calendar",
-        "source_id": "45mfckh8tm6fa4funs5qfnrm9f_20260401T163000Z",
-        "completed": false
-      },
-      {
-        "id": "mtg-investor-network",
-        "type": "meeting",
-        "label": "Offers: Investor Network - Weekly",
-        "start": "2026-04-01T13:00:00-04:00",
-        "end": "2026-04-01T14:00:00-04:00",
-        "source": "calendar",
-        "source_id": "2loq3l6udd1eteluuoubne8gma_20260401T170000Z",
-        "category": "Meetings",
-        "completed": false,
-        "notes": "With Ben and Luke. Overlaps end of Sprint Planning."
-      },
-      {
-        "id": "block-pom3",
-        "type": "time_block",
-        "label": "POM3: BOOK MEETINGS HERE",
-        "start": "2026-04-01T14:00:00-04:00",
-        "end": "2026-04-01T17:00:00-04:00",
-        "source": "calendar",
-        "source_id": "erfaesoao08d1hb20hl8ldj9jv_20260401T180000Z",
-        "category": "Meetings",
-        "completed": false,
-        "nested_tasks": ["task-cx-review", "prep-collins"]
-      },
-      {
-        "id": "task-cx-review",
-        "type": "task",
-        "label": "Review Jeff's #cx-announcements re: cash offer expansion (15m)",
-        "start": "2026-04-01T14:00:00-04:00",
-        "end": "2026-04-01T14:15:00-04:00",
-        "source": "triage",
-        "priority": "Medium",
-        "estimated_minutes": 15,
-        "completed": false,
-        "notes": "Review and respond to Jeff's announcement in #cx-announcements about Zoocasa + QuickBuy."
-      },
-      {
-        "id": "prep-collins",
-        "type": "prep",
-        "label": "Prep: Drake/Collins 1:1",
-        "start": "2026-04-01T14:30:00-04:00",
-        "end": "2026-04-01T14:45:00-04:00",
-        "source": "scheduler",
-        "category": "Direct Reports",
-        "estimated_minutes": 15,
-        "completed": false
-      },
-      {
-        "id": "mtg-collins",
-        "type": "meeting",
-        "label": "Drake/Collins 1:1",
-        "start": "2026-04-01T14:45:00-04:00",
-        "end": "2026-04-01T15:45:00-04:00",
-        "source": "calendar",
-        "source_id": "37ncbg5lh3n2m8nkr3k101tch2",
-        "category": "Direct Reports",
-        "completed": false
-      },
-      {
-        "id": "prep-eleanor",
-        "type": "prep",
-        "label": "Prep: Eleanor / Drake Coffee Chat",
-        "start": "2026-04-01T15:45:00-04:00",
-        "end": "2026-04-01T16:00:00-04:00",
-        "source": "scheduler",
-        "estimated_minutes": 15,
-        "completed": false
-      },
-      {
-        "id": "triage-1600",
-        "type": "time_block",
-        "label": "Email & Slack Triage",
-        "start": "2026-04-01T16:00:00-04:00",
-        "end": "2026-04-01T16:15:00-04:00",
-        "source": "calendar",
-        "source_id": "23mrn023htr5m8r3mnf4afoetj_20260401T200000Z",
-        "category": "Triage",
-        "completed": false
-      },
-      {
-        "id": "mtg-eleanor",
-        "type": "meeting",
-        "label": "Eleanor / Drake - Coffee Chat",
-        "start": "2026-04-01T16:15:00-04:00",
-        "end": "2026-04-01T16:45:00-04:00",
-        "source": "calendar",
-        "source_id": "5bp6k5fu79h69vugqsuks67n6m",
-        "completed": false
-      },
-      {
-        "id": "block-eod",
-        "type": "focus_time",
-        "label": "EOD Email and Slack Triage",
-        "start": "2026-04-01T17:00:00-04:00",
-        "end": "2026-04-01T17:30:00-04:00",
-        "source": "calendar",
-        "source_id": "d6deda3315f449a7bdbcfd5739b8b7c3_20260401T210000Z",
-        "category": "Triage",
-        "completed": false,
-        "notes": "Update Jira/Notion with progress. Set priorities for tomorrow."
-      },
-      {
-        "id": "mtg-mandatory-fun",
-        "type": "meeting",
-        "label": "Mandatory Fun!",
-        "start": "2026-04-01T18:00:00-04:00",
-        "end": "2026-04-01T19:00:00-04:00",
-        "source": "calendar",
-        "source_id": "6eb8eomdq2c5bn6qtcjfn0f7lm_20260401T220000Z",
-        "category": "Meetings",
-        "completed": false,
-        "notes": "Team building -- no work talk!"
+        "calendar_link": "https://www.google.com/calendar/event?eid=MmYyMDk3ODJkZDNjNDJiNzk5ZWZjYjVjZGJkYzNiMzYgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "2f209782dd3c42b799efcb5cdbdc3b36"
       }
     ],
     "tasks_scheduled": [
       {
-        "task_id": "32dfcdf7-9b27-8118-a579-e4f0866e5ee1",
-        "title": "Create new investor onboarding email for Amp portal",
-        "url": "https://www.notion.so/32dfcdf79b278118a579e4f0866e5ee1",
-        "priority": "Medium",
+        "task_id": "task-2026-05-13-dcc-review",
+        "title": "DCC morning review and source check",
+        "estimated_minutes": 20,
+        "priority": "high"
+      },
+      {
+        "task_id": "task-2026-05-13-sweep-slack",
+        "title": "Fix Sweep Suite Slack/DCC packet path",
+        "estimated_minutes": 90,
+        "priority": "high"
+      },
+      {
+        "task_id": "task-2026-05-13-hyhh",
+        "title": "HYHH tracker follow-through with backup-first guardrails",
+        "estimated_minutes": 85,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-13-audit-angel",
+        "title": "Audit Angel slideshow/export QA",
+        "estimated_minutes": 90,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-13-sweep-phase3",
+        "title": "Sweep Suite reader preflight",
         "estimated_minutes": 60,
-        "scheduled_start": "07:30",
-        "scheduled_end": "08:30",
-        "status": "pending"
+        "priority": "medium"
       },
       {
-        "task_id": "32ffcdf7-9b27-81c1-bf93-ce69b0701b47",
-        "title": "Sunset pay-for-photos: prepare one-click removal for April 1",
-        "url": "https://www.notion.so/32ffcdf79b2781c1bf93ce69b0701b47",
-        "priority": "High",
-        "estimated_minutes": 45,
-        "due_date": "2026-04-01",
-        "scheduled_start": "09:30",
-        "scheduled_end": "10:15",
-        "status": "pending"
+        "task_id": "task-2026-05-13-inbox-buffer",
+        "title": "Inbox/manual Slack triage buffer",
+        "estimated_minutes": 60,
+        "priority": "medium"
       },
       {
-        "task_id": "333fcdf7-9b27-81fa-abf8-c8363123b8d1",
-        "title": "Answer Mike Provinzino: Close Paid connection sync question",
-        "url": "https://www.notion.so/333fcdf79b2781faabf8c8363123b8d1",
-        "priority": "High",
-        "estimated_minutes": 30,
-        "scheduled_start": "10:15",
-        "scheduled_end": "10:45",
-        "status": "pending"
-      },
-      {
-        "task_id": "32cfcdf7-9b27-8154-be01-d46665998ed0",
-        "title": "QA/fix investor count stamping workflow",
-        "url": "https://www.notion.so/32cfcdf79b278154be01d46665998ed0",
-        "priority": "Medium",
-        "estimated_minutes": 30,
-        "due_date": "2026-03-23",
-        "scheduled_start": "11:15",
-        "scheduled_end": "11:45",
-        "status": "pending"
+        "task_id": "task-2026-05-13-dcc-closeout",
+        "title": "DCC closeout: preserve actuals and update next packet inputs",
+        "estimated_minutes": 60,
+        "priority": "high"
       }
     ],
-    "tasks_couldnt_fit": [
-      {
-        "task_id": "32cfcdf7-9b27-81fd-85da-f42fe280bf0e",
-        "title": "Review HubSpot workflows feeding Collins' queue",
-        "url": "https://www.notion.so/32cfcdf79b2781fd85daf42fe280bf0e",
-        "priority": "Medium",
-        "reason": "2-hour task, no contiguous block available after meetings. Defer to tomorrow."
-      },
-      {
-        "task_id": "32dfcdf7-9b27-8134-ad00-e77ae27a5de6",
-        "title": "Analyze whether already-listed properties should be excluded from agent matching",
-        "url": "https://www.notion.so/32dfcdf79b278134ad00e77ae27a5de6",
-        "priority": "High",
-        "reason": "2-hour task overdue from 3/27. Heavy meeting day today. Defer to first morning slot tomorrow."
-      },
-      {
-        "task_id": "31ffcdf7-9b27-81a4-aa6d-c65bcc74515c",
-        "title": "Define Q2 metrics for tracking",
-        "url": "https://www.notion.so/31ffcdf79b2781a4aa6dc65bcc74515c",
-        "priority": "Medium",
-        "reason": "1-hour task. No remaining morning deep work slots. Defer to tomorrow."
-      }
-    ],
+    "tasks_couldnt_fit": [],
     "stats": {
-      "total_tasks_scheduled": 4,
-      "total_estimated_hours": 2.75,
-      "total_meetings": 6,
-      "free_time_minutes": 30
+      "calendar_events": 2,
+      "planned_task_minutes": 465,
+      "planned_meeting_minutes": 210,
+      "source_confidence": "partial",
+      "source_gaps": [
+        "Slack connector not callable in this session",
+        "Work Gmail obligations not found in connected mailbox"
+      ]
     }
+  },
+  "meetings": [
+    {
+      "id": "d931f1ecf8a348e1b8f73b41652c2068",
+      "event_id": "d931f1ecf8a348e1b8f73b41652c2068",
+      "title": "Crafting: Claude or 3D Print?",
+      "start": "2026-05-13T07:00:00-04:00",
+      "end": "2026-05-13T08:30:00-04:00",
+      "attendees": [],
+      "calUrl": "https://www.google.com/calendar/event?eid=ZDkzMWYxZWNmOGEzNDhlMWI4ZjczYjQxNjUyYzIwNjggb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": null
+    },
+    {
+      "id": "2f209782dd3c42b799efcb5cdbdc3b36",
+      "event_id": "2f209782dd3c42b799efcb5cdbdc3b36",
+      "title": "Escape Room",
+      "start": "2026-05-13T19:00:00-04:00",
+      "end": "2026-05-13T21:00:00-04:00",
+      "attendees": [],
+      "calUrl": "https://www.google.com/calendar/event?eid=MmYyMDk3ODJkZDNjNDJiNzk5ZWZjYjVjZGJkYzNiMzYgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    }
+  ],
+  "mutations": [
+    {
+      "skill": "codex-tomorrow-packet",
+      "action": "create_dcc_packet",
+      "at": "2026-05-13T03:40:35Z",
+      "target_date": "2026-05-13",
+      "calendar_events": 2,
+      "gmail_candidate_messages_scanned": 20,
+      "triage_items_added": 4,
+      "status": "partial",
+      "blocked_sources": [
+        "slack"
+      ]
+    }
+  ],
+  "meta": {
+    "skill_runs": [
+      {
+        "skill": "codex-tomorrow-packet",
+        "started_at": "2026-05-13T03:32:32Z",
+        "finished_at": "2026-05-13T03:40:35Z",
+        "status": "partial",
+        "notes": "Calendar and Gmail connector scans completed. Slack scan blocked by missing callable tools."
+      }
+    ]
   }
 }

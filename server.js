@@ -31,6 +31,11 @@ const slotStore = require("./slot-store");
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
 const PORT = process.env.PORT || 8090;
+const LOCAL_AUTH_ENABLED = process.env.NODE_ENV !== "production" && process.env.DCC_LOCAL_AUTH === "1";
+const LOCAL_AUTH_USERNAME = process.env.SEED_USERNAME || "drake";
+const LOCAL_AUTH_PASSWORD = process.env.SEED_PASSWORD || "clever123";
+const LOCAL_AUTH_USER_ID = Number(process.env.DCC_LOCAL_USER_ID || 1);
+const LOCAL_AUTH_WORKSPACE_ID = process.env.DCC_LOCAL_WORKSPACE_ID || `ws-${LOCAL_AUTH_USER_ID}`;
 
 const PROJECT_DIR = __dirname;
 const DATA_DIR = path.join(PROJECT_DIR, "data");
@@ -86,11 +91,14 @@ function getSessionSecret() {
 
 const sessionSecret = getSessionSecret();
 
-app.use(session({
-  store: new pgSession({ pool: pool, tableName: "session", createTableIfMissing: true, pruneSessionInterval: 15 * 60 }),
+const sessionOptions = {
   secret: sessionSecret, resave: false, saveUninitialized: false, name: "dcc_session",
   cookie: { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 30 * 24 * 60 * 60 * 1000, sameSite: "lax" }
-}));
+};
+if (!LOCAL_AUTH_ENABLED) {
+  sessionOptions.store = new pgSession({ pool: pool, tableName: "session", createTableIfMissing: true, pruneSessionInterval: 15 * 60 });
+}
+app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
@@ -123,10 +131,21 @@ app.get("/login", (req, res) => { if (req.session.userId) return res.redirect("/
 app.post("/api/auth/login", async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-  const user = await auth.findUserByUsername(username);
-  if (!user || !auth.verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
-  req.session.userId = user.id; req.session.username = user.username; req.session.workspaceId = null;
-  res.json({ ok: true, username: user.username });
+  if (LOCAL_AUTH_ENABLED && username === LOCAL_AUTH_USERNAME && password === LOCAL_AUTH_PASSWORD) {
+    req.session.userId = LOCAL_AUTH_USER_ID;
+    req.session.username = LOCAL_AUTH_USERNAME;
+    req.session.workspaceId = LOCAL_AUTH_WORKSPACE_ID;
+    return res.json({ ok: true, username: LOCAL_AUTH_USERNAME, workspaceId: LOCAL_AUTH_WORKSPACE_ID, local: true });
+  }
+  try {
+    const user = await auth.findUserByUsername(username);
+    if (!user || !auth.verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
+    req.session.userId = user.id; req.session.username = user.username; req.session.workspaceId = null;
+    res.json({ ok: true, username: user.username });
+  } catch (e) {
+    if (LOCAL_AUTH_ENABLED) return res.status(401).json({ error: "Invalid local username or password" });
+    throw e;
+  }
 });
 
 app.post("/api/auth/logout", (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
@@ -802,13 +821,17 @@ app.listen(PORT, async () => {
   console.log(`  --------------------`);
   console.log(`  Dashboard:  http://localhost:${PORT}`);
   console.log(`  Database:   Postgres (via DATABASE_URL)`);
-  console.log(`  Auth:       Session-based -- login at /login`);
+  console.log(`  Auth:       ${LOCAL_AUTH_ENABLED ? `Local dev login (${LOCAL_AUTH_USERNAME})` : "Session-based -- login at /login"}`);
 
-  try {
-    const defaultUser = await auth.ensureDefaultUser();
-    if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE pa_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
-    await blockDB.ensureWorkspacesForAllUsers();
-  } catch (e) { console.error("[auth] Startup error:", e.message); }
+  if (LOCAL_AUTH_ENABLED) {
+    defaultUserId = LOCAL_AUTH_USER_ID;
+  } else {
+    try {
+      const defaultUser = await auth.ensureDefaultUser();
+      if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE pa_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
+      await blockDB.ensureWorkspacesForAllUsers();
+    } catch (e) { console.error("[auth] Startup error:", e.message); }
+  }
 
   try { await gcalSync.init(broadcast, defaultUserId); const gcalAccounts = await gcalAuth.listAuthenticatedAccounts(defaultUserId); if (gcalAccounts.length) { console.log(`  GCal:       Connected (${gcalAccounts.map(a => a.key).join(", ")})`); gcalSync.startPolling(); } else { console.log(`  GCal:       Not connected`); } } catch (e) { console.error("[gcal] Init error:", e.message); }
 
