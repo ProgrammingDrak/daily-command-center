@@ -779,17 +779,87 @@ function toggleSnCreateTask(){
 })();
 
 // ======== FOCUS BANNER ========
+function _focusBannerOpenTimerPanel(){
+  const panel=document.getElementById("ft-panel");
+  const fab=document.getElementById("ft-fab");
+  const mini=document.getElementById("ft-mini");
+  if(panel)panel.style.display="flex";
+  if(fab)fab.style.display="none";
+  if(mini)mini.style.display="none";
+}
+function _focusBannerNextItem(){
+  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return null;
+  const items=scheduled.filter(ev=>{
+    if(!ev||ev.nested)return false;
+    if(typeof isDone==="function"&&isDone(ev))return false;
+    if(typeof isDeleted==="function"&&isDeleted(ev))return false;
+    if(typeof isPushed==="function"&&isPushed(ev))return false;
+    return !["break","ooo","free_time"].includes(ev.type);
+  });
+  if(!items.length)return null;
+  const pinnedId=(typeof getPinnedActiveId==="function")?getPinnedActiveId():null;
+  if(pinnedId){
+    const pinned=items.find(ev=>String(ev.id)===String(pinnedId));
+    if(pinned)return pinned;
+  }
+  const active=(typeof isActive==="function")?items.find(isActive):null;
+  if(active)return active;
+  if(typeof pt==="function"&&typeof now==="function"){
+    const upcoming=items.find(ev=>pt(ev.start)>=now());
+    if(upcoming)return upcoming;
+  }
+  return items[0];
+}
+function _focusBannerStartNext(){
+  const next=_focusBannerNextItem();
+  if(!next)return false;
+  if(typeof openPomodoro==="function"){
+    openPomodoro(next.title,typeof dur==="function"?dur(next):(next.durMin||25));
+    return true;
+  }
+  return false;
+}
+function _focusBannerWireButton(){
+  const btn=document.getElementById("fb-open-timer");
+  if(!btn||btn.dataset.wired)return;
+  btn.dataset.wired="1";
+  btn.addEventListener("click",()=>{
+    const hasTitle=typeof pomoState!=="undefined"&&pomoState.title&&pomoState.title!=="--";
+    if(!hasTitle&&_focusBannerStartNext())return;
+    _focusBannerOpenTimerPanel();
+  });
+}
 function updateFocusBanner(){
   const banner=document.getElementById("focus-banner");
   if(!banner)return;
+  _focusBannerWireButton();
   const title=(typeof pomoState!=="undefined"&&pomoState.title&&pomoState.title!=="--")?pomoState.title:null;
-  if(!title){banner.style.display="none";return;}
+  const fbLabel=banner.querySelector(".fb-label");
+  const fbTitle=document.getElementById("fb-title");
+  const fbStatus=document.getElementById("fb-status");
+  const fbBtn=document.getElementById("fb-open-timer");
+  if(!title){
+    const next=_focusBannerNextItem();
+    if(!next){banner.style.display="none";return;}
+    banner.style.display="flex";
+    banner.classList.remove("running");
+    banner.classList.add("ready");
+    if(fbLabel)fbLabel.textContent="Want to start to focus?";
+    if(fbTitle)fbTitle.textContent=next.title;
+    if(fbStatus){
+      const d=typeof dur==="function"?dur(next):(next.durMin||0);
+      const dLabel=(typeof ms==="function")?ms(d):d+"m";
+      fbStatus.textContent=d?"· "+dLabel+" ready":"· Ready";
+    }
+    if(fbBtn)fbBtn.title="Start timer for next item";
+    return;
+  }
   banner.style.display="flex";
   const running=(typeof pomoState!=="undefined"&&pomoState.running);
+  banner.classList.remove("ready");
   banner.classList.toggle("running",running);
-  const fbTitle=document.getElementById("fb-title");
+  if(fbLabel)fbLabel.textContent="Now Focusing";
   if(fbTitle)fbTitle.textContent=title;
-  const fbStatus=document.getElementById("fb-status");
   if(fbStatus){
     if(running){
       const rem=(typeof pomoFmt==="function")?pomoFmt(pomoState.remaining):"";
@@ -798,6 +868,7 @@ function updateFocusBanner(){
       fbStatus.textContent="· Paused";
     }
   }
+  if(fbBtn)fbBtn.title="Open timer panel";
 }
 
 // ======== TASK QUEUE PANEL ========
