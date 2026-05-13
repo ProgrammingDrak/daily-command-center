@@ -131,7 +131,7 @@
       if (status.migrated && status.blockCount > 5) {
         el.innerHTML = `
           <div style="color:var(--green);font-size:13px;margin-bottom:8px">
-            Migration already completed! ${status.blockCount} blocks in database, ${status.paStateCount} PA states.
+            Migration already completed! ${status.blockCount} blocks in database, ${status.dccStateCount} DCC states.
           </div>
           <div style="font-size:11px;color:var(--text-muted)">
             You can run the migration again safely — it's idempotent (won't duplicate data).
@@ -187,8 +187,8 @@
             <div class="lbl">Days Found</div>
           </div>
           <div class="summary-stat">
-            <div class="num">${manifest.paState.dates}</div>
-            <div class="lbl">PA States</div>
+            <div class="num">${manifest.dccState.dates}</div>
+            <div class="lbl">DCC States</div>
           </div>
           <div class="summary-stat">
             <div class="num">${manifest.errors.length}</div>
@@ -237,7 +237,7 @@ ${manifest.errors.length ? `\n<span class="warn">Errors: ${JSON.stringify(manife
 
     await sleep(200);
     progress.style.width = "60%";
-    label.textContent = "Migrating PA state...";
+    label.textContent = "Migrating DCC state...";
 
     try {
       const res = await fetch(API + "/api/migrate", {
@@ -272,8 +272,8 @@ ${manifest.errors.length ? `\n<span class="warn">Errors: ${JSON.stringify(manife
             <div class="lbl">Days Migrated</div>
           </div>
           <div class="summary-stat">
-            <div class="num" style="color:var(--green)">${manifest.paState.dates}</div>
-            <div class="lbl">PA States</div>
+            <div class="num" style="color:var(--green)">${manifest.dccState.dates}</div>
+            <div class="lbl">DCC States</div>
           </div>
           <div class="summary-stat">
             <div class="num" style="color:${manifest.errors.length ? 'var(--red)' : 'var(--green)'}">${manifest.errors.length}</div>

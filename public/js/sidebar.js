@@ -239,7 +239,7 @@ function buildPickerList(query){
   });
 }
 document.getElementById("pomo-task-card").addEventListener("click",e=>{
-  if(e.target.closest("#pomo-task-check"))return;
+  if(e.target.closest("#pomo-task-check,#pomo-task-lightning,button,a,input,select,textarea"))return;
   openTaskPicker();
 });
 document.getElementById("pomo-picker-close").addEventListener("click",closeTaskPicker);

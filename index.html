@@ -117,27 +117,16 @@
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <button class="sn-btn" id="sn-open-btn" onclick="openStickyNotes()">📌 Notes <span class="sn-badge" id="sn-badge" style="display:none">0</span></button>
-    <div class="sb-menu" style="position:relative">
-      <button class="sn-btn" id="sb-menu-btn" onclick="toggleSBMenu()" title="The Second Brain">🧠</button>
-      <div id="sb-menu-drop" style="display:none;position:absolute;right:0;top:100%;margin-top:6px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);min-width:180px;z-index:200">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);padding:4px 8px;margin-bottom:4px">The Second Brain</div>
-        <button onclick="downloadBackup()" style="display:block;width:100%;text-align:left;background:none;border:none;cursor:pointer;color:var(--text);font-size:12px;padding:6px 8px;border-radius:6px;transition:background 0.12s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='none'">💾 Save Backup</button>
-        <button onclick="document.getElementById('sb-restore-input').click()" style="display:block;width:100%;text-align:left;background:none;border:none;cursor:pointer;color:var(--text);font-size:12px;padding:6px 8px;border-radius:6px;transition:background 0.12s" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='none'">📂 Load Backup</button>
-        <input type="file" id="sb-restore-input" accept=".json" style="display:none" onchange="loadBackup(event)">
-        <div style="border-top:1px solid var(--border);margin:4px 0"></div>
-        <div style="font-size:10px;color:var(--text-muted);padding:4px 8px" id="sb-status">--</div>
-        <div class="sync-section" id="sync-section">
-          <div class="sync-sum" id="sync-sum"></div>
-          <div class="sync-btns">
-            <button class="sbtn sbtn-undo" id="btn-undo">Undo</button>
-            <button class="sbtn sbtn-reset" id="btn-reset">Reset</button>
-            <button class="sbtn sbtn-copy" id="btn-copy">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
-              Copy
-            </button>
-          </div>
-        </div>
-      </div>
+    <!-- Second Brain Save/Load Backup buttons removed Phase 6: silently broken
+         in BlockStore-only mode (backed up empty localStorage, restored to keys
+         nothing reads). A real BlockStore backup/restore is a separate feature.
+         The Copy-for-Claude button + activity summary are preserved here. -->
+    <div class="sync-section" id="sync-section" style="display:flex;align-items:center;gap:8px">
+      <div class="sync-sum" id="sync-sum" style="font-size:10px;color:var(--text-muted)"></div>
+      <button class="sbtn sbtn-copy" id="btn-copy" title="Copy activity log for Claude">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+        Copy
+      </button>
     </div>
     <div class="time-now"><div class="clock" id="clock">--:--</div><div id="tz-label">--</div></div>
   </div>
@@ -196,8 +185,9 @@
 
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
-  <button class="tab" data-tab="responsibilities" id="responsibilities-tab-btn">Responsibilities <span class="badge" id="responsibilities-count" style="display:none">0</span></button>
+  <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
+  <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
 </div>
 
@@ -216,6 +206,7 @@
         <button class="svt-btn active" data-view="plan">Plan</button>
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
+      <button class="ma-morning-btn" id="ma-morning-btn" type="button" title="Generate prep for today's meetings">Morning prep</button>
       <span class="sched-drag-hint" style="margin-left:10px">Drag to reorder &middot; +/- to adjust time &middot; Check to complete</span>
     </span>
   </div>
@@ -241,6 +232,15 @@
   <div class="tl" id="timeline"></div>
   <div id="actual-view" style="display:none"></div>
 </div>
+
+<div class="tab-content" id="tab-glymphatic">
+  <div id="glymphatic-brief-root"></div>
+</div>
+
+<!-- Floating Trivial bubble: at-a-glance count of available trivial tasks -->
+<button class="float-trivial" id="float-trivial" type="button" style="display:none" title="Trivial tasks">
+  <span class="float-trivial-count" id="float-trivial-count">0</span>
+</button>
 
 <!-- Side drawer: Tasks (right edge) -->
 <aside class="side-drawer side-drawer-right" id="tasks-drawer" aria-hidden="true">
@@ -930,46 +930,30 @@
   </div>
 </div>
 
-<div class="tab-content" id="tab-responsibilities">
-  <div class="delegated-header">
-    <h2 class="delegated-title">Responsibilities</h2>
-    <div class="resp-actions">
-      <button class="secondary resp-small-btn" id="resp-auto-schedule-btn">Auto-schedule due</button>
-      <button class="primary" id="resp-new-btn">+ New responsibility</button>
-    </div>
-  </div>
-  <div class="resp-capture">
-    <div id="resp-capture-text" class="resp-capture-editor" data-placeholder="Paste a responsibility, Slack alert text, or screenshot OCR here..."></div>
-    <button class="primary" id="resp-capture-btn">Capture</button>
-  </div>
-  <div class="delegated-filter-bar">
-    <button class="delegated-filter-btn active resp-filter-btn" data-filter="active">Active</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="inbox">Inbox</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="due">Due</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="archived">Archived</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="all">All</button>
-  </div>
-  <div class="responsibilities-list" id="responsibilities-list">
-    <div class="delegated-empty">No responsibilities yet. Capture one above or create it manually.</div>
-  </div>
-</div>
+<div class="tab-content" id="tab-calendar"></div>
 
 <div class="tab-content" id="tab-slots">
   <div class="slots-shell">
     <div class="slots-topline">
       <div>
         <h2 class="slots-title">Task House Jackpot</h2>
-        <div class="slots-subtitle">Complete tasks, earn points, build the bank, and let the house reels decide.</div>
+        <div class="slots-subtitle">Complete tasks, earn Task Tokens, build the bank, and let the house reels decide.</div>
       </div>
       <div class="slots-balances">
-        <div class="slots-balance"><span>Points</span><strong id="slot-credit-balance">0</strong></div>
+        <div class="slots-balance"><span>Task Tokens</span><strong id="slot-credit-balance">0</strong></div>
         <div class="slots-balance slots-bank">
           <span>Piggy Bank</span>
-          <strong id="slot-bank-balance">$0.00</strong>
-          <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" style="display:none">
-            <span class="slot-wolf">WOLF</span>
-            <span class="slot-balloon" id="slot-pending-balloon">$0.00</span>
-            <span class="slot-pop-label">transfer & pop</span>
+          <button id="slot-pending-deposit" class="slot-pending-deposit" type="button">
+            <strong id="slot-bank-balance">$0.00</strong>
+            <span class="slot-bank-meter"><span id="slot-bank-fill"></span></span>
+            <span class="slot-bank-breakdown">
+              <span>Ready <b id="slot-bank-ready">$0.00</b></span>
+              <span>To sweep <b id="slot-bank-pending">$0.00</b></span>
+              <span>Total usable <b id="slot-bank-total">$0.00</b></span>
+              <span>This month <b id="slot-bank-month">$0.00 / $0.00</b></span>
+              <span>At risk <b id="slot-bank-shortfall">$0.00</b></span>
+            </span>
+            <span class="slot-pop-label" id="slot-bank-action-label">No sweep pending</span>
           </button>
         </div>
       </div>
@@ -997,11 +981,49 @@
         <div class="slot-actions">
           <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
           <button class="slot-refresh-btn" id="slot-refresh-btn" type="button">Refresh</button>
+          <button class="slot-refresh-btn" id="slot-rules-toggle" type="button">Rules &amp; cost</button>
+        </div>
+        <div class="slot-rules-panel" id="slot-rules-panel" style="display:none">
+          <div class="slot-rules-grid">
+            <label class="slot-setting-field">
+              <span>Spin cost</span>
+              <input id="slot-spin-cost" type="number" min="1" max="25" step="1">
+            </label>
+            <label class="slot-setting-field">
+              <span>Monthly goal $</span>
+              <input id="slot-monthly-goal" type="number" min="1" max="10000" step="1">
+            </label>
+            <div class="slot-setting-note">
+              <strong id="slot-current-cost">1 Task Token per spin</strong>
+              <span id="slot-current-goal">Monthly goal: $0.00</span>
+            </div>
+          </div>
+          <div class="slot-rule-list">
+            <div><strong>Task scoring</strong></div>
+            <div>Base completion: +1 Task Token</div>
+            <div>Longer tasks: bonuses at 45m, 90m, and 150m</div>
+            <div>Priority: High, Urgent, Critical, or P1 tasks get bonuses</div>
+            <div>Focus time: logged sessions can add bonuses at 25m and 90m</div>
+            <div>Tiny or trivial tasks are capped; max award is 5 Task Tokens</div>
+            <div>Bank-builder prizes can fill this month's goal, then stop until next month</div>
+          </div>
+          <label class="slot-rationale-field">
+            <span>Shortfall consequence</span>
+            <textarea id="slot-shortfall-penalty"></textarea>
+          </label>
+          <label class="slot-rationale-field">
+            <span>Rationale</span>
+            <textarea id="slot-scoring-rationale"></textarea>
+          </label>
+          <div class="slot-form-actions">
+            <button id="slot-save-settings-btn" class="slot-small-btn primary" type="button">Save settings</button>
+          </div>
         </div>
         <div class="slot-spin-cost" id="slot-spin-cost">10 pts per spin</div>
         <div class="slot-cap-row">
           <span id="slot-daily-cap">Daily bank cap: $0.00 / $50.00</span>
           <span id="slot-weekly-cap">Weekly bank cap: $0.00 / $150.00</span>
+          <span id="slot-shortfall-line">Shortfall consequence: --</span>
         </div>
         <div class="slot-history" id="slot-history"></div>
       </section>
@@ -1112,11 +1134,12 @@
 <script src="/public/js/sidebar.js"></script>
 <script src="/public/js/tag-manager.js"></script>
 <script src="/public/js/schedule-tab.js"></script>
+<script src="/public/js/meeting-automation.js"></script>
 <script src="/public/js/sync.js"></script>
 <script src="/public/js/triage.js"></script>
 <script src="/public/js/tabs.js"></script>
 <script src="/public/js/features.js"></script>
-<script src="/public/js/task-bank.js"></script>
+<script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/responsibilities.js"></script>
 <script src="/public/js/boot.js"></script>

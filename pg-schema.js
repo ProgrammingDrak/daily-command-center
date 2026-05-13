@@ -89,8 +89,18 @@ CREATE TABLE IF NOT EXISTS operations (
   batch_id    TEXT
 );
 
--- ── PA State ──
-CREATE TABLE IF NOT EXISTS pa_state (
+-- ── DCC State ──
+DO $$
+BEGIN
+  IF to_regclass('public.dcc_state') IS NULL AND to_regclass('public.pa_state') IS NOT NULL THEN
+    ALTER TABLE pa_state RENAME TO dcc_state;
+  END IF;
+  IF to_regclass('public.idx_pa_state_workspace') IS NOT NULL AND to_regclass('public.idx_dcc_state_workspace') IS NULL THEN
+    ALTER INDEX idx_pa_state_workspace RENAME TO idx_dcc_state_workspace;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS dcc_state (
   date         DATE NOT NULL,
   state_json   JSONB NOT NULL,
   user_id      INTEGER REFERENCES users(id),
@@ -99,8 +109,8 @@ CREATE TABLE IF NOT EXISTS pa_state (
   PRIMARY KEY (date, workspace_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_pa_state_workspace
-  ON pa_state(workspace_id, date);
+CREATE INDEX IF NOT EXISTS idx_dcc_state_workspace
+  ON dcc_state(workspace_id, date);
 
 -- ── Slot Rewards ──
 CREATE TABLE IF NOT EXISTS slot_accounts (

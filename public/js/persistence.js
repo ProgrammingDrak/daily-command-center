@@ -42,11 +42,11 @@ let viewMode = "today";
 let viewDate = __state ? __state.date : null;
 
 // Compute the "today" date string from injected state
-let __todayDate = (window.__PA_STATE__ && window.__PA_STATE__.date) || null;
-let __tomorrowDate = (window.__PA_TOMORROW__ && window.__PA_TOMORROW__.date) || null;
+let __todayDate = (window.__DCC_STATE__ && window.__DCC_STATE__.date) || null;
+let __tomorrowDate = (window.__DCC_TOMORROW__ && window.__DCC_TOMORROW__.date) || null;
 
 // Available archive dates (for date picker dots)
-let __archiveDates = window.__PA_ARCHIVES__ ? Object.keys(window.__PA_ARCHIVES__).sort() : [];
+let __archiveDates = window.__DCC_ARCHIVES__ ? Object.keys(window.__DCC_ARCHIVES__).sort() : [];
 
 function initKeys() {
   const d = (__state && __state.date) ? __state.date : "unknown";
@@ -82,373 +82,31 @@ function initKeys() {
   }
 }
 
-// ======== INDEXEDDB PERSISTENCE LAYER (The Second Brain - Tier 2) ========
-// Mirrors localStorage to IndexedDB for durable persistence across sessions.
-// IndexedDB survives browser restarts and most cache clears.
-const PaDB = {
-  _db: null,
-  _pending: null,
-  DB_NAME: 'pa-second-brain',
-  DB_VERSION: 1,
+// ======== (Phase 6 cleanup) RETIRED PERSISTENCE TIERS ========
+// This region used to host the legacy 3-tier persistence stack:
+//   1. PaDB (IndexedDB mirror, ~106 lines)
+//   2. scheduleIDBSave / scheduleExpressSave / flushToExpress / startHeartbeat
+//   3. collectAllState / collectGlobalState (state -> JSON serializers)
+//   4. writeToLocalStorage / writeGlobalsToLocalStorage (state importers)
+//   5. hydrateFromStorage / hydrateGlobals (boot-time tier-fallback waterfall)
+//
+// Every path was guarded behind window.USE_BLOCKSTORE.* flags that have been
+// unconditionally true in production for months. With BlockStore writing
+// straight to Postgres on every mutation (and the durable WAL added in
+// commit 082d839 covering offline durability), the IDB mirror, the Express
+// /api/save-day fan-out, and the localStorage importers were all dead. Their
+// only remaining callers were each other, the boot-time hydration gate at
+// boot.js:157 (also retired), and the Second Brain backup feature in
+// engrams.js (also retired -- it was silently broken).
+//
+// fetchExpressDate() survives because switchToDate() still uses it to fetch
+// archive-day snapshots from /api/state/day. Its dead /api/brain/recent
+// fallback has been removed.
 
-  open() {
-    if (this._db) return Promise.resolve(this._db);
-    if (this._pending) return this._pending;
-    this._pending = new Promise((resolve, reject) => {
-      try {
-        const req = indexedDB.open(this.DB_NAME, this.DB_VERSION);
-        req.onupgradeneeded = (e) => {
-          const db = e.target.result;
-          if (!db.objectStoreNames.contains('day-state')) {
-            db.createObjectStore('day-state');
-          }
-          if (!db.objectStoreNames.contains('global-state')) {
-            db.createObjectStore('global-state');
-          }
-        };
-        req.onsuccess = (e) => { this._db = e.target.result; resolve(this._db); };
-        req.onerror = (e) => { console.warn('PaDB open error:', e); reject(e); };
-      } catch(e) { console.warn('IndexedDB not available:', e); reject(e); }
-    });
-    return this._pending;
-  },
-
-  async saveDate(dateStr, stateObj) {
-    try {
-      const db = await this.open();
-      const tx = db.transaction('day-state', 'readwrite');
-      tx.objectStore('day-state').put({ ...stateObj, savedAt: new Date().toISOString() }, dateStr);
-    } catch(e) { console.warn('PaDB saveDate error:', e); }
-  },
-
-  async loadDate(dateStr) {
-    try {
-      const db = await this.open();
-      return new Promise((resolve) => {
-        const tx = db.transaction('day-state', 'readonly');
-        const req = tx.objectStore('day-state').get(dateStr);
-        req.onsuccess = () => resolve(req.result || null);
-        req.onerror = () => resolve(null);
-      });
-    } catch(e) { return null; }
-  },
-
-  async saveGlobal(key, value) {
-    try {
-      const db = await this.open();
-      const tx = db.transaction('global-state', 'readwrite');
-      tx.objectStore('global-state').put(value, key);
-    } catch(e) { console.warn('PaDB saveGlobal error:', e); }
-  },
-
-  async loadGlobal(key) {
-    try {
-      const db = await this.open();
-      return new Promise((resolve) => {
-        const tx = db.transaction('global-state', 'readonly');
-        const req = tx.objectStore('global-state').get(key);
-        req.onsuccess = () => resolve(req.result !== undefined ? req.result : null);
-        req.onerror = () => resolve(null);
-      });
-    } catch(e) { return null; }
-  },
-
-  async listDates() {
-    try {
-      const db = await this.open();
-      return new Promise((resolve) => {
-        const tx = db.transaction('day-state', 'readonly');
-        const req = tx.objectStore('day-state').getAllKeys();
-        req.onsuccess = () => resolve(req.result || []);
-        req.onerror = () => resolve([]);
-      });
-    } catch(e) { return []; }
-  },
-
-  async exportAll() {
-    try {
-      const db = await this.open();
-      const days = {};
-      const globals = {};
-      await new Promise((resolve) => {
-        const tx = db.transaction(['day-state', 'global-state'], 'readonly');
-        const dayReq = tx.objectStore('day-state').openCursor();
-        dayReq.onsuccess = (e) => {
-          const cursor = e.target.result;
-          if (cursor) { days[cursor.key] = cursor.value; cursor.continue(); }
-        };
-        const globalReq = tx.objectStore('global-state').openCursor();
-        globalReq.onsuccess = (e) => {
-          const cursor = e.target.result;
-          if (cursor) { globals[cursor.key] = cursor.value; cursor.continue(); }
-        };
-        tx.oncomplete = () => resolve();
-      });
-      return { days, globals, exportedAt: new Date().toISOString() };
-    } catch(e) { return { days: {}, globals: {} }; }
-  }
-};
-
-// Collect all localStorage state for current date into a single object
-function collectAllState() {
-  const date = (__state && __state.date) ? __state.date : "unknown";
-  const d = date;
-  try {
-    return {
-      date: d,
-      done: JSON.parse(localStorage.getItem("pa-done-" + d) || "{}"),
-      pushed: JSON.parse(localStorage.getItem("pa-pushed-" + d) || "{}"),
-      deleted: JSON.parse(localStorage.getItem("pa-deleted-" + d) || "[]"),
-      durChanges: JSON.parse(localStorage.getItem("pa-dur-" + d) || "{}"),
-      notes: JSON.parse(localStorage.getItem("pa-notes-" + d) || "{}"),
-      actions: JSON.parse(localStorage.getItem("pa-actions-" + d) || "{}"),
-      dismissed: JSON.parse(localStorage.getItem("pa-dismissed-" + d) || "{}"),
-      sessions: JSON.parse(localStorage.getItem("pa-sessions-" + d) || "{}"),
-      deferred: JSON.parse(localStorage.getItem("pa-deferred-" + d) || "[]"),
-      pomo: JSON.parse(localStorage.getItem("pa-pomo-state-" + d) || "{}"),
-      reviewed: JSON.parse(localStorage.getItem("pa-reviewed-" + d) || "[]"),
-      bounty: typeof getDailyBounty === "function" ? getDailyBounty() : JSON.parse(localStorage.getItem("pa-bounty-" + d) || "null"),
-      subtasks: JSON.parse(localStorage.getItem("pa-subtasks-" + d) || "{}"),
-      trivialFlags: JSON.parse(localStorage.getItem("pa-trivial-flags-" + d) || "{}"),
-      pendingTasks: JSON.parse(localStorage.getItem(PENDING_TASKS_KEY) || "[]"),
-      addedTasks: loadAddedTasks(),
-      collectedAt: new Date().toISOString()
-    };
-  } catch(e) { return { date: d }; }
-}
-
-// Collect global (non-date-specific) state
-function collectGlobalState() {
-  try {
-    return {
-      stickyNotes: JSON.parse(localStorage.getItem("pa-sticky-notes") || "[]"),
-      trivialTasks: JSON.parse(localStorage.getItem("pa-trivial-tasks") || "[]"),
-      upcomingNotes: JSON.parse(localStorage.getItem("pa-upcoming-notes") || "{}"),
-      upcomingActions: JSON.parse(localStorage.getItem("pa-upcoming-actions") || "{}"),
-      pushedDocs: JSON.parse(localStorage.getItem("pa-pushed-docs") || "{}"),
-      morning: JSON.parse(localStorage.getItem("pa-morning") || "{}"),
-      collectedAt: new Date().toISOString()
-    };
-  } catch(e) { return {}; }
-}
-
-// ======== PERSISTENCE TIMERS ========
-// Phase 0 quick fix: reduced debounce for critical state + heartbeat + flush on unload
-let _idbTimer = null;
-let _expressTimer = null;
-let _heartbeatTimer = null;
-let _hasPendingChanges = false;
-
-function scheduleIDBSave() {
-  // Phase 6: Skip localStorage/IDB/Express sync entirely when all BlockStore flags are ON
-  // BlockStore writes directly to SQLite — no need for the old 3-tier system
-  if (window.USE_BLOCKSTORE && Object.values(window.USE_BLOCKSTORE).every(v => v)) {
-    return; // BlockStore handles all persistence now
-  }
-  _hasPendingChanges = true;
-  updateSaveStatus("saving", "Syncing changes...");
-  clearTimeout(_idbTimer);
-  _idbTimer = setTimeout(() => {
-    const date = (__state && __state.date) ? __state.date : "unknown";
-    PaDB.saveDate(date, collectAllState());
-    PaDB.saveGlobal('globals', collectGlobalState());
-  }, 500);
-  scheduleExpressSave();
-}
-
-// Durable persistence via Express server at :8090
-function scheduleExpressSave() {
-  clearTimeout(_expressTimer);
-  _expressTimer = setTimeout(() => {
-    flushToExpress();
-  }, 2000); // Reduced from 15000ms to 2000ms
-}
-
-// Synchronous-ish Express flush — used by both debounce and beforeunload
-function flushToExpress() {
-  const date = (__state && __state.date) ? __state.date : "unknown";
-  if (date === "unknown") return;
-  _hasPendingChanges = false;
-  try {
-    // Use keepalive: true so fetch survives page unload
-    fetch("/api/save-day", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(collectAllState()),
-      keepalive: true
-    }).then(() => {
-      updateSaveStatus("ok", "All changes synced");
-    }).catch((e) => {
-      updateSaveStatus("error", "Sync failed — retrying...");
-      console.warn("[Express Sync] save-day failed:", e.message);
-    });
-    fetch("/api/save-globals", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(collectGlobalState()),
-      keepalive: true
-    }).catch(() => {});
-  } catch(e) {
-    updateSaveStatus("error", "Sync failed");
-    console.warn("[Express Sync] Save failed:", e.message);
-  }
-}
-
-// Heartbeat: save every 2s while there are pending changes
-function startHeartbeat() {
-  if (_heartbeatTimer) return;
-  _heartbeatTimer = setInterval(() => {
-    if (_hasPendingChanges) {
-      const date = (__state && __state.date) ? __state.date : "unknown";
-      PaDB.saveDate(date, collectAllState());
-      PaDB.saveGlobal('globals', collectGlobalState());
-      flushToExpress();
-    }
-  }, 2000);
-}
-startHeartbeat();
-
-// ======== RECONNECT SYNC ========
-// When the browser comes back online or the tab regains focus, reconcile
-// local state with the server. Most-recent-wins per key using savedAt timestamps.
-
-async function reconcileWithServer() {
-  const date = (__state && __state.date) ? __state.date : "unknown";
-  if (date === "unknown") return;
-
-  // 1. Flush any pending local changes first
-  if (_hasPendingChanges) {
-    flushToExpress();
-    // Short delay to let the flush land before pulling
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  // 2. Fetch the latest server state
-  let serverState = null;
-  try {
-    const res = await fetch("/api/brain/recent", { signal: AbortSignal.timeout(5000) });
-    if (res.ok) {
-      const data = await res.json();
-      serverState = data[date] || null;
-    }
-  } catch(e) {
-    console.warn("[Reconnect Sync] Could not reach server:", e.message);
-    updateSaveStatus("error", "Server unreachable — working offline");
-    return;
-  }
-  if (!serverState) return;
-
-  // 3. Compare timestamps — merge server state into local where server is newer
-  const localState = collectAllState();
-  const localTime = localState.collectedAt ? new Date(localState.collectedAt).getTime() : 0;
-  const serverTime = serverState.savedAt ? new Date(serverState.savedAt).getTime() : 0;
-
-  if (serverTime > localTime) {
-    // Server has newer data — merge it in
-    console.log("[Reconnect Sync] Server state is newer (" + serverState.savedAt + "), merging...");
-    // Write server state to localStorage (safe — writeToLocalStorage is non-destructive per key)
-    writeToLocalStorage(date, serverState);
-    // Reload in-memory state from the now-updated localStorage
-    if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
-    if (typeof render === "function") render();
-    if (typeof buildTriage === "function") buildTriage();
-    if (typeof updateStats === "function") updateStats();
-    updateSaveStatus("ok", "Synced with server");
-    console.log("[Reconnect Sync] Merge complete");
-  } else {
-    // Local is same or newer — push local to server
-    console.log("[Reconnect Sync] Local state is current, pushing to server");
-    flushToExpress();
-  }
-}
-
-// Trigger sync when browser comes back online
-window.addEventListener("online", () => {
-  console.log("[Reconnect Sync] Browser is online — reconciling...");
-  updateSaveStatus("saving", "Reconnecting...");
-  reconcileWithServer();
-});
-
-// Trigger sync when tab regains visibility (covers sleep/wake, tab switch)
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    // Small delay to avoid thrashing on rapid tab switches
-    setTimeout(() => {
-      if (!document.hidden) reconcileWithServer();
-    }, 1000);
-  }
-});
-
-// Show offline indicator when network drops
-window.addEventListener("offline", () => {
-  updateSaveStatus("error", "Offline — changes saved locally");
-});
-
-// Write a state object back into localStorage for a given date
-function writeToLocalStorage(date, state) {
-  if (!state || !date) return;
-  const writes = {
-    ["pa-done-" + date]: state.done,
-    ["pa-pushed-" + date]: state.pushed,
-    ["pa-deleted-" + date]: state.deleted,
-    ["pa-dur-" + date]: state.durChanges,
-    ["pa-notes-" + date]: state.notes,
-    ["pa-actions-" + date]: state.actions,
-    ["pa-dismissed-" + date]: state.dismissed,
-    ["pa-sessions-" + date]: state.sessions,
-    ["pa-deferred-" + date]: state.deferred,
-    ["pa-pomo-state-" + date]: state.pomo,
-    ["pa-reviewed-" + date]: state.reviewed,
-    ["pa-bounty-" + date]: state.bounty,
-    ["pa-subtasks-" + date]: state.subtasks,
-    ["pa-trivial-flags-" + date]: state.trivialFlags,
-  };
-  for (const [key, val] of Object.entries(writes)) {
-    if (val !== undefined && val !== null) {
-      try {
-        localStorage.setItem(key, JSON.stringify(val));
-      } catch(e) {
-        // Phase 0 fix: warn on quota exceeded instead of silent failure
-        if (e.name === 'QuotaExceededError') {
-          console.error("[Persistence] localStorage quota exceeded for key:", key);
-          // Force an immediate Express save as fallback
-          if (typeof flushToExpress === "function") flushToExpress();
-        }
-      }
-    }
-  }
-}
-
-// Write global state back into localStorage
-function writeGlobalsToLocalStorage(globals) {
-  if (!globals) return;
-  const writes = {
-    "pa-sticky-notes": globals.stickyNotes,
-    "pa-trivial-tasks": globals.trivialTasks,
-    "pa-upcoming-notes": globals.upcomingNotes,
-    "pa-upcoming-actions": globals.upcomingActions,
-    "pa-pushed-docs": globals.pushedDocs,
-    "pa-morning": globals.morning,
-  };
-  for (const [key, val] of Object.entries(writes)) {
-    if (val !== undefined && val !== null) {
-      try {
-        localStorage.setItem(key, JSON.stringify(val));
-      } catch(e) {
-        if (e.name === 'QuotaExceededError') {
-          console.error("[Persistence] localStorage quota exceeded for global key:", key);
-          if (typeof flushToExpress === "function") flushToExpress();
-        }
-      }
-    }
-  }
-}
-
-// ======== WATERFALL COLD-START RESTORATION ========
-// Priority: localStorage → IndexedDB → Express API → Second Brain (injected) → __PA_LOCAL__ (legacy)
+// Stub kept for any straggler callers; treats every call as a no-op.
+function scheduleIDBSave() {}
 
 async function fetchExpressDate(date) {
-  // Tier A: Try the day state API (Postgres-backed, always has the data)
   try {
     const dayRes = await fetch("/api/state/day?date=" + encodeURIComponent(date), { signal: AbortSignal.timeout(4000) });
     if (dayRes.ok) {
@@ -456,83 +114,8 @@ async function fetchExpressDate(date) {
       if (dayData && dayData.date) return dayData;
     }
   } catch {}
-  // Tier B: Fall back to Second Brain recent cache
-  try {
-    const res = await fetch("/api/brain/recent", { signal: AbortSignal.timeout(2000) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return (data && data[date]) ? data[date] : null;
-  } catch { return null; }
+  return null;
 }
-
-async function hydrateFromStorage() {
-  const date = (__state && __state.date) || "unknown";
-  if (date === "unknown") return;
-
-  // Tier 1: localStorage already has data? Use it.
-  if (localStorage.getItem("pa-done-" + date)) return;
-
-  console.log("[Second Brain] localStorage empty for " + date + ", attempting restoration...");
-
-  // Tier 2: Try IndexedDB
-  try {
-    const idbState = await PaDB.loadDate(date);
-    if (idbState && idbState.done) {
-      console.log("[Second Brain] Restoring from IndexedDB for " + date);
-      writeToLocalStorage(date, idbState);
-      return;
-    }
-  } catch(e) { console.warn("[Second Brain] IndexedDB read failed:", e); }
-
-  // Tier 3: Try Express API (replaces old File DB at :8091)
-  const expressState = await fetchExpressDate(date);
-  if (expressState) {
-    console.log("[Second Brain] Restoring from Express API for " + date);
-    writeToLocalStorage(date, expressState);
-    return;
-  }
-
-  // Tier 4: Try Second Brain (injected at boot from Express API)
-  if (window.__SECOND_BRAIN__ && window.__SECOND_BRAIN__[date]) {
-    console.log("[Second Brain] Restoring from injected state for " + date);
-    writeToLocalStorage(date, window.__SECOND_BRAIN__[date]);
-    return;
-  }
-
-  // Legacy fallback: Try __PA_LOCAL__
-  const local = window.__PA_LOCAL__;
-  if (local && local.date === date) {
-    console.log("[Second Brain] Restoring from __PA_LOCAL__ sidecar for " + date);
-    writeToLocalStorage(date, local);
-    return;
-  }
-
-  console.log("[Second Brain] No stored state found for " + date);
-}
-
-// Hydrate globals from IndexedDB / Express API / Second Brain if localStorage is empty
-async function hydrateGlobals() {
-  if (localStorage.getItem("pa-sticky-notes")) return; // already populated
-
-  // Try IndexedDB
-  try {
-    const globals = await PaDB.loadGlobal('globals');
-    if (globals && globals.stickyNotes) {
-      console.log("[Second Brain] Restoring globals from IndexedDB");
-      writeGlobalsToLocalStorage(globals);
-      return;
-    }
-  } catch(e) {}
-
-  // Try Express API globals (already fetched at boot into __SECOND_BRAIN_GLOBALS__)
-  if (window.__SECOND_BRAIN_GLOBALS__ && window.__SECOND_BRAIN_GLOBALS__.stickyNotes) {
-    console.log("[Second Brain] Restoring globals from Express API");
-    writeGlobalsToLocalStorage(window.__SECOND_BRAIN_GLOBALS__);
-  }
-}
-
-// Initialize IndexedDB and open connection early
-PaDB.open().catch(() => {});
 
 function reloadPersistedEdits() {
   // Reset mutable UI state
@@ -560,51 +143,9 @@ function reloadPersistedEdits() {
       dailyBounty = dayRoot.properties._bounty || null;
       Object.assign(durChanges, dayRoot.properties._durChanges || {});
     }
-    // One-time migration: if day_root has no _done but localStorage does, push all date state up
-    const dayRoot2 = window.blockStore.get(window.blockStore.getDayRootId());
-    if (dayRoot2 && !dayRoot2.properties._done && localStorage.getItem(DONE_KEY)) {
-      console.log('[Migrate] Promoting localStorage state to blockStore for', window.blockStore.getCurrentDate());
-      // Core state — these functions read manualDone/pushedSet/deletedSet/durChanges which
-      // were just loaded above from localStorage in the else-branch... but we're in the
-      // USE_BLOCKSTORE branch and they're empty. Load from LS now for migration only.
-      const _lsDone = (() => { try { return JSON.parse(localStorage.getItem(DONE_KEY)||"{}"); } catch(e) { return {}; } })();
-      const _lsPushed = (() => { try { return JSON.parse(localStorage.getItem(PUSHED_KEY)||"{}"); } catch(e) { return {}; } })();
-      const _lsDeleted = (() => { try { return JSON.parse(localStorage.getItem(DELETED_KEY)||"[]"); } catch(e) { return []; } })();
-      const _lsDur = (() => { try { return JSON.parse(localStorage.getItem(DUR_KEY)||"{}"); } catch(e) { return {}; } })();
-      const _lsBounty = (() => { try { return JSON.parse(localStorage.getItem(BOUNTY_KEY)||"null"); } catch(e) { return null; } })();
-      const id = window.blockStore.getDayRootId();
-      const root = window.blockStore.get(id);
-      if (root) {
-        window.blockStore.updateBlock(id, {
-          ...root.properties,
-          _done: _lsDone,
-          _pushed: _lsPushed,
-          _deleted: _lsDeleted,
-          _durChanges: _lsDur,
-          _bounty: _lsBounty,
-          // Also migrate other date-scoped state
-          _dismissed: (() => { try { return JSON.parse(localStorage.getItem(DISMISS_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _sessions: (() => { try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _reviewed: (() => { try { return JSON.parse(localStorage.getItem(REVIEWED_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _triageParents: (() => { try { return JSON.parse(localStorage.getItem(TRIAGE_PARENTS_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _triageScheduled: (() => { try { return JSON.parse(localStorage.getItem(TRIAGE_SCHEDULED_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _pinnedStarts: (() => { try { return JSON.parse(localStorage.getItem(PINNED_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _taskOrder: (() => { try { return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]"); } catch(e) { return []; } })(),
-          _subtasks: (() => { try { return JSON.parse(localStorage.getItem(SUBTASK_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _trivialFlags: (() => { try { return JSON.parse(localStorage.getItem(TRIV_FLAGS_KEY)||"{}"); } catch(e) { return {}; } })(),
-          _pomoState: (() => { try { return JSON.parse(localStorage.getItem(POMO_STATE_KEY)||"null"); } catch(e) { return null; } })(),
-        });
-        // Apply loaded values to in-memory state
-        if (_lsDone.ids) _lsDone.ids.forEach(i => manualDone.add(i));
-        if (_lsDone.at) Object.assign(doneAt, _lsDone.at);
-        if (_lsPushed.ids) _lsPushed.ids.forEach(i => pushedSet.add(i));
-        if (_lsPushed.at) Object.assign(pushedAt, _lsPushed.at);
-        _lsDeleted.forEach(i => deletedSet.add(i));
-        dailyBounty = _lsBounty;
-        Object.assign(durChanges, _lsDur);
-        console.log('[Migrate] localStorage → blockStore migration complete');
-      }
-    }
+    // (Phase 6 cleanup) Removed one-shot localStorage->blockStore migration shim.
+    // Every active workspace has _done populated on day_root for months; the shim
+    // had no remaining work to do and added 40 lines of conditional reads.
   } else {
     // Fallback: localStorage
     try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}");
@@ -731,22 +272,20 @@ function reloadPersistedEdits() {
 async function switchToDate(dateStr) {
   if (!dateStr) return;
 
-  // Save current day's state to IndexedDB before switching away
-  if (viewDate && viewDate !== dateStr) {
-    const prevDate = (__state && __state.date) ? __state.date : null;
-    if (prevDate) PaDB.saveDate(prevDate, collectAllState());
-  }
+  // (Phase 6 cleanup) Removed PaDB.saveDate(prevDate, ...) snapshot --
+  // BlockStore writes every mutation through to Postgres immediately, so the
+  // outgoing day is already durable. No explicit save-on-switch needed.
 
   let newState = null;
   if (dateStr === __todayDate) {
-    newState = window.__PA_STATE__;
+    newState = window.__DCC_STATE__;
     viewMode = "today";
-  } else if (dateStr === __tomorrowDate && window.__PA_TOMORROW__) {
+  } else if (dateStr === __tomorrowDate && window.__DCC_TOMORROW__) {
     // Build a synthetic state from the tomorrow pre-plan
-    newState = { date: __tomorrowDate, schedule: window.__PA_TOMORROW__.schedule };
+    newState = { date: __tomorrowDate, schedule: window.__DCC_TOMORROW__.schedule };
     viewMode = "tomorrow";
-  } else if (window.__PA_ARCHIVES__ && window.__PA_ARCHIVES__[dateStr]) {
-    const cached = window.__PA_ARCHIVES__[dateStr];
+  } else if (window.__DCC_ARCHIVES__ && window.__DCC_ARCHIVES__[dateStr]) {
+    const cached = window.__DCC_ARCHIVES__[dateStr];
     // If the archive entry has full schedule data, use it directly;
     // otherwise treat it as a navigation stub and fetch from the server
     if (cached.schedule && cached.schedule.timeline && cached.schedule.timeline.length > 0) {
@@ -754,7 +293,7 @@ async function switchToDate(dateStr) {
     } else {
       const expressState = await fetchExpressDate(dateStr);
       if (expressState) {
-        window.__PA_ARCHIVES__[dateStr] = expressState; // cache for next time
+        window.__DCC_ARCHIVES__[dateStr] = expressState; // cache for next time
         newState = expressState;
       } else {
         newState = cached; // fall back to whatever we have
@@ -794,18 +333,10 @@ async function switchToDate(dateStr) {
     } catch(e) { console.warn("[BlockStore] loadDay failed for", dateStr, e); }
   }
 
-  // Seed localStorage from Express API or Second Brain for this date if localStorage is empty
-  if (!localStorage.getItem("pa-done-" + dateStr)) {
-    const expressState = await fetchExpressDate(dateStr);
-    if (expressState) {
-      writeToLocalStorage(dateStr, expressState);
-    } else {
-      const sbState = window.__SECOND_BRAIN__ && window.__SECOND_BRAIN__[dateStr];
-      if (sbState) {
-        writeToLocalStorage(dateStr, sbState);
-      }
-    }
-  }
+  // (Phase 6 cleanup) Removed legacy localStorage seeding from Express /
+  // __SECOND_BRAIN__. reloadPersistedEdits() reads from BlockStore now, not
+  // localStorage; the seed had no effect. fetchExpressDate is still called
+  // earlier in this function for archive snapshots that arrive as nav stubs.
 
   reloadPersistedEdits();
 

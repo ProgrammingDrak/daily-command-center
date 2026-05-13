@@ -990,7 +990,7 @@ function _flushDeferredRender() {
     render();
   }
 }
-function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();buildUpcoming();buildProgress();updateStats();updateSync();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();updateFocusBanner();}
+function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();if(typeof buildGlymphaticBrief==='function')buildGlymphaticBrief();buildUpcoming();buildProgress();updateStats();updateSync();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();updateFocusBanner();}
 function _updateTaskMenusBadge(){
   const badge=document.getElementById("tasks-count");if(!badge)return;
   // Sum up counts from sub-tab badges
@@ -1012,8 +1012,10 @@ document.getElementById("btn-copy").addEventListener("click",function(){
     setTimeout(()=>{b.classList.remove("copied");b.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> Copy for Claude'},2000)
   });
 });
-document.getElementById("btn-undo").addEventListener("click",undoLast);
-document.getElementById("btn-reset").addEventListener("click",resetAll);
+// btn-undo and btn-reset removed Phase 6 -- both were broken-but-wired:
+// undoLast() handled only 3 of 8 actionLog types; resetAll() wiped `scheduled`
+// without touching BlockStore / pushedSet / deletedSet, leaving inconsistent UI.
+// A real undo stack is a feature project, not tech debt; ship that separately.
 // Old add-task-btn, ai-tab-add-btn, new-title wiring removed — handled by universal task-add bar
 
 

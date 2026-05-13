@@ -312,27 +312,97 @@ function insertTaskFromDrawer(title, durMin, opts){
 }
 
 // ======== ACTIONS ========
-function toggleDone(id){
-  const wasDone=manualDone.has(id);
-  if(!wasDone&&typeof getIncompleteSubtasks==="function"&&typeof openDoneModal==="function"){
-    const incomplete=getIncompleteSubtasks(id);
-    if(incomplete&&incomplete.length){
+// Mark `id` done in a different date's persistence (not the currently-viewed day).
+// Used when completing a future/past task and pinning the completion to a specific date.
+async function commitDoneOnDate(id,dateStr){
+  if(!id||!dateStr)return;
+  const nowIso=new Date().toISOString();
+  const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+
+  // Same-day completion: take the in-memory fast path
+  if(currentDate===dateStr){
+    manualDone.add(id);doneAt[id]=new Date();
+    log("checked",id);saveDoneState();render();
+    return;
+  }
+
+  // localStorage mirror so a refresh on the target date sees the completion
+  try{
+    const key="pa-done-"+dateStr;
+    let d={};try{d=JSON.parse(localStorage.getItem(key)||"{}")}catch(e){d={}}
+    if(!d.ids)d.ids=[];if(!d.at)d.at={};
+    if(!d.ids.includes(id))d.ids.push(id);
+    d.at[id]=nowIso;
+    localStorage.setItem(key,JSON.stringify(d));
+  }catch(e){}
+
+  // Server-side: load the target day's day_root and patch its _done property.
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.done){
+    try{
+      const blocks=await fetch("/api/blocks?date="+dateStr).then(r=>r.json());
+      const dayRoot=Array.isArray(blocks)?blocks.find(b=>b.type==="day_root"):null;
+      if(dayRoot){
+        const props=dayRoot.properties||{};
+        const existing=props._done||{ids:[],at:{}};
+        const ids=new Set(existing.ids||[]);ids.add(id);
+        const at={...(existing.at||{})};at[id]=nowIso;
+        await fetch("/api/blocks/"+dayRoot.id,{
+          method:"PATCH",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({properties:{...props,_done:{ids:[...ids],at}}})
+        });
+      }
+    }catch(e){}
+  }
+  log("checked-on",id,"Marked done on "+dateStr);
+}
+
+function toggleDone(id,opts){
+  opts=opts||{};
+  if(manualDone.has(id)){
+    manualDone.delete(id);delete doneAt[id];log("unchecked",id);
+    saveDoneState();render();return;
+  }
+
+  // Caller forced a specific completion date (Done-on-date confirmation flow)
+  if(opts.markOnDate){
+    if(opts.bringToToday&&typeof rescheduleTaskToDate==="function"){
+      rescheduleTaskToDate(id,opts.markOnDate,{silent:true}).then(()=>commitDoneOnDate(id,opts.markOnDate));
+    } else {
+      commitDoneOnDate(id,opts.markOnDate);
+    }
+    return;
+  }
+
+  // Smart completion-date handling: don't mark done on a date that isn't actually today
+  // when the user is browsing a different day's plan.
+  if(typeof _actualTodayStr==="function"){
+    const today=_actualTodayStr();
+    const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+    if(currentDate&&currentDate>today){
+      // Future: silently move the task to today and complete it.
       const ev=scheduled.find(e=>e.id===id);
-      if(ev){openDoneModal(id,ev.title,()=>toggleDone(id),ev);return;}
+      const title=ev?ev.title:"task";
+      const fromLabel=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
+      (async()=>{
+        if(typeof rescheduleTaskToDate==="function")await rescheduleTaskToDate(id,today,{silent:true});
+        await commitDoneOnDate(id,today);
+        if(typeof showToast==="function")showToast("Marked “"+title+"” done today (was "+fromLabel+")","success");
+      })();
+      return;
+    }
+    if(currentDate&&currentDate<today){
+      // Past: ask the user whether they did it today or back on the original date.
+      if(typeof openCompletionDateConfirm==="function"){
+        openCompletionDateConfirm(id,currentDate,today);
+        return;
+      }
+      // Without the confirm modal available, fall through to default behavior.
     }
   }
-  if(wasDone){manualDone.delete(id);delete doneAt[id];log("unchecked",id)}
-  else{
-    manualDone.add(id);doneAt[id]=new Date();log("checked",id);
-    const ev=scheduled.find(e=>e.id===id);
-    if(ev&&ev.responsibilityId&&typeof markResponsibilityTaskCompleted==="function"){
-      markResponsibilityTaskCompleted(ev);
-    }
-    if(window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
-      window.SlotRewards.earnTaskCredit(ev||{id});
-    }
-  }
-  saveDoneState();render()
+
+  manualDone.add(id);doneAt[id]=new Date();log("checked",id);
+  saveDoneState();render();
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
@@ -767,8 +837,9 @@ function markDoneOnDate(id, date){
   }
 }
 
-function undoLast(){if(!actionLog.length)return;const a=actionLog.pop();if(a.type==="checked")manualDone.delete(a.id);else if(a.type==="unchecked")manualDone.add(a.id);else if(a.type==="reorder"&&a.detail)scheduled=JSON.parse(a.detail);render()}
-function resetAll(){scheduled=JSON.parse(JSON.stringify(INIT_SCHED));consider=JSON.parse(JSON.stringify(INIT_CONSIDER));backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));manualDone.clear();doneAt={};actionLog=[];durChanges={};dailyBounty=null;saveBountyState();render()}
+// undoLast() and resetAll() removed Phase 6 -- both broken; see features.js.
+// actionLog still populated by log() because sync.js builds the "Copy for Claude"
+// activity report from it (sync.js:5-15) -- that path is alive.
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");
