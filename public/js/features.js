@@ -2,13 +2,32 @@
 const TRIV_KEY = "pa-trivial-tasks";
 let TRIV_FLAGS_KEY = "pa-trivial-flags-" + ((__state && __state.date) ? __state.date : "unknown");
 
+function smallTaskKind(t){
+  const tags=(t&&t.tags)||[];
+  if(t&&(t.kind==="side_project"||t.category==="side_project"||tags.includes("side-project")))return"side_project";
+  return"trivial";
+}
+function smallTaskTag(kind){return kind==="side_project"?"side-project":"trivial";}
+
 function loadTrivialTasks(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    return (window.blockStore.getByType("trivial_task")||[]).concat(window.blockStore.getByType("block").filter(b=>(b.properties||{}).tags&&b.properties.tags.includes("trivial"))).map(b=>({
-      id:b.id, text:b.properties.text, done:!!b.properties.done,
-      createdAt:b.created_at, doneAt:b.properties.doneAt||null,
-      updatedAt:b.updated_at, linkedTo:b.properties.linkedTo||null, _blockId:b.id
-    }));
+    return (window.blockStore.getByType("trivial_task")||[])
+      .concat(window.blockStore.getByType("block").filter(b=>{
+        const tags=(b.properties||{}).tags||[];
+        return tags.includes("trivial")||tags.includes("side-project");
+      }))
+      .map(b=>{
+        const p=b.properties||{};
+        const tags=p.tags||[];
+        return {
+          id:b.id, text:p.text, done:!!p.done,
+          kind:p.kind||(tags.includes("side-project")?"side_project":"trivial"),
+          durMin:p.durMin||p.duration||null,
+          tags,
+          createdAt:b.created_at, doneAt:p.doneAt||null,
+          updatedAt:b.updated_at, linkedTo:p.linkedTo||null, _blockId:b.id
+        };
+      });
   }
   try{return JSON.parse(localStorage.getItem(TRIV_KEY)||"[]")}catch(e){return[]}
 }
@@ -33,17 +52,21 @@ function saveTrivialFlags(f){
   try{localStorage.setItem(TRIV_FLAGS_KEY,JSON.stringify(f));scheduleIDBSave()}catch(e){}
 }
 
-function addTrivialTask(text){
+function addTrivialTask(text, kind, durMin){
   if(!text.trim())return;
+  kind=kind||"trivial";
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    window.blockStore.createBlock("block",{text:text.trim(),done:false,tags:["trivial"]},{date:null}).then(()=>buildTrivialTasks());
+    const props={text:text.trim(),done:false,kind,tags:[smallTaskTag(kind)]};
+    if(durMin)props.durMin=durMin;
+    window.blockStore.createBlock("block",props,{date:null}).then(()=>buildTrivialTasks());
     return;
   }
   const tasks=loadTrivialTasks();
-  tasks.push({id:"triv-"+Date.now(),text:text.trim(),done:false,createdAt:new Date().toISOString()});
+  tasks.push({id:(kind==="side_project"?"sideproj-":"triv-")+Date.now(),text:text.trim(),kind,done:false,durMin:durMin||null,createdAt:new Date().toISOString()});
   saveTrivialTasks(tasks);
   buildTrivialTasks();
 }
+function addSideProjectTask(text,durMin){addTrivialTask(text,"side_project",durMin);}
 function toggleTrivialTask(id){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
     const block=window.blockStore.get(id);
@@ -84,20 +107,20 @@ function toggleTrivialFlag(evId){
 // Phase 7c: Link/unlink trivial tasks to schedule items
 function getLinkedTrivialTasks(scheduleId){
   const tasks=loadTrivialTasks();
-  return tasks.filter(t=>t.linkedTo===scheduleId);
+  return tasks.filter(t=>smallTaskKind(t)==="trivial"&&t.linkedTo===scheduleId);
 }
 
 function addLinkedTrivialTask(scheduleId, text){
   if(!text.trim())return;
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.trivialTasks&&window.blockStore){
-    window.blockStore.createBlock("block",{text:text.trim(),done:false,linkedTo:scheduleId,tags:["trivial"]},{date:null}).then(()=>{
+    window.blockStore.createBlock("block",{text:text.trim(),done:false,kind:"trivial",linkedTo:scheduleId,tags:["trivial"]},{date:null}).then(()=>{
       if(typeof buildSchedule==='function')buildSchedule();
       if(typeof buildTrivialTasks==='function')buildTrivialTasks();
     });
     return;
   }
   const tasks=loadTrivialTasks();
-  tasks.push({id:"triv-"+Date.now(),text:text.trim(),done:false,linkedTo:scheduleId,createdAt:new Date().toISOString()});
+  tasks.push({id:"triv-"+Date.now(),text:text.trim(),kind:"trivial",done:false,linkedTo:scheduleId,createdAt:new Date().toISOString()});
   saveTrivialTasks(tasks);
 }
 
@@ -136,7 +159,7 @@ function unlinkTrivialFromSchedule(trivialId){
 // Phase 7d: Trivial task picker dropdown
 function openTrivialPicker(scheduleId, anchorEl){
   document.querySelectorAll(".triv-picker-popup").forEach(p=>p.remove());
-  const tasks=loadTrivialTasks().filter(t=>!t.done&&!t.linkedTo);
+  const tasks=loadTrivialTasks().filter(t=>smallTaskKind(t)==="trivial"&&!t.done&&!t.linkedTo);
   if(!tasks.length){
     const pop=document.createElement("div");pop.className="triv-picker-popup";
     pop.innerHTML='<div style="padding:8px;font-size:11px;color:var(--text-muted)">No unlinked trivial tasks. Add one first.</div>';
@@ -372,44 +395,42 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 
-function buildTrivialTasks(){
-  const el=document.getElementById("triage-trivial");if(!el)return;
-  const tasks=loadTrivialTasks();
-  const flags=loadTrivialFlags();
-  const flaggedScheduleItems=(typeof scheduled!=='undefined'?scheduled:[]).filter(ev=>flags[ev.id]);
+function _setSmallTaskBadge(id,count){
+  const badge=document.getElementById(id);
+  if(!badge)return;
+  badge.textContent=count>99?"99+":String(count);
+  badge.style.display=count?"":"none";
+}
+
+function _renderSmallTaskSection(opts){
+  const el=document.getElementById(opts.containerId);if(!el)return 0;
+  const label=opts.label;
+  const kind=opts.kind;
+  const accent=opts.accent;
+  const extras=opts.extras||[];
+  const tasks=opts.tasks||[];
   const activeRaw=tasks.filter(t=>!t.done&&!t.linkedTo);
   const doneRaw=tasks.filter(t=>t.done);
   const active=(typeof taskBankSort==="function"?taskBankSort(activeRaw.map(t=>({priority:"Low",...t}))):activeRaw)
     .filter(t=>typeof taskBankMatches==="function"?taskBankMatches(t,["text"]):true);
   const done=(typeof taskBankSort==="function"?taskBankSort(doneRaw.map(t=>({priority:"Low",...t}))):doneRaw)
     .filter(t=>typeof taskBankMatches==="function"?taskBankMatches(t,["text"]):true);
-  const totalCount=flaggedScheduleItems.length+active.length;
-  const trivBadge=document.getElementById("trivial-count");
-  if(trivBadge){trivBadge.textContent=totalCount;trivBadge.style.display=totalCount?"":"none"}
-  // Floating purple Trivial bubble: at-a-glance count, hidden when zero
-  const trivFab=document.getElementById("float-trivial");
-  if(trivFab){
-    const lbl=document.getElementById("float-trivial-count");
-    if(lbl)lbl.textContent=totalCount>99?"99+":String(totalCount);
-    trivFab.dataset.overflow=totalCount>99?"true":"false";
-    trivFab.style.display=totalCount>0?"":"none";
-  }
+  const totalCount=extras.length+active.length;
 
   el.innerHTML="";
   if(!totalCount&&!done.length){
     const hasSearch=window.taskBankState&&window.taskBankState.query;
-    const rawCount=flaggedScheduleItems.length+activeRaw.length+doneRaw.length;
-    el.innerHTML='<div class="board-empty">'+(hasSearch&&rawCount?'No trivial tasks match that search.':'No trivial tasks. Use the task bar above to add one.')+'</div>';
-    return;
+    const rawCount=extras.length+activeRaw.length+doneRaw.length;
+    el.innerHTML='<div class="board-empty">'+(hasSearch&&rawCount?'No '+label.toLowerCase()+' tasks match that search.':'No '+label.toLowerCase()+' tasks. Use the task bar above to add one.')+'</div>';
+    return totalCount;
   }
 
-  // Flagged schedule items
-  flaggedScheduleItems.forEach(ev=>{
-    const c=typeof cfg==='function'?cfg(ev.type):{color:'var(--text-muted)',tag:ev.type};
+  extras.forEach(ev=>{
+    const c=typeof cfg==='function'?cfg(ev.type):{color:'var(--text-muted)',tag:ev.type,cls:''};
     const card=document.createElement("div");card.className="board-card";
     card.innerHTML='<div class="bar" style="background:'+c.color+'"></div>'+
       '<div class="body"><div class="title-row"><span class="ttl">'+ev.title+'</span>'+(typeof srcTag==='function'?srcTag(ev.source):'')+'</div>'+
-      '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span></div></div>'+
+      '<div class="meta"><span class="tag '+(c.cls||'')+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span></div></div>'+
       '<button class="add-btn triv-restore-btn" data-tid="'+ev.id+'">Restore</button>'+
       '<button class="add-btn triv-flagged-done-btn" data-tid="'+ev.id+'" style="background:var(--green)">Done</button>';
     card.querySelector(".triv-restore-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(ev.id)});
@@ -417,16 +438,20 @@ function buildTrivialTasks(){
     el.appendChild(card);
   });
 
-  // Active trivial tasks
   active.forEach(t=>{
+    const duration=t.durMin?'<span>'+ms(t.durMin)+'</span>':'';
+    const scheduleBtn=kind==="side_project" ? '<button class="add-btn small-task-schedule-btn" data-tid="'+t.id+'">Schedule</button>' : '';
     const card=document.createElement("div");card.className="board-card";
-    card.innerHTML='<div class="bar" style="background:var(--purple,#a78bfa)"></div>'+
+    card.innerHTML='<div class="bar" style="background:'+accent+'"></div>'+
       '<div class="body"><div class="title-row">'+(typeof renderTaskBankTrivialTitle==="function"?renderTaskBankTrivialTitle(t):'<span class="ttl">'+t.text+'</span>')+'</div>'+
-      '<div class="meta"><span class="tag tag-task">Trivial</span></div></div>'+
+      '<div class="meta"><span class="tag tag-task">'+label+'</span>'+duration+'</div></div>'+
+      scheduleBtn+
       '<button class="add-btn triv-check-btn" data-tid="'+t.id+'" style="background:var(--green)">Done</button>'+
       '<button class="task-bank-icon-btn triv-edit-btn" data-tid="'+t.id+'" title="Edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
       '<button class="btn-del-task triv-del-btn" data-tid="'+t.id+'" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>';
     card.querySelector(".triv-check-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
+    const schedule=card.querySelector(".small-task-schedule-btn");
+    if(schedule) schedule.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePicker==="function")openSchedulePicker(t.text,t.durMin||30)});
     const editBtn=card.querySelector(".triv-edit-btn");
     if(editBtn)editBtn.addEventListener("click",e=>{e.stopPropagation();if(typeof startTaskBankTrivialEdit==="function")startTaskBankTrivialEdit(t.id)});
     card.querySelector(".triv-del-btn").addEventListener("click",e=>{e.stopPropagation();deleteTrivialTask(t.id)});
@@ -434,7 +459,6 @@ function buildTrivialTasks(){
     el.appendChild(card);
   });
 
-  // Done section
   if(done.length){
     const doneWrap=document.createElement("details");doneWrap.style.cssText="margin-top:12px";
     doneWrap.innerHTML='<summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:6px 0">Done ('+done.length+')</summary>';
@@ -450,6 +474,34 @@ function buildTrivialTasks(){
     doneWrap.appendChild(doneList);
     el.appendChild(doneWrap);
   }
+  return totalCount;
+}
+
+function buildTrivialTasks(){
+  const tasks=loadTrivialTasks();
+  const flags=loadTrivialFlags();
+  const flaggedScheduleItems=(typeof scheduled!=='undefined'?scheduled:[]).filter(ev=>flags[ev.id]);
+  const trivialTasks=tasks.filter(t=>smallTaskKind(t)==="trivial");
+  const sideProjectTasks=tasks.filter(t=>smallTaskKind(t)==="side_project");
+  const trivialCount=_renderSmallTaskSection({
+    containerId:"triage-trivial",
+    label:"Trivial",
+    kind:"trivial",
+    accent:"var(--purple,#a78bfa)",
+    tasks:trivialTasks,
+    extras:flaggedScheduleItems
+  });
+  const sideProjectsCount=_renderSmallTaskSection({
+    containerId:"triage-side-projects",
+    label:"Side Project",
+    kind:"side_project",
+    accent:"var(--cyan,#22d3ee)",
+    tasks:sideProjectTasks
+  });
+  _setSmallTaskBadge("trivial-count",trivialCount);
+  _setSmallTaskBadge("trivial-tab-count",trivialCount);
+  _setSmallTaskBadge("side-projects-section-count",sideProjectsCount);
+  _setSmallTaskBadge("side-projects-count",sideProjectsCount);
 }
 
 // ======== STICKY NOTES ========
@@ -953,7 +1005,9 @@ function _updateTaskMenusBadge(){
   const sc=parseInt(document.getElementById("soon-count")?.textContent||"0")||0;
   const bc=parseInt(document.getElementById("backlog-count")?.textContent||"0")||0;
   const schedc=parseInt(document.getElementById("scheduled-count")?.textContent||"0")||0;
-  const total=tc+sc+bc+schedc;
+  const trivc=parseInt(document.getElementById("trivial-count")?.textContent||"0")||0;
+  const sidec=parseInt(document.getElementById("side-projects-section-count")?.textContent||"0")||0;
+  const total=tc+sc+bc+schedc+trivc+sidec;
   badge.textContent=total;badge.style.display=total?"":"none";
 }
 

@@ -535,6 +535,10 @@ function addTaskUniversal(barEl){
     case"schedule":openSchedulePicker(title,durMin);break;
     case"backlog":addNewTask(title,durMin);break;
     case"urgent":insertTaskNow(title,durMin);break;
+    case"side_project":{
+      if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
+      break;
+    }
     case"trivial":{
       if(typeof addTrivialTask==="function")addTrivialTask(title);
       break;

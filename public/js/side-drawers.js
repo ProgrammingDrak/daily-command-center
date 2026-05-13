@@ -45,20 +45,23 @@
     if(d?.classList.contains("open")) closeTasks(); else openTasks();
   }
 
-  function openTasksToTrivial(){
+  function openTasksToSection(sectionId){
     openTasks();
-    const sec = document.getElementById("tm-trivial-section");
+    const sec = document.getElementById(sectionId);
     if(sec){
       sec.open = true;
       // Scroll into view inside the drawer's scroll container after the slide animation settles.
       setTimeout(() => sec.scrollIntoView({behavior:"smooth", block:"start"}), 240);
     }
   }
+  function openTasksToTrivial(){ openTasksToSection("tm-trivial-section"); }
+  function openTasksToSideProjects(){ openTasksToSection("tm-side-projects-section"); }
 
   function init(){
     document.getElementById("tasks-drawer-handle")?.addEventListener("click", toggleTasks);
     document.getElementById("tasks-drawer-close")?.addEventListener("click", () => closeTasks());
-    document.getElementById("float-trivial")?.addEventListener("click", openTasksToTrivial);
+    document.getElementById("trivial-tab")?.addEventListener("click", openTasksToTrivial);
+    document.getElementById("side-projects-tab")?.addEventListener("click", openTasksToSideProjects);
 
     const bd = document.getElementById("side-drawer-backdrop");
     if(bd){
@@ -92,4 +95,5 @@
 
   window.openTasksDrawer = openTasks;
   window.closeTasksDrawer = closeTasks;
+  window.openTasksToSection = openTasksToSection;
 })();
