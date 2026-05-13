@@ -913,6 +913,36 @@ function triageTaskPayload(item){
     urgent:String(item.priority||"").toLowerCase()==="high"
   };
 }
+function triageCompletionDateKey(value){
+  const dt=value instanceof Date?value:new Date(value);
+  if(!dt||isNaN(dt))return null;
+  return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
+}
+function completedTriageTasksForDate(dateStr){
+  const dismissed=typeof loadDismissed==="function"?loadDismissed():{};
+  const viewDate=dateStr||((__state&&__state.date)||triageCompletionDateKey(new Date()));
+  return (INIT_TRIAGE||[]).map(item=>{
+    const done=dismissed[item.id];
+    if(!done||done.trivial)return null;
+    const completedAt=done.dismissed_at||done.completed_at||done.at;
+    if(triageCompletionDateKey(completedAt)!==viewDate)return null;
+    const payload=triageTaskPayload(item);
+    return {
+      ...payload,
+      id:payload.id,
+      triageId:item.id,
+      title:item.title||payload.title,
+      completedAt,
+      note:done.note||"",
+      source:"triage",
+      type:"task",
+      durMin:payload.durMin||payload.duration_minutes||30,
+      start:(item.start||""),
+      end:(item.end||"")
+    };
+  }).filter(Boolean).sort((a,b)=>new Date(a.completedAt)-new Date(b.completedAt));
+}
+window.completedTriageTasksForDate=completedTriageTasksForDate;
 function triagePointsChip(item){
   const payload=triageTaskPayload(item);
   const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"

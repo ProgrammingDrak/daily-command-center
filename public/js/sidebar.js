@@ -65,9 +65,11 @@ function buildMiniSchedule(){
 function buildSideDone(){
   const list=document.getElementById("pomo-done-list");if(!list)return;
   const doneItems=scheduled.filter(isDone);
-  const badge=document.getElementById("side-done-count");if(badge)badge.textContent=doneItems.length;
+  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+  const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
+  const badge=document.getElementById("side-done-count");if(badge)badge.textContent=doneItems.length+triageDoneItems.length;
   list.innerHTML="";
-  if(!doneItems.length){list.innerHTML='<div class="pomo-side-empty">Nothing completed yet. Check off tasks to see them here.</div>';return}
+  if(!doneItems.length&&!triageDoneItems.length){list.innerHTML='<div class="pomo-side-empty">Nothing completed yet. Check off tasks to see them here.</div>';return}
 
   // Group by completion time (hour buckets)
   const groups={};
@@ -81,23 +83,36 @@ function buildSideDone(){
       label="Completed at "+h12+":"+String(m).padStart(2,"0")+" "+ap;
     }
     if(!groups[label])groups[label]=[];
-    groups[label].push(ev);
+    groups[label].push({kind:"schedule",ev});
+  });
+  triageDoneItems.forEach(ev=>{
+    const ts=ev.completedAt?new Date(ev.completedAt):null;
+    let label="Earlier";
+    if(ts&&!isNaN(ts)){
+      const h=ts.getHours(),m=ts.getMinutes();
+      const ap=h>=12?"PM":"AM",h12=h>12?h-12:h||12;
+      label="Completed at "+h12+":"+String(m).padStart(2,"0")+" "+ap;
+    }
+    if(!groups[label])groups[label]=[];
+    groups[label].push({kind:"triage",ev});
   });
 
   Object.entries(groups).forEach(([label,items])=>{
     const hdr=document.createElement("div");hdr.className="pomo-side-done-group";hdr.textContent=label;
     list.appendChild(hdr);
-    items.forEach(ev=>{
-      const c=cfg(ev.type);
-      const durMin=dur(ev);
-      const focusSec=pomoState.taskTime[ev.title]||0;
+    items.forEach(item=>{
+      const ev=item.ev;
+      const isTriage=item.kind==="triage";
+      const c=isTriage?{color:"var(--purple,#a78bfa)"}:cfg(ev.type);
+      const durMin=isTriage?(ev.durMin||30):dur(ev);
+      const focusSec=isTriage?0:(pomoState.taskTime[ev.title]||0);
       const focusMin=Math.round(focusSec/60);
       const el=document.createElement("div");el.className="pomo-side-done-item";
       el.innerHTML=
         '<span class="done-check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>'+
         '<span class="side-bar" style="background:'+c.color+';opacity:0.5"></span>'+
         '<div class="done-body"><div class="done-title">'+ev.title+'</div>'+
-        '<div class="done-meta"><span>'+ms(durMin)+' planned</span>'+(focusMin>0?'<span>'+ms(focusMin)+' focused</span>':'')+'</div></div>';
+        '<div class="done-meta"><span>'+ms(durMin)+' planned</span>'+(isTriage?'<span>triage</span>':focusMin>0?'<span>'+ms(focusMin)+' focused</span>':'')+'</div></div>';
       list.appendChild(el);
     });
   });
