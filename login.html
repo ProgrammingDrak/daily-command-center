@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Daily Command Center — Sign In</title>
+  <title>Daily Command Center — Account</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -57,8 +57,40 @@
       margin-top: 4px;
     }
 
+    .auth-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      padding: 4px;
+      margin-bottom: 20px;
+    }
+
+    .auth-tab {
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      color: #64748b;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 10px;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .auth-tab.active {
+      background: #2d3148;
+      color: #f1f5f9;
+    }
+
     .form-group {
       margin-bottom: 16px;
+    }
+
+    .form-group.hidden {
+      display: none;
     }
 
     label {
@@ -145,6 +177,14 @@
     }
 
     .error.visible { display: block; }
+
+    .fine-print {
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 14px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -152,12 +192,17 @@
     <div class="logo">
       <div class="logo-icon">⚡</div>
       <h1>Daily Command Center</h1>
-      <p>Sign in to continue</p>
+      <p id="authSubtitle">Sign in to continue</p>
     </div>
 
     <div class="error" id="error"></div>
 
-    <form id="loginForm">
+    <div class="auth-tabs" role="tablist" aria-label="Account access">
+      <button type="button" class="auth-tab active" id="loginTab" role="tab" aria-selected="true">Sign in</button>
+      <button type="button" class="auth-tab" id="registerTab" role="tab" aria-selected="false">Register</button>
+    </div>
+
+    <form id="authForm">
       <div class="form-group">
         <label for="username">Username</label>
         <input type="text" id="username" name="username" placeholder="drake" autocomplete="username" autofocus>
@@ -174,14 +219,49 @@
           </button>
         </div>
       </div>
-      <button type="submit" class="btn" id="submitBtn">Sign In</button>
+      <div class="form-group hidden" id="confirmGroup">
+        <label for="confirmPassword">Confirm password</label>
+        <input type="password" id="confirmPassword" name="confirmPassword" placeholder="••••••••" autocomplete="new-password">
+      </div>
+      <button type="submit" class="btn" id="submitBtn">Sign in</button>
+      <p class="fine-print" id="authFinePrint">New here? Choose Register to create your workspace.</p>
     </form>
   </div>
 
   <script>
+    let mode = window.location.pathname === "/register" ? "register" : "login";
+
+    const loginTab = document.getElementById("loginTab");
+    const registerTab = document.getElementById("registerTab");
+    const subtitle = document.getElementById("authSubtitle");
+    const confirmGroup = document.getElementById("confirmGroup");
+    const confirmInput = document.getElementById("confirmPassword");
+    const finePrint = document.getElementById("authFinePrint");
     const togglePw = document.getElementById("togglePw");
     const passwordInput = document.getElementById("password");
     const eyeIcon = document.getElementById("eyeIcon");
+    const usernameInput = document.getElementById("username");
+
+    function setMode(nextMode, pushState = true) {
+      mode = nextMode;
+      const isRegister = mode === "register";
+      loginTab.classList.toggle("active", !isRegister);
+      registerTab.classList.toggle("active", isRegister);
+      loginTab.setAttribute("aria-selected", String(!isRegister));
+      registerTab.setAttribute("aria-selected", String(isRegister));
+      subtitle.textContent = isRegister ? "Create an account to continue" : "Sign in to continue";
+      confirmGroup.classList.toggle("hidden", !isRegister);
+      confirmInput.required = isRegister;
+      passwordInput.autocomplete = isRegister ? "new-password" : "current-password";
+      document.title = isRegister ? "Daily Command Center — Register" : "Daily Command Center — Sign In";
+      btn.textContent = isRegister ? "Create Account" : "Sign in";
+      finePrint.textContent = isRegister ? "Usernames use lowercase letters, numbers, hyphens, or underscores." : "New here? Choose Register to create your workspace.";
+      errorEl.classList.remove("visible");
+      if (pushState) {
+        const params = window.location.search || "";
+        window.history.replaceState(null, "", (isRegister ? "/register" : "/login") + params);
+      }
+    }
 
     togglePw.addEventListener("click", () => {
       const isHidden = passwordInput.type === "password";
@@ -194,21 +274,42 @@
            <circle cx="12" cy="12" r="3"/>`;
     });
 
-    const form = document.getElementById("loginForm");
+    const form = document.getElementById("authForm");
     const errorEl = document.getElementById("error");
     const btn = document.getElementById("submitBtn");
+
+    loginTab.addEventListener("click", () => setMode("login"));
+    registerTab.addEventListener("click", () => setMode("register"));
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errorEl.classList.remove("visible");
       btn.disabled = true;
-      btn.textContent = "Signing in…";
+      btn.textContent = mode === "register" ? "Creating account…" : "Signing in…";
 
-      const username = document.getElementById("username").value.trim();
-      const password = document.getElementById("password").value;
+      const rawUsername = usernameInput.value.trim();
+      const username = mode === "register" ? rawUsername.toLowerCase() : rawUsername;
+      const password = passwordInput.value;
+      const confirmPassword = confirmInput.value;
+
+      if (mode === "register" && password !== confirmPassword) {
+        errorEl.textContent = "Passwords do not match.";
+        errorEl.classList.add("visible");
+        btn.disabled = false;
+        btn.textContent = "Create Account";
+        return;
+      }
+
+      if (mode === "register" && !/^[a-z0-9_-]{3,30}$/.test(username)) {
+        errorEl.textContent = "Username must be 3-30 lowercase letters, numbers, hyphens, or underscores.";
+        errorEl.classList.add("visible");
+        btn.disabled = false;
+        btn.textContent = "Create Account";
+        return;
+      }
 
       try {
-        const res = await fetch("/api/auth/login", {
+        const res = await fetch(mode === "register" ? "/api/auth/register" : "/api/auth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username, password }),
@@ -221,18 +322,20 @@
           const params = new URLSearchParams(window.location.search);
           window.location.href = params.get("next") || "/";
         } else {
-          errorEl.textContent = data.error || "Sign in failed. Check your credentials.";
+          errorEl.textContent = data.error || (mode === "register" ? "Registration failed." : "Sign in failed. Check your credentials.");
           errorEl.classList.add("visible");
           btn.disabled = false;
-          btn.textContent = "Sign In";
+          btn.textContent = mode === "register" ? "Create Account" : "Sign in";
         }
       } catch {
         errorEl.textContent = "Network error — is the server running?";
         errorEl.classList.add("visible");
         btn.disabled = false;
-        btn.textContent = "Sign In";
+        btn.textContent = mode === "register" ? "Create Account" : "Sign in";
       }
     });
+
+    setMode(mode, false);
   </script>
 </body>
 </html>

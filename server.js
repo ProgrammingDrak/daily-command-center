@@ -100,7 +100,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register"]);
+const AUTH_PUBLIC = new Set(["/login", "/register", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register"]);
 const PA_ENDPOINTS = new Set(["/api/pa-state/ingest", "/api/ingest/day-state", "/api/clean-tidy/approve"]);
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 function hasPaToken(req) { const paToken = process.env.SECRET_PA_TOKEN; if (!paToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === paToken : false; }
@@ -125,7 +125,13 @@ app.use(async (req, res, next) => {
 });
 
 // ── Auth Routes ──
-app.get("/login", (req, res) => { if (req.session.userId) return res.redirect("/"); res.sendFile(path.join(PROJECT_DIR, "login.html")); });
+function sendAuthPage(req, res) {
+  if (req.session.userId) return res.redirect("/");
+  res.sendFile(path.join(PROJECT_DIR, "login.html"));
+}
+
+app.get("/login", sendAuthPage);
+app.get("/register", sendAuthPage);
 
 app.post("/api/auth/login", async (req, res) => {
   const { username, password } = req.body || {};
