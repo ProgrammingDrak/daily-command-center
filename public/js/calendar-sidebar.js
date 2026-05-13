@@ -168,7 +168,13 @@
     const btn = document.querySelector(".gcal-sync-btn");
     if (btn) btn.classList.add("spinning");
     try {
-      await window.gcal.triggerSync();
+      await window.gcal.triggerSync({ full: true });
+      if (window.blockStore && typeof window.blockStore.invalidateRangeCache === "function") {
+        window.blockStore.invalidateRangeCache();
+      }
+      if (typeof window.refreshPaStateFromServer === "function") {
+        await window.refreshPaStateFromServer();
+      }
       // Reload sidebar state
       const cals = await window.gcal.getCalendars();
       if (window._gcalSidebarState) {

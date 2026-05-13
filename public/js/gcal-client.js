@@ -92,8 +92,13 @@
   };
 
   // ── Sync ──
-  gcal.triggerSync = async function () {
-    const res = await fetch("/api/gcal/sync", { method: "POST" });
+  gcal.triggerSync = async function (options = {}) {
+    const body = options && options.full ? JSON.stringify({ full: true }) : null;
+    const res = await fetch("/api/gcal/sync", {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body || undefined,
+    });
     return res.json();
   };
 
