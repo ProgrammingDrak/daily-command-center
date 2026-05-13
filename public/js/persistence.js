@@ -18,6 +18,24 @@ function showToast(message, type = "error", duration = 5000) {
   if (duration > 0) setTimeout(() => toast.remove(), duration);
 }
 
+async function checkServerHealthForSaveStatus() {
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.database === "ok") return true;
+    const msg = data.databaseConfigured === false
+      ? "Database not configured - edits queued locally"
+      : "Database unavailable - edits queued locally";
+    window.__DCC_HEALTH_ERROR = msg;
+    updateSaveStatus("error", msg);
+    return false;
+  } catch {
+    window.__DCC_HEALTH_ERROR = "Server unreachable - edits queued locally";
+    updateSaveStatus("error", window.__DCC_HEALTH_ERROR);
+    return false;
+  }
+}
+
 // ── BlockStore day-root property helpers ──
 // Read a property from the current day's root block (returns def if unavailable)
 function _bsProp(key, def) {
@@ -362,3 +380,5 @@ async function switchToDate(dateStr) {
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
 }
+
+setTimeout(checkServerHealthForSaveStatus, 1000);
