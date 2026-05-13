@@ -634,10 +634,13 @@
   /* ---- Focus Banner ---- */
   .focus-banner{display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25);border-radius:8px;margin-bottom:10px}
   .focus-banner.running{background:rgba(59,130,246,0.14);border-color:rgba(59,130,246,0.4)}
+  .focus-banner.ready{background:rgba(34,197,94,0.08);border-color:rgba(34,197,94,0.24)}
   .fb-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);flex-shrink:0;transition:background 0.3s}
   .focus-banner.running .fb-dot{background:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,0.2);animation:fb-pulse 2s ease-in-out infinite}
+  .focus-banner.ready .fb-dot{background:var(--green)}
   @keyframes fb-pulse{0%,100%{box-shadow:0 0 0 3px rgba(59,130,246,0.2)}50%{box-shadow:0 0 0 6px rgba(59,130,246,0.0)}}
   .fb-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);flex-shrink:0}
+  .focus-banner.ready .fb-label{font-size:12px;text-transform:none;letter-spacing:0;color:var(--green)}
   .fb-title{font-size:13px;font-weight:700;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fb-status{font-size:11px;color:var(--text-muted);flex-shrink:0}
   .fb-open-timer{background:none;border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 7px;flex-shrink:0}
