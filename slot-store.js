@@ -26,7 +26,7 @@ const BANK_SCREEN_COUNT_WEIGHTS = [
 ];
 
 const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partner", "either_partner"]);
-const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "bank_builder", "sponsor", "choice", "reroll"]);
+const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "sponsor", "choice", "reroll"]);
 
 const DEFAULT_REWARDS = [
   ...[
@@ -149,33 +149,6 @@ const DEFAULT_REWARDS = [
     "Partner plans a cozy no-phone evening",
     "Partner helps execute a larger reward when jackpot unlocks it",
   ].map(title => reward({ title, kind: "sponsor", sponsor_type: "romantic_partner", weight: 5, sponsor_active: false, requires_confirmation: true })),
-  ...[
-    ["Bank builder: add $0.10", 10, 180],
-    ["Bank builder: add $0.25", 25, 154],
-    ["Bank builder: add $0.50", 50, 141],
-    ["Bank builder: add $0.75", 75, 116],
-    ["Bank builder: add $1", 100, 103],
-    ["Bank builder: add $2", 200, 72],
-    ["Bank builder: add spare-change dime", 10, 129],
-    ["Bank builder: add two quarters", 50, 116],
-    ["Bank builder: add tiny session bounty", 100, 90],
-    ["Put $5 into the bank", 500, 8],
-    ["Put $10 into the bank", 1000, 6],
-    ["Put $25 into the bank", 2500, 3],
-    ["Put $50 into the bank", 5000, 1],
-    ["Round up today's purchases into the bank", 500, 5],
-    ["Move unused eating-out budget into the bank", 1500, 4],
-    ["Add money saved from choosing a free reward", 1000, 4],
-    ["Bank the sale delta from a cheaper wishlist item", 1000, 3],
-    ["Add refund/rebate/cashback money", 1000, 3],
-    ["Add no-spend-day bonus", 1000, 5],
-    ["Add sponsor pledge", 1500, 3],
-    ["Add streak bonus from completed days", 1000, 4],
-    ["Add hard task bounty", 1000, 4],
-    ["Add deep work bounty after focused time", 1000, 4],
-    ["Add weekly leftover discretionary budget", 2500, 2],
-    ["Add partner/accountability match, capped weekly", 2000, 2],
-  ].map(([title, delta, weight]) => reward({ title, kind: "bank_builder", weight, bank_delta_cents: delta, requires_confirmation: true })),
   reward({ title: "Pick one of three eligible rewards", kind: "choice", weight: 2, requires_confirmation: true }),
   reward({ title: "Free reroll", kind: "reroll", weight: 2 }),
 ];
@@ -331,7 +304,7 @@ function normalizeRewardInput(body) {
     active: body.active !== false,
     sponsor_active: sponsorType === "self" ? true : body.sponsor_active === true,
     value_cents: Math.max(0, parseInt(body.value_cents, 10) || 0),
-    bank_delta_cents: Math.max(0, parseInt(body.bank_delta_cents, 10) || 0),
+    bank_delta_cents: 0,
     requires_confirmation: !!body.requires_confirmation,
     cooldown_days: Math.max(0, parseInt(body.cooldown_days, 10) || 0),
     unlock_threshold_cents: Math.max(0, parseInt(body.unlock_threshold_cents, 10) || 0),
@@ -406,7 +379,7 @@ async function getState(workspaceId, userId) {
   const account = await ensureAccount(workspaceId, userId);
   const bankUsage = await getBankUsage(workspaceId);
   const pendingBankDeposit = await getPendingBankDeposit(workspaceId);
-  const { rows: rewardRows } = await pool.query("SELECT * FROM slot_rewards WHERE workspace_id = $1 ORDER BY active DESC, kind, title", [workspaceId]);
+  const { rows: rewardRows } = await pool.query("SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> 'bank_builder' ORDER BY active DESC, kind, title", [workspaceId]);
   const rewards = rewardRows.map(r => rowToReward(r, account, bankUsage));
   const { rows: spins } = await pool.query(
     "SELECT * FROM slot_spins WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 25",
@@ -515,16 +488,8 @@ function weightedBankScreenCount() {
   return 1;
 }
 
-function shouldHitScreenBankBuilder(selected, eligible) {
-  if (selected.kind === "bank_builder") return true;
-  const totalWeight = eligible.reduce((sum, r) => sum + r.weight, 0);
-  const bankBuilderWeight = eligible
-    .filter(r => r.kind === "bank_builder")
-    .reduce((sum, r) => sum + r.weight, 0);
-  const selectedBankRate = totalWeight > 0 ? bankBuilderWeight / totalWeight : 0;
-  if (selectedBankRate >= SCREEN_BANK_BUILDER_HIT_RATE) return false;
-  const extraRate = (SCREEN_BANK_BUILDER_HIT_RATE - selectedBankRate) / (1 - selectedBankRate);
-  return crypto.randomInt(1000000) < Math.floor(extraRate * 1000000);
+function shouldHitScreenBankBuilder() {
+  return crypto.randomInt(1000000) < Math.floor(SCREEN_BANK_BUILDER_HIT_RATE * 1000000);
 }
 
 function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
@@ -634,7 +599,7 @@ async function spin(workspaceId, userId) {
     throw err;
   }
   const selected = chooseWeighted(eligible);
-  const screen = buildSpinScreen(selected, state.account, state.bankUsage, shouldHitScreenBankBuilder(selected, eligible));
+  const screen = buildSpinScreen(selected, state.account, state.bankUsage, shouldHitScreenBankBuilder());
   const bankDelta = screen.payout.cents || 0;
   const selectedSnapshot = {
     ...selected,
