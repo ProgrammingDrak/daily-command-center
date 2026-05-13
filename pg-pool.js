@@ -9,6 +9,39 @@
 
 const { Pool } = require("pg");
 
+function getDatabaseConfigStatus() {
+  const raw = process.env.DATABASE_URL;
+  if (!raw) {
+    return {
+      configured: false,
+      reason: "DATABASE_URL is not set",
+    };
+  }
+
+  try {
+    const url = new URL(raw);
+    return {
+      configured: true,
+      host: url.hostname || null,
+      database: url.pathname ? url.pathname.replace(/^\//, "") : null,
+      ssl: !raw.includes("localhost"),
+    };
+  } catch {
+    return {
+      configured: false,
+      reason: "DATABASE_URL is invalid",
+    };
+  }
+}
+
+function describeDatabaseError(err) {
+  if (!err) return "Unknown database error";
+  const status = getDatabaseConfigStatus();
+  if (!status.configured) return status.reason;
+  if (err.code) return err.code;
+  return err.name || "DatabaseError";
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 10,
@@ -22,5 +55,8 @@ const pool = new Pool({
 pool.on("error", (err) => {
   console.error("[pg-pool] Unexpected error on idle client:", err.message);
 });
+
+pool.getConfigStatus = getDatabaseConfigStatus;
+pool.describeError = describeDatabaseError;
 
 module.exports = pool;

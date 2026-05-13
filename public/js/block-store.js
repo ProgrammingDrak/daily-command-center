@@ -31,8 +31,9 @@
     if (typeof updateSaveStatus === "function") updateSaveStatus("ok", "All changes saved");
   }
   function setError(msg) {
-    if (typeof updateSaveStatus === "function") updateSaveStatus("error", msg || "Save failed");
-    if (typeof showToast === "function") showToast(msg || "Save failed — will retry", "error");
+    const display = window.__DCC_HEALTH_ERROR || msg || "Save failed";
+    if (typeof updateSaveStatus === "function") updateSaveStatus("error", display);
+    if (typeof showToast === "function") showToast(msg || display || "Save failed - will retry", "error");
   }
 
   // ── Write-Ahead Log (localStorage) ──
