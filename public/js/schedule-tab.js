@@ -86,6 +86,8 @@ function buildSchedule(){
   const trivFlags=loadTrivialFlags();
   const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Hide side-project-marked items from the schedule
   const doneItems=vis.filter(isDone);
+  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+  const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
   const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
 
@@ -150,8 +152,26 @@ function buildSchedule(){
     tl.appendChild(el);
   });
 
+  // Render triage items completed on the viewed date as compact rows
+  triageDoneItems.forEach(ev=>{
+    const dt=new Date(ev.completedAt);
+    const hhmm=!isNaN(dt)?String(dt.getHours()).padStart(2,"0")+":"+String(dt.getMinutes()).padStart(2,"0"):"";
+    const timeStr=hhmm?f12(hhmm):"Done";
+    const el=document.createElement("div");el.className="tl-compact";el.dataset.triageDoneId=ev.triageId;
+    el.innerHTML=
+      '<div class="tl-time">'+timeStr.replace(/ (AM|PM)/,"")+'</div>'+
+      '<div class="tl-node"></div>'+
+      '<div class="compact-row">'+
+        '<div class="c-check" title="Completed triage">'+ckSvg+'</div>'+
+        '<div class="bar" style="background:var(--purple,#a78bfa)"></div>'+
+        '<span class="c-title">'+ev.title+'</span>'+
+        '<span class="tag tag-task" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a78bfa)">Triage</span>'+
+        '<span class="c-time">'+timeStr+'</span>'+
+      '</div>';
+    tl.appendChild(el);
+  });
+
   // Render side projects completed on the viewed date as compact rows
-  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   const doneTrivials=(typeof loadTrivialTasks==='function'?loadTrivialTasks():[])
     .filter(t=>t.done&&t.doneAt&&new Date(t.doneAt).toISOString().split("T")[0]===viewDate);
   doneTrivials.forEach(t=>{
@@ -174,7 +194,7 @@ function buildSchedule(){
   });
 
   // Divider between done and active
-  if((doneItems.length||doneTrivials.length)&&activeItems.length){
+  if((doneItems.length||triageDoneItems.length||doneTrivials.length)&&activeItems.length){
     const d=document.createElement("div");d.className="divider";d.innerHTML='<span>Up Next</span>';tl.appendChild(d);
   }
 
@@ -777,15 +797,22 @@ function showStatPopover(statId, event) {
     }
     case 's-done': {
       const done = scheduled.filter(isDone);
+      const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+      const triageDone=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
       html = '<div class="sp-title">Completed Today</div>';
-      if (!done.length) { html += '<div class="sp-empty">Nothing checked off yet.</div>'; break; }
+      if (!done.length&&!triageDone.length) { html += '<div class="sp-empty">Nothing checked off yet.</div>'; break; }
       html += done.map(ev => {
         const t = doneAt[ev.id] ? new Date(doneAt[ev.id]).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
         const actual=_actualMin(ev), planned=dur(ev);
         const diff=actual-planned, diffLabel=diff>0?'+'+ms(diff):diff<0?'-'+ms(-diff):'';
         return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(actual)+(diffLabel?' <span style="font-size:10px;opacity:0.6">('+diffLabel+')</span>':'')+'</span></div>';
       }).join('');
-      const totalActual=done.reduce((a,ev)=>a+_actualMin(ev),0), totalPlanned=done.reduce((a,ev)=>a+dur(ev),0);
+      html += triageDone.map(ev => {
+        const t = ev.completedAt ? new Date(ev.completedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
+        const planned=ev.durMin||30;
+        return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(planned)+' <span style="font-size:10px;opacity:0.6">(triage)</span></span></div>';
+      }).join('');
+      const totalActual=done.reduce((a,ev)=>a+_actualMin(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0), totalPlanned=done.reduce((a,ev)=>a+dur(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0);
       html+='<div class="sp-note">Actual: '+ms(totalActual)+' / Planned: '+ms(totalPlanned)+'</div>';
       break;
     }
