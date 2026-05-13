@@ -23,6 +23,7 @@ const blockDB = require("./db");
 const migration = require("./migrate");
 const gcalAuth = require("./gcal-auth");
 const gcalSync = require("./gcal-sync");
+const calendarStateCleanup = require("./calendar-state-cleanup");
 const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
@@ -896,7 +897,15 @@ app.listen(PORT, async () => {
     } catch (e) { console.error("[auth] Startup error:", e.message); }
   }
 
-  try { await gcalSync.init(broadcast, defaultUserId); const gcalAccounts = await gcalAuth.listAuthenticatedAccounts(defaultUserId); if (gcalAccounts.length) { console.log(`  GCal:       Connected (${gcalAccounts.map(a => a.key).join(", ")})`); gcalSync.startPolling(); } else { console.log(`  GCal:       Not connected`); } } catch (e) { console.error("[gcal] Init error:", e.message); }
+  try {
+    await gcalSync.init(broadcast, defaultUserId);
+    const gcalAccounts = await gcalAuth.listAuthenticatedAccounts(defaultUserId);
+    if (gcalAccounts.length) {
+      console.log(`  GCal:       Connected (${gcalAccounts.map(a => a.key).join(", ")})`);
+      try { await calendarStateCleanup.runOnce({ gcalSync }); } catch (e) { console.error("[calendar-cleanup] Startup cleanup error:", e.message); }
+      gcalSync.startPolling();
+    } else { console.log(`  GCal:       Not connected`); }
+  } catch (e) { console.error("[gcal] Init error:", e.message); }
 
   try { await initVault(); } catch (e) { console.error("[vault] Init error:", e.message); }
   try { await slotStore.ensureSchema(); } catch (e) { console.error("[slots] Schema error:", e.message); }
