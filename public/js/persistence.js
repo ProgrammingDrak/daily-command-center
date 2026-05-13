@@ -629,7 +629,16 @@ function reloadPersistedEdits() {
           end:p.end||fmt(d),
           meta:p.meta||("Custom task \u00b7 "+ms(d)),
           detail:p.detail||"",source:p.source||"manual",
-          notionUrl:p.notionUrl||"",priority:p.priority||"High"
+          notionUrl:p.notionUrl||"",priority:p.priority||"High",
+          kind:p.kind||"",
+          responsibilityId:p.responsibilityId||null,
+          responsibilityTitle:p.responsibilityTitle||"",
+          capacityBucket:p.capacityBucket||"",
+          responsibilityScore:p.responsibilityScore||null,
+          alertKey:p.alertKey||null,
+          alertType:p.alertType||null,
+          ampUrl:p.ampUrl||"",
+          hubspotUrl:p.hubspotUrl||""
         };
         // Pin the start time so recalcTimes() doesn't overwrite it
         if(hasStoredTime)task._pinnedStart=p.start;
@@ -809,4 +818,3 @@ async function switchToDate(dateStr) {
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
 }
-

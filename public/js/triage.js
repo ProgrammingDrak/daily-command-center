@@ -277,28 +277,15 @@ function openDoneModal(id, title, onConfirm, ev){
         '<span class="st-subtask-text">'+st.text+'</span>'+
       '</label>';
     }).join('');
-    const moveOpts=scheduled
-      .filter(e=>!isMeeting(e)&&!isDone(e)&&e.id!==id)
-      .map(e=>'<option value="'+e.id+'">'+e.title+' ('+f12(e.start)+')</option>')
-      .join('');
     stSection.innerHTML=
-      '<div class="st-resolve-section">'+
-        '<div class="st-resolve-title" id="st-resolve-title">⚠ '+incomplete.length+' subtask'+(incomplete.length>1?'s':'')+' not completed</div>'+
+      '<div class="st-resolve-section blocking">'+
+        '<div class="st-resolve-title" id="st-resolve-title">⚠ Resolve '+incomplete.length+' unfinished subtask'+(incomplete.length>1?'s':'')+' before completing</div>'+
         '<div class="st-subtask-list" id="st-subtask-list">'+listHtml+'</div>'+
         '<div class="st-action-row">'+
-          '<button class="st-act-btn" data-act="discard" title="Remove checked subtasks">Discard</button>'+
-          '<button class="st-act-btn" data-act="individual" title="Schedule each as its own task">Schedule each</button>'+
-          '<button class="st-act-btn" data-act="grouped" title="Create one task from all checked">Group into task</button>'+
-          '<button class="st-act-btn" data-act="move" title="Add as subtasks of another task">Move to task ›</button>'+
+          '<button class="st-act-btn primary" data-act="complete" title="Mark checked subtasks complete">Mark selected complete</button>'+
+          '<button class="st-act-btn" data-act="spinoff" title="Create standalone tasks from checked subtasks">Spin selected into tasks</button>'+
         '</div>'+
-        '<div class="st-move-row" id="st-move-row" style="display:none">'+
-          '<select class="st-move-select" id="st-move-select">'+
-            '<option value="">Pick a task…</option>'+
-            moveOpts+
-          '</select>'+
-          '<button class="st-move-confirm-btn" id="st-move-confirm">Move</button>'+
-        '</div>'+
-        '<div class="st-hint">Unchecked subtasks are discarded when you mark complete.</div>'+
+        '<div class="st-hint">Unchecked subtasks stay unresolved. Finish this list or cancel parent completion.</div>'+
       '</div>';
     stSection.style.display="";
 
@@ -311,12 +298,12 @@ function openDoneModal(id, title, onConfirm, ev){
         if(row)row.remove();
       });
       const rem=stSection.querySelectorAll('.st-subtask-chk').length;
-      if(!rem){stSection.innerHTML='';stSection.style.display='none';}
-      else{
-        const titleEl=document.getElementById('st-resolve-title');
-        if(titleEl)titleEl.textContent='⚠ '+rem+' subtask'+(rem>1?'s':'')+' not completed';
+        if(!rem){stSection.innerHTML='';stSection.style.display='none';}
+        else{
+          const titleEl=document.getElementById('st-resolve-title');
+          if(titleEl)titleEl.textContent='⚠ Resolve '+rem+' unfinished subtask'+(rem>1?'s':'')+' before completing';
+        }
       }
-    }
     stSection.querySelectorAll('.st-act-btn').forEach(btn=>{
       btn.addEventListener('click',()=>{
         const act=btn.dataset.act;
@@ -331,19 +318,6 @@ function openDoneModal(id, title, onConfirm, ev){
         removeRows(ids);
       });
     });
-    const moveBtn=document.getElementById('st-move-confirm');
-    if(moveBtn){
-      moveBtn.addEventListener('click',()=>{
-        const targetId=document.getElementById('st-move-select').value;
-        if(!targetId){if(typeof showToast==='function')showToast('Pick a target task first.');return;}
-        const ids=getCheckedIds();
-        if(!ids.length){if(typeof showToast==='function')showToast('Check at least one subtask first.');return;}
-        executeSubtaskResolution(id,'move',ids,targetId);
-        removeRows(ids);
-        const mr=document.getElementById('st-move-row');
-        if(mr)mr.style.display='none';
-      });
-    }
   } else {
     stSection.innerHTML="";stSection.style.display="none";
   }
@@ -392,11 +366,10 @@ function confirmDoneModal(){
     if(parentId){triageParents[_dmId]=parentId;}else{delete triageParents[_dmId];}
     saveTriageParents(triageParents);
   }
-  // Discard any subtasks still shown in the list (unhandled ones are implicitly discarded on completion)
   const remainingRows=document.querySelectorAll('#dm-subtask-section .st-subtask-row');
   if(remainingRows.length){
-    const allSubs=loadSubtasks();
-    if(allSubs[_dmId]){allSubs[_dmId]=allSubs[_dmId].map(s=>({...s,done:true}));saveSubtasks(allSubs);}
+    if(typeof showToast==='function')showToast('Resolve unfinished subtasks before completing the parent task.','error');
+    return;
   }
   if(_dmCallback)_dmCallback(text);
   closeDoneModal();
@@ -1209,4 +1182,3 @@ function buildTriage() {
     });
   }
 }
-

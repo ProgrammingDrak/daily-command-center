@@ -186,6 +186,7 @@ function persistAddedTask(item){
     // Write to blockstore — will be reloaded via property-based query on refresh
     const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null);
     window.blockStore.createBlock("block",{
+      kind:item.kind||undefined,
       local_id:item.id,
       title:item.title,
       duration:dur(item),
@@ -197,6 +198,14 @@ function persistAddedTask(item){
       notionUrl:item.notionUrl||"",
       source:item.source||"manual",
       tags:item.tags||[],
+      responsibilityId:item.responsibilityId||null,
+      responsibilityTitle:item.responsibilityTitle||null,
+      capacityBucket:item.capacityBucket||null,
+      responsibilityScore:item.responsibilityScore||null,
+      alertKey:item.alertKey||null,
+      alertType:item.alertType||null,
+      ampUrl:item.ampUrl||null,
+      hubspotUrl:item.hubspotUrl||null,
       added_at:new Date().toISOString()
     },{date});
     return;
@@ -301,12 +310,22 @@ function insertTaskFromDrawer(title, durMin){
 // ======== ACTIONS ========
 function toggleDone(id){
   const wasDone=manualDone.has(id);
+  if(!wasDone&&typeof getIncompleteSubtasks==="function"&&typeof openDoneModal==="function"){
+    const incomplete=getIncompleteSubtasks(id);
+    if(incomplete&&incomplete.length){
+      const ev=scheduled.find(e=>e.id===id);
+      if(ev){openDoneModal(id,ev.title,()=>toggleDone(id),ev);return;}
+    }
+  }
   if(wasDone){manualDone.delete(id);delete doneAt[id];log("unchecked",id)}
   else{
     manualDone.add(id);doneAt[id]=new Date();log("checked",id);
+    const ev=scheduled.find(e=>e.id===id);
+    if(ev&&ev.responsibilityId&&typeof markResponsibilityTaskCompleted==="function"){
+      markResponsibilityTaskCompleted(ev);
+    }
     if(window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
-      const ev=scheduled.find(e=>e.id===id)||{id};
-      window.SlotRewards.earnTaskCredit(ev);
+      window.SlotRewards.earnTaskCredit(ev||{id});
     }
   }
   saveDoneState();render()
@@ -792,4 +811,3 @@ function checkBlockWarnings(task){
     }
   }
 }
-

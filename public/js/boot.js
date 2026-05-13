@@ -162,6 +162,7 @@
   if (typeof buildTriage === 'function') buildTriage();
   if (typeof buildNotifications === 'function') buildNotifications();
   if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();
+  if (typeof loadResponsibilities === 'function') loadResponsibilities();
   if (typeof buildDelegated === 'function') buildDelegated();
   if (typeof updateStats === 'function') updateStats();
   if (typeof updateDateNav === 'function') updateDateNav();
@@ -218,4 +219,3 @@ setInterval(updateClock, 1000);
   pomoRenderReport();
   buildMiniSchedule();buildSideConsider();buildSideBacklog();buildSideDone();
 })();
-
