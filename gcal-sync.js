@@ -17,6 +17,7 @@ const pool = require("./pg-pool");
 const syncState = new Map();
 const calendarListRefreshAt = new Map();
 const CALENDAR_LIST_REFRESH_MS = 15 * 60 * 1000;
+const APP_TIME_ZONE = process.env.DCC_TIME_ZONE || process.env.APP_TIME_ZONE || "America/New_York";
 let _pollTimer = null;
 let _broadcast = null;
 let _syncInProgress = false;
@@ -194,10 +195,11 @@ async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_
   let startTime, endTime, dateStr;
   if (isAllDay) { dateStr = gcalEvent.start.date; startTime = null; endTime = null; }
   else {
-    const startDt = new Date(gcalEvent.start.dateTime); const endDt = new Date(gcalEvent.end.dateTime);
-    dateStr = startDt.toISOString().slice(0, 10);
-    startTime = String(startDt.getHours()).padStart(2, "0") + ":" + String(startDt.getMinutes()).padStart(2, "0");
-    endTime = String(endDt.getHours()).padStart(2, "0") + ":" + String(endDt.getMinutes()).padStart(2, "0");
+    const startParts = zonedDateTimeParts(gcalEvent.start.dateTime);
+    const endParts = zonedDateTimeParts(gcalEvent.end.dateTime);
+    dateStr = startParts.date;
+    startTime = startParts.time;
+    endTime = endParts.time;
   }
   const { rows: gcalRows } = await pool.query("SELECT * FROM gcal_events WHERE gcal_event_id = $1 AND calendar_id = $2 AND account_key = $3", [gcalEvent.id, calendarId, account]);
   const existingGcal = gcalRows[0];
@@ -218,7 +220,7 @@ async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_
   let blockId;
   if (existingGcal && existingGcal.block_id) {
     blockId = existingGcal.block_id;
-    await pool.query(`UPDATE blocks SET properties = $1, date = $2, updated_at = $3 WHERE id = $4 AND deleted_at IS NULL`, [jsonbParam(props), dateStr, now, blockId]);
+    await pool.query(`UPDATE blocks SET properties = $1, date = $2, sort_order = $3, updated_at = $4 WHERE id = $5 AND deleted_at IS NULL`, [jsonbParam(props), dateStr, toSortOrder(startTime), now, blockId]);
   } else {
     blockId = "gcal-" + crypto.createHash("sha256").update(gcalEvent.id + calendarId + account).digest("hex").slice(0, 24);
     const userId = _defaultUserId || null; const workspaceId = userId ? `ws-${userId}` : null;
@@ -229,7 +231,7 @@ async function upsertEvent(gcalEvent, calendarId, accountKey = gcalAuth.DEFAULT_
     }
     await pool.query(
       `INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1, 'block', $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT(id) DO UPDATE SET properties = EXCLUDED.properties, date = EXCLUDED.date, updated_at = EXCLUDED.updated_at, deleted_at = NULL`,
+       ON CONFLICT(id) DO UPDATE SET properties = EXCLUDED.properties, date = EXCLUDED.date, sort_order = EXCLUDED.sort_order, updated_at = EXCLUDED.updated_at, deleted_at = NULL`,
       [blockId, dayRootId, dateStr, jsonbParam(props), toSortOrder(startTime), userId, workspaceId, now, now]
     );
   }
@@ -401,6 +403,26 @@ function toSortOrder(startTime) { if (!startTime) return 0; const [h, m] = start
 function toRFC3339(dateStr, timeStr) { return new Date(`${dateStr}T${timeStr}:00`).toISOString(); }
 function jsonbParam(value) { return value == null ? null : JSON.stringify(value); }
 function safeParseJSON(val, fallback) { if (Array.isArray(val)) return val; if (typeof val === "object" && val !== null) return val; if (!val) return fallback; try { return JSON.parse(val); } catch { return fallback; } }
+function zonedDateTimeParts(value, timeZone = APP_TIME_ZONE) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error(`Invalid calendar date: ${value}`);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`,
+  };
+}
 
 async function getSyncStatus() {
   const calendars = await getSelectedCalendars();

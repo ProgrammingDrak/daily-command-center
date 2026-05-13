@@ -136,7 +136,7 @@ async function schedulePushedOnTomorrow(ev){
   // Get tomorrow's meetings as blocker intervals
   const tTimeline=(tomorrow.schedule&&tomorrow.schedule.timeline)||[];
   const tMeetings=tTimeline
-    .filter(e=>e.type==="meeting"||e.type==="oneone")
+    .filter(e=>e.type==="meeting"||e.type==="oneone"||e.type==="ooo"||e.type==="break"||e.source==="calendar"||e.source==="gcal")
     .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
     .sort((a,b)=>a.s-b.s);
 
