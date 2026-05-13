@@ -4,6 +4,7 @@
   let editingId = null;
   let isSpinning = false;
   let lastPendingBankCents = 0;
+  let pendingDeleteRewardId = null;
   const KIND_LABELS = {
     miss: "No prize",
     free: "Free",
@@ -113,11 +114,23 @@
           (r.sponsor_type !== "self" ? '<button class="slot-mini slot-sponsor-toggle" data-id="' + r.id + '">' + (r.sponsor_active ? 'Opt out' : 'Opt in') + '</button>' : '') +
           '<button class="slot-mini slot-edit" data-id="' + r.id + '">Edit</button>' +
           '<button class="slot-mini danger slot-delete" data-id="' + r.id + '">Delete</button>' +
+          (String(pendingDeleteRewardId) === String(r.id)
+            ? '<div class="slot-delete-confirm" role="dialog" aria-label="Confirm reward deletion">' +
+                '<span>Delete this?</span>' +
+                '<button class="slot-mini danger slot-delete-confirm-yes" data-id="' + r.id + '">Delete</button>' +
+                '<button class="slot-mini slot-delete-confirm-no" type="button">Cancel</button>' +
+              '</div>'
+            : '') +
         '</div>' +
       '</div>';
     }).join("");
     list.querySelectorAll(".slot-edit").forEach(btn => btn.addEventListener("click", () => openForm(findReward(btn.dataset.id))));
-    list.querySelectorAll(".slot-delete").forEach(btn => btn.addEventListener("click", () => deleteReward(btn.dataset.id)));
+    list.querySelectorAll(".slot-delete").forEach(btn => btn.addEventListener("click", () => requestDeleteReward(btn.dataset.id)));
+    list.querySelectorAll(".slot-delete-confirm-yes").forEach(btn => btn.addEventListener("click", () => deleteReward(btn.dataset.id)));
+    list.querySelectorAll(".slot-delete-confirm-no").forEach(btn => btn.addEventListener("click", () => {
+      pendingDeleteRewardId = null;
+      renderRewards();
+    }));
     list.querySelectorAll(".slot-sponsor-toggle").forEach(btn => btn.addEventListener("click", () => toggleSponsor(btn.dataset.id)));
   }
 
@@ -427,12 +440,20 @@
     }
   }
 
+  function requestDeleteReward(id){
+    pendingDeleteRewardId = String(id);
+    renderRewards();
+    const row = document.querySelector('.slot-reward-row[data-id="' + CSS.escape(String(id)) + '"]');
+    const confirmBtn = row && row.querySelector(".slot-delete-confirm-yes");
+    if(confirmBtn) confirmBtn.focus();
+  }
+
   async function deleteReward(id){
-    if(!confirm("Delete this reward?")) return;
     const existing = slotState && Array.isArray(slotState.rewards)
       ? slotState.rewards.find(r => String(r.id) === String(id))
       : null;
     try {
+      pendingDeleteRewardId = null;
       if(slotState && Array.isArray(slotState.rewards)){
         slotState.rewards = slotState.rewards.filter(r => String(r.id) !== String(id));
         renderRewards();
@@ -583,6 +604,17 @@
     });
     const tabBtn = document.getElementById("slots-tab-btn");
     if(tabBtn) tabBtn.addEventListener("click", loadSlots);
+    document.addEventListener("click", (event) => {
+      if(!pendingDeleteRewardId) return;
+      if(event.target.closest && event.target.closest(".slot-delete-confirm, .slot-delete")) return;
+      pendingDeleteRewardId = null;
+      renderRewards();
+    });
+    document.addEventListener("keydown", (event) => {
+      if(event.key !== "Escape" || !pendingDeleteRewardId) return;
+      pendingDeleteRewardId = null;
+      renderRewards();
+    });
     loadSlots();
   }
 
