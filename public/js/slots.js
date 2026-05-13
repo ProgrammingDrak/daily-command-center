@@ -9,7 +9,6 @@
     free: "Free",
     small_paid: "Small paid",
     bank_gated: "Bank gated",
-    bank_builder: "Bank builder",
     sponsor: "Sponsor",
     choice: "Choice",
     reroll: "Reroll"
@@ -362,7 +361,6 @@
     val("slot-form-sponsor", reward ? reward.sponsor_type : "self");
     val("slot-form-weight", reward ? reward.weight : 10);
     val("slot-form-value", reward ? ((reward.value_cents || 0) / 100) : "");
-    val("slot-form-bank", reward ? ((reward.bank_delta_cents || 0) / 100) : "");
     val("slot-form-cooldown", reward ? reward.cooldown_days : 0);
     checked("slot-form-active", reward ? reward.active : true);
     checked("slot-form-sponsor-active", reward ? reward.sponsor_active : false);
@@ -388,7 +386,6 @@
 
   function formPayload(){
     const valueDollars = parseFloat(document.getElementById("slot-form-value").value || "0") || 0;
-    const bankDollars = parseFloat(document.getElementById("slot-form-bank").value || "0") || 0;
     const kind = document.getElementById("slot-form-kind").value;
     const sponsor = document.getElementById("slot-form-sponsor").value;
     const valueCents = Math.round(valueDollars * 100);
@@ -400,8 +397,8 @@
       active: document.getElementById("slot-form-active").checked,
       sponsor_active: sponsor === "self" ? true : document.getElementById("slot-form-sponsor-active").checked,
       value_cents: valueCents,
-      bank_delta_cents: Math.round(bankDollars * 100),
-      requires_confirmation: document.getElementById("slot-form-confirm").checked || kind === "bank_builder" || kind === "bank_gated" || kind === "small_paid",
+      bank_delta_cents: 0,
+      requires_confirmation: document.getElementById("slot-form-confirm").checked || kind === "bank_gated" || kind === "small_paid",
       cooldown_days: parseInt(document.getElementById("slot-form-cooldown").value, 10) || 0,
       unlock_threshold_cents: valueCents,
       notes: document.getElementById("slot-form-notes").value
