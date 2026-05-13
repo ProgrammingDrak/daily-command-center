@@ -1285,6 +1285,7 @@
   .sidecar-tabs{position:fixed;top:244px;right:0;z-index:455;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
   .sidecar-tab{min-height:102px;width:30px;padding:12px 5px;background:rgba(15,23,42,0.92);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;writing-mode:vertical-rl;font-size:11px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;transition:background 150ms ease,color 150ms ease,border-color 150ms ease}
   .sidecar-tab:hover{background:var(--card-hover,rgba(255,255,255,0.05));color:var(--text);border-color:var(--accent)}
+  .sidecar-tab.drag-over{background:rgba(34,211,238,0.14);color:var(--cyan,#22d3ee);border-color:var(--cyan,#22d3ee)}
   .sidecar-tab .badge{font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,0.16);color:var(--accent-light);letter-spacing:0;text-transform:none}
   .side-drawer.open .sidecar-tabs{display:none}
   .side-drawer-header{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
@@ -1330,6 +1331,7 @@
   .bc-card .bc-act:hover{background:rgba(255,255,255,0.05)}
   .bc-card .bc-act-today{background:var(--accent);border-color:var(--accent);color:white}
   .bc-card .bc-act-today:hover{opacity:0.85;background:var(--accent)}
+  .bc-card .bc-act-side:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee)}
   .bc-card .bc-act-later:hover{border-color:var(--accent-light);color:var(--accent-light)}
   .bc-card .bc-act-icon{width:26px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 
@@ -1524,6 +1526,7 @@
   .tm-section-header::-webkit-details-marker{display:none}
   .tm-section-header::marker{display:none;content:""}
   .tm-section-header:hover{background:rgba(255,255,255,0.03)}
+  .tm-section.drag-over{outline:2px dashed var(--cyan,#22d3ee);outline-offset:2px}
   .tm-chevron{
     display:inline-flex;align-items:center;justify-content:center;
     width:16px;height:16px;flex-shrink:0;

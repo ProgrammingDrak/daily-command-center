@@ -154,7 +154,7 @@
 
   function renderTrivialTitle(t){
     if(editingTrivialId !== t.id) return '<span class="ttl">'+esc(t.text)+'</span>';
-    return '<input class="task-bank-inline-title" value="'+esc(t.text)+'" data-triv-edit-id="'+esc(t.id)+'" aria-label="Trivial task title">';
+    return '<input class="task-bank-inline-title" value="'+esc(t.text)+'" data-triv-edit-id="'+esc(t.id)+'" aria-label="Side project title">';
   }
 
   function bindTrivialEdit(card, t){

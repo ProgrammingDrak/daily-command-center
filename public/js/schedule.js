@@ -540,7 +540,7 @@ function addTaskUniversal(barEl){
       break;
     }
     case"trivial":{
-      if(typeof addTrivialTask==="function")addTrivialTask(title);
+      if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
     }
   }
@@ -705,7 +705,7 @@ function getBacklogBlocks(){
     if(p.start&&p.end)return false;
     // Must not be trivial, action-item, pinned, or other special blocks
     const tags=p.tags||[];
-    if(tags.includes("trivial")||tags.includes("action-item")||tags.includes("pinned"))return false;
+    if(tags.includes("trivial")||tags.includes("side-project")||tags.includes("action-item")||tags.includes("pinned"))return false;
     // Must not be non-task blocks (notes, engrams, etc.)
     if(p.html&&!p.title)return false; // notes
     if(p.mood!==undefined&&!p.title)return false; // mood-only
