@@ -346,23 +346,43 @@
 
   async function saveReward(){
     const payload = formPayload();
-    const path = editingId ? "/api/slot/rewards/" + editingId : "/api/slot/rewards";
-    const method = editingId ? "PUT" : "POST";
+    const rewardId = editingId;
+    const path = rewardId ? "/api/slot/rewards/" + rewardId : "/api/slot/rewards";
+    const method = rewardId ? "PUT" : "POST";
     try {
-      await api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if(rewardId && slotState && Array.isArray(slotState.rewards)){
+        const idx = slotState.rewards.findIndex(r => String(r.id) === String(rewardId));
+        if(idx >= 0){
+          slotState.rewards[idx] = { ...slotState.rewards[idx], ...payload, id: slotState.rewards[idx].id, eligible: payload.active && payload.weight > 0 };
+          renderRewards();
+        }
+      }
       closeForm();
+      await api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       await loadSlots();
     } catch(e) {
+      await loadSlots();
       setResult(e.message);
     }
   }
 
   async function deleteReward(id){
     if(!confirm("Delete this reward?")) return;
+    const existing = slotState && Array.isArray(slotState.rewards)
+      ? slotState.rewards.find(r => String(r.id) === String(id))
+      : null;
     try {
+      if(slotState && Array.isArray(slotState.rewards)){
+        slotState.rewards = slotState.rewards.filter(r => String(r.id) !== String(id));
+        renderRewards();
+      }
       await api("/api/slot/rewards/" + id, { method: "DELETE" });
       await loadSlots();
     } catch(e) {
+      if(existing && slotState && Array.isArray(slotState.rewards) && !slotState.rewards.some(r => String(r.id) === String(id))){
+        slotState.rewards.push(existing);
+        renderRewards();
+      }
       setResult(e.message);
     }
   }

@@ -259,6 +259,25 @@ async function ensureAccount(workspaceId, userId) {
 }
 
 async function seedRewards(workspaceId) {
+  const { rows: [account] } = await pool.query("SELECT settings FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);
+  const settings = account && account.settings ? account.settings : {};
+  if (settings.default_rewards_seeded_at) return;
+
+  const { rows: [existing] } = await pool.query("SELECT COUNT(*)::int AS count FROM slot_rewards WHERE workspace_id = $1", [workspaceId]);
+  if ((existing && existing.count) > 0) {
+    await pool.query(
+      `UPDATE slot_accounts
+       SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+           updated_at = NOW()
+       WHERE workspace_id = $1`,
+      [workspaceId, JSON.stringify({
+        default_rewards_seeded_at: new Date().toISOString(),
+        default_rewards_seeded_from_existing: true
+      })]
+    );
+    return;
+  }
+
   for (const r of DEFAULT_REWARDS) {
     await pool.query(
       `INSERT INTO slot_rewards
@@ -268,6 +287,13 @@ async function seedRewards(workspaceId) {
       [workspaceId, r.title, r.kind, r.sponsor_type, r.weight, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
     );
   }
+  await pool.query(
+    `UPDATE slot_accounts
+     SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1`,
+    [workspaceId, JSON.stringify({ default_rewards_seeded_at: new Date().toISOString() })]
+  );
 }
 
 function normalizeRewardInput(body) {
