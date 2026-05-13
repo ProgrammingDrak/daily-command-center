@@ -85,13 +85,20 @@ function calendarStateDedupeKey(item) {
   const start = item.start || "";
   const end = item.end || "";
   const title = String(item.title || item.label || "Untitled").trim().toLowerCase().replace(/\s+/g, " ");
-  return (item.dedupeKey || "title:" + title + "|" + start + "|" + end);
+  const sourceId = item.gcal_event_id || item.source_id;
+  return sourceId
+    ? [item.gcal_account_key || "default", item.gcal_calendar_id || "", sourceId].join("|")
+    : (item.dedupeKey || "title:" + title + "|" + start + "|" + end);
+}
+
+function isCalendarStateItem(item) {
+  return !!item && (item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id || !!item.gcal_event_id);
 }
 
 function dedupeCalendarStateTimeline(timeline) {
   const seen = new Set();
   return (timeline || []).filter(item => {
-    if (item.source !== "calendar" && item.source !== "gcal") return true;
+    if (!isCalendarStateItem(item)) return true;
     const key = calendarStateDedupeKey(item);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -115,8 +122,9 @@ function transformState(state) {
       const endStr = String(end.getHours()).padStart(2,"0") + ":" + String(end.getMinutes()).padStart(2,"0");
       // Match meeting prep data from state.meetings[]
       const meetings = (state.meetings || []);
-      const matchedMeeting = item.source === "calendar" && item.source_id ?
-        meetings.find(m => m.event_id === item.source_id) : null;
+      const eventId = item.source_id || item.gcal_event_id;
+      const matchedMeeting = isCalendarStateItem(item) && eventId ?
+        meetings.find(m => m.event_id === eventId || m.id === eventId) : null;
 
       // Build prep array from matched meeting data
       const prep = [];
@@ -150,13 +158,21 @@ function transformState(state) {
         meta: (item.priority ? item.priority + " priority" : "") +
               (item.estimated_minutes ? " \u00b7 " + item.estimated_minutes + " min" : ""),
         detail: item.detail || item.description || item.notes || "", source: item.source || "manual",
+        source_id: item.source_id || "",
+        gcal_event_id: item.gcal_event_id || item.source_id || "",
         notes: item.notes || item.description || item.detail || "",
+        hangout_link: item.hangout_link || "",
+        location: item.location || "",
+        rsvp_status: item.rsvp_status || "",
+        attendee_count: item.attendee_count || 0,
+        is_recurring: item.is_recurring || false,
+        all_day: item.all_day || false,
         gcal_calendar_id: item.gcal_calendar_id || "",
         gcal_calendar_name: item.gcal_calendar_name || "",
         gcal_account_key: item.gcal_account_key || "",
         notionUrl: item.source === "notion" && item.source_id ?
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
-        calUrl: item.source === "calendar" ? item.calendar_link || "" : "",
+        calUrl: isCalendarStateItem(item) ? item.calendar_link || "" : "",
         priority: item.priority || "",
         completed: item.completed || false,
         nested: false,

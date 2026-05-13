@@ -17,6 +17,13 @@
     }[ch]));
   }
 
+  function isGcalEvent(ev) {
+    if (window.calHelpers && typeof window.calHelpers.isLiveGcalEvent === "function") {
+      return window.calHelpers.isLiveGcalEvent(ev);
+    }
+    return !!ev && (ev.source === "gcal" || !!ev.gcal_calendar_id || !!ev.gcal_event_id);
+  }
+
   function renderOverlayShell() {
     return `<div class="cal-overlay-bg" id="cal-overlay-bg" onclick="calCloseOverlay(event)">
       <div class="cal-overlay" onclick="event.stopPropagation()">
@@ -45,7 +52,7 @@
     titleEl.textContent = ev.title || "Untitled";
 
     // Make title editable for GCal events
-    if (ev.source === "gcal" && window.gcal) {
+    if (isGcalEvent(ev) && window.gcal) {
       titleEl.contentEditable = "true";
       titleEl.classList.add("gcal-editable");
       titleEl.addEventListener("blur", function () {
@@ -68,7 +75,7 @@
     body.innerHTML = renderOverlayContent(ev, dateStr);
 
     // Load GCal details asynchronously
-    if (ev.source === "gcal" && window.gcal) {
+    if (isGcalEvent(ev) && window.gcal) {
       const details = await window.gcal.getCachedDetails(ev.id);
       if (details && currentOverlayId === eventId) {
         renderGcalSections(ev, dateStr, details);
@@ -139,7 +146,7 @@
       </div>`;
     }
 
-    const sourceLabel = ev.gcal_calendar_name || ((ev.source === "gcal" || ev.source === "calendar") && ev.gcal_calendar_id ? "Google Calendar" : ev.source);
+    const sourceLabel = ev.gcal_calendar_name || (isGcalEvent(ev) && ev.gcal_calendar_id ? "Google Calendar" : ev.source);
     if (sourceLabel) {
       propsHTML += `<div class="cal-prop-row">
         <div class="cal-prop-label">Source</div>
@@ -171,7 +178,7 @@
     }
 
     // GCal: RSVP status
-    if (ev.source === "gcal" && ev.rsvp_status) {
+    if (isGcalEvent(ev) && ev.rsvp_status) {
       const rsvpColors = { accepted: "var(--green)", declined: "var(--red)", tentative: "var(--amber)", needsAction: "var(--text-muted)" };
       const rsvpLabels = { accepted: "Accepted", declined: "Declined", tentative: "Maybe", needsAction: "No response" };
       propsHTML += `<div class="cal-prop-row">
@@ -218,7 +225,7 @@
 
     // GCal: RSVP Buttons (for GCal events)
     let rsvpButtonsHTML = "";
-    if (ev.source === "gcal" && window.gcal) {
+    if (isGcalEvent(ev) && window.gcal) {
       rsvpButtonsHTML = `<div class="cal-overlay-section gcal-rsvp-section">
         <div class="cal-overlay-section-title">Your Response</div>
         <div class="gcal-rsvp-buttons">
@@ -234,7 +241,7 @@
 
     // GCal: Attendees placeholder (filled asynchronously)
     let attendeesHTML = "";
-    if (ev.source === "gcal") {
+    if (isGcalEvent(ev)) {
       attendeesHTML = `<div class="cal-overlay-section" id="gcal-attendees-section">
         <div class="cal-overlay-section-title">Attendees ${ev.attendee_count ? "(" + ev.attendee_count + ")" : ""}</div>
         <div id="gcal-attendees-list" class="gcal-attendees-list">
