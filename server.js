@@ -235,8 +235,8 @@ async function getMeetingsFromDB(dateStr, userId, workspaceId) {
     const calendarName = props.gcal_calendar_name || row.calendar_summary || null;
     const dedupeKey = calendarDedupeKey({ ical_uid: row.ical_uid, title: props.title, start: startISO, end: endISO });
     const description = props.detail || props.description || "";
-    meetings.push({ id: eventId, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null, description, gcal_calendar_id: props.gcal_calendar_id || null, gcal_calendar_name: calendarName, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
-    meetingTimeline.push({ id: "mtg-" + row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "calendar", source_id: eventId, category: "Meetings", completed: false, description, notes: description, calendar_link: props.calUrl || row.html_link || null, gcal_calendar_id: props.gcal_calendar_id || null, gcal_calendar_name: calendarName, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
+    meetings.push({ id: eventId, event_id: eventId, block_id: row.id, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null, description, gcal_calendar_id: props.gcal_calendar_id || null, gcal_calendar_name: calendarName, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
+    meetingTimeline.push({ id: row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "gcal", source_id: eventId, category: "Meetings", completed: false, description, notes: description, calendar_link: props.calUrl || row.html_link || null, hangout_link: props.hangout_link || null, location: props.location || "", rsvp_status: props.rsvp_status || null, attendee_count: props.attendee_count || attendees.length, is_recurring: !!props.is_recurring, all_day: !!props.all_day, gcal_event_id: eventId, gcal_calendar_id: props.gcal_calendar_id || null, gcal_calendar_name: calendarName, gcal_account_key: props.gcal_account_key || "default", dedupeKey });
   }
   const seen = new Map(), dedupedMeetings = [], dedupedTimeline = [];
   for (let i = 0; i < meetings.length; i++) { const key = meetings[i].dedupeKey; const existing = seen.get(key); if (existing !== undefined) { if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") { dedupedMeetings[existing] = meetings[i]; dedupedTimeline[existing] = meetingTimeline[i]; } } else { seen.set(key, dedupedMeetings.length); dedupedMeetings.push(meetings[i]); dedupedTimeline.push(meetingTimeline[i]); } }
@@ -253,12 +253,30 @@ function calendarDedupeKey(item) {
 function dedupeCalendarTimeline(timeline) {
   const seen = new Set();
   return (timeline || []).filter(item => {
-    if (item.source !== "calendar" && item.source !== "gcal") return true;
+    if (!isCalendarTimelineItem(item)) return true;
     const key = item.dedupeKey || calendarDedupeKey(item);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function isCalendarTimelineItem(item) {
+  return !!item && (item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id || !!item.gcal_event_id);
+}
+
+function reconcileCalendarTimeline(timeline, meetingTimeline) {
+  const correctedBySourceId = new Map(meetingTimeline.filter(mtg => mtg.source_id).map(mtg => [mtg.source_id, mtg]));
+  const correctedByDedupeKey = new Map(meetingTimeline.map(mtg => [mtg.dedupeKey || calendarDedupeKey(mtg), mtg]));
+  const reconciled = (timeline || []).map(item => {
+    if (!isCalendarTimelineItem(item)) return item;
+    const corrected = (item.source_id && correctedBySourceId.get(item.source_id)) || correctedByDedupeKey.get(item.dedupeKey || calendarDedupeKey(item));
+    if (!corrected) return null;
+    if (corrected.source_id) correctedBySourceId.delete(corrected.source_id);
+    return { ...item, ...corrected, id: corrected.id || item.id, completed: !!(item.completed || corrected.completed) };
+  }).filter(Boolean);
+  for (const mtg of correctedBySourceId.values()) reconciled.push(mtg);
+  return dedupeCalendarTimeline(reconciled).sort((a, b) => String(a.start || "").localeCompare(String(b.start || "")));
 }
 
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
@@ -280,18 +298,7 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   const { meetings, meetingTimeline } = await getMeetingsFromDB(dateStr, userId, workspaceId);
   const result = { ...enrichment, date: dateStr, meetings };
   if (result.schedule && result.schedule.timeline) {
-    const correctedBySourceId = new Map(meetingTimeline.filter(mtg => mtg.source_id).map(mtg => [mtg.source_id, mtg]));
-    result.schedule.timeline = result.schedule.timeline.map(item => {
-      if ((item.source === "calendar" || item.source === "gcal") && item.source_id && correctedBySourceId.has(item.source_id)) {
-        const corrected = correctedBySourceId.get(item.source_id);
-        correctedBySourceId.delete(item.source_id);
-        return { ...item, ...corrected, id: item.id || corrected.id, completed: !!(item.completed || corrected.completed) };
-      }
-      return item;
-    });
-    for (const mtg of correctedBySourceId.values()) result.schedule.timeline.push(mtg);
-    result.schedule.timeline = dedupeCalendarTimeline(result.schedule.timeline);
-    result.schedule.timeline.sort((a, b) => a.start.localeCompare(b.start));
+    result.schedule.timeline = reconcileCalendarTimeline(result.schedule.timeline, meetingTimeline);
   } else { result.schedule = { ...(result.schedule || {}), timeline: meetingTimeline }; }
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
   return result;
@@ -630,7 +637,31 @@ app.delete("/api/delegated-items/:id", async (req, res) => {
 });
 
 // ── PA State API ──
-app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/pa-state/range", async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" });
+    const states = await blockDB.getPaStateRange(start, end, req.workspaceId);
+    const result = {};
+    for (const s of states) {
+      const dateStr = s.date instanceof Date ? s.date.toISOString().slice(0, 10) : String(s.date).split("T")[0];
+      let state = s.state_json;
+      if (state && state.schedule && Array.isArray(state.schedule.timeline)) {
+        const { meetings, meetingTimeline } = await getMeetingsFromDB(dateStr, req.session.userId, req.workspaceId);
+        state = {
+          ...state,
+          meetings,
+          schedule: {
+            ...state.schedule,
+            timeline: reconcileCalendarTimeline(state.schedule.timeline, meetingTimeline),
+          },
+        };
+      }
+      result[dateStr] = state;
+    }
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
 app.post("/api/pa-state/ingest", async (req, res) => { try { const { date, ...stateData } = req.body; if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" }); let userId = req.session.userId || null, workspaceId = req.workspaceId || null; if (!userId) { workspaceId = req.headers["x-workspace-id"] || "ws-1"; const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]); userId = rows[0] ? rows[0].user_id : 1; } await blockDB.savePaState(date, stateData, userId, workspaceId); broadcast("pa-state-changed", { date }); res.json({ ok: true, date }); } catch (e) { res.status(500).json({ error: e.message }); } });
 

@@ -115,16 +115,27 @@
     });
   }
 
+  function isCalendarEvent(ev) {
+    return !!ev && (ev.source === "gcal" || ev.source === "calendar" || !!ev.gcal_calendar_id || !!ev.gcal_event_id);
+  }
+
+  function isLiveGcalEvent(ev) {
+    return !!ev && (ev.source === "gcal" || !!ev.gcal_calendar_id || !!ev.gcal_event_id);
+  }
+
   function dedupeGcalEvents(events) {
     const seen = new Set();
     return events.filter(ev => {
-      if (ev.source !== "gcal" && ev.source !== "calendar" && !ev.gcal_calendar_id) return true;
-      const key = [
-        String(ev.title || "Untitled").trim().toLowerCase().replace(/\s+/g, " "),
-        ev.date || "",
-        ev.start || "",
-        ev.end || "",
-      ].join("|");
+      if (!isCalendarEvent(ev)) return true;
+      const sourceId = ev.gcal_event_id || ev.source_id;
+      const key = sourceId
+        ? [ev.gcal_account_key || "default", ev.gcal_calendar_id || "", sourceId].join("|")
+        : [
+          String(ev.title || "Untitled").trim().toLowerCase().replace(/\s+/g, " "),
+          ev.date || "",
+          ev.start || "",
+          ev.end || "",
+        ].join("|");
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -147,10 +158,18 @@
           end: ev.end,
           priority: ev.priority,
           source: ev.source,
+          source_id: ev.source_id,
           detail: ev.detail,
+          gcal_event_id: ev.gcal_event_id,
           gcal_calendar_id: ev.gcal_calendar_id,
           gcal_calendar_name: ev.gcal_calendar_name,
           gcal_account_key: ev.gcal_account_key,
+          hangout_link: ev.hangout_link,
+          location: ev.location,
+          rsvp_status: ev.rsvp_status,
+          attendee_count: ev.attendee_count,
+          is_recurring: ev.is_recurring,
+          all_day: ev.all_day,
           calUrl: ev.calUrl,
           notionUrl: ev.notionUrl,
           meta: ev.meta,
@@ -168,6 +187,7 @@
     const cached = window.blockStore ? window.blockStore.getRangeCache(ds) : null;
     if (cached && cached.paState && cached.paState.schedule && cached.paState.schedule.timeline) {
       for (const item of cached.paState.schedule.timeline) {
+        if (isCalendarEvent(item)) continue;
         const start = item.start ? new Date(item.start) : null;
         const end = item.end ? new Date(item.end) : null;
         if (!start || !end) continue;
@@ -211,6 +231,7 @@
             end: p.end,
             priority: p.priority,
             source: p.source || "manual",
+            source_id: p.source_id,
             detail: p.detail,
             calUrl: p.calUrl,
             notionUrl: p.notionUrl,
@@ -224,7 +245,7 @@
             attendee_count: p.attendee_count,
             is_recurring: p.is_recurring,
             all_day: p.all_day,
-            gcal_event_id: p.gcal_event_id,
+            gcal_event_id: p.gcal_event_id || p.source_id,
             gcal_calendar_id: p.gcal_calendar_id,
             gcal_calendar_name: p.gcal_calendar_name,
             gcal_account_key: p.gcal_account_key,
@@ -358,7 +379,7 @@
         const timeStr = fmtTime12(startMins) + " \u2013 " + fmtTime12(endMins);
         const tc = typeof cfg === "function" ? cfg(ev.type) : { tag: ev.type, color: "#a78bfa" };
 
-        const isGcal = ev.source === "gcal";
+        const isGcal = isLiveGcalEvent(ev);
         const meetIcon = (isGcal && ev.hangout_link) ? '<span class="cal-event-meet-icon" title="Google Meet">&#x1F4F9;</span>' : "";
         const gcalBadge = isGcal ? '<span class="cal-event-gcal-badge" title="Google Calendar"></span>' : "";
         const attendeeInfo = (isGcal && ev.attendee_count > 1) ? `<span class="cal-event-attendees">${ev.attendee_count}</span>` : "";
@@ -564,7 +585,7 @@
   // Expose helpers for other calendar modules
   window.calHelpers = {
     dateStr, sameDay, addDays, toMinutes, fmtTime12, minsToY, yToMins,
-    getEventsForDate, getVisibleRange, resolveOverlaps
+    getEventsForDate, getVisibleRange, resolveOverlaps, isCalendarEvent, isLiveGcalEvent
   };
 
 })();

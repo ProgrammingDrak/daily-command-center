@@ -90,6 +90,8 @@
     }
   }
 
+  window.refreshPaStateFromServer = refreshPaState;
+
   // Handle block changes from another tab
   async function handleBlockEvent(msg){
     if(!window.blockStore) return;
@@ -105,7 +107,7 @@
   function connect(){
     if(sse) sse.close();
     sse = new EventSource('/api/events');
-    sse.onmessage = function(e){
+    sse.onmessage = async function(e){
       if(e.data === 'connected') {
         console.log('[SSE] Connected to live update stream');
         // Replay any buffered writes from when server was down
@@ -144,6 +146,10 @@
             console.log('[SSE] GCal sync:', msg.action || 'refresh', msg.changed || '');
             // Clear gcal client cache
             if(window.gcal && typeof window.gcal.clearCache === 'function') window.gcal.clearCache();
+            if(window.blockStore && typeof window.blockStore.invalidateRangeCache === 'function') {
+              window.blockStore.invalidateRangeCache();
+            }
+            await refreshPaState();
             // Rebuild calendar if visible
             if(typeof buildCalendar === 'function') {
               const calTab = document.getElementById('tab-calendar');

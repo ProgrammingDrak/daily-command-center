@@ -45,6 +45,31 @@
     }
   }
 
+  function findEvent(eventId, dateStr) {
+    if (!window.calHelpers || typeof window.calHelpers.getEventsForDate !== "function") return null;
+    return window.calHelpers.getEventsForDate(dateStr).find(e => e.id === eventId) || null;
+  }
+
+  function isGcalEvent(ev) {
+    if (window.calHelpers && typeof window.calHelpers.isLiveGcalEvent === "function") {
+      return window.calHelpers.isLiveGcalEvent(ev);
+    }
+    return !!ev && (ev.source === "gcal" || !!ev.gcal_calendar_id || !!ev.gcal_event_id);
+  }
+
+  async function refreshAfterGcalEdit(eventId) {
+    if (window.gcal && typeof window.gcal.clearCache === "function") window.gcal.clearCache(eventId);
+    if (window.blockStore && typeof window.blockStore.invalidateRangeCache === "function") window.blockStore.invalidateRangeCache();
+    if (typeof window.refreshPaStateFromServer === "function") await window.refreshPaStateFromServer();
+  }
+
+  async function syncGcalEventTime(eventId, date, startStr, endStr) {
+    if (!window.gcal || typeof window.gcal.updateEvent !== "function") return false;
+    await window.gcal.updateEvent(eventId, { date, start: startStr, end: endStr });
+    await refreshAfterGcalEdit(eventId);
+    return true;
+  }
+
   // ── Sidebar → Calendar Drop ──
 
   function onSidebarDragStart(e) {
@@ -94,7 +119,7 @@
     }
   }
 
-  function onColumnDrop(e) {
+  async function onColumnDrop(e) {
     e.preventDefault();
     if (!dragState) return;
 
@@ -111,16 +136,18 @@
     const startStr = String(Math.floor(startMins / 60)).padStart(2, "0") + ":" + String(startMins % 60).padStart(2, "0");
     const endStr = String(Math.floor(endMins / 60)).padStart(2, "0") + ":" + String(endMins % 60).padStart(2, "0");
 
-    if (dragState.type === "sidebar") {
-      // Create a new scheduled item
-      handleSidebarDrop(date, startStr, endStr, durMins);
-    } else if (dragState.type === "event-move") {
-      // Move existing event
-      handleEventMove(dragState.eventId, dragState.originalDate, date, startStr, endStr);
+    try {
+      if (dragState.type === "sidebar") {
+        // Create a new scheduled item
+        await handleSidebarDrop(date, startStr, endStr, durMins);
+      } else if (dragState.type === "event-move") {
+        // Move existing event
+        await handleEventMove(dragState.eventId, dragState.originalDate, date, startStr, endStr);
+      }
+    } finally {
+      cleanup();
+      if (typeof buildCalendar === "function") await buildCalendar();
     }
-
-    cleanup();
-    if (typeof buildCalendar === "function") buildCalendar();
   }
 
   async function handleSidebarDrop(date, startStr, endStr, durMins) {
@@ -163,6 +190,12 @@
   }
 
   async function handleEventMove(eventId, originalDate, newDate, startStr, endStr) {
+    const ev = findEvent(eventId, originalDate);
+    if (isGcalEvent(ev)) {
+      await syncGcalEventTime(eventId, newDate, startStr, endStr);
+      return;
+    }
+
     const today = new Date().toISOString().slice(0, 10);
 
     if (originalDate === today && typeof pinStartTime === "function") {
@@ -245,26 +278,29 @@
       }
     }
 
-    function onMouseUp(me) {
+    async function onMouseUp(me) {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
 
       if (moved && dragState) {
-        const col = findColumnAt(me.clientX, me.clientY);
-        if (col) {
-          const date = col.dataset.date;
-          const rect = col.getBoundingClientRect();
-          const gridWrap = document.getElementById("cal-grid-wrap");
-          const scrollTop = gridWrap ? gridWrap.scrollTop : 0;
-          const y = me.clientY - rect.top + scrollTop;
-          const startMins = window.calHelpers.yToMins(y);
-          const endMins = startMins + dragState.durMins;
-          const startStr = String(Math.floor(startMins / 60)).padStart(2, "0") + ":" + String(startMins % 60).padStart(2, "0");
-          const endStr = String(Math.floor(endMins / 60)).padStart(2, "0") + ":" + String(endMins % 60).padStart(2, "0");
-          handleEventMove(dragState.eventId, dragState.originalDate, date, startStr, endStr);
+        try {
+          const col = findColumnAt(me.clientX, me.clientY);
+          if (col) {
+            const date = col.dataset.date;
+            const rect = col.getBoundingClientRect();
+            const gridWrap = document.getElementById("cal-grid-wrap");
+            const scrollTop = gridWrap ? gridWrap.scrollTop : 0;
+            const y = me.clientY - rect.top + scrollTop;
+            const startMins = window.calHelpers.yToMins(y);
+            const endMins = startMins + dragState.durMins;
+            const startStr = String(Math.floor(startMins / 60)).padStart(2, "0") + ":" + String(startMins % 60).padStart(2, "0");
+            const endStr = String(Math.floor(endMins / 60)).padStart(2, "0") + ":" + String(endMins % 60).padStart(2, "0");
+            await handleEventMove(dragState.eventId, dragState.originalDate, date, startStr, endStr);
+          }
+        } finally {
+          cleanup();
+          if (typeof buildCalendar === "function") await buildCalendar();
         }
-        cleanup();
-        if (typeof buildCalendar === "function") buildCalendar();
       } else {
         cleanup();
       }
@@ -304,7 +340,7 @@
       eventEl.style.height = newHeight + "px";
     }
 
-    function onMouseUp(me) {
+    async function onMouseUp(me) {
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
 
@@ -320,22 +356,29 @@
       const startStr = String(Math.floor(startMins / 60)).padStart(2, "0") + ":" + String(startMins % 60).padStart(2, "0");
       const endStr = String(Math.floor(endMins / 60)).padStart(2, "0") + ":" + String(endMins % 60).padStart(2, "0");
 
-      // Update duration
-      const today = new Date().toISOString().slice(0, 10);
-      if (date === today && typeof setDurAbsolute === "function") {
-        setDurAbsolute(eventId, durMins);
-        if (typeof buildSchedule === "function") buildSchedule();
-      }
+      try {
+        const ev = findEvent(eventId, date);
+        if (isGcalEvent(ev)) {
+          await syncGcalEventTime(eventId, date, startStr, endStr);
+        } else {
+          // Update duration
+          const today = new Date().toISOString().slice(0, 10);
+          if (date === today && typeof setDurAbsolute === "function") {
+            setDurAbsolute(eventId, durMins);
+            if (typeof buildSchedule === "function") buildSchedule();
+          }
 
-      if (window.blockStore) {
-        const block = window.blockStore.get(eventId);
-        if (block) {
-          const props = { ...block.properties, start: startStr, end: endStr, durCurrent: durMins };
-          window.blockStore.updateBlock(eventId, props);
+          if (window.blockStore) {
+            const block = window.blockStore.get(eventId);
+            if (block) {
+              const props = { ...block.properties, start: startStr, end: endStr, durCurrent: durMins };
+              await window.blockStore.updateBlock(eventId, props);
+            }
+          }
         }
+      } finally {
+        if (typeof buildCalendar === "function") await buildCalendar();
       }
-
-      if (typeof buildCalendar === "function") buildCalendar();
     }
 
     document.addEventListener("mousemove", onMouseMove);

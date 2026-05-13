@@ -55,7 +55,7 @@ async function syncAll(userId, options = {}) {
     for (const account of accounts) {
       const auth = await gcalAuth.getAuthClient(uid, account.key);
       if (!auth) continue;
-      const fetched = await refreshCalendarsIfDue(auth, account);
+      const fetched = await refreshCalendarsIfDue(auth, account, !!options.forceFull);
       let calendars = await getSelectedCalendars(account.key);
       if (!calendars.length) {
         if (!calendars.length && fetched.length) {
@@ -88,11 +88,12 @@ async function syncCalendar(auth, calendarId, accountKey = gcalAuth.DEFAULT_ACCO
   const account = gcalAuth.normalizeAccountKey(accountKey);
   const calendar = google.calendar({ version: "v3", auth });
   const state = syncState.get(syncKey(account, calendarId)) || { syncToken: null, fullSync: true };
-  let params = { calendarId, maxResults: 250, singleEvents: true, orderBy: "startTime" };
+  let params = { calendarId, maxResults: 250, singleEvents: true, orderBy: "startTime", timeZone: APP_TIME_ZONE };
   const seenEventIds = new Set();
   let fullSyncWindow = null;
   if (state.syncToken && !state.fullSync && !options.forceFull) {
-    params.syncToken = state.syncToken; delete params.orderBy; delete params.singleEvents;
+    params.syncToken = state.syncToken;
+    delete params.orderBy;
   } else {
     const now = new Date(); const past = new Date(now); past.setDate(past.getDate() - 30);
     const future = new Date(now); future.setDate(future.getDate() + 60);
