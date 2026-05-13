@@ -1,24 +1,377 @@
 {
   "date": "2026-05-13",
-  "last_updated_at": "2026-05-02T17:58:19.633Z",
-  "last_updated_by": "skeleton",
-  "watermarks": {},
+  "last_updated_at": "2026-05-13T03:40:35Z",
+  "last_updated_by": "codex-tomorrow-packet",
+  "watermarks": {
+    "calendar": {
+      "last_at": "2026-05-13T03:40:35Z",
+      "last_id": "google-calendar:primary:2026-05-13"
+    },
+    "gmail": {
+      "last_at": "2026-05-13T03:40:35Z",
+      "last_id": "gmail:scan:2026-05-13"
+    },
+    "slack": {
+      "status": "blocked",
+      "detail": "Sweep Suite documents Slack reader tools, but Slack MCP tools were not exposed in this Codex session."
+    }
+  },
   "triage": {
-    "open_items": [],
+    "open_items": [
+      {
+        "id": "dcc:2026-05-13:dcc-source-recovery",
+        "type": "system",
+        "sub_type": "dcc_recovery",
+        "source_ref": "/Users/drakeshadwell/portable-programming/Repos/daily-command-center",
+        "title": "DCC source recovery: confirm cloned repo, packet path, and live app boot",
+        "summary": "DCC repo was missing during recent daily reviews and was cloned tonight. Verify the app boots, sees the 2026-05-13 packet, and no longer produces skeleton days.",
+        "priority": "high",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "This closes the repeated review blocker called out in the 2026-05-12 retrospective."
+      },
+      {
+        "id": "sweep:2026-05-13:slack-connector-gap",
+        "type": "system",
+        "sub_type": "connector_gap",
+        "source_ref": "/Users/drakeshadwell/portable-programming/claude-brain/plugins/local/sweep-suite/skills/read-slack/SKILL.md",
+        "title": "Sweep Suite Slack reader exists, but Slack tools are not callable here",
+        "summary": "The local read-slack skill names Slack MCP tools and expects Slack user/config state, but tool discovery returned no Slack tools and sweep-suite config/state are empty.",
+        "priority": "high",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "Resolve before relying on automated Slack DMs/mentions in the daily packet."
+      },
+      {
+        "id": "audit-angel:2026-05-13:review-dirty-export",
+        "type": "project",
+        "sub_type": "dirty_worktree",
+        "source_ref": "/Users/drakeshadwell/portable-programming/Repos/audit-angel",
+        "title": "Audit Angel has uncommitted slideshow/export changes to review",
+        "summary": "Local git status shows modified public/index.html and public/js/export.js after the HTML slideshow export work.",
+        "priority": "medium",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "Do a quick QA pass, then either commit or intentionally park."
+      },
+      {
+        "id": "hyhh:2026-05-13:browser-data-safety",
+        "type": "project",
+        "sub_type": "data_safety",
+        "source_ref": "/Users/drakeshadwell/portable-programming/claude-brain/projects/hold-your-hand-handbook",
+        "title": "HYHH call tracker: protect browser-local data before more schema/UI changes",
+        "summary": "Tuesday's recovery showed the call tracker browser database is production state. Any further IndexedDB changes should start with export/backup and blocked-upgrade handling.",
+        "priority": "medium",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-13T03:40:35Z",
+        "last_seen_at": "2026-05-13T03:40:35Z",
+        "notes": "Reference: 2026-05-12 retrospective F1 and F2."
+      }
+    ],
     "resolved_items": [],
-    "cycle_count": 0
+    "cycle_count": 1
   },
   "completions": {
     "tasks": []
+  },
+  "notifications": [
+    {
+      "id": "sources:2026-05-13",
+      "type": "source_readiness",
+      "title": "Source scan for Wednesday packet",
+      "body": "Calendar scanned successfully. Gmail scanned successfully, but connected mailbox produced no actionable Clever/work mail in focused searches. Slack was not callable from this Codex session despite local Sweep Suite documentation.",
+      "priority": "medium",
+      "created_at": "2026-05-13T03:40:35Z"
+    }
+  ],
+  "assessment": {
+    "day_theme": "Restore DCC as the working source of truth, then spend the cleanest focus blocks on active project follow-through.",
+    "hard_commitments": [
+      "07:00-08:30 Crafting: Claude or 3D Print?",
+      "19:00-21:00 Escape Room"
+    ],
+    "must_do": [
+      "Verify DCC repo/app boot and confirm this 2026-05-13 packet renders instead of a skeleton.",
+      "Resolve the Sweep Suite Slack path enough to know whether daily packets can read DMs/mentions automatically.",
+      "Review Audit Angel's uncommitted slideshow/export changes and decide commit vs. park.",
+      "Keep HYHH browser-local data protected before any more tracker schema or artifact-link work."
+    ],
+    "nice_to_do": [
+      "Seed Sweep Suite user-context with known Slack user ID and the next reader configuration once connector access is clear.",
+      "Turn today's manual packet shape into a repeatable DCC packet routine."
+    ],
+    "risks": [
+      "Without Slack access, the packet can miss DMs and mentions.",
+      "Gmail connector appears to be pointed at a mailbox with mostly newsletters, not work obligations.",
+      "DCC data can regress to skeleton days if the repo/app path is not kept materialized."
+    ]
   },
   "schedule": {
     "working_hours": {
       "start": "07:00",
       "end": "17:30"
     },
-    "timeline": [],
-    "tasks_scheduled": [],
+    "timeline": [
+      {
+        "id": "cal-d931f1ecf8a348e1b8f73b41652c2068",
+        "type": "meeting",
+        "label": "Crafting: Claude or 3D Print?",
+        "start": "2026-05-13T07:00:00-04:00",
+        "end": "2026-05-13T08:30:00-04:00",
+        "source": "calendar",
+        "source_id": "d931f1ecf8a348e1b8f73b41652c2068",
+        "category": "Meetings",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=ZDkzMWYxZWNmOGEzNDhlMWI4ZjczYjQxNjUyYzIwNjggb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "d931f1ecf8a348e1b8f73b41652c2068"
+      },
+      {
+        "id": "task-2026-05-13-dcc-review",
+        "type": "task",
+        "label": "DCC morning review and source check",
+        "description": "Open DCC, confirm Wednesday packet renders, note any skeleton/day-state issues, and make the first adjustment before starting project work.",
+        "start": "2026-05-13T08:30:00-04:00",
+        "end": "2026-05-13T08:50:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-13:dcc-review",
+        "priority": "high",
+        "estimated_minutes": 20,
+        "category": "Planning",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-sweep-slack",
+        "type": "task",
+        "label": "Fix Sweep Suite Slack/DCC packet path",
+        "description": "Find why read-slack MCP tools are documented but not callable here; seed missing config only after confirming the correct credential layer.",
+        "start": "2026-05-13T08:50:00-04:00",
+        "end": "2026-05-13T10:20:00-04:00",
+        "source": "codex-packet",
+        "source_id": "sweep:2026-05-13:slack-connector-gap",
+        "priority": "high",
+        "estimated_minutes": 90,
+        "category": "Systems",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-13-1020",
+        "type": "free_time",
+        "label": "Reset / notes",
+        "description": "Short buffer after source plumbing.",
+        "start": "2026-05-13T10:20:00-04:00",
+        "end": "2026-05-13T10:35:00-04:00",
+        "source": "codex-packet",
+        "category": "Break",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-hyhh",
+        "type": "task",
+        "label": "HYHH tracker follow-through with backup-first guardrails",
+        "description": "Continue only after preserving/exporting browser-local call tracker state. Prioritize any remaining artifact-link or documentation-upload polish from Tuesday.",
+        "start": "2026-05-13T10:35:00-04:00",
+        "end": "2026-05-13T12:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "hyhh:2026-05-13:browser-data-safety",
+        "priority": "medium",
+        "estimated_minutes": 85,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-13-lunch",
+        "type": "free_time",
+        "label": "Lunch / admin buffer",
+        "description": "Unscheduled buffer so the afternoon does not start already overdrawn.",
+        "start": "2026-05-13T12:00:00-04:00",
+        "end": "2026-05-13T12:45:00-04:00",
+        "source": "codex-packet",
+        "category": "Break",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-audit-angel",
+        "type": "task",
+        "label": "Audit Angel slideshow/export QA",
+        "description": "Review dirty changes in public/index.html and public/js/export.js, run the lightest useful verification, then commit or explicitly defer.",
+        "start": "2026-05-13T12:45:00-04:00",
+        "end": "2026-05-13T14:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "audit-angel:2026-05-13:review-dirty-export",
+        "priority": "medium",
+        "estimated_minutes": 90,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-sweep-phase3",
+        "type": "task",
+        "label": "Sweep Suite reader preflight",
+        "description": "Use the Phase 3 brief to confirm Calendar/Notion access, define the task-board DB input needed, and avoid wiring life/brain readers back into scope.",
+        "start": "2026-05-13T14:15:00-04:00",
+        "end": "2026-05-13T15:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "sweep-suite:phase-3-brief",
+        "priority": "medium",
+        "estimated_minutes": 60,
+        "category": "Systems",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-inbox-buffer",
+        "type": "task",
+        "label": "Inbox/manual Slack triage buffer",
+        "description": "Because Slack is unavailable to Codex and Gmail found no work-mail obligations, use this slot for manual scan or quick replies if needed.",
+        "start": "2026-05-13T15:15:00-04:00",
+        "end": "2026-05-13T16:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "manual-triage:2026-05-13",
+        "priority": "medium",
+        "estimated_minutes": 60,
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-13-dcc-closeout",
+        "type": "task",
+        "label": "DCC closeout: preserve actuals and update next packet inputs",
+        "description": "Before evening plans, mark what moved/done/blocked so tomorrow's review does not have to reconstruct the day from transcripts.",
+        "start": "2026-05-13T16:15:00-04:00",
+        "end": "2026-05-13T17:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-13:closeout",
+        "priority": "high",
+        "estimated_minutes": 60,
+        "category": "Planning",
+        "completed": false
+      },
+      {
+        "id": "cal-2f209782dd3c42b799efcb5cdbdc3b36",
+        "type": "meeting",
+        "label": "Escape Room",
+        "start": "2026-05-13T19:00:00-04:00",
+        "end": "2026-05-13T21:00:00-04:00",
+        "source": "calendar",
+        "source_id": "2f209782dd3c42b799efcb5cdbdc3b36",
+        "category": "Personal",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=MmYyMDk3ODJkZDNjNDJiNzk5ZWZjYjVjZGJkYzNiMzYgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "2f209782dd3c42b799efcb5cdbdc3b36"
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "task-2026-05-13-dcc-review",
+        "title": "DCC morning review and source check",
+        "estimated_minutes": 20,
+        "priority": "high"
+      },
+      {
+        "task_id": "task-2026-05-13-sweep-slack",
+        "title": "Fix Sweep Suite Slack/DCC packet path",
+        "estimated_minutes": 90,
+        "priority": "high"
+      },
+      {
+        "task_id": "task-2026-05-13-hyhh",
+        "title": "HYHH tracker follow-through with backup-first guardrails",
+        "estimated_minutes": 85,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-13-audit-angel",
+        "title": "Audit Angel slideshow/export QA",
+        "estimated_minutes": 90,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-13-sweep-phase3",
+        "title": "Sweep Suite reader preflight",
+        "estimated_minutes": 60,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-13-inbox-buffer",
+        "title": "Inbox/manual Slack triage buffer",
+        "estimated_minutes": 60,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-13-dcc-closeout",
+        "title": "DCC closeout: preserve actuals and update next packet inputs",
+        "estimated_minutes": 60,
+        "priority": "high"
+      }
+    ],
     "tasks_couldnt_fit": [],
-    "stats": {}
+    "stats": {
+      "calendar_events": 2,
+      "planned_task_minutes": 465,
+      "planned_meeting_minutes": 210,
+      "source_confidence": "partial",
+      "source_gaps": [
+        "Slack connector not callable in this session",
+        "Work Gmail obligations not found in connected mailbox"
+      ]
+    }
+  },
+  "meetings": [
+    {
+      "id": "d931f1ecf8a348e1b8f73b41652c2068",
+      "event_id": "d931f1ecf8a348e1b8f73b41652c2068",
+      "title": "Crafting: Claude or 3D Print?",
+      "start": "2026-05-13T07:00:00-04:00",
+      "end": "2026-05-13T08:30:00-04:00",
+      "attendees": [],
+      "calUrl": "https://www.google.com/calendar/event?eid=ZDkzMWYxZWNmOGEzNDhlMWI4ZjczYjQxNjUyYzIwNjggb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": null
+    },
+    {
+      "id": "2f209782dd3c42b799efcb5cdbdc3b36",
+      "event_id": "2f209782dd3c42b799efcb5cdbdc3b36",
+      "title": "Escape Room",
+      "start": "2026-05-13T19:00:00-04:00",
+      "end": "2026-05-13T21:00:00-04:00",
+      "attendees": [],
+      "calUrl": "https://www.google.com/calendar/event?eid=MmYyMDk3ODJkZDNjNDJiNzk5ZWZjYjVjZGJkYzNiMzYgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    }
+  ],
+  "mutations": [
+    {
+      "skill": "codex-tomorrow-packet",
+      "action": "create_dcc_packet",
+      "at": "2026-05-13T03:40:35Z",
+      "target_date": "2026-05-13",
+      "calendar_events": 2,
+      "gmail_candidate_messages_scanned": 20,
+      "triage_items_added": 4,
+      "status": "partial",
+      "blocked_sources": [
+        "slack"
+      ]
+    }
+  ],
+  "meta": {
+    "skill_runs": [
+      {
+        "skill": "codex-tomorrow-packet",
+        "started_at": "2026-05-13T03:32:32Z",
+        "finished_at": "2026-05-13T03:40:35Z",
+        "status": "partial",
+        "notes": "Calendar and Gmail connector scans completed. Slack scan blocked by missing callable tools."
+      }
+    ]
   }
 }
