@@ -80,7 +80,6 @@
 |---|------|--------|
 | 1 | Task notes not rendering in complete object modal | Not started |
 | 2 | Silent fail on drag into small block | Done (toast added) |
-| 14 | Calendar filter toggle does nothing | Not started |
 
 ### Phase 3 - Stats Bar & Time Block Rework
 | # | Note | What |
@@ -105,7 +104,6 @@
 | # | Note | What |
 |---|------|------|
 | 6 | Fix scheduled task runner | Audit cron/OS hooks, diagnose why tasks don't fire |
-| 15 | Multi-calendar account sync | Multiple OAuth tokens, per-account calendars in sidebar |
 | 16 | Conflict check on WAL replay | Before replaying a queued mutation, compare its `updated_at` to the server block's `updated_at`; skip the replay if the server is newer so a stale local queue doesn't clobber a cross-machine edit. Small lift, prevents silent data loss in multi-device use. |
 
 ### Phase 7 - Task Grouping (in progress, rolling out incrementally)

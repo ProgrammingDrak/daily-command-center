@@ -199,7 +199,6 @@ function buildSchedule(){
     if(ev.detail)detailParts.push('<div class="detail-summary">'+ev.detail.replace(/\n/g,'<br>')+'</div>');
     const dLinks=[];
     if(ev.notionUrl)dLinks.push('<a href="'+ev.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
-    if(ev.calUrl)dLinks.push('<a href="'+ev.calUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Open in Calendar</a>');
     if(dLinks.length)detailParts.push('<div class="detail-links">'+dLinks.join('')+'</div>');
     const detailMeta=[];
     if(ev.priority)detailMeta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">Priority: '+ev.priority+'</span>');
@@ -505,7 +504,13 @@ function buildConsider(){
   const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=consider.length;
   if(!consider.length){board.innerHTML='<div class="board-empty">Nothing flagged for today. Nice work, or add tasks via Notion.</div>';return}
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
-  const sorted=[...consider].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+  const filtered=(typeof taskBankMatches==="function")
+    ? consider.filter(t=>taskBankMatches(t,["title","detail","priority","stage","source"]))
+    : [...consider];
+  if(!filtered.length){board.innerHTML='<div class="board-empty">No priority tasks match that search.</div>';return}
+  const sorted=(typeof taskBankSort==="function")
+    ? taskBankSort(filtered)
+    : filtered.sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
   sorted.forEach(t=>{
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
@@ -555,7 +560,13 @@ function buildBacklog(){
   if(!backlog.length){board.innerHTML='<div class="board-empty">No backlog items. Add tasks above or check your Notion board.</div>';return}
   // Sort: High > Medium > Low
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
-  const sorted=[...backlog].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
+  const filtered=(typeof taskBankMatches==="function")
+    ? backlog.filter(t=>taskBankMatches(t,["title","detail","priority","stage","source"]))
+    : [...backlog];
+  if(!filtered.length){board.innerHTML='<div class="board-empty">No backlog items match that search.</div>';return}
+  const sorted=(typeof taskBankSort==="function")
+    ? taskBankSort(filtered)
+    : filtered.sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
   sorted.forEach(t=>{
     const c=cfg(t.type);
     const stageClass=t.stage==="Backlog"?"stage-backlog":t.stage==="Next Sprint"?"stage-next":t.stage==="Tasks for Today"?"stage-today":"stage-scheduled";
@@ -603,7 +614,10 @@ function buildBacklog(){
           notesButton({id: t.id, title: t.title})+
           '<button class="pomo-btn bc-act-icon" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           '<button class="delegate-btn bc-act-icon" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(isDelegated?'Edit delegated item linked to this task':'Delegate this task')+'">'+(isDelegated?'\u2713':'\u2191')+'</button>'+
+          '<button class="task-bank-icon-btn bank-edit-btn" data-id="'+t.id+'" title="Edit task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
+          '<button class="task-bank-icon-btn danger bank-delete-btn" data-id="'+t.id+'" title="Delete task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>'+
         '</div>'+
+        (typeof renderTaskBankBacklogEditForm==="function"?renderTaskBankBacklogEditForm(t):"")+
       '</div>';
 
     const bnb=el.querySelector(".notes-btn");if(bnb)bnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(bnb.dataset.notesId,bnb.dataset.notesTitle)});
@@ -627,6 +641,14 @@ function buildBacklog(){
       e.stopPropagation();
       if(typeof openSchedulePicker==="function") openSchedulePicker(t.title, t.durMin);
     });
+    const editBtn=el.querySelector(".bank-edit-btn");
+    if(editBtn)editBtn.addEventListener("click",e=>{e.stopPropagation();if(typeof startTaskBankBacklogEdit==="function")startTaskBankBacklogEdit(t.id)});
+    const deleteBtn=el.querySelector(".bank-delete-btn");
+    if(deleteBtn)deleteBtn.addEventListener("click",e=>{
+      e.stopPropagation();
+      if(confirm("Delete this task from this account's bank?")&&typeof deleteTaskBankBacklogTask==="function")deleteTaskBankBacklogTask(t.id);
+    });
+    if(typeof bindTaskBankBacklogEditForm==="function")bindTaskBankBacklogEditForm(el,t);
     // Click anywhere on the title row toggles the expanded panel.
     el.querySelector(".bc-row").addEventListener("click",e=>{
       if(e.target.closest("button")||e.target.closest("a"))return;

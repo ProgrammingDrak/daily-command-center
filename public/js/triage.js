@@ -219,7 +219,7 @@ function notesButton(ev) {
   const actions = loadActions();
   const n = notes[ev.id];
   const hasNotes = n && (typeof n === "string" ? n.trim() : (n.text && n.text.trim()));
-  const hasSeedNotes = !hasNotes && typeof calendarSeedNoteForTask === "function" && !!calendarSeedNoteForTask(ev.id, ev);
+  const hasSeedNotes = !hasNotes && typeof seedNoteForTask === "function" && !!seedNoteForTask(ev.id, ev);
   const actionItems = actions[ev.id] || [];
   const hasActions = actionItems.length > 0;
   const openCount = actionItems.filter(a => !a.done).length;
@@ -816,7 +816,6 @@ const TRI_ICONS = {
   unanswered_dm: {cls:"tri-icon-dm", emoji:"\u{1F4AC}"},
   email_needs_response: {cls:"tri-icon-email", emoji:"\u{1F4E7}"},
   slack_mention: {cls:"tri-icon-mention", emoji:"\u{1F514}"},
-  calendar_event: {cls:"tri-icon-cal", emoji:"\u{1F4C5}"}
 };
 function triIcon(type) {
   const t = TRI_ICONS[type] || {cls:"tri-icon-dm", emoji:"\u{2753}"};
@@ -835,7 +834,7 @@ function buildTriageCard(item) {
     const hrs = Math.round((Date.now() - new Date(item.firstSeen).getTime()) / 3600000);
     ageParts.push(hrs > 0 ? hrs + "h ago" : "just now");
   }
-  const triTypeColors = {unanswered_dm:"#a78bfa",email_needs_response:"#f87171",slack_mention:"#22d3ee",calendar_event:"#f97316"};
+  const triTypeColors = {unanswered_dm:"#a78bfa",email_needs_response:"#f87171",slack_mention:"#22d3ee"};
   const barColor = isDismissed ? "var(--green)" : (triTypeColors[item.type] || "#a78bfa");
   const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
@@ -882,7 +881,10 @@ function buildScheduled() {
   const today = __state && __state.date ? __state.date : new Date().toISOString().split("T")[0];
   const todayLabel = new Date(today + "T12:00:00").toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric"});
   const nowMins = now();
-  const active = scheduled.filter(ev => !isDeleted(ev) && !isPushed(ev));
+  const activeAll = scheduled.filter(ev => !isDeleted(ev) && !isPushed(ev));
+  const active = (typeof taskBankMatches==="function")
+    ? activeAll.filter(ev=>taskBankMatches(ev,["title","detail","priority","source","meta"]))
+    : activeAll;
   const needsReview = active.filter(ev => pt(ev.start) < nowMins && !isDone(ev));
   const rest = active.filter(ev => pt(ev.start) >= nowMins || isDone(ev));
 
@@ -957,7 +959,9 @@ function buildScheduled() {
 function buildScheduleSoon() {
   const list=document.getElementById("soon-pushed-list");
   if(!list)return;
-  const pushed=scheduled.filter(ev=>isPushed(ev));
+  const pushed=scheduled.filter(ev=>isPushed(ev)).filter(ev=>
+    typeof taskBankMatches==="function"?taskBankMatches(ev,["title","detail","priority","source","meta"]):true
+  );
   if(!pushed.length){list.innerHTML='';return}
   list.innerHTML='<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px">Pushed from Schedule</div>'+
     pushed.map(ev=>{

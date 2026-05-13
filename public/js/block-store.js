@@ -247,7 +247,7 @@
       const payload = {
         type,
         parent_id: parentId || null,
-        date: date || _currentDate,
+        date: date !== undefined ? date : _currentDate,
         properties,
         sort_order: sortOrder || 0
       };
@@ -450,7 +450,7 @@
       return "day-root-" + _currentDate;
     },
 
-    // ── Range Loading (for Calendar View) ──
+    // ── Range Loading ──
     _rangeCache: new Map(), // dateStr → { blocks: [], paState: null }
 
     async loadDateRange(startDate, endDate) {

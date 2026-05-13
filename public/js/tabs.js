@@ -4,34 +4,11 @@ document.querySelectorAll(".tab").forEach(tab=>{
     document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
     document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
     tab.classList.add("active");document.getElementById("tab-"+tab.dataset.tab).classList.add("active");
-    if(tab.dataset.tab==="calendar"&&typeof buildCalendar==="function"){buildCalendar();}
-    // PIN 9: mount the mini-month sidebar into the Task Menu split view
-    // whenever the user activates the tasks tab. Cheap (just string
-    // concatenation); picks up the current _gcalSidebarState from
-    // calendar-sidebar.js's async IIFE each time.
-    if(tab.dataset.tab==="tasks"&&typeof renderCalendarSidebar==="function"){
-      var _tmMount=document.getElementById("tm-cal-mount");
-      if(_tmMount)_tmMount.innerHTML=renderCalendarSidebar();
-    }
     // PIN 10.A: render the delegated list on tab activation so the UI
     // reflects any blocks-changed SSE events that fired while the tab was hidden.
     if(tab.dataset.tab==="delegated"&&typeof renderDelegatedList==="function"){renderDelegatedList();}
     if(tab.dataset.tab==="responsibilities"&&typeof renderResponsibilities==="function"){renderResponsibilities();}
   });
-});
-
-// PIN 9: initial mount of the mini-month sidebar into the Task Menu split
-// view. Must run AFTER calendar-sidebar.js (which loads later in index.html
-// and exposes window.renderCalendarSidebar). DOMContentLoaded guarantees
-// all <script> tags have been parsed. The tasks tab is not active by
-// default, but the mount point exists in the DOM at this point. The tab
-// switcher above re-renders the sidebar on every subsequent tasks click
-// so _gcalSidebarState stays fresh.
-document.addEventListener("DOMContentLoaded",function(){
-  if(typeof renderCalendarSidebar==="function"){
-    var _tmMount=document.getElementById("tm-cal-mount");
-    if(_tmMount)_tmMount.innerHTML=renderCalendarSidebar();
-  }
 });
 
 // ======== TASK MENU ACCORDION ========
@@ -274,7 +251,7 @@ function buildUpcoming() {
         '</div>' +
         '<div class="uc-actions">' +
           upNotesButton(mtg) +
-          (hasDoc ? '<button class="btn-push-doc' + (isPushed ? ' pushed' : '') + '" data-mtg-id="' + mtg.id + '" data-mtg-title="' + mtg.title.replace(/"/g, '&quot;') + '" data-doc-url="' + (mtg.linkedDocUrl || '').replace(/"/g, '&quot;') + '" data-doc-title="' + (mtg.linkedDocTitle || '').replace(/"/g, '&quot;') + '" data-mtg-date="' + dayLabel + '">' + (isPushed ? '\u2713 Pushed' : '\u2197 Push to Doc') + '</button>' : '<a href="' + (mtg.calUrl || '#') + '" target="_blank" style="font-size:10px;color:var(--text-muted);text-decoration:none" title="No linked doc -- open event to add one">\u{1F4C5}</a>') +
+          (hasDoc ? '<button class="btn-push-doc' + (isPushed ? ' pushed' : '') + '" data-mtg-id="' + mtg.id + '" data-mtg-title="' + mtg.title.replace(/"/g, '&quot;') + '" data-doc-url="' + (mtg.linkedDocUrl || '').replace(/"/g, '&quot;') + '" data-doc-title="' + (mtg.linkedDocTitle || '').replace(/"/g, '&quot;') + '" data-mtg-date="' + dayLabel + '">' + (isPushed ? '\u2713 Pushed' : '\u2197 Push to Doc') + '</button>' : '') +
         '</div>';
       // Wire notes button
       const nb = card.querySelector(".notes-btn");

@@ -13,7 +13,7 @@ function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-b
 // ── Scheduling helpers ──
 
 function isFixedTimeBlock(ev){
-  return isMeeting(ev)||ev.type==="ooo"||ev.type==="break"||ev.source==="calendar"||ev.source==="gcal";
+  return isMeeting(ev)||ev.type==="ooo"||ev.type==="break";
 }
 
 // Build fixed blocker array from INIT_SCHED (used by both cascade variants)

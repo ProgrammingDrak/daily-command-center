@@ -142,24 +142,6 @@
             handleBlockEvent(msg);
             break;
 
-          // Google Calendar sync completed
-          case 'gcal-sync':
-            console.log('[SSE] GCal sync:', msg.action || 'refresh', msg.changed || '');
-            // Clear gcal client cache
-            if(window.gcal && typeof window.gcal.clearCache === 'function') window.gcal.clearCache();
-            if(window.blockStore && typeof window.blockStore.invalidateRangeCache === 'function') {
-              window.blockStore.invalidateRangeCache();
-            }
-            await refreshPaState();
-            // Rebuild calendar if visible
-            if(typeof buildCalendar === 'function') {
-              const calTab = document.getElementById('tab-calendar');
-              if(calTab && calTab.style.display !== 'none') buildCalendar();
-            }
-            showIndicator("Calendar synced", "var(--green)");
-            setTimeout(hideIndicator, 1500);
-            break;
-
           // Old-style save event (from current persistence layer)
           case 'save':
             // During Phase 3-4 coexistence, still handle old saves

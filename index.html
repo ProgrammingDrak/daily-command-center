@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Daily Command Center -- Drake Shadwell</title>
 <link rel="stylesheet" href="/public/css/dashboard.css">
-<link rel="stylesheet" href="/public/css/calendar.css">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -199,7 +198,6 @@
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="responsibilities" id="responsibilities-tab-btn">Responsibilities <span class="badge" id="responsibilities-count" style="display:none">0</span></button>
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
-  <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
 </div>
 
@@ -212,8 +210,7 @@
     <button class="fb-open-timer" onclick="document.getElementById('ft-panel').style.display='flex';document.getElementById('ft-fab').style.display='none';document.getElementById('ft-mini').style.display='none';" title="Open timer panel">⏱</button>
   </div>
   <div class="source-row">
-    <span class="source-dot" style="background:var(--accent)"></span> Google Calendar
-    <span class="source-dot" style="background:var(--purple);margin-left:10px"></span> Notion Kanban
+    <span class="source-dot" style="background:var(--purple)"></span> Notion Kanban
     <span style="margin-left:auto">
       <span class="sched-view-toggle" id="sched-view-toggle">
         <button class="svt-btn active" data-view="plan">Plan</button>
@@ -357,22 +354,6 @@
         </details>
 
       </div>
-    </div>
-  </div>
-</aside>
-
-<!-- Side drawer: Calendar (left edge) -->
-<aside class="side-drawer side-drawer-left" id="calendar-drawer" aria-hidden="true">
-  <button class="side-drawer-handle" id="calendar-drawer-handle" type="button" aria-label="Open calendar drawer">
-    <span class="side-drawer-handle-label">Calendar</span>
-  </button>
-  <div class="side-drawer-body">
-    <div class="side-drawer-header">
-      <h3>Calendar</h3>
-      <button class="side-drawer-close" id="calendar-drawer-close" type="button" aria-label="Close">&times;</button>
-    </div>
-    <div class="side-drawer-content">
-      <div id="tm-cal-mount"></div>
     </div>
   </div>
 </aside>
@@ -958,8 +939,6 @@
   </div>
 </div>
 
-<div class="tab-content" id="tab-calendar"></div>
-
 <div class="tab-content" id="tab-slots">
   <div class="slots-shell">
     <div class="slots-topline">
@@ -1060,7 +1039,7 @@
 </div>
 
 <div class="footer">
-  Data from Google Calendar + Notion &middot; Generated for Drake Shadwell &middot; <span id="gen-time">--</span>
+  Data from Notion and the PA itinerary &middot; Generated for Drake Shadwell &middot; <span id="gen-time">--</span>
 </div>
 
 <!-- sync-bar kept as hidden element for JS compatibility -->
@@ -1087,11 +1066,6 @@
 <script src="/public/js/responsibilities.js"></script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js"></script>
-<script src="/public/js/gcal-client.js"></script>
-<script src="/public/js/calendar-sidebar.js"></script>
-<script src="/public/js/calendar-overlay.js"></script>
-<script src="/public/js/calendar.js"></script>
-<script src="/public/js/calendar-drag.js"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/carryover-review.js"></script>

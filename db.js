@@ -8,35 +8,10 @@
  * is a "block" with a type, parent, properties (JSONB), and sort order.
  */
 
-const fs = require("fs");
-const path = require("path");
 const crypto = require("crypto");
 const pool = require("./pg-pool");
 
 // ── Workspace Bootstrap ──
-
-async function _migrateGcalFilesToDb(client, users, now) {
-  const credPath = path.join(__dirname, "data", "gcal-credentials.json");
-  if (!fs.existsSync(credPath)) return;
-  let credentials;
-  try { credentials = JSON.parse(fs.readFileSync(credPath, "utf8")); } catch { return; }
-  const tokensPath = path.join(__dirname, "data", "gcal-tokens.json");
-  const calendarsPath = path.join(__dirname, "data", "gcal-calendars.json");
-
-  for (const user of users) {
-    const { rows } = await client.query("SELECT user_id FROM gcal_tokens WHERE user_id = $1", [user.id]);
-    if (rows.length > 0) continue;
-    let tokens = null, calendars = null;
-    try { if (fs.existsSync(tokensPath)) tokens = JSON.parse(fs.readFileSync(tokensPath, "utf8")); } catch {}
-    try { if (fs.existsSync(calendarsPath)) calendars = JSON.parse(fs.readFileSync(calendarsPath, "utf8")); } catch {}
-    await client.query(
-      `INSERT INTO gcal_tokens (user_id, credentials, tokens, calendars, updated_at) VALUES ($1, $2, $3, $4, $5)`,
-      [user.id, credentials, tokens, calendars, now]
-    );
-    console.log(`[workspace] Migrated GCal tokens to DB for user '${user.username}'`);
-    break;
-  }
-}
 
 async function ensureWorkspacesForAllUsers() {
   const { rows: users } = await pool.query("SELECT * FROM users");
@@ -65,7 +40,6 @@ async function ensureWorkspacesForAllUsers() {
       const paResult = await client.query("UPDATE pa_state SET workspace_id = $1 WHERE user_id = $2 AND workspace_id IS NULL", [workspaceId, user.id]);
       if (paResult.rowCount > 0) console.log(`[workspace] Stamped workspace_id on ${paResult.rowCount} pa_state rows for '${user.username}'`);
     }
-    await _migrateGcalFilesToDb(client, users, now);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");

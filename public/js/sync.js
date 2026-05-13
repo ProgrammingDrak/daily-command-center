@@ -52,7 +52,7 @@ function buildClip(){
     unreviewed.forEach(c=>{t+="- "+c.title+" -- "+c.evidence_summary+"\n"});
     t+="\n";
   }
-  t+="Please update Notion (close completed tasks, note duration changes) and adjust my calendar if anything was reordered.";
+  t+="Please update Notion, close completed tasks, and note any duration changes.";
   return t;
 }
 
@@ -96,7 +96,7 @@ function saveNotes(data) {
   localStorage.setItem(NOTES_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
-function calendarSeedNoteForTask(taskId, ev) {
+function seedNoteForTask(taskId, ev) {
   const pools = [];
   if (ev) pools.push([ev]);
   if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) pools.push(scheduled);
@@ -104,8 +104,7 @@ function calendarSeedNoteForTask(taskId, ev) {
   for (const pool of pools) {
     const item = pool.find(e => e && e.id === taskId);
     if (!item) continue;
-    const isCalendar = item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id;
-    if (!isCalendar) continue;
+    if (item.type !== "meeting" && item.type !== "oneone") continue;
     const seed = item.notes || item.detail || item.description || "";
     if (typeof seed === "string" && seed.trim()) return seed;
   }
@@ -120,7 +119,7 @@ function noteBlocksForTask(taskId, noteVal, ev) {
   } else if(typeof noteVal==="string" && noteVal){
     return migrateHtmlToBlocks(noteVal);
   }
-  const seed = calendarSeedNoteForTask(taskId, ev);
+  const seed = seedNoteForTask(taskId, ev);
   return seed ? migrateHtmlToBlocks(seed) : null;
 }
 
@@ -375,9 +374,41 @@ function deleteAction(taskId, idx) {
 
 // ======== ACTION ITEM SCHEDULING ========
 const PENDING_TASKS_KEY = "pa-pending-tasks";
-function loadPendingTasks(){ try{return JSON.parse(localStorage.getItem(PENDING_TASKS_KEY)||"[]")}catch(e){return[]} }
+function _pendingTaskBlocks(){
+  if(!window.USE_BLOCKSTORE||!window.USE_BLOCKSTORE.pendingTasks||!window.blockStore)return[];
+  const legacy=window.blockStore.getByType("pending_task")||[];
+  const unified=window.blockStore.getByType("block").filter(b=>(b.properties||{}).kind==="pending_task");
+  const seen=new Set();
+  return legacy.concat(unified).filter(b=>{if(seen.has(b.id))return false;seen.add(b.id);return true});
+}
+function loadPendingTasks(){
+  const blocks=_pendingTaskBlocks();
+  if(blocks.length){
+    return blocks.map(b=>{
+      const p=b.properties||{};
+      return {...p,id:p.local_id||p.id||b.id,_blockId:b.id};
+    }).filter(t=>t.status!=="deleted"&&t.status!=="archived");
+  }
+  try{return JSON.parse(localStorage.getItem(PENDING_TASKS_KEY)||"[]")}catch(e){return[]}
+}
 function savePendingTasks(tasks){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.pendingTasks&&window.blockStore){
+    const desired=Array.isArray(tasks)?tasks:[];
+    const blocks=_pendingTaskBlocks();
+    const byLocal=new Map(blocks.map(b=>[(b.properties||{}).local_id||b.id,b]));
+    const keep=new Set();
+    desired.forEach((task,idx)=>{
+      const localId=task.id||("pending-"+Date.now()+"-"+idx);
+      keep.add(localId);
+      const props={...task,kind:"pending_task",local_id:localId,id:localId,updatedAt:new Date().toISOString()};
+      const existing=task._blockId?window.blockStore.get(task._blockId):byLocal.get(localId);
+      if(existing)window.blockStore.updateBlock(existing.id,{...(existing.properties||{}),...props});
+      else window.blockStore.createBlock("block",props,{date:null,sortOrder:idx});
+    });
+    blocks.forEach(block=>{
+      const localId=(block.properties||{}).local_id||block.id;
+      if(!keep.has(localId))window.blockStore.deleteBlock(block.id);
+    });
     exportPendingTasks();
     return;
   }
