@@ -198,6 +198,7 @@
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
+  <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
 </div>
 
@@ -940,29 +941,7 @@
   </div>
 </div>
 
-<div class="tab-content" id="tab-responsibilities">
-  <div class="delegated-header">
-    <h2 class="delegated-title">Responsibilities</h2>
-    <div class="resp-actions">
-      <button class="secondary resp-small-btn" id="resp-auto-schedule-btn">Auto-schedule due</button>
-      <button class="primary" id="resp-new-btn">+ New responsibility</button>
-    </div>
-  </div>
-  <div class="resp-capture">
-    <div id="resp-capture-text" class="resp-capture-editor" data-placeholder="Paste a responsibility, Slack alert text, or screenshot OCR here..."></div>
-    <button class="primary" id="resp-capture-btn">Capture</button>
-  </div>
-  <div class="delegated-filter-bar">
-    <button class="delegated-filter-btn active resp-filter-btn" data-filter="active">Active</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="inbox">Inbox</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="due">Due</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="archived">Archived</button>
-    <button class="delegated-filter-btn resp-filter-btn" data-filter="all">All</button>
-  </div>
-  <div class="responsibilities-list" id="responsibilities-list">
-    <div class="delegated-empty">No responsibilities yet. Capture one above or create it manually.</div>
-  </div>
-</div>
+<div class="tab-content" id="tab-calendar"></div>
 
 <div class="tab-content" id="tab-slots">
   <div class="slots-shell">
