@@ -62,13 +62,15 @@
   function renderSlots(){
     if(!slotState) return;
     const account = slotState.account || {};
-    const credits = account.point_balance || 0;
-    setText("slot-credit-balance", String(credits));
+    const points = account.point_balance || 0;
+    const spinCost = ((slotState.constants && (slotState.constants.spinCostPoints || slotState.constants.spinCost)) || 10);
+    setText("slot-credit-balance", String(points));
+    setText("slot-spin-cost", spinCost + " pts per spin");
     setText("slot-bank-balance", money(account.bank_balance_cents));
     const badge = document.getElementById("slots-credit-badge");
     if(badge){
-      badge.textContent = String(credits);
-      badge.style.display = credits > 0 ? "" : "none";
+      badge.textContent = String(points);
+      badge.style.display = points > 0 ? "" : "none";
     }
     renderPendingDeposit(false);
     const bu = slotState.bankUsage || {};
@@ -77,7 +79,7 @@
     renderRewards();
     if(!isSpinning) renderHistory();
     const btn = document.getElementById("slot-spin-btn");
-    if(btn) btn.disabled = isSpinning || credits < ((slotState.constants && slotState.constants.spinCost) || 1);
+    if(btn) btn.disabled = isSpinning || points < spinCost;
   }
 
   function setText(id, text){
@@ -559,21 +561,30 @@
   async function earnTaskCredit(task){
     if(!task || !task.id) return;
     const isBounty = typeof isBountyTask === "function" && isBountyTask(task.id);
+    const payload = window.TaskPoints && typeof window.TaskPoints.buildPayload === "function"
+      ? window.TaskPoints.buildPayload(task, { bounty: isBounty })
+      : {
+          task_id: task.id,
+          title: task.title || task.label || "Task completed",
+          type: task.type || "task",
+          priority: task.priority || "",
+          tags: task.tags || [],
+          bounty: isBounty,
+          duration_minutes: task.durMin || task.duration || 30
+        };
     try {
       const result = await api("/api/slot/earn-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           source_key: String((window.__state && window.__state.date) || "unknown") + ":" + task.id,
-          task_id: task.id,
-          title: task.title || task.label || "Task completed",
-          bounty: isBounty
+          ...payload
         })
       });
       if(result.awarded && typeof showToast === "function") {
         const drip = result.bankDrip || {};
-        const delta = result.delta || 1;
-        showToast("+" + delta + " slot credit" + (delta === 1 ? "" : "s") + (isBounty ? " (bounty)" : "") + (drip.cents > 0 ? ", +" + money(drip.cents) + " bank" : ""));
+        const delta = result.delta || 0;
+        showToast("+" + delta + " point" + (delta === 1 ? "" : "s") + (isBounty ? " (bounty)" : "") + (drip.cents > 0 ? ", +" + money(drip.cents) + " bank" : ""));
       }
       await loadSlots();
     } catch(e) {
