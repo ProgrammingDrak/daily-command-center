@@ -144,14 +144,17 @@
     el.innerHTML = spins.map(s => {
       const snap = s.reward_snapshot || {};
       const pending = s.status === "pending";
-      const bankBuilderPending = pending && snap.kind === "bank_builder";
+      const bankBuilderPending = pending && (s.bank_delta_cents || 0) > 0 && !s.bank_reserved_cents;
       const miss = s.status === "miss" || snap.kind === "miss";
       const symbol = rewardSymbol(snap);
+      const taskDrip = snap.source_type === "task_bank_drip";
+      const screenBank = snap.source_type === "slot_screen_bank_builder";
+      const metaLabel = taskDrip ? "task bank drip" : screenBank ? "screen bank builders" : "needs 3 in a row";
       const bank = s.bank_delta_cents ? ' <span class="slot-history-bank">+' + money(s.bank_delta_cents) + '</span>' : '';
       const reserve = s.bank_reserved_cents ? ' <span class="slot-history-bank">reserve ' + money(s.bank_reserved_cents) + '</span>' : '';
       return '<div class="slot-history-row">' +
         '<div><strong>' + esc(snap.title || (miss ? "No prize" : "Reward")) + '</strong>' + bank + reserve +
-          '<div class="slot-history-meta">' + esc(symbol) + ' needs 3 in a row · ' + esc(KIND_LABELS[snap.kind] || snap.kind || "") + ' · ' + new Date(s.created_at).toLocaleString() + '</div>' +
+          '<div class="slot-history-meta">' + esc(symbol) + ' ' + esc(metaLabel) + ' · ' + esc(KIND_LABELS[snap.kind] || snap.kind || "") + ' · ' + new Date(s.created_at).toLocaleString() + '</div>' +
         '</div>' +
         (pending && !bankBuilderPending ? '<button class="slot-mini primary slot-confirm" data-id="' + s.id + '">Confirm</button>' : '<span class="slot-status ' + (miss ? 'miss' : '') + '">' + esc(bankBuilderPending ? "deposit pending" : (miss ? "no prize" : s.status)) + '</span>') +
       '</div>';
@@ -173,12 +176,12 @@
       const snap = spinRow.reward_snapshot || {};
       setResult("Building houses...");
       await animateReels(resultSymbols(spinRow, snap));
-      setResult(resultText(spinRow, snap));
-      if(snap.kind === "bank_builder") {
-        const delta = spinRow.bank_delta_cents || snap.bank_delta_cents || 0;
-        if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(delta);
-        else addPendingDeposit(delta);
+      if((spinRow.bank_delta_cents || 0) > 0) {
+        await animateBankPayout(spinRow, snap);
+        if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(spinRow.bank_delta_cents || 0);
+        else addPendingDeposit(spinRow.bank_delta_cents || 0);
       }
+      setResult(resultText(spinRow, snap));
       isSpinning = false;
       await loadSlots();
     } catch(e) {
@@ -231,6 +234,9 @@
   }
 
   function resultSymbols(spinRow, reward){
+    if(reward && Array.isArray(reward.screen_board) && reward.screen_board.length){
+      return reward.screen_board;
+    }
     const seed = hashCode([spinRow.id || 0, spinRow.created_at || "", reward.title || "", reward.kind || ""].join("|"));
     const board = Array.from({ length: 15 }, (_, i) => FILLER_SYMBOLS[(seed + i * 3) % FILLER_SYMBOLS.length]);
     const symbol = rewardSymbol(reward);
@@ -252,6 +258,57 @@
     board[(seed + 5) % 15] = TEASER_SYMBOLS[(seed + 2) % TEASER_SYMBOLS.length];
     board[(seed + 9) % 15] = TEASER_SYMBOLS[(seed + 4) % TEASER_SYMBOLS.length];
     return board;
+  }
+
+  async function animateBankPayout(spinRow, snap){
+    const payout = (snap && snap.bank_screen_payout) || {};
+    const positions = Array.isArray(payout.positions) ? payout.positions : [];
+    if(!positions.length) return;
+    const reels = Array.from(document.querySelectorAll(".slot-cell"));
+    const cells = positions.map(i => reels[i]).filter(Boolean);
+    if(!cells.length) return;
+
+    cells.forEach(cell => cell.classList.add("bank-hit"));
+    await wait(260);
+
+    const horizontalGroups = Array.isArray(payout.horizontal_groups) ? payout.horizontal_groups : [];
+    horizontalGroups.flat().forEach(i => {
+      if(reels[i]) reels[i].classList.add("bank-horizontal");
+    });
+    await wait(horizontalGroups.length ? 420 : 120);
+
+    const verticalGroups = Array.isArray(payout.vertical_groups) ? payout.vertical_groups : [];
+    verticalGroups.flat().forEach(i => {
+      if(reels[i]) reels[i].classList.add("bank-vertical");
+    });
+    await wait(verticalGroups.length ? 420 : 120);
+
+    const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
+    if(target) flyBankLights(cells, target);
+    await wait(760);
+    cells.forEach(cell => cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical"));
+  }
+
+  function flyBankLights(cells, target){
+    const targetRect = target.getBoundingClientRect();
+    const tx = targetRect.left + targetRect.width / 2;
+    const ty = targetRect.top + targetRect.height / 2;
+    cells.forEach((cell, idx) => {
+      const rect = cell.getBoundingClientRect();
+      const light = document.createElement("span");
+      light.className = "slot-bank-flow";
+      light.style.left = (rect.left + rect.width / 2) + "px";
+      light.style.top = (rect.top + rect.height / 2) + "px";
+      light.style.setProperty("--slot-flow-x", (tx - rect.left - rect.width / 2) + "px");
+      light.style.setProperty("--slot-flow-y", (ty - rect.top - rect.height / 2) + "px");
+      light.style.animationDelay = (idx * 34) + "ms";
+      document.body.appendChild(light);
+      light.addEventListener("animationend", () => light.remove(), { once: true });
+    });
+  }
+
+  function wait(ms){
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   function rewardSymbol(reward){
@@ -277,6 +334,13 @@
   }
 
   function resultText(spinRow, snap){
+    const payout = (snap && snap.bank_screen_payout) || {};
+    const bankDelta = spinRow.bank_delta_cents || payout.cents || 0;
+    if(bankDelta > 0) {
+      const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
+      const cap = payout.capped ? " Bank cap trimmed the payout." : "";
+      return "Bank builders paid " + money(bankDelta) + units + ". The light flowed into the piggy bank." + cap;
+    }
     if(spinRow.status === "miss" || snap.kind === "miss") return "No reward this spin: " + (snap.title || "keep building");
     if(snap.kind === "bank_builder") return "Bank balloon grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Transfer it, then pop it into the piggy bank.";
     if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
@@ -476,6 +540,7 @@
 
   async function earnTaskCredit(task){
     if(!task || !task.id) return;
+    const isBounty = typeof isBountyTask === "function" && isBountyTask(task.id);
     try {
       const result = await api("/api/slot/earn-task", {
         method: "POST",
@@ -483,10 +548,15 @@
         body: JSON.stringify({
           source_key: String((window.__state && window.__state.date) || "unknown") + ":" + task.id,
           task_id: task.id,
-          title: task.title || task.label || "Task completed"
+          title: task.title || task.label || "Task completed",
+          bounty: isBounty
         })
       });
-      if(result.awarded && typeof showToast === "function") showToast("+1 slot credit");
+      if(result.awarded && typeof showToast === "function") {
+        const drip = result.bankDrip || {};
+        const delta = result.delta || 1;
+        showToast("+" + delta + " slot credit" + (delta === 1 ? "" : "s") + (isBounty ? " (bounty)" : "") + (drip.cents > 0 ? ", +" + money(drip.cents) + " bank" : ""));
+      }
       await loadSlots();
     } catch(e) {
       console.warn("[slots] earn failed:", e.message);

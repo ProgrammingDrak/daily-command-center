@@ -104,12 +104,14 @@ function buildSchedule(){
 
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
+  const bountySvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
 
   // Render done items as compact one-liners
   const completionsData = (__state && __state.completions && __state.completions.tasks) || [];
   const reviewedState = loadReviewed();
   doneItems.forEach(ev=>{
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
+    const bountyDone=typeof isBountyTask==="function"&&isBountyTask(ev.id);
     // Check if this task was auto-completed and needs review
     const comp = completionsData.find(t => t.task_id === ev.id);
     const needsReview = comp && comp.needs_review && !reviewedState[ev.id];
@@ -123,6 +125,7 @@ function buildSchedule(){
         '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
         '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
         '<span class="c-title">'+ev.title+'</span>'+
+        (bountyDone?'<span class="bounty-chip done">Bounty x2</span>':'')+
         reviewBadgeHtml+
         evSrcTag+
         '<span class="c-time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
@@ -185,7 +188,11 @@ function buildSchedule(){
     const active=trueActive||isNextUp||isPinnedActive,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
     const d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
+    const isBounty=typeof isBountyTask==="function"&&isBountyTask(ev.id);
+    const bountyPlaced=!!(typeof getDailyBounty==="function"&&getDailyBounty());
+    const canEditBounty=typeof viewMode==="undefined"||viewMode!=="archive";
     const el=document.createElement("div");el.className="tl-item";el.dataset.id=ev.id;
+    if(isBounty)el.classList.add("bounty");
     // Meetings and locked tasks are fixed anchors -- no drag, but still valid drop targets so other tasks can be positioned around them.
     if(!isMeeting(ev)&&!ev._locked){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     if(ev._locked)el.classList.add("locked");
@@ -266,7 +273,7 @@ function buildSchedule(){
       '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(nearEnd?' near-end':'')+(isNextUp?' next-up':'')+(isPinnedActive?' pinned':'')+(pinnedAging==='yellow'?' aging-yellow':'')+(pinnedAging==='red'?' aging-red':'')+'" data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
-        '<div class="card'+(active?' card-active':'')+'">'+
+        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+'">'+
           '<div class="grip" title="Drag to reorder">'+gripSvg+'</div>'+
           '<button class="chk" title="Mark done">'+ckSvg+'</button>'+
           '<div class="chk-col">'+
@@ -275,7 +282,7 @@ function buildSchedule(){
           '</div>'+
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
+            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip">Bounty x2</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
             '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+colorMeta(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
@@ -283,6 +290,7 @@ function buildSchedule(){
             '</div>'+
           '</div>'+
           notesButton(ev)+
+          (!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty)?'<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Bounty locked here: this task pays 2 credits':"Place today's bounty here")+'">'+(isBounty?'<span>2x</span>':bountySvg)+'</button>':'')+
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Mark as trivial — move to triage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
@@ -364,6 +372,7 @@ function buildSchedule(){
       function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==dbadge){closePop();}}
       setTimeout(()=>document.addEventListener("click",onOutside,true),0);
     });}
+    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();pushTask(pb.dataset.pushId)});
@@ -378,7 +387,7 @@ function buildSchedule(){
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Phase 7: removed old triv-flag-chk (replaced by btn-triv-link on card face)
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-lock")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-bounty")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-lock")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){
@@ -404,6 +413,7 @@ function buildSchedule(){
               if(task){
                 task.title=newTitle;
                 if(typeof _persistTaskTitle==="function")_persistTaskTitle(ev.id,newTitle);
+                if(typeof isBountyTask==="function"&&isBountyTask(ev.id)&&typeof saveBountyState==="function")saveBountyState();
                 if(typeof showToast==="function")showToast("Title updated","success");
               }
             }

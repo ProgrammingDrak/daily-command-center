@@ -68,6 +68,7 @@ function initKeys() {
   SUBTASK_KEY = "pa-subtasks-" + d;
   TRIV_FLAGS_KEY = "pa-trivial-flags-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
+  BOUNTY_KEY = "pa-bounty-" + d;
   // PIN 1: rebind the pinned-active-task key and reload state on date change
   PINNED_ACTIVE_KEY = "pa-pinned-active-" + d;
   try { _pinnedActiveId = JSON.parse(localStorage.getItem(PINNED_ACTIVE_KEY) || "null"); } catch(e) { _pinnedActiveId = null; }
@@ -205,6 +206,7 @@ function collectAllState() {
       deferred: JSON.parse(localStorage.getItem("pa-deferred-" + d) || "[]"),
       pomo: JSON.parse(localStorage.getItem("pa-pomo-state-" + d) || "{}"),
       reviewed: JSON.parse(localStorage.getItem("pa-reviewed-" + d) || "[]"),
+      bounty: typeof getDailyBounty === "function" ? getDailyBounty() : JSON.parse(localStorage.getItem("pa-bounty-" + d) || "null"),
       subtasks: JSON.parse(localStorage.getItem("pa-subtasks-" + d) || "{}"),
       trivialFlags: JSON.parse(localStorage.getItem("pa-trivial-flags-" + d) || "{}"),
       pendingTasks: JSON.parse(localStorage.getItem(PENDING_TASKS_KEY) || "[]"),
@@ -396,6 +398,7 @@ function writeToLocalStorage(date, state) {
     ["pa-deferred-" + date]: state.deferred,
     ["pa-pomo-state-" + date]: state.pomo,
     ["pa-reviewed-" + date]: state.reviewed,
+    ["pa-bounty-" + date]: state.bounty,
     ["pa-subtasks-" + date]: state.subtasks,
     ["pa-trivial-flags-" + date]: state.trivialFlags,
   };
@@ -539,6 +542,7 @@ function reloadPersistedEdits() {
   pushedSet = new Set();
   pushedAt = {};
   deletedSet = new Set();
+  dailyBounty = null;
 
   // Reload from blockStore day_root (primary) or localStorage (fallback)
   if (window.USE_BLOCKSTORE && window.blockStore) {
@@ -552,6 +556,7 @@ function reloadPersistedEdits() {
       if (pushed.at) Object.assign(pushedAt, pushed.at);
       const deleted = dayRoot.properties._deleted || [];
       deleted.forEach(id => deletedSet.add(id));
+      dailyBounty = dayRoot.properties._bounty || null;
       Object.assign(durChanges, dayRoot.properties._durChanges || {});
     }
     // One-time migration: if day_root has no _done but localStorage does, push all date state up
@@ -565,6 +570,7 @@ function reloadPersistedEdits() {
       const _lsPushed = (() => { try { return JSON.parse(localStorage.getItem(PUSHED_KEY)||"{}"); } catch(e) { return {}; } })();
       const _lsDeleted = (() => { try { return JSON.parse(localStorage.getItem(DELETED_KEY)||"[]"); } catch(e) { return []; } })();
       const _lsDur = (() => { try { return JSON.parse(localStorage.getItem(DUR_KEY)||"{}"); } catch(e) { return {}; } })();
+      const _lsBounty = (() => { try { return JSON.parse(localStorage.getItem(BOUNTY_KEY)||"null"); } catch(e) { return null; } })();
       const id = window.blockStore.getDayRootId();
       const root = window.blockStore.get(id);
       if (root) {
@@ -574,6 +580,7 @@ function reloadPersistedEdits() {
           _pushed: _lsPushed,
           _deleted: _lsDeleted,
           _durChanges: _lsDur,
+          _bounty: _lsBounty,
           // Also migrate other date-scoped state
           _dismissed: (() => { try { return JSON.parse(localStorage.getItem(DISMISS_KEY)||"{}"); } catch(e) { return {}; } })(),
           _sessions: (() => { try { return JSON.parse(localStorage.getItem(SESSIONS_KEY)||"{}"); } catch(e) { return {}; } })(),
@@ -591,6 +598,7 @@ function reloadPersistedEdits() {
         if (_lsPushed.ids) _lsPushed.ids.forEach(i => pushedSet.add(i));
         if (_lsPushed.at) Object.assign(pushedAt, _lsPushed.at);
         _lsDeleted.forEach(i => deletedSet.add(i));
+        dailyBounty = _lsBounty;
         Object.assign(durChanges, _lsDur);
         console.log('[Migrate] localStorage → blockStore migration complete');
       }
@@ -608,6 +616,7 @@ function reloadPersistedEdits() {
     try { const d = JSON.parse(localStorage.getItem(DELETED_KEY) || "[]");
       d.forEach(id => deletedSet.add(id));
     } catch(e) {}
+    try { dailyBounty = JSON.parse(localStorage.getItem(BOUNTY_KEY) || "null"); } catch(e) { dailyBounty = null; }
   }
   // Restore user-added tasks (quick-add, drawer-add)
   try {
