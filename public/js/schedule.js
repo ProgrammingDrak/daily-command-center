@@ -318,11 +318,13 @@ async function commitDoneOnDate(id,dateStr){
   if(!id||!dateStr)return;
   const nowIso=new Date().toISOString();
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  const ev=scheduled.find(e=>e.id===id);
 
   // Same-day completion: take the in-memory fast path
   if(currentDate===dateStr){
     manualDone.add(id);doneAt[id]=new Date();
     log("checked",id);saveDoneState();render();
+    awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso});
     return;
   }
 
@@ -355,6 +357,23 @@ async function commitDoneOnDate(id,dateStr){
     }catch(e){}
   }
   log("checked-on",id,"Marked done on "+dateStr);
+  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso});
+}
+
+function awardSlotTaskCredit(ev,opts){
+  if(!ev||!ev.id)return;
+  if(window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
+    window.SlotRewards.earnTaskCredit(ev,opts||{});
+  } else {
+    try {
+      const key="pa-slot-award-queue";
+      const rows=JSON.parse(localStorage.getItem(key)||"[]");
+      if(Array.isArray(rows)){
+        rows.push({task:ev,options:opts||{},queuedAt:new Date().toISOString()});
+        localStorage.setItem(key,JSON.stringify(rows.slice(-100)));
+      }
+    } catch(e) {}
+  }
 }
 
 function toggleDone(id,opts){
@@ -401,8 +420,12 @@ function toggleDone(id,opts){
     }
   }
 
-  manualDone.add(id);doneAt[id]=new Date();log("checked",id);
+  const ev=scheduled.find(e=>e.id===id);
+  const completedAt=new Date();
+  manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
   saveDoneState();render();
+  const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
