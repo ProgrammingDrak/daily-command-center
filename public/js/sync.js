@@ -104,7 +104,6 @@ function seedNoteForTask(taskId, ev) {
   for (const pool of pools) {
     const item = pool.find(e => e && e.id === taskId);
     if (!item) continue;
-    if (item.type !== "meeting" && item.type !== "oneone") continue;
     const seed = item.notes || item.detail || item.description || "";
     if (typeof seed === "string" && seed.trim()) return seed;
   }
