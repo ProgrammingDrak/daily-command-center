@@ -937,10 +937,10 @@
     <div class="slots-topline">
       <div>
         <h2 class="slots-title">Task House Jackpot</h2>
-        <div class="slots-subtitle">Complete tasks, earn Task Tokens, build the bank, and let the house reels decide.</div>
+        <div class="slots-subtitle">Complete tasks, earn points, build the bank, and let the house reels decide.</div>
       </div>
       <div class="slots-balances">
-        <div class="slots-balance"><span>Task Tokens</span><strong id="slot-credit-balance">0</strong></div>
+        <div class="slots-balance"><span>Task Points</span><strong id="slot-credit-balance">0</strong></div>
         <div class="slots-balance slots-bank">
           <span>Piggy Bank</span>
           <button id="slot-pending-deposit" class="slot-pending-deposit" type="button">
@@ -987,24 +987,23 @@
           <div class="slot-rules-grid">
             <label class="slot-setting-field">
               <span>Spin cost</span>
-              <input id="slot-spin-cost" type="number" min="1" max="25" step="1">
+              <input id="slot-spin-cost-input" type="number" min="1" max="250" step="1">
             </label>
             <label class="slot-setting-field">
               <span>Monthly goal $</span>
               <input id="slot-monthly-goal" type="number" min="1" max="10000" step="1">
             </label>
             <div class="slot-setting-note">
-              <strong id="slot-current-cost">1 Task Token per spin</strong>
+              <strong id="slot-current-cost">1 point per spin</strong>
               <span id="slot-current-goal">Monthly goal: $0.00</span>
             </div>
           </div>
           <div class="slot-rule-list">
             <div><strong>Task scoring</strong></div>
-            <div>Base completion: +1 Task Token</div>
-            <div>Longer tasks: bonuses at 45m, 90m, and 150m</div>
-            <div>Priority: High, Urgent, Critical, or P1 tasks get bonuses</div>
-            <div>Focus time: logged sessions can add bonuses at 25m and 90m</div>
-            <div>Tiny or trivial tasks are capped; max award is 5 Task Tokens</div>
+            <div>Points scale from planned or logged minutes.</div>
+            <div>Effort, attention, urgency, and bounty status multiply the award.</div>
+            <div>Meetings, breaks, and OOO blocks do not earn points.</div>
+            <div>Tiny or trivial tasks still earn a small nonzero award when eligible.</div>
             <div>Bank-builder prizes can fill this month's goal, then stop until next month</div>
           </div>
           <label class="slot-rationale-field">
@@ -1019,7 +1018,7 @@
             <button id="slot-save-settings-btn" class="slot-small-btn primary" type="button">Save settings</button>
           </div>
         </div>
-        <div class="slot-spin-cost" id="slot-spin-cost">10 pts per spin</div>
+        <div class="slot-spin-cost" id="slot-spin-cost-line">10 pts per spin</div>
         <div class="slot-cap-row">
           <span id="slot-daily-cap">Daily bank cap: $0.00 / $50.00</span>
           <span id="slot-weekly-cap">Weekly bank cap: $0.00 / $150.00</span>
