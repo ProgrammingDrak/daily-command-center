@@ -304,6 +304,9 @@ function buildSchedule(){
       timeHtml+='<span class="prep-line"></span>';
     }
     timeHtml+='</div>';
+    const bountyControl=(!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty))
+      ? '<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Current bounty - 2x points':'Set bounty - 2x points')+'" aria-label="'+(isBounty?'Current bounty':'Set bounty')+'">'+(isBounty?'2x':bountySvg)+'</button>'
+      : '';
 
     el.innerHTML=
       timeHtml+
@@ -331,6 +334,7 @@ function buildSchedule(){
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
           (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+          bountyControl+
           '<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
           '<div class="dur">'+
             '<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>'+
@@ -405,7 +409,7 @@ function buildSchedule(){
       function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==dbadge){closePop();}}
       setTimeout(()=>document.addEventListener("click",onOutside,true),0);
     });}
-    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
+    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});
@@ -419,7 +423,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){
