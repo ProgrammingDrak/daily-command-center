@@ -1,24 +1,414 @@
 {
   "date": "2026-05-14",
-  "last_updated_at": "2026-05-02T17:58:19.634Z",
-  "last_updated_by": "skeleton",
-  "watermarks": {},
+  "last_updated_at": "2026-05-14T03:29:39Z",
+  "last_updated_by": "codex-dcc-itinerary-notes",
+  "watermarks": {
+    "calendar": {
+      "last_at": "2026-05-14T03:23:03Z",
+      "last_id": "google-calendar:primary:2026-05-14"
+    },
+    "gmail": {
+      "last_at": "2026-05-13T17:34:41Z",
+      "last_id": "gmail:19e2267bf753c870"
+    },
+    "slack": {
+      "last_at": "2026-05-14T03:23:03Z",
+      "last_id": "slack:scan:2026-05-14",
+      "status": "ok"
+    }
+  },
   "triage": {
-    "open_items": [],
+    "open_items": [
+      {
+        "id": "dcc:2026-05-14:packet-render",
+        "type": "system",
+        "sub_type": "dcc_readiness",
+        "source_ref": "C:/Users/offic/portable-programming/Repos/daily-command-center/data/state/days/2026-05-14.json",
+        "title": "Confirm the Thursday DCC packet renders in the live app",
+        "summary": "Thursday's packet replaced a skeleton file. Open the DCC preview and confirm the schedule, source health, and timeline render correctly.",
+        "priority": "high",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "last_seen_at": "2026-05-14T03:23:03Z",
+        "notes": "This keeps the source-of-truth recovery work from slipping back into skeleton days."
+      },
+      {
+        "id": "sweep-suite:2026-05-14:reader-config",
+        "type": "system",
+        "sub_type": "reader_config",
+        "source_ref": "C:/Users/offic/portable-programming/claude-brain/plugins/local/sweep-suite/config/user-context.json",
+        "title": "Finish Sweep Suite reader config now that Slack is callable",
+        "summary": "Slack searches were callable and returned no hits, but user-context is still empty and keyword alerts are not configured.",
+        "priority": "medium",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "last_seen_at": "2026-05-14T03:23:03Z",
+        "notes": "Seed Slack user ID and any keyword alerts before relying on unattended sweeps."
+      },
+      {
+        "id": "audit-angel:2026-05-14:review-dirty-export",
+        "type": "project",
+        "sub_type": "dirty_worktree",
+        "source_ref": "C:/Users/offic/portable-programming/Repos/audit-angel",
+        "title": "Audit Angel slideshow/export QA",
+        "summary": "Carryover from Wednesday: review uncommitted slideshow/export changes, run a light verification pass, then commit or intentionally park.",
+        "priority": "medium",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "last_seen_at": "2026-05-14T03:23:03Z",
+        "notes": "Keep this bounded; the goal is decision quality, not a refactor."
+      },
+      {
+        "id": "hyhh:2026-05-14:browser-data-safety",
+        "type": "project",
+        "sub_type": "data_safety",
+        "source_ref": "C:/Users/offic/portable-programming/claude-brain/projects/hold-your-hand-handbook",
+        "title": "HYHH tracker follow-through with backup-first guardrails",
+        "summary": "Continue HYHH tracker work only after preserving/exporting browser-local state and confirming blocked-upgrade handling.",
+        "priority": "medium",
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "last_seen_at": "2026-05-14T03:23:03Z",
+        "notes": "Tuesday's recovery showed the browser database is production state."
+      }
+    ],
     "resolved_items": [],
-    "cycle_count": 0
+    "cycle_count": 1
   },
   "completions": {
     "tasks": []
+  },
+  "notifications": [
+    {
+      "id": "sources:2026-05-14",
+      "type": "source_readiness",
+      "title": "Sweep Suite source scan for Thursday",
+      "body": "Calendar scanned successfully. Gmail unread/starred found four promotion/newsletter-style messages and no work obligations. Slack connector searches were callable and found no DMs or mentions in the Thursday planning window.",
+      "priority": "medium",
+      "created_at": "2026-05-14T03:23:03Z"
+    }
+  ],
+  "assessment": {
+    "day_theme": "Use the morning social block cleanly, then spend the workday turning yesterday's source recovery into durable routines before evening tennis.",
+    "hard_commitments": [
+      "07:00-08:45 Social: Coffee Chat at Local Honey Coffee Company",
+      "18:00-21:00 Thursday Tennis"
+    ],
+    "must_do": [
+      "Confirm Thursday's DCC packet renders instead of a skeleton.",
+      "Finish Sweep Suite reader config enough that future Slack/Gmail sweeps are trustworthy.",
+      "Review Audit Angel's uncommitted slideshow/export changes and decide commit vs. park.",
+      "Continue HYHH only with backup-first guardrails."
+    ],
+    "nice_to_do": [
+      "Turn this manual packet shape into a repeatable DCC routine.",
+      "Clear or label the four non-actionable Gmail promo/newsletter messages."
+    ],
+    "risks": [
+      "The calendar is solid, but Sweep Suite still lacks configured Slack user context and keyword alerts.",
+      "Gmail appears noisy and promotion-heavy, so it should not drive the day without filtering.",
+      "Evening tennis compresses closeout; protect the 16:00 planning block."
+    ]
   },
   "schedule": {
     "working_hours": {
       "start": "07:00",
       "end": "17:30"
     },
-    "timeline": [],
-    "tasks_scheduled": [],
+    "timeline": [
+      {
+        "id": "cal-07cda81a736642c09cc2dc4fb9fa469a",
+        "type": "meeting",
+        "label": "Social: Coffee Chat",
+        "description": "Local Honey Coffee Company, 250 Riverplace Unit B, Greenville, SC 29601",
+        "start": "2026-05-14T07:00:00-04:00",
+        "end": "2026-05-14T08:45:00-04:00",
+        "source": "calendar",
+        "source_id": "07cda81a736642c09cc2dc4fb9fa469a",
+        "category": "Personal",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=MDdjZGE4MWE3MzY2NDJjMDljYzJkYzRmYjlmYTQ2OWEgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "07cda81a736642c09cc2dc4fb9fa469a"
+      },
+      {
+        "id": "break-2026-05-14-0845",
+        "type": "free_time",
+        "label": "Transit / settle",
+        "description": "Buffer after coffee before opening the work loop.",
+        "start": "2026-05-14T08:45:00-04:00",
+        "end": "2026-05-14T09:05:00-04:00",
+        "source": "codex-packet",
+        "category": "Buffer",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-14-dcc-render",
+        "type": "task",
+        "label": "DCC packet render check",
+        "description": "Open DCC and confirm the Thursday packet is visible, current, and usable before deeper work.",
+        "notes": "Goal: make sure DCC is actually carrying today's itinerary, not a stale skeleton. Checklist: open the local DCC preview; confirm the date is 2026-05-14; confirm Coffee Chat and Thursday Tennis appear; confirm the work blocks appear in order from 9:05 through 17:00; check the source-readiness notification; click at least one task card and confirm the detail/notes panel opens. If the app still shows a skeleton or Wednesday data, capture which file/API endpoint it is reading and update the state path before moving on. Done when the live DCC screen matches this packet closely enough to use during the day.",
+        "start": "2026-05-14T09:05:00-04:00",
+        "end": "2026-05-14T09:30:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-14:packet-render",
+        "priority": "high",
+        "estimated_minutes": 25,
+        "category": "Planning",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-14-sweep-config",
+        "type": "task",
+        "label": "Sweep Suite reader config",
+        "description": "Finish enough Sweep Suite configuration that future Slack/Gmail sweeps are trustworthy.",
+        "notes": "Goal: turn today's manual connector sweep into a repeatable Sweep Suite run. Checklist: inspect claude-brain/plugins/local/sweep-suite/config/user-context.json; add or confirm the Slack user id if available; decide which keyword_alerts should exist, if any; preserve the current no-alert behavior if no keywords are ready; document that Slack connector searches are now callable; decide whether Gmail should filter promotions/newsletters before becoming a planning source. Done when the config file and notes clearly explain what the next unattended sweep will search and what it will intentionally ignore.",
+        "start": "2026-05-14T09:30:00-04:00",
+        "end": "2026-05-14T10:30:00-04:00",
+        "source": "codex-packet",
+        "source_id": "sweep-suite:2026-05-14:reader-config",
+        "priority": "medium",
+        "estimated_minutes": 60,
+        "category": "Systems",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-14-audit-angel",
+        "type": "task",
+        "label": "Audit Angel slideshow/export QA",
+        "description": "Review Audit Angel's dirty slideshow/export work and choose commit or park.",
+        "notes": "Goal: close the loop on the uncommitted Audit Angel export changes without letting it expand into a broad refactor. Checklist: run git status in Repos/audit-angel; review the diff for public/index.html and public/js/export.js; start the app or use the lightest existing verification path; test the slideshow/export flow that changed; note any visual or download regression; either commit with a focused message or write down why the work is parked. Done when the repo state is intentional and there is no mystery dirty work left from the export pass.",
+        "start": "2026-05-14T10:30:00-04:00",
+        "end": "2026-05-14T12:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "audit-angel:2026-05-14:review-dirty-export",
+        "priority": "medium",
+        "estimated_minutes": 90,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-14-lunch",
+        "type": "free_time",
+        "label": "Lunch / reset",
+        "description": "Keep the afternoon from inheriting morning residue.",
+        "start": "2026-05-14T12:00:00-04:00",
+        "end": "2026-05-14T12:45:00-04:00",
+        "source": "codex-packet",
+        "category": "Break",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-14-hyhh",
+        "type": "task",
+        "label": "HYHH tracker follow-through",
+        "description": "Continue HYHH tracker work only after protecting browser-local production state.",
+        "notes": "Goal: make progress on HYHH without risking the call tracker data. Checklist: identify the live browser/profile data store being used; export or otherwise preserve the current tracker data before any schema/UI work; confirm blocked-upgrade handling before touching IndexedDB-related code; then choose one narrow follow-through item, preferably artifact-link polish or documentation-upload polish from Tuesday. Avoid opportunistic schema cleanup. Done when the data is backed up, the chosen narrow task is complete or clearly blocked, and any follow-up risk is written down.",
+        "start": "2026-05-14T12:45:00-04:00",
+        "end": "2026-05-14T14:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "hyhh:2026-05-14:browser-data-safety",
+        "priority": "medium",
+        "estimated_minutes": 90,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-14-dcc-routine",
+        "type": "task",
+        "label": "DCC packet routine follow-through",
+        "description": "Capture today's manual sweep-to-itinerary path as a repeatable DCC routine.",
+        "notes": "Goal: make the next itinerary less dependent on memory. Checklist: write down the source order used today: Calendar, Gmail unread/starred, Slack mentions, Slack IM/MPIM search, then DCC carryovers; record the queries and date-window assumptions; decide where that routine belongs in the DCC or Sweep Suite docs/config; note that Gmail found only promotions/newsletters and Slack found no DMs/mentions; add any missing automation or connector gaps as explicit follow-up tasks. Done when a future session can recreate the packet from the written routine without reverse-engineering this chat.",
+        "start": "2026-05-14T14:15:00-04:00",
+        "end": "2026-05-14T15:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-14:routine",
+        "priority": "medium",
+        "estimated_minutes": 45,
+        "category": "Systems",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-14-admin-buffer",
+        "type": "task",
+        "label": "Inbox/admin buffer",
+        "description": "Use this flexible block for inbox cleanup, quick replies, or small admin.",
+        "notes": "Goal: absorb small communication/admin work without stealing from project blocks. Checklist: scan the four Gmail messages found by the sweep; archive, label, unsubscribe, or leave them if they are intentionally informational; do a quick manual Slack check if anything feels missing from the connector search; handle only replies that take a few minutes; move anything larger into a task instead of doing it here. Done when the inbox noise is lower and no hidden urgent message is nagging at the rest of the day.",
+        "start": "2026-05-14T15:00:00-04:00",
+        "end": "2026-05-14T16:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "manual-triage:2026-05-14",
+        "priority": "medium",
+        "estimated_minutes": 60,
+        "category": "Triage",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-14-closeout",
+        "type": "task",
+        "label": "Closeout and Friday inputs",
+        "description": "Close the loop on actuals and set up Friday before evening tennis.",
+        "notes": "Goal: prevent Friday from starting with archaeological work. Checklist: mark completed DCC timeline blocks; mark anything skipped or partially done honestly; record blockers from Sweep Suite, Audit Angel, and HYHH; move unfinished work into Friday or an explicit later bucket; capture any source-confidence issues from today's packet; make sure the evening tennis block remains protected. Done when Friday has clear inputs and today's packet reflects what actually happened.",
+        "start": "2026-05-14T16:00:00-04:00",
+        "end": "2026-05-14T17:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-14:closeout",
+        "priority": "high",
+        "estimated_minutes": 60,
+        "category": "Planning",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-14-1700",
+        "type": "free_time",
+        "label": "Dinner / tennis buffer",
+        "description": "Travel, food, and gear buffer before tennis.",
+        "start": "2026-05-14T17:00:00-04:00",
+        "end": "2026-05-14T18:00:00-04:00",
+        "source": "codex-packet",
+        "category": "Buffer",
+        "completed": false
+      },
+      {
+        "id": "cal-68efdb5cdff945298ed7e68373927311",
+        "type": "meeting",
+        "label": "Thursday Tennis",
+        "description": "Calendar note: Southside? Might work from my place or stay in downtown Greenville if preferred.",
+        "start": "2026-05-14T18:00:00-04:00",
+        "end": "2026-05-14T21:00:00-04:00",
+        "source": "calendar",
+        "source_id": "68efdb5cdff945298ed7e68373927311",
+        "category": "Personal",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=NjhlZmRiNWNkZmY5NDUyOThlZDdlNjgzNzM5MjczMTEgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "68efdb5cdff945298ed7e68373927311"
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "task-2026-05-14-dcc-render",
+        "title": "DCC packet render check",
+        "estimated_minutes": 25,
+        "priority": "high"
+      },
+      {
+        "task_id": "task-2026-05-14-sweep-config",
+        "title": "Sweep Suite reader config",
+        "estimated_minutes": 60,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-14-audit-angel",
+        "title": "Audit Angel slideshow/export QA",
+        "estimated_minutes": 90,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-14-hyhh",
+        "title": "HYHH tracker follow-through",
+        "estimated_minutes": 90,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-14-dcc-routine",
+        "title": "DCC packet routine follow-through",
+        "estimated_minutes": 45,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-14-admin-buffer",
+        "title": "Inbox/admin buffer",
+        "estimated_minutes": 60,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-14-closeout",
+        "title": "Closeout and Friday inputs",
+        "estimated_minutes": 60,
+        "priority": "high"
+      }
+    ],
     "tasks_couldnt_fit": [],
-    "stats": {}
+    "stats": {
+      "calendar_events": 2,
+      "planned_task_minutes": 425,
+      "planned_meeting_minutes": 285,
+      "source_confidence": "partial_plus",
+      "source_gaps": [
+        "Sweep Suite user-context is empty",
+        "Slack keyword alerts are not configured",
+        "Gmail sweep is noisy and promotion-heavy"
+      ]
+    }
+  },
+  "meetings": [
+    {
+      "id": "07cda81a736642c09cc2dc4fb9fa469a",
+      "event_id": "07cda81a736642c09cc2dc4fb9fa469a",
+      "title": "Social: Coffee Chat",
+      "start": "2026-05-14T07:00:00-04:00",
+      "end": "2026-05-14T08:45:00-04:00",
+      "location": "Local Honey Coffee Company, 250 Riverplace Unit B, Greenville, SC 29601",
+      "attendees": [],
+      "calUrl": "https://www.google.com/calendar/event?eid=MDdjZGE4MWE3MzY2NDJjMDljYzJkYzRmYjlmYTQ2OWEgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    },
+    {
+      "id": "68efdb5cdff945298ed7e68373927311",
+      "event_id": "68efdb5cdff945298ed7e68373927311",
+      "title": "Thursday Tennis",
+      "start": "2026-05-14T18:00:00-04:00",
+      "end": "2026-05-14T21:00:00-04:00",
+      "location": "Southside? Might go and work from my place or could stay in dtown gville if you want to play there!",
+      "attendees": [],
+      "calUrl": "https://www.google.com/calendar/event?eid=NjhlZmRiNWNkZmY5NDUyOThlZDdlNjgzNzM5MjczMTEgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": "accepted"
+    }
+  ],
+  "mutations": [
+    {
+      "skill": "codex-sweep-suite-itinerary",
+      "action": "create_dcc_packet",
+      "at": "2026-05-14T03:23:03Z",
+      "target_date": "2026-05-14",
+      "calendar_events": 2,
+      "gmail_candidate_messages_scanned": 4,
+      "slack_results_found": 0,
+      "triage_items_added": 4,
+      "status": "ok"
+    },
+    {
+      "skill": "codex-dcc-itinerary-notes",
+      "action": "enrich_task_notes",
+      "at": "2026-05-14T03:29:39Z",
+      "target_date": "2026-05-14",
+      "tasks_updated": 7,
+      "status": "ok"
+    }
+  ],
+  "meta": {
+    "skill_runs": [
+      {
+        "skill": "codex-sweep-suite-itinerary",
+        "started_at": "2026-05-14T03:23:03Z",
+        "finished_at": "2026-05-14T03:23:03Z",
+        "status": "ok",
+        "notes": "Calendar, Gmail, and Slack connector scans completed. Gmail hits were non-actionable promotions/newsletters; Slack returned no DM or mention hits."
+      },
+      {
+        "skill": "codex-dcc-itinerary-notes",
+        "started_at": "2026-05-14T03:29:39Z",
+        "finished_at": "2026-05-14T03:29:39Z",
+        "status": "ok",
+        "notes": "Added detailed task notes to scheduled DCC itinerary items and enabled seeded notes for non-meeting tasks."
+      }
+    ]
   }
 }
