@@ -433,9 +433,10 @@ function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && wo
 const RESPONSIBILITY_KINDS = new Set(["responsibility_item", "responsibility_trigger"]);
 
 function cadenceDays(props) {
+  const raw = String(props.cadence || "").toLowerCase();
+  if (raw === "as_needed" || raw === "as-needed" || raw === "as needed") return 0;
   const n = Number(props.cadenceDays || props.cadence_days || 0);
   if (n > 0) return n;
-  const raw = String(props.cadence || "").toLowerCase();
   if (raw === "daily") return 1;
   if (raw === "weekly") return 7;
   if (raw === "biweekly") return 14;
@@ -448,6 +449,7 @@ function cadenceDays(props) {
 function responsibilityScore(props, at = new Date()) {
   if (!props || props.status === "archived" || props.status === "done") return 0;
   const days = cadenceDays(props);
+  if (!days) return 0;
   const anchor = props.lastCompletedAt || props.createdAt || props.created_at || props.added_at;
   const start = anchor ? new Date(anchor) : at;
   const elapsedDays = Math.max(0, (at - start) / 86400000);
@@ -524,7 +526,8 @@ async function upsertResponsibility({ properties, userId, workspaceId }) {
     slug,
     domain: properties.domain || "professional",
     area: properties.area || "general",
-    cadenceDays: Number(properties.cadenceDays || 7),
+    cadence: properties.cadence || (properties.asNeeded ? "as_needed" : "custom"),
+    cadenceDays: properties.cadence === "as_needed" ? null : Number(properties.cadenceDays || 7),
     capacityBucket: properties.capacityBucket || "work_admin",
     estimatedMinutes: Number(properties.estimatedMinutes || 30),
     status: properties.status || "active",

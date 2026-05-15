@@ -167,9 +167,9 @@
 
 <div class="stats">
   <div class="stat stat-combined">
-    <div class="stat-half" onclick="showStatPopover('s-time',event)"><div class="v" style="color:var(--accent-light)" id="s-time">--</div><div class="l">Time Left</div></div>
+    <div class="stat-half" onclick="toggleRemainingStatScope(event)" title="Click to switch day/block remaining scope"><div class="v" style="color:var(--accent-light)" id="s-time">--</div><div class="l" id="s-time-label">Day Time Left</div></div>
     <div class="stat-sep"></div>
-    <div class="stat-half" onclick="showStatPopover('s-tasks',event)"><div class="v" style="color:var(--accent-light)" id="s-tasks">--</div><div class="l">Tasks</div></div>
+    <div class="stat-half" onclick="toggleRemainingStatScope(event)" title="Click to switch day/block remaining scope"><div class="v" style="color:var(--accent-light)" id="s-tasks">--</div><div class="l" id="s-tasks-label">Day Tasks Left</div></div>
   </div>
   <div class="stat" onclick="showStatPopover('s-done',event)"><div class="v" style="color:var(--green)" id="s-done">--</div><div class="l">Completed</div></div>
   <div class="stat" onclick="showStatPopover('s-block',event)"><div class="v" style="color:var(--green)" id="s-block">--</div><div class="l">Block Ends</div></div>
@@ -244,18 +244,13 @@
 
 <!-- Side drawer: Tasks (right edge) -->
 <aside class="side-drawer side-drawer-right" id="tasks-drawer" aria-hidden="true">
-  <button class="side-drawer-handle" id="tasks-drawer-handle" type="button" aria-label="Open tasks drawer">
-    <span class="side-drawer-handle-label">Tasks <span class="badge" id="tasks-count" style="display:none">0</span></span>
-  </button>
-  <div class="sidecar-tabs" aria-label="Task sidecar shortcuts">
-    <button class="sidecar-tab" id="side-projects-tab" type="button">
-      <span>Side Projects</span>
-      <span class="badge" id="side-projects-count" style="display:none">0</span>
-    </button>
+  <div class="sidecar-tabs" id="sidecar-tabs" aria-label="Task sidecar shortcuts">
+    <div class="sidecar-drop-hint" id="sidecar-drop-hint">Drop section</div>
   </div>
   <div class="side-drawer-body">
     <div class="side-drawer-header">
-      <h3>Tasks</h3>
+      <h3 id="tasks-drawer-title">Tasks</h3>
+      <button class="side-drawer-all" id="tasks-drawer-all" type="button" style="display:none">All tasks</button>
       <button class="side-drawer-close" id="tasks-drawer-close" type="button" aria-label="Close">&times;</button>
     </div>
     <div class="task-add-bar" id="task-add-menus">
@@ -367,6 +362,40 @@
           </summary>
           <div class="tm-section-body" id="tm-side-projects">
             <div id="triage-side-projects"></div>
+          </div>
+        </details>
+
+        <details class="tm-section" id="tm-repeat-responsibilities-section">
+          <summary class="tm-section-header">
+            <span class="tm-chevron"></span>
+            Repeat Responsibilities
+            <span class="badge" id="repeat-responsibilities-section-count" style="display:none">0</span>
+          </summary>
+          <div class="tm-section-body" id="tm-repeat-responsibilities">
+            <div class="repeat-resp-tools">
+              <input type="search" id="repeat-responsibilities-search" placeholder="Search repeat responsibilities...">
+              <select id="repeat-responsibilities-filter" title="Filter repeat responsibilities">
+                <option value="active">Active</option>
+                <option value="due">Due soon</option>
+                <option value="green">Green</option>
+                <option value="blue">Blue</option>
+                <option value="yellow">Yellow</option>
+                <option value="red">Red</option>
+                <option value="all">All</option>
+                <option value="archived">Archived</option>
+              </select>
+              <select id="repeat-responsibilities-sort" title="Sort repeat responsibilities">
+                <option value="urgency">Urgency</option>
+                <option value="title">Title</option>
+                <option value="cadence">Cadence</option>
+                <option value="last-completed">Last completed</option>
+                <option value="duration">Duration</option>
+              </select>
+              <button type="button" id="repeat-responsibilities-new">+ New</button>
+            </div>
+            <div class="repeat-resp-list" id="repeat-responsibilities-list">
+              <div class="delegated-empty">No repeat responsibilities yet.</div>
+            </div>
           </div>
         </details>
 
@@ -746,6 +775,13 @@
         <div class="am-section-label">Tags</div>
         <div id="am-tag-picker" class="am-tag-picker-wrap"></div>
       </div>
+      <div class="am-section">
+        <div class="am-section-label">Commute time</div>
+        <div class="am-commute-row">
+          <input id="am-commute-input" type="number" min="0" step="5" inputmode="numeric" placeholder="Minutes">
+          <span class="am-commute-hint" id="am-commute-hint">No leave window</span>
+        </div>
+      </div>
       <!-- Notes section -->
       <div class="am-section">
         <div class="am-section-label">Notes</div>
@@ -855,7 +891,7 @@
 <!-- Responsibilities create/edit modal -->
 <div class="delegated-modal-overlay" id="responsibility-modal-overlay">
   <div class="delegated-modal-box">
-    <h3 class="delegated-modal-title" id="resp-modal-title">New responsibility</h3>
+    <h3 class="delegated-modal-title" id="resp-modal-title">New repeat responsibility</h3>
     <form id="responsibility-modal-form" onsubmit="return false">
       <input type="hidden" id="resp-id" />
       <label class="delegated-modal-label">Title<span class="dm-req">*</span></label>
@@ -874,6 +910,17 @@
       <input type="text" id="resp-area" class="delegated-modal-input" maxlength="80" placeholder="bug_management" />
       <div class="resp-form-grid">
         <div>
+          <label class="delegated-modal-label">Cadence</label>
+          <select id="resp-cadence-preset" class="delegated-modal-input">
+            <option value="as_needed">As needed</option>
+            <option value="daily">Daily</option>
+            <option value="weekly" selected>Weekly</option>
+            <option value="biweekly">Biweekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="custom">Custom days</option>
+          </select>
+        </div>
+        <div id="resp-cadence-days-wrap">
           <label class="delegated-modal-label">Cadence days</label>
           <input type="number" id="resp-cadence-days" class="delegated-modal-input" min="1" max="365" value="7" />
         </div>

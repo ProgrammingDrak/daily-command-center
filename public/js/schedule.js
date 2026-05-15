@@ -207,6 +207,7 @@ function persistAddedTask(item){
       triageId:item.triageId||null,
       ampUrl:item.ampUrl||null,
       hubspotUrl:item.hubspotUrl||null,
+      commuteMinutes:item.commuteMinutes||null,
       added_at:new Date().toISOString()
     },{date});
     return;
@@ -214,7 +215,7 @@ function persistAddedTask(item){
   // Fallback: localStorage
   const added=loadAddedTasks();
   if(!added.find(t=>t.id===item.id)){
-    added.push({id:item.id,title:item.title,durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",triageId:item.triageId||null,addedAt:new Date().toISOString()});
+    added.push({id:item.id,title:item.title,durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",triageId:item.triageId||null,commuteMinutes:item.commuteMinutes||null,addedAt:new Date().toISOString()});
     saveAddedTasks(added);
   }
 }
@@ -528,7 +529,7 @@ function addToSchedule(blId){
   if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+task.durMin;
-  const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority};
+  const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority,commuteMinutes:task.commuteMinutes||null};
   scheduled.push(newItem);
   if(fromBacklog)deleteBacklogBlock(blId);
   // Persist as a scheduled block so the move survives reload (the backlog block is gone now).
@@ -565,6 +566,7 @@ function persistBacklogItem(item){
       notionUrl:item.notionUrl||"",
       priority:item.priority||"",
       stage:item.stage||"",
+      commuteMinutes:item.commuteMinutes||null,
       added_at:new Date().toISOString()
     },{date:null});
   }catch(e){console.warn("[backlog] persist failed:",e)}
@@ -597,6 +599,7 @@ function hydrateBacklogFromBlocks(){
       notionUrl:p.notionUrl||"",
       priority:p.priority||"",
       stage:p.stage||"",
+      commuteMinutes:p.commuteMinutes||null,
       createdAt:b.created_at||p.added_at||"",
       updatedAt:b.updated_at||p.updated_at||"",
       _blockId:b.id,
@@ -724,6 +727,7 @@ function confirmSchedulePicker(){
         local_id:id,title,duration:durMin,start:timeStr,end:newItem.end,
         priority:"High",meta:newItem.meta,detail:"",notionUrl:"",
         source:"manual",tags:[],_pinnedStart:timeStr,
+        commuteMinutes:newItem.commuteMinutes||null,
         added_at:new Date().toISOString()
       },{date:dateStr});
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
@@ -734,7 +738,7 @@ function confirmSchedulePicker(){
       let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){arr=[]}
       arr.push({id,title,durMin,priority:"High",source:"manual",meta:newItem.meta,
         detail:"",notionUrl:"",start:timeStr,end:newItem.end,
-        _pinnedStart:timeStr,addedAt:new Date().toISOString()});
+        _pinnedStart:timeStr,commuteMinutes:newItem.commuteMinutes||null,addedAt:new Date().toISOString()});
       localStorage.setItem(key,JSON.stringify(arr));
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
     }

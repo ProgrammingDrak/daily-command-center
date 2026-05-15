@@ -81,6 +81,7 @@ function initKeys() {
   REVIEWED_KEY = "pa-reviewed-" + d;
   ADDED_KEY = "pa-added-tasks-" + d;
   PINNED_KEY = "pa-pinned-starts-" + d;
+  COMMUTE_KEY = "pa-commute-times-" + d;
   LOCKED_KEY = "pa-locked-tasks-" + d;
   ORDER_KEY = "pa-task-order-" + d;
   SUBTASK_KEY = "pa-subtasks-" + d;
@@ -141,6 +142,7 @@ function reloadPersistedEdits() {
   doneAt = {};
   actionLog = [];
   durChanges = {};
+  commuteTimes = {};
   pushedSet = new Set();
   pushedAt = {};
   deletedSet = new Set();
@@ -160,6 +162,7 @@ function reloadPersistedEdits() {
       deleted.forEach(id => deletedSet.add(id));
       dailyBounty = dayRoot.properties._bounty || null;
       Object.assign(durChanges, dayRoot.properties._durChanges || {});
+      commuteTimes = { ...(dayRoot.properties._commuteTimes || {}) };
     }
     // (Phase 6 cleanup) Removed one-shot localStorage->blockStore migration shim.
     // Every active workspace has _done populated on day_root for months; the shim
@@ -178,6 +181,7 @@ function reloadPersistedEdits() {
       d.forEach(id => deletedSet.add(id));
     } catch(e) {}
     try { dailyBounty = JSON.parse(localStorage.getItem(BOUNTY_KEY) || "null"); } catch(e) { dailyBounty = null; }
+    try { commuteTimes = JSON.parse(localStorage.getItem(COMMUTE_KEY) || "{}"); } catch(e) { commuteTimes = {}; }
   }
   // Restore user-added tasks (quick-add, drawer-add)
   try {
@@ -211,6 +215,7 @@ function reloadPersistedEdits() {
           ampUrl:p.ampUrl||"",
           hubspotUrl:p.hubspotUrl||""
         };
+        if(p.commuteMinutes||p.commute_minutes)task.commuteMinutes=p.commuteMinutes||p.commute_minutes;
         // Pin the start time so recalcTimes() doesn't overwrite it
         if(hasStoredTime)task._pinnedStart=p.start;
         scheduled.push(task);
@@ -226,7 +231,8 @@ function reloadPersistedEdits() {
           meta: t.meta || ("Custom task \u00b7 " + ms(d)),
           detail: t.detail || "", source: t.source || "manual",
           notionUrl: t.notionUrl || "", priority: t.priority || "High",
-          triageId: t.triageId || null
+          triageId: t.triageId || null,
+          commuteMinutes: t.commuteMinutes || t.commute_minutes || null
         });
       });
     }
@@ -255,6 +261,9 @@ function reloadPersistedEdits() {
       const ev = scheduled.find(e => e.id === id); if (!ev) return;
       ev._pinnedStart = timeStr;
     });
+  } catch(e) {}
+  try {
+    if (typeof hydrateTaskCommuteTimes === "function") hydrateTaskCommuteTimes();
   } catch(e) {}
   // Apply duration changes to scheduled array
   // durChanges already populated above from day_root or localStorage

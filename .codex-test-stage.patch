@@ -1,0 +1,12 @@
+diff --git a/public/js/prep.js b/public/js/prep.js
+--- a/public/js/prep.js
++++ b/public/js/prep.js
+@@ -207,7 +207,7 @@ document.getElementById("pomo-task-check").addEventListener("click",(e)=>{
+   const capturedTitle = pomoState.title;
+   const capturedStart = pomoState.startedAt;
+   _completionModalCallback = (result) => {
+-    if(result === true){
++    if(result && result.completed === true && result.startNext === true){
+       _pomoCompleteHook = { prevTitle: capturedTitle, capturedStart: capturedStart };
+       openTaskPicker(capturedTitle);
+     }
