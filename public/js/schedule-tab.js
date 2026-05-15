@@ -245,6 +245,8 @@ function buildSchedule(){
     const detailMeta=[];
     if(ev.priority)detailMeta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">Priority: '+ev.priority+'</span>');
     if(ev.estTime)detailMeta.push('<span>Est: '+ev.estTime+'</span>');
+    const commuteWin=typeof commuteLeaveWindow==="function"?commuteLeaveWindow(ev):null;
+    if(commuteWin)detailMeta.push('<span>'+commuteWin.label+'</span>');
     detailMeta.push('<span>Duration: '+ms(d)+(changed?' (was '+ms(od)+')':'')+'</span>');
     detailMeta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
     if(detailMeta.length)detailParts.push('<div class="detail-meta">'+detailMeta.join('')+'</div>');
@@ -304,6 +306,9 @@ function buildSchedule(){
       timeHtml+='<span class="prep-line"></span>';
     }
     timeHtml+='</div>';
+    const bountyControl=(!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty))
+      ? '<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Current bounty - 2x points':'Set bounty - 2x points')+'" aria-label="'+(isBounty?'Current bounty':'Set bounty')+'">'+(isBounty?'2x':bountySvg)+'</button>'
+      : '';
 
     el.innerHTML=
       timeHtml+
@@ -320,7 +325,7 @@ function buildSchedule(){
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip">Bounty x2</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
-            '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
               taskTagChipsHtml(ev)+
@@ -331,6 +336,7 @@ function buildSchedule(){
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
           (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+          bountyControl+
           '<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
           '<div class="dur">'+
             '<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>'+
@@ -405,7 +411,7 @@ function buildSchedule(){
       function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==dbadge){closePop();}}
       setTimeout(()=>document.addEventListener("click",onOutside,true),0);
     });}
-    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
+    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});
@@ -419,7 +425,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){
@@ -774,14 +780,64 @@ function _actualMin(ev){
   try{const s=loadSessions();if(s[ev.id]&&s[ev.id].length)return s[ev.id].reduce((a,x)=>a+x.durationMin,0);}catch(e){}
   return dur(ev);
 }
+const REMAINING_STAT_SCOPE_KEY="pa-remaining-stat-scope";
+function _remainingStatScope(){
+  try{return localStorage.getItem(REMAINING_STAT_SCOPE_KEY)==="block"?"block":"day";}catch(e){return"day";}
+}
+function _setRemainingStatScope(scope){
+  try{localStorage.setItem(REMAINING_STAT_SCOPE_KEY,scope==="block"?"block":"day");}catch(e){}
+}
+function _currentBlockWindow(){
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  if(!blocks.length)return null;
+  const now=new Date();
+  const nowMin=now.getHours()*60+now.getMinutes();
+  for(const b of blocks){
+    const bStart=pt(b.start),bEnd=pt(b.end);
+    if(nowMin>=bStart&&nowMin<bEnd)return {block:b,start:bStart,end:bEnd};
+  }
+  return null;
+}
+function _remainingForScope(scope){
+  const rem=scheduled.filter(ev=>!isDone(ev));
+  if(scope!=="block")return rem;
+  const win=_currentBlockWindow();
+  if(!win)return [];
+  return rem.filter(ev=>pt(ev.start)<win.end&&pt(ev.end)>win.start);
+}
+function _remainingEmptyMessage(scope){
+  return scope==="block"&&!_currentBlockWindow()?"No active block.":"Nothing left!";
+}
+function _remainingScopeLabel(scope){
+  return scope==="block"?"Block":"Day";
+}
+function _updateRemainingStatLabels(scope){
+  const scopeLabel=_remainingScopeLabel(scope);
+  const timeLabel=document.getElementById("s-time-label");
+  const tasksLabel=document.getElementById("s-tasks-label");
+  const hint="Click to show "+(scope==="block"?"day":"block")+" remaining";
+  if(timeLabel)timeLabel.textContent=scopeLabel+" Time Left";
+  if(tasksLabel)tasksLabel.textContent=scopeLabel+" Tasks Left";
+  document.querySelectorAll(".stat-combined .stat-half").forEach(el=>{el.title=hint;});
+}
+function toggleRemainingStatScope(event){
+  if(event)event.stopPropagation();
+  const next=_remainingStatScope()==="block"?"day":"block";
+  _setRemainingStatScope(next);
+  const popover=document.getElementById("stat-popover");
+  if(popover){popover.style.display="none";popover.dataset.openFor="";}
+  document.querySelectorAll(".stat.sp-open").forEach(el=>el.classList.remove("sp-open"));
+  updateStats();
+}
 function updateStats(){
-  const done=scheduled.filter(isDone), rem=scheduled.filter(ev=>!isDone(ev));
+  const done=scheduled.filter(isDone), scope=_remainingStatScope(), rem=_remainingForScope(scope);
   const remMin=rem.reduce((a,ev)=>a+dur(ev),0);
   const doneMin=done.reduce((a,ev)=>a+_actualMin(ev),0);
   document.getElementById("s-time").textContent=remMin>0?ms(remMin):"0m";
   document.getElementById("s-tasks").textContent=rem.length;
   document.getElementById("s-done").textContent=done.length+" / "+ms(doneMin);
   document.getElementById("s-block").textContent=getCurrentBlockEnd();
+  _updateRemainingStatLabels(scope);
 }
 function getCurrentBlockEnd(){
   const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
@@ -809,18 +865,20 @@ function showStatPopover(statId, event) {
   let html = '';
   switch(statId) {
     case 's-time': {
-      const rem = scheduled.filter(ev => !isDone(ev));
-      html = '<div class="sp-title">Time Remaining</div>';
-      if (!rem.length) { html += '<div class="sp-empty">All tasks complete!</div>'; break; }
+      const scope = _remainingStatScope();
+      const rem = _remainingForScope(scope);
+      html = '<div class="sp-title">'+_remainingScopeLabel(scope)+' Time Remaining</div>';
+      if (!rem.length) { html += '<div class="sp-empty">'+_remainingEmptyMessage(scope)+'</div>'; break; }
       html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(dur(ev))+'</span></div>').join('');
       const total = rem.reduce((a,ev) => a+dur(ev), 0);
       html += '<div class="sp-note">Total: '+ms(total)+'</div>';
       break;
     }
     case 's-tasks': {
-      const rem = scheduled.filter(ev => !isDone(ev));
-      html = '<div class="sp-title">Remaining Tasks</div>';
-      if (!rem.length) { html += '<div class="sp-empty">Nothing left!</div>'; break; }
+      const scope = _remainingStatScope();
+      const rem = _remainingForScope(scope);
+      html = '<div class="sp-title">'+_remainingScopeLabel(scope)+' Remaining Tasks</div>';
+      if (!rem.length) { html += '<div class="sp-empty">'+_remainingEmptyMessage(scope)+'</div>'; break; }
       html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span></div>').join('');
       break;
     }

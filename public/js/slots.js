@@ -5,6 +5,8 @@
   let isSpinning = false;
   let lastPendingBankCents = 0;
   let pendingDeleteRewardId = null;
+  const AWARD_QUEUE_KEY = "pa-slot-award-queue";
+  const coinPhysics = { coins: [], raf: null, lastTs: 0 };
   const KIND_LABELS = {
     miss: "No prize",
     free: "Free",
@@ -34,8 +36,8 @@
     return "$" + ((cents || 0) / 100).toFixed(2);
   }
 
-  function tokenLabel(count){
-    return count + " Task Token" + (count === 1 ? "" : "s");
+  function pointLabel(count){
+    return count + " point" + (count === 1 ? "" : "s");
   }
 
   function esc(s){
@@ -72,8 +74,8 @@
     renderSettings();
     const badge = document.getElementById("slots-credit-badge");
     if(badge){
-      badge.textContent = String(points);
-      badge.style.display = points > 0 ? "" : "none";
+      badge.textContent = String(credits);
+      badge.style.display = credits > 0 ? "" : "none";
     }
     const bu = slotState.bankUsage || {};
     const constants = slotState.constants || {};
@@ -86,7 +88,7 @@
     const spinCost = (slotState.constants && slotState.constants.spinCost) || 1;
     if(btn) {
       btn.disabled = isSpinning || credits < spinCost;
-      btn.textContent = "Spin (" + tokenLabel(spinCost) + ")";
+      btn.textContent = "Spin (" + pointLabel(spinCost) + ")";
     }
   }
 
@@ -95,12 +97,78 @@
     if(el) el.textContent = text;
   }
 
+  function readAwardQueue(){
+    try {
+      const rows = JSON.parse(localStorage.getItem(AWARD_QUEUE_KEY) || "[]");
+      return Array.isArray(rows) ? rows : [];
+    } catch(e) {
+      return [];
+    }
+  }
+
+  function isSlotsPageActive(){
+    const root = document.getElementById("tab-slots");
+    return !!(root && root.classList.contains("active"));
+  }
+
+  function clearSlotCoinEffects(){
+    if(coinPhysics.raf){
+      cancelAnimationFrame(coinPhysics.raf);
+      coinPhysics.raf = null;
+    }
+    coinPhysics.coins.forEach(coin => {
+      if(coin && coin.el) coin.el.remove();
+    });
+    coinPhysics.coins = [];
+    const field = document.getElementById("slot-coin-field");
+    if(field) field.remove();
+    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop").forEach(el => el.remove());
+    document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
+  }
+
+  window.clearSlotCoinEffects = clearSlotCoinEffects;
+
+  function writeAwardQueue(rows){
+    try {
+      localStorage.setItem(AWARD_QUEUE_KEY, JSON.stringify((rows || []).slice(-100)));
+    } catch(e) {}
+  }
+
+  function queueTaskCredit(task, options){
+    if(!task || !task.id) return;
+    const row = { task, options: options || {}, queuedAt: new Date().toISOString() };
+    const rows = readAwardQueue();
+    const key = (row.options.sourceKey || row.options.source_key || row.options.sourceDate || "unknown") + ":" + task.id;
+    const filtered = rows.filter(item => {
+      const itemTask = item && item.task;
+      const itemOptions = (item && item.options) || {};
+      const itemKey = (itemOptions.sourceKey || itemOptions.source_key || itemOptions.sourceDate || "unknown") + ":" + (itemTask && itemTask.id);
+      return itemKey !== key;
+    });
+    filtered.push(row);
+    writeAwardQueue(filtered);
+  }
+
+  async function flushTaskCreditQueue(){
+    const rows = readAwardQueue();
+    if(!rows.length) return;
+    const remaining = [];
+    for(const row of rows){
+      try {
+        await earnTaskCredit(row.task, { ...(row.options || {}), fromQueue: true });
+      } catch(e) {
+        remaining.push(row);
+      }
+    }
+    writeAwardQueue(remaining);
+  }
+
   function renderSettings(){
     if(!slotState) return;
     const constants = slotState.constants || {};
     const spinCost = constants.spinCost || 1;
     const monthlyGoal = constants.monthlyGoalCents || 10000;
-    const costInput = document.getElementById("slot-spin-cost");
+    const costInput = document.getElementById("slot-spin-cost-input");
     const goalInput = document.getElementById("slot-monthly-goal");
     const penalty = document.getElementById("slot-shortfall-penalty");
     const rationale = document.getElementById("slot-scoring-rationale");
@@ -108,16 +176,17 @@
     if(goalInput && document.activeElement !== goalInput) goalInput.value = ((monthlyGoal || 0) / 100).toFixed(0);
     if(penalty && document.activeElement !== penalty) penalty.value = constants.shortfallPenalty || "";
     if(rationale && document.activeElement !== rationale) rationale.value = constants.scoringRationale || "";
-    setText("slot-current-cost", tokenLabel(spinCost) + " per spin");
+    setText("slot-current-cost", pointLabel(spinCost) + " per spin");
+    setText("slot-spin-cost-line", pointLabel(spinCost) + " per spin");
     setText("slot-current-goal", "Monthly goal: " + money(monthlyGoal) + "; shortfall gets redirected.");
   }
 
   async function saveSettings(){
-    const costInput = document.getElementById("slot-spin-cost");
+    const costInput = document.getElementById("slot-spin-cost-input");
     const goalInput = document.getElementById("slot-monthly-goal");
     const penalty = document.getElementById("slot-shortfall-penalty");
     const rationale = document.getElementById("slot-scoring-rationale");
-    const spinCost = Math.max(1, Math.min(25, parseInt(costInput && costInput.value, 10) || 1));
+    const spinCost = Math.max(1, Math.min(250, parseInt(costInput && costInput.value, 10) || 10));
     const monthlyGoalCents = Math.max(100, Math.min(1000000, Math.round((parseFloat(goalInput && goalInput.value) || 1) * 100)));
     try {
       await api("/api/slot/settings", {
@@ -241,10 +310,11 @@
       setResult("Building houses...");
       await animateReels(resultSymbols(spinRow, snap));
       if((spinRow.bank_delta_cents || 0) > 0) {
-        await animateBankPayout(spinRow, snap);
+        await animateBankPayout(spinRow, snap, spinRow.bank_delta_cents || 0);
         if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(spinRow.bank_delta_cents || 0);
         else addPendingDeposit(spinRow.bank_delta_cents || 0);
       }
+      highlightWinningCells(spinRow, snap);
       setResult(resultText(spinRow, snap));
       isSpinning = false;
       await loadSlots();
@@ -260,6 +330,7 @@
     if(!reels.length) return Promise.resolve();
     const targets = finalSymbols && finalSymbols.length ? finalSymbols : SPIN_SYMBOLS;
     let tick = 0;
+    clearResultHighlights();
     reels.forEach(r => {
       r.classList.remove("reveal");
       r.classList.add("spinning");
@@ -291,6 +362,7 @@
   function setReelsForReward(reward){
     const reels = document.querySelectorAll(".slot-cell");
     const words = resultSymbols({ status: reward.kind === "miss" ? "miss" : "awarded", id: reward.id || 0 }, reward);
+    clearResultHighlights();
     reels.forEach((r, i) => {
       setCell(r, words[i] || "STAR");
       r.classList.add("reveal");
@@ -324,7 +396,40 @@
     return board;
   }
 
-  async function animateBankPayout(spinRow, snap){
+  function winningPositions(spinRow, snap){
+    const board = snap && Array.isArray(snap.screen_board) ? snap.screen_board : resultSymbols(spinRow, snap || {});
+    const payline = snap && Array.isArray(snap.screen_payline) ? snap.screen_payline : [];
+    const status = spinRow && spinRow.status;
+    const isMiss = status === "miss" || (snap && snap.kind === "miss");
+    if(!isMiss && payline.length) return payline;
+
+    const symbol = rewardSymbol(snap || {});
+    if(!isMiss && board && board.length){
+      const line = PAYLINES.find(candidate => candidate.every(i => board[i] === symbol));
+      if(line) return line;
+    }
+
+    const payout = (snap && snap.bank_screen_payout) || {};
+    if((spinRow && (spinRow.bank_delta_cents || 0) > 0) && Array.isArray(payout.positions)) {
+      return payout.positions;
+    }
+    return [];
+  }
+
+  function clearResultHighlights(){
+    document.querySelectorAll(".slot-cell.win-hit").forEach(cell => cell.classList.remove("win-hit"));
+  }
+
+  function highlightWinningCells(spinRow, snap){
+    const reels = Array.from(document.querySelectorAll(".slot-cell"));
+    const positions = winningPositions(spinRow, snap);
+    clearResultHighlights();
+    positions.forEach(i => {
+      if(reels[i]) reels[i].classList.add("win-hit");
+    });
+  }
+
+  async function animateBankPayout(spinRow, snap, deltaCents){
     const payout = (snap && snap.bank_screen_payout) || {};
     const positions = Array.isArray(payout.positions) ? payout.positions : [];
     if(!positions.length) return;
@@ -349,11 +454,217 @@
 
     const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
     if(target) flyBankLights(cells, target);
-    await wait(760);
+    if(deltaCents > 0) await animateBankCoinCollection(cells, deltaCents);
+    else await wait(760);
     cells.forEach(cell => cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical"));
   }
 
+  async function animateBankCoinCollection(cells, deltaCents){
+    if(!isSlotsPageActive()) return;
+    const field = ensureCoinField();
+    if(!field) return;
+    const label = field.querySelector(".slot-coin-ground-amount");
+    field.classList.add("active");
+    if(label){
+      label.textContent = "+" + money(deltaCents);
+      label.classList.remove("pop");
+      void label.offsetWidth;
+      label.classList.add("pop");
+    }
+    let idx = 0;
+    cells.forEach((cell, cellIdx) => {
+      for(let burst = 0; burst < 9; burst++){
+        spawnPhysicsCoin(cell, idx++, cellIdx, burst);
+      }
+    });
+    startCoinPhysics();
+    await wait(900);
+    if(!isSlotsPageActive()) return;
+    await animateCoinPileToPiggy(deltaCents);
+  }
+
+  async function animateCoinPileToPiggy(deltaCents){
+    if(!isSlotsPageActive()) return;
+    const target = document.getElementById("slot-pending-deposit") || document.getElementById("slot-bank-balance");
+    if(!target) return;
+    const targetRect = target.getBoundingClientRect();
+    const tx = targetRect.left + targetRect.width / 2;
+    const ty = targetRect.top + targetRect.height / 2;
+    const floorCoins = coinPhysics.coins.filter(c => c.y > window.innerHeight - 90);
+    const sources = floorCoins.length ? floorCoins : coinPhysics.coins;
+    target.classList.add("receiving");
+    for(let i = 0; i < 14; i++){
+      const source = sources.length ? sources[(i * 7) % sources.length] : null;
+      const sx = source ? source.x : (window.innerWidth / 2 + (i % 5 - 2) * 28);
+      const sy = source ? source.y : (window.innerHeight - 18);
+      const spark = document.createElement("span");
+      spark.className = "slot-gold-transfer";
+      spark.style.left = sx + "px";
+      spark.style.top = sy + "px";
+      spark.style.setProperty("--gold-x", (tx - sx) + "px");
+      spark.style.setProperty("--gold-y", (ty - sy) + "px");
+      spark.style.animationDelay = (i * 42) + "ms";
+      document.body.appendChild(spark);
+      spark.addEventListener("animationend", () => spark.remove(), { once: true });
+    }
+    await wait(720);
+    if(isSlotsPageActive()) showPiggyBankAddAmount(target, deltaCents);
+    await wait(500);
+    target.classList.remove("receiving");
+  }
+
+  function showPiggyBankAddAmount(target, deltaCents){
+    const rect = target.getBoundingClientRect();
+    const pop = document.createElement("span");
+    pop.className = "slot-piggy-add-pop";
+    pop.textContent = "+" + money(deltaCents);
+    pop.style.left = (rect.left + rect.width / 2) + "px";
+    pop.style.top = (rect.top + Math.min(34, rect.height / 2)) + "px";
+    document.body.appendChild(pop);
+    target.classList.add("deposit-impact");
+    pop.addEventListener("animationend", () => pop.remove(), { once: true });
+    setTimeout(() => target.classList.remove("deposit-impact"), 680);
+  }
+
+  function ensureCoinField(){
+    if(!isSlotsPageActive()) return null;
+    let field = document.getElementById("slot-coin-field");
+    if(field) return field;
+    field = document.createElement("div");
+    field.id = "slot-coin-field";
+    field.className = "slot-coin-field";
+    field.innerHTML = '<div class="slot-coin-ground"></div><div class="slot-coin-ground-amount"></div>';
+    document.body.appendChild(field);
+    return field;
+  }
+
+  function spawnPhysicsCoin(cell, idx, cellIdx, burstIdx){
+    const field = ensureCoinField();
+    if(!field) return;
+    const rect = cell.getBoundingClientRect();
+    const el = document.createElement("span");
+    const r = 8 + (idx % 3);
+    const angle = (-Math.PI * 0.92) + (burstIdx / 8) * (Math.PI * 0.84) + ((cellIdx % 2) ? 0.08 : -0.08);
+    const speed = 390 + (idx % 5) * 54;
+    const coin = {
+      el,
+      r,
+      x: rect.left + rect.width / 2 + (burstIdx - 4) * 2,
+      y: rect.top + rect.height / 2,
+      vx: Math.cos(angle) * speed + (Math.random() - 0.5) * 120,
+      vy: Math.sin(angle) * speed - 120 - Math.random() * 130,
+      rot: Math.random() * 360,
+      vr: (Math.random() - 0.5) * 860,
+      born: performance.now()
+    };
+    el.className = "slot-physics-coin";
+    el.style.width = (r * 2) + "px";
+    el.style.height = (r * 2) + "px";
+    field.appendChild(el);
+    coinPhysics.coins.push(coin);
+    trimPhysicsCoins();
+    renderPhysicsCoin(coin);
+  }
+
+  function trimPhysicsCoins(){
+    const maxCoins = 180;
+    while(coinPhysics.coins.length > maxCoins){
+      const coin = coinPhysics.coins.shift();
+      if(coin && coin.el) coin.el.remove();
+    }
+  }
+
+  function startCoinPhysics(){
+    if(!isSlotsPageActive()) return;
+    if(coinPhysics.raf) return;
+    coinPhysics.lastTs = performance.now();
+    coinPhysics.raf = requestAnimationFrame(stepCoinPhysics);
+  }
+
+  function stepCoinPhysics(ts){
+    if(!isSlotsPageActive()){
+      coinPhysics.raf = null;
+      return;
+    }
+    const dt = Math.min(0.026, Math.max(0.001, (ts - coinPhysics.lastTs) / 1000));
+    coinPhysics.lastTs = ts;
+    const floor = window.innerHeight - 8;
+    const left = 6;
+    const right = window.innerWidth - 6;
+    const gravity = 1420;
+    const coins = coinPhysics.coins;
+
+    coins.forEach(c => {
+      c.vy += gravity * dt;
+      c.vx *= 0.992;
+      c.vy *= 0.998;
+      c.x += c.vx * dt;
+      c.y += c.vy * dt;
+      c.rot += c.vr * dt;
+
+      if(c.x - c.r < left){
+        c.x = left + c.r;
+        c.vx = Math.abs(c.vx) * 0.48;
+        c.vr *= 0.78;
+      }
+      if(c.x + c.r > right){
+        c.x = right - c.r;
+        c.vx = -Math.abs(c.vx) * 0.48;
+        c.vr *= 0.78;
+      }
+      if(c.y + c.r > floor){
+        c.y = floor - c.r;
+        if(Math.abs(c.vy) > 45) c.vy = -Math.abs(c.vy) * 0.22;
+        else c.vy = 0;
+        c.vx *= 0.83;
+        c.vr *= 0.7;
+      }
+    });
+
+    for(let pass = 0; pass < 2; pass++){
+      for(let i = 0; i < coins.length; i++){
+        for(let j = i + 1; j < coins.length; j++){
+          const a = coins[i], b = coins[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const min = a.r + b.r;
+          const distSq = dx * dx + dy * dy;
+          if(distSq <= 0 || distSq >= min * min) continue;
+          const dist = Math.sqrt(distSq);
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const overlap = (min - dist) * 0.52;
+          a.x -= nx * overlap;
+          a.y -= ny * overlap;
+          b.x += nx * overlap;
+          b.y += ny * overlap;
+          const rel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+          if(rel < 0){
+            const impulse = -rel * 0.18;
+            a.vx -= nx * impulse;
+            a.vy -= ny * impulse;
+            b.vx += nx * impulse;
+            b.vy += ny * impulse;
+          }
+        }
+      }
+    }
+
+    coins.forEach(c => renderPhysicsCoin(c));
+    const moving = coins.some(c => Math.abs(c.vx) > 4 || Math.abs(c.vy) > 4);
+    if(moving){
+      coinPhysics.raf = requestAnimationFrame(stepCoinPhysics);
+    } else {
+      coinPhysics.raf = null;
+    }
+  }
+
+  function renderPhysicsCoin(coin){
+    coin.el.style.transform = "translate(" + (coin.x - coin.r) + "px," + (coin.y - coin.r) + "px) rotate(" + coin.rot + "deg)";
+  }
+
   function flyBankLights(cells, target){
+    if(!isSlotsPageActive()) return;
     const targetRect = target.getBoundingClientRect();
     const tx = targetRect.left + targetRect.width / 2;
     const ty = targetRect.top + targetRect.height / 2;
@@ -651,8 +962,9 @@
     }
   }
 
-  async function earnTaskCredit(task){
+  async function earnTaskCredit(task, options){
     if(!task || !task.id) return;
+    options = options || {};
     const isBounty = typeof isBountyTask === "function" && isBountyTask(task.id);
     const payload = window.TaskPoints && typeof window.TaskPoints.buildPayload === "function"
       ? window.TaskPoints.buildPayload(task, { bounty: isBounty })
@@ -665,29 +977,58 @@
           bounty: isBounty,
           duration_minutes: task.durMin || task.duration || 30
         };
+    const sourceDate = options.sourceDate || options.completionDate || (window.__state && window.__state.date) || "unknown";
+    const sourceKey = options.sourceKey || (String(sourceDate) + ":" + task.id);
     try {
       const result = await api("/api/slot/earn-task", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          source_key: String((window.__state && window.__state.date) || "unknown") + ":" + task.id,
+          ...payload,
+          source_key: sourceKey,
           task_id: task.id,
           title: task.title || task.label || "Task completed",
           type: task.type || "task",
           source: task.source || "",
           priority: task.priority || "",
           tags: Array.isArray(task.tags) ? task.tags : [],
-          duration_min: taskDurationMinutes(task),
-          focus_minutes: taskFocusMinutes(task)
+          duration_minutes: payload.duration_minutes || taskDurationMinutes(task),
+          actual_minutes: payload.actual_minutes || taskFocusMinutes(task),
+          completed_at: options.completedAt || new Date().toISOString()
         })
       });
-      if(result.awarded && typeof showToast === "function") {
-        const credits = result.credits || 1;
-        showToast("+" + tokenLabel(credits));
+      if(result.awarded && !options.silent && typeof showToast === "function") {
+        const points = result.credits || result.delta || (result.scoring && result.scoring.awardPoints) || 1;
+        showToast("+" + pointLabel(points));
       }
       await loadSlots();
+      return result;
     } catch(e) {
       console.warn("[slots] earn failed:", e.message);
+      if(!options.fromQueue) queueTaskCredit(task, options);
+      throw e;
+    }
+  }
+
+  async function reconcileCompletedTaskCredits(){
+    if(typeof scheduled === "undefined" || !Array.isArray(scheduled)) return;
+    const sourceDate = (typeof viewDate !== "undefined" && viewDate) || (window.__state && window.__state.date) || "unknown";
+    const seen = new Set();
+    for(const task of scheduled){
+      if(!task || !task.id || seen.has(task.id)) continue;
+      let done = false;
+      try {
+        done = typeof isDone === "function" ? !!isDone(task) : !!(manualDone && manualDone.has && manualDone.has(task.id));
+      } catch(e) {}
+      if(!done) continue;
+      seen.add(task.id);
+      const doneAtMap = typeof doneAt !== "undefined" ? doneAt : null;
+      const completedAt = doneAtMap && doneAtMap[task.id]
+        ? (doneAtMap[task.id] instanceof Date ? doneAtMap[task.id].toISOString() : new Date(doneAtMap[task.id]).toISOString())
+        : new Date().toISOString();
+      try {
+        await earnTaskCredit(task, { sourceDate, completedAt, silent: true, reconcile: true });
+      } catch(e) {}
     }
   }
 
@@ -733,9 +1074,11 @@
       renderRewards();
     });
     loadSlots();
+    flushTaskCreditQueue();
+    setTimeout(reconcileCompletedTaskCredits, 1500);
   }
 
-  window.SlotRewards = { load: loadSlots, earnTaskCredit };
+  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits };
   document.addEventListener("slot-changed", loadSlots);
   document.addEventListener("DOMContentLoaded", init);
 })();

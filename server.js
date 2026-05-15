@@ -105,9 +105,19 @@ const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/a
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve"]);
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
+function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === token : false; }
+function isSweepBlockWrite(req) { return req.method === "POST" && req.path === "/api/blocks" && hasSweepWriteToken(req); }
+function attachSweepServiceAuth(req) {
+  const userId = Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 1);
+  const workspaceId = req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${userId}`;
+  req.dccServiceAuth = { userId, workspaceId, source: "sweep-suite" };
+  req.workspaceId = workspaceId;
+}
+function isAllowedSweepBlockItem(item) { const props = item && item.properties; return item && item.type === "block" && props && props.kind === "sweep_suite_task"; }
 
 app.use((req, res, next) => {
   if (AUTH_PUBLIC.has(req.path)) return next();
+  if (isSweepBlockWrite(req)) { attachSweepServiceAuth(req); return next(); }
   if (DCC_ENDPOINTS.has(req.path) && (isLocalhost(req) || hasDccToken(req))) return next();
   if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
   next();
@@ -115,6 +125,7 @@ app.use((req, res, next) => {
 
 // ── Workspace Middleware ──
 app.use(async (req, res, next) => {
+  if (req.dccServiceAuth) { req.workspaceId = req.dccServiceAuth.workspaceId; return next(); }
   if (!req.session.userId) return next();
   if (req.session.workspaceId) { req.workspaceId = req.session.workspaceId; return next(); }
   try {
@@ -422,9 +433,10 @@ function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && wo
 const RESPONSIBILITY_KINDS = new Set(["responsibility_item", "responsibility_trigger"]);
 
 function cadenceDays(props) {
+  const raw = String(props.cadence || "").toLowerCase();
+  if (raw === "as_needed" || raw === "as-needed" || raw === "as needed") return 0;
   const n = Number(props.cadenceDays || props.cadence_days || 0);
   if (n > 0) return n;
-  const raw = String(props.cadence || "").toLowerCase();
   if (raw === "daily") return 1;
   if (raw === "weekly") return 7;
   if (raw === "biweekly") return 14;
@@ -437,6 +449,7 @@ function cadenceDays(props) {
 function responsibilityScore(props, at = new Date()) {
   if (!props || props.status === "archived" || props.status === "done") return 0;
   const days = cadenceDays(props);
+  if (!days) return 0;
   const anchor = props.lastCompletedAt || props.createdAt || props.created_at || props.added_at;
   const start = anchor ? new Date(anchor) : at;
   const elapsedDays = Math.max(0, (at - start) / 86400000);
@@ -513,7 +526,8 @@ async function upsertResponsibility({ properties, userId, workspaceId }) {
     slug,
     domain: properties.domain || "professional",
     area: properties.area || "general",
-    cadenceDays: Number(properties.cadenceDays || 7),
+    cadence: properties.cadence || (properties.asNeeded ? "as_needed" : "custom"),
+    cadenceDays: properties.cadence === "as_needed" ? null : Number(properties.cadenceDays || 7),
     capacityBucket: properties.capacityBucket || "work_admin",
     estimatedMinutes: Number(properties.estimatedMinutes || 30),
     status: properties.status || "active",
@@ -641,7 +655,7 @@ function parseOffersAmpAlert(text) {
   };
 }
 
-app.post("/api/blocks", async (req, res) => { try { const body = req.body, userId = req.session.userId; const items = Array.isArray(body) ? body : [body]; const results = []; for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: req.workspaceId })); broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, req.workspaceId); res.json(results.length === 1 ? results[0] : results); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post("/api/blocks", async (req, res) => { try { const body = req.body, userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || null; const workspaceId = req.workspaceId || (req.dccServiceAuth && req.dccServiceAuth.workspaceId) || null; const items = Array.isArray(body) ? body : [body]; if (req.dccServiceAuth && !items.every(isAllowedSweepBlockItem)) return res.status(403).json({ error: "Sweep Suite token may only create sweep_suite_task blocks" }); const results = []; for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId })); broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, workspaceId); res.json(results.length === 1 ? results[0] : results); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.patch("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.updateBlock(req.params.id, req.body); broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 app.delete("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.deleteBlock(req.params.id); broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id] }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 app.post("/api/blocks/batch", async (req, res) => { try { const { operations, _clientId } = req.body; if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" }); const opsWithUser = operations.map(op => op.op === "create" ? { ...op, user_id: req.session.userId, workspace_id: req.workspaceId } : op); const result = await blockDB.batchOp(opsWithUser); broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(400).json({ error: e.message }); } });

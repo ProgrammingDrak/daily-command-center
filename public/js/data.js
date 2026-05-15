@@ -141,6 +141,7 @@ function transformState(state) {
         attendee_count: item.attendee_count || 0,
         is_recurring: item.is_recurring || false,
         all_day: item.all_day || false,
+        commuteMinutes: item.commuteMinutes || item.commute_minutes || item.commute_time_minutes || item.travel_minutes || null,
         notionUrl: item.source === "notion" && item.source_id ?
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
         priority: item.priority || "",
@@ -159,6 +160,7 @@ function transformState(state) {
         id: task.task_id || "cf-" + consider.length,
         title: task.title, type: "task",
         durMin: task.estimated_minutes || 30,
+        commuteMinutes: task.commuteMinutes || task.commute_minutes || task.travel_minutes || null,
         meta: (task.priority || "Medium") + " \u00b7 " + (task.reason || ""),
         detail: "", source: "notion",
         notionUrl: task.url || "", priority: task.priority || "Medium"

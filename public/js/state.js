@@ -2,7 +2,7 @@
 let scheduled=JSON.parse(JSON.stringify(INIT_SCHED));
 let consider=JSON.parse(JSON.stringify(INIT_CONSIDER));
 let backlog=JSON.parse(JSON.stringify(INIT_BACKLOG));
-let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, nextId=200, schedView="plan";
+let manualDone=new Set(), doneAt={}, actionLog=[], durChanges={}, commuteTimes={}, nextId=200, schedView="plan";
 let dailyBounty=null;
 function qaId(){return "qa-"+Date.now()+"-"+Math.random().toString(36).slice(2,7)}
 
@@ -51,6 +51,94 @@ function toggleDetail(itemEl){
   const panel=itemEl.querySelector(".detail-panel");
   if(!panel)return;
   panel.classList.toggle("open");
+}
+
+// ======== COMMUTE LEAVE WINDOWS ========
+let COMMUTE_KEY = "pa-commute-times-" + ((__state && __state.date) ? __state.date : "unknown");
+function normalizeCommuteMinutes(value){
+  const n=parseInt(value,10);
+  return Number.isFinite(n)&&n>0?n:0;
+}
+function commuteWindowBufferMinutes(commuteMinutes){
+  const commute=normalizeCommuteMinutes(commuteMinutes);
+  if(!commute)return 0;
+  return Math.ceil(Math.max(10,commute*0.25)/5)*5;
+}
+function _fmtClockMinute(mins){
+  const day=24*60;
+  const normalized=((Math.round(mins)%day)+day)%day;
+  return fmt(normalized);
+}
+function commuteLeaveWindow(ev){
+  const commute=normalizeCommuteMinutes(ev&&(ev.commuteMinutes||ev.commute_minutes||ev.commuteTime));
+  if(!ev||!commute)return null;
+  const latest=pt(ev.start)-commute;
+  const buffer=commuteWindowBufferMinutes(commute);
+  const earliest=latest-buffer;
+  return {
+    commuteMinutes:commute,
+    bufferMinutes:buffer,
+    earliest:_fmtClockMinute(earliest),
+    latest:_fmtClockMinute(latest),
+    label:"Leave between "+f12(_fmtClockMinute(earliest))+" - "+f12(_fmtClockMinute(latest))
+  };
+}
+function commuteLeaveChipHtml(ev){
+  const win=commuteLeaveWindow(ev);
+  if(!win)return"";
+  const title=(win.commuteMinutes+"m commute, "+win.bufferMinutes+"m departure window").replace(/"/g,"&quot;");
+  return '<span class="commute-chip" title="'+title+'"><span>leave between</span> '+f12(win.earliest)+' - '+f12(win.latest)+'</span>';
+}
+function loadCommuteTimes(){
+  const bs=_bsProp("_commuteTimes",null);
+  if(bs&&typeof bs==="object")return {...bs};
+  try{return JSON.parse(localStorage.getItem(COMMUTE_KEY)||"{}")}catch(e){return{}}
+}
+function saveCommuteTimes(){
+  if(_bsSaveProp("_commuteTimes",commuteTimes))return;
+  try{localStorage.setItem(COMMUTE_KEY,JSON.stringify(commuteTimes));scheduleIDBSave()}catch(e){}
+}
+function _commuteBlockForTask(taskId){
+  if(!window.blockStore||!taskId)return null;
+  const blocks=(window.blockStore.getByType("added_task")||[])
+    .concat(window.blockStore.getByType("schedule_item")||[])
+    .concat((window.blockStore.getByType("block")||[]).filter(b=>{
+      const p=b.properties||{};
+      return p.local_id||p.start||p.end||p.scheduled_dates;
+    }));
+  return blocks.find(b=>{
+    const p=b.properties||{};
+    return p.local_id===taskId||b.id===taskId;
+  })||null;
+}
+function setTaskCommuteMinutes(taskId,value){
+  if(!taskId)return;
+  const minutes=normalizeCommuteMinutes(value);
+  if(minutes)commuteTimes[taskId]=minutes;
+  else delete commuteTimes[taskId];
+  const ev=scheduled.find(e=>e.id===taskId);
+  if(ev){
+    if(minutes)ev.commuteMinutes=minutes;
+    else delete ev.commuteMinutes;
+  }
+  saveCommuteTimes();
+  const block=_commuteBlockForTask(taskId);
+  if(block&&window.blockStore){
+    const props={...(block.properties||{})};
+    if(minutes)props.commuteMinutes=minutes;
+    else delete props.commuteMinutes;
+    window.blockStore.updateBlock(block.id,props);
+  }
+}
+function hydrateTaskCommuteTimes(){
+  commuteTimes=loadCommuteTimes();
+  scheduled.forEach(ev=>{
+    const fromEvent=normalizeCommuteMinutes(ev.commuteMinutes||ev.commute_minutes||ev.commuteTime);
+    const fromMap=normalizeCommuteMinutes(commuteTimes[ev.id]);
+    const minutes=fromMap||fromEvent;
+    if(minutes)ev.commuteMinutes=minutes;
+    else delete ev.commuteMinutes;
+  });
 }
 
 // ======== DEFERRED (push to tomorrow) ========
@@ -272,6 +360,7 @@ async function schedulePushedOnDate(ev,targetDate,opts){
     notionUrl:ev.notionUrl||"",
     source:ev.source||"pushed",
     tags:ev.tags||[],
+    commuteMinutes:ev.commuteMinutes||null,
     added_at:new Date().toISOString(),
     pushed_from:(__state&&__state.date)||"unknown"
   },{date:targetDate});
@@ -338,6 +427,7 @@ async function _scheduleTaskOnDate(ev, dateStr, dayContext){
     notionUrl:ev.notionUrl||"",
     source:ev.source||"moved",
     tags:ev.tags||[],
+    commuteMinutes:ev.commuteMinutes||null,
     added_at:new Date().toISOString(),
     moved_from:(__state&&__state.date)||"unknown"
   },{date:dateStr});
@@ -404,6 +494,20 @@ function moveTaskToTrivial(id){
   if(typeof buildTrivialTasks==='function')buildTrivialTasks();
   if(typeof updateStats==='function')updateStats();
   if(typeof showToast==="function")showToast("Moved to trivial","success");
+}
+
+function moveScheduledTaskToSideProject(id){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return false;
+  if(typeof addSideProjectTask==="function")addSideProjectTask(ev.title,dur(ev)||30);
+  deletedSet.add(id);
+  saveDeletedState();
+  _purgeManualBlock(ev);
+  log("side-project",id,"Moved to Side Projects: "+ev.title);
+  if(typeof showToast==="function")showToast("Moved to Side Projects","success");
+  recalcTimes();
+  render();
+  return true;
 }
 
 function _moveTaskToBacklogStage(id,stage,toastMsg){

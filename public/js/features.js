@@ -208,11 +208,11 @@ function _persistTaskTags(taskId, tagIds) {
 function openAddModal(taskId, taskTitle) {
   _addModalTaskId = taskId;
   document.getElementById('add-modal-title').textContent = taskTitle || 'Task Details';
+  var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
 
   // Initialize tag picker
   var tagContainer = document.getElementById('am-tag-picker');
   if (tagContainer && typeof createTagPicker === 'function') {
-    var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
     var currentTags = (taskEntry && taskEntry.tags) ? taskEntry.tags : [];
     createTagPicker(tagContainer, currentTags, function(newIds) {
       if (taskEntry) taskEntry.tags = newIds;
@@ -220,10 +220,19 @@ function openAddModal(taskId, taskTitle) {
     });
   }
 
+  var commuteInput = document.getElementById('am-commute-input');
+  var commuteHint = document.getElementById('am-commute-hint');
+  if (commuteInput) {
+    var minutes = taskEntry ? (taskEntry.commuteMinutes || 0) : 0;
+    commuteInput.value = minutes ? String(minutes) : '';
+    updateAddModalCommuteHint();
+  } else if (commuteHint) {
+    commuteHint.textContent = 'No leave window';
+  }
+
   // Load notes into block editor
   var notes = loadNotes();
   var noteVal = notes[taskId];
-  var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks);
@@ -240,6 +249,7 @@ function openAddModal(taskId, taskTitle) {
 }
 
 function closeAddModal() {
+  persistAddModalCommute();
   // Save notes from block editor on close
   if (_addModalTaskId && window._amBlockEditor) {
     var notes = loadNotes();
@@ -253,6 +263,7 @@ function closeAddModal() {
   _addModalTaskId = null;
   // Flush any deferred renders now that modal is closed
   _flushDeferredRender();
+  if (typeof render === 'function') render();
 }
 
 function renderModalItems(taskId) {
@@ -340,6 +351,15 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
     if (e.target === e.currentTarget) closeAddModal();
   });
+  var commuteInput = document.getElementById('am-commute-input');
+  if (commuteInput) {
+    commuteInput.addEventListener('input', updateAddModalCommuteHint);
+    commuteInput.addEventListener('change', function() {
+      persistAddModalCommute();
+      updateAddModalCommuteHint();
+      if (typeof render === 'function') render();
+    });
+  }
 
   // Add item (subtask, side project, or action -- based on type dropdown)
   function addModalItem() {
@@ -480,16 +500,13 @@ function _renderSmallTaskSection(opts){
 
 function buildTrivialTasks(){
   const tasks=loadTrivialTasks();
-  const flags=loadTrivialFlags();
-  const flaggedScheduleItems=(typeof scheduled!=='undefined'?scheduled:[]).filter(ev=>flags[ev.id]);
-  const sideProjectTasks=tasks.filter(t=>!t.linkedTo);
+  const sideProjectTasks=tasks.filter(t=>smallTaskKind(t)==="side_project"&&!t.linkedTo);
   const sideProjectsCount=_renderSmallTaskSection({
     containerId:"triage-side-projects",
     label:"Side Project",
     kind:"side_project",
     accent:"var(--cyan,#22d3ee)",
-    tasks:sideProjectTasks,
-    extras:flaggedScheduleItems
+    tasks:sideProjectTasks
   });
   _setSmallTaskBadge("trivial-count",0);
   _setSmallTaskBadge("trivial-tab-count",0);
@@ -787,6 +804,28 @@ function _focusBannerOpenTimerPanel(){
   if(fab)fab.style.display="none";
   if(mini)mini.style.display="none";
 }
+
+function persistAddModalCommute() {
+  if (!_addModalTaskId) return;
+  var input = document.getElementById('am-commute-input');
+  if (!input || typeof setTaskCommuteMinutes !== 'function') return;
+  setTaskCommuteMinutes(_addModalTaskId, input.value);
+}
+
+function updateAddModalCommuteHint() {
+  var input = document.getElementById('am-commute-input');
+  var hint = document.getElementById('am-commute-hint');
+  if (!input || !hint) return;
+  var taskEntry = (typeof scheduled !== 'undefined' && _addModalTaskId) ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null;
+  var minutes = typeof normalizeCommuteMinutes === 'function' ? normalizeCommuteMinutes(input.value) : (parseInt(input.value, 10) || 0);
+  if (!taskEntry || !minutes || typeof commuteLeaveWindow !== 'function') {
+    hint.textContent = 'No leave window';
+    return;
+  }
+  var preview = Object.assign({}, taskEntry, { commuteMinutes: minutes });
+  var win = commuteLeaveWindow(preview);
+  hint.textContent = win ? win.label : 'No leave window';
+}
 function _focusBannerNextItem(){
   if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return null;
   const items=scheduled.filter(ev=>{
@@ -1071,8 +1110,10 @@ function _updateTaskMenusBadge(){
   const schedc=parseInt(document.getElementById("scheduled-count")?.textContent||"0")||0;
   const trivc=parseInt(document.getElementById("trivial-count")?.textContent||"0")||0;
   const sidec=parseInt(document.getElementById("side-projects-section-count")?.textContent||"0")||0;
-  const total=tc+sc+bc+schedc+trivc+sidec;
+  const repeatc=parseInt(document.getElementById("repeat-responsibilities-section-count")?.textContent||"0")||0;
+  const total=tc+sc+bc+schedc+trivc+sidec+repeatc;
   badge.textContent=total;badge.style.display=total?"":"none";
+  if(typeof refreshSidecarTabs==="function")refreshSidecarTabs();
 }
 
 // ======== BUTTONS ========

@@ -33,11 +33,11 @@ const BANK_SCREEN_COUNT_WEIGHTS = [
 const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
 const DEFAULT_SCORING_RATIONALE = [
-  "Task Tokens are automatic so task entry stays lightweight.",
-  "Every completed task earns at least 1 Task Token.",
-  "Longer tasks, high-priority work, urgent work, and logged focus sessions can earn more.",
+  "Task points are automatic so task entry stays lightweight.",
+  "Every eligible completed task earns points from the v2 scoring formula.",
+  "Planned or logged minutes, high-priority work, urgent work, focus level, and bounty status can earn more.",
   "Tiny or trivial tasks are capped so the slot machine rewards real progress without making small chores feel useless.",
-  "A single task can award up to 5 Task Tokens."
+  "Meetings, breaks, and OOO blocks do not earn task points."
 ].join("\n");
 
 const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partner", "either_partner"]);
@@ -273,19 +273,41 @@ async function ensureAccount(workspaceId, userId) {
 
 async function migrateAccountPointsV2(workspaceId, account) {
   const settings = account && account.settings ? account.settings : {};
-  if (settings.points_v2_migrated_at) return account;
-  const migration = {
-    points_v2_migrated_at: new Date().toISOString(),
-    points_v2_multiplier: POINTS_PER_SPIN,
-    points_v2_formula_version: POINTS_FORMULA_VERSION,
-  };
+  const needsBalanceMigration = !settings.points_v2_migrated_at;
+  const needsSpinCostMigration = !settings.points_v2_spin_cost_migrated_at;
+  if (!needsBalanceMigration && !needsSpinCostMigration) return account;
+  const now = new Date().toISOString();
+  const oldSpinCost = clampInt(settings.spin_cost || 1, 1, 250);
+  const migration = {};
+  if (needsBalanceMigration) {
+    Object.assign(migration, {
+      points_v2_migrated_at: now,
+      points_v2_multiplier: POINTS_PER_SPIN,
+      points_v2_formula_version: POINTS_FORMULA_VERSION,
+    });
+  }
+  if (needsSpinCostMigration) {
+    Object.assign(migration, {
+      spin_cost: clampInt(oldSpinCost * POINTS_PER_SPIN, 1, 250),
+      points_v2_spin_cost_migrated_at: now,
+      points_v2_old_spin_cost: oldSpinCost,
+      points_v2_spin_cost_multiplier: POINTS_PER_SPIN,
+    });
+  }
   const { rows: [updated] } = await pool.query(
     `UPDATE slot_accounts
-     SET point_balance = point_balance * $2,
+     SET point_balance = CASE
+           WHEN NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v2_migrated_at')
+           THEN point_balance * $2
+           ELSE point_balance
+         END,
          settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb,
          updated_at = NOW()
      WHERE workspace_id = $1
-       AND NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v2_migrated_at')
+       AND (
+         NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v2_migrated_at')
+         OR NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v2_spin_cost_migrated_at')
+       )
      RETURNING *`,
     [workspaceId, POINTS_PER_SPIN, JSON.stringify(migration)]
   );
@@ -298,7 +320,7 @@ function normalizeSlotSettings(settings = {}) {
   const raw = settings && typeof settings === "object" ? settings : {};
   return {
     ...raw,
-    spin_cost: clampInt(raw.spin_cost || DEFAULT_SPIN_COST, 1, 25),
+    spin_cost: clampInt(raw.spin_cost || DEFAULT_SPIN_COST, 1, 250),
     monthly_goal_cents: clampInt(raw.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000),
     shortfall_penalty: String(raw.shortfall_penalty || DEFAULT_SHORTFALL_PENALTY),
     scoring_rationale: String(raw.scoring_rationale || DEFAULT_SCORING_RATIONALE),
@@ -479,7 +501,10 @@ async function getState(workspaceId, userId) {
     funding,
     constants: {
       spinCost,
-      maxTaskCredits: 5,
+      spinCostPoints: spinCost,
+      pointsPerSpin: POINTS_PER_SPIN,
+      pointsFormulaVersion: POINTS_FORMULA_VERSION,
+      maxTaskCredits: null,
       monthlyGoalCents: account.settings.monthly_goal_cents,
       shortfallPenalty: account.settings.shortfall_penalty,
       scoringRationale: account.settings.scoring_rationale,
@@ -492,7 +517,7 @@ async function updateSettings(workspaceId, userId, body = {}) {
   const current = account.settings || {};
   const next = {
     ...current,
-    spin_cost: clampInt(body.spin_cost || body.spinCost || current.spin_cost || DEFAULT_SPIN_COST, 1, 25),
+    spin_cost: clampInt(body.spin_cost || body.spinCost || current.spin_cost || DEFAULT_SPIN_COST, 1, 250),
     monthly_goal_cents: clampInt(
       body.monthly_goal_cents || body.monthlyGoalCents || current.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS,
       100,
@@ -555,60 +580,81 @@ function clampInt(value, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-function normalizePriority(priority) {
-  return String(priority || "").trim().toLowerCase();
-}
-
-function calculateTaskCompletionCredits(body = {}) {
-  const durationMin = clampInt(body.duration_min || body.dur_min || body.durMin || 0, 0, 480);
-  const focusMin = clampInt(body.focus_minutes || body.focusMin || 0, 0, 480);
-  const priority = normalizePriority(body.priority);
-  const source = String(body.source || "").trim().toLowerCase();
-  const type = String(body.type || "").trim().toLowerCase();
-  const tags = Array.isArray(body.tags) ? body.tags.map(t => String(t).toLowerCase()) : [];
-
-  if (type === "meeting" || type === "ooo") return 0;
-
-  let credits = 1;
-
-  if (durationMin >= 45) credits += 1;
-  if (durationMin >= 90) credits += 1;
-  if (durationMin >= 150) credits += 1;
-
-  if (["high", "urgent", "critical", "p1"].includes(priority)) credits += 1;
-  if (["urgent", "critical", "p1"].includes(priority)) credits += 1;
-
-  if (focusMin >= 25) credits += 1;
-  if (focusMin >= 90) credits += 1;
-
-  if (source.includes("trivial") || tags.includes("trivial") || durationMin > 0 && durationMin <= 15) {
-    credits = Math.min(credits, priority === "high" ? 2 : 1);
-  }
-
-  return Math.max(1, Math.min(credits, 5));
+function normalizeTaskCreditBody(body = {}) {
+  return {
+    ...body,
+    duration_minutes: body.duration_minutes ?? body.durationMinutes ?? body.duration_min ?? body.dur_min ?? body.duration ?? body.durMin,
+    actual_minutes: body.actual_minutes ?? body.actualMinutes ?? body.focus_minutes ?? body.focusMin,
+  };
 }
 
 async function earnTaskCredit(workspaceId, userId, body) {
+  body = normalizeTaskCreditBody(body || {});
   await ensureAccount(workspaceId, userId);
   const sourceKey = String(body.source_key || body.task_id || "").trim();
   if (!sourceKey) throw new Error("source_key required");
   const description = String(body.description || body.title || "Task completed");
-  const credits = calculateTaskCompletionCredits(body);
-  if (credits < 1) return { awarded: false, account: (await getState(workspaceId, userId)).account };
+  const scoring = scoreTaskPoints(body);
+  const credits = scoring.awardPoints;
+  const metadata = {
+    formulaVersion: POINTS_FORMULA_VERSION,
+    scoring,
+    inputs: {
+      task_id: body.task_id || null,
+      title: body.title || null,
+      type: body.type || body.kind || null,
+      priority: body.priority || null,
+      source: body.source || null,
+      tags: body.tags || [],
+      duration_minutes: body.duration_minutes ?? body.durationMinutes ?? body.duration ?? body.durMin ?? null,
+      actual_minutes: body.actual_minutes ?? body.actualMinutes ?? null,
+      effort_tier: body.effort_tier || body.effortTier || null,
+      attention_tier: body.attention_tier || body.attentionTier || null,
+      bounty: body.bounty === true,
+      trivial: body.trivial === true,
+      completed_at: body.completed_at || body.completedAt || null,
+    },
+  };
+  if (!scoring.eligible || credits < 1) {
+    const state = await getState(workspaceId, userId);
+    return { awarded: false, credits: 0, delta: 0, account: state.account, scoring };
+  }
   const { rows } = await pool.query(
-    `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description)
-     VALUES ($1,$2,$3,'task_complete',$4,$5)
+    `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description, metadata)
+     VALUES ($1,$2,$3,'task_complete',$4,$5,$6)
      ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
      RETURNING *`,
-    [workspaceId, userId || null, credits, sourceKey, description]
+    [workspaceId, userId || null, credits, sourceKey, description, JSON.stringify(metadata)]
   );
   let awarded = false;
+  let adjusted = false;
+  let delta = 0;
   if (rows[0]) {
     awarded = true;
-    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, credits]);
+    delta = credits;
+    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
+  } else {
+    const { rows: [existing] } = await pool.query(
+      `SELECT delta FROM slot_point_ledger
+       WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2`,
+      [workspaceId, sourceKey]
+    );
+    if (existing && Number(existing.delta) < credits) {
+      delta = credits - Number(existing.delta || 0);
+      await pool.query(
+        `UPDATE slot_point_ledger
+         SET delta=$3, description=$4, metadata=$5
+         WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2`,
+        [workspaceId, sourceKey, credits, description, JSON.stringify(metadata)]
+      );
+      if (delta !== 0) {
+        adjusted = true;
+        await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
+      }
+    }
   }
   const state = await getState(workspaceId, userId);
-  return { awarded, credits: awarded ? credits : 0, account: state.account };
+  return { awarded: awarded || adjusted, adjusted, credits: awarded || adjusted ? delta : 0, delta, account: state.account, scoring };
 }
 
 function chooseWeighted(rewards) {
@@ -652,9 +698,11 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
   const protectedCells = new Set();
   const selectedSymbol = rewardSymbol(selected);
   const isMiss = selected.kind === "miss";
+  let payline = [];
 
   if (!isMiss && selected.kind !== "bank_builder") {
     const line = PAYLINES[crypto.randomInt(PAYLINES.length)];
+    payline = [...line];
     line.forEach(i => {
       board[i] = selectedSymbol;
       protectedCells.add(i);
@@ -676,7 +724,7 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
   }
 
   const payout = calculateScreenBankPayout(board, account, bankUsage);
-  return { board, payout };
+  return { board, payline, payout };
 }
 
 function calculateScreenBankPayout(board, account, bankUsage) {
@@ -711,7 +759,14 @@ function calculateScreenBankPayout(board, account, bankUsage) {
     }
   }
 
-  const baseCents = Math.floor(((account && account.bank_balance_cents) || 0) * SCREEN_BANK_BUILDER_PERCENT);
+  const monthlyGoalCents = clampInt(
+    (bankUsage && bankUsage.monthlyGoal) ||
+    (account && account.settings && account.settings.monthly_goal_cents) ||
+    DEFAULT_MONTHLY_GOAL_CENTS,
+    100,
+    1000000
+  );
+  const baseCents = Math.floor(monthlyGoalCents * SCREEN_BANK_BUILDER_PERCENT);
   const baseUnits = positions.length;
   const horizontalBonusUnits = horizontalGroups.reduce((sum, group) => sum + group.length * (group.length - 1), 0);
   const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
@@ -729,6 +784,7 @@ function calculateScreenBankPayout(board, account, bankUsage) {
     horizontal_groups: horizontalGroups,
     vertical_groups: verticalGroups,
     base_cents: baseCents,
+    goal_cents: monthlyGoalCents,
     base_units: baseUnits,
     horizontal_bonus_units: horizontalBonusUnits,
     vertical_bonus_units: verticalBonusUnits,
@@ -744,7 +800,7 @@ async function spin(workspaceId, userId) {
   const state = await getState(workspaceId, userId);
   const spinCost = state.constants.spinCost;
   if (state.account.point_balance < spinCost) {
-    const err = new Error("Not enough Task Tokens");
+    const err = new Error("Not enough points");
     err.statusCode = 400;
     throw err;
   }
@@ -761,6 +817,7 @@ async function spin(workspaceId, userId) {
     ...selected,
     source_type: bankDelta > 0 ? "slot_screen_bank_builder" : selected.source_type,
     screen_board: screen.board,
+    screen_payline: screen.payline,
     bank_screen_payout: screen.payout,
   };
   const status = selected.kind === "miss"
@@ -777,14 +834,14 @@ async function spin(workspaceId, userId) {
       [workspaceId]
     );
     const lockedSpinCost = getSpinCost(account);
-    if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough Task Tokens");
+    if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough points");
     await client.query("UPDATE slot_accounts SET point_balance = point_balance - $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, lockedSpinCost]);
     const { rows } = await client.query(
       `INSERT INTO slot_spins
        (workspace_id,user_id,cost_credits,reward_id,reward_snapshot,status,bank_delta_cents,bank_reserved_cents)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING *`,
-      [workspaceId, userId || null, lockedSpinCost, selected.id, selected, status, selected.bank_delta_cents || 0, bankReserved]
+      [workspaceId, userId || null, lockedSpinCost, selected.id, selectedSnapshot, status, bankDelta || selected.bank_delta_cents || 0, bankReserved]
     );
     await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
     await client.query("COMMIT");
@@ -897,4 +954,7 @@ module.exports = {
   spin,
   confirmSpin,
   confirmPendingBankBuilders,
+  _test: {
+    calculateScreenBankPayout,
+  },
 };

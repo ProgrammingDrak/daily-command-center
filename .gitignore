@@ -9,6 +9,8 @@ data/.vault-index.json
 # SQLite WAL files (transient, never commit)
 data/blocks.db-shm
 data/blocks.db-wal
+data/postgres/
+data/postgres.log
 
 # Credentials (never commit)
 data/gcal-credentials.json

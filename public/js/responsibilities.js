@@ -4,6 +4,9 @@
 (function(){
   let _items = [];
   let _filter = "active";
+  let _sidebarQuery = "";
+  let _sidebarFilter = "active";
+  let _sidebarSort = "urgency";
   let _captureEditor = null;
 
   function esc(s){
@@ -13,9 +16,31 @@
   }
 
   function scoreClass(score){
-    if(score >= 85) return "high";
-    if(score >= 50) return "med";
-    return "low";
+    if(score >= 85) return "red";
+    if(score >= 70) return "yellow";
+    if(score >= 35) return "blue";
+    return "green";
+  }
+
+  function isAsNeeded(props){
+    const raw=String((props&&props.cadence)||"").toLowerCase();
+    return raw==="as_needed"||raw==="as-needed"||raw==="as needed"||props&&props.asNeeded;
+  }
+
+  function cadencePreset(props){
+    props=props||{};
+    if(isAsNeeded(props))return "as_needed";
+    const days=Number(props.cadenceDays||props.cadence_days||0);
+    if(days===1)return "daily";
+    if(days===7)return "weekly";
+    if(days===14)return "biweekly";
+    if(days===30)return "monthly";
+    return "custom";
+  }
+
+  function cadenceSortDays(props){
+    if(isAsNeeded(props))return 9999;
+    return Math.max(1,Number((props&&props.cadenceDays)||(props&&props.cadence_days)||7));
   }
 
   function daysAgo(iso){
@@ -26,6 +51,32 @@
     if(days<=0)return "completed today";
     if(days===1)return "completed 1d ago";
     return "completed "+days+"d ago";
+  }
+
+  function responsibilityTiming(props){
+    props=props||{};
+    if(isAsNeeded(props))return {cadence:null,elapsed:0,remaining:null,progress:0,asNeeded:true};
+    const cadence=Math.max(1,Number(props.cadenceDays||props.cadence_days||7));
+    const anchor=props.lastCompletedAt||props.createdAt||props.created_at||props.added_at;
+    const start=anchor?new Date(anchor):new Date();
+    const elapsed=isNaN(start.getTime())?0:Math.max(0,(Date.now()-start.getTime())/86400000);
+    const remaining=Math.ceil(cadence-elapsed);
+    const progress=Math.max(0,Math.min(100,Math.round((elapsed/cadence)*100)));
+    return {cadence,elapsed,remaining,progress};
+  }
+
+  function dueLabel(props){
+    const t=responsibilityTiming(props);
+    if(t.asNeeded) return "as needed";
+    if(t.remaining < 0) return Math.abs(t.remaining)+"d overdue";
+    if(t.remaining === 0) return "due today";
+    if(t.remaining === 1) return "1d left";
+    return t.remaining+"d left";
+  }
+
+  function cadenceLabel(props){
+    if(isAsNeeded(props))return "As needed";
+    return "Every "+esc((props&&props.cadenceDays)||7)+"d";
   }
 
   function getResponsibilities(){
@@ -45,6 +96,7 @@
       const data=await res.json();
       _items=data.items||[];
       renderResponsibilities();
+      renderRepeatResponsibilitiesSidebar();
       return _items;
     }catch(e){
       if(typeof showToast==="function")showToast("Could not load responsibilities: "+(e.message||e),"error");
@@ -54,7 +106,7 @@
 
   function renderResponsibilities(){
     const mount=document.getElementById("responsibilities-list");
-    if(!mount)return;
+    if(!mount){renderRepeatResponsibilitiesSidebar();return;}
     const all=getResponsibilities().sort((a,b)=>Number((b.properties||{}).importanceScore||0)-Number((a.properties||{}).importanceScore||0));
     const visible=applyFilter(all);
     const badge=document.getElementById("responsibilities-count");
@@ -82,7 +134,7 @@
           '<div class="resp-meta">'+
             '<span>'+esc(p.area||"general")+'</span>'+
             '<span>'+esc(p.capacityBucket||"work_admin")+'</span>'+
-            '<span>Every '+esc(p.cadenceDays||7)+'d</span>'+
+            '<span>'+cadenceLabel(p)+'</span>'+
             '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
             '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
           '</div>'+
@@ -98,6 +150,86 @@
     }).join("");
     mount.querySelectorAll(".resp-card-actions button").forEach(btn=>{
       btn.addEventListener("click",()=>handleCardAction(btn.closest(".resp-card").dataset.id,btn.dataset.act));
+    });
+    renderRepeatResponsibilitiesSidebar();
+  }
+
+  function sidebarItems(){
+    const q=_sidebarQuery.trim().toLowerCase();
+    let items=getResponsibilities();
+    if(_sidebarFilter==="active")items=items.filter(i=>((i.properties||{}).status||"active")==="active");
+    else if(_sidebarFilter==="due")items=items.filter(i=>Number((i.properties||{}).importanceScore||0)>=70 && (i.properties||{}).status!=="archived");
+    else if(_sidebarFilter==="archived")items=items.filter(i=>(i.properties||{}).status==="archived");
+    else if(["green","blue","yellow","red"].includes(_sidebarFilter)){
+      items=items.filter(i=>(i.properties||{}).status!=="archived" && scoreClass(Number((i.properties||{}).importanceScore||0))===_sidebarFilter);
+    }
+    if(q){
+      items=items.filter(item=>{
+        const p=item.properties||{};
+        const subtasks=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks.join(" "):"";
+        return [p.title,p.domain,p.area,p.capacityBucket,subtasks].join(" ").toLowerCase().includes(q);
+      });
+    }
+    return items.sort((a,b)=>{
+      const ap=a.properties||{}, bp=b.properties||{};
+      if(_sidebarSort==="title")return String(ap.title||"").localeCompare(String(bp.title||""));
+      if(_sidebarSort==="cadence")return cadenceSortDays(ap)-cadenceSortDays(bp);
+      if(_sidebarSort==="duration")return Number(ap.estimatedMinutes||30)-Number(bp.estimatedMinutes||30);
+      if(_sidebarSort==="last-completed"){
+        const at=ap.lastCompletedAt?Date.parse(ap.lastCompletedAt):0;
+        const bt=bp.lastCompletedAt?Date.parse(bp.lastCompletedAt):0;
+        return at-bt;
+      }
+      return Number(bp.importanceScore||0)-Number(ap.importanceScore||0);
+    });
+  }
+
+  function renderRepeatResponsibilitiesSidebar(){
+    const mount=document.getElementById("repeat-responsibilities-list");
+    const all=getResponsibilities();
+    const due=all.filter(i=>Number((i.properties||{}).importanceScore||0)>=70 && (i.properties||{}).status!=="archived").length;
+    ["repeat-responsibilities-count","repeat-responsibilities-section-count"].forEach(id=>{
+      const badge=document.getElementById(id);
+      if(badge){badge.textContent=due;badge.style.display=due?"":"none";}
+    });
+    if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
+    if(!mount)return;
+    const items=sidebarItems();
+    if(!items.length){
+      mount.innerHTML='<div class="delegated-empty">'+(_sidebarQuery?'No repeat responsibilities match that search.':'No repeat responsibilities yet.')+'</div>';
+      return;
+    }
+    mount.innerHTML=items.map(item=>{
+      const p=item.properties||{};
+      const score=Number(p.importanceScore||0);
+      const cls=scoreClass(score);
+      const timing=responsibilityTiming(p);
+      const subtasks=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
+      return '<div class="repeat-resp-card '+cls+'" data-id="'+esc(item.id)+'">'+
+        '<div class="repeat-resp-score resp-score '+cls+'">'+score+'</div>'+
+        '<div class="repeat-resp-main">'+
+          '<div class="repeat-resp-title-row">'+
+            '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+
+            '<span class="resp-chip domain">'+esc(p.domain||"other")+'</span>'+
+          '</div>'+
+          '<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>'+
+          '<div class="repeat-resp-meta">'+
+            '<span>'+cadenceLabel(p)+'</span>'+
+            '<span>'+esc(dueLabel(p))+'</span>'+
+            '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
+            '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
+          '</div>'+
+          (subtasks.length?'<div class="repeat-resp-subtasks">'+subtasks.slice(0,4).map(s=>'<span>'+esc(s)+'</span>').join("")+(subtasks.length>4?'<span>+'+(subtasks.length-4)+'</span>':'')+'</div>':'')+
+        '</div>'+
+        '<div class="repeat-resp-actions">'+
+          '<button type="button" data-act="schedule">Schedule</button>'+
+          '<button type="button" data-act="complete">Complete</button>'+
+          '<button type="button" data-act="edit">Edit</button>'+
+        '</div>'+
+      '</div>';
+    }).join("");
+    mount.querySelectorAll(".repeat-resp-actions button").forEach(btn=>{
+      btn.addEventListener("click",()=>handleCardAction(btn.closest(".repeat-resp-card").dataset.id,btn.dataset.act));
     });
   }
 
@@ -132,11 +264,14 @@
     document.getElementById("resp-title").value=p.title||"";
     document.getElementById("resp-domain").value=p.domain||"professional";
     document.getElementById("resp-area").value=p.area||"general";
+    const preset=document.getElementById("resp-cadence-preset");
+    if(preset)preset.value=cadencePreset(p);
     document.getElementById("resp-cadence-days").value=p.cadenceDays||7;
+    syncCadencePreset();
     document.getElementById("resp-estimated-minutes").value=p.estimatedMinutes||30;
     document.getElementById("resp-capacity-bucket").value=p.capacityBucket||"work_admin";
     document.getElementById("resp-default-subtasks").value=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks.join("\n"):"";
-    document.getElementById("resp-modal-title").textContent=id?"Edit responsibility":"New responsibility";
+    document.getElementById("resp-modal-title").textContent=id?"Edit repeat responsibility":"New repeat responsibility";
     document.getElementById("responsibility-modal-overlay").classList.add("open");
     setTimeout(()=>document.getElementById("resp-title").focus(),20);
   }
@@ -147,16 +282,34 @@
   }
 
   function formProps(){
+    const cadence=document.getElementById("resp-cadence-preset")?.value||"custom";
+    const cadenceMap={daily:1,weekly:7,biweekly:14,monthly:30};
+    const customDays=Math.max(1,parseInt(document.getElementById("resp-cadence-days").value,10)||7);
+    const cadenceDays=cadence==="as_needed"?null:(cadenceMap[cadence]||customDays);
     return {
       title:document.getElementById("resp-title").value.trim(),
       domain:document.getElementById("resp-domain").value,
       area:document.getElementById("resp-area").value.trim()||"general",
-      cadenceDays:Math.max(1,parseInt(document.getElementById("resp-cadence-days").value,10)||7),
+      cadence,
+      cadenceDays,
+      asNeeded:cadence==="as_needed",
       estimatedMinutes:Math.max(15,parseInt(document.getElementById("resp-estimated-minutes").value,10)||30),
       capacityBucket:document.getElementById("resp-capacity-bucket").value,
       defaultSubtasks:document.getElementById("resp-default-subtasks").value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
       status:"active"
     };
+  }
+
+  function syncCadencePreset(){
+    const preset=document.getElementById("resp-cadence-preset");
+    const wrap=document.getElementById("resp-cadence-days-wrap");
+    const input=document.getElementById("resp-cadence-days");
+    if(!preset||!wrap||!input)return;
+    const map={daily:1,weekly:7,biweekly:14,monthly:30};
+    const custom=preset.value==="custom";
+    wrap.style.display=custom?"":"none";
+    if(map[preset.value])input.value=map[preset.value];
+    input.disabled=preset.value==="as_needed";
   }
 
   async function patchResponsibility(id,props){
@@ -248,6 +401,16 @@
         renderResponsibilities();
       });
     });
+    const repeatSearch=document.getElementById("repeat-responsibilities-search");
+    if(repeatSearch)repeatSearch.addEventListener("input",()=>{_sidebarQuery=repeatSearch.value||"";renderRepeatResponsibilitiesSidebar();});
+    const repeatFilter=document.getElementById("repeat-responsibilities-filter");
+    if(repeatFilter)repeatFilter.addEventListener("change",()=>{_sidebarFilter=repeatFilter.value||"active";renderRepeatResponsibilitiesSidebar();});
+    const repeatSort=document.getElementById("repeat-responsibilities-sort");
+    if(repeatSort)repeatSort.addEventListener("change",()=>{_sidebarSort=repeatSort.value||"urgency";renderRepeatResponsibilitiesSidebar();});
+    const repeatNew=document.getElementById("repeat-responsibilities-new");
+    if(repeatNew)repeatNew.addEventListener("click",()=>openResponsibilityModal(null));
+    const cadencePresetEl=document.getElementById("resp-cadence-preset");
+    if(cadencePresetEl)cadencePresetEl.addEventListener("change",syncCadencePreset);
     const newBtn=document.getElementById("resp-new-btn");
     if(newBtn)newBtn.addEventListener("click",()=>openResponsibilityModal(null));
     const cancel=document.getElementById("resp-cancel");
@@ -265,5 +428,6 @@
   document.addEventListener("DOMContentLoaded",bindResponsibilities);
   window.loadResponsibilities=loadResponsibilities;
   window.renderResponsibilities=renderResponsibilities;
+  window.renderRepeatResponsibilitiesSidebar=renderRepeatResponsibilitiesSidebar;
   window.markResponsibilityTaskCompleted=markResponsibilityTaskCompleted;
 })();
