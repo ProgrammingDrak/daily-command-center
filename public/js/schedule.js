@@ -639,6 +639,11 @@ function addTaskUniversal(barEl){
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
     }
+    case"repeat_responsibility":{
+      if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask({title,type:"task",durMin,source:"manual"});
+      else if(typeof showToast==="function")showToast("Repeat responsibilities are still loading. Try again in a moment.","info");
+      break;
+    }
     case"trivial":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;

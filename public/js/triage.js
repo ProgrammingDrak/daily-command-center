@@ -1070,6 +1070,7 @@ function buildScheduled() {
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
           (!isMeeting(ev) && canEditBounty && (!bountyPlaced || isBounty) ? '<button class="add-btn sched-bounty-btn" data-id="' + ev.id + '" style="background:rgba(251,191,36,0.12);color:var(--amber)">Bounty</button>' : '') +
+          '<button class="add-btn sched-repeat-btn" data-id="' + ev.id + '" title="Turn into a repeat responsibility">Repeat</button>' +
           '<button class="add-btn sched-done-btn" data-id="' + ev.id + '" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>' +
           '<button class="add-btn sched-push-btn" data-id="' + ev.id + '">Priority</button>' +
           '<button class="add-btn sched-backlog-btn" data-id="' + ev.id + '" style="background:rgba(255,255,255,0.06);color:var(--text-muted)">Backlog</button>' +
@@ -1091,6 +1092,7 @@ function buildScheduled() {
             '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + '">Bounty x2</span>' : '') + '</div>' +
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
+          '<button class="add-btn sched-repeat-btn" data-id="' + ev.id + '" title="Turn into a repeat responsibility">Repeat</button>' +
         '</div>';
     });
   }
@@ -1106,6 +1108,12 @@ function buildScheduled() {
   });
   el.querySelectorAll(".sched-bounty-btn").forEach(btn => {
     btn.addEventListener("click", () => { if(typeof placeBounty === "function") placeBounty(btn.dataset.id); });
+  });
+  el.querySelectorAll(".sched-repeat-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const ev = scheduled.find(e => e.id === btn.dataset.id);
+      if (ev && typeof openRepeatResponsibilityFromTask === "function") openRepeatResponsibilityFromTask(ev);
+    });
   });
   el.querySelectorAll(".sched-push-btn").forEach(btn => {
     btn.addEventListener("click", () => { pushTask(btn.dataset.id); });
@@ -1144,9 +1152,17 @@ function buildScheduleSoon() {
           '<div class="title-row"><span class="ttl">'+ev.title+'</span></div>'+
           '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span><span>pushed from schedule</span></div>'+
         '</div>'+
+        '<button class="add-btn soon-repeat-btn" data-id="'+ev.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
         '<button class="add-btn" onclick="unpushTask(\''+ev.id+'\');render()" title="Restore to schedule" style="background:rgba(34,197,94,0.15);color:var(--green)">Restore</button>'+
       '</div>';
     }).join('');
+  list.querySelectorAll(".soon-repeat-btn").forEach(btn=>{
+    btn.addEventListener("click",e=>{
+      e.stopPropagation();
+      const ev=scheduled.find(item=>item.id===btn.dataset.id);
+      if(ev&&typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);
+    });
+  });
   // Update badge
   const soonCount=pushed.length+consider.length;
   const badge=document.getElementById("soon-count");

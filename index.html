@@ -64,6 +64,7 @@
           <option value="backlog">Backlog</option>
           <option value="urgent" selected>Urgent</option>
           <option value="side_project">Side Project</option>
+          <option value="repeat_responsibility">Repeat Responsibility</option>
         </select>
         <button class="tab-add">+ Add</button>
       </div>
@@ -158,6 +159,7 @@
         <option value="backlog">Backlog</option>
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
+        <option value="repeat_responsibility">Repeat Responsibility</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -225,6 +227,7 @@
       <option value="backlog">Backlog</option>
       <option value="urgent" selected>Urgent</option>
       <option value="side_project">Side Project</option>
+      <option value="repeat_responsibility">Repeat Responsibility</option>
     </select>
     <button class="tab-add">+ Add</button>
   </div>
@@ -268,6 +271,7 @@
         <option value="schedule">Schedule</option>
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
+        <option value="repeat_responsibility">Repeat Responsibility</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -808,6 +812,7 @@
       </div>
     </div>
     <div class="add-modal-footer">
+      <button class="dm-btn-cancel am-repeat-btn" id="add-modal-repeat" type="button">Make repeat</button>
       <button class="dm-btn-cancel" id="add-modal-done">Done</button>
     </div>
   </div>
@@ -939,7 +944,15 @@
         <option value="quick_personal">Quick personal</option>
       </select>
       <label class="delegated-modal-label">Default subtasks</label>
-      <textarea id="resp-default-subtasks" class="delegated-modal-input" rows="4" maxlength="1200" placeholder="One checklist item per line"></textarea>
+      <div class="resp-subtask-editor" id="resp-default-subtasks-editor">
+        <div class="resp-subtask-list" id="resp-default-subtasks-list"></div>
+        <div class="resp-subtask-add">
+          <span class="resp-subtask-checkbox" aria-hidden="true"></span>
+          <input type="text" id="resp-default-subtask-input" maxlength="200" placeholder="Add checklist item...">
+          <button type="button" id="resp-default-subtask-add">Add</button>
+        </div>
+      </div>
+      <textarea id="resp-default-subtasks" class="delegated-modal-input resp-subtask-source" rows="4" maxlength="1200" placeholder="One checklist item per line"></textarea>
       <div class="delegated-modal-actions">
         <button type="button" class="secondary" id="resp-cancel">Cancel</button>
         <button type="button" class="primary" id="resp-save">Save</button>
@@ -1187,7 +1200,7 @@
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
-<script src="/public/js/responsibilities.js"></script>
+<script src="/public/js/responsibilities.js?v=repeat-responsibility-save-2"></script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js"></script>
 <script src="/public/js/delegated.js"></script>
