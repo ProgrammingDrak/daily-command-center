@@ -184,6 +184,16 @@ function openTrivialPicker(scheduleId, anchorEl){
 // ======== TASK DETAIL MODAL (Notes + Subtasks + Side Projects + Action Items) ========
 let _addModalTaskId = null;
 
+function taskForRepeatResponsibility(taskId, fallbackTitle) {
+  const scheduledTask = (typeof scheduled !== 'undefined' ? scheduled : []).find(function(ev) { return ev.id === taskId; });
+  if (scheduledTask) return scheduledTask;
+  const backlogTask = (typeof backlog !== 'undefined' ? backlog : []).find(function(t) { return t.id === taskId; });
+  if (backlogTask) return backlogTask;
+  const priorityTask = (typeof consider !== 'undefined' ? consider : []).find(function(t) { return t.id === taskId; });
+  if (priorityTask) return priorityTask;
+  return { id: taskId, title: fallbackTitle || document.getElementById('add-modal-title')?.textContent || '', type: 'task', durMin: 30 };
+}
+
 function _persistTaskTags(taskId, tagIds) {
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.addedTasks && window.blockStore) {
     // Check added_task blocks (legacy + new "block" type with scheduled_dates)
@@ -348,6 +358,15 @@ document.addEventListener('DOMContentLoaded', function() {
   // Close
   document.getElementById('add-modal-close').addEventListener('click', closeAddModal);
   document.getElementById('add-modal-done').addEventListener('click', closeAddModal);
+  var repeatBtn = document.getElementById('add-modal-repeat');
+  if (repeatBtn) repeatBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!_addModalTaskId || typeof openRepeatResponsibilityFromTask !== 'function') return;
+    var task = taskForRepeatResponsibility(_addModalTaskId);
+    closeAddModal();
+    setTimeout(function() { openRepeatResponsibilityFromTask(task); }, 0);
+  });
   document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
     if (e.target === e.currentTarget) closeAddModal();
   });
@@ -467,10 +486,13 @@ function _renderSmallTaskSection(opts){
       '<div class="body"><div class="title-row">'+(typeof renderTaskBankTrivialTitle==="function"?renderTaskBankTrivialTitle(t):'<span class="ttl">'+t.text+'</span>')+'</div>'+
       '<div class="meta"><span class="tag tag-task">'+label+'</span>'+duration+'</div></div>'+
       scheduleBtn+
+      '<button class="add-btn small-task-repeat-btn" data-tid="'+t.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
       '<button class="add-btn triv-check-btn" data-tid="'+t.id+'" style="background:var(--green)">Done</button>'+
       '<button class="task-bank-icon-btn triv-edit-btn" data-tid="'+t.id+'" title="Edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
       '<button class="btn-del-task triv-del-btn" data-tid="'+t.id+'" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>';
     card.querySelector(".triv-check-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
+    const repeat=card.querySelector(".small-task-repeat-btn");
+    if(repeat)repeat.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask({id:t.id,title:t.text,type:kind,durMin:t.durMin||30,detail:t.detail||""})});
     const schedule=card.querySelector(".small-task-schedule-btn");
     if(schedule) schedule.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePicker==="function")openSchedulePicker(t.text,t.durMin||30)});
     const editBtn=card.querySelector(".triv-edit-btn");

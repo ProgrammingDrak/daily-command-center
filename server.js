@@ -673,6 +673,10 @@ app.get("/api/responsibilities", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+function apiErrorMessage(e) {
+  return [e && e.message, e && e.detail, e && e.code].filter(Boolean).join(" · ") || "Request failed";
+}
+
 app.post("/api/responsibilities", async (req, res) => {
   try {
     const body = req.body || {};
@@ -685,7 +689,7 @@ app.post("/api/responsibilities", async (req, res) => {
     });
     broadcast("blocks-changed", { action: "responsibility-upsert", blockIds: [created.id] }, req.workspaceId);
     res.json(created);
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) { console.error("[responsibilities:create]", e); res.status(400).json({ error: apiErrorMessage(e) }); }
 });
 
 app.patch("/api/responsibilities/:id", async (req, res) => {
@@ -697,7 +701,7 @@ app.patch("/api/responsibilities/:id", async (req, res) => {
     const updated = normalizeResponsibility(await blockDB.updateBlock(req.params.id, { properties: merged }));
     broadcast("blocks-changed", { action: "responsibility-update", blockIds: [updated.id] }, req.workspaceId);
     res.json(updated);
-  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+  } catch (e) { console.error("[responsibilities:update]", e); res.status(e.statusCode || 400).json({ error: apiErrorMessage(e) }); }
 });
 
 app.delete("/api/responsibilities/:id", async (req, res) => {
