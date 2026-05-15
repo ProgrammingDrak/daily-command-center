@@ -1,0 +1,60 @@
+2026-05-14 09:48:25.848 EDT [41968] LOG:  starting PostgreSQL 18.3 on x86_64-windows, compiled by msvc-19.44.35222, 64-bit
+2026-05-14 09:48:25.854 EDT [41968] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-14 09:48:25.854 EDT [41968] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-14 09:48:25.938 EDT [34680] LOG:  database system was shut down at 2026-05-14 09:48:10 EDT
+2026-05-14 09:48:25.947 EDT [41968] LOG:  database system is ready to accept connections
+2026-05-14 09:48:48.267 EDT [14112] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-14 09:49:59.121 EDT [46760] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-14 09:53:25.936 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 09:55:25.581 EDT [47068] LOG:  checkpoint complete: wrote 1100 buffers (6.7%), wrote 3 SLRU buffers; 1 WAL file(s) added, 0 removed, 0 recycled; write=119.261 s, sync=0.335 s, total=119.645 s; sync files=379, longest=0.007 s, average=0.001 s; distance=5482 kB, estimate=5482 kB; lsn=0/1D65D80, redo lsn=0/1D4BD20
+2026-05-14 09:59:08.598 EDT [4336] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-14 10:03:25.620 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:03:27.721 EDT [47068] LOG:  checkpoint complete: wrote 19 buffers (0.1%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=2.078 s, sync=0.013 s, total=2.102 s; sync files=14, longest=0.002 s, average=0.001 s; distance=104 kB, estimate=4944 kB; lsn=0/1D66018, redo lsn=0/1D65FA8
+2026-05-14 10:08:25.727 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:08:27.282 EDT [47068] LOG:  checkpoint complete: wrote 14 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.532 s, sync=0.013 s, total=1.555 s; sync files=14, longest=0.002 s, average=0.001 s; distance=25 kB, estimate=4452 kB; lsn=0/1D6C580, redo lsn=0/1D6C528
+2026-05-14 10:12:40.562 EDT [47460] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-14 10:13:06.432 EDT [47720] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-14 10:13:25.283 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:13:25.524 EDT [47068] LOG:  checkpoint complete: wrote 2 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.225 s, sync=0.005 s, total=0.241 s; sync files=3, longest=0.002 s, average=0.002 s; distance=7 kB, estimate=4008 kB; lsn=0/1D6E198, redo lsn=0/1D6E140
+2026-05-14 10:18:25.533 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:18:26.324 EDT [47068] LOG:  checkpoint complete: wrote 7 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.770 s, sync=0.011 s, total=0.791 s; sync files=7, longest=0.003 s, average=0.002 s; distance=28 kB, estimate=3610 kB; lsn=0/1D75428, redo lsn=0/1D753D0
+2026-05-14 10:23:25.337 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:23:27.982 EDT [47068] LOG:  checkpoint complete: wrote 24 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=2.616 s, sync=0.020 s, total=2.645 s; sync files=21, longest=0.002 s, average=0.001 s; distance=53 kB, estimate=3254 kB; lsn=0/1D82958, redo lsn=0/1D82900
+2026-05-14 10:25:03.473 EDT [43928] FATAL:  role "offic" does not exist
+2026-05-14 10:25:22.447 EDT [47428] FATAL:  role "offic" does not exist
+2026-05-14 10:27:58.119 EDT [4996] FATAL:  role "offic" does not exist
+2026-05-14 10:28:17.985 EDT [40788] FATAL:  role "offic" does not exist
+2026-05-14 10:28:25.995 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:28:26.344 EDT [47068] LOG:  checkpoint complete: wrote 3 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.334 s, sync=0.006 s, total=0.350 s; sync files=4, longest=0.002 s, average=0.002 s; distance=11 kB, estimate=2930 kB; lsn=0/1D85820, redo lsn=0/1D857C8
+2026-05-14 10:30:51.904 EDT [48032] FATAL:  role "offic" does not exist
+2026-05-14 10:33:25.353 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:33:27.673 EDT [47068] LOG:  checkpoint complete: wrote 21 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=2.291 s, sync=0.019 s, total=2.320 s; sync files=19, longest=0.002 s, average=0.001 s; distance=56 kB, estimate=2642 kB; lsn=0/1D93B38, redo lsn=0/1D93AA8
+2026-05-14 10:43:25.702 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:43:26.913 EDT [47068] LOG:  checkpoint complete: wrote 11 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.190 s, sync=0.013 s, total=1.212 s; sync files=12, longest=0.002 s, average=0.002 s; distance=19 kB, estimate=2380 kB; lsn=0/1DA6C00, redo lsn=0/1D988B8
+2026-05-14 10:48:25.929 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 10:48:27.045 EDT [47068] LOG:  checkpoint complete: wrote 10 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.098 s, sync=0.009 s, total=1.117 s; sync files=8, longest=0.002 s, average=0.002 s; distance=62 kB, estimate=2148 kB; lsn=0/1DA84F0, redo lsn=0/1DA8498
+2026-05-14 11:03:25.067 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:03:28.474 EDT [47068] LOG:  checkpoint complete: wrote 31 buffers (0.2%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=3.374 s, sync=0.025 s, total=3.408 s; sync files=28, longest=0.002 s, average=0.001 s; distance=81 kB, estimate=1942 kB; lsn=0/1DBC918, redo lsn=0/1DBC8C0
+2026-05-14 11:08:25.487 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:08:27.040 EDT [47068] LOG:  checkpoint complete: wrote 14 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.527 s, sync=0.014 s, total=1.553 s; sync files=14, longest=0.002 s, average=0.001 s; distance=35 kB, estimate=1751 kB; lsn=0/1DC5898, redo lsn=0/1DC5808
+2026-05-14 11:13:25.043 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:13:27.768 EDT [47068] LOG:  checkpoint complete: wrote 25 buffers (0.2%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=2.700 s, sync=0.016 s, total=2.725 s; sync files=17, longest=0.002 s, average=0.001 s; distance=128 kB, estimate=1589 kB; lsn=0/1DE5918, redo lsn=0/1DE58C0
+2026-05-14 11:18:25.777 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:18:27.316 EDT [47068] LOG:  checkpoint complete: wrote 14 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.519 s, sync=0.012 s, total=1.540 s; sync files=12, longest=0.002 s, average=0.001 s; distance=69 kB, estimate=1437 kB; lsn=0/1DF7008, redo lsn=0/1DF6FB0
+2026-05-14 11:23:25.318 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:23:26.323 EDT [47068] LOG:  checkpoint complete: wrote 9 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.988 s, sync=0.009 s, total=1.006 s; sync files=10, longest=0.001 s, average=0.001 s; distance=22 kB, estimate=1295 kB; lsn=0/1DFCB00, redo lsn=0/1DFCAA8
+2026-05-14 11:28:25.331 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:28:27.946 EDT [47068] LOG:  checkpoint complete: wrote 24 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=2.593 s, sync=0.014 s, total=2.616 s; sync files=15, longest=0.002 s, average=0.001 s; distance=131 kB, estimate=1179 kB; lsn=0/1E1DAE8, redo lsn=0/1E1DA90
+2026-05-14 11:33:25.961 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:33:26.972 EDT [47068] LOG:  checkpoint complete: wrote 9 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.990 s, sync=0.011 s, total=1.011 s; sync files=10, longest=0.002 s, average=0.002 s; distance=35 kB, estimate=1064 kB; lsn=0/1E26708, redo lsn=0/1E266B0
+2026-05-14 11:38:25.978 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 11:38:27.893 EDT [47068] LOG:  checkpoint complete: wrote 17 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.869 s, sync=0.013 s, total=1.916 s; sync files=14, longest=0.002 s, average=0.001 s; distance=88 kB, estimate=967 kB; lsn=0/1E3C720, redo lsn=0/1E3C6C8
+2026-05-14 15:33:27.584 EDT [47068] LOG:  checkpoint starting: time
+2026-05-14 15:33:27.931 EDT [47068] LOG:  checkpoint complete: wrote 3 buffers (0.0%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.326 s, sync=0.005 s, total=0.348 s; sync files=4, longest=0.002 s, average=0.001 s; distance=13 kB, estimate=871 kB; lsn=0/1E3FD48, redo lsn=0/1E3FCF0
+2026-05-15 00:03:02.781 EDT [47068] LOG:  checkpoint starting: time
+2026-05-15 00:03:04.118 EDT [47068] LOG:  checkpoint complete: wrote 12 buffers (0.1%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.311 s, sync=0.013 s, total=1.338 s; sync files=13, longest=0.002 s, average=0.001 s; distance=13 kB, estimate=786 kB; lsn=0/1E434B8, redo lsn=0/1E43460
