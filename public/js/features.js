@@ -208,11 +208,11 @@ function _persistTaskTags(taskId, tagIds) {
 function openAddModal(taskId, taskTitle) {
   _addModalTaskId = taskId;
   document.getElementById('add-modal-title').textContent = taskTitle || 'Task Details';
+  var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
 
   // Initialize tag picker
   var tagContainer = document.getElementById('am-tag-picker');
   if (tagContainer && typeof createTagPicker === 'function') {
-    var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
     var currentTags = (taskEntry && taskEntry.tags) ? taskEntry.tags : [];
     createTagPicker(tagContainer, currentTags, function(newIds) {
       if (taskEntry) taskEntry.tags = newIds;
@@ -220,10 +220,19 @@ function openAddModal(taskId, taskTitle) {
     });
   }
 
+  var commuteInput = document.getElementById('am-commute-input');
+  var commuteHint = document.getElementById('am-commute-hint');
+  if (commuteInput) {
+    var minutes = taskEntry ? (taskEntry.commuteMinutes || 0) : 0;
+    commuteInput.value = minutes ? String(minutes) : '';
+    updateAddModalCommuteHint();
+  } else if (commuteHint) {
+    commuteHint.textContent = 'No leave window';
+  }
+
   // Load notes into block editor
   var notes = loadNotes();
   var noteVal = notes[taskId];
-  var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
   var initialBlocks=typeof noteBlocksForTask === 'function' ? noteBlocksForTask(taskId, noteVal, taskEntry) : null;
   if(window._amBlockEditor) window._amBlockEditor.destroy();
   window._amBlockEditor=createBlockEditor(document.getElementById('am-notes-block-editor'), initialBlocks);
@@ -240,6 +249,7 @@ function openAddModal(taskId, taskTitle) {
 }
 
 function closeAddModal() {
+  persistAddModalCommute();
   // Save notes from block editor on close
   if (_addModalTaskId && window._amBlockEditor) {
     var notes = loadNotes();
@@ -253,6 +263,7 @@ function closeAddModal() {
   _addModalTaskId = null;
   // Flush any deferred renders now that modal is closed
   _flushDeferredRender();
+  if (typeof render === 'function') render();
 }
 
 function renderModalItems(taskId) {
@@ -340,6 +351,15 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
     if (e.target === e.currentTarget) closeAddModal();
   });
+  var commuteInput = document.getElementById('am-commute-input');
+  if (commuteInput) {
+    commuteInput.addEventListener('input', updateAddModalCommuteHint);
+    commuteInput.addEventListener('change', function() {
+      persistAddModalCommute();
+      updateAddModalCommuteHint();
+      if (typeof render === 'function') render();
+    });
+  }
 
   // Add item (subtask, side project, or action -- based on type dropdown)
   function addModalItem() {
@@ -480,16 +500,13 @@ function _renderSmallTaskSection(opts){
 
 function buildTrivialTasks(){
   const tasks=loadTrivialTasks();
-  const flags=loadTrivialFlags();
-  const flaggedScheduleItems=(typeof scheduled!=='undefined'?scheduled:[]).filter(ev=>flags[ev.id]);
-  const sideProjectTasks=tasks.filter(t=>!t.linkedTo);
+  const sideProjectTasks=tasks.filter(t=>smallTaskKind(t)==="side_project"&&!t.linkedTo);
   const sideProjectsCount=_renderSmallTaskSection({
     containerId:"triage-side-projects",
     label:"Side Project",
     kind:"side_project",
     accent:"var(--cyan,#22d3ee)",
-    tasks:sideProjectTasks,
-    extras:flaggedScheduleItems
+    tasks:sideProjectTasks
   });
   _setSmallTaskBadge("trivial-count",0);
   _setSmallTaskBadge("trivial-tab-count",0);
@@ -779,17 +796,108 @@ function toggleSnCreateTask(){
 })();
 
 // ======== FOCUS BANNER ========
+function _focusBannerOpenTimerPanel(){
+  const panel=document.getElementById("ft-panel");
+  const fab=document.getElementById("ft-fab");
+  const mini=document.getElementById("ft-mini");
+  if(panel)panel.style.display="flex";
+  if(fab)fab.style.display="none";
+  if(mini)mini.style.display="none";
+}
+function persistAddModalCommute() {
+  if (!_addModalTaskId) return;
+  var input = document.getElementById('am-commute-input');
+  if (!input || typeof setTaskCommuteMinutes !== 'function') return;
+  setTaskCommuteMinutes(_addModalTaskId, input.value);
+}
+
+function updateAddModalCommuteHint() {
+  var input = document.getElementById('am-commute-input');
+  var hint = document.getElementById('am-commute-hint');
+  if (!input || !hint) return;
+  var taskEntry = (typeof scheduled !== 'undefined' && _addModalTaskId) ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null;
+  var minutes = typeof normalizeCommuteMinutes === 'function' ? normalizeCommuteMinutes(input.value) : (parseInt(input.value, 10) || 0);
+  if (!taskEntry || !minutes || typeof commuteLeaveWindow !== 'function') {
+    hint.textContent = 'No leave window';
+    return;
+  }
+  var preview = Object.assign({}, taskEntry, { commuteMinutes: minutes });
+  var win = commuteLeaveWindow(preview);
+  hint.textContent = win ? win.label : 'No leave window';
+}
+function _focusBannerNextItem(){
+  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return null;
+  const items=scheduled.filter(ev=>{
+    if(!ev||ev.nested)return false;
+    if(typeof isDone==="function"&&isDone(ev))return false;
+    if(typeof isDeleted==="function"&&isDeleted(ev))return false;
+    if(typeof isPushed==="function"&&isPushed(ev))return false;
+    return !["break","ooo","free_time"].includes(ev.type);
+  });
+  if(!items.length)return null;
+  const pinnedId=(typeof getPinnedActiveId==="function")?getPinnedActiveId():null;
+  if(pinnedId){
+    const pinned=items.find(ev=>String(ev.id)===String(pinnedId));
+    if(pinned)return pinned;
+  }
+  const active=(typeof isActive==="function")?items.find(isActive):null;
+  if(active)return active;
+  if(typeof pt==="function"&&typeof now==="function"){
+    const upcoming=items.find(ev=>pt(ev.start)>=now());
+    if(upcoming)return upcoming;
+  }
+  return items[0];
+}
+function _focusBannerStartNext(){
+  const next=_focusBannerNextItem();
+  if(!next)return false;
+  if(typeof openPomodoro==="function"){
+    openPomodoro(next.title,typeof dur==="function"?dur(next):(next.durMin||25));
+    return true;
+  }
+  return false;
+}
+function _focusBannerWireButton(){
+  const btn=document.getElementById("fb-open-timer");
+  if(!btn||btn.dataset.wired)return;
+  btn.dataset.wired="1";
+  btn.addEventListener("click",()=>{
+    const hasTitle=typeof pomoState!=="undefined"&&pomoState.title&&pomoState.title!=="--";
+    if(!hasTitle&&_focusBannerStartNext())return;
+    _focusBannerOpenTimerPanel();
+  });
+}
 function updateFocusBanner(){
   const banner=document.getElementById("focus-banner");
   if(!banner)return;
+  _focusBannerWireButton();
   const title=(typeof pomoState!=="undefined"&&pomoState.title&&pomoState.title!=="--")?pomoState.title:null;
-  if(!title){banner.style.display="none";return;}
+  const fbLabel=banner.querySelector(".fb-label");
+  const fbTitle=document.getElementById("fb-title");
+  const fbStatus=document.getElementById("fb-status");
+  const fbBtn=document.getElementById("fb-open-timer");
+  if(!title){
+    const next=_focusBannerNextItem();
+    if(!next){banner.style.display="none";return;}
+    banner.style.display="flex";
+    banner.classList.remove("running");
+    banner.classList.add("ready");
+    if(fbLabel)fbLabel.textContent="Want to start to focus?";
+    if(fbTitle)fbTitle.textContent=next.title;
+    if(fbStatus){
+      const d=typeof dur==="function"?dur(next):(next.durMin||0);
+      const dLabel=(typeof ms==="function")?ms(d):d+"m";
+      fbStatus.textContent=d?"· "+dLabel+" ready":"· Ready";
+    }
+    if(fbBtn)fbBtn.title="Start timer for next item";
+    return;
+  }
   banner.style.display="flex";
   const running=(typeof pomoState!=="undefined"&&pomoState.running);
+  banner.classList.remove("ready");
   banner.classList.toggle("running",running);
-  const fbTitle=document.getElementById("fb-title");
+  if(fbLabel)fbLabel.textContent="Now Focusing";
   if(fbTitle)fbTitle.textContent=title;
-  const fbStatus=document.getElementById("fb-status");
   if(fbStatus){
     if(running){
       const rem=(typeof pomoFmt==="function")?pomoFmt(pomoState.remaining):"";
@@ -798,6 +906,7 @@ function updateFocusBanner(){
       fbStatus.textContent="· Paused";
     }
   }
+  if(fbBtn)fbBtn.title="Open timer panel";
 }
 
 // ======== TASK QUEUE PANEL ========
@@ -1000,8 +1109,10 @@ function _updateTaskMenusBadge(){
   const schedc=parseInt(document.getElementById("scheduled-count")?.textContent||"0")||0;
   const trivc=parseInt(document.getElementById("trivial-count")?.textContent||"0")||0;
   const sidec=parseInt(document.getElementById("side-projects-section-count")?.textContent||"0")||0;
-  const total=tc+sc+bc+schedc+trivc+sidec;
+  const repeatc=parseInt(document.getElementById("repeat-responsibilities-section-count")?.textContent||"0")||0;
+  const total=tc+sc+bc+schedc+trivc+sidec+repeatc;
   badge.textContent=total;badge.style.display=total?"":"none";
+  if(typeof refreshSidecarTabs==="function")refreshSidecarTabs();
 }
 
 // ======== BUTTONS ========

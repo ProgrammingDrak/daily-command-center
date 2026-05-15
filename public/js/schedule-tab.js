@@ -245,6 +245,8 @@ function buildSchedule(){
     const detailMeta=[];
     if(ev.priority)detailMeta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">Priority: '+ev.priority+'</span>');
     if(ev.estTime)detailMeta.push('<span>Est: '+ev.estTime+'</span>');
+    const commuteWin=typeof commuteLeaveWindow==="function"?commuteLeaveWindow(ev):null;
+    if(commuteWin)detailMeta.push('<span>'+commuteWin.label+'</span>');
     detailMeta.push('<span>Duration: '+ms(d)+(changed?' (was '+ms(od)+')':'')+'</span>');
     detailMeta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
     if(detailMeta.length)detailParts.push('<div class="detail-meta">'+detailMeta.join('')+'</div>');
@@ -323,7 +325,7 @@ function buildSchedule(){
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip">Bounty x2</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
-            '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
               taskTagChipsHtml(ev)+
@@ -778,14 +780,64 @@ function _actualMin(ev){
   try{const s=loadSessions();if(s[ev.id]&&s[ev.id].length)return s[ev.id].reduce((a,x)=>a+x.durationMin,0);}catch(e){}
   return dur(ev);
 }
+const REMAINING_STAT_SCOPE_KEY="pa-remaining-stat-scope";
+function _remainingStatScope(){
+  try{return localStorage.getItem(REMAINING_STAT_SCOPE_KEY)==="block"?"block":"day";}catch(e){return"day";}
+}
+function _setRemainingStatScope(scope){
+  try{localStorage.setItem(REMAINING_STAT_SCOPE_KEY,scope==="block"?"block":"day");}catch(e){}
+}
+function _currentBlockWindow(){
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  if(!blocks.length)return null;
+  const now=new Date();
+  const nowMin=now.getHours()*60+now.getMinutes();
+  for(const b of blocks){
+    const bStart=pt(b.start),bEnd=pt(b.end);
+    if(nowMin>=bStart&&nowMin<bEnd)return {block:b,start:bStart,end:bEnd};
+  }
+  return null;
+}
+function _remainingForScope(scope){
+  const rem=scheduled.filter(ev=>!isDone(ev));
+  if(scope!=="block")return rem;
+  const win=_currentBlockWindow();
+  if(!win)return [];
+  return rem.filter(ev=>pt(ev.start)<win.end&&pt(ev.end)>win.start);
+}
+function _remainingEmptyMessage(scope){
+  return scope==="block"&&!_currentBlockWindow()?"No active block.":"Nothing left!";
+}
+function _remainingScopeLabel(scope){
+  return scope==="block"?"Block":"Day";
+}
+function _updateRemainingStatLabels(scope){
+  const scopeLabel=_remainingScopeLabel(scope);
+  const timeLabel=document.getElementById("s-time-label");
+  const tasksLabel=document.getElementById("s-tasks-label");
+  const hint="Click to show "+(scope==="block"?"day":"block")+" remaining";
+  if(timeLabel)timeLabel.textContent=scopeLabel+" Time Left";
+  if(tasksLabel)tasksLabel.textContent=scopeLabel+" Tasks Left";
+  document.querySelectorAll(".stat-combined .stat-half").forEach(el=>{el.title=hint;});
+}
+function toggleRemainingStatScope(event){
+  if(event)event.stopPropagation();
+  const next=_remainingStatScope()==="block"?"day":"block";
+  _setRemainingStatScope(next);
+  const popover=document.getElementById("stat-popover");
+  if(popover){popover.style.display="none";popover.dataset.openFor="";}
+  document.querySelectorAll(".stat.sp-open").forEach(el=>el.classList.remove("sp-open"));
+  updateStats();
+}
 function updateStats(){
-  const done=scheduled.filter(isDone), rem=scheduled.filter(ev=>!isDone(ev));
+  const done=scheduled.filter(isDone), scope=_remainingStatScope(), rem=_remainingForScope(scope);
   const remMin=rem.reduce((a,ev)=>a+dur(ev),0);
   const doneMin=done.reduce((a,ev)=>a+_actualMin(ev),0);
   document.getElementById("s-time").textContent=remMin>0?ms(remMin):"0m";
   document.getElementById("s-tasks").textContent=rem.length;
   document.getElementById("s-done").textContent=done.length+" / "+ms(doneMin);
   document.getElementById("s-block").textContent=getCurrentBlockEnd();
+  _updateRemainingStatLabels(scope);
 }
 function getCurrentBlockEnd(){
   const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
@@ -813,18 +865,20 @@ function showStatPopover(statId, event) {
   let html = '';
   switch(statId) {
     case 's-time': {
-      const rem = scheduled.filter(ev => !isDone(ev));
-      html = '<div class="sp-title">Time Remaining</div>';
-      if (!rem.length) { html += '<div class="sp-empty">All tasks complete!</div>'; break; }
+      const scope = _remainingStatScope();
+      const rem = _remainingForScope(scope);
+      html = '<div class="sp-title">'+_remainingScopeLabel(scope)+' Time Remaining</div>';
+      if (!rem.length) { html += '<div class="sp-empty">'+_remainingEmptyMessage(scope)+'</div>'; break; }
       html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(dur(ev))+'</span></div>').join('');
       const total = rem.reduce((a,ev) => a+dur(ev), 0);
       html += '<div class="sp-note">Total: '+ms(total)+'</div>';
       break;
     }
     case 's-tasks': {
-      const rem = scheduled.filter(ev => !isDone(ev));
-      html = '<div class="sp-title">Remaining Tasks</div>';
-      if (!rem.length) { html += '<div class="sp-empty">Nothing left!</div>'; break; }
+      const scope = _remainingStatScope();
+      const rem = _remainingForScope(scope);
+      html = '<div class="sp-title">'+_remainingScopeLabel(scope)+' Remaining Tasks</div>';
+      if (!rem.length) { html += '<div class="sp-empty">'+_remainingEmptyMessage(scope)+'</div>'; break; }
       html += rem.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+ev.title+'</span></div>').join('');
       break;
     }
