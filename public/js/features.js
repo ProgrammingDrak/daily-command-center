@@ -804,7 +804,6 @@ function _focusBannerOpenTimerPanel(){
   if(fab)fab.style.display="none";
   if(mini)mini.style.display="none";
 }
-
 function persistAddModalCommute() {
   if (!_addModalTaskId) return;
   var input = document.getElementById('am-commute-input');
