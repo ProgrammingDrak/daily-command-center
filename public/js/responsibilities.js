@@ -79,6 +79,20 @@
     return "Every "+esc((props&&props.cadenceDays)||7)+"d";
   }
 
+  function outcomeLabel(outcome){
+    if(!outcome||!outcome.type)return "";
+    const labels={blocked:"Blocked",deferred:"Deferred",interrupted:"Interrupted",abandoned:"Abandoned",done:"Done"};
+    return labels[outcome.type]||outcome.type;
+  }
+
+  function outcomePrompt(type,title){
+    if(type==="deferred")return window.prompt("Why is this deferred?", "")||"";
+    if(type==="blocked")return window.prompt("What is blocking this responsibility?", "")||"";
+    if(type==="interrupted")return window.prompt("What interrupted this responsibility?", "")||"";
+    if(type==="abandoned")return window.prompt("Why abandon this cycle?", "")||"";
+    return "";
+  }
+
   function getResponsibilities(){
     return _items.filter(i=>(i.properties||{}).kind==="responsibility_item");
   }
@@ -205,26 +219,43 @@
       const cls=scoreClass(score);
       const timing=responsibilityTiming(p);
       const subtasks=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
+      const subtaskSummary=subtasks.length?(subtasks.length+" checklist item"+(subtasks.length===1?"":"s")):"";
+      const outcome=outcomeLabel(p.lastOutcome||{type:p.lastOutcomeType});
+      const outcomeReason=(p.lastOutcome&&p.lastOutcome.reason)||p.lastOutcomeReason||"";
       return '<div class="repeat-resp-card '+cls+'" data-id="'+esc(item.id)+'">'+
-        '<div class="repeat-resp-score resp-score '+cls+'">'+score+'</div>'+
         '<div class="repeat-resp-main">'+
-          '<div class="repeat-resp-title-row">'+
-            '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+
-            '<span class="resp-chip domain">'+esc(p.domain||"other")+'</span>'+
+          '<div class="repeat-resp-top">'+
+            '<div class="repeat-resp-title-wrap">'+
+              '<div class="repeat-resp-title" title="'+esc(p.title||"(untitled)")+'">'+esc(p.title||"(untitled)")+'</div>'+
+              '<div class="repeat-resp-meta">'+
+                '<span class="repeat-resp-domain">'+esc(p.domain||"other")+'</span>'+
+                '<span>'+cadenceLabel(p)+'</span>'+
+                '<span class="repeat-resp-due">'+esc(dueLabel(p))+'</span>'+
+                '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
+              '</div>'+
+            '</div>'+
+            '<div class="repeat-resp-score-pill '+cls+'" title="Urgency score">'+score+'</div>'+
           '</div>'+
           '<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>'+
-          '<div class="repeat-resp-meta">'+
-            '<span>'+cadenceLabel(p)+'</span>'+
-            '<span>'+esc(dueLabel(p))+'</span>'+
-            '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
+          '<div class="repeat-resp-foot">'+
             '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
+            (subtaskSummary?'<span>'+esc(subtaskSummary)+'</span>':'')+
+            (outcome?'<span class="repeat-resp-outcome" title="'+esc(outcomeReason)+'">'+esc(outcome)+'</span>':'')+
           '</div>'+
-          (subtasks.length?'<div class="repeat-resp-subtasks">'+subtasks.slice(0,4).map(s=>'<span>'+esc(s)+'</span>').join("")+(subtasks.length>4?'<span>+'+(subtasks.length-4)+'</span>':'')+'</div>':'')+
         '</div>'+
         '<div class="repeat-resp-actions">'+
-          '<button type="button" data-act="schedule">Schedule</button>'+
-          '<button type="button" data-act="complete">Complete</button>'+
-          '<button type="button" data-act="edit">Edit</button>'+
+          '<button type="button" class="repeat-resp-primary" data-act="complete">Done</button>'+
+          '<button type="button" class="repeat-resp-secondary" data-act="schedule" title="Schedule">Schedule</button>'+
+          '<details class="repeat-resp-more">'+
+            '<summary title="More actions" aria-label="More actions">...</summary>'+
+            '<div class="repeat-resp-menu">'+
+              '<button type="button" data-act="edit">Edit</button>'+
+              '<button type="button" data-act="blocked">Blocked</button>'+
+              '<button type="button" data-act="deferred">Deferred</button>'+
+              '<button type="button" data-act="interrupted">Interrupted</button>'+
+              '<button type="button" data-act="abandoned">Abandoned</button>'+
+            '</div>'+
+          '</details>'+
         '</div>'+
       '</div>';
     }).join("");
@@ -245,6 +276,17 @@
       }else if(act==="complete"){
         const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
+        await loadResponsibilities();
+      }else if(["blocked","deferred","interrupted","abandoned"].includes(act)){
+        const at=new Date().toISOString();
+        const reason=outcomePrompt(act,(item.properties||{}).title||"");
+        await patchResponsibility(id,{
+          lastOutcome:{type:act,reason,at},
+          lastOutcomeType:act,
+          lastOutcomeReason:reason,
+          lastOutcomeAt:at
+        });
+        if(typeof showToast==="function")showToast("Marked "+outcomeLabel({type:act}).toLowerCase(),"success");
         await loadResponsibilities();
       }else if(act==="archive"||act==="activate"){
         await patchResponsibility(id,{status:act==="archive"?"archived":"active"});

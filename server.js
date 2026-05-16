@@ -740,6 +740,10 @@ app.post("/api/responsibilities/:id/complete", async (req, res) => {
       properties: {
         ...responsibility.properties,
         lastCompletedAt: at,
+        lastOutcome: { type: "done", reason: "", at },
+        lastOutcomeType: "done",
+        lastOutcomeReason: "",
+        lastOutcomeAt: at,
         updatedAt: at,
         lastCompletedTaskId: req.body && req.body.taskId || null
       }

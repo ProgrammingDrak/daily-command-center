@@ -29,6 +29,13 @@
     return (clone.textContent || "").replace(/\s+/g, " ").trim() || section.id || "Section";
   }
 
+  function sidecarShortLabel(label){
+    label=String(label||"").trim();
+    const known={Tasks:"T",Repeats:"R","Repeat Responsibilities":"R","Side Projects":"S"};
+    if(known[label])return known[label];
+    return label.slice(0,1).toUpperCase()||"?";
+  }
+
   function sectionBadge(section){
     const badge = section && section.querySelector(":scope > summary .badge");
     if(!badge) return { text: "", show: false };
@@ -158,7 +165,9 @@
     tasksBtn.className = "sidecar-tab sidecar-tab-permanent";
     tasksBtn.id = "sidecar-tasks-tab";
     tasksBtn.type = "button";
-    tasksBtn.innerHTML = '<span>Tasks</span><span class="badge" id="tasks-count" style="display:none">0</span>';
+    tasksBtn.title = "Tasks";
+    tasksBtn.setAttribute("aria-label","Tasks");
+    tasksBtn.innerHTML = '<span>' + sidecarShortLabel("Tasks") + '</span><span class="badge" id="tasks-count" style="display:none">0</span>';
     tasksBtn.addEventListener("click", toggleTasks);
     rail.appendChild(tasksBtn);
     clean.forEach(id => {
@@ -169,8 +178,10 @@
       btn.type = "button";
       btn.dataset.sectionId = id;
       btn.draggable = true;
+      btn.title = sectionLabel(sec);
+      btn.setAttribute("aria-label",sectionLabel(sec));
       btn.innerHTML =
-        '<span>' + escAttr(sectionLabel(sec)) + '</span>' +
+        '<span>' + escAttr(sidecarShortLabel(sectionLabel(sec))) + '</span>' +
         '<span class="badge" style="' + (badge.show ? "" : "display:none") + '">' + escAttr(badge.text) + '</span>' +
         '<span class="sidecar-remove" title="Remove tab" aria-label="Remove tab">&times;</span>';
       btn.addEventListener("click", e => {
