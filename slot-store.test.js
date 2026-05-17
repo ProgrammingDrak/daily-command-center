@@ -25,6 +25,8 @@ function createMockPool(options = {}) {
     ledgerDelta: options.ledgerDelta ?? null,
     pointAdds: 0,
     ledgerMetadata: null,
+    rewardRows: options.rewardRows || [],
+    legacyBankBuildersRetired: false,
   };
 
   async function query(sql, params = []) {
@@ -44,6 +46,15 @@ function createMockPool(options = {}) {
     }
     if (text.includes("SELECT settings FROM slot_accounts")) {
       return { rows: [{ settings: { ...state.settings, default_rewards_seeded_at: "seeded" } }] };
+    }
+    if (text.includes("UPDATE slot_rewards") && text.includes("kind = $2")) {
+      state.legacyBankBuildersRetired = true;
+      state.rewardRows = state.rewardRows.map(row => row.kind === params[1] ? { ...row, active: false, weight: 0 } : row);
+      return { rows: [] };
+    }
+    if (text.includes("UPDATE slot_accounts") && text.includes("settings = COALESCE(settings")) {
+      state.settings = { ...state.settings, ...JSON.parse(params[1]) };
+      return { rows: [] };
     }
     if (text.includes("SELECT * FROM slot_accounts WHERE workspace_id")) {
       return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, settings: state.settings }] };
@@ -72,7 +83,10 @@ function createMockPool(options = {}) {
     if (text.includes("date_trunc('week'")) return { rows: [{ cents: 0 }] };
     if (text.includes("date_trunc('month'")) return { rows: [{ cents: 0 }] };
     if (text.includes("MIN(created_at) AS oldest_at")) return { rows: [{ cents: 0, count: 0, oldest_at: null }] };
-    if (text.includes("SELECT * FROM slot_rewards")) return { rows: [] };
+    if (text.includes("SELECT * FROM slot_rewards")) {
+      const legacyKind = params[1];
+      return { rows: legacyKind ? state.rewardRows.filter(row => row.kind !== legacyKind) : state.rewardRows };
+    }
     if (text.includes("SELECT * FROM slot_spins")) return { rows: [] };
     throw new Error("Unexpected query: " + text.slice(0, 120));
   }
@@ -174,6 +188,34 @@ test("getState migrates old token spin cost to point spin cost without remultipl
   assert.equal(state.constants.spinCost, 10);
   assert.equal(state.account.settings.points_v2_old_spin_cost, 1);
   assert.equal(state.account.settings.points_v2_spin_cost_multiplier, 10);
+});
+
+test("getState retires and omits legacy bank builder rewards", async () => {
+  const rewardBase = {
+    sponsor_type: "self",
+    sponsor_active: true,
+    value_cents: 0,
+    bank_delta_cents: 0,
+    requires_confirmation: false,
+    cooldown_days: 0,
+    unlock_threshold_cents: 0,
+    notes: "",
+    last_won_at: null,
+  };
+  const mockPool = createMockPool({
+    pointBalance: 70,
+    migrated: true,
+    rewardRows: [
+      { ...rewardBase, id: 1, title: "Bank builder: add $1", kind: "bank_builder", active: true, weight: 100, bank_delta_cents: 100 },
+      { ...rewardBase, id: 2, title: "Take a walk", kind: "free", active: true, weight: 16 },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const state = await store.getState("ws-1", 1);
+
+  assert.equal(mockPool.state.legacyBankBuildersRetired, true);
+  assert.deepEqual(state.rewards.map(r => r.title), ["Take a walk"]);
 });
 
 test("bank screen payout values each BANK tile from the monthly goal, not current bank balance", () => {

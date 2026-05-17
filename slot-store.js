@@ -32,6 +32,8 @@ const BANK_SCREEN_COUNT_WEIGHTS = [
 ];
 const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
+const LEGACY_BANK_BUILDER_KIND = "bank_builder";
+const LEGACY_BANK_BUILDER_RETIRED_SETTING = "legacy_bank_builder_rewards_retired_at";
 const DEFAULT_SCORING_RATIONALE = [
   "Task points are automatic so task entry stays lightweight.",
   "Every eligible completed task earns points from the v2 scoring formula.",
@@ -268,6 +270,7 @@ async function ensureAccount(workspaceId, userId) {
   );
   const account = await migrateAccountPointsV2(workspaceId, rows[0]);
   await seedRewards(workspaceId);
+  await retireLegacyBankBuilderRewards(workspaceId);
   return account;
 }
 
@@ -371,6 +374,30 @@ async function seedRewards(workspaceId) {
          updated_at = NOW()
      WHERE workspace_id = $1`,
     [workspaceId, JSON.stringify({ default_rewards_seeded_at: new Date().toISOString() })]
+  );
+}
+
+async function retireLegacyBankBuilderRewards(workspaceId) {
+  const { rows: [account] } = await pool.query("SELECT settings FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);
+  const settings = account && account.settings ? account.settings : {};
+  if (settings[LEGACY_BANK_BUILDER_RETIRED_SETTING]) return;
+
+  await pool.query(
+    `UPDATE slot_rewards
+     SET active = FALSE,
+         weight = 0,
+         updated_at = NOW()
+     WHERE workspace_id = $1
+       AND kind = $2
+       AND (active IS DISTINCT FROM FALSE OR weight <> 0)`,
+    [workspaceId, LEGACY_BANK_BUILDER_KIND]
+  );
+  await pool.query(
+    `UPDATE slot_accounts
+     SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1`,
+    [workspaceId, JSON.stringify({ [LEGACY_BANK_BUILDER_RETIRED_SETTING]: new Date().toISOString() })]
   );
 }
 
@@ -486,8 +513,10 @@ async function getState(workspaceId, userId) {
     pending: pendingBankDeposit.cents || 0,
     total: (account.bank_balance_cents || 0) + (pendingBankDeposit.cents || 0),
   };
-  const { rows: rewardRows } = await pool.query("SELECT * FROM slot_rewards WHERE workspace_id = $1 ORDER BY active DESC, kind, title", [workspaceId]);
-  const rewards = rewardRows.map(r => rowToReward(r, account, bankUsage, funding.total));
+  const { rows: rewardRows } = await pool.query("SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> $2 ORDER BY active DESC, kind, title", [workspaceId, LEGACY_BANK_BUILDER_KIND]);
+  const rewards = rewardRows
+    .filter(r => r.kind !== LEGACY_BANK_BUILDER_KIND)
+    .map(r => rowToReward(r, account, bankUsage, funding.total));
   const { rows: spins } = await pool.query(
     "SELECT * FROM slot_spins WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 25",
     [workspaceId]
