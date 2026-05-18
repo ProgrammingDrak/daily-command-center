@@ -15,11 +15,20 @@
   const KIND_LABELS = {
     miss: "No prize",
     free: "Free",
-    small_paid: "Small paid",
-    bank_gated: "Bank gated",
+    small_paid: "Jackpot",
+    bank_gated: "Jackpot",
     sponsor: "Sponsor",
     choice: "Choice",
     reroll: "Reroll"
+  };
+  const FORM_SUBTITLES = {
+    miss: "No-prize outcome",
+    free: "Free outcome",
+    small_paid: "Money-cost jackpot",
+    bank_gated: "Jackpot Jar reward",
+    sponsor: "Partner-sponsored reward",
+    choice: "Choice reward",
+    reroll: "Reroll outcome"
   };
   const SPONSOR_LABELS = {
     self: "Self",
@@ -27,9 +36,9 @@
     romantic_partner: "Romantic",
     either_partner: "Either partner"
   };
-  const SPIN_SYMBOLS = ["HAT","STRAW","STICK","BRICK","BANK","CARE","TREAT","BONUS","WILD","HOUSE","TOOLS","STAR","JACKPOT","PLEDGE","PICK"];
+  const SPIN_SYMBOLS = ["HAT","STRAW","STICK","BRICK","BANK","CARE","BONUS","WILD","HOUSE","TOOLS","STAR","JACKPOT","PLEDGE","PICK"];
   const FILLER_SYMBOLS = ["STRAW","STICK","BRICK","HAT","TOOLS","HOUSE"];
-  const TEASER_SYMBOLS = ["CARE","TREAT","BANK","JACKPOT","PLEDGE","PICK","REROLL"];
+  const TEASER_SYMBOLS = ["CARE","BONUS","BANK","JACKPOT","PLEDGE","PICK","REROLL"];
   const PAYLINES = [
     [0,1,2], [1,2,3], [2,3,4],
     [5,6,7], [6,7,8], [7,8,9],
@@ -279,8 +288,12 @@
     return Math.max(reward.value_cents || 0, reward.unlock_threshold_cents || 0, reward.bank_delta_cents || 0);
   }
 
+  function rewardCostCents(reward){
+    return Math.max(reward.value_cents || 0, reward.unlock_threshold_cents || 0);
+  }
+
   function isJackpotReward(reward){
-    return reward && reward.kind === "bank_gated" && rewardValueCents(reward) >= 20000;
+    return rewardCostCents(reward) > 0;
   }
 
   function matchesPriceFilter(reward){
@@ -758,8 +771,7 @@
 
   function rewardSymbol(reward){
     if(!reward || reward.kind === "miss") return "MISS";
-    if(reward.kind === "bank_gated") return (reward.value_cents || reward.unlock_threshold_cents || 0) >= 20000 ? "JACKPOT" : "GOLD";
-    if(reward.kind === "small_paid") return "TREAT";
+    if(isJackpotReward(reward)) return "JACKPOT";
     if(reward.kind === "bank_builder") return "BANK";
     if(reward.kind === "sponsor") return "PLEDGE";
     if(reward.kind === "choice") return "PICK";
@@ -802,6 +814,7 @@
     const form = document.getElementById("slot-reward-form");
     if(!form) return;
     form.style.display = "";
+    setText("slot-form-heading", reward ? "Edit reward" : "New reward");
     val("slot-form-title", reward ? reward.title : "");
     val("slot-form-kind", reward ? reward.kind : "free");
     val("slot-form-sponsor", reward ? reward.sponsor_type : "self");
@@ -812,12 +825,46 @@
     checked("slot-form-sponsor-active", reward ? reward.sponsor_active : false);
     checked("slot-form-confirm", reward ? reward.requires_confirmation : false);
     val("slot-form-notes", reward ? reward.notes : "");
+    syncRewardFormUi();
+    const title = document.getElementById("slot-form-title");
+    if(title) title.focus();
   }
 
   function closeForm(){
     editingId = null;
     const form = document.getElementById("slot-reward-form");
     if(form) form.style.display = "none";
+  }
+
+  function syncRewardFormUi(){
+    const kindEl = document.getElementById("slot-form-kind");
+    const sponsorEl = document.getElementById("slot-form-sponsor");
+    const kind = kindEl ? kindEl.value : "free";
+    let sponsor = sponsorEl ? sponsorEl.value : "self";
+    if(kind === "sponsor" && sponsor === "self"){
+      val("slot-form-sponsor", "accountability_partner");
+      sponsor = "accountability_partner";
+    }
+    const needsPrice = ["small_paid", "bank_gated", "sponsor"].includes(kind);
+    const usesSponsor = kind === "sponsor";
+    const sponsorOptIn = usesSponsor && sponsor !== "self";
+    const form = document.getElementById("slot-reward-form");
+    if(form){
+      form.dataset.rewardKind = kind;
+      form.querySelectorAll(".slot-kind-option").forEach(btn => {
+        const active = btn.dataset.slotKind === kind;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-checked", active ? "true" : "false");
+      });
+      form.querySelectorAll('[data-slot-field="value"]').forEach(el => el.hidden = !needsPrice);
+      form.querySelectorAll('[data-slot-field="sponsor"]').forEach(el => el.hidden = !usesSponsor);
+      form.querySelectorAll('[data-slot-field="sponsor-active"]').forEach(el => el.hidden = !sponsorOptIn);
+    }
+    setText("slot-form-subtitle", FORM_SUBTITLES[kind] || "Reward");
+    if(!usesSponsor) val("slot-form-sponsor", "self");
+    if(!needsPrice) val("slot-form-value", "");
+    if(!sponsorOptIn) checked("slot-form-sponsor-active", usesSponsor);
+    if(kind === "bank_gated" || kind === "small_paid" || kind === "sponsor") checked("slot-form-confirm", true);
   }
 
   function val(id, value){
@@ -1122,6 +1169,16 @@
     if(saveBtn) saveBtn.addEventListener("click", saveReward);
     const cancelBtn = document.getElementById("slot-cancel-reward-btn");
     if(cancelBtn) cancelBtn.addEventListener("click", closeForm);
+    const closeRewardFormBtn = document.getElementById("slot-close-reward-form");
+    if(closeRewardFormBtn) closeRewardFormBtn.addEventListener("click", closeForm);
+    document.querySelectorAll(".slot-kind-option").forEach(btn => {
+      btn.addEventListener("click", () => {
+        val("slot-form-kind", btn.dataset.slotKind || "free");
+        syncRewardFormUi();
+      });
+    });
+    const sponsorSelect = document.getElementById("slot-form-sponsor");
+    if(sponsorSelect) sponsorSelect.addEventListener("change", syncRewardFormUi);
     document.querySelectorAll(".slot-filter").forEach(btn => {
       btn.addEventListener("click", () => {
         filter = btn.dataset.slotFilter;
