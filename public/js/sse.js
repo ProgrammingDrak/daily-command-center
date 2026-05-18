@@ -90,7 +90,8 @@
     }
   }
 
-  window.refreshPaStateFromServer = refreshPaState;
+  window.refreshPaStateFromServer = refreshDccState;
+  window.refreshDccStateFromServer = refreshDccState;
 
   // Handle block changes from another tab
   async function handleBlockEvent(msg){
