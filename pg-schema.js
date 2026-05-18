@@ -89,6 +89,21 @@ CREATE TABLE IF NOT EXISTS operations (
   batch_id    TEXT
 );
 
+-- ── Feedback Messages ──
+CREATE TABLE IF NOT EXISTS feedback_messages (
+  id           SERIAL PRIMARY KEY,
+  workspace_id TEXT REFERENCES workspaces(id),
+  user_id      INTEGER REFERENCES users(id),
+  message      TEXT NOT NULL,
+  page_path    TEXT,
+  user_agent   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_messages_workspace_created
+  ON feedback_messages(workspace_id, created_at DESC);
+
 -- ── DCC State ──
 DO $$
 BEGIN

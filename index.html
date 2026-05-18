@@ -117,6 +117,7 @@
     <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
+    <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
     <button class="sn-btn" id="sn-open-btn" onclick="openStickyNotes()">📌 Notes <span class="sn-badge" id="sn-badge" style="display:none">0</span></button>
     <!-- Second Brain Save/Load Backup buttons removed Phase 6: silently broken
          in BlockStore-only mode (backed up empty localStorage, restored to keys
@@ -1291,6 +1292,20 @@ window.USE_BLOCKSTORE = {
   <span class="save-status-dot"></span>
   <span class="save-status-tooltip" id="save-status-tooltip">All changes synced</span>
 </div>
+
+<button class="feedback-fab" id="feedback-fab" type="button" title="Send feedback" aria-label="Send feedback">?</button>
+<div class="feedback-panel" id="feedback-panel" aria-hidden="true">
+  <div class="feedback-panel-head">
+    <strong>Feedback</strong>
+    <button class="feedback-close" id="feedback-close" type="button" aria-label="Close feedback">&times;</button>
+  </div>
+  <textarea id="feedback-message" maxlength="4000" placeholder="What should be fixed, improved, or remembered?"></textarea>
+  <div class="feedback-panel-actions">
+    <span id="feedback-status"></span>
+    <button id="feedback-submit" type="button">Send</button>
+  </div>
+</div>
+<script src="/public/js/feedback.js"></script>
 
 <!-- Error toast container -->
 <div id="toast-container" class="toast-container"></div>
