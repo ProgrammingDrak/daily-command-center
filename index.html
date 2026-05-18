@@ -1179,9 +1179,43 @@
           </div>
         </div>
         <div class="slot-filter-row">
-          <button class="slot-filter active" data-slot-filter="eligible" type="button">Eligible</button>
-          <button class="slot-filter" data-slot-filter="locked" type="button">Locked</button>
-          <button class="slot-filter" data-slot-filter="all" type="button">All</button>
+          <button class="slot-filter" data-slot-filter="free" type="button">Free</button>
+          <button class="slot-filter" data-slot-filter="jackpots" type="button">Jackpots</button>
+          <button class="slot-filter active" data-slot-filter="all" type="button">All</button>
+        </div>
+        <div class="slot-reward-tools">
+          <input id="slot-reward-search" type="search" placeholder="Search rewards" aria-label="Search rewards">
+          <select id="slot-reward-category" aria-label="Filter by category">
+            <option value="all">All categories</option>
+            <option value="miss">No prize</option>
+            <option value="free">Free</option>
+            <option value="small_paid">Small paid</option>
+            <option value="bank_gated">Bank gated</option>
+            <option value="sponsor">Sponsor</option>
+            <option value="choice">Choice</option>
+            <option value="reroll">Reroll</option>
+          </select>
+          <select id="slot-reward-price" aria-label="Filter by price">
+            <option value="all">All prices</option>
+            <option value="free">$0</option>
+            <option value="under25">Under $25</option>
+            <option value="25to99">$25-$99</option>
+            <option value="100to199">$100-$199</option>
+            <option value="200plus">$200+</option>
+          </select>
+          <select id="slot-reward-eligibility" aria-label="Filter by eligibility">
+            <option value="all">All states</option>
+            <option value="eligible">Eligible</option>
+            <option value="locked">Locked</option>
+          </select>
+          <select id="slot-reward-sort" aria-label="Sort rewards">
+            <option value="category">Category</option>
+            <option value="title">Name</option>
+            <option value="price-asc">Price low-high</option>
+            <option value="price-desc">Price high-low</option>
+            <option value="weight-desc">Weight high-low</option>
+            <option value="eligible">Eligible first</option>
+          </select>
         </div>
         <div class="slot-reward-list" id="slot-reward-list"></div>
       </section>

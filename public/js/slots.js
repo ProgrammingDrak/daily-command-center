@@ -1,6 +1,11 @@
 (function(){
   let slotState = null;
-  let filter = "eligible";
+  let filter = "all";
+  let rewardSearch = "";
+  let rewardCategory = "all";
+  let rewardPrice = "all";
+  let rewardEligibility = "all";
+  let rewardSort = "category";
   let editingId = null;
   let isSpinning = false;
   let lastPendingBankCents = 0;
@@ -209,11 +214,9 @@
   function renderRewards(){
     const list = document.getElementById("slot-reward-list");
     if(!list || !slotState) return;
-    let rewards = slotState.rewards || [];
-    if(filter === "eligible") rewards = rewards.filter(r => r.eligible);
-    if(filter === "locked") rewards = rewards.filter(r => !r.eligible);
+    let rewards = filterRewards(slotState.rewards || []);
     if(!rewards.length){
-      list.innerHTML = '<div class="slot-empty">No rewards in this view.</div>';
+      list.innerHTML = '<div class="slot-empty">No rewards match this view.</div>';
       return;
     }
     list.innerHTML = rewards.map(r => {
@@ -253,6 +256,71 @@
       renderRewards();
     }));
     list.querySelectorAll(".slot-sponsor-toggle").forEach(btn => btn.addEventListener("click", () => toggleSponsor(btn.dataset.id)));
+  }
+
+  function filterRewards(rewards){
+    const query = rewardSearch.trim().toLowerCase();
+    return [...rewards]
+      .filter(r => {
+        if(filter === "free" && r.kind !== "free") return false;
+        if(filter === "jackpots" && !isJackpotReward(r)) return false;
+        if(rewardCategory !== "all" && r.kind !== rewardCategory) return false;
+        if(rewardEligibility === "eligible" && !r.eligible) return false;
+        if(rewardEligibility === "locked" && r.eligible) return false;
+        if(!matchesPriceFilter(r)) return false;
+        if(query && !rewardSearchText(r).includes(query)) return false;
+        return true;
+      })
+      .sort(compareRewards);
+  }
+
+  function rewardValueCents(reward){
+    return Math.max(reward.value_cents || 0, reward.unlock_threshold_cents || 0, reward.bank_delta_cents || 0);
+  }
+
+  function isJackpotReward(reward){
+    return reward && reward.kind === "bank_gated" && rewardValueCents(reward) >= 20000;
+  }
+
+  function matchesPriceFilter(reward){
+    const value = rewardValueCents(reward);
+    if(rewardPrice === "free") return value === 0;
+    if(rewardPrice === "under25") return value > 0 && value < 2500;
+    if(rewardPrice === "25to99") return value >= 2500 && value < 10000;
+    if(rewardPrice === "100to199") return value >= 10000 && value < 20000;
+    if(rewardPrice === "200plus") return value >= 20000;
+    return true;
+  }
+
+  function rewardSearchText(reward){
+    const parts = [
+      reward.title,
+      reward.kind,
+      KIND_LABELS[reward.kind],
+      rewardSymbol(reward),
+      reward.notes,
+      reward.sponsor_type,
+      SPONSOR_LABELS[reward.sponsor_type],
+      reward.eligible ? "eligible" : "locked",
+      reward.eligible ? "" : lockLabel(reward.locked_reason),
+      money(rewardValueCents(reward))
+    ];
+    return parts.filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function compareRewards(a, b){
+    const categoryA = KIND_LABELS[a.kind] || a.kind || "";
+    const categoryB = KIND_LABELS[b.kind] || b.kind || "";
+    const titleA = String(a.title || "").toLowerCase();
+    const titleB = String(b.title || "").toLowerCase();
+    const valueA = rewardValueCents(a);
+    const valueB = rewardValueCents(b);
+    if(rewardSort === "title") return titleA.localeCompare(titleB);
+    if(rewardSort === "price-asc") return valueA - valueB || titleA.localeCompare(titleB);
+    if(rewardSort === "price-desc") return valueB - valueA || titleA.localeCompare(titleB);
+    if(rewardSort === "weight-desc") return (b.weight || 0) - (a.weight || 0) || titleA.localeCompare(titleB);
+    if(rewardSort === "eligible") return Number(!!b.eligible) - Number(!!a.eligible) || titleA.localeCompare(titleB);
+    return categoryA.localeCompare(categoryB) || valueA - valueB || titleA.localeCompare(titleB);
   }
 
   function lockLabel(reason){
@@ -1059,6 +1127,31 @@
         btn.classList.add("active");
         renderRewards();
       });
+    });
+    const rewardSearchInput = document.getElementById("slot-reward-search");
+    if(rewardSearchInput) rewardSearchInput.addEventListener("input", () => {
+      rewardSearch = rewardSearchInput.value || "";
+      renderRewards();
+    });
+    const categorySelect = document.getElementById("slot-reward-category");
+    if(categorySelect) categorySelect.addEventListener("change", () => {
+      rewardCategory = categorySelect.value || "all";
+      renderRewards();
+    });
+    const priceSelect = document.getElementById("slot-reward-price");
+    if(priceSelect) priceSelect.addEventListener("change", () => {
+      rewardPrice = priceSelect.value || "all";
+      renderRewards();
+    });
+    const eligibilitySelect = document.getElementById("slot-reward-eligibility");
+    if(eligibilitySelect) eligibilitySelect.addEventListener("change", () => {
+      rewardEligibility = eligibilitySelect.value || "all";
+      renderRewards();
+    });
+    const sortSelect = document.getElementById("slot-reward-sort");
+    if(sortSelect) sortSelect.addEventListener("change", () => {
+      rewardSort = sortSelect.value || "category";
+      renderRewards();
     });
     const tabBtn = document.getElementById("slots-tab-btn");
     if(tabBtn) tabBtn.addEventListener("click", loadSlots);
