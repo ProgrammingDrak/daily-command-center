@@ -934,6 +934,61 @@
           <input type="number" id="resp-estimated-minutes" class="delegated-modal-input" min="15" max="480" step="15" value="30" />
         </div>
       </div>
+      <label class="delegated-modal-label">Preferred date to complete</label>
+      <select id="resp-preferred-cadence" class="delegated-modal-input">
+        <option value="none">No preferred day</option>
+        <option value="weekly">Day of week</option>
+        <option value="monthly">Day of month</option>
+        <option value="custom">Custom repeat</option>
+        <option value="yearly">Yearly date</option>
+      </select>
+      <div class="resp-preferred-grid" id="resp-preferred-grid">
+        <div class="resp-preferred-field" data-preferred-field="weekly">
+          <label class="delegated-modal-label">Day of week</label>
+          <select id="resp-preferred-weekday" class="delegated-modal-input">
+            <option value="0">Sunday</option>
+            <option value="1">Monday</option>
+            <option value="2">Tuesday</option>
+            <option value="3">Wednesday</option>
+            <option value="4">Thursday</option>
+            <option value="5">Friday</option>
+            <option value="6">Saturday</option>
+          </select>
+        </div>
+        <div class="resp-preferred-field" data-preferred-field="monthly">
+          <label class="delegated-modal-label">Day of month</label>
+          <input type="number" id="resp-preferred-month-day" class="delegated-modal-input" min="1" max="31" value="1" />
+        </div>
+        <div class="resp-preferred-field" data-preferred-field="custom">
+          <label class="delegated-modal-label">Start date</label>
+          <input type="date" id="resp-preferred-custom-anchor" class="delegated-modal-input" />
+        </div>
+        <div class="resp-preferred-field" data-preferred-field="custom">
+          <label class="delegated-modal-label">Repeat days</label>
+          <input type="number" id="resp-preferred-custom-days" class="delegated-modal-input" min="1" max="365" value="30" />
+        </div>
+        <div class="resp-preferred-field" data-preferred-field="yearly">
+          <label class="delegated-modal-label">Month</label>
+          <select id="resp-preferred-year-month" class="delegated-modal-input">
+            <option value="1">January</option>
+            <option value="2">February</option>
+            <option value="3">March</option>
+            <option value="4">April</option>
+            <option value="5">May</option>
+            <option value="6">June</option>
+            <option value="7">July</option>
+            <option value="8">August</option>
+            <option value="9">September</option>
+            <option value="10">October</option>
+            <option value="11">November</option>
+            <option value="12">December</option>
+          </select>
+        </div>
+        <div class="resp-preferred-field" data-preferred-field="yearly">
+          <label class="delegated-modal-label">Day</label>
+          <input type="number" id="resp-preferred-year-day" class="delegated-modal-input" min="1" max="31" value="1" />
+        </div>
+      </div>
       <label class="delegated-modal-label">Capacity bucket</label>
       <select id="resp-capacity-bucket" class="delegated-modal-input">
         <option value="work_admin">Work admin</option>
