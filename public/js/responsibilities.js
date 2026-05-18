@@ -155,6 +155,34 @@
     }
   }
 
+  function resetScheduleFromBase(){
+    if(typeof INIT_SCHED==="undefined"||typeof scheduled==="undefined")return;
+    scheduled=JSON.parse(JSON.stringify(INIT_SCHED||[]));
+  }
+
+  function repaintScheduleNow(){
+    if(typeof buildSchedule==="function")buildSchedule();
+    if(typeof buildScheduled==="function")buildScheduled();
+    if(typeof buildScheduleSoon==="function")buildScheduleSoon();
+    if(typeof buildProgress==="function")buildProgress();
+    if(typeof updateStats==="function")updateStats();
+    if(typeof updateSync==="function")updateSync();
+    if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
+    if(typeof schedView!=="undefined"&&schedView==="actual"&&typeof buildActualView==="function")buildActualView();
+  }
+
+  async function refreshScheduleAfterResponsibilityChange(){
+    const date=typeof viewDate!=="undefined"&&viewDate
+      ? viewDate
+      : (window.__DCC_STATE__&&window.__DCC_STATE__.date);
+    if(window.blockStore&&date){
+      try{await window.blockStore.loadDay(date);}catch(e){console.warn("[responsibilities] schedule refresh failed",e);}
+    }
+    resetScheduleFromBase();
+    if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+    repaintScheduleNow();
+  }
+
   function renderResponsibilities(){
     const mount=document.getElementById("responsibilities-list");
     if(!mount){renderRepeatResponsibilitiesSidebar();return;}
@@ -303,6 +331,7 @@
         const data=await res.json();
         if(typeof showToast==="function")showToast(data.created?(act==="urgent-schedule"?"Urgent responsibility added":"Responsibility scheduled"):"That responsibility is already scheduled","success");
         await loadResponsibilities();
+        await refreshScheduleAfterResponsibilityChange();
       }else if(act==="complete"){
         const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
@@ -594,7 +623,7 @@
       await loadResponsibilities();
       if(data.task&&data.task.properties&&data.task.properties.local_id){
         if(typeof showToast==="function")showToast(data.duplicate?"Alert already captured":"Alert captured and scheduled","success");
-        location.reload();
+        await refreshScheduleAfterResponsibilityChange();
       }else if(typeof showToast==="function")showToast("Responsibility captured","success");
     }catch(e){
       if(typeof showToast==="function")showToast("Capture failed: "+(e.message||e),"error");
@@ -608,7 +637,7 @@
       const data=await res.json();
       const count=(data.scheduled||[]).filter(x=>x.created).length;
       if(typeof showToast==="function")showToast(count?("Scheduled "+count+" due responsibilities"):"No new due responsibilities to schedule",count?"success":"info");
-      if(count)location.reload();
+      if(count)await refreshScheduleAfterResponsibilityChange();
     }catch(e){
       if(typeof showToast==="function")showToast("Auto-schedule failed: "+(e.message||e),"error");
     }
