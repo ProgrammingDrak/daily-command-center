@@ -16,7 +16,7 @@ const SLOT_ROWS = 3;
 const SLOT_COLS = 5;
 const SLOT_CELL_COUNT = SLOT_ROWS * SLOT_COLS;
 const FILLER_SYMBOLS = ["STRAW", "STICK", "BRICK", "HAT", "TOOLS", "HOUSE"];
-const TEASER_SYMBOLS = ["CARE", "TREAT", "JACKPOT", "PLEDGE", "PICK", "REROLL"];
+const TEASER_SYMBOLS = ["CARE", "BONUS", "JACKPOT", "PLEDGE", "PICK", "REROLL"];
 const PAYLINES = [
   [0, 1, 2], [1, 2, 3], [2, 3, 4],
   [5, 6, 7], [6, 7, 8], [7, 8, 9],
@@ -697,10 +697,13 @@ function chooseWeighted(rewards) {
   return rewards[rewards.length - 1];
 }
 
+function rewardCostCents(row) {
+  return Math.max((row && row.value_cents) || 0, (row && row.unlock_threshold_cents) || 0);
+}
+
 function rewardSymbol(row) {
   if (!row || row.kind === "miss") return "MISS";
-  if (row.kind === "bank_gated") return (row.value_cents || row.unlock_threshold_cents || 0) >= 20000 ? "JACKPOT" : "GOLD";
-  if (row.kind === "small_paid") return "TREAT";
+  if (rewardCostCents(row) > 0) return "JACKPOT";
   if (row.kind === "bank_builder") return "BANK";
   if (row.kind === "sponsor") return "PLEDGE";
   if (row.kind === "choice") return "PICK";

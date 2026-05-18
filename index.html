@@ -1083,7 +1083,7 @@
           <div class="slot-cell" data-symbol="brick">BRICK</div>
           <div class="slot-cell" data-symbol="bank">BANK</div>
           <div class="slot-cell" data-symbol="care">CARE</div>
-          <div class="slot-cell" data-symbol="treat">TREAT</div>
+          <div class="slot-cell" data-symbol="bonus">BONUS</div>
           <div class="slot-cell" data-symbol="bonus">BONUS</div>
           <div class="slot-cell" data-symbol="house">HOUSE</div>
           <div class="slot-cell" data-symbol="wild">WILD</div>
@@ -1148,31 +1148,58 @@
           <button id="slot-add-reward-btn" class="slot-small-btn" type="button">Add reward</button>
         </div>
         <div class="slot-reward-form" id="slot-reward-form" style="display:none">
-          <input id="slot-form-title" type="text" placeholder="Reward title">
-          <div class="slot-form-grid">
-            <select id="slot-form-kind">
-              <option value="miss">no prize</option>
-              <option value="free">free</option>
-              <option value="small_paid">small paid</option>
-              <option value="bank_gated">bank gated</option>
-              <option value="sponsor">sponsor</option>
-              <option value="choice">choice</option>
-              <option value="reroll">reroll</option>
-            </select>
-            <select id="slot-form-sponsor">
-              <option value="self">self</option>
-              <option value="accountability_partner">accountability partner</option>
-              <option value="romantic_partner">romantic partner</option>
-              <option value="either_partner">either partner</option>
-            </select>
-            <input id="slot-form-weight" type="number" min="0" step="1" placeholder="Weight">
-            <input id="slot-form-value" type="number" min="0" step="1" placeholder="Value $">
-            <input id="slot-form-cooldown" type="number" min="0" step="1" placeholder="Cooldown days">
+          <div class="slot-form-head">
+            <div>
+              <div class="slot-form-title" id="slot-form-heading">New reward</div>
+              <div class="slot-form-subtitle" id="slot-form-subtitle">Free outcome</div>
+            </div>
+            <button id="slot-close-reward-form" class="slot-icon-btn" type="button" aria-label="Close reward form">&times;</button>
           </div>
-          <label class="slot-check"><input id="slot-form-active" type="checkbox" checked> Active</label>
-          <label class="slot-check"><input id="slot-form-sponsor-active" type="checkbox"> Sponsor opted in</label>
-          <label class="slot-check"><input id="slot-form-confirm" type="checkbox"> Require confirmation</label>
-          <textarea id="slot-form-notes" placeholder="Notes"></textarea>
+          <label class="slot-field slot-field-full">
+            <span>Reward name</span>
+            <input id="slot-form-title" type="text" placeholder="Declare a tiny win and stop working after essentials">
+          </label>
+          <input id="slot-form-kind" type="hidden" value="free">
+          <div class="slot-kind-picker" role="radiogroup" aria-label="Reward type">
+            <button class="slot-kind-option active" data-slot-kind="free" type="button"><strong>Free</strong><span>$0 win</span></button>
+            <button class="slot-kind-option" data-slot-kind="small_paid" type="button"><strong>Jackpot</strong><span>Small spend</span></button>
+            <button class="slot-kind-option" data-slot-kind="bank_gated" type="button"><strong>Jackpot</strong><span>Jar spend</span></button>
+            <button class="slot-kind-option" data-slot-kind="sponsor" type="button"><strong>Sponsor</strong><span>Partner prize</span></button>
+            <button class="slot-kind-option" data-slot-kind="choice" type="button"><strong>Choice</strong><span>Pick later</span></button>
+            <button class="slot-kind-option" data-slot-kind="reroll" type="button"><strong>Reroll</strong><span>Try again</span></button>
+          </div>
+          <div class="slot-form-grid">
+            <label class="slot-field">
+              <span>Odds weight</span>
+              <input id="slot-form-weight" type="number" min="0" step="1" placeholder="16">
+            </label>
+            <label class="slot-field" data-slot-field="value">
+              <span>Price</span>
+              <input id="slot-form-value" type="number" min="0" step="1" placeholder="0">
+            </label>
+            <label class="slot-field">
+              <span>Cooldown</span>
+              <input id="slot-form-cooldown" type="number" min="0" step="1" placeholder="0">
+            </label>
+            <label class="slot-field" data-slot-field="sponsor">
+              <span>Sponsor</span>
+              <select id="slot-form-sponsor">
+                <option value="self">Self</option>
+                <option value="accountability_partner">Accountability partner</option>
+                <option value="romantic_partner">Romantic partner</option>
+                <option value="either_partner">Either partner</option>
+              </select>
+            </label>
+          </div>
+          <div class="slot-toggle-row">
+            <label class="slot-toggle"><input id="slot-form-active" type="checkbox" checked><span>Active</span></label>
+            <label class="slot-toggle" data-slot-field="sponsor-active"><input id="slot-form-sponsor-active" type="checkbox"><span>Sponsor opted in</span></label>
+            <label class="slot-toggle"><input id="slot-form-confirm" type="checkbox"><span>Require confirmation</span></label>
+          </div>
+          <label class="slot-field slot-field-full">
+            <span>Notes</span>
+            <textarea id="slot-form-notes" placeholder="Notes"></textarea>
+          </label>
           <div class="slot-form-actions">
             <button id="slot-save-reward-btn" class="slot-small-btn primary" type="button">Save</button>
             <button id="slot-cancel-reward-btn" class="slot-small-btn" type="button">Cancel</button>
@@ -1189,8 +1216,8 @@
             <option value="all">All categories</option>
             <option value="miss">No prize</option>
             <option value="free">Free</option>
-            <option value="small_paid">Small paid</option>
-            <option value="bank_gated">Bank gated</option>
+            <option value="small_paid">Jackpot (small)</option>
+            <option value="bank_gated">Jackpot (jar)</option>
             <option value="sponsor">Sponsor</option>
             <option value="choice">Choice</option>
             <option value="reroll">Reroll</option>
