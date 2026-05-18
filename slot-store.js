@@ -47,21 +47,21 @@ const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "spons
 
 const DEFAULT_REWARDS = [
   ...[
-    ["Straw frame - keep building", 240],
-    ["Stick frame - no prize yet", 220],
-    ["Brick frame - almost there", 200],
-    ["Hard hat - keep stacking", 190],
-    ["Blueprint - no prize this spin", 180],
-    ["Foundation poured - keep building", 180],
-    ["Empty lot - try again", 170],
-    ["Roofline started - keep going", 160],
-    ["Bonus tease - no reveal", 150],
-    ["Almost framed - no prize", 150],
-    ["Dry spin - bank stays put", 140],
-    ["Crew break - no prize", 130],
-    ["Permit delay - spin again later", 120],
-    ["Paint sample - no prize", 110],
-    ["Tool check - keep earning", 110],
+    ["No prize - default 01", 240],
+    ["No prize - default 02", 220],
+    ["No prize - default 03", 200],
+    ["No prize - default 04", 190],
+    ["No prize - default 05", 180],
+    ["No prize - default 06", 180],
+    ["No prize - default 07", 170],
+    ["No prize - default 08", 160],
+    ["No prize - default 09", 150],
+    ["No prize - default 10", 150],
+    ["No prize - default 11", 140],
+    ["No prize - default 12", 130],
+    ["No prize - default 13", 120],
+    ["No prize - default 14", 110],
+    ["No prize - default 15", 110],
   ].map(([title, weight]) => reward({ title, kind: "miss", weight, notes: "No-prize outcome that keeps rewards from landing every spin." })),
   ...[
     "Take a guilt-free 30-minute nap",
@@ -698,7 +698,7 @@ function chooseWeighted(rewards) {
 }
 
 function rewardSymbol(row) {
-  if (!row || row.kind === "miss") return "BUILD";
+  if (!row || row.kind === "miss") return "MISS";
   if (row.kind === "bank_gated") return (row.value_cents || row.unlock_threshold_cents || 0) >= 20000 ? "JACKPOT" : "GOLD";
   if (row.kind === "small_paid") return "TREAT";
   if (row.kind === "bank_builder") return "BANK";
