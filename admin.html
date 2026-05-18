@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Activity - Daily Command Center</title>
+<link rel="stylesheet" href="/public/css/dashboard.css">
+<link rel="stylesheet" href="/public/css/admin.css">
+</head>
+<body class="admin-body">
+  <header class="admin-top">
+    <div>
+      <h1>Admin</h1>
+      <p>Recent app activity and feedback messages.</p>
+    </div>
+    <div class="admin-actions">
+      <a href="/">Dashboard</a>
+      <button id="admin-refresh" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="admin-metrics" aria-label="Admin summary">
+      <div class="admin-metric">
+        <span>Activity Events</span>
+        <strong id="metric-activity">--</strong>
+      </div>
+      <div class="admin-metric">
+        <span>Feedback Messages</span>
+        <strong id="metric-feedback">--</strong>
+      </div>
+      <div class="admin-metric">
+        <span>Last Activity</span>
+        <strong id="metric-last-activity">--</strong>
+      </div>
+      <div class="admin-metric">
+        <span>Last Feedback</span>
+        <strong id="metric-last-feedback">--</strong>
+      </div>
+    </section>
+
+    <section class="admin-grid">
+      <div class="admin-panel">
+        <div class="admin-panel-head">
+          <h2>Activity</h2>
+          <span id="activity-count">--</span>
+        </div>
+        <div class="admin-list" id="activity-list"></div>
+      </div>
+
+      <div class="admin-panel">
+        <div class="admin-panel-head">
+          <h2>Feedback</h2>
+          <span id="feedback-count">--</span>
+        </div>
+        <div class="admin-list" id="feedback-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/public/js/admin.js"></script>
+</body>
+</html>

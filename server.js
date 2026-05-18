@@ -211,6 +211,26 @@ function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; i
 function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
+async function ensureFeedbackTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feedback_messages (
+      id           SERIAL PRIMARY KEY,
+      workspace_id TEXT REFERENCES workspaces(id),
+      user_id      INTEGER REFERENCES users(id),
+      message      TEXT NOT NULL,
+      page_path    TEXT,
+      user_agent   TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at  TIMESTAMPTZ
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_feedback_messages_workspace_created ON feedback_messages(workspace_id, created_at DESC)");
+}
+
+function pickActivityTitle(data) {
+  if (!data || typeof data !== "object") return null;
+  return data.title || data.name || data.label || data.text || data.taskTitle || data.date || null;
+}
 
 async function getMeetingsFromDB(dateStr, userId, workspaceId) {
   const offset = getETOffset(dateStr);
@@ -363,6 +383,88 @@ app.get("/api/brain/tags", (req, res) => { if (!fs.existsSync(USER_CONTEXT_FILE)
 app.get("/api/prep", (req, res) => { if (!fs.existsSync(PREP_DIR)) return res.json({}); const files = {}; for (const fname of fs.readdirSync(PREP_DIR)) { if (!fname.endsWith(".html")) continue; try { files[fname] = fs.readFileSync(path.join(PREP_DIR, fname), "utf8"); } catch {} } res.json(files); });
 app.get("/api/prep/:filename", (req, res) => { const fp = path.join(PREP_DIR, req.params.filename); if (!fs.existsSync(fp)) return res.status(404).json({ error: "Not found" }); res.type("html").send(fs.readFileSync(fp, "utf8")); });
 app.get("/api/dcc-log", (req, res) => { if (!fs.existsSync(DCC_LOG_FILE)) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">dcc activity log not found.</div>' }); const raw = fs.readFileSync(DCC_LOG_FILE, "utf8"); const match = raw.match(/(### (\d{4}-\d{2}-\d{2}T[\d:+\-]+) -- (?:overnight-oracle|pa-offpeak|clever-assistant|dcc-refresh)[^\n]*\n)([\s\S]*?)(?=\n---|\Z)/); if (!match) return res.json({ html: '<div style="color:var(--text-muted);padding:24px">No overnight review found.</div>' }); const ts = match[2], body = match[3].trim(); const lines = body.split("\n"), parts = []; let inUl = false; for (const line of lines) { const stripped = line.trim(); if (stripped.startsWith("- ")) { if (!inUl) { parts.push('<ul style="margin:4px 0 8px 16px;padding:0;list-style:disc">'); inUl = true; } parts.push(`<li style="margin:3px 0;font-size:12px;line-height:1.5">${stripped.slice(2).replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</li>`); } else { if (inUl) { parts.push("</ul>"); inUl = false; } if (!stripped) parts.push('<div style="height:6px"></div>'); else parts.push(`<div style="font-size:12px;line-height:1.5;margin:2px 0">${stripped.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")}</div>`); } } if (inUl) parts.push("</ul>"); res.json({ html: `<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--text-muted);margin-bottom:12px">Last DCC sweep ran <strong style="color:var(--text)">${ts}</strong></div><div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px">${parts.join("\n")}</div></div>`, timestamp: ts }); });
+
+app.post("/api/feedback", async (req, res) => {
+  try {
+    const message = String(req.body?.message || "").trim();
+    const pagePath = String(req.body?.pagePath || req.body?.path || "").slice(0, 500);
+    if (!message) return res.status(400).json({ error: "Feedback message is required" });
+    if (message.length > 4000) return res.status(400).json({ error: "Feedback message is too long" });
+    await ensureFeedbackTable();
+    const { rows } = await pool.query(
+      `INSERT INTO feedback_messages (workspace_id, user_id, message, page_path, user_agent, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id, workspace_id, user_id, message, page_path, created_at`,
+      [req.workspaceId || null, req.session.userId || null, message, pagePath || null, String(req.headers["user-agent"] || "").slice(0, 500) || null]
+    );
+    res.status(201).json({ ok: true, feedback: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/admin/activity", async (req, res) => {
+  try {
+    await ensureFeedbackTable();
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 80, 1), 200);
+    const ws = req.workspaceId || null;
+    const activityParams = ws ? [ws, limit] : [limit];
+    const activitySql = ws
+      ? `SELECT o.id, o.block_id, o.op_type, o.before_data, o.after_data, o.timestamp, b.type AS block_type, b.date, b.properties
+         FROM operations o
+         JOIN blocks b ON b.id = o.block_id
+         WHERE b.workspace_id = $1
+         ORDER BY o.timestamp DESC, o.id DESC
+         LIMIT $2`
+      : `SELECT o.id, o.block_id, o.op_type, o.before_data, o.after_data, o.timestamp, b.type AS block_type, b.date, b.properties
+         FROM operations o
+         JOIN blocks b ON b.id = o.block_id
+         ORDER BY o.timestamp DESC, o.id DESC
+         LIMIT $1`;
+    const feedbackParams = ws ? [ws, limit] : [limit];
+    const feedbackSql = ws
+      ? `SELECT id, workspace_id, user_id, message, page_path, created_at, resolved_at
+         FROM feedback_messages
+         WHERE workspace_id = $1
+         ORDER BY created_at DESC, id DESC
+         LIMIT $2`
+      : `SELECT id, workspace_id, user_id, message, page_path, created_at, resolved_at
+         FROM feedback_messages
+         ORDER BY created_at DESC, id DESC
+         LIMIT $1`;
+    const [{ rows: activityRows }, { rows: feedbackRows }] = await Promise.all([
+      pool.query(activitySql, activityParams),
+      pool.query(feedbackSql, feedbackParams),
+    ]);
+    const activity = activityRows.map((row) => {
+      const after = typeof row.after_data === "string" ? JSON.parse(row.after_data) : row.after_data;
+      const before = typeof row.before_data === "string" ? JSON.parse(row.before_data) : row.before_data;
+      const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;
+      return {
+        id: row.id,
+        blockId: row.block_id,
+        opType: row.op_type,
+        timestamp: row.timestamp,
+        blockType: row.block_type,
+        date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : row.date,
+        title: pickActivityTitle(after) || pickActivityTitle(before) || pickActivityTitle(props) || row.block_id,
+      };
+    });
+    res.json({
+      workspaceId: ws,
+      summary: {
+        activityCount: activity.length,
+        feedbackCount: feedbackRows.length,
+        latestActivityAt: activity[0]?.timestamp || null,
+        latestFeedbackAt: feedbackRows[0]?.created_at || null,
+      },
+      activity,
+      feedback: feedbackRows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ── POST: State Persistence ──
 // /api/save-day retired Phase 6 -- BlockStore is the source of truth, no client calls this.
@@ -1324,6 +1426,7 @@ app.post("/api/vault/flush", async (req, res) => {
 // ── Static + Fallback ──
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });
+app.get("/admin", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
 
 // ── Startup ──
 let defaultUserId = 1;
@@ -1372,6 +1475,7 @@ app.listen(PORT, async () => {
 
   try {
     await blockDB.ensureDccStateTable();
+    await ensureFeedbackTable();
     const defaultUser = await auth.ensureDefaultUser();
     if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE dcc_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
     await blockDB.ensureWorkspacesForAllUsers();
