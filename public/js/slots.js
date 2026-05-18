@@ -84,7 +84,7 @@
     }
     const bu = slotState.bankUsage || {};
     const constants = slotState.constants || {};
-    setText("slot-daily-cap", "Bank builders: " + money(bu.today || 0) + " today; " + money(bu.week || 0) + " this week");
+    setText("slot-daily-cap", "Bank bonuses: " + money(bu.today || 0) + " today; " + money(bu.week || 0) + " this week");
     setText("slot-weekly-cap", "Monthly Jackpot Jar: " + money(bu.month || 0) + " / " + money(bu.monthlyGoal || 0) + " filled; " + money(bu.monthlyRemaining || 0) + " still at risk");
     setText("slot-shortfall-line", "Shortfall consequence: " + (constants.shortfallPenalty || "Leftover goal amount gets redirected."));
     renderRewards();
@@ -262,6 +262,7 @@
     const query = rewardSearch.trim().toLowerCase();
     return [...rewards]
       .filter(r => {
+        if(r.kind === "miss") return false;
         if(filter === "free" && r.kind !== "free") return false;
         if(filter === "jackpots" && !isJackpotReward(r)) return false;
         if(rewardCategory !== "all" && r.kind !== rewardCategory) return false;
@@ -350,11 +351,12 @@
       const symbol = rewardSymbol(snap);
       const taskDrip = snap.source_type === "task_bank_drip";
       const screenBank = snap.source_type === "slot_screen_bank_builder";
-      const metaLabel = taskDrip ? "task bank drip" : screenBank ? "screen bank builders" : "needs 3 in a row";
+      const metaLabel = taskDrip ? "task bank drip" : screenBank ? "screen bank bonus" : "needs 3 in a row";
       const bank = s.bank_delta_cents ? ' <span class="slot-history-bank">+' + money(s.bank_delta_cents) + '</span>' : '';
       const reserve = s.bank_reserved_cents ? ' <span class="slot-history-bank">reserve ' + money(s.bank_reserved_cents) + '</span>' : '';
+      const title = miss ? "No prize" : (snap.title || "Reward");
       return '<div class="slot-history-row">' +
-        '<div><strong>' + esc(snap.title || (miss ? "No prize" : "Reward")) + '</strong>' + bank + reserve +
+        '<div><strong>' + esc(title) + '</strong>' + bank + reserve +
           '<div class="slot-history-meta">' + esc(symbol) + ' ' + esc(metaLabel) + ' · ' + esc(KIND_LABELS[snap.kind] || snap.kind || "") + ' · ' + new Date(s.created_at).toLocaleString() + '</div>' +
         '</div>' +
         (pending && !bankBuilderPending ? '<button class="slot-mini primary slot-confirm" data-id="' + s.id + '">Confirm</button>' : '<span class="slot-status ' + (miss ? 'miss' : '') + '">' + esc(bankBuilderPending ? "sweep pending" : (miss ? "no prize" : s.status)) + '</span>') +
@@ -755,7 +757,7 @@
   }
 
   function rewardSymbol(reward){
-    if(!reward || reward.kind === "miss") return "BUILD";
+    if(!reward || reward.kind === "miss") return "MISS";
     if(reward.kind === "bank_gated") return (reward.value_cents || reward.unlock_threshold_cents || 0) >= 20000 ? "JACKPOT" : "GOLD";
     if(reward.kind === "small_paid") return "TREAT";
     if(reward.kind === "bank_builder") return "BANK";
@@ -782,9 +784,9 @@
     if(bankDelta > 0) {
       const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
       const cap = payout.capped ? " Bank cap trimmed the payout." : "";
-      return "Bank builders paid " + money(bankDelta) + units + ". The light flowed into the piggy bank." + cap;
+      return "Bank bonus paid " + money(bankDelta) + units + ". The light flowed into the piggy bank." + cap;
     }
-    if(spinRow.status === "miss" || snap.kind === "miss") return "No reward this spin: " + (snap.title || "keep building");
+    if(spinRow.status === "miss" || snap.kind === "miss") return "No reward this spin: No prize";
     if(snap.kind === "bank_builder") return "Piggy Bank grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Sweep it into savings when you get a chance.";
     if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
     return "Prize reveal: " + (snap.title || "Reward");
