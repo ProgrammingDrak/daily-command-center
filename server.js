@@ -446,14 +446,54 @@ function cadenceDays(props) {
   return m ? Math.max(1, parseInt(m[1], 10)) : 7;
 }
 
+function localDateOnly(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function daysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function preferredCompletionDue(props, at = new Date()) {
+  if (!props) return false;
+  const cadence = String(props.preferredCompletionCadence || props.preferredCadence || "none").toLowerCase();
+  if (!cadence || cadence === "none") return false;
+  if (!(at instanceof Date) || Number.isNaN(at.getTime())) return false;
+  if (cadence === "weekly") {
+    const day = Math.max(0, Math.min(6, Number(props.preferredDayOfWeek || 0)));
+    return at.getDay() === day;
+  }
+  if (cadence === "monthly") {
+    const target = Math.max(1, Math.min(31, Number(props.preferredDayOfMonth || 1)));
+    return at.getDate() === Math.min(target, daysInMonth(at.getFullYear(), at.getMonth()));
+  }
+  if (cadence === "yearly") {
+    const month = Math.max(1, Math.min(12, Number(props.preferredMonth || 1)));
+    const target = Math.max(1, Math.min(31, Number(props.preferredMonthDay || 1)));
+    return at.getMonth() + 1 === month && at.getDate() === Math.min(target, daysInMonth(at.getFullYear(), month - 1));
+  }
+  if (cadence === "custom") {
+    const anchorRaw = props.preferredCustomAnchor || props.preferredDate || "";
+    const every = Math.max(1, Number(props.preferredCustomDays || props.preferredEveryDays || 1));
+    const anchor = anchorRaw ? new Date(`${anchorRaw}T00:00:00`) : null;
+    if (!anchor || Number.isNaN(anchor.getTime())) return false;
+    const diff = Math.floor((localDateOnly(at) - localDateOnly(anchor)) / 86400000);
+    return diff >= 0 && diff % every === 0;
+  }
+  return false;
+}
+
 function responsibilityScore(props, at = new Date()) {
   if (!props || props.status === "archived" || props.status === "done") return 0;
   const days = cadenceDays(props);
-  if (!days) return 0;
-  const anchor = props.lastCompletedAt || props.createdAt || props.created_at || props.added_at;
-  const start = anchor ? new Date(anchor) : at;
-  const elapsedDays = Math.max(0, (at - start) / 86400000);
-  const base = days ? Math.round((elapsedDays / days) * 100) : 0;
+  let base = 0;
+  if (days) {
+    const anchor = props.lastCompletedAt || props.createdAt || props.created_at || props.added_at;
+    const start = anchor ? new Date(anchor) : at;
+    const elapsedDays = Math.max(0, (at - start) / 86400000);
+    base = Math.round((elapsedDays / days) * 100);
+  }
+  if (preferredCompletionDue(props, at)) base = Math.max(base, Number(props.preferredCompletionScore || 85));
   const boost = Number(props.importanceBoost || props.boost || 0);
   return Math.max(0, Math.min(100, base + boost));
 }
@@ -599,6 +639,7 @@ async function scheduleResponsibilityTask({ responsibility, date, userId, worksp
   const localId = "resp-task-" + crypto.randomUUID().slice(0, 12);
   const title = sourceProps.title || props.nextTaskTitle || props.title;
   const score = responsibilityScore(props);
+  const priority = sourceProps.priority || (sourceProps.urgent ? "High" : null) || (score >= 90 ? "High" : score >= 60 ? "Medium" : "Low");
   const taskProps = {
     kind: "responsibility_task",
     local_id: localId,
@@ -606,7 +647,7 @@ async function scheduleResponsibilityTask({ responsibility, date, userId, worksp
     duration,
     start: minutesToHHMM(slot),
     end: minutesToHHMM(slot + duration),
-    priority: score >= 90 ? "High" : score >= 60 ? "Medium" : "Low",
+    priority,
     meta: "Responsibility · " + (props.area || props.domain || "general") + " · " + duration + "m",
     detail: sourceProps.detail || props.description || "",
     source: "responsibility",

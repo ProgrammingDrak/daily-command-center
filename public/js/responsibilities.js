@@ -53,6 +53,55 @@
     return "completed "+days+"d ago";
   }
 
+  const WEEKDAY_LABELS=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const MONTH_LABELS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+  function localDateOnly(date){
+    return new Date(date.getFullYear(),date.getMonth(),date.getDate());
+  }
+
+  function daysInMonth(year,monthIndex){
+    return new Date(year,monthIndex+1,0).getDate();
+  }
+
+  function preferredCompletionInfo(props,at){
+    props=props||{};
+    const cadence=String(props.preferredCompletionCadence||props.preferredCadence||"none").toLowerCase();
+    if(!cadence||cadence==="none")return {active:false,due:false,label:""};
+    const now=at instanceof Date?at:new Date();
+    if(isNaN(now.getTime()))return {active:false,due:false,label:""};
+    if(cadence==="weekly"){
+      const day=Math.max(0,Math.min(6,Number(props.preferredDayOfWeek||0)));
+      return {active:true,due:now.getDay()===day,label:WEEKDAY_LABELS[day]};
+    }
+    if(cadence==="monthly"){
+      const target=Math.max(1,Math.min(31,Number(props.preferredDayOfMonth||1)));
+      const dueDay=Math.min(target,daysInMonth(now.getFullYear(),now.getMonth()));
+      return {active:true,due:now.getDate()===dueDay,label:"Day "+target};
+    }
+    if(cadence==="yearly"){
+      const month=Math.max(1,Math.min(12,Number(props.preferredMonth||1)));
+      const target=Math.max(1,Math.min(31,Number(props.preferredMonthDay||1)));
+      const dueDay=Math.min(target,daysInMonth(now.getFullYear(),month-1));
+      return {active:true,due:now.getMonth()+1===month&&now.getDate()===dueDay,label:MONTH_LABELS[month-1]+" "+target};
+    }
+    if(cadence==="custom"){
+      const anchorRaw=props.preferredCustomAnchor||props.preferredDate||"";
+      const every=Math.max(1,Number(props.preferredCustomDays||props.preferredEveryDays||1));
+      const anchor=anchorRaw?new Date(anchorRaw+"T00:00:00"):null;
+      if(!anchor||isNaN(anchor.getTime()))return {active:true,due:false,label:"Every "+every+"d"};
+      const diff=Math.floor((localDateOnly(now)-localDateOnly(anchor))/86400000);
+      return {active:true,due:diff>=0&&diff%every===0,label:"Every "+every+"d"};
+    }
+    return {active:false,due:false,label:""};
+  }
+
+  function preferredCompletionSummary(props){
+    const info=preferredCompletionInfo(props);
+    if(!info.active||!info.due)return "";
+    return "Don't forget! This is when you like to do this.";
+  }
+
   function responsibilityTiming(props){
     props=props||{};
     if(isAsNeeded(props))return {cadence:null,elapsed:0,remaining:null,progress:0,asNeeded:true};
@@ -66,6 +115,8 @@
   }
 
   function dueLabel(props){
+    const preferred=preferredCompletionInfo(props);
+    if(preferred.due)return "preferred today";
     const t=responsibilityTiming(props);
     if(t.asNeeded) return "as needed";
     if(t.remaining < 0) return Math.abs(t.remaining)+"d overdue";
@@ -123,8 +174,10 @@
       const p=item.properties||{};
       const score=Number(p.importanceScore||0);
       const subtasks=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
+      const preferred=preferredCompletionSummary(p);
+      const asNeeded=isAsNeeded(p);
       return '<div class="resp-card" data-id="'+esc(item.id)+'">'+
-        '<div class="resp-score '+scoreClass(score)+'">'+score+'</div>'+
+        (asNeeded?'<button type="button" class="resp-score resp-score-plus" data-act="urgent-schedule" title="Add as urgent" aria-label="Add as urgent">+</button>':'<div class="resp-score '+scoreClass(score)+'">'+score+'</div>')+
         '<div class="resp-body">'+
           '<div class="resp-title-row">'+
             '<div class="resp-title">'+esc(p.title||"(untitled)")+'</div>'+
@@ -139,16 +192,18 @@
             '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
           '</div>'+
           (subtasks.length?'<div class="resp-subtasks">'+esc(subtasks.slice(0,3).join(" · "))+(subtasks.length>3?" · ...":"")+'</div>':'')+
+          (preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
         '</div>'+
         '<div class="resp-card-actions">'+
           '<button data-act="schedule">Schedule</button>'+
           '<button data-act="complete">Complete</button>'+
           '<button data-act="edit">Edit</button>'+
           '<button class="danger" data-act="'+(p.status==="archived"?"activate":"archive")+'">'+(p.status==="archived"?"Activate":"Archive")+'</button>'+
+          '<button class="danger" data-act="remove">Remove</button>'+
         '</div>'+
       '</div>';
     }).join("");
-    mount.querySelectorAll(".resp-card-actions button").forEach(btn=>{
+    mount.querySelectorAll(".resp-card [data-act]").forEach(btn=>{
       btn.addEventListener("click",()=>handleCardAction(btn.closest(".resp-card").dataset.id,btn.dataset.act));
     });
     renderRepeatResponsibilitiesSidebar();
@@ -205,8 +260,10 @@
       const cls=scoreClass(score);
       const timing=responsibilityTiming(p);
       const subtasks=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
+      const preferred=preferredCompletionSummary(p);
+      const asNeeded=isAsNeeded(p);
       return '<div class="repeat-resp-card '+cls+'" data-id="'+esc(item.id)+'">'+
-        '<div class="repeat-resp-score resp-score '+cls+'">'+score+'</div>'+
+        (asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="urgent-schedule" title="Add as urgent" aria-label="Add as urgent">+</button>':'<div class="repeat-resp-score resp-score '+cls+'">'+score+'</div>')+
         '<div class="repeat-resp-main">'+
           '<div class="repeat-resp-title-row">'+
             '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+
@@ -215,20 +272,22 @@
           '<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>'+
           '<div class="repeat-resp-meta">'+
             '<span>'+cadenceLabel(p)+'</span>'+
-            '<span>'+esc(dueLabel(p))+'</span>'+
+            (asNeeded?'':'<span>'+esc(dueLabel(p))+'</span>')+
             '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
             '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
           '</div>'+
           (subtasks.length?'<div class="repeat-resp-subtasks">'+subtasks.slice(0,4).map(s=>'<span>'+esc(s)+'</span>').join("")+(subtasks.length>4?'<span>+'+(subtasks.length-4)+'</span>':'')+'</div>':'')+
+          (preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
         '</div>'+
         '<div class="repeat-resp-actions">'+
           '<button type="button" data-act="schedule">Schedule</button>'+
           '<button type="button" data-act="complete">Complete</button>'+
           '<button type="button" data-act="edit">Edit</button>'+
+          '<button type="button" class="danger" data-act="remove">Remove</button>'+
         '</div>'+
       '</div>';
     }).join("");
-    mount.querySelectorAll(".repeat-resp-actions button").forEach(btn=>{
+    mount.querySelectorAll(".repeat-resp-card [data-act]").forEach(btn=>{
       btn.addEventListener("click",()=>handleCardAction(btn.closest(".repeat-resp-card").dataset.id,btn.dataset.act));
     });
   }
@@ -237,11 +296,13 @@
     const item=_items.find(i=>i.id===id);
     if(!item)return;
     try{
-      if(act==="schedule"){
-        const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/schedule",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
+      if(act==="schedule"||act==="urgent-schedule"){
+        const body=act==="urgent-schedule"?{force:true,task:{priority:"High",urgent:true}}:{force:true};
+        const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/schedule",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
-        if(typeof showToast==="function")showToast("Responsibility scheduled","success");
-        location.reload();
+        const data=await res.json();
+        if(typeof showToast==="function")showToast(data.created?(act==="urgent-schedule"?"Urgent responsibility added":"Responsibility scheduled"):"That responsibility is already scheduled","success");
+        await loadResponsibilities();
       }else if(act==="complete"){
         const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
@@ -249,6 +310,14 @@
       }else if(act==="archive"||act==="activate"){
         await patchResponsibility(id,{status:act==="archive"?"archived":"active"});
         await loadResponsibilities();
+      }else if(act==="remove"){
+        const title=(item.properties&&item.properties.title)||"this repeat responsibility";
+        if(!window.confirm('Remove "'+title+'"? This cannot be undone.'))return;
+        const res=await fetch("/api/responsibilities/"+encodeURIComponent(id),{method:"DELETE"});
+        if(!res.ok)throw new Error((await res.json()).error||res.statusText);
+        _items=_items.filter(i=>i.id!==id);
+        renderResponsibilities();
+        if(typeof showToast==="function")showToast("Repeat responsibility removed","success");
       }else if(act==="edit"){
         openResponsibilityModal(id);
       }
@@ -401,6 +470,8 @@
   function openResponsibilityModal(id,defaults){
     const item=id?_items.find(i=>i.id===id):null;
     const p=item?(item.properties||{}):(defaults||{});
+    const today=new Date();
+    const todayIso=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0");
     document.getElementById("resp-id").value=id||"";
     document.getElementById("resp-title").value=p.title||"";
     document.getElementById("resp-domain").value=p.domain||"professional";
@@ -410,6 +481,14 @@
     document.getElementById("resp-cadence-days").value=p.cadenceDays||7;
     syncCadencePreset();
     document.getElementById("resp-estimated-minutes").value=p.estimatedMinutes||30;
+    document.getElementById("resp-preferred-cadence").value=p.preferredCompletionCadence||p.preferredCadence||"none";
+    document.getElementById("resp-preferred-weekday").value=p.preferredDayOfWeek!=null?p.preferredDayOfWeek:today.getDay();
+    document.getElementById("resp-preferred-month-day").value=p.preferredDayOfMonth||today.getDate();
+    document.getElementById("resp-preferred-year-month").value=p.preferredMonth||today.getMonth()+1;
+    document.getElementById("resp-preferred-year-day").value=p.preferredMonthDay||today.getDate();
+    document.getElementById("resp-preferred-custom-anchor").value=p.preferredCustomAnchor||p.preferredDate||todayIso;
+    document.getElementById("resp-preferred-custom-days").value=p.preferredCustomDays||p.cadenceDays||30;
+    syncPreferredCompletion();
     document.getElementById("resp-capacity-bucket").value=p.capacityBucket||"work_admin";
     const subtaskInput=document.getElementById("resp-default-subtask-input");
     if(subtaskInput)subtaskInput.value="";
@@ -429,6 +508,7 @@
     const cadenceMap={daily:1,weekly:7,biweekly:14,monthly:30};
     const customDays=Math.max(1,parseInt(document.getElementById("resp-cadence-days").value,10)||7);
     const cadenceDays=cadence==="as_needed"?null:(cadenceMap[cadence]||customDays);
+    const preferredCadence=document.getElementById("resp-preferred-cadence")?.value||"none";
     return {
       title:document.getElementById("resp-title").value.trim(),
       domain:document.getElementById("resp-domain").value,
@@ -437,6 +517,13 @@
       cadenceDays,
       asNeeded:cadence==="as_needed",
       estimatedMinutes:Math.max(15,parseInt(document.getElementById("resp-estimated-minutes").value,10)||30),
+      preferredCompletionCadence:preferredCadence,
+      preferredDayOfWeek:Math.max(0,Math.min(6,parseInt(document.getElementById("resp-preferred-weekday").value,10)||0)),
+      preferredDayOfMonth:Math.max(1,Math.min(31,parseInt(document.getElementById("resp-preferred-month-day").value,10)||1)),
+      preferredMonth:Math.max(1,Math.min(12,parseInt(document.getElementById("resp-preferred-year-month").value,10)||1)),
+      preferredMonthDay:Math.max(1,Math.min(31,parseInt(document.getElementById("resp-preferred-year-day").value,10)||1)),
+      preferredCustomAnchor:document.getElementById("resp-preferred-custom-anchor").value||"",
+      preferredCustomDays:Math.max(1,parseInt(document.getElementById("resp-preferred-custom-days").value,10)||30),
       capacityBucket:document.getElementById("resp-capacity-bucket").value,
       defaultSubtasks:readDefaultSubtasks(),
       status:"active"
@@ -453,6 +540,17 @@
     wrap.style.display=custom?"":"none";
     if(map[preset.value])input.value=map[preset.value];
     input.disabled=preset.value==="as_needed";
+  }
+
+  function syncPreferredCompletion(){
+    const preset=document.getElementById("resp-preferred-cadence");
+    const grid=document.getElementById("resp-preferred-grid");
+    if(!preset||!grid)return;
+    const active=preset.value||"none";
+    grid.style.display=active==="none"?"none":"grid";
+    grid.querySelectorAll(".resp-preferred-field").forEach(field=>{
+      field.style.display=field.dataset.preferredField===active?"":"none";
+    });
   }
 
   async function patchResponsibility(id,props){
@@ -554,6 +652,8 @@
     if(repeatNew)repeatNew.addEventListener("click",()=>openResponsibilityModal(null));
     const cadencePresetEl=document.getElementById("resp-cadence-preset");
     if(cadencePresetEl)cadencePresetEl.addEventListener("change",syncCadencePreset);
+    const preferredCadenceEl=document.getElementById("resp-preferred-cadence");
+    if(preferredCadenceEl)preferredCadenceEl.addEventListener("change",syncPreferredCompletion);
     const newBtn=document.getElementById("resp-new-btn");
     if(newBtn)newBtn.addEventListener("click",()=>openResponsibilityModal(null));
     const subtaskAdd=document.getElementById("resp-default-subtask-add");

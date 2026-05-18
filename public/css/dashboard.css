@@ -2186,6 +2186,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .resp-subtask-add button{padding:0 10px;font-weight:600}
 .resp-subtask-remove:hover,.resp-subtask-add button:hover{border-color:var(--accent);color:var(--accent-light)}
 .resp-subtask-empty{padding:2px 0 2px 26px;color:var(--text-muted);font-size:12px;line-height:1.35}
+.resp-preferred-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.resp-preferred-nudge{margin-top:7px;color:var(--amber);font-size:11px;font-weight:700;line-height:1.35}
 .delegated-modal-actions{display:flex;gap:8px;margin-top:20px;justify-content:flex-end;flex-wrap:wrap}
 .delegated-modal-actions button{font-size:12px;padding:8px 14px;border-radius:6px;cursor:pointer;border:1px solid var(--border);font-family:inherit}
 .delegated-modal-actions button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -2212,6 +2214,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .resp-score.blue{border-color:var(--accent-light);color:var(--accent-light)}
 .resp-score.yellow{border-color:var(--amber);color:var(--amber)}
 .resp-score.red{border-color:var(--red);color:var(--red)}
+.resp-score-plus{cursor:pointer;color:var(--green);border-color:var(--green);font-size:22px;font-weight:800;line-height:1}
+.resp-score-plus:hover{background:rgba(34,197,94,0.1);box-shadow:0 0 0 2px rgba(34,197,94,0.14)}
 .resp-title-row{display:flex;gap:8px;align-items:center;min-width:0;flex-wrap:wrap}
 .resp-title{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .resp-chip{font-size:10px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--border);border-radius:999px;padding:2px 7px;color:var(--text-muted);background:rgba(255,255,255,0.03)}
@@ -2248,9 +2252,11 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .repeat-resp-meta{display:flex;gap:7px;flex-wrap:wrap;color:var(--text-muted);font-size:10px;line-height:1.35}
 .repeat-resp-subtasks{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
 .repeat-resp-subtasks span{max-width:100%;font-size:10px;line-height:1.2;color:var(--text-muted);border:1px solid var(--border);background:rgba(255,255,255,0.03);border-radius:999px;padding:3px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repeat-resp-card .resp-preferred-nudge{font-size:10px}
 .repeat-resp-actions{grid-column:1 / -1;display:flex;gap:5px;justify-content:flex-end}
 .repeat-resp-actions button{font-size:10px;padding:4px 8px;border-radius:5px;background:var(--bg);border:1px solid var(--border);color:var(--text-muted);cursor:pointer}
 .repeat-resp-actions button:hover{border-color:var(--accent);color:var(--accent-light)}
+.repeat-resp-actions .danger:hover{border-color:var(--red);color:var(--red)}
 .st-act-btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .st-act-btn.primary:hover{background:var(--accent-light);color:#fff}
 .st-resolve-section.blocking{border:1px solid rgba(245,158,11,0.45);border-radius:8px;padding:10px;background:rgba(245,158,11,0.07)}
@@ -2261,6 +2267,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .resp-card-actions{justify-content:flex-start}
   .repeat-resp-tools{grid-template-columns:1fr 1fr}
   .repeat-resp-tools input{grid-column:1 / -1}
+  .resp-preferred-grid{grid-template-columns:1fr}
 }
 
 /* Delegate button: circular icon on backlog cards + pill on tag editor (PIN 10.A-4) */
