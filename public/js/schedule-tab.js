@@ -839,6 +839,94 @@ function _updateRemainingStatLabels(scope){
   if(tasksLabel)tasksLabel.textContent=scopeLabel+" Tasks Left";
   document.querySelectorAll(".stat-combined .stat-half").forEach(el=>{el.title=hint;});
 }
+const DAY_POINT_GOALS_KEY="pa-day-point-goals-v1";
+function _statEsc(value){
+  return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+}
+function _currentViewDateKey(){
+  return (__state&&__state.date)||new Date().toISOString().split("T")[0];
+}
+function _roundGoal(value){
+  return Math.max(0, Math.round((Number(value)||0)/5)*5);
+}
+function _defaultDayPointGoals(){
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  const workMinutes=blocks
+    .filter(b=>(b.blockType||b.type||"work")==="work")
+    .reduce((sum,b)=>sum+Math.max(0,pt(b.end||"00:00")-pt(b.start||"00:00")),0);
+  const fallbackMin=300, fallbackMax=480;
+  const min=workMinutes>0?_roundGoal(workMinutes*0.65):fallbackMin;
+  const max=workMinutes>0?_roundGoal(workMinutes):fallbackMax;
+  return {min:Math.max(60,min),max:Math.max(Math.max(60,min),max)};
+}
+function _storedDayPointGoals(){
+  try{
+    const parsed=JSON.parse(localStorage.getItem(DAY_POINT_GOALS_KEY)||"{}");
+    return parsed&&typeof parsed==="object"?parsed:{};
+  }catch(e){return{};}
+}
+function getDayPointGoals(){
+  const dateKey=_currentViewDateKey();
+  const all=_storedDayPointGoals();
+  const defaults=_defaultDayPointGoals();
+  const saved=all[dateKey]||{};
+  const min=_roundGoal(saved.min!=null?saved.min:defaults.min);
+  const max=_roundGoal(saved.max!=null?saved.max:defaults.max);
+  return {min, max:Math.max(min,max)};
+}
+function setDayPointGoal(field,value){
+  const dateKey=_currentViewDateKey();
+  const all=_storedDayPointGoals();
+  const current=getDayPointGoals();
+  current[field]=_roundGoal(value);
+  if(field==="min"&&current.max<current.min) current.max=current.min;
+  if(field==="max"&&current.max<current.min) current.min=current.max;
+  all[dateKey]=current;
+  try{localStorage.setItem(DAY_POINT_GOALS_KEY,JSON.stringify(all));}catch(e){}
+  updateStats();
+  const popover=document.getElementById("stat-popover");
+  if(popover&&popover.dataset.openFor==="s-points"){
+    const card=document.querySelector(".stat-points");
+    popover.dataset.openFor="";
+    if(card) showStatPopover("s-points",{stopPropagation:function(){},currentTarget:card});
+  }
+}
+function _estimatedTaskPoints(ev){
+  if(!ev)return 0;
+  const bounty=typeof isBountyTask==="function"&&isBountyTask(ev.id);
+  const payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
+    ? window.TaskPoints.buildPayload(ev,{bounty})
+    : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty};
+  const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
+    ? window.TaskPoints.estimate(payload)
+    : {eligible:(typeof isMeeting!=="function"||!isMeeting(ev))&&ev.type!=="ooo"&&ev.type!=="break",awardPoints:Math.max(1,Math.round(typeof dur==="function"?dur(ev):(ev.durMin||30)))};
+  return scoring&&scoring.eligible?Math.max(0,Number(scoring.awardPoints)||0):0;
+}
+function _pointEligibleScheduleItems(){
+  const trivFlags=typeof loadTrivialFlags==="function"?loadTrivialFlags():{};
+  return scheduled.filter(ev=>{
+    if(!ev||trivFlags[ev.id])return false;
+    if(typeof isDeleted==="function"&&isDeleted(ev))return false;
+    if(typeof isPushed==="function"&&isPushed(ev))return false;
+    return true;
+  });
+}
+function _dayPointSummary(){
+  const items=_pointEligibleScheduleItems();
+  const done=items.filter(isDone);
+  const remaining=items.filter(ev=>!isDone(ev));
+  const earned=done.reduce((sum,ev)=>sum+_estimatedTaskPoints(ev),0);
+  const remainingPoints=remaining.reduce((sum,ev)=>sum+_estimatedTaskPoints(ev),0);
+  const scheduledPoints=earned+remainingPoints;
+  const goals=getDayPointGoals();
+  return {
+    items,done,remaining,earned,remainingPoints,scheduledPoints,
+    minGoal:goals.min,
+    maxGoal:goals.max,
+    neededToMin:Math.max(0,goals.min-scheduledPoints),
+    availableToMax:Math.max(0,goals.max-scheduledPoints)
+  };
+}
 function toggleRemainingStatScope(event){
   if(event)event.stopPropagation();
   const next=_remainingStatScope()==="block"?"day":"block";
@@ -855,6 +943,11 @@ function updateStats(){
   document.getElementById("s-time").textContent=remMin>0?ms(remMin):"0m";
   document.getElementById("s-tasks").textContent=rem.length;
   document.getElementById("s-done").textContent=done.length+" / "+ms(doneMin);
+  const pointSummary=_dayPointSummary();
+  const pointEl=document.getElementById("s-points");
+  const pointAvailEl=document.getElementById("s-points-available");
+  if(pointEl)pointEl.textContent=pointSummary.earned+" / "+pointSummary.scheduledPoints;
+  if(pointAvailEl)pointAvailEl.textContent="Available: "+pointSummary.availableToMax+" pts";
   document.getElementById("s-block").textContent=getCurrentBlockEnd();
   _updateRemainingStatLabels(scope);
 }
@@ -920,6 +1013,28 @@ function showStatPopover(statId, event) {
       }).join('');
       const totalActual=done.reduce((a,ev)=>a+_actualMin(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0), totalPlanned=done.reduce((a,ev)=>a+dur(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0);
       html+='<div class="sp-note">Actual: '+ms(totalActual)+' / Planned: '+ms(totalPlanned)+'</div>';
+      break;
+    }
+    case 's-points': {
+      const summary=_dayPointSummary();
+      const maxForMeter=Math.max(1,summary.maxGoal);
+      const scheduledPct=Math.max(0,Math.min(100,Math.round((summary.scheduledPoints/maxForMeter)*100)));
+      html = '<div class="sp-title">Day Point Budget</div>';
+      html += '<div class="sp-row"><span class="sp-label">Earned from completed tasks</span><span class="sp-dur">'+summary.earned+' pts</span></div>';
+      html += '<div class="sp-row"><span class="sp-label">Still scheduled</span><span class="sp-dur">'+summary.remainingPoints+' pts</span></div>';
+      html += '<div class="sp-row"><span class="sp-label">Planned total</span><span class="sp-dur">'+summary.scheduledPoints+' pts</span></div>';
+      html += '<div class="sp-point-meter" title="'+summary.scheduledPoints+' of '+summary.maxGoal+' max points allocated"><div class="sp-point-meter-fill" style="width:'+scheduledPct+'%"></div></div>';
+      html += '<div class="sp-row"><span class="sp-label">Needed to minimum</span><span class="sp-dur">'+summary.neededToMin+' pts</span></div>';
+      html += '<div class="sp-row"><span class="sp-label">Available to allocate</span><span class="sp-dur">'+summary.availableToMax+' pts</span></div>';
+      html += '<div class="sp-point-goals">'
+        +'<label class="sp-point-goal">Minimum goal<input type="number" min="0" step="5" value="'+summary.minGoal+'" onchange="setDayPointGoal(&apos;min&apos;,this.value)"></label>'
+        +'<label class="sp-point-goal">Maximum goal<input type="number" min="0" step="5" value="'+summary.maxGoal+'" onchange="setDayPointGoal(&apos;max&apos;,this.value)"></label>'
+        +'</div>';
+      if(summary.remaining.length){
+        html += '<div class="sp-title" style="margin-top:12px">Scheduled Points</div>';
+        html += summary.remaining.map(ev => '<div class="sp-row"><span class="sp-time">'+f12(ev.start).replace(' ','')+'</span><span class="sp-label">'+_statEsc(ev.title)+'</span><span class="sp-dur">'+_estimatedTaskPoints(ev)+' pts</span></div>').join('');
+      }
+      html += '<div class="sp-point-note">This is display-only for now. The over-allocation warning can plug into these same totals later.</div>';
       break;
     }
     case 's-block': {
