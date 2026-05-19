@@ -7,11 +7,16 @@
   let rewardEligibility = "all";
   let rewardSort = "category";
   let editingId = null;
+  let sponsorSplitsDraft = [];
   let isSpinning = false;
   let lastPendingBankCents = 0;
   let pendingDeleteRewardId = null;
+  let bankDetailsOpen = false;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
+  const SLOT_SOUND_KEY = "pa-slot-sound-on";
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
+  let slotSoundOn = readSlotSoundPreference();
+  let slotAudioCtx = null;
   const KIND_LABELS = {
     miss: "No prize",
     free: "Free",
@@ -34,6 +39,12 @@
     self: "Self",
     accountability_partner: "Accountability",
     romantic_partner: "Romantic",
+    either_partner: "Either partner",
+    split: "Split sponsor"
+  };
+  const SPONSOR_PRESETS = {
+    accountability_partner: "Accountability partner",
+    romantic_partner: "Romantic partner",
     either_partner: "Either partner"
   };
   const SPIN_SYMBOLS = ["HAT","STRAW","STICK","BRICK","BANK","CARE","BONUS","WILD","HOUSE","TOOLS","STAR","JACKPOT","PLEDGE","PICK"];
@@ -58,6 +69,145 @@
     return String(s == null ? "" : s).replace(/[&<>"']/g, ch => ({
       "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
     })[ch]);
+  }
+
+  function readSlotSoundPreference(){
+    try {
+      return localStorage.getItem(SLOT_SOUND_KEY) !== "off";
+    } catch(e) {
+      return true;
+    }
+  }
+
+  function writeSlotSoundPreference(){
+    try {
+      localStorage.setItem(SLOT_SOUND_KEY, slotSoundOn ? "on" : "off");
+    } catch(e) {}
+  }
+
+  function updateSlotSoundButton(){
+    const btn = document.getElementById("slot-sound-toggle");
+    if(!btn) return;
+    btn.textContent = "Sound: " + (slotSoundOn ? "On" : "Off");
+    btn.setAttribute("aria-pressed", slotSoundOn ? "true" : "false");
+  }
+
+  function toggleSlotSound(){
+    slotSoundOn = !slotSoundOn;
+    writeSlotSoundPreference();
+    updateSlotSoundButton();
+    if(slotSoundOn) slotPlay("toggle");
+  }
+
+  function getSlotAudioContext(){
+    if(!slotSoundOn) return null;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if(!AudioCtx) return null;
+    if(!slotAudioCtx) slotAudioCtx = new AudioCtx();
+    if(slotAudioCtx.state === "suspended" && slotAudioCtx.resume) slotAudioCtx.resume().catch(() => {});
+    return slotAudioCtx;
+  }
+
+  function slotTone(freq, duration, options){
+    const ctx = getSlotAudioContext();
+    if(!ctx) return;
+    const opts = options || {};
+    const start = ctx.currentTime + (opts.delay || 0);
+    const dur = Math.max(0.02, duration || 0.08);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const gainValue = opts.gain == null ? 0.08 : opts.gain;
+    const attack = opts.attack == null ? 0.006 : opts.attack;
+    const release = opts.release == null ? 0.05 : opts.release;
+    osc.type = opts.type || "sine";
+    osc.frequency.setValueAtTime(freq, start);
+    if(opts.endFreq) osc.frequency.exponentialRampToValueAtTime(Math.max(1, opts.endFreq), start + dur);
+    if(opts.detune) osc.detune.setValueAtTime(opts.detune, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, gainValue), start + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + dur + release);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + dur + release + 0.02);
+  }
+
+  function slotNoise(duration, options){
+    const ctx = getSlotAudioContext();
+    if(!ctx) return;
+    const opts = options || {};
+    const start = ctx.currentTime + (opts.delay || 0);
+    const dur = Math.max(0.03, duration || 0.1);
+    const sampleCount = Math.max(1, Math.floor(ctx.sampleRate * dur));
+    const buffer = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i = 0; i < sampleCount; i++) data[i] = Math.random() * 2 - 1;
+    const source = ctx.createBufferSource();
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    source.buffer = buffer;
+    filter.type = opts.filterType || "bandpass";
+    filter.frequency.setValueAtTime(opts.filterFreq || 1200, start);
+    filter.Q.setValueAtTime(opts.q || 1.6, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, opts.gain == null ? 0.04 : opts.gain), start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    source.start(start);
+    source.stop(start + dur + 0.02);
+  }
+
+  function slotPlay(name, detail){
+    if(!slotSoundOn) return;
+    const d = detail || {};
+    try {
+      if(name === "toggle"){
+        slotTone(660, 0.08, { type: "triangle", gain: 0.07 });
+        slotTone(990, 0.11, { type: "triangle", gain: 0.06, delay: 0.08 });
+      } else if(name === "lever"){
+        slotNoise(0.08, { filterType: "lowpass", filterFreq: 240, gain: 0.12 });
+        slotTone(120, 0.16, { type: "sawtooth", gain: 0.06, endFreq: 62 });
+      } else if(name === "reelStart"){
+        slotTone(180, 0.18, { type: "sawtooth", gain: 0.035, endFreq: 320 });
+        slotNoise(0.14, { filterFreq: 620, gain: 0.035, delay: 0.04 });
+      } else if(name === "tick"){
+        slotTone(520 + ((d.tick || 0) % 5) * 38, 0.025, { type: "square", gain: 0.018, release: 0.012 });
+      } else if(name === "stop"){
+        slotTone(760 + ((d.index || 0) % 5) * 28, 0.04, { type: "triangle", gain: 0.035, release: 0.018 });
+        slotNoise(0.025, { filterFreq: 1900, gain: 0.018 });
+      } else if(name === "win"){
+        [523, 659, 784, 1046].forEach((freq, i) => slotTone(freq, 0.13, { type: "triangle", gain: 0.07, delay: i * 0.075 }));
+        slotTone(1318, 0.24, { type: "sine", gain: 0.05, delay: 0.27 });
+      } else if(name === "miss"){
+        slotTone(330, 0.12, { type: "triangle", gain: 0.045, endFreq: 260 });
+        slotTone(220, 0.16, { type: "triangle", gain: 0.04, endFreq: 160, delay: 0.12 });
+        slotNoise(0.07, { filterType: "lowpass", filterFreq: 180, gain: 0.045, delay: 0.21 });
+      } else if(name === "pending"){
+        slotTone(622, 0.1, { type: "triangle", gain: 0.055 });
+        slotTone(932, 0.14, { type: "triangle", gain: 0.05, delay: 0.1 });
+      } else if(name === "bankLine"){
+        slotTone(392, 0.08, { type: "square", gain: 0.04 });
+        slotTone(784, 0.12, { type: "triangle", gain: 0.05, delay: 0.08 });
+      } else if(name === "coins"){
+        for(let i = 0; i < 12; i++){
+          slotTone(820 + (i % 4) * 92, 0.035, { type: "triangle", gain: 0.026, delay: i * 0.036, release: 0.018 });
+        }
+        slotNoise(0.32, { filterFreq: 2600, gain: 0.025 });
+      } else if(name === "sweep"){
+        slotTone(440, 0.09, { type: "sine", gain: 0.04 });
+        slotTone(880, 0.18, { type: "sine", gain: 0.045, delay: 0.09 });
+      } else if(name === "deposit"){
+        slotTone(1046, 0.08, { type: "triangle", gain: 0.06 });
+        slotTone(1568, 0.16, { type: "sine", gain: 0.045, delay: 0.08 });
+      } else if(name === "confirm"){
+        slotTone(740, 0.08, { type: "triangle", gain: 0.045 });
+        slotTone(988, 0.1, { type: "triangle", gain: 0.04, delay: 0.08 });
+      } else if(name === "error"){
+        slotTone(180, 0.16, { type: "sawtooth", gain: 0.04, endFreq: 120 });
+      }
+    } catch(e) {}
   }
 
   async function api(path, opts){
@@ -232,19 +382,18 @@
       const value = r.value_cents ? '<span>' + money(r.value_cents) + '</span>' : '';
       const bank = r.bank_delta_cents ? '<span>+' + money(r.bank_delta_cents) + ' bank</span>' : '';
       const locked = r.eligible ? '' : '<span class="slot-locked">' + lockLabel(r.locked_reason) + '</span>';
-      const sponsor = r.sponsor_type !== "self" ? '<span>' + esc(SPONSOR_LABELS[r.sponsor_type] || r.sponsor_type) + '</span>' : '';
       const symbol = rewardSymbol(r);
+      const oddsLabel = oddsText(r, slotState.rewards || []);
       return '<div class="slot-reward-row ' + (r.eligible ? '' : 'locked') + '" data-id="' + r.id + '">' +
         '<div class="slot-reward-main">' +
           '<div class="slot-reward-title"><span class="slot-symbol-badge" data-symbol="' + esc(symbol.toLowerCase()) + '">' + esc(symbol) + '</span>' + esc(r.title) + '</div>' +
           '<div class="slot-reward-meta">' +
             '<span>' + esc(KIND_LABELS[r.kind] || r.kind) + '</span>' +
-            '<span>weight ' + esc(r.weight) + '</span>' +
-            value + bank + sponsor + locked +
+            '<span>' + esc(oddsLabel) + '</span>' +
+            value + bank + locked +
           '</div>' +
         '</div>' +
         '<div class="slot-reward-actions">' +
-          (r.sponsor_type !== "self" ? '<button class="slot-mini slot-sponsor-toggle" data-id="' + r.id + '">' + (r.sponsor_active ? 'Opt out' : 'Opt in') + '</button>' : '') +
           '<button class="slot-mini slot-edit" data-id="' + r.id + '">Edit</button>' +
           '<button class="slot-mini danger slot-delete" data-id="' + r.id + '">Delete</button>' +
           (String(pendingDeleteRewardId) === String(r.id)
@@ -264,7 +413,15 @@
       pendingDeleteRewardId = null;
       renderRewards();
     }));
-    list.querySelectorAll(".slot-sponsor-toggle").forEach(btn => btn.addEventListener("click", () => toggleSponsor(btn.dataset.id)));
+  }
+
+  function oddsText(reward, rewards){
+    const weight = reward && reward.weight ? Number(reward.weight) : 0;
+    const pool = (rewards || []).filter(r => r && r.kind !== "miss" && r.active !== false && (r.weight || 0) > 0);
+    const total = pool.reduce((sum, r) => sum + (Number(r.weight) || 0), 0);
+    const pct = total > 0 && weight > 0 ? (weight / total) * 100 : 0;
+    const pctText = pct >= 10 ? pct.toFixed(0) : pct >= 1 ? pct.toFixed(1) : pct > 0 ? pct.toFixed(2) : "0";
+    return weight + " odds share" + (weight === 1 ? "" : "s") + " (~" + pctText + "%)";
   }
 
   function filterRewards(rewards){
@@ -341,9 +498,7 @@
     return ({
       inactive: "inactive",
       zero_weight: "zero weight",
-      sponsor_opt_in_required: "needs sponsor opt-in",
       bank_too_small: "bank locked",
-      cooldown: "cooldown",
       bank_cap: "bucket full"
     })[reason] || "locked";
   }
@@ -387,6 +542,7 @@
     if(btn) btn.disabled = true;
     isSpinning = true;
     setResult("Pulling the lever...");
+    slotPlay("lever");
     try {
       const spinRow = await api("/api/slot/spin", { method: "POST" });
       const snap = spinRow.reward_snapshot || {};
@@ -399,11 +555,16 @@
       }
       highlightWinningCells(spinRow, snap);
       setResult(resultText(spinRow, snap));
+      if((spinRow.bank_delta_cents || 0) > 0) slotPlay("win");
+      else if(spinRow.status === "miss" || snap.kind === "miss") slotPlay("miss");
+      else if(spinRow.status === "pending") slotPlay("pending");
+      else slotPlay("win");
       isSpinning = false;
       await loadSlots();
     } catch(e) {
       isSpinning = false;
       setResult(e.message);
+      slotPlay("error");
       if(btn) btn.disabled = false;
     }
   }
@@ -418,6 +579,7 @@
       r.classList.remove("reveal");
       r.classList.add("spinning");
     });
+    slotPlay("reelStart");
     return new Promise(resolve => {
       const timer = setInterval(() => {
         reels.forEach((r, i) => {
@@ -425,6 +587,7 @@
           setCell(r, SPIN_SYMBOLS[(tick + i * 5) % SPIN_SYMBOLS.length]);
           r.classList.toggle("pulse", tick % 2 === 0);
         });
+        if(tick % 3 === 0) slotPlay("tick", { tick });
         tick++;
       }, 48);
       reels.forEach((r, i) => {
@@ -432,6 +595,7 @@
           r.classList.add("stopped");
           setCell(r, targets[i % targets.length] || "STAR");
           r.classList.add("reveal");
+          slotPlay("stop", { index: i });
         }, 700 + (i % 5) * 140 + Math.floor(i / 5) * 170);
       });
       setTimeout(() => {
@@ -521,6 +685,7 @@
     if(!cells.length) return;
 
     cells.forEach(cell => cell.classList.add("bank-hit"));
+    slotPlay("bankLine");
     await wait(260);
 
     const horizontalGroups = Array.isArray(payout.horizontal_groups) ? payout.horizontal_groups : [];
@@ -554,6 +719,7 @@
       void label.offsetWidth;
       label.classList.add("pop");
     }
+    slotPlay("coins", { cents: deltaCents });
     let idx = 0;
     cells.forEach((cell, cellIdx) => {
       for(let burst = 0; burst < 9; burst++){
@@ -576,6 +742,7 @@
     const floorCoins = coinPhysics.coins.filter(c => c.y > window.innerHeight - 90);
     const sources = floorCoins.length ? floorCoins : coinPhysics.coins;
     target.classList.add("receiving");
+    slotPlay("sweep", { cents: deltaCents });
     for(let i = 0; i < 14; i++){
       const source = sources.length ? sources[(i * 7) % sources.length] : null;
       const sx = source ? source.x : (window.innerWidth / 2 + (i % 5 - 2) * 28);
@@ -605,6 +772,7 @@
     pop.style.top = (rect.top + Math.min(34, rect.height / 2)) + "px";
     document.body.appendChild(pop);
     target.classList.add("deposit-impact");
+    slotPlay("deposit", { cents: deltaCents });
     pop.addEventListener("animationend", () => pop.remove(), { once: true });
     setTimeout(() => target.classList.remove("deposit-impact"), 680);
   }
@@ -820,10 +988,8 @@
     val("slot-form-sponsor", reward ? reward.sponsor_type : "self");
     val("slot-form-weight", reward ? reward.weight : 10);
     val("slot-form-value", reward ? ((reward.value_cents || 0) / 100) : "");
-    val("slot-form-cooldown", reward ? reward.cooldown_days : 0);
+    sponsorSplitsDraft = sponsorSplitsForReward(reward);
     checked("slot-form-active", reward ? reward.active : true);
-    checked("slot-form-sponsor-active", reward ? reward.sponsor_active : false);
-    checked("slot-form-confirm", reward ? reward.requires_confirmation : false);
     val("slot-form-notes", reward ? reward.notes : "");
     syncRewardFormUi();
     const title = document.getElementById("slot-form-title");
@@ -841,13 +1007,8 @@
     const sponsorEl = document.getElementById("slot-form-sponsor");
     const kind = kindEl ? kindEl.value : "free";
     let sponsor = sponsorEl ? sponsorEl.value : "self";
-    if(kind === "sponsor" && sponsor === "self"){
-      val("slot-form-sponsor", "accountability_partner");
-      sponsor = "accountability_partner";
-    }
     const needsPrice = ["small_paid", "bank_gated", "sponsor"].includes(kind);
     const usesSponsor = kind === "sponsor";
-    const sponsorOptIn = usesSponsor && sponsor !== "self";
     const form = document.getElementById("slot-reward-form");
     if(form){
       form.dataset.rewardKind = kind;
@@ -858,13 +1019,85 @@
       });
       form.querySelectorAll('[data-slot-field="value"]').forEach(el => el.hidden = !needsPrice);
       form.querySelectorAll('[data-slot-field="sponsor"]').forEach(el => el.hidden = !usesSponsor);
-      form.querySelectorAll('[data-slot-field="sponsor-active"]').forEach(el => el.hidden = !sponsorOptIn);
     }
     setText("slot-form-subtitle", FORM_SUBTITLES[kind] || "Reward");
-    if(!usesSponsor) val("slot-form-sponsor", "self");
+    if(!usesSponsor) {
+      val("slot-form-sponsor", "self");
+      sponsorSplitsDraft = [];
+    } else if(sponsor === "__add"){
+      addSponsorSplit("", remainingSponsorPercent());
+      val("slot-form-sponsor", "self");
+    } else if(SPONSOR_PRESETS[sponsor]){
+      addSponsorSplit(SPONSOR_PRESETS[sponsor], remainingSponsorPercent());
+      val("slot-form-sponsor", "self");
+    }
     if(!needsPrice) val("slot-form-value", "");
-    if(!sponsorOptIn) checked("slot-form-sponsor-active", usesSponsor);
-    if(kind === "bank_gated" || kind === "small_paid" || kind === "sponsor") checked("slot-form-confirm", true);
+    renderSponsorSplits();
+    updateOddsHint();
+  }
+
+  function sponsorSplitsForReward(reward){
+    if(!reward) return [];
+    if(Array.isArray(reward.sponsor_splits) && reward.sponsor_splits.length){
+      return reward.sponsor_splits.map(row => ({
+        name: String(row.name || ""),
+        percent: Math.max(0, Math.min(100, parseInt(row.percent, 10) || 0))
+      })).filter(row => row.name || row.percent > 0);
+    }
+    if(reward.kind === "sponsor" && reward.sponsor_type && reward.sponsor_type !== "self"){
+      return [{ name: SPONSOR_LABELS[reward.sponsor_type] || reward.sponsor_type, percent: 100 }];
+    }
+    return [];
+  }
+
+  function remainingSponsorPercent(){
+    const used = sponsorSplitsDraft.reduce((sum, row) => sum + (parseInt(row.percent, 10) || 0), 0);
+    return Math.max(0, Math.min(100, 100 - used)) || 100;
+  }
+
+  function addSponsorSplit(name, percent){
+    sponsorSplitsDraft.push({ name: name || "", percent: Math.max(0, Math.min(100, parseInt(percent, 10) || 0)) });
+    renderSponsorSplits();
+  }
+
+  function renderSponsorSplits(){
+    const list = document.getElementById("slot-sponsor-split-list");
+    if(!list) return;
+    if(!sponsorSplitsDraft.length){
+      list.innerHTML = '<div class="slot-empty">No sponsor coverage yet.</div>';
+      return;
+    }
+    list.innerHTML = sponsorSplitsDraft.map((row, i) =>
+      '<div class="slot-sponsor-split-row" data-index="' + i + '">' +
+        '<input class="slot-sponsor-name" type="text" placeholder="Person name" value="' + esc(row.name || "") + '">' +
+        '<input class="slot-sponsor-percent" type="number" min="0" max="100" step="1" aria-label="Sponsor percent" value="' + esc(row.percent || 0) + '">' +
+        '<button class="slot-sponsor-remove" type="button" aria-label="Remove sponsor">x</button>' +
+      '</div>'
+    ).join("");
+    list.querySelectorAll(".slot-sponsor-split-row").forEach(rowEl => {
+      const idx = parseInt(rowEl.dataset.index, 10);
+      const nameInput = rowEl.querySelector(".slot-sponsor-name");
+      const percentInput = rowEl.querySelector(".slot-sponsor-percent");
+      const removeBtn = rowEl.querySelector(".slot-sponsor-remove");
+      if(nameInput) nameInput.addEventListener("input", () => { if(sponsorSplitsDraft[idx]) sponsorSplitsDraft[idx].name = nameInput.value; });
+      if(percentInput) percentInput.addEventListener("input", () => { if(sponsorSplitsDraft[idx]) sponsorSplitsDraft[idx].percent = Math.max(0, Math.min(100, parseInt(percentInput.value, 10) || 0)); });
+      if(removeBtn) removeBtn.addEventListener("click", () => { sponsorSplitsDraft.splice(idx, 1); renderSponsorSplits(); });
+    });
+  }
+
+  function updateOddsHint(){
+    const note = document.getElementById("slot-form-weight-note");
+    const input = document.getElementById("slot-form-weight");
+    if(!note || !input) return;
+    const weight = parseInt(input.value, 10) || 0;
+    const rewards = (slotState && slotState.rewards) || [];
+    const total = rewards
+      .filter(r => !editingId || String(r.id) !== String(editingId))
+      .filter(r => r.kind !== "miss" && r.active !== false && (r.weight || 0) > 0)
+      .reduce((sum, r) => sum + (Number(r.weight) || 0), 0) + weight;
+    const pct = total > 0 && weight > 0 ? (weight / total) * 100 : 0;
+    const pctText = pct >= 10 ? pct.toFixed(0) : pct >= 1 ? pct.toFixed(1) : pct > 0 ? pct.toFixed(2) : "0";
+    note.textContent = weight ? (weight + " shares is about " + pctText + "% of the active pool.") : "0 shares keeps this out of the draw.";
   }
 
   function val(id, value){
@@ -880,19 +1113,25 @@
   function formPayload(){
     const valueDollars = parseFloat(document.getElementById("slot-form-value").value || "0") || 0;
     const kind = document.getElementById("slot-form-kind").value;
-    const sponsor = document.getElementById("slot-form-sponsor").value;
     const valueCents = Math.round(valueDollars * 100);
+    const sponsorSplits = kind === "sponsor"
+      ? sponsorSplitsDraft.map(row => ({
+          name: String(row.name || "").trim(),
+          percent: Math.max(0, Math.min(100, parseInt(row.percent, 10) || 0))
+        })).filter(row => row.name && row.percent > 0)
+      : [];
     return {
       title: document.getElementById("slot-form-title").value,
       kind,
-      sponsor_type: sponsor,
+      sponsor_type: sponsorSplits.length ? "split" : "self",
+      sponsor_splits: sponsorSplits,
       weight: parseInt(document.getElementById("slot-form-weight").value, 10) || 0,
       active: document.getElementById("slot-form-active").checked,
-      sponsor_active: sponsor === "self" ? true : document.getElementById("slot-form-sponsor-active").checked,
+      sponsor_active: true,
       value_cents: valueCents,
       bank_delta_cents: 0,
-      requires_confirmation: document.getElementById("slot-form-confirm").checked || kind === "bank_gated" || kind === "small_paid",
-      cooldown_days: parseInt(document.getElementById("slot-form-cooldown").value, 10) || 0,
+      requires_confirmation: false,
+      cooldown_days: 0,
       unlock_threshold_cents: valueCents,
       notes: document.getElementById("slot-form-notes").value
     };
@@ -949,26 +1188,16 @@
     }
   }
 
-  async function toggleSponsor(id){
-    const reward = findReward(id);
-    if(!reward) return;
-    const payload = { ...reward, sponsor_active: !reward.sponsor_active };
-    try {
-      await api("/api/slot/rewards/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      await loadSlots();
-    } catch(e) {
-      setResult(e.message);
-    }
-  }
-
   async function confirmSpin(id){
     try {
       const spinRow = await api("/api/slot/spins/" + id + "/confirm", { method: "POST" });
       const snap = spinRow.reward_snapshot || {};
+      slotPlay("confirm");
       setResult("Confirmed: " + (snap.title || "Reward"));
       await loadSlots();
     } catch(e) {
       setResult(e.message);
+      slotPlay("error");
     }
   }
 
@@ -985,6 +1214,8 @@
     const shortfall = bu.monthlyRemaining != null ? bu.monthlyRemaining : Math.max(0, monthlyGoal - monthCents);
     const btn = document.getElementById("slot-pending-deposit");
     const fill = document.getElementById("slot-bank-fill");
+    const details = document.getElementById("slot-bank-details");
+    const sweepBtn = document.getElementById("slot-bank-sweep-btn");
     if(!btn) return;
     setText("slot-bank-balance", money(totalCents));
     setText("slot-bank-ready", money(readyCents));
@@ -992,18 +1223,30 @@
     setText("slot-bank-total", money(totalCents));
     setText("slot-bank-month", money(monthCents) + " / " + money(monthlyGoal));
     setText("slot-bank-shortfall", money(shortfall));
-    setText("slot-bank-action-label", pendingCents > 0 ? "Click after sweeping " + money(pendingCents) + " into savings" : (shortfall > 0 ? money(shortfall) + " left to save this month" : "Monthly bucket filled"));
-    btn.disabled = pendingCents <= 0;
+    setText("slot-bank-action-label", "Unlocked total - click for details");
+    btn.disabled = false;
     btn.classList.toggle("urgent", pendingCents > 0);
-    btn.title = pendingCents > 0
-      ? "After you transfer " + money(pendingCents) + " into the savings account, click to mark it swept."
-      : "No pending sweep. Ready funds stay available for funded rewards.";
+    btn.setAttribute("aria-expanded", bankDetailsOpen ? "true" : "false");
+    btn.title = "Click to see how much is ready and how much still needs to be swept.";
+    if(details) details.hidden = !bankDetailsOpen;
+    if(sweepBtn){
+      sweepBtn.disabled = pendingCents <= 0;
+      sweepBtn.textContent = pendingCents > 0 ? "Mark " + money(pendingCents) + " swept" : "No sweep pending";
+    }
     if(fill){
       const pct = monthlyGoal <= 0 ? 0 : Math.max(monthCents > 0 ? 8 : 0, Math.min(100, Math.round((monthCents / monthlyGoal) * 100)));
       fill.style.width = pct + "%";
     }
     if(animate && pendingCents > lastPendingBankCents) inflatePendingDeposit(pendingCents - lastPendingBankCents);
     lastPendingBankCents = pendingCents;
+  }
+
+  function togglePiggyBankDetails(){
+    bankDetailsOpen = !bankDetailsOpen;
+    const details = document.getElementById("slot-bank-details");
+    const btn = document.getElementById("slot-pending-deposit");
+    if(details) details.hidden = !bankDetailsOpen;
+    if(btn) btn.setAttribute("aria-expanded", bankDetailsOpen ? "true" : "false");
   }
 
   function inflatePendingDeposit(deltaCents){
@@ -1046,6 +1289,7 @@
     if(btn) btn.classList.add("pop");
     try {
       const result = await api("/api/slot/bank-builders/confirm", { method: "POST" });
+      slotPlay("confirm");
       setResult("Swept " + money(result.confirmed_cents || cents) + " into ready reward savings.");
       lastPendingBankCents = 0;
       setTimeout(async () => {
@@ -1055,6 +1299,7 @@
     } catch(e) {
       if(btn) btn.classList.remove("pop");
       setResult(e.message);
+      slotPlay("error");
     }
   }
 
@@ -1159,10 +1404,15 @@
       const panel = document.getElementById("slot-rules-panel");
       if(panel) panel.style.display = panel.style.display === "none" ? "" : "none";
     });
+    const soundBtn = document.getElementById("slot-sound-toggle");
+    if(soundBtn) soundBtn.addEventListener("click", toggleSlotSound);
+    updateSlotSoundButton();
     const saveSettingsBtn = document.getElementById("slot-save-settings-btn");
     if(saveSettingsBtn) saveSettingsBtn.addEventListener("click", saveSettings);
     const pendingBtn = document.getElementById("slot-pending-deposit");
-    if(pendingBtn) pendingBtn.addEventListener("click", popPendingDeposit);
+    if(pendingBtn) pendingBtn.addEventListener("click", togglePiggyBankDetails);
+    const sweepBtn = document.getElementById("slot-bank-sweep-btn");
+    if(sweepBtn) sweepBtn.addEventListener("click", popPendingDeposit);
     const addBtn = document.getElementById("slot-add-reward-btn");
     if(addBtn) addBtn.addEventListener("click", () => openForm(null));
     const saveBtn = document.getElementById("slot-save-reward-btn");
@@ -1179,6 +1429,10 @@
     });
     const sponsorSelect = document.getElementById("slot-form-sponsor");
     if(sponsorSelect) sponsorSelect.addEventListener("change", syncRewardFormUi);
+    const addSponsorPersonBtn = document.getElementById("slot-add-sponsor-person");
+    if(addSponsorPersonBtn) addSponsorPersonBtn.addEventListener("click", () => addSponsorSplit("", remainingSponsorPercent()));
+    const weightInput = document.getElementById("slot-form-weight");
+    if(weightInput) weightInput.addEventListener("input", updateOddsHint);
     document.querySelectorAll(".slot-filter").forEach(btn => {
       btn.addEventListener("click", () => {
         filter = btn.dataset.slotFilter;
