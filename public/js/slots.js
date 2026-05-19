@@ -12,6 +12,9 @@
   let lastPendingBankCents = 0;
   let pendingDeleteRewardId = null;
   let bankDetailsOpen = false;
+  let activeSlotSection = "machine";
+  let slotPetHome = null;
+  let slotPetReactionTimer = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
@@ -69,6 +72,14 @@
     return String(s == null ? "" : s).replace(/[&<>"']/g, ch => ({
       "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
     })[ch]);
+  }
+
+  function slotPetGlyph(base){
+    return { sprout: "S", mossling: "M", moonpup: "P", pufflet: "F" }[base] || "S";
+  }
+
+  function slotPetAccessory(accessory){
+    return { bandana: "◇", hat: "^", necklace: "o", flower: "*" }[accessory] || "";
   }
 
   function readSlotSoundPreference(){
@@ -217,6 +228,42 @@
     return data;
   }
 
+  async function loadSlotPetHome(){
+    try {
+      const data = await api("/api/pet-home/state");
+      slotPetHome = data && data.home ? data.home : null;
+      renderSlotPetHome();
+    } catch(e) {}
+  }
+
+  function renderSlotPetHome(){
+    const avatar = document.getElementById("slot-pet-avatar");
+    if(!avatar) return;
+    const pet = (slotPetHome && slotPetHome.pet) || {};
+    avatar.style.setProperty("--slot-pet-color", pet.color || "#f2b56b");
+    setText("slot-pet-glyph", slotPetGlyph(pet.base));
+    setText("slot-pet-accessory", slotPetAccessory(pet.accessory));
+  }
+
+  function slotPetReact(mood, message, duration){
+    const machine = document.querySelector(".slots-machine");
+    const avatar = document.getElementById("slot-pet-avatar");
+    const speech = document.getElementById("slot-pet-speech");
+    if(slotPetReactionTimer) clearTimeout(slotPetReactionTimer);
+    if(avatar) {
+      avatar.dataset.mood = mood || "idle";
+      avatar.classList.remove("slot-pet-bump");
+      void avatar.offsetWidth;
+    }
+    if(speech && message) speech.textContent = message;
+    if(machine) machine.classList.toggle("pet-helping", mood === "pull");
+    slotPetReactionTimer = setTimeout(() => {
+      if(avatar) avatar.dataset.mood = "idle";
+      if(machine) machine.classList.remove("pet-helping");
+      if(speech) speech.textContent = "Ready.";
+    }, duration || 1800);
+  }
+
   async function loadSlots(){
     const root = document.getElementById("tab-slots");
     if(!root) return;
@@ -231,6 +278,8 @@
 
   function renderSlots(){
     if(!slotState) return;
+    applySlotSection();
+    renderSlotPetHome();
     const account = slotState.account || {};
     const credits = account.point_balance || 0;
     setText("slot-credit-balance", String(credits));
@@ -254,6 +303,27 @@
       btn.disabled = isSpinning || credits < spinCost;
       btn.textContent = "Spin (" + pointLabel(spinCost) + ")";
     }
+  }
+
+  function switchSlotSection(section){
+    activeSlotSection = section || "machine";
+    applySlotSection();
+    if(activeSlotSection === "rewards") renderRewards();
+    if(activeSlotSection === "rules") {
+      renderSettings();
+      renderHistory();
+    }
+  }
+
+  function applySlotSection(){
+    document.querySelectorAll(".slot-section-tab").forEach(btn => {
+      const active = btn.dataset.slotSection === activeSlotSection;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    document.querySelectorAll("[data-slot-section-panel]").forEach(panel => {
+      panel.classList.toggle("active", panel.dataset.slotSectionPanel === activeSlotSection);
+    });
   }
 
   function setText(id, text){
@@ -538,10 +608,13 @@
   }
 
   async function spin(){
+    if(isSpinning) return;
     const btn = document.getElementById("slot-spin-btn");
     if(btn) btn.disabled = true;
     isSpinning = true;
     setResult("Pulling the lever...");
+    const petHelps = Math.random() < 0.42;
+    slotPetReact(petHelps ? "pull" : "idle", petHelps ? "I got it." : "Here we go.", 1200);
     slotPlay("lever");
     try {
       const spinRow = await api("/api/slot/spin", { method: "POST" });
@@ -555,16 +628,26 @@
       }
       highlightWinningCells(spinRow, snap);
       setResult(resultText(spinRow, snap));
-      if((spinRow.bank_delta_cents || 0) > 0) slotPlay("win");
-      else if(spinRow.status === "miss" || snap.kind === "miss") slotPlay("miss");
-      else if(spinRow.status === "pending") slotPlay("pending");
-      else slotPlay("win");
+      if((spinRow.bank_delta_cents || 0) > 0) {
+        slotPlay("win");
+        slotPetReact("happy", "Bank hit!", 2400);
+      } else if(spinRow.status === "miss" || snap.kind === "miss") {
+        slotPlay("miss");
+        slotPetReact("sad", "Almost.", 2100);
+      } else if(spinRow.status === "pending") {
+        slotPlay("pending");
+        slotPetReact("happy", "Prize waiting.", 2300);
+      } else {
+        slotPlay("win");
+        slotPetReact("happy", "Nice pull.", 2300);
+      }
       isSpinning = false;
       await loadSlots();
     } catch(e) {
       isSpinning = false;
       setResult(e.message);
       slotPlay("error");
+      slotPetReact("sad", "Need more points.", 2200);
       if(btn) btn.disabled = false;
     }
   }
@@ -1243,6 +1326,7 @@
 
   function togglePiggyBankDetails(){
     bankDetailsOpen = !bankDetailsOpen;
+    if(bankDetailsOpen) switchSlotSection("rules");
     const details = document.getElementById("slot-bank-details");
     const btn = document.getElementById("slot-pending-deposit");
     if(details) details.hidden = !bankDetailsOpen;
@@ -1395,15 +1479,15 @@
   }
 
   function init(){
+    document.querySelectorAll(".slot-section-tab").forEach(btn => {
+      btn.addEventListener("click", () => switchSlotSection(btn.dataset.slotSection || "machine"));
+    });
     const spinBtn = document.getElementById("slot-spin-btn");
     if(spinBtn) spinBtn.addEventListener("click", spin);
+    const helperLever = document.getElementById("slot-helper-lever");
+    if(helperLever) helperLever.addEventListener("click", spin);
     const refreshBtn = document.getElementById("slot-refresh-btn");
     if(refreshBtn) refreshBtn.addEventListener("click", loadSlots);
-    const rulesBtn = document.getElementById("slot-rules-toggle");
-    if(rulesBtn) rulesBtn.addEventListener("click", () => {
-      const panel = document.getElementById("slot-rules-panel");
-      if(panel) panel.style.display = panel.style.display === "none" ? "" : "none";
-    });
     const soundBtn = document.getElementById("slot-sound-toggle");
     if(soundBtn) soundBtn.addEventListener("click", toggleSlotSound);
     updateSlotSoundButton();
@@ -1479,6 +1563,8 @@
       pendingDeleteRewardId = null;
       renderRewards();
     });
+    applySlotSection();
+    loadSlotPetHome();
     loadSlots();
     flushTaskCreditQueue();
     setTimeout(reconcileCompletedTaskCredits, 1500);

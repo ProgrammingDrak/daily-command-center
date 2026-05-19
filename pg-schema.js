@@ -176,6 +176,45 @@ CREATE TABLE IF NOT EXISTS pet_task_suggestions (
 CREATE INDEX IF NOT EXISTS idx_pet_task_suggestions_workspace_status
   ON pet_task_suggestions(workspace_id, status, created_at DESC);
 
+-- ── Live Todo Shares ──
+CREATE TABLE IF NOT EXISTS todo_shares (
+  id             SERIAL PRIMARY KEY,
+  workspace_id   TEXT NOT NULL REFERENCES workspaces(id),
+  token          TEXT NOT NULL UNIQUE,
+  access_level   TEXT NOT NULL DEFAULT 'guest_view',
+  active         BOOLEAN NOT NULL DEFAULT TRUE,
+  settings       JSONB NOT NULL DEFAULT '{}',
+  created_by     INTEGER REFERENCES users(id),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_viewed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_todo_shares_workspace_active
+  ON todo_shares(workspace_id, active, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS todo_sponsorships (
+  id               SERIAL PRIMARY KEY,
+  workspace_id     TEXT NOT NULL REFERENCES workspaces(id),
+  share_id         INTEGER NOT NULL REFERENCES todo_shares(id),
+  task_id          TEXT NOT NULL,
+  task_block_id    TEXT,
+  task_title       TEXT NOT NULL,
+  sponsor_name     TEXT NOT NULL,
+  sponsor_email    TEXT,
+  sponsor_user_id  INTEGER REFERENCES users(id),
+  kind             TEXT NOT NULL DEFAULT 'bounty',
+  reward_title     TEXT NOT NULL,
+  note             TEXT NOT NULL DEFAULT '',
+  value_cents      INTEGER NOT NULL DEFAULT 0,
+  status           TEXT NOT NULL DEFAULT 'pending',
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_workspace_status
+  ON todo_sponsorships(workspace_id, status, created_at DESC);
+
 -- ── Slot Rewards ──
 CREATE TABLE IF NOT EXISTS slot_accounts (
   workspace_id        TEXT PRIMARY KEY REFERENCES workspaces(id),

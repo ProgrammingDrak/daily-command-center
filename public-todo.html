@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shared Todo List</title>
+  <link rel="stylesheet" href="/public/css/dashboard.css">
+</head>
+<body class="todo-public-body">
+  <main class="todo-public-shell">
+    <section class="todo-public-hero">
+      <div>
+        <h1 id="todo-public-title">Shared Todo List</h1>
+        <p id="todo-public-subtitle">A live view of today's active list.</p>
+      </div>
+      <div class="todo-public-actions">
+        <a class="todo-public-login" href="/login">Sign in</a>
+        <a class="todo-public-login primary" href="/register">Create account</a>
+      </div>
+    </section>
+
+    <section id="todo-public-error" class="todo-public-error" hidden></section>
+
+    <section id="todo-public-content" class="todo-public-grid" hidden>
+      <section class="todo-public-main">
+        <div class="todo-public-toolbar">
+          <div>
+            <strong id="todo-public-date">Today</strong>
+            <span id="todo-public-updated">Live</span>
+          </div>
+          <div class="todo-public-stats">
+            <span><b id="todo-stat-open">0</b> open</span>
+            <span><b id="todo-stat-done">0</b> done</span>
+            <span><b id="todo-stat-sponsored">0</b> sponsored</span>
+          </div>
+        </div>
+        <div id="todo-public-list" class="todo-public-list"></div>
+      </section>
+
+      <aside class="todo-sponsor-panel">
+        <h2>Visit as a guest</h2>
+        <p>Use the link to keep watching the live list. An account lets your sponsorships stay tied to you.</p>
+        <label>Your name <input id="todo-sponsor-name" type="text" maxlength="80" placeholder="Name"></label>
+        <label>Email optional <input id="todo-sponsor-email" type="email" maxlength="180" placeholder="you@example.com"></label>
+        <label>Task <select id="todo-sponsor-task"></select></label>
+        <label>Offer type
+          <select id="todo-sponsor-kind">
+            <option value="bounty">Sponsor a bounty</option>
+            <option value="reward">Offer a reward</option>
+          </select>
+        </label>
+        <label>Reward or bounty <input id="todo-sponsor-title" type="text" maxlength="160" placeholder="Coffee if this gets done"></label>
+        <label>Dollar value optional <input id="todo-sponsor-value" type="number" min="0" step="0.01" placeholder="0.00"></label>
+        <label>Note <textarea id="todo-sponsor-note" maxlength="1000" placeholder="Add context or encouragement"></textarea></label>
+        <button id="todo-send-sponsorship" class="todo-public-btn primary" type="button">Send offer</button>
+        <div id="todo-sponsor-status" class="todo-sponsor-status"></div>
+      </aside>
+    </section>
+  </main>
+  <script src="/public/js/public-todo-share.js"></script>
+</body>
+</html>
