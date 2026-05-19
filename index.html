@@ -191,6 +191,7 @@
   <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
   <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
+  <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
 </div>
 
@@ -1048,6 +1049,82 @@
 
 <div class="tab-content" id="tab-calendar"></div>
 
+<div class="tab-content" id="tab-pet-home">
+  <div class="pet-shell">
+    <div class="pet-topline">
+      <div>
+        <h2 class="pet-title">Pet Home</h2>
+        <div class="pet-subtitle">A cozy little house where completed tasks become care, decor, and visible progress.</div>
+      </div>
+      <div class="pet-share">
+        <button id="pet-share-enable" class="pet-btn primary" type="button">Enable share</button>
+        <button id="pet-share-copy" class="pet-btn" type="button">Copy link</button>
+        <button id="pet-share-rotate" class="pet-btn" type="button">Rotate link</button>
+      </div>
+    </div>
+    <div class="pet-grid">
+      <section class="pet-home-stage" aria-label="Pet home preview">
+        <div class="pet-room">
+          <div class="pet-window"></div>
+          <div class="pet-whiteboard">
+            <div class="pet-board-title">Today</div>
+            <div id="pet-board-list" class="pet-board-list"></div>
+          </div>
+          <div class="pet-garden" id="pet-garden-zone"></div>
+          <div class="pet-special" id="pet-special-zone"></div>
+          <div class="pet-bowl"></div>
+          <div class="pet-avatar" id="pet-avatar"><span id="pet-accessory"></span></div>
+        </div>
+        <div class="pet-care-bars">
+          <div class="pet-meter"><span>Food</span><strong id="pet-food-label">0%</strong><i><b id="pet-food-fill"></b></i></div>
+          <div class="pet-meter"><span>Mood</span><strong id="pet-mood-label">0%</strong><i><b id="pet-mood-fill"></b></i></div>
+          <div class="pet-currency"><span>Decor treats</span><strong id="pet-decor-currency">0</strong></div>
+        </div>
+      </section>
+      <section class="pet-panel">
+        <h3>Customize</h3>
+        <div class="pet-form-grid">
+          <label>Name <input id="pet-name-input" type="text" maxlength="40"></label>
+          <label>Base
+            <select id="pet-base-select">
+              <option value="sprout">Sprout</option>
+              <option value="mossling">Mossling</option>
+              <option value="moonpup">Moonpup</option>
+              <option value="pufflet">Pufflet</option>
+            </select>
+          </label>
+          <label>Color <input id="pet-color-input" type="color" value="#f2b56b"></label>
+          <label>Accessory
+            <select id="pet-accessory-select">
+              <option value="none">None</option>
+              <option value="bandana">Bandana</option>
+              <option value="hat">Hat</option>
+              <option value="necklace">Necklace</option>
+              <option value="flower">Flower</option>
+            </select>
+          </label>
+        </div>
+        <div class="pet-form-actions">
+          <button id="pet-save-customize" class="pet-btn primary" type="button">Save home</button>
+        </div>
+        <h3>Decor</h3>
+        <div id="pet-decor-list" class="pet-decor-list"></div>
+      </section>
+      <section class="pet-panel">
+        <div class="pet-panel-head">
+          <h3>Suggestion Inbox</h3>
+          <span id="pet-suggestion-count">0 pending</span>
+        </div>
+        <div id="pet-suggestions" class="pet-suggestions"></div>
+      </section>
+      <section class="pet-panel">
+        <h3>Encouragement Wall</h3>
+        <div id="pet-events" class="pet-events"></div>
+      </section>
+    </div>
+  </div>
+</div>
+
 <div class="tab-content" id="tab-slots">
   <div class="slots-shell">
     <div class="slots-topline">
@@ -1058,10 +1135,20 @@
       <div class="slots-balances">
         <div class="slots-balance"><span>Task Points</span><strong id="slot-credit-balance">0</strong></div>
         <div class="slots-balance slots-bank">
-          <span>Piggy Bank</span>
-          <button id="slot-pending-deposit" class="slot-pending-deposit" type="button">
+          <div class="slot-bank-heading">
+            <span>Piggy Bank</span>
+            <button class="slot-bank-info" type="button" aria-label="How unlocking works">i
+              <span class="slot-bank-info-tip" role="tooltip">
+                Set a fun discretionary budget. BANK hits unlock dollars toward it. Once money is ready, JACKPOT hits let you spend it.
+              </span>
+            </button>
+          </div>
+          <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" aria-expanded="false" aria-controls="slot-bank-details">
             <strong id="slot-bank-balance">$0.00</strong>
             <span class="slot-bank-meter"><span id="slot-bank-fill"></span></span>
+            <span class="slot-pop-label" id="slot-bank-action-label">No sweep pending</span>
+          </button>
+          <div class="slot-bank-details" id="slot-bank-details" hidden>
             <span class="slot-bank-breakdown">
               <span>Ready <b id="slot-bank-ready">$0.00</b></span>
               <span>To sweep <b id="slot-bank-pending">$0.00</b></span>
@@ -1069,8 +1156,8 @@
               <span>This month <b id="slot-bank-month">$0.00 / $0.00</b></span>
               <span>At risk <b id="slot-bank-shortfall">$0.00</b></span>
             </span>
-            <span class="slot-pop-label" id="slot-bank-action-label">No sweep pending</span>
-          </button>
+            <button id="slot-bank-sweep-btn" class="slot-bank-sweep-btn" type="button">Mark swept</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1098,6 +1185,7 @@
           <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
           <button class="slot-refresh-btn" id="slot-refresh-btn" type="button">Refresh</button>
           <button class="slot-refresh-btn" id="slot-rules-toggle" type="button">Rules &amp; cost</button>
+          <button class="slot-sound-btn" id="slot-sound-toggle" type="button" aria-pressed="true">Sound: On</button>
         </div>
         <div class="slot-rules-panel" id="slot-rules-panel" style="display:none">
           <div class="slot-rules-grid">
@@ -1170,16 +1258,13 @@
           </div>
           <div class="slot-form-grid">
             <label class="slot-field">
-              <span>Odds weight</span>
+              <span>Odds shares</span>
               <input id="slot-form-weight" type="number" min="0" step="1" placeholder="16">
+              <em id="slot-form-weight-note">Higher shares make this more likely.</em>
             </label>
             <label class="slot-field" data-slot-field="value">
               <span>Price</span>
               <input id="slot-form-value" type="number" min="0" step="1" placeholder="0">
-            </label>
-            <label class="slot-field">
-              <span>Cooldown</span>
-              <input id="slot-form-cooldown" type="number" min="0" step="1" placeholder="0">
             </label>
             <label class="slot-field" data-slot-field="sponsor">
               <span>Sponsor</span>
@@ -1188,13 +1273,19 @@
                 <option value="accountability_partner">Accountability partner</option>
                 <option value="romantic_partner">Romantic partner</option>
                 <option value="either_partner">Either partner</option>
+                <option value="__add">Add person...</option>
               </select>
             </label>
           </div>
+          <div class="slot-sponsor-splits" id="slot-sponsor-splits" data-slot-field="sponsor">
+            <div class="slot-sponsor-splits-head">
+              <span>Coverage</span>
+              <button id="slot-add-sponsor-person" class="slot-mini" type="button">Add person</button>
+            </div>
+            <div class="slot-sponsor-split-list" id="slot-sponsor-split-list"></div>
+          </div>
           <div class="slot-toggle-row">
             <label class="slot-toggle"><input id="slot-form-active" type="checkbox" checked><span>Active</span></label>
-            <label class="slot-toggle" data-slot-field="sponsor-active"><input id="slot-form-sponsor-active" type="checkbox"><span>Sponsor opted in</span></label>
-            <label class="slot-toggle"><input id="slot-form-confirm" type="checkbox"><span>Require confirmation</span></label>
           </div>
           <label class="slot-field slot-field-full">
             <span>Notes</span>
@@ -1240,7 +1331,7 @@
             <option value="title">Name</option>
             <option value="price-asc">Price low-high</option>
             <option value="price-desc">Price high-low</option>
-            <option value="weight-desc">Weight high-low</option>
+            <option value="weight-desc">Odds high-low</option>
             <option value="eligible">Eligible first</option>
           </select>
         </div>
@@ -1321,6 +1412,7 @@
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js"></script>
 <script src="/public/js/delegated.js"></script>
+<script src="/public/js/pet-home.js"></script>
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/ev-calculator.js"></script>
 <script src="/public/js/carryover-review.js"></script>
