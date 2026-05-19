@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pet Home</title>
+  <link rel="stylesheet" href="/public/css/dashboard.css">
+</head>
+<body class="pet-public-body">
+  <main class="pet-public-shell">
+    <section class="pet-public-hero">
+      <div>
+        <h1 id="public-pet-title">Pet Home</h1>
+        <p id="public-pet-subtitle">A shared cozy task home.</p>
+      </div>
+      <a class="pet-public-login" href="/register">Create account</a>
+    </section>
+    <section id="public-pet-error" class="pet-public-error" hidden></section>
+    <section id="public-pet-content" class="pet-public-grid" hidden>
+      <div class="pet-home-stage public">
+        <div class="pet-room">
+          <div class="pet-window"></div>
+          <div class="pet-whiteboard">
+            <div class="pet-board-title">Shared Board</div>
+            <div id="public-task-list" class="pet-board-list"></div>
+          </div>
+          <div class="pet-garden" id="public-garden-zone"></div>
+          <div class="pet-special" id="public-special-zone"></div>
+          <div class="pet-bowl"></div>
+          <div class="pet-avatar" id="public-pet-avatar"></div>
+        </div>
+        <div class="pet-care-bars">
+          <div class="pet-meter"><span>Food</span><strong id="public-food-label">0%</strong><i><b id="public-food-fill"></b></i></div>
+          <div class="pet-meter"><span>Mood</span><strong id="public-mood-label">0%</strong><i><b id="public-mood-fill"></b></i></div>
+        </div>
+      </div>
+      <aside class="pet-public-panel">
+        <h2>Visit as a guest</h2>
+        <p>Use your name so your encouragement and suggestions are easy to recognize.</p>
+        <label>Your name <input id="public-visitor-name" type="text" maxlength="60" placeholder="Name"></label>
+        <label>Encouragement <textarea id="public-encouragement" maxlength="500" placeholder="Leave a kind note"></textarea></label>
+        <button id="public-send-encouragement" class="pet-btn primary" type="button">Send encouragement</button>
+        <label>Suggest a task <input id="public-suggestion-title" type="text" maxlength="160" placeholder="Task idea"></label>
+        <label>Optional note <textarea id="public-suggestion-note" maxlength="500" placeholder="Why this might help"></textarea></label>
+        <button id="public-send-suggestion" class="pet-btn" type="button">Suggest task</button>
+      </aside>
+      <section class="pet-public-panel">
+        <h2>Progress</h2>
+        <div id="public-progress-list" class="pet-public-tasks"></div>
+      </section>
+      <section class="pet-public-panel">
+        <h2>Encouragement Wall</h2>
+        <div id="public-events" class="pet-events"></div>
+      </section>
+    </section>
+  </main>
+  <script src="/public/js/public-pet-home.js"></script>
+</body>
+</html>

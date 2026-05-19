@@ -1,5 +1,6 @@
 node_modules/
 .env
+.env.local
 
 # Data directory — tracked by default; ignore specific local-only paths
 data/.session-secret

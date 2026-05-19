@@ -1,8 +1,9 @@
 (function(){
-  const FORMULA_VERSION = "task_points_v2";
-  const POINTS_PER_SPIN = 10;
-  const EFFORT = { trivial: 0.35, low: 0.75, medium: 1.15, high: 1.35, intense: 1.55 };
-  const ATTENTION = { light: 0.85, normal: 1, focused: 1.15, intense: 1.3 };
+  const FORMULA_VERSION = "task_points_v3";
+  const POINTS_PER_SPIN = 25;
+  const EFFORT = { trivial: 0.25, low: 0.75, medium: 1, high: 1.2, intense: 1.4 };
+  const ATTENTION = { light: 0.9, normal: 1, focused: 1.1, intense: 1.2 };
+  const IMPORTANCE = { low: 0.9, normal: 1, important: 1.15, high: 1.25, critical: 1.4 };
   const NON_EARNING = new Set(["meeting", "break", "ooo"]);
   const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
   const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
@@ -58,7 +59,9 @@
     return p === "high" || p === "urgent" || p === "p1" || p === "critical";
   }
   function urgent(input){
-    return input.urgent === true || norm(input.urgency) === "urgent" || highPriority(input);
+    const u = norm(input.urgency);
+    const p = norm(input.priority);
+    return input.urgent === true || u === "urgent" || u === "now" || u === "today" || p === "urgent" || p === "p1" || p === "critical";
   }
   function responsibility(input){
     return input.responsibility === true || input.is_responsibility === true || input.responsibility_id != null || input.responsibilityId != null || norm(input.source) === "responsibility";
@@ -68,7 +71,9 @@
     if(EFFORT[explicit]) return explicit;
     const t = tags(input.tags || input.tag);
     if(input.trivial === true || t.includes("trivial") || (typeof loadTrivialFlags === "function" && input.id && loadTrivialFlags()[input.id])) return "trivial";
-    if(highPriority(input) || urgent(input) || responsibility(input) || duration >= 90) return "high";
+    if(t.includes("hard") || t.includes("difficult") || t.includes("heavy")) return "high";
+    if(t.includes("intense")) return "intense";
+    if(duration <= 10 && t.some(tag => LIGHT_TAGS.has(tag))) return "low";
     return "medium";
   }
   function attentionTier(input){
@@ -79,23 +84,44 @@
     if(t.some(tag => LIGHT_TAGS.has(tag))) return "light";
     return "normal";
   }
+  function importanceTier(input){
+    const explicit = norm(input.importance_tier || input.importanceTier || input.importance);
+    if(IMPORTANCE[explicit]) return explicit;
+    const p = norm(input.priority);
+    if(p === "critical" || p === "p1") return "critical";
+    if(p === "urgent" || p === "high") return "high";
+    if(p === "medium" || p === "normal") return "normal";
+    if(p === "low") return "low";
+    if(responsibility(input)) return "important";
+    return "normal";
+  }
+  function bountyCount(input){
+    const explicit = Number(input.bounty_count != null ? input.bounty_count : input.bountyCount);
+    if(Number.isFinite(explicit)) return Math.max(0, Math.min(2, Math.round(explicit)));
+    let count = input.bounty === true ? 1 : 0;
+    if(input.partner_bounty === true || input.partnerBounty === true || input.shared_bounty === true || input.sharedBounty === true) count += 1;
+    return Math.max(0, Math.min(2, count));
+  }
   function estimate(input){
     input = input || {};
     const duration = durationMinutes(input);
     const effort = effortTier(input, duration);
     const attention = attentionTier(input);
+    const importance = importanceTier(input);
+    const bounties = bountyCount(input);
     const multipliers = {
       effort: EFFORT[effort] || EFFORT.medium,
       attention: ATTENTION[attention] || ATTENTION.normal,
-      urgency: urgent(input) ? 1.2 : 1,
-      bounty: input.bounty === true ? 2 : 1
+      importance: IMPORTANCE[importance] || IMPORTANCE.normal,
+      urgency: urgent(input) ? 1.15 : 1,
+      bounty: Math.pow(2, bounties)
     };
-    const basePoints = duration / 5;
+    const basePoints = duration;
     if(NON_EARNING.has(norm(input.type || input.kind))){
-      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, effortTier: effort, attentionTier: attention, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
+      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
     }
-    const rawPoints = basePoints * multipliers.effort * multipliers.attention * multipliers.urgency * multipliers.bounty;
-    return { formulaVersion: FORMULA_VERSION, eligible: true, durationMinutes: duration, effortTier: effort, attentionTier: attention, multipliers, basePoints, rawPoints, awardPoints: Math.max(1, Math.round(rawPoints)) };
+    const rawPoints = basePoints * multipliers.effort * multipliers.attention * multipliers.importance * multipliers.urgency * multipliers.bounty;
+    return { formulaVersion: FORMULA_VERSION, eligible: true, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, multipliers, basePoints, rawPoints, awardPoints: Math.max(1, Math.round(rawPoints)) };
   }
   function buildPayload(task, options){
     task = task || {};
@@ -108,11 +134,15 @@
       title: task.title || task.label || "Task completed",
       type: task.type || task.kind || "task",
       priority: task.priority || "",
+      importance: task.importance || task.importance_tier || task.importanceTier || "",
+      urgency: task.urgency || "",
       tags: task.tags || task.tag || [],
       source: task.source || "",
       responsibility: task.responsibility === true || task.is_responsibility === true || task.responsibility_id != null || task.responsibilityId != null || task.source === "responsibility",
-      urgent: task.urgent === true || highPriority(task),
+      urgent: urgent(task),
       bounty,
+      bounty_count: task.bounty_count || task.bountyCount,
+      partner_bounty: task.partner_bounty === true || task.partnerBounty === true || task.shared_bounty === true || task.sharedBounty === true,
       actual_minutes: actual > 0 ? actual : undefined,
       duration_minutes: planned,
       effort_tier: task.effort_tier || task.effortTier,
