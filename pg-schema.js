@@ -127,6 +127,55 @@ CREATE TABLE IF NOT EXISTS dcc_state (
 CREATE INDEX IF NOT EXISTS idx_dcc_state_workspace
   ON dcc_state(workspace_id, date);
 
+-- ── Pet Home ──
+CREATE TABLE IF NOT EXISTS pet_homes (
+  workspace_id       TEXT PRIMARY KEY REFERENCES workspaces(id),
+  user_id            INTEGER REFERENCES users(id),
+  pet                JSONB NOT NULL DEFAULT '{}',
+  home               JSONB NOT NULL DEFAULT '{}',
+  food_level         INTEGER NOT NULL DEFAULT 50,
+  mood_level         INTEGER NOT NULL DEFAULT 55,
+  decor_currency     INTEGER NOT NULL DEFAULT 0,
+  share_slug         TEXT UNIQUE,
+  public_enabled     BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS pet_home_events (
+  id             SERIAL PRIMARY KEY,
+  workspace_id   TEXT NOT NULL REFERENCES workspaces(id),
+  user_id        INTEGER REFERENCES users(id),
+  event_type     TEXT NOT NULL,
+  source_type    TEXT NOT NULL DEFAULT 'manual',
+  source_key     TEXT NOT NULL,
+  actor_name     TEXT,
+  message        TEXT,
+  metadata       JSONB NOT NULL DEFAULT '{}',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pet_home_events_source
+  ON pet_home_events(workspace_id, source_type, source_key);
+
+CREATE INDEX IF NOT EXISTS idx_pet_home_events_workspace_created
+  ON pet_home_events(workspace_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS pet_task_suggestions (
+  id                SERIAL PRIMARY KEY,
+  workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
+  visitor_name      TEXT NOT NULL,
+  title             TEXT NOT NULL,
+  note              TEXT NOT NULL DEFAULT '',
+  status            TEXT NOT NULL DEFAULT 'pending',
+  approved_block_id TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pet_task_suggestions_workspace_status
+  ON pet_task_suggestions(workspace_id, status, created_at DESC);
+
 -- ── Slot Rewards ──
 CREATE TABLE IF NOT EXISTS slot_accounts (
   workspace_id        TEXT PRIMARY KEY REFERENCES workspaces(id),
@@ -144,6 +193,7 @@ CREATE TABLE IF NOT EXISTS slot_rewards (
   title                  TEXT NOT NULL,
   kind                   TEXT NOT NULL,
   sponsor_type           TEXT NOT NULL DEFAULT 'self',
+  sponsor_splits         JSONB NOT NULL DEFAULT '[]',
   weight                 INTEGER NOT NULL DEFAULT 1,
   active                 BOOLEAN NOT NULL DEFAULT TRUE,
   sponsor_active         BOOLEAN NOT NULL DEFAULT TRUE,
@@ -154,6 +204,7 @@ CREATE TABLE IF NOT EXISTS slot_rewards (
   unlock_threshold_cents INTEGER NOT NULL DEFAULT 0,
   notes                  TEXT NOT NULL DEFAULT '',
   last_won_at            TIMESTAMPTZ,
+  deleted_at             TIMESTAMPTZ,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(workspace_id, title)
@@ -173,6 +224,12 @@ CREATE TABLE IF NOT EXISTS slot_point_ledger (
 
 ALTER TABLE slot_point_ledger
   ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+
+ALTER TABLE slot_rewards
+  ADD COLUMN IF NOT EXISTS sponsor_splits JSONB NOT NULL DEFAULT '[]';
+
+ALTER TABLE slot_rewards
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_point_ledger_source
   ON slot_point_ledger(workspace_id, source_type, source_key);

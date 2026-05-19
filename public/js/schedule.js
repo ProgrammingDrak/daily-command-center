@@ -363,6 +363,9 @@ async function commitDoneOnDate(id,dateStr){
 
 function awardSlotTaskCredit(ev,opts){
   if(!ev||!ev.id)return;
+  if(window.PetHome&&typeof window.PetHome.awardTask==="function"){
+    window.PetHome.awardTask(ev,opts||{});
+  }
   if(window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
     window.SlotRewards.earnTaskCredit(ev,opts||{});
   } else {

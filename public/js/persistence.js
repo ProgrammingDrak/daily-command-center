@@ -199,6 +199,7 @@ function reloadPersistedEdits() {
         const hasStoredTime=p.start&&p.start!=="00:00";
         const task={
           id:taskId,title:p.title,type:"task",
+          _blockId:block.id,
           start:p.start||"00:00",
           end:p.end||fmt(d),
           meta:p.meta||("Custom task \u00b7 "+ms(d)),
@@ -211,6 +212,7 @@ function reloadPersistedEdits() {
           responsibilityScore:p.responsibilityScore||null,
           alertKey:p.alertKey||null,
           alertType:p.alertType||null,
+          publicVisibility:p.publicVisibility||"public",
           triageId:p.triageId||null,
           ampUrl:p.ampUrl||"",
           hubspotUrl:p.hubspotUrl||""
