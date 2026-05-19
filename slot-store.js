@@ -42,7 +42,7 @@ const DEFAULT_SCORING_RATIONALE = [
   "Meetings, breaks, and OOO blocks do not earn task points."
 ].join("\n");
 
-const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partner", "either_partner"]);
+const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partner", "either_partner", "split"]);
 const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "sponsor", "choice", "reroll"]);
 
 const DEFAULT_REWARDS = [
@@ -116,7 +116,7 @@ const DEFAULT_REWARDS = [
     ["Buy a small piece of art/poster/sticker", 1200],
     ["Buy a puzzle/model/LEGO-style small set", 2500],
     ["Buy one wishlist item under jackpot", 3000],
-  ].map(([title, value]) => reward({ title, kind: "small_paid", weight: 7, value_cents: value, unlock_threshold_cents: value, requires_confirmation: true })),
+  ].map(([title, value]) => reward({ title, kind: "small_paid", weight: 7, value_cents: value, unlock_threshold_cents: value })),
   ...[
     ["Buy a wishlist item up to current bank value", 5000],
     ["Take a random PTO day", 15000],
@@ -132,7 +132,7 @@ const DEFAULT_REWARDS = [
     ["Gaming/hobby hardware fund", 20000],
     ["Premium class/course/workshop", 15000],
     ["Big ridiculous thing fund", 50000],
-  ].map(([title, value]) => reward({ title, kind: "bank_gated", weight: 3, value_cents: value, unlock_threshold_cents: value, requires_confirmation: true, cooldown_days: 14 })),
+  ].map(([title, value]) => reward({ title, kind: "bank_gated", weight: 3, value_cents: value, unlock_threshold_cents: value })),
   ...[
     "Partner sends a congratulatory voice note",
     "Partner chooses a fun free challenge reward",
@@ -148,7 +148,7 @@ const DEFAULT_REWARDS = [
     "Partner schedules a celebration check-in",
     "Partner gives you a brag audit",
     "Partner unlocks a shared activity",
-  ].map(title => reward({ title, kind: "sponsor", sponsor_type: "accountability_partner", weight: 5, sponsor_active: false, requires_confirmation: true })),
+  ].map(title => reward({ title, kind: "sponsor", sponsor_type: "accountability_partner", weight: 5 })),
   ...[
     "Cuddle/movie night",
     "Partner-planned date at home",
@@ -165,14 +165,15 @@ const DEFAULT_REWARDS = [
     "Partner gives a full attention hour",
     "Partner plans a cozy no-phone evening",
     "Partner helps execute a larger reward when jackpot unlocks it",
-  ].map(title => reward({ title, kind: "sponsor", sponsor_type: "romantic_partner", weight: 5, sponsor_active: false, requires_confirmation: true })),
-  reward({ title: "Pick one of three eligible rewards", kind: "choice", weight: 2, requires_confirmation: true }),
+  ].map(title => reward({ title, kind: "sponsor", sponsor_type: "romantic_partner", weight: 5 })),
+  reward({ title: "Pick one of three eligible rewards", kind: "choice", weight: 2 }),
   reward({ title: "Free reroll", kind: "reroll", weight: 2 }),
 ];
 
 function reward(data) {
   return {
     sponsor_type: "self",
+    sponsor_splits: [],
     weight: 1,
     active: true,
     sponsor_active: true,
@@ -204,6 +205,7 @@ async function ensureSchema() {
       title TEXT NOT NULL,
       kind TEXT NOT NULL,
       sponsor_type TEXT NOT NULL DEFAULT 'self',
+      sponsor_splits JSONB NOT NULL DEFAULT '[]',
       weight INTEGER NOT NULL DEFAULT 1,
       active BOOLEAN NOT NULL DEFAULT TRUE,
       sponsor_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -214,6 +216,7 @@ async function ensureSchema() {
       unlock_threshold_cents INTEGER NOT NULL DEFAULT 0,
       notes TEXT NOT NULL DEFAULT '',
       last_won_at TIMESTAMPTZ,
+      deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(workspace_id, title)
@@ -233,6 +236,12 @@ async function ensureSchema() {
 
     ALTER TABLE slot_point_ledger
       ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+
+    ALTER TABLE slot_rewards
+      ADD COLUMN IF NOT EXISTS sponsor_splits JSONB NOT NULL DEFAULT '[]';
+
+    ALTER TABLE slot_rewards
+      ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_point_ledger_source
       ON slot_point_ledger(workspace_id, source_type, source_key);
@@ -342,7 +351,7 @@ function getSpinCost(account) {
 async function seedRewards(workspaceId) {
   const { rows: [account] } = await pool.query("SELECT settings FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);
   const settings = account && account.settings ? account.settings : {};
-  if (settings.default_rewards_seeded_at) return;
+  if (settings.default_rewards_seeded_at || settings.default_rewards_user_modified_at) return;
 
   const { rows: [existing] } = await pool.query("SELECT COUNT(*)::int AS count FROM slot_rewards WHERE workspace_id = $1", [workspaceId]);
   if ((existing && existing.count) > 0) {
@@ -362,10 +371,10 @@ async function seedRewards(workspaceId) {
   for (const r of DEFAULT_REWARDS) {
     await pool.query(
       `INSERT INTO slot_rewards
-       (workspace_id, title, kind, sponsor_type, weight, active, sponsor_active, value_cents, bank_delta_cents, requires_confirmation, cooldown_days, unlock_threshold_cents, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       (workspace_id, title, kind, sponsor_type, sponsor_splits, weight, active, sponsor_active, value_cents, bank_delta_cents, requires_confirmation, cooldown_days, unlock_threshold_cents, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (workspace_id, title) DO NOTHING`,
-      [workspaceId, r.title, r.kind, r.sponsor_type, r.weight, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
+      [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits || []), r.weight, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
     );
   }
   await pool.query(
@@ -405,42 +414,51 @@ function normalizeRewardInput(body) {
   const title = String(body.title || "").trim();
   if (!title) throw new Error("title required");
   const kind = String(body.kind || "free");
-  const sponsorType = String(body.sponsor_type || "self");
+  const sponsorSplits = normalizeSponsorSplits(body.sponsor_splits || body.sponsorSplits || []);
+  const sponsorType = sponsorSplits.length ? "split" : String(body.sponsor_type || "self");
   if (!REWARD_KINDS.has(kind)) throw new Error("invalid kind");
   if (!SPONSOR_TYPES.has(sponsorType)) throw new Error("invalid sponsor_type");
   return {
     title,
     kind,
     sponsor_type: sponsorType,
+    sponsor_splits: sponsorSplits,
     weight: Math.max(0, parseInt(body.weight, 10) || 0),
     active: body.active !== false,
-    sponsor_active: sponsorType === "self" ? true : body.sponsor_active === true,
+    sponsor_active: true,
     value_cents: Math.max(0, parseInt(body.value_cents, 10) || 0),
     bank_delta_cents: 0,
-    requires_confirmation: !!body.requires_confirmation,
-    cooldown_days: Math.max(0, parseInt(body.cooldown_days, 10) || 0),
+    requires_confirmation: false,
+    cooldown_days: 0,
     unlock_threshold_cents: Math.max(0, parseInt(body.unlock_threshold_cents, 10) || 0),
     notes: String(body.notes || ""),
   };
 }
 
+function normalizeSponsorSplits(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  return list
+    .map(row => ({
+      name: String(row && row.name || "").trim(),
+      percent: clampInt(row && row.percent, 0, 100),
+    }))
+    .filter(row => row.name && row.percent > 0);
+}
+
 function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   const bankBalance = Number.isFinite(fundingAvailableCents) ? fundingAvailableCents : (account ? account.bank_balance_cents : 0);
   const threshold = Math.max(row.value_cents || 0, row.unlock_threshold_cents || 0);
-  const sponsorLocked = row.sponsor_type !== "self" && !row.sponsor_active;
   const paidLocked = ["small_paid", "bank_gated"].includes(row.kind) && threshold > bankBalance;
-  const cooldownLocked = row.cooldown_days > 0 && row.last_won_at && Date.now() - new Date(row.last_won_at).getTime() < row.cooldown_days * 86400000;
   const bankCapLocked = row.kind === "bank_builder" && bankUsage && (
     bankUsage.month + row.bank_delta_cents > bankUsage.monthlyGoal
   );
   return {
     ...row,
-    eligible: !!row.active && row.weight > 0 && !sponsorLocked && !paidLocked && !cooldownLocked && !bankCapLocked,
+    sponsor_splits: normalizeSponsorSplits(row.sponsor_splits),
+    eligible: !!row.active && row.weight > 0 && !paidLocked && !bankCapLocked,
     locked_reason: !row.active ? "inactive" :
       row.weight <= 0 ? "zero_weight" :
-      sponsorLocked ? "sponsor_opt_in_required" :
       paidLocked ? "bank_too_small" :
-      cooldownLocked ? "cooldown" :
       bankCapLocked ? "bank_cap" :
       null,
   };
@@ -513,7 +531,10 @@ async function getState(workspaceId, userId) {
     pending: pendingBankDeposit.cents || 0,
     total: (account.bank_balance_cents || 0) + (pendingBankDeposit.cents || 0),
   };
-  const { rows: rewardRows } = await pool.query("SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> $2 ORDER BY active DESC, kind, title", [workspaceId, LEGACY_BANK_BUILDER_KIND]);
+  const { rows: rewardRows } = await pool.query(
+    "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> $2 AND deleted_at IS NULL ORDER BY active DESC, kind, title",
+    [workspaceId, LEGACY_BANK_BUILDER_KIND]
+  );
   const rewards = rewardRows
     .filter(r => r.kind !== LEGACY_BANK_BUILDER_KIND)
     .map(r => rowToReward(r, account, bankUsage, funding.total));
@@ -574,10 +595,10 @@ async function createReward(workspaceId, body) {
   const r = normalizeRewardInput(body);
   const { rows } = await pool.query(
     `INSERT INTO slot_rewards
-     (workspace_id,title,kind,sponsor_type,weight,active,sponsor_active,value_cents,bank_delta_cents,requires_confirmation,cooldown_days,unlock_threshold_cents,notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,active,sponsor_active,value_cents,bank_delta_cents,requires_confirmation,cooldown_days,unlock_threshold_cents,notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      RETURNING *`,
-    [workspaceId, r.title, r.kind, r.sponsor_type, r.weight, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
+    [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
   );
   return rows[0];
 }
@@ -586,20 +607,37 @@ async function updateReward(workspaceId, id, body) {
   const r = normalizeRewardInput(body);
   const { rows } = await pool.query(
     `UPDATE slot_rewards SET
-       title=$3, kind=$4, sponsor_type=$5, weight=$6, active=$7, sponsor_active=$8,
-       value_cents=$9, bank_delta_cents=$10, requires_confirmation=$11,
-       cooldown_days=$12, unlock_threshold_cents=$13, notes=$14, updated_at=NOW()
-     WHERE workspace_id=$1 AND id=$2
+       title=$3, kind=$4, sponsor_type=$5, sponsor_splits=$6, weight=$7, active=$8, sponsor_active=$9,
+       value_cents=$10, bank_delta_cents=$11, requires_confirmation=$12,
+       cooldown_days=$13, unlock_threshold_cents=$14, notes=$15, updated_at=NOW()
+     WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL
      RETURNING *`,
-    [workspaceId, id, r.title, r.kind, r.sponsor_type, r.weight, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
+    [workspaceId, id, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
   );
   if (!rows[0]) throw notFound("Reward not found");
   return rows[0];
 }
 
 async function deleteReward(workspaceId, id) {
-  const { rowCount } = await pool.query("DELETE FROM slot_rewards WHERE workspace_id=$1 AND id=$2", [workspaceId, id]);
+  const { rowCount } = await pool.query(
+    `UPDATE slot_rewards
+     SET active=FALSE,
+         weight=0,
+         deleted_at=NOW(),
+         updated_at=NOW()
+     WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL`,
+    [workspaceId, id]
+  );
   if (!rowCount) throw notFound("Reward not found");
+  await pool.query(
+    `UPDATE slot_accounts
+     SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1`,
+    [workspaceId, JSON.stringify({
+      default_rewards_user_modified_at: new Date().toISOString()
+    })]
+  );
   return { ok: true };
 }
 
@@ -854,7 +892,7 @@ async function spin(workspaceId, userId) {
   };
   const status = selected.kind === "miss"
     ? bankDelta > 0 ? "pending" : "miss"
-    : selected.requires_confirmation || selected.kind === "bank_builder" || bankDelta > 0 || ["small_paid", "bank_gated", "sponsor", "choice"].includes(selected.kind)
+    : selected.kind === "bank_builder" || bankDelta > 0 || ["small_paid", "bank_gated"].includes(selected.kind)
     ? "pending"
     : "awarded";
   const bankReserved = ["small_paid", "bank_gated"].includes(selected.kind) ? Math.max(selected.value_cents, selected.unlock_threshold_cents) : 0;

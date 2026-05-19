@@ -5,6 +5,8 @@
   "main": "server.js",
   "scripts": {
     "check:db": "node scripts/check-db.js",
+    "db:refresh-local": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1",
+    "db:schedule-local-refresh": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1 -InstallDailyTask",
     "start": "npm run check:db && node pg-schema.js && node server.js",
     "dev": "npm run start",
     "start:render": "node pg-schema.js && node server.js",

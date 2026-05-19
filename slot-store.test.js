@@ -52,6 +52,12 @@ function createMockPool(options = {}) {
       state.rewardRows = state.rewardRows.map(row => row.kind === params[1] ? { ...row, active: false, weight: 0 } : row);
       return { rows: [] };
     }
+    if (text.includes("UPDATE slot_rewards") && text.includes("deleted_at=NOW()")) {
+      const idx = state.rewardRows.findIndex(row => String(row.id) === String(params[1]) && !row.deleted_at);
+      if (idx < 0) return { rowCount: 0, rows: [] };
+      state.rewardRows[idx] = { ...state.rewardRows[idx], active: false, weight: 0, deleted_at: "now" };
+      return { rowCount: 1, rows: [] };
+    }
     if (text.includes("UPDATE slot_accounts") && text.includes("settings = COALESCE(settings")) {
       state.settings = { ...state.settings, ...JSON.parse(params[1]) };
       return { rows: [] };
@@ -85,7 +91,9 @@ function createMockPool(options = {}) {
     if (text.includes("MIN(created_at) AS oldest_at")) return { rows: [{ cents: 0, count: 0, oldest_at: null }] };
     if (text.includes("SELECT * FROM slot_rewards")) {
       const legacyKind = params[1];
-      return { rows: legacyKind ? state.rewardRows.filter(row => row.kind !== legacyKind) : state.rewardRows };
+      let rows = legacyKind ? state.rewardRows.filter(row => row.kind !== legacyKind) : state.rewardRows;
+      if (text.includes("deleted_at IS NULL")) rows = rows.filter(row => !row.deleted_at);
+      return { rows };
     }
     if (text.includes("SELECT * FROM slot_spins")) return { rows: [] };
     throw new Error("Unexpected query: " + text.slice(0, 120));
@@ -215,6 +223,41 @@ test("getState retires and omits legacy bank builder rewards", async () => {
   const state = await store.getState("ws-1", 1);
 
   assert.equal(mockPool.state.legacyBankBuildersRetired, true);
+  assert.deepEqual(state.rewards.map(r => r.title), ["Take a walk"]);
+});
+
+test("deleteReward hides rewards without removing rows referenced by spin history", async () => {
+  const rewardBase = {
+    sponsor_type: "self",
+    sponsor_splits: [],
+    sponsor_active: true,
+    value_cents: 0,
+    bank_delta_cents: 0,
+    requires_confirmation: false,
+    cooldown_days: 0,
+    unlock_threshold_cents: 0,
+    notes: "",
+    last_won_at: null,
+    deleted_at: null,
+  };
+  const mockPool = createMockPool({
+    pointBalance: 70,
+    migrated: true,
+    rewardRows: [
+      { ...rewardBase, id: 1, title: "Take a nap", kind: "free", active: true, weight: 16 },
+      { ...rewardBase, id: 2, title: "Take a walk", kind: "free", active: true, weight: 16 },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const result = await store.deleteReward("ws-1", 1);
+  const state = await store.getState("ws-1", 1);
+
+  assert.deepEqual(result, { ok: true });
+  assert.equal(mockPool.state.rewardRows[0].deleted_at, "now");
+  assert.equal(mockPool.state.rewardRows[0].active, false);
+  assert.equal(mockPool.state.rewardRows[0].weight, 0);
+  assert.equal(typeof mockPool.state.settings.default_rewards_user_modified_at, "string");
   assert.deepEqual(state.rewards.map(r => r.title), ["Take a walk"]);
 });
 
