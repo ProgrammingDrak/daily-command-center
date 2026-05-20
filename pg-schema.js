@@ -104,6 +104,21 @@ CREATE TABLE IF NOT EXISTS feedback_messages (
 CREATE INDEX IF NOT EXISTS idx_feedback_messages_workspace_created
   ON feedback_messages(workspace_id, created_at DESC);
 
+-- ── Login Events ──
+CREATE TABLE IF NOT EXISTS login_events (
+  id           SERIAL PRIMARY KEY,
+  workspace_id TEXT REFERENCES workspaces(id),
+  user_id      INTEGER REFERENCES users(id),
+  username     TEXT,
+  event_type   TEXT NOT NULL DEFAULT 'login',
+  ip_address   TEXT,
+  user_agent   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_login_events_workspace_created
+  ON login_events(workspace_id, created_at DESC);
+
 -- ── DCC State ──
 DO $$
 BEGIN
@@ -198,6 +213,7 @@ CREATE TABLE IF NOT EXISTS todo_sponsorships (
   workspace_id     TEXT NOT NULL REFERENCES workspaces(id),
   share_id         INTEGER NOT NULL REFERENCES todo_shares(id),
   task_id          TEXT NOT NULL,
+  task_date        DATE,
   task_block_id    TEXT,
   task_title       TEXT NOT NULL,
   sponsor_name     TEXT NOT NULL,
@@ -214,6 +230,38 @@ CREATE TABLE IF NOT EXISTS todo_sponsorships (
 
 CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_workspace_status
   ON todo_sponsorships(workspace_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS todo_task_reactions (
+  id              SERIAL PRIMARY KEY,
+  workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
+  share_id        INTEGER NOT NULL REFERENCES todo_shares(id),
+  task_id         TEXT NOT NULL,
+  task_date       DATE,
+  task_block_id   TEXT,
+  task_title      TEXT NOT NULL DEFAULT '',
+  identity_ids    JSONB NOT NULL DEFAULT '[]',
+  emoji           TEXT NOT NULL,
+  actor_key       TEXT NOT NULL,
+  actor_user_id   INTEGER REFERENCES users(id),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE todo_task_reactions
+  ADD COLUMN IF NOT EXISTS task_date DATE;
+
+ALTER TABLE todo_task_reactions
+  ADD COLUMN IF NOT EXISTS identity_ids JSONB NOT NULL DEFAULT '[]';
+
+DROP INDEX IF EXISTS idx_todo_task_reactions_unique_actor;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_task_reactions_unique_actor_date
+  ON todo_task_reactions(share_id, task_id, COALESCE(task_date, DATE '0001-01-01'), emoji, actor_key);
+
+CREATE INDEX IF NOT EXISTS idx_todo_task_reactions_share_task
+  ON todo_task_reactions(share_id, task_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_todo_task_reactions_share_date
+  ON todo_task_reactions(share_id, task_date, created_at DESC);
 
 -- ── Slot Rewards ──
 CREATE TABLE IF NOT EXISTS slot_accounts (

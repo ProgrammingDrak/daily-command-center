@@ -85,6 +85,20 @@ function isRetiredCalendarStateItem(item) {
   return !!item && (item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id || !!item.gcal_event_id);
 }
 
+function triageActionLink(item){
+  if(!item)return "";
+  return item.link || item.action_url || item.actionUrl || item.url || item.source_ref || item.evidence_link || "";
+}
+function triageActionLabel(item, link){
+  if(!item)return "";
+  const explicit=item.link_label || item.action_label;
+  if(explicit)return explicit;
+  const value=String(link || "");
+  if(value.includes("mail.google.com"))return "Open email";
+  if(value.includes("slack.com/archives"))return "Open Slack";
+  if(value.startsWith("file:"))return "Open file";
+  return value ? "Open source" : "";
+}
 function transformState(state) {
   if (!state) return { sched: [], consider: [], bklog: [], triageItems: [], notifications: [] };
   const sched = [], consider = [], bklog = [], triageItems = [], notifications = [];
@@ -171,12 +185,16 @@ function transformState(state) {
   // Triage open items
   if (state.triage && state.triage.open_items) {
     state.triage.open_items.forEach(item => {
+      const actionLink=triageActionLink(item);
+      const actionLabel=triageActionLabel(item, actionLink);
       triageItems.push({
         id: item.id,
         type: item.type,
         title: item.title,
         summary: item.summary || "",
-        link: item.link || "",
+        link: actionLink,
+        link_label: actionLabel,
+        action_label: actionLabel,
         priority: item.priority || "medium",
         escalation: item.escalation_level || "normal",
         cycleCount: item.cycle_count || 1,
