@@ -669,6 +669,43 @@ function dismissTriage(triageId, note, trivial) {
   buildTriage();
 }
 
+let TRIAGE_DELETED_KEY = "pa-triage-deleted-" + ((__state && __state.date) || "unknown");
+function loadDeletedTriage(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_triageDeleted", null);
+    if (Array.isArray(v)) return v;
+  }
+  try{return JSON.parse(localStorage.getItem(TRIAGE_DELETED_KEY)||"[]")}catch(e){return[]}
+}
+function saveDeletedTriage(ids){
+  if (_bsSaveProp("_triageDeleted", ids)) return;
+  localStorage.setItem(TRIAGE_DELETED_KEY,JSON.stringify(ids)); scheduleIDBSave();
+}
+function deleteTriageItem(triageId){
+  const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
+  if(!item)return;
+  if(!confirm('Delete "'+(item.title||"this triage item")+'" from today?'))return;
+
+  const deleted=loadDeletedTriage();
+  if(!deleted.includes(triageId))deleted.push(triageId);
+  saveDeletedTriage(deleted);
+
+  const dismissed=loadDismissed();
+  if(dismissed[triageId]){delete dismissed[triageId];saveDismissed(dismissed);}
+
+  const scheduledTriage=loadTriageScheduled();
+  if(scheduledTriage[triageId]){delete scheduledTriage[triageId];saveTriageScheduled(scheduledTriage);}
+
+  const triageParents=loadTriageParents();
+  if(triageParents[triageId]){delete triageParents[triageId];saveTriageParents(triageParents);}
+
+  if(typeof showToast==="function")showToast("Deleted triage item","success");
+  if(typeof buildScheduleTriage==="function")buildScheduleTriage();
+  buildTriage();
+  if(typeof buildTaskQueuePanel==="function")buildTaskQueuePanel();
+  if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
+}
+
 // Wire up overflow modal
 document.getElementById("overflow-modal-close").addEventListener("click", closeOverflowModal);
 document.getElementById("overflow-work-late").addEventListener("click", workLateOverflow);
@@ -859,6 +896,9 @@ function buildTriageCard(item) {
     notesButton({id: item.id, title: item.title}) +
     '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
     '<button class="tri-quick" data-dismiss-id="' + item.id + '" title="Quick complete">&#9889;</button>' +
+    '<button class="tri-delete-btn" data-delete-tri="' + item.id + '" title="Delete triage item" aria-label="Delete triage item">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>' +
+    '</button>' +
   '</div>';
 }
 // Triage parent linking
@@ -955,7 +995,8 @@ function triagePointsChip(item){
 function activeTriageItems(){
   const dismissed=loadDismissed();
   const scheduledTriage=loadTriageScheduled();
-  return (INIT_TRIAGE||[]).filter(i=>!dismissed[i.id]&&!scheduledTriage[i.id]);
+  const deletedTriage=loadDeletedTriage();
+  return (INIT_TRIAGE||[]).filter(i=>!dismissed[i.id]&&!scheduledTriage[i.id]&&!deletedTriage.includes(i.id));
 }
 function scheduleTriageItem(triageId){
   const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
@@ -1006,6 +1047,9 @@ function buildScheduleTriageCard(item){
     '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
     '<button class="add-btn schedule-triage-done" data-triage-id="'+item.id+'" data-triage-title="'+safeTitle+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
     '<button class="tri-quick schedule-triage-quick" data-triage-id="'+item.id+'" title="Quick complete">&#9889;</button>'+
+    '<button class="tri-delete-btn schedule-triage-delete" data-triage-id="'+item.id+'" title="Delete triage item" aria-label="Delete triage item">'+
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'+
+    '</button>'+
   '</div>';
 }
 function buildScheduleTriage(){
@@ -1035,6 +1079,9 @@ function buildScheduleTriage(){
   });
   el.querySelectorAll(".schedule-triage-quick").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();dismissTriage(btn.dataset.triageId,"",false);});
+  });
+  el.querySelectorAll(".schedule-triage-delete").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();deleteTriageItem(btn.dataset.triageId);});
   });
 }
 
@@ -1172,11 +1219,13 @@ function buildTriage() {
   const dismissed = loadDismissed();
   const triageParents = loadTriageParents();
   const priColors = {high:"var(--red)", medium:"var(--amber)", low:"var(--text-muted)"};
+  const deletedTriage = loadDeletedTriage();
 
   // Split into active vs completed (dismissed)
   const scheduledTriage = loadTriageScheduled();
-  const active = INIT_TRIAGE.filter(i => !dismissed[i.id] && !scheduledTriage[i.id]);
-  const completed = INIT_TRIAGE.filter(i => !!dismissed[i.id]);
+  const visibleTriage = INIT_TRIAGE.filter(i => !deletedTriage.includes(i.id));
+  const active = visibleTriage.filter(i => !dismissed[i.id] && !scheduledTriage[i.id]);
+  const completed = visibleTriage.filter(i => !!dismissed[i.id]);
 
   const high = active.filter(i => i.priority === "high");
   const med = active.filter(i => i.priority === "medium");
@@ -1293,7 +1342,15 @@ function buildTriage() {
     btn.addEventListener("click", e => {
       e.stopPropagation();
       const id = btn.dataset.dismissId;
+      if (!id) return;
       dismissTriage(id, "", false);
+    });
+  });
+
+  document.querySelectorAll(".tri-delete-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      deleteTriageItem(btn.dataset.deleteTri || btn.dataset.triageId);
     });
   });
 
