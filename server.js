@@ -116,6 +116,11 @@ function attachSweepServiceAuth(req) {
   req.workspaceId = workspaceId;
 }
 function isAllowedSweepBlockItem(item) { const props = item && item.properties; return item && item.type === "block" && props && props.kind === "sweep_suite_task"; }
+function getRequestOrigin(req) {
+  const forwardedFor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  const proxyIp = req.headers["cf-connecting-ip"] || req.headers["x-real-ip"] || forwardedFor;
+  return String(proxyIp || req.ip || req.socket?.remoteAddress || "").slice(0, 80) || null;
+}
 
 app.use((req, res, next) => {
   if (AUTH_PUBLIC.has(req.path)) return next();
@@ -547,6 +552,42 @@ function centsFromBody(value) {
   return Math.min(Math.round(n * 100), 1000000);
 }
 
+function todoActorKey(req) {
+  if (req.session?.userId) return `user:${req.session.userId}`;
+  const raw = [
+    getRequestOrigin(req),
+    String(req.headers["user-agent"] || "").slice(0, 300),
+    req.sessionID || ""
+  ].join("|");
+  return "guest:" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
+}
+
+function localHHMMFromDate(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.hour || "09"}:${parts.minute || "00"}`;
+}
+
+function addMinutesHHMM(hhmm, minutes) {
+  const match = String(hhmm || "").match(/^(\d{1,2}):(\d{2})$/);
+  const start = match ? Number(match[1]) * 60 + Number(match[2]) : 9 * 60;
+  const next = Math.min(start + minutes, 23 * 60 + 59);
+  return `${String(Math.floor(next / 60)).padStart(2, "0")}:${String(next % 60).padStart(2, "0")}`;
+}
+
+function nextQuarterHHMM() {
+  const [h, m] = localHHMMFromDate().split(":").map(Number);
+  const rounded = Math.min(Math.ceil((h * 60 + m) / 15) * 15, 23 * 60 + 45);
+  return `${String(Math.floor(rounded / 60)).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
+}
+
 async function ensureTodoShareTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS todo_shares (
@@ -569,6 +610,7 @@ async function ensureTodoShareTables() {
       workspace_id     TEXT NOT NULL REFERENCES workspaces(id),
       share_id         INTEGER NOT NULL REFERENCES todo_shares(id),
       task_id          TEXT NOT NULL,
+      task_date        DATE,
       task_block_id    TEXT,
       task_title       TEXT NOT NULL,
       sponsor_name     TEXT NOT NULL,
@@ -583,7 +625,30 @@ async function ensureTodoShareTables() {
       updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS task_date DATE");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_workspace_status ON todo_sponsorships(workspace_id, status, created_at DESC)");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS todo_task_reactions (
+      id              SERIAL PRIMARY KEY,
+      workspace_id    TEXT NOT NULL REFERENCES workspaces(id),
+      share_id        INTEGER NOT NULL REFERENCES todo_shares(id),
+      task_id         TEXT NOT NULL,
+      task_date       DATE,
+      task_block_id   TEXT,
+      task_title      TEXT NOT NULL DEFAULT '',
+      identity_ids    JSONB NOT NULL DEFAULT '[]',
+      emoji           TEXT NOT NULL,
+      actor_key       TEXT NOT NULL,
+      actor_user_id   INTEGER REFERENCES users(id),
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query("ALTER TABLE todo_task_reactions ADD COLUMN IF NOT EXISTS task_date DATE");
+  await pool.query("ALTER TABLE todo_task_reactions ADD COLUMN IF NOT EXISTS identity_ids JSONB NOT NULL DEFAULT '[]'");
+  await pool.query("DROP INDEX IF EXISTS idx_todo_task_reactions_unique_actor");
+  await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_todo_task_reactions_unique_actor_date ON todo_task_reactions(share_id, task_id, COALESCE(task_date, DATE '0001-01-01'), emoji, actor_key)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_reactions_share_task ON todo_task_reactions(share_id, task_id, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_task_reactions_share_date ON todo_task_reactions(share_id, task_date, created_at DESC)");
 }
 
 function normalizeTodoShare(row, req) {
@@ -643,8 +708,71 @@ function taskMinutes(start, end, fallback) {
   return Number.isFinite(n) && n > 0 ? n : 30;
 }
 
+function publicTaskIdentityIds(input) {
+  input = input || {};
+  const ids = [
+    input.id,
+    input.local_id,
+    input.localId,
+    input.task_id,
+    input.taskId,
+    input.blockId,
+    input.block_id,
+    input.source_id,
+    input.sourceId,
+    input.gcal_event_id
+  ];
+  return [...new Set(ids.map(v => String(v || "").trim()).filter(Boolean))];
+}
+
+function normalizeReactionIdentityIds(value, fallback = {}) {
+  let ids = [];
+  if (Array.isArray(value)) ids = value;
+  else if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) ids = parsed;
+    } catch {}
+  }
+  return [...new Set([...ids, ...publicTaskIdentityIds(fallback)].map(v => String(v || "").trim()).filter(Boolean))];
+}
+
+function findPublicShareTask(tasks, taskId) {
+  const requested = String(taskId || "").trim();
+  if (!requested) return null;
+  return (tasks || []).find(task => {
+    const ids = task && task.identityIds && task.identityIds.length ? task.identityIds : publicTaskIdentityIds(task || {});
+    return ids.map(String).includes(requested);
+  }) || null;
+}
+
+function addReactionToMap(map, row) {
+  const taskId = String(row.task_id);
+  if (!map[taskId]) {
+    const storedIdentityIds = Array.isArray(row.identity_ids) ? row.identity_ids : [];
+    const identityIds = normalizeReactionIdentityIds(row.identity_ids, {
+      id: row.task_id,
+      blockId: row.task_block_id,
+      block_id: row.task_block_id
+    });
+    map[taskId] = {
+      taskId,
+      taskDate: coerceDateString(row.task_date),
+      taskBlockId: row.task_block_id || "",
+      taskTitle: row.task_title || "",
+      identityIds,
+      legacy: storedIdentityIds.length === 0,
+      counts: {}
+    };
+    identityIds.forEach(id => { if (!map[id]) map[id] = map[taskId]; });
+  }
+  map[taskId].counts[row.emoji] = row.count;
+}
+
 function publicTaskStatus(task, doneIds) {
-  if (doneIds.has(String(task.id))) return "done";
+  const ids = task.identityIds && task.identityIds.length ? task.identityIds : publicTaskIdentityIds(task);
+  if (ids.some(id => doneIds.has(id))) return "done";
+  if (task.completed) return "done";
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const m = String(task.end || "").match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return "open";
@@ -652,55 +780,168 @@ function publicTaskStatus(task, doneIds) {
   return nowMin > endMin ? "overdue" : "open";
 }
 
-function normalizePublicTask(input, doneIds) {
+function publicFeedType(input) {
+  const kind = String(input.kind || input.type || "task").toLowerCase();
+  const source = String(input.source || "").toLowerCase();
+  if (source === "calendar" || source === "gcal" || input.gcal_event_id || input.gcal_calendar_id || ["meeting", "oneone"].includes(kind)) return "calendar";
+  if (["responsibility_trigger", "repeat_responsibility", "repeat", "recurring"].includes(kind) || input.is_recurring || input.recurring) return "repeat";
+  if (["break", "free_time"].includes(kind)) return "break";
+  if (kind === "ooo") return "ooo";
+  return "task";
+}
+
+function publicFeedTypeLabel(feedType, kind) {
+  if (feedType === "calendar") return kind === "oneone" ? "1:1" : "Calendar";
+  if (feedType === "repeat") return "Repeat";
+  if (feedType === "break") return "Break";
+  if (feedType === "ooo") return "OOO";
+  if (kind === "public_task") return "Public";
+  return "Task";
+}
+
+async function getPublicCalendarMap() {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, summary, background_color, account_key, account_email, is_primary
+         FROM gcal_calendars`
+    );
+    return new Map(rows.map((row) => [String(row.id), {
+      id: row.id,
+      name: row.summary || row.id,
+      color: row.background_color || "#4285f4",
+      accountKey: row.account_key || "default",
+      accountEmail: row.account_email || "",
+      primary: !!row.is_primary
+    }]));
+  } catch {
+    return new Map();
+  }
+}
+
+function calendarMeta(input, calendarsById) {
+  const id = String(input.gcal_calendar_id || input.calendarId || input.calendar_id || "").trim();
+  if (!id) return null;
+  const known = calendarsById.get(id);
+  if (known) return known;
+  return {
+    id,
+    name: String(input.calendarName || input.calendar_name || id).slice(0, 140),
+    color: input.calendarColor || input.calendar_color || "#4285f4",
+    accountKey: input.accountKey || input.account_key || "",
+    accountEmail: input.accountEmail || input.account_email || "",
+    primary: false
+  };
+}
+
+function normalizePublicTask(input, doneIds, calendarsById = new Map()) {
+  const kind = String(input.kind || "task").slice(0, 80);
+  const feedType = publicFeedType(input);
+  const calendar = calendarMeta(input, calendarsById);
+  const identityIds = publicTaskIdentityIds(input);
   const task = {
-    id: String(input.id || input.local_id || input.blockId || crypto.randomUUID()),
-    blockId: input.blockId || "",
+    id: identityIds[0] || crypto.randomUUID(),
+    blockId: input.blockId || input.block_id || "",
     title: String(input.title || "Untitled task").slice(0, 220),
     detail: String(input.detail || input.notes || "").slice(0, 500),
     start: localTimeFromAny(input.start),
     end: localTimeFromAny(input.end),
     priority: String(input.priority || "").slice(0, 40),
     source: String(input.source || "manual").slice(0, 80),
-    kind: String(input.kind || "task").slice(0, 80)
+    sourceId: String(input.source_id || input.sourceId || input.gcal_event_id || "").slice(0, 200),
+    kind,
+    itemType: feedType,
+    itemTypeLabel: publicFeedTypeLabel(feedType, kind),
+    completed: !!input.completed,
+    identityIds,
+    calendar,
+    gcalCalendarId: calendar ? calendar.id : ""
   };
   task.durationMinutes = taskMinutes(task.start, task.end, input.duration || input.estimated_minutes || input.durMin);
   task.status = publicTaskStatus(task, doneIds);
   return task;
 }
 
-async function buildPublicTodoShare(share, dateStr) {
+async function buildPublicTodoShare(share, dateStr, req) {
   const date = isValidDate(dateStr) ? dateStr : getTodayStr();
   const state = await buildDayResponse(date, null, share.workspace_id);
   const blocks = await blockDB.getBlocksByDate(date, share.workspace_id);
   const root = blocks.find(b => b.type === "day_root");
   const rootProps = root && root.properties ? root.properties : {};
-  const doneIds = new Set(((rootProps._done && rootProps._done.ids) || []).map(String));
+  const rootDone = rootProps._done || {};
+  const doneIds = new Set([
+    ...((rootDone.ids || []).map(String)),
+    ...Object.keys(rootDone.at || {}).map(String)
+  ]);
   const hiddenIds = new Set([
     ...((rootProps._deleted || [])).map(String),
     ...(((rootProps._pushed && rootProps._pushed.ids) || [])).map(String)
   ]);
+  for (const block of blocks) {
+    const p = block.properties || {};
+    const aliases = publicTaskIdentityIds({
+      id: p.local_id || block.id,
+      local_id: p.local_id,
+      blockId: block.id,
+      block_id: block.id,
+      source_id: p.source_id,
+      sourceId: p.sourceId,
+      gcal_event_id: p.gcal_event_id
+    });
+    if (aliases.some(id => doneIds.has(id))) aliases.forEach(id => doneIds.add(id));
+    if (aliases.some(id => hiddenIds.has(id))) aliases.forEach(id => hiddenIds.add(id));
+  }
+  const calendarsById = await getPublicCalendarMap();
   const tasks = [];
   const seen = new Set();
   const addTask = (task) => {
-    if (!task || !task.title || hiddenIds.has(String(task.id))) return;
-    if (seen.has(task.id)) return;
+    const ids = task && task.identityIds && task.identityIds.length ? task.identityIds : publicTaskIdentityIds(task || {});
+    if (!task || !task.title || ids.some(id => hiddenIds.has(id))) return;
+    const dedupeKey = task.sourceId ? `${task.itemType}:${task.sourceId}` : task.id;
+    if (seen.has(task.id) || seen.has(dedupeKey) || ids.some(id => seen.has(`id:${id}`))) return;
     seen.add(task.id);
+    seen.add(dedupeKey);
+    ids.forEach(id => seen.add(`id:${id}`));
     tasks.push(task);
   };
 
   for (const item of ((state.schedule && state.schedule.timeline) || [])) {
-    if (!item || ["meeting", "oneone", "free_time", "break", "ooo"].includes(item.type)) continue;
+    if (!item || item.publicVisibility === "private") continue;
     const task = normalizePublicTask({
       id: item.id || item.source_id,
+      local_id: item.local_id || item.localId,
+      blockId: item.block_id || item.blockId || "",
+      block_id: item.block_id || item.blockId || "",
       title: item.label || item.title,
       start: item.start,
       end: item.end,
       priority: item.priority,
       detail: item.detail || item.description || item.notes,
       source: item.source || "schedule",
+      source_id: item.source_id,
+      sourceId: item.sourceId,
+      gcal_calendar_id: item.gcal_calendar_id,
+      calendarName: item.calendarName || item.calendar_name,
+      calendarColor: item.calendarColor || item.calendar_color,
+      completed: item.completed,
       kind: item.type
-    }, doneIds);
+    }, doneIds, calendarsById);
+    addTask(task);
+  }
+
+  for (const item of ((state.triage && state.triage.open_items) || [])) {
+    if (!item || item.publicVisibility !== "public") continue;
+    const task = normalizePublicTask({
+      id: item.id,
+      local_id: item.local_id,
+      title: item.title,
+      duration: item.duration_minutes || item.durationMinutes || item.estimated_minutes,
+      priority: item.priority,
+      detail: item.summary || item.notes,
+      source: item.source || "public_share",
+      source_id: item.source_id || item.id,
+      completed: item.completed,
+      kind: item.type || "public_task"
+    }, doneIds, calendarsById);
     addTask(task);
   }
 
@@ -709,12 +950,14 @@ async function buildPublicTodoShare(share, dateStr) {
     if (block.type === "day_root") continue;
     if (p.publicVisibility === "private") continue;
     const kind = p.kind || block.type;
-    if (["meeting", "oneone", "break", "ooo", "delegated_item", "responsibility_trigger"].includes(kind)) continue;
+    if (["delegated_item"].includes(kind)) continue;
     if (!p.title && !p.label) continue;
     const id = p.local_id || block.id;
     const task = normalizePublicTask({
       id,
+      local_id: p.local_id,
       blockId: block.id,
+      block_id: block.id,
       title: p.title || p.label,
       start: p.start,
       end: p.end,
@@ -722,13 +965,20 @@ async function buildPublicTodoShare(share, dateStr) {
       priority: p.priority,
       detail: p.detail || p.notes,
       source: p.source || block.type,
+      source_id: p.source_id || p.gcal_event_id,
+      gcal_event_id: p.gcal_event_id,
+      gcal_calendar_id: p.gcal_calendar_id,
+      calendarName: p.calendarName || p.calendar_name,
+      calendarColor: p.calendarColor || p.calendar_color,
+      is_recurring: p.is_recurring,
+      completed: p.completed,
       kind
-    }, doneIds);
+    }, doneIds, calendarsById);
     addTask(task);
   }
 
   const { rows: sponsors } = await pool.query(
-    `SELECT id, task_id, task_title, sponsor_name, kind, reward_title, note, value_cents, status, created_at
+    `SELECT id, task_id, task_date, task_title, sponsor_name, kind, reward_title, note, value_cents, status, created_at
        FROM todo_sponsorships
       WHERE share_id = $1
       ORDER BY created_at DESC
@@ -751,6 +1001,39 @@ async function buildPublicTodoShare(share, dateStr) {
     });
   }
   for (const task of tasks) task.sponsorships = sponsorByTask.get(String(task.id)) || [];
+  const { rows: reactionRows } = await pool.query(
+    `SELECT task_id, task_date, task_block_id, task_title, identity_ids, emoji, COUNT(*)::int AS count
+       FROM todo_task_reactions
+      WHERE share_id = $1
+        AND (task_date = $2::date OR task_date IS NULL)
+      GROUP BY task_id, task_date, task_block_id, task_title, identity_ids, emoji`,
+    [share.id, date]
+  );
+  const reactionByTask = {};
+  reactionRows.forEach(row => addReactionToMap(reactionByTask, row));
+  const actorKey = req ? todoActorKey(req) : "";
+  const { rows: viewerReactionRows } = actorKey
+    ? await pool.query(
+        `SELECT task_id, emoji
+           FROM todo_task_reactions
+          WHERE share_id = $1
+            AND actor_key = $2
+            AND (task_date = $3::date OR task_date IS NULL)`,
+        [share.id, actorKey, date]
+      )
+    : { rows: [] };
+  const viewerByTask = new Map();
+  for (const row of viewerReactionRows) {
+    const taskId = String(row.task_id);
+    if (!viewerByTask.has(taskId)) viewerByTask.set(taskId, []);
+    viewerByTask.get(taskId).push(row.emoji);
+  }
+  for (const task of tasks) {
+    const ids = task.identityIds && task.identityIds.length ? task.identityIds : publicTaskIdentityIds(task);
+    const reaction = ids.map(id => reactionByTask[id]).find(Boolean);
+    task.reactions = reaction && reaction.counts ? reaction.counts : {};
+    task.viewerReactions = viewerByTask.get(String(task.id)) || [];
+  }
   tasks.sort((a, b) => (a.status === "done") - (b.status === "done") || (a.start || "99:99").localeCompare(b.start || "99:99"));
   return {
     date,
@@ -758,14 +1041,93 @@ async function buildPublicTodoShare(share, dateStr) {
     ownerUsername: share.owner_username || "",
     updatedAt: new Date().toISOString(),
     tasks,
+    calendars: Array.from(calendarsById.values()),
+    viewer: {
+      loggedIn: !!req?.session?.userId,
+      username: req?.session?.username || ""
+    },
     sponsorships: sponsors,
     stats: {
       total: tasks.length,
       done: tasks.filter(t => t.status === "done").length,
       open: tasks.filter(t => t.status !== "done").length,
-      sponsored: sponsors.filter(s => s.status !== "dismissed").length
+      sponsored: sponsors.filter(s => s.status !== "dismissed").length,
+      tasks: tasks.filter(t => t.itemType === "task").length,
+      repeat: tasks.filter(t => t.itemType === "repeat").length,
+      calendar: tasks.filter(t => t.itemType === "calendar").length
     }
   };
+}
+
+function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req }) {
+  const now = new Date().toISOString();
+  const localId = "public-" + crypto.randomUUID();
+  const item = {
+    id: "public_share:" + localId,
+    local_id: localId,
+    type: "public_task",
+    sub_type: "created_task",
+    source: "public_share",
+    source_ref: todoShareUrl(req, share.token),
+    source_id: localId,
+    title,
+    summary: note,
+    notes: note,
+    priority: "medium",
+    escalation: "normal",
+    received_at: now,
+    first_seen_at: now,
+    last_seen_at: now,
+    seen_count: 1,
+    duration_minutes: durationMinutes,
+    estimated_minutes: durationMinutes,
+    publicVisibility: "public",
+    queue_label: "Public task",
+    source_label: "Public todo",
+    createdByGuestName: visitorName,
+    createdByGuestEmail: visitorEmail
+  };
+
+  const dayFile = getDayFilePath(date);
+  const state = readJSON(dayFile, null) || buildSkeletonState(date);
+  if (!state.triage) state.triage = { open_items: [], resolved_items: [], cycle_count: 0 };
+  if (!Array.isArray(state.triage.open_items)) state.triage.open_items = [];
+  if (!Array.isArray(state.triage.resolved_items)) state.triage.resolved_items = [];
+  state.triage.open_items.push(item);
+  if (state.sweep) state.sweep.open_item_count = state.triage.open_items.length;
+  state.last_updated_at = now;
+  state.last_updated_by = "public-todo-triage";
+  writeJSON(dayFile, state);
+  updateManifest(date);
+  if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, state);
+  return item;
+}
+
+async function activateTodoShareBounty(sponsorship, userId) {
+  const sponsorshipDate = coerceDateString(sponsorship.task_date);
+  const date = isValidDate(sponsorshipDate) ? sponsorshipDate : getTodayStr();
+  const taskId = String(sponsorship.task_id || sponsorship.task_block_id || "");
+  const rootId = await blockDB.ensureDayRoot(date, userId || null, sponsorship.workspace_id);
+  const root = await blockDB.getBlock(rootId);
+  const props = root && root.properties ? root.properties : { date };
+  const existing = props._bounty;
+  const existingTaskId = existing && existing.taskId ? String(existing.taskId) : "";
+  if (existingTaskId && existingTaskId !== taskId) {
+    const err = new Error("Today's bounty is already set");
+    err.statusCode = 409;
+    throw err;
+  }
+  const bounty = existingTaskId ? existing : {
+    taskId,
+    taskTitle: sponsorship.task_title,
+    placedAt: new Date().toISOString(),
+    source: "todo-share",
+    sponsorshipId: sponsorship.id,
+    sponsorName: sponsorship.sponsor_name || ""
+  };
+  await blockDB.updateBlock(rootId, { properties: { ...props, _bounty: bounty } });
+  broadcast("blocks-changed", { action: "public-bounty-approved", blockIds: [rootId] }, sponsorship.workspace_id);
+  return bounty;
 }
 
 app.get("/api/todo-share", async (req, res) => {
@@ -819,11 +1181,45 @@ app.get("/api/todo-share/sponsorships", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get("/api/todo-share/reactions", async (req, res) => {
+  try {
+    await ensureTodoShareTables();
+    const requestedDate = coerceDateString(req.query.date);
+    const date = isValidDate(requestedDate) ? requestedDate : getTodayStr();
+    const share = await getActiveTodoShare(req.workspaceId);
+    if (!share) return res.json({ date, reactions: {}, rows: [] });
+    const { rows } = await pool.query(
+      `SELECT task_id, task_date, task_block_id, task_title, identity_ids, emoji, COUNT(*)::int AS count
+         FROM todo_task_reactions
+        WHERE workspace_id = $1
+          AND share_id = $2
+          AND (task_date = $3::date OR task_date IS NULL)
+        GROUP BY task_id, task_date, task_block_id, task_title, identity_ids, emoji
+        ORDER BY task_title ASC, emoji ASC`,
+      [req.workspaceId, share.id, date]
+    );
+    const byTask = {};
+    rows.forEach(row => addReactionToMap(byTask, row));
+    res.json({ date, shareId: share.id, reactions: byTask, rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
   try {
     await ensureTodoShareTables();
     const status = String(req.body?.status || "").toLowerCase();
     if (!["approved", "dismissed", "pending"].includes(status)) return res.status(400).json({ error: "Invalid status" });
+    const { rows: existingRows } = await pool.query(
+      `SELECT *
+         FROM todo_sponsorships
+        WHERE id = $1 AND workspace_id = $2`,
+      [Number(req.params.id), req.workspaceId]
+    );
+    if (!existingRows[0]) return res.status(404).json({ error: "Sponsorship not found" });
+    let bounty = null;
+    if (status === "approved" && existingRows[0].kind === "bounty") {
+      bounty = await activateTodoShareBounty(existingRows[0], req.session?.userId || null);
+    }
     const { rows } = await pool.query(
       `UPDATE todo_sponsorships
           SET status = $3, updated_at = NOW()
@@ -832,7 +1228,6 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
       [Number(req.params.id), req.workspaceId, status]
     );
     const sponsorship = rows[0];
-    if (!sponsorship) return res.status(404).json({ error: "Sponsorship not found" });
     let reward = null;
     if (status === "approved" && sponsorship.kind === "reward") {
       const sponsor = sponsorship.sponsor_name ? ` from ${sponsorship.sponsor_name}` : "";
@@ -850,8 +1245,8 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
       broadcast("slot-changed", { action: "sponsored-reward-approved" }, req.workspaceId);
     }
     broadcast("todo-share-changed", { action: "sponsorship-status", id: sponsorship.id }, req.workspaceId);
-    res.json({ sponsorship, reward });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    res.json({ sponsorship, reward, bounty });
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
 });
 
 app.get("/api/public/todo-share/:token", async (req, res) => {
@@ -859,8 +1254,36 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1", [share.id]);
-    res.json(await buildPublicTodoShare(share, req.query.date));
+    res.json(await buildPublicTodoShare(share, req.query.date, req));
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
+  try {
+    const share = await findTodoShareByToken(req.params.token);
+    if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
+    const body = req.body || {};
+    const title = String(body.title || "").trim().slice(0, 220);
+    if (!title) return res.status(400).json({ error: "Task title is required" });
+    const durationMinutes = Math.max(15, Math.min(240, Number(body.durationMinutes || body.duration || 30) || 30));
+    const visitorName = String(body.visitorName || body.visitor_name || "").trim().slice(0, 80);
+    const visitorEmail = String(body.visitorEmail || body.visitor_email || "").trim().slice(0, 180);
+    const note = String(body.note || "").trim().slice(0, 1000);
+    const date = isValidDate(body.date) ? body.date : getTodayStr();
+    const triageItem = appendPublicShareTriageItem({
+      share,
+      date,
+      title,
+      durationMinutes,
+      visitorName,
+      visitorEmail,
+      note,
+      req
+    });
+    broadcast("dcc-state-changed", { source: "public-todo-triage", date }, share.workspace_id);
+    broadcast("todo-share-changed", { action: "public-triage-create", id: triageItem.id }, share.workspace_id);
+    res.status(201).json({ triageItem });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
@@ -868,23 +1291,40 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
     const share = await findTodoShareByToken(req.params.token);
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     const body = req.body || {};
-    const sponsorName = String(body.sponsorName || body.sponsor_name || "").trim().slice(0, 80);
+    if (!req.session?.userId) return res.status(401).json({ error: "Sign in to send rewards and bounties" });
+    const sponsorName = String(body.sponsorName || body.sponsor_name || req.session.username || "").trim().slice(0, 80);
     const taskId = String(body.taskId || body.task_id || "").trim().slice(0, 200);
     const taskTitle = String(body.taskTitle || body.task_title || "").trim().slice(0, 220);
+    const requestedDate = coerceDateString(body.date || body.taskDate || body.task_date);
+    const taskDate = isValidDate(requestedDate) ? requestedDate : getTodayStr();
     const kind = String(body.kind || "bounty").toLowerCase() === "reward" ? "reward" : "bounty";
-    const rewardTitle = String(body.rewardTitle || body.reward_title || (kind === "reward" ? "Sponsored reward" : "Sponsored bounty")).trim().slice(0, 160);
+    const rewardTitle = String(body.rewardTitle || body.reward_title || (kind === "reward" ? "Sponsored reward" : "Double points bounty")).trim().slice(0, 160);
     if (!sponsorName) return res.status(400).json({ error: "Your name is required" });
     if (!taskId || !taskTitle) return res.status(400).json({ error: "Pick a task to sponsor" });
-    if (!rewardTitle) return res.status(400).json({ error: "Reward or bounty title is required" });
+    if (kind === "reward" && !rewardTitle) return res.status(400).json({ error: "Reward description is required" });
+    if (kind === "bounty") {
+      const { rows: existingBounties } = await pool.query(
+        `SELECT COUNT(*)::int AS count
+           FROM todo_sponsorships
+          WHERE share_id = $1
+            AND sponsor_user_id = $2
+            AND kind = 'bounty'
+            AND created_at::date = CURRENT_DATE
+            AND status <> 'dismissed'`,
+        [share.id, req.session.userId]
+      );
+      if (existingBounties[0].count >= 1) return res.status(429).json({ error: "You can offer one bounty per day" });
+    }
     const { rows } = await pool.query(
       `INSERT INTO todo_sponsorships
-       (workspace_id, share_id, task_id, task_block_id, task_title, sponsor_name, sponsor_email, sponsor_user_id, kind, reward_title, note, value_cents)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       (workspace_id, share_id, task_id, task_date, task_block_id, task_title, sponsor_name, sponsor_email, sponsor_user_id, kind, reward_title, note, value_cents)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [
         share.workspace_id,
         share.id,
         taskId,
+        taskDate,
         String(body.taskBlockId || body.task_block_id || "").slice(0, 200) || null,
         taskTitle,
         sponsorName,
@@ -898,6 +1338,74 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
     );
     broadcast("todo-share-changed", { action: "sponsorship-create", id: rows[0].id }, share.workspace_id);
     res.status(201).json(rows[0]);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post("/api/public/todo-share/:token/reactions", async (req, res) => {
+  try {
+    const share = await findTodoShareByToken(req.params.token);
+    if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
+    const body = req.body || {};
+    const emoji = String(body.emoji || "").trim();
+    if (!["👍", "🙌", "🔥", "💪", "🎉", "❤️"].includes(emoji)) return res.status(400).json({ error: "Unsupported reaction" });
+    const requestedDate = coerceDateString(body.date || body.taskDate || body.task_date || req.query.date);
+    const taskDate = isValidDate(requestedDate) ? requestedDate : getTodayStr();
+    const requestedTaskId = String(body.taskId || body.task_id || "").trim().slice(0, 200);
+    if (!requestedTaskId) return res.status(400).json({ error: "Task is required" });
+    const shareData = await buildPublicTodoShare(share, taskDate, req);
+    const task = findPublicShareTask(shareData.tasks, requestedTaskId);
+    if (!task) return res.status(404).json({ error: "Task is not available on this shared list" });
+    const identityIds = task.identityIds && task.identityIds.length ? task.identityIds : publicTaskIdentityIds(task);
+    const taskId = String(task.id);
+    const taskBlockId = String(task.blockId || "").slice(0, 200) || null;
+    const taskTitle = String(task.title || "").trim().slice(0, 220);
+    const actorKey = todoActorKey(req);
+    const deleted = await pool.query(
+      `DELETE FROM todo_task_reactions
+        WHERE share_id = $1 AND task_id = $2 AND emoji = $3 AND actor_key = $4 AND task_date = $5::date
+        RETURNING id`,
+      [share.id, taskId, emoji, actorKey, taskDate]
+    );
+    let active = false;
+    if (!deleted.rowCount) {
+      await pool.query(
+        `INSERT INTO todo_task_reactions
+         (workspace_id, share_id, task_id, task_date, task_block_id, task_title, identity_ids, emoji, actor_key, actor_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT DO NOTHING`,
+        [
+          share.workspace_id,
+          share.id,
+          taskId,
+          taskDate,
+          taskBlockId,
+          taskTitle,
+          JSON.stringify(identityIds),
+          emoji,
+          actorKey,
+          req.session?.userId || null
+        ]
+      );
+      active = true;
+    }
+    const { rows: countRows } = await pool.query(
+      `SELECT emoji, COUNT(*)::int AS count
+         FROM todo_task_reactions
+        WHERE share_id = $1 AND task_id = $2
+          AND task_date = $3::date
+        GROUP BY emoji`,
+      [share.id, taskId, taskDate]
+    );
+    const { rows: viewerRows } = await pool.query(
+      `SELECT emoji
+         FROM todo_task_reactions
+        WHERE share_id = $1 AND task_id = $2 AND actor_key = $3 AND task_date = $4::date`,
+      [share.id, taskId, actorKey, taskDate]
+    );
+    const counts = {};
+    countRows.forEach(row => { counts[row.emoji] = row.count; });
+    broadcast("todo-share-changed", { action: "reaction", taskId, taskDate, emoji, active }, share.workspace_id);
+    res.json({ counts, viewerReactions: viewerRows.map(row => row.emoji), active });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -1022,6 +1530,11 @@ app.post("/api/public/pet-home/:shareSlug/suggestions", async (req, res) => {
 });
 
 // ── Block API ──
+function coerceDateString(value) {
+  if (!value) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
 function isValidDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }
 function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
 const RESPONSIBILITY_KINDS = new Set(["responsibility_item", "responsibility_trigger"]);

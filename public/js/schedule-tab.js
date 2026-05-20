@@ -82,11 +82,12 @@ function buildActualView(){
 function buildSchedule(){
   const tl=document.getElementById("timeline");tl.innerHTML="";
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
+  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+  if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
   // Separate done vs pushed vs active vs deleted vs side-project-marked
   const trivFlags=loadTrivialFlags();
   const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Hide side-project-marked items from the schedule
   const doneItems=vis.filter(isDone);
-  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
   const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
@@ -316,6 +317,7 @@ function buildSchedule(){
     const bountyControl=(!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty))
       ? '<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Current bounty - 2x points':'Set bounty - 2x points')+'" aria-label="'+(isBounty?'Current bounty':'Set bounty')+'">'+(isBounty?'2x':bountySvg)+'</button>'
       : '';
+    const reactionHtml=(window.todoShareReactionChipsHtml?window.todoShareReactionChipsHtml(ev):"");
 
     el.innerHTML=
       timeHtml+
@@ -323,6 +325,7 @@ function buildSchedule(){
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
         '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+'">'+
+          reactionHtml+
           '<div class="grip" title="Drag to reorder">'+gripSvg+'</div>'+
           '<button class="chk" title="Mark done">'+ckSvg+'</button>'+
           '<div class="chk-col">'+
@@ -435,7 +438,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){

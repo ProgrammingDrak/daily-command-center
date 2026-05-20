@@ -1,6 +1,11 @@
 (function(){
   let share = null;
   let sponsorships = [];
+  let taskReactions = {};
+  let taskReactionsByTitle = {};
+  const reactionOrder = ["👍", "🙌", "🔥", "💪", "🎉", "❤️"];
+  let reactionsDate = "";
+  let reactionsLoading = null;
 
   function esc(value){
     return String(value == null ? "" : value).replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
@@ -21,6 +26,47 @@
 
   function toast(message, type){
     if (typeof showToast === "function") showToast(message, type || "success", 2600);
+  }
+
+  function reactionTitleKey(value){
+    return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  function currentItineraryDate(){
+    if (typeof __state !== "undefined" && __state && __state.date) return __state.date;
+    if (window.__DCC_STATE__ && window.__DCC_STATE__.date) return window.__DCC_STATE__.date;
+    return new Date().toISOString().split("T")[0];
+  }
+
+  function updateReactionToggle(){
+    const btn = document.getElementById("todo-reactions-toggle");
+    if (!btn) return;
+    btn.classList.remove("active");
+    btn.removeAttribute("aria-pressed");
+    btn.textContent = reactionsLoading ? "Refreshing..." : "Refresh reactions";
+    btn.title = "Refresh guest reactions on itinerary tasks";
+  }
+
+  function taskIdentityKeys(task){
+    if (!task) return [];
+    const keys = [
+      task.id,
+      task.local_id,
+      task.localId,
+      task.task_id,
+      task.taskId,
+      task._blockId,
+      task.blockId,
+      task.block_id,
+      task.meetingBlockId,
+      task.triageId,
+      task.sourceId,
+      task.source_id,
+      task.gcal_event_id,
+      task.alertKey,
+      task.responsibilityId
+    ];
+    return [...new Set(keys.map(key => String(key || "").trim()).filter(Boolean))];
   }
 
   function ensureModal(){
@@ -104,6 +150,106 @@
     render();
   }
 
+  async function loadReactions(date, options){
+    const targetDate = date || currentItineraryDate();
+    const force = !!(options && options.force);
+    if (!force && reactionsDate === targetDate) return taskReactions;
+    if (!force && reactionsLoading && reactionsLoading.date === targetDate) return reactionsLoading.promise;
+    const promise = (async () => {
+      updateReactionToggle();
+      const data = await api("/api/todo-share/reactions?date=" + encodeURIComponent(targetDate));
+      taskReactions = data.reactions || {};
+      taskReactionsByTitle = {};
+      const seen = new Set();
+      Object.values(taskReactions).forEach(reaction => {
+        if (!reaction || seen.has(reaction)) return;
+        seen.add(reaction);
+        if (reaction.legacy) {
+          const key = reactionTitleKey(reaction && reaction.taskTitle);
+          if (key && !taskReactionsByTitle[key]) taskReactionsByTitle[key] = reaction;
+        }
+        (reaction.identityIds || []).forEach(id => {
+          const normalized = String(id || "").trim();
+          if (normalized && !taskReactions[normalized]) taskReactions[normalized] = reaction;
+        });
+      });
+      reactionsDate = targetDate;
+      if (typeof window.render === "function") window.render();
+      return taskReactions;
+    })();
+    reactionsLoading = { date: targetDate, promise };
+    try {
+      return await promise;
+    } finally {
+      if (reactionsLoading && reactionsLoading.promise === promise) reactionsLoading = null;
+      updateReactionToggle();
+    }
+  }
+
+  async function refreshItineraryReactions(){
+    try {
+      await loadReactions(currentItineraryDate(), { force: true });
+      toast("Guest reactions refreshed");
+    } catch (e) { toast(e.message, "error"); }
+  }
+
+  function ensureReactionsForDate(date){
+    loadReactions(date || currentItineraryDate()).catch(() => {});
+  }
+
+  function reactionChipsHtml(task){
+    if (!task) return "";
+    const keys = taskIdentityKeys(task);
+    let reaction = keys.map(key => taskReactions[key]).find(Boolean);
+    if (!reaction) reaction = taskReactionsByTitle[reactionTitleKey(task.title || task.label)];
+    const counts = reaction && reaction.counts ? reaction.counts : {};
+    const entries = reactionOrder
+      .map(emoji => ({ emoji, count: Number(counts[emoji]) || 0 }))
+      .filter(entry => entry.count > 0);
+    if (!entries.length) return "";
+    const total = entries.reduce((sum, entry) => sum + entry.count, 0);
+    const stack = entries.slice(0, 3)
+      .map((entry, index) => '<span class="itinerary-reaction-face" style="z-index:' + (4 - index) + '">' + esc(entry.emoji) + '</span>')
+      .join("") + (entries.length > 3 ? '<span class="itinerary-reaction-more">+' + esc(entries.length - 3) + '</span>' : "");
+    const chips = entries
+      .map(entry => '<span class="itinerary-reaction-chip"><span>' + esc(entry.emoji) + '</span><b>' + esc(entry.count) + '</b></span>')
+      .join("");
+    return '<div class="itinerary-reactions" aria-label="Guest reactions">' +
+      '<button class="itinerary-reactions-toggle" type="button" aria-expanded="false" title="Show guest reactions">' +
+        '<span class="itinerary-reaction-stack">' + stack + '</span>' +
+        '<b class="itinerary-reaction-total">' + esc(total) + '</b>' +
+      '</button>' +
+      '<div class="itinerary-reaction-tray" role="list">' + chips + '</div>' +
+    '</div>';
+  }
+
+  function toggleReactionTray(event){
+    const btn = event.target.closest(".itinerary-reactions-toggle");
+    if (!btn) {
+      if (!event.target.closest(".itinerary-reactions")) {
+        document.querySelectorAll(".itinerary-reactions.expanded").forEach(el => {
+          el.classList.remove("expanded");
+          const toggle = el.querySelector(".itinerary-reactions-toggle");
+          if (toggle) toggle.setAttribute("aria-expanded", "false");
+        });
+      }
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const wrap = btn.closest(".itinerary-reactions");
+    if (!wrap) return;
+    const next = !wrap.classList.contains("expanded");
+    document.querySelectorAll(".itinerary-reactions.expanded").forEach(el => {
+      if (el === wrap) return;
+      el.classList.remove("expanded");
+      const toggle = el.querySelector(".itinerary-reactions-toggle");
+      if (toggle) toggle.setAttribute("aria-expanded", "false");
+    });
+    wrap.classList.toggle("expanded", next);
+    btn.setAttribute("aria-expanded", next ? "true" : "false");
+  }
+
   async function enableShare(){
     try {
       const result = await api("/api/todo-share", { method: "POST" });
@@ -159,9 +305,19 @@
   }
 
   document.addEventListener("DOMContentLoaded", () => {
+    updateReactionToggle();
+    document.addEventListener("click", toggleReactionTray, true);
+    const reactionsBtn = document.getElementById("todo-reactions-toggle");
+    if (reactionsBtn) reactionsBtn.addEventListener("click", refreshItineraryReactions);
     const btn = document.getElementById("todo-share-open");
     if (btn) btn.addEventListener("click", openModal);
+    ensureReactionsForDate(currentItineraryDate());
   });
 
   window.openTodoShareModal = openModal;
+  window.todoShareReactionChipsHtml = reactionChipsHtml;
+  window.todoShareReactionsVisible = () => true;
+  window.ensureTodoShareReactionsForDate = ensureReactionsForDate;
+  window.toggleTodoShareReactions = refreshItineraryReactions;
+  window.reloadTodoShareReactions = (date) => loadReactions(date || currentItineraryDate(), { force: true });
 })();

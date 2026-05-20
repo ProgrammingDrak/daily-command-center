@@ -34,26 +34,92 @@
             <span><b id="todo-stat-sponsored">0</b> sponsored</span>
           </div>
         </div>
+        <div class="todo-public-controls" aria-label="Feed controls">
+          <div class="todo-public-multiselect" id="todo-type-filter">
+            <span class="todo-public-control-label">Show</span>
+            <button id="todo-filter-type-button" class="todo-filter-menu-button" type="button" aria-haspopup="true" aria-expanded="false">Tasks, Repeat</button>
+            <div id="todo-filter-type-menu" class="todo-filter-menu" hidden>
+              <label><input type="checkbox" data-type-filter="task" checked> Tasks</label>
+              <label><input type="checkbox" data-type-filter="repeat" checked> Repeat</label>
+              <label><input type="checkbox" data-type-filter="calendar"> Calendar</label>
+              <label><input type="checkbox" data-type-filter="time"> Breaks / OOO</label>
+            </div>
+          </div>
+          <label>Status
+            <select id="todo-filter-status">
+              <option value="all">All statuses</option>
+              <option value="open">Open</option>
+              <option value="done">Done</option>
+              <option value="sponsored">Sponsored</option>
+            </select>
+          </label>
+          <label>Calendar
+            <select id="todo-filter-calendar">
+              <option value="all">All calendars</option>
+            </select>
+          </label>
+          <label>Sort
+            <select id="todo-sort">
+              <option value="time">Time</option>
+              <option value="type">Type</option>
+              <option value="status">Status</option>
+              <option value="title">Title</option>
+              <option value="duration">Duration</option>
+            </select>
+          </label>
+        </div>
         <div id="todo-public-list" class="todo-public-list"></div>
       </section>
 
       <aside class="todo-sponsor-panel">
-        <h2>Visit as a guest</h2>
-        <p>Use the link to keep watching the live list. An account lets your sponsorships stay tied to you.</p>
-        <label>Your name <input id="todo-sponsor-name" type="text" maxlength="80" placeholder="Name"></label>
-        <label>Email optional <input id="todo-sponsor-email" type="email" maxlength="180" placeholder="you@example.com"></label>
-        <label>Task <select id="todo-sponsor-task"></select></label>
-        <label>Offer type
-          <select id="todo-sponsor-kind">
-            <option value="bounty">Sponsor a bounty</option>
-            <option value="reward">Offer a reward</option>
-          </select>
-        </label>
-        <label>Reward or bounty <input id="todo-sponsor-title" type="text" maxlength="160" placeholder="Coffee if this gets done"></label>
-        <label>Dollar value optional <input id="todo-sponsor-value" type="number" min="0" step="0.01" placeholder="0.00"></label>
-        <label>Note <textarea id="todo-sponsor-note" maxlength="1000" placeholder="Add context or encouragement"></textarea></label>
-        <button id="todo-send-sponsorship" class="todo-public-btn primary" type="button">Send offer</button>
-        <div id="todo-sponsor-status" class="todo-sponsor-status"></div>
+        <div class="todo-public-tabs" role="tablist" aria-label="Guest actions">
+          <button id="todo-tab-create" class="todo-public-tab active" type="button" role="tab" aria-selected="true" data-todo-panel="create">Create a Task</button>
+          <button id="todo-tab-encourage" class="todo-public-tab" type="button" role="tab" aria-selected="false" data-todo-panel="encourage">Encouragement</button>
+        </div>
+
+        <section id="todo-panel-create" class="todo-public-panel active" role="tabpanel" aria-labelledby="todo-tab-create">
+          <h2>Create a Task</h2>
+          <p>Add something to the shared command center. It will appear in the owner&apos;s live task flow.</p>
+          <label>Your name <input id="todo-create-name" type="text" maxlength="80" placeholder="Name"></label>
+          <label>Email optional <input id="todo-create-email" type="email" maxlength="180" placeholder="you@example.com"></label>
+          <label>Task <input id="todo-create-title" type="text" maxlength="220" placeholder="+ Add a task..."></label>
+          <div class="todo-create-row">
+            <label>Duration
+              <select id="todo-create-duration">
+                <option value="15">15m</option>
+                <option value="30" selected>30m</option>
+                <option value="45">45m</option>
+                <option value="60">1h</option>
+                <option value="90">1.5h</option>
+                <option value="120">2h</option>
+              </select>
+            </label>
+          </div>
+          <label>Note <textarea id="todo-create-note" maxlength="1000" placeholder="Add context"></textarea></label>
+          <button id="todo-create-task" class="todo-public-btn primary" type="button">Create task</button>
+          <div id="todo-create-status" class="todo-sponsor-status"></div>
+        </section>
+
+        <section id="todo-panel-encourage" class="todo-public-panel" role="tabpanel" aria-labelledby="todo-tab-encourage">
+          <h2>Encouragement</h2>
+          <p id="todo-encourage-auth-note">Sign in to send a reward or bounty. Bounties are limited to one per day.</p>
+          <label>Your name <input id="todo-sponsor-name" type="text" maxlength="80" placeholder="Name"></label>
+          <label>Email optional <input id="todo-sponsor-email" type="email" maxlength="180" placeholder="you@example.com"></label>
+          <label>Task <select id="todo-sponsor-task"></select></label>
+          <label>Offer type
+            <select id="todo-sponsor-kind">
+              <option value="bounty">Sponsor a bounty</option>
+              <option value="reward">Offer a reward</option>
+            </select>
+          </label>
+          <div id="todo-reward-fields" class="todo-reward-fields" hidden>
+            <label>Reward description <input id="todo-sponsor-title" type="text" maxlength="160" placeholder="Coffee if this gets done"></label>
+            <label>Dollar value optional <input id="todo-sponsor-value" type="number" min="0" step="0.01" placeholder="0.00"></label>
+          </div>
+          <label>Note <textarea id="todo-sponsor-note" maxlength="1000" placeholder="Add context or encouragement"></textarea></label>
+          <button id="todo-send-sponsorship" class="todo-public-btn primary" type="button" disabled>Send offer</button>
+          <div id="todo-sponsor-status" class="todo-sponsor-status"></div>
+        </section>
       </aside>
     </section>
   </main>
