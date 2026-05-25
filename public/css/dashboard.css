@@ -2605,6 +2605,18 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @keyframes slotPetHappy{0%,100%{transform:translateY(0) rotate(0)}25%{transform:translateY(-8px) rotate(-5deg)}55%{transform:translateY(-4px) rotate(5deg)}}
 @keyframes slotPetSad{0%,100%{transform:translateY(0)}50%{transform:translateY(6px) scale(0.96)}}
 @keyframes slotPetPull{0%,100%{transform:translateX(0) rotate(0)}45%{transform:translateX(-10px) rotate(-7deg)}}
+.slot-bank-math-overlay{position:fixed;inset:0;z-index:9997;pointer-events:none}
+.slot-bank-math-panel{position:fixed;min-width:220px;max-width:min(330px,calc(100vw - 28px));padding:9px 13px;border-radius:8px;background:rgba(18,16,32,0.94);border:1px solid rgba(255,214,110,0.62);box-shadow:0 0 22px rgba(250,204,21,0.28),0 10px 28px rgba(0,0,0,0.32);color:#fff7d1;text-align:center;transform:translateX(-50%);transition:transform 0.16s ease,filter 0.16s ease,opacity 0.2s ease}
+.slot-bank-math-title,.slot-bank-math-total{display:block;font-size:10px;font-weight:900;letter-spacing:0;text-transform:uppercase;color:#bbf7d0}
+.slot-bank-math-formula{display:block;margin:3px 0;color:#ffe08a;font-size:16px;font-weight:950;font-variant-numeric:tabular-nums;text-shadow:0 0 12px rgba(250,204,21,0.42)}
+.slot-bank-math-total{color:#bae6fd}
+.slot-bank-math-node{position:fixed;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:999px;display:grid;place-items:center;background:radial-gradient(circle at 32% 25%,#fff8c5,#facc15 52%,#a16207);border:1px solid rgba(255,248,197,0.82);color:#1f1300;font-size:12px;font-weight:950;box-shadow:0 0 16px rgba(250,204,21,0.68),0 0 0 3px rgba(34,197,94,0.18);animation:slotBankNodePop 0.72s cubic-bezier(.2,1.45,.24,1) both}
+.slot-bank-math-overlay.step-pop .slot-bank-math-panel{transform:translateX(-50%) scale(1.035);filter:brightness(1.12)}
+.slot-bank-math-overlay.leaving .slot-bank-math-panel,.slot-bank-math-overlay.leaving .slot-bank-math-node{opacity:0;transform:translateX(-50%) translateY(-8px) scale(0.92)}
+.slot-bank-link{position:fixed;z-index:9996;height:6px;margin-top:-3px;border-radius:999px;transform-origin:left center;background:linear-gradient(90deg,rgba(187,247,208,0),#bbf7d0,#ffe08a,rgba(255,224,138,0));box-shadow:0 0 16px rgba(34,197,94,0.76),0 0 28px rgba(250,204,21,0.4);pointer-events:none;animation:slotBankLinkDraw 0.58s ease-out both}
+.slot-bank-link.column{background:linear-gradient(90deg,rgba(186,230,253,0),#bae6fd,#ffe08a,rgba(255,224,138,0));box-shadow:0 0 16px rgba(34,211,238,0.66),0 0 28px rgba(250,204,21,0.36)}
+@keyframes slotBankNodePop{0%{opacity:0;transform:translateY(8px) scale(0.42)}45%{opacity:1;transform:translateY(-4px) scale(1.18)}100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes slotBankLinkDraw{0%{opacity:0;clip-path:inset(0 100% 0 0)}22%{opacity:1}100%{opacity:1;clip-path:inset(0 0 0 0)}}
 .slot-bank-flow{position:fixed;z-index:9999;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:999px;background:#bbf7d0;box-shadow:0 0 12px rgba(34,197,94,0.85),0 0 22px rgba(250,204,21,0.45);pointer-events:none;animation:slotBankFlow 0.74s cubic-bezier(.2,.75,.18,1) forwards}
 @keyframes slotBankFlow{0%{opacity:0;transform:translate(0,0) scale(0.7)}18%{opacity:1;transform:translate(0,0) scale(1.35)}100%{opacity:0;transform:translate(var(--slot-flow-x),var(--slot-flow-y)) scale(0.35)}}
 .slot-coin-field{position:fixed;inset:0;z-index:9998;pointer-events:none;overflow:hidden;opacity:0;transition:opacity 0.24s ease}

@@ -356,7 +356,7 @@
     coinPhysics.coins = [];
     const field = document.getElementById("slot-coin-field");
     if(field) field.remove();
-    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop").forEach(el => el.remove());
+    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop,.slot-bank-link,.slot-bank-math-overlay").forEach(el => el.remove());
     document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
   }
 
@@ -774,25 +774,142 @@
 
     cells.forEach(cell => cell.classList.add("bank-hit"));
     slotPlay("bankLine");
-    await wait(260);
+    const math = showBankMathOverlay(cells, payout, deltaCents);
+    updateBankMathOverlay(math, "Bank tiles", bankUnitLine(payout.base_units || cells.length, 0, 0), bankTotalLine(payout, deltaCents, "base"));
+    await wait(360);
 
     const horizontalGroups = Array.isArray(payout.horizontal_groups) ? payout.horizontal_groups : [];
+    const horizontalLinks = showBankLinks(horizontalGroups, reels, "row");
     horizontalGroups.flat().forEach(i => {
       if(reels[i]) reels[i].classList.add("bank-horizontal");
     });
-    await wait(horizontalGroups.length ? 420 : 120);
+    updateBankMathOverlay(math, "Row links", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, 0), bankTotalLine(payout, deltaCents, "horizontal"));
+    await wait(horizontalGroups.length ? 560 : 160);
 
     const verticalGroups = Array.isArray(payout.vertical_groups) ? payout.vertical_groups : [];
+    const verticalLinks = showBankLinks(verticalGroups, reels, "column");
     verticalGroups.flat().forEach(i => {
       if(reels[i]) reels[i].classList.add("bank-vertical");
     });
-    await wait(verticalGroups.length ? 420 : 120);
+    updateBankMathOverlay(math, "Column links", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, payout.vertical_bonus_units || 0), bankTotalLine(payout, deltaCents, "vertical"));
+    await wait(verticalGroups.length ? 560 : 160);
+
+    updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
+    await wait(620);
 
     const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
     if(target) flyBankLights(cells, target);
+    dismissBankMathOverlay(math);
+    [...horizontalLinks, ...verticalLinks].forEach(link => link.remove());
     if(deltaCents > 0) await animateBankCoinCollection(cells, deltaCents);
     else await wait(760);
     cells.forEach(cell => cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical"));
+  }
+
+  function bankUnitLine(baseUnits, horizontalUnits, verticalUnits){
+    const parts = [baseUnits + " BANK"];
+    if(horizontalUnits > 0) parts.push("+ " + horizontalUnits + " row");
+    if(verticalUnits > 0) parts.push("+ " + verticalUnits + " column");
+    const total = baseUnits + horizontalUnits + verticalUnits;
+    return parts.join(" ") + " = " + total + " unit" + (total === 1 ? "" : "s");
+  }
+
+  function bankFinalFormula(payout){
+    const units = payout.units || 0;
+    const baseCents = payout.base_cents || 0;
+    return units + " x " + money(baseCents) + " = " + money((payout.raw_cents != null ? payout.raw_cents : units * baseCents));
+  }
+
+  function bankTotalLine(payout, deltaCents, step){
+    if(step === "base") return "Each BANK starts one unit.";
+    if(step === "horizontal" && (payout.horizontal_bonus_units || 0) > 0) return "Connected rows multiply the bank units.";
+    if(step === "vertical" && (payout.vertical_bonus_units || 0) > 0) return "Connected columns add another boost.";
+    if(payout.capped) return "Cap applied: +" + money(deltaCents);
+    if(step === "final") return "Reserve add: +" + money(deltaCents);
+    return "No extra link bonus here.";
+  }
+
+  function showBankMathOverlay(cells, payout, deltaCents){
+    if(!isSlotsPageActive()) return null;
+    const frame = document.querySelector(".slot-reels-frame");
+    const frameRect = frame ? frame.getBoundingClientRect() : null;
+    const overlay = document.createElement("div");
+    overlay.className = "slot-bank-math-overlay";
+    const panel = document.createElement("div");
+    panel.className = "slot-bank-math-panel";
+    if(frameRect){
+      panel.style.left = (frameRect.left + frameRect.width / 2) + "px";
+      panel.style.top = (frameRect.top + 16) + "px";
+    }
+    panel.innerHTML = '<span class="slot-bank-math-title"></span><strong class="slot-bank-math-formula"></strong><em class="slot-bank-math-total"></em>';
+    overlay.appendChild(panel);
+    cells.forEach((cell, idx) => {
+      const rect = cell.getBoundingClientRect();
+      const node = document.createElement("span");
+      node.className = "slot-bank-math-node";
+      node.textContent = "+1";
+      node.style.left = (rect.left + rect.width / 2) + "px";
+      node.style.top = (rect.top + rect.height / 2) + "px";
+      node.style.animationDelay = (idx * 45) + "ms";
+      overlay.appendChild(node);
+    });
+    document.body.appendChild(overlay);
+    return {
+      overlay,
+      title: panel.querySelector(".slot-bank-math-title"),
+      formula: panel.querySelector(".slot-bank-math-formula"),
+      total: panel.querySelector(".slot-bank-math-total"),
+      payout,
+      deltaCents
+    };
+  }
+
+  function updateBankMathOverlay(math, title, formula, total){
+    if(!math) return;
+    if(math.title) math.title.textContent = title;
+    if(math.formula) math.formula.textContent = formula;
+    if(math.total) math.total.textContent = total;
+    math.overlay.classList.remove("step-pop");
+    void math.overlay.offsetWidth;
+    math.overlay.classList.add("step-pop");
+  }
+
+  function dismissBankMathOverlay(math){
+    if(!math || !math.overlay) return;
+    math.overlay.classList.add("leaving");
+    setTimeout(() => {
+      if(math.overlay) math.overlay.remove();
+    }, 360);
+  }
+
+  function showBankLinks(groups, reels, tone){
+    if(!isSlotsPageActive() || !Array.isArray(groups) || !groups.length) return [];
+    const links = [];
+    groups.forEach((group, groupIdx) => {
+      for(let i = 0; i < group.length - 1; i++){
+        const from = reels[group[i]];
+        const to = reels[group[i + 1]];
+        if(!from || !to) continue;
+        const fromRect = from.getBoundingClientRect();
+        const toRect = to.getBoundingClientRect();
+        const x1 = fromRect.left + fromRect.width / 2;
+        const y1 = fromRect.top + fromRect.height / 2;
+        const x2 = toRect.left + toRect.width / 2;
+        const y2 = toRect.top + toRect.height / 2;
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const link = document.createElement("span");
+        link.className = "slot-bank-link " + tone;
+        link.style.left = x1 + "px";
+        link.style.top = y1 + "px";
+        link.style.width = Math.sqrt(dx * dx + dy * dy) + "px";
+        link.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
+        link.style.animationDelay = ((groupIdx + i) * 70) + "ms";
+        document.body.appendChild(link);
+        links.push(link);
+      }
+    });
+    return links;
   }
 
   async function animateBankCoinCollection(cells, deltaCents){
