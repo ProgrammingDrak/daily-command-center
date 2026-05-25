@@ -51,6 +51,7 @@ const STATE_DIR = path.join(DATA_DIR, "state");
 const DAY_STATE_FILE = path.join(STATE_DIR, "day-state.json");
 const TOMORROW_STATE_FILE = path.join(STATE_DIR, "tomorrow-state.json");
 const LOCAL_UI_STATE_FILE = path.join(STATE_DIR, "local-ui-state.json");
+const UPCOMING_FILE = path.join(STATE_DIR, "upcoming-meetings.json");
 const ARCHIVE_DIR = path.join(STATE_DIR, "archive");
 const DAYS_DIR = path.join(STATE_DIR, "days");
 const BRAIN_DIR = path.join(DATA_DIR, "brain");
