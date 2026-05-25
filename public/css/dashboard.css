@@ -2607,6 +2607,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-cell.bank-vertical{box-shadow:inset 0 -5px 0 rgba(62,42,11,0.12),0 0 26px rgba(34,211,238,0.62),0 0 0 2px rgba(34,211,238,0.34)}
 .slot-cell.bank-zap-source{animation:slotBankSourceCharge 0.72s ease-out both}
 .slot-cell.bank-zap-impact{animation:slotBankTileImpact 0.9s cubic-bezier(.18,1.35,.24,1) both}
+.slot-cell.bank-pet-collected{animation:slotBankPetCollected 0.54s cubic-bezier(.18,1.3,.24,1) both}
 .slot-cell[data-symbol="bank"],.slot-cell[data-symbol="bonus"],.slot-cell[data-symbol="star"],.slot-cell[data-symbol="wild"]{background:linear-gradient(180deg,#ffec9d,#d7a331);color:#241604;border-color:#ffe28b}
 .slot-cell[data-symbol="gold"],.slot-cell[data-symbol="jackpot"]{background:linear-gradient(180deg,#fff4a8,#c97f19);color:#201100;border-color:#ffdf6f;box-shadow:inset 0 -5px 0 rgba(62,42,11,0.12),0 0 14px rgba(255,203,64,0.26)}
 .slot-cell[data-symbol="jackpot"]{background:linear-gradient(180deg,#fff2b8,#e44848);color:white;border-color:#ffd86b}
@@ -2684,17 +2685,41 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-bank-total-pop small,.slot-bank-total-pop strong{display:block;line-height:1}
 .slot-bank-total-pop small{font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:0;color:#bbf7d0}
 .slot-bank-total-pop strong{margin-top:3px;font-size:25px;font-weight:950;font-variant-numeric:tabular-nums;text-shadow:0 0 14px rgba(34,197,94,0.7)}
+.slot-bank-pet-runner{--runner-turn:1;--runner-step:0;position:fixed;z-index:10006;width:54px;height:58px;margin:-29px 0 0 -27px;border-radius:44% 44% 38% 38%;background:var(--slot-pet-color,#f2b56b);box-shadow:inset 0 -7px 0 rgba(0,0,0,0.12),0 8px 18px rgba(0,0,0,0.26),0 0 22px rgba(187,247,208,0.36);display:flex;align-items:center;justify-content:center;color:#281706;font-weight:950;pointer-events:none;transition:left 0.24s linear,top 0.24s cubic-bezier(.18,.86,.18,1);transform:translateZ(0) scaleX(var(--runner-turn));will-change:left,top,transform}
+.slot-bank-pet-runner strong{font-size:20px;line-height:1}
+.slot-bank-pet-runner em{position:absolute;top:-8px;right:6px;font-style:normal;font-size:14px;color:#fff7cc;text-shadow:0 1px 2px rgba(0,0,0,0.45)}
+.slot-bank-pet-runner .slot-pet-ears:before,.slot-bank-pet-runner .slot-pet-ears:after{content:"";position:absolute;top:-8px;width:18px;height:18px;border-radius:7px 7px 3px 3px;background:var(--slot-pet-color,#f2b56b);box-shadow:inset 0 -3px 0 rgba(0,0,0,0.1)}
+.slot-bank-pet-runner .slot-pet-ears:before{left:7px;transform:rotate(-18deg)}
+.slot-bank-pet-runner .slot-pet-ears:after{right:7px;transform:rotate(18deg)}
+.slot-bank-pet-runner .slot-pet-face:before,.slot-bank-pet-runner .slot-pet-face:after{content:"";position:absolute;top:25px;width:6px;height:6px;border-radius:50%;background:#24130a}
+.slot-bank-pet-runner .slot-pet-face:before{left:17px}
+.slot-bank-pet-runner .slot-pet-face:after{right:17px}
+.slot-bank-pet-runner.running{animation:slotBankPetRun 0.28s steps(2,end) infinite}
+.slot-bank-pet-runner.carrying{box-shadow:inset 0 -7px 0 rgba(0,0,0,0.12),0 8px 18px rgba(0,0,0,0.26),0 0 22px rgba(187,247,208,0.48),0 0 34px rgba(250,204,21,0.34)}
+.slot-bank-pet-runner.depositing{animation:slotBankPetDeposit 0.32s cubic-bezier(.18,1.3,.24,1) both}
+.slot-bank-pet-runner.leaving{opacity:0;transform:translateY(-10px) scale(0.76) scaleX(var(--runner-turn));transition:opacity 0.22s ease,transform 0.22s ease}
+.slot-bank-pet-money{position:absolute;right:-8px;bottom:8px;width:24px;height:24px;border-radius:999px;background:radial-gradient(circle at 32% 25%,#fff8c5,#facc15 56%,#a16207);border:1px solid rgba(255,248,197,0.86);display:grid;place-items:center;color:#241604;font-size:12px;font-weight:950;box-shadow:0 0 14px rgba(250,204,21,0.76);opacity:0;transform:scale(0.45)}
+.slot-bank-pet-runner.carrying .slot-bank-pet-money{opacity:1;animation:slotBankPetMoney 0.44s ease-in-out infinite alternate}
+.slot-bank-pet-dust{position:fixed;z-index:10004;width:9px;height:6px;border-radius:999px;background:rgba(187,247,208,0.72);box-shadow:0 0 10px rgba(34,197,94,0.52);pointer-events:none;animation:slotBankPetDust 0.54s ease-out both}
+.slot-bank-collect-pop{position:fixed;z-index:10005;margin:-18px 0 0 -24px;min-width:48px;text-align:center;padding:5px 8px;border-radius:999px;background:rgba(5,46,22,0.95);border:1px solid rgba(187,247,208,0.82);color:#bbf7d0;font-size:16px;font-weight:950;font-variant-numeric:tabular-nums;box-shadow:0 0 16px rgba(34,197,94,0.48),0 0 24px rgba(250,204,21,0.24);pointer-events:none;animation:slotBankCollectPop 0.78s cubic-bezier(.18,1.3,.24,1) both}
 @keyframes slotBankNodePop{0%{opacity:0;transform:translateY(8px) scale(0.42)}45%{opacity:1;transform:translateY(-4px) scale(1.18)}100%{opacity:1;transform:translateY(0) scale(1)}}
 @keyframes slotBankSourceCharge{0%{transform:scale(1);filter:brightness(1)}55%{transform:scale(1.08);filter:brightness(1.35) saturate(1.25)}100%{transform:scale(1.02);filter:brightness(1.08)}}
 @keyframes slotBankTileImpact{0%{transform:scale(1);filter:brightness(1)}22%{transform:scale(1.16) rotate(-2deg);filter:brightness(1.52) saturate(1.35)}56%{transform:scale(1.04) rotate(2deg);filter:brightness(1.18) saturate(1.16)}100%{transform:scale(1);filter:brightness(1)}}
+@keyframes slotBankPetCollected{0%{transform:scale(1);filter:brightness(1)}28%{transform:scale(1.12);filter:brightness(1.42) saturate(1.28);box-shadow:inset 0 -5px 0 rgba(62,42,11,0.12),0 0 24px rgba(187,247,208,0.86),0 0 0 3px rgba(187,247,208,0.58)}100%{transform:scale(1);filter:brightness(1)}}
 @keyframes slotBankLightningZip{0%{opacity:0;clip-path:inset(0 100% 0 0);filter:drop-shadow(0 0 4px rgba(125,249,255,0.5))}16%{opacity:1;clip-path:inset(0 78% 0 0)}34%{clip-path:inset(0 50% 0 0);filter:drop-shadow(0 0 16px rgba(255,255,255,1)) drop-shadow(0 0 28px rgba(250,204,21,0.86))}64%{clip-path:inset(0 18% 0 0)}100%{opacity:1;clip-path:polygon(0 48%,7% 26%,16% 56%,25% 34%,35% 62%,46% 24%,57% 54%,68% 30%,78% 58%,89% 35%,100% 50%,100% 72%,88% 50%,78% 76%,67% 48%,57% 78%,45% 46%,35% 74%,24% 48%,15% 76%,6% 54%,0 72%)}}
 @keyframes slotBankZapHead{0%{left:0;opacity:0;transform:translate(-50%,-50%) scale(0.42)}16%{opacity:1;transform:translate(-50%,-50%) scale(1)}84%{opacity:1;transform:translate(-50%,-50%) scale(1.12)}100%{left:100%;opacity:0;transform:translate(-50%,-50%) scale(0.72)}}
 @keyframes slotBankImpactSpark{0%{opacity:0;transform:scale(0.18) rotate(-16deg)}18%{opacity:1;transform:scale(1.18) rotate(8deg)}52%{opacity:1;transform:scale(0.92) rotate(-4deg)}100%{opacity:0;transform:scale(1.52) rotate(22deg)}}
 @keyframes slotBankSparkCrackle{0%{transform:rotate(0deg) scale(0.82);opacity:0.78}50%{transform:rotate(26deg) scale(1.08);opacity:1}100%{transform:rotate(-18deg) scale(0.92);opacity:0.7}}
 @keyframes slotBankMultiplierPop{0%{opacity:0;transform:translateY(18px) scale(0.24) rotate(-10deg)}14%{opacity:1;transform:translateY(-10px) scale(1.28) rotate(3deg)}34%{opacity:1;transform:translateY(0) scale(0.98) rotate(-1deg)}68%{opacity:1;transform:translateY(-6px) scale(1.05) rotate(1deg)}100%{opacity:0;transform:translateY(-32px) scale(0.78) rotate(-2deg)}}
+.slot-bank-pet-runner+.slot-bank-flow{display:none}
 .slot-bank-flow{position:fixed;z-index:9999;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:999px;background:#bbf7d0;box-shadow:0 0 14px rgba(34,197,94,0.9),0 0 28px rgba(250,204,21,0.5);pointer-events:none;animation:slotBankFlow 0.7s cubic-bezier(.2,.75,.18,1) forwards}
 @keyframes slotBankFlow{0%{opacity:0;transform:translate(0,0) scale(0.65)}14%{opacity:1;transform:translate(0,0) scale(1.45)}100%{opacity:0;transform:translate(var(--slot-flow-x),var(--slot-flow-y)) scale(0.25)}}
 @keyframes slotBankTotalPop{0%{opacity:0;transform:translateY(12px) scale(0.4) rotate(-5deg)}16%{opacity:1;transform:translateY(-6px) scale(1.16) rotate(2deg)}58%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-24px) scale(0.88)}}
+@keyframes slotBankPetRun{0%{transform:translateY(0) scaleX(var(--runner-turn)) scaleY(1)}50%{transform:translateY(-7px) scaleX(calc(var(--runner-turn) * 1.08)) scaleY(0.92)}100%{transform:translateY(0) scaleX(var(--runner-turn)) scaleY(1)}}
+@keyframes slotBankPetMoney{0%{transform:translateY(0) scale(0.9) rotate(-8deg)}100%{transform:translateY(-3px) scale(1.08) rotate(8deg)}}
+@keyframes slotBankPetDeposit{0%{transform:scaleX(var(--runner-turn)) scale(1)}54%{transform:scaleX(var(--runner-turn)) scale(1.22) rotate(-4deg)}100%{transform:scaleX(var(--runner-turn)) scale(0.96) rotate(2deg)}}
+@keyframes slotBankPetDust{0%{opacity:0;transform:translate(0,0) scale(0.4)}28%{opacity:1;transform:translate(-8px,0) scale(1)}100%{opacity:0;transform:translate(-24px,8px) scale(0.25)}}
+@keyframes slotBankCollectPop{0%{opacity:0;transform:translateY(8px) scale(0.48)}22%{opacity:1;transform:translateY(-8px) scale(1.16)}68%{opacity:1;transform:translateY(-14px) scale(1)}100%{opacity:0;transform:translateY(-28px) scale(0.82)}}
 .slot-coin-field{position:fixed;inset:0;z-index:9998;pointer-events:none;overflow:hidden;opacity:0;transition:opacity 0.24s ease}
 .slot-coin-field.active{opacity:1}
 .slot-coin-ground{position:absolute;left:0;right:0;bottom:0;height:10px;background:linear-gradient(180deg,rgba(250,204,21,0.18),rgba(120,75,14,0.36));box-shadow:0 -8px 24px rgba(250,204,21,0.12)}

@@ -359,7 +359,7 @@
     coinPhysics.coins = [];
     const field = document.getElementById("slot-coin-field");
     if(field) field.remove();
-    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop,.slot-bank-total-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-impact-spark,.slot-bank-math-overlay").forEach(el => el.remove());
+    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-bank-pet-runner,.slot-bank-pet-dust,.slot-bank-pet-money,.slot-bank-collect-pop,.slot-piggy-add-pop,.slot-bank-total-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-impact-spark,.slot-bank-math-overlay").forEach(el => el.remove());
     document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
     clearSlotRewardEffects();
   }
@@ -1080,13 +1080,13 @@
     updateBankMathOverlay(math, "Chain reaction", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, payout.vertical_bonus_units || 0), "Bank links are firing together.");
     const horizontalPromise = playBankLightningGroups(horizontalGroups, reels, "row", "Double Points!");
     const verticalPromise = playBankLightningGroups(verticalGroups, reels, "column", "+1 Bank Unit!");
+    const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
+    const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents) : Promise.resolve();
     await wait(520);
     updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
     const [horizontalLinks, verticalLinks] = await Promise.all([horizontalPromise, verticalPromise]);
-    await wait(220);
-
-    const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
-    if(target) await animateBankReserveDrain(cells, target, deltaCents);
+    await reservePromise;
+    await wait(160);
     dismissBankMathOverlay(math);
     [...horizontalLinks, ...verticalLinks].forEach(link => link.remove());
     if(deltaCents <= 0) await wait(360);
@@ -1344,13 +1344,114 @@
   async function animateBankReserveDrain(cells, target, deltaCents){
     if(!isSlotsPageActive() || !target) return;
     target.classList.add("receiving");
-    showBankReserveTotalPop(target, deltaCents);
-    flyBankLights(cells, target, 3, 42);
-    slotPlay("sweep", { cents: deltaCents });
-    await wait(720);
+    await animateBankPetRunner(cells, target, deltaCents);
     if(isSlotsPageActive()) showPiggyBankAddAmount(target, deltaCents);
     await wait(420);
     target.classList.remove("receiving");
+  }
+
+  async function animateBankPetRunner(cells, target, deltaCents){
+    const avatar = document.getElementById("slot-pet-avatar");
+    if(!avatar || !cells.length || !target) {
+      showBankReserveTotalPop(target, deltaCents);
+      flyBankLights(cells, target, 2, 42);
+      await wait(760);
+      return;
+    }
+    const runner = makeBankPetRunner(avatar);
+    const avatarRect = avatar.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const start = centerPoint(avatarRect);
+    const reserve = centerPoint(targetRect);
+    runner.style.left = start.x + "px";
+    runner.style.top = start.y + "px";
+    document.body.appendChild(runner);
+    slotPlay("sweep", { cents: deltaCents });
+    await wait(40);
+
+    const route = cells.map(cell => ({ cell, point: centerPoint(cell.getBoundingClientRect()) }));
+    const ordered = route;
+    for(let i = 0; i < ordered.length; i++){
+      const step = ordered[i];
+      const duration = i === 0 ? 220 : 128;
+      await moveBankPetRunner(runner, step.point, duration, i);
+      flashBankPetCollect(step.cell, step.point, i);
+      if(i === 0) runner.classList.add("carrying");
+      await wait(28);
+    }
+
+    await moveBankPetRunner(runner, reserve, 260, ordered.length);
+    showBankReserveTotalPop(target, deltaCents);
+    runner.classList.add("depositing");
+    await wait(220);
+    runner.classList.add("leaving");
+    setTimeout(() => runner.remove(), 300);
+  }
+
+  function makeBankPetRunner(avatar){
+    const runner = avatar.cloneNode(true);
+    runner.id = "";
+    runner.removeAttribute("data-mood");
+    runner.className = "slot-bank-pet-runner";
+    const color = avatar.style.getPropertyValue("--slot-pet-color");
+    if(color) runner.style.setProperty("--slot-pet-color", color);
+    const money = document.createElement("span");
+    money.className = "slot-bank-pet-money";
+    money.textContent = "$";
+    runner.appendChild(money);
+    return runner;
+  }
+
+  function centerPoint(rect){
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  }
+
+  function moveBankPetRunner(runner, point, duration, step){
+    return new Promise(resolve => {
+      if(!runner || !isSlotsPageActive()) return resolve();
+      const currentX = parseFloat(runner.style.left || "0");
+      const currentY = parseFloat(runner.style.top || "0");
+      const dx = point.x - currentX;
+      runner.style.setProperty("--runner-turn", dx < 0 ? "-1" : "1");
+      runner.style.setProperty("--runner-step", String(step % 2));
+      runner.classList.remove("running");
+      void runner.offsetWidth;
+      runner.classList.add("running");
+      spawnBankPetDust(currentX, currentY, step);
+      runner.style.transitionDuration = duration + "ms";
+      runner.style.left = point.x + "px";
+      runner.style.top = point.y + "px";
+      setTimeout(resolve, duration + 18);
+    });
+  }
+
+  function spawnBankPetDust(x, y, step){
+    for(let i = 0; i < 3; i++){
+      const dust = document.createElement("span");
+      dust.className = "slot-bank-pet-dust";
+      dust.style.left = (x - 16 + i * 8) + "px";
+      dust.style.top = (y + 22 + (step % 2) * 3) + "px";
+      dust.style.animationDelay = (i * 38) + "ms";
+      document.body.appendChild(dust);
+      dust.addEventListener("animationend", () => dust.remove(), { once: true });
+    }
+  }
+
+  function flashBankPetCollect(cell, point, idx){
+    if(cell){
+      cell.classList.remove("bank-pet-collected");
+      void cell.offsetWidth;
+      cell.classList.add("bank-pet-collected");
+      setTimeout(() => cell.classList.remove("bank-pet-collected"), 540);
+    }
+    const pop = document.createElement("span");
+    pop.className = "slot-bank-collect-pop";
+    pop.textContent = "+$";
+    pop.style.left = point.x + "px";
+    pop.style.top = point.y + "px";
+    pop.style.animationDelay = (idx % 2 ? 35 : 0) + "ms";
+    document.body.appendChild(pop);
+    pop.addEventListener("animationend", () => pop.remove(), { once: true });
   }
 
   function showBankReserveTotalPop(target, deltaCents){
