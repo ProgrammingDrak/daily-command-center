@@ -359,7 +359,7 @@
     coinPhysics.coins = [];
     const field = document.getElementById("slot-coin-field");
     if(field) field.remove();
-    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-math-overlay").forEach(el => el.remove());
+    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-impact-spark,.slot-bank-math-overlay").forEach(el => el.remove());
     document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
     clearSlotRewardEffects();
   }
@@ -1066,16 +1066,16 @@
       if(reels[i]) reels[i].classList.add("bank-horizontal");
     });
     updateBankMathOverlay(math, "Row links", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, 0), bankTotalLine(payout, deltaCents, "horizontal"));
-    const horizontalLinks = await playBankLightningGroups(horizontalGroups, reels, "row", "x2");
-    await wait(horizontalGroups.length ? 620 : 280);
+    const horizontalLinks = await playBankLightningGroups(horizontalGroups, reels, "row", "Double Points!");
+    await wait(horizontalGroups.length ? 760 : 280);
 
     const verticalGroups = Array.isArray(payout.vertical_groups) ? payout.vertical_groups : [];
     verticalGroups.flat().forEach(i => {
       if(reels[i]) reels[i].classList.add("bank-vertical");
     });
     updateBankMathOverlay(math, "Column links", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, payout.vertical_bonus_units || 0), bankTotalLine(payout, deltaCents, "vertical"));
-    const verticalLinks = await playBankLightningGroups(verticalGroups, reels, "column", "+1");
-    await wait(verticalGroups.length ? 620 : 280);
+    const verticalLinks = await playBankLightningGroups(verticalGroups, reels, "column", "+1 Bank Unit!");
+    await wait(verticalGroups.length ? 760 : 280);
 
     updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
     await wait(1250);
@@ -1168,7 +1168,7 @@
   async function playBankLightningGroups(groups, reels, tone, impactLabel){
     if(!isSlotsPageActive() || !Array.isArray(groups) || !groups.length) return [];
     const links = [];
-    groups.forEach((group, groupIdx) => {
+    groups.forEach((group) => {
       for(let i = 0; i < group.length - 1; i++){
         const from = reels[group[i]];
         const to = reels[group[i + 1]];
@@ -1188,19 +1188,53 @@
         link.style.width = Math.sqrt(dx * dx + dy * dy) + "px";
         link.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
         link.style.animationDelay = "0ms";
-        link.dataset.impactX = String((x1 + x2) / 2);
-        link.dataset.impactY = String((y1 + y2) / 2);
-        links.push(link);
+        link.dataset.startX = String(x1);
+        link.dataset.startY = String(y1);
+        link.dataset.impactX = String(x2);
+        link.dataset.impactY = String(y2);
+        links.push({ link, from, to });
       }
     });
-    for(const link of links){
+    const renderedLinks = [];
+    for(const item of links){
+      const { link, from, to } = item;
+      const startX = Number(link.dataset.startX || 0);
+      const startY = Number(link.dataset.startY || 0);
+      const impactX = Number(link.dataset.impactX || 0);
+      const impactY = Number(link.dataset.impactY || 0);
+      showBankTileSurge(startX, startY, tone, "charge");
+      if(from) {
+        from.classList.remove("bank-zap-source");
+        void from.offsetWidth;
+        from.classList.add("bank-zap-source");
+      }
+      await wait(130);
       document.body.appendChild(link);
+      renderedLinks.push(link);
       slotPlay("bankLine");
-      await wait(360);
-      showBankMultiplierPop(Number(link.dataset.impactX || 0), Number(link.dataset.impactY || 0), impactLabel, tone);
-      await wait(520);
+      await wait(620);
+      if(to) {
+        to.classList.remove("bank-zap-impact");
+        void to.offsetWidth;
+        to.classList.add("bank-zap-impact");
+      }
+      showBankTileSurge(impactX, impactY, tone, "impact");
+      showBankMultiplierPop(impactX, impactY, impactLabel, tone);
+      await wait(860);
+      if(from) from.classList.remove("bank-zap-source");
+      if(to) to.classList.remove("bank-zap-impact");
     }
-    return links;
+    return renderedLinks;
+  }
+
+  function showBankTileSurge(x, y, tone, phase){
+    if(!isSlotsPageActive()) return;
+    const spark = document.createElement("span");
+    spark.className = "slot-bank-impact-spark " + tone + " " + (phase || "impact");
+    spark.style.left = x + "px";
+    spark.style.top = y + "px";
+    document.body.appendChild(spark);
+    spark.addEventListener("animationend", () => spark.remove(), { once: true });
   }
 
   function showBankMultiplierPop(x, y, label, tone){
