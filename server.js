@@ -2372,7 +2372,7 @@ app.post("/api/slot/spin", async (req, res) => {
 
 app.post("/api/slot/spins/:id/confirm", async (req, res) => {
   try {
-    const spin = await slotStore.confirmSpin(req.workspaceId, req.params.id);
+    const spin = await slotStore.confirmSpin(req.workspaceId, req.params.id, req.body || {});
     broadcast("slot-changed", { action: "spin-confirm" }, req.workspaceId);
     res.json(spin);
   } catch (e) {
