@@ -1153,17 +1153,17 @@
             <div class="slots-balance"><span>Task Points</span><strong id="slot-credit-balance">0</strong></div>
             <div class="slots-balance slots-bank">
               <div class="slot-bank-heading">
-                <span>Jackpot Jar</span>
+                <span>Reward Reserve</span>
                 <button class="slot-bank-info" type="button" aria-label="How unlocking works">i
                   <span class="slot-bank-info-tip" role="tooltip">
-                    BANK hits unlock dollars toward the fun budget. JACKPOT hits spend from the ready jar.
+                    Set a monthly Discretionary Spending budget. Bank Building hits unlock that budget for spending. Jackpot Prizes unlock as funds accumulate in your Reward Reserve.
                   </span>
                 </button>
               </div>
               <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" aria-expanded="false" aria-controls="slot-bank-details">
                 <strong id="slot-bank-balance">$0.00</strong>
                 <span class="slot-bank-meter"><span id="slot-bank-fill"></span></span>
-                <span class="slot-pop-label" id="slot-bank-action-label">No sweep pending</span>
+                <span class="slot-pop-label" id="slot-bank-action-label">No reserve pending</span>
               </button>
             </div>
           </div>
@@ -1227,7 +1227,7 @@
           <div class="slot-kind-picker" role="radiogroup" aria-label="Reward type">
             <button class="slot-kind-option active" data-slot-kind="free" type="button"><strong>Free</strong><span>$0 win</span></button>
             <button class="slot-kind-option" data-slot-kind="small_paid" type="button"><strong>Jackpot</strong><span>Small spend</span></button>
-            <button class="slot-kind-option" data-slot-kind="bank_gated" type="button"><strong>Jackpot</strong><span>Jar spend</span></button>
+            <button class="slot-kind-option" data-slot-kind="bank_gated" type="button"><strong>Jackpot</strong><span>Reserve spend</span></button>
             <button class="slot-kind-option" data-slot-kind="sponsor" type="button"><strong>Sponsor</strong><span>Partner prize</span></button>
             <button class="slot-kind-option" data-slot-kind="choice" type="button"><strong>Choice</strong><span>Pick later</span></button>
             <button class="slot-kind-option" data-slot-kind="reroll" type="button"><strong>Reroll</strong><span>Try again</span></button>
@@ -1284,7 +1284,7 @@
             <option value="miss">No prize</option>
             <option value="free">Free</option>
             <option value="small_paid">Jackpot (small)</option>
-            <option value="bank_gated">Jackpot (jar)</option>
+            <option value="bank_gated">Jackpot (reserve)</option>
             <option value="sponsor">Sponsor</option>
             <option value="choice">Choice</option>
             <option value="reroll">Reroll</option>
@@ -1364,7 +1364,7 @@
             <span>This month <b id="slot-bank-month">$0.00 / $0.00</b></span>
             <span>At risk <b id="slot-bank-shortfall">$0.00</b></span>
           </span>
-          <button id="slot-bank-sweep-btn" class="slot-bank-sweep-btn" type="button">Mark swept</button>
+          <button id="slot-bank-sweep-btn" class="slot-bank-sweep-btn" type="button">Confirm reserve</button>
         </div>
         <div class="slot-cap-row">
           <span id="slot-daily-cap">Daily bank cap: $0.00 / $50.00</span>
@@ -1373,45 +1373,6 @@
         </div>
         <div class="slot-history" id="slot-history"></div>
       </section>
-      <section class="ev-calculator" id="ev-calculator">
-      <div class="ev-header">
-        <div>
-          <h3>EV Calculator</h3>
-          <p>Informational only. These results do not change task points, spins, rewards, or balances.</p>
-        </div>
-        <button id="ev-calculate" class="slot-small-btn primary" type="button">Calculate</button>
-      </div>
-      <div class="ev-grid">
-        <label>Category
-          <select id="ev-category">
-            <option value="work">Work</option>
-            <option value="financial">Financial</option>
-            <option value="personal">Personal</option>
-            <option value="health">Health</option>
-            <option value="relationship">Relationship</option>
-            <option value="learning">Learning</option>
-          </select>
-        </label>
-        <label>Time hours
-          <input id="ev-time" type="number" min="0" step="0.25" value="1">
-        </label>
-        <label>Energy
-          <input id="ev-energy" type="number" min="0" step="1" value="1">
-        </label>
-        <label>Attention
-          <input id="ev-attention" type="number" min="0" step="1" value="1">
-        </label>
-        <label>Money risk
-          <input id="ev-money" type="number" min="0" step="1" value="0">
-        </label>
-      </div>
-      <div class="ev-outcomes-head">
-        <span>Outcome</span><span>Probability %</span><span>Value units</span><span></span>
-      </div>
-      <div class="ev-outcomes" id="ev-outcomes"></div>
-      <button id="ev-add-outcome" class="slot-small-btn" type="button">Add outcome</button>
-      <div class="ev-result" id="ev-result"></div>
-    </section>
     </div>
   </div>
 </div>
@@ -1451,7 +1412,6 @@
 <script src="/public/js/pet-home.js"></script>
 <script src="/public/js/todo-share.js"></script>
 <script src="/public/js/slots.js"></script>
-<script src="/public/js/ev-calculator.js"></script>
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script>

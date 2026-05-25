@@ -1,24 +1,772 @@
 {
   "date": "2026-05-20",
-  "last_updated_at": "2026-05-08T12:01:03.686Z",
-  "last_updated_by": "skeleton",
-  "watermarks": {},
+  "last_updated_at": "2026-05-20T04:48:46Z",
+  "last_updated_by": "codex-sweep-suite-live-refresh",
+  "watermarks": {
+    "gmail": {
+      "last_at": "2026-05-19T16:10:55Z",
+      "last_id": "gmail:19e41012fa56f73e"
+    },
+    "slack": {
+      "mentions": {
+        "last_at": "2026-05-20T04:47:24Z",
+        "last_id": "slack:mentions:none:2026-05-20"
+      },
+      "dms": {
+        "last_at": "2026-05-20T04:47:24Z",
+        "last_id": "slack:dms:none:2026-05-20"
+      }
+    },
+    "calendar": {
+      "last_at": "2026-05-20T04:47:24Z",
+      "last_id": "calendar:refresh:2026-05-20"
+    }
+  },
   "triage": {
-    "open_items": [],
+    "open_items": [
+      {
+        "id": "gmail:19e2267bf753c870",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e2267bf753c870",
+        "title": "Greenville Theatre: Summer Dance Intensives registration",
+        "received_at": "2026-05-13T17:34:41Z",
+        "priority": "high",
+        "escalation": 0,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "seen_count": 1,
+        "stale": true
+      },
+      {
+        "id": "gmail:19e2199e6a6f8c18",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e2199e6a6f8c18",
+        "title": "Canva collaboration promo",
+        "received_at": "2026-05-13T13:49:54Z",
+        "priority": "high",
+        "escalation": 0,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "seen_count": 1,
+        "stale": true
+      },
+      {
+        "id": "gmail:19e21513d0af4844",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e21513d0af4844",
+        "title": "Men's Wearhouse spring sale",
+        "received_at": "2026-05-13T12:30:32Z",
+        "priority": "high",
+        "escalation": 0,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "seen_count": 1,
+        "stale": true
+      },
+      {
+        "id": "gmail:19e20c1b4a0e56a9",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e20c1b4a0e56a9",
+        "title": "Morning Brew: Too hot to handle",
+        "received_at": "2026-05-13T09:35:23Z",
+        "priority": "high",
+        "escalation": 0,
+        "first_seen_at": "2026-05-14T03:23:03Z",
+        "seen_count": 1,
+        "stale": true
+      },
+      {
+        "id": "gmail:19e41012fa56f73e",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e41012fa56f73e",
+        "title": "Your Passkey is ready to use",
+        "received_at": "2026-05-19T16:10:55Z",
+        "priority": "medium",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T00:31:00Z",
+        "seen_count": 4,
+        "snippet": "You can now use Passkeys to set up two-factor authentication for your account.",
+        "from": "Gusto gustonoreply@gusto.com"
+      },
+      {
+        "id": "slack:dm:D04Q9CT9DT4:1779223206.233409",
+        "type": "slack",
+        "sub_type": "dm",
+        "source_ref": "https://cleverrealestate.slack.com/archives/D04Q9CT9DT4/p1779223206233409",
+        "title": "DM with Ben Mizes: this is going to be fire",
+        "received_at": "2026-05-19T20:40:06Z",
+        "priority": "normal",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T00:32:00Z",
+        "seen_count": 1
+      },
+      {
+        "id": "slack:dm:D09694UPEKC:1779222617.013329",
+        "type": "slack",
+        "sub_type": "dm",
+        "source_ref": "https://cleverrealestate.slack.com/archives/D09694UPEKC/p1779222617013329",
+        "title": "DM with Mike Provinzino: Hey, I will be there in just a couple of minutes.",
+        "received_at": "2026-05-19T20:30:17Z",
+        "priority": "normal",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T00:32:00Z",
+        "seen_count": 1
+      },
+      {
+        "id": "slack:mention:D04Q9CT9DT4:1779216911.706359",
+        "type": "slack",
+        "sub_type": "mention",
+        "source_ref": "https://cleverrealestate.slack.com/archives/D04Q9CT9DT4/p1779216911706359",
+        "title": "DM with Ben Mizes: when will you have draft ready?",
+        "received_at": "2026-05-19T18:55:11Z",
+        "priority": "normal",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T00:32:00Z",
+        "seen_count": 1
+      },
+      {
+        "id": "slack:mention:D09694UPEKC:1779213155.655519",
+        "type": "slack",
+        "sub_type": "mention",
+        "source_ref": "https://cleverrealestate.slack.com/archives/D09694UPEKC/p1779213155655519",
+        "title": "DM with Mike Provinzino: Question about exporting the investor portal update workflow.",
+        "received_at": "2026-05-19T17:52:35Z",
+        "priority": "normal",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T00:32:00Z",
+        "seen_count": 1
+      },
+      {
+        "id": "gmail:19e40204f74aa895",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e40204f74aa895",
+        "title": "Your Duke Energy statement is ready",
+        "received_at": "2026-05-19T12:05:00Z",
+        "priority": "normal",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T02:52:18Z",
+        "seen_count": 2,
+        "snippet": "Your bill is ready to view and pay.",
+        "from": "Duke Energy Paperless Billing dukeenergypaperlessbilling@paperless.dukeenergy.com"
+      },
+      {
+        "id": "gmail:19e3f98332d677dd",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e3f98332d677dd",
+        "title": "Morning Brew: Elon loses it",
+        "received_at": "2026-05-19T09:21:22Z",
+        "priority": "normal",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T02:52:18Z",
+        "seen_count": 2,
+        "snippet": "Musk's case against OpenAI got tossed.",
+        "from": "Morning Brew crew@morningbrew.com"
+      },
+      {
+        "id": "gmail:19e4062fc755d2ad",
+        "type": "email",
+        "source_ref": "https://mail.google.com/mail/#all/19e4062fc755d2ad",
+        "title": "Flash Sale up to 50% OFF",
+        "received_at": "2026-05-19T13:18:09Z",
+        "priority": "normal",
+        "escalation": 0,
+        "first_seen_at": "2026-05-20T02:52:18Z",
+        "seen_count": 2,
+        "snippet": "Priced for any budget, fit for every moment. Do not wait to snap up these savings.",
+        "from": "Men's Wearhouse menswearhouse@imktg.menswearhouse.com"
+      }
+    ],
     "resolved_items": [],
-    "cycle_count": 0
+    "cycle_count": 14,
+    "deleted_items": [
+      {
+        "id": "gmail:19e4062fc755d2ad",
+        "title": "Flash Sale up to 50% OFF",
+        "source_ref": "https://mail.google.com/mail/#all/19e4062fc755d2ad",
+        "deleted_at": "2026-05-20T04:25:05.690Z",
+        "deleted_by": "user"
+      }
+    ]
   },
   "completions": {
     "tasks": []
+  },
+  "notifications": [
+    {
+      "id": "sweep-suite:2026-05-20:date-corrected-live-reader-summary",
+      "type": "source_readiness",
+      "title": "Full Sweep Suite reader pass for Wednesday",
+      "body": "Corrected tomorrow target to Wednesday, May 20, 2026. Calendar/Gmail/Slack live readers ran through connector-backed normalization. Calendar found Drive to Furman, Darts at Furman, and Poker Night for Wednesday. Gmail saw four unread/starred items and added/updated them in triage. Slack returned no DMs or mentions; keyword alerts remain skipped because no keywords are configured.",
+      "priority": "medium",
+      "created_at": "2026-05-20T03:08:00Z"
+    },
+    {
+      "id": "sweep-suite:2026-05-20:live-reader-refresh",
+      "type": "sweep_suite_summary",
+      "title": "Sweep Suite refreshed for Wednesday",
+      "body": "Live reader pass refreshed Gmail, Slack, and primary Google Calendar for Wednesday, May 20, 2026. Gmail re-saw one unread item, Slack had no new DMs or mentions, and primary Calendar refreshed 10 upcoming events. Work calendar drake.shadwell@movewithclever.com could not be read because the connector returned UNAUTHORIZED.",
+      "severity": "medium",
+      "created_at": "2026-05-20T04:48:46Z"
+    }
+  ],
+  "assessment": {
+    "day_theme": "Use the Furman day deliberately: land the morning commitments, process the unified triage queue, and make one durable reliability move before Poker Night.",
+    "hard_commitments": [
+      "All day: Work from Furman University",
+      "07:00-08:30 Drive to Furman and Setup",
+      "10:30-11:30 Darts at Furman",
+      "19:00-23:00 Poker Night"
+    ],
+    "must_do": [
+      "Review the Sweep triage queue without duplicating it into DCC tasks.",
+      "Clear or dismiss stale/high inbox items so the queue reflects real work.",
+      "Make one bounded DCC/Sweep Suite reliability move.",
+      "Close out before Poker Night so Thursday is not carrying mystery residue."
+    ],
+    "nice_to_do": [
+      "Handle Duke Energy and Gusto security/admin emails if they are still actionable.",
+      "Choose one project carryover after lunch: DCC, HYHH, or Audit Angel."
+    ],
+    "risks": [
+      "Furman logistics split the morning; do not overpack the pre-Darts window.",
+      "Gmail is noisy and promotion-heavy; triage first, schedule only what is truly actionable.",
+      "Poker Night makes late closeout unlikely, so protect the 16:15 planning block."
+    ]
+  },
+  "sweep": {
+    "source_health": [
+      {
+        "source": "calendar",
+        "status": "ok",
+        "items_seen": 10,
+        "last_run_at": "2026-05-20T02:53:18Z"
+      },
+      {
+        "source": "gmail",
+        "status": "ok",
+        "items_seen": 4,
+        "last_run_at": "2026-05-20T02:54:18Z"
+      },
+      {
+        "source": "slack",
+        "status": "ok",
+        "items_seen": 0,
+        "last_run_at": "2026-05-20T02:55:18Z"
+      }
+    ],
+    "readers": [
+      {
+        "skill": "read-calendar",
+        "status": "ok",
+        "last_run_at": "2026-05-20T04:48:46Z",
+        "items_seen": 10,
+        "items_added": 0,
+        "items_updated": 10
+      },
+      {
+        "skill": "read-gmail",
+        "status": "ok",
+        "last_run_at": "2026-05-20T04:48:46Z",
+        "items_seen": 1,
+        "items_added": 0,
+        "items_updated": 1
+      },
+      {
+        "skill": "read-slack",
+        "status": "ok",
+        "last_run_at": "2026-05-20T04:48:46Z",
+        "items_seen": 0,
+        "items_added": 0,
+        "items_updated": 0,
+        "alerts_skipped": true
+      },
+      {
+        "skill": "read-calendar:work",
+        "status": "error",
+        "last_run_at": "2026-05-20T04:48:46Z",
+        "code": "UNAUTHORIZED",
+        "calendar_id": "drake.shadwell@movewithclever.com"
+      }
+    ],
+    "open_item_count": 12,
+    "meetings_count": 12,
+    "last_run_at": "2026-05-20T04:48:46Z",
+    "last_run_status": "partial"
   },
   "schedule": {
     "working_hours": {
       "start": "07:00",
       "end": "17:30"
     },
-    "timeline": [],
-    "tasks_scheduled": [],
+    "timeline": [
+      {
+        "id": "cal-22842321500b4698bcaf0fa8c3165a20",
+        "type": "meeting",
+        "label": "Drive to Furman and Setup",
+        "description": "Calendar commitment. Travel/setup block from primary Google Calendar.",
+        "start": "2026-05-20T07:00:00-04:00",
+        "end": "2026-05-20T08:30:00-04:00",
+        "source": "calendar",
+        "source_id": "22842321500b4698bcaf0fa8c3165a20",
+        "category": "Travel",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=MjI4NDIzMjE1MDBiNDY5OGJjYWYwZmE4YzMxNjVhMjAgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "22842321500b4698bcaf0fa8c3165a20"
+      },
+      {
+        "id": "break-2026-05-20-0830",
+        "type": "free_time",
+        "label": "Furman setup buffer",
+        "description": "Get settled before opening the work queue.",
+        "start": "2026-05-20T08:30:00-04:00",
+        "end": "2026-05-20T09:00:00-04:00",
+        "source": "codex-full-sweep-suite",
+        "category": "Buffer",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-20-sweep-triage-review",
+        "type": "task",
+        "label": "Review Sweep triage queue",
+        "title": "Review Sweep triage queue",
+        "description": "Work from the unified triage queue. Decide what is real action, what is noise, and what deserves formal scheduling.",
+        "start": "2026-05-20T09:00:00-04:00",
+        "end": "2026-05-20T10:15:00-04:00",
+        "priority": "High",
+        "source": "sweep-suite",
+        "source_id": "sweep:triage-review:2026-05-20",
+        "category": "Ops",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-20-1015",
+        "type": "free_time",
+        "label": "Transition to Darts",
+        "description": "Short buffer before the calendar block.",
+        "start": "2026-05-20T10:15:00-04:00",
+        "end": "2026-05-20T10:30:00-04:00",
+        "source": "codex-full-sweep-suite",
+        "category": "Buffer",
+        "completed": false
+      },
+      {
+        "id": "cal-bd6f2b1781494c278696ba7e8b4d1227",
+        "type": "meeting",
+        "label": "Darts at Furman",
+        "description": "Calendar commitment.",
+        "start": "2026-05-20T10:30:00-04:00",
+        "end": "2026-05-20T11:30:00-04:00",
+        "source": "calendar",
+        "source_id": "bd6f2b1781494c278696ba7e8b4d1227",
+        "category": "Personal",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=YmQ2ZjJiMTc4MTQ5NGMyNzg2OTZiYTdlOGI0ZDEyMjcgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "bd6f2b1781494c278696ba7e8b4d1227"
+      },
+      {
+        "id": "break-2026-05-20-1130",
+        "type": "free_time",
+        "label": "Lunch / reset",
+        "description": "Recover after the morning movement before the work block.",
+        "start": "2026-05-20T11:30:00-04:00",
+        "end": "2026-05-20T12:30:00-04:00",
+        "source": "codex-full-sweep-suite",
+        "category": "Personal",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-20-dcc-sweep-hardening",
+        "type": "task",
+        "label": "DCC / Sweep Suite hardening block",
+        "title": "DCC / Sweep Suite hardening block",
+        "description": "Make one bounded reliability move after the reader and public-task queue changes. Keep it shippable.",
+        "start": "2026-05-20T12:30:00-04:00",
+        "end": "2026-05-20T14:00:00-04:00",
+        "priority": "High",
+        "source": "codex-full-sweep-suite",
+        "source_id": "dcc-sweep-hardening:2026-05-20",
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-20-admin-email-checks",
+        "type": "task",
+        "label": "Admin: bill/security checks",
+        "title": "Admin: bill/security checks",
+        "description": "Review Duke Energy statement and Gusto passkey/security email from the triage queue; dismiss anything non-actionable.",
+        "start": "2026-05-20T14:00:00-04:00",
+        "end": "2026-05-20T14:45:00-04:00",
+        "priority": "Medium",
+        "source": "sweep-suite",
+        "source_id": "admin-email-checks:2026-05-20",
+        "category": "Admin",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-20-project-carryover",
+        "type": "task",
+        "label": "Choose one project carryover and move it",
+        "title": "Choose one project carryover and move it",
+        "description": "Pick one: DCC reliability follow-through, HYHH backup-safe work, or Audit Angel QA. Bound the move to 90 minutes.",
+        "start": "2026-05-20T14:45:00-04:00",
+        "end": "2026-05-20T16:15:00-04:00",
+        "priority": "Medium",
+        "source": "codex-full-sweep-suite",
+        "source_id": "project-carryover:2026-05-20",
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-20-closeout",
+        "type": "task",
+        "label": "Closeout before Poker Night",
+        "title": "Closeout before Poker Night",
+        "description": "Record actuals, update triage decisions, and leave Thursday/Friday setup clear before Poker Night.",
+        "start": "2026-05-20T16:15:00-04:00",
+        "end": "2026-05-20T17:30:00-04:00",
+        "priority": "Medium",
+        "source": "codex-full-sweep-suite",
+        "source_id": "closeout:2026-05-20",
+        "category": "Planning",
+        "completed": false
+      },
+      {
+        "id": "cal-e71b1d59d33949878d5175c9a773f038",
+        "type": "meeting",
+        "label": "Poker Night",
+        "description": "Evening calendar commitment.",
+        "start": "2026-05-20T19:00:00-04:00",
+        "end": "2026-05-20T23:00:00-04:00",
+        "source": "calendar",
+        "source_id": "e71b1d59d33949878d5175c9a773f038",
+        "category": "Personal",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=ZTcxYjFkNTlkMzM5NDk4NzhkNTE3NWM5YTc3M2YwMzggb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "e71b1d59d33949878d5175c9a773f038"
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "task-2026-05-20-sweep-triage-review",
+        "title": "Review Sweep triage queue",
+        "start": "2026-05-20T09:00:00-04:00",
+        "end": "2026-05-20T10:15:00-04:00",
+        "priority": "High",
+        "source": "sweep-suite",
+        "source_id": "sweep:triage-review:2026-05-20"
+      },
+      {
+        "task_id": "task-2026-05-20-dcc-sweep-hardening",
+        "title": "DCC / Sweep Suite hardening block",
+        "start": "2026-05-20T12:30:00-04:00",
+        "end": "2026-05-20T14:00:00-04:00",
+        "priority": "High",
+        "source": "codex-full-sweep-suite",
+        "source_id": "dcc-sweep-hardening:2026-05-20"
+      },
+      {
+        "task_id": "task-2026-05-20-admin-email-checks",
+        "title": "Admin: bill/security checks",
+        "start": "2026-05-20T14:00:00-04:00",
+        "end": "2026-05-20T14:45:00-04:00",
+        "priority": "Medium",
+        "source": "sweep-suite",
+        "source_id": "admin-email-checks:2026-05-20"
+      },
+      {
+        "task_id": "task-2026-05-20-project-carryover",
+        "title": "Choose one project carryover and move it",
+        "start": "2026-05-20T14:45:00-04:00",
+        "end": "2026-05-20T16:15:00-04:00",
+        "priority": "Medium",
+        "source": "codex-full-sweep-suite",
+        "source_id": "project-carryover:2026-05-20"
+      },
+      {
+        "task_id": "task-2026-05-20-closeout",
+        "title": "Closeout before Poker Night",
+        "start": "2026-05-20T16:15:00-04:00",
+        "end": "2026-05-20T17:30:00-04:00",
+        "priority": "Medium",
+        "source": "codex-full-sweep-suite",
+        "source_id": "closeout:2026-05-20"
+      }
+    ],
     "tasks_couldnt_fit": [],
-    "stats": {}
-  }
+    "stats": {
+      "scheduled_tasks": 5,
+      "hard_commitments": 4,
+      "open_triage_items": 12,
+      "planned_minutes": 780
+    },
+    "blocks": [
+      {
+        "end": "10:00",
+        "name": "Morning Deep Work",
+        "start": "08:00",
+        "blockType": "work",
+        "id": "a50671bd-a117-4b01-8a60-441b0aa3b7e0",
+        "parent_id": null,
+        "sort_order": 0
+      },
+      {
+        "end": "11:00",
+        "name": "Admin & Email",
+        "start": "10:00",
+        "blockType": "work",
+        "id": "f3f70c8a-177a-407f-9f97-1918cfb7ea9e",
+        "parent_id": null,
+        "sort_order": 1
+      },
+      {
+        "end": "13:00",
+        "name": "Lunch",
+        "start": "12:00",
+        "blockType": "personal",
+        "id": "13eb0ad3-d193-484a-95e2-f58df8bd056c",
+        "parent_id": null,
+        "sort_order": 2
+      },
+      {
+        "end": "16:00",
+        "name": "Afternoon Focus",
+        "start": "13:00",
+        "blockType": "work",
+        "id": "ddcbb180-1a16-4d66-af21-7db0f2e882b1",
+        "parent_id": null,
+        "sort_order": 3
+      },
+      {
+        "end": "17:30",
+        "name": "Wind Down",
+        "start": "16:00",
+        "blockType": "work",
+        "id": "77d547ea-affa-4f1f-9290-72da73862baa",
+        "parent_id": null,
+        "sort_order": 4
+      }
+    ]
+  },
+  "mutations": [
+    {
+      "skill": "codex-full-sweep-suite",
+      "action": "build_tomorrow_schedule_date_corrected",
+      "at": "2026-05-20T03:08:00Z",
+      "target_date": "2026-05-20",
+      "correction": "User clarified tomorrow is Wednesday, May 20, 2026, not Thursday, May 21, 2026.",
+      "triage_items_projected": 12,
+      "timeline_items": 11
+    },
+    {
+      "skill": "codex-full-sweep-suite",
+      "action": "live-reader-refresh",
+      "at": "2026-05-20T04:48:46Z",
+      "target_date": "2026-05-20",
+      "triage_added": 1,
+      "triage_updated": 11,
+      "meetings_count": 12,
+      "work_calendar_error": {
+        "status": "error",
+        "code": "UNAUTHORIZED",
+        "calendar_id": "drake.shadwell@movewithclever.com"
+      }
+    }
+  ],
+  "meetings": [
+    {
+      "id": "a7428ab4aad742f6becd74d3b257aae4",
+      "event_id": "a7428ab4aad742f6becd74d3b257aae4",
+      "title": "Crossroads Coffee",
+      "start": "2026-05-19T11:00:00Z",
+      "end": "2026-05-19T12:30:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "Crossroads 4 Coffee and Tea, 112 E Standing Springs Rd, Simpsonville, SC 29680, USA",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=YTc0MjhhYjRhYWQ3NDJmNmJlY2Q3NGQzYjI1N2FhZTQgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt",
+      "prep_status": "pending",
+      "reviewed": false
+    },
+    {
+      "id": "b2237db8f5d64133a59d49f4b1abaeac",
+      "event_id": "b2237db8f5d64133a59d49f4b1abaeac",
+      "title": "Southside Tennis",
+      "start": "2026-05-19T22:30:00Z",
+      "end": "2026-05-20T01:00:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "Southside Park, 417 Baldwin Rd, Simpsonville, SC 29680, USA",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=YjIyMzdkYjhmNWQ2NDEzM2E1OWQ0OWY0YjFhYmFlYWMgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt",
+      "prep_status": "pending",
+      "reviewed": false
+    },
+    {
+      "id": "3db586753e674b5383af37eaa6cd0569",
+      "event_id": "3db586753e674b5383af37eaa6cd0569",
+      "title": "Work from Furman University",
+      "start": "2026-05-20T00:00:00Z",
+      "end": "2026-05-21T00:00:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=M2RiNTg2NzUzZTY3NGI1MzgzYWYzN2VhYTZjZDA1Njkgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "22842321500b4698bcaf0fa8c3165a20",
+      "event_id": "22842321500b4698bcaf0fa8c3165a20",
+      "title": "Drive to Furman and Setup (Claude with Extra Time)",
+      "start": "2026-05-20T11:00:00Z",
+      "end": "2026-05-20T12:30:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=MjI4NDIzMjE1MDBiNDY5OGJjYWYwZmE4YzMxNjVhMjAgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "bd6f2b1781494c278696ba7e8b4d1227",
+      "event_id": "bd6f2b1781494c278696ba7e8b4d1227",
+      "title": "Darts at Furman",
+      "start": "2026-05-20T14:30:00Z",
+      "end": "2026-05-20T15:30:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=YmQ2ZjJiMTc4MTQ5NGMyNzg2OTZiYTdlOGI0ZDEyMjcgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "e71b1d59d33949878d5175c9a773f038",
+      "event_id": "e71b1d59d33949878d5175c9a773f038",
+      "title": "Poker Night",
+      "start": "2026-05-20T23:00:00Z",
+      "end": "2026-05-21T03:00:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=ZTcxYjFkNTlkMzM5NDk4NzhkNTE3NWM5YTc3M2YwMzggb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "99ba88e21f8b49f28b17866fda4fef39",
+      "event_id": "99ba88e21f8b49f28b17866fda4fef39",
+      "title": "Drive to Norse Forged",
+      "start": "2026-05-21T11:00:00Z",
+      "end": "2026-05-21T12:30:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=OTliYTg4ZTIxZjhiNDlmMjhiMTc4NjZmZGE0ZmVmMzkgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "7kk599njvrh39vn83a4ql61883",
+      "event_id": "7kk599njvrh39vn83a4ql61883",
+      "title": "Norse Forged",
+      "start": "2026-05-22T00:00:00Z",
+      "end": "2026-05-25T00:00:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "44184 Cannon Rd, New London, NC 28127",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=N2trNTk5bmp2cmgzOXZuODNhNHFsNjE4ODMgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "m8nshgkhr0vsfdhbma5kvuc92c_20260522",
+      "event_id": "m8nshgkhr0vsfdhbma5kvuc92c_20260522",
+      "title": "Mama Bear's birthday",
+      "start": "2026-05-22T00:00:00Z",
+      "end": "2026-05-23T00:00:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=bThuc2hna2hyMHZzZmRoYm1hNWt2dWM5MmNfMjAyNjA1MjIgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "4knlkuhelntlv8c1sch1mgu0p5_20260531",
+      "event_id": "4knlkuhelntlv8c1sch1mgu0p5_20260531",
+      "title": "Payoff Credit Card(s)",
+      "start": "2026-05-31T00:00:00Z",
+      "end": "2026-06-01T00:00:00Z",
+      "attendees": [],
+      "description": "Payoff any and all credit card balances prior to month-end. Transfer from Savings to Checking the needed amount for expected expenses for the coming month.",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=NGtubGt1aGVsbnRsdjhjMXNjaDFtZ3UwcDVfMjAyNjA1MzEgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "1e3m0rgrh95quo6m88dit2qgf9",
+      "event_id": "1e3m0rgrh95quo6m88dit2qgf9",
+      "title": "St. Louis Onsite",
+      "start": "2026-06-01T00:00:00Z",
+      "end": "2026-06-05T00:00:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=MWUzbTByZ3JoOTVxdW82bTg4ZGl0MnFnZjkgb2ZmaWNpYWwuZHJha2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    },
+    {
+      "id": "cautd85c3fnkam7pf6jsirhj18_20260601",
+      "event_id": "cautd85c3fnkam7pf6jsirhj18_20260601",
+      "title": "Nick Cotton's birthday",
+      "start": "2026-06-01T00:00:00Z",
+      "end": "2026-06-02T00:00:00Z",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=Y2F1dGQ4NWMzZm5rYW03cGY2anNpcmhqMThfMjAyNjA2MDEgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+      "prep_status": "pending",
+      "reviewed": false,
+      "calendar_id": "primary",
+      "account_key": "default",
+      "account_email": ""
+    }
+  ]
 }

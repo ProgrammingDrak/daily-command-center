@@ -21,6 +21,11 @@
 .admin-title{font-size:13px;font-weight:700;line-height:1.35;margin-bottom:5px;overflow-wrap:anywhere}
 .admin-meta{display:flex;flex-wrap:wrap;gap:5px;color:var(--text-muted);font-size:11px}
 .admin-pill{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;padding:2px 7px;background:rgba(255,255,255,0.03);font-size:10px;font-weight:800;text-transform:uppercase;color:var(--text-muted)}
+.admin-login-head,.admin-login-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(130px,0.9fr) minmax(110px,0.9fr);gap:14px;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.05)}
+.admin-login-head{position:sticky;top:0;z-index:1;background:var(--card);color:var(--text-muted);font-size:10px;font-weight:800;text-transform:uppercase}
+.admin-login-row{font-size:12px}
+.admin-login-user{font-size:13px;font-weight:800;overflow-wrap:anywhere}
+.admin-login-time,.admin-login-origin{color:var(--text-muted);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .admin-message{font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
 .admin-empty,.admin-error{padding:18px;color:var(--text-muted);font-size:13px}
 .admin-error{color:var(--red)}
@@ -34,4 +39,6 @@
 @media (max-width:560px){
   .admin-metrics{grid-template-columns:1fr}
   .admin-row{grid-template-columns:1fr;gap:6px}
+  .admin-login-head{display:none}
+  .admin-login-row{grid-template-columns:1fr;gap:4px}
 }

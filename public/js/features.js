@@ -953,7 +953,7 @@ function buildTaskQueuePanel(){
       return '<div class="tqp-triage-card">'+
         '<span class="tqp-tri-dot" style="background:'+dotColor+'"></span>'+
         '<span class="tqp-tri-title">'+item.title+'</span>'+
-        '<span class="tqp-tri-meta">'+(item.priority||"")+'</span>'+
+        '<span class="tqp-tri-meta">'+[item.priority||"", item.queue_label||item.source_label||""].filter(Boolean).join(" · ")+'</span>'+
       '</div>';
     }).join('');
   }

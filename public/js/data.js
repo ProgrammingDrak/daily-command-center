@@ -82,7 +82,10 @@ window.__SECOND_BRAIN__ = {};
 window.__SECOND_BRAIN_GLOBALS__ = {};
 
 function isRetiredCalendarStateItem(item) {
-  return !!item && (item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id || !!item.gcal_event_id);
+  if (!item) return false;
+  const isCalendarItem = item.source === "calendar" || item.source === "gcal" || !!item.gcal_calendar_id || !!item.gcal_event_id;
+  const explicitlyRetired = item.retired === true || item.deleted === true || item.status === "retired";
+  return isCalendarItem && explicitlyRetired;
 }
 
 function triageActionLink(item){
@@ -97,8 +100,10 @@ function triageActionLabel(item, link){
   if(value.includes("mail.google.com"))return "Open email";
   if(value.includes("slack.com/archives"))return "Open Slack";
   if(value.startsWith("file:"))return "Open file";
-  return value ? "Open source" : "";
+  if(value)return "Open source";
+  return "";
 }
+
 function transformState(state) {
   if (!state) return { sched: [], consider: [], bklog: [], triageItems: [], notifications: [] };
   const sched = [], consider = [], bklog = [], triageItems = [], notifications = [];
@@ -188,6 +193,7 @@ function transformState(state) {
       const actionLink=triageActionLink(item);
       const actionLabel=triageActionLabel(item, actionLink);
       triageItems.push({
+        ...item,
         id: item.id,
         type: item.type,
         title: item.title,
@@ -195,6 +201,18 @@ function transformState(state) {
         link: actionLink,
         link_label: actionLabel,
         action_label: actionLabel,
+        source_ref: item.source_ref || "",
+        evidence_link: item.evidence_link || "",
+        auto_task_url: item.auto_task_url || "",
+        draft_id: item.draft_id || "",
+        draft_type: item.draft_type || "",
+        draft_link: item.draft_link || item.draft_url || "",
+        draft_url: item.draft_url || item.draft_link || "",
+        draft_preview: item.draft_preview || "",
+        estimated_minutes: item.estimated_minutes || item.estimatedMinutes || item.duration_minutes || item.durationMinutes || item.durMin || null,
+        duration_minutes: item.duration_minutes || item.durationMinutes || item.estimated_minutes || item.estimatedMinutes || item.durMin || null,
+        durationMinutes: item.durationMinutes || item.duration_minutes || item.estimated_minutes || item.estimatedMinutes || item.durMin || null,
+        durMin: item.durMin || item.estimated_minutes || item.estimatedMinutes || item.duration_minutes || item.durationMinutes || null,
         priority: item.priority || "medium",
         escalation: item.escalation_level || "normal",
         cycleCount: item.cycle_count || 1,

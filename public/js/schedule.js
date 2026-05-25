@@ -363,18 +363,32 @@ async function commitDoneOnDate(id,dateStr){
 
 function awardSlotTaskCredit(ev,opts){
   if(!ev||!ev.id)return;
+  opts=opts||{};
+  const fallbackDate=(typeof viewDate!=="undefined"&&viewDate)||((__state&&__state.date)||new Date().toISOString().split("T")[0]);
+  const normalizedOpts={...opts,sourceDate:opts.sourceDate||opts.completionDate||fallbackDate,completedAt:opts.completedAt||new Date().toISOString()};
   if(window.PetHome&&typeof window.PetHome.awardTask==="function"){
-    window.PetHome.awardTask(ev,opts||{});
+    window.PetHome.awardTask(ev,normalizedOpts).catch(()=>{});
   }
   if(window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
-    window.SlotRewards.earnTaskCredit(ev,opts||{});
+    window.SlotRewards.earnTaskCredit(ev,normalizedOpts).catch(e=>{
+      if(!normalizedOpts.silent&&typeof showToast==="function")showToast("Points queued; retrying in the background","info");
+      console.warn("[points] award queued:",e&&e.message?e.message:e);
+    });
   } else {
     try {
       const key="pa-slot-award-queue";
       const rows=JSON.parse(localStorage.getItem(key)||"[]");
       if(Array.isArray(rows)){
-        rows.push({task:ev,options:opts||{},queuedAt:new Date().toISOString()});
-        localStorage.setItem(key,JSON.stringify(rows.slice(-100)));
+        const sourceKey=(normalizedOpts.sourceKey||normalizedOpts.source_key||normalizedOpts.sourceDate||"unknown")+":"+ev.id;
+        const filtered=rows.filter(row=>{
+          const rowTask=row&&row.task;
+          const rowOpts=(row&&row.options)||{};
+          const rowKey=(rowOpts.sourceKey||rowOpts.source_key||rowOpts.sourceDate||"unknown")+":"+(rowTask&&rowTask.id);
+          return rowKey!==sourceKey;
+        });
+        filtered.push({task:ev,options:normalizedOpts,queuedAt:new Date().toISOString()});
+        localStorage.setItem(key,JSON.stringify(filtered.slice(-100)));
+        if(!normalizedOpts.silent&&typeof showToast==="function")showToast("Points queued; retrying when rewards load","info");
       }
     } catch(e) {}
   }

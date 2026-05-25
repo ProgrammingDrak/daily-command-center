@@ -188,12 +188,14 @@ function deleteUpAction(id, idx) {
   if (actions[id]) { actions[id].splice(idx, 1); saveUpActions(actions); openUpcomingNotesDrawer(id, document.getElementById("notes-drawer-task-title").textContent); }
 }
 
-function showToast(msg) {
-  let t = document.getElementById("pa-toast");
-  if (!t) { t = document.createElement("div"); t.id = "pa-toast"; t.className = "toast"; document.body.appendChild(t); }
-  t.textContent = msg;
-  t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 3000);
+if (typeof window.showToast !== "function") {
+  window.showToast = function(msg) {
+    let t = document.getElementById("pa-toast");
+    if (!t) { t = document.createElement("div"); t.id = "pa-toast"; t.className = "toast"; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.classList.add("show");
+    setTimeout(() => t.classList.remove("show"), 3000);
+  };
 }
 
 function pushToDoc(mtgId, mtgTitle, docUrl, docTitle, mtgDate) {

@@ -668,6 +668,94 @@ function dismissTriage(triageId, note, trivial) {
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   buildTriage();
 }
+async function persistTriageDeletion(triageId, item) {
+  if (!__state || !__state.triage) return;
+  const nowIso = new Date().toISOString();
+  __state.triage.open_items = (__state.triage.open_items || []).filter(i => i.id !== triageId);
+  const deletedItems = __state.triage.deleted_items || [];
+  if (!deletedItems.some(i => i.id === triageId)) {
+    deletedItems.push({
+      id: triageId,
+      title: item && item.title,
+      source_ref: item && (item.source_ref || item.link || ""),
+      deleted_at: nowIso,
+      deleted_by: "user"
+    });
+  }
+  __state.triage.deleted_items = deletedItems;
+  __state.last_updated_at = nowIso;
+  __state.last_updated_by = "triage-delete";
+  try {
+    const res = await fetch("/api/ingest/day-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(__state)
+    });
+    if (!res.ok) throw new Error((await res.text()) || ("HTTP " + res.status));
+  } catch (e) {
+    if (typeof showToast === "function") showToast("Deleted locally, but save failed: " + e.message, "error");
+  }
+}
+async function persistTriageRestore(triageId, item, insertIndex) {
+  if (!__state || !__state.triage || !item) return;
+  const nowIso = new Date().toISOString();
+  const openItems = __state.triage.open_items || [];
+  if (!openItems.some(i => i.id === triageId)) {
+    const safeIndex = Math.max(0, Math.min(Number(insertIndex) || 0, openItems.length));
+    openItems.splice(safeIndex, 0, item);
+  }
+  __state.triage.open_items = openItems;
+  __state.triage.deleted_items = (__state.triage.deleted_items || []).filter(i => i.id !== triageId);
+  __state.last_updated_at = nowIso;
+  __state.last_updated_by = "triage-delete-undo";
+  try {
+    const res = await fetch("/api/ingest/day-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(__state)
+    });
+    if (!res.ok) throw new Error((await res.text()) || ("HTTP " + res.status));
+  } catch (e) {
+    if (typeof showToast === "function") showToast("Restored locally, but save failed: " + e.message, "error");
+  }
+}
+function deleteTriageItem(triageId) {
+  const item = (INIT_TRIAGE || []).find(i => i.id === triageId);
+  const originalIndex = Math.max(0, (INIT_TRIAGE || []).findIndex(i => i.id === triageId));
+  const dismissed = loadDismissed();
+  const previousDismissed = dismissed[triageId];
+  const scheduledTriage = loadTriageScheduled();
+  const previousScheduled = scheduledTriage[triageId];
+  INIT_TRIAGE = (INIT_TRIAGE || []).filter(i => i.id !== triageId);
+  if (__data && __data.triageItems) __data.triageItems = INIT_TRIAGE;
+  if (dismissed[triageId]) { delete dismissed[triageId]; saveDismissed(dismissed); }
+  if (scheduledTriage[triageId]) { delete scheduledTriage[triageId]; saveTriageScheduled(scheduledTriage); }
+  const deletePersist = persistTriageDeletion(triageId, item);
+  if (typeof showToast === "function") {
+    showToast("Triage item deleted", "success", 8000, {
+      label: "Undo",
+      onClick: async () => {
+        await deletePersist.catch(() => {});
+        if (item && !(INIT_TRIAGE || []).some(i => i.id === triageId)) {
+          INIT_TRIAGE.splice(Math.min(originalIndex, INIT_TRIAGE.length), 0, item);
+        }
+        if (__data && __data.triageItems) __data.triageItems = INIT_TRIAGE;
+        const nextDismissed = loadDismissed();
+        if (previousDismissed) { nextDismissed[triageId] = previousDismissed; saveDismissed(nextDismissed); }
+        const nextScheduled = loadTriageScheduled();
+        if (previousScheduled) { nextScheduled[triageId] = previousScheduled; saveTriageScheduled(nextScheduled); }
+        await persistTriageRestore(triageId, item, originalIndex);
+        if (typeof buildScheduleTriage === "function") buildScheduleTriage();
+        buildTriage();
+        if (typeof showToast === "function") showToast("Triage item restored", "success", 2200);
+      }
+    });
+  }
+  if (typeof buildScheduleTriage === "function") buildScheduleTriage();
+  buildTriage();
+}
 
 // Wire up overflow modal
 document.getElementById("overflow-modal-close").addEventListener("click", closeOverflowModal);
@@ -817,6 +905,7 @@ const TRI_ICONS = {
   unanswered_dm: {cls:"tri-icon-dm", emoji:"\u{1F4AC}"},
   email_needs_response: {cls:"tri-icon-email", emoji:"\u{1F4E7}"},
   slack_mention: {cls:"tri-icon-mention", emoji:"\u{1F514}"},
+  public_task: {cls:"tri-icon-public", emoji:"+"},
 };
 function triIcon(type) {
   const t = TRI_ICONS[type] || {cls:"tri-icon-dm", emoji:"\u{2753}"};
@@ -839,6 +928,14 @@ function buildTriageCard(item) {
   const barColor = isDismissed ? "var(--green)" : (triTypeColors[item.type] || "#a78bfa");
   const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
+  const linkLabel = item.link_label || item.action_label || "Open";
+  const draftLink = item.draft_link || item.draft_url || "";
+  const draftLabel = item.draft_type === 'gmail' ? 'DRAFT' : 'MSG';
+  const draftChip = item.draft_id
+    ? (draftLink
+      ? '<a href="' + draftLink + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">REVIEW ' + draftLabel + '</a>'
+      : '<span style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700">' + draftLabel + '</span>')
+    : '';
   return '<div class="board-card' + (isDismissed ? ' board-card-done' : '') + '" data-tri-id="' + item.id + '" style="' + (isDismissed ? 'opacity:0.5' : '') + '">' +
     '<div class="bar" style="background:' + barColor + '"></div>' +
     '<div class="body">' +
@@ -848,9 +945,10 @@ function buildTriageCard(item) {
       '</div>' +
       '<div class="meta">' +
         '<span class="' + priCls + '">' + (item.priority || 'medium') + '</span>' +
-        (item.link ? '<a href="' + item.link + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">Open</a>' : '') +
+        (item.queue_label || item.source_label ? '<span>' + (item.queue_label || item.source_label) + '</span>' : '') +
+        (item.link ? '<a href="' + item.link + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">' + linkLabel + '</a>' : '') +
         (item.auto_task_url ? '<a href="' + item.auto_task_url + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a855f7);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
-        (item.draft_id ? '<span style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700">' + (item.draft_type === 'gmail' ? 'DRAFT' : 'MSG') + '</span>' : '') +
+        draftChip +
         '<span>' + ageParts.join(' \u00b7 ') + '</span>' +
         (isDismissed ? '<span style="color:var(--green)">\u2713 ' + (dismissed[item.id].trivial ? 'Dismissed' : dismissed[item.id].note || 'Resolved') + '</span>' : '') +
       '</div>' +
@@ -858,6 +956,7 @@ function buildTriageCard(item) {
     '</div>' +
     notesButton({id: item.id, title: item.title}) +
     '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
+    '<button class="tri-delete" data-triage-delete-id="' + item.id + '" title="Delete triage item">×</button>' +
     '<button class="tri-quick" data-dismiss-id="' + item.id + '" title="Quick complete">&#9889;</button>' +
   '</div>';
 }
@@ -999,12 +1098,13 @@ function buildScheduleTriageCard(item){
     '<div class="body">'+
       '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
       '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+'<span>'+ms(triageDuration(item))+'</span>'+
-        (item.link?'<a href="'+item.link+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">Open</a>':'')+
+        (item.link?'<a href="'+item.link+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+(item.link_label||item.action_label||"Open")+'</a>':'')+
       '</div>'+
       (item.summary?'<div class="schedule-triage-summary">'+item.summary+'</div>':'')+
     '</div>'+
     '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
     '<button class="add-btn schedule-triage-done" data-triage-id="'+item.id+'" data-triage-title="'+safeTitle+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
+    '<button class="add-btn schedule-triage-delete" data-triage-id="'+item.id+'" style="border-color:rgba(239,68,68,0.42);background:rgba(239,68,68,0.08);color:var(--red)">Delete</button>'+
     '<button class="tri-quick schedule-triage-quick" data-triage-id="'+item.id+'" title="Quick complete">&#9889;</button>'+
   '</div>';
 }
@@ -1032,6 +1132,9 @@ function buildScheduleTriage(){
       e.stopPropagation();
       openDoneModal(btn.dataset.triageId,btn.dataset.triageTitle,(noteText)=>dismissTriage(btn.dataset.triageId,noteText||"",false),null);
     });
+  });
+  el.querySelectorAll(".schedule-triage-delete").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();deleteTriageItem(btn.dataset.triageId);});
   });
   el.querySelectorAll(".schedule-triage-quick").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();dismissTriage(btn.dataset.triageId,"",false);});
@@ -1294,6 +1397,13 @@ function buildTriage() {
       e.stopPropagation();
       const id = btn.dataset.dismissId;
       dismissTriage(id, "", false);
+    });
+  });
+
+  document.querySelectorAll(".tri-delete").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      deleteTriageItem(btn.dataset.triageDeleteId);
     });
   });
 

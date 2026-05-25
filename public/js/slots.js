@@ -33,7 +33,7 @@
     miss: "No-prize outcome",
     free: "Free outcome",
     small_paid: "Money-cost jackpot",
-    bank_gated: "Jackpot Jar reward",
+    bank_gated: "Reward Reserve prize",
     sponsor: "Partner-sponsored reward",
     choice: "Choice reward",
     reroll: "Reroll outcome"
@@ -292,8 +292,8 @@
     }
     const bu = slotState.bankUsage || {};
     const constants = slotState.constants || {};
-    setText("slot-daily-cap", "Bank bonuses: " + money(bu.today || 0) + " today; " + money(bu.week || 0) + " this week");
-    setText("slot-weekly-cap", "Monthly Jackpot Jar: " + money(bu.month || 0) + " / " + money(bu.monthlyGoal || 0) + " filled; " + money(bu.monthlyRemaining || 0) + " still at risk");
+    setText("slot-daily-cap", "Bank Building: " + money(bu.today || 0) + " today; " + money(bu.week || 0) + " this week");
+    setText("slot-weekly-cap", "Monthly Discretionary Spending: " + money(bu.month || 0) + " / " + money(bu.monthlyGoal || 0) + " unlocked; " + money(bu.monthlyRemaining || 0) + " still locked");
     setText("slot-shortfall-line", "Shortfall consequence: " + (constants.shortfallPenalty || "Leftover goal amount gets redirected."));
     renderRewards();
     if(!isSpinning) renderHistory();
@@ -395,6 +395,11 @@
       }
     }
     writeAwardQueue(remaining);
+  }
+
+  async function syncCompletedTaskCredits(){
+    await flushTaskCreditQueue();
+    await reconcileCompletedTaskCredits();
   }
 
   function renderSettings(){
@@ -589,7 +594,7 @@
       const symbol = rewardSymbol(snap);
       const taskDrip = snap.source_type === "task_bank_drip";
       const screenBank = snap.source_type === "slot_screen_bank_builder";
-      const metaLabel = taskDrip ? "task bank drip" : screenBank ? "screen bank bonus" : "needs 3 in a row";
+      const metaLabel = taskDrip ? "task bank drip" : screenBank ? "Bank Building hit" : "needs 3 in a row";
       const bank = s.bank_delta_cents ? ' <span class="slot-history-bank">+' + money(s.bank_delta_cents) + '</span>' : '';
       const reserve = s.bank_reserved_cents ? ' <span class="slot-history-bank">reserve ' + money(s.bank_reserved_cents) + '</span>' : '';
       const title = miss ? "No prize" : (snap.title || "Reward");
@@ -597,7 +602,7 @@
         '<div><strong>' + esc(title) + '</strong>' + bank + reserve +
           '<div class="slot-history-meta">' + esc(symbol) + ' ' + esc(metaLabel) + ' · ' + esc(KIND_LABELS[snap.kind] || snap.kind || "") + ' · ' + new Date(s.created_at).toLocaleString() + '</div>' +
         '</div>' +
-        (pending && !bankBuilderPending ? '<button class="slot-mini primary slot-confirm" data-id="' + s.id + '">Confirm</button>' : '<span class="slot-status ' + (miss ? 'miss' : '') + '">' + esc(bankBuilderPending ? "sweep pending" : (miss ? "no prize" : s.status)) + '</span>') +
+        (pending && !bankBuilderPending ? '<button class="slot-mini primary slot-confirm" data-id="' + s.id + '">Confirm</button>' : '<span class="slot-status ' + (miss ? 'miss' : '') + '">' + esc(bankBuilderPending ? "reserve pending" : (miss ? "no prize" : s.status)) + '</span>') +
       '</div>';
     }).join("");
     el.querySelectorAll(".slot-confirm").forEach(btn => btn.addEventListener("click", () => confirmSpin(btn.dataset.id)));
@@ -1047,10 +1052,10 @@
     if(bankDelta > 0) {
       const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
       const cap = payout.capped ? " Bank cap trimmed the payout." : "";
-      return "Bank bonus paid " + money(bankDelta) + units + ". The light flowed into the piggy bank." + cap;
+      return "Bank Building paid " + money(bankDelta) + units + ". Funds moved into the Reward Reserve." + cap;
     }
     if(spinRow.status === "miss" || snap.kind === "miss") return "No reward this spin: No prize";
-    if(snap.kind === "bank_builder") return "Piggy Bank grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Sweep it into savings when you get a chance.";
+    if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
     if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
     return "Prize reveal: " + (snap.title || "Reward");
   }
@@ -1314,7 +1319,7 @@
     if(details) details.hidden = !bankDetailsOpen;
     if(sweepBtn){
       sweepBtn.disabled = pendingCents <= 0;
-      sweepBtn.textContent = pendingCents > 0 ? "Mark " + money(pendingCents) + " swept" : "No sweep pending";
+      sweepBtn.textContent = pendingCents > 0 ? "Confirm " + money(pendingCents) + " reserved" : "No reserve pending";
     }
     if(fill){
       const pct = monthlyGoal <= 0 ? 0 : Math.max(monthCents > 0 ? 8 : 0, Math.min(100, Math.round((monthCents / monthlyGoal) * 100)));
@@ -1368,7 +1373,7 @@
     const pending = (slotState && slotState.pendingBankDeposit) || {};
     const cents = pending.cents || 0;
     if(cents <= 0) return;
-    if(!confirm("I transferred " + money(cents) + " into the dedicated savings account. Mark it swept?")) return;
+    if(!confirm("I transferred " + money(cents) + " into the Reward Reserve. Confirm it?")) return;
     const btn = document.getElementById("slot-pending-deposit");
     if(btn) btn.classList.add("pop");
     try {
@@ -1567,10 +1572,13 @@
     loadSlotPetHome();
     loadSlots();
     flushTaskCreditQueue();
-    setTimeout(reconcileCompletedTaskCredits, 1500);
+    setTimeout(syncCompletedTaskCredits, 1500);
   }
 
-  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits };
+  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits };
   document.addEventListener("slot-changed", loadSlots);
+  window.addEventListener("dcc:data-ready", () => {
+    setTimeout(syncCompletedTaskCredits, 250);
+  });
   document.addEventListener("DOMContentLoaded", init);
 })();

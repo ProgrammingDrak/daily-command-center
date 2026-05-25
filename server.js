@@ -38,6 +38,12 @@ const LOCAL_AUTH_USERNAME = process.env.SEED_USERNAME || "drake";
 const LOCAL_AUTH_PASSWORD = process.env.SEED_PASSWORD || "clever123";
 const LOCAL_AUTH_USER_ID = Number(process.env.DCC_LOCAL_USER_ID || 1);
 const LOCAL_AUTH_WORKSPACE_ID = process.env.DCC_LOCAL_WORKSPACE_ID || `ws-${LOCAL_AUTH_USER_ID}`;
+const ADMIN_USERNAMES = new Set(
+  String(process.env.DCC_ADMIN_USERNAMES || process.env.ADMIN_USERNAMES || LOCAL_AUTH_USERNAME)
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean)
+);
 
 const PROJECT_DIR = __dirname;
 const DATA_DIR = path.join(PROJECT_DIR, "data");
@@ -108,7 +114,9 @@ function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.st
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
 function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === token : false; }
+function hasDccIngestToken(req) { return hasDccToken(req) || hasSweepWriteToken(req); }
 function isSweepBlockWrite(req) { return req.method === "POST" && req.path === "/api/blocks" && hasSweepWriteToken(req); }
+function isDccStateIngest(req) { return req.method === "POST" && req.path === "/api/ingest/day-state"; }
 function attachSweepServiceAuth(req) {
   const userId = Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 1);
   const workspaceId = req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${userId}`;
@@ -121,11 +129,20 @@ function getRequestOrigin(req) {
   const proxyIp = req.headers["cf-connecting-ip"] || req.headers["x-real-ip"] || forwardedFor;
   return String(proxyIp || req.ip || req.socket?.remoteAddress || "").slice(0, 80) || null;
 }
+function isAdminSession(req) {
+  return ADMIN_USERNAMES.has(String(req.session?.username || "").toLowerCase());
+}
+function requireAdmin(req, res, next) {
+  if (isAdminSession(req)) return next();
+  if (req.path.startsWith("/api/")) return res.status(403).json({ error: "Admin access required" });
+  return res.status(403).send("Admin access required");
+}
 
 app.use((req, res, next) => {
   if (AUTH_PUBLIC.has(req.path)) return next();
   if (isPublicRoute(req)) return next();
   if (isSweepBlockWrite(req)) { attachSweepServiceAuth(req); return next(); }
+  if (isDccStateIngest(req) && hasDccIngestToken(req)) { attachSweepServiceAuth(req); return next(); }
   if (DCC_ENDPOINTS.has(req.path) && (isLocalhost(req) || hasDccToken(req))) return next();
   if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
   next();
@@ -160,12 +177,15 @@ app.post("/api/auth/login", async (req, res) => {
     req.session.userId = LOCAL_AUTH_USER_ID;
     req.session.username = LOCAL_AUTH_USERNAME;
     req.session.workspaceId = LOCAL_AUTH_WORKSPACE_ID;
+    await recordLoginEvent(req, { userId: LOCAL_AUTH_USER_ID, username: LOCAL_AUTH_USERNAME, workspaceId: LOCAL_AUTH_WORKSPACE_ID });
     return res.json({ ok: true, username: LOCAL_AUTH_USERNAME, workspaceId: LOCAL_AUTH_WORKSPACE_ID, local: true });
   }
   try {
     const user = await auth.findUserByUsername(username);
     if (!user || !auth.verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
     req.session.userId = user.id; req.session.username = user.username; req.session.workspaceId = null;
+    const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id = $1 AND role = 'owner' LIMIT 1", [user.id]);
+    await recordLoginEvent(req, { userId: user.id, username: user.username, workspaceId: rows[0]?.workspace_id || null });
     res.json({ ok: true, username: user.username });
   } catch (e) {
     if (LOCAL_AUTH_ENABLED) return res.status(401).json({ error: "Invalid local username or password" });
@@ -180,6 +200,7 @@ app.post("/api/auth/register", async (req, res) => {
     const { username, password } = req.body || {};
     const result = await auth.registerUser({ username, password });
     req.session.userId = result.user.id; req.session.username = result.user.username; req.session.workspaceId = result.workspaceId;
+    await recordLoginEvent(req, { userId: result.user.id, username: result.user.username, workspaceId: result.workspaceId });
     res.status(201).json({ ok: true, username: result.user.username, workspaceId: result.workspaceId });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -235,9 +256,40 @@ async function ensureFeedbackTable() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_feedback_messages_workspace_created ON feedback_messages(workspace_id, created_at DESC)");
 }
 
-function pickActivityTitle(data) {
-  if (!data || typeof data !== "object") return null;
-  return data.title || data.name || data.label || data.text || data.taskTitle || data.date || null;
+async function ensureLoginEventsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS login_events (
+      id           SERIAL PRIMARY KEY,
+      workspace_id TEXT REFERENCES workspaces(id),
+      user_id      INTEGER REFERENCES users(id),
+      username     TEXT,
+      event_type   TEXT NOT NULL DEFAULT 'login',
+      ip_address   TEXT,
+      user_agent   TEXT,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query("CREATE INDEX IF NOT EXISTS idx_login_events_workspace_created ON login_events(workspace_id, created_at DESC)");
+}
+
+async function recordLoginEvent(req, { userId, username, workspaceId, eventType = "login" }) {
+  try {
+    await ensureLoginEventsTable();
+    await pool.query(
+      `INSERT INTO login_events (workspace_id, user_id, username, event_type, ip_address, user_agent)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        workspaceId || null,
+        userId || null,
+        username || null,
+        eventType,
+        getRequestOrigin(req),
+        String(req.headers["user-agent"] || "").slice(0, 500) || null,
+      ]
+    );
+  } catch (e) {
+    console.error("[auth] Could not record login event:", e.message);
+  }
 }
 
 async function getMeetingsFromDB(dateStr, userId, workspaceId) {
@@ -411,55 +463,33 @@ app.post("/api/feedback", async (req, res) => {
   }
 });
 
-app.get("/api/admin/activity", async (req, res) => {
+app.get("/api/admin/activity", requireAdmin, async (req, res) => {
   try {
     await ensureFeedbackTable();
+    await ensureLoginEventsTable();
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 80, 1), 200);
-    const ws = req.workspaceId || null;
-    const activityParams = ws ? [ws, limit] : [limit];
-    const activitySql = ws
-      ? `SELECT o.id, o.block_id, o.op_type, o.before_data, o.after_data, o.timestamp, b.type AS block_type, b.date, b.properties
-         FROM operations o
-         JOIN blocks b ON b.id = o.block_id
-         WHERE b.workspace_id = $1
-         ORDER BY o.timestamp DESC, o.id DESC
-         LIMIT $2`
-      : `SELECT o.id, o.block_id, o.op_type, o.before_data, o.after_data, o.timestamp, b.type AS block_type, b.date, b.properties
-         FROM operations o
-         JOIN blocks b ON b.id = o.block_id
-         ORDER BY o.timestamp DESC, o.id DESC
-         LIMIT $1`;
-    const feedbackParams = ws ? [ws, limit] : [limit];
-    const feedbackSql = ws
-      ? `SELECT id, workspace_id, user_id, message, page_path, created_at, resolved_at
-         FROM feedback_messages
-         WHERE workspace_id = $1
-         ORDER BY created_at DESC, id DESC
-         LIMIT $2`
-      : `SELECT id, workspace_id, user_id, message, page_path, created_at, resolved_at
-         FROM feedback_messages
-         ORDER BY created_at DESC, id DESC
-         LIMIT $1`;
+    const activitySql = `SELECT id, workspace_id, user_id, username, event_type, ip_address, user_agent, created_at
+       FROM login_events
+       ORDER BY created_at DESC, id DESC
+       LIMIT $1`;
+    const feedbackSql = `SELECT id, workspace_id, user_id, message, page_path, created_at, resolved_at
+       FROM feedback_messages
+       ORDER BY created_at DESC, id DESC
+       LIMIT $1`;
     const [{ rows: activityRows }, { rows: feedbackRows }] = await Promise.all([
-      pool.query(activitySql, activityParams),
-      pool.query(feedbackSql, feedbackParams),
+      pool.query(activitySql, [limit]),
+      pool.query(feedbackSql, [limit]),
     ]);
-    const activity = activityRows.map((row) => {
-      const after = typeof row.after_data === "string" ? JSON.parse(row.after_data) : row.after_data;
-      const before = typeof row.before_data === "string" ? JSON.parse(row.before_data) : row.before_data;
-      const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;
-      return {
-        id: row.id,
-        blockId: row.block_id,
-        opType: row.op_type,
-        timestamp: row.timestamp,
-        blockType: row.block_type,
-        date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : row.date,
-        title: pickActivityTitle(after) || pickActivityTitle(before) || pickActivityTitle(props) || row.block_id,
-      };
-    });
+    const activity = activityRows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      username: row.username,
+      workspaceId: row.workspace_id,
+      timestamp: row.created_at,
+      origin: row.ip_address || "Unknown",
+    }));
     res.json({
-      workspaceId: ws,
+      workspaceId: null,
       summary: {
         activityCount: activity.length,
         feedbackCount: feedbackRows.length,
@@ -483,16 +513,18 @@ app.post("/api/save-engram-index", (req, res) => { const body = req.body; body.s
 app.post("/api/ingest/day-state", async (req, res) => {
   const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
   const dayFile = getDayFilePath(incoming.date); const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
-  const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "clean_tidy", "orchestrator", "mutations", "completions", "personal"];
+  const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "clean_tidy", "orchestrator", "mutations", "completions", "personal", "meetings"];
   const USER_SECTIONS = ["done", "pushed", "deleted", "durChanges", "notes", "actions", "sessions", "mood", "reviewed", "subtasks"];
   const merged = { ...existing };
   for (const key of DCC_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }
   for (const key of USER_SECTIONS) { if (key in existing && !(key in incoming)) merged[key] = existing[key]; if (key in incoming && !(key in existing)) merged[key] = incoming[key]; }
   merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
-  delete merged.meetings; delete merged.meetings_tomorrow;
-  writeJSON(dayFile, merged); writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || [] });
-  try { await blockDB.saveDccState(incoming.date, merged, req.session.userId || null, req.workspaceId || req.headers["x-workspace-id"] || "ws-1"); } catch(e) { console.error("[dcc-state ingest] save failed:", e.message); }
-  broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, req.workspaceId || req.headers["x-workspace-id"]);
+  delete merged.meetings_tomorrow;
+  const ingestUserId = req.dccServiceAuth?.userId || req.session.userId || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
+  const ingestWorkspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || "ws-1";
+  writeJSON(dayFile, merged); writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || merged.meetings || [] });
+  try { await blockDB.saveDccState(incoming.date, merged, ingestUserId, ingestWorkspaceId); } catch(e) { console.error("[dcc-state ingest] save failed:", e.message); }
+  broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, ingestWorkspaceId);
   res.json({ ok: true, date: incoming.date });
 });
 
@@ -2433,7 +2465,7 @@ app.get("/pet/:shareSlug", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "
 app.get("/todo/:token", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "public-todo.html")); });
 app.use(express.static(PROJECT_DIR, { extensions: ["html"], etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 app.get("/", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "index.html")); });
-app.get("/admin", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
+app.get("/admin", requireAdmin, (req, res) => { res.sendFile(path.join(PROJECT_DIR, "admin.html")); });
 
 // ── Startup ──
 let defaultUserId = 1;
@@ -2483,6 +2515,7 @@ app.listen(PORT, async () => {
   try {
     await blockDB.ensureDccStateTable();
     await ensureFeedbackTable();
+    await ensureLoginEventsTable();
     const defaultUser = await auth.ensureDefaultUser();
     if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE dcc_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
     await blockDB.ensureWorkspacesForAllUsers();
