@@ -358,7 +358,7 @@
     coinPhysics.coins = [];
     const field = document.getElementById("slot-coin-field");
     if(field) field.remove();
-    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop,.slot-bank-link,.slot-bank-math-overlay").forEach(el => el.remove());
+    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-math-overlay").forEach(el => el.remove());
     document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
   }
 
@@ -866,17 +866,16 @@
     const payline = snap && Array.isArray(snap.screen_payline) ? snap.screen_payline : [];
     const status = spinRow && spinRow.status;
     const isMiss = status === "miss" || (snap && snap.kind === "miss");
+    const payout = (snap && snap.bank_screen_payout) || {};
+    if((spinRow && (spinRow.bank_delta_cents || 0) > 0) && Array.isArray(payout.positions)) {
+      return payout.positions;
+    }
     if(!isMiss && payline.length) return payline;
 
     const symbol = rewardSymbol(snap || {});
     if(!isMiss && board && board.length){
       const line = PAYLINES.find(candidate => candidate.every(i => board[i] === symbol));
       if(line) return line;
-    }
-
-    const payout = (snap && snap.bank_screen_payout) || {};
-    if((spinRow && (spinRow.bank_delta_cents || 0) > 0) && Array.isArray(payout.positions)) {
-      return payout.positions;
     }
     return [];
   }
@@ -906,26 +905,26 @@
     slotPlay("bankLine");
     const math = showBankMathOverlay(cells, payout, deltaCents);
     updateBankMathOverlay(math, "Bank tiles", bankUnitLine(payout.base_units || cells.length, 0, 0), bankTotalLine(payout, deltaCents, "base"));
-    await wait(360);
+    await wait(950);
 
     const horizontalGroups = Array.isArray(payout.horizontal_groups) ? payout.horizontal_groups : [];
-    const horizontalLinks = showBankLinks(horizontalGroups, reels, "row");
     horizontalGroups.flat().forEach(i => {
       if(reels[i]) reels[i].classList.add("bank-horizontal");
     });
     updateBankMathOverlay(math, "Row links", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, 0), bankTotalLine(payout, deltaCents, "horizontal"));
-    await wait(horizontalGroups.length ? 560 : 160);
+    const horizontalLinks = await playBankLightningGroups(horizontalGroups, reels, "row", "x2");
+    await wait(horizontalGroups.length ? 620 : 280);
 
     const verticalGroups = Array.isArray(payout.vertical_groups) ? payout.vertical_groups : [];
-    const verticalLinks = showBankLinks(verticalGroups, reels, "column");
     verticalGroups.flat().forEach(i => {
       if(reels[i]) reels[i].classList.add("bank-vertical");
     });
     updateBankMathOverlay(math, "Column links", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, payout.vertical_bonus_units || 0), bankTotalLine(payout, deltaCents, "vertical"));
-    await wait(verticalGroups.length ? 560 : 160);
+    const verticalLinks = await playBankLightningGroups(verticalGroups, reels, "column", "+1");
+    await wait(verticalGroups.length ? 620 : 280);
 
     updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
-    await wait(620);
+    await wait(1250);
 
     const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
     if(target) flyBankLights(cells, target);
@@ -1012,7 +1011,7 @@
     }, 360);
   }
 
-  function showBankLinks(groups, reels, tone){
+  async function playBankLightningGroups(groups, reels, tone, impactLabel){
     if(!isSlotsPageActive() || !Array.isArray(groups) || !groups.length) return [];
     const links = [];
     groups.forEach((group, groupIdx) => {
@@ -1034,12 +1033,71 @@
         link.style.top = y1 + "px";
         link.style.width = Math.sqrt(dx * dx + dy * dy) + "px";
         link.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
-        link.style.animationDelay = ((groupIdx + i) * 70) + "ms";
-        document.body.appendChild(link);
+        link.style.animationDelay = "0ms";
+        link.dataset.impactX = String((x1 + x2) / 2);
+        link.dataset.impactY = String((y1 + y2) / 2);
         links.push(link);
       }
     });
+    for(const link of links){
+      document.body.appendChild(link);
+      slotPlay("bankLine");
+      await wait(360);
+      showBankMultiplierPop(Number(link.dataset.impactX || 0), Number(link.dataset.impactY || 0), impactLabel, tone);
+      await wait(520);
+    }
     return links;
+  }
+
+  function showBankMultiplierPop(x, y, label, tone){
+    if(!isSlotsPageActive()) return;
+    const pop = document.createElement("span");
+    pop.className = "slot-bank-multiplier-pop " + tone;
+    pop.textContent = label;
+    pop.style.left = x + "px";
+    pop.style.top = y + "px";
+    document.body.appendChild(pop);
+    pop.addEventListener("animationend", () => pop.remove(), { once: true });
+  }
+
+  async function previewBankAnimationScenario(name){
+    const scenarios = {
+      base: {
+        board: ["BANK","STRAW","STICK","BRICK","BANK","TOOLS","HAT","STRAW","JACKPOT","HOUSE","STRAW","HOUSE","CARE","STICK","HOUSE"],
+        payout: { positions: [0,4], horizontal_groups: [], vertical_groups: [], base_cents: 22, base_units: 2, horizontal_bonus_units: 0, vertical_bonus_units: 0, units: 2, raw_cents: 44, cents: 44 }
+      },
+      row: {
+        board: ["BANK","BANK","BANK","STICK","REROLL","TOOLS","HAT","STRAW","JACKPOT","HOUSE","STRAW","HOUSE","CARE","STICK","HOUSE"],
+        payout: { positions: [0,1,2], horizontal_groups: [[0,1,2]], vertical_groups: [], base_cents: 22, base_units: 3, horizontal_bonus_units: 6, vertical_bonus_units: 0, units: 9, raw_cents: 198, cents: 198 }
+      },
+      column: {
+        board: ["BANK","STRAW","STICK","BRICK","REROLL","BANK","HAT","STRAW","JACKPOT","HOUSE","BANK","HOUSE","CARE","STICK","HOUSE"],
+        payout: { positions: [0,5,10], horizontal_groups: [], vertical_groups: [[0,5,10]], base_cents: 22, base_units: 3, horizontal_bonus_units: 0, vertical_bonus_units: 3, units: 6, raw_cents: 132, cents: 132 }
+      },
+      mixed: {
+        board: ["BANK","BANK","BANK","BRICK","REROLL","TOOLS","HAT","BANK","JACKPOT","HOUSE","STRAW","HOUSE","BANK","STICK","HOUSE"],
+        payout: { positions: [0,1,2,7,12], horizontal_groups: [[0,1,2]], vertical_groups: [[2,7,12]], base_cents: 22, base_units: 5, horizontal_bonus_units: 6, vertical_bonus_units: 3, units: 14, raw_cents: 308, cents: 308 }
+      },
+      capped: {
+        board: ["BANK","BANK","BANK","BANK","BANK","TOOLS","HAT","BANK","JACKPOT","HOUSE","STRAW","HOUSE","BANK","STICK","HOUSE"],
+        payout: { positions: [0,1,2,3,4,7,12], horizontal_groups: [[0,1,2,3,4]], vertical_groups: [[2,7,12]], base_cents: 22, base_units: 7, horizontal_bonus_units: 20, vertical_bonus_units: 3, units: 30, raw_cents: 660, cents: 500, capped: true }
+      }
+    };
+    const scenario = scenarios[name] || scenarios.mixed;
+    const reels = Array.from(document.querySelectorAll(".slot-cell"));
+    if(!reels.length) return null;
+    clearSlotCoinEffects();
+    clearResultHighlights();
+    reels.forEach((cell, idx) => {
+      setCell(cell, scenario.board[idx] || "STRAW");
+      cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical", "reveal", "spinning", "pulse", "stopped");
+      cell.classList.add("reveal");
+    });
+    const snap = { bank_screen_payout: scenario.payout, screen_board: scenario.board, kind: "bank_builder", source_type: "slot_screen_bank_builder" };
+    const spinRow = { id: Date.now(), status: "pending", bank_delta_cents: scenario.payout.cents };
+    await animateBankPayout(spinRow, snap, scenario.payout.cents);
+    highlightWinningCells(spinRow, snap);
+    return scenario.payout;
   }
 
   async function animateBankCoinCollection(cells, deltaCents){
@@ -1824,7 +1882,7 @@
     setTimeout(syncCompletedTaskCredits, 1500);
   }
 
-  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits };
+  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits, previewBankAnimationScenario };
   document.addEventListener("slot-changed", loadSlots);
   window.addEventListener("dcc:data-ready", () => {
     setTimeout(syncCompletedTaskCredits, 250);
