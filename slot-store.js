@@ -358,7 +358,7 @@ async function migrateAccountPointsV3(workspaceId, account) {
     `UPDATE slot_accounts
      SET point_balance = CASE
            WHEN NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v3_migrated_at')
-           THEN ROUND(point_balance * $2)::int
+           THEN ROUND(point_balance * $2::numeric)::int
            ELSE point_balance
          END,
          settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb,

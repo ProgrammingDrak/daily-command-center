@@ -212,6 +212,10 @@ test("getState migrates v2 spin cost to minute-based v3 spin cost", async () => 
   assert.equal(state.constants.spinCost, 25);
   assert.equal(state.account.settings.points_v3_old_spin_cost, 10);
   assert.equal(state.account.settings.points_v3_balance_multiplier, 2.5);
+  assert.ok(
+    mockPool.calls.some(call => String(call.sql).includes("ROUND(point_balance * $2::numeric)::int")),
+    "v3 balance migration casts the fractional multiplier to numeric for Postgres"
+  );
 });
 
 test("getState retires and omits legacy bank builder rewards", async () => {
