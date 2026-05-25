@@ -17,6 +17,7 @@
   let activeJackpotChoiceFilter = "any";
   let slotPetHome = null;
   let slotPetReactionTimer = null;
+  let slotRewardAnimationTimer = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
@@ -360,6 +361,24 @@
     if(field) field.remove();
     document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-piggy-add-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-math-overlay").forEach(el => el.remove());
     document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
+    clearSlotRewardEffects();
+  }
+
+  function clearSlotRewardEffects(){
+    if(slotRewardAnimationTimer){
+      clearTimeout(slotRewardAnimationTimer);
+      slotRewardAnimationTimer = null;
+    }
+    const machine = document.querySelector(".slots-machine");
+    if(machine){
+      machine.classList.remove("reward-bank", "reward-pledge", "reward-jackpot", "reward-choice", "reward-reroll", "reward-care", "reward-miss");
+    }
+    const avatar = document.getElementById("slot-pet-avatar");
+    if(avatar){
+      avatar.classList.remove("slot-pet-reward", "slot-pet-reward-bank", "slot-pet-reward-pledge", "slot-pet-reward-jackpot", "slot-pet-reward-choice", "slot-pet-reward-reroll", "slot-pet-reward-care", "slot-pet-reward-miss");
+    }
+    document.querySelectorAll(".slot-cell.reward-focus").forEach(cell => cell.classList.remove("reward-focus"));
+    document.querySelectorAll(".slot-reward-burst,.slot-reward-token,.slot-reward-beam,.slot-reward-caption,.slot-pet-trail").forEach(el => el.remove());
   }
 
   window.clearSlotCoinEffects = clearSlotCoinEffects;
@@ -758,6 +777,7 @@
         else addPendingDeposit(spinRow.bank_delta_cents || 0);
       }
       highlightWinningCells(spinRow, snap);
+      animateRewardReveal(spinRow, snap);
       setResult(resultText(spinRow, snap));
       if((spinRow.bank_delta_cents || 0) > 0) {
         slotPlay("win");
@@ -891,6 +911,140 @@
     positions.forEach(i => {
       if(reels[i]) reels[i].classList.add("win-hit");
     });
+  }
+
+  function rewardAnimationKind(spinRow, snap){
+    const payout = (snap && snap.bank_screen_payout) || {};
+    const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || payout.cents || 0;
+    const status = spinRow && spinRow.status;
+    const kind = snap && snap.kind;
+    if(bankDelta > 0 || kind === "bank_builder" || (snap && snap.source_type === "slot_screen_bank_builder")) return "bank";
+    if(status === "miss" || kind === "miss") return "miss";
+    if(kind === "sponsor") return "pledge";
+    if(kind === "choice") return "choice";
+    if(kind === "reroll") return "reroll";
+    if((snap && snap.requires_jackpot_choice) || isJackpotReward(snap || {})) return "jackpot";
+    return "care";
+  }
+
+  function rewardAnimationConfig(kind, spinRow, snap){
+    const title = (snap && snap.title) || "";
+    const jackpotLabel = (snap && snap.requires_jackpot_choice) ? "Pick a prize" : "Jackpot";
+    const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || ((snap && snap.bank_screen_payout && snap.bank_screen_payout.cents) || 0);
+    const configs = {
+      bank: { caption: bankDelta > 0 ? "+" + money(bankDelta) + " Reserve" : "Reserve up", tokens: ["BANK", "+$", "+$"], beams: 5 },
+      pledge: { caption: title ? "Pledge: " + title : "Pledge hit", tokens: ["PLEDGE", "PARTNER", "SIGNED"], beams: 4 },
+      jackpot: { caption: title || jackpotLabel, tokens: ["JACKPOT", "UNLOCK", "PRIZE"], beams: 6 },
+      choice: { caption: "Pick your prize", tokens: ["PICK", "1", "2", "3"], beams: 3 },
+      reroll: { caption: "Reroll charged", tokens: ["REROLL", "AGAIN", "SPIN"], beams: 4 },
+      care: { caption: title || "Reward hit", tokens: ["CARE", "WIN", "READY"], beams: 4 },
+      miss: { caption: "Almost", tokens: ["MISS", "NEXT", "TRY"], beams: 2 }
+    };
+    return configs[kind] || configs.care;
+  }
+
+  function animateRewardReveal(spinRow, snap){
+    if(!isSlotsPageActive()) return null;
+    const kind = rewardAnimationKind(spinRow || {}, snap || {});
+    const config = rewardAnimationConfig(kind, spinRow || {}, snap || {});
+    const machine = document.querySelector(".slots-machine");
+    const frame = document.querySelector(".slot-reels-frame");
+    const reels = Array.from(document.querySelectorAll(".slot-cell"));
+    if(!frame || !reels.length) return null;
+
+    clearSlotRewardEffects();
+    if(machine) machine.classList.add("reward-" + kind);
+    const positions = winningPositions(spinRow || {}, snap || {});
+    const cells = (positions.length ? positions : [2, 7, 12]).map(i => reels[i]).filter(Boolean);
+    cells.forEach(cell => cell.classList.add("reward-focus"));
+    triggerPetRewardAnimation(kind);
+    const caption = showRewardCaption(frame, kind, config.caption);
+    const tokens = spawnRewardTokens(cells, kind, config.tokens);
+    const beams = spawnRewardBeams(kind, cells, config.beams);
+    slotRewardAnimationTimer = setTimeout(clearSlotRewardEffects, kind === "miss" ? 1900 : 3100);
+    return { kind, caption, tokens, beams };
+  }
+
+  function triggerPetRewardAnimation(kind){
+    const avatar = document.getElementById("slot-pet-avatar");
+    const companion = document.getElementById("slot-pet-companion");
+    if(!avatar) return;
+    avatar.classList.remove("slot-pet-reward", "slot-pet-reward-bank", "slot-pet-reward-pledge", "slot-pet-reward-jackpot", "slot-pet-reward-choice", "slot-pet-reward-reroll", "slot-pet-reward-care", "slot-pet-reward-miss");
+    void avatar.offsetWidth;
+    avatar.classList.add("slot-pet-reward", "slot-pet-reward-" + kind);
+    if(companion) spawnPetTrail(companion, kind);
+  }
+
+  function showRewardCaption(frame, kind, text){
+    const rect = frame.getBoundingClientRect();
+    const caption = document.createElement("div");
+    caption.className = "slot-reward-caption " + kind;
+    caption.textContent = text || "Reward hit";
+    caption.style.left = (rect.left + rect.width / 2) + "px";
+    caption.style.top = (rect.top + 20) + "px";
+    document.body.appendChild(caption);
+    return caption;
+  }
+
+  function spawnRewardTokens(cells, kind, labels){
+    const tokens = [];
+    const sourceCells = cells.length ? cells : Array.from(document.querySelectorAll(".slot-cell")).slice(0, 3);
+    sourceCells.forEach((cell, cellIdx) => {
+      const rect = cell.getBoundingClientRect();
+      for(let i = 0; i < 3; i++){
+        const token = document.createElement("span");
+        token.className = "slot-reward-token " + kind;
+        token.textContent = labels[(cellIdx + i) % labels.length] || "WIN";
+        token.style.left = (rect.left + rect.width / 2) + "px";
+        token.style.top = (rect.top + rect.height / 2) + "px";
+        token.style.setProperty("--reward-dx", (((i - 1) * 32) + (cellIdx % 2 ? 20 : -20)) + "px");
+        token.style.setProperty("--reward-dy", (-70 - (i * 18) - (cellIdx * 5)) + "px");
+        token.style.animationDelay = ((cellIdx * 120) + (i * 80)) + "ms";
+        document.body.appendChild(token);
+        tokens.push(token);
+      }
+    });
+    return tokens;
+  }
+
+  function spawnRewardBeams(kind, cells, count){
+    const avatar = document.getElementById("slot-pet-avatar");
+    const beams = [];
+    if(!avatar || !cells.length || kind === "miss") return beams;
+    const petRect = avatar.getBoundingClientRect();
+    const px = petRect.left + petRect.width / 2;
+    const py = petRect.top + petRect.height / 2;
+    const max = Math.max(1, Math.min(count || 3, cells.length * 2));
+    for(let i = 0; i < max; i++){
+      const cell = cells[i % cells.length];
+      const rect = cell.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const dx = x - px;
+      const dy = y - py;
+      const beam = document.createElement("span");
+      beam.className = "slot-reward-beam " + kind;
+      beam.style.left = px + "px";
+      beam.style.top = py + "px";
+      beam.style.width = Math.sqrt(dx * dx + dy * dy) + "px";
+      beam.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
+      beam.style.animationDelay = (i * 135) + "ms";
+      document.body.appendChild(beam);
+      beams.push(beam);
+    }
+    return beams;
+  }
+
+  function spawnPetTrail(companion, kind){
+    const rect = companion.getBoundingClientRect();
+    for(let i = 0; i < 7; i++){
+      const dot = document.createElement("span");
+      dot.className = "slot-pet-trail " + kind;
+      dot.style.left = (rect.left + rect.width - 42 - (i * 7)) + "px";
+      dot.style.top = (rect.top + rect.height - 36 + ((i % 3) * 6)) + "px";
+      dot.style.animationDelay = (i * 70) + "ms";
+      document.body.appendChild(dot);
+    }
   }
 
   async function animateBankPayout(spinRow, snap, deltaCents){
@@ -1098,6 +1252,43 @@
     await animateBankPayout(spinRow, snap, scenario.payout.cents);
     highlightWinningCells(spinRow, snap);
     return scenario.payout;
+  }
+
+  async function previewRewardAnimationScenario(name){
+    const scenarios = {
+      bank: { kind: "bank_builder", status: "pending", symbol: "BANK", title: "Reserve boost", bank_delta_cents: 462, payout: { positions: [0, 1, 2, 7, 12], cents: 462 } },
+      pledge: { kind: "sponsor", status: "awarded", symbol: "PLEDGE", title: "Partner chooses a shared playlist night" },
+      jackpot: { kind: "bank_gated", status: "pending", symbol: "JACKPOT", title: "Fancy dinner night", requires_jackpot_choice: true },
+      choice: { kind: "choice", status: "pending", symbol: "PICK", title: "Choose one of three rewards" },
+      reroll: { kind: "reroll", status: "awarded", symbol: "REROLL", title: "Extra spin" },
+      care: { kind: "free", status: "awarded", symbol: "CARE", title: "Care package" },
+      miss: { kind: "miss", status: "miss", symbol: "MISS", title: "No prize" }
+    };
+    const scenario = scenarios[name] || scenarios.pledge;
+    const reels = Array.from(document.querySelectorAll(".slot-cell"));
+    if(!reels.length) return null;
+    clearSlotCoinEffects();
+    clearResultHighlights();
+    const seed = hashCode(scenario.kind + "|" + scenario.title);
+    const board = Array.from({ length: 15 }, (_, i) => FILLER_SYMBOLS[(seed + i * 4) % FILLER_SYMBOLS.length]);
+    const line = scenario.status === "miss" ? [1, 7, 13] : PAYLINES[seed % PAYLINES.length];
+    line.forEach(i => { board[i] = scenario.symbol; });
+    reels.forEach((cell, idx) => {
+      setCell(cell, board[idx] || "STRAW");
+      cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical", "reveal", "spinning", "pulse", "stopped", "win-hit", "reward-focus");
+      cell.classList.add("reveal");
+    });
+    const snap = {
+      kind: scenario.kind,
+      title: scenario.title,
+      screen_board: board,
+      screen_payline: scenario.status === "miss" ? [] : line,
+      requires_jackpot_choice: !!scenario.requires_jackpot_choice,
+      bank_screen_payout: scenario.payout || {}
+    };
+    const spinRow = { id: Date.now(), status: scenario.status, bank_delta_cents: scenario.bank_delta_cents || 0 };
+    highlightWinningCells(spinRow, snap);
+    return animateRewardReveal(spinRow, snap);
   }
 
   async function animateBankCoinCollection(cells, deltaCents){
@@ -1332,11 +1523,11 @@
 
   function rewardSymbol(reward){
     if(!reward || reward.kind === "miss") return "MISS";
-    if(isJackpotReward(reward)) return "JACKPOT";
     if(reward.kind === "bank_builder") return "BANK";
     if(reward.kind === "sponsor") return "PLEDGE";
     if(reward.kind === "choice") return "PICK";
     if(reward.kind === "reroll") return "REROLL";
+    if(isJackpotReward(reward)) return "JACKPOT";
     return "CARE";
   }
 
@@ -1882,7 +2073,7 @@
     setTimeout(syncCompletedTaskCredits, 1500);
   }
 
-  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits, previewBankAnimationScenario };
+  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits, previewBankAnimationScenario, previewRewardAnimationScenario };
   document.addEventListener("slot-changed", loadSlots);
   window.addEventListener("dcc:data-ready", () => {
     setTimeout(syncCompletedTaskCredits, 250);
