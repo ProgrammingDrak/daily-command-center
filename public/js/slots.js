@@ -18,6 +18,7 @@
   let slotPetHome = null;
   let slotPetReactionTimer = null;
   let slotRewardAnimationTimer = null;
+  let activeBankPetRunRestore = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
@@ -359,9 +360,17 @@
     coinPhysics.coins = [];
     const field = document.getElementById("slot-coin-field");
     if(field) field.remove();
-    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-bank-pet-runner,.slot-bank-pet-dust,.slot-bank-pet-money,.slot-bank-collect-pop,.slot-piggy-add-pop,.slot-bank-total-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-impact-spark,.slot-bank-math-overlay").forEach(el => el.remove());
+    restoreActiveBankPetRunner();
+    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-bank-pet-dust,.slot-bank-pet-money,.slot-bank-collect-pop,.slot-piggy-add-pop,.slot-bank-total-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-impact-spark,.slot-bank-math-overlay").forEach(el => el.remove());
     document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
     clearSlotRewardEffects();
+  }
+
+  function restoreActiveBankPetRunner(){
+    if(typeof activeBankPetRunRestore === "function") {
+      activeBankPetRunRestore();
+      activeBankPetRunRestore = null;
+    }
   }
 
   function clearSlotRewardEffects(){
@@ -1365,7 +1374,6 @@
     const reserve = centerPoint(targetRect);
     runner.style.left = start.x + "px";
     runner.style.top = start.y + "px";
-    document.body.appendChild(runner);
     slotPlay("sweep", { cents: deltaCents });
     await wait(40);
 
@@ -1384,17 +1392,54 @@
     showBankReserveTotalPop(target, deltaCents);
     runner.classList.add("depositing");
     await wait(220);
-    runner.classList.add("leaving");
-    setTimeout(() => runner.remove(), 300);
+    runner.classList.remove("carrying", "depositing");
+    const homeRect = runner.dataset.homeLeft ? {
+      left: Number(runner.dataset.homeLeft),
+      top: Number(runner.dataset.homeTop),
+      width: Number(runner.dataset.homeWidth),
+      height: Number(runner.dataset.homeHeight)
+    } : avatarRect;
+    await moveBankPetRunner(runner, centerPoint(homeRect), 260, ordered.length + 1);
+    restoreActiveBankPetRunner();
   }
 
   function makeBankPetRunner(avatar){
-    const runner = avatar.cloneNode(true);
-    runner.id = "";
-    runner.removeAttribute("data-mood");
-    runner.className = "slot-bank-pet-runner";
-    const color = avatar.style.getPropertyValue("--slot-pet-color");
-    if(color) runner.style.setProperty("--slot-pet-color", color);
+    restoreActiveBankPetRunner();
+    const runner = avatar;
+    const rect = runner.getBoundingClientRect();
+    const original = {
+      className: runner.className,
+      cssText: runner.style.cssText,
+      mood: runner.dataset.mood,
+      parent: runner.parentNode,
+      nextSibling: runner.nextSibling
+    };
+    runner.dataset.homeLeft = String(rect.left);
+    runner.dataset.homeTop = String(rect.top);
+    runner.dataset.homeWidth = String(rect.width);
+    runner.dataset.homeHeight = String(rect.height);
+    runner.style.left = (rect.left + rect.width / 2) + "px";
+    runner.style.top = (rect.top + rect.height / 2) + "px";
+    runner.style.width = rect.width + "px";
+    runner.style.height = rect.height + "px";
+    runner.style.margin = (-rect.height / 2) + "px 0 0 " + (-rect.width / 2) + "px";
+    runner.classList.add("slot-bank-pet-runner");
+    runner.classList.remove("slot-pet-reward-bank", "slot-pet-reward", "slot-pet-bump");
+    runner.dataset.mood = "idle";
+    activeBankPetRunRestore = () => {
+      runner.querySelectorAll(".slot-bank-pet-money").forEach(el => el.remove());
+      if(original.parent && runner.parentNode !== original.parent) {
+        original.parent.insertBefore(runner, original.nextSibling);
+      }
+      runner.className = original.className;
+      runner.style.cssText = original.cssText;
+      if(original.mood == null) runner.removeAttribute("data-mood");
+      else runner.dataset.mood = original.mood;
+      delete runner.dataset.homeLeft;
+      delete runner.dataset.homeTop;
+      delete runner.dataset.homeWidth;
+      delete runner.dataset.homeHeight;
+    };
     const money = document.createElement("span");
     money.className = "slot-bank-pet-money";
     money.textContent = "$";
