@@ -17,20 +17,19 @@
     text("activity-count", items.length + " shown");
     if (!list) return;
     if (!items.length) {
-      list.innerHTML = '<div class="admin-empty">No activity found yet.</div>';
+      list.innerHTML = '<div class="admin-empty">No logins found yet.</div>';
       return;
     }
-    list.innerHTML = items.map(function(item){
-      return '<article class="admin-row">' +
-        '<div class="admin-time">' + esc(fmtTime(item.timestamp)) + '</div>' +
-        '<div>' +
-          '<div class="admin-title">' + esc(item.title || item.blockId) + '</div>' +
-          '<div class="admin-meta">' +
-            '<span class="admin-pill">' + esc(item.opType) + '</span>' +
-            '<span>' + esc(item.blockType || "block") + '</span>' +
-            (item.date ? '<span>' + esc(item.date) + '</span>' : '') +
-          '</div>' +
-        '</div>' +
+    var header = '<div class="admin-login-head">' +
+      '<span>User</span>' +
+      '<span>Logged in</span>' +
+      '<span>From</span>' +
+    '</div>';
+    list.innerHTML = header + items.map(function(item){
+      return '<article class="admin-login-row">' +
+        '<div class="admin-login-user">' + esc(item.username || ("User #" + (item.userId || item.id))) + '</div>' +
+        '<div class="admin-login-time">' + esc(fmtTime(item.timestamp)) + '</div>' +
+        '<div class="admin-login-origin">' + esc(item.origin || item.ipAddress || "Unknown") + '</div>' +
       '</article>';
     }).join("");
   }

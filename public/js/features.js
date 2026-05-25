@@ -954,7 +954,7 @@ function buildTaskQueuePanel(){
       return '<div class="tqp-triage-card">'+
         '<span class="tqp-tri-dot" style="background:'+dotColor+'"></span>'+
         '<span class="tqp-tri-title">'+item.title+'</span>'+
-        '<span class="tqp-tri-meta">'+(item.priority||"")+'</span>'+
+        '<span class="tqp-tri-meta">'+[item.priority||"", item.queue_label||item.source_label||""].filter(Boolean).join(" · ")+'</span>'+
         '<button class="tqp-delete-btn" data-tqp-delete-tri="'+item.id+'" title="Delete triage item" aria-label="Delete triage item">'+
           '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'+
         '</button>'+

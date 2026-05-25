@@ -1,132 +1,74 @@
 [
   {
-    "id": "ikebhiij4drkn2va7fd08ngocf_20260401T130000Z",
-    "title": "The Bullpen! (BOD Standup)",
-    "start": "2026-04-01T09:00:00-04:00",
-    "end": "2026-04-01T09:15:00-04:00",
-    "attendees": ["michael.provinzino@movewithclever.com", "collins.okoye@movewithclever.com", "jay.watson@movewithclever.com", "arnold.mejica@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjA0MDFUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": "https://docs.google.com/document/d/1fbkpNeRulP3zmr_I-wwCN3-XTb5KPPCshgCWvbCMvt8/edit",
-    "linkedDocTitle": "Notes - The Bullpen! (BOD Standup)"
+    "id": "a7428ab4aad742f6becd74d3b257aae4",
+    "title": "Crossroads Coffee",
+    "start_local": "2026-05-19T11:00:00Z",
+    "end_local": "2026-05-19T12:30:00Z"
   },
   {
-    "id": "2h8qpfrlfmd5i97jvbqb2gll99_20260401T163000Z",
-    "title": "Offers - Sprint planning",
-    "start": "2026-04-01T12:30:00-04:00",
-    "end": "2026-04-01T13:30:00-04:00",
-    "attendees": ["ben@movewithclever.com", "michael.provinzino@movewithclever.com", "tim.stobbe@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=Mmg4cXBmcmxmbWQ1aTk3anZicWIyZ2xsOTlfMjAyNjA0MDFUMTYzMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
+    "id": "b2237db8f5d64133a59d49f4b1abaeac",
+    "title": "Southside Tennis",
+    "start_local": "2026-05-19T22:30:00Z",
+    "end_local": "2026-05-20T01:00:00Z"
   },
   {
-    "id": "2loq3l6udd1eteluuoubne8gma_20260401T170000Z",
-    "title": "Offers: Investor Network - Weekly",
-    "start": "2026-04-01T13:00:00-04:00",
-    "end": "2026-04-01T14:00:00-04:00",
-    "attendees": ["michael.provinzino@movewithclever.com", "ben@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=MmxvcTNsNnVkZDFldGVsdXVvdWJuZThnbWFfMjAyNjA0MDFUMTQ0NTAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
+    "id": "3db586753e674b5383af37eaa6cd0569",
+    "title": "Work from Furman University",
+    "start_local": "2026-05-20T00:00:00Z",
+    "end_local": "2026-05-21T00:00:00Z"
   },
   {
-    "id": "5q4l5uqj0khq5p76jqq6s5i76g_20260401T184500Z",
-    "title": "Drake/Collins",
-    "start": "2026-04-01T14:45:00-04:00",
-    "end": "2026-04-01T15:15:00-04:00",
-    "attendees": ["collins.okoye@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=NXE0bDV1cWowa2hxNXA3NmpxcTZzNWk3NmdfMjAyNjA0MDFUMTg0NTAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
+    "id": "22842321500b4698bcaf0fa8c3165a20",
+    "title": "Drive to Furman and Setup (Claude with Extra Time)",
+    "start_local": "2026-05-20T11:00:00Z",
+    "end_local": "2026-05-20T12:30:00Z"
   },
   {
-    "id": "4co2kjqm4fdbvjubnb7r7j6fvo_20260401T202500Z",
-    "title": "Eleanor / Drake - Coffee Chat",
-    "start": "2026-04-01T16:25:00-04:00",
-    "end": "2026-04-01T16:55:00-04:00",
-    "attendees": ["eleanor.beaton@movewithclever.com"],
-    "calUrl": null,
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
+    "id": "bd6f2b1781494c278696ba7e8b4d1227",
+    "title": "Darts at Furman",
+    "start_local": "2026-05-20T14:30:00Z",
+    "end_local": "2026-05-20T15:30:00Z"
   },
   {
-    "id": "ikebhiij4drkn2va7fd08ngocf_20260402T130000Z",
-    "title": "The Bullpen! (BOD Standup)",
-    "start": "2026-04-02T09:00:00-04:00",
-    "end": "2026-04-02T09:15:00-04:00",
-    "attendees": ["michael.provinzino@movewithclever.com", "collins.okoye@movewithclever.com", "jay.watson@movewithclever.com", "arnold.mejica@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjA0MDJUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": "https://docs.google.com/document/d/1fbkpNeRulP3zmr_I-wwCN3-XTb5KPPCshgCWvbCMvt8/edit",
-    "linkedDocTitle": "Notes - The Bullpen! (BOD Standup)"
+    "id": "e71b1d59d33949878d5175c9a773f038",
+    "title": "Poker Night",
+    "start_local": "2026-05-20T23:00:00Z",
+    "end_local": "2026-05-21T03:00:00Z"
   },
   {
-    "id": "homeward_weekly_20260402",
-    "title": "Clever <> Homeward Weekly Meeting",
-    "start": "2026-04-02T16:00:00-04:00",
-    "end": "2026-04-02T17:00:00-04:00",
-    "attendees": [],
-    "calUrl": null,
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
+    "id": "99ba88e21f8b49f28b17866fda4fef39",
+    "title": "Drive to Norse Forged",
+    "start_local": "2026-05-21T11:00:00Z",
+    "end_local": "2026-05-21T12:30:00Z"
   },
   {
-    "id": "ikebhiij4drkn2va7fd08ngocf_20260403T130000Z",
-    "title": "The Bullpen! (BOD Standup)",
-    "start": "2026-04-03T09:00:00-04:00",
-    "end": "2026-04-03T09:15:00-04:00",
-    "attendees": ["michael.provinzino@movewithclever.com", "collins.okoye@movewithclever.com", "jay.watson@movewithclever.com", "arnold.mejica@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjA0MDNUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": "https://docs.google.com/document/d/1fbkpNeRulP3zmr_I-wwCN3-XTb5KPPCshgCWvbCMvt8/edit",
-    "linkedDocTitle": "Notes - The Bullpen! (BOD Standup)"
+    "id": "7kk599njvrh39vn83a4ql61883",
+    "title": "Norse Forged",
+    "start_local": "2026-05-22T00:00:00Z",
+    "end_local": "2026-05-25T00:00:00Z"
   },
   {
-    "id": "drake_ben_20260403",
-    "title": "Drake / Ben",
-    "start": "2026-04-03T15:00:00-04:00",
-    "end": "2026-04-03T16:00:00-04:00",
-    "attendees": ["ben@movewithclever.com"],
-    "calUrl": null,
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
+    "id": "m8nshgkhr0vsfdhbma5kvuc92c_20260522",
+    "title": "Mama Bear's birthday",
+    "start_local": "2026-05-22T00:00:00Z",
+    "end_local": "2026-05-23T00:00:00Z"
   },
   {
-    "id": "ikebhiij4drkn2va7fd08ngocf_20260407T130000Z",
-    "title": "The Bullpen! (BOD Standup)",
-    "start": "2026-04-07T09:00:00-04:00",
-    "end": "2026-04-07T09:15:00-04:00",
-    "attendees": ["michael.provinzino@movewithclever.com", "collins.okoye@movewithclever.com", "jay.watson@movewithclever.com", "arnold.mejica@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjA0MDdUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": "https://docs.google.com/document/d/1fbkpNeRulP3zmr_I-wwCN3-XTb5KPPCshgCWvbCMvt8/edit",
-    "linkedDocTitle": "Notes - The Bullpen! (BOD Standup)"
+    "id": "4knlkuhelntlv8c1sch1mgu0p5_20260531",
+    "title": "Payoff Credit Card(s)",
+    "start_local": "2026-05-31T00:00:00Z",
+    "end_local": "2026-06-01T00:00:00Z"
   },
   {
-    "id": "ikebhiij4drkn2va7fd08ngocf_20260408T130000Z",
-    "title": "The Bullpen! (BOD Standup)",
-    "start": "2026-04-08T09:00:00-04:00",
-    "end": "2026-04-08T09:15:00-04:00",
-    "attendees": ["michael.provinzino@movewithclever.com", "collins.okoye@movewithclever.com", "jay.watson@movewithclever.com", "arnold.mejica@movewithclever.com"],
-    "calUrl": "https://www.google.com/calendar/event?eid=aWtlYmhpaWo0ZHJrbjJ2YTdmZDA4bmdvY2ZfMjAyNjA0MDhUMTMwMDAwWiBkcmFrZS5zaGFkd2VsbEBtb3Zld2l0aGNsZXZlci5jb20&ctz=America/New_York",
-    "linkedDocUrl": "https://docs.google.com/document/d/1fbkpNeRulP3zmr_I-wwCN3-XTb5KPPCshgCWvbCMvt8/edit",
-    "linkedDocTitle": "Notes - The Bullpen! (BOD Standup)"
+    "id": "1e3m0rgrh95quo6m88dit2qgf9",
+    "title": "St. Louis Onsite",
+    "start_local": "2026-06-01T00:00:00Z",
+    "end_local": "2026-06-05T00:00:00Z"
   },
   {
-    "id": "town_hall_20260409",
-    "title": "Town Hall - All-Hands Meeting",
-    "start": "2026-04-09T15:00:00-04:00",
-    "end": "2026-04-09T16:00:00-04:00",
-    "attendees": [],
-    "calUrl": null,
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
-  },
-  {
-    "id": "qbr_20260414",
-    "title": "Quarterly Business Review",
-    "start": "2026-04-14T12:00:00-04:00",
-    "end": "2026-04-14T14:00:00-04:00",
-    "attendees": [],
-    "calUrl": null,
-    "linkedDocUrl": null,
-    "linkedDocTitle": null
+    "id": "cautd85c3fnkam7pf6jsirhj18_20260601",
+    "title": "Nick Cotton's birthday",
+    "start_local": "2026-06-01T00:00:00Z",
+    "end_local": "2026-06-02T00:00:00Z"
   }
 ]

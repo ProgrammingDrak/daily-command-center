@@ -8,12 +8,35 @@ function updateSaveStatus(state, text) {
   if (tooltip) tooltip.textContent = text || "";
 }
 
-function showToast(message, type = "error", duration = 5000) {
+function showToast(message, type = "error", duration = 5000, action = null) {
+  if (duration && typeof duration === "object") {
+    action = duration;
+    duration = 5000;
+  }
   const container = document.getElementById("toast-container");
   if (!container) return;
   const toast = document.createElement("div");
   toast.className = "toast toast--" + type;
-  toast.innerHTML = `<span>${message}</span><button class="toast-close" onclick="this.parentElement.remove()">&times;</button>`;
+  const text = document.createElement("span");
+  text.textContent = message;
+  toast.appendChild(text);
+  if (action && typeof action.onClick === "function") {
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "toast-action";
+    actionBtn.textContent = action.label || "Undo";
+    actionBtn.addEventListener("click", () => {
+      toast.remove();
+      action.onClick();
+    });
+    toast.appendChild(actionBtn);
+  }
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "toast-close";
+  closeBtn.textContent = "\u00d7";
+  closeBtn.addEventListener("click", () => toast.remove());
+  toast.appendChild(closeBtn);
   container.appendChild(toast);
   if (duration > 0) setTimeout(() => toast.remove(), duration);
 }

@@ -629,7 +629,60 @@ function saveDeletedState(){
 function isDeleted(ev){return deletedSet.has(ev.id)}
 
 let _delPendingId=null;
+let _deleteUndoTimers = {};
 function openDeleteConfirm(id){
+  deleteTaskWithUndo(id);
+}
+function deleteTaskWithUndo(id){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||deletedSet.has(id))return;
+  if(_deleteUndoTimers[id]){
+    clearTimeout(_deleteUndoTimers[id].timer);
+    delete _deleteUndoTimers[id];
+  }
+  let blockId=null;
+  if(ev.source==="manual"&&window.blockStore){
+    const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id);
+    blockId=block&&block.id;
+  }
+  deletedSet.add(id);
+  saveDeletedState();
+  log("deleted",id,"Removed from schedule: "+(ev?ev.title:id));
+  recalcTimes();
+  render();
+  if(blockId&&window.blockStore){
+    _deleteUndoTimers[id]={
+      blockId,
+      timer:setTimeout(()=>{
+        const pending=_deleteUndoTimers[id];
+        delete _deleteUndoTimers[id];
+        if(pending&&deletedSet.has(id)){
+          window.blockStore.deleteBlock(pending.blockId).catch(()=>{});
+        }
+      },8000)
+    };
+  }
+  if(typeof showToast==="function"){
+    showToast("Task deleted","success",8000,{
+      label:"Undo",
+      onClick:()=>undoDeleteTask(id)
+    });
+  }
+}
+function undoDeleteTask(id){
+  if(_deleteUndoTimers[id]){
+    clearTimeout(_deleteUndoTimers[id].timer);
+    delete _deleteUndoTimers[id];
+  }
+  if(!deletedSet.has(id))return;
+  deletedSet.delete(id);
+  saveDeletedState();
+  log("delete-undone",id,"Restored to schedule");
+  recalcTimes();
+  render();
+  if(typeof showToast==="function")showToast("Task restored","success",2200);
+}
+function openDeleteConfirmLegacy(id){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return;
   _delPendingId=id;
@@ -649,20 +702,8 @@ function closeDeleteConfirm(){
 function confirmDeleteTask(){
   if(!_delPendingId)return;
   const id=_delPendingId;
-  const ev=scheduled.find(e=>e.id===id);
-  deletedSet.add(id);
-  saveDeletedState();
-  // For DCC-native tasks, the deletedSet alone isn't enough: the underlying block stays
-  // in SQLite and keeps getting rehydrated by loadGlobals(). Soft-delete the block too
-  // so it's actually gone.
-  if(ev&&ev.source==="manual"&&window.blockStore){
-    const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id);
-    if(block)window.blockStore.deleteBlock(block.id).catch(()=>{});
-  }
-  log("deleted",id,"Removed from schedule: "+(ev?ev.title:id));
   closeDeleteConfirm();
-  recalcTimes();
-  render();
+  deleteTaskWithUndo(id);
 }
 document.getElementById("del-cancel").addEventListener("click",closeDeleteConfirm);
 document.getElementById("del-go").addEventListener("click",confirmDeleteTask);
