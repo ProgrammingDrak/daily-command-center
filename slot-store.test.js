@@ -19,6 +19,7 @@ function createMockPool(options = {}) {
   const calls = [];
   const state = {
     pointBalance: options.pointBalance ?? 0,
+    bankBalance: options.bankBalance ?? 0,
     migrated: options.migrated ?? true,
     settings: options.settings || (options.migrated === false ? {} : {
       points_v2_migrated_at: "already",
@@ -39,7 +40,7 @@ function createMockPool(options = {}) {
     const text = String(sql);
     if (text.includes("CREATE TABLE IF NOT EXISTS slot_accounts")) return { rows: [] };
     if (text.includes("INSERT INTO slot_accounts")) {
-      return { rows: [{ workspace_id: params[0], user_id: params[1], point_balance: state.pointBalance, settings: state.settings }] };
+      return { rows: [{ workspace_id: params[0], user_id: params[1], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
     }
     if (text.includes("THEN point_balance *")) {
       if (!state.settings.points_v2_migrated_at) {
@@ -75,7 +76,7 @@ function createMockPool(options = {}) {
       return { rows: [] };
     }
     if (text.includes("SELECT * FROM slot_accounts WHERE workspace_id")) {
-      return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, settings: state.settings }] };
+      return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
     }
     if (text.includes("INSERT INTO slot_point_ledger")) {
       state.ledgerMetadata = JSON.parse(params[5]);
@@ -275,6 +276,38 @@ test("deleteReward hides rewards without removing rows referenced by spin histor
   assert.equal(mockPool.state.rewardRows[0].weight, 0);
   assert.equal(typeof mockPool.state.settings.default_rewards_user_modified_at, "string");
   assert.deepEqual(state.rewards.map(r => r.title), ["Take a walk"]);
+});
+
+test("getState keeps paid jackpots hittable when reserve is short", async () => {
+  const rewardBase = {
+    sponsor_type: "self",
+    sponsor_splits: [],
+    sponsor_active: true,
+    value_cents: 7500,
+    bank_delta_cents: 0,
+    requires_confirmation: true,
+    cooldown_days: 0,
+    unlock_threshold_cents: 7500,
+    notes: "",
+    last_won_at: null,
+    deleted_at: null,
+  };
+  const mockPool = createMockPool({
+    bankBalance: 1200,
+    migrated: true,
+    rewardRows: [
+      { ...rewardBase, id: 10, title: "Dinner jackpot", kind: "bank_gated", active: true, weight: 8 },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const state = await store.getState("ws-1", 1);
+  const reward = state.rewards.find(r => r.id === 10);
+
+  assert.equal(reward.eligible, true);
+  assert.equal(reward.reserve_affordable, false);
+  assert.equal(reward.reserve_shortfall_cents, 6300);
+  assert.equal(reward.jackpot_type, "self");
 });
 
 test("bank screen payout values each BANK tile from the monthly goal, not current bank balance", () => {

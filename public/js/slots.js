@@ -13,6 +13,8 @@
   let pendingDeleteRewardId = null;
   let bankDetailsOpen = false;
   let activeSlotSection = "machine";
+  let activeJackpotChoiceSpin = null;
+  let activeJackpotChoiceFilter = "any";
   let slotPetHome = null;
   let slotPetReactionTimer = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
@@ -525,7 +527,7 @@
   }
 
   function isJackpotReward(reward){
-    return rewardCostCents(reward) > 0;
+    return rewardCostCents(reward) > 0 || (reward && reward.kind === "sponsor");
   }
 
   function matchesPriceFilter(reward){
@@ -602,14 +604,138 @@
         '<div><strong>' + esc(title) + '</strong>' + bank + reserve +
           '<div class="slot-history-meta">' + esc(symbol) + ' ' + esc(metaLabel) + ' · ' + esc(KIND_LABELS[snap.kind] || snap.kind || "") + ' · ' + new Date(s.created_at).toLocaleString() + '</div>' +
         '</div>' +
-        (pending && !bankBuilderPending ? '<button class="slot-mini primary slot-confirm" data-id="' + s.id + '">Confirm</button>' : '<span class="slot-status ' + (miss ? 'miss' : '') + '">' + esc(bankBuilderPending ? "reserve pending" : (miss ? "no prize" : s.status)) + '</span>') +
+        (pending && snap.requires_jackpot_choice ? '<button class="slot-mini primary slot-pick-jackpot" data-id="' + s.id + '">Pick jackpot</button>' :
+          pending && !bankBuilderPending ? '<button class="slot-mini primary slot-confirm" data-id="' + s.id + '">Confirm</button>' : '<span class="slot-status ' + (miss ? 'miss' : '') + '">' + esc(bankBuilderPending ? "reserve pending" : (miss ? "no prize" : s.status)) + '</span>') +
       '</div>';
     }).join("");
     el.querySelectorAll(".slot-confirm").forEach(btn => btn.addEventListener("click", () => confirmSpin(btn.dataset.id)));
+    el.querySelectorAll(".slot-pick-jackpot").forEach(btn => btn.addEventListener("click", () => {
+      const spinRow = (slotState.spins || []).find(s => String(s.id) === String(btn.dataset.id));
+      if(spinRow) openJackpotChoice(spinRow);
+    }));
   }
 
   function findReward(id){
     return (slotState && slotState.rewards || []).find(r => String(r.id) === String(id));
+  }
+
+  function reserveAvailableCents(){
+    const funding = (slotState && slotState.funding) || {};
+    const account = (slotState && slotState.account) || {};
+    const pending = (slotState && slotState.pendingBankDeposit) || {};
+    if(funding.total != null) return funding.total || 0;
+    return (account.bank_balance_cents || 0) + (pending.cents || 0);
+  }
+
+  function jackpotChoiceCost(reward){
+    if(!reward || !["small_paid", "bank_gated"].includes(reward.kind)) return 0;
+    return Math.max(reward.value_cents || 0, reward.unlock_threshold_cents || 0, reward.reserve_cost_cents || 0);
+  }
+
+  function jackpotChoiceType(reward){
+    if(!reward) return "any";
+    return reward.kind === "sponsor" ? "partner" : "self";
+  }
+
+  function jackpotChoices(){
+    const available = reserveAvailableCents();
+    return (slotState && slotState.rewards || [])
+      .filter(r => r && r.active !== false && (r.weight || 0) > 0 && ["small_paid", "bank_gated", "sponsor"].includes(r.kind))
+      .map(r => {
+        const cost = jackpotChoiceCost(r);
+        return {
+          ...r,
+          choice_type: jackpotChoiceType(r),
+          choice_cost_cents: cost,
+          choice_affordable: cost <= available,
+          choice_shortfall_cents: Math.max(0, cost - available)
+        };
+      });
+  }
+
+  function openJackpotChoice(spinRow){
+    activeJackpotChoiceSpin = spinRow;
+    activeJackpotChoiceFilter = "any";
+    renderJackpotChoiceModal();
+  }
+
+  function closeJackpotChoiceModal(){
+    activeJackpotChoiceSpin = null;
+    const modal = document.getElementById("slot-jackpot-choice-modal");
+    if(modal) modal.remove();
+  }
+
+  function renderJackpotChoiceModal(){
+    if(!activeJackpotChoiceSpin) return;
+    let modal = document.getElementById("slot-jackpot-choice-modal");
+    if(!modal){
+      modal = document.createElement("div");
+      modal.id = "slot-jackpot-choice-modal";
+      modal.className = "slot-jackpot-modal";
+      document.body.appendChild(modal);
+    }
+    const available = reserveAvailableCents();
+    const choices = jackpotChoices().filter(r => activeJackpotChoiceFilter === "any" || r.choice_type === activeJackpotChoiceFilter);
+    const rows = choices.length ? choices.map(r => {
+      const disabled = !r.choice_affordable;
+      const sponsor = r.kind === "sponsor" ? '<span>' + esc(SPONSOR_LABELS[r.sponsor_type] || "Partner") + '</span>' : '';
+      const price = r.choice_cost_cents > 0 ? '<span>' + money(r.choice_cost_cents) + '</span>' : '<span>partner-covered</span>';
+      const lock = disabled ? '<em>Need ' + money(r.choice_shortfall_cents) + ' more reserve</em>' : '<em>Available now</em>';
+      return '<button class="slot-jackpot-choice ' + (disabled ? 'locked' : '') + '" data-id="' + r.id + '" ' + (disabled ? 'disabled' : '') + '>' +
+        '<strong>' + esc(r.title || "Jackpot") + '</strong>' +
+        '<span class="slot-jackpot-choice-meta">' +
+          '<span>' + esc(r.choice_type === "partner" ? "Partner Jackpot" : "Self Jackpot") + '</span>' +
+          price + sponsor + lock +
+        '</span>' +
+      '</button>';
+    }).join("") : '<div class="slot-empty">No jackpots in this category yet.</div>';
+    modal.innerHTML =
+      '<div class="slot-jackpot-backdrop"></div>' +
+      '<section class="slot-jackpot-dialog" role="dialog" aria-modal="true" aria-label="Choose jackpot">' +
+        '<div class="slot-jackpot-head">' +
+          '<div><div class="slot-jackpot-kicker">Jackpot hit</div><h3>Pick your prize</h3><p>Reward Reserve available: <strong>' + money(available) + '</strong></p></div>' +
+          '<button class="slot-icon-btn slot-jackpot-close" type="button" aria-label="Close jackpot picker">&times;</button>' +
+        '</div>' +
+        '<div class="slot-jackpot-filters" role="tablist" aria-label="Jackpot types">' +
+          jackpotFilterButton("any", "Any") +
+          jackpotFilterButton("self", "Self") +
+          jackpotFilterButton("partner", "Partner") +
+        '</div>' +
+        '<div class="slot-jackpot-list">' + rows + '</div>' +
+      '</section>';
+    modal.querySelector(".slot-jackpot-backdrop").addEventListener("click", closeJackpotChoiceModal);
+    modal.querySelector(".slot-jackpot-close").addEventListener("click", closeJackpotChoiceModal);
+    modal.querySelectorAll(".slot-jackpot-filter").forEach(btn => btn.addEventListener("click", () => {
+      activeJackpotChoiceFilter = btn.dataset.jackpotFilter || "any";
+      renderJackpotChoiceModal();
+    }));
+    modal.querySelectorAll(".slot-jackpot-choice:not(:disabled)").forEach(btn => btn.addEventListener("click", () => chooseJackpotReward(btn.dataset.id)));
+  }
+
+  function jackpotFilterButton(name, label){
+    const active = activeJackpotChoiceFilter === name;
+    return '<button class="slot-jackpot-filter ' + (active ? 'active' : '') + '" data-jackpot-filter="' + name + '" type="button" aria-selected="' + (active ? 'true' : 'false') + '">' + label + '</button>';
+  }
+
+  async function chooseJackpotReward(rewardId){
+    if(!activeJackpotChoiceSpin || !rewardId) return;
+    try {
+      const spinRow = await api("/api/slot/spins/" + activeJackpotChoiceSpin.id + "/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reward_id: rewardId })
+      });
+      const snap = spinRow.reward_snapshot || {};
+      slotPlay("confirm");
+      closeJackpotChoiceModal();
+      setResult("Jackpot selected: " + (snap.title || "Reward"));
+      await loadSlots();
+    } catch(e) {
+      setResult(e.message);
+      slotPlay("error");
+      await loadSlots();
+      renderJackpotChoiceModal();
+    }
   }
 
   async function spin(){
@@ -641,13 +767,17 @@
         slotPetReact("sad", "Almost.", 2100);
       } else if(spinRow.status === "pending") {
         slotPlay("pending");
-        slotPetReact("happy", "Prize waiting.", 2300);
+        slotPetReact("happy", snap.requires_jackpot_choice ? "Pick one." : "Prize waiting.", 2300);
       } else {
         slotPlay("win");
         slotPetReact("happy", "Nice pull.", 2300);
       }
       isSpinning = false;
       await loadSlots();
+      if(snap.requires_jackpot_choice) {
+        const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
+        openJackpotChoice(refreshed);
+      }
     } catch(e) {
       isSpinning = false;
       setResult(e.message);
@@ -1169,10 +1299,12 @@
     if(bankDelta > 0) {
       const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
       const cap = payout.capped ? " Bank cap trimmed the payout." : "";
-      return "Bank Building paid " + money(bankDelta) + units + ". Funds moved into the Reward Reserve." + cap;
+      const choice = snap.requires_jackpot_choice ? " Pick a jackpot from the list." : "";
+      return "Bank Building paid " + money(bankDelta) + units + ". Funds moved into the Reward Reserve." + cap + choice;
     }
     if(spinRow.status === "miss" || snap.kind === "miss") return "No reward this spin: No prize";
     if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
+    if(spinRow.status === "pending" && snap.requires_jackpot_choice) return "Jackpot hit. Pick a prize from the list.";
     if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
     return "Prize reveal: " + (snap.title || "Reward");
   }

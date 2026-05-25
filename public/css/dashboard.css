@@ -2628,6 +2628,26 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-coin-ground-amount.pop{animation:slotCoinAmountPop 1.6s ease-out both}
 .slot-gold-transfer{position:fixed;z-index:9999;width:9px;height:9px;margin:-4px 0 0 -4px;border-radius:50%;background:#ffd66e;box-shadow:0 0 10px rgba(250,204,21,0.9),0 0 20px rgba(34,197,94,0.28);pointer-events:none;animation:slotGoldToPiggy 0.72s cubic-bezier(.24,.75,.18,1) forwards}
 .slot-piggy-add-pop{position:fixed;z-index:10000;margin:-14px 0 0 -38px;min-width:76px;text-align:center;padding:4px 9px;border-radius:999px;background:rgba(6,35,18,0.94);border:1px solid rgba(187,247,208,0.72);color:#bbf7d0;font-size:18px;font-weight:950;font-variant-numeric:tabular-nums;text-shadow:0 0 10px rgba(34,197,94,0.48);box-shadow:0 0 18px rgba(34,197,94,0.36),0 0 28px rgba(250,204,21,0.16);pointer-events:none;animation:slotPiggyAddPop 1.08s cubic-bezier(.2,1.35,.28,1) forwards}
+.slot-jackpot-modal{position:fixed;inset:0;z-index:10020;display:grid;place-items:center;padding:18px}
+.slot-jackpot-backdrop{position:absolute;inset:0;background:rgba(6,8,18,0.68);backdrop-filter:blur(4px)}
+.slot-jackpot-dialog{position:relative;width:min(620px,100%);max-height:min(760px,calc(100vh - 36px));display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:10px;background:linear-gradient(180deg,rgba(35,29,54,0.98),rgba(18,16,32,0.98));border:1px solid rgba(255,214,110,0.42);box-shadow:0 24px 70px rgba(0,0,0,0.5),0 0 34px rgba(250,204,21,0.18);overflow:hidden}
+.slot-jackpot-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.slot-jackpot-kicker{font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:0;color:#ffe08a}
+.slot-jackpot-head h3{margin:2px 0 4px;font-size:22px;line-height:1.05;color:#fff7d1}
+.slot-jackpot-head p{margin:0;color:var(--text-muted);font-size:12px}
+.slot-jackpot-head p strong{color:#bbf7d0;font-variant-numeric:tabular-nums}
+.slot-jackpot-filters{display:flex;gap:6px;flex-wrap:wrap}
+.slot-jackpot-filter{border:1px solid rgba(255,214,110,0.28);border-radius:6px;background:rgba(255,255,255,0.04);color:var(--text-muted);font-family:inherit;font-size:12px;font-weight:850;padding:7px 10px;cursor:pointer}
+.slot-jackpot-filter.active{background:rgba(250,204,21,0.15);border-color:#ffe08a;color:#ffe08a}
+.slot-jackpot-list{display:grid;gap:8px;overflow:auto;padding-right:3px}
+.slot-jackpot-choice{width:100%;display:block;text-align:left;padding:11px 12px;border-radius:8px;border:1px solid rgba(187,247,208,0.28);background:rgba(34,197,94,0.08);color:var(--text);font-family:inherit;cursor:pointer}
+.slot-jackpot-choice:hover:not(:disabled){border-color:#bbf7d0;background:rgba(34,197,94,0.13)}
+.slot-jackpot-choice strong{display:block;font-size:14px;line-height:1.25;color:#fff7d1}
+.slot-jackpot-choice-meta{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px;color:var(--text-muted);font-size:11px}
+.slot-jackpot-choice-meta span,.slot-jackpot-choice-meta em{border:1px solid rgba(255,255,255,0.1);border-radius:999px;padding:2px 7px;font-style:normal}
+.slot-jackpot-choice-meta em{color:#bbf7d0;border-color:rgba(187,247,208,0.26)}
+.slot-jackpot-choice.locked{opacity:0.46;filter:grayscale(0.72);cursor:not-allowed;background:rgba(148,163,184,0.08);border-color:rgba(148,163,184,0.22)}
+.slot-jackpot-choice.locked .slot-jackpot-choice-meta em{color:#fecaca;border-color:rgba(248,113,113,0.24)}
 @keyframes slotCoinAmountPop{0%{opacity:0;transform:translateY(10px) scale(0.9)}14%{opacity:1;transform:translateY(0) scale(1.08)}72%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-8px) scale(0.98)}}
 @keyframes slotGoldToPiggy{0%{opacity:0;transform:translate(0,0) scale(0.6)}12%{opacity:1;transform:translate(0,-10px) scale(1.2)}100%{opacity:0;transform:translate(var(--gold-x),var(--gold-y)) scale(0.28)}}
 @keyframes slotPiggyBankImpact{0%{transform:scale(1);filter:brightness(1)}34%{transform:scale(1.055);filter:brightness(1.16)}100%{transform:scale(1);filter:brightness(1)}}

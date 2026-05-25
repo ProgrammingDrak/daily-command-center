@@ -493,20 +493,38 @@ function normalizeSponsorSplits(rows) {
     .filter(row => row.name && row.percent > 0);
 }
 
+function reserveCostCents(row) {
+  if (!row || !["small_paid", "bank_gated"].includes(row.kind)) return 0;
+  return Math.max(row.value_cents || 0, row.unlock_threshold_cents || 0);
+}
+
+function isJackpotChoiceReward(row) {
+  return !!row && ["small_paid", "bank_gated", "sponsor"].includes(row.kind);
+}
+
+function jackpotType(row) {
+  if (!row) return "any";
+  if (row.kind === "sponsor") return "partner";
+  return "self";
+}
+
 function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   const bankBalance = Number.isFinite(fundingAvailableCents) ? fundingAvailableCents : (account ? account.bank_balance_cents : 0);
-  const threshold = Math.max(row.value_cents || 0, row.unlock_threshold_cents || 0);
-  const paidLocked = ["small_paid", "bank_gated"].includes(row.kind) && threshold > bankBalance;
+  const threshold = reserveCostCents(row);
+  const reserveAffordable = threshold <= bankBalance;
   const bankCapLocked = row.kind === "bank_builder" && bankUsage && (
     bankUsage.month + row.bank_delta_cents > bankUsage.monthlyGoal
   );
   return {
     ...row,
     sponsor_splits: normalizeSponsorSplits(row.sponsor_splits),
-    eligible: !!row.active && row.weight > 0 && !paidLocked && !bankCapLocked,
+    eligible: !!row.active && row.weight > 0 && !bankCapLocked,
+    jackpot_type: jackpotType(row),
+    reserve_cost_cents: threshold,
+    reserve_affordable: reserveAffordable,
+    reserve_shortfall_cents: Math.max(0, threshold - bankBalance),
     locked_reason: !row.active ? "inactive" :
       row.weight <= 0 ? "zero_weight" :
-      paidLocked ? "bank_too_small" :
       bankCapLocked ? "bank_cap" :
       null,
   };
@@ -942,12 +960,17 @@ async function spin(workspaceId, userId) {
     screen_payline: screen.payline,
     bank_screen_payout: screen.payout,
   };
+  if (isJackpotChoiceReward(selected)) {
+    selectedSnapshot.requires_jackpot_choice = true;
+    selectedSnapshot.jackpot_choice_type = jackpotType(selected);
+    selectedSnapshot.original_reward_id = selected.id;
+  }
   const status = selected.kind === "miss"
     ? bankDelta > 0 ? "pending" : "miss"
-    : selected.kind === "bank_builder" || bankDelta > 0 || ["small_paid", "bank_gated"].includes(selected.kind)
+    : selected.kind === "bank_builder" || bankDelta > 0 || isJackpotChoiceReward(selected)
     ? "pending"
     : "awarded";
-  const bankReserved = ["small_paid", "bank_gated"].includes(selected.kind) ? Math.max(selected.value_cents, selected.unlock_threshold_cents) : 0;
+  const bankReserved = 0;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -976,7 +999,7 @@ async function spin(workspaceId, userId) {
   }
 }
 
-async function confirmSpin(workspaceId, spinId) {
+async function confirmSpin(workspaceId, spinId, options = {}) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -990,7 +1013,58 @@ async function confirmSpin(workspaceId, spinId) {
     const snapshot = spinRow.reward_snapshot || {};
     let accountUpdate = "";
     const params = [workspaceId];
-    if (snapshot.kind === "bank_builder" && spinRow.bank_delta_cents > 0) {
+    let nextSnapshot = snapshot;
+    let nextRewardId = spinRow.reward_id;
+    let nextReservedCents = spinRow.bank_reserved_cents || 0;
+    if (snapshot.requires_jackpot_choice) {
+      const rewardId = options.reward_id || options.rewardId || options.jackpot_reward_id || options.jackpotRewardId;
+      if (!rewardId) {
+        const err = new Error("Pick a jackpot reward");
+        err.statusCode = 400;
+        throw err;
+      }
+      const { rows: rewardRows } = await client.query(
+        "SELECT * FROM slot_rewards WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE",
+        [workspaceId, rewardId]
+      );
+      const reward = rewardRows[0];
+      if (!reward || !reward.active || reward.weight <= 0 || !isJackpotChoiceReward(reward)) {
+        const err = new Error("That jackpot is not available");
+        err.statusCode = 400;
+        throw err;
+      }
+      await sweepPendingBankBuildersInTx(client, workspaceId);
+      const { rows: [account] } = await client.query("SELECT bank_balance_cents FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE", [workspaceId]);
+      const reserveCost = reserveCostCents(reward);
+      const currentBankDelta = snapshot.source_type === "slot_screen_bank_builder" && spinRow.bank_delta_cents > 0 && !spinRow.bank_reserved_cents
+        ? spinRow.bank_delta_cents
+        : 0;
+      const availableReserve = ((account && account.bank_balance_cents) || 0) + currentBankDelta;
+      if (reserveCost > availableReserve) {
+        const err = new Error("Not enough Reward Reserve for that jackpot");
+        err.statusCode = 400;
+        throw err;
+      }
+      const reserveNet = currentBankDelta - reserveCost;
+      if (reserveNet !== 0) {
+        accountUpdate = "bank_balance_cents = GREATEST(0, bank_balance_cents + $2),";
+        params.push(reserveNet);
+      }
+      nextRewardId = reward.id;
+      nextReservedCents = reserveCost;
+      nextSnapshot = {
+        ...snapshot,
+        ...reward,
+        sponsor_splits: normalizeSponsorSplits(reward.sponsor_splits),
+        source_type: snapshot.source_type,
+        screen_board: snapshot.screen_board,
+        screen_payline: snapshot.screen_payline,
+        bank_screen_payout: snapshot.bank_screen_payout,
+        requires_jackpot_choice: false,
+        jackpot_choice_type: jackpotType(reward),
+        jackpot_selected_at: new Date().toISOString(),
+      };
+    } else if (snapshot.kind === "bank_builder" && spinRow.bank_delta_cents > 0) {
       accountUpdate = "bank_balance_cents = bank_balance_cents + $2,";
       params.push(spinRow.bank_delta_cents);
     } else if (["small_paid", "bank_gated"].includes(snapshot.kind) && spinRow.bank_reserved_cents > 0) {
@@ -1002,8 +1076,15 @@ async function confirmSpin(workspaceId, spinId) {
       await client.query(`UPDATE slot_accounts SET ${accountUpdate} updated_at=NOW() WHERE workspace_id=$1`, params);
     }
     const { rows: [updated] } = await client.query(
-      "UPDATE slot_spins SET status='confirmed', confirmed_at=NOW() WHERE workspace_id=$1 AND id=$2 RETURNING *",
-      [workspaceId, spinId]
+      `UPDATE slot_spins
+       SET status='confirmed',
+           confirmed_at=NOW(),
+           reward_id=$3,
+           reward_snapshot=$4,
+           bank_reserved_cents=$5
+       WHERE workspace_id=$1 AND id=$2
+       RETURNING *`,
+      [workspaceId, spinId, nextRewardId, nextSnapshot, nextReservedCents]
     );
     await client.query("COMMIT");
     return updated;
@@ -1021,7 +1102,11 @@ async function sweepPendingBankBuildersInTx(client, workspaceId) {
      FROM slot_spins
      WHERE workspace_id=$1
        AND status='pending'
-       AND reward_snapshot->>'kind' = 'bank_builder'
+       AND (
+         reward_snapshot->>'kind' = 'bank_builder'
+         OR reward_snapshot->>'source_type' = 'slot_screen_bank_builder'
+       )
+       AND COALESCE(reward_snapshot->>'requires_jackpot_choice', 'false') <> 'true'
      FOR UPDATE`,
     [workspaceId]
   );
@@ -1036,7 +1121,11 @@ async function sweepPendingBankBuildersInTx(client, workspaceId) {
        SET status='confirmed', confirmed_at=NOW()
        WHERE workspace_id=$1
          AND status='pending'
-         AND reward_snapshot->>'kind' = 'bank_builder'`,
+         AND (
+           reward_snapshot->>'kind' = 'bank_builder'
+           OR reward_snapshot->>'source_type' = 'slot_screen_bank_builder'
+         )
+         AND COALESCE(reward_snapshot->>'requires_jackpot_choice', 'false') <> 'true'`,
       [workspaceId]
     );
   }
