@@ -88,6 +88,7 @@ function initKeys() {
   TRIV_FLAGS_KEY = "pa-trivial-flags-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
   if (typeof TRIAGE_SCHEDULED_KEY !== "undefined") TRIAGE_SCHEDULED_KEY = "pa-triage-scheduled-" + d;
+  if (typeof TRIAGE_DELETED_KEY !== "undefined") TRIAGE_DELETED_KEY = "pa-triage-deleted-" + d;
   BOUNTY_KEY = "pa-bounty-" + d;
   // PIN 1: rebind the pinned-active-task key and reload state on date change
   PINNED_ACTIVE_KEY = "pa-pinned-active-" + d;

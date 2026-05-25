@@ -397,21 +397,22 @@ function toggleDone(id,opts){
     return;
   }
 
-  // Smart completion-date handling: don't mark done on a date that isn't actually today
-  // when the user is browsing a different day's plan.
+  // Smart completion-date handling for non-today views.
   if(typeof _actualTodayStr==="function"){
     const today=_actualTodayStr();
     const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
     if(currentDate&&currentDate>today){
-      // Future: silently move the task to today and complete it.
+      // Future-day plans are editable pre-plans. If the user is intentionally
+      // viewing that day and checks a task off, persist the completion there.
       const ev=scheduled.find(e=>e.id===id);
-      const title=ev?ev.title:"task";
-      const fromLabel=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
-      (async()=>{
-        if(typeof rescheduleTaskToDate==="function")await rescheduleTaskToDate(id,today,{silent:true});
-        await commitDoneOnDate(id,today);
-        if(typeof showToast==="function")showToast("Marked “"+title+"” done today (was "+fromLabel+")","success");
-      })();
+      const completedAt=new Date();
+      manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+      saveDoneState();render();
+      awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
+      if(typeof showToast==="function"){
+        const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
+        showToast("Marked done on "+label,"success");
+      }
       return;
     }
     if(currentDate&&currentDate<today){

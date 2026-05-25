@@ -158,6 +158,13 @@
           case 'slot-changed':
             document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
             break;
+
+          case 'todo-share-changed':
+            if (typeof window.reloadTodoShareReactions === 'function') {
+              window.reloadTodoShareReactions().catch(() => {});
+            }
+            document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
+            break;
         }
       } catch(err) { /* ignore parse errors */ }
     };
