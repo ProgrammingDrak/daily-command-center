@@ -4,6 +4,8 @@ const {
   POINTS_FORMULA_VERSION,
   POINTS_PER_SPIN,
   DEFAULT_SPIN_COST_POINTS,
+  LEGACY_POINTS_V2_MULTIPLIER,
+  POINTS_V3_BALANCE_MULTIPLIER,
   scoreTaskPoints,
 } = require("./slot-scoring");
 
@@ -36,9 +38,9 @@ const LEGACY_BANK_BUILDER_KIND = "bank_builder";
 const LEGACY_BANK_BUILDER_RETIRED_SETTING = "legacy_bank_builder_rewards_retired_at";
 const DEFAULT_SCORING_RATIONALE = [
   "Task points are automatic so task entry stays lightweight.",
-  "Every eligible completed task earns points from the v2 scoring formula.",
-  "Planned or logged minutes, high-priority work, urgent work, focus level, and bounty status can earn more.",
-  "Tiny or trivial tasks are capped so the slot machine rewards real progress without making small chores feel useless.",
+  "Every eligible completed task starts at 1 point per completed or scheduled minute.",
+  "Effort, attention, importance, urgency, and bounty status multiply that base.",
+  "A self bounty doubles the award; a partner/shared bounty can stack as one additional bounty.",
   "Meetings, breaks, and OOO blocks do not earn task points."
 ].join("\n");
 
@@ -277,7 +279,8 @@ async function ensureAccount(workspaceId, userId) {
      RETURNING *`,
     [workspaceId, userId || null]
   );
-  const account = await migrateAccountPointsV2(workspaceId, rows[0]);
+  let account = await migrateAccountPointsV2(workspaceId, rows[0]);
+  account = await migrateAccountPointsV3(workspaceId, account);
   await seedRewards(workspaceId);
   await retireLegacyBankBuilderRewards(workspaceId);
   return account;
@@ -294,16 +297,16 @@ async function migrateAccountPointsV2(workspaceId, account) {
   if (needsBalanceMigration) {
     Object.assign(migration, {
       points_v2_migrated_at: now,
-      points_v2_multiplier: POINTS_PER_SPIN,
-      points_v2_formula_version: POINTS_FORMULA_VERSION,
+      points_v2_multiplier: LEGACY_POINTS_V2_MULTIPLIER,
+      points_v2_formula_version: "task_points_v2",
     });
   }
   if (needsSpinCostMigration) {
     Object.assign(migration, {
-      spin_cost: clampInt(oldSpinCost * POINTS_PER_SPIN, 1, 250),
+      spin_cost: clampInt(oldSpinCost * LEGACY_POINTS_V2_MULTIPLIER, 1, 250),
       points_v2_spin_cost_migrated_at: now,
       points_v2_old_spin_cost: oldSpinCost,
-      points_v2_spin_cost_multiplier: POINTS_PER_SPIN,
+      points_v2_spin_cost_multiplier: LEGACY_POINTS_V2_MULTIPLIER,
     });
   }
   const { rows: [updated] } = await pool.query(
@@ -321,7 +324,52 @@ async function migrateAccountPointsV2(workspaceId, account) {
          OR NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v2_spin_cost_migrated_at')
        )
      RETURNING *`,
-    [workspaceId, POINTS_PER_SPIN, JSON.stringify(migration)]
+    [workspaceId, LEGACY_POINTS_V2_MULTIPLIER, JSON.stringify(migration)]
+  );
+  if (updated) return updated;
+  const { rows: [current] } = await pool.query("SELECT * FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);
+  return current || account;
+}
+
+async function migrateAccountPointsV3(workspaceId, account) {
+  const settings = account && account.settings ? account.settings : {};
+  const needsBalanceMigration = !settings.points_v3_migrated_at;
+  const needsSpinCostMigration = !settings.points_v3_spin_cost_migrated_at;
+  if (!needsBalanceMigration && !needsSpinCostMigration) return account;
+  const now = new Date().toISOString();
+  const oldSpinCost = clampInt(settings.spin_cost || DEFAULT_SPIN_COST, 1, 250);
+  const nextSpinCost = Math.max(DEFAULT_SPIN_COST, oldSpinCost);
+  const migration = {};
+  if (needsBalanceMigration) {
+    Object.assign(migration, {
+      points_v3_migrated_at: now,
+      points_v3_balance_multiplier: POINTS_V3_BALANCE_MULTIPLIER,
+      points_v3_formula_version: POINTS_FORMULA_VERSION,
+    });
+  }
+  if (needsSpinCostMigration) {
+    Object.assign(migration, {
+      spin_cost: clampInt(nextSpinCost, 1, 250),
+      points_v3_spin_cost_migrated_at: now,
+      points_v3_old_spin_cost: oldSpinCost,
+    });
+  }
+  const { rows: [updated] } = await pool.query(
+    `UPDATE slot_accounts
+     SET point_balance = CASE
+           WHEN NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v3_migrated_at')
+           THEN ROUND(point_balance * $2)::int
+           ELSE point_balance
+         END,
+         settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1
+       AND (
+         NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v3_migrated_at')
+         OR NOT (COALESCE(settings, '{}'::jsonb) ? 'points_v3_spin_cost_migrated_at')
+       )
+     RETURNING *`,
+    [workspaceId, POINTS_V3_BALANCE_MULTIPLIER, JSON.stringify(migration)]
   );
   if (updated) return updated;
   const { rows: [current] } = await pool.query("SELECT * FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);
@@ -671,6 +719,8 @@ async function earnTaskCredit(workspaceId, userId, body) {
       title: body.title || null,
       type: body.type || body.kind || null,
       priority: body.priority || null,
+      importance: body.importance || body.importance_tier || body.importanceTier || null,
+      urgency: body.urgency || null,
       source: body.source || null,
       tags: body.tags || [],
       duration_minutes: body.duration_minutes ?? body.durationMinutes ?? body.duration ?? body.durMin ?? null,
@@ -678,6 +728,8 @@ async function earnTaskCredit(workspaceId, userId, body) {
       effort_tier: body.effort_tier || body.effortTier || null,
       attention_tier: body.attention_tier || body.attentionTier || null,
       bounty: body.bounty === true,
+      bounty_count: body.bounty_count ?? body.bountyCount ?? null,
+      partner_bounty: body.partner_bounty === true || body.partnerBounty === true || body.shared_bounty === true || body.sharedBounty === true,
       trivial: body.trivial === true,
       completed_at: body.completed_at || body.completedAt || null,
     },

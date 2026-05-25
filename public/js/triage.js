@@ -947,9 +947,9 @@ function triagePointsChip(item){
   const payload=triageTaskPayload(item);
   const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
     ? window.TaskPoints.estimate(payload)
-    : {eligible:true,awardPoints:7,durationMinutes:payload.duration_minutes,effortTier:"medium",attentionTier:"normal"};
+    : {eligible:true,awardPoints:(payload.duration_minutes||30),durationMinutes:payload.duration_minutes,effortTier:"medium",attentionTier:"normal",importanceTier:"normal"};
   if(!scoring.eligible||scoring.awardPoints<=0)return"";
-  const title="Completing this triage item earns about "+scoring.awardPoints+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention.";
+  const title="Completing this triage item earns about "+scoring.awardPoints+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention, "+(scoring.importanceTier||"normal")+" importance.";
   return '<span class="points-chip'+(scoring.awardPoints>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+scoring.awardPoints+' pts</span>';
 }
 function activeTriageItems(){

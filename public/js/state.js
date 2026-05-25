@@ -150,7 +150,7 @@ function saveDeferred(arr){
 }
 
 // ======== DAILY BOUNTY ========
-// One immutable "today succeeds if this gets done" marker. Completion pays 2x points.
+// One immutable "today succeeds if this gets done" marker. Completion pays 2x points and can stack with one partner bounty.
 let BOUNTY_KEY = "pa-bounty-" + ((__state && __state.date) ? __state.date : "unknown");
 function loadBountyState(){
   if(window.USE_BLOCKSTORE&&window.blockStore){

@@ -20,7 +20,12 @@ function createMockPool(options = {}) {
   const state = {
     pointBalance: options.pointBalance ?? 0,
     migrated: options.migrated ?? true,
-    settings: options.settings || (options.migrated === false ? {} : { points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already" }),
+    settings: options.settings || (options.migrated === false ? {} : {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+    }),
     ledgerInserted: false,
     ledgerDelta: options.ledgerDelta ?? null,
     pointAdds: 0,
@@ -40,6 +45,13 @@ function createMockPool(options = {}) {
       if (!state.settings.points_v2_migrated_at) {
         state.pointBalance *= params[1];
         state.migrated = true;
+      }
+      state.settings = { ...state.settings, ...JSON.parse(params[2]) };
+      return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, settings: state.settings }] };
+    }
+    if (text.includes("points_v3_migrated_at")) {
+      if (!state.settings.points_v3_migrated_at) {
+        state.pointBalance = Math.round(state.pointBalance * params[1]);
       }
       state.settings = { ...state.settings, ...JSON.parse(params[2]) };
       return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, settings: state.settings }] };
@@ -119,16 +131,16 @@ test("earnTaskCredit stores formula metadata and does not double-award duplicate
   const duplicate = await store.earnTaskCredit("ws-1", 1, body);
 
   assert.equal(first.awarded, true);
-  assert.equal(first.delta, 14);
+  assert.equal(first.delta, 60);
   assert.equal(duplicate.awarded, false);
   assert.equal(duplicate.delta, 0);
   assert.equal(mockPool.state.pointAdds, 1);
-  assert.equal(mockPool.state.ledgerMetadata.formulaVersion, "task_points_v2");
-  assert.equal(mockPool.state.ledgerMetadata.scoring.awardPoints, 14);
+  assert.equal(mockPool.state.ledgerMetadata.formulaVersion, "task_points_v3");
+  assert.equal(mockPool.state.ledgerMetadata.scoring.awardPoints, 60);
   assert.equal(mockPool.state.ledgerMetadata.inputs.duration_minutes, 60);
 });
 
-test("earnTaskCredit normalizes legacy duration_min payloads into v2 points", async () => {
+test("earnTaskCredit normalizes legacy duration_min payloads into minute-based points", async () => {
   const mockPool = createMockPool({ pointBalance: 0, migrated: true });
   const store = loadStoreWithMock(mockPool);
 
@@ -142,14 +154,14 @@ test("earnTaskCredit normalizes legacy duration_min payloads into v2 points", as
   });
 
   assert.equal(result.awarded, true);
-  assert.equal(result.credits, 14);
-  assert.equal(result.delta, 14);
-  assert.equal(mockPool.state.pointBalance, 14);
-  assert.equal(mockPool.state.ledgerMetadata.scoring.awardPoints, 14);
+  assert.equal(result.credits, 60);
+  assert.equal(result.delta, 60);
+  assert.equal(mockPool.state.pointBalance, 60);
+  assert.equal(mockPool.state.ledgerMetadata.scoring.awardPoints, 60);
   assert.equal(mockPool.state.ledgerMetadata.inputs.duration_minutes, 60);
 });
 
-test("earnTaskCredit adjusts old one-point duplicate ledger rows up to v2 points", async () => {
+test("earnTaskCredit adjusts old one-point duplicate ledger rows up to minute-based points", async () => {
   const mockPool = createMockPool({ pointBalance: 1, migrated: true, ledgerDelta: 1 });
   mockPool.state.ledgerInserted = true;
   const store = loadStoreWithMock(mockPool);
@@ -164,38 +176,42 @@ test("earnTaskCredit adjusts old one-point duplicate ledger rows up to v2 points
 
   assert.equal(result.awarded, true);
   assert.equal(result.adjusted, true);
-  assert.equal(result.credits, 13);
-  assert.equal(result.delta, 13);
-  assert.equal(mockPool.state.pointBalance, 14);
-  assert.equal(mockPool.state.ledgerDelta, 14);
+  assert.equal(result.credits, 59);
+  assert.equal(result.delta, 59);
+  assert.equal(mockPool.state.pointBalance, 60);
+  assert.equal(mockPool.state.ledgerDelta, 60);
 });
 
-test("getState migrates old one-spin credits into v2 points once", async () => {
+test("getState migrates old one-spin credits into minute-based points once", async () => {
   const mockPool = createMockPool({ pointBalance: 7, migrated: false });
   const store = loadStoreWithMock(mockPool);
 
   const state = await store.getState("ws-1", 1);
 
-  assert.equal(state.account.point_balance, 70);
-  assert.equal(state.constants.spinCostPoints, 10);
-  assert.equal(state.constants.pointsPerSpin, 10);
-  assert.equal(state.constants.pointsFormulaVersion, "task_points_v2");
+  assert.equal(state.account.point_balance, 175);
+  assert.equal(state.constants.spinCostPoints, 25);
+  assert.equal(state.constants.pointsPerSpin, 25);
+  assert.equal(state.constants.pointsFormulaVersion, "task_points_v3");
 });
 
-test("getState migrates old token spin cost to point spin cost without remultiplying balance", async () => {
+test("getState migrates v2 spin cost to minute-based v3 spin cost", async () => {
   const mockPool = createMockPool({
     pointBalance: 70,
     migrated: true,
-    settings: { points_v2_migrated_at: "already", spin_cost: 1 },
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      spin_cost: 10,
+    },
   });
   const store = loadStoreWithMock(mockPool);
 
   const state = await store.getState("ws-1", 1);
 
-  assert.equal(state.account.point_balance, 70);
-  assert.equal(state.constants.spinCost, 10);
-  assert.equal(state.account.settings.points_v2_old_spin_cost, 1);
-  assert.equal(state.account.settings.points_v2_spin_cost_multiplier, 10);
+  assert.equal(state.account.point_balance, 175);
+  assert.equal(state.constants.spinCost, 25);
+  assert.equal(state.account.settings.points_v3_old_spin_cost, 10);
+  assert.equal(state.account.settings.points_v3_balance_multiplier, 2.5);
 });
 
 test("getState retires and omits legacy bank builder rewards", async () => {
