@@ -104,6 +104,20 @@ function triageActionLabel(item, link){
   return "";
 }
 
+function triageActionLink(item){
+  if(!item)return "";
+  return item.link || item.action_url || item.actionUrl || item.url || item.source_ref || item.evidence_link || "";
+}
+function triageActionLabel(item, link){
+  if(!item)return "";
+  const explicit=item.link_label || item.action_label;
+  if(explicit)return explicit;
+  const value=String(link || "");
+  if(value.includes("mail.google.com"))return "Open email";
+  if(value.includes("slack.com/archives"))return "Open Slack";
+  if(value.startsWith("file:"))return "Open file";
+  return value ? "Open source" : "";
+}
 function transformState(state) {
   if (!state) return { sched: [], consider: [], bklog: [], triageItems: [], notifications: [] };
   const sched = [], consider = [], bklog = [], triageItems = [], notifications = [];

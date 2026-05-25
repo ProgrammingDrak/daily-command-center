@@ -941,8 +941,9 @@ function buildTaskQueuePanel(){
 
   // ---- Triage ----
   const dismissed=(typeof loadDismissed==="function")?loadDismissed():{};
+  const deletedTriage=(typeof loadDeletedTriage==="function")?loadDeletedTriage():[];
   const priColors={high:"var(--red)",medium:"var(--amber)",low:"var(--text-muted)"};
-  const activeTriage=(typeof INIT_TRIAGE!=="undefined")?INIT_TRIAGE.filter(i=>!dismissed[i.id]):[];
+  const activeTriage=(typeof INIT_TRIAGE!=="undefined")?INIT_TRIAGE.filter(i=>!dismissed[i.id]&&!deletedTriage.includes(i.id)):[];
   const tqpTriageBadge=document.getElementById("tqp-triage-count");
   if(tqpTriageBadge)tqpTriageBadge.textContent=activeTriage.length;
   if(!activeTriage.length){
@@ -954,8 +955,17 @@ function buildTaskQueuePanel(){
         '<span class="tqp-tri-dot" style="background:'+dotColor+'"></span>'+
         '<span class="tqp-tri-title">'+item.title+'</span>'+
         '<span class="tqp-tri-meta">'+[item.priority||"", item.queue_label||item.source_label||""].filter(Boolean).join(" · ")+'</span>'+
+        '<button class="tqp-delete-btn" data-tqp-delete-tri="'+item.id+'" title="Delete triage item" aria-label="Delete triage item">'+
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'+
+        '</button>'+
       '</div>';
     }).join('');
+    triagePanel.querySelectorAll('.tqp-delete-btn').forEach(btn=>{
+      btn.addEventListener('click',e=>{
+        e.stopPropagation();
+        if(typeof deleteTriageItem==='function')deleteTriageItem(btn.dataset.tqpDeleteTri);
+      });
+    });
   }
 
   // ---- Priority (consider) ----
@@ -1154,4 +1164,3 @@ document.getElementById("btn-copy").addEventListener("click",function(){
 
 // ======== PREP FILES (loaded from API) ========
 window.__PREP_FILES__ = {};
-

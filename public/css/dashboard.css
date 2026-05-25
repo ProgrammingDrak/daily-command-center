@@ -536,7 +536,9 @@
   .card:hover .st-quick-btn{opacity:0.35}
   .st-quick-btn:hover{opacity:1!important;color:var(--accent-light);border-color:rgba(59,130,246,0.4);background:rgba(59,130,246,0.1)}
   .tri-quick{width:20px;height:20px;border-radius:4px;border:1px solid transparent;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;opacity:0;transition:all 0.15s;flex-shrink:0;padding:0;line-height:1}
-  .tri-card:hover .tri-quick{opacity:0.4} .tri-quick:hover{opacity:1!important;background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.3)}
+  .board-card:hover .tri-quick,.tri-card:hover .tri-quick{opacity:0.4} .tri-quick:hover{opacity:1!important;background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.3)}
+  .tri-delete-btn{width:28px;height:28px;border-radius:6px;border:1px solid rgba(239,68,68,0.24);background:rgba(239,68,68,0.08);color:var(--red,#ef4444);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 0.12s,border-color 0.12s,color 0.12s}
+  .tri-delete-btn:hover{background:rgba(239,68,68,0.16);border-color:rgba(239,68,68,0.5);color:#fca5a5}
   .bar{width:3px;border-radius:3px;flex-shrink:0;align-self:stretch;min-height:36px}
   .body{flex:1;min-width:0}
   .title-row{display:flex;align-items:baseline;gap:6px;margin-bottom:2px;flex-wrap:wrap}
@@ -817,6 +819,8 @@
   .tqp-tri-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;margin-top:5px}
   .tqp-tri-title{font-size:12px;color:var(--text);flex:1;line-height:1.4}
   .tqp-tri-meta{font-size:10px;color:var(--text-muted);flex-shrink:0}
+  .tqp-delete-btn{width:22px;height:22px;border-radius:5px;border:1px solid rgba(239,68,68,0.22);background:rgba(239,68,68,0.07);color:var(--red,#ef4444);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;opacity:0.75;transition:opacity 0.12s,background 0.12s,border-color 0.12s}
+  .tqp-delete-btn:hover{opacity:1;background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.45)}
   .tqp-task-card{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
   .tqp-task-card:last-child{border-bottom:none}
   .tqp-task-bar{width:3px;height:28px;border-radius:2px;flex-shrink:0}
@@ -2711,6 +2715,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-delete-confirm .slot-mini{position:relative;z-index:1}
 .slot-empty{padding:18px;text-align:center;color:var(--text-muted);font-size:12px;border:1px dashed var(--border);border-radius:8px}
 @media (max-width: 900px){
+  .ev-grid,.ev-result-grid{grid-template-columns:1fr 1fr}
+  .ev-outcomes-head,.ev-outcome-row{grid-template-columns:1fr 84px 84px 34px}
   .slots-grid{grid-template-columns:1fr}
   .slot-machine-top{grid-template-columns:1fr}
   .slot-pet-companion{grid-template-columns:1fr 42px 74px}
