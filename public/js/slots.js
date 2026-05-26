@@ -33,6 +33,19 @@
     choice: "Choice",
     reroll: "Reroll"
   };
+  const PAYMENT_SOURCES = [
+    { id: "self", label: "Self" },
+    { id: "sponsored", label: "Sponsored" },
+    { id: "free", label: "Free" }
+  ];
+  const DEFAULT_REWARD_TIERS = [
+    { id: "tier_i", label: "Tier I", weight: 36, active: true },
+    { id: "tier_ii", label: "Tier II", weight: 24, active: true },
+    { id: "tier_iii", label: "Tier III", weight: 16, active: true },
+    { id: "tier_iv", label: "Tier IV", weight: 10, active: true },
+    { id: "tier_v", label: "Tier V", weight: 6, active: true },
+    { id: "tier_vi", label: "Tier VI", weight: 3, active: true }
+  ];
   const FORM_SUBTITLES = {
     miss: "No-prize outcome",
     free: "Free outcome",
@@ -195,6 +208,23 @@
       } else if(name === "win"){
         [523, 659, 784, 1046].forEach((freq, i) => slotTone(freq, 0.13, { type: "triangle", gain: 0.07, delay: i * 0.075 }));
         slotTone(1318, 0.24, { type: "sine", gain: 0.05, delay: 0.27 });
+      } else if(name === "jackpotHit"){
+        [392, 523, 659, 784, 988].forEach((freq, i) => slotTone(freq, 0.11, { type: "square", gain: 0.055, delay: i * 0.055 }));
+        slotNoise(0.18, { filterFreq: 2400, gain: 0.035, delay: 0.18 });
+      } else if(name === "tierLock"){
+        slotTone(330, 0.08, { type: "triangle", gain: 0.05 });
+        slotTone(660, 0.1, { type: "triangle", gain: 0.055, delay: 0.08 });
+        slotTone(990, 0.14, { type: "triangle", gain: 0.05, delay: 0.18 });
+      } else if(name === "rewardReveal"){
+        [659, 784, 988, 1318].forEach((freq, i) => slotTone(freq, 0.12, { type: "sine", gain: 0.055, delay: i * 0.07 }));
+      } else if(name === "emptyBucket"){
+        slotTone(440, 0.08, { type: "triangle", gain: 0.04 });
+        slotTone(330, 0.11, { type: "triangle", gain: 0.038, delay: 0.08 });
+        slotNoise(0.12, { filterType: "lowpass", filterFreq: 420, gain: 0.04, delay: 0.12 });
+      } else if(name === "rerollCredit"){
+        slotTone(622, 0.08, { type: "triangle", gain: 0.055 });
+        slotTone(932, 0.12, { type: "triangle", gain: 0.05, delay: 0.08 });
+        slotTone(1244, 0.16, { type: "sine", gain: 0.045, delay: 0.18 });
       } else if(name === "miss"){
         slotTone(330, 0.12, { type: "triangle", gain: 0.045, endFreq: 260 });
         slotTone(220, 0.16, { type: "triangle", gain: 0.04, endFreq: 160, delay: 0.12 });
@@ -299,13 +329,15 @@
     setText("slot-daily-cap", "Bank Building: " + money(bu.today || 0) + " today; " + money(bu.week || 0) + " this week");
     setText("slot-weekly-cap", "Monthly Discretionary Spending: " + money(bu.month || 0) + " / " + money(bu.monthlyGoal || 0) + " unlocked; " + money(bu.monthlyRemaining || 0) + " still locked");
     setText("slot-shortfall-line", "Shortfall consequence: " + (constants.shortfallPenalty || "Leftover goal amount gets redirected."));
+    renderTierManager();
     renderRewards();
     if(!isSpinning) renderHistory();
     const btn = document.getElementById("slot-spin-btn");
     const spinCost = (slotState.constants && slotState.constants.spinCost) || 1;
+    const rerolls = (slotState.constants && slotState.constants.rerollCredits) || ((slotState.account && slotState.account.settings && slotState.account.settings.reroll_credits) || 0);
     if(btn) {
-      btn.disabled = isSpinning || credits < spinCost;
-      btn.textContent = "Spin (" + pointLabel(spinCost) + ")";
+      btn.disabled = isSpinning || (credits < spinCost && rerolls <= 0);
+      btn.textContent = rerolls > 0 ? "Free reroll (" + rerolls + ")" : "Spin (" + pointLabel(spinCost) + ")";
     }
   }
 
@@ -333,6 +365,47 @@
   function setText(id, text){
     const el = document.getElementById(id);
     if(el) el.textContent = text;
+  }
+
+  function rewardTiers(){
+    const constants = (slotState && slotState.constants) || {};
+    const settings = (slotState && slotState.account && slotState.account.settings) || {};
+    const tiers = constants.rewardTiers || settings.reward_tiers || DEFAULT_REWARD_TIERS;
+    return (Array.isArray(tiers) && tiers.length ? tiers : DEFAULT_REWARD_TIERS)
+      .map((tier, index) => ({
+        id: tier.id || ("tier_" + (index + 1)),
+        label: tier.label || ("Tier " + (index + 1)),
+        weight: Math.max(0, parseInt(tier.weight, 10) || 0),
+        active: tier.active !== false,
+        sort: Number.isFinite(Number(tier.sort)) ? Number(tier.sort) : index
+      }))
+      .sort((a, b) => a.sort - b.sort);
+  }
+
+  function activeRewardTiers(){
+    return rewardTiers().filter(tier => tier.active !== false);
+  }
+
+  function tierById(id){
+    return rewardTiers().find(tier => String(tier.id) === String(id)) || activeRewardTiers()[0] || DEFAULT_REWARD_TIERS[0];
+  }
+
+  function sourceLabel(id){
+    const source = PAYMENT_SOURCES.find(s => s.id === id || (id === "sponsor" && s.id === "sponsored"));
+    return source ? source.label : "Self";
+  }
+
+  function normalizeRewardSource(reward){
+    if(!reward) return "self";
+    if(reward.payment_source === "sponsor") return "sponsored";
+    if(reward.payment_source) return reward.payment_source;
+    if(reward.kind === "sponsor") return "sponsored";
+    if(["free", "choice", "reroll"].includes(reward.kind)) return "free";
+    return "self";
+  }
+
+  function rewardShares(reward){
+    return Math.max(0, Number(reward && (reward.chance_shares != null ? reward.chance_shares : reward.weight)) || 0);
   }
 
   function readAwardQueue(){
@@ -437,25 +510,40 @@
     const constants = slotState.constants || {};
     const spinCost = constants.spinCost || 1;
     const monthlyGoal = constants.monthlyGoalCents || 10000;
+    const jackpotRate = constants.jackpotHitRate == null ? 0.2 : constants.jackpotHitRate;
+    const sourceWeights = constants.paymentSourceWeights || {};
     const costInput = document.getElementById("slot-spin-cost-input");
+    const jackpotInput = document.getElementById("slot-jackpot-rate");
     const goalInput = document.getElementById("slot-monthly-goal");
+    const selfInput = document.getElementById("slot-source-self-weight");
+    const sponsoredInput = document.getElementById("slot-source-sponsored-weight");
+    const freeInput = document.getElementById("slot-source-free-weight");
     const penalty = document.getElementById("slot-shortfall-penalty");
     const rationale = document.getElementById("slot-scoring-rationale");
     if(costInput && document.activeElement !== costInput) costInput.value = spinCost;
+    if(jackpotInput && document.activeElement !== jackpotInput) jackpotInput.value = Math.round(jackpotRate * 100);
     if(goalInput && document.activeElement !== goalInput) goalInput.value = ((monthlyGoal || 0) / 100).toFixed(0);
+    if(selfInput && document.activeElement !== selfInput) selfInput.value = sourceWeights.self == null ? 45 : sourceWeights.self;
+    if(sponsoredInput && document.activeElement !== sponsoredInput) sponsoredInput.value = sourceWeights.sponsored == null ? 25 : sourceWeights.sponsored;
+    if(freeInput && document.activeElement !== freeInput) freeInput.value = sourceWeights.free == null ? 30 : sourceWeights.free;
     if(penalty && document.activeElement !== penalty) penalty.value = constants.shortfallPenalty || "";
     if(rationale && document.activeElement !== rationale) rationale.value = constants.scoringRationale || "";
     setText("slot-current-cost", pointLabel(spinCost) + " per spin");
     setText("slot-spin-cost-line", pointLabel(spinCost) + " per spin");
-    setText("slot-current-goal", "Monthly goal: " + money(monthlyGoal) + "; shortfall gets redirected.");
+    setText("slot-current-goal", "Jackpot hit: " + Math.round(jackpotRate * 100) + "%; monthly goal: " + money(monthlyGoal) + ".");
   }
 
   async function saveSettings(){
     const costInput = document.getElementById("slot-spin-cost-input");
+    const jackpotInput = document.getElementById("slot-jackpot-rate");
     const goalInput = document.getElementById("slot-monthly-goal");
+    const selfInput = document.getElementById("slot-source-self-weight");
+    const sponsoredInput = document.getElementById("slot-source-sponsored-weight");
+    const freeInput = document.getElementById("slot-source-free-weight");
     const penalty = document.getElementById("slot-shortfall-penalty");
     const rationale = document.getElementById("slot-scoring-rationale");
     const spinCost = Math.max(1, Math.min(250, parseInt(costInput && costInput.value, 10) || 25));
+    const jackpotHitRate = Math.max(0, Math.min(100, parseFloat(jackpotInput && jackpotInput.value) || 0)) / 100;
     const monthlyGoalCents = Math.max(100, Math.min(1000000, Math.round((parseFloat(goalInput && goalInput.value) || 1) * 100)));
     try {
       await api("/api/slot/settings", {
@@ -463,6 +551,13 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           spin_cost: spinCost,
+          jackpot_hit_rate: jackpotHitRate,
+          payment_source_weights: {
+            self: Math.max(0, parseInt(selfInput && selfInput.value, 10) || 0),
+            sponsored: Math.max(0, parseInt(sponsoredInput && sponsoredInput.value, 10) || 0),
+            free: Math.max(0, parseInt(freeInput && freeInput.value, 10) || 0)
+          },
+          reward_tiers: rewardTiers(),
           monthly_goal_cents: monthlyGoalCents,
           shortfall_penalty: penalty ? penalty.value : "",
           scoring_rationale: rationale ? rationale.value : ""
@@ -475,6 +570,123 @@
     }
   }
 
+  function renderTierManager(){
+    const el = document.getElementById("slot-tier-manager");
+    if(!el || !slotState) return;
+    const tiers = rewardTiers();
+    el.innerHTML =
+      '<div class="slot-tier-manager-head">' +
+        '<strong>Jackpot tiers</strong>' +
+        '<span>Roll source and tier, then spin within that bucket.</span>' +
+        '<button class="slot-mini primary" id="slot-add-tier" type="button">Add tier</button>' +
+      '</div>' +
+      '<div class="slot-tier-manager-list">' +
+        tiers.map((tier, index) =>
+          '<div class="slot-tier-row" data-tier-id="' + esc(tier.id) + '">' +
+            '<input class="slot-tier-label" value="' + esc(tier.label) + '" aria-label="Tier label">' +
+            '<input class="slot-tier-weight" type="number" min="0" step="1" value="' + esc(tier.weight) + '" aria-label="Tier weight">' +
+            '<button class="slot-mini slot-tier-up" type="button" ' + (index === 0 ? "disabled" : "") + '>Up</button>' +
+            '<button class="slot-mini slot-tier-down" type="button" ' + (index === tiers.length - 1 ? "disabled" : "") + '>Down</button>' +
+            '<button class="slot-mini slot-tier-toggle" type="button">' + (tier.active === false ? "Enable" : "Disable") + '</button>' +
+            '<button class="slot-mini danger slot-tier-delete" type="button">Delete</button>' +
+          '</div>'
+        ).join("") +
+      '</div>';
+    const add = el.querySelector("#slot-add-tier");
+    if(add) add.addEventListener("click", addTier);
+    el.querySelectorAll(".slot-tier-label,.slot-tier-weight").forEach(input => {
+      input.addEventListener("change", persistTierManager);
+      input.addEventListener("keydown", e => { if(e.key === "Enter") persistTierManager(); });
+    });
+    el.querySelectorAll(".slot-tier-up").forEach(btn => btn.addEventListener("click", () => moveTier(btn.closest(".slot-tier-row").dataset.tierId, -1)));
+    el.querySelectorAll(".slot-tier-down").forEach(btn => btn.addEventListener("click", () => moveTier(btn.closest(".slot-tier-row").dataset.tierId, 1)));
+    el.querySelectorAll(".slot-tier-toggle").forEach(btn => btn.addEventListener("click", () => toggleTier(btn.closest(".slot-tier-row").dataset.tierId)));
+    el.querySelectorAll(".slot-tier-delete").forEach(btn => btn.addEventListener("click", () => deleteTier(btn.closest(".slot-tier-row").dataset.tierId)));
+  }
+
+  function collectTierRows(){
+    const rows = Array.from(document.querySelectorAll("#slot-tier-manager .slot-tier-row"));
+    const current = new Map(rewardTiers().map(tier => [String(tier.id), tier]));
+    return rows.map((row, index) => {
+      const tier = current.get(String(row.dataset.tierId)) || {};
+      return {
+        id: row.dataset.tierId,
+        label: (row.querySelector(".slot-tier-label").value || tier.label || ("Tier " + (index + 1))).trim(),
+        weight: Math.max(0, parseInt(row.querySelector(".slot-tier-weight").value, 10) || 0),
+        active: tier.active !== false,
+        sort: index
+      };
+    });
+  }
+
+  function tierSlug(label){
+    return String(label || "tier").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || ("tier_" + Date.now());
+  }
+
+  async function saveTierSettings(tiers){
+    const current = (slotState && slotState.constants) || {};
+    try {
+      await api("/api/slot/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spin_cost: current.spinCost || 25,
+          jackpot_hit_rate: current.jackpotHitRate == null ? 0.2 : current.jackpotHitRate,
+          payment_source_weights: current.paymentSourceWeights || {},
+          reward_tiers: tiers,
+          monthly_goal_cents: current.monthlyGoalCents || 10000,
+          shortfall_penalty: current.shortfallPenalty || "",
+          scoring_rationale: current.scoringRationale || ""
+        })
+      });
+      await loadSlots();
+    } catch(e) {
+      setResult(e.message);
+    }
+  }
+
+  function persistTierManager(){
+    saveTierSettings(collectTierRows());
+  }
+
+  function addTier(){
+    const tiers = collectTierRows();
+    const label = "Tier " + (tiers.length + 1);
+    let id = tierSlug(label);
+    while(tiers.some(t => t.id === id)) id = id + "_" + String(Date.now()).slice(-4);
+    tiers.push({ id, label, weight: 1, active: true, sort: tiers.length });
+    saveTierSettings(tiers);
+  }
+
+  function moveTier(id, delta){
+    const tiers = collectTierRows();
+    const idx = tiers.findIndex(t => String(t.id) === String(id));
+    const next = idx + delta;
+    if(idx < 0 || next < 0 || next >= tiers.length) return;
+    const [tier] = tiers.splice(idx, 1);
+    tiers.splice(next, 0, tier);
+    tiers.forEach((t, i) => t.sort = i);
+    saveTierSettings(tiers);
+  }
+
+  function toggleTier(id){
+    const tiers = collectTierRows();
+    const tier = tiers.find(t => String(t.id) === String(id));
+    if(tier) tier.active = !tier.active;
+    saveTierSettings(tiers);
+  }
+
+  function deleteTier(id){
+    const tiers = collectTierRows();
+    if(tiers.length <= 1) {
+      setResult("Keep at least one tier.");
+      return;
+    }
+    const activeRewards = (slotState.rewards || []).filter(r => String(r.tier_id || "tier_i") === String(id) && r.active !== false);
+    if(activeRewards.length && !confirm("This tier has active rewards. Move them before deleting?")) return;
+    saveTierSettings(tiers.filter(t => String(t.id) !== String(id)).map((t, i) => ({ ...t, sort: i })));
+  }
+
   function renderRewards(){
     const list = document.getElementById("slot-reward-list");
     if(!list || !slotState) return;
@@ -483,19 +695,58 @@
       list.innerHTML = '<div class="slot-empty">No rewards match this view.</div>';
       return;
     }
-    list.innerHTML = rewards.map(r => {
+    const tiers = activeRewardTiers();
+    const tierOptionsHtml = tiers.map(t => '<option value="' + esc(t.id) + '">' + esc(t.label) + '</option>').join("");
+    const sourceOptionsHtml = PAYMENT_SOURCES.map(s => '<option value="' + esc(s.id) + '">' + esc(s.label) + '</option>').join("");
+    list.innerHTML = PAYMENT_SOURCES.map(source => {
+      const sourceRewards = rewards.filter(r => normalizeRewardSource(r) === source.id);
+      const count = sourceRewards.length;
+      return '<section class="slot-source-section" data-source="' + esc(source.id) + '">' +
+        '<div class="slot-source-head"><h4>' + esc(source.label) + '</h4><span>' + count + ' reward' + (count === 1 ? '' : 's') + '</span></div>' +
+        '<div class="slot-tier-board">' +
+          tiers.map(tier => {
+            const bucket = sourceRewards.filter(r => String(r.tier_id || "tier_i") === String(tier.id));
+            const totalShares = bucket.reduce((sum, r) => sum + rewardShares(r), 0);
+            return '<div class="slot-tier-column" data-source="' + esc(source.id) + '" data-tier-id="' + esc(tier.id) + '">' +
+              '<div class="slot-tier-column-head"><strong>' + esc(tier.label) + '</strong><span>' + totalShares + ' shares</span></div>' +
+              (bucket.length ? bucket.map(r => rewardCardHtml(r, tierOptionsHtml, sourceOptionsHtml)).join("") : '<div class="slot-empty small">No rewards here.</div>') +
+            '</div>';
+          }).join("") +
+        '</div>' +
+      '</section>';
+    }).join("");
+    list.querySelectorAll(".slot-edit").forEach(btn => btn.addEventListener("click", () => openForm(findReward(btn.dataset.id))));
+    list.querySelectorAll(".slot-delete").forEach(btn => btn.addEventListener("click", () => requestDeleteReward(btn.dataset.id)));
+    list.querySelectorAll(".slot-delete-confirm-yes").forEach(btn => btn.addEventListener("click", () => deleteReward(btn.dataset.id)));
+    list.querySelectorAll(".slot-delete-confirm-no").forEach(btn => btn.addEventListener("click", () => {
+      pendingDeleteRewardId = null;
+      renderRewards();
+    }));
+    list.querySelectorAll(".slot-card-source,.slot-card-tier,.slot-card-shares,.slot-card-active").forEach(input => {
+      input.addEventListener("change", () => quickUpdateReward(input.closest(".slot-reward-row")));
+    });
+  }
+
+  function rewardCardHtml(r, tierOptionsHtml, sourceOptionsHtml){
       const value = r.value_cents ? '<span>' + money(r.value_cents) + '</span>' : '';
       const bank = r.bank_delta_cents ? '<span>+' + money(r.bank_delta_cents) + ' bank</span>' : '';
       const locked = r.eligible ? '' : '<span class="slot-locked">' + lockLabel(r.locked_reason) + '</span>';
       const symbol = rewardSymbol(r);
       const oddsLabel = oddsText(r, slotState.rewards || []);
-      return '<div class="slot-reward-row ' + (r.eligible ? '' : 'locked') + '" data-id="' + r.id + '">' +
+      return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + '" data-id="' + r.id + '">' +
         '<div class="slot-reward-main">' +
           '<div class="slot-reward-title"><span class="slot-symbol-badge" data-symbol="' + esc(symbol.toLowerCase()) + '">' + esc(symbol) + '</span>' + esc(r.title) + '</div>' +
           '<div class="slot-reward-meta">' +
-            '<span>' + esc(KIND_LABELS[r.kind] || r.kind) + '</span>' +
+            '<span>' + esc(sourceLabel(normalizeRewardSource(r))) + '</span>' +
+            '<span>' + esc(tierById(r.tier_id).label) + '</span>' +
             '<span>' + esc(oddsLabel) + '</span>' +
             value + bank + locked +
+          '</div>' +
+          '<div class="slot-reward-inline-edit">' +
+            '<select class="slot-card-source" aria-label="Paid by">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
+            '<select class="slot-card-tier" aria-label="Tier">' + tierOptionsHtml.replace('value="' + esc(r.tier_id || "tier_i") + '"', 'value="' + esc(r.tier_id || "tier_i") + '" selected') + '</select>' +
+            '<input class="slot-card-shares" type="number" min="0" step="1" value="' + esc(rewardShares(r)) + '" aria-label="Reward chances">' +
+            '<label class="slot-card-active"><input type="checkbox" ' + (r.active !== false ? 'checked' : '') + '> Active</label>' +
           '</div>' +
         '</div>' +
         '<div class="slot-reward-actions">' +
@@ -510,23 +761,17 @@
             : '') +
         '</div>' +
       '</div>';
-    }).join("");
-    list.querySelectorAll(".slot-edit").forEach(btn => btn.addEventListener("click", () => openForm(findReward(btn.dataset.id))));
-    list.querySelectorAll(".slot-delete").forEach(btn => btn.addEventListener("click", () => requestDeleteReward(btn.dataset.id)));
-    list.querySelectorAll(".slot-delete-confirm-yes").forEach(btn => btn.addEventListener("click", () => deleteReward(btn.dataset.id)));
-    list.querySelectorAll(".slot-delete-confirm-no").forEach(btn => btn.addEventListener("click", () => {
-      pendingDeleteRewardId = null;
-      renderRewards();
-    }));
   }
 
   function oddsText(reward, rewards){
-    const weight = reward && reward.weight ? Number(reward.weight) : 0;
-    const pool = (rewards || []).filter(r => r && r.kind !== "miss" && r.active !== false && (r.weight || 0) > 0);
-    const total = pool.reduce((sum, r) => sum + (Number(r.weight) || 0), 0);
-    const pct = total > 0 && weight > 0 ? (weight / total) * 100 : 0;
+    const shares = rewardShares(reward);
+    const source = normalizeRewardSource(reward);
+    const tierId = String((reward && reward.tier_id) || "tier_i");
+    const bucket = (rewards || []).filter(r => r && r.kind !== "miss" && r.active !== false && normalizeRewardSource(r) === source && String(r.tier_id || "tier_i") === tierId && rewardShares(r) > 0);
+    const total = bucket.reduce((sum, r) => sum + rewardShares(r), 0);
+    const pct = total > 0 && shares > 0 ? (shares / total) * 100 : 0;
     const pctText = pct >= 10 ? pct.toFixed(0) : pct >= 1 ? pct.toFixed(1) : pct > 0 ? pct.toFixed(2) : "0";
-    return weight + " odds share" + (weight === 1 ? "" : "s") + " (~" + pctText + "%)";
+    return shares + " chance" + (shares === 1 ? "" : "s") + " in bucket (~" + pctText + "%)";
   }
 
   function filterRewards(rewards){
@@ -534,8 +779,8 @@
     return [...rewards]
       .filter(r => {
         if(r.kind === "miss") return false;
-        if(filter === "free" && r.kind !== "free") return false;
-        if(filter === "jackpots" && !isJackpotReward(r)) return false;
+        if(filter === "free" && normalizeRewardSource(r) !== "free") return false;
+        if(filter === "jackpots" && normalizeRewardSource(r) === "free") return false;
         if(rewardCategory !== "all" && r.kind !== rewardCategory) return false;
         if(rewardEligibility === "eligible" && !r.eligible) return false;
         if(rewardEligibility === "locked" && r.eligible) return false;
@@ -573,6 +818,9 @@
       reward.title,
       reward.kind,
       KIND_LABELS[reward.kind],
+      normalizeRewardSource(reward),
+      sourceLabel(normalizeRewardSource(reward)),
+      tierById(reward.tier_id).label,
       rewardSymbol(reward),
       reward.notes,
       reward.sponsor_type,
@@ -624,7 +872,15 @@
       const symbol = rewardSymbol(snap);
       const taskDrip = snap.source_type === "task_bank_drip";
       const screenBank = snap.source_type === "slot_screen_bank_builder";
-      const metaLabel = taskDrip ? "task bank drip" : screenBank ? "Bank Building hit" : "needs 3 in a row";
+      const stages = snap.slot_stages || {};
+      const stageLabel = stages.empty_bucket
+        ? "empty bucket -> reroll credit"
+        : stages.jackpot_hit === false
+        ? "jackpot miss"
+        : stages.payment_source && stages.tier
+        ? (stages.payment_source.label + " / " + stages.tier.label)
+        : "";
+      const metaLabel = stageLabel || (taskDrip ? "task bank drip" : screenBank ? "Bank Building hit" : "needs 3 in a row");
       const bank = s.bank_delta_cents ? ' <span class="slot-history-bank">+' + money(s.bank_delta_cents) + '</span>' : '';
       const reserve = s.bank_reserved_cents ? ' <span class="slot-history-bank">reserve ' + money(s.bank_reserved_cents) + '</span>' : '';
       const title = miss ? "No prize" : (snap.title || "Reward");
@@ -776,10 +1032,47 @@
     slotPetReact(petHelps ? "pull" : "idle", petHelps ? "I got it." : "Here we go.", 1200);
     slotPlay("lever");
     try {
+      document.querySelectorAll(".slot-stage-chip").forEach(chip => { chip.dataset.state = ""; });
       const spinRow = await api("/api/slot/spin", { method: "POST" });
       const snap = spinRow.reward_snapshot || {};
-      setResult("Building houses...");
+      const stages = snap.slot_stages || {};
+      updateStageTrack("jackpot", "spinning");
+      setResult("Spin 1: chasing the jackpot...");
+      await animateReels(jackpotStageSymbols(stages.jackpot_hit));
+      if(!stages.jackpot_hit){
+        updateStageTrack("jackpot", "miss");
+        slotPlay("miss");
+        slotPetReact("sad", "So close.", 2100);
+        highlightWinningCells(spinRow, snap);
+        animateRewardReveal(spinRow, snap);
+        setResult(resultText(spinRow, snap));
+        isSpinning = false;
+        await loadSlots();
+        return;
+      }
+      updateStageTrack("jackpot", "hit");
+      slotPlay("jackpotHit");
+      setResult("Jackpot hit! Spin 2: source and tier...");
+      updateStageTrack("bucket", "spinning");
+      await animateReels(bucketStageSymbols(stages));
+      updateStageTrack("bucket", stages.empty_bucket ? "empty" : "hit");
+      slotPlay(stages.empty_bucket ? "emptyBucket" : "tierLock");
+      if(stages.empty_bucket){
+        setResult(resultText(spinRow, snap));
+        await animateReels(resultSymbols(spinRow, snap));
+        highlightWinningCells(spinRow, snap);
+        animateRewardReveal(spinRow, snap);
+        updateStageTrack("reward", "reroll");
+        slotPlay("rerollCredit");
+        slotPetReact("happy", "Reroll loaded.", 2400);
+        isSpinning = false;
+        await loadSlots();
+        return;
+      }
+      setResult("Spin 3: reward reveal...");
+      updateStageTrack("reward", "spinning");
       await animateReels(resultSymbols(spinRow, snap));
+      updateStageTrack("reward", "hit");
       const bankHit = (spinRow.bank_delta_cents || 0) > 0;
       if(bankHit) {
         highlightWinningCells(spinRow, snap);
@@ -805,7 +1098,7 @@
         slotPlay("pending");
         slotPetReact("happy", snap.requires_jackpot_choice ? "Pick one." : "Prize waiting.", 2300);
       } else {
-        slotPlay("win");
+        slotPlay("rewardReveal");
         slotPetReact("happy", "Nice pull.", 2300);
       }
       isSpinning = false;
@@ -821,6 +1114,34 @@
       slotPetReact("sad", "Need more points.", 2200);
       if(btn) btn.disabled = false;
     }
+  }
+
+  function updateStageTrack(stage, state){
+    document.querySelectorAll(".slot-stage-chip").forEach(chip => {
+      if(chip.dataset.stage === stage){
+        chip.dataset.state = state || "";
+      } else if(state === "spinning") {
+        chip.dataset.state = chip.dataset.state || "";
+      }
+    });
+  }
+
+  function jackpotStageSymbols(hit){
+    const board = Array.from({ length: 15 }, (_, i) => FILLER_SYMBOLS[i % FILLER_SYMBOLS.length]);
+    const line = PAYLINES[hit ? 0 : 3];
+    line.forEach(i => { board[i] = hit ? "JACKPOT" : "MISS"; });
+    return board;
+  }
+
+  function bucketStageSymbols(stages){
+    const source = (stages && stages.payment_source && stages.payment_source.label) || "Source";
+    const tier = (stages && stages.tier && stages.tier.label) || "Tier";
+    const sourceSym = String(source).toUpperCase();
+    const tierSym = String(tier).toUpperCase().replace(/\s+/g, " ");
+    const board = Array.from({ length: 15 }, (_, i) => i % 2 ? tierSym : sourceSym);
+    [0, 6, 12].forEach(i => { board[i] = sourceSym; });
+    [2, 8, 14].forEach(i => { board[i] = tierSym; });
+    return board;
   }
 
   function animateReels(finalSymbols){
@@ -1767,6 +2088,13 @@
   }
 
   function resultText(spinRow, snap){
+    const stages = (snap && snap.slot_stages) || {};
+    if(stages.empty_bucket) {
+      const source = stages.payment_source && stages.payment_source.label ? stages.payment_source.label : sourceLabel(snap.payment_source);
+      const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
+      return source + " " + tier + " was empty. Free reroll credit awarded.";
+    }
+    if(stages.jackpot_hit === false) return "No jackpot this spin. The lights are warming up.";
     const payout = (snap && snap.bank_screen_payout) || {};
     const bankDelta = spinRow.bank_delta_cents || payout.cents || 0;
     if(bankDelta > 0) {
@@ -1775,11 +2103,13 @@
       const choice = snap.requires_jackpot_choice ? " Pick a jackpot from the list." : "";
       return "Bank Building paid " + money(bankDelta) + units + ". Funds moved into the Reward Reserve." + cap + choice;
     }
-    if(spinRow.status === "miss" || snap.kind === "miss") return "No reward this spin: No prize";
+    if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
     if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
     if(spinRow.status === "pending" && snap.requires_jackpot_choice) return "Jackpot hit. Pick a prize from the list.";
     if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
-    return "Prize reveal: " + (snap.title || "Reward");
+    const source = snap.payment_source ? sourceLabel(snap.payment_source) + " " : "";
+    const tier = snap.tier_id ? tierById(snap.tier_id).label + ": " : "";
+    return "Prize reveal: " + source + tier + (snap.title || "Reward");
   }
 
   function setResult(text){
@@ -1794,9 +2124,11 @@
     form.style.display = "";
     setText("slot-form-heading", reward ? "Edit reward" : "New reward");
     val("slot-form-title", reward ? reward.title : "");
+    val("slot-form-source", reward ? normalizeRewardSource(reward) : "free");
+    populateTierSelect(reward ? reward.tier_id : "tier_i");
     val("slot-form-kind", reward ? reward.kind : "free");
     val("slot-form-sponsor", reward ? reward.sponsor_type : "self");
-    val("slot-form-weight", reward ? reward.weight : 10);
+    val("slot-form-weight", reward ? rewardShares(reward) : 10);
     val("slot-form-value", reward ? ((reward.value_cents || 0) / 100) : "");
     sponsorSplitsDraft = sponsorSplitsForReward(reward);
     checked("slot-form-active", reward ? reward.active : true);
@@ -1814,23 +2146,22 @@
 
   function syncRewardFormUi(){
     const kindEl = document.getElementById("slot-form-kind");
+    const sourceEl = document.getElementById("slot-form-source");
     const sponsorEl = document.getElementById("slot-form-sponsor");
-    const kind = kindEl ? kindEl.value : "free";
+    const source = sourceEl ? sourceEl.value : "free";
+    const valueDollars = parseFloat((document.getElementById("slot-form-value") || {}).value || "0") || 0;
+    const kind = source === "sponsored" ? "sponsor" : source === "self" && valueDollars > 0 ? "bank_gated" : "free";
+    if(kindEl) kindEl.value = kind;
     let sponsor = sponsorEl ? sponsorEl.value : "self";
-    const needsPrice = ["small_paid", "bank_gated", "sponsor"].includes(kind);
-    const usesSponsor = kind === "sponsor";
+    const needsPrice = source !== "free";
+    const usesSponsor = source === "sponsored";
     const form = document.getElementById("slot-reward-form");
     if(form){
       form.dataset.rewardKind = kind;
-      form.querySelectorAll(".slot-kind-option").forEach(btn => {
-        const active = btn.dataset.slotKind === kind;
-        btn.classList.toggle("active", active);
-        btn.setAttribute("aria-checked", active ? "true" : "false");
-      });
       form.querySelectorAll('[data-slot-field="value"]').forEach(el => el.hidden = !needsPrice);
       form.querySelectorAll('[data-slot-field="sponsor"]').forEach(el => el.hidden = !usesSponsor);
     }
-    setText("slot-form-subtitle", FORM_SUBTITLES[kind] || "Reward");
+    setText("slot-form-subtitle", sourceLabel(source) + " " + (tierById((document.getElementById("slot-form-tier") || {}).value).label || "Tier I"));
     if(!usesSponsor) {
       val("slot-form-sponsor", "self");
       sponsorSplitsDraft = [];
@@ -1844,6 +2175,16 @@
     if(!needsPrice) val("slot-form-value", "");
     renderSponsorSplits();
     updateOddsHint();
+  }
+
+  function populateTierSelect(selectedId){
+    const select = document.getElementById("slot-form-tier");
+    if(!select) return;
+    const tiers = activeRewardTiers();
+    select.innerHTML = tiers.map(tier =>
+      '<option value="' + esc(tier.id) + '">' + esc(tier.label) + '</option>'
+    ).join("");
+    select.value = selectedId && tiers.some(t => String(t.id) === String(selectedId)) ? selectedId : (tiers[0] && tiers[0].id) || "tier_i";
   }
 
   function sponsorSplitsForReward(reward){
@@ -1901,13 +2242,15 @@
     if(!note || !input) return;
     const weight = parseInt(input.value, 10) || 0;
     const rewards = (slotState && slotState.rewards) || [];
+    const source = (document.getElementById("slot-form-source") || {}).value || "free";
+    const tierId = (document.getElementById("slot-form-tier") || {}).value || "tier_i";
     const total = rewards
       .filter(r => !editingId || String(r.id) !== String(editingId))
-      .filter(r => r.kind !== "miss" && r.active !== false && (r.weight || 0) > 0)
-      .reduce((sum, r) => sum + (Number(r.weight) || 0), 0) + weight;
+      .filter(r => r.kind !== "miss" && r.active !== false && normalizeRewardSource(r) === source && String(r.tier_id || "tier_i") === String(tierId) && rewardShares(r) > 0)
+      .reduce((sum, r) => sum + rewardShares(r), 0) + weight;
     const pct = total > 0 && weight > 0 ? (weight / total) * 100 : 0;
     const pctText = pct >= 10 ? pct.toFixed(0) : pct >= 1 ? pct.toFixed(1) : pct > 0 ? pct.toFixed(2) : "0";
-    note.textContent = weight ? (weight + " shares is about " + pctText + "% of the active pool.") : "0 shares keeps this out of the draw.";
+    note.textContent = weight ? (weight + " chances is about " + pctText + "% inside this source+tier bucket.") : "0 chances keeps this out of the draw.";
   }
 
   function val(id, value){
@@ -1922,9 +2265,11 @@
 
   function formPayload(){
     const valueDollars = parseFloat(document.getElementById("slot-form-value").value || "0") || 0;
-    const kind = document.getElementById("slot-form-kind").value;
+    const source = (document.getElementById("slot-form-source") || {}).value || "free";
+    const tierId = (document.getElementById("slot-form-tier") || {}).value || "tier_i";
     const valueCents = Math.round(valueDollars * 100);
-    const sponsorSplits = kind === "sponsor"
+    const kind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    const sponsorSplits = source === "sponsored"
       ? sponsorSplitsDraft.map(row => ({
           name: String(row.name || "").trim(),
           percent: Math.max(0, Math.min(100, parseInt(row.percent, 10) || 0))
@@ -1936,6 +2281,9 @@
       sponsor_type: sponsorSplits.length ? "split" : "self",
       sponsor_splits: sponsorSplits,
       weight: parseInt(document.getElementById("slot-form-weight").value, 10) || 0,
+      chance_shares: parseInt(document.getElementById("slot-form-weight").value, 10) || 0,
+      payment_source: source,
+      tier_id: tierId,
       active: document.getElementById("slot-form-active").checked,
       sponsor_active: true,
       value_cents: valueCents,
@@ -1966,6 +2314,57 @@
     } catch(e) {
       await loadSlots();
       setResult(e.message);
+    }
+  }
+
+  function payloadFromReward(reward, patch){
+    const source = (patch && patch.payment_source) || normalizeRewardSource(reward);
+    const valueCents = patch && patch.value_cents != null ? patch.value_cents : (reward.value_cents || 0);
+    const kind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    return {
+      title: reward.title,
+      kind,
+      sponsor_type: reward.sponsor_type || "self",
+      sponsor_splits: reward.sponsor_splits || [],
+      weight: rewardShares(reward),
+      chance_shares: rewardShares(reward),
+      payment_source: source,
+      tier_id: reward.tier_id || "tier_i",
+      active: reward.active !== false,
+      sponsor_active: true,
+      value_cents: valueCents,
+      bank_delta_cents: reward.bank_delta_cents || 0,
+      requires_confirmation: false,
+      cooldown_days: reward.cooldown_days || 0,
+      unlock_threshold_cents: reward.unlock_threshold_cents || valueCents,
+      notes: reward.notes || "",
+      ...(patch || {})
+    };
+  }
+
+  async function quickUpdateReward(row){
+    if(!row) return;
+    const reward = findReward(row.dataset.id);
+    if(!reward) return;
+    const source = row.querySelector(".slot-card-source").value;
+    const tier = row.querySelector(".slot-card-tier").value;
+    const shares = Math.max(0, parseInt(row.querySelector(".slot-card-shares").value, 10) || 0);
+    const active = !!(row.querySelector(".slot-card-active input") && row.querySelector(".slot-card-active input").checked);
+    const payload = payloadFromReward(reward, {
+      payment_source: source,
+      tier_id: tier,
+      weight: shares,
+      chance_shares: shares,
+      active
+    });
+    try {
+      Object.assign(reward, payload);
+      renderRewards();
+      await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      await loadSlots();
+    } catch(e) {
+      setResult(e.message);
+      await loadSlots();
     }
   }
 
@@ -2241,6 +2640,12 @@
         syncRewardFormUi();
       });
     });
+    const sourceSelect = document.getElementById("slot-form-source");
+    if(sourceSelect) sourceSelect.addEventListener("change", syncRewardFormUi);
+    const tierSelect = document.getElementById("slot-form-tier");
+    if(tierSelect) tierSelect.addEventListener("change", syncRewardFormUi);
+    const valueInput = document.getElementById("slot-form-value");
+    if(valueInput) valueInput.addEventListener("input", syncRewardFormUi);
     const sponsorSelect = document.getElementById("slot-form-sponsor");
     if(sponsorSelect) sponsorSelect.addEventListener("change", syncRewardFormUi);
     const addSponsorPersonBtn = document.getElementById("slot-add-sponsor-person");

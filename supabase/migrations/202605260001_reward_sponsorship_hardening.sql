@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS slot_rewards (
   sponsor_type TEXT NOT NULL DEFAULT 'self',
   sponsor_splits JSONB NOT NULL DEFAULT '[]',
   weight INTEGER NOT NULL DEFAULT 1,
+  chance_shares INTEGER NOT NULL DEFAULT 1,
+  payment_source TEXT NOT NULL DEFAULT 'self',
+  tier_id TEXT NOT NULL DEFAULT 'tier_i',
   active BOOLEAN NOT NULL DEFAULT TRUE,
   sponsor_active BOOLEAN NOT NULL DEFAULT TRUE,
   value_cents INTEGER NOT NULL DEFAULT 0,
@@ -93,7 +96,24 @@ CREATE TABLE IF NOT EXISTS todo_sponsorships (
 
 ALTER TABLE slot_rewards
   ADD COLUMN IF NOT EXISTS sponsor_splits JSONB NOT NULL DEFAULT '[]',
+  ADD COLUMN IF NOT EXISTS chance_shares INTEGER NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS payment_source TEXT NOT NULL DEFAULT 'self',
+  ADD COLUMN IF NOT EXISTS tier_id TEXT NOT NULL DEFAULT 'tier_i',
   ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+UPDATE slot_rewards
+   SET chance_shares = GREATEST(0, weight)
+ WHERE chance_shares = 1
+   AND weight <> 1;
+
+UPDATE slot_rewards
+   SET payment_source = CASE
+     WHEN kind = 'sponsor' THEN 'sponsored'
+     WHEN kind IN ('free','choice','reroll') THEN 'free'
+     ELSE payment_source
+   END
+ WHERE payment_source = 'self'
+   AND kind IN ('sponsor','free','choice','reroll');
 
 ALTER TABLE slot_point_ledger
   ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
