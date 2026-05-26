@@ -23,6 +23,9 @@ data/brain/engrams/
 .gstack/
 supabase/.temp/
 
+# Local Git worktrees for this repo
+.worktrees/
+
 # Vault — owned by its own git repo, never tracked here
 vault/
 

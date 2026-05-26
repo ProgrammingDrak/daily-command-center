@@ -622,6 +622,7 @@ function nextQuarterHHMM() {
 }
 
 async function ensureTodoShareTables() {
+  await slotStore.ensureSchema();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS todo_shares (
       id             SERIAL PRIMARY KEY,
@@ -653,12 +654,14 @@ async function ensureTodoShareTables() {
       reward_title     TEXT NOT NULL,
       note             TEXT NOT NULL DEFAULT '',
       value_cents      INTEGER NOT NULL DEFAULT 0,
+      slot_reward_id   INTEGER REFERENCES slot_rewards(id),
       status           TEXT NOT NULL DEFAULT 'pending',
       created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS task_date DATE");
+  await pool.query("ALTER TABLE todo_sponsorships ADD COLUMN IF NOT EXISTS slot_reward_id INTEGER REFERENCES slot_rewards(id)");
   await pool.query("CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_workspace_status ON todo_sponsorships(workspace_id, status, created_at DESC)");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS todo_task_reactions (
@@ -1143,14 +1146,20 @@ async function activateTodoShareBounty(sponsorship, userId) {
   const rootId = await blockDB.ensureDayRoot(date, userId || null, sponsorship.workspace_id);
   const root = await blockDB.getBlock(rootId);
   const props = root && root.properties ? root.properties : { date };
-  const existing = props._bounty;
-  const existingTaskId = existing && existing.taskId ? String(existing.taskId) : "";
-  if (existingTaskId && existingTaskId !== taskId) {
-    const err = new Error("Today's bounty is already set");
+  const existing = normalizeBountyState(props._bounty);
+  const selfTaskId = existing.self && existing.self.taskId ? String(existing.self.taskId) : "";
+  const partnerTaskId = existing.partner && existing.partner.taskId ? String(existing.partner.taskId) : "";
+  if (selfTaskId && selfTaskId !== taskId) {
+    const err = new Error("Sponsor bounty must stack on today's self bounty task");
     err.statusCode = 409;
     throw err;
   }
-  const bounty = existingTaskId ? existing : {
+  if (partnerTaskId && partnerTaskId !== taskId) {
+    const err = new Error("Today's sponsor bounty is already set");
+    err.statusCode = 409;
+    throw err;
+  }
+  const partner = partnerTaskId ? existing.partner : {
     taskId,
     taskTitle: sponsorship.task_title,
     placedAt: new Date().toISOString(),
@@ -1158,9 +1167,22 @@ async function activateTodoShareBounty(sponsorship, userId) {
     sponsorshipId: sponsorship.id,
     sponsorName: sponsorship.sponsor_name || ""
   };
+  const bounty = { ...existing, partner };
   await blockDB.updateBlock(rootId, { properties: { ...props, _bounty: bounty } });
   broadcast("blocks-changed", { action: "public-bounty-approved", blockIds: [rootId] }, sponsorship.workspace_id);
   return bounty;
+}
+
+function normalizeBountyState(value) {
+  if (!value || typeof value !== "object") return { self: null, partner: null };
+  if (value.self || value.partner) {
+    return {
+      self: value.self || null,
+      partner: value.partner || null,
+    };
+  }
+  if (value.taskId) return { self: value, partner: null };
+  return { self: null, partner: null };
 }
 
 app.get("/api/todo-share", async (req, res) => {
@@ -1240,6 +1262,7 @@ app.get("/api/todo-share/reactions", async (req, res) => {
 app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
   try {
     await ensureTodoShareTables();
+    await slotStore.ensureSchema();
     const status = String(req.body?.status || "").toLowerCase();
     if (!["approved", "dismissed", "pending"].includes(status)) return res.status(400).json({ error: "Invalid status" });
     const { rows: existingRows } = await pool.query(
@@ -1253,30 +1276,50 @@ app.post("/api/todo-share/sponsorships/:id/status", async (req, res) => {
     if (status === "approved" && existingRows[0].kind === "bounty") {
       bounty = await activateTodoShareBounty(existingRows[0], req.session?.userId || null);
     }
-    const { rows } = await pool.query(
-      `UPDATE todo_sponsorships
-          SET status = $3, updated_at = NOW()
-        WHERE id = $1 AND workspace_id = $2
-        RETURNING *`,
-      [Number(req.params.id), req.workspaceId, status]
-    );
-    const sponsorship = rows[0];
+    let sponsorship = existingRows[0];
     let reward = null;
-    if (status === "approved" && sponsorship.kind === "reward") {
+    let slotRewardId = sponsorship.slot_reward_id || null;
+    if (status === "approved" && sponsorship.kind === "reward" && slotRewardId) {
+      const { rows: rewardRows } = await pool.query(
+        "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL",
+        [req.workspaceId, slotRewardId]
+      );
+      reward = rewardRows[0] || null;
+    }
+    if (status === "approved" && sponsorship.kind === "reward" && !reward) {
       const sponsor = sponsorship.sponsor_name ? ` from ${sponsorship.sponsor_name}` : "";
-      reward = await slotStore.createReward(req.workspaceId, {
-        title: `${sponsorship.reward_title}${sponsor}`.slice(0, 180),
-        kind: "sponsor",
-        sponsor_type: "accountability_partner",
-        sponsor_splits: [{ name: sponsorship.sponsor_name, email: sponsorship.sponsor_email || "", value_cents: sponsorship.value_cents }],
-        weight: 5,
-        active: true,
-        sponsor_active: true,
-        value_cents: sponsorship.value_cents,
-        notes: `Shared todo reward for "${sponsorship.task_title}". ${sponsorship.note || ""}`.trim()
-      });
+      const title = `${sponsorship.reward_title}${sponsor}`.slice(0, 180);
+      const notes = `Shared todo reward for "${sponsorship.task_title}". ${sponsorship.note || ""}`.trim();
+      const sponsorSplits = [{ name: sponsorship.sponsor_name, email: sponsorship.sponsor_email || "", percent: 100, value_cents: sponsorship.value_cents }];
+      const { rows: rewardRows } = await pool.query(
+        `INSERT INTO slot_rewards
+         (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,active,sponsor_active,value_cents,bank_delta_cents,requires_confirmation,cooldown_days,unlock_threshold_cents,notes)
+         VALUES ($1,$2,'sponsor','accountability_partner',$3,5,TRUE,TRUE,$4,0,FALSE,0,0,$5)
+         ON CONFLICT (workspace_id, title) DO UPDATE
+           SET sponsor_splits = EXCLUDED.sponsor_splits,
+               value_cents = EXCLUDED.value_cents,
+               notes = EXCLUDED.notes,
+               active = TRUE,
+               deleted_at = NULL,
+               weight = GREATEST(slot_rewards.weight, EXCLUDED.weight),
+               updated_at = NOW()
+         RETURNING *`,
+        [req.workspaceId, title, JSON.stringify(sponsorSplits), sponsorship.value_cents || 0, notes]
+      );
+      reward = rewardRows[0];
+      slotRewardId = reward.id;
       broadcast("slot-changed", { action: "sponsored-reward-approved" }, req.workspaceId);
     }
+    const { rows } = await pool.query(
+      `UPDATE todo_sponsorships
+          SET status = $3,
+              slot_reward_id = COALESCE($4, slot_reward_id),
+              updated_at = NOW()
+        WHERE id = $1 AND workspace_id = $2
+        RETURNING *`,
+      [Number(req.params.id), req.workspaceId, status, slotRewardId]
+    );
+    sponsorship = rows[0];
     broadcast("todo-share-changed", { action: "sponsorship-status", id: sponsorship.id }, req.workspaceId);
     res.json({ sponsorship, reward, bounty });
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }

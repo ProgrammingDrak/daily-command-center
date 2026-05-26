@@ -1199,14 +1199,15 @@ function buildScheduled() {
     html += '<div class="tri-group-label"><span class="tri-dot" style="background:var(--amber)"></span>Needs Review <span style="opacity:0.6;font-weight:400;font-size:10px">(past · incomplete)</span></div>';
     needsReview.forEach(ev => {
       const c = cfg(ev.type);
-      const isBounty = typeof isBountyTask === "function" && isBountyTask(ev.id);
-      const bountyPlaced = !!(typeof getDailyBounty === "function" && getDailyBounty());
+      const bountyCount = typeof getBountyCountForTask === "function" ? getBountyCountForTask(ev.id) : ((typeof isBountyTask === "function" && isBountyTask(ev.id)) ? 1 : 0);
+      const isBounty = bountyCount > 0;
+      const bountyPlaced = typeof hasSelfBounty === "function" ? hasSelfBounty() : !!(typeof getDailyBounty === "function" && getDailyBounty());
       const canEditBounty = typeof viewMode === "undefined" || viewMode !== "archive";
       html +=
         '<div class="board-card" style="margin-bottom:6px">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
-            '<div class="title-row"><span class="ttl">' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip">Bounty x2</span>' : '') + '</div>' +
+            '<div class="title-row"><span class="ttl">' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip">Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
           (!isMeeting(ev) && canEditBounty && (!bountyPlaced || isBounty) ? '<button class="add-btn sched-bounty-btn" data-id="' + ev.id + '" style="background:rgba(251,191,36,0.12);color:var(--amber)">Bounty</button>' : '') +
@@ -1224,12 +1225,13 @@ function buildScheduled() {
     rest.forEach(ev => {
       const c = cfg(ev.type);
       const done = isDone(ev);
-      const isBounty = typeof isBountyTask === "function" && isBountyTask(ev.id);
+      const bountyCount = typeof getBountyCountForTask === "function" ? getBountyCountForTask(ev.id) : ((typeof isBountyTask === "function" && isBountyTask(ev.id)) ? 1 : 0);
+      const isBounty = bountyCount > 0;
       html +=
         '<div class="board-card" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
-            '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + '">Bounty x2</span>' : '') + '</div>' +
+            '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + '">Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
           '<button class="add-btn sched-repeat-btn" data-id="' + ev.id + '" title="Turn into a repeat responsibility">Repeat</button>' +

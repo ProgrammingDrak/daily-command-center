@@ -152,17 +152,47 @@ function saveDeferred(arr){
 // ======== DAILY BOUNTY ========
 // One immutable "today succeeds if this gets done" marker. Completion pays 2x points and can stack with one partner bounty.
 let BOUNTY_KEY = "pa-bounty-" + ((__state && __state.date) ? __state.date : "unknown");
+function normalizeBountyState(value){
+  if(!value||typeof value!=="object")return null;
+  let state;
+  if(value.self||value.partner){
+    state={self:value.self||null,partner:value.partner||null};
+  }else if(value.taskId){
+    state={self:value,partner:null};
+  }else{
+    state={self:null,partner:null};
+  }
+  return state.self||state.partner?state:null;
+}
+function bountyEntryMatches(entry,id){return !!(entry&&String(entry.taskId)===String(id))}
+function getBountyCountForTask(id){
+  const state=normalizeBountyState(dailyBounty);
+  if(!state)return 0;
+  let count=0;
+  if(bountyEntryMatches(state.self,id))count++;
+  if(bountyEntryMatches(state.partner,id))count++;
+  return Math.min(2,count);
+}
+function hasSelfBounty(){const state=normalizeBountyState(dailyBounty);return !!(state&&state.self&&state.self.taskId)}
+function hasPartnerBounty(){const state=normalizeBountyState(dailyBounty);return !!(state&&state.partner&&state.partner.taskId)}
 function loadBountyState(){
   if(window.USE_BLOCKSTORE&&window.blockStore){
     const v=_bsProp("_bounty",null);
-    if(v&&v.taskId)return v;
+    const state=normalizeBountyState(v);
+    if(state)return state;
   }
-  try{return JSON.parse(localStorage.getItem(BOUNTY_KEY)||"null")}catch(e){return null}
+  try{return normalizeBountyState(JSON.parse(localStorage.getItem(BOUNTY_KEY)||"null"))}catch(e){return null}
 }
 function saveBountyState(){
-  if(dailyBounty&&dailyBounty.taskId){
-    const ev=scheduled.find(e=>e.id===dailyBounty.taskId);
-    if(ev)dailyBounty.taskTitle=ev.title;
+  dailyBounty=normalizeBountyState(dailyBounty);
+  if(dailyBounty){
+    ["self","partner"].forEach(kind=>{
+      const entry=dailyBounty&&dailyBounty[kind];
+      if(entry&&entry.taskId){
+        const ev=scheduled.find(e=>String(e.id)===String(entry.taskId));
+        if(ev)entry.taskTitle=ev.title;
+      }
+    });
   }
   if(_bsSaveProp("_bounty",dailyBounty))return;
   if(dailyBounty)localStorage.setItem(BOUNTY_KEY,JSON.stringify(dailyBounty));
@@ -171,7 +201,7 @@ function saveBountyState(){
 }
 function hydrateBountyState(){dailyBounty=loadBountyState();}
 function getDailyBounty(){return dailyBounty;}
-function isBountyTask(id){return !!(dailyBounty&&String(dailyBounty.taskId)===String(id))}
+function isBountyTask(id){return getBountyCountForTask(id)>0}
 function placeBounty(id){
   if(typeof viewMode!=="undefined"&&viewMode==="archive"){
     if(typeof showToast==="function")showToast("Archived days are read-only","info");
@@ -179,16 +209,22 @@ function placeBounty(id){
   }
   const ev=scheduled.find(e=>e.id===id);
   if(!ev||isMeeting(ev))return;
-  if(dailyBounty&&dailyBounty.taskId){
-    const title=(scheduled.find(e=>e.id===dailyBounty.taskId)||dailyBounty).title||dailyBounty.taskTitle||"today's bounty";
+  const state=normalizeBountyState(dailyBounty)||{self:null,partner:null};
+  if(state.self&&state.self.taskId){
+    const title=(scheduled.find(e=>String(e.id)===String(state.self.taskId))||state.self).title||state.self.taskTitle||"today's bounty";
     if(typeof showToast==="function")showToast("Bounty is locked on "+title,"info");
+    return;
+  }
+  if(state.partner&&state.partner.taskId&&String(state.partner.taskId)!==String(id)){
+    const title=(scheduled.find(e=>String(e.id)===String(state.partner.taskId))||state.partner).title||state.partner.taskTitle||"the sponsored bounty";
+    if(typeof showToast==="function")showToast("Self bounty must stack on "+title,"info");
     return;
   }
   if(isDone(ev)){
     if(typeof showToast==="function")showToast("Pick an unfinished task for the bounty","info");
     return;
   }
-  dailyBounty={taskId:ev.id,taskTitle:ev.title,placedAt:new Date().toISOString()};
+  dailyBounty={...state,self:{taskId:ev.id,taskTitle:ev.title,placedAt:new Date().toISOString(),source:"self"}};
   saveBountyState();
   log("bounty",ev.id,"Bounty placed: "+ev.title);
   if(typeof showToast==="function")showToast("Bounty locked: "+ev.title+" pays 2x points","success");
