@@ -1199,7 +1199,7 @@
         </div>
         <div class="slot-result" id="slot-result">Ready when you are.</div>
         <div class="slot-stage-track" id="slot-stage-track" aria-live="polite">
-          <span class="slot-stage-chip" data-stage="jackpot">Jackpot</span>
+          <span class="slot-stage-chip" data-stage="jackpot">Miss / Bank / Jackpot</span>
           <span class="slot-stage-chip" data-stage="bucket">Tier + Source</span>
           <span class="slot-stage-chip" data-stage="reward">Reward</span>
         </div>
@@ -1339,6 +1339,10 @@
             <label class="slot-setting-field">
               <span>Jackpot hit %</span>
               <input id="slot-jackpot-rate" type="number" min="0" max="100" step="1">
+            </label>
+            <label class="slot-setting-field">
+              <span>Bank builder %</span>
+              <input id="slot-bank-builder-rate" type="number" min="0" max="100" step="1">
             </label>
             <label class="slot-setting-field">
               <span>Monthly goal $</span>

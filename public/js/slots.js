@@ -511,9 +511,11 @@
     const spinCost = constants.spinCost || 1;
     const monthlyGoal = constants.monthlyGoalCents || 10000;
     const jackpotRate = constants.jackpotHitRate == null ? 0.2 : constants.jackpotHitRate;
+    const bankBuilderRate = constants.bankBuilderHitRate == null ? 0.45 : constants.bankBuilderHitRate;
     const sourceWeights = constants.paymentSourceWeights || {};
     const costInput = document.getElementById("slot-spin-cost-input");
     const jackpotInput = document.getElementById("slot-jackpot-rate");
+    const bankBuilderInput = document.getElementById("slot-bank-builder-rate");
     const goalInput = document.getElementById("slot-monthly-goal");
     const selfInput = document.getElementById("slot-source-self-weight");
     const sponsoredInput = document.getElementById("slot-source-sponsored-weight");
@@ -522,6 +524,7 @@
     const rationale = document.getElementById("slot-scoring-rationale");
     if(costInput && document.activeElement !== costInput) costInput.value = spinCost;
     if(jackpotInput && document.activeElement !== jackpotInput) jackpotInput.value = Math.round(jackpotRate * 100);
+    if(bankBuilderInput && document.activeElement !== bankBuilderInput) bankBuilderInput.value = Math.round(bankBuilderRate * 100);
     if(goalInput && document.activeElement !== goalInput) goalInput.value = ((monthlyGoal || 0) / 100).toFixed(0);
     if(selfInput && document.activeElement !== selfInput) selfInput.value = sourceWeights.self == null ? 45 : sourceWeights.self;
     if(sponsoredInput && document.activeElement !== sponsoredInput) sponsoredInput.value = sourceWeights.sponsored == null ? 25 : sourceWeights.sponsored;
@@ -530,12 +533,13 @@
     if(rationale && document.activeElement !== rationale) rationale.value = constants.scoringRationale || "";
     setText("slot-current-cost", pointLabel(spinCost) + " per spin");
     setText("slot-spin-cost-line", pointLabel(spinCost) + " per spin");
-    setText("slot-current-goal", "Jackpot hit: " + Math.round(jackpotRate * 100) + "%; monthly goal: " + money(monthlyGoal) + ".");
+    setText("slot-current-goal", "Jackpot: " + Math.round(jackpotRate * 100) + "%; bank builder: " + Math.round(bankBuilderRate * 100) + "% of non-jackpots.");
   }
 
   async function saveSettings(){
     const costInput = document.getElementById("slot-spin-cost-input");
     const jackpotInput = document.getElementById("slot-jackpot-rate");
+    const bankBuilderInput = document.getElementById("slot-bank-builder-rate");
     const goalInput = document.getElementById("slot-monthly-goal");
     const selfInput = document.getElementById("slot-source-self-weight");
     const sponsoredInput = document.getElementById("slot-source-sponsored-weight");
@@ -544,6 +548,7 @@
     const rationale = document.getElementById("slot-scoring-rationale");
     const spinCost = Math.max(1, Math.min(250, parseInt(costInput && costInput.value, 10) || 25));
     const jackpotHitRate = Math.max(0, Math.min(100, parseFloat(jackpotInput && jackpotInput.value) || 0)) / 100;
+    const bankBuilderHitRate = Math.max(0, Math.min(100, parseFloat(bankBuilderInput && bankBuilderInput.value) || 0)) / 100;
     const monthlyGoalCents = Math.max(100, Math.min(1000000, Math.round((parseFloat(goalInput && goalInput.value) || 1) * 100)));
     try {
       await api("/api/slot/settings", {
@@ -552,6 +557,7 @@
         body: JSON.stringify({
           spin_cost: spinCost,
           jackpot_hit_rate: jackpotHitRate,
+          bank_builder_hit_rate: bankBuilderHitRate,
           payment_source_weights: {
             self: Math.max(0, parseInt(selfInput && selfInput.value, 10) || 0),
             sponsored: Math.max(0, parseInt(sponsoredInput && sponsoredInput.value, 10) || 0),
@@ -632,6 +638,7 @@
         body: JSON.stringify({
           spin_cost: current.spinCost || 25,
           jackpot_hit_rate: current.jackpotHitRate == null ? 0.2 : current.jackpotHitRate,
+          bank_builder_hit_rate: current.bankBuilderHitRate == null ? 0.45 : current.bankBuilderHitRate,
           payment_source_weights: current.paymentSourceWeights || {},
           reward_tiers: tiers,
           monthly_goal_cents: current.monthlyGoalCents || 10000,
@@ -875,6 +882,8 @@
       const stages = snap.slot_stages || {};
       const stageLabel = stages.empty_bucket
         ? "empty bucket -> reroll credit"
+        : stages.bank_builder_hit
+        ? "bank builder"
         : stages.jackpot_hit === false
         ? "jackpot miss"
         : stages.payment_source && stages.tier
@@ -1037,8 +1046,25 @@
       const snap = spinRow.reward_snapshot || {};
       const stages = snap.slot_stages || {};
       updateStageTrack("jackpot", "spinning");
-      setResult("Spin 1: chasing the jackpot...");
-      await animateReels(jackpotStageSymbols(stages.jackpot_hit));
+      setResult("Spin 1: miss, bank, or jackpot...");
+      await animateReels(firstStageSymbols(stages, snap));
+      if(stages.bank_builder_hit){
+        updateStageTrack("jackpot", "hit");
+        const bankDelta = spinRow.bank_delta_cents || 0;
+        highlightWinningCells(spinRow, snap);
+        animateRewardReveal(spinRow, snap);
+        if(bankDelta > 0) {
+          await animateBankPayout(spinRow, snap, bankDelta);
+          if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(bankDelta);
+          else addPendingDeposit(bankDelta);
+        }
+        setResult(resultText(spinRow, snap));
+        slotPlay("win");
+        slotPetReact("happy", bankDelta > 0 ? "Bank builder!" : "Bank builder capped.", 2400);
+        isSpinning = false;
+        await loadSlots();
+        return;
+      }
       if(!stages.jackpot_hit){
         updateStageTrack("jackpot", "miss");
         slotPlay("miss");
@@ -1124,6 +1150,13 @@
         chip.dataset.state = chip.dataset.state || "";
       }
     });
+  }
+
+  function firstStageSymbols(stages, snap){
+    if(stages && stages.bank_builder_hit && snap && Array.isArray(snap.screen_board) && snap.screen_board.length) {
+      return snap.screen_board;
+    }
+    return jackpotStageSymbols(stages && stages.jackpot_hit);
   }
 
   function jackpotStageSymbols(hit){
@@ -2089,7 +2122,6 @@
       const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
       return source + " " + tier + " was empty. Free reroll credit awarded.";
     }
-    if(stages.jackpot_hit === false) return "No jackpot this spin. The lights are warming up.";
     const payout = (snap && snap.bank_screen_payout) || {};
     const bankDelta = spinRow.bank_delta_cents || 0;
     if(bankDelta > 0) {
@@ -2098,6 +2130,8 @@
       const choice = snap.requires_jackpot_choice ? " Pick a jackpot from the list." : "";
       return "Bank Building paid " + money(bankDelta) + units + ". Funds moved into the Reward Reserve." + cap + choice;
     }
+    if(stages.bank_builder_hit) return "Bank Builder hit, but the reserve cap is full.";
+    if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
     if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
     if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
     if(spinRow.status === "pending" && snap.requires_jackpot_choice) return "Jackpot hit. Pick a prize from the list.";

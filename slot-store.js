@@ -12,7 +12,7 @@ const {
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
 const DAILY_BANK_CAP_CENTS = 5000;
 const WEEKLY_BANK_CAP_CENTS = 15000;
-const SCREEN_BANK_BUILDER_HIT_RATE = 0.65;
+const DEFAULT_BANK_BUILDER_HIT_RATE = 0.45;
 const SCREEN_BANK_BUILDER_PERCENT = 0.0022;
 const SLOT_ROWS = 3;
 const SLOT_COLS = 5;
@@ -259,10 +259,18 @@ function normalizeSourceWeights(value) {
   };
 }
 
-function normalizeJackpotHitRate(value) {
+function normalizeRate(value, fallback) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return DEFAULT_JACKPOT_HIT_RATE;
+  if (!Number.isFinite(n)) return fallback;
   return Math.max(0, Math.min(1, n > 1 ? n / 100 : n));
+}
+
+function normalizeJackpotHitRate(value) {
+  return normalizeRate(value, DEFAULT_JACKPOT_HIT_RATE);
+}
+
+function normalizeBankBuilderHitRate(value) {
+  return normalizeRate(value, DEFAULT_BANK_BUILDER_HIT_RATE);
 }
 
 async function ensureSchema() {
@@ -482,6 +490,7 @@ function normalizeSlotSettings(settings = {}) {
     ...raw,
     spin_cost: clampInt(raw.spin_cost || DEFAULT_SPIN_COST, 1, 250),
     jackpot_hit_rate: normalizeJackpotHitRate(raw.jackpot_hit_rate ?? raw.jackpotHitRate),
+    bank_builder_hit_rate: normalizeBankBuilderHitRate(raw.bank_builder_hit_rate ?? raw.bankBuilderHitRate),
     payment_source_weights: normalizeSourceWeights(raw.payment_source_weights || raw.paymentSourceWeights),
     reward_tiers: normalizeRewardTiers(raw.reward_tiers || raw.rewardTiers),
     reroll_credits: clampInt(raw.reroll_credits ?? raw.rerollCredits ?? 0, 0, 1000),
@@ -741,6 +750,7 @@ async function getState(workspaceId, userId) {
       maxTaskCredits: null,
       monthlyGoalCents: account.settings.monthly_goal_cents,
       jackpotHitRate: account.settings.jackpot_hit_rate,
+      bankBuilderHitRate: account.settings.bank_builder_hit_rate,
       paymentSourceWeights: account.settings.payment_source_weights,
       rewardTiers: account.settings.reward_tiers,
       rerollCredits: account.settings.reroll_credits,
@@ -758,6 +768,9 @@ async function updateSettings(workspaceId, userId, body = {}) {
     spin_cost: clampInt(body.spin_cost || body.spinCost || current.spin_cost || DEFAULT_SPIN_COST, 1, 250),
     jackpot_hit_rate: normalizeJackpotHitRate(
       body.jackpot_hit_rate ?? body.jackpotHitRate ?? current.jackpot_hit_rate ?? DEFAULT_JACKPOT_HIT_RATE
+    ),
+    bank_builder_hit_rate: normalizeBankBuilderHitRate(
+      body.bank_builder_hit_rate ?? body.bankBuilderHitRate ?? current.bank_builder_hit_rate ?? DEFAULT_BANK_BUILDER_HIT_RATE
     ),
     payment_source_weights: normalizeSourceWeights(
       body.payment_source_weights || body.paymentSourceWeights || current.payment_source_weights || DEFAULT_SOURCE_WEIGHTS
@@ -965,6 +978,13 @@ function jackpotHits(settings, rng = crypto.randomInt) {
   return rng(1000000) < Math.floor(rate * 1000000);
 }
 
+function bankBuilderHits(settings, rng = crypto.randomInt) {
+  const rate = normalizeSlotSettings(settings).bank_builder_hit_rate;
+  if (rate <= 0) return false;
+  if (rate >= 1) return true;
+  return rng(1000000) < Math.floor(rate * 1000000);
+}
+
 function fakeMissReward() {
   return reward({
     id: null,
@@ -976,6 +996,21 @@ function fakeMissReward() {
     chance_shares: 0,
     active: true,
     notes: "No-jackpot outcome.",
+  });
+}
+
+function fakeBankBuilderReward() {
+  return reward({
+    id: null,
+    title: "Bank Builder",
+    kind: "bank_builder",
+    payment_source: "self",
+    tier_id: "tier_i",
+    weight: 0,
+    chance_shares: 0,
+    active: true,
+    requires_confirmation: true,
+    notes: "First-spin bank builder outcome.",
   });
 }
 
@@ -997,8 +1032,24 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   const normalized = normalizeSlotSettings(settings);
   const hit = jackpotHits(normalized, rng);
   if (!hit) {
+    const bankHit = bankBuilderHits(normalized, rng);
+    if (bankHit) {
+      return {
+        outcome: "bank",
+        jackpot_hit: false,
+        bank_builder_hit: true,
+        selected: fakeBankBuilderReward(),
+        source: null,
+        tier: null,
+        bucket: [],
+        empty_bucket: false,
+        reroll_credit: false,
+      };
+    }
     return {
+      outcome: "miss",
       jackpot_hit: false,
+      bank_builder_hit: false,
       selected: fakeMissReward(),
       source: null,
       tier: null,
@@ -1018,7 +1069,9 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   );
   if (!bucket.length) {
     return {
+      outcome: "jackpot",
       jackpot_hit: true,
+      bank_builder_hit: false,
       selected: fakeRerollReward(source, tier),
       source,
       tier,
@@ -1028,7 +1081,9 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
     };
   }
   return {
+    outcome: "jackpot",
     jackpot_hit: true,
+    bank_builder_hit: false,
     selected: chooseWeighted(bucket, "chance_shares", rng),
     source,
     tier,
@@ -1056,10 +1111,6 @@ function weightedBankScreenCount() {
     if (roll <= 0) return count;
   }
   return 1;
-}
-
-function shouldHitScreenBankBuilder() {
-  return crypto.randomInt(1000000) < Math.floor(SCREEN_BANK_BUILDER_HIT_RATE * 1000000);
 }
 
 function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
@@ -1205,16 +1256,11 @@ async function spin(workspaceId, userId) {
     throw err;
   }
   const drawPool = state.rewards.filter(r => r.kind !== "miss");
-  if (!drawPool.length) {
-    const err = new Error("No eligible rewards");
-    err.statusCode = 400;
-    throw err;
-  }
   const outcome = selectThreeStageOutcome(drawPool, settings);
   const selected = outcome.selected;
-  const canHitScreenBank = outcome.jackpot_hit && !outcome.empty_bucket && shouldHitScreenBankBuilder();
+  const canHitScreenBank = outcome.bank_builder_hit === true;
   const screen = buildSpinScreen(selected, state.account, state.bankUsage, canHitScreenBank);
-  const bankDelta = outcome.jackpot_hit && !outcome.empty_bucket ? (screen.payout.cents || 0) : 0;
+  const bankDelta = outcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
   const reserveCost = outcome.jackpot_hit && !outcome.empty_bucket ? reserveCostCents(selected) : 0;
   const selectedSnapshot = {
     ...selected,
@@ -1222,18 +1268,21 @@ async function spin(workspaceId, userId) {
     payment_source: selected.payment_source || (outcome.source && outcome.source.id) || defaultPaymentSourceForKind(selected.kind),
     tier_id: selected.tier_id || (outcome.tier && outcome.tier.id) || "tier_i",
     slot_stages: {
+      outcome: outcome.outcome,
       jackpot_hit: outcome.jackpot_hit,
       jackpot_hit_rate: settings.jackpot_hit_rate,
+      bank_builder_hit: outcome.bank_builder_hit,
+      bank_builder_hit_rate: settings.bank_builder_hit_rate,
       payment_source: outcome.source,
       tier: outcome.tier,
       empty_bucket: outcome.empty_bucket,
       reroll_credit: outcome.reroll_credit,
-      reward_spin: outcome.empty_bucket ? null : {
+      reward_spin: outcome.jackpot_hit && !outcome.empty_bucket ? {
         reward_id: selected.id,
         chance_shares: selected.chance_shares || selected.weight || 0,
         bucket_size: outcome.bucket.length,
         bucket_total_shares: outcome.bucket.reduce((sum, r) => sum + (Number(r.chance_shares ?? r.weight) || 0), 0),
-      },
+      } : null,
     },
     screen_board: screen.board,
     screen_payline: screen.payline,
@@ -1458,5 +1507,6 @@ module.exports = {
     normalizeSlotSettings,
     selectThreeStageOutcome,
     chooseWeighted,
+    bankBuilderHits,
   },
 };
