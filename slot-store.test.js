@@ -333,12 +333,25 @@ test("getState locks paid jackpots when reserve is short", async () => {
   assert.equal(reward.jackpot_type, "self");
 });
 
-test("selectThreeStageOutcome returns a miss when jackpot roll misses", () => {
+test("selectThreeStageOutcome returns a miss when jackpot and bank builder rolls miss", () => {
   const store = loadStoreWithMock(createMockPool());
-  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0 }, () => 0);
+  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 0 }, () => 0);
 
+  assert.equal(outcome.outcome, "miss");
   assert.equal(outcome.jackpot_hit, false);
+  assert.equal(outcome.bank_builder_hit, false);
   assert.equal(outcome.selected.kind, "miss");
+  assert.equal(outcome.reroll_credit, false);
+});
+
+test("selectThreeStageOutcome can hit bank builder outside jackpot", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 1 }, () => 0);
+
+  assert.equal(outcome.outcome, "bank");
+  assert.equal(outcome.jackpot_hit, false);
+  assert.equal(outcome.bank_builder_hit, true);
+  assert.equal(outcome.selected.kind, "bank_builder");
   assert.equal(outcome.reroll_credit, false);
 });
 
