@@ -380,7 +380,7 @@ test("selectThreeStageOutcome awards reroll credit for empty source-tier bucket"
 
 test("bank screen payout values each BANK tile from the monthly goal, not current bank balance", () => {
   const store = loadStoreWithMock(createMockPool());
-  const board = Array.from({ length: 15 }, () => "STRAW");
+  const board = Array.from({ length: 15 }, () => "MISS");
   board[0] = "BANK";
   board[4] = "BANK";
   const payout = store._test.calculateScreenBankPayout(

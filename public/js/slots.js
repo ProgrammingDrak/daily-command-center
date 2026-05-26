@@ -67,9 +67,9 @@
     romantic_partner: "Romantic partner",
     either_partner: "Either partner"
   };
-  const SPIN_SYMBOLS = ["HAT","STRAW","STICK","BRICK","BANK","CARE","BONUS","WILD","HOUSE","TOOLS","STAR","JACKPOT","PLEDGE","PICK"];
-  const FILLER_SYMBOLS = ["STRAW","STICK","BRICK","HAT","TOOLS","HOUSE"];
-  const TEASER_SYMBOLS = ["CARE","BONUS","BANK","JACKPOT","PLEDGE","PICK","REROLL"];
+  const SPIN_SYMBOLS = ["MISS","MISS","BANK","MISS","JACKPOT"];
+  const FILLER_SYMBOLS = ["MISS"];
+  const TEASER_SYMBOLS = ["MISS"];
   const PAYLINES = [
     [0,1,2], [1,2,3], [2,3,4],
     [5,6,7], [6,7,8], [7,8,9],
@@ -577,7 +577,7 @@
     el.innerHTML =
       '<div class="slot-tier-manager-head">' +
         '<strong>Jackpot tiers</strong>' +
-        '<span>Roll source and tier, then spin within that bucket.</span>' +
+        '<span>Roll tier and source, then spin within that bucket.</span>' +
         '<button class="slot-mini primary" id="slot-add-tier" type="button">Add tier</button>' +
       '</div>' +
       '<div class="slot-tier-manager-list">' +
@@ -1052,7 +1052,7 @@
       }
       updateStageTrack("jackpot", "hit");
       slotPlay("jackpotHit");
-      setResult("Jackpot hit! Spin 2: source and tier...");
+      setResult("Jackpot hit! Spin 2: tier and source...");
       updateStageTrack("bucket", "spinning");
       await animateReels(bucketStageSymbols(stages));
       updateStageTrack("bucket", stages.empty_bucket ? "empty" : "hit");
@@ -1138,9 +1138,9 @@
     const tier = (stages && stages.tier && stages.tier.label) || "Tier";
     const sourceSym = String(source).toUpperCase();
     const tierSym = String(tier).toUpperCase().replace(/\s+/g, " ");
-    const board = Array.from({ length: 15 }, (_, i) => i % 2 ? tierSym : sourceSym);
-    [0, 6, 12].forEach(i => { board[i] = sourceSym; });
-    [2, 8, 14].forEach(i => { board[i] = tierSym; });
+    const board = Array.from({ length: 15 }, () => "MISS");
+    [0, 1, 2, 6, 10].forEach(i => { board[i] = tierSym; });
+    [4, 8, 12, 13, 14].forEach(i => { board[i] = sourceSym; });
     return board;
   }
 
@@ -1168,7 +1168,7 @@
       reels.forEach((r, i) => {
         setTimeout(() => {
           r.classList.add("stopped");
-          setCell(r, targets[i % targets.length] || "STAR");
+          setCell(r, targets[i % targets.length] || "MISS");
           r.classList.add("reveal");
           slotPlay("stop", { index: i });
         }, 700 + (i % 5) * 140 + Math.floor(i / 5) * 170);
@@ -1186,7 +1186,7 @@
     const words = resultSymbols({ status: reward.kind === "miss" ? "miss" : "awarded", id: reward.id || 0 }, reward);
     clearResultHighlights();
     reels.forEach((r, i) => {
-      setCell(r, words[i] || "STAR");
+      setCell(r, words[i] || "MISS");
       r.classList.add("reveal");
     });
   }
@@ -1269,11 +1269,11 @@
     const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || 0;
     const configs = {
       bank: { caption: bankDelta > 0 ? "+" + money(bankDelta) + " Reserve" : "Reserve up", tokens: ["BANK", "+$", "+$"], beams: 5 },
-      pledge: { caption: title ? "Pledge: " + title : "Pledge hit", tokens: ["PLEDGE", "PARTNER", "SIGNED"], beams: 4 },
+      pledge: { caption: title ? "Sponsored: " + title : "Sponsored jackpot", tokens: ["JACKPOT", "SPONSORED", "WIN"], beams: 4 },
       jackpot: { caption: title || jackpotLabel, tokens: ["JACKPOT", "UNLOCK", "PRIZE"], beams: 6 },
-      choice: { caption: "Pick your prize", tokens: ["PICK", "1", "2", "3"], beams: 3 },
-      reroll: { caption: "Reroll charged", tokens: ["REROLL", "AGAIN", "SPIN"], beams: 4 },
-      care: { caption: title || "Reward hit", tokens: ["CARE", "WIN", "READY"], beams: 4 },
+      choice: { caption: "Jackpot choice", tokens: ["JACKPOT", "TIER", "REWARD"], beams: 3 },
+      reroll: { caption: "Reroll credit", tokens: ["MISS", "CREDIT", "SPIN"], beams: 4 },
+      care: { caption: title || "Reward hit", tokens: ["JACKPOT", "WIN", "REWARD"], beams: 4 },
       miss: { caption: "Almost", tokens: ["MISS", "NEXT", "TRY"], beams: 2 }
     };
     return configs[kind] || configs.care;
@@ -1594,23 +1594,23 @@
   async function previewBankAnimationScenario(name){
     const scenarios = {
       base: {
-        board: ["BANK","STRAW","STICK","BRICK","BANK","TOOLS","HAT","STRAW","JACKPOT","HOUSE","STRAW","HOUSE","CARE","STICK","HOUSE"],
+        board: ["BANK","MISS","MISS","MISS","BANK","MISS","MISS","MISS","JACKPOT","MISS","MISS","MISS","MISS","MISS","MISS"],
         payout: { positions: [0,4], horizontal_groups: [], vertical_groups: [], base_cents: 22, base_units: 2, horizontal_bonus_units: 0, vertical_bonus_units: 0, units: 2, raw_cents: 44, cents: 44 }
       },
       row: {
-        board: ["BANK","BANK","BANK","STICK","REROLL","TOOLS","HAT","STRAW","JACKPOT","HOUSE","STRAW","HOUSE","CARE","STICK","HOUSE"],
+        board: ["BANK","BANK","BANK","MISS","MISS","MISS","MISS","MISS","JACKPOT","MISS","MISS","MISS","MISS","MISS","MISS"],
         payout: { positions: [0,1,2], horizontal_groups: [[0,1,2]], vertical_groups: [], base_cents: 22, base_units: 3, horizontal_bonus_units: 6, vertical_bonus_units: 0, units: 9, raw_cents: 198, cents: 198 }
       },
       column: {
-        board: ["BANK","STRAW","STICK","BRICK","REROLL","BANK","HAT","STRAW","JACKPOT","HOUSE","BANK","HOUSE","CARE","STICK","HOUSE"],
+        board: ["BANK","MISS","MISS","MISS","MISS","BANK","MISS","MISS","JACKPOT","MISS","BANK","MISS","MISS","MISS","MISS"],
         payout: { positions: [0,5,10], horizontal_groups: [], vertical_groups: [[0,5,10]], base_cents: 22, base_units: 3, horizontal_bonus_units: 0, vertical_bonus_units: 3, units: 6, raw_cents: 132, cents: 132 }
       },
       mixed: {
-        board: ["BANK","BANK","BANK","BRICK","REROLL","TOOLS","HAT","BANK","JACKPOT","HOUSE","STRAW","HOUSE","BANK","STICK","HOUSE"],
+        board: ["BANK","BANK","BANK","MISS","MISS","MISS","MISS","BANK","JACKPOT","MISS","MISS","MISS","BANK","MISS","MISS"],
         payout: { positions: [0,1,2,7,12], horizontal_groups: [[0,1,2]], vertical_groups: [[2,7,12]], base_cents: 22, base_units: 5, horizontal_bonus_units: 6, vertical_bonus_units: 3, units: 14, raw_cents: 308, cents: 308 }
       },
       capped: {
-        board: ["BANK","BANK","BANK","BANK","BANK","TOOLS","HAT","BANK","JACKPOT","HOUSE","STRAW","HOUSE","BANK","STICK","HOUSE"],
+        board: ["BANK","BANK","BANK","BANK","BANK","MISS","MISS","BANK","JACKPOT","MISS","MISS","MISS","BANK","MISS","MISS"],
         payout: { positions: [0,1,2,3,4,7,12], horizontal_groups: [[0,1,2,3,4]], vertical_groups: [[2,7,12]], base_cents: 22, base_units: 7, horizontal_bonus_units: 20, vertical_bonus_units: 3, units: 30, raw_cents: 660, cents: 500, capped: true }
       }
     };
@@ -1620,7 +1620,7 @@
     clearSlotCoinEffects();
     clearResultHighlights();
     reels.forEach((cell, idx) => {
-      setCell(cell, scenario.board[idx] || "STRAW");
+      setCell(cell, scenario.board[idx] || "MISS");
       cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical", "reveal", "spinning", "pulse", "stopped");
       cell.classList.add("reveal");
     });
@@ -1636,11 +1636,11 @@
   async function previewRewardAnimationScenario(name){
     const scenarios = {
       bank: { kind: "bank_builder", status: "pending", symbol: "BANK", title: "Reserve boost", bank_delta_cents: 462, payout: { positions: [0, 1, 2, 7, 12], cents: 462 } },
-      pledge: { kind: "sponsor", status: "awarded", symbol: "PLEDGE", title: "Partner chooses a shared playlist night" },
+      pledge: { kind: "sponsor", status: "awarded", symbol: "JACKPOT", title: "Partner chooses a shared playlist night" },
       jackpot: { kind: "bank_gated", status: "pending", symbol: "JACKPOT", title: "Fancy dinner night", requires_jackpot_choice: true },
-      choice: { kind: "choice", status: "pending", symbol: "PICK", title: "Choose one of three rewards" },
-      reroll: { kind: "reroll", status: "awarded", symbol: "REROLL", title: "Extra spin" },
-      care: { kind: "free", status: "awarded", symbol: "CARE", title: "Care package" },
+      choice: { kind: "choice", status: "pending", symbol: "JACKPOT", title: "Choose one of three rewards" },
+      reroll: { kind: "reroll", status: "awarded", symbol: "JACKPOT", title: "Extra spin" },
+      care: { kind: "free", status: "awarded", symbol: "JACKPOT", title: "Care package" },
       miss: { kind: "miss", status: "miss", symbol: "MISS", title: "No prize" }
     };
     const scenario = scenarios[name] || scenarios.pledge;
@@ -1653,7 +1653,7 @@
     const line = scenario.status === "miss" ? [1, 7, 13] : PAYLINES[seed % PAYLINES.length];
     line.forEach(i => { board[i] = scenario.symbol; });
     reels.forEach((cell, idx) => {
-      setCell(cell, board[idx] || "STRAW");
+      setCell(cell, board[idx] || "MISS");
       cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical", "reveal", "spinning", "pulse", "stopped", "win-hit", "reward-focus");
       cell.classList.add("reveal");
     });
@@ -2068,11 +2068,7 @@
   function rewardSymbol(reward){
     if(!reward || reward.kind === "miss") return "MISS";
     if(reward.kind === "bank_builder") return "BANK";
-    if(reward.kind === "sponsor") return "PLEDGE";
-    if(reward.kind === "choice") return "PICK";
-    if(reward.kind === "reroll") return "REROLL";
-    if(isJackpotReward(reward)) return "JACKPOT";
-    return "CARE";
+    return "JACKPOT";
   }
 
   function hashCode(text){
