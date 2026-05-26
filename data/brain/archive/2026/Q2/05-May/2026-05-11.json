@@ -437,15 +437,27 @@
         "date": "2026-05-10",
         "summary": "Filed lessons that DCC skeleton days weaken reviews, Daily-Life-Journal fallback needs fixing, and sync reports must state pull/local/push outcomes separately.",
         "lessons": [
-          { "text": "Sync reports must lead with the final remote state." },
-          { "text": "DCC skeleton days limit daily review confidence." },
-          { "text": "Daily-Life-Journal unavailable forces inbox fallback." }
+          {
+            "text": "Sync reports must lead with the final remote state."
+          },
+          {
+            "text": "DCC skeleton days limit daily review confidence."
+          },
+          {
+            "text": "Daily-Life-Journal unavailable forces inbox fallback."
+          }
         ],
         "disregarded": [
-          { "text": "No open project retrospective cleanup was needed." }
+          {
+            "text": "No open project retrospective cleanup was needed."
+          }
         ],
         "suggested_tasks": [
-          { "id": "mount-journal", "title": "Clone or mount Daily-Life-Journal", "duration_minutes": 30 }
+          {
+            "id": "mount-journal",
+            "title": "Clone or mount Daily-Life-Journal",
+            "duration_minutes": 30
+          }
         ]
       }
     ]
@@ -460,5 +472,7 @@
       "d714038466cf93f7606215c82fd9d2316381a4a0093178468e5d8ba7cc2d8d70@group.calendar.google.com",
       "en.usa#holiday@group.v.calendar.google.com"
     ]
-  }
+  },
+  "source": "api-save",
+  "savedAt": "2026-05-26T04:46:38.811Z"
 }
