@@ -1,13 +1,100 @@
 {
   "date": "2026-05-27",
-  "last_updated_at": "2026-05-14T09:37:29.335Z",
-  "last_updated_by": "skeleton",
-  "watermarks": {},
-  "triage": {
-    "open_items": [],
-    "resolved_items": [],
-    "cycle_count": 0
+  "last_updated_at": "2026-05-26T01:44:00-04:00",
+  "last_updated_by": "codex-glymphatic-sweep-suite",
+  "watermarks": {
+    "calendar": {
+      "last_at": "2026-05-26T01:44:00-04:00",
+      "last_id": "calendar:refresh:2026-05-27"
+    },
+    "glymphatic": {
+      "last_at": "2026-05-26T01:44:00-04:00",
+      "last_id": "glymphatic:packet:2026-05-27"
+    }
   },
+  "triage": {
+    "open_items": [
+      {
+        "id": "glymphatic:2026-05-27:partner-data",
+        "channel": "dcc",
+        "type": "task",
+        "title": "Review data for the partners",
+        "summary": "Use inbound partner/vendor framing from the brain: partner means deals.vendor, not clever_offers_winning_partner. Start with Bankrate, Houzeo, iBuyer, Opendoor, Mr Cooper, Rabbu, LendingTree, and Carrington if the extract supports them.",
+        "priority": "High",
+        "source_link": "C:\\Users\\offic\\portable-programming\\claude-brain\\brain\\glossary.md",
+        "draft_status": "needs_work",
+        "draft_preview": "Produce the partner metric readout before touching copy updates."
+      },
+      {
+        "id": "glymphatic:2026-05-27:sow-time",
+        "channel": "dcc",
+        "type": "task",
+        "title": "Find SOW meeting time and update metrics",
+        "summary": "Drake is free 11:30 AM-12:00 PM ET and 4:15-4:45 PM ET around known calendar anchors. Best proposed hold: 11:30 AM ET; fallback: 4:15 PM ET after Juggle with Alan.",
+        "priority": "High",
+        "source_link": "Google Calendar primary availability 2026-05-27",
+        "draft_status": "needs_draft",
+        "draft_preview": "Draft the team scheduling note after confirming required attendees."
+      },
+      {
+        "id": "glymphatic:2026-05-27:education-swap",
+        "channel": "dcc",
+        "type": "task",
+        "title": "Inventory education sends and point them to the cash offer comparison tool",
+        "summary": "Slack evidence says the new direction is to redo emails so they point agents to https://compare.cleveroffers.com/cash-offers. Local repo search did not find static education copy, so this needs a HubSpot/Slack/workflow inventory pass before edits.",
+        "priority": "High",
+        "source_link": "https://compare.cleveroffers.com/cash-offers",
+        "draft_status": "needs_work",
+        "draft_preview": "Make the inventory first, then change references only where the current education send is confirmed."
+      }
+    ],
+    "resolved_items": [],
+    "cycle_count": 1
+  },
+  "meetings": [
+    {
+      "id": "gcal:work-from-furman:2026-05-27",
+      "event_id": "64sj2d1hc8s32b9kc5i6ab9k6tgm4b9p65gmabb46co32cpjcks3adj568",
+      "title": "Work from Furman",
+      "start": "2026-05-27T00:00:00-04:00",
+      "end": "2026-05-28T00:00:00-04:00",
+      "attendees": [],
+      "description": "Transparent all-day location/context anchor.",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=NjRzajJkMWhjOHMzMmI5a2M1aTZhYjlrNnRnbTRiOXA2NWdtYWJiNDZjbzMyY3BqY2tzM2FkajU2OCBvZmZpY2lhbC5kcmFrZXNoYWR3ZWxsQG0&ctz=America/New_York",
+      "prep_status": "not_needed",
+      "reviewed": false
+    },
+    {
+      "id": "gcal:morning-workout:2026-05-27",
+      "event_id": "chgjec1jclhj6b9m6lgj8b9kcopm6bb164om8b9hc5h68e1icdi68dj174",
+      "title": "Morning Workout",
+      "start": "2026-05-27T07:00:00-04:00",
+      "end": "2026-05-27T08:30:00-04:00",
+      "attendees": [],
+      "description": "",
+      "location": "25 Draper St, Greenville, SC 29611, USA",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=Y2hnamVjMWpjbGhqNmI5bTZsZ2o4YjlrY29wbTZiYjE2NG9tOGI5aGM1aDY4ZTFpY2RpNjhkajE3NCBvZmZpY2lhbC5kcmFrZXNoYWR3ZWxsQG0&ctz=America/New_York",
+      "prep_status": "not_needed",
+      "reviewed": false
+    },
+    {
+      "id": "gcal:juggle-alan:2026-05-27",
+      "event_id": "c8om4c1k68rj6bb46oq66b9kc5im4b9p60p32b9h64pm6cr6c8rj0e9o68",
+      "title": "Juggle with Alan",
+      "start": "2026-05-27T14:00:00-04:00",
+      "end": "2026-05-27T16:00:00-04:00",
+      "attendees": [],
+      "description": "",
+      "location": "",
+      "meet_link": null,
+      "source_ref": "https://www.google.com/calendar/event?eid=YzhvbTRjMWs2OHJqNmJiNDZvcTY2YjlrYzVpbTRiOXA2MHAzMmI5aDY0cG02Y3I2YzhyajBlOW82OCBvZmZpY2lhbC5kcmFrZXNoYWR3ZWxsQG0&ctz=America/New_York",
+      "prep_status": "not_needed",
+      "reviewed": false
+    }
+  ],
   "completions": {
     "tasks": []
   },
@@ -16,9 +103,440 @@
       "start": "07:00",
       "end": "17:30"
     },
-    "timeline": [],
-    "tasks_scheduled": [],
+    "timeline": [
+      {
+        "id": "cal-morning-workout",
+        "type": "meeting",
+        "title": "Morning Workout",
+        "start": "2026-05-27T07:00:00-04:00",
+        "end": "2026-05-27T08:30:00-04:00",
+        "source": "calendar",
+        "source_id": "chgjec1jclhj6b9m6lgj8b9kcopm6bb164om8b9hc5h68e1icdi68dj174",
+        "location": "25 Draper St, Greenville, SC 29611, USA"
+      },
+      {
+        "id": "task-partner-data-readout",
+        "type": "task",
+        "title": "Partner data review: sources, denominators, current metrics",
+        "start": "2026-05-27T09:00:00-04:00",
+        "end": "2026-05-27T09:45:00-04:00",
+        "durMin": 45,
+        "duration_minutes": 45,
+        "priority": "high",
+        "tags": ["partners", "metrics", "offers"],
+        "notes": "Use deals.vendor as the partner axis unless the task explicitly asks for downstream buyer/investor."
+      },
+      {
+        "id": "task-metrics-snapshot",
+        "type": "task",
+        "title": "Update metrics snapshot for SOW/team discussion",
+        "start": "2026-05-27T09:45:00-04:00",
+        "end": "2026-05-27T10:15:00-04:00",
+        "durMin": 30,
+        "duration_minutes": 30,
+        "priority": "high",
+        "tags": ["sow", "metrics"],
+        "notes": "Output should be a short metric packet, not an exploratory notebook."
+      },
+      {
+        "id": "task-sow-scheduling",
+        "type": "task",
+        "title": "SOW meeting slot: confirm attendees and send proposed time",
+        "start": "2026-05-27T10:30:00-04:00",
+        "end": "2026-05-27T11:15:00-04:00",
+        "durMin": 45,
+        "duration_minutes": 45,
+        "priority": "high",
+        "tags": ["sow", "team"],
+        "notes": "Best Drake-available slot is 11:30 AM ET. Fallback is 4:15 PM ET. Required attendee set likely starts from prior SOW kickoff: Ben, Mike Bennett, Jay, Collins, Mike Provinzino."
+      },
+      {
+        "id": "task-education-inventory",
+        "type": "task",
+        "title": "Inventory every education send surface",
+        "start": "2026-05-27T11:15:00-04:00",
+        "end": "2026-05-27T12:30:00-04:00",
+        "durMin": 75,
+        "duration_minutes": 75,
+        "priority": "high",
+        "tags": ["education", "cash-offer-tool", "inventory"],
+        "notes": "Check HubSpot forms/workflows, Slack launch/update references, agent emails, and any portal/handbook copy. Local offers_amp search found no static education-copy hits."
+      },
+      {
+        "id": "break-lunch",
+        "type": "break",
+        "title": "Lunch / reset",
+        "start": "2026-05-27T12:30:00-04:00",
+        "end": "2026-05-27T13:00:00-04:00",
+        "durMin": 30,
+        "duration_minutes": 30
+      },
+      {
+        "id": "task-comparison-tool-copy",
+        "type": "task",
+        "title": "Draft replacement copy pointing to cash offer comparison tool",
+        "start": "2026-05-27T13:00:00-04:00",
+        "end": "2026-05-27T13:45:00-04:00",
+        "durMin": 45,
+        "duration_minutes": 45,
+        "priority": "high",
+        "tags": ["education", "copy", "cash-offer-tool"],
+        "notes": "Use https://compare.cleveroffers.com/cash-offers as the reference. Keep copy action-oriented: go to the tool, compare options, use the tool as source of truth."
+      },
+      {
+        "id": "cal-juggle-alan",
+        "type": "meeting",
+        "title": "Juggle with Alan",
+        "start": "2026-05-27T14:00:00-04:00",
+        "end": "2026-05-27T16:00:00-04:00",
+        "source": "calendar",
+        "source_id": "c8om4c1k68rj6bb46oq66b9kc5im4b9p60p32b9h64pm6cr6c8rj0e9o68"
+      },
+      {
+        "id": "task-ship-updates",
+        "type": "task",
+        "title": "Apply education reference swaps and send/update SOW metrics",
+        "start": "2026-05-27T16:00:00-04:00",
+        "end": "2026-05-27T17:15:00-04:00",
+        "durMin": 75,
+        "duration_minutes": 75,
+        "priority": "high",
+        "tags": ["ship", "metrics", "education"],
+        "notes": "Use this block for confirmed edits only. If inventory reveals owned surfaces outside local repo access, produce the exact change list and owner handoff."
+      },
+      {
+        "id": "task-closeout",
+        "type": "task",
+        "title": "Closeout: DCC actuals, unresolved owners, tomorrow carryover",
+        "start": "2026-05-27T17:15:00-04:00",
+        "end": "2026-05-27T17:30:00-04:00",
+        "durMin": 15,
+        "duration_minutes": 15,
+        "priority": "medium",
+        "tags": ["dcc", "closeout"],
+        "notes": "Capture done/deferred/blocked reasons so the glymphatic review has actuals."
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "task-partner-data-readout",
+        "title": "Partner data review: sources, denominators, current metrics",
+        "estimated_minutes": 45,
+        "recommended_start": "09:00",
+        "priority": "high"
+      },
+      {
+        "task_id": "task-metrics-snapshot",
+        "title": "Update metrics snapshot for SOW/team discussion",
+        "estimated_minutes": 30,
+        "recommended_start": "09:45",
+        "priority": "high"
+      },
+      {
+        "task_id": "task-sow-scheduling",
+        "title": "SOW meeting slot: confirm attendees and send proposed time",
+        "estimated_minutes": 45,
+        "recommended_start": "10:30",
+        "priority": "high"
+      },
+      {
+        "task_id": "task-education-inventory",
+        "title": "Inventory every education send surface",
+        "estimated_minutes": 75,
+        "recommended_start": "11:15",
+        "priority": "high"
+      },
+      {
+        "task_id": "task-comparison-tool-copy",
+        "title": "Draft replacement copy pointing to cash offer comparison tool",
+        "estimated_minutes": 45,
+        "recommended_start": "13:00",
+        "priority": "high"
+      },
+      {
+        "task_id": "task-ship-updates",
+        "title": "Apply education reference swaps and send/update SOW metrics",
+        "estimated_minutes": 75,
+        "recommended_start": "16:00",
+        "priority": "high"
+      },
+      {
+        "task_id": "task-closeout",
+        "title": "Closeout: DCC actuals, unresolved owners, tomorrow carryover",
+        "estimated_minutes": 15,
+        "recommended_start": "17:15",
+        "priority": "medium"
+      }
+    ],
     "tasks_couldnt_fit": [],
-    "stats": {}
+    "stats": {
+      "planned_task_minutes": 330,
+      "calendar_busy_minutes": 210,
+      "free_time_minutes": 120,
+      "high_priority_tasks": 6
+    }
+  },
+  "assessment": {
+    "day_theme": "Protect the morning for partner metrics and the education-reference migration, then use the late block to ship confirmed updates.",
+    "hard_commitments": [
+      "All day: Work from Furman (transparent calendar context)",
+      "7:00-8:30 AM: Morning Workout",
+      "2:00-4:00 PM: Juggle with Alan"
+    ],
+    "must_do": [
+      "Review partner data using deals.vendor as the partner axis.",
+      "Produce/update the metric snapshot needed for the SOW team conversation.",
+      "Send or stage the SOW meeting scheduling note; proposed Drake-open slot is 11:30 AM ET.",
+      "Inventory all education-send surfaces before changing references.",
+      "Point confirmed education sends to https://compare.cleveroffers.com/cash-offers."
+    ],
+    "nice_to_do": [
+      "Turn the education inventory into a reusable checklist for future launches.",
+      "Add the final SOW meeting time to the calendar once the team confirms."
+    ],
+    "risks": [
+      "Team availability is not fully known from Drake's primary calendar; do not assume the 11:30 AM slot works for everyone.",
+      "Local repo search did not reveal static education-copy surfaces, so the real owner may be HubSpot/workflows rather than code.",
+      "If the metrics pass sprawls, the education migration loses the only good pre-2 PM focus window."
+    ]
+  },
+  "sweep": {
+    "last_run_at": "2026-05-26T01:44:00-04:00",
+    "source_health": [
+      {
+        "id": "calendar",
+        "label": "Calendar",
+        "status": "ok",
+        "detail": "Primary calendar read for 2026-05-27; busy window inside workday is 2:00-4:00 PM ET.",
+        "count": 3,
+        "checked_at": "2026-05-26T01:44:00-04:00"
+      },
+      {
+        "id": "gmail",
+        "label": "Gmail",
+        "status": "ok",
+        "detail": "Targeted searches for SOW, education cash offer, and cash offer comparison tool returned no matching recent emails.",
+        "count": 0,
+        "checked_at": "2026-05-26T01:44:00-04:00"
+      },
+      {
+        "id": "slack",
+        "label": "Slack",
+        "status": "ok",
+        "detail": "Found cash-offer comparison tool rollout/reference evidence; SOW search found one broad partner-status mention.",
+        "count": 6,
+        "checked_at": "2026-05-26T01:44:00-04:00"
+      },
+      {
+        "id": "workspace",
+        "label": "Workspace",
+        "status": "partial",
+        "detail": "offers_amp has partner metrics surfaces but no static education-copy matches; education inventory likely lives in HubSpot/ops tools.",
+        "count": 1,
+        "checked_at": "2026-05-26T01:44:00-04:00"
+      }
+    ],
+    "open_item_count": 3,
+    "meetings_count": 3
+  },
+  "glymphatic_context": {
+    "last_packet_id": "glymphatic-packet-2026-05-27",
+    "last_packet_at": "2026-05-26T01:44:00-04:00",
+    "last_source": "codex-glymphatic-sweep-suite",
+    "summary": "Tomorrow's highest-EV work is a three-part Offers block: partner data review, SOW scheduling/metrics, and education-reference migration to the cash offer comparison tool. Calendar leaves 9:00 AM-2:00 PM and 4:00-5:30 PM as usable work windows.",
+    "suggested_tasks": [
+      {
+        "id": "deep-task-partner-data-readout",
+        "title": "Review partner data and metric denominators",
+        "priority": "High",
+        "duration_minutes": 45,
+        "recommended_start": "09:00",
+        "confidence": "user request + brain glossary",
+        "reason": "Partner means inbound vendor/deals.vendor in this context; confirm denominators before sharing metrics.",
+        "tags": ["partners", "metrics", "offers"]
+      },
+      {
+        "id": "deep-task-sow-meeting",
+        "title": "Confirm SOW attendees and propose meeting time",
+        "priority": "High",
+        "duration_minutes": 45,
+        "recommended_start": "10:30",
+        "confidence": "calendar availability",
+        "reason": "Drake has an open 11:30 AM ET slot before lunch; fallback is 4:15 PM ET.",
+        "tags": ["sow", "team", "calendar"]
+      },
+      {
+        "id": "deep-task-education-inventory",
+        "title": "Inventory education send surfaces",
+        "priority": "High",
+        "duration_minutes": 75,
+        "recommended_start": "11:15",
+        "confidence": "slack + workspace sweep",
+        "reason": "Slack says education/emails should point to the new tool; local code did not reveal all send surfaces.",
+        "tags": ["education", "cash-offer-tool"]
+      },
+      {
+        "id": "deep-task-comparison-tool-copy",
+        "title": "Draft and apply cash offer comparison tool references",
+        "priority": "High",
+        "duration_minutes": 45,
+        "recommended_start": "13:00",
+        "confidence": "slack evidence",
+        "reason": "Use https://compare.cleveroffers.com/cash-offers as the reference destination.",
+        "tags": ["copy", "education", "offers"]
+      }
+    ],
+    "lessons": [
+      {
+        "id": "lesson-partner-axis",
+        "title": "Partner metric work should default to inbound vendor",
+        "text": "For partner reporting or partner data review, default to deals.vendor unless the task explicitly says downstream winning buyer/investor."
+      },
+      {
+        "id": "lesson-education-inventory-before-edit",
+        "title": "Inventory education surfaces before copy swaps",
+        "text": "The relevant education sends are likely split across HubSpot, Slack, emails, and operational docs; do not edit the first visible copy and assume coverage."
+      }
+    ],
+    "disregarded": [
+      {
+        "id": "skip-stale-dcc-triage",
+        "title": "Did not carry stale May 20 DCC triage into tomorrow",
+        "reason": "The existing local tomorrow-state triage was stale and not evidence for May 27."
+      }
+    ],
+    "retro": {
+      "decision_quality": "The right first move tomorrow is source inventory and denominator control, not copy-writing from memory.",
+      "autonomy": "Calendar and workspace searches were enough to propose a working itinerary without asking for more inputs.",
+      "dcc_improvement": "DCC should preserve this packet's actuals tomorrow so the next glymphatic review can compare planned vs actual instead of reading another skeleton day."
+    },
+    "source_health": []
+  },
+  "glymphatic_brief": {
+    "current": {
+      "id": "dcc-brief-2026-05-27-glymphatic",
+      "date": "2026-05-27",
+      "title": "Tomorrow's Offers Work Packet",
+      "generated_at": "2026-05-26T01:44:00-04:00",
+      "summary": "Partner metrics first, SOW scheduling second, education-reference migration third. The best open SOW hold from Drake's calendar is 11:30 AM ET, with 4:15 PM ET as fallback.",
+      "source_health": [],
+      "triage": {
+        "summary": "Three high-priority work items are staged from the user request and sweep evidence.",
+        "items": [
+          {
+            "id": "glymphatic:2026-05-27:partner-data",
+            "channel": "dcc",
+            "title": "Review data for the partners",
+            "summary": "Partner means inbound vendor/deals.vendor unless explicitly stated otherwise.",
+            "priority": "High",
+            "source_link": "C:\\Users\\offic\\portable-programming\\claude-brain\\brain\\glossary.md",
+            "draft_status": "needs_work",
+            "draft_link": "",
+            "draft_preview": "Metric readout before copy work."
+          },
+          {
+            "id": "glymphatic:2026-05-27:sow-time",
+            "channel": "calendar",
+            "title": "SOW meeting time",
+            "summary": "Propose 11:30 AM ET; fallback 4:15 PM ET.",
+            "priority": "High",
+            "source_link": "Google Calendar primary availability 2026-05-27",
+            "draft_status": "needs_draft",
+            "draft_link": "",
+            "draft_preview": "Team scheduling note."
+          },
+          {
+            "id": "glymphatic:2026-05-27:education-swap",
+            "channel": "slack/workspace",
+            "title": "Education sends to comparison tool",
+            "summary": "Point confirmed education sends to https://compare.cleveroffers.com/cash-offers after inventory.",
+            "priority": "High",
+            "source_link": "https://compare.cleveroffers.com/cash-offers",
+            "draft_status": "needs_work",
+            "draft_link": "",
+            "draft_preview": "Inventory first, then swap references."
+          }
+        ]
+      },
+      "retro": {
+        "decision_quality": "Do the denominator/source inventory before updating copy.",
+        "autonomy": "Use the proposed slots unless team availability proves otherwise.",
+        "dcc_improvement": "Close the loop tomorrow with actual task outcomes."
+      },
+      "lessons": [],
+      "disregarded": [],
+      "suggested_tasks": [
+        {
+          "id": "deep-task-partner-data-readout",
+          "title": "Review partner data and metric denominators",
+          "priority": "High",
+          "duration_minutes": 45,
+          "recommended_start": "09:00",
+          "confidence": "user request + brain glossary",
+          "reason": "Partner means inbound vendor/deals.vendor in this context.",
+          "tags": ["partners", "metrics", "offers"]
+        },
+        {
+          "id": "deep-task-sow-meeting",
+          "title": "Confirm SOW attendees and propose meeting time",
+          "priority": "High",
+          "duration_minutes": 45,
+          "recommended_start": "10:30",
+          "confidence": "calendar availability",
+          "reason": "Drake has an open 11:30 AM ET slot; 4:15 PM ET is fallback.",
+          "tags": ["sow", "team", "calendar"]
+        },
+        {
+          "id": "deep-task-education-inventory",
+          "title": "Inventory education send surfaces",
+          "priority": "High",
+          "duration_minutes": 75,
+          "recommended_start": "11:15",
+          "confidence": "slack + workspace sweep",
+          "reason": "Find every current send before changing references.",
+          "tags": ["education", "cash-offer-tool"]
+        },
+        {
+          "id": "deep-task-comparison-tool-copy",
+          "title": "Draft and apply cash offer comparison tool references",
+          "priority": "High",
+          "duration_minutes": 45,
+          "recommended_start": "13:00",
+          "confidence": "slack evidence",
+          "reason": "Use https://compare.cleveroffers.com/cash-offers as the destination.",
+          "tags": ["copy", "education", "offers"]
+        }
+      ]
+    },
+    "history": []
+  },
+  "notifications": [
+    {
+      "id": "glymphatic:2026-05-27:packet-ready",
+      "type": "glymphatic_packet",
+      "title": "Tomorrow's Offers packet is staged",
+      "body": "Calendar anchors, partner metric work, SOW scheduling, and cash-offer comparison tool education migration are scheduled for Wednesday, May 27, 2026.",
+      "priority": "high",
+      "created_at": "2026-05-26T01:44:00-04:00"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "mutation-glymphatic-2026-05-27",
+      "type": "glymphatic-packet",
+      "at": "2026-05-26T01:44:00-04:00",
+      "open_items": 3,
+      "scheduled_tasks": 7,
+      "source": "codex-glymphatic-sweep-suite"
+    }
+  ],
+  "meta": {
+    "packet_version": "glymphatic_packet.v1",
+    "timezone": "America/New_York",
+    "generated_for": "2026-05-27",
+    "known_limits": [
+      "Work calendar/team calendars were not fully available; SOW time is based on Drake primary calendar availability.",
+      "HubSpot/workflow education surfaces were not directly readable from local code search."
+    ]
   }
 }
