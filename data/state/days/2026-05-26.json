@@ -1,7 +1,7 @@
 {
   "date": "2026-05-26",
-  "last_updated_at": "2026-05-13T18:30:12.319Z",
-  "last_updated_by": "skeleton",
+  "last_updated_at": "2026-05-26T04:53:20.309Z",
+  "last_updated_by": "codex-dcc-itinerary",
   "watermarks": {},
   "triage": {
     "open_items": [],
@@ -13,12 +13,200 @@
   },
   "schedule": {
     "working_hours": {
-      "start": "07:00",
+      "start": "09:00",
       "end": "17:30"
     },
-    "timeline": [],
-    "tasks_scheduled": [],
+    "timeline": [
+      {
+        "id": "task-2026-05-26-sweep-triage-review",
+        "type": "task",
+        "label": "Sweep triage review + pick top 3",
+        "title": "Sweep triage review + pick top 3",
+        "description": "Quickly review open items, decide what is real action vs noise, and pick the 3 highest-leverage outcomes for the day.",
+        "start": "2026-05-26T09:00:00-04:00",
+        "end": "2026-05-26T09:35:00-04:00",
+        "priority": "High",
+        "source": "dcc-manual",
+        "source_id": "manual:triage-review:2026-05-26",
+        "category": "Ops",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-26-offers-surface-inventory",
+        "type": "task",
+        "label": "Offers: surface inventory for compare-tool shift",
+        "title": "Offers: surface inventory for compare-tool shift",
+        "description": "Inventory every surface that references the legacy cash-offer flow (HubSpot, unicomms, scripts, guides, landing pages). Produce a checklist and choose the first 3 updates to ship today.",
+        "start": "2026-05-26T09:35:00-04:00",
+        "end": "2026-05-26T11:05:00-04:00",
+        "priority": "High",
+        "source": "dcc-manual",
+        "source_id": "manual:offers-surface-inventory:2026-05-26",
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-26-1105",
+        "type": "free_time",
+        "label": "Buffer",
+        "description": "Short break and context switch buffer.",
+        "start": "2026-05-26T11:05:00-04:00",
+        "end": "2026-05-26T11:20:00-04:00",
+        "source": "dcc-manual",
+        "category": "Buffer",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-26-stakeholder-align",
+        "type": "task",
+        "label": "Stakeholder alignment + announce plan",
+        "title": "Stakeholder alignment + announce plan",
+        "description": "Confirm ownership/handoffs for the compare-tool rollout and draft the CX note to stop offering any legacy item where applicable.",
+        "start": "2026-05-26T11:20:00-04:00",
+        "end": "2026-05-26T12:00:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:stakeholder-align:2026-05-26",
+        "category": "Comms",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-26-lunch",
+        "type": "free_time",
+        "label": "Lunch / reset",
+        "description": "Step away before the afternoon block.",
+        "start": "2026-05-26T12:00:00-04:00",
+        "end": "2026-05-26T13:00:00-04:00",
+        "source": "dcc-manual",
+        "category": "Personal",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-26-script-update",
+        "type": "task",
+        "label": "Update appointment flow + compare-tool demo beats",
+        "title": "Update appointment flow + compare-tool demo beats",
+        "description": "Finish the in-person appointment flow structure (tour → value framing → compare tool walkthrough → next step) and define success criteria.",
+        "start": "2026-05-26T13:00:00-04:00",
+        "end": "2026-05-26T14:30:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:script-update:2026-05-26",
+        "category": "Deep Work",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-26-admin-email",
+        "type": "task",
+        "label": "Admin + inbox hygiene",
+        "title": "Admin + inbox hygiene",
+        "description": "Clear any time-sensitive admin items; archive noise; leave only actionable threads.",
+        "start": "2026-05-26T14:30:00-04:00",
+        "end": "2026-05-26T15:00:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:admin-email:2026-05-26",
+        "category": "Admin",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-26-followups",
+        "type": "task",
+        "label": "Follow-ups + ship 1 concrete update",
+        "title": "Follow-ups + ship 1 concrete update",
+        "description": "Use this as the execution lane: ship one update from the surface inventory (email/script/guide) and send necessary follow-ups.",
+        "start": "2026-05-26T15:00:00-04:00",
+        "end": "2026-05-26T16:15:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:followups-ship:2026-05-26",
+        "category": "Execution",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-26-closeout",
+        "type": "task",
+        "label": "Closeout + tomorrow seed",
+        "title": "Closeout + tomorrow seed",
+        "description": "Mark actuals, record decisions, and seed tomorrow with the next 1–3 obvious steps so the morning starts clean.",
+        "start": "2026-05-26T16:15:00-04:00",
+        "end": "2026-05-26T17:30:00-04:00",
+        "priority": "High",
+        "source": "dcc-manual",
+        "source_id": "manual:closeout:2026-05-26",
+        "category": "Planning",
+        "completed": false
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "task-2026-05-26-sweep-triage-review",
+        "title": "Sweep triage review + pick top 3",
+        "start": "2026-05-26T09:00:00-04:00",
+        "end": "2026-05-26T09:35:00-04:00",
+        "priority": "High",
+        "source": "dcc-manual",
+        "source_id": "manual:triage-review:2026-05-26"
+      },
+      {
+        "task_id": "task-2026-05-26-offers-surface-inventory",
+        "title": "Offers: surface inventory for compare-tool shift",
+        "start": "2026-05-26T09:35:00-04:00",
+        "end": "2026-05-26T11:05:00-04:00",
+        "priority": "High",
+        "source": "dcc-manual",
+        "source_id": "manual:offers-surface-inventory:2026-05-26"
+      },
+      {
+        "task_id": "task-2026-05-26-stakeholder-align",
+        "title": "Stakeholder alignment + announce plan",
+        "start": "2026-05-26T11:20:00-04:00",
+        "end": "2026-05-26T12:00:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:stakeholder-align:2026-05-26"
+      },
+      {
+        "task_id": "task-2026-05-26-script-update",
+        "title": "Update appointment flow + compare-tool demo beats",
+        "start": "2026-05-26T13:00:00-04:00",
+        "end": "2026-05-26T14:30:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:script-update:2026-05-26"
+      },
+      {
+        "task_id": "task-2026-05-26-admin-email",
+        "title": "Admin + inbox hygiene",
+        "start": "2026-05-26T14:30:00-04:00",
+        "end": "2026-05-26T15:00:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:admin-email:2026-05-26"
+      },
+      {
+        "task_id": "task-2026-05-26-followups",
+        "title": "Follow-ups + ship 1 concrete update",
+        "start": "2026-05-26T15:00:00-04:00",
+        "end": "2026-05-26T16:15:00-04:00",
+        "priority": "Medium",
+        "source": "dcc-manual",
+        "source_id": "manual:followups-ship:2026-05-26"
+      },
+      {
+        "task_id": "task-2026-05-26-closeout",
+        "title": "Closeout + tomorrow seed",
+        "start": "2026-05-26T16:15:00-04:00",
+        "end": "2026-05-26T17:30:00-04:00",
+        "priority": "High",
+        "source": "dcc-manual",
+        "source_id": "manual:closeout:2026-05-26"
+      }
+    ],
     "tasks_couldnt_fit": [],
-    "stats": {}
+    "stats": {
+      "source_confidence": "manual_itinerary",
+      "planned_task_minutes": 355
+    }
   }
 }
