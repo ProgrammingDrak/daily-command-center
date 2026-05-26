@@ -1,22 +1,325 @@
 {
   "date": "2026-05-25",
-  "last_updated_at": "2026-05-12T13:25:44.977Z",
-  "last_updated_by": "skeleton",
-  "watermarks": {},
+  "last_updated_at": "2026-05-25T16:06:03.861Z",
+  "last_updated_by": "morning-sweep-suite",
+  "watermarks": {
+    "calendar": {
+      "last_at": "2026-05-25T16:06:03.861Z",
+      "last_id": "google-calendar:primary:2026-05-25"
+    },
+    "gmail": {
+      "last_at": "2026-05-25T16:06:03.861Z",
+      "last_id": "gmail:19e37a10fc5b8433"
+    },
+    "slack": {
+      "last_at": "2026-05-25T16:06:03.861Z",
+      "last_id": "slack:scan:2026-05-25",
+      "status": "ok"
+    },
+    "github": {
+      "last_at": "2026-05-25T16:06:03.861Z",
+      "last_id": "github:pr:71",
+      "status": "ok"
+    }
+  },
   "triage": {
-    "open_items": [],
+    "open_items": [
+      {
+        "id": "slack:cx-daily-ops:1779714397.428009",
+        "source": "slack",
+        "source_id": "1779714397.428009",
+        "type": "slack",
+        "title": "Spanish-speaking concierge needed (HubSpot contact)",
+        "summary": "From #cx-daily-ops: HubSpot contact needs a Spanish speaking concierge; came in as “Five9 Dial in” with no info in OEF.",
+        "priority": "High",
+        "link": "https://cleverrealestate.slack.com/archives/C05D9U39B1B/p1779714397428009",
+        "created_at": "2026-05-25T09:06:37-04:00",
+        "status": "open"
+      },
+      {
+        "id": "github:pr:71",
+        "source": "github",
+        "source_id": "71",
+        "type": "github",
+        "title": "Review PR #71 (draft): pet home social task feature",
+        "summary": "Open draft PR in ProgrammingDrak/daily-command-center; review/decide next action.",
+        "priority": "Medium",
+        "link": "https://github.com/ProgrammingDrak/daily-command-center/pull/71",
+        "created_at": "2026-05-25T16:06:03.861Z",
+        "status": "open"
+      },
+      {
+        "id": "gmail:19e37a10fc5b8433",
+        "source": "gmail",
+        "source_id": "19e37a10fc5b8433",
+        "type": "gmail",
+        "title": "OpenAI privacy policy update",
+        "summary": "Unread email: “Update to our privacy policy and more controls” — review for any action needed.",
+        "priority": "Low",
+        "link": "https://mail.google.com/mail/#all/19e37a10fc5b8433",
+        "created_at": "2026-05-17T20:29:19Z",
+        "status": "open"
+      },
+      {
+        "id": "dcc:2026-05-25:packet-refresh",
+        "source": "system",
+        "source_id": "day-file",
+        "type": "system",
+        "title": "DCC packet refresh + render check",
+        "summary": "Today’s day file started as a skeleton; confirm the refreshed packet renders in the app.",
+        "priority": "High",
+        "link": "",
+        "created_at": "2026-05-25T16:06:03.861Z",
+        "status": "open"
+      }
+    ],
     "resolved_items": [],
-    "cycle_count": 0
+    "cycle_count": 1
   },
   "sweep": {
-    "source_health": [],
-    "readers": [],
-    "open_item_count": 0,
-    "meetings_count": 0
+    "source_health": [
+      {
+        "id": "calendar",
+        "label": "Calendar",
+        "status": "ok",
+        "detail": "Calendar events pulled via Google Calendar connector.",
+        "count": 1,
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "gmail",
+        "label": "Gmail",
+        "status": "partial_plus",
+        "detail": "Pulled recent unread non-promo messages; inbox backlog is high.",
+        "count": 1,
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "slack",
+        "label": "Slack",
+        "status": "ok",
+        "detail": "Pulled latest public-channel operational signal.",
+        "count": 1,
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "github",
+        "label": "Github",
+        "status": "ok",
+        "detail": "Pulled open PRs for daily-command-center.",
+        "count": 1,
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "tasks",
+        "label": "Tasks",
+        "status": "unavailable",
+        "detail": "Task connector not available (Notion tools not installed in this session).",
+        "count": 0,
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      }
+    ],
+    "readers": [
+      {
+        "id": "calendar",
+        "status": "ok",
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "gmail",
+        "status": "partial_plus",
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "slack",
+        "status": "ok",
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "github",
+        "status": "ok",
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      },
+      {
+        "id": "tasks",
+        "status": "unavailable",
+        "checked_at": "2026-05-25T16:06:03.861Z"
+      }
+    ],
+    "open_item_count": 4,
+    "meetings_count": 1
   },
   "glymphatic_brief": {
     "history": [],
-    "current": null
+    "current": {
+      "id": "dcc-brief-8a1b57660b0e",
+      "date": "2026-05-25",
+      "title": "DCC Brief",
+      "generated_at": "2026-05-25T16:06:03.861Z",
+      "summary": "4 open reader items and 1 calendar meetings are ready for review. Suggestions stay review-first until you add them to the itinerary.",
+      "source_health": [
+        {
+          "id": "calendar",
+          "label": "Calendar",
+          "status": "ok",
+          "detail": "Calendar events pulled via Google Calendar connector.",
+          "count": 1,
+          "checked_at": "2026-05-25T16:06:03.861Z"
+        },
+        {
+          "id": "gmail",
+          "label": "Gmail",
+          "status": "partial_plus",
+          "detail": "Pulled recent unread non-promo messages; inbox backlog is high.",
+          "count": 1,
+          "checked_at": "2026-05-25T16:06:03.861Z"
+        },
+        {
+          "id": "slack",
+          "label": "Slack",
+          "status": "ok",
+          "detail": "Pulled latest public-channel operational signal.",
+          "count": 1,
+          "checked_at": "2026-05-25T16:06:03.861Z"
+        },
+        {
+          "id": "github",
+          "label": "Github",
+          "status": "ok",
+          "detail": "Pulled open PRs for daily-command-center.",
+          "count": 1,
+          "checked_at": "2026-05-25T16:06:03.861Z"
+        },
+        {
+          "id": "tasks",
+          "label": "Tasks",
+          "status": "unavailable",
+          "detail": "Task connector not available (Notion tools not installed in this session).",
+          "count": 0,
+          "checked_at": "2026-05-25T16:06:03.861Z"
+        }
+      ],
+      "triage": {
+        "summary": "3/5 readers checked in. Review the highest-signal items before scheduling.",
+        "items": [
+          {
+            "id": "slack:cx-daily-ops:1779714397.428009",
+            "channel": "slack",
+            "title": "Spanish-speaking concierge needed (HubSpot contact)",
+            "summary": "From #cx-daily-ops: HubSpot contact needs a Spanish speaking concierge; came in as “Five9 Dial in” with no info in OEF.",
+            "priority": "High",
+            "source_link": "https://cleverrealestate.slack.com/archives/C05D9U39B1B/p1779714397428009",
+            "draft_status": "needs_draft",
+            "draft_link": ""
+          },
+          {
+            "id": "github:pr:71",
+            "channel": "github",
+            "title": "Review PR #71 (draft): pet home social task feature",
+            "summary": "Open draft PR in ProgrammingDrak/daily-command-center; review/decide next action.",
+            "priority": "Medium",
+            "source_link": "https://github.com/ProgrammingDrak/daily-command-center/pull/71",
+            "draft_status": "needs_draft",
+            "draft_link": ""
+          },
+          {
+            "id": "gmail:19e37a10fc5b8433",
+            "channel": "gmail",
+            "title": "OpenAI privacy policy update",
+            "summary": "Unread email: “Update to our privacy policy and more controls” — review for any action needed.",
+            "priority": "Low",
+            "source_link": "https://mail.google.com/mail/#all/19e37a10fc5b8433",
+            "draft_status": "needs_draft",
+            "draft_link": ""
+          },
+          {
+            "id": "dcc:2026-05-25:packet-refresh",
+            "channel": "system",
+            "title": "DCC packet refresh + render check",
+            "summary": "Today’s day file started as a skeleton; confirm the refreshed packet renders in the app.",
+            "priority": "High",
+            "source_link": "",
+            "draft_status": "needs_draft",
+            "draft_link": ""
+          }
+        ]
+      },
+      "retro": null,
+      "lessons": [],
+      "disregarded": [],
+      "suggested_tasks": [
+        {
+          "id": "brief-meeting-0b9ae3d83957",
+          "title": "Prep: Set up the Greenhouse",
+          "priority": "Medium",
+          "duration_minutes": 20,
+          "recommended_start": "",
+          "confidence": "calendar",
+          "reason": "Event 2026-05-25T14:30:00-04:00–2026-05-25T16:30:00-04:00",
+          "tags": [
+            "DCC",
+            "calendar"
+          ],
+          "source_item_id": "68rj6d9h74sj0b9mc5hjgb9kckrjibb271hj2b9kccp66dhg6ksjge9g6s"
+        },
+        {
+          "id": "brief-task-412738a21cb2",
+          "title": "Spanish-speaking concierge needed (HubSpot contact)",
+          "priority": "High",
+          "duration_minutes": 30,
+          "recommended_start": "",
+          "confidence": "slack",
+          "reason": "From #cx-daily-ops: HubSpot contact needs a Spanish speaking concierge; came in as “Five9 Dial in” with no info in OEF.",
+          "tags": [
+            "DCC",
+            "triage"
+          ],
+          "source_item_id": "slack:cx-daily-ops:1779714397.428009"
+        },
+        {
+          "id": "brief-task-c7227be3179d",
+          "title": "DCC packet refresh + render check",
+          "priority": "High",
+          "duration_minutes": 30,
+          "recommended_start": "",
+          "confidence": "system",
+          "reason": "Today’s day file started as a skeleton; confirm the refreshed packet renders in the app.",
+          "tags": [
+            "DCC",
+            "triage"
+          ],
+          "source_item_id": "dcc:2026-05-25:packet-refresh"
+        },
+        {
+          "id": "brief-task-b2dc201ed93b",
+          "title": "Review PR #71 (draft): pet home social task feature",
+          "priority": "Medium",
+          "duration_minutes": 20,
+          "recommended_start": "",
+          "confidence": "github",
+          "reason": "Open draft PR in ProgrammingDrak/daily-command-center; review/decide next action.",
+          "tags": [
+            "DCC",
+            "triage"
+          ],
+          "source_item_id": "github:pr:71"
+        },
+        {
+          "id": "brief-task-d1ca634976c1",
+          "title": "OpenAI privacy policy update",
+          "priority": "Low",
+          "duration_minutes": 20,
+          "recommended_start": "",
+          "confidence": "gmail",
+          "reason": "Unread email: “Update to our privacy policy and more controls” — review for any action needed.",
+          "tags": [
+            "DCC",
+            "triage"
+          ],
+          "source_item_id": "gmail:19e37a10fc5b8433"
+        }
+      ]
+    }
   },
   "completions": {
     "tasks": []
@@ -30,5 +333,35 @@
     "tasks_scheduled": [],
     "tasks_couldnt_fit": [],
     "stats": {}
+  },
+  "meetings": [
+    {
+      "id": "68rj6d9h74sj0b9mc5hjgb9kckrjibb271hj2b9kccp66dhg6ksjge9g6s",
+      "event_id": "68rj6d9h74sj0b9mc5hjgb9kckrjibb271hj2b9kccp66dhg6ksjge9g6s",
+      "title": "Set up the Greenhouse",
+      "start": "2026-05-25T14:30:00-04:00",
+      "end": "2026-05-25T16:30:00-04:00",
+      "location": null,
+      "attendees": [],
+      "calUrl": "https://www.google.com/calendar/event?eid=NjhyajZkOWg3NHNqMGI5bWM1aGpnYjlrY2tyamliYjI3MWhqMmI5a2NjcDY2ZGhnNmtzamdlOWc2cyBvZmZpY2lhbC5kcmFrZXNoYWR3ZWxsQG0&ctz=America/New_York",
+      "linkedDocUrl": null,
+      "linkedDocTitle": null,
+      "myResponseStatus": null
+    }
+  ],
+  "mutations": [
+    {
+      "id": "mutation-9794945fc7cb",
+      "type": "morning-sweep-suite",
+      "at": "2026-05-25T16:06:03.861Z",
+      "open_items": 4,
+      "meetings": 1
+    }
+  ],
+  "meta": {
+    "morning_sweep_suite": {
+      "last_run_at": "2026-05-25T16:06:03.861Z"
+    }
   }
 }
+
