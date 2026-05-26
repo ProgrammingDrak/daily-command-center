@@ -2609,6 +2609,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-cell.bank-zap-impact{animation:slotBankTileImpact 0.9s cubic-bezier(.18,1.35,.24,1) both}
 .slot-cell.bank-pet-collected{animation:slotBankPetCollected 0.54s cubic-bezier(.18,1.3,.24,1) both}
 .slot-cell[data-symbol="bank"],.slot-cell[data-symbol="bonus"],.slot-cell[data-symbol="star"],.slot-cell[data-symbol="wild"]{background:linear-gradient(180deg,#ffec9d,#d7a331);color:#241604;border-color:#ffe28b}
+.slot-cell[data-symbol="miss"]{background:linear-gradient(180deg,#fff8df,#eadfb9);color:#2d2415;border-color:rgba(68,49,14,0.38)}
 .slot-cell[data-symbol="gold"],.slot-cell[data-symbol="jackpot"]{background:linear-gradient(180deg,#fff4a8,#c97f19);color:#201100;border-color:#ffdf6f;box-shadow:inset 0 -5px 0 rgba(62,42,11,0.12),0 0 14px rgba(255,203,64,0.26)}
 .slot-cell[data-symbol="jackpot"]{background:linear-gradient(180deg,#fff2b8,#e44848);color:white;border-color:#ffd86b}
 .slot-cell[data-symbol="care"],.slot-cell[data-symbol="treat"],.slot-cell[data-symbol="rest"],.slot-cell[data-symbol="pick"],.slot-cell[data-symbol="partner"],.slot-cell[data-symbol="pledge"],.slot-cell[data-symbol="reroll"]{background:linear-gradient(180deg,#dff6ff,#7fc3d7);color:#092633;border-color:#b9f1ff}

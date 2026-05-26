@@ -17,8 +17,8 @@ const SCREEN_BANK_BUILDER_PERCENT = 0.0022;
 const SLOT_ROWS = 3;
 const SLOT_COLS = 5;
 const SLOT_CELL_COUNT = SLOT_ROWS * SLOT_COLS;
-const FILLER_SYMBOLS = ["STRAW", "STICK", "BRICK", "HAT", "TOOLS", "HOUSE"];
-const TEASER_SYMBOLS = ["CARE", "BONUS", "JACKPOT", "PLEDGE", "PICK", "REROLL"];
+const FILLER_SYMBOLS = ["MISS"];
+const TEASER_SYMBOLS = ["MISS"];
 const PAYLINES = [
   [0, 1, 2], [1, 2, 3], [2, 3, 4],
   [5, 6, 7], [6, 7, 8], [7, 8, 9],
@@ -1044,12 +1044,8 @@ function rewardCostCents(row) {
 
 function rewardSymbol(row) {
   if (!row || row.kind === "miss") return "MISS";
-  if (rewardCostCents(row) > 0) return "JACKPOT";
   if (row.kind === "bank_builder") return "BANK";
-  if (row.kind === "sponsor") return "PLEDGE";
-  if (row.kind === "choice") return "PICK";
-  if (row.kind === "reroll") return "REROLL";
-  return "CARE";
+  return "JACKPOT";
 }
 
 function weightedBankScreenCount() {
