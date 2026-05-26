@@ -1251,11 +1251,10 @@
   }
 
   function rewardAnimationKind(spinRow, snap){
-    const payout = (snap && snap.bank_screen_payout) || {};
-    const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || payout.cents || 0;
+    const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || 0;
     const status = spinRow && spinRow.status;
     const kind = snap && snap.kind;
-    if(bankDelta > 0 || kind === "bank_builder" || (snap && snap.source_type === "slot_screen_bank_builder")) return "bank";
+    if(bankDelta > 0 || kind === "bank_builder") return "bank";
     if(status === "miss" || kind === "miss") return "miss";
     if(kind === "sponsor") return "pledge";
     if(kind === "choice") return "choice";
@@ -1267,7 +1266,7 @@
   function rewardAnimationConfig(kind, spinRow, snap){
     const title = (snap && snap.title) || "";
     const jackpotLabel = (snap && snap.requires_jackpot_choice) ? "Pick a prize" : "Jackpot";
-    const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || ((snap && snap.bank_screen_payout && snap.bank_screen_payout.cents) || 0);
+    const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || 0;
     const configs = {
       bank: { caption: bankDelta > 0 ? "+" + money(bankDelta) + " Reserve" : "Reserve up", tokens: ["BANK", "+$", "+$"], beams: 5 },
       pledge: { caption: title ? "Pledge: " + title : "Pledge hit", tokens: ["PLEDGE", "PARTNER", "SIGNED"], beams: 4 },
@@ -2096,7 +2095,7 @@
     }
     if(stages.jackpot_hit === false) return "No jackpot this spin. The lights are warming up.";
     const payout = (snap && snap.bank_screen_payout) || {};
-    const bankDelta = spinRow.bank_delta_cents || payout.cents || 0;
+    const bankDelta = spinRow.bank_delta_cents || 0;
     if(bankDelta > 0) {
       const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
       const cap = payout.capped ? " Bank cap trimmed the payout." : "";
