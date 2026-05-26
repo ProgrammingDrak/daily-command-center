@@ -1071,6 +1071,7 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
   const protectedCells = new Set();
   const selectedSymbol = rewardSymbol(selected);
   const isMiss = selected.kind === "miss";
+  const canPlaceBankSymbols = screenBankHit && !isMiss;
   let payline = [];
 
   if (!isMiss && selected.kind !== "bank_builder") {
@@ -1086,7 +1087,7 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
     }
   }
 
-  if (screenBankHit) {
+  if (canPlaceBankSymbols) {
     const openCells = Array.from({ length: SLOT_CELL_COUNT }, (_, i) => i).filter(i => !protectedCells.has(i));
     const bankCount = Math.min(weightedBankScreenCount(), openCells.length);
     for (let i = 0; i < bankCount; i++) {
@@ -1096,7 +1097,9 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
     }
   }
 
-  const payout = calculateScreenBankPayout(board, account, bankUsage);
+  const payout = canPlaceBankSymbols
+    ? calculateScreenBankPayout(board, account, bankUsage)
+    : emptyScreenBankPayout(account, bankUsage);
   return { board, payline, payout };
 }
 
@@ -1169,6 +1172,32 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   };
 }
 
+function emptyScreenBankPayout(account, bankUsage) {
+  const monthlyGoalCents = clampInt(
+    (bankUsage && bankUsage.monthlyGoal) ||
+    (account && account.settings && account.settings.monthly_goal_cents) ||
+    DEFAULT_MONTHLY_GOAL_CENTS,
+    100,
+    1000000
+  );
+  return {
+    source_type: "slot_screen_bank_builder",
+    positions: [],
+    horizontal_groups: [],
+    vertical_groups: [],
+    base_cents: Math.floor(monthlyGoalCents * SCREEN_BANK_BUILDER_PERCENT),
+    goal_cents: monthlyGoalCents,
+    base_units: 0,
+    horizontal_bonus_units: 0,
+    vertical_bonus_units: 0,
+    units: 0,
+    raw_cents: 0,
+    cents: 0,
+    capped: false,
+    percent: SCREEN_BANK_BUILDER_PERCENT,
+  };
+}
+
 async function spin(workspaceId, userId) {
   const state = await getState(workspaceId, userId);
   const spinCost = state.constants.spinCost;
@@ -1187,7 +1216,8 @@ async function spin(workspaceId, userId) {
   }
   const outcome = selectThreeStageOutcome(drawPool, settings);
   const selected = outcome.selected;
-  const screen = buildSpinScreen(selected, state.account, state.bankUsage, shouldHitScreenBankBuilder());
+  const canHitScreenBank = outcome.jackpot_hit && !outcome.empty_bucket && shouldHitScreenBankBuilder();
+  const screen = buildSpinScreen(selected, state.account, state.bankUsage, canHitScreenBank);
   const bankDelta = outcome.jackpot_hit && !outcome.empty_bucket ? (screen.payout.cents || 0) : 0;
   const reserveCost = outcome.jackpot_hit && !outcome.empty_bucket ? reserveCostCents(selected) : 0;
   const selectedSnapshot = {
@@ -1426,7 +1456,9 @@ module.exports = {
   confirmSpin,
   confirmPendingBankBuilders,
   _test: {
+    buildSpinScreen,
     calculateScreenBankPayout,
+    emptyScreenBankPayout,
     normalizeSlotSettings,
     selectThreeStageOutcome,
     chooseWeighted,

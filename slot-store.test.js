@@ -395,3 +395,25 @@ test("bank screen payout values each BANK tile from the monthly goal, not curren
   assert.equal(payout.base_units, 2);
   assert.equal(payout.cents, 44);
 });
+
+test("buildSpinScreen does not pay bank bonus on miss screens", () => {
+  const crypto = require("node:crypto");
+  const originalRandomInt = crypto.randomInt;
+  crypto.randomInt = () => 0;
+  try {
+    const store = loadStoreWithMock(createMockPool());
+    const screen = store._test.buildSpinScreen(
+      { kind: "miss" },
+      { bank_balance_cents: 0, settings: { monthly_goal_cents: 10000 } },
+      { today: 0, week: 0, monthlyGoal: 10000 },
+      true
+    );
+
+    assert.equal(screen.board.includes("BANK"), false);
+    assert.equal(screen.payout.base_units, 0);
+    assert.equal(screen.payout.positions.length, 0);
+    assert.equal(screen.payout.cents, 0);
+  } finally {
+    crypto.randomInt = originalRandomInt;
+  }
+});
