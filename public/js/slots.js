@@ -460,7 +460,7 @@
       avatar.classList.remove("slot-pet-reward", "slot-pet-reward-bank", "slot-pet-reward-pledge", "slot-pet-reward-jackpot", "slot-pet-reward-choice", "slot-pet-reward-reroll", "slot-pet-reward-care", "slot-pet-reward-miss");
     }
     document.querySelectorAll(".slot-cell.reward-focus").forEach(cell => cell.classList.remove("reward-focus"));
-    document.querySelectorAll(".slot-reward-burst,.slot-reward-token,.slot-reward-beam,.slot-reward-caption,.slot-pet-trail").forEach(el => el.remove());
+    document.querySelectorAll(".slot-reward-burst,.slot-reward-token,.slot-reward-beam,.slot-reward-caption,.slot-pet-trail,.slot-jackpot-dice-stage,.slot-reward-wheel-stage,.slot-jackpot-burst").forEach(el => el.remove());
   }
 
   window.clearSlotCoinEffects = clearSlotCoinEffects;
@@ -1078,14 +1078,16 @@
       }
       updateStageTrack("jackpot", "hit");
       slotPlay("jackpotHit");
-      setResult("Jackpot hit! Spin 2: tier and source...");
+      setResult("JACKPOT. Hold on...");
+      await animateJackpotBurst();
+      setResult("Two dice roll now: one for tier, one for who pays.");
       updateStageTrack("bucket", "spinning");
-      await animateReels(bucketStageSymbols(stages));
+      await animateBucketDice(stages);
       updateStageTrack("bucket", stages.empty_bucket ? "empty" : "hit");
       slotPlay(stages.empty_bucket ? "emptyBucket" : "tierLock");
       if(stages.empty_bucket){
         setResult(resultText(spinRow, snap));
-        await animateReels(resultSymbols(spinRow, snap));
+        await animateReels(resultSymbols(spinRow, snap), { duration: 1700 });
         highlightWinningCells(spinRow, snap);
         animateRewardReveal(spinRow, snap);
         updateStageTrack("reward", "reroll");
@@ -1095,9 +1097,11 @@
         await loadSlots();
         return;
       }
-      setResult("Spin 3: reward reveal...");
+      setResult("Tier and payer locked. Spinning the reward wheel...");
       updateStageTrack("reward", "spinning");
-      await animateReels(resultSymbols(spinRow, snap));
+      await animateRewardWheel(spinRow, snap, stages);
+      setResult("Wheel locked. Final reveal...");
+      await animateReels(resultSymbols(spinRow, snap), { duration: 2400 });
       updateStageTrack("reward", "hit");
       const bankHit = (spinRow.bank_delta_cents || 0) > 0;
       if(bankHit) {
@@ -1177,11 +1181,125 @@
     return board;
   }
 
-  function animateReels(finalSymbols){
+  async function animateJackpotBurst(){
+    const frame = document.querySelector(".slot-reels-frame");
+    if(!frame) {
+      await wait(900);
+      return;
+    }
+    document.querySelectorAll(".slot-jackpot-burst").forEach(el => el.remove());
+    const burst = document.createElement("div");
+    burst.className = "slot-jackpot-burst";
+    burst.innerHTML = '<strong>JACKPOT</strong><span>Tier dice loading...</span>';
+    frame.appendChild(burst);
+    slotPetReact("happy", "JACKPOT!", 1800);
+    slotPlay("jackpotHit");
+    await wait(1500);
+    burst.classList.add("leaving");
+    await wait(320);
+    burst.remove();
+  }
+
+  async function animateBucketDice(stages){
+    const frame = document.querySelector(".slot-reels-frame");
+    const tier = (stages && stages.tier) || {};
+    const source = (stages && stages.payment_source) || {};
+    const tierOptions = activeRewardTiers().map(t => t.label);
+    const sourceOptions = PAYMENT_SOURCES.map(s => s.label);
+    const tierLabel = tier.label || tierById(tier.id).label || "Tier I";
+    const sourceLabelText = source.label || sourceLabel(source.id) || "Self";
+    const reels = document.querySelectorAll(".slot-cell");
+    const settledSymbols = bucketStageSymbols(stages);
+    reels.forEach((cell, index) => {
+      setCell(cell, settledSymbols[index] || "MISS");
+      cell.classList.add("reveal");
+    });
+    if(!frame) return;
+    document.querySelectorAll(".slot-jackpot-dice-stage").forEach(el => el.remove());
+    const stage = document.createElement("div");
+    stage.className = "slot-jackpot-dice-stage";
+    stage.innerHTML =
+      '<div class="slot-jackpot-die" data-die="tier"><span>Tier die</span><strong>...</strong></div>' +
+      '<div class="slot-jackpot-die" data-die="source"><span>Paid by die</span><strong>...</strong></div>';
+    frame.appendChild(stage);
+    const tierValue = stage.querySelector('[data-die="tier"] strong');
+    const sourceValue = stage.querySelector('[data-die="source"] strong');
+    const start = Date.now();
+    slotPlay("reelStart");
+    await new Promise(resolve => {
+      const timer = setInterval(() => {
+        const tick = Math.floor((Date.now() - start) / 95);
+        if(tierValue) tierValue.textContent = tierOptions[tick % tierOptions.length] || "Tier I";
+        if(sourceValue) sourceValue.textContent = sourceOptions[(tick + 1) % sourceOptions.length] || "Self";
+        if(tick % 3 === 0) slotPlay("tick", { tick });
+      }, 95);
+      setTimeout(() => {
+        clearInterval(timer);
+        if(tierValue) tierValue.textContent = tierLabel;
+        if(sourceValue) sourceValue.textContent = sourceLabelText;
+        stage.classList.add("locked");
+        slotPlay("tierLock");
+        resolve();
+      }, 2400);
+    });
+    await wait(1200);
+    stage.classList.add("leaving");
+    await wait(320);
+    stage.remove();
+  }
+
+  function jackpotBucketRewards(stages){
+    const source = stages && stages.payment_source && stages.payment_source.id;
+    const tier = stages && stages.tier && stages.tier.id;
+    return (slotState && slotState.rewards || [])
+      .filter(r => r && r.kind !== "miss" && r.active !== false && rewardShares(r) > 0)
+      .filter(r => !source || normalizeRewardSource(r) === source)
+      .filter(r => !tier || String(r.tier_id || "tier_i") === String(tier));
+  }
+
+  async function animateRewardWheel(spinRow, snap, stages){
+    const frame = document.querySelector(".slot-reels-frame");
+    if(!frame) {
+      await wait(1200);
+      return;
+    }
+    document.querySelectorAll(".slot-reward-wheel-stage").forEach(el => el.remove());
+    const bucket = jackpotBucketRewards(stages);
+    const selectedId = snap && snap.id != null ? String(snap.id) : "";
+    const selectedTitle = snap && snap.title ? snap.title : "Reward";
+    const wheel = document.createElement("div");
+    wheel.className = "slot-reward-wheel-stage";
+    const options = (bucket.length ? bucket : [{ id: selectedId || "selected", title: selectedTitle }]).slice(0, 12);
+    const optionHtml = options.map((reward, index) => {
+      const angle = (360 / Math.max(1, options.length)) * index;
+      const selected = selectedId && String(reward.id) === selectedId;
+      return '<span class="slot-wheel-option ' + (selected ? 'selected' : '') + '" style="--slot-wheel-angle:' + angle + 'deg">' + esc(reward.title || "Reward") + '</span>';
+    }).join("");
+    wheel.innerHTML =
+      '<div class="slot-wheel-pointer">Reward</div>' +
+      '<div class="slot-wheel-disc">' + optionHtml + '<strong>' + esc(selectedTitle) + '</strong></div>' +
+      '<div class="slot-wheel-caption">' + esc(options.length) + ' possible reward' + (options.length === 1 ? '' : 's') + ' in this bucket</div>';
+    frame.appendChild(wheel);
+    slotPlay("reelStart");
+    await wait(2600);
+    wheel.classList.add("locked");
+    slotPlay("rewardReveal");
+    await wait(1150);
+    wheel.classList.add("leaving");
+    await wait(340);
+    wheel.remove();
+  }
+
+  function animateReels(finalSymbols, options){
     const reels = document.querySelectorAll(".slot-cell");
     if(!reels.length) return Promise.resolve();
+    const opts = options || {};
     const targets = finalSymbols && finalSymbols.length ? finalSymbols : SPIN_SYMBOLS;
     let tick = 0;
+    const duration = Math.max(900, opts.duration || 1900);
+    const stopBase = Math.max(360, opts.stopBase || Math.round(duration * 0.36));
+    const colGap = opts.colGap == null ? Math.max(70, Math.round(duration * 0.074)) : opts.colGap;
+    const rowGap = opts.rowGap == null ? Math.max(85, Math.round(duration * 0.09)) : opts.rowGap;
     clearResultHighlights();
     reels.forEach(r => {
       r.classList.remove("reveal");
@@ -1204,13 +1322,13 @@
           setCell(r, targets[i % targets.length] || "MISS");
           r.classList.add("reveal");
           slotPlay("stop", { index: i });
-        }, 700 + (i % 5) * 140 + Math.floor(i / 5) * 170);
+        }, stopBase + (i % 5) * colGap + Math.floor(i / 5) * rowGap);
       });
       setTimeout(() => {
         clearInterval(timer);
         reels.forEach(r => r.classList.remove("spinning", "pulse", "stopped"));
         resolve();
-      }, 1900);
+      }, duration);
     });
   }
 
