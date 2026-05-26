@@ -65,6 +65,24 @@ function createMockPool(options = {}) {
       state.rewardRows = state.rewardRows.map(row => row.kind === params[1] ? { ...row, active: false, weight: 0 } : row);
       return { rows: [] };
     }
+    if (text.includes("UPDATE slot_rewards") && text.includes("SET chance_shares = GREATEST")) {
+      state.rewardRows = state.rewardRows.map(row => ({
+        ...row,
+        chance_shares: (row.chance_shares === undefined || (row.chance_shares === 1 && row.weight !== 1))
+          ? Math.max(0, row.weight || 0)
+          : row.chance_shares,
+      }));
+      return { rows: [] };
+    }
+    if (text.includes("UPDATE slot_rewards") && text.includes("SET payment_source = CASE")) {
+      state.rewardRows = state.rewardRows.map(row => {
+        if (row.payment_source && row.payment_source !== "self") return row;
+        if (row.kind === "sponsor") return { ...row, payment_source: "sponsored" };
+        if (["free", "choice", "reroll"].includes(row.kind)) return { ...row, payment_source: "free" };
+        return row.payment_source ? row : { ...row, payment_source: "self" };
+      });
+      return { rows: [] };
+    }
     if (text.includes("UPDATE slot_rewards") && text.includes("deleted_at=NOW()")) {
       const idx = state.rewardRows.findIndex(row => String(row.id) === String(params[1]) && !row.deleted_at);
       if (idx < 0) return { rowCount: 0, rows: [] };
@@ -282,7 +300,7 @@ test("deleteReward hides rewards without removing rows referenced by spin histor
   assert.deepEqual(state.rewards.map(r => r.title), ["Take a walk"]);
 });
 
-test("getState keeps paid jackpots hittable when reserve is short", async () => {
+test("getState locks paid jackpots when reserve is short", async () => {
   const rewardBase = {
     sponsor_type: "self",
     sponsor_splits: [],
@@ -308,10 +326,56 @@ test("getState keeps paid jackpots hittable when reserve is short", async () => 
   const state = await store.getState("ws-1", 1);
   const reward = state.rewards.find(r => r.id === 10);
 
-  assert.equal(reward.eligible, true);
+  assert.equal(reward.eligible, false);
   assert.equal(reward.reserve_affordable, false);
   assert.equal(reward.reserve_shortfall_cents, 6300);
+  assert.equal(reward.locked_reason, "bank_too_small");
   assert.equal(reward.jackpot_type, "self");
+});
+
+test("selectThreeStageOutcome returns a miss when jackpot roll misses", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0 }, () => 0);
+
+  assert.equal(outcome.jackpot_hit, false);
+  assert.equal(outcome.selected.kind, "miss");
+  assert.equal(outcome.reroll_credit, false);
+});
+
+test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const rolls = [0, 0, 5];
+  const rng = () => rolls.shift() || 0;
+  const outcome = store._test.selectThreeStageOutcome([
+    { id: 1, title: "Small thing", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 3 },
+    { id: 2, title: "Big thing", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 7 },
+  ], {
+    jackpot_hit_rate: 1,
+    payment_source_weights: { self: 0, sponsored: 0, free: 1 },
+    reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
+  }, rng);
+
+  assert.equal(outcome.jackpot_hit, true);
+  assert.equal(outcome.source.id, "free");
+  assert.equal(outcome.tier.id, "tier_i");
+  assert.equal(outcome.selected.id, 2);
+  assert.equal(outcome.empty_bucket, false);
+});
+
+test("selectThreeStageOutcome awards reroll credit for empty source-tier bucket", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const outcome = store._test.selectThreeStageOutcome([
+    { id: 1, title: "Wrong bucket", kind: "free", active: true, eligible: true, payment_source: "self", tier_id: "tier_i", chance_shares: 3 },
+  ], {
+    jackpot_hit_rate: 1,
+    payment_source_weights: { self: 0, sponsored: 1, free: 0 },
+    reward_tiers: [{ id: "tier_vi", label: "Tier VI", weight: 1, active: true }],
+  }, () => 0);
+
+  assert.equal(outcome.jackpot_hit, true);
+  assert.equal(outcome.empty_bucket, true);
+  assert.equal(outcome.reroll_credit, true);
+  assert.equal(outcome.selected.kind, "reroll");
 });
 
 test("bank screen payout values each BANK tile from the monthly goal, not current bank balance", () => {

@@ -1198,6 +1198,11 @@
           </div>
         </div>
         <div class="slot-result" id="slot-result">Ready when you are.</div>
+        <div class="slot-stage-track" id="slot-stage-track" aria-live="polite">
+          <span class="slot-stage-chip" data-stage="jackpot">Jackpot</span>
+          <span class="slot-stage-chip" data-stage="bucket">Source + Tier</span>
+          <span class="slot-stage-chip" data-stage="reward">Reward</span>
+        </div>
         <div class="slot-actions">
           <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
           <button class="slot-sound-btn" id="slot-sound-toggle" type="button" aria-pressed="true">Sound: On</button>
@@ -1211,6 +1216,7 @@
           <h3>Outcome Pool</h3>
           <button id="slot-add-reward-btn" class="slot-small-btn" type="button">Add reward</button>
         </div>
+        <div class="slot-tier-manager" id="slot-tier-manager"></div>
         <div class="slot-reward-form" id="slot-reward-form" style="display:none">
           <div class="slot-form-head">
             <div>
@@ -1224,17 +1230,21 @@
             <input id="slot-form-title" type="text" placeholder="Declare a tiny win and stop working after essentials">
           </label>
           <input id="slot-form-kind" type="hidden" value="free">
-          <div class="slot-kind-picker" role="radiogroup" aria-label="Reward type">
-            <button class="slot-kind-option active" data-slot-kind="free" type="button"><strong>Free</strong><span>$0 win</span></button>
-            <button class="slot-kind-option" data-slot-kind="small_paid" type="button"><strong>Jackpot</strong><span>Small spend</span></button>
-            <button class="slot-kind-option" data-slot-kind="bank_gated" type="button"><strong>Jackpot</strong><span>Reserve spend</span></button>
-            <button class="slot-kind-option" data-slot-kind="sponsor" type="button"><strong>Sponsor</strong><span>Partner prize</span></button>
-            <button class="slot-kind-option" data-slot-kind="choice" type="button"><strong>Choice</strong><span>Pick later</span></button>
-            <button class="slot-kind-option" data-slot-kind="reroll" type="button"><strong>Reroll</strong><span>Try again</span></button>
-          </div>
           <div class="slot-form-grid">
             <label class="slot-field">
-              <span>Odds shares</span>
+              <span>Paid by</span>
+              <select id="slot-form-source">
+                <option value="self">Self</option>
+                <option value="sponsored">Sponsored</option>
+                <option value="free">Free</option>
+              </select>
+            </label>
+            <label class="slot-field">
+              <span>Tier</span>
+              <select id="slot-form-tier"></select>
+            </label>
+            <label class="slot-field">
+              <span>Reward chances</span>
               <input id="slot-form-weight" type="number" min="0" step="1" placeholder="16">
               <em id="slot-form-weight-note">Higher shares make this more likely.</em>
             </label>
@@ -1327,8 +1337,24 @@
               <input id="slot-spin-cost-input" type="number" min="1" max="250" step="1">
             </label>
             <label class="slot-setting-field">
+              <span>Jackpot hit %</span>
+              <input id="slot-jackpot-rate" type="number" min="0" max="100" step="1">
+            </label>
+            <label class="slot-setting-field">
               <span>Monthly goal $</span>
               <input id="slot-monthly-goal" type="number" min="1" max="10000" step="1">
+            </label>
+            <label class="slot-setting-field">
+              <span>Self source weight</span>
+              <input id="slot-source-self-weight" type="number" min="0" step="1">
+            </label>
+            <label class="slot-setting-field">
+              <span>Sponsored source weight</span>
+              <input id="slot-source-sponsored-weight" type="number" min="0" step="1">
+            </label>
+            <label class="slot-setting-field">
+              <span>Free source weight</span>
+              <input id="slot-source-free-weight" type="number" min="0" step="1">
             </label>
             <div class="slot-setting-note">
               <strong id="slot-current-cost">25 points per spin</strong>
