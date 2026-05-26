@@ -117,16 +117,17 @@ function buildSchedule(){
     return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
   };
   const pointsChip=ev=>{
-    const bounty=typeof isBountyTask==="function"&&isBountyTask(ev.id);
+    const bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
+    const bounty=bountyCount>0;
     const payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
-      ? window.TaskPoints.buildPayload(ev,{bounty})
-      : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty};
+      ? window.TaskPoints.buildPayload(ev,{bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1})
+      : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
     const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
       ? window.TaskPoints.estimate(payload)
       : {eligible:!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break",awardPoints:bounty?28:14,durationMinutes:60,effortTier:"medium",attentionTier:"normal"};
     if(!scoring.eligible||scoring.awardPoints<=0)return "";
     const pts=scoring.awardPoints;
-    const title="Completing this task earns about "+pts+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention"+(bounty?", bounty x2":"")+".";
+    const title="Completing this task earns about "+pts+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention"+(bounty?", bounty x"+Math.pow(2,bountyCount):"")+".";
     return '<span class="points-chip'+(bounty||pts>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+pts+' pts</span>';
   };
 
@@ -135,7 +136,7 @@ function buildSchedule(){
   const reviewedState = loadReviewed();
   doneItems.forEach(ev=>{
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
-    const bountyDone=typeof isBountyTask==="function"&&isBountyTask(ev.id);
+    const bountyDoneCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
     // Check if this task was auto-completed and needs review
     const comp = completionsData.find(t => t.task_id === ev.id);
     const needsReview = comp && comp.needs_review && !reviewedState[ev.id];
@@ -149,7 +150,7 @@ function buildSchedule(){
         '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
         '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
         '<span class="c-title">'+ev.title+'</span>'+
-        (bountyDone?'<span class="bounty-chip done">Bounty x2</span>':'')+
+        (bountyDoneCount?'<span class="bounty-chip done">Bounty x'+Math.pow(2,bountyDoneCount)+'</span>':'')+
         reviewBadgeHtml+
         evSrcTag+
         petPrivacyChip(ev)+
@@ -231,8 +232,9 @@ function buildSchedule(){
     const active=trueActive||isNextUp||isPinnedActive,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
     const d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
-    const isBounty=typeof isBountyTask==="function"&&isBountyTask(ev.id);
-    const bountyPlaced=!!(typeof getDailyBounty==="function"&&getDailyBounty());
+    const bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
+    const isBounty=bountyCount>0;
+    const bountyPlaced=typeof hasSelfBounty==="function"?hasSelfBounty():!!(typeof getDailyBounty==="function"&&getDailyBounty());
     const canEditBounty=typeof viewMode==="undefined"||viewMode!=="archive";
     const el=document.createElement("div");el.className="tl-item";el.dataset.id=ev.id;
     if(isBounty)el.classList.add("bounty");
@@ -314,8 +316,9 @@ function buildSchedule(){
       timeHtml+='<span class="prep-line"></span>';
     }
     timeHtml+='</div>';
+    const bountyMultiplier=Math.pow(2,Math.max(1,bountyCount||1));
     const bountyControl=(!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty))
-      ? '<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Current bounty - 2x points':'Set bounty - 2x points')+'" aria-label="'+(isBounty?'Current bounty':'Set bounty')+'">'+(isBounty?'2x':bountySvg)+'</button>'
+      ? '<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Current bounty - '+bountyMultiplier+'x points':'Set bounty - 2x points')+'" aria-label="'+(isBounty?'Current bounty':'Set bounty')+'">'+(isBounty?bountyMultiplier+'x':bountySvg)+'</button>'
       : '';
     const reactionHtml=(window.todoShareReactionChipsHtml?window.todoShareReactionChipsHtml(ev):"");
 
@@ -334,7 +337,7 @@ function buildSchedule(){
           '</div>'+
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip">Bounty x2</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
+            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip">Bounty x'+bountyMultiplier+'</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
             '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
@@ -896,10 +899,11 @@ function setDayPointGoal(field,value){
 }
 function _estimatedTaskPoints(ev){
   if(!ev)return 0;
-  const bounty=typeof isBountyTask==="function"&&isBountyTask(ev.id);
+  const bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
+  const bounty=bountyCount>0;
   const payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
-    ? window.TaskPoints.buildPayload(ev,{bounty})
-    : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty};
+    ? window.TaskPoints.buildPayload(ev,{bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1})
+    : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
   const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
     ? window.TaskPoints.estimate(payload)
     : {eligible:(typeof isMeeting!=="function"||!isMeeting(ev))&&ev.type!=="ooo"&&ev.type!=="break",awardPoints:Math.max(1,Math.round(typeof dur==="function"?dur(ev):(ev.durMin||30)))};

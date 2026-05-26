@@ -184,7 +184,7 @@ function reloadPersistedEdits() {
       if (pushed.at) Object.assign(pushedAt, pushed.at);
       const deleted = dayRoot.properties._deleted || [];
       deleted.forEach(id => deletedSet.add(id));
-      dailyBounty = dayRoot.properties._bounty || null;
+      dailyBounty = typeof normalizeBountyState === "function" ? normalizeBountyState(dayRoot.properties._bounty) : (dayRoot.properties._bounty || null);
       Object.assign(durChanges, dayRoot.properties._durChanges || {});
       commuteTimes = { ...(dayRoot.properties._commuteTimes || {}) };
     }

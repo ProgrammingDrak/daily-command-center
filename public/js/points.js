@@ -129,6 +129,10 @@
     const actual = actualMinutes(task);
     const planned = plannedMinutes(task);
     const bounty = options.bounty === true || task.bounty === true;
+    const optionBountyCount = Number(options.bounty_count != null ? options.bounty_count : options.bountyCount);
+    const resolvedBountyCount = Number.isFinite(optionBountyCount) ? Math.max(0, Math.min(2, Math.round(optionBountyCount))) : (task.bounty_count || task.bountyCount);
+    const partnerBounty = options.partner_bounty === true || options.partnerBounty === true || options.shared_bounty === true || options.sharedBounty === true ||
+      task.partner_bounty === true || task.partnerBounty === true || task.shared_bounty === true || task.sharedBounty === true;
     return {
       task_id: task.id,
       title: task.title || task.label || "Task completed",
@@ -141,8 +145,8 @@
       responsibility: task.responsibility === true || task.is_responsibility === true || task.responsibility_id != null || task.responsibilityId != null || task.source === "responsibility",
       urgent: urgent(task),
       bounty,
-      bounty_count: task.bounty_count || task.bountyCount,
-      partner_bounty: task.partner_bounty === true || task.partnerBounty === true || task.shared_bounty === true || task.sharedBounty === true,
+      bounty_count: resolvedBountyCount,
+      partner_bounty: partnerBounty || resolvedBountyCount > 1,
       actual_minutes: actual > 0 ? actual : undefined,
       duration_minutes: planned,
       effort_tier: task.effort_tier || task.effortTier,

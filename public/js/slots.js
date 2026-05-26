@@ -2138,9 +2138,10 @@
   async function earnTaskCredit(task, options){
     if(!task || !task.id) return;
     options = options || {};
-    const isBounty = typeof isBountyTask === "function" && isBountyTask(task.id);
+    const bountyCount = typeof getBountyCountForTask === "function" ? getBountyCountForTask(task.id) : ((typeof isBountyTask === "function" && isBountyTask(task.id)) ? 1 : 0);
+    const isBounty = bountyCount > 0;
     const payload = window.TaskPoints && typeof window.TaskPoints.buildPayload === "function"
-      ? window.TaskPoints.buildPayload(task, { bounty: isBounty })
+      ? window.TaskPoints.buildPayload(task, { bounty: isBounty, bounty_count: bountyCount, partner_bounty: bountyCount > 1 })
       : {
           task_id: task.id,
           title: task.title || task.label || "Task completed",
@@ -2148,6 +2149,8 @@
           priority: task.priority || "",
           tags: task.tags || [],
           bounty: isBounty,
+          bounty_count: bountyCount,
+          partner_bounty: bountyCount > 1,
           duration_minutes: task.durMin || task.duration || 30
         };
     const sourceDate = options.sourceDate || options.completionDate || (window.__state && window.__state.date) || "unknown";
