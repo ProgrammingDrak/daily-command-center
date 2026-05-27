@@ -87,6 +87,7 @@
   // Reload persisted UI state AFTER blockstore cache is populated —
   // blockstore-backed features (addedTasks, etc.) need loadDay() to complete first
   if (typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
+  if (typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
 
   // Cross-device pomodoro restore: if localStorage had no pomo state but blockStore does,
   // restore it now (blockStore.loadDay() has populated the cache at this point)
@@ -95,6 +96,7 @@
       const savedPomo = typeof loadPomoState === 'function' ? loadPomoState() : null;
       if (savedPomo && savedPomo.title) {
         pomoState.title = savedPomo.title;
+        pomoState.currentTaskRef = savedPomo.currentTaskRef || null;
         pomoState.workMin = savedPomo.workMin || 25;
         pomoState.mode = savedPomo.mode || "work";
         pomoState.total = savedPomo.total || 25*60;
@@ -106,12 +108,13 @@
         pomoState.taskDone = savedPomo.taskDone || false;
         pomoState.stackedSessions = savedPomo.stackedSessions || {};
         pomoState.pivotTasks = savedPomo.pivotTasks || [];
+        if (typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
         const emptyEl = document.getElementById("pomo-empty");
         const activeEl = document.getElementById("pomo-active");
         if (emptyEl) emptyEl.style.display = "none";
         if (activeEl) activeEl.style.display = "block";
         const titleEl = document.getElementById("pomo-title");
-        if (titleEl) titleEl.textContent = savedPomo.title;
+        if (titleEl) titleEl.textContent = pomoState.title;
         const modeWork = document.querySelector('.pomo-mode[data-pm="work"]');
         if (modeWork) modeWork.textContent = "Focus (" + pomoState.workMin + "m)";
         document.querySelectorAll(".pomo-mode").forEach(b => b.classList.toggle("active", b.dataset.pm === pomoState.mode));
@@ -176,6 +179,7 @@ setInterval(updateClock, 1000);
   if (!saved || !saved.title) return;
   // Restore core state
   pomoState.title = saved.title;
+  pomoState.currentTaskRef = saved.currentTaskRef || null;
   pomoState.workMin = saved.workMin || 25;
   pomoState.mode = saved.mode || "work";
   pomoState.total = saved.total || 25*60;
@@ -186,12 +190,14 @@ setInterval(updateClock, 1000);
   pomoState.taskTime = saved.taskTime || {};
   pomoState.taskDone = saved.taskDone || false;
   pomoState.stackedSessions = saved.stackedSessions || {};
+  pomoState.pivotTasks = saved.pivotTasks || [];
+  if (typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
   // Show the timer UI (hide empty state, show active)
   const emptyEl = document.getElementById("pomo-empty");
   const activeEl = document.getElementById("pomo-active");
   if (emptyEl) emptyEl.style.display = "none";
   if (activeEl) activeEl.style.display = "block";
-  document.getElementById("pomo-title").textContent = saved.title;
+  document.getElementById("pomo-title").textContent = pomoState.title;
   const modeWork = document.querySelector('.pomo-mode[data-pm="work"]');
   if (modeWork) modeWork.textContent = "Focus (" + pomoState.workMin + "m)";
   document.querySelectorAll(".pomo-mode").forEach(function(b){ b.classList.toggle("active", b.dataset.pm === pomoState.mode); });
@@ -210,6 +216,7 @@ setInterval(updateClock, 1000);
     pomoState.running = false;
   }
   pomoPaint();
+  if (typeof paintPivotTasks === 'function') paintPivotTasks();
   pomoUpdateStartBtn();
   updateTimerBadge();
   pomoRenderReport();

@@ -38,7 +38,16 @@ document.addEventListener("keydown",e=>{
   }
 });
 
-function openPomodoro(title,durMin){
+function openPomodoro(title,durMin,taskRef){
+  const requestedRef=taskRef||{title:title,source:"custom"};
+  const resolved=resolvePomoTaskRef(requestedRef,{allowCustom:true,defaultDurMin:durMin||25});
+  if(resolved){
+    title=resolved.title;
+    durMin=durMin||resolved.durMin;
+    taskRef=resolved.ref;
+  }else{
+    taskRef={id:"",source:"custom",title:title};
+  }
   // Capture previous session state for mid-switch logging and time carry-over
   const prevTitle = pomoState.title;
   const prevStartedAt = pomoState.startedAt;
@@ -61,7 +70,7 @@ function openPomodoro(title,durMin){
     if(elapsed >= 60) pomoLogSession(prevTitle, elapsed, prevMode);
   }
   clearInterval(pomoState.iv);
-  pomoState.title=title;pomoState.workMin=Math.min(durMin||25,120);pomoState.sessions=0;pomoState.taskDone=false;
+  pomoState.title=title;pomoState.currentTaskRef=taskRef;pomoState.workMin=Math.min(durMin||25,120);pomoState.sessions=0;pomoState.taskDone=false;
   document.querySelectorAll(".pomo-dot").forEach(d=>d.className="pomo-dot");
   document.getElementById("pomo-empty").style.display="none";
   document.getElementById("pomo-active").style.display="block";
@@ -121,7 +130,8 @@ document.getElementById("pomo-stop").addEventListener("click",()=>{
   document.getElementById("pomo-stop-confirm").style.display="block";
 });
 document.getElementById("pomo-stop-yes").addEventListener("click",()=>{
-  const task=scheduled.find(s=>s.title===pomoState.title && !s.nested);
+  const current=getCurrentPomoTask();
+  const task=current&&current.source==="schedule"?current.task:scheduled.find(s=>s.title===pomoState.title && !s.nested);
   if(task) toggleDone(task.id);
   showToast("✓ "+pomoState.title+" completed");
   document.getElementById("pomo-stop-confirm").style.display="none";
@@ -137,6 +147,41 @@ document.getElementById("pomo-distracted").addEventListener("click",()=>{
 });
 
 function closeDistractionModal(){ document.getElementById("distraction-modal-overlay").classList.remove("open"); }
+function addDistractionToItinerary(title,mins,classify){
+  if(!title||!mins)return null;
+  const scheduleType=classify==="focus"?"focus":"break";
+  const endMin=(typeof now==="function"?now():(new Date().getHours()*60+new Date().getMinutes()));
+  const startMin=Math.max(0,endMin-mins);
+  const id="distraction-"+Date.now()+"-"+Math.random().toString(36).slice(2,6);
+  const label=scheduleType==="break"?"Break":"Focus";
+  const item={
+    id,
+    title,
+    type:scheduleType,
+    start:fmt(startMin),
+    end:fmt(endMin),
+    meta:"Logged "+label.toLowerCase()+" · "+ms(mins),
+    detail:"Captured from I got distracted.",
+    source:"timer-log",
+    priority:"Low",
+    tags:[],
+    _pinnedStart:fmt(startMin)
+  };
+  if(typeof scheduled!=="undefined"&&Array.isArray(scheduled)){
+    const insertAt=scheduled.findIndex(ev=>pt(ev.start)>startMin);
+    if(insertAt===-1)scheduled.push(item);
+    else scheduled.splice(insertAt,0,item);
+  }
+  if(typeof persistAddedTask==="function")persistAddedTask(item);
+  if(typeof manualDone!=="undefined"&&manualDone&&typeof manualDone.add==="function"){
+    manualDone.add(id);
+    doneAt[id]=new Date();
+    if(typeof saveDoneState==="function")saveDoneState();
+  }
+  if(typeof log==="function")log("distraction-log",id,label+": "+title);
+  if(typeof render==="function")render();
+  return item;
+}
 function logDistraction(){
   // 1. Log the focused work time accumulated so far (timer is still running)
   if(pomoState.startedAt && pomoState.mode==="work"){
@@ -155,6 +200,7 @@ function logDistraction(){
   const classify = document.querySelector(".distraction-classify-btn.active")?.dataset.classify || "break";
   const type = classify === "focus" ? "work" : "distraction";
   const prefix = type === "work" ? "" : "[Distracted] ";
+  addDistractionToItinerary(title,mins,classify);
   pomoState.sessionLog.unshift({
     title: prefix + title,
     durSec: mins * 60,
@@ -217,7 +263,8 @@ document.getElementById("pomo-task-check").addEventListener("click",(e)=>{
 // ⚡ Lightning complete — instant done, no forced task switch
 document.getElementById("pomo-task-lightning").addEventListener("click",(e)=>{
   e.stopPropagation();
-  const task=scheduled.find(s=>s.title===pomoState.title && !s.nested);
+  const current=getCurrentPomoTask();
+  const task=current&&current.source==="schedule"?current.task:scheduled.find(s=>s.title===pomoState.title && !s.nested);
   if(task) toggleDone(task.id);
   showToast("✓ "+pomoState.title+" completed");
 });
