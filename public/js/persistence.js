@@ -222,7 +222,7 @@ function reloadPersistedEdits() {
         const d=p.duration||30;
         const hasStoredTime=p.start&&p.start!=="00:00";
         const task={
-          id:taskId,title:p.title,type:"task",
+          id:taskId,title:p.title,type:p.type||"task",
           _blockId:block.id,
           start:p.start||"00:00",
           end:p.end||fmt(d),
@@ -252,7 +252,7 @@ function reloadPersistedEdits() {
         if (scheduled.find(e => e.id === t.id)) return; // already in schedule
         const d = t.durMin || 30;
         scheduled.push({
-          id: t.id, title: t.title, type: "task",
+          id: t.id, title: t.title, type: t.type || "task",
           start: "00:00", end: fmt(d),
           meta: t.meta || ("Custom task \u00b7 " + ms(d)),
           detail: t.detail || "", source: t.source || "manual",
@@ -392,6 +392,7 @@ async function switchToDate(dateStr) {
   // earlier in this function for archive snapshots that arrive as nav stubs.
 
   reloadPersistedEdits();
+  if (typeof normalizePomoStateRefs === "function") normalizePomoStateRefs();
 
   // Toggle readonly mode for archives
   document.body.classList.toggle("view-readonly", viewMode === "archive");
@@ -411,6 +412,7 @@ async function switchToDate(dateStr) {
 
   // Re-render all tabs
   if (typeof buildSchedule === "function") buildSchedule();
+  if (typeof paintPivotTasks === "function") paintPivotTasks();
   if (typeof buildActualView === "function" && schedView === "actual") buildActualView();
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();

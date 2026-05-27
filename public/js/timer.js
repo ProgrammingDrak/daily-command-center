@@ -4,7 +4,94 @@ const pomoSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 const POMO_C=2*Math.PI*54;
 // Each tick segment = 5.65 on, 2.83 gap. Total ticks ~ 40.
 const POMO_SEG=5.65,POMO_GAP=2.83,POMO_UNIT=POMO_SEG+POMO_GAP;
-let pomoState={title:"",workMin:25,mode:"work",total:25*60,remaining:25*60,running:false,iv:null,sessions:0,soundOn:true,sessionLog:[],taskTime:{},startedAt:null,taskDone:false,stackedSessions:{},pivotTasks:[]};
+let pomoState={title:"",currentTaskRef:null,workMin:25,mode:"work",total:25*60,remaining:25*60,running:false,iv:null,sessions:0,soundOn:true,sessionLog:[],taskTime:{},startedAt:null,taskDone:false,stackedSessions:{},pivotTasks:[]};
+
+// Timer-facing task references resolve against the live itinerary pools. Persist
+// ids; keep titles only as a legacy/custom fallback.
+function _pomoTaskPools(){
+  return [
+    {source:"schedule",items:(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled:[]},
+    {source:"consider",items:(typeof consider!=="undefined"&&Array.isArray(consider))?consider:[]},
+    {source:"backlog",items:(typeof backlog!=="undefined"&&Array.isArray(backlog))?backlog:[]}
+  ];
+}
+function _pomoTaskAvailable(task,source){
+  if(!task)return false;
+  if(source==="schedule"){
+    if(task.nested)return false;
+    if(typeof isDone==="function"&&isDone(task))return false;
+    if(typeof isDeleted==="function"&&isDeleted(task))return false;
+    if(typeof isPushed==="function"&&isPushed(task))return false;
+  }
+  return true;
+}
+function makePomoTaskRef(task,source,titleFallback){
+  if(!task&&titleFallback)return {id:"",source:"custom",title:titleFallback};
+  return {id:(task&&task.id)||"",source:source||"custom",title:(task&&task.title)||titleFallback||""};
+}
+function resolvePomoTaskRef(ref,opts){
+  opts=opts||{};
+  if(!ref)return null;
+  if(typeof ref==="string")ref={title:ref};
+  const refId=ref.id?String(ref.id):"";
+  const refSource=ref.source||"";
+  const refTitle=(ref.title||"").trim();
+  const pools=_pomoTaskPools();
+  function usable(task,source){return !opts.availableOnly||_pomoTaskAvailable(task,source)}
+  if(refId){
+    const ordered=refSource?pools.filter(p=>p.source===refSource).concat(pools.filter(p=>p.source!==refSource)):pools;
+    for(const pool of ordered){
+      const task=pool.items.find(t=>String(t.id)===refId);
+      if(task&&usable(task,pool.source))return {task,source:pool.source,ref:makePomoTaskRef(task,pool.source),title:task.title,durMin:pool.source==="schedule"?(typeof dur==="function"?dur(task):25):(task.durMin||25)};
+    }
+  }
+  if(refTitle){
+    for(const pool of pools){
+      const task=pool.items.find(t=>(t.title||"").trim()===refTitle&&usable(t,pool.source));
+      if(task)return {task,source:pool.source,ref:makePomoTaskRef(task,pool.source),title:task.title,durMin:pool.source==="schedule"?(typeof dur==="function"?dur(task):25):(task.durMin||25)};
+    }
+    if(refSource==="custom"||opts.allowCustom)return {task:null,source:"custom",ref:{id:"",source:"custom",title:refTitle},title:refTitle,durMin:opts.defaultDurMin||25,isCustom:true};
+  }
+  return null;
+}
+function getCurrentPomoTask(){
+  const ref=pomoState.currentTaskRef||{title:pomoState.title,source:"custom"};
+  return resolvePomoTaskRef(ref,{allowCustom:true,defaultDurMin:pomoState.workMin||25});
+}
+function syncCurrentPomoTitle(){
+  const resolved=getCurrentPomoTask();
+  if(!resolved)return null;
+  pomoState.title=resolved.title;
+  if(resolved.ref)pomoState.currentTaskRef=resolved.ref;
+  const titleEl=document.getElementById("pomo-title");if(titleEl)titleEl.textContent=pomoState.title;
+  const miniTask=document.getElementById("ft-mini-task");if(miniTask)miniTask.textContent=pomoState.title||"--";
+  return resolved;
+}
+function normalizePomoStateRefs(){
+  if(!pomoState.currentTaskRef&&pomoState.title){
+    const resolved=resolvePomoTaskRef({title:pomoState.title},{allowCustom:true,defaultDurMin:pomoState.workMin||25});
+    pomoState.currentTaskRef=resolved?resolved.ref:{id:"",source:"custom",title:pomoState.title};
+  }
+  if(!Array.isArray(pomoState.pivotTasks))pomoState.pivotTasks=[];
+  if(!_pomoTaskPools().some(pool=>pool.items.length)){
+    syncCurrentPomoTitle();
+    return false;
+  }
+  const cleaned=[];
+  const seen=new Set();
+  pomoState.pivotTasks.forEach(p=>{
+    const resolved=resolvePomoTaskRef(p,{availableOnly:true});
+    if(!resolved)return;
+    const key=resolved.ref.source+":"+resolved.ref.id;
+    if(!resolved.ref.id||seen.has(key))return;
+    seen.add(key);
+    cleaned.push(resolved.ref);
+  });
+  const changed=JSON.stringify(cleaned)!==JSON.stringify(pomoState.pivotTasks);
+  pomoState.pivotTasks=cleaned;
+  syncCurrentPomoTitle();
+  return changed;
+}
 
 function pomoBeep(){
   if(!pomoState.soundOn)return;
@@ -277,6 +364,7 @@ function proceedWithCompletion(){
 
 function attributeTimeAndClose(isCompleted,startNext){
   const taskTitle=currentCompletionData.taskTitle;
+  const currentTask=getCurrentPomoTask();
   currentCompletionData.startNext=!!startNext;
 
   if(currentCompletionData.sessionIndex!==null){
@@ -298,7 +386,8 @@ function attributeTimeAndClose(isCompleted,startNext){
   }
 
   if(isCompleted){
-    toggleDone(currentCompletionData.selectedTimeBlock||scheduled.find(s=>s.title===taskTitle)?.id);
+    const scheduleId=currentCompletionData.selectedTimeBlock||(currentTask&&currentTask.source==="schedule"&&currentTask.task?currentTask.task.id:null)||scheduled.find(s=>s.title===taskTitle)?.id;
+    if(scheduleId)toggleDone(scheduleId);
   }
 
   pomoRenderReport();savePomoState();
@@ -552,11 +641,24 @@ function buildDistractionTaskList(){
 function paintPivotTasks(){
   const list=document.getElementById("pivot-tasks-list");
   if(!list)return;
-  list.innerHTML=pomoState.pivotTasks.map((t,i)=>
+  const changed=normalizePomoStateRefs();
+  if(changed&&typeof savePomoState==="function")savePomoState();
+  if(!_pomoTaskPools().some(pool=>pool.items.length)){
+    list.innerHTML=pomoState.pivotTasks.map((t,i)=>
+      '<div class="pivot-card">'+
+        '<button class="pivot-swap" data-pivot-idx="'+i+'" title="Make this my focus">\u21c4</button>'+
+        '<span class="pivot-title">'+(t.title||"Untitled")+'</span>'+
+        '<button class="pivot-remove" data-pivot-idx="'+i+'" title="Remove">&times;</button>'+
+      '</div>'
+    ).join('');
+    return;
+  }
+  const rows=pomoState.pivotTasks.map((t,i)=>({resolved:resolvePomoTaskRef(t,{availableOnly:true}),i})).filter(row=>row.resolved);
+  list.innerHTML=rows.map(row=>
     '<div class="pivot-card">'+
-      '<button class="pivot-swap" data-pivot-idx="'+i+'" title="Make this my focus">\u21c4</button>'+
-      '<span class="pivot-title">'+t.title+'</span>'+
-      '<button class="pivot-remove" data-pivot-idx="'+i+'" title="Remove">&times;</button>'+
+      '<button class="pivot-swap" data-pivot-idx="'+row.i+'" title="Make this my focus">\u21c4</button>'+
+      '<span class="pivot-title">'+row.resolved.title+'</span>'+
+      '<button class="pivot-remove" data-pivot-idx="'+row.i+'" title="Remove">&times;</button>'+
     '</div>'
   ).join('');
   list.querySelectorAll('.pivot-swap').forEach(btn=>btn.addEventListener('click',e=>{
@@ -569,14 +671,19 @@ function paintPivotTasks(){
 
 function swapWithPivot(idx){
   if(idx<0||idx>=pomoState.pivotTasks.length)return;
-  const oldPrimary={title:pomoState.title};
-  const pivot=pomoState.pivotTasks[idx];
+  const oldPrimary=getCurrentPomoTask();
+  const pivot=resolvePomoTaskRef(pomoState.pivotTasks[idx],{availableOnly:true});
+  if(!pivot){
+    pomoState.pivotTasks.splice(idx,1);
+    savePomoState();
+    paintPivotTasks();
+    return;
+  }
+  pomoState.currentTaskRef=pivot.ref;
   pomoState.title=pivot.title;
-  pomoState.pivotTasks[idx]=oldPrimary;
-  const titleEl=document.getElementById("pomo-title");
-  if(titleEl)titleEl.textContent=pomoState.title;
-  const miniTask=document.getElementById("ft-mini-task");
-  if(miniTask)miniTask.textContent=pomoState.title;
+  if(oldPrimary&&oldPrimary.ref&&oldPrimary.ref.id)pomoState.pivotTasks[idx]=oldPrimary.ref;
+  else pomoState.pivotTasks.splice(idx,1);
+  syncCurrentPomoTitle();
   if(typeof showToast==="function")showToast("Swapped to: "+pomoState.title,"success");
   savePomoState();
   paintPivotTasks();
@@ -592,11 +699,18 @@ function openPivotPicker(){
   const overlay=document.getElementById("pivot-picker-overlay");
   const body=document.getElementById("pivot-picker-body");
   if(!overlay||!body)return;
-  const taken=new Set([pomoState.title,...pomoState.pivotTasks.map(t=>t.title)]);
+  normalizePomoStateRefs();
+  const current=getCurrentPomoTask();
+  const taken=new Set();
+  if(current&&current.ref&&current.ref.id)taken.add(current.ref.source+":"+current.ref.id);
+  pomoState.pivotTasks.forEach(t=>{
+    const resolved=resolvePomoTaskRef(t,{availableOnly:true});
+    if(resolved&&resolved.ref.id)taken.add(resolved.ref.source+":"+resolved.ref.id);
+  });
   const available=[
-    ...(typeof scheduled!=="undefined"?scheduled.filter(s=>!(typeof isDone==="function"?isDone(s):false)&&!s.nested&&!taken.has(s.title)):[]),
-    ...(typeof consider!=="undefined"?consider.filter(t=>!taken.has(t.title)):[]),
-    ...(typeof backlog!=="undefined"?backlog.filter(t=>!taken.has(t.title)):[])
+    ...(typeof scheduled!=="undefined"?scheduled.filter(s=>_pomoTaskAvailable(s,"schedule")&&!taken.has("schedule:"+s.id)).map(s=>Object.assign({_pomoSource:"schedule"},s)):[]),
+    ...(typeof consider!=="undefined"?consider.filter(t=>!taken.has("consider:"+t.id)).map(t=>Object.assign({_pomoSource:"consider"},t)):[]),
+    ...(typeof backlog!=="undefined"?backlog.filter(t=>!taken.has("backlog:"+t.id)).map(t=>Object.assign({_pomoSource:"backlog"},t)):[])
   ];
   body.innerHTML=(typeof buildTaskListHtml==="function")
     ?buildTaskListHtml(available)
@@ -607,7 +721,7 @@ function openPivotPicker(){
         if(typeof showToast==="function")showToast("Max 3 pivot tasks","info");
         return;
       }
-      pomoState.pivotTasks.push({title:el.dataset.taskTitle,id:el.dataset.taskId||''});
+      pomoState.pivotTasks.push({id:el.dataset.taskId||"",source:el.dataset.taskSource||"",title:el.dataset.taskTitle||""});
       savePomoState();
       paintPivotTasks();
       closePivotPicker();

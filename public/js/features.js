@@ -874,7 +874,7 @@ function _focusBannerStartNext(){
   const next=_focusBannerNextItem();
   if(!next)return false;
   if(typeof openPomodoro==="function"){
-    openPomodoro(next.title,typeof dur==="function"?dur(next):(next.durMin||25));
+    openPomodoro(next.title,typeof dur==="function"?dur(next):(next.durMin||25),{id:next.id,source:"schedule",title:next.title});
     return true;
   }
   return false;
@@ -1076,7 +1076,8 @@ function buildTaskListHtml(tasks) {
   return tasks.map(function(t) {
     var c = (typeof cfg === 'function') ? cfg(t.type) : {color:'var(--text-muted)',tag:t.type||''};
     var timeStr = (t.start && t.end) ? ('<span>' + (typeof f12==='function'?f12(t.start):t.start) + ' \u2013 ' + (typeof f12==='function'?f12(t.end):t.end) + '</span>') : '';
-    return '<div class="completion-item clickable" data-task-id="' + (t.id||'').replace(/"/g,'&quot;') + '" data-task-title="' + (t.title||'').replace(/"/g,'&quot;') + '">' +
+    var taskSource = t._pomoSource || (t.start && t.end ? 'schedule' : '');
+    return '<div class="completion-item clickable" data-task-id="' + (t.id||'').replace(/"/g,'&quot;') + '" data-task-source="' + taskSource.replace(/"/g,'&quot;') + '" data-task-title="' + (t.title||'').replace(/"/g,'&quot;') + '">' +
       '<span class="ci-bar" style="background:' + c.color + '"></span>' +
       '<div class="ci-body">' +
         '<div class="ci-title">' + (t.title||'') + '</div>' +
@@ -1131,7 +1132,7 @@ function _flushDeferredRender() {
     render();
   }
 }
-function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();if(typeof buildGlymphaticBrief==='function')buildGlymphaticBrief();buildUpcoming();buildProgress();updateStats();updateSync();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();updateFocusBanner();}
+function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();if(typeof buildGlymphaticBrief==='function')buildGlymphaticBrief();buildUpcoming();buildProgress();updateStats();updateSync();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();if(typeof paintPivotTasks==='function')paintPivotTasks();updateFocusBanner();}
 function _updateTaskMenusBadge(){
   const badge=document.getElementById("tasks-count");if(!badge)return;
   // Sum up counts from sub-tab badges

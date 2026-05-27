@@ -38,11 +38,11 @@ function buildMiniSchedule(){
       '<span class="mini-bar" style="background:'+c.color+'"></span>'+
       '<span class="mini-time">'+f12(ev.start).replace(" ","").toLowerCase()+'</span>'+
       '<span class="mini-title">'+ev.title+'</span>'+
-      '<button class="pomo-mini-pomo" data-t="'+ev.title.replace(/"/g,'&quot;')+'" data-d="'+durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
+      '<button class="pomo-mini-pomo" data-id="'+ev.id+'" data-source="schedule" data-t="'+ev.title.replace(/"/g,'&quot;')+'" data-d="'+durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
     el.querySelector(".pomo-mini-pomo").addEventListener("click",e=>{
       e.stopPropagation();
       const b=e.currentTarget;
-      openPomodoro(b.dataset.t,parseInt(b.dataset.d));
+      openPomodoro(b.dataset.t,parseInt(b.dataset.d),{id:b.dataset.id,source:b.dataset.source,title:b.dataset.t});
     });
     wrap.appendChild(el);
 
@@ -132,9 +132,9 @@ function buildSideConsider(){
       '<span class="side-bar" style="background:'+c.color+'"></span>'+
       '<div class="side-body"><div class="side-title">'+t.title+'</div>'+
       '<div class="side-meta"><span>'+c.tag+'</span><span>'+ms(t.durMin)+'</span>'+(t.priority?'<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>':'')+'</div></div>'+
-      '<button class="pomo-mini-pomo" data-t="'+t.title.replace(/"/g,'&quot;')+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
+      '<button class="pomo-mini-pomo" data-id="'+t.id+'" data-source="consider" data-t="'+t.title.replace(/"/g,'&quot;')+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
     el.querySelector(".pomo-mini-pomo").addEventListener("click",e=>{
-      e.stopPropagation();openPomodoro(e.currentTarget.dataset.t,parseInt(e.currentTarget.dataset.d));
+      e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.t,parseInt(b.dataset.d),{id:b.dataset.id,source:b.dataset.source,title:b.dataset.t});
     });
     wrap.appendChild(el);
     // Expandable detail
@@ -164,9 +164,9 @@ function buildSideBacklog(){
       '<span class="side-bar" style="background:'+c.color+'"></span>'+
       '<div class="side-body"><div class="side-title">'+t.title+'</div>'+
       '<div class="side-meta"><span>'+c.tag+'</span><span>'+ms(t.durMin)+'</span>'+(t.priority?'<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>':'')+(t.stage?'<span>'+t.stage+'</span>':'')+'</div></div>'+
-      '<button class="pomo-mini-pomo" data-t="'+t.title.replace(/"/g,'&quot;')+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
+      '<button class="pomo-mini-pomo" data-id="'+t.id+'" data-source="backlog" data-t="'+t.title.replace(/"/g,'&quot;')+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
     el.querySelector(".pomo-mini-pomo").addEventListener("click",e=>{
-      e.stopPropagation();openPomodoro(e.currentTarget.dataset.t,parseInt(e.currentTarget.dataset.d));
+      e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.t,parseInt(b.dataset.d),{id:b.dataset.id,source:b.dataset.source,title:b.dataset.t});
     });
     wrap.appendChild(el);
     if(t.detail||t.notionUrl){
@@ -222,9 +222,9 @@ function buildPickerList(query){
   const q=query.toLowerCase();
   // Gather all tasks from schedule, consider, backlog
   const groups=[
-    {label:"Schedule",items:scheduled.map(ev=>({title:ev.title,dur:dur(ev),color:cfg(ev.type).color,type:ev.type}))},
-    {label:"Consider for Today",items:consider.map(t=>({title:t.title,dur:t.durMin,color:cfg(t.type).color,type:t.type}))},
-    {label:"Backlog",items:backlog.map(t=>({title:t.title,dur:t.durMin,color:cfg(t.type).color,type:t.type}))}
+    {label:"Schedule",items:scheduled.map(ev=>({id:ev.id,source:"schedule",title:ev.title,dur:dur(ev),color:cfg(ev.type).color,type:ev.type}))},
+    {label:"Consider for Today",items:consider.map(t=>({id:t.id,source:"consider",title:t.title,dur:t.durMin,color:cfg(t.type).color,type:t.type}))},
+    {label:"Backlog",items:backlog.map(t=>({id:t.id,source:"backlog",title:t.title,dur:t.durMin,color:cfg(t.type).color,type:t.type}))}
   ];
   groups.forEach(g=>{
     const filtered=g.items.filter(i=>!q||i.title.toLowerCase().includes(q));
@@ -233,7 +233,7 @@ function buildPickerList(query){
     filtered.forEach(item=>{
       const el=document.createElement("div");el.className="pomo-picker-item";
       el.innerHTML='<div class="ppi-bar" style="background:'+item.color+'"></div><div class="ppi-body"><div class="ppi-title">'+item.title+'</div><div class="ppi-meta">'+cfg(item.type).tag+' &middot; '+ms(item.dur)+'</div></div><div class="ppi-dur">'+ms(item.dur)+'</div>';
-      el.addEventListener("click",()=>{closeTaskPicker();openPomodoro(item.title,item.dur)});
+      el.addEventListener("click",()=>{closeTaskPicker();openPomodoro(item.title,item.dur,{id:item.id,source:item.source,title:item.title})});
       list.appendChild(el);
     });
   });
@@ -248,7 +248,7 @@ document.getElementById("pomo-picker-q").addEventListener("input",e=>buildPicker
 document.getElementById("pomo-picker-new-btn").addEventListener("click",()=>{
   const title=document.getElementById("pomo-picker-new-title").value.trim();if(!title)return;
   const durMin=parseInt(document.getElementById("pomo-picker-new-dur").value);
-  closeTaskPicker();openPomodoro(title,durMin);
+  closeTaskPicker();openPomodoro(title,durMin,{source:"custom",title});
   document.getElementById("pomo-picker-new-title").value="";
 });
 document.getElementById("pomo-picker-new-title").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("pomo-picker-new-btn").click()});

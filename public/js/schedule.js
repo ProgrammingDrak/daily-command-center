@@ -188,6 +188,7 @@ function persistAddedTask(item){
     window.blockStore.createBlock("block",{
       kind:item.kind||undefined,
       local_id:item.id,
+      type:item.type||"task",
       title:item.title,
       duration:dur(item),
       start:item.start,
@@ -215,7 +216,7 @@ function persistAddedTask(item){
   // Fallback: localStorage
   const added=loadAddedTasks();
   if(!added.find(t=>t.id===item.id)){
-    added.push({id:item.id,title:item.title,durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",triageId:item.triageId||null,commuteMinutes:item.commuteMinutes||null,addedAt:new Date().toISOString()});
+    added.push({id:item.id,title:item.title,type:item.type||"task",durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",triageId:item.triageId||null,commuteMinutes:item.commuteMinutes||null,addedAt:new Date().toISOString()});
     saveAddedTasks(added);
   }
 }

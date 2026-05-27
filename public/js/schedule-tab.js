@@ -348,7 +348,7 @@ function buildSchedule(){
           notesButton(ev)+
           (!isMeeting(ev)?'<button class="btn-repeat-resp" data-repeat-id="'+ev.id+'" data-tooltip="Make repeat responsibility" aria-label="Make repeat responsibility"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>':'')+
           (isMeeting(ev)?'<button class="btn-meeting-auto" data-meeting-auto-id="'+(ev.meetingBlockId||ev.id)+'" data-tooltip="Meeting prep and follow-ups"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="M5.6 5.6l2.8 2.8"/><path d="M15.6 15.6l2.8 2.8"/><path d="M18.4 5.6l-2.8 2.8"/><path d="M8.4 15.6l-2.8 2.8"/></svg></button>':'')+
-          '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+          '<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           (!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
           (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
           bountyControl+
@@ -428,7 +428,7 @@ function buildSchedule(){
     });}
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     const rb=el.querySelector(".btn-repeat-resp");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);});
-    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
+    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});
     const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId)});
@@ -605,7 +605,7 @@ function openMoveMenu(id, anchorEl){
 function buildConsider(){
   const board=document.getElementById("consider-board");board.innerHTML="";
   // Surface backlog items flagged Priority alongside Notion-driven consider items.
-  const fromBacklog=backlog.filter(t=>t.stage==="Priority");
+  const fromBacklog=backlog.filter(t=>t.stage==="Priority").map(t=>Object.assign({_pomoSource:"backlog"},t));
   const merged=consider.concat(fromBacklog);
   const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=merged.length;
   if(!merged.length){board.innerHTML='<div class="board-empty">Nothing flagged for today. Nice work, or add tasks via Notion.</div>';return}
@@ -642,12 +642,12 @@ function buildConsider(){
       '</div>'+
       (hasD?chev:'')+
       notesButton({id: t.id, title: t.title})+
-      '<button class="pomo-btn" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+      '<button class="pomo-btn" data-pomo-id="'+t.id+'" data-pomo-source="'+(t._pomoSource||"consider")+'" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
       '<button class="add-btn" data-id="'+t.id+'"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Schedule</button>'+
       '<button class="add-btn repeat-resp-btn" data-id="'+t.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
       (hasD?'<div class="detail-panel" style="width:100%;padding-left:14px"><div class="detail-inner">'+dParts.join('')+'</div></div>':'');
     const cnb=el.querySelector(".notes-btn");if(cnb)cnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(cnb.dataset.notesId,cnb.dataset.notesTitle)});
-    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
+    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     el.querySelector(".add-btn").addEventListener("click",e=>{e.stopPropagation();addToSchedule(t.id)});
     const repeatBtn=el.querySelector(".repeat-resp-btn");
     if(repeatBtn)repeatBtn.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(t)});
@@ -713,7 +713,7 @@ function buildBacklog(){
           '<button class="bc-act bc-act-later" data-id="'+t.id+'" title="Schedule for a later date">Later\u2026</button>'+
           '<button class="bc-act bc-act-repeat" data-id="'+t.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
           notesButton({id: t.id, title: t.title})+
-          '<button class="pomo-btn bc-act-icon" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+          '<button class="pomo-btn bc-act-icon" data-pomo-id="'+t.id+'" data-pomo-source="backlog" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           '<button class="delegate-btn bc-act-icon" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(isDelegated?'Edit delegated item linked to this task':'Delegate this task')+'">'+(isDelegated?'\u2713':'\u2191')+'</button>'+
           '<button class="task-bank-icon-btn bank-edit-btn" data-id="'+t.id+'" title="Edit task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
           '<button class="task-bank-icon-btn danger bank-delete-btn" data-id="'+t.id+'" title="Delete task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>'+
@@ -723,7 +723,7 @@ function buildBacklog(){
 
     if(el.querySelector("[data-bank-edit-id]"))el.classList.add("expanded");
     const bnb=el.querySelector(".notes-btn");if(bnb)bnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(bnb.dataset.notesId,bnb.dataset.notesTitle)});
-    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
+    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     el.querySelector(".delegate-btn").addEventListener("click",e=>{
       e.stopPropagation();
       const btn=e.currentTarget;
