@@ -217,7 +217,7 @@ let POMO_STATE_KEY = "pa-pomo-state-" + (__state ? __state.date : "unknown");
 // localOnly=false (default): write to localStorage + BlockStore/Railway (used by pause/stop/start/mode changes).
 function savePomoState(localOnly) {
   const data = {
-    title: pomoState.title, workMin: pomoState.workMin, mode: pomoState.mode,
+    title: pomoState.title, currentTaskRef: pomoState.currentTaskRef || null, workMin: pomoState.workMin, mode: pomoState.mode,
     total: pomoState.total, remaining: pomoState.remaining, running: pomoState.running,
     sessions: pomoState.sessions, soundOn: pomoState.soundOn, sessionLog: pomoState.sessionLog,
     taskTime: pomoState.taskTime, taskDone: pomoState.taskDone, stackedSessions: pomoState.stackedSessions,

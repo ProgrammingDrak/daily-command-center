@@ -73,8 +73,10 @@
 
         // Re-apply user edits from blocks (Phase 4+) or localStorage (Phase 0-3)
         if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
+        if(typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
 
         if(typeof render === 'function') render();
+        if(typeof paintPivotTasks === 'function') paintPivotTasks();
         if(typeof buildTriage === 'function') buildTriage();
         if(typeof buildNotifications === 'function') buildNotifications();
         if(typeof updateStats === 'function') updateStats();
@@ -101,7 +103,9 @@
     console.log('[SSE] Block update from another source:', msg.action, msg.blockIds?.length || 0, 'blocks');
     // Re-apply persisted edits from updated cache and re-render UI
     if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
+    if(typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
     if(typeof render === 'function') render();
+    if(typeof paintPivotTasks === 'function') paintPivotTasks();
     if(typeof updateStats === 'function') updateStats();
     if(typeof loadResponsibilities === 'function') loadResponsibilities();
   }
