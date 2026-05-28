@@ -1,0 +1,2714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simple Burn vs Income Runway</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(15, 23, 42, 0.9);
+      --panel-2: rgba(30, 41, 59, 0.78);
+      --cell: rgba(2, 6, 23, 0.58);
+      --ink: #f8fafc;
+      --muted: #9aa8bd;
+      --line: rgba(148, 163, 184, 0.24);
+      --income: #22c55e;
+      --burn: #ef4444;
+      --cash: #38bdf8;
+      --zero: #e5e7eb;
+      --accent: #38bdf8;
+      --warn: #f59e0b;
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(56, 189, 248, 0.18), transparent 30%),
+        radial-gradient(circle at 92% 8%, rgba(168, 85, 247, 0.2), transparent 30%),
+        linear-gradient(180deg, #10233a 0%, #090f1d 44%, #020617 100%);
+      color: var(--ink);
+    }
+
+    .wrap {
+      width: min(1500px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 16px 0 54px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 430px minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .controls {
+      position: sticky;
+      top: 16px;
+      padding: 18px;
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+    }
+
+    .controls::-webkit-scrollbar,
+    .source-ramp::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    .controls::-webkit-scrollbar-thumb,
+    .source-ramp::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.5);
+    }
+
+    .sidebar-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .sidebar-tab {
+      min-height: 38px;
+      color: #cbd5e1;
+      background: rgba(30, 41, 59, 0.8);
+      border-radius: 999px;
+    }
+
+    .sidebar-tab.active {
+      color: var(--ink);
+      border-color: var(--accent);
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.32), rgba(168, 85, 247, 0.18));
+    }
+
+    .subtabs {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 7px;
+      margin-bottom: 12px;
+    }
+
+    .subtab {
+      min-height: 34px;
+      padding: 7px 8px;
+      color: var(--muted);
+      background: rgba(30, 41, 59, 0.62);
+      border-radius: 999px;
+      font-size: 0.78rem;
+    }
+
+    .subtab.active {
+      color: var(--ink);
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.18);
+    }
+
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    .budget-subpanel {
+      display: none;
+    }
+
+    .budget-subpanel.active {
+      display: block;
+    }
+
+    .control-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .expense-box {
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(30, 41, 59, 0.45);
+    }
+
+    .expense-rule-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .expense-rule-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .expense-rule-actions button {
+      min-height: 34px;
+      padding: 7px 10px;
+      font-size: 0.78rem;
+    }
+
+    .expense-rule-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .expense-rule-row {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr) minmax(0, 1fr) 36px;
+      grid-template-areas:
+        "drag label type remove"
+        "drag threshold expenses remove";
+      gap: 7px;
+      align-items: center;
+      padding: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.34);
+    }
+
+    .expense-rule-row.dragging {
+      opacity: 0.55;
+    }
+
+    .drag-handle {
+      grid-area: drag;
+      min-height: 36px;
+      height: 100%;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      cursor: grab;
+      user-select: none;
+    }
+
+    .drag-handle:active {
+      cursor: grabbing;
+    }
+
+    .rule-label {
+      grid-area: label;
+    }
+
+    .rule-type {
+      grid-area: type;
+    }
+
+    .rule-threshold {
+      grid-area: threshold;
+    }
+
+    .rule-expenses {
+      grid-area: expenses;
+    }
+
+    .expense-rule-row > button {
+      grid-area: remove;
+      height: 100%;
+    }
+
+    .expense-rule-row .mini-field {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .expense-rule-row span {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .expense-rule-row input,
+    .expense-rule-row select,
+    .expense-rule-row button {
+      min-height: 36px;
+      padding: 7px 8px;
+    }
+
+    .expense-rule-row button {
+      color: var(--burn);
+      font-weight: 950;
+    }
+
+    .entry-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .entry-row {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.34);
+    }
+
+    .budget-row {
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.2fr) 36px;
+      align-items: end;
+    }
+
+    .tier-card {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.72);
+    }
+
+    .tier-card.dragging,
+    .tier-item.dragging {
+      opacity: 0.55;
+    }
+
+    .tier-head {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr) minmax(110px, 0.7fr) 36px;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .tier-items {
+      display: grid;
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(148, 163, 184, 0.12);
+    }
+
+    .tier-item {
+      display: grid;
+      grid-template-columns: 26px minmax(0, 1fr) minmax(92px, 0.65fr) 36px;
+      gap: 8px;
+      align-items: end;
+      padding: 8px;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.32);
+    }
+
+    .tier-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .tier-actions button {
+      min-height: 34px;
+      padding: 7px 10px;
+    }
+
+    .tier-card .mini-field,
+    .tier-item .mini-field {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .tier-card span,
+    .tier-item span {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .tier-card input,
+    .tier-card button,
+    .tier-item input,
+    .tier-item button {
+      min-height: 36px;
+      padding: 7px 8px;
+    }
+
+    .tier-head > button,
+    .tier-item > button {
+      color: var(--burn);
+      font-weight: 950;
+    }
+
+    .drag-handle {
+      min-height: 36px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      cursor: grab;
+      font-weight: 950;
+    }
+
+    .transaction-row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: end;
+    }
+
+    .transaction-row > button {
+      grid-column: span 2;
+    }
+
+    .entry-row .mini-field {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .entry-row span,
+    .summary-card span {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .entry-row input,
+    .entry-row select,
+    .entry-row button {
+      min-height: 36px;
+      padding: 7px 8px;
+    }
+
+    .entry-row button {
+      color: var(--burn);
+      font-weight: 950;
+    }
+
+    .summary-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .summary-month-field {
+      margin-bottom: 12px;
+    }
+
+    .thermometer {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.28);
+    }
+
+    .thermometer-head {
+      display: grid;
+      gap: 4px;
+    }
+
+    .thermometer-stack {
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 7px;
+      min-height: 420px;
+      padding: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(34, 197, 94, 0.12), rgba(56, 189, 248, 0.08), rgba(15, 23, 42, 0.35));
+    }
+
+    .thermo-tier {
+      display: grid;
+      gap: 6px;
+    }
+
+    .thermo-tier-label,
+    .thermo-gate {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 10px;
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.76);
+      color: #cbd5e1;
+      font-size: 0.82rem;
+      font-weight: 900;
+    }
+
+    .thermo-gate.locked {
+      border-color: rgba(245, 158, 11, 0.48);
+      color: #fde68a;
+      background: rgba(245, 158, 11, 0.1);
+    }
+
+    .thermo-item,
+    .thermo-builder,
+    .thermo-surplus {
+      position: relative;
+      overflow: hidden;
+      min-height: 54px;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.56);
+    }
+
+    .thermo-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--fill);
+      background: linear-gradient(90deg, rgba(34, 197, 94, 0.52), rgba(56, 189, 248, 0.42));
+    }
+
+    .thermo-builder .thermo-fill {
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.62), rgba(56, 189, 248, 0.34));
+    }
+
+    .thermo-surplus .thermo-fill {
+      background: linear-gradient(90deg, rgba(168, 85, 247, 0.48), rgba(34, 197, 94, 0.26));
+    }
+
+    .thermo-content {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      height: 100%;
+      padding: 10px;
+      align-items: center;
+    }
+
+    .thermo-content strong,
+    .thermometer-head strong {
+      color: var(--ink);
+    }
+
+    .summary-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.34);
+    }
+
+    .summary-values {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .summary-values strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 1rem;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    label {
+      color: #dbeafe;
+      font-size: 0.88rem;
+      font-weight: 800;
+    }
+
+    input,
+    select,
+    button {
+      font: inherit;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 10px;
+      background: rgba(2, 6, 23, 0.62);
+      color: var(--ink);
+      outline: none;
+    }
+
+    input:focus,
+    select:focus {
+      border-color: var(--cash);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.16);
+    }
+
+    button {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 9px 12px;
+      background: rgba(15, 23, 42, 0.82);
+      color: var(--ink);
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.12);
+    }
+
+    .source-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 10px;
+    }
+
+    .source-head h2,
+    .chart-head h2 {
+      margin: 0;
+      font-size: 1rem;
+      letter-spacing: 0;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .source-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--panel-2);
+    }
+
+    .source-title {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 38px 38px;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .source-title input,
+    .source-title button {
+      min-height: 38px;
+      padding: 8px;
+    }
+
+    .source-title button {
+      color: var(--burn);
+      font-weight: 900;
+    }
+
+    .source-title .collapse-source {
+      color: var(--accent);
+    }
+
+    .show-source {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(2, 6, 23, 0.62);
+    }
+
+    .show-source input {
+      width: 16px;
+      min-height: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .source-card.collapsed .source-ramp {
+      display: none;
+    }
+
+    .source-ramp {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+      max-height: 292px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .ramp-cell {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid rgba(208, 215, 226, 0.86);
+      border-radius: 8px;
+      background: var(--cell);
+    }
+
+    .ramp-cell span {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .ramp-cell input {
+      min-height: 36px;
+      padding: 7px 8px;
+    }
+
+    .copy-forward {
+      width: 100%;
+      min-height: 30px;
+      margin-top: 6px;
+      padding: 5px 6px;
+      color: var(--accent);
+      font-size: 0.72rem;
+      line-height: 1.1;
+    }
+
+    .hint {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.4;
+    }
+
+    .dashboard-main {
+      display: grid;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    .chart-panel {
+      padding: 20px;
+    }
+
+    .projection-bar {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .projection-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .projection-tab {
+      width: 150px;
+      min-height: 38px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(30, 41, 59, 0.74);
+      color: #cbd5e1;
+      padding: 8px 12px;
+      font-weight: 850;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    .projection-tab.active {
+      border-color: var(--accent);
+      color: var(--ink);
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.32), rgba(168, 85, 247, 0.18));
+    }
+
+    .projection-tab input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 900;
+      text-align: center;
+      outline: none;
+    }
+
+    .projection-tab span {
+      display: block;
+      width: 100%;
+      overflow: hidden;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .projection-actions {
+      display: flex;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+
+    .projection-actions button {
+      min-height: 38px;
+      white-space: nowrap;
+    }
+
+    .chart-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .legend-note {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.4;
+    }
+
+    .axis-legend {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      margin: 14px 0 10px;
+    }
+
+    .legend-group {
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 8px;
+      background: rgba(2, 6, 23, 0.28);
+      overflow: hidden;
+    }
+
+    .legend-group summary {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 11px;
+      cursor: pointer;
+      color: #dbeafe;
+      font-size: 0.78rem;
+      font-weight: 950;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      list-style: none;
+    }
+
+    .legend-group summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .legend-group summary::after {
+      content: "-";
+      color: var(--accent);
+      font-size: 1rem;
+      line-height: 1;
+    }
+
+    .legend-group:not([open]) summary::after {
+      content: "+";
+    }
+
+    .legend-items {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 0 10px 10px;
+    }
+
+    .legend-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 30px;
+      padding: 5px 8px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.74);
+      color: #cbd5e1;
+      font-size: 0.78rem;
+      font-weight: 800;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .legend-toggle.off {
+      opacity: 0.45;
+      text-decoration: line-through;
+    }
+
+    .legend-swatch {
+      width: 10px;
+      height: 10px;
+      border: 2px solid currentColor;
+      border-radius: 999px;
+      flex: 0 0 auto;
+    }
+
+    canvas {
+      width: 100% !important;
+      height: 560px !important;
+    }
+
+    .good {
+      color: var(--income);
+    }
+
+    .bad {
+      color: var(--burn);
+    }
+
+    .warn {
+      color: var(--warn);
+    }
+
+    @media (max-width: 960px) {
+      .layout,
+      .chart-head {
+        grid-template-columns: 1fr;
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .controls {
+        position: relative;
+        top: auto;
+        max-height: none;
+      }
+
+      canvas {
+        height: 430px !important;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .wrap {
+        width: min(100% - 20px, 1320px);
+        padding-top: 18px;
+      }
+
+      .source-ramp {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .expense-rule-row {
+        grid-template-columns: 34px 1fr 36px;
+        grid-template-areas:
+          "drag label remove"
+          "drag type remove"
+          "drag threshold remove"
+          "drag expenses remove";
+      }
+
+      .expense-rule-row button {
+        grid-column: auto;
+      }
+
+      .budget-row,
+      .transaction-row,
+      .summary-values {
+        grid-template-columns: 1fr;
+      }
+
+      .axis-legend {
+        grid-template-columns: 1fr;
+      }
+
+      .projection-bar {
+        flex-direction: column;
+      }
+
+      .projection-actions {
+        width: 100%;
+      }
+
+      .projection-actions button {
+        flex: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="layout">
+      <aside class="panel controls">
+        <div class="sidebar-tabs" role="tablist" aria-label="Runway model sections">
+          <button type="button" class="sidebar-tab active" id="tab-assumptions" role="tab" aria-selected="true" aria-controls="panel-assumptions">Assumptions</button>
+          <button type="button" class="sidebar-tab" id="tab-income" role="tab" aria-selected="false" aria-controls="panel-income">Income Sources</button>
+          <button type="button" class="sidebar-tab" id="tab-budget" role="tab" aria-selected="false" aria-controls="panel-budget">Budget</button>
+        </div>
+
+        <section class="tab-panel active" id="panel-assumptions" role="tabpanel" aria-labelledby="tab-assumptions">
+          <div class="control-grid">
+            <div class="field">
+              <label for="startingSavings">Starting Savings</label>
+              <input id="startingSavings" type="number" min="0" step="100" value="10000" />
+            </div>
+            <div class="field">
+              <label for="horizon">Chart Horizon</label>
+              <select id="horizon">
+                <option value="12">12 months</option>
+                <option value="18">18 months</option>
+                <option value="24" selected>24 months</option>
+                <option value="36">36 months</option>
+                <option value="48">48 months</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-income" role="tabpanel" aria-labelledby="tab-income">
+          <div class="source-head">
+            <h2>Monthly Income Sources</h2>
+            <button type="button" id="addSource">Add</button>
+          </div>
+          <div class="source-list" id="sourceList"></div>
+          <p class="hint">Each source has its own monthly projection for the selected chart horizon. The main chart totals every source into the income rate.</p>
+        </section>
+
+        <section class="tab-panel" id="panel-budget" role="tabpanel" aria-labelledby="tab-budget">
+          <div class="subtabs" role="tablist" aria-label="Budget sections">
+            <button type="button" class="subtab active" id="budget-subtab-plan" role="tab" aria-selected="true">Plan</button>
+            <button type="button" class="subtab" id="budget-subtab-transactions" role="tab" aria-selected="false">Transactions</button>
+            <button type="button" class="subtab" id="budget-subtab-summary" role="tab" aria-selected="false">Summary</button>
+          </div>
+
+          <div class="budget-subpanel active" id="budget-panel-plan">
+            <div class="source-head">
+              <h2>Budget Thermometer</h2>
+              <button type="button" id="addBudgetTier">Add Tier</button>
+            </div>
+            <div class="entry-list" id="budgetList"></div>
+            <p class="hint">Stack spending items from bottom to top. Tier gates hold back income as a Bankroll builder until the minimum bankroll is reached.</p>
+          </div>
+
+          <div class="budget-subpanel" id="budget-panel-transactions">
+            <div class="source-head">
+              <h2>Transactions</h2>
+              <button type="button" id="addTransaction">Add</button>
+            </div>
+            <div class="entry-list" id="transactionList"></div>
+            <p class="hint">Log actual spend by month and budget item. Summary compares spend against the selected month allocation.</p>
+          </div>
+
+          <div class="budget-subpanel" id="budget-panel-summary">
+            <div class="source-head">
+              <h2>Budget Summary</h2>
+            </div>
+            <div class="field summary-month-field">
+              <label for="summaryMonth">Summary Month</label>
+              <select id="summaryMonth"></select>
+            </div>
+            <div class="summary-list" id="summaryList"></div>
+            <p class="hint">Monthly income fills budget items in order. Locked gates redirect excess into Bankroll builder until the next tier is safe.</p>
+          </div>
+        </section>
+      </aside>
+
+      <main class="dashboard-main">
+        <section class="panel chart-panel">
+          <div class="projection-bar">
+            <div class="projection-tabs" id="projectionTabs" role="tablist" aria-label="Saved projections"></div>
+            <div class="projection-actions">
+              <button type="button" id="saveViewButton">Save View</button>
+              <button type="button" id="duplicateViewButton">Duplicate</button>
+            </div>
+          </div>
+          <div class="chart-head">
+            <div>
+              <h2>Bankroll, Burn Rate, Expenses, and Income</h2>
+              <p class="legend-note" id="chartNote">-</p>
+            </div>
+            <button type="button" id="resetButton">Reset</button>
+          </div>
+          <div class="axis-legend" id="axisLegend"></div>
+          <canvas id="runwayChart"></canvas>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const inputs = {
+      startingSavings: document.getElementById('startingSavings'),
+      horizon: document.getElementById('horizon')
+    };
+
+    const sourceList = document.getElementById('sourceList');
+    const expenseRuleList = document.getElementById('expenseRuleList');
+    const budgetList = document.getElementById('budgetList');
+    const transactionList = document.getElementById('transactionList');
+    const summaryList = document.getElementById('summaryList');
+    const summaryMonth = document.getElementById('summaryMonth');
+    const axisLegend = document.getElementById('axisLegend');
+    const projectionTabs = document.getElementById('projectionTabs');
+    const money = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0
+    });
+
+    const STORAGE_KEY = 'quit-runway-simple-state-v1';
+    const API_STATE_URL = '/api/runway-state';
+    const defaultInputs = {
+      startingSavings: 10000,
+      horizon: 24
+    };
+    const defaultExpenseRules = [
+      { label: 'Barebones', type: 'below', threshold: 11037, expenses: 2759 },
+      { label: 'Relaxed', type: 'above', threshold: 30000, expenses: 4500 }
+    ];
+    const defaultBudgetItems = [
+      { category: 'Essentials', amount: 2759, unlock: 'always' },
+      { category: 'Savings', amount: 500, unlock: 'above:20000' },
+      { category: 'Discretionary', amount: 750, unlock: 'above:30000' }
+    ];
+    const defaultBudgetTiers = [
+      {
+        id: 'tier-essentials',
+        label: 'Essentials',
+        minimumBankroll: 0,
+        items: [
+          { id: 'item-rent', label: 'Rent', amount: 1800 },
+          { id: 'item-food', label: 'Food', amount: 650 },
+          { id: 'item-phone', label: 'Phone', amount: 100 },
+          { id: 'item-utilities', label: 'Utilities', amount: 209 }
+        ]
+      },
+      {
+        id: 'tier-stability',
+        label: 'Stability',
+        minimumBankroll: 10000,
+        items: [
+          { id: 'item-savings', label: 'Savings', amount: 500 }
+        ]
+      },
+      {
+        id: 'tier-discretionary',
+        label: 'Discretionary',
+        minimumBankroll: 30000,
+        items: [
+          { id: 'item-restaurants', label: 'Restaurants', amount: 300 },
+          { id: 'item-fun', label: 'Fun', amount: 450 }
+        ]
+      }
+    ];
+    const defaultSources = [
+      { name: 'First sales', showOnChart: true, amounts: [0, 0, 0, 500, 650, 800, 900, 1000, 1000, 1000, 1000, 1000] },
+      { name: 'Client payments', showOnChart: true, amounts: [0, 0, 0, 0, 0, 0, 0, 1200, 1200, 1400, 1400, 1600] },
+      { name: 'Launch income', showOnChart: true, amounts: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2600] }
+    ];
+
+    let chart;
+    let activeSidebarTab = 'assumptions';
+    let activeBudgetTab = 'plan';
+    let persistenceBackend = 'local';
+    let saveTimer;
+    let legendVisibility = {};
+    let expenseRules = structuredClone(defaultExpenseRules);
+    let budgetTiers = structuredClone(defaultBudgetTiers);
+    let transactions = [];
+    let sources = structuredClone(defaultSources);
+    let views = [];
+    let activeViewId = '';
+    let isApplyingView = false;
+
+    function value(id) {
+      return Number(inputs[id].value || 0);
+    }
+
+    function renderExpenseRules() {
+      if (!expenseRuleList) return;
+      ensureExpenseRules();
+      expenseRuleList.innerHTML = '';
+
+      expenseRules.forEach((rule, index) => {
+        normalizeExpenseRule(rule);
+
+        const row = document.createElement('div');
+        row.className = 'expense-rule-row';
+        row.draggable = true;
+        row.dataset.index = String(index);
+        row.innerHTML = `
+          <div class="drag-handle" aria-label="Drag expense rule" title="Drag to reorder">::</div>
+          <div class="mini-field rule-label">
+            <span>Label</span>
+            <input aria-label="Expense rule label" type="text" value="${escapeHtml(rule.label)}" placeholder="Essentials" />
+          </div>
+          <div class="mini-field rule-type">
+            <span>When</span>
+            <select aria-label="Expense rule condition">
+              <option value="below" ${rule.type === 'below' ? 'selected' : ''}>Below</option>
+              <option value="above" ${rule.type === 'above' ? 'selected' : ''}>Above</option>
+            </select>
+          </div>
+          <div class="mini-field rule-threshold">
+            <span>Savings $</span>
+            <input aria-label="Expense rule savings threshold" type="number" min="0" step="100" value="${rule.threshold}" />
+          </div>
+          <div class="mini-field rule-expenses">
+            <span>Expenses $/mo</span>
+            <input aria-label="Expense rule monthly expenses" type="number" min="0" step="50" value="${rule.expenses}" />
+          </div>
+          <button type="button" aria-label="Remove expense rule">x</button>
+        `;
+
+        const labelInput = row.querySelector('input[aria-label="Expense rule label"]');
+        const typeInput = row.querySelector('select');
+        const thresholdInput = row.querySelector('input[aria-label="Expense rule savings threshold"]');
+        const expensesInput = row.querySelector('input[aria-label="Expense rule monthly expenses"]');
+        const removeButton = row.querySelector('button');
+
+        row.addEventListener('dragstart', event => {
+          row.classList.add('dragging');
+          event.dataTransfer.setData('text/plain', String(index));
+          event.dataTransfer.effectAllowed = 'move';
+        });
+
+        row.addEventListener('dragend', () => {
+          row.classList.remove('dragging');
+        });
+
+        row.addEventListener('dragover', event => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+        });
+
+        row.addEventListener('drop', event => {
+          event.preventDefault();
+          const fromIndex = Number(event.dataTransfer.getData('text/plain'));
+          moveExpenseRule(fromIndex, index);
+        });
+
+        labelInput.addEventListener('input', () => {
+          expenseRules[index].label = labelInput.value;
+          renderBudgetItems();
+          recalculate();
+          renderSummary();
+          saveState();
+        });
+
+        typeInput.addEventListener('input', () => {
+          expenseRules[index].type = typeInput.value;
+          renderBudgetItems();
+          recalculate();
+          renderSummary();
+          saveState();
+        });
+
+        thresholdInput.addEventListener('input', () => {
+          expenseRules[index].threshold = Number(thresholdInput.value || 0);
+          renderBudgetItems();
+          recalculate();
+          renderSummary();
+          saveState();
+        });
+
+        expensesInput.addEventListener('input', () => {
+          expenseRules[index].expenses = Number(expensesInput.value || 0);
+          recalculate();
+          saveState();
+        });
+
+        removeButton.addEventListener('click', () => {
+          expenseRules.splice(index, 1);
+          ensureExpenseRules();
+          renderExpenseRules();
+          renderBudgetItems();
+          recalculate();
+          renderSummary();
+          saveState();
+        });
+
+        expenseRuleList.appendChild(row);
+      });
+    }
+
+    function normalizeExpenseRule(rule) {
+      if (!rule.label) rule.label = defaultRuleLabel(rule);
+      rule.type = rule.type === 'above' ? 'above' : 'below';
+      rule.threshold = Number(rule.threshold || 0);
+      rule.expenses = Number(rule.expenses || 0);
+    }
+
+    function defaultRuleLabel(rule) {
+      if (rule?.type === 'above') return 'Relaxed';
+      return 'Essentials';
+    }
+
+    function addExpenseRule(type) {
+      const referenceExpenses = expenseRules[expenseRules.length - 1]?.expenses || 3000;
+      expenseRules.push({
+        label: type === 'above' ? 'Relaxed' : 'Essentials',
+        type: type === 'above' ? 'above' : 'below',
+        threshold: type === 'above' ? value('startingSavings') * 2 : value('startingSavings'),
+        expenses: type === 'above' ? Math.round(referenceExpenses * 1.15) : Math.round(referenceExpenses * 0.75)
+      });
+      renderExpenseRules();
+      renderBudgetItems();
+      recalculate();
+      renderSummary();
+      saveState();
+    }
+
+    function moveExpenseRule(fromIndex, toIndex) {
+      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex) || fromIndex === toIndex) return;
+      const [moved] = expenseRules.splice(fromIndex, 1);
+      expenseRules.splice(toIndex, 0, moved);
+      renderExpenseRules();
+      renderBudgetItems();
+      recalculate();
+      renderSummary();
+      saveState();
+    }
+
+    function ensureExpenseRules() {
+      if (expenseRules.length) return;
+      expenseRules = structuredClone(defaultExpenseRules);
+    }
+
+    function makeId(prefix) {
+      return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function budgetItemOptions(selectedId) {
+      const options = flatBudgetItems();
+      if (!options.some(option => option.item.id === selectedId) && selectedId) {
+        options.push({ tier: { label: 'Archived' }, item: { id: selectedId, label: selectedId, amount: 0 } });
+      }
+
+      return options.map(({ tier, item }) => {
+        const label = `${tier.label || 'Tier'}: ${item.label || 'Item'}`;
+        return `<option value="${escapeHtml(item.id)}" ${item.id === selectedId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+      }).join('');
+    }
+
+    function flatBudgetItems() {
+      return budgetTiers.flatMap(tier => {
+        normalizeBudgetTier(tier);
+        return tier.items.map(item => ({ tier, item }));
+      });
+    }
+
+    function normalizeBudgetTier(tier) {
+      if (!tier.id) tier.id = makeId('tier');
+      tier.label = tier.label || 'New tier';
+      tier.minimumBankroll = Math.round(Number(tier.minimumBankroll || 0));
+      if (!Array.isArray(tier.items)) tier.items = [];
+      tier.items = tier.items.map(item => normalizeBudgetItem(item));
+      if (!tier.items.length) {
+        tier.items.push(normalizeBudgetItem({ label: 'New item', amount: 100 }));
+      }
+      return tier;
+    }
+
+    function normalizeBudgetItem(item) {
+      return {
+        id: item.id || makeId('item'),
+        label: item.label || item.category || 'New item',
+        amount: Math.round(Number(item.amount || 0))
+      };
+    }
+
+    function ensureBudgetTiers() {
+      if (budgetTiers.length) {
+        budgetTiers.forEach(normalizeBudgetTier);
+        return;
+      }
+      budgetTiers = structuredClone(defaultBudgetTiers);
+    }
+
+    function migrateBudgetItemsToTiers(items) {
+      const groups = new Map();
+      (Array.isArray(items) ? items : defaultBudgetItems).forEach(item => {
+        const unlock = item.unlock || 'always';
+        const minimumBankroll = unlock.startsWith('above:')
+          ? Math.round(Number(unlock.split(':')[1] || 0))
+          : 0;
+        const key = String(minimumBankroll);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            id: makeId('tier'),
+            label: minimumBankroll ? `Bankroll ${money.format(minimumBankroll)}` : 'Essentials',
+            minimumBankroll,
+            items: []
+          });
+        }
+        groups.get(key).items.push({
+          id: makeId('item'),
+          label: item.category || 'Budget item',
+          amount: Math.round(Number(item.amount || 0))
+        });
+      });
+
+      return [...groups.values()]
+        .sort((a, b) => a.minimumBankroll - b.minimumBankroll)
+        .map(normalizeBudgetTier);
+    }
+
+    function renderSummaryMonthOptions() {
+      const horizon = value('horizon');
+      const current = Math.min(Math.max(Number(summaryMonth.value || 1), 1), horizon);
+      summaryMonth.innerHTML = Array.from({ length: horizon }, (_, index) => {
+        const month = index + 1;
+        return `<option value="${month}" ${month === current ? 'selected' : ''}>Month ${month}</option>`;
+      }).join('');
+      summaryMonth.value = String(current);
+    }
+
+    function renderBudgetItems() {
+      ensureBudgetTiers();
+      budgetList.innerHTML = '';
+
+      budgetTiers.forEach((tier, tierIndex) => {
+        normalizeBudgetTier(tier);
+        const card = document.createElement('div');
+        card.className = 'tier-card';
+        card.draggable = true;
+        card.dataset.tierIndex = String(tierIndex);
+        card.innerHTML = `
+          <div class="tier-head">
+            <div class="drag-handle" aria-label="Drag tier" title="Drag tier">::</div>
+            <div class="mini-field">
+              <span>Tier</span>
+              <input aria-label="Tier label" type="text" value="${escapeHtml(tier.label)}" placeholder="Essentials" />
+            </div>
+            <div class="mini-field">
+              <span>Min bankroll $</span>
+              <input aria-label="Tier minimum bankroll" type="number" min="0" step="100" value="${tier.minimumBankroll}" />
+            </div>
+            <button type="button" aria-label="Remove tier">x</button>
+          </div>
+          <div class="tier-items"></div>
+          <div class="tier-actions">
+            <button type="button" class="add-tier-item">Add Item</button>
+          </div>
+        `;
+
+        const labelInput = card.querySelector('input[aria-label="Tier label"]');
+        const minimumInput = card.querySelector('input[aria-label="Tier minimum bankroll"]');
+        const removeTierButton = card.querySelector('button[aria-label="Remove tier"]');
+        const addItemButton = card.querySelector('.add-tier-item');
+        const itemList = card.querySelector('.tier-items');
+
+        card.addEventListener('dragstart', event => {
+          card.classList.add('dragging');
+          event.dataTransfer.setData('text/plain', `tier:${tierIndex}`);
+          event.dataTransfer.effectAllowed = 'move';
+        });
+        card.addEventListener('dragend', () => card.classList.remove('dragging'));
+        card.addEventListener('dragover', event => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+        });
+        card.addEventListener('drop', event => {
+          event.preventDefault();
+          const [kind, fromText] = event.dataTransfer.getData('text/plain').split(':');
+          if (kind === 'tier') moveBudgetTier(Number(fromText), tierIndex);
+        });
+
+        labelInput.addEventListener('input', () => {
+          budgetTiers[tierIndex].label = labelInput.value;
+          renderTransactions();
+          renderSummary();
+          saveState();
+        });
+
+        minimumInput.addEventListener('input', () => {
+          budgetTiers[tierIndex].minimumBankroll = Number(minimumInput.value || 0);
+          recalculate();
+          renderSummary();
+          saveState();
+        });
+
+        removeTierButton.addEventListener('click', () => {
+          budgetTiers.splice(tierIndex, 1);
+          ensureBudgetTiers();
+          renderBudgetItems();
+          renderTransactions();
+          recalculate();
+          renderSummary();
+          saveState();
+        });
+
+        addItemButton.addEventListener('click', () => {
+          budgetTiers[tierIndex].items.push(normalizeBudgetItem({ label: 'New item', amount: 100 }));
+          renderBudgetItems();
+          renderTransactions();
+          recalculate();
+          renderSummary();
+          saveState();
+        });
+
+        tier.items.forEach((item, itemIndex) => {
+          const row = document.createElement('div');
+          row.className = 'tier-item';
+          row.draggable = true;
+          row.dataset.tierIndex = String(tierIndex);
+          row.dataset.itemIndex = String(itemIndex);
+          row.innerHTML = `
+            <div class="drag-handle" aria-label="Drag budget item" title="Drag item">::</div>
+            <div class="mini-field">
+              <span>Item</span>
+              <input aria-label="Budget item label" type="text" value="${escapeHtml(item.label)}" placeholder="Rent" />
+            </div>
+            <div class="mini-field">
+              <span>Amount $</span>
+              <input aria-label="Budget item amount" type="number" min="0" step="25" value="${Number(item.amount || 0)}" />
+            </div>
+            <button type="button" aria-label="Remove budget item">x</button>
+          `;
+
+          const itemLabelInput = row.querySelector('input[aria-label="Budget item label"]');
+          const itemAmountInput = row.querySelector('input[aria-label="Budget item amount"]');
+          const removeItemButton = row.querySelector('button');
+
+          row.addEventListener('dragstart', event => {
+            row.classList.add('dragging');
+            event.dataTransfer.setData('text/plain', `item:${tierIndex}:${itemIndex}`);
+            event.dataTransfer.effectAllowed = 'move';
+            event.stopPropagation();
+          });
+          row.addEventListener('dragend', () => row.classList.remove('dragging'));
+          row.addEventListener('dragover', event => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+          });
+          row.addEventListener('drop', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const [kind, fromTierText, fromItemText] = event.dataTransfer.getData('text/plain').split(':');
+            if (kind === 'item') moveBudgetItem(Number(fromTierText), Number(fromItemText), tierIndex, itemIndex);
+          });
+
+          itemLabelInput.addEventListener('input', () => {
+            budgetTiers[tierIndex].items[itemIndex].label = itemLabelInput.value;
+            renderTransactions();
+            renderSummary();
+            saveState();
+          });
+
+          itemAmountInput.addEventListener('input', () => {
+            budgetTiers[tierIndex].items[itemIndex].amount = Number(itemAmountInput.value || 0);
+            recalculate();
+            renderSummary();
+            saveState();
+          });
+
+          removeItemButton.addEventListener('click', () => {
+            budgetTiers[tierIndex].items.splice(itemIndex, 1);
+            ensureBudgetTiers();
+            renderBudgetItems();
+            renderTransactions();
+            recalculate();
+            renderSummary();
+            saveState();
+          });
+
+          itemList.appendChild(row);
+        });
+
+        budgetList.appendChild(card);
+      });
+    }
+
+    function moveBudgetTier(fromIndex, toIndex) {
+      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex) || fromIndex === toIndex) return;
+      const [moved] = budgetTiers.splice(fromIndex, 1);
+      budgetTiers.splice(toIndex, 0, moved);
+      renderBudgetItems();
+      recalculate();
+      renderSummary();
+      saveState();
+    }
+
+    function moveBudgetItem(fromTierIndex, fromItemIndex, toTierIndex, toItemIndex) {
+      if (![fromTierIndex, fromItemIndex, toTierIndex, toItemIndex].every(Number.isInteger)) return;
+      const fromTier = budgetTiers[fromTierIndex];
+      const toTier = budgetTiers[toTierIndex];
+      if (!fromTier || !toTier) return;
+      const [moved] = fromTier.items.splice(fromItemIndex, 1);
+      if (!moved) return;
+      const adjustedToIndex = fromTierIndex === toTierIndex && fromItemIndex < toItemIndex ? toItemIndex - 1 : toItemIndex;
+      toTier.items.splice(adjustedToIndex, 0, moved);
+      ensureBudgetTiers();
+      renderBudgetItems();
+      recalculate();
+      renderSummary();
+      saveState();
+    }
+
+    function renderTransactions() {
+      renderSummaryMonthOptions();
+      transactionList.innerHTML = '';
+
+      transactions.forEach((transaction, index) => {
+        normalizeTransaction(transaction);
+        const row = document.createElement('div');
+        row.className = 'entry-row transaction-row';
+        row.innerHTML = `
+          <div class="mini-field">
+            <span>Month</span>
+            <select aria-label="Transaction month">${Array.from({ length: value('horizon') }, (_, monthIndex) => {
+              const month = monthIndex + 1;
+              return `<option value="${month}" ${month === transaction.month ? 'selected' : ''}>M${month}</option>`;
+            }).join('')}</select>
+          </div>
+          <div class="mini-field">
+            <span>Budget Item</span>
+            <select aria-label="Transaction budget item">${budgetItemOptions(transaction.itemId)}</select>
+          </div>
+          <div class="mini-field">
+            <span>Item</span>
+            <input aria-label="Transaction item" type="text" value="${escapeHtml(transaction.item || '')}" placeholder="Item" />
+          </div>
+          <div class="mini-field">
+            <span>Vendor</span>
+            <input aria-label="Transaction vendor" type="text" value="${escapeHtml(transaction.vendor || '')}" placeholder="Vendor" />
+          </div>
+          <div class="mini-field">
+            <span>Amount $</span>
+            <input aria-label="Transaction amount" type="number" min="0" step="1" value="${Number(transaction.amount || 0)}" />
+          </div>
+          <button type="button" aria-label="Remove transaction">x</button>
+        `;
+
+        const monthInput = row.querySelector('select[aria-label="Transaction month"]');
+        const itemIdInput = row.querySelector('select[aria-label="Transaction budget item"]');
+        const itemInput = row.querySelector('input[aria-label="Transaction item"]');
+        const vendorInput = row.querySelector('input[aria-label="Transaction vendor"]');
+        const amountInput = row.querySelector('input[aria-label="Transaction amount"]');
+        const removeButton = row.querySelector('button');
+
+        monthInput.addEventListener('input', () => {
+          transactions[index].month = Number(monthInput.value || 1);
+          renderSummary();
+          saveState();
+        });
+
+        itemIdInput.addEventListener('input', () => {
+          transactions[index].itemId = itemIdInput.value;
+          renderSummary();
+          saveState();
+        });
+
+        itemInput.addEventListener('input', () => {
+          transactions[index].item = itemInput.value;
+          saveState();
+        });
+
+        vendorInput.addEventListener('input', () => {
+          transactions[index].vendor = vendorInput.value;
+          saveState();
+        });
+
+        amountInput.addEventListener('input', () => {
+          transactions[index].amount = Number(amountInput.value || 0);
+          renderSummary();
+          saveState();
+        });
+
+        removeButton.addEventListener('click', () => {
+          transactions.splice(index, 1);
+          renderTransactions();
+          renderSummary();
+          saveState();
+        });
+
+        transactionList.appendChild(row);
+      });
+    }
+
+    function normalizeTransaction(transaction) {
+      transaction.month = Math.min(Math.max(Math.round(Number(transaction.month || 1)), 1), value('horizon'));
+      transaction.item = transaction.item || '';
+      transaction.vendor = transaction.vendor || '';
+      transaction.amount = Math.round(Number(transaction.amount || 0));
+      if (!transaction.itemId) {
+        const match = flatBudgetItems().find(({ item }) => item.label === transaction.category || item.label === transaction.item);
+        transaction.itemId = match?.item.id || flatBudgetItems()[0]?.item.id || '';
+      }
+      return transaction;
+    }
+
+    function allocationForMonth(month, startBankroll) {
+      ensureBudgetTiers();
+      const income = sources.reduce((sum, source) => sum + sourceAmount(source, month), 0);
+      let remainingIncome = income;
+      let workingBankroll = startBankroll;
+      let allocatedExpenses = 0;
+      let builder = 0;
+      let surplus = 0;
+      let lockedGate = null;
+      const entries = [];
+
+      budgetTiers.forEach(tier => {
+        normalizeBudgetTier(tier);
+        const tierEntry = {
+          tierId: tier.id,
+          tierLabel: tier.label,
+          minimumBankroll: tier.minimumBankroll,
+          unlockedAtStart: workingBankroll >= tier.minimumBankroll,
+          unlockedAfterBuilder: false,
+          items: []
+        };
+
+        if (remainingIncome <= 0) {
+          tierEntry.items = tier.items.map(item => ({
+            tierId: tier.id,
+            tierLabel: tier.label,
+            itemId: item.id,
+            label: item.label,
+            cap: Math.max(Number(item.amount || 0), 0),
+            allocated: 0
+          }));
+          entries.push(tierEntry);
+          return;
+        }
+
+        if (workingBankroll < tier.minimumBankroll) {
+          const needed = tier.minimumBankroll - workingBankroll;
+          const builderAmount = Math.min(remainingIncome, needed);
+          builder += builderAmount;
+          workingBankroll += builderAmount;
+          remainingIncome -= builderAmount;
+          tierEntry.builderAmount = builderAmount;
+          if (workingBankroll < tier.minimumBankroll) {
+            lockedGate = {
+              tierId: tier.id,
+              tierLabel: tier.label,
+              minimumBankroll: tier.minimumBankroll,
+              needed: tier.minimumBankroll - workingBankroll
+            };
+            tierEntry.items = tier.items.map(item => ({
+              tierId: tier.id,
+              tierLabel: tier.label,
+              itemId: item.id,
+              label: item.label,
+              cap: Math.max(Number(item.amount || 0), 0),
+              allocated: 0
+            }));
+            entries.push(tierEntry);
+            return;
+          }
+          tierEntry.unlockedAfterBuilder = true;
+        }
+
+        tier.items.forEach(item => {
+          const cap = Math.max(Number(item.amount || 0), 0);
+          const allocated = Math.min(remainingIncome, cap);
+          remainingIncome -= allocated;
+          allocatedExpenses += allocated;
+          tierEntry.items.push({
+            tierId: tier.id,
+            tierLabel: tier.label,
+            itemId: item.id,
+            label: item.label,
+            cap,
+            allocated
+          });
+        });
+
+        entries.push(tierEntry);
+      });
+
+      if (remainingIncome > 0) {
+        surplus = remainingIncome;
+        workingBankroll += surplus;
+      }
+
+      const endBankroll = startBankroll + income - allocatedExpenses;
+      return {
+        month,
+        startBankroll,
+        income,
+        allocatedExpenses,
+        net: income - allocatedExpenses,
+        endBankroll,
+        builder,
+        surplus,
+        lockedGate,
+        entries
+      };
+    }
+
+    function projectionRows() {
+      const horizon = value('horizon');
+      let bankroll = value('startingSavings');
+      const rows = [];
+      for (let month = 1; month <= horizon; month += 1) {
+        const allocation = allocationForMonth(month, bankroll);
+        bankroll = allocation.endBankroll;
+        rows.push(allocation);
+      }
+      return rows;
+    }
+
+    function selectedSummaryAllocation() {
+      const rows = projectionRows();
+      const month = Math.min(Math.max(Number(summaryMonth.value || 1), 1), rows.length || 1);
+      summaryMonth.value = String(month);
+      return rows[month - 1] || allocationForMonth(1, value('startingSavings'));
+    }
+
+    function renderSummary() {
+      renderSummaryMonthOptions();
+      const allocation = selectedSummaryAllocation();
+      const allItems = allocation.entries.flatMap(entry => entry.items);
+      const maxAmount = Math.max(
+        1,
+        allocation.income,
+        ...allItems.map(item => item.cap),
+        allocation.builder,
+        allocation.surplus
+      );
+      const spentByItem = new Map();
+      transactions.forEach(transaction => {
+        normalizeTransaction(transaction);
+        if (transaction.month !== allocation.month) return;
+        spentByItem.set(transaction.itemId, (spentByItem.get(transaction.itemId) || 0) + Number(transaction.amount || 0));
+      });
+
+      const stack = allocation.entries.map(entry => {
+        const gateClass = entry.minimumBankroll > allocation.startBankroll && !entry.unlockedAfterBuilder ? ' locked' : '';
+        const gateText = entry.minimumBankroll <= 0
+          ? 'No bankroll minimum'
+          : allocation.startBankroll >= entry.minimumBankroll
+            ? `Unlocked at ${money.format(entry.minimumBankroll)} bankroll`
+            : `Waiting for bankroll to exceed ${money.format(entry.minimumBankroll)} minimum requirement to go to ${entry.tierLabel}`;
+        const builderBlock = entry.builderAmount ? `
+          <div class="thermo-builder">
+            <div class="thermo-fill" style="--fill: ${Math.round((entry.builderAmount / maxAmount) * 100)}%;"></div>
+            <div class="thermo-content">
+              <strong>Bankroll builder</strong>
+              <span>${money.format(entry.builderAmount)} toward ${escapeHtml(entry.tierLabel)}</span>
+            </div>
+          </div>
+        ` : '';
+        const itemBlocks = entry.items.map(item => `
+          <div class="thermo-item">
+            <div class="thermo-fill" style="--fill: ${Math.round((item.allocated / Math.max(item.cap, 1)) * 100)}%;"></div>
+            <div class="thermo-content">
+              <strong>${escapeHtml(item.label)}</strong>
+              <span>${money.format(item.allocated)} / ${money.format(item.cap)}</span>
+            </div>
+          </div>
+        `).join('');
+        return `
+          <div class="thermo-tier">
+            <div class="thermo-tier-label"><span>${escapeHtml(entry.tierLabel)}</span><span>Min ${money.format(entry.minimumBankroll)}</span></div>
+            ${itemBlocks}
+            ${builderBlock}
+            <div class="thermo-gate${gateClass}"><span>${gateText}</span><span>${money.format(entry.minimumBankroll)}</span></div>
+          </div>
+        `;
+      }).join('');
+
+      const surplusBlock = allocation.surplus ? `
+        <div class="thermo-surplus">
+          <div class="thermo-fill" style="--fill: 100%;"></div>
+          <div class="thermo-content">
+            <strong>Extra bankroll surplus</strong>
+            <span>${money.format(allocation.surplus)}</span>
+          </div>
+        </div>
+      ` : '';
+
+      const cards = allItems.map(item => {
+        const spent = spentByItem.get(item.itemId) || 0;
+        const remaining = item.allocated - spent;
+        return `
+          <div class="summary-card">
+            <strong>${escapeHtml(item.label)}</strong>
+            <div class="summary-values">
+              <div><span>Allocated</span><strong>${money.format(item.allocated)}</strong></div>
+              <div><span>Spent</span><strong>${money.format(spent)}</strong></div>
+              <div><span>Remaining</span><strong class="${remaining >= 0 ? 'good' : 'bad'}">${money.format(remaining)}</strong></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const lockedMessage = allocation.lockedGate
+        ? `<p class="hint warn">Capped at this tier: waiting for bankroll to exceed ${money.format(allocation.lockedGate.minimumBankroll)} minimum requirement to go to ${escapeHtml(allocation.lockedGate.tierLabel)}.</p>`
+        : '<p class="hint good">All reached tier gates are open for this month.</p>';
+
+      summaryList.innerHTML = `
+        <div class="thermometer">
+          <div class="thermometer-head">
+            <strong>Month ${allocation.month} Income Thermometer</strong>
+            <span>Income ${money.format(allocation.income)} | Start bankroll ${money.format(allocation.startBankroll)} | Allocated expenses ${money.format(allocation.allocatedExpenses)}</span>
+            ${lockedMessage}
+          </div>
+          <div class="thermometer-stack">
+            ${surplusBlock}
+            ${stack}
+          </div>
+        </div>
+        ${cards || '<div class="summary-card"><strong>No budget items yet.</strong></div>'}
+      `;
+    }
+
+    function expenseRuleForSavings(savings) {
+      const normalizedRules = expenseRules
+        .map(rule => ({ ...rule, threshold: Number(rule.threshold || 0), expenses: Number(rule.expenses || 0) }))
+        .filter(rule => rule.expenses > 0);
+
+      if (!normalizedRules.length) {
+        return { type: 'base', threshold: null, expenses: 0 };
+      }
+
+      const belowMatch = normalizedRules
+        .filter(rule => rule.type === 'below' && savings < rule.threshold)
+        .sort((a, b) => a.threshold - b.threshold)[0];
+
+      if (belowMatch) return belowMatch;
+
+      const aboveMatch = normalizedRules
+        .filter(rule => rule.type === 'above' && savings > rule.threshold)
+        .sort((a, b) => b.threshold - a.threshold)[0];
+
+      if (aboveMatch) return aboveMatch;
+
+      return normalizedRules
+        .slice()
+        .sort((a, b) => a.threshold - b.threshold)[0];
+    }
+
+    function applyDefaultInputs() {
+      Object.entries(defaultInputs).forEach(([key, val]) => {
+        inputs[key].value = val;
+      });
+    }
+
+    function inputSnapshot() {
+      return Object.fromEntries(
+        Object.keys(inputs).map(key => [key, key === 'horizon' ? String(inputs[key].value) : Number(inputs[key].value || 0)])
+      );
+    }
+
+    function currentProjectionState() {
+      return {
+        activeSidebarTab,
+        activeBudgetTab,
+        summaryMonth: Number(summaryMonth.value || 1),
+        inputs: inputSnapshot(),
+        expenseRules: structuredClone(expenseRules),
+        budgetTiers: structuredClone(budgetTiers),
+        transactions: structuredClone(transactions),
+        legendVisibility: { ...legendVisibility },
+        sources: structuredClone(sources)
+      };
+    }
+
+    function newViewId() {
+      return `view-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function normalizeView(view, index) {
+      const label = String(view?.label || `Projection ${index + 1}`).trim() || `Projection ${index + 1}`;
+      return {
+        id: String(view?.id || newViewId()),
+        label,
+        snapshot: view?.snapshot && typeof view.snapshot === 'object'
+          ? structuredClone(view.snapshot)
+          : currentProjectionState()
+      };
+    }
+
+    function ensureViews() {
+      if (!views.length) {
+        activeViewId = newViewId();
+        views = [{ id: activeViewId, label: 'Projection 1', snapshot: currentProjectionState() }];
+      }
+
+      if (!views.some(view => view.id === activeViewId)) {
+        activeViewId = views[0].id;
+      }
+    }
+
+    function syncActiveViewSnapshot() {
+      ensureViews();
+      const activeView = views.find(view => view.id === activeViewId);
+      if (activeView) activeView.snapshot = currentProjectionState();
+    }
+
+    function statePayload() {
+      ensureViews();
+      const working = currentProjectionState();
+      return {
+        version: 2,
+        activeViewId,
+        views: views.map(view => ({
+          id: view.id,
+          label: view.label,
+          snapshot: structuredClone(view.snapshot)
+        })),
+        working,
+        ...working
+      };
+    }
+
+    function saveState() {
+      if (!isApplyingView) syncActiveViewSnapshot();
+      const payload = statePayload();
+
+      if (persistenceBackend === 'postgres') {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          fetch(API_STATE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).catch(error => {
+            console.warn('Unable to save runway model to Postgres.', error);
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+            } catch (storageError) {
+              console.warn('Unable to save runway model locally.', storageError);
+            }
+          });
+        }, 180);
+        return;
+      }
+
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      } catch (error) {
+        console.warn('Unable to save runway model locally.', error);
+      }
+    }
+
+    function applyProjectionSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') return;
+
+      if (snapshot.inputs && typeof snapshot.inputs === 'object') {
+        Object.entries(snapshot.inputs).forEach(([key, val]) => {
+          if (inputs[key]) inputs[key].value = val;
+        });
+      }
+
+      if (Array.isArray(snapshot.sources)) {
+        sources = snapshot.sources.map(source => ({
+          name: source.name || 'Income source',
+          showOnChart: source.showOnChart !== false,
+          collapsed: Boolean(source.collapsed),
+          amounts: Array.isArray(source.amounts) ? source.amounts.map(amount => Number(amount || 0)) : []
+        }));
+      }
+
+      if (Array.isArray(snapshot.expenseRules)) {
+        expenseRules = snapshot.expenseRules.map(rule => ({
+          label: rule.label || defaultRuleLabel(rule),
+          type: rule.type === 'above' ? 'above' : 'below',
+          threshold: Math.round(Number(rule.threshold || 0)),
+          expenses: Math.round(Number(rule.expenses || 0))
+        }));
+      } else if (snapshot.inputs && (snapshot.inputs.reserveMonths || snapshot.inputs.tightenPercent)) {
+        const monthlyExpenses = Number(snapshot.inputs.monthlyExpenses || 3679);
+        expenseRules = [{
+          label: 'Barebones',
+          type: 'below',
+          threshold: Math.round(monthlyExpenses * Number(snapshot.inputs.reserveMonths || 3)),
+          expenses: Math.round(monthlyExpenses * (1 - Number(snapshot.inputs.tightenPercent || 0) / 100))
+        }];
+      }
+
+      if (Array.isArray(snapshot.budgetTiers)) {
+        budgetTiers = snapshot.budgetTiers.map(tier => normalizeBudgetTier({
+          id: tier.id,
+          label: tier.label,
+          minimumBankroll: tier.minimumBankroll,
+          items: Array.isArray(tier.items) ? tier.items : []
+        }));
+      } else if (Array.isArray(snapshot.budgetItems)) {
+        budgetTiers = migrateBudgetItemsToTiers(snapshot.budgetItems);
+      }
+
+      if (Array.isArray(snapshot.transactions)) {
+        transactions = snapshot.transactions.map(transaction => normalizeTransaction({
+          month: transaction.month || 1,
+          itemId: transaction.itemId || '',
+          item: transaction.item || '',
+          vendor: transaction.vendor || '',
+          category: transaction.category || 'Uncategorized',
+          amount: Math.round(Number(transaction.amount || 0))
+        }));
+      }
+
+      if (snapshot.legendVisibility && typeof snapshot.legendVisibility === 'object') {
+        legendVisibility = { ...snapshot.legendVisibility };
+      }
+
+      if (['assumptions', 'income', 'budget', 'transactions', 'summary'].includes(snapshot.activeSidebarTab)) {
+        if (snapshot.activeSidebarTab === 'transactions' || snapshot.activeSidebarTab === 'summary') {
+          activeSidebarTab = 'budget';
+          activeBudgetTab = snapshot.activeSidebarTab;
+        } else {
+          activeSidebarTab = snapshot.activeSidebarTab;
+        }
+      }
+
+      if (['plan', 'transactions', 'summary'].includes(snapshot.activeBudgetTab)) {
+        activeBudgetTab = snapshot.activeBudgetTab;
+      }
+
+      if (snapshot.summaryMonth) {
+        summaryMonth.value = String(snapshot.summaryMonth);
+      }
+    }
+
+    function renderCurrentState() {
+      renderExpenseRules();
+      renderBudgetItems();
+      renderTransactions();
+      renderSummary();
+      renderSources();
+      setSidebarTab(activeSidebarTab);
+      setBudgetTab(activeBudgetTab);
+      recalculate();
+    }
+
+    function applyProjectionState(snapshot, options = {}) {
+      isApplyingView = true;
+      try {
+        applyProjectionSnapshot(snapshot);
+        if (options.render !== false) {
+          renderCurrentState();
+          renderProjectionTabs();
+        }
+      } finally {
+        isApplyingView = false;
+      }
+    }
+
+    function applySavedState(saved) {
+      if (!saved || typeof saved !== 'object') return;
+
+      if (Array.isArray(saved.views) && saved.views.length) {
+        views = saved.views.map(normalizeView);
+        activeViewId = views.some(view => view.id === saved.activeViewId) ? saved.activeViewId : views[0].id;
+        applyProjectionState(saved.working || views.find(view => view.id === activeViewId)?.snapshot, { render: false });
+        syncActiveViewSnapshot();
+        return;
+      }
+
+      applyProjectionSnapshot(saved);
+      activeViewId = newViewId();
+      views = [{ id: activeViewId, label: 'Projection 1', snapshot: currentProjectionState() }];
+    }
+
+    async function loadState() {
+      applyDefaultInputs();
+
+      try {
+        const response = await fetch(API_STATE_URL, { cache: 'no-store' });
+        if (response.ok) {
+          const data = await response.json();
+          persistenceBackend = 'postgres';
+          applySavedState(data.state);
+          return;
+        }
+      } catch (error) {
+        persistenceBackend = 'local';
+      }
+
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        applySavedState(JSON.parse(raw));
+      } catch (error) {
+        console.warn('Unable to load saved runway model state.', error);
+      }
+    }
+
+    function renderProjectionTabs() {
+      ensureViews();
+      projectionTabs.innerHTML = views.map(view => {
+        const active = view.id === activeViewId;
+        return `
+          <div class="projection-tab${active ? ' active' : ''}" role="tab" aria-selected="${active}" tabindex="0" data-view-id="${escapeHtml(view.id)}">
+            ${active
+              ? `<input aria-label="Projection name" type="text" value="${escapeHtml(view.label)}" />`
+              : `<span>${escapeHtml(view.label)}</span>`}
+          </div>
+        `;
+      }).join('');
+
+      projectionTabs.querySelectorAll('.projection-tab').forEach(tab => {
+        const viewId = tab.dataset.viewId;
+        const labelInput = tab.querySelector('input');
+
+        tab.addEventListener('click', event => {
+          if (event.target === labelInput) return;
+          switchProjectionView(viewId);
+        });
+
+        tab.addEventListener('keydown', event => {
+          if (event.target === labelInput) return;
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          switchProjectionView(viewId);
+        });
+
+        if (labelInput) {
+          labelInput.addEventListener('input', () => {
+            const activeView = views.find(view => view.id === activeViewId);
+            if (!activeView) return;
+            activeView.label = labelInput.value || 'Untitled';
+            saveState();
+          });
+        }
+      });
+    }
+
+    function switchProjectionView(viewId) {
+      if (!viewId || viewId === activeViewId) return;
+      const targetView = views.find(view => view.id === viewId);
+      if (!targetView) return;
+
+      syncActiveViewSnapshot();
+      activeViewId = targetView.id;
+      applyProjectionState(targetView.snapshot);
+      saveState();
+    }
+
+    function saveActiveProjection() {
+      syncActiveViewSnapshot();
+      renderProjectionTabs();
+      saveState();
+    }
+
+    function duplicateActiveProjection() {
+      syncActiveViewSnapshot();
+      const sourceView = views.find(view => view.id === activeViewId);
+      const snapshot = structuredClone(sourceView?.snapshot || currentProjectionState());
+      const id = newViewId();
+      const label = `${sourceView?.label || 'Projection'} Copy`;
+      views.push({ id, label, snapshot });
+      activeViewId = id;
+      applyProjectionState(snapshot);
+      saveState();
+    }
+
+    function renderSources() {
+      sourceList.innerHTML = '';
+      const horizon = value('horizon');
+
+      sources.forEach((source, index) => {
+        normalizeSource(source);
+
+        const card = document.createElement('div');
+        card.className = `source-card${source.collapsed ? ' collapsed' : ''}`;
+        card.innerHTML = `
+          <div class="source-title">
+            <input aria-label="Source name" type="text" value="${escapeHtml(source.name)}" placeholder="Source name" />
+            <button type="button" class="collapse-source" aria-label="${source.collapsed ? 'Expand income source' : 'Collapse income source'}">${source.collapsed ? '+' : '-'}</button>
+            <button type="button" aria-label="Remove income source">x</button>
+          </div>
+          <div class="source-ramp"></div>
+        `;
+
+        const nameInput = card.querySelector('input[aria-label="Source name"]');
+        const collapseButton = card.querySelector('.collapse-source');
+        const removeButton = card.querySelector('button[aria-label="Remove income source"]');
+        const ramp = card.querySelector('.source-ramp');
+
+        nameInput.addEventListener('input', () => {
+          sources[index].name = nameInput.value;
+          saveState();
+        });
+
+        collapseButton.addEventListener('click', () => {
+          sources[index].collapsed = !sources[index].collapsed;
+          renderSources();
+          saveState();
+        });
+
+        removeButton.addEventListener('click', () => {
+          sources.splice(index, 1);
+          renderSources();
+          recalculate();
+          saveState();
+        });
+
+        for (let month = 1; month <= horizon; month += 1) {
+          const cell = document.createElement('div');
+          cell.className = 'ramp-cell';
+          cell.innerHTML = `
+            <span>Month ${month}</span>
+            <input aria-label="${escapeHtml(source.name || 'Income source')} month ${month}" type="number" min="0" step="50" value="${sourceAmount(source, month)}" />
+            <button type="button" class="copy-forward" aria-label="Copy ${escapeHtml(source.name || 'Income source')} month ${month} to all future months">Copy forward</button>
+          `;
+          const amountInput = cell.querySelector('input');
+          const copyButton = cell.querySelector('.copy-forward');
+          amountInput.addEventListener('input', () => {
+            source.amounts[month - 1] = Number(amountInput.value || 0);
+            recalculate();
+            saveState();
+          });
+          copyButton.addEventListener('click', () => {
+            copyToFutureMonths(index, month, Number(amountInput.value || 0));
+          });
+          ramp.appendChild(cell);
+        }
+
+        sourceList.appendChild(card);
+      });
+    }
+
+    function normalizeSource(source) {
+      if (typeof source.showOnChart !== 'boolean') source.showOnChart = true;
+      if (Array.isArray(source.amounts)) return;
+      source.amounts = [];
+      if (source.month) source.amounts[source.month - 1] = Number(source.amount || 0);
+      delete source.month;
+      delete source.amount;
+    }
+
+    function sourceAmount(source, month) {
+      normalizeSource(source);
+      return Number(source.amounts[month - 1] || 0);
+    }
+
+    function copyToFutureMonths(sourceIndex, startMonth, amount) {
+      const source = sources[sourceIndex];
+      const horizon = value('horizon');
+      normalizeSource(source);
+      for (let month = startMonth; month <= horizon; month += 1) {
+        source.amounts[month - 1] = amount;
+      }
+      renderSources();
+      recalculate();
+      saveState();
+    }
+
+    function setSidebarTab(tabName) {
+      const tabs = ['assumptions', 'income', 'budget'];
+      activeSidebarTab = tabs.includes(tabName) ? tabName : 'assumptions';
+      tabs.forEach(tab => {
+        const active = tab === activeSidebarTab;
+        document.getElementById(`tab-${tab}`).classList.toggle('active', active);
+        document.getElementById(`tab-${tab}`).setAttribute('aria-selected', String(active));
+        document.getElementById(`panel-${tab}`).classList.toggle('active', active);
+      });
+      saveState();
+    }
+
+    function setBudgetTab(tabName) {
+      const tabs = ['plan', 'transactions', 'summary'];
+      activeBudgetTab = tabs.includes(tabName) ? tabName : 'plan';
+      tabs.forEach(tab => {
+        const active = tab === activeBudgetTab;
+        document.getElementById(`budget-subtab-${tab}`).classList.toggle('active', active);
+        document.getElementById(`budget-subtab-${tab}`).setAttribute('aria-selected', String(active));
+        document.getElementById(`budget-panel-${tab}`).classList.toggle('active', active);
+      });
+      saveState();
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function project() {
+      let failureMonth = null;
+      let breakEvenMonth = null;
+      const rows = projectionRows().map(row => {
+        if (!breakEvenMonth && row.net >= 0) breakEvenMonth = row.month;
+        if (!failureMonth && row.endBankroll <= 0) failureMonth = row.month;
+        return {
+          ...row,
+          burn: row.allocatedExpenses,
+          savings: row.endBankroll
+        };
+      });
+
+      return { rows, failureMonth, breakEvenMonth };
+    }
+
+    function recalculate() {
+      const result = project();
+      renderChart(result);
+    }
+
+    function renderChart(result) {
+      const labels = ['Start', ...result.rows.map(row => `M${row.month}`)];
+      const savings = [value('startingSavings'), ...result.rows.map(row => Math.round(row.savings))];
+      const income = [null, ...result.rows.map(row => Math.round(row.income))];
+      const expenses = [null, ...result.rows.map(row => Math.round(row.burn))];
+      const burnRate = [null, ...result.rows.map(row => Math.round(row.net))];
+      const zero = labels.map(() => 0);
+      const alignedScales = alignedZeroScales({
+        cashValues: savings,
+        rateValues: [...income, ...expenses, ...burnRate]
+      });
+
+      const datasets = [
+        {
+          label: 'Bankroll',
+          data: savings,
+          borderColor: '#38bdf8',
+          backgroundColor: 'rgba(56, 189, 248, 0.14)',
+          yAxisID: 'cash',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 3
+        },
+        {
+          label: 'Income',
+          data: income,
+          borderColor: '#22c55e',
+          backgroundColor: 'rgba(34, 197, 94, 0.12)',
+          yAxisID: 'rate',
+          tension: 0.2,
+          pointRadius: 3
+        },
+        {
+          label: 'Burn Rate',
+          data: burnRate,
+          borderColor: '#f59e0b',
+          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+          yAxisID: 'rate',
+          tension: 0.2,
+          pointRadius: 3,
+          borderDash: [6, 5]
+        },
+        {
+          label: 'Expenses',
+          data: expenses,
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(220, 38, 38, 0.08)',
+          yAxisID: 'rate',
+          tension: 0.2,
+          pointRadius: 0,
+          borderDash: [9, 6]
+        },
+        {
+          label: 'Break Even / Failure ($0)',
+          data: zero,
+          borderColor: '#e5e7eb',
+          yAxisID: 'cash',
+          pointRadius: 0,
+          borderWidth: 2
+        }
+      ];
+
+      datasets.forEach(dataset => {
+        if (legendVisibility[dataset.label] === false) dataset.hidden = true;
+      });
+
+      if (chart) chart.destroy();
+      chart = new Chart(document.getElementById('runwayChart'), {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: {
+              display: false
+            },
+            tooltip: {
+              callbacks: {
+                label: context => `${context.dataset.label}: ${money.format(context.raw || 0)}`
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#94a3b8' },
+              grid: { color: 'rgba(148, 163, 184, 0.1)' }
+            },
+            cash: {
+              position: 'left',
+              min: alignedScales.cash.min,
+              max: alignedScales.cash.max,
+              ticks: {
+                color: '#94a3b8',
+                callback: tick => money.format(tick)
+              },
+              grid: { color: 'rgba(148, 163, 184, 0.1)' },
+              title: {
+                display: true,
+                text: 'Savings',
+                color: '#cbd5e1'
+              }
+            },
+            rate: {
+              position: 'right',
+              min: alignedScales.rate.min,
+              max: alignedScales.rate.max,
+              ticks: {
+                color: '#94a3b8',
+                callback: tick => money.format(tick)
+              },
+              grid: { drawOnChartArea: false },
+              title: {
+                display: true,
+                text: 'Monthly Rate',
+                color: '#cbd5e1'
+              }
+            }
+          }
+        }
+      });
+
+      renderAxisLegend();
+      renderChartNote();
+    }
+
+    function alignedZeroScales({ cashValues, rateValues }) {
+      const cashBounds = dataBounds(cashValues);
+      const rateBounds = dataBounds(rateValues);
+      const cashPadding = Math.max((cashBounds.max - cashBounds.min) * 0.08, 1000);
+      const ratePadding = Math.max((rateBounds.max - rateBounds.min) * 0.08, 500);
+
+      const cashPositive = Math.max(cashBounds.max + cashPadding, 1000);
+      const ratePositive = Math.max(rateBounds.max + ratePadding, 500);
+      const cashNegative = Math.max(Math.abs(cashBounds.min) + cashPadding, 1000);
+      const rateNegative = Math.max(Math.abs(rateBounds.min) + ratePadding, 500);
+      const zeroPosition = Math.min(
+        0.72,
+        Math.max(
+          0.18,
+          cashNegative / (cashPositive + cashNegative),
+          rateNegative / (ratePositive + rateNegative)
+        )
+      );
+
+      return {
+        cash: scaledBounds(cashPositive, cashNegative, zeroPosition),
+        rate: scaledBounds(ratePositive, rateNegative, zeroPosition)
+      };
+    }
+
+    function scaledBounds(positive, negative, zeroPosition) {
+      const total = Math.max(
+        positive / (1 - zeroPosition),
+        negative / zeroPosition
+      );
+      return {
+        min: -total * zeroPosition,
+        max: total * (1 - zeroPosition)
+      };
+    }
+
+    function dataBounds(values) {
+      const numbers = values.filter(value => Number.isFinite(value));
+      if (!numbers.length) return { min: -1, max: 1 };
+      return {
+        min: Math.min(0, ...numbers),
+        max: Math.max(0, ...numbers)
+      };
+    }
+
+    function renderAxisLegend() {
+      if (!chart) return;
+
+      const groups = [
+        { title: 'Left Axis: Bankroll', axis: 'cash' },
+        { title: 'Right Axis: Monthly Rates', axis: 'rate' }
+      ];
+
+      axisLegend.innerHTML = groups.map(group => {
+        const items = chart.data.datasets
+          .map((dataset, index) => ({ dataset, index }))
+          .filter(item => item.dataset.yAxisID === group.axis)
+          .map(item => {
+            const label = escapeHtml(item.dataset.label);
+            const active = chart.isDatasetVisible(item.index);
+            const color = item.dataset.borderColor || '#cbd5e1';
+            return `
+              <button type="button" class="legend-toggle ${active ? '' : 'off'}" data-dataset-index="${item.index}" style="color: ${color}" aria-pressed="${String(active)}">
+                <span class="legend-swatch"></span>
+                <span>${label}</span>
+              </button>
+            `;
+          })
+          .join('');
+
+        return `
+          <details class="legend-group" open>
+            <summary>${group.title}</summary>
+            <div class="legend-items">${items}</div>
+          </details>
+        `;
+      }).join('');
+
+      axisLegend.querySelectorAll('.legend-toggle[data-dataset-index]').forEach(button => {
+        button.addEventListener('click', () => {
+          const index = Number(button.dataset.datasetIndex);
+          const dataset = chart.data.datasets[index];
+          const nextVisible = !chart.isDatasetVisible(index);
+          chart.setDatasetVisibility(index, nextVisible);
+          legendVisibility[dataset.label] = nextVisible;
+          chart.update();
+          renderAxisLegend();
+          saveState();
+        });
+      });
+    }
+
+    function renderChartNote() {
+      document.getElementById('chartNote').textContent =
+        'Bankroll starts with initial savings. Income fills budget tiers from bottom to top; locked gates send excess into Bankroll builder until the next tier is safe.';
+    }
+
+    Object.values(inputs).forEach(input => {
+      input.addEventListener('input', () => {
+        if (input.id === 'horizon') {
+          renderSources();
+          renderSummaryMonthOptions();
+          renderTransactions();
+        }
+        recalculate();
+        renderSummary();
+        saveState();
+      });
+    });
+
+    summaryMonth.addEventListener('input', () => {
+      renderSummary();
+      saveState();
+    });
+
+    document.getElementById('addExpenseRule')?.addEventListener('click', () => {
+      addExpenseRule('below');
+    });
+
+    document.getElementById('tab-assumptions').addEventListener('click', () => {
+      setSidebarTab('assumptions');
+    });
+
+    document.getElementById('tab-income').addEventListener('click', () => {
+      setSidebarTab('income');
+    });
+
+    document.getElementById('tab-budget').addEventListener('click', () => {
+      setSidebarTab('budget');
+    });
+
+    document.getElementById('budget-subtab-plan').addEventListener('click', () => {
+      setBudgetTab('plan');
+    });
+
+    document.getElementById('budget-subtab-transactions').addEventListener('click', () => {
+      setBudgetTab('transactions');
+    });
+
+    document.getElementById('budget-subtab-summary').addEventListener('click', () => {
+      setBudgetTab('summary');
+    });
+
+    document.getElementById('addBudgetTier').addEventListener('click', () => {
+      budgetTiers.push(normalizeBudgetTier({
+        label: 'New tier',
+        minimumBankroll: 0,
+        items: [{ label: 'New item', amount: 100 }]
+      }));
+      renderBudgetItems();
+      renderTransactions();
+      recalculate();
+      renderSummary();
+      saveState();
+    });
+
+    document.getElementById('addTransaction').addEventListener('click', () => {
+      transactions.push(normalizeTransaction({
+        month: Number(summaryMonth.value || 1),
+        itemId: flatBudgetItems()[0]?.item.id || '',
+        item: '',
+        vendor: '',
+        amount: 0
+      }));
+      renderTransactions();
+      renderSummary();
+      saveState();
+    });
+
+    document.getElementById('addSource').addEventListener('click', () => {
+      const amounts = Array.from({ length: value('horizon') }, () => 0);
+      sources.push({ name: 'New income source', showOnChart: true, amounts });
+      renderSources();
+      recalculate();
+      saveState();
+    });
+
+    document.getElementById('saveViewButton').addEventListener('click', () => {
+      saveActiveProjection();
+    });
+
+    document.getElementById('duplicateViewButton').addEventListener('click', () => {
+      duplicateActiveProjection();
+    });
+
+    document.getElementById('resetButton').addEventListener('click', () => {
+      applyDefaultInputs();
+      activeSidebarTab = 'assumptions';
+      activeBudgetTab = 'plan';
+      legendVisibility = {};
+      expenseRules = structuredClone(defaultExpenseRules);
+      budgetTiers = structuredClone(defaultBudgetTiers);
+      transactions = [];
+      sources = structuredClone(defaultSources);
+      renderExpenseRules();
+      renderBudgetItems();
+      renderTransactions();
+      renderSummary();
+      renderSources();
+      setSidebarTab(activeSidebarTab);
+      setBudgetTab(activeBudgetTab);
+      recalculate();
+      syncActiveViewSnapshot();
+      renderProjectionTabs();
+      saveState();
+    });
+
+    async function initialize() {
+      await loadState();
+      ensureViews();
+      renderProjectionTabs();
+      renderCurrentState();
+      saveState();
+    }
+
+    initialize();
+  </script>
+</body>
+</html>
