@@ -185,8 +185,8 @@ function buildListView(){
 // ======== SCHEDULE TAB ========
 function buildSchedule(){
   const tl=document.getElementById("timeline");tl.innerHTML="";
-  if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   const listView=document.getElementById("list-view");if(listView)listView.innerHTML="";
+  if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
