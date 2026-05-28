@@ -1202,6 +1202,7 @@
           </div>
         </div>
         <div class="slot-result" id="slot-result">Ready when you are.</div>
+        <div class="slot-result-actions" id="slot-result-actions" aria-live="polite"></div>
         <div class="slot-stage-track" id="slot-stage-track" aria-live="polite">
           <span class="slot-stage-chip" data-stage="jackpot">Miss / Bank / Jackpot</span>
           <span class="slot-stage-chip" data-stage="bucket">Tier + Source</span>
@@ -1256,6 +1257,11 @@
             <label class="slot-field" data-slot-field="value">
               <span>Price</span>
               <input id="slot-form-value" type="number" min="0" step="1" placeholder="0">
+            </label>
+            <label class="slot-field">
+              <span>Time</span>
+              <input id="slot-form-duration" type="number" min="0" step="5" placeholder="0">
+              <em>Minutes to enjoy after winning.</em>
             </label>
             <label class="slot-field" data-slot-field="sponsor">
               <span>Sponsor</span>
@@ -1379,6 +1385,7 @@
             <div>Meetings, breaks, and OOO blocks do not earn points.</div>
             <div>Tiny or trivial tasks still earn a small nonzero award when eligible.</div>
             <div>Bank-builder prizes can fill this month's goal, then stop until next month</div>
+            <div>Bonus reward spins skip the slot reels and start at the tier + payer dice.</div>
           </div>
           <div class="slot-admin-override" id="slot-admin-override">
             <div class="slot-admin-override-head">

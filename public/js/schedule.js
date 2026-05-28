@@ -240,7 +240,8 @@ function syncAddedTaskTimes(){
   });
 }
 
-function insertTaskNow(titleArg, durMinArg){
+function insertTaskNow(titleArg, durMinArg, opts){
+  opts=opts||{};
   const title=titleArg||(function(){const inp=document.getElementById("qa-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
   if(!title)return;
   const durMin=durMinArg||30;
@@ -255,9 +256,8 @@ function insertTaskNow(titleArg, durMinArg){
   const startMin=_freeStart(roundTo15(now()),durMin,meetings);
   const startStr=fmt(startMin);
 
-  const newItem={id,title,type:"task",start:startStr,end:fmt(startMin+durMin),
-    meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",
-    notionUrl:"",priority:"High",tags:[],_pinnedStart:startStr};
+  const newItem=Object.assign({id,title,type:"task",start:startStr,end:fmt(startMin+durMin),
+    _pinnedStart:startStr},schedulePickerFields(durMin,opts));
 
   // Calculate insertion position
   const activeIdx=scheduled.findIndex(isActive);
