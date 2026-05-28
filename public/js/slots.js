@@ -10,6 +10,7 @@
   let sponsorSplitsDraft = [];
   let isSpinning = false;
   let lastPendingBankCents = 0;
+  let refreshSlotsAfterSpin = false;
   let pendingDeleteRewardId = null;
   let pendingTierDelete = null;
   let draggedRewardId = null;
@@ -370,6 +371,19 @@
       const result = document.getElementById("slot-result");
       if(result) result.textContent = e.message;
     }
+  }
+
+  function handleSlotChanged(){
+    if(isSpinning){
+      refreshSlotsAfterSpin = true;
+      return;
+    }
+    loadSlots();
+  }
+
+  async function loadSlotsAfterSpin(){
+    refreshSlotsAfterSpin = false;
+    await loadSlots();
   }
 
   function renderSlots(){
@@ -1525,15 +1539,20 @@
         highlightWinningCells(spinRow, snap);
         animateRewardReveal(spinRow, snap);
         if(bankDelta > 0) {
-          await animateBankPayout(spinRow, snap, bankDelta);
-          if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(bankDelta);
-          else addPendingDeposit(bankDelta);
+          let reserveUpdated = false;
+          const updateReserveAtDropoff = () => {
+            if(reserveUpdated) return;
+            reserveUpdated = true;
+            addPendingDeposit(bankDelta);
+          };
+          await animateBankPayout(spinRow, snap, bankDelta, updateReserveAtDropoff);
+          if(!reserveUpdated) updateReserveAtDropoff();
         }
         setResult(resultText(spinRow, snap));
         slotPlay("win");
         slotPetReact("happy", bankDelta > 0 ? "Bank builder!" : "Bank builder capped.", 2400);
         isSpinning = false;
-        await loadSlots();
+        await loadSlotsAfterSpin();
         return;
       }
       if(!stages.jackpot_hit){
@@ -1544,7 +1563,7 @@
         animateRewardReveal(spinRow, snap);
         setResult(resultText(spinRow, snap));
         isSpinning = false;
-        await loadSlots();
+        await loadSlotsAfterSpin();
         return;
       }
       updateStageTrack("jackpot", "hit");
@@ -1587,7 +1606,7 @@
         slotPlay("emptyBucket");
         slotPetReact("sad", "No rewards there.", 2400);
         isSpinning = false;
-        await loadSlots();
+        await loadSlotsAfterSpin();
         return;
       }
       setResult("Tier and payer locked. Grab the wheel rim and spin it.");
@@ -1595,8 +1614,7 @@
       await animateRewardWheel(spinRow, snap, stages);
       updateStageTrack("reward", "hit");
       if((spinRow.bank_delta_cents || 0) > 0) {
-        if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(spinRow.bank_delta_cents || 0);
-        else addPendingDeposit(spinRow.bank_delta_cents || 0);
+        addPendingDeposit(spinRow.bank_delta_cents || 0);
       }
       resetSlotMachineBoard();
       setResult(resultText(spinRow, snap));
@@ -1614,7 +1632,7 @@
         slotPetReact("happy", "Nice pull.", 2300);
       }
       isSpinning = false;
-      await loadSlots();
+      await loadSlotsAfterSpin();
       if(snap.requires_jackpot_choice) {
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openJackpotChoice(refreshed);
@@ -1624,6 +1642,7 @@
       setResult(e.message);
       slotPlay("error");
       slotPetReact("sad", "Need more points.", 2200);
+      if(refreshSlotsAfterSpin) await loadSlotsAfterSpin();
       if(btn) btn.disabled = false;
     }
   }
@@ -2378,7 +2397,7 @@
     }
   }
 
-  async function animateBankPayout(spinRow, snap, deltaCents){
+  async function animateBankPayout(spinRow, snap, deltaCents, onDeposit){
     const payout = (snap && snap.bank_screen_payout) || {};
     const positions = Array.isArray(payout.positions) ? payout.positions : [];
     if(!positions.length) return;
@@ -2405,7 +2424,7 @@
     const horizontalPromise = playBankLightningGroups(horizontalGroups, reels, "row", "Double Points!");
     const verticalPromise = playBankLightningGroups(verticalGroups, reels, "column", "+1 Bank Unit!");
     const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
-    const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents) : Promise.resolve();
+    const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents, onDeposit) : Promise.resolve();
     await wait(520);
     updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
     const [horizontalLinks, verticalLinks] = await Promise.all([horizontalPromise, verticalPromise]);
@@ -2665,19 +2684,20 @@
     return animateRewardReveal(spinRow, snap);
   }
 
-  async function animateBankReserveDrain(cells, target, deltaCents){
+  async function animateBankReserveDrain(cells, target, deltaCents, onDeposit){
     if(!isSlotsPageActive() || !target) return;
     target.classList.add("receiving");
-    await animateBankPetRunner(cells, target, deltaCents);
+    await animateBankPetRunner(cells, target, deltaCents, onDeposit);
     if(isSlotsPageActive()) showPiggyBankAddAmount(target, deltaCents);
     await wait(420);
     target.classList.remove("receiving");
   }
 
-  async function animateBankPetRunner(cells, target, deltaCents){
+  async function animateBankPetRunner(cells, target, deltaCents, onDeposit){
     const avatar = document.getElementById("slot-pet-avatar");
     if(!avatar || !cells.length || !target) {
       showBankReserveTotalPop(target, deltaCents);
+      if(typeof onDeposit === "function") onDeposit();
       flyBankLights(cells, target, 2, 42);
       await wait(760);
       return;
@@ -2705,6 +2725,8 @@
 
     await moveBankPetRunner(runner, reserve, 260, ordered.length);
     showBankReserveTotalPop(target, deltaCents);
+    if(typeof onDeposit === "function") onDeposit();
+    slotPlay("deposit", { cents: deltaCents });
     runner.classList.add("depositing");
     await wait(220);
     runner.classList.remove("carrying", "depositing");
@@ -3715,11 +3737,18 @@
       slotState.bankUsage.month = (slotState.bankUsage.month || 0) + deltaCents;
       slotState.bankUsage.monthlyRemaining = Math.max(0, (slotState.bankUsage.monthlyGoal || 0) - slotState.bankUsage.month);
     }
+    if(slotState.bankrollGoal && slotState.bankrollGoal.enabled){
+      const goal = slotState.bankrollGoal;
+      const target = goal.target_cents || 0;
+      goal.pending_cents = (goal.pending_cents || 0) + deltaCents;
+      goal.total_cents = (goal.ready_cents || 0) + (goal.pending_cents || 0);
+      goal.remaining_cents = Math.max(0, target - goal.total_cents);
+      goal.progress_percent = target > 0 ? Math.max(0, Math.min(100, Math.round((goal.total_cents / target) * 100))) : 0;
+      goal.funded = target > 0 && goal.total_cents >= target;
+      goal.claimable = !!goal.reward && goal.funded && !goal.completed;
+    }
     renderPiggyBank(true);
-  }
-
-  function hasLoadedSpin(id){
-    return !!(slotState && Array.isArray(slotState.spins) && slotState.spins.some(s => String(s.id) === String(id)));
+    renderBankrollGoalPanel();
   }
 
   async function popPendingDeposit(){
@@ -3948,7 +3977,7 @@
   }
 
   window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits, previewBankAnimationScenario, previewRewardAnimationScenario };
-  document.addEventListener("slot-changed", loadSlots);
+  document.addEventListener("slot-changed", handleSlotChanged);
   window.addEventListener("dcc:data-ready", () => {
     setTimeout(syncCompletedTaskCredits, 250);
   });
