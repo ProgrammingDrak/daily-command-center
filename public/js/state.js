@@ -339,8 +339,8 @@ async function schedulePushedOnDate(ev,targetDate,opts){
 
   // Resolve target state (for meeting times + work-hour bounds)
   let targetState=null;
-  if(targetDate===__todayDate&&window.__PA_STATE__)targetState=window.__PA_STATE__;
-  else if(targetDate===__tomorrowDate&&window.__PA_TOMORROW__)targetState=window.__PA_TOMORROW__;
+  if(targetDate===__todayDate&&window.__DCC_STATE__)targetState=window.__DCC_STATE__;
+  else if(targetDate===__tomorrowDate&&window.__DCC_TOMORROW__)targetState=window.__DCC_TOMORROW__;
   if(!targetState){
     try{const r=await fetch("/api/state/day?date="+encodeURIComponent(targetDate));targetState=await r.json()}catch(e){}
   }
@@ -781,7 +781,7 @@ function openReschedulePopover(id,anchorEl){
 
   // Quick buttons
   pop.querySelectorAll(".resched-btn").forEach(btn=>{
-    btn.addEventListener("click",e=>{
+    btn.addEventListener("click",async e=>{
       e.stopPropagation();
       if(btn.disabled)return;
       const target=btn.dataset.target;
@@ -789,8 +789,13 @@ function openReschedulePopover(id,anchorEl){
       if(target==="today")dateStr=today;
       else if(target==="tomorrow")dateStr=__tomorrowDate;
       if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
-      closePop();
-      rescheduleTaskToDate(id,dateStr);
+      pop.querySelectorAll("button").forEach(b=>{b.disabled=true;});
+      btn.textContent="Moving...";
+      try{
+        await rescheduleTaskToDate(id,dateStr);
+      }finally{
+        closePop();
+      }
     });
   });
   // Custom date

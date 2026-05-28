@@ -200,6 +200,7 @@
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
+  <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
 </div>
 
 <div class="tab-content active" id="tab-schedule">
@@ -1374,6 +1375,24 @@
             <div>Tiny or trivial tasks still earn a small nonzero award when eligible.</div>
             <div>Bank-builder prizes can fill this month's goal, then stop until next month</div>
           </div>
+          <div class="slot-admin-override" id="slot-admin-override">
+            <div class="slot-admin-override-head">
+              <div>
+                <strong>Admin next spin tiles</strong>
+                <span id="slot-override-status">No override queued.</span>
+              </div>
+              <div class="slot-admin-override-actions">
+                <button id="slot-override-miss" class="slot-mini" type="button">Miss grid</button>
+                <button id="slot-override-bank" class="slot-mini" type="button">Bank test</button>
+                <button id="slot-override-jackpot" class="slot-mini" type="button">Jackpot line</button>
+              </div>
+            </div>
+            <div class="slot-override-grid" id="slot-override-grid" aria-label="Next spin tile override"></div>
+            <div class="slot-admin-override-actions">
+              <button id="slot-save-override-btn" class="slot-small-btn primary" type="button">Override next spin</button>
+              <button id="slot-clear-override-btn" class="slot-small-btn" type="button">Clear override</button>
+            </div>
+          </div>
           <label class="slot-rationale-field">
             <span>Shortfall consequence</span>
             <textarea id="slot-shortfall-penalty"></textarea>
@@ -1405,6 +1424,10 @@
       </section>
     </div>
   </div>
+</div>
+
+<div class="tab-content" id="tab-runway">
+  <iframe class="tool-frame" src="/public/tools/quit-runway-simple.html" title="Simple Burn vs Income Runway"></iframe>
 </div>
 
 <div class="footer">
