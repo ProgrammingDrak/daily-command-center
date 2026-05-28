@@ -1,20 +1,12 @@
 
+> daily-command-center@1.0.0 dev
+> npm run start
+
+
 > daily-command-center@1.0.0 start
 > npm run check:db && node pg-schema.js && node server.js
 
 
 > daily-command-center@1.0.0 check:db
 > node scripts/check-db.js
-
-[check-db] Database reachable: postgres://localhost/daily_command_center
-[pg-schema] Creating tables...
-[pg-schema] All tables and indexes created.
-[pg-schema] Done.
-
-  Daily Command Center
-  --------------------
-  Dashboard:  http://localhost:8090
-  Database:   Postgres (via DATABASE_URL)
-  Auth:       Local dev login (drake)
-  Vault:      1 nodes, 0 edges (local-only)
 

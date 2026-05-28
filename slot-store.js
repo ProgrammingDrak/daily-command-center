@@ -32,6 +32,7 @@ const BANK_SCREEN_COUNT_WEIGHTS = [
   [4, 4],
   [5, 1],
 ];
+const SLOT_SYMBOLS = new Set(["MISS", "BANK", "JACKPOT"]);
 const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
 const LEGACY_BANK_BUILDER_KIND = "bank_builder";
@@ -497,6 +498,7 @@ function normalizeSlotSettings(settings = {}) {
     monthly_goal_cents: clampInt(raw.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000),
     shortfall_penalty: String(raw.shortfall_penalty || DEFAULT_SHORTFALL_PENALTY),
     scoring_rationale: String(raw.scoring_rationale || DEFAULT_SCORING_RATIONALE),
+    next_spin_tile_override: normalizeStoredNextSpinTileOverride(raw.next_spin_tile_override || raw.nextSpinTileOverride),
   };
 }
 
@@ -806,6 +808,121 @@ async function updateSettings(workspaceId, userId, body = {}) {
   return accountWithSettings(rows[0]);
 }
 
+async function setNextSpinTileOverride(workspaceId, userId, body = {}) {
+  const override = normalizeNextSpinTileOverride(body, userId);
+  await ensureAccount(workspaceId, userId);
+  const { rows } = await pool.query(
+    `UPDATE slot_accounts
+     SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1
+     RETURNING *`,
+    [workspaceId, JSON.stringify({ next_spin_tile_override: override })]
+  );
+  return {
+    ok: true,
+    override,
+    account: accountWithSettings(rows[0]),
+  };
+}
+
+async function clearNextSpinTileOverride(workspaceId, userId) {
+  await ensureAccount(workspaceId, userId);
+  const { rows } = await pool.query(
+    `UPDATE slot_accounts
+     SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1
+     RETURNING *`,
+    [workspaceId, JSON.stringify({ next_spin_tile_override: null })]
+  );
+  return {
+    ok: true,
+    override: null,
+    account: accountWithSettings(rows[0]),
+  };
+}
+
+function statusForSelectedReward(selected, bankDelta = 0, reserveCost = 0) {
+  if (!selected || selected.kind === "miss") return "miss";
+  if (selected.kind === "bank_builder" || bankDelta > 0 || reserveCost > 0 || selected.requires_confirmation) return "pending";
+  return "awarded";
+}
+
+async function chooseSpinDiceReroll(workspaceId, spinId, body = {}) {
+  const die = String(body.die || body.choice || "").trim().toLowerCase();
+  if (!["tier", "source"].includes(die)) {
+    const err = new Error("Choose tier or source");
+    err.statusCode = 400;
+    throw err;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      "SELECT * FROM slot_spins WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [workspaceId, spinId]
+    );
+    const spinRow = rows[0];
+    if (!spinRow) throw notFound("Spin not found");
+    const snapshot = spinRow.reward_snapshot || {};
+    const stages = snapshot.slot_stages || {};
+    const reroll = stages.dice_reroll || {};
+    const choice = reroll.choices && reroll.choices[die];
+    if (!choice || !choice.reward) {
+      const err = new Error("That die does not have a valid reroll for this bucket");
+      err.statusCode = 400;
+      throw err;
+    }
+    const selected = choice.reward;
+    const reserveCost = reserveCostCents(selected);
+    const nextSnapshot = {
+      ...snapshot,
+      ...selected,
+      source_type: selected.source_type,
+      payment_source: selected.payment_source || (choice.payment_source && choice.payment_source.id) || defaultPaymentSourceForKind(selected.kind),
+      tier_id: selected.tier_id || (choice.tier && choice.tier.id) || "tier_i",
+      slot_stages: {
+        ...stages,
+        payment_source: choice.payment_source,
+        tier: choice.tier,
+        dice_reroll: {
+          ...reroll,
+          selected_choice: die,
+          to: {
+            payment_source: choice.payment_source,
+            tier: choice.tier,
+          },
+        },
+        reward_spin: choice.reward_spin || null,
+      },
+      screen_board: snapshot.screen_board,
+      screen_payline: snapshot.screen_payline,
+      bank_screen_payout: snapshot.bank_screen_payout,
+      screen_override: snapshot.screen_override,
+    };
+    const nextStatus = statusForSelectedReward(selected, spinRow.bank_delta_cents || 0, reserveCost);
+    const { rows: updatedRows } = await client.query(
+      `UPDATE slot_spins
+       SET reward_id=$3,
+           reward_snapshot=$4,
+           status=$5,
+           bank_reserved_cents=$6
+       WHERE workspace_id=$1 AND id=$2
+       RETURNING *`,
+      [workspaceId, spinId, selected.id || null, nextSnapshot, nextStatus, reserveCost]
+    );
+    if (selected.id) await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
+    await client.query("COMMIT");
+    return updatedRows[0];
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 async function createReward(workspaceId, body) {
   const r = normalizeRewardInput(body);
   const { rows } = await pool.query(
@@ -1028,6 +1145,97 @@ function fakeRerollReward(source, tier) {
   });
 }
 
+function bucketForSourceTier(rewards, source, tier) {
+  return (rewards || []).filter(r =>
+    r &&
+    r.eligible &&
+    normalizePaymentSource(r.payment_source, r.kind) === source.id &&
+    String(r.tier_id || "tier_i") === String(tier.id) &&
+    (Number(r.chance_shares ?? r.weight) || 0) > 0
+  );
+}
+
+function chooseBucketAttempt(rewards, settings, rng) {
+  const normalized = normalizeSlotSettings(settings);
+  const source = chooseWeighted(sourceOptions(normalized), "weight", rng) || sourceOptions(normalized)[0];
+  const tier = chooseWeighted(tierOptions(normalized), "weight", rng) || tierOptions(normalized)[0] || DEFAULT_REWARD_TIERS[0];
+  return {
+    source,
+    tier,
+    bucket: bucketForSourceTier(rewards, source, tier),
+  };
+}
+
+function chooseExistingBucketAttempt(rewards, settings, rng) {
+  const normalized = normalizeSlotSettings(settings);
+  const attempts = [];
+  for (const source of sourceOptions(normalized)) {
+    for (const tier of tierOptions(normalized)) {
+      const bucket = bucketForSourceTier(rewards, source, tier);
+      if (!bucket.length) continue;
+      attempts.push({
+        source,
+        tier,
+        bucket,
+        weight: Math.max(0, Number(source.weight) || 0) * Math.max(0, Number(tier.weight) || 0),
+      });
+    }
+  }
+  return chooseWeighted(attempts, "weight", rng) || attempts[0] || null;
+}
+
+function chooseSingleDieRerollAttempt(rewards, settings, firstAttempt, die, rng) {
+  const normalized = normalizeSlotSettings(settings);
+  const attempts = [];
+  if (die === "tier") {
+    for (const tier of tierOptions(normalized)) {
+      if (String(tier.id) === String(firstAttempt.tier.id)) continue;
+      const bucket = bucketForSourceTier(rewards, firstAttempt.source, tier);
+      if (!bucket.length) continue;
+      attempts.push({
+        source: firstAttempt.source,
+        tier,
+        bucket,
+        weight: Math.max(0, Number(tier.weight) || 0),
+      });
+    }
+  } else if (die === "source") {
+    for (const source of sourceOptions(normalized)) {
+      if (String(source.id) === String(firstAttempt.source.id)) continue;
+      const bucket = bucketForSourceTier(rewards, source, firstAttempt.tier);
+      if (!bucket.length) continue;
+      attempts.push({
+        source,
+        tier: firstAttempt.tier,
+        bucket,
+        weight: Math.max(0, Number(source.weight) || 0),
+      });
+    }
+  }
+  return chooseWeighted(attempts, "weight", rng) || attempts[0] || null;
+}
+
+function bucketTotalShares(bucket) {
+  return (bucket || []).reduce((sum, r) => sum + (Number(r.chance_shares ?? r.weight) || 0), 0);
+}
+
+function buildDiceRerollChoice(attempt, die, rng) {
+  if (!attempt || !attempt.bucket || !attempt.bucket.length) return null;
+  const reward = chooseWeighted(attempt.bucket, "chance_shares", rng);
+  return {
+    die,
+    payment_source: attempt.source,
+    tier: attempt.tier,
+    reward,
+    reward_spin: {
+      reward_id: reward && reward.id,
+      chance_shares: reward && (reward.chance_shares || reward.weight || 0),
+      bucket_size: attempt.bucket.length,
+      bucket_total_shares: bucketTotalShares(attempt.bucket),
+    },
+  };
+}
+
 function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   const normalized = normalizeSlotSettings(settings);
   const hit = jackpotHits(normalized, rng);
@@ -1058,38 +1266,71 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
       reroll_credit: false,
     };
   }
-  const source = chooseWeighted(sourceOptions(normalized), "weight", rng) || sourceOptions(normalized)[0];
-  const tier = chooseWeighted(tierOptions(normalized), "weight", rng) || tierOptions(normalized)[0] || DEFAULT_REWARD_TIERS[0];
-  const bucket = (rewards || []).filter(r =>
-    r &&
-    r.eligible &&
-    normalizePaymentSource(r.payment_source, r.kind) === source.id &&
-    String(r.tier_id || "tier_i") === String(tier.id) &&
-    (Number(r.chance_shares ?? r.weight) || 0) > 0
-  );
-  if (!bucket.length) {
+  const firstAttempt = chooseBucketAttempt(rewards, normalized, rng);
+  let finalAttempt = firstAttempt;
+  let diceReroll = null;
+  let selectedChoice = null;
+  if (!firstAttempt.bucket.length) {
+    const sourceChoice = buildDiceRerollChoice(
+      chooseSingleDieRerollAttempt(rewards, normalized, firstAttempt, "source", rng),
+      "source",
+      rng
+    );
+    const tierChoice = buildDiceRerollChoice(
+      chooseSingleDieRerollAttempt(rewards, normalized, firstAttempt, "tier", rng),
+      "tier",
+      rng
+    );
+    selectedChoice = sourceChoice || tierChoice;
+    finalAttempt = selectedChoice
+      ? { source: selectedChoice.payment_source, tier: selectedChoice.tier, bucket: [selectedChoice.reward] }
+      : null;
+    if (finalAttempt || sourceChoice || tierChoice) {
+      diceReroll = {
+        reason: "empty_bucket",
+        from: {
+          payment_source: firstAttempt.source,
+          tier: firstAttempt.tier,
+        },
+        choices: {
+          source: sourceChoice,
+          tier: tierChoice,
+        },
+        default_choice: selectedChoice ? selectedChoice.die : "both",
+        to: finalAttempt ? {
+          payment_source: finalAttempt.source,
+          tier: finalAttempt.tier,
+        } : null,
+      };
+    }
+  }
+  if (!finalAttempt || !finalAttempt.bucket.length) {
     return {
       outcome: "jackpot",
       jackpot_hit: true,
       bank_builder_hit: false,
-      selected: fakeRerollReward(source, tier),
-      source,
-      tier,
-      bucket,
+      selected: fakeMissReward(),
+      source: firstAttempt.source,
+      tier: firstAttempt.tier,
+      bucket: [],
       empty_bucket: true,
-      reroll_credit: true,
+      reroll_credit: false,
+      dice_reroll: null,
     };
   }
+  const { source, tier, bucket } = finalAttempt;
+  const selected = selectedChoice ? selectedChoice.reward : chooseWeighted(bucket, "chance_shares", rng);
   return {
     outcome: "jackpot",
     jackpot_hit: true,
     bank_builder_hit: false,
-    selected: chooseWeighted(bucket, "chance_shares", rng),
+    selected,
     source,
     tier,
     bucket,
     empty_bucket: false,
     reroll_credit: false,
+    dice_reroll: diceReroll,
   };
 }
 
@@ -1101,6 +1342,74 @@ function rewardSymbol(row) {
   if (!row || row.kind === "miss") return "MISS";
   if (row.kind === "bank_builder") return "BANK";
   return "JACKPOT";
+}
+
+function normalizeTileSymbol(value) {
+  const symbol = String(value == null ? "" : value).trim().toUpperCase();
+  if (symbol === "JACK" || symbol === "JP") return "JACKPOT";
+  if (symbol === "B") return "BANK";
+  if (symbol === "M") return "MISS";
+  return symbol;
+}
+
+function normalizeTileBoard(value, strict = false) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value == null ? "" : value).split(/[\s,|]+/).filter(Boolean);
+  if (raw.length !== SLOT_CELL_COUNT) {
+    if (!strict) return null;
+    throw new Error("Tile override needs exactly 15 tiles");
+  }
+  const board = raw.map(normalizeTileSymbol);
+  const invalid = board.find(symbol => !SLOT_SYMBOLS.has(symbol));
+  if (invalid) {
+    if (!strict) return null;
+    throw new Error("Tiles must be MISS, BANK, or JACKPOT");
+  }
+  return board;
+}
+
+function normalizeStoredNextSpinTileOverride(value) {
+  if (!value || typeof value !== "object") return null;
+  const tiles = normalizeTileBoard(value.tiles || value.board || value);
+  if (!tiles) return null;
+  return {
+    tiles,
+    created_at: value.created_at || null,
+    created_by: value.created_by || null,
+  };
+}
+
+function normalizeNextSpinTileOverride(body = {}, userId = null) {
+  if (body && body.clear) return null;
+  const tiles = normalizeTileBoard(body.tiles ?? body.board ?? body.pattern, true);
+  return {
+    tiles,
+    created_at: new Date().toISOString(),
+    created_by: userId || null,
+  };
+}
+
+function overridePayline(board, selected) {
+  if (!selected || selected.kind === "miss" || selected.kind === "bank_builder") return [];
+  const symbol = rewardSymbol(selected);
+  return PAYLINES.find(line => line.every(i => board[i] === symbol)) || [];
+}
+
+function applyTileOverrideToScreen(screen, override, selected, account, bankUsage, screenBankHit) {
+  const stored = normalizeStoredNextSpinTileOverride(override);
+  if (!stored) return { ...screen, override: null };
+  const board = [...stored.tiles];
+  const isMiss = selected.kind === "miss";
+  const canPayBank = screenBankHit && !isMiss;
+  return {
+    board,
+    payline: overridePayline(board, selected),
+    payout: canPayBank
+      ? calculateScreenBankPayout(board, account, bankUsage)
+      : emptyScreenBankPayout(account, bankUsage),
+    override: stored,
+  };
 }
 
 function weightedBankScreenCount() {
@@ -1259,42 +1568,7 @@ async function spin(workspaceId, userId) {
   const outcome = selectThreeStageOutcome(drawPool, settings);
   const selected = outcome.selected;
   const canHitScreenBank = outcome.bank_builder_hit === true;
-  const screen = buildSpinScreen(selected, state.account, state.bankUsage, canHitScreenBank);
-  const bankDelta = outcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
   const reserveCost = outcome.jackpot_hit && !outcome.empty_bucket ? reserveCostCents(selected) : 0;
-  const selectedSnapshot = {
-    ...selected,
-    source_type: bankDelta > 0 ? "slot_screen_bank_builder" : selected.source_type,
-    payment_source: selected.payment_source || (outcome.source && outcome.source.id) || defaultPaymentSourceForKind(selected.kind),
-    tier_id: selected.tier_id || (outcome.tier && outcome.tier.id) || "tier_i",
-    slot_stages: {
-      outcome: outcome.outcome,
-      jackpot_hit: outcome.jackpot_hit,
-      jackpot_hit_rate: settings.jackpot_hit_rate,
-      bank_builder_hit: outcome.bank_builder_hit,
-      bank_builder_hit_rate: settings.bank_builder_hit_rate,
-      payment_source: outcome.source,
-      tier: outcome.tier,
-      empty_bucket: outcome.empty_bucket,
-      reroll_credit: outcome.reroll_credit,
-      reward_spin: outcome.jackpot_hit && !outcome.empty_bucket ? {
-        reward_id: selected.id,
-        chance_shares: selected.chance_shares || selected.weight || 0,
-        bucket_size: outcome.bucket.length,
-        bucket_total_shares: outcome.bucket.reduce((sum, r) => sum + (Number(r.chance_shares ?? r.weight) || 0), 0),
-      } : null,
-    },
-    screen_board: screen.board,
-    screen_payline: screen.payline,
-    bank_screen_payout: screen.payout,
-  };
-  const status = outcome.reroll_credit
-    ? "reroll_credit"
-    : selected.kind === "miss"
-    ? "miss"
-    : selected.kind === "bank_builder" || bankDelta > 0 || reserveCost > 0 || selected.requires_confirmation
-    ? "pending"
-    : "awarded";
   const bankReserved = reserveCost;
   const client = await pool.connect();
   try {
@@ -1307,6 +1581,58 @@ async function spin(workspaceId, userId) {
     const usedRerollCredit = lockedSettings.reroll_credits > 0;
     const lockedSpinCost = usedRerollCredit ? 0 : getSpinCost(account);
     if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough points");
+    const baseScreen = buildSpinScreen(selected, { ...account, settings: lockedSettings }, state.bankUsage, canHitScreenBank);
+    const screen = applyTileOverrideToScreen(
+      baseScreen,
+      lockedSettings.next_spin_tile_override,
+      selected,
+      { ...account, settings: lockedSettings },
+      state.bankUsage,
+      canHitScreenBank
+    );
+    const bankDelta = outcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
+    const selectedSnapshot = {
+      ...selected,
+      source_type: bankDelta > 0 ? "slot_screen_bank_builder" : selected.source_type,
+      payment_source: selected.payment_source || (outcome.source && outcome.source.id) || defaultPaymentSourceForKind(selected.kind),
+      tier_id: selected.tier_id || (outcome.tier && outcome.tier.id) || "tier_i",
+      slot_stages: {
+        outcome: outcome.outcome,
+        jackpot_hit: outcome.jackpot_hit,
+        jackpot_hit_rate: settings.jackpot_hit_rate,
+        bank_builder_hit: outcome.bank_builder_hit,
+        bank_builder_hit_rate: settings.bank_builder_hit_rate,
+        payment_source: outcome.source,
+        tier: outcome.tier,
+        empty_bucket: outcome.empty_bucket,
+        reroll_credit: outcome.reroll_credit,
+        dice_reroll: outcome.dice_reroll,
+        reward_spin: outcome.jackpot_hit && !outcome.empty_bucket ? (
+          outcome.dice_reroll &&
+          outcome.dice_reroll.default_choice &&
+          outcome.dice_reroll.choices &&
+          outcome.dice_reroll.choices[outcome.dice_reroll.default_choice]
+            ? outcome.dice_reroll.choices[outcome.dice_reroll.default_choice].reward_spin
+            : {
+              reward_id: selected.id,
+              chance_shares: selected.chance_shares || selected.weight || 0,
+              bucket_size: outcome.bucket.length,
+              bucket_total_shares: bucketTotalShares(outcome.bucket),
+            }
+        ) : null,
+      },
+      screen_board: screen.board,
+      screen_payline: screen.payline,
+      bank_screen_payout: screen.payout,
+      screen_override: screen.override,
+    };
+    const status = outcome.reroll_credit
+      ? "reroll_credit"
+      : selected.kind === "miss"
+      ? "miss"
+      : selected.kind === "bank_builder" || bankDelta > 0 || reserveCost > 0 || selected.requires_confirmation
+      ? "pending"
+      : "awarded";
     const nextRerollCredits = Math.max(0, lockedSettings.reroll_credits - (usedRerollCredit ? 1 : 0)) + (outcome.reroll_credit ? 1 : 0);
     await client.query(
       `UPDATE slot_accounts
@@ -1314,7 +1640,10 @@ async function spin(workspaceId, userId) {
            settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb,
            updated_at=NOW()
        WHERE workspace_id=$1`,
-      [workspaceId, lockedSpinCost, JSON.stringify({ reroll_credits: nextRerollCredits })]
+      [workspaceId, lockedSpinCost, JSON.stringify({
+        reroll_credits: nextRerollCredits,
+        next_spin_tile_override: null,
+      })]
     );
     const { rows } = await client.query(
       `INSERT INTO slot_spins
@@ -1493,6 +1822,9 @@ module.exports = {
   ensureSchema,
   getState,
   updateSettings,
+  setNextSpinTileOverride,
+  clearNextSpinTileOverride,
+  chooseSpinDiceReroll,
   createReward,
   updateReward,
   deleteReward,
@@ -1504,6 +1836,10 @@ module.exports = {
     buildSpinScreen,
     calculateScreenBankPayout,
     emptyScreenBankPayout,
+    normalizeTileBoard,
+    normalizeNextSpinTileOverride,
+    applyTileOverrideToScreen,
+    chooseSingleDieRerollAttempt,
     normalizeSlotSettings,
     selectThreeStageOutcome,
     chooseWeighted,

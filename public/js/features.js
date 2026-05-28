@@ -467,12 +467,16 @@ function _renderSmallTaskSection(opts){
 
   extras.forEach(ev=>{
     const c=typeof cfg==='function'?cfg(ev.type):{color:'var(--text-muted)',tag:ev.type,cls:''};
-    const card=document.createElement("div");card.className="board-card";
-    card.innerHTML='<div class="bar" style="background:'+c.color+'"></div>'+
-      '<div class="body"><div class="title-row"><span class="ttl">'+ev.title+'</span>'+(typeof srcTag==='function'?srcTag(ev.source):'')+'</div>'+
-      '<div class="meta"><span class="tag '+(c.cls||'')+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span></div></div>'+
-      '<button class="add-btn triv-restore-btn" data-tid="'+ev.id+'">Restore</button>'+
-      '<button class="add-btn triv-flagged-done-btn" data-tid="'+ev.id+'" style="background:var(--green)">Done</button>';
+    const card=document.createElement("div");card.className="board-card small-task-card small-task-flagged";
+    card.innerHTML='<div class="small-task-accent" style="background:'+c.color+'"></div>'+
+      '<div class="small-task-main">'+
+        '<div class="small-task-title-row"><span class="ttl">'+ev.title+'</span>'+(typeof srcTag==='function'?srcTag(ev.source):'')+'</div>'+
+        '<div class="small-task-meta"><span class="tag '+(c.cls||'')+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span></div>'+
+        '<div class="small-task-actions">'+
+          '<button class="add-btn small-task-action triv-restore-btn" data-tid="'+ev.id+'">Restore</button>'+
+          '<button class="add-btn small-task-action small-task-done triv-flagged-done-btn" data-tid="'+ev.id+'">Done</button>'+
+        '</div>'+
+      '</div>';
     card.querySelector(".triv-restore-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialFlag(ev.id)});
     card.querySelector(".triv-flagged-done-btn").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id)});
     el.appendChild(card);
@@ -480,16 +484,21 @@ function _renderSmallTaskSection(opts){
 
   active.forEach(t=>{
     const duration=t.durMin?'<span>'+ms(t.durMin)+'</span>':'';
-    const scheduleBtn=kind==="side_project" ? '<button class="add-btn small-task-schedule-btn" data-tid="'+t.id+'">Schedule</button>' : '';
-    const card=document.createElement("div");card.className="board-card";
-    card.innerHTML='<div class="bar" style="background:'+accent+'"></div>'+
-      '<div class="body"><div class="title-row">'+(typeof renderTaskBankTrivialTitle==="function"?renderTaskBankTrivialTitle(t):'<span class="ttl">'+t.text+'</span>')+'</div>'+
-      '<div class="meta"><span class="tag tag-task">'+label+'</span>'+duration+'</div></div>'+
-      scheduleBtn+
-      '<button class="add-btn small-task-repeat-btn" data-tid="'+t.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
-      '<button class="add-btn triv-check-btn" data-tid="'+t.id+'" style="background:var(--green)">Done</button>'+
-      '<button class="task-bank-icon-btn triv-edit-btn" data-tid="'+t.id+'" title="Edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
-      '<button class="btn-del-task triv-del-btn" data-tid="'+t.id+'" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>';
+    const scheduleBtn=kind==="side_project" ? '<button class="add-btn small-task-action small-task-primary small-task-schedule-btn" data-tid="'+t.id+'">Schedule</button>' : '';
+    const card=document.createElement("div");card.className="board-card small-task-card small-task-"+kind;
+    card.innerHTML='<div class="small-task-accent" style="background:'+accent+'"></div>'+
+      '<div class="small-task-main">'+
+        '<div class="small-task-title-row">'+(typeof renderTaskBankTrivialTitle==="function"?renderTaskBankTrivialTitle(t):'<span class="ttl">'+t.text+'</span>')+'</div>'+
+        '<div class="small-task-meta">'+duration+'<span>'+label+'</span></div>'+
+        '<div class="small-task-actions">'+
+          scheduleBtn+
+          '<button class="add-btn small-task-action small-task-icon small-task-repeat-btn" data-tid="'+t.id+'" title="Turn into a repeat responsibility" aria-label="Turn into a repeat responsibility"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>'+
+          '<button class="add-btn small-task-action small-task-done triv-check-btn" data-tid="'+t.id+'">Done</button>'+
+          '<span class="small-task-actions-spacer"></span>'+
+          '<button class="task-bank-icon-btn triv-edit-btn" data-tid="'+t.id+'" title="Edit" aria-label="Edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
+          '<button class="task-bank-icon-btn danger triv-del-btn" data-tid="'+t.id+'" title="Delete" aria-label="Delete"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
+        '</div>'+
+      '</div>';
     card.querySelector(".triv-check-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
     const repeat=card.querySelector(".small-task-repeat-btn");
     if(repeat)repeat.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask({id:t.id,title:t.text,type:kind,durMin:t.durMin||30,detail:t.detail||""})});
@@ -507,10 +516,16 @@ function _renderSmallTaskSection(opts){
     doneWrap.innerHTML='<summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;padding:6px 0">Done ('+done.length+')</summary>';
     const doneList=document.createElement("div");
     done.forEach(t=>{
-      const card=document.createElement("div");card.className="board-card";card.style.opacity="0.5";
-      card.innerHTML='<div class="bar" style="background:var(--green)"></div>'+
-        '<div class="body"><div class="title-row"><span class="ttl" style="text-decoration:line-through">'+t.text+'</span></div></div>'+
-        '<button class="btn-del-task triv-del-btn" data-tid="'+t.id+'" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>';
+      const card=document.createElement("div");card.className="board-card small-task-card small-task-done-card";card.style.opacity="0.62";
+      card.innerHTML='<div class="small-task-accent" style="background:var(--green)"></div>'+
+        '<div class="small-task-main">'+
+          '<div class="small-task-title-row"><span class="ttl" style="text-decoration:line-through">'+t.text+'</span></div>'+
+          '<div class="small-task-actions small-task-actions-compact">'+
+            '<span class="small-task-meta">Completed</span>'+
+            '<span class="small-task-actions-spacer"></span>'+
+            '<button class="task-bank-icon-btn danger triv-del-btn" data-tid="'+t.id+'" title="Delete" aria-label="Delete"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
+          '</div>'+
+        '</div>';
       card.querySelector(".triv-del-btn").addEventListener("click",e=>{e.stopPropagation();deleteTrivialTask(t.id)});
       doneList.appendChild(card);
     });

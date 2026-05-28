@@ -196,7 +196,6 @@
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
-  <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
@@ -241,6 +240,7 @@
     </select>
     <button class="tab-add">+ Add</button>
   </div>
+  <section class="schedule-delegated-section" id="schedule-delegated-section" style="display:none" aria-label="Delegated"></section>
   <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
   <div class="tl" id="timeline"></div>
   <div id="actual-view" style="display:none"></div>
@@ -877,11 +877,13 @@
       <input type="text" id="dm-delegatee-name" class="delegated-modal-input" maxlength="100" placeholder="Alice Carter" />
       <label class="delegated-modal-label">Delegatee email</label>
       <input type="email" id="dm-delegatee-email" class="delegated-modal-input" maxlength="200" placeholder="alice@example.com" />
+      <label class="delegated-modal-label">Slack target URL</label>
+      <input type="url" id="dm-delegatee-slack-url" class="delegated-modal-input" maxlength="500" placeholder="https://slack.com/app_redirect?..." />
       <label class="delegated-modal-label">Channel</label>
       <select id="dm-channel" class="delegated-modal-input">
-        <option value="manual" selected>Manual (I'll contact them myself)</option>
-        <option value="email">Email (activates in Phase 10.C)</option>
-        <option value="slack">Slack (activates in Phase 10.C)</option>
+        <option value="manual" selected>Manual</option>
+        <option value="email">Email</option>
+        <option value="slack">Slack</option>
       </select>
       <label class="delegated-modal-label">Check-in at</label>
       <input type="datetime-local" id="dm-check-in-at" class="delegated-modal-input" />
@@ -1036,22 +1038,6 @@
       <button class="clk-cancel" id="dm-clock-cancel">Cancel</button>
       <button class="clk-ok" id="dm-clock-ok">OK</button>
     </div>
-  </div>
-</div>
-
-<div class="tab-content" id="tab-delegated">
-  <div class="delegated-header">
-    <h2 class="delegated-title">Delegated</h2>
-    <button class="primary" id="delegated-new-btn">+ New delegated item</button>
-  </div>
-  <div class="delegated-filter-bar">
-    <button class="delegated-filter-btn active" data-filter="all">All</button>
-    <button class="delegated-filter-btn" data-filter="upcoming">Upcoming</button>
-    <button class="delegated-filter-btn" data-filter="overdue">Overdue</button>
-    <button class="delegated-filter-btn" data-filter="done">Done</button>
-  </div>
-  <div class="delegated-list" id="delegated-list">
-    <div class="delegated-empty">No delegated items yet. Click "+ New delegated item" to create one.</div>
   </div>
 </div>
 
@@ -1374,6 +1360,24 @@
             <div>Meetings, breaks, and OOO blocks do not earn points.</div>
             <div>Tiny or trivial tasks still earn a small nonzero award when eligible.</div>
             <div>Bank-builder prizes can fill this month's goal, then stop until next month</div>
+          </div>
+          <div class="slot-admin-override" id="slot-admin-override">
+            <div class="slot-admin-override-head">
+              <div>
+                <strong>Admin next spin tiles</strong>
+                <span id="slot-override-status">No override queued.</span>
+              </div>
+              <div class="slot-admin-override-actions">
+                <button id="slot-override-miss" class="slot-mini" type="button">Miss grid</button>
+                <button id="slot-override-bank" class="slot-mini" type="button">Bank test</button>
+                <button id="slot-override-jackpot" class="slot-mini" type="button">Jackpot line</button>
+              </div>
+            </div>
+            <div class="slot-override-grid" id="slot-override-grid" aria-label="Next spin tile override"></div>
+            <div class="slot-admin-override-actions">
+              <button id="slot-save-override-btn" class="slot-small-btn primary" type="button">Override next spin</button>
+              <button id="slot-clear-override-btn" class="slot-small-btn" type="button">Clear override</button>
+            </div>
           </div>
           <label class="slot-rationale-field">
             <span>Shortfall consequence</span>

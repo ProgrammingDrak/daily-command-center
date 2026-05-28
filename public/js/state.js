@@ -37,13 +37,13 @@ function isActive(ev){return!manualDone.has(ev.id)&&now()>=pt(ev.start)&&now()<p
 function log(type,id,detail){actionLog.push({type,id,detail,ts:new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit",hour12:true})})}
 
 // ======== SOURCE TAGS ========
-const SRC_LABELS={notion:"Notion",gmail:"Gmail"};
-const SRC_CLS={notion:"src-notion",gmail:"src-gmail"};
+const SRC_LABELS={notion:"Notion",gmail:"Gmail",delegated:"Delegated"};
+const SRC_CLS={notion:"src-notion",gmail:"src-gmail",delegated:"src-delegated"};
 function srcTag(sources){
   if(!sources)return'';
   const list=Array.isArray(sources)?sources:[sources];
   if(list.length>1)return'<span class="src-tag src-multi"><span class="src-icon" style="background:var(--amber)"></span>'+list.map(s=>SRC_LABELS[s]||s).join(" + ")+'</span>';
-  const s=list[0];return'<span class="src-tag '+(SRC_CLS[s]||"src-multi")+'"><span class="src-icon" style="background:'+(s==="notion"?"var(--purple)":s==="gmail"?"#f87171":"var(--amber)")+'"></span>'+(SRC_LABELS[s]||s)+'</span>';
+  const s=list[0];return'<span class="src-tag '+(SRC_CLS[s]||"src-multi")+'"><span class="src-icon" style="background:'+(s==="notion"?"var(--purple)":s==="gmail"?"#f87171":s==="delegated"?"var(--cyan)":"var(--amber)")+'"></span>'+(SRC_LABELS[s]||s)+'</span>';
 }
 
 // ======== DETAIL PANEL ========
@@ -339,8 +339,8 @@ async function schedulePushedOnDate(ev,targetDate,opts){
 
   // Resolve target state (for meeting times + work-hour bounds)
   let targetState=null;
-  if(targetDate===__todayDate&&window.__PA_STATE__)targetState=window.__PA_STATE__;
-  else if(targetDate===__tomorrowDate&&window.__PA_TOMORROW__)targetState=window.__PA_TOMORROW__;
+  if(targetDate===__todayDate&&window.__DCC_STATE__)targetState=window.__DCC_STATE__;
+  else if(targetDate===__tomorrowDate&&window.__DCC_TOMORROW__)targetState=window.__DCC_TOMORROW__;
   if(!targetState){
     try{const r=await fetch("/api/state/day?date="+encodeURIComponent(targetDate));targetState=await r.json()}catch(e){}
   }
@@ -781,7 +781,7 @@ function openReschedulePopover(id,anchorEl){
 
   // Quick buttons
   pop.querySelectorAll(".resched-btn").forEach(btn=>{
-    btn.addEventListener("click",e=>{
+    btn.addEventListener("click",async e=>{
       e.stopPropagation();
       if(btn.disabled)return;
       const target=btn.dataset.target;
@@ -789,8 +789,13 @@ function openReschedulePopover(id,anchorEl){
       if(target==="today")dateStr=today;
       else if(target==="tomorrow")dateStr=__tomorrowDate;
       if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
-      closePop();
-      rescheduleTaskToDate(id,dateStr);
+      pop.querySelectorAll("button").forEach(b=>{b.disabled=true;});
+      btn.textContent="Moving...";
+      try{
+        await rescheduleTaskToDate(id,dateStr);
+      }finally{
+        closePop();
+      }
     });
   });
   // Custom date

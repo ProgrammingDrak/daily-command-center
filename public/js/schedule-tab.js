@@ -5,6 +5,7 @@ document.querySelectorAll(".svt-btn").forEach(btn=>{
     document.querySelectorAll(".svt-btn").forEach(b=>b.classList.toggle("active",b.dataset.view===schedView));
     document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
     document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
+    if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
     if(typeof buildScheduleTriage==="function")buildScheduleTriage();
     if(schedView==="actual")buildActualView();
   });
@@ -81,6 +82,7 @@ function buildActualView(){
 // ======== SCHEDULE TAB ========
 function buildSchedule(){
   const tl=document.getElementById("timeline");tl.innerHTML="";
+  if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
@@ -251,6 +253,7 @@ function buildSchedule(){
     if(ev.detail)detailParts.push('<div class="detail-summary">'+ev.detail.replace(/\n/g,'<br>')+'</div>');
     const dLinks=[];
     if(ev.notionUrl)dLinks.push('<a href="'+ev.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
+    if(ev.delegatedItemId&&typeof openDelegatedModal==="function")dLinks.push('<button type="button" class="detail-action-link" onclick="event.stopPropagation();openDelegatedModal(\''+String(ev.delegatedItemId).replace(/'/g,"\\'")+'\')">Edit delegated item</button>');
     if(dLinks.length)detailParts.push('<div class="detail-links">'+dLinks.join('')+'</div>');
     const detailMeta=[];
     if(ev.priority)detailMeta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">Priority: '+ev.priority+'</span>');

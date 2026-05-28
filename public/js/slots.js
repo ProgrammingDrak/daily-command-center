@@ -11,6 +11,8 @@
   let isSpinning = false;
   let lastPendingBankCents = 0;
   let pendingDeleteRewardId = null;
+  let pendingTierDelete = null;
+  let draggedRewardId = null;
   let bankDetailsOpen = false;
   let activeSlotSection = "machine";
   let activeJackpotChoiceSpin = null;
@@ -19,6 +21,7 @@
   let slotPetReactionTimer = null;
   let slotRewardAnimationTimer = null;
   let activeBankPetRunRestore = null;
+  let slotOverrideDraft = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
@@ -67,9 +70,15 @@
     romantic_partner: "Romantic partner",
     either_partner: "Either partner"
   };
-  const SPIN_SYMBOLS = ["MISS","MISS","BANK","MISS","JACKPOT"];
-  const FILLER_SYMBOLS = ["MISS"];
-  const TEASER_SYMBOLS = ["MISS"];
+  const SPIN_SYMBOLS = ["MISS","BANK","MISS","JACKPOT","MISS","MISS","BANK","MISS","JACKPOT"];
+  const FILLER_SYMBOLS = ["MISS","MISS","MISS","BANK","JACKPOT"];
+  const TEASER_SYMBOLS = ["JACKPOT","BANK","MISS"];
+  const OVERRIDE_SYMBOLS = ["MISS","BANK","JACKPOT"];
+  const DEFAULT_OVERRIDE_TILES = [
+    "MISS","MISS","MISS","MISS","MISS",
+    "MISS","MISS","MISS","MISS","MISS",
+    "MISS","MISS","MISS","MISS","MISS"
+  ];
   const PAYLINES = [
     [0,1,2], [1,2,3], [2,3,4],
     [5,6,7], [6,7,8], [7,8,9],
@@ -386,6 +395,10 @@
     return rewardTiers().filter(tier => tier.active !== false);
   }
 
+  function rewardTiersExcept(id){
+    return rewardTiers().filter(tier => String(tier.id) !== String(id));
+  }
+
   function tierById(id){
     return rewardTiers().find(tier => String(tier.id) === String(id)) || activeRewardTiers()[0] || DEFAULT_REWARD_TIERS[0];
   }
@@ -534,6 +547,100 @@
     setText("slot-current-cost", pointLabel(spinCost) + " per spin");
     setText("slot-spin-cost-line", pointLabel(spinCost) + " per spin");
     setText("slot-current-goal", "Jackpot: " + Math.round(jackpotRate * 100) + "%; bank builder: " + Math.round(bankBuilderRate * 100) + "% of non-jackpots.");
+    renderTileOverride();
+  }
+
+  function normalizeOverrideTiles(tiles){
+    const source = Array.isArray(tiles) && tiles.length === 15 ? tiles : DEFAULT_OVERRIDE_TILES;
+    return source.map(symbol => {
+      const normalized = String(symbol || "MISS").trim().toUpperCase();
+      return OVERRIDE_SYMBOLS.includes(normalized) ? normalized : "MISS";
+    });
+  }
+
+  function currentQueuedTileOverride(){
+    const settings = slotState && slotState.account && slotState.account.settings;
+    const override = settings && settings.next_spin_tile_override;
+    return override && Array.isArray(override.tiles) && override.tiles.length === 15 ? override : null;
+  }
+
+  function overrideTileLabel(symbol){
+    if(symbol === "JACKPOT") return "JACK";
+    return symbol;
+  }
+
+  function renderTileOverride(){
+    const grid = document.getElementById("slot-override-grid");
+    if(!grid) return;
+    const queued = currentQueuedTileOverride();
+    if(!slotOverrideDraft) slotOverrideDraft = normalizeOverrideTiles(queued && queued.tiles);
+    const status = document.getElementById("slot-override-status");
+    if(status) {
+      status.textContent = queued
+        ? "Override queued for the next spin."
+        : "No override queued.";
+    }
+    grid.innerHTML = slotOverrideDraft.map((symbol, index) =>
+      '<button class="slot-override-tile" data-index="' + index + '" data-symbol="' + esc(symbol.toLowerCase()) + '" type="button" aria-label="Tile ' + (index + 1) + ': ' + esc(symbol) + '">' +
+        overrideTileLabel(symbol) +
+      '</button>'
+    ).join("");
+    grid.querySelectorAll(".slot-override-tile").forEach(btn => {
+      btn.addEventListener("click", () => cycleOverrideTile(parseInt(btn.dataset.index, 10)));
+    });
+  }
+
+  function cycleOverrideTile(index){
+    if(!slotOverrideDraft) slotOverrideDraft = [...DEFAULT_OVERRIDE_TILES];
+    const current = slotOverrideDraft[index] || "MISS";
+    const next = OVERRIDE_SYMBOLS[(OVERRIDE_SYMBOLS.indexOf(current) + 1) % OVERRIDE_SYMBOLS.length];
+    slotOverrideDraft[index] = next;
+    renderTileOverride();
+  }
+
+  function setOverridePreset(kind){
+    if(kind === "bank"){
+      slotOverrideDraft = [
+        "MISS","BANK","BANK","MISS","JACKPOT",
+        "MISS","MISS","BANK","MISS","MISS",
+        "JACKPOT","MISS","BANK","BANK","MISS"
+      ];
+    } else if(kind === "jackpot"){
+      slotOverrideDraft = [
+        "JACKPOT","JACKPOT","JACKPOT","MISS","BANK",
+        "MISS","BANK","MISS","MISS","JACKPOT",
+        "BANK","MISS","MISS","JACKPOT","MISS"
+      ];
+    } else {
+      slotOverrideDraft = [...DEFAULT_OVERRIDE_TILES];
+    }
+    renderTileOverride();
+  }
+
+  async function saveTileOverride(){
+    if(!slotOverrideDraft) slotOverrideDraft = [...DEFAULT_OVERRIDE_TILES];
+    try {
+      await api("/api/slot/admin/next-spin-tiles", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tiles: slotOverrideDraft })
+      });
+      setResult("Next spin tile override queued.");
+      await loadSlots();
+    } catch(e) {
+      setResult(e.message);
+    }
+  }
+
+  async function clearTileOverride(){
+    try {
+      await api("/api/slot/admin/next-spin-tiles", { method: "DELETE" });
+      slotOverrideDraft = [...DEFAULT_OVERRIDE_TILES];
+      setResult("Next spin tile override cleared.");
+      await loadSlots();
+    } catch(e) {
+      setResult(e.message);
+    }
   }
 
   async function saveSettings(){
@@ -580,6 +687,9 @@
     const el = document.getElementById("slot-tier-manager");
     if(!el || !slotState) return;
     const tiers = rewardTiers();
+    if(pendingTierDelete && !tiers.some(tier => String(tier.id) === String(pendingTierDelete.tierId))){
+      pendingTierDelete = null;
+    }
     el.innerHTML =
       '<div class="slot-tier-manager-head">' +
         '<strong>Jackpot tiers</strong>' +
@@ -597,7 +707,8 @@
             '<button class="slot-mini danger slot-tier-delete" type="button">Delete</button>' +
           '</div>'
         ).join("") +
-      '</div>';
+      '</div>' +
+      tierDeletePanelHtml();
     const add = el.querySelector("#slot-add-tier");
     if(add) add.addEventListener("click", addTier);
     el.querySelectorAll(".slot-tier-label,.slot-tier-weight").forEach(input => {
@@ -608,6 +719,55 @@
     el.querySelectorAll(".slot-tier-down").forEach(btn => btn.addEventListener("click", () => moveTier(btn.closest(".slot-tier-row").dataset.tierId, 1)));
     el.querySelectorAll(".slot-tier-toggle").forEach(btn => btn.addEventListener("click", () => toggleTier(btn.closest(".slot-tier-row").dataset.tierId)));
     el.querySelectorAll(".slot-tier-delete").forEach(btn => btn.addEventListener("click", () => deleteTier(btn.closest(".slot-tier-row").dataset.tierId)));
+    const applyAll = el.querySelector("#slot-tier-delete-apply-all");
+    if(applyAll) applyAll.addEventListener("click", applyTierDeleteTargetToAll);
+    const confirmDelete = el.querySelector("#slot-confirm-tier-delete");
+    if(confirmDelete) confirmDelete.addEventListener("click", confirmTierDelete);
+    const cancelDelete = el.querySelector("#slot-cancel-tier-delete");
+    if(cancelDelete) cancelDelete.addEventListener("click", () => {
+      pendingTierDelete = null;
+      renderTierManager();
+    });
+    el.querySelectorAll(".slot-tier-delete-target").forEach(select => {
+      select.addEventListener("change", () => {
+        if(!pendingTierDelete) return;
+        pendingTierDelete.assignments[String(select.dataset.rewardId)] = select.value;
+      });
+    });
+  }
+
+  function tierDeletePanelHtml(){
+    if(!pendingTierDelete || !slotState) return "";
+    const sourceTier = tierById(pendingTierDelete.tierId);
+    const targets = rewardTiersExcept(pendingTierDelete.tierId);
+    if(!targets.length) return "";
+    const rewards = tierRewards(pendingTierDelete.tierId);
+    const targetOptions = targets.map(tier => '<option value="' + esc(tier.id) + '">' + esc(tier.label) + '</option>').join("");
+    const applyValue = pendingTierDelete.applyTargetId || (targets[0] && targets[0].id) || "";
+    return '<div class="slot-tier-delete-panel" role="dialog" aria-label="Move rewards before deleting tier">' +
+      '<div class="slot-tier-delete-head">' +
+        '<div><strong>Delete ' + esc(sourceTier.label) + '</strong><span>' + rewards.length + ' reward' + (rewards.length === 1 ? '' : 's') + ' need a new tier.</span></div>' +
+        '<div class="slot-tier-delete-apply">' +
+          '<select id="slot-tier-delete-apply-target" aria-label="Apply target tier">' + targetOptions.replace('value="' + esc(applyValue) + '"', 'value="' + esc(applyValue) + '" selected') + '</select>' +
+          '<button class="slot-mini" id="slot-tier-delete-apply-all" type="button">Apply to all</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="slot-tier-delete-list">' +
+        rewards.map(reward => {
+          const selected = pendingTierDelete.assignments[String(reward.id)] || applyValue;
+          return '<label class="slot-tier-delete-reward">' +
+            '<span>' + esc(reward.title || "Reward") + '</span>' +
+            '<select class="slot-tier-delete-target" data-reward-id="' + esc(reward.id) + '" aria-label="Move ' + esc(reward.title || "reward") + ' to tier">' +
+              targetOptions.replace('value="' + esc(selected) + '"', 'value="' + esc(selected) + '" selected') +
+            '</select>' +
+          '</label>';
+        }).join("") +
+      '</div>' +
+      '<div class="slot-tier-delete-actions">' +
+        '<button class="slot-small-btn primary" id="slot-confirm-tier-delete" type="button">Move rewards and delete</button>' +
+        '<button class="slot-small-btn" id="slot-cancel-tier-delete" type="button">Cancel</button>' +
+      '</div>' +
+    '</div>';
   }
 
   function collectTierRows(){
@@ -683,15 +843,80 @@
     saveTierSettings(tiers);
   }
 
+  function tierRewards(id){
+    return ((slotState && slotState.rewards) || [])
+      .filter(r => r && r.kind !== "miss" && String(r.tier_id || "tier_i") === String(id));
+  }
+
+  function defaultDeleteTargetTier(id, tiers){
+    const idx = tiers.findIndex(tier => String(tier.id) === String(id));
+    const target = tiers[idx + 1] || tiers[idx - 1] || tiers.find(tier => String(tier.id) !== String(id));
+    return target ? target.id : "";
+  }
+
   function deleteTier(id){
     const tiers = collectTierRows();
     if(tiers.length <= 1) {
       setResult("Keep at least one tier.");
       return;
     }
-    const activeRewards = (slotState.rewards || []).filter(r => String(r.tier_id || "tier_i") === String(id) && r.active !== false);
-    if(activeRewards.length && !confirm("This tier has active rewards. Move them before deleting?")) return;
-    saveTierSettings(tiers.filter(t => String(t.id) !== String(id)).map((t, i) => ({ ...t, sort: i })));
+    const rewards = tierRewards(id);
+    if(!rewards.length){
+      pendingTierDelete = null;
+      saveTierSettings(tiers.filter(t => String(t.id) !== String(id)).map((t, i) => ({ ...t, sort: i })));
+      return;
+    }
+    const targetTierId = defaultDeleteTargetTier(id, tiers);
+    pendingTierDelete = {
+      tierId: String(id),
+      applyTargetId: targetTierId,
+      assignments: rewards.reduce((map, reward) => {
+        map[String(reward.id)] = targetTierId;
+        return map;
+      }, {})
+    };
+    renderTierManager();
+    const panel = document.querySelector(".slot-tier-delete-panel");
+    if(panel) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function applyTierDeleteTargetToAll(){
+    if(!pendingTierDelete) return;
+    const select = document.getElementById("slot-tier-delete-apply-target");
+    const targetId = select && select.value;
+    if(!targetId) return;
+    pendingTierDelete.applyTargetId = targetId;
+    tierRewards(pendingTierDelete.tierId).forEach(reward => {
+      pendingTierDelete.assignments[String(reward.id)] = targetId;
+    });
+    renderTierManager();
+  }
+
+  async function confirmTierDelete(){
+    if(!pendingTierDelete || !slotState) return;
+    const tiers = collectTierRows();
+    const deletingId = pendingTierDelete.tierId;
+    const assignments = { ...pendingTierDelete.assignments };
+    const rewards = tierRewards(deletingId);
+    const validTargets = new Set(rewardTiersExcept(deletingId).map(tier => String(tier.id)));
+    if(rewards.some(reward => !validTargets.has(String(assignments[String(reward.id)] || "")))){
+      setResult("Choose a destination tier for each reward.");
+      return;
+    }
+    try {
+      for(const reward of rewards){
+        const tierId = assignments[String(reward.id)];
+        const payload = payloadFromReward(reward, { tier_id: tierId });
+        Object.assign(reward, payload);
+        await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      }
+      pendingTierDelete = null;
+      await saveTierSettings(tiers.filter(t => String(t.id) !== String(deletingId)).map((t, i) => ({ ...t, sort: i })));
+      setResult("Tier deleted and rewards moved.");
+    } catch(e) {
+      setResult(e.message);
+      await loadSlots();
+    }
   }
 
   function renderRewards(){
@@ -732,6 +957,7 @@
     list.querySelectorAll(".slot-card-source,.slot-card-tier,.slot-card-shares,.slot-card-active").forEach(input => {
       input.addEventListener("change", () => quickUpdateReward(input.closest(".slot-reward-row")));
     });
+    attachRewardDragHandlers(list);
   }
 
   function rewardCardHtml(r, tierOptionsHtml, sourceOptionsHtml){
@@ -740,7 +966,7 @@
       const locked = r.eligible ? '' : '<span class="slot-locked">' + lockLabel(r.locked_reason) + '</span>';
       const symbol = rewardSymbol(r);
       const oddsLabel = oddsText(r, slotState.rewards || []);
-      return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + '" data-id="' + r.id + '">' +
+      return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + '" data-id="' + r.id + '" draggable="true">' +
         '<div class="slot-reward-main">' +
           '<div class="slot-reward-title"><span class="slot-symbol-badge" data-symbol="' + esc(symbol.toLowerCase()) + '">' + esc(symbol) + '</span>' + esc(r.title) + '</div>' +
           '<div class="slot-reward-meta">' +
@@ -768,6 +994,65 @@
             : '') +
         '</div>' +
       '</div>';
+  }
+
+  function attachRewardDragHandlers(list){
+    list.querySelectorAll(".slot-reward-card").forEach(card => {
+      card.addEventListener("dragstart", event => {
+        draggedRewardId = String(card.dataset.id || "");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedRewardId);
+        card.classList.add("dragging");
+      });
+      card.addEventListener("dragend", () => {
+        draggedRewardId = null;
+        document.querySelectorAll(".slot-tier-column.drag-over").forEach(col => col.classList.remove("drag-over"));
+        card.classList.remove("dragging");
+      });
+    });
+    list.querySelectorAll(".slot-tier-column").forEach(column => {
+      column.addEventListener("dragover", event => {
+        if(!draggedRewardId) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        column.classList.add("drag-over");
+      });
+      column.addEventListener("dragleave", event => {
+        if(column.contains(event.relatedTarget)) return;
+        column.classList.remove("drag-over");
+      });
+      column.addEventListener("drop", event => {
+        event.preventDefault();
+        column.classList.remove("drag-over");
+        const id = event.dataTransfer.getData("text/plain") || draggedRewardId;
+        moveRewardToBucket(id, column.dataset.tierId, column.dataset.source);
+      });
+    });
+  }
+
+  async function moveRewardToBucket(id, tierId, source){
+    const reward = findReward(id);
+    if(!reward || !tierId) return;
+    const nextSource = source || normalizeRewardSource(reward);
+    const sameTier = String(reward.tier_id || "tier_i") === String(tierId);
+    const sameSource = normalizeRewardSource(reward) === nextSource;
+    if(sameTier && sameSource) return;
+    const previous = { ...reward };
+    const payload = payloadFromReward(reward, {
+      payment_source: nextSource,
+      tier_id: tierId
+    });
+    try {
+      Object.assign(reward, payload);
+      renderRewards();
+      await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      setResult("Moved " + (reward.title || "reward") + " to " + tierById(tierId).label + ".");
+      await loadSlots();
+    } catch(e) {
+      Object.assign(reward, previous);
+      renderRewards();
+      setResult(e.message);
+    }
   }
 
   function oddsText(reward, rewards){
@@ -881,7 +1166,9 @@
       const screenBank = snap.source_type === "slot_screen_bank_builder";
       const stages = snap.slot_stages || {};
       const stageLabel = stages.empty_bucket
-        ? "empty bucket -> reroll credit"
+        ? "empty bucket"
+        : stages.dice_reroll
+        ? "dice rerolled -> " + ((stages.payment_source && stages.payment_source.label) || "Source") + " / " + ((stages.tier && stages.tier.label) || "Tier")
         : stages.bank_builder_hit
         ? "bank builder"
         : stages.jackpot_hit === false
@@ -1042,12 +1329,12 @@
     slotPlay("lever");
     try {
       document.querySelectorAll(".slot-stage-chip").forEach(chip => { chip.dataset.state = ""; });
-      const spinRow = await api("/api/slot/spin", { method: "POST" });
-      const snap = spinRow.reward_snapshot || {};
-      const stages = snap.slot_stages || {};
+      let spinRow = await api("/api/slot/spin", { method: "POST" });
+      let snap = spinRow.reward_snapshot || {};
+      let stages = snap.slot_stages || {};
       updateStageTrack("jackpot", "spinning");
       setResult("Spin 1: miss, bank, or jackpot...");
-      await animateReels(firstStageSymbols(stages, snap));
+      await animateReels(firstStageSymbols(stages, snap, spinRow));
       if(stages.bank_builder_hit){
         updateStageTrack("jackpot", "hit");
         const bankDelta = spinRow.bank_delta_cents || 0;
@@ -1082,7 +1369,28 @@
       await animateJackpotBurst();
       setResult("Two dice roll now: one for tier, one for who pays.");
       updateStageTrack("bucket", "spinning");
-      await animateBucketDice(stages);
+      const diceReroll = stages.dice_reroll || null;
+      if(diceReroll && diceReroll.from) {
+        const firstDice = {
+          ...stages,
+          payment_source: diceReroll.from.payment_source,
+          tier: diceReroll.from.tier,
+          empty_bucket: true
+        };
+        const rerollDie = await animateBucketDice(firstDice, {
+          holdForReroll: true,
+          choices: diceReroll.choices || {}
+        });
+        if(!rerollDie) throw new Error("No valid die reroll exists for that bucket");
+        updateStageTrack("bucket", "spinning");
+        setResult((rerollDie === "tier" ? "Tier" : "Paid by") + " die re-rolling. Jackpot stays locked.");
+        spinRow = await chooseDiceReroll(spinRow.id, rerollDie);
+        snap = spinRow.reward_snapshot || {};
+        stages = snap.slot_stages || {};
+        await animateBucketDice(stages, { rerollDie });
+      } else {
+        await animateBucketDice(stages);
+      }
       updateStageTrack("bucket", stages.empty_bucket ? "empty" : "hit");
       slotPlay(stages.empty_bucket ? "emptyBucket" : "tierLock");
       if(stages.empty_bucket){
@@ -1090,33 +1398,21 @@
         await animateReels(resultSymbols(spinRow, snap), { duration: 1700 });
         highlightWinningCells(spinRow, snap);
         animateRewardReveal(spinRow, snap);
-        updateStageTrack("reward", "reroll");
-        slotPlay("rerollCredit");
-        slotPetReact("happy", "Reroll loaded.", 2400);
+        slotPlay("emptyBucket");
+        slotPetReact("sad", "No rewards there.", 2400);
         isSpinning = false;
         await loadSlots();
         return;
       }
-      setResult("Tier and payer locked. Spinning the reward wheel...");
+      setResult("Tier and payer locked. Grab the wheel rim and spin it.");
       updateStageTrack("reward", "spinning");
       await animateRewardWheel(spinRow, snap, stages);
-      setResult("Wheel locked. Final reveal...");
-      await animateReels(resultSymbols(spinRow, snap), { duration: 2400 });
       updateStageTrack("reward", "hit");
-      const bankHit = (spinRow.bank_delta_cents || 0) > 0;
-      if(bankHit) {
-        highlightWinningCells(spinRow, snap);
-        animateRewardReveal(spinRow, snap);
-      }
       if((spinRow.bank_delta_cents || 0) > 0) {
-        await animateBankPayout(spinRow, snap, spinRow.bank_delta_cents || 0);
         if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(spinRow.bank_delta_cents || 0);
         else addPendingDeposit(spinRow.bank_delta_cents || 0);
       }
-      if(!bankHit) {
-        highlightWinningCells(spinRow, snap);
-        animateRewardReveal(spinRow, snap);
-      }
+      resetSlotMachineBoard();
       setResult(resultText(spinRow, snap));
       if((spinRow.bank_delta_cents || 0) > 0) {
         slotPlay("win");
@@ -1146,6 +1442,22 @@
     }
   }
 
+  async function chooseDiceReroll(spinId, die){
+    return api("/api/slot/spins/" + spinId + "/dice-reroll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ die })
+    });
+  }
+
+  function resetSlotMachineBoard(){
+    clearResultHighlights();
+    document.querySelectorAll(".slot-cell").forEach((cell, index) => {
+      setCell(cell, SPIN_SYMBOLS[index % SPIN_SYMBOLS.length]);
+      cell.classList.remove("spinning", "pulse", "stopped", "reveal", "win-hit", "reward-focus", "bank-hit", "bank-horizontal", "bank-vertical");
+    });
+  }
+
   function updateStageTrack(stage, state){
     document.querySelectorAll(".slot-stage-chip").forEach(chip => {
       if(chip.dataset.stage === stage){
@@ -1156,18 +1468,145 @@
     });
   }
 
-  function firstStageSymbols(stages, snap){
+  function firstStageSymbols(stages, snap, spinRow){
     if(stages && stages.bank_builder_hit && snap && Array.isArray(snap.screen_board) && snap.screen_board.length) {
-      return snap.screen_board;
+      return dressScreenBoard(snap.screen_board, spinRow || {}, snap || {}, {
+        mode: "bank",
+        preserveBankSymbols: true
+      });
     }
-    return jackpotStageSymbols(stages && stages.jackpot_hit);
+    const seed = hashCode([
+      spinRow && spinRow.id || 0,
+      spinRow && spinRow.created_at || "",
+      stages && stages.jackpot_hit ? "jackpot" : "miss",
+      snap && snap.title || ""
+    ].join("|"));
+    return jackpotStageSymbols(stages && stages.jackpot_hit, seed);
   }
 
-  function jackpotStageSymbols(hit){
-    const board = Array.from({ length: 15 }, (_, i) => FILLER_SYMBOLS[i % FILLER_SYMBOLS.length]);
-    const line = PAYLINES[hit ? 0 : 3];
-    line.forEach(i => { board[i] = hit ? "JACKPOT" : "MISS"; });
+  function jackpotStageSymbols(hit, seed){
+    const rng = seededRandom(seed || Date.now());
+    const board = randomSlotBoard(rng, hit ? "jackpot" : "miss");
+    const line = PAYLINES[Math.floor(rng() * PAYLINES.length) % PAYLINES.length];
+    if(hit){
+      line.forEach(i => { board[i] = "JACKPOT"; });
+      addScatter(board, rng, { jackpot: 2, bank: 2 }, new Set(line));
+      return scrubAccidentalWins(board, { allowedSymbol: "JACKPOT", allowedLine: line });
+    }
+    const missIndex = Math.floor(rng() * line.length) % line.length;
+    line.forEach((i, index) => { board[i] = index === missIndex ? (rng() < 0.55 ? "MISS" : "BANK") : "JACKPOT"; });
+    addScatter(board, rng, { jackpot: 2 + Math.floor(rng() * 2), bank: 2 + Math.floor(rng() * 2) }, new Set(line));
+    return scrubAccidentalWins(board);
+  }
+
+  function seededRandom(seed){
+    let t = (Number(seed) || 1) >>> 0;
+    return function(){
+      t += 0x6D2B79F5;
+      let x = t;
+      x = Math.imul(x ^ (x >>> 15), x | 1);
+      x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function randomSlotBoard(rng, mode){
+    const weights = mode === "bank"
+      ? [["MISS", 48], ["BANK", 34], ["JACKPOT", 18]]
+      : mode === "bank_display"
+      ? [["MISS", 62], ["JACKPOT", 38]]
+      : mode === "jackpot"
+      ? [["MISS", 48], ["BANK", 18], ["JACKPOT", 34]]
+      : [["MISS", 54], ["BANK", 23], ["JACKPOT", 23]];
+    return Array.from({ length: 15 }, () => weightedSymbol(rng, weights));
+  }
+
+  function weightedSymbol(rng, weights){
+    const total = weights.reduce((sum, row) => sum + row[1], 0);
+    let roll = rng() * total;
+    for(const row of weights){
+      roll -= row[1];
+      if(roll <= 0) return row[0];
+    }
+    return weights[weights.length - 1][0];
+  }
+
+  function addScatter(board, rng, counts, protectedCells){
+    const protectedSet = protectedCells || new Set();
+    const open = Array.from({ length: board.length }, (_, i) => i).filter(i => !protectedSet.has(i));
+    const place = (symbol, count) => {
+      for(let i = 0; i < count && open.length; i++){
+        const pick = Math.floor(rng() * open.length) % open.length;
+        board[open[pick]] = symbol;
+        open.splice(pick, 1);
+      }
+    };
+    place("JACKPOT", counts && counts.jackpot || 0);
+    place("BANK", counts && counts.bank || 0);
+  }
+
+  function scrubAccidentalWins(board, options){
+    const opts = options || {};
+    const allowedLine = opts.allowedLine || [];
+    const allowedKey = allowedLine.join(",");
+    const symbols = opts.symbols || ["JACKPOT", "BANK"];
+    PAYLINES.forEach((line, lineIndex) => {
+      const lineKey = line.join(",");
+      symbols.forEach(symbol => {
+        if(opts.allowedSymbol === symbol && allowedKey === lineKey) return;
+        if(line.every(i => board[i] === symbol)){
+          const index = line[(lineIndex + symbol.length) % line.length];
+          board[index] = symbol === "JACKPOT" ? "BANK" : "MISS";
+        }
+      });
+    });
     return board;
+  }
+
+  function dressScreenBoard(sourceBoard, spinRow, reward, options){
+    const original = Array.isArray(sourceBoard) && sourceBoard.length ? sourceBoard : [];
+    const seed = hashCode([
+      spinRow && spinRow.id || 0,
+      spinRow && spinRow.created_at || "",
+      reward && reward.title || "",
+      reward && reward.kind || "",
+      original.join(",")
+    ].join("|"));
+    const rng = seededRandom(seed);
+    const preserveBanks = options && options.preserveBankSymbols;
+    const mode = preserveBanks
+      ? "bank_display"
+      : options && options.mode || ((spinRow && (spinRow.bank_delta_cents || 0)) || (reward && reward.kind === "bank_builder") ? "bank" : "jackpot");
+    const board = randomSlotBoard(rng, mode);
+    const protectedCells = new Set();
+    const symbol = rewardSymbol(reward || {});
+    const payline = reward && Array.isArray(reward.screen_payline) ? reward.screen_payline : [];
+    payline.forEach(i => {
+      if(i >= 0 && i < board.length) {
+        board[i] = original[i] || symbol;
+        protectedCells.add(i);
+      }
+    });
+    if(preserveBanks){
+      original.forEach((value, index) => {
+        if(value === "BANK") {
+          board[index] = "BANK";
+          protectedCells.add(index);
+        }
+      });
+      board.forEach((value, index) => {
+        if(value === "BANK" && original[index] !== "BANK") board[index] = "MISS";
+      });
+      return scrubAccidentalWins(board, { symbols: ["JACKPOT"] });
+    }
+    original.forEach((value, index) => {
+      if(value && value !== "MISS" && (value === symbol || !protectedCells.has(index))){
+        board[index] = value;
+        if(value === symbol) protectedCells.add(index);
+      }
+    });
+    if(payline.length) return scrubAccidentalWins(board, { allowedSymbol: symbol, allowedLine: payline });
+    return scrubAccidentalWins(board);
   }
 
   function bucketStageSymbols(stages){
@@ -1200,7 +1639,8 @@
     burst.remove();
   }
 
-  async function animateBucketDice(stages){
+  async function animateBucketDice(stages, options){
+    const opts = options || {};
     const frame = document.querySelector(".slot-reels-frame");
     const tier = (stages && stages.tier) || {};
     const source = (stages && stages.payment_source) || {};
@@ -1208,6 +1648,7 @@
     const sourceOptions = PAYMENT_SOURCES.map(s => s.label);
     const tierLabel = tier.label || tierById(tier.id).label || "Tier I";
     const sourceLabelText = source.label || sourceLabel(source.id) || "Self";
+    const rerollDie = opts.rerollDie || null;
     const reels = document.querySelectorAll(".slot-cell");
     const settledSymbols = bucketStageSymbols(stages);
     reels.forEach((cell, index) => {
@@ -1229,8 +1670,8 @@
     await new Promise(resolve => {
       const timer = setInterval(() => {
         const tick = Math.floor((Date.now() - start) / 95);
-        if(tierValue) tierValue.textContent = tierOptions[tick % tierOptions.length] || "Tier I";
-        if(sourceValue) sourceValue.textContent = sourceOptions[(tick + 1) % sourceOptions.length] || "Self";
+        if(tierValue) tierValue.textContent = rerollDie && rerollDie !== "tier" ? tierLabel : (tierOptions[tick % tierOptions.length] || "Tier I");
+        if(sourceValue) sourceValue.textContent = rerollDie && rerollDie !== "source" ? sourceLabelText : (sourceOptions[(tick + 1) % sourceOptions.length] || "Self");
         if(tick % 3 === 0) slotPlay("tick", { tick });
       }, 95);
       setTimeout(() => {
@@ -1242,7 +1683,60 @@
         resolve();
       }, 2400);
     });
-    await wait(1200);
+    if(opts.holdForReroll) {
+      updateStageTrack("bucket", "empty");
+      stage.classList.add("interactive", "reroll-ready");
+      setResult("No rewards in that bucket. Choose which die to re-roll.");
+      const note = document.createElement("div");
+      note.className = "slot-dice-note";
+      note.textContent = "No rewards live in that bucket.";
+      stage.appendChild(note);
+      const choices = opts.choices || {};
+      stage.querySelectorAll(".slot-jackpot-die").forEach(dieEl => {
+        const dieName = dieEl.dataset.die;
+        const hasChoice = !!choices[dieName];
+        const btn = document.createElement("button");
+        btn.className = "slot-die-reroll-btn";
+        btn.type = "button";
+        btn.disabled = !hasChoice;
+        btn.textContent = hasChoice ? "Re-roll" : "No match";
+        btn.setAttribute("aria-label", hasChoice ? "Re-roll " + (dieName === "tier" ? "tier die" : "paid by die") : "No valid " + dieName + " reroll");
+        dieEl.appendChild(btn);
+      });
+      const firstButton = stage.querySelector(".slot-die-reroll-btn:not(:disabled)");
+      if(firstButton) firstButton.focus();
+      slotPlay("emptyBucket");
+      if(!firstButton) {
+        await wait(1600);
+        stage.classList.add("leaving");
+        await wait(320);
+        stage.remove();
+        return null;
+      }
+      const selectedDie = await new Promise(resolve => {
+        const finish = event => {
+          const btn = event && event.target && event.target.closest ? event.target.closest(".slot-die-reroll-btn") : null;
+          if(!btn || btn.disabled) return;
+          if(event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+          if(event) event.preventDefault();
+          stage.removeEventListener("click", finish);
+          stage.removeEventListener("keydown", finish);
+          const die = btn.closest(".slot-jackpot-die");
+          resolve((die && die.dataset.die) || "source");
+        };
+        stage.addEventListener("click", finish);
+        stage.addEventListener("keydown", finish);
+      });
+      stage.classList.remove("reroll-ready");
+      stage.classList.add("reroll-picked");
+      slotPlay("lever");
+      stage.classList.add("leaving");
+      await wait(320);
+      stage.remove();
+      return selectedDie;
+    } else {
+      await wait(1200);
+    }
     stage.classList.add("leaving");
     await wait(320);
     stage.remove();
@@ -1269,25 +1763,194 @@
     const selectedTitle = snap && snap.title ? snap.title : "Reward";
     const wheel = document.createElement("div");
     wheel.className = "slot-reward-wheel-stage";
-    const options = (bucket.length ? bucket : [{ id: selectedId || "selected", title: selectedTitle }]).slice(0, 12);
+    frame.classList.add("wheel-active");
+    const options = rewardWheelOptions(bucket, selectedId, selectedTitle);
+    const selectedIndex = Math.max(0, options.findIndex(reward => selectedId && String(reward.id) === selectedId));
+    const segmentAngle = 360 / Math.max(1, options.length);
     const optionHtml = options.map((reward, index) => {
-      const angle = (360 / Math.max(1, options.length)) * index;
+      const angle = segmentAngle * index;
       const selected = selectedId && String(reward.id) === selectedId;
-      return '<span class="slot-wheel-option ' + (selected ? 'selected' : '') + '" style="--slot-wheel-angle:' + angle + 'deg">' + esc(reward.title || "Reward") + '</span>';
+      return '<span class="slot-wheel-option" data-wheel-option-index="' + index + '" data-wheel-selected="' + (selected ? 'true' : 'false') + '" style="--slot-wheel-angle:' + angle + 'deg">' + esc(reward.title || "Reward") + '</span>';
     }).join("");
     wheel.innerHTML =
       '<div class="slot-wheel-pointer">Reward</div>' +
-      '<div class="slot-wheel-disc">' + optionHtml + '<strong>' + esc(selectedTitle) + '</strong></div>' +
-      '<div class="slot-wheel-caption">' + esc(options.length) + ' possible reward' + (options.length === 1 ? '' : 's') + ' in this bucket</div>';
+      '<div class="slot-wheel-ticker" aria-hidden="true"></div>' +
+      '<div class="slot-wheel-disc" role="button" tabindex="0" aria-label="Spin reward wheel">' + optionHtml + '</div>' +
+      '<strong class="slot-wheel-prize" data-placeholder="true">SPIN</strong>' +
+      '<div class="slot-wheel-announcement" hidden>' +
+        '<span>Won</span>' +
+        '<strong></strong>' +
+        '<button class="slot-wheel-ack" type="button">Nice</button>' +
+      '</div>';
     frame.appendChild(wheel);
-    slotPlay("reelStart");
-    await wait(2600);
-    wheel.classList.add("locked");
+    const disc = wheel.querySelector(".slot-wheel-disc");
+    slotPlay("tierLock");
+    await spinWheelByDrag(disc, wheel, selectedIndex, segmentAngle);
+    wheel.classList.add("locked", "prize-locked");
+    const selectedOption = wheel.querySelector('[data-wheel-selected="true"]');
+    if(selectedOption) selectedOption.classList.add("selected");
+    const prize = wheel.querySelector(".slot-wheel-prize");
+    if(prize) {
+      prize.textContent = selectedTitle;
+      prize.dataset.placeholder = "false";
+    }
+    const announcement = wheel.querySelector(".slot-wheel-announcement");
+    const announcementTitle = announcement && announcement.querySelector("strong");
+    if(announcementTitle) announcementTitle.textContent = selectedTitle;
+    if(announcement) announcement.hidden = false;
+    setResult("You won: " + selectedTitle);
     slotPlay("rewardReveal");
-    await wait(1150);
+    await waitForWheelAcknowledgement(wheel);
     wheel.classList.add("leaving");
     await wait(340);
     wheel.remove();
+    frame.classList.remove("wheel-active");
+  }
+
+  function waitForWheelAcknowledgement(wheel){
+    const button = wheel && wheel.querySelector(".slot-wheel-ack");
+    if(!button) return wait(900);
+    button.focus();
+    return new Promise(resolve => {
+      const finish = event => {
+        if(event && event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+        if(event) event.preventDefault();
+        button.removeEventListener("click", finish);
+        button.removeEventListener("keydown", finish);
+        resolve();
+      };
+      button.addEventListener("click", finish);
+      button.addEventListener("keydown", finish);
+    });
+  }
+
+  function rewardWheelOptions(bucket, selectedId, selectedTitle){
+    const selectedKey = selectedId == null ? "" : String(selectedId);
+    const source = Array.isArray(bucket) && bucket.length ? bucket : [];
+    if(!source.length) return [{ id: selectedKey || "selected", title: selectedTitle || "Reward" }];
+    const selectedIndex = source.findIndex(reward => selectedKey && String(reward.id) === selectedKey);
+    if(source.length <= 12) {
+      if(selectedIndex >= 0) return source;
+      return source.slice(0, 11).concat({ id: selectedKey || "selected", title: selectedTitle || "Reward" }).slice(0, 12);
+    }
+    if(selectedIndex >= 0) {
+      const start = Math.max(0, Math.min(source.length - 12, selectedIndex - 6));
+      return source.slice(start, start + 12);
+    }
+    return source.slice(0, 11).concat({ id: selectedKey || "selected", title: selectedTitle || "Reward" });
+  }
+
+  function spinWheelByDrag(disc, wheel, selectedIndex, segmentAngle){
+    if(!disc) return wait(1200);
+    let rotation = 0;
+    let dragging = false;
+    let lastAngle = 0;
+    let lastTime = 0;
+    let velocity = 0;
+    let lastTick = 0;
+    const setRotation = value => {
+      rotation = value;
+      disc.style.transform = "rotate(" + rotation + "deg)";
+      disc.style.setProperty("--slot-wheel-rotation", rotation + "deg");
+      const tick = Math.floor((((rotation % 360) + 360) % 360) / Math.max(1, segmentAngle));
+      if(tick !== lastTick) {
+        lastTick = tick;
+        slotPlay("tick", { tick });
+        if(wheel) {
+          wheel.classList.remove("ticking");
+          void wheel.offsetWidth;
+          wheel.classList.add("ticking");
+        }
+      }
+    };
+    const pointerAngle = event => {
+      const rect = disc.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      return Math.atan2(event.clientY - cy, event.clientX - cx) * 180 / Math.PI;
+    };
+    return new Promise(resolve => {
+      const finish = () => {
+        disc.removeEventListener("pointerdown", onPointerDown);
+        disc.removeEventListener("keydown", onKeyDown);
+        resolve();
+      };
+      const onPointerMove = event => {
+        if(!dragging) return;
+        const now = performance.now();
+        const angle = pointerAngle(event);
+        let delta = angle - lastAngle;
+        if(delta > 180) delta -= 360;
+        if(delta < -180) delta += 360;
+        const dt = Math.max(16, now - lastTime);
+        velocity = delta / dt;
+        lastAngle = angle;
+        lastTime = now;
+        setRotation(rotation + delta);
+      };
+      const onPointerUp = event => {
+        if(!dragging) return;
+        dragging = false;
+        disc.classList.remove("grabbing");
+        try { disc.releasePointerCapture(event.pointerId); } catch(e) {}
+        disc.removeEventListener("pointermove", onPointerMove);
+        disc.removeEventListener("pointerup", onPointerUp);
+        disc.removeEventListener("pointercancel", onPointerUp);
+        resolveWheelSpin(rotation, velocity, selectedIndex, segmentAngle, setRotation).then(finish);
+      };
+      const onPointerDown = event => {
+        event.preventDefault();
+        dragging = true;
+        lastAngle = pointerAngle(event);
+        lastTime = performance.now();
+        velocity = 0;
+        disc.classList.add("grabbing");
+        slotPlay("reelStart");
+        try { disc.setPointerCapture(event.pointerId); } catch(e) {}
+        disc.addEventListener("pointermove", onPointerMove);
+        disc.addEventListener("pointerup", onPointerUp);
+        disc.addEventListener("pointercancel", onPointerUp);
+      };
+      const onKeyDown = event => {
+        if(event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        slotPlay("reelStart");
+        velocity = 0.9;
+        resolveWheelSpin(rotation, velocity, selectedIndex, segmentAngle, setRotation).then(finish);
+      };
+      disc.addEventListener("pointerdown", onPointerDown);
+      disc.addEventListener("keydown", onKeyDown);
+      disc.focus();
+    });
+  }
+
+  function resolveWheelSpin(startRotation, velocity, selectedIndex, segmentAngle, setRotation){
+    const direction = velocity < -0.04 ? -1 : 1;
+    const selectedAngle = selectedIndex * segmentAngle;
+    const targetModulo = -selectedAngle;
+    const minTurns = 3 + Math.min(4, Math.floor(Math.abs(velocity) * 9));
+    let target = targetModulo + direction * minTurns * 360;
+    if(direction > 0) {
+      while(target <= startRotation + 540) target += 360;
+    } else {
+      while(target >= startRotation - 540) target -= 360;
+    }
+    const duration = Math.max(1700, Math.min(4200, 2200 + Math.abs(velocity) * 1100));
+    const start = performance.now();
+    return new Promise(resolve => {
+      const step = now => {
+        const t = Math.min(1, (now - start) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        setRotation(startRotation + (target - startRotation) * eased);
+        if(t < 1) {
+          requestAnimationFrame(step);
+        } else {
+          setRotation(target);
+          resolve();
+        }
+      };
+      requestAnimationFrame(step);
+    });
   }
 
   function animateReels(finalSymbols, options){
@@ -1344,29 +2007,25 @@
 
   function resultSymbols(spinRow, reward){
     if(reward && Array.isArray(reward.screen_board) && reward.screen_board.length){
-      return reward.screen_board;
+      return dressScreenBoard(reward.screen_board, spinRow || {}, reward || {});
     }
     const seed = hashCode([spinRow.id || 0, spinRow.created_at || "", reward.title || "", reward.kind || ""].join("|"));
-    const board = Array.from({ length: 15 }, (_, i) => FILLER_SYMBOLS[(seed + i * 3) % FILLER_SYMBOLS.length]);
+    const rng = seededRandom(seed);
     const symbol = rewardSymbol(reward);
     const isMiss = spinRow.status === "miss" || reward.kind === "miss";
 
     if(isMiss){
-      const teaserA = TEASER_SYMBOLS[seed % TEASER_SYMBOLS.length];
-      const teaserB = TEASER_SYMBOLS[(seed + 3) % TEASER_SYMBOLS.length];
-      const teaserC = TEASER_SYMBOLS[(seed + 5) % TEASER_SYMBOLS.length];
-      board[(seed + 1) % 15] = teaserA;
-      board[(seed + 7) % 15] = teaserA;
-      board[(seed + 4) % 15] = teaserB;
-      board[(seed + 11) % 15] = teaserC;
-      return board;
+      return jackpotStageSymbols(false, seed);
     }
 
-    const line = PAYLINES[seed % PAYLINES.length];
+    const board = randomSlotBoard(rng, symbol === "BANK" ? "bank" : "jackpot");
+    const line = PAYLINES[Math.floor(rng() * PAYLINES.length) % PAYLINES.length];
     line.forEach(i => { board[i] = symbol; });
-    board[(seed + 5) % 15] = TEASER_SYMBOLS[(seed + 2) % TEASER_SYMBOLS.length];
-    board[(seed + 9) % 15] = TEASER_SYMBOLS[(seed + 4) % TEASER_SYMBOLS.length];
-    return board;
+    addScatter(board, rng, {
+      jackpot: symbol === "JACKPOT" ? 2 : 2 + Math.floor(rng() * 2),
+      bank: symbol === "BANK" ? 2 : 2 + Math.floor(rng() * 2)
+    }, new Set(line));
+    return scrubAccidentalWins(board, { allowedSymbol: symbol, allowedLine: line });
   }
 
   function winningPositions(spinRow, snap){
@@ -2238,7 +2897,7 @@
     if(stages.empty_bucket) {
       const source = stages.payment_source && stages.payment_source.label ? stages.payment_source.label : sourceLabel(snap.payment_source);
       const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
-      return source + " " + tier + " was empty. Free reroll credit awarded.";
+      return source + " " + tier + " was empty. No jackpot reroll; roll the dice again after adding rewards to a bucket.";
     }
     const payout = (snap && snap.bank_screen_payout) || {};
     const bankDelta = spinRow.bank_delta_cents || 0;
@@ -2769,6 +3428,16 @@
     updateSlotSoundButton();
     const saveSettingsBtn = document.getElementById("slot-save-settings-btn");
     if(saveSettingsBtn) saveSettingsBtn.addEventListener("click", saveSettings);
+    const saveOverrideBtn = document.getElementById("slot-save-override-btn");
+    if(saveOverrideBtn) saveOverrideBtn.addEventListener("click", saveTileOverride);
+    const clearOverrideBtn = document.getElementById("slot-clear-override-btn");
+    if(clearOverrideBtn) clearOverrideBtn.addEventListener("click", clearTileOverride);
+    const missOverrideBtn = document.getElementById("slot-override-miss");
+    if(missOverrideBtn) missOverrideBtn.addEventListener("click", () => setOverridePreset("miss"));
+    const bankOverrideBtn = document.getElementById("slot-override-bank");
+    if(bankOverrideBtn) bankOverrideBtn.addEventListener("click", () => setOverridePreset("bank"));
+    const jackpotOverrideBtn = document.getElementById("slot-override-jackpot");
+    if(jackpotOverrideBtn) jackpotOverrideBtn.addEventListener("click", () => setOverridePreset("jackpot"));
     const pendingBtn = document.getElementById("slot-pending-deposit");
     if(pendingBtn) pendingBtn.addEventListener("click", togglePiggyBankDetails);
     const sweepBtn = document.getElementById("slot-bank-sweep-btn");
