@@ -10,6 +10,7 @@
   let sponsorSplitsDraft = [];
   let isSpinning = false;
   let lastPendingBankCents = 0;
+  let refreshSlotsAfterSpin = false;
   let pendingDeleteRewardId = null;
   let pendingTierDelete = null;
   let draggedRewardId = null;
@@ -42,13 +43,14 @@
     { id: "free", label: "Free" }
   ];
   const DEFAULT_REWARD_TIERS = [
-    { id: "tier_i", label: "Tier I", weight: 36, active: true },
-    { id: "tier_ii", label: "Tier II", weight: 24, active: true },
-    { id: "tier_iii", label: "Tier III", weight: 16, active: true },
-    { id: "tier_iv", label: "Tier IV", weight: 10, active: true },
-    { id: "tier_v", label: "Tier V", weight: 6, active: true },
-    { id: "tier_vi", label: "Tier VI", weight: 3, active: true }
+    { id: "tier_i", label: "Tier 1", weight: 36, active: true },
+    { id: "tier_ii", label: "Tier 2", weight: 24, active: true },
+    { id: "tier_iii", label: "Tier 3", weight: 16, active: true },
+    { id: "tier_iv", label: "Tier 4", weight: 10, active: true },
+    { id: "tier_v", label: "Tier 5", weight: 8, active: true },
+    { id: "tier_vi", label: "Tier 6", weight: 6, active: true }
   ];
+  const TIER_PERCENT_TOTAL = 100;
   const FORM_SUBTITLES = {
     miss: "No-prize outcome",
     free: "Free outcome",
@@ -83,7 +85,23 @@
     [0,1,2], [1,2,3], [2,3,4],
     [5,6,7], [6,7,8], [7,8,9],
     [10,11,12], [11,12,13], [12,13,14],
-    [0,6,12], [2,6,10], [4,8,12], [2,8,14]
+    [0,5,10], [1,6,11], [2,7,12], [3,8,13], [4,9,14]
+  ];
+  const BANKROLL_ICONS = [
+    { id: "tickets", label: "Concert tickets", paths: ['M4 7h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4V7zm5 2v8m3-8v8'] },
+    { id: "headphones", label: "Headphones", paths: ['M4 13a8 8 0 0 1 16 0v5a3 3 0 0 1-3 3h-1v-7h4M4 14h4v7H7a3 3 0 0 1-3-3v-5'] },
+    { id: "tech", label: "Technology", paths: ['M4 6h16v10H4V6zm6 13h4m-7 0h10'] },
+    { id: "games", label: "Video games", paths: ['M7 10h10a5 5 0 0 1 4 8l-1 1a2 2 0 0 1-3-.5L15.5 16h-7L7 18.5a2 2 0 0 1-3 .5l-1-1a5 5 0 0 1 4-8zm0 3v4m-2-2h4m8-1h.1m2 2h.1'] },
+    { id: "sports", label: "Sports", paths: ['M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm-6 6c4 1 8 5 9 9M15 4c-2 5-6 9-11 10m6-10c3 2 6 5 8 9'] },
+    { id: "clothes", label: "Clothes", paths: ['M9 4h6l2 2 4 2-2 5-2-1v8H7v-8l-2 1-2-5 4-2 2-2zm0 0a3 3 0 0 0 6 0'] },
+    { id: "shoes", label: "Shoes", paths: ['M4 14c4 0 6-2 8-5l3 5h5a2 2 0 0 1 2 2v2H5a3 3 0 0 1-3-3v-1h2zm8 0l2-2'] },
+    { id: "travel", label: "Travel", paths: ['M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-9 0h10a2 2 0 0 1 2 2v10H5V9a2 2 0 0 1 2-2zm2 14V7m6 14V7'] },
+    { id: "food", label: "Food", paths: ['M7 3v8m3-8v8M5 3v5a4 4 0 0 0 4 4v9m8-18v18m0-18a4 7 0 0 0 0 14'] },
+    { id: "camera", label: "Camera", paths: ['M4 8h4l2-3h4l2 3h4v11H4V8zm8 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z'] },
+    { id: "book", label: "Books", paths: ['M5 5h6a3 3 0 0 1 3 3v12a3 3 0 0 0-3-3H5V5zm14 0h-5a3 3 0 0 0-3 3'] },
+    { id: "home", label: "Home", paths: ['M3 11l9-8 9 8m-16-1v10h14V10M9 20v-6h6v6'] },
+    { id: "tools", label: "Tools", paths: ['M14 6l4-4 4 4-4 4-4-4zM3 21l8-8m2-2l2-2M6 4l4 4'] },
+    { id: "gift", label: "Gift", paths: ['M4 10h16v10H4V10zm8 0v10M5 7h14v3H5V7zm7 0c-3 0-4-4-1-4 2 0 1 4 1 4zm0 0c3 0 4-4 1-4-2 0-1 4-1 4z'] }
   ];
 
   function money(cents){
@@ -98,6 +116,42 @@
     return String(s == null ? "" : s).replace(/[&<>"']/g, ch => ({
       "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
     })[ch]);
+  }
+
+  function bankrollIconById(id){
+    return BANKROLL_ICONS.find(icon => icon.id === id) || BANKROLL_ICONS[BANKROLL_ICONS.length - 1];
+  }
+
+  function inferBankrollIconId(text){
+    const raw = String(text || "").toLowerCase();
+    if(/concert|ticket|show|event|music|festival/.test(raw)) return "tickets";
+    if(/headphone|earbud|audio|speaker/.test(raw)) return "headphones";
+    if(/laptop|computer|phone|tablet|tech|monitor|keyboard|desk/.test(raw)) return "tech";
+    if(/game|gaming|console|controller|switch|playstation|xbox/.test(raw)) return "games";
+    if(/sport|ball|tennis|golf|bike|fitness|gym|run/.test(raw)) return "sports";
+    if(/clothes|shirt|jacket|pants|dress|hoodie|coat/.test(raw)) return "clothes";
+    if(/shoe|sneaker|boot/.test(raw)) return "shoes";
+    if(/trip|travel|hotel|flight|vacation|staycation/.test(raw)) return "travel";
+    if(/dinner|food|coffee|meal|restaurant|takeout/.test(raw)) return "food";
+    if(/camera|photo|lens/.test(raw)) return "camera";
+    if(/book|course|class|workshop/.test(raw)) return "book";
+    if(/home|office|room|furniture/.test(raw)) return "home";
+    if(/tool|gear|hardware|upgrade/.test(raw)) return "tools";
+    return "gift";
+  }
+
+  function bankrollIconSvg(id){
+    const icon = bankrollIconById(id);
+    return '<svg class="slot-bankroll-icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+      icon.paths.map(path => '<path d="' + esc(path) + '"></path>').join("") +
+    '</svg>';
+  }
+
+  function bankrollIconOptions(selectedId){
+    const selected = selectedId || "gift";
+    return BANKROLL_ICONS.map(icon =>
+      '<option value="' + esc(icon.id) + '" ' + (icon.id === selected ? 'selected' : '') + '>' + esc(icon.label) + '</option>'
+    ).join("");
   }
 
   function slotPetGlyph(base){
@@ -327,6 +381,7 @@
     const credits = account.point_balance || 0;
     setText("slot-credit-balance", String(credits));
     renderPiggyBank(false);
+    renderBankrollGoalPanel();
     renderSettings();
     const badge = document.getElementById("slots-credit-badge");
     if(badge){
@@ -338,22 +393,42 @@
     setText("slot-daily-cap", "Bank Building: " + money(bu.today || 0) + " today; " + money(bu.week || 0) + " this week");
     setText("slot-weekly-cap", "Monthly Discretionary Spending: " + money(bu.month || 0) + " / " + money(bu.monthlyGoal || 0) + " unlocked; " + money(bu.monthlyRemaining || 0) + " still locked");
     setText("slot-shortfall-line", "Shortfall consequence: " + (constants.shortfallPenalty || "Leftover goal amount gets redirected."));
+    renderBankrollManager();
     renderTierManager();
     renderRewards();
     if(!isSpinning) renderHistory();
     const btn = document.getElementById("slot-spin-btn");
     const spinCost = (slotState.constants && slotState.constants.spinCost) || 1;
     const rerolls = (slotState.constants && slotState.constants.rerollCredits) || ((slotState.account && slotState.account.settings && slotState.account.settings.reroll_credits) || 0);
+    const jackpotCredits = (slotState.constants && slotState.constants.jackpotSpinCredits) || ((slotState.account && slotState.account.settings && slotState.account.settings.jackpot_spin_credits) || 0);
     if(btn) {
-      btn.disabled = isSpinning || (credits < spinCost && rerolls <= 0);
-      btn.textContent = rerolls > 0 ? "Free reroll (" + rerolls + ")" : "Spin (" + pointLabel(spinCost) + ")";
+      btn.disabled = isSpinning || (credits < spinCost && rerolls <= 0 && jackpotCredits <= 0);
+      btn.textContent = jackpotCredits > 0
+        ? "Jackpot spin (" + jackpotCredits + ")"
+        : rerolls > 0
+        ? "Free reroll (" + rerolls + ")"
+        : "Spin (" + pointLabel(spinCost) + ")";
     }
+  }
+
+  function handleSlotChanged(){
+    if(isSpinning){
+      refreshSlotsAfterSpin = true;
+      return;
+    }
+    loadSlots();
+  }
+
+  async function loadSlotsAfterSpin(){
+    refreshSlotsAfterSpin = false;
+    await loadSlots();
   }
 
   function switchSlotSection(section){
     activeSlotSection = section || "machine";
     applySlotSection();
     if(activeSlotSection === "rewards") renderRewards();
+    if(activeSlotSection === "rewards") renderBankrollManager();
     if(activeSlotSection === "rules") {
       renderSettings();
       renderHistory();
@@ -393,6 +468,66 @@
 
   function activeRewardTiers(){
     return rewardTiers().filter(tier => tier.active !== false);
+  }
+
+  function tierPercentTotal(tiers){
+    return (tiers || [])
+      .filter(tier => tier && tier.active !== false)
+      .reduce((sum, tier) => sum + (Math.max(0, parseInt(tier.weight, 10) || 0)), 0);
+  }
+
+  function tierPercentError(tiers){
+    const active = (tiers || []).filter(tier => tier && tier.active !== false);
+    if(!active.length) return "Keep at least one active jackpot tier.";
+    const total = tierPercentTotal(active);
+    return total === TIER_PERCENT_TOTAL
+      ? ""
+      : "Tier percentages must add up to 100%. Current active total: " + total + "%.";
+  }
+
+  function balanceTierPercentages(tiers, protectedId){
+    const balanced = (tiers || []).map(tier => ({
+      ...tier,
+      weight: Math.max(0, parseInt(tier && tier.weight, 10) || 0)
+    }));
+    const active = balanced.filter(tier => tier.active !== false);
+    if(!active.length) return balanced;
+    let diff = tierPercentTotal(active) - TIER_PERCENT_TOTAL;
+    if(diff > 0){
+      const candidates = active
+        .filter(tier => String(tier.id) !== String(protectedId))
+        .sort((a, b) => b.weight - a.weight)
+        .concat(active.filter(tier => String(tier.id) === String(protectedId)));
+      for(const tier of candidates){
+        if(diff <= 0) break;
+        const take = Math.min(tier.weight, diff);
+        tier.weight -= take;
+        diff -= take;
+      }
+    } else if(diff < 0){
+      const target = active.find(tier => String(tier.id) === String(protectedId)) || active[active.length - 1];
+      target.weight += Math.abs(diff);
+    }
+    return balanced;
+  }
+
+  function tierRarityMeta(index, total){
+    if(index === 0) {
+      return {
+        badge: "Easiest",
+        hint: "Lowest tier. Best for common, everyday rewards."
+      };
+    }
+    if(index === total - 1) {
+      return {
+        badge: "Rarest",
+        hint: "Highest tier. Save this for the rarest rewards."
+      };
+    }
+    return {
+      badge: "Rarer",
+      hint: "Higher than Tier " + index + ". Use for more special rewards."
+    };
   }
 
   function rewardTiersExcept(id){
@@ -473,7 +608,7 @@
       avatar.classList.remove("slot-pet-reward", "slot-pet-reward-bank", "slot-pet-reward-pledge", "slot-pet-reward-jackpot", "slot-pet-reward-choice", "slot-pet-reward-reroll", "slot-pet-reward-care", "slot-pet-reward-miss");
     }
     document.querySelectorAll(".slot-cell.reward-focus").forEach(cell => cell.classList.remove("reward-focus"));
-    document.querySelectorAll(".slot-reward-burst,.slot-reward-token,.slot-reward-beam,.slot-reward-caption,.slot-pet-trail,.slot-jackpot-dice-stage,.slot-reward-wheel-stage,.slot-jackpot-burst").forEach(el => el.remove());
+    document.querySelectorAll(".slot-reward-burst,.slot-reward-token,.slot-reward-beam,.slot-reward-caption,.slot-pet-trail,.slot-jackpot-dice-stage,.slot-reward-wheel-stage,.slot-jackpot-burst,.slot-goal-fireworks").forEach(el => el.remove());
   }
 
   window.clearSlotCoinEffects = clearSlotCoinEffects;
@@ -687,26 +822,57 @@
     const el = document.getElementById("slot-tier-manager");
     if(!el || !slotState) return;
     const tiers = rewardTiers();
+    const tierTotal = tierPercentTotal(tiers);
+    const tierTotalClass = tierTotal === TIER_PERCENT_TOTAL ? "good" : "warn";
     if(pendingTierDelete && !tiers.some(tier => String(tier.id) === String(pendingTierDelete.tierId))){
       pendingTierDelete = null;
     }
     el.innerHTML =
       '<div class="slot-tier-manager-head">' +
-        '<strong>Jackpot tiers</strong>' +
-        '<span>Roll tier and source, then spin within that bucket.</span>' +
+        '<div class="slot-tier-title-block">' +
+          '<strong>Jackpot tier ladder</strong>' +
+          '<span>Tier 1 is the easiest/common bucket. Higher tiers should be rarer rewards with lower odds.</span>' +
+        '</div>' +
+        '<div class="slot-tier-total-pill ' + tierTotalClass + '">' +
+          '<span>Active total</span>' +
+          '<strong>' + tierTotal + '%</strong>' +
+        '</div>' +
         '<button class="slot-mini primary" id="slot-add-tier" type="button">Add tier</button>' +
       '</div>' +
+      '<div class="slot-tier-ladder-guide" aria-hidden="true">' +
+        '<span>Easy / common</span>' +
+        '<i></i>' +
+        '<span>Rare / special</span>' +
+      '</div>' +
       '<div class="slot-tier-manager-list">' +
-        tiers.map((tier, index) =>
-          '<div class="slot-tier-row" data-tier-id="' + esc(tier.id) + '">' +
-            '<input class="slot-tier-label" value="' + esc(tier.label) + '" aria-label="Tier label">' +
-            '<input class="slot-tier-weight" type="number" min="0" step="1" value="' + esc(tier.weight) + '" aria-label="Tier weight">' +
-            '<button class="slot-mini slot-tier-up" type="button" ' + (index === 0 ? "disabled" : "") + '>Up</button>' +
-            '<button class="slot-mini slot-tier-down" type="button" ' + (index === tiers.length - 1 ? "disabled" : "") + '>Down</button>' +
-            '<button class="slot-mini slot-tier-toggle" type="button">' + (tier.active === false ? "Enable" : "Disable") + '</button>' +
-            '<button class="slot-mini danger slot-tier-delete" type="button">Delete</button>' +
-          '</div>'
-        ).join("") +
+        tiers.map((tier, index) => {
+          const meta = tierRarityMeta(index, tiers.length);
+          const weight = Math.max(0, Math.min(100, parseInt(tier.weight, 10) || 0));
+          return '<div class="slot-tier-row' + (tier.active === false ? ' is-inactive' : '') + '" data-tier-id="' + esc(tier.id) + '" style="--tier-percent:' + weight + '%">' +
+            '<div class="slot-tier-step">' +
+              '<span>Tier</span>' +
+              '<strong>' + (index + 1) + '</strong>' +
+            '</div>' +
+            '<div class="slot-tier-main">' +
+              '<div class="slot-tier-name-line">' +
+                '<input class="slot-tier-label" value="' + esc(tier.label) + '" aria-label="Tier ' + (index + 1) + ' label">' +
+                '<span class="slot-tier-rarity">' + esc(meta.badge) + '</span>' +
+              '</div>' +
+              '<p>' + esc(meta.hint) + '</p>' +
+              '<div class="slot-tier-meter" aria-hidden="true"><span></span></div>' +
+            '</div>' +
+            '<label class="slot-tier-percent-field">' +
+              '<span>Chance</span>' +
+              '<b><input class="slot-tier-weight" type="number" min="0" max="100" step="1" value="' + esc(weight) + '" aria-label="Tier ' + (index + 1) + ' percentage chance"><em>%</em></b>' +
+            '</label>' +
+            '<div class="slot-tier-actions">' +
+              '<button class="slot-mini slot-tier-up" type="button" ' + (index === 0 ? "disabled" : "") + '>Up</button>' +
+              '<button class="slot-mini slot-tier-down" type="button" ' + (index === tiers.length - 1 ? "disabled" : "") + '>Down</button>' +
+              '<button class="slot-mini slot-tier-toggle" type="button">' + (tier.active === false ? "Enable" : "Disable") + '</button>' +
+              '<button class="slot-mini danger slot-tier-delete" type="button">Delete</button>' +
+            '</div>' +
+          '</div>';
+        }).join("") +
       '</div>' +
       tierDeletePanelHtml();
     const add = el.querySelector("#slot-add-tier");
@@ -790,6 +956,11 @@
   }
 
   async function saveTierSettings(tiers){
+    const error = tierPercentError(tiers);
+    if(error){
+      setResult(error);
+      return;
+    }
     const current = (slotState && slotState.constants) || {};
     try {
       await api("/api/slot/settings", {
@@ -822,7 +993,7 @@
     let id = tierSlug(label);
     while(tiers.some(t => t.id === id)) id = id + "_" + String(Date.now()).slice(-4);
     tiers.push({ id, label, weight: 1, active: true, sort: tiers.length });
-    saveTierSettings(tiers);
+    saveTierSettings(balanceTierPercentages(tiers, id));
   }
 
   function moveTier(id, delta){
@@ -840,7 +1011,9 @@
     const tiers = collectTierRows();
     const tier = tiers.find(t => String(t.id) === String(id));
     if(tier) tier.active = !tier.active;
-    saveTierSettings(tiers);
+    if(tier && tier.active === false) tier.weight = 0;
+    if(tier && tier.active !== false && tier.weight <= 0) tier.weight = 1;
+    saveTierSettings(balanceTierPercentages(tiers, id));
   }
 
   function tierRewards(id){
@@ -863,7 +1036,7 @@
     const rewards = tierRewards(id);
     if(!rewards.length){
       pendingTierDelete = null;
-      saveTierSettings(tiers.filter(t => String(t.id) !== String(id)).map((t, i) => ({ ...t, sort: i })));
+      saveTierSettings(balanceTierPercentages(tiers.filter(t => String(t.id) !== String(id)).map((t, i) => ({ ...t, sort: i }))));
       return;
     }
     const targetTierId = defaultDeleteTargetTier(id, tiers);
@@ -911,7 +1084,7 @@
         await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       }
       pendingTierDelete = null;
-      await saveTierSettings(tiers.filter(t => String(t.id) !== String(deletingId)).map((t, i) => ({ ...t, sort: i })));
+      await saveTierSettings(balanceTierPercentages(tiers.filter(t => String(t.id) !== String(deletingId)).map((t, i) => ({ ...t, sort: i }))));
       setResult("Tier deleted and rewards moved.");
     } catch(e) {
       setResult(e.message);
@@ -927,7 +1100,7 @@
       list.innerHTML = '<div class="slot-empty">No rewards match this view.</div>';
       return;
     }
-    const tiers = activeRewardTiers();
+    const tiers = rewardEligibility === "archived" ? rewardTiers() : activeRewardTiers();
     const tierOptionsHtml = tiers.map(t => '<option value="' + esc(t.id) + '">' + esc(t.label) + '</option>').join("");
     const sourceOptionsHtml = PAYMENT_SOURCES.map(s => '<option value="' + esc(s.id) + '">' + esc(s.label) + '</option>').join("");
     list.innerHTML = PAYMENT_SOURCES.map(source => {
@@ -948,6 +1121,8 @@
       '</section>';
     }).join("");
     list.querySelectorAll(".slot-edit").forEach(btn => btn.addEventListener("click", () => openForm(findReward(btn.dataset.id))));
+    list.querySelectorAll(".slot-archive").forEach(btn => btn.addEventListener("click", () => archiveReward(btn.dataset.id)));
+    list.querySelectorAll(".slot-restore").forEach(btn => btn.addEventListener("click", () => restoreReward(btn.dataset.id)));
     list.querySelectorAll(".slot-delete").forEach(btn => btn.addEventListener("click", () => requestDeleteReward(btn.dataset.id)));
     list.querySelectorAll(".slot-delete-confirm-yes").forEach(btn => btn.addEventListener("click", () => deleteReward(btn.dataset.id)));
     list.querySelectorAll(".slot-delete-confirm-no").forEach(btn => btn.addEventListener("click", () => {
@@ -961,19 +1136,20 @@
   }
 
   function rewardCardHtml(r, tierOptionsHtml, sourceOptionsHtml){
+      const archived = r.active === false;
       const value = r.value_cents ? '<span>' + money(r.value_cents) + '</span>' : '';
       const bank = r.bank_delta_cents ? '<span>+' + money(r.bank_delta_cents) + ' bank</span>' : '';
-      const locked = r.eligible ? '' : '<span class="slot-locked">' + lockLabel(r.locked_reason) + '</span>';
-      const symbol = rewardSymbol(r);
+      const locked = archived ? '<span class="slot-archived-label">archived</span>' : (r.eligible ? '' : '<span class="slot-locked">' + lockLabel(r.locked_reason) + '</span>');
+      const goalExcluded = r.bankroll_goal_excluded ? '<span class="slot-goal-excluded">bankroll goal mode</span>' : '';
       const oddsLabel = oddsText(r, slotState.rewards || []);
-      return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + '" data-id="' + r.id + '" draggable="true">' +
+      return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + (archived ? ' archived' : '') + '" data-id="' + r.id + '" draggable="' + (archived ? 'false' : 'true') + '">' +
         '<div class="slot-reward-main">' +
-          '<div class="slot-reward-title"><span class="slot-symbol-badge" data-symbol="' + esc(symbol.toLowerCase()) + '">' + esc(symbol) + '</span>' + esc(r.title) + '</div>' +
+          '<div class="slot-reward-title">' + esc(r.title) + '</div>' +
           '<div class="slot-reward-meta">' +
             '<span>' + esc(sourceLabel(normalizeRewardSource(r))) + '</span>' +
             '<span>' + esc(tierById(r.tier_id).label) + '</span>' +
             '<span>' + esc(oddsLabel) + '</span>' +
-            value + bank + locked +
+            value + bank + goalExcluded + locked +
           '</div>' +
           '<div class="slot-reward-inline-edit">' +
             '<select class="slot-card-source" aria-label="Paid by">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
@@ -984,6 +1160,9 @@
         '</div>' +
         '<div class="slot-reward-actions">' +
           '<button class="slot-mini slot-edit" data-id="' + r.id + '">Edit</button>' +
+          (archived
+            ? '<button class="slot-mini primary slot-restore" data-id="' + r.id + '">Restore</button>'
+            : '<button class="slot-mini slot-archive" data-id="' + r.id + '">Archive</button>') +
           '<button class="slot-mini danger slot-delete" data-id="' + r.id + '">Delete</button>' +
           (String(pendingDeleteRewardId) === String(r.id)
             ? '<div class="slot-delete-confirm" role="dialog" aria-label="Confirm reward deletion">' +
@@ -999,6 +1178,10 @@
   function attachRewardDragHandlers(list){
     list.querySelectorAll(".slot-reward-card").forEach(card => {
       card.addEventListener("dragstart", event => {
+        if(card.classList.contains("archived")){
+          event.preventDefault();
+          return;
+        }
         draggedRewardId = String(card.dataset.id || "");
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", draggedRewardId);
@@ -1071,6 +1254,11 @@
     return [...rewards]
       .filter(r => {
         if(r.kind === "miss") return false;
+        if(rewardEligibility === "archived"){
+          if(r.active !== false) return false;
+        } else if(r.active === false) {
+          return false;
+        }
         if(filter === "free" && normalizeRewardSource(r) !== "free") return false;
         if(filter === "jackpots" && normalizeRewardSource(r) === "free") return false;
         if(rewardCategory !== "all" && r.kind !== rewardCategory) return false;
@@ -1089,6 +1277,14 @@
 
   function rewardCostCents(reward){
     return Math.max(reward.value_cents || 0, reward.unlock_threshold_cents || 0);
+  }
+
+  function bankrollGoal(){
+    return (slotState && slotState.bankrollGoal) || {};
+  }
+
+  function isSelfFundedPaidReward(reward){
+    return !!reward && ["small_paid", "bank_gated"].includes(reward.kind) && normalizeRewardSource(reward) === "self" && rewardCostCents(reward) > 0;
   }
 
   function isJackpotReward(reward){
@@ -1143,6 +1339,7 @@
     return ({
       inactive: "inactive",
       zero_weight: "zero weight",
+      bankroll_goal: "goal mode",
       bank_too_small: "bank locked",
       bank_cap: "bucket full"
     })[reason] || "locked";
@@ -1221,6 +1418,7 @@
     const available = reserveAvailableCents();
     return (slotState && slotState.rewards || [])
       .filter(r => r && r.active !== false && (r.weight || 0) > 0 && ["small_paid", "bank_gated", "sponsor"].includes(r.kind))
+      .filter(r => !r.bankroll_goal_excluded)
       .map(r => {
         const cost = jackpotChoiceCost(r);
         return {
@@ -1341,15 +1539,20 @@
         highlightWinningCells(spinRow, snap);
         animateRewardReveal(spinRow, snap);
         if(bankDelta > 0) {
-          await animateBankPayout(spinRow, snap, bankDelta);
-          if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(bankDelta);
-          else addPendingDeposit(bankDelta);
+          let reserveUpdated = false;
+          const updateReserveAtDropoff = () => {
+            if(reserveUpdated) return;
+            reserveUpdated = true;
+            addPendingDeposit(bankDelta);
+          };
+          await animateBankPayout(spinRow, snap, bankDelta, updateReserveAtDropoff);
+          if(!reserveUpdated) updateReserveAtDropoff();
         }
         setResult(resultText(spinRow, snap));
         slotPlay("win");
         slotPetReact("happy", bankDelta > 0 ? "Bank builder!" : "Bank builder capped.", 2400);
         isSpinning = false;
-        await loadSlots();
+        await loadSlotsAfterSpin();
         return;
       }
       if(!stages.jackpot_hit){
@@ -1360,12 +1563,14 @@
         animateRewardReveal(spinRow, snap);
         setResult(resultText(spinRow, snap));
         isSpinning = false;
-        await loadSlots();
+        await loadSlotsAfterSpin();
         return;
       }
       updateStageTrack("jackpot", "hit");
       slotPlay("jackpotHit");
-      setResult("JACKPOT. Hold on...");
+      const jackpotSpins = Math.max(1, Number(stages.jackpot_spins || 1));
+      const jackpotLevel = Math.max(1, Number(stages.jackpot_level || 1));
+      setResult("Level " + jackpotLevel + " jackpot. " + jackpotSpins + " reward spin" + (jackpotSpins === 1 ? "" : "s") + " earned.");
       await animateJackpotBurst();
       setResult("Two dice roll now: one for tier, one for who pays.");
       updateStageTrack("bucket", "spinning");
@@ -1401,7 +1606,7 @@
         slotPlay("emptyBucket");
         slotPetReact("sad", "No rewards there.", 2400);
         isSpinning = false;
-        await loadSlots();
+        await loadSlotsAfterSpin();
         return;
       }
       setResult("Tier and payer locked. Grab the wheel rim and spin it.");
@@ -1409,8 +1614,7 @@
       await animateRewardWheel(spinRow, snap, stages);
       updateStageTrack("reward", "hit");
       if((spinRow.bank_delta_cents || 0) > 0) {
-        if(hasLoadedSpin(spinRow.id)) inflatePendingDeposit(spinRow.bank_delta_cents || 0);
-        else addPendingDeposit(spinRow.bank_delta_cents || 0);
+        addPendingDeposit(spinRow.bank_delta_cents || 0);
       }
       resetSlotMachineBoard();
       setResult(resultText(spinRow, snap));
@@ -1428,7 +1632,7 @@
         slotPetReact("happy", "Nice pull.", 2300);
       }
       isSpinning = false;
-      await loadSlots();
+      await loadSlotsAfterSpin();
       if(snap.requires_jackpot_choice) {
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openJackpotChoice(refreshed);
@@ -1438,6 +1642,7 @@
       setResult(e.message);
       slotPlay("error");
       slotPetReact("sad", "Need more points.", 2200);
+      if(refreshSlotsAfterSpin) await loadSlotsAfterSpin();
       if(btn) btn.disabled = false;
     }
   }
@@ -1469,11 +1674,8 @@
   }
 
   function firstStageSymbols(stages, snap, spinRow){
-    if(stages && stages.bank_builder_hit && snap && Array.isArray(snap.screen_board) && snap.screen_board.length) {
-      return dressScreenBoard(snap.screen_board, spinRow || {}, snap || {}, {
-        mode: "bank",
-        preserveBankSymbols: true
-      });
+    if(snap && Array.isArray(snap.screen_board) && snap.screen_board.length) {
+      return snap.screen_board;
     }
     const seed = hashCode([
       spinRow && spinRow.id || 0,
@@ -1747,6 +1949,7 @@
     const tier = stages && stages.tier && stages.tier.id;
     return (slotState && slotState.rewards || [])
       .filter(r => r && r.kind !== "miss" && r.active !== false && rewardShares(r) > 0)
+      .filter(r => !r.bankroll_goal_excluded)
       .filter(r => !source || normalizeRewardSource(r) === source)
       .filter(r => !tier || String(r.tier_id || "tier_i") === String(tier));
   }
@@ -1770,12 +1973,12 @@
     const optionHtml = options.map((reward, index) => {
       const angle = segmentAngle * index;
       const selected = selectedId && String(reward.id) === selectedId;
-      return '<span class="slot-wheel-option" data-wheel-option-index="' + index + '" data-wheel-selected="' + (selected ? 'true' : 'false') + '" style="--slot-wheel-angle:' + angle + 'deg">' + esc(reward.title || "Reward") + '</span>';
+      return '<span class="slot-wheel-option" data-wheel-option-index="' + index + '" data-wheel-selected="' + (selected ? 'true' : 'false') + '" style="--slot-wheel-angle:' + angle + 'deg"><span class="slot-wheel-option-label">' + esc(reward.title || "Reward") + '</span></span>';
     }).join("");
     wheel.innerHTML =
       '<div class="slot-wheel-pointer">Reward</div>' +
       '<div class="slot-wheel-ticker" aria-hidden="true"></div>' +
-      '<div class="slot-wheel-disc" role="button" tabindex="0" aria-label="Spin reward wheel">' + optionHtml + '</div>' +
+      '<div class="slot-wheel-disc" role="button" tabindex="0" aria-label="Spin reward wheel"><div class="slot-wheel-rotor">' + optionHtml + '</div></div>' +
       '<strong class="slot-wheel-prize" data-placeholder="true">SPIN</strong>' +
       '<div class="slot-wheel-announcement" hidden>' +
         '<span>Won</span>' +
@@ -1784,8 +1987,9 @@
       '</div>';
     frame.appendChild(wheel);
     const disc = wheel.querySelector(".slot-wheel-disc");
+    const rotor = wheel.querySelector(".slot-wheel-rotor");
     slotPlay("tierLock");
-    await spinWheelByDrag(disc, wheel, selectedIndex, segmentAngle);
+    await spinWheelByDrag(disc, rotor, wheel, selectedIndex, segmentAngle);
     wheel.classList.add("locked", "prize-locked");
     const selectedOption = wheel.querySelector('[data-wheel-selected="true"]');
     if(selectedOption) selectedOption.classList.add("selected");
@@ -1840,8 +2044,9 @@
     return source.slice(0, 11).concat({ id: selectedKey || "selected", title: selectedTitle || "Reward" });
   }
 
-  function spinWheelByDrag(disc, wheel, selectedIndex, segmentAngle){
+  function spinWheelByDrag(disc, rotor, wheel, selectedIndex, segmentAngle){
     if(!disc) return wait(1200);
+    const rotatingEl = rotor || disc;
     let rotation = 0;
     let dragging = false;
     let lastAngle = 0;
@@ -1850,8 +2055,7 @@
     let lastTick = 0;
     const setRotation = value => {
       rotation = value;
-      disc.style.transform = "rotate(" + rotation + "deg)";
-      disc.style.setProperty("--slot-wheel-rotation", rotation + "deg");
+      rotatingEl.style.setProperty("--slot-wheel-rotation", rotation + "deg");
       const tick = Math.floor((((rotation % 360) + 360) % 360) / Math.max(1, segmentAngle));
       if(tick !== lastTick) {
         lastTick = tick;
@@ -2007,7 +2211,7 @@
 
   function resultSymbols(spinRow, reward){
     if(reward && Array.isArray(reward.screen_board) && reward.screen_board.length){
-      return dressScreenBoard(reward.screen_board, spinRow || {}, reward || {});
+      return reward.screen_board;
     }
     const seed = hashCode([spinRow.id || 0, spinRow.created_at || "", reward.title || "", reward.kind || ""].join("|"));
     const rng = seededRandom(seed);
@@ -2034,7 +2238,9 @@
     const status = spinRow && spinRow.status;
     const isMiss = status === "miss" || (snap && snap.kind === "miss");
     const payout = (snap && snap.bank_screen_payout) || {};
-    if((spinRow && (spinRow.bank_delta_cents || 0) > 0) && Array.isArray(payout.positions)) {
+    const stages = (snap && snap.slot_stages) || {};
+    const bankScreenHit = stages.bank_builder_hit || (snap && snap.kind === "bank_builder") || (snap && snap.source_type === "slot_screen_bank_builder");
+    if(bankScreenHit && Array.isArray(payout.positions)) {
       return payout.positions;
     }
     if(!isMiss && payline.length) return payline;
@@ -2193,7 +2399,7 @@
     }
   }
 
-  async function animateBankPayout(spinRow, snap, deltaCents){
+  async function animateBankPayout(spinRow, snap, deltaCents, onDeposit){
     const payout = (snap && snap.bank_screen_payout) || {};
     const positions = Array.isArray(payout.positions) ? payout.positions : [];
     if(!positions.length) return;
@@ -2220,7 +2426,7 @@
     const horizontalPromise = playBankLightningGroups(horizontalGroups, reels, "row", "Double Points!");
     const verticalPromise = playBankLightningGroups(verticalGroups, reels, "column", "+1 Bank Unit!");
     const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
-    const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents) : Promise.resolve();
+    const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents, onDeposit) : Promise.resolve();
     await wait(520);
     updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
     const [horizontalLinks, verticalLinks] = await Promise.all([horizontalPromise, verticalPromise]);
@@ -2480,19 +2686,20 @@
     return animateRewardReveal(spinRow, snap);
   }
 
-  async function animateBankReserveDrain(cells, target, deltaCents){
+  async function animateBankReserveDrain(cells, target, deltaCents, onDeposit){
     if(!isSlotsPageActive() || !target) return;
     target.classList.add("receiving");
-    await animateBankPetRunner(cells, target, deltaCents);
+    await animateBankPetRunner(cells, target, deltaCents, onDeposit);
     if(isSlotsPageActive()) showPiggyBankAddAmount(target, deltaCents);
     await wait(420);
     target.classList.remove("receiving");
   }
 
-  async function animateBankPetRunner(cells, target, deltaCents){
+  async function animateBankPetRunner(cells, target, deltaCents, onDeposit){
     const avatar = document.getElementById("slot-pet-avatar");
     if(!avatar || !cells.length || !target) {
       showBankReserveTotalPop(target, deltaCents);
+      if(typeof onDeposit === "function") onDeposit();
       flyBankLights(cells, target, 2, 42);
       await wait(760);
       return;
@@ -2520,6 +2727,8 @@
 
     await moveBankPetRunner(runner, reserve, 260, ordered.length);
     showBankReserveTotalPop(target, deltaCents);
+    if(typeof onDeposit === "function") onDeposit();
+    slotPlay("deposit", { cents: deltaCents });
     runner.classList.add("depositing");
     await wait(220);
     runner.classList.remove("carrying", "depositing");
@@ -2911,7 +3120,10 @@
     if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
     if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
     if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
-    if(spinRow.status === "pending" && snap.requires_jackpot_choice) return "Jackpot hit. Pick a prize from the list.";
+    const jackpotSpins = Math.max(1, Number(stages.jackpot_spins || 1));
+    const jackpotLevel = Math.max(1, Number(stages.jackpot_level || 1));
+    const jackpotPrefix = stages.jackpot_hit ? "Level " + jackpotLevel + " jackpot (" + jackpotSpins + " reward spin" + (jackpotSpins === 1 ? "" : "s") + "). " : "";
+    if(spinRow.status === "pending" && snap.requires_jackpot_choice) return jackpotPrefix + "Pick a prize from the list.";
     if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
     const source = snap.payment_source ? sourceLabel(snap.payment_source) + " " : "";
     const tier = snap.tier_id ? tierById(snap.tier_id).label + ": " : "";
@@ -3167,11 +3379,38 @@
       Object.assign(reward, payload);
       renderRewards();
       await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if(!active) setResult("Archived " + (reward.title || "reward") + ". Use the Archived state filter to restore it later.");
       await loadSlots();
     } catch(e) {
       setResult(e.message);
       await loadSlots();
     }
+  }
+
+  async function setRewardArchived(id, archived){
+    const reward = findReward(id);
+    if(!reward) return;
+    const previous = { ...reward };
+    const payload = payloadFromReward(reward, { active: !archived });
+    try {
+      Object.assign(reward, payload);
+      renderRewards();
+      await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      setResult((archived ? "Archived " : "Restored ") + (reward.title || "reward") + (archived ? ". Use the Archived state filter to view it later." : "."));
+      await loadSlots();
+    } catch(e) {
+      Object.assign(reward, previous);
+      renderRewards();
+      setResult(e.message);
+    }
+  }
+
+  function archiveReward(id){
+    setRewardArchived(id, true);
+  }
+
+  function restoreReward(id){
+    setRewardArchived(id, false);
   }
 
   function requestDeleteReward(id){
@@ -3214,6 +3453,217 @@
       setResult(e.message);
       slotPlay("error");
     }
+  }
+
+  function renderBankrollGoalPanel(){
+    const panel = document.getElementById("slot-bankroll-goal-panel");
+    if(!panel) return;
+    const goal = bankrollGoal();
+    if(!goal.enabled){
+      panel.className = "slot-bankroll-goal-panel empty";
+      panel.innerHTML =
+        '<div class="slot-bankroll-kicker">Bankroll Goal</div>' +
+        '<strong>No goal selected</strong>' +
+        '<button class="slot-mini" id="slot-bankroll-open-rewards" type="button">Choose goal</button>';
+      const open = panel.querySelector("#slot-bankroll-open-rewards");
+      if(open) open.addEventListener("click", () => switchSlotSection("rewards"));
+      return;
+    }
+    const reward = goal.reward || {};
+    const pct = Math.max(0, Math.min(100, goal.progress_percent || 0));
+    const completed = !!goal.completed;
+    const claimable = !!goal.claimable;
+    const inferredIconId = inferBankrollIconId((reward.title || "") + " " + (goal.description || reward.notes || ""));
+    const iconId = goal.icon_id && goal.icon_id !== "gift" ? goal.icon_id : inferredIconId;
+    const description = goal.description || reward.notes || "Build the reserve until this reward is fully funded.";
+    panel.className = "slot-bankroll-goal-panel" + (claimable ? " ready" : "") + (completed ? " completed" : "");
+    panel.innerHTML =
+      '<div class="slot-bankroll-card-top">' +
+        '<div class="slot-bankroll-art" data-icon="' + esc(iconId) + '">' + bankrollIconSvg(iconId) + '</div>' +
+        '<div class="slot-bankroll-copy">' +
+          '<div class="slot-bankroll-kicker">Bankroll Goal</div>' +
+          '<div class="slot-bankroll-title">' + esc(claimable ? "YOU HIT YOUR GOAL!" : (reward.title || "Goal missing")) + '</div>' +
+          '<div class="slot-bankroll-target">' + esc(reward.title || "Choose a new goal") + '</div>' +
+          '<p class="slot-bankroll-description">' + esc(description) + '</p>' +
+        '</div>' +
+      '</div>' +
+      '<div class="slot-bankroll-meter"><span style="width:' + pct + '%"></span></div>' +
+      '<div class="slot-bankroll-stats">' +
+        '<span>' + money(goal.total_cents || 0) + ' / ' + money(goal.target_cents || 0) + '</span>' +
+        '<span>' + (completed ? 'Claimed' : claimable ? 'Ready' : money(goal.remaining_cents || 0) + ' left') + '</span>' +
+      '</div>' +
+      (claimable ? '<button class="slot-small-btn primary" id="slot-bankroll-celebrate-btn" type="button">Celebration spin</button>' : '') +
+      (completed ? '<button class="slot-mini" id="slot-bankroll-open-rewards" type="button">Set next goal</button>' : '');
+    const celebrate = panel.querySelector("#slot-bankroll-celebrate-btn");
+    if(celebrate) celebrate.addEventListener("click", celebrationSpin);
+    const open = panel.querySelector("#slot-bankroll-open-rewards");
+    if(open) open.addEventListener("click", () => switchSlotSection("rewards"));
+  }
+
+  function renderBankrollManager(){
+    const el = document.getElementById("slot-bankroll-manager");
+    if(!el || !slotState) return;
+    const goal = bankrollGoal();
+    const rewards = (slotState.rewards || []).filter(isSelfFundedPaidReward);
+    const selectedId = goal.reward_id || (rewards[0] && rewards[0].id) || "";
+    const selectedReward = rewards.find(r => String(r.id) === String(selectedId)) || {};
+    const activeDescription = goal.description || selectedReward.notes || "";
+    const inferredIconId = inferBankrollIconId((selectedReward.title || "") + " " + activeDescription);
+    const activeIconId = goal.icon_id && goal.icon_id !== "gift" ? goal.icon_id : inferredIconId;
+    const rewardOptions = rewards.length
+      ? rewards.map(r => '<option value="' + esc(r.id) + '" ' + (String(r.id) === String(selectedId) ? 'selected' : '') + '>' + esc(r.title || "Reward") + ' - ' + money(rewardCostCents(r)) + '</option>').join("")
+      : '<option value="">No self-funded rewards yet</option>';
+    el.innerHTML =
+      '<div class="slot-bankroll-manager-head">' +
+        '<div><strong>Bankroll Goal</strong><span>' + (goal.enabled ? 'Active: ' + esc((goal.reward && goal.reward.title) || "Goal") : 'No active goal') + '</span></div>' +
+        (goal.enabled ? '<button class="slot-mini danger" id="slot-bankroll-disable" type="button">Turn off</button>' : '') +
+      '</div>' +
+      '<div class="slot-bankroll-manager-grid">' +
+        '<label class="slot-field"><span>Existing reward</span><select id="slot-bankroll-reward">' + rewardOptions + '</select></label>' +
+        '<button class="slot-small-btn primary" id="slot-bankroll-set-existing" type="button" ' + (rewards.length ? '' : 'disabled') + '>Use selected</button>' +
+        '<label class="slot-field"><span>New goal</span><input id="slot-bankroll-new-title" type="text" maxlength="160" placeholder="Wishlist item"></label>' +
+        '<label class="slot-field"><span>Price</span><input id="slot-bankroll-new-price" type="number" min="1" step="1" placeholder="100"></label>' +
+        '<button class="slot-small-btn" id="slot-bankroll-create" type="button">Create goal</button>' +
+        '<label class="slot-field"><span>Picture</span><select id="slot-bankroll-icon">' + bankrollIconOptions(activeIconId) + '</select></label>' +
+        '<label class="slot-field slot-bankroll-description-field"><span>Description</span><textarea id="slot-bankroll-description" maxlength="500" placeholder="What are you building the bank for?">' + esc(activeDescription) + '</textarea></label>' +
+      '</div>';
+    const setExisting = el.querySelector("#slot-bankroll-set-existing");
+    if(setExisting) setExisting.addEventListener("click", setExistingBankrollGoal);
+    const create = el.querySelector("#slot-bankroll-create");
+    if(create) create.addEventListener("click", createBankrollGoal);
+    const disable = el.querySelector("#slot-bankroll-disable");
+    if(disable) disable.addEventListener("click", clearBankrollGoal);
+    const rewardSelect = el.querySelector("#slot-bankroll-reward");
+    if(rewardSelect) rewardSelect.addEventListener("change", () => {
+      const reward = rewards.find(r => String(r.id) === String(rewardSelect.value)) || {};
+      const descriptionEl = document.getElementById("slot-bankroll-description");
+      const iconEl = document.getElementById("slot-bankroll-icon");
+      if(descriptionEl && !descriptionEl.value.trim()) descriptionEl.value = reward.notes || "";
+      if(iconEl) iconEl.value = inferBankrollIconId((reward.title || "") + " " + (descriptionEl && descriptionEl.value || reward.notes || ""));
+    });
+  }
+
+  async function setExistingBankrollGoal(){
+    const select = document.getElementById("slot-bankroll-reward");
+    const rewardId = select && select.value;
+    if(!rewardId) return;
+    const iconEl = document.getElementById("slot-bankroll-icon");
+    const descriptionEl = document.getElementById("slot-bankroll-description");
+    try {
+      slotState = await api("/api/slot/bankroll-goal", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reward_id: rewardId,
+          icon_id: iconEl ? iconEl.value : "",
+          description: descriptionEl ? descriptionEl.value : ""
+        })
+      });
+      setResult("Bankroll goal set.");
+      renderSlots();
+    } catch(e) {
+      setResult(e.message);
+    }
+  }
+
+  async function createBankrollGoal(){
+    const titleEl = document.getElementById("slot-bankroll-new-title");
+    const priceEl = document.getElementById("slot-bankroll-new-price");
+    const iconEl = document.getElementById("slot-bankroll-icon");
+    const descriptionEl = document.getElementById("slot-bankroll-description");
+    const title = titleEl ? titleEl.value.trim() : "";
+    const cents = Math.round((parseFloat(priceEl && priceEl.value) || 0) * 100);
+    if(!title || cents <= 0) {
+      setResult("Add a goal name and price.");
+      return;
+    }
+    try {
+      slotState = await api("/api/slot/bankroll-goal", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          target_cents: cents,
+          value_cents: cents,
+          chance_shares: 0,
+          icon_id: iconEl ? iconEl.value : inferBankrollIconId(title),
+          description: descriptionEl ? descriptionEl.value : "",
+          notes: descriptionEl ? descriptionEl.value : ""
+        })
+      });
+      setResult("Bankroll goal created.");
+      renderSlots();
+    } catch(e) {
+      setResult(e.message);
+    }
+  }
+
+  async function clearBankrollGoal(){
+    try {
+      slotState = await api("/api/slot/bankroll-goal", { method: "DELETE" });
+      setResult("Bankroll goal turned off.");
+      renderSlots();
+    } catch(e) {
+      setResult(e.message);
+    }
+  }
+
+  async function celebrationSpin(){
+    if(isSpinning) return;
+    isSpinning = true;
+    const btn = document.getElementById("slot-bankroll-celebrate-btn");
+    if(btn) btn.disabled = true;
+    setResult("YOU HIT YOUR GOAL!");
+    slotPlay("jackpotHit");
+    slotPetReact("happy", "YOU DID IT!", 2600);
+    try {
+      document.querySelectorAll(".slot-stage-chip").forEach(chip => { chip.dataset.state = ""; });
+      const spinRow = await api("/api/slot/bankroll-goal/celebration-spin", { method: "POST" });
+      const snap = spinRow.reward_snapshot || {};
+      const stages = snap.slot_stages || {};
+      updateStageTrack("jackpot", "spinning");
+      await animateReels(firstStageSymbols(stages, snap, spinRow), { duration: 1700 });
+      highlightWinningCells(spinRow, snap);
+      updateStageTrack("jackpot", "hit");
+      await animateGoalFireworks(snap);
+      await animateJackpotBurst();
+      updateStageTrack("bucket", "hit");
+      updateStageTrack("reward", "spinning");
+      await animateRewardWheel(spinRow, snap, stages);
+      updateStageTrack("reward", "hit");
+      resetSlotMachineBoard();
+      animateRewardReveal(spinRow, snap);
+      setResult("YOU HIT YOUR GOAL! " + (snap.title || "Reward") + " is yours.");
+      slotPlay("rewardReveal");
+      slotPetReact("happy", "Goal claimed!", 2600);
+      isSpinning = false;
+      await loadSlots();
+    } catch(e) {
+      isSpinning = false;
+      setResult(e.message);
+      slotPlay("error");
+      slotPetReact("sad", "Goal needs more reserve.", 2200);
+      await loadSlots();
+    }
+  }
+
+  async function animateGoalFireworks(snap){
+    const frame = document.querySelector(".slot-reels-frame");
+    if(!frame) {
+      await wait(900);
+      return;
+    }
+    const burst = document.createElement("div");
+    burst.className = "slot-goal-fireworks";
+    burst.innerHTML =
+      '<strong>YOU HIT YOUR GOAL!</strong>' +
+      '<span>' + esc((snap && snap.title) || "Goal unlocked") + '</span>' +
+      '<i></i><i></i><i></i><i></i><i></i>';
+    frame.appendChild(burst);
+    await wait(1700);
+    burst.classList.add("leaving");
+    await wait(320);
+    burst.remove();
   }
 
   function renderPiggyBank(animate){
@@ -3289,11 +3739,18 @@
       slotState.bankUsage.month = (slotState.bankUsage.month || 0) + deltaCents;
       slotState.bankUsage.monthlyRemaining = Math.max(0, (slotState.bankUsage.monthlyGoal || 0) - slotState.bankUsage.month);
     }
+    if(slotState.bankrollGoal && slotState.bankrollGoal.enabled){
+      const goal = slotState.bankrollGoal;
+      const target = goal.target_cents || 0;
+      goal.pending_cents = (goal.pending_cents || 0) + deltaCents;
+      goal.total_cents = (goal.ready_cents || 0) + (goal.pending_cents || 0);
+      goal.remaining_cents = Math.max(0, target - goal.total_cents);
+      goal.progress_percent = target > 0 ? Math.max(0, Math.min(100, Math.round((goal.total_cents / target) * 100))) : 0;
+      goal.funded = target > 0 && goal.total_cents >= target;
+      goal.claimable = !!goal.reward && goal.funded && !goal.completed;
+    }
     renderPiggyBank(true);
-  }
-
-  function hasLoadedSpin(id){
-    return !!(slotState && Array.isArray(slotState.spins) && slotState.spins.some(s => String(s.id) === String(id)));
+    renderBankrollGoalPanel();
   }
 
   async function popPendingDeposit(){
@@ -3522,7 +3979,7 @@
   }
 
   window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits, previewBankAnimationScenario, previewRewardAnimationScenario };
-  document.addEventListener("slot-changed", loadSlots);
+  document.addEventListener("slot-changed", handleSlotChanged);
   window.addEventListener("dcc:data-ready", () => {
     setTimeout(syncCompletedTaskCredits, 250);
   });
