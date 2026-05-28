@@ -5,8 +5,9 @@ function dStart(e,id){
   e.dataTransfer.effectAllowed="move";
   e.dataTransfer.setData("text/plain",id); // required for Firefox
   const el=e.target.closest(".tl-item");if(el)el.classList.add("dragging");
+  const listEl=e.target.closest(".it-list-item");if(listEl)listEl.classList.add("dragging");
 }
-function dEnd(){dragId=null;document.querySelectorAll(".tl-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom"))}
+function dEnd(){dragId=null;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom"))}
 function dOver(e,id){e.preventDefault();if(id===dragId)return;const r=e.currentTarget.getBoundingClientRect(),mid=r.top+r.height/2;e.currentTarget.classList.toggle("drag-over-top",e.clientY<mid);e.currentTarget.classList.toggle("drag-over-bottom",e.clientY>=mid)}
 function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom")}
 
@@ -205,7 +206,7 @@ function dDrop(e,tid){
   const old=JSON.stringify(scheduled);
 
   // Operate only on the active (undone) sublist -- these are the only draggable items
-  const active=scheduled.filter(ev=>!isDone(ev));
+  const active=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
   const fi=active.findIndex(x=>x.id===dragId);
   if(fi===-1)return;
 
@@ -221,7 +222,7 @@ function dDrop(e,tid){
 
   // Write the reordered active items back into scheduled, preserving done-item slots
   let ai=0;
-  for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i]))scheduled[i]=active[ai++];}
+  for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i])&&!isPushed(scheduled[i]))scheduled[i]=active[ai++];}
 
   // Clear pinned start on the moved task so cascade places it at its new position.
   // Also drop the persisted pin so the drag effect survives reload.
@@ -238,7 +239,7 @@ function dDrop(e,tid){
 
   // If the moved item ended up further in the list than where it was dropped,
   // a meeting blocked it — show a friendly toast so the user knows why
-  const sortedActive=scheduled.filter(ev=>!isDone(ev));
+  const sortedActive=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
   const actualIdx=sortedActive.findIndex(x=>x.id===dragId);
   if(actualIdx>insertIdx){
     if(typeof showToast==='function')showToast("Not enough time allotted for that task — placed after the meeting.","warn",4000);
@@ -249,7 +250,7 @@ function dDrop(e,tid){
   if(typeof syncAddedTaskTimes==='function')syncAddedTaskTimes();
 
   log("reorder",dragId,old);
-  document.querySelectorAll(".tl-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom"));
+  document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom"));
   render();
 }
 

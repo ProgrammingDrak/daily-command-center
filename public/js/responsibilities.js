@@ -7,6 +7,7 @@
   let _sidebarQuery = "";
   let _sidebarFilter = "active";
   let _sidebarSort = "urgency";
+  let _sidebarExpanded = new Set();
   let _captureEditor = null;
 
   function esc(s){
@@ -290,33 +291,52 @@
       const subtasks=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
       const preferred=preferredCompletionSummary(p);
       const asNeeded=isAsNeeded(p);
-      return '<div class="repeat-resp-card '+cls+'" data-id="'+esc(item.id)+'">'+
-        (asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="urgent-schedule" title="Add as urgent" aria-label="Add as urgent">+</button>':'<div class="repeat-resp-score resp-score '+cls+'">'+score+'</div>')+
-        '<div class="repeat-resp-main">'+
+      const expanded=_sidebarExpanded.has(item.id);
+      return '<div class="repeat-resp-card '+cls+(expanded?' expanded':'')+'" data-id="'+esc(item.id)+'">'+
+        (asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="urgent-schedule" title="Add as urgent" aria-label="Add as urgent">+</button>':'<button type="button" class="repeat-resp-score resp-score '+cls+'" data-act="complete" title="Mark complete" aria-label="Mark '+esc(p.title||"repeat responsibility")+' complete">'+score+'</button>')+
+        '<div class="repeat-resp-main" role="button" tabindex="0" data-act="toggle" aria-expanded="'+(expanded?'true':'false')+'">'+
           '<div class="repeat-resp-title-row">'+
             '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+
-            '<span class="resp-chip domain">'+esc(p.domain||"other")+'</span>'+
           '</div>'+
-          '<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>'+
-          '<div class="repeat-resp-meta">'+
-            '<span>'+cadenceLabel(p)+'</span>'+
-            (asNeeded?'':'<span>'+esc(dueLabel(p))+'</span>')+
-            '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
-            '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
-          '</div>'+
-          (subtasks.length?'<div class="repeat-resp-subtasks">'+subtasks.slice(0,4).map(s=>'<span>'+esc(s)+'</span>').join("")+(subtasks.length>4?'<span>+'+(subtasks.length-4)+'</span>':'')+'</div>':'')+
-          (preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
+          (expanded?'<div class="repeat-resp-details">'+
+            '<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>'+
+            '<div class="repeat-resp-meta">'+
+              '<span>'+cadenceLabel(p)+'</span>'+
+              (asNeeded?'':'<span>'+esc(dueLabel(p))+'</span>')+
+              '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
+              '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
+            '</div>'+
+            (subtasks.length?'<div class="repeat-resp-subtasks">'+subtasks.slice(0,4).map(s=>'<span>'+esc(s)+'</span>').join("")+(subtasks.length>4?'<span>+'+(subtasks.length-4)+'</span>':'')+'</div>':'')+
+            (preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
+          '</div>':'')+
         '</div>'+
         '<div class="repeat-resp-actions">'+
           '<button type="button" data-act="schedule">Schedule</button>'+
-          '<button type="button" data-act="complete">Complete</button>'+
-          '<button type="button" data-act="edit">Edit</button>'+
-          '<button type="button" class="danger" data-act="remove">Remove</button>'+
+          (expanded?'<button type="button" data-act="edit">Edit</button><button type="button" class="danger" data-act="remove">Remove</button>':'')+
         '</div>'+
       '</div>';
     }).join("");
     mount.querySelectorAll(".repeat-resp-card [data-act]").forEach(btn=>{
-      btn.addEventListener("click",()=>handleCardAction(btn.closest(".repeat-resp-card").dataset.id,btn.dataset.act));
+      btn.addEventListener("click",e=>{
+        e.stopPropagation();
+        const card=btn.closest(".repeat-resp-card");
+        const id=card&&card.dataset.id;
+        if(!id)return;
+        if(btn.dataset.act==="toggle"){
+          if(_sidebarExpanded.has(id))_sidebarExpanded.delete(id);
+          else _sidebarExpanded.add(id);
+          renderRepeatResponsibilitiesSidebar();
+          return;
+        }
+        handleCardAction(id,btn.dataset.act);
+      });
+      if(btn.dataset.act==="toggle"){
+        btn.addEventListener("keydown",e=>{
+          if(e.key!=="Enter"&&e.key!==" ")return;
+          e.preventDefault();
+          btn.click();
+        });
+      }
     });
   }
 

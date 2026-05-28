@@ -359,7 +359,11 @@ async function schedulePushedOnDate(ev,targetDate,opts){
   let existingBlockers=[];
   try{
     const tBlks=await fetch("/api/blocks?date="+targetDate).then(r=>r.json());
-    if(tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id))return null;
+    const existing=tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id);
+    if(existing){
+      if(opts.useExisting)return existing;
+      return null;
+    }
     existingBlockers=tBlks
       .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
       .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
@@ -420,6 +424,33 @@ async function unscheduleTaskFromDate(id,dateStr){
 }
 
 // ======== MOVE-TO MENU HELPERS ========
+function _findTaskBlockForDate(id,dateStr,ev){
+  if(!window.blockStore||!id)return null;
+  const blocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block")];
+  const matches=blocks.filter(b=>{
+    if(!b||b.deleted_at)return false;
+    const p=b.properties||{};
+    const ids=[p.local_id,b.id];
+    if(ev&&ev._blockId)ids.push(ev._blockId);
+    return ids.map(String).includes(String(id))||!!(ev&&ev._blockId&&String(b.id)===String(ev._blockId));
+  });
+  if(dateStr){
+    const exact=matches.find(b=>b.date===dateStr);
+    if(exact)return exact;
+    const undated=matches.find(b=>!b.date);
+    if(undated)return undated;
+  }
+  return matches[0]||null;
+}
+
+async function _removeTaskBlockFromDate(id,dateStr,ev){
+  const block=_findTaskBlockForDate(id,dateStr,ev);
+  if(block&&window.blockStore){
+    try{await window.blockStore.deleteBlock(block.id);return true;}catch(e){}
+  }
+  return false;
+}
+
 // Schedule a task on an arbitrary date at the next free slot.
 // Returns the start time string on success, null on failure (no slot, dedupe, or no blockstore).
 async function _scheduleTaskOnDate(ev, dateStr, dayContext){
@@ -438,7 +469,11 @@ async function _scheduleTaskOnDate(ev, dateStr, dayContext){
   let existingBlockers=[];
   try{
     const tBlks=await fetch("/api/blocks?date="+dateStr).then(r=>r.json());
-    if(tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id))return null;
+    const existing=tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id);
+    if(existing){
+      const p=existing.properties||{};
+      return p.start||null;
+    }
     existingBlockers=tBlks
       .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
       .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
@@ -482,8 +517,8 @@ function _nextSundayDate(){
 
 function _purgeManualBlock(ev){
   if(!ev||ev.source!=="manual"||!window.blockStore)return;
-  const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===ev.id);
-  if(block)window.blockStore.deleteBlock(block.id).catch(()=>{});
+  const dateStr=(__state&&__state.date)||null;
+  _removeTaskBlockFromDate(ev.id,dateStr,ev);
 }
 
 async function moveTaskToToday(id){
@@ -590,17 +625,14 @@ async function rescheduleTaskToDate(id,targetDate,opts){
     return;
   }
 
-  const block=await schedulePushedOnDate(ev,targetDate,{silent:true});
+  const block=await schedulePushedOnDate(ev,targetDate,{silent:true,useExisting:true});
   if(!block)return; // schedulePushedOnDate already toasted the failure
 
   // Remove from the source date.
   // Manual / pushed tasks live as blockstore blocks on `fromDate` -- delete the source.
   // Native schedule items (meetings, etc.) come from INIT_SCHED -- mark as pushed instead.
-  if(window.blockStore&&(ev.source==="manual"||ev.source==="pushed")){
-    try{
-      const src=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id&&(!b.date||b.date===fromDate));
-      if(src)await window.blockStore.deleteBlock(src.id);
-    }catch(e){}
+  if(window.blockStore&&(ev.source==="manual"||ev.source==="pushed"||ev._blockId)){
+    await _removeTaskBlockFromDate(id,fromDate,ev);
     // Drop any local "added task" mirror for this id on the source date
     try{
       const added=loadAddedTasks().filter(t=>t.id!==id);
