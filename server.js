@@ -2464,6 +2464,36 @@ app.put("/api/slot/settings", async (req, res) => {
   }
 });
 
+app.put("/api/slot/bankroll-goal", async (req, res) => {
+  try {
+    const state = await slotStore.setBankrollGoal(req.workspaceId, req.session.userId, req.body || {});
+    broadcast("slot-changed", { action: "bankroll-goal-update" }, req.workspaceId);
+    res.json(state);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/slot/bankroll-goal", async (req, res) => {
+  try {
+    const state = await slotStore.clearBankrollGoal(req.workspaceId, req.session.userId);
+    broadcast("slot-changed", { action: "bankroll-goal-clear" }, req.workspaceId);
+    res.json(state);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/bankroll-goal/celebration-spin", async (req, res) => {
+  try {
+    const spin = await slotStore.celebrationSpinForBankrollGoal(req.workspaceId, req.session.userId);
+    broadcast("slot-changed", { action: "bankroll-goal-celebration" }, req.workspaceId);
+    res.json(spin);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
 app.put("/api/slot/admin/next-spin-tiles", requireAdmin, async (req, res) => {
   try {
     const result = await slotStore.setNextSpinTileOverride(req.workspaceId, req.session.userId, req.body || {});
