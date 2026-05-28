@@ -154,6 +154,32 @@ function createMockPool(options = {}) {
       if (text.includes("deleted_at IS NULL")) rows = rows.filter(row => !row.deleted_at);
       return { rows };
     }
+    if (text.includes("INSERT INTO slot_rewards")) {
+      const hasDuration = text.includes("duration_minutes");
+      const row = {
+        id: state.rewardRows.length + 1,
+        workspace_id: params[0],
+        title: params[1],
+        kind: params[2],
+        sponsor_type: params[3],
+        sponsor_splits: JSON.parse(params[4] || "[]"),
+        weight: params[5],
+        chance_shares: params[6],
+        payment_source: params[7],
+        tier_id: params[8],
+        active: params[9],
+        sponsor_active: params[10],
+        value_cents: params[11],
+        bank_delta_cents: params[12],
+        duration_minutes: hasDuration ? params[13] : 0,
+        requires_confirmation: hasDuration ? params[14] : params[13],
+        cooldown_days: hasDuration ? params[15] : params[14],
+        unlock_threshold_cents: hasDuration ? params[16] : params[15],
+        notes: hasDuration ? params[17] : params[16],
+      };
+      state.rewardRows.push(row);
+      return { rows: [row] };
+    }
     if (text.includes("INSERT INTO slot_spins")) {
       const normalSpin = params.length >= 8;
       const row = normalSpin
@@ -362,6 +388,22 @@ test("deleteReward hides rewards without removing rows referenced by spin histor
   assert.equal(mockPool.state.rewardRows[0].weight, 0);
   assert.equal(typeof mockPool.state.settings.default_rewards_user_modified_at, "string");
   assert.deepEqual(state.rewards.map(r => r.title), ["Take a walk"]);
+});
+
+test("createReward stores optional duration minutes", async () => {
+  const mockPool = createMockPool({ migrated: true });
+  const store = loadStoreWithMock(mockPool);
+
+  const reward = await store.createReward("ws-1", {
+    title: "Movie break",
+    kind: "free",
+    payment_source: "free",
+    duration_minutes: 95,
+    chance_shares: 4,
+  });
+
+  assert.equal(reward.duration_minutes, 95);
+  assert.equal(mockPool.state.rewardRows[0].duration_minutes, 95);
 });
 
 test("getState locks paid jackpots when reserve is short", async () => {
