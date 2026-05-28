@@ -196,7 +196,6 @@
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
-  <button class="tab" data-tab="calendar" id="calendar-tab-btn">Calendar</button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
@@ -214,7 +213,8 @@
     <span class="source-dot" style="background:var(--purple)"></span> Notion Kanban
     <span style="margin-left:auto">
       <span class="sched-view-toggle" id="sched-view-toggle">
-        <button class="svt-btn active" data-view="plan">Plan</button>
+        <button class="svt-btn active" data-view="plan">Blocks</button>
+        <button class="svt-btn" data-view="list">List</button>
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
       <button class="ma-morning-btn" id="ma-morning-btn" type="button" title="Generate prep for today's meetings">Morning prep</button>
@@ -243,6 +243,7 @@
   <section class="schedule-delegated-section" id="schedule-delegated-section" style="display:none" aria-label="Delegated"></section>
   <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
   <div class="tl" id="timeline"></div>
+  <div id="list-view" class="it-list-view" style="display:none"></div>
   <div id="actual-view" style="display:none"></div>
 </div>
 
@@ -1040,8 +1041,6 @@
     </div>
   </div>
 </div>
-
-<div class="tab-content" id="tab-calendar"></div>
 
 <div class="tab-content" id="tab-pet-home">
   <div class="pet-shell">

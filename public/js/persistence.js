@@ -414,6 +414,12 @@ async function switchToDate(dateStr) {
     b.classList.toggle("active", b.dataset.view === targetView);
   });
   schedView = targetView;
+  const timelineEl = document.getElementById("timeline");
+  const listViewEl = document.getElementById("list-view");
+  const actualViewEl = document.getElementById("actual-view");
+  if (timelineEl) timelineEl.style.display = schedView === "plan" ? "block" : "none";
+  if (listViewEl) listViewEl.style.display = schedView === "list" ? "flex" : "none";
+  if (actualViewEl) actualViewEl.style.display = schedView === "actual" ? "block" : "none";
 
   // Update date nav display
   updateDateNav();
