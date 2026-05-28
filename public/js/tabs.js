@@ -17,9 +17,6 @@ document.querySelectorAll(".tab").forEach(tab=>{
       var _tmMount=document.getElementById("tm-cal-mount");
       if(_tmMount)_tmMount.innerHTML=renderCalendarSidebar();
     }
-    // PIN 10.A: render the delegated list on tab activation so the UI
-    // reflects any blocks-changed SSE events that fired while the tab was hidden.
-    if(tab.dataset.tab==="delegated"&&typeof renderDelegatedList==="function"){renderDelegatedList();}
     if(tab.dataset.tab==="pet-home"&&window.PetHome&&typeof window.PetHome.render==="function"){window.PetHome.render();}
     if(tab.dataset.tab==="responsibilities"&&typeof renderResponsibilities==="function"){renderResponsibilities();}
   });

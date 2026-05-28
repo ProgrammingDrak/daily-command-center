@@ -375,20 +375,35 @@ test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => 
   assert.equal(outcome.empty_bucket, false);
 });
 
-test("selectThreeStageOutcome awards reroll credit for empty source-tier bucket", () => {
+test("selectThreeStageOutcome offers separate die choices when first source-tier bucket is empty", () => {
   const store = loadStoreWithMock(createMockPool());
+  const rolls = [0, 0, 0, 0, 0, 0, 0];
+  const rng = max => Math.min(max - 1, rolls.shift() || 0);
   const outcome = store._test.selectThreeStageOutcome([
-    { id: 1, title: "Wrong bucket", kind: "free", active: true, eligible: true, payment_source: "self", tier_id: "tier_i", chance_shares: 3 },
+    { id: 1, title: "Same source new tier", kind: "free", active: true, eligible: true, payment_source: "sponsored", tier_id: "tier_ii", chance_shares: 3 },
+    { id: 2, title: "Same tier new source", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 5 },
   ], {
     jackpot_hit_rate: 1,
-    payment_source_weights: { self: 0, sponsored: 1, free: 0 },
-    reward_tiers: [{ id: "tier_vi", label: "Tier VI", weight: 1, active: true }],
-  }, () => 0);
+    payment_source_weights: { self: 0, sponsored: 1, free: 1 },
+    reward_tiers: [
+      { id: "tier_i", label: "Tier I", weight: 1, active: true },
+      { id: "tier_ii", label: "Tier II", weight: 1, active: true },
+    ],
+  }, rng);
 
   assert.equal(outcome.jackpot_hit, true);
-  assert.equal(outcome.empty_bucket, true);
-  assert.equal(outcome.reroll_credit, true);
-  assert.equal(outcome.selected.kind, "reroll");
+  assert.equal(outcome.empty_bucket, false);
+  assert.equal(outcome.reroll_credit, false);
+  assert.equal(outcome.selected.id, 2);
+  assert.equal(outcome.dice_reroll.reason, "empty_bucket");
+  assert.equal(outcome.dice_reroll.from.payment_source.id, "sponsored");
+  assert.equal(outcome.dice_reroll.from.tier.id, "tier_i");
+  assert.equal(outcome.dice_reroll.choices.source.reward.id, 2);
+  assert.equal(outcome.dice_reroll.choices.source.payment_source.id, "free");
+  assert.equal(outcome.dice_reroll.choices.source.tier.id, "tier_i");
+  assert.equal(outcome.dice_reroll.choices.tier.reward.id, 1);
+  assert.equal(outcome.dice_reroll.choices.tier.payment_source.id, "sponsored");
+  assert.equal(outcome.dice_reroll.choices.tier.tier.id, "tier_ii");
 });
 
 test("bank screen payout values each BANK tile from the monthly goal, not current bank balance", () => {
@@ -407,6 +422,52 @@ test("bank screen payout values each BANK tile from the monthly goal, not curren
   assert.equal(payout.base_cents, 22);
   assert.equal(payout.base_units, 2);
   assert.equal(payout.cents, 44);
+});
+
+test("normalizeNextSpinTileOverride requires exactly fifteen known symbols", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const override = store._test.normalizeNextSpinTileOverride({
+    tiles: [
+      "miss", "bank", "jackpot", "M", "B",
+      "JP", "MISS", "BANK", "JACK", "MISS",
+      "MISS", "MISS", "MISS", "MISS", "MISS",
+    ],
+  }, "user-1");
+
+  assert.equal(override.tiles.length, 15);
+  assert.deepEqual(override.tiles.slice(0, 6), ["MISS", "BANK", "JACKPOT", "MISS", "BANK", "JACKPOT"]);
+  assert.equal(override.created_by, "user-1");
+  assert.throws(
+    () => store._test.normalizeNextSpinTileOverride({ tiles: ["MISS"] }),
+    /exactly 15/
+  );
+  assert.throws(
+    () => store._test.normalizeNextSpinTileOverride({ tiles: Array.from({ length: 15 }, () => "WILD") }),
+    /MISS, BANK, or JACKPOT/
+  );
+});
+
+test("applyTileOverrideToScreen keeps exact tiles and pays bank from override on bank-builder spins", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const board = Array.from({ length: 15 }, () => "MISS");
+  board[1] = "BANK";
+  board[2] = "BANK";
+  board[7] = "BANK";
+  const screen = store._test.applyTileOverrideToScreen(
+    { board: Array.from({ length: 15 }, () => "MISS"), payline: [], payout: {} },
+    { tiles: board, created_at: "now" },
+    { kind: "bank_builder" },
+    { settings: { monthly_goal_cents: 10000 } },
+    { today: 0, week: 0, monthlyGoal: 10000 },
+    true
+  );
+
+  assert.deepEqual(screen.board, board);
+  assert.deepEqual(screen.payout.positions, [1, 2, 7]);
+  assert.equal(screen.payout.base_units, 3);
+  assert.equal(screen.payout.horizontal_bonus_units, 2);
+  assert.equal(screen.payout.vertical_bonus_units, 2);
+  assert.equal(screen.payout.cents, 154);
 });
 
 test("buildSpinScreen does not pay bank bonus on miss screens", () => {
