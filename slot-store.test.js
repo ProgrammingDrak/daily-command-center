@@ -32,12 +32,16 @@ function createMockPool(options = {}) {
     pointAdds: 0,
     ledgerMetadata: null,
     rewardRows: options.rewardRows || [],
+    pendingBankDeposit: options.pendingBankDeposit || { cents: 0, count: 0, oldest_at: null },
+    pendingSpinRows: options.pendingSpinRows || [],
+    spinRows: options.spinRows || [],
     legacyBankBuildersRetired: false,
   };
 
   async function query(sql, params = []) {
     calls.push({ sql, params });
     const text = String(sql);
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(text)) return { rows: [] };
     if (text.includes("CREATE TABLE IF NOT EXISTS slot_accounts")) return { rows: [] };
     if (text.includes("INSERT INTO slot_accounts")) {
       return { rows: [{ workspace_id: params[0], user_id: params[1], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
@@ -90,8 +94,12 @@ function createMockPool(options = {}) {
       return { rowCount: 1, rows: [] };
     }
     if (text.includes("UPDATE slot_accounts") && text.includes("settings = COALESCE(settings")) {
-      state.settings = { ...state.settings, ...JSON.parse(params[1]) };
-      return { rows: [] };
+      const jsonParam = params.find(p => typeof p === "string" && p.trim().startsWith("{"));
+      if (jsonParam) state.settings = { ...state.settings, ...JSON.parse(jsonParam) };
+      if (text.includes("bank_balance_cents = GREATEST") && params.length >= 3) {
+        state.bankBalance = Math.max(0, state.bankBalance - (params[1] || 0));
+      }
+      return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
     }
     if (text.includes("SELECT * FROM slot_accounts WHERE workspace_id")) {
       return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
@@ -119,18 +127,53 @@ function createMockPool(options = {}) {
     if (text.includes("date_trunc('day'")) return { rows: [{ cents: 0 }] };
     if (text.includes("date_trunc('week'")) return { rows: [{ cents: 0 }] };
     if (text.includes("date_trunc('month'")) return { rows: [{ cents: 0 }] };
-    if (text.includes("MIN(created_at) AS oldest_at")) return { rows: [{ cents: 0, count: 0, oldest_at: null }] };
+    if (text.includes("MIN(created_at) AS oldest_at")) return { rows: [{ cents: state.pendingBankDeposit.cents || 0, count: state.pendingBankDeposit.count || 0, oldest_at: state.pendingBankDeposit.oldest_at || null }] };
+    if (text.includes("SELECT id, bank_delta_cents") && text.includes("FROM slot_spins")) {
+      return { rows: state.pendingSpinRows };
+    }
+    if (text.includes("UPDATE slot_accounts SET bank_balance_cents = bank_balance_cents +")) {
+      state.bankBalance += params[1] || 0;
+      return { rows: [] };
+    }
+    if (text.includes("UPDATE slot_spins") && text.includes("status='confirmed'")) {
+      state.pendingSpinRows = [];
+      return { rows: [] };
+    }
+    if (text.includes("SELECT * FROM slot_rewards") && text.includes("id=$2")) {
+      return { rows: state.rewardRows.filter(row => String(row.id) === String(params[1]) && !row.deleted_at) };
+    }
     if (text.includes("SELECT * FROM slot_rewards")) {
       const legacyKind = params[1];
       let rows = legacyKind ? state.rewardRows.filter(row => row.kind !== legacyKind) : state.rewardRows;
       if (text.includes("deleted_at IS NULL")) rows = rows.filter(row => !row.deleted_at);
       return { rows };
     }
-    if (text.includes("SELECT * FROM slot_spins")) return { rows: [] };
+    if (text.includes("INSERT INTO slot_spins")) {
+      const row = {
+        id: state.spinRows.length + 1,
+        workspace_id: params[0],
+        user_id: params[1],
+        cost_credits: 0,
+        reward_id: params[2],
+        reward_snapshot: params[3],
+        status: "confirmed",
+        bank_delta_cents: 0,
+        bank_reserved_cents: params[4],
+        created_at: "now",
+        confirmed_at: "now",
+      };
+      state.spinRows.unshift(row);
+      return { rows: [row] };
+    }
+    if (text.includes("UPDATE slot_rewards SET last_won_at=NOW()")) {
+      state.rewardRows = state.rewardRows.map(row => String(row.id) === String(params[0]) ? { ...row, last_won_at: "now" } : row);
+      return { rows: [] };
+    }
+    if (text.includes("SELECT * FROM slot_spins")) return { rows: state.spinRows };
     throw new Error("Unexpected query: " + text.slice(0, 120));
   }
 
-  return { query, calls, state };
+  return { query, connect: async () => ({ query, release() {} }), calls, state };
 }
 
 test("earnTaskCredit stores formula metadata and does not double-award duplicate source keys", async () => {
@@ -333,6 +376,153 @@ test("getState locks paid jackpots when reserve is short", async () => {
   assert.equal(reward.jackpot_type, "self");
 });
 
+test("getState excludes self-funded paid rewards during bankroll goal mode", async () => {
+  const rewardBase = {
+    sponsor_type: "self",
+    sponsor_splits: [],
+    sponsor_active: true,
+    value_cents: 0,
+    bank_delta_cents: 0,
+    requires_confirmation: false,
+    cooldown_days: 0,
+    unlock_threshold_cents: 0,
+    notes: "",
+    last_won_at: null,
+    deleted_at: null,
+  };
+  const mockPool = createMockPool({
+    bankBalance: 10000,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      bankroll_goal: { enabled: true, reward_id: 10, target_cents: 7500 },
+    },
+    rewardRows: [
+      { ...rewardBase, id: 10, title: "Dinner jackpot", kind: "bank_gated", payment_source: "self", value_cents: 7500, unlock_threshold_cents: 7500, active: true, weight: 8 },
+      { ...rewardBase, id: 11, title: "Partner reward", kind: "sponsor", payment_source: "sponsored", active: true, weight: 5 },
+      { ...rewardBase, id: 12, title: "Free rest", kind: "free", payment_source: "free", active: true, weight: 6 },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const state = await store.getState("ws-1", 1);
+  const selfReward = state.rewards.find(r => r.id === 10);
+  const sponsorReward = state.rewards.find(r => r.id === 11);
+  const freeReward = state.rewards.find(r => r.id === 12);
+
+  assert.equal(state.constants.bankrollGoalModeEnabled, true);
+  assert.equal(selfReward.active, true);
+  assert.equal(selfReward.weight, 8);
+  assert.equal(selfReward.eligible, false);
+  assert.equal(selfReward.bankroll_goal_excluded, true);
+  assert.equal(selfReward.locked_reason, "bankroll_goal");
+  assert.equal(sponsorReward.eligible, true);
+  assert.equal(freeReward.eligible, true);
+});
+
+test("bankroll goal state counts pending bank deposits toward funding", async () => {
+  const mockPool = createMockPool({
+    bankBalance: 1200,
+    pendingBankDeposit: { cents: 6300, count: 2, oldest_at: "soon" },
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      bankroll_goal: { enabled: true, reward_id: 10, target_cents: 7500 },
+    },
+    rewardRows: [
+      {
+        id: 10,
+        title: "Big headphones",
+        kind: "bank_gated",
+        payment_source: "self",
+        sponsor_type: "self",
+        sponsor_splits: [],
+        sponsor_active: true,
+        value_cents: 7500,
+        bank_delta_cents: 0,
+        requires_confirmation: false,
+        cooldown_days: 0,
+        unlock_threshold_cents: 7500,
+        notes: "",
+        last_won_at: null,
+        deleted_at: null,
+        active: true,
+        weight: 4,
+      },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const state = await store.getState("ws-1", 1);
+
+  assert.equal(state.bankrollGoal.enabled, true);
+  assert.equal(state.bankrollGoal.total_cents, 7500);
+  assert.equal(state.bankrollGoal.ready_cents, 1200);
+  assert.equal(state.bankrollGoal.pending_cents, 6300);
+  assert.equal(state.bankrollGoal.funded, true);
+  assert.equal(state.bankrollGoal.claimable, true);
+  assert.equal(state.bankrollGoal.progress_percent, 100);
+});
+
+test("celebrationSpinForBankrollGoal forces a free confirmed jackpot and cannot run twice", async () => {
+  const mockPool = createMockPool({
+    bankBalance: 7500,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      bankroll_goal: { enabled: true, reward_id: 10, target_cents: 7500 },
+    },
+    rewardRows: [
+      {
+        id: 10,
+        title: "Big headphones",
+        kind: "bank_gated",
+        payment_source: "self",
+        tier_id: "tier_i",
+        sponsor_type: "self",
+        sponsor_splits: [],
+        sponsor_active: true,
+        value_cents: 7500,
+        bank_delta_cents: 0,
+        requires_confirmation: false,
+        cooldown_days: 0,
+        unlock_threshold_cents: 7500,
+        notes: "",
+        last_won_at: null,
+        deleted_at: null,
+        active: true,
+        weight: 4,
+      },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const spin = await store.celebrationSpinForBankrollGoal("ws-1", 1);
+
+  assert.equal(spin.cost_credits, 0);
+  assert.equal(spin.status, "confirmed");
+  assert.equal(spin.bank_reserved_cents, 7500);
+  assert.equal(spin.reward_snapshot.source_type, "bankroll_goal_celebration");
+  assert.equal(spin.reward_snapshot.slot_stages.jackpot_hit, true);
+  assert.equal(spin.reward_snapshot.bankroll_goal_celebration, true);
+  assert.equal(mockPool.state.bankBalance, 0);
+  assert.ok(mockPool.state.settings.bankroll_goal.celebration_spin_claimed_at);
+
+  await assert.rejects(
+    () => store.celebrationSpinForBankrollGoal("ws-1", 1),
+    /already claimed/
+  );
+});
+
 test("selectThreeStageOutcome returns a miss when jackpot and bank builder rolls miss", () => {
   const store = loadStoreWithMock(createMockPool());
   const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 0 }, () => 0);
@@ -373,6 +563,16 @@ test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => 
   assert.equal(outcome.tier.id, "tier_i");
   assert.equal(outcome.selected.id, 2);
   assert.equal(outcome.empty_bucket, false);
+});
+
+test("default reward tier percentages add up to 100", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const settings = store._test.normalizeSlotSettings({});
+  const total = settings.reward_tiers
+    .filter(tier => tier.active !== false)
+    .reduce((sum, tier) => sum + tier.weight, 0);
+
+  assert.equal(total, 100);
 });
 
 test("selectThreeStageOutcome offers separate die choices when first source-tier bucket is empty", () => {
@@ -445,6 +645,85 @@ test("normalizeNextSpinTileOverride requires exactly fifteen known symbols", () 
     () => store._test.normalizeNextSpinTileOverride({ tiles: Array.from({ length: 15 }, () => "WILD") }),
     /MISS, BANK, or JACKPOT/
   );
+});
+
+test("normalizeSlotSettings keeps bonus jackpot spin credits separate from rerolls", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const settings = store._test.normalizeSlotSettings({
+    reroll_credits: 2,
+    jackpot_spin_credits: 3,
+  });
+
+  assert.equal(settings.reroll_credits, 2);
+  assert.equal(settings.jackpot_spin_credits, 3);
+});
+
+test("evaluateJackpotBoard only counts connected horizontal or vertical jackpot runs", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const scattered = [
+    "MISS", "BANK", "MISS", "JACKPOT", "MISS",
+    "MISS", "BANK", "MISS", "JACKPOT", "MISS",
+    "BANK", "MISS", "JACKPOT", "MISS", "MISS",
+  ];
+  const diagonal = Array.from({ length: 15 }, () => "MISS");
+  diagonal[0] = "JACKPOT";
+  diagonal[6] = "JACKPOT";
+  diagonal[12] = "JACKPOT";
+
+  assert.equal(store._test.evaluateJackpotBoard(scattered).hit, false);
+  assert.equal(store._test.evaluateJackpotBoard(diagonal).hit, false);
+
+  const vertical = Array.from({ length: 15 }, () => "MISS");
+  vertical[3] = "JACKPOT";
+  vertical[8] = "JACKPOT";
+  vertical[13] = "JACKPOT";
+  assert.deepEqual(store._test.evaluateJackpotBoard(vertical), {
+    hit: true,
+    level: 1,
+    spins: 1,
+    payline: [3, 8, 13],
+    orientation: "vertical",
+  });
+
+  const fourHorizontal = Array.from({ length: 15 }, () => "MISS");
+  [5, 6, 7, 8].forEach(i => { fourHorizontal[i] = "JACKPOT"; });
+  assert.deepEqual(store._test.evaluateJackpotBoard(fourHorizontal), {
+    hit: true,
+    level: 2,
+    spins: 2,
+    payline: [5, 6, 7, 8],
+    orientation: "horizontal",
+  });
+
+  const fiveHorizontal = Array.from({ length: 15 }, () => "MISS");
+  [10, 11, 12, 13, 14].forEach(i => { fiveHorizontal[i] = "JACKPOT"; });
+  assert.deepEqual(store._test.evaluateJackpotBoard(fiveHorizontal), {
+    hit: true,
+    level: 3,
+    spins: 3,
+    payline: [10, 11, 12, 13, 14],
+    orientation: "horizontal",
+  });
+});
+
+test("applyTileOverrideToScreen does not turn scattered jackpots into a payline", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const board = [
+    "MISS", "BANK", "MISS", "JACKPOT", "MISS",
+    "MISS", "BANK", "MISS", "JACKPOT", "MISS",
+    "BANK", "MISS", "JACKPOT", "MISS", "MISS",
+  ];
+  const screen = store._test.applyTileOverrideToScreen(
+    { board: Array.from({ length: 15 }, () => "MISS"), payline: [], payout: {} },
+    { tiles: board, created_at: "now" },
+    { kind: "free" },
+    { settings: { monthly_goal_cents: 10000 } },
+    { today: 0, week: 0, monthlyGoal: 10000 },
+    false
+  );
+
+  assert.deepEqual(screen.payline, []);
+  assert.equal(screen.jackpot.hit, false);
 });
 
 test("applyTileOverrideToScreen keeps exact tiles and pays bank from override on bank-builder spins", () => {

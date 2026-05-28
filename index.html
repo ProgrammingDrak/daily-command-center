@@ -196,6 +196,7 @@
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
+  <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
@@ -1042,6 +1043,22 @@
   </div>
 </div>
 
+<div class="tab-content" id="tab-delegated">
+  <div class="delegated-header">
+    <h2 class="delegated-title">Delegated</h2>
+    <button class="primary" id="delegated-new-btn">+ New delegated item</button>
+  </div>
+  <div class="delegated-filter-bar">
+    <button class="delegated-filter-btn active" data-filter="all">All</button>
+    <button class="delegated-filter-btn" data-filter="upcoming">Upcoming</button>
+    <button class="delegated-filter-btn" data-filter="overdue">Overdue</button>
+    <button class="delegated-filter-btn" data-filter="done">Done</button>
+  </div>
+  <div class="delegated-list" id="delegated-list">
+    <div class="delegated-empty">No delegated items yet. Click "+ New delegated item" to create one.</div>
+  </div>
+</div>
+
 <div class="tab-content" id="tab-pet-home">
   <div class="pet-shell">
     <div class="pet-topline">
@@ -1153,6 +1170,7 @@
               </button>
             </div>
           </div>
+          <div class="slot-bankroll-goal-panel" id="slot-bankroll-goal-panel"></div>
           <div class="slot-pet-companion" id="slot-pet-companion" aria-live="polite">
             <div class="slot-pet-speech" id="slot-pet-speech">Ready.</div>
             <button class="slot-lever" id="slot-helper-lever" type="button" aria-label="Pull lever"><span></span></button>
@@ -1202,6 +1220,7 @@
           <h3>Outcome Pool</h3>
           <button id="slot-add-reward-btn" class="slot-small-btn" type="button">Add reward</button>
         </div>
+        <div class="slot-bankroll-manager" id="slot-bankroll-manager"></div>
         <div class="slot-tier-manager" id="slot-tier-manager"></div>
         <div class="slot-reward-form" id="slot-reward-form" style="display:none">
           <div class="slot-form-head">
@@ -1294,9 +1313,10 @@
             <option value="200plus">$200+</option>
           </select>
           <select id="slot-reward-eligibility" aria-label="Filter by eligibility">
-            <option value="all">All states</option>
+            <option value="all">Active rewards</option>
             <option value="eligible">Eligible</option>
             <option value="locked">Locked</option>
+            <option value="archived">Archived</option>
           </select>
           <select id="slot-reward-sort" aria-label="Sort rewards">
             <option value="category">Category</option>

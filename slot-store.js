@@ -23,7 +23,14 @@ const PAYLINES = [
   [0, 1, 2], [1, 2, 3], [2, 3, 4],
   [5, 6, 7], [6, 7, 8], [7, 8, 9],
   [10, 11, 12], [11, 12, 13], [12, 13, 14],
-  [0, 6, 12], [2, 6, 10], [4, 8, 12], [2, 8, 14],
+  [0, 5, 10], [1, 6, 11], [2, 7, 12], [3, 8, 13], [4, 9, 14],
+];
+const JACKPOT_PAYLINES = [
+  [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14],
+  [0, 1, 2, 3], [1, 2, 3, 4],
+  [5, 6, 7, 8], [6, 7, 8, 9],
+  [10, 11, 12, 13], [11, 12, 13, 14],
+  ...PAYLINES,
 ];
 const BANK_SCREEN_COUNT_WEIGHTS = [
   [1, 55],
@@ -50,14 +57,16 @@ const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "spons
 const PAYMENT_SOURCES = new Set(["self", "sponsored", "free"]);
 const DEFAULT_JACKPOT_HIT_RATE = 0.2;
 const DEFAULT_SOURCE_WEIGHTS = { self: 45, sponsored: 25, free: 30 };
+const MAX_BANKROLL_GOAL_CENTS = 10000000;
 const DEFAULT_REWARD_TIERS = [
-  { id: "tier_i", label: "Tier I", weight: 36, active: true },
-  { id: "tier_ii", label: "Tier II", weight: 24, active: true },
-  { id: "tier_iii", label: "Tier III", weight: 16, active: true },
-  { id: "tier_iv", label: "Tier IV", weight: 10, active: true },
-  { id: "tier_v", label: "Tier V", weight: 6, active: true },
-  { id: "tier_vi", label: "Tier VI", weight: 3, active: true },
+  { id: "tier_i", label: "Tier 1", weight: 36, active: true },
+  { id: "tier_ii", label: "Tier 2", weight: 24, active: true },
+  { id: "tier_iii", label: "Tier 3", weight: 16, active: true },
+  { id: "tier_iv", label: "Tier 4", weight: 10, active: true },
+  { id: "tier_v", label: "Tier 5", weight: 8, active: true },
+  { id: "tier_vi", label: "Tier 6", weight: 6, active: true },
 ];
+const REWARD_TIER_PERCENT_TOTAL = 100;
 
 const DEFAULT_REWARDS = [
   ...[
@@ -251,12 +260,49 @@ function normalizeRewardTiers(value) {
   }).sort((a, b) => a.sort - b.sort);
 }
 
+function rewardTierPercentTotal(tiers) {
+  return (Array.isArray(tiers) ? tiers : [])
+    .filter(tier => tier && tier.active !== false)
+    .reduce((sum, tier) => sum + clampInt(tier.weight, 0, 1000000), 0);
+}
+
+function assertRewardTierPercentTotal(tiers) {
+  const activeCount = (Array.isArray(tiers) ? tiers : []).filter(tier => tier && tier.active !== false).length;
+  if (!activeCount) {
+    const err = new Error("Keep at least one active jackpot tier.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const total = rewardTierPercentTotal(tiers);
+  if (total !== REWARD_TIER_PERCENT_TOTAL) {
+    const err = new Error(`Tier percentages must add up to 100%. Current active total: ${total}%.`);
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 function normalizeSourceWeights(value) {
   const raw = value && typeof value === "object" ? value : {};
   return {
     self: clampInt(raw.self ?? DEFAULT_SOURCE_WEIGHTS.self, 0, 1000000),
     sponsored: clampInt(raw.sponsored ?? raw.sponsor ?? DEFAULT_SOURCE_WEIGHTS.sponsored, 0, 1000000),
     free: clampInt(raw.free ?? DEFAULT_SOURCE_WEIGHTS.free, 0, 1000000),
+  };
+}
+
+function normalizeBankrollGoal(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  const rewardId = raw.reward_id ?? raw.rewardId;
+  const iconId = String(raw.icon_id || raw.iconId || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 40);
+  return {
+    enabled: raw.enabled === true,
+    reward_id: rewardId == null || rewardId === "" ? null : Number.parseInt(rewardId, 10),
+    target_cents: clampInt(raw.target_cents ?? raw.targetCents ?? 0, 0, MAX_BANKROLL_GOAL_CENTS),
+    icon_id: iconId || "gift",
+    description: String(raw.description || "").trim().slice(0, 500),
+    funded_at: raw.funded_at || raw.fundedAt || null,
+    celebration_spin_claimed_at: raw.celebration_spin_claimed_at || raw.celebrationSpinClaimedAt || null,
+    updated_at: raw.updated_at || raw.updatedAt || null,
   };
 }
 
@@ -495,7 +541,9 @@ function normalizeSlotSettings(settings = {}) {
     payment_source_weights: normalizeSourceWeights(raw.payment_source_weights || raw.paymentSourceWeights),
     reward_tiers: normalizeRewardTiers(raw.reward_tiers || raw.rewardTiers),
     reroll_credits: clampInt(raw.reroll_credits ?? raw.rerollCredits ?? 0, 0, 1000),
+    jackpot_spin_credits: clampInt(raw.jackpot_spin_credits ?? raw.jackpotSpinCredits ?? 0, 0, 1000),
     monthly_goal_cents: clampInt(raw.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000),
+    bankroll_goal: normalizeBankrollGoal(raw.bankroll_goal || raw.bankrollGoal),
     shortfall_penalty: String(raw.shortfall_penalty || DEFAULT_SHORTFALL_PENALTY),
     scoring_rationale: String(raw.scoring_rationale || DEFAULT_SCORING_RATIONALE),
     next_spin_tile_override: normalizeStoredNextSpinTileOverride(raw.next_spin_tile_override || raw.nextSpinTileOverride),
@@ -619,6 +667,22 @@ function reserveCostCents(row) {
   return Math.max(row.value_cents || 0, row.unlock_threshold_cents || 0);
 }
 
+function isSelfFundedPaidReward(row) {
+  return !!row &&
+    ["small_paid", "bank_gated"].includes(row.kind) &&
+    normalizePaymentSource(row.payment_source, row.kind) === "self" &&
+    reserveCostCents(row) > 0;
+}
+
+function isBankrollGoalModeActive(settings = {}) {
+  const goal = normalizeSlotSettings(settings).bankroll_goal;
+  return !!(goal.enabled && goal.reward_id && goal.target_cents > 0 && !goal.celebration_spin_claimed_at);
+}
+
+function isBankrollGoalExcluded(row, settings = {}) {
+  return isBankrollGoalModeActive(settings) && isSelfFundedPaidReward(row);
+}
+
 function isJackpotChoiceReward(row) {
   return !!row && ["small_paid", "bank_gated", "sponsor"].includes(row.kind);
 }
@@ -639,6 +703,7 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   const paymentSource = normalizePaymentSource(row.payment_source, row.kind);
   const chanceShares = Math.max(0, parseInt(row.chance_shares ?? row.weight, 10) || 0);
   const reserveLocked = ["small_paid", "bank_gated"].includes(row.kind) && threshold > 0 && !reserveAffordable;
+  const bankrollGoalExcluded = isBankrollGoalExcluded(row, account && account.settings);
   return {
     ...row,
     payment_source: paymentSource,
@@ -646,13 +711,15 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     chance_shares: chanceShares,
     weight: chanceShares,
     sponsor_splits: normalizeSponsorSplits(row.sponsor_splits),
-    eligible: !!row.active && chanceShares > 0 && !bankCapLocked && !reserveLocked,
+    eligible: !!row.active && chanceShares > 0 && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded,
     jackpot_type: jackpotType(row),
+    bankroll_goal_excluded: bankrollGoalExcluded,
     reserve_cost_cents: threshold,
     reserve_affordable: reserveAffordable,
     reserve_shortfall_cents: Math.max(0, threshold - bankBalance),
     locked_reason: !row.active ? "inactive" :
       chanceShares <= 0 ? "zero_weight" :
+      bankrollGoalExcluded ? "bankroll_goal" :
       reserveLocked ? "bank_too_small" :
       bankCapLocked ? "bank_cap" :
       null,
@@ -716,6 +783,66 @@ async function getPendingBankDeposit(workspaceId) {
   return { cents: pending.cents, count: pending.count, oldest_at: pending.oldest_at };
 }
 
+function buildBankrollGoalState(account, rewardRows, bankUsage, funding) {
+  const settings = normalizeSlotSettings(account && account.settings);
+  const goal = settings.bankroll_goal;
+  const baseFunding = funding || {};
+  const disabled = {
+    enabled: false,
+    reward: null,
+    reward_id: null,
+    target_cents: 0,
+    icon_id: goal.icon_id || "gift",
+    description: goal.description || "",
+    ready_cents: baseFunding.ready || 0,
+    pending_cents: baseFunding.pending || 0,
+    total_cents: baseFunding.total || 0,
+    remaining_cents: 0,
+    progress_percent: 0,
+    funded: false,
+    claimable: false,
+    completed: false,
+    missing: false,
+    funded_at: null,
+    celebration_spin_claimed_at: null,
+  };
+  if (!goal.enabled) return disabled;
+
+  const row = (rewardRows || []).find(r => String(r.id) === String(goal.reward_id));
+  const ready = baseFunding.ready || 0;
+  const pending = baseFunding.pending || 0;
+  const total = baseFunding.total != null ? baseFunding.total : ready + pending;
+  const target = Math.max(goal.target_cents || reserveCostCents(row), 0);
+  const completed = !!goal.celebration_spin_claimed_at;
+  const funded = target > 0 && total >= target;
+  const displayAccount = {
+    ...(account || {}),
+    settings: {
+      ...settings,
+      bankroll_goal: { ...goal, enabled: false },
+    },
+  };
+  return {
+    enabled: true,
+    reward: row ? rowToReward(row, displayAccount, bankUsage, total) : null,
+    reward_id: goal.reward_id,
+    target_cents: target,
+    icon_id: goal.icon_id || "gift",
+    description: goal.description || (row && row.notes) || "",
+    ready_cents: ready,
+    pending_cents: pending,
+    total_cents: total,
+    remaining_cents: Math.max(0, target - total),
+    progress_percent: target > 0 ? Math.max(0, Math.min(100, Math.round((total / target) * 100))) : 0,
+    funded,
+    claimable: !!row && funded && !completed,
+    completed,
+    missing: !row,
+    funded_at: goal.funded_at || null,
+    celebration_spin_claimed_at: goal.celebration_spin_claimed_at || null,
+  };
+}
+
 async function getState(workspaceId, userId) {
   const account = accountWithSettings(await ensureAccount(workspaceId, userId));
   const spinCost = getSpinCost(account);
@@ -730,6 +857,7 @@ async function getState(workspaceId, userId) {
     "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> $2 AND deleted_at IS NULL ORDER BY active DESC, kind, title",
     [workspaceId, LEGACY_BANK_BUILDER_KIND]
   );
+  const bankrollGoal = buildBankrollGoalState(account, rewardRows, bankUsage, funding);
   const rewards = rewardRows
     .filter(r => r.kind !== LEGACY_BANK_BUILDER_KIND)
     .map(r => rowToReward(r, account, bankUsage, funding.total));
@@ -744,6 +872,7 @@ async function getState(workspaceId, userId) {
     bankUsage,
     pendingBankDeposit,
     funding,
+    bankrollGoal,
     constants: {
       spinCost,
       spinCostPoints: spinCost,
@@ -756,8 +885,10 @@ async function getState(workspaceId, userId) {
       paymentSourceWeights: account.settings.payment_source_weights,
       rewardTiers: account.settings.reward_tiers,
       rerollCredits: account.settings.reroll_credits,
+      jackpotSpinCredits: account.settings.jackpot_spin_credits,
       shortfallPenalty: account.settings.shortfall_penalty,
       scoringRationale: account.settings.scoring_rationale,
+      bankrollGoalModeEnabled: isBankrollGoalModeActive(account.settings),
     },
   };
 }
@@ -765,6 +896,10 @@ async function getState(workspaceId, userId) {
 async function updateSettings(workspaceId, userId, body = {}) {
   const account = accountWithSettings(await ensureAccount(workspaceId, userId));
   const current = account.settings || {};
+  const rewardTiers = normalizeRewardTiers(
+    body.reward_tiers || body.rewardTiers || current.reward_tiers || DEFAULT_REWARD_TIERS
+  );
+  if (body.reward_tiers || body.rewardTiers) assertRewardTierPercentTotal(rewardTiers);
   const next = {
     ...current,
     spin_cost: clampInt(body.spin_cost || body.spinCost || current.spin_cost || DEFAULT_SPIN_COST, 1, 250),
@@ -777,9 +912,7 @@ async function updateSettings(workspaceId, userId, body = {}) {
     payment_source_weights: normalizeSourceWeights(
       body.payment_source_weights || body.paymentSourceWeights || current.payment_source_weights || DEFAULT_SOURCE_WEIGHTS
     ),
-    reward_tiers: normalizeRewardTiers(
-      body.reward_tiers || body.rewardTiers || current.reward_tiers || DEFAULT_REWARD_TIERS
-    ),
+    reward_tiers: rewardTiers,
     reroll_credits: clampInt(
       body.reroll_credits ?? body.rerollCredits ?? current.reroll_credits ?? 0,
       0,
@@ -806,6 +939,109 @@ async function updateSettings(workspaceId, userId, body = {}) {
     [workspaceId, next]
   );
   return accountWithSettings(rows[0]);
+}
+
+async function setBankrollGoal(workspaceId, userId, body = {}) {
+  await ensureAccount(workspaceId, userId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    let rewardRow = null;
+    const rewardId = body.reward_id || body.rewardId;
+    if (rewardId) {
+      const { rows } = await client.query(
+        "SELECT * FROM slot_rewards WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE",
+        [workspaceId, rewardId]
+      );
+      rewardRow = rows[0];
+      if (!rewardRow) throw notFound("Reward not found");
+    } else {
+      const title = String(body.title || "").trim();
+      const targetCents = Math.max(0, parseInt(body.target_cents ?? body.targetCents ?? body.value_cents ?? body.valueCents, 10) || 0);
+      if (!title) {
+        const err = new Error("Reward or title required");
+        err.statusCode = 400;
+        throw err;
+      }
+      if (targetCents <= 0) {
+        const err = new Error("Bankroll goal needs a positive target");
+        err.statusCode = 400;
+        throw err;
+      }
+      const { rows } = await client.query(
+        `INSERT INTO slot_rewards
+         (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,requires_confirmation,cooldown_days,unlock_threshold_cents,notes)
+         VALUES ($1,$2,'bank_gated','self','[]',$3,$3,'self',$4,TRUE,TRUE,$5,0,FALSE,0,$5,$6)
+         RETURNING *`,
+        [workspaceId, title, Math.max(0, parseInt(body.chance_shares ?? body.weight, 10) || 0), String(body.tier_id || body.tierId || "tier_i"), targetCents, String(body.notes || "Dedicated bankroll goal.")]
+      );
+      rewardRow = rows[0];
+    }
+    if (!isSelfFundedPaidReward(rewardRow)) {
+      const err = new Error("Bankroll goal must be a self-funded paid reward");
+      err.statusCode = 400;
+      throw err;
+    }
+    const targetCents = Math.max(
+      parseInt(body.target_cents ?? body.targetCents, 10) || 0,
+      reserveCostCents(rewardRow)
+    );
+    if (targetCents <= 0) {
+      const err = new Error("Bankroll goal needs a positive target");
+      err.statusCode = 400;
+      throw err;
+    }
+    const nextGoal = {
+      enabled: true,
+      reward_id: rewardRow.id,
+      target_cents: Math.min(targetCents, MAX_BANKROLL_GOAL_CENTS),
+      icon_id: normalizeBankrollGoal({ icon_id: body.icon_id || body.iconId }).icon_id,
+      description: String(body.description || body.notes || rewardRow.notes || "").trim().slice(0, 500),
+      funded_at: null,
+      celebration_spin_claimed_at: null,
+      updated_at: new Date().toISOString(),
+    };
+    await client.query(
+      `UPDATE slot_accounts
+       SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+           updated_at = NOW()
+       WHERE workspace_id = $1`,
+      [workspaceId, JSON.stringify({ bankroll_goal: nextGoal })]
+    );
+    await client.query("COMMIT");
+    return getState(workspaceId, userId);
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function clearBankrollGoal(workspaceId, userId) {
+  await ensureAccount(workspaceId, userId);
+  const nextGoal = {
+    enabled: false,
+    reward_id: null,
+    target_cents: 0,
+    icon_id: "gift",
+    description: "",
+    funded_at: null,
+    celebration_spin_claimed_at: null,
+    updated_at: new Date().toISOString(),
+  };
+  await pool.query(
+    `UPDATE slot_accounts
+     SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1`,
+    [workspaceId, JSON.stringify({ bankroll_goal: nextGoal })]
+  );
+  return getState(workspaceId, userId);
 }
 
 async function setNextSpinTileOverride(workspaceId, userId, body = {}) {
@@ -1086,6 +1322,13 @@ function tierOptions(settings) {
   return normalizeSlotSettings(settings).reward_tiers
     .filter(tier => tier.active !== false)
     .map(tier => ({ ...tier, weight: Number(tier.weight) || 0 }));
+}
+
+function tierStageForReward(settings, reward) {
+  const tierId = String((reward && reward.tier_id) || "tier_i");
+  return tierOptions(settings).find(tier => String(tier.id) === tierId) ||
+    normalizeSlotSettings(settings).reward_tiers.find(tier => String(tier.id) === tierId) ||
+    { id: tierId, label: "Tier I", weight: 0, active: true };
 }
 
 function jackpotHits(settings, rng = crypto.randomInt) {
@@ -1390,10 +1633,91 @@ function normalizeNextSpinTileOverride(body = {}, userId = null) {
   };
 }
 
+function emptyJackpotScreenResult() {
+  return {
+    hit: false,
+    level: 0,
+    spins: 0,
+    payline: [],
+    orientation: null,
+  };
+}
+
+function jackpotSpinsForLine(line, orientation) {
+  if (orientation === "horizontal") {
+    if (line.length >= 5) return 3;
+    if (line.length >= 4) return 2;
+    if (line.length >= 3) return 1;
+  }
+  if (orientation === "vertical" && line.length >= 3) return 1;
+  return 0;
+}
+
+function bestJackpotScreenResult(candidates) {
+  const best = candidates
+    .filter(candidate => candidate.spins > 0)
+    .sort((a, b) =>
+      b.spins - a.spins ||
+      b.payline.length - a.payline.length ||
+      a.payline[0] - b.payline[0]
+    )[0];
+  return best || emptyJackpotScreenResult();
+}
+
+function evaluateJackpotBoard(board) {
+  if (!Array.isArray(board) || board.length !== SLOT_CELL_COUNT) return emptyJackpotScreenResult();
+  const candidates = [];
+
+  for (let row = 0; row < SLOT_ROWS; row++) {
+    let run = [];
+    for (let col = 0; col < SLOT_COLS; col++) {
+      const idx = row * SLOT_COLS + col;
+      if (board[idx] === "JACKPOT") run.push(idx);
+      if (board[idx] !== "JACKPOT" || col === SLOT_COLS - 1) {
+        const spins = jackpotSpinsForLine(run, "horizontal");
+        if (spins > 0) {
+          candidates.push({
+            hit: true,
+            level: spins,
+            spins,
+            payline: [...run],
+            orientation: "horizontal",
+          });
+        }
+        run = [];
+      }
+    }
+  }
+
+  for (let col = 0; col < SLOT_COLS; col++) {
+    let run = [];
+    for (let row = 0; row < SLOT_ROWS; row++) {
+      const idx = row * SLOT_COLS + col;
+      if (board[idx] === "JACKPOT") run.push(idx);
+      if (board[idx] !== "JACKPOT" || row === SLOT_ROWS - 1) {
+        const spins = jackpotSpinsForLine(run, "vertical");
+        if (spins > 0) {
+          candidates.push({
+            hit: true,
+            level: 1,
+            spins,
+            payline: [...run],
+            orientation: "vertical",
+          });
+        }
+        run = [];
+      }
+    }
+  }
+
+  return bestJackpotScreenResult(candidates);
+}
+
 function overridePayline(board, selected) {
   if (!selected || selected.kind === "miss" || selected.kind === "bank_builder") return [];
   const symbol = rewardSymbol(selected);
-  return PAYLINES.find(line => line.every(i => board[i] === symbol)) || [];
+  if (symbol === "JACKPOT") return evaluateJackpotBoard(board).payline;
+  return [];
 }
 
 function applyTileOverrideToScreen(screen, override, selected, account, bankUsage, screenBankHit) {
@@ -1408,6 +1732,7 @@ function applyTileOverrideToScreen(screen, override, selected, account, bankUsag
     payout: canPayBank
       ? calculateScreenBankPayout(board, account, bankUsage)
       : emptyScreenBankPayout(account, bankUsage),
+    jackpot: evaluateJackpotBoard(board),
     override: stored,
   };
 }
@@ -1431,7 +1756,7 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
   let payline = [];
 
   if (!isMiss && selected.kind !== "bank_builder") {
-    const line = PAYLINES[crypto.randomInt(PAYLINES.length)];
+    const line = JACKPOT_PAYLINES[crypto.randomInt(JACKPOT_PAYLINES.length)];
     payline = [...line];
     line.forEach(i => {
       board[i] = selectedSymbol;
@@ -1456,7 +1781,22 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
   const payout = canPlaceBankSymbols
     ? calculateScreenBankPayout(board, account, bankUsage)
     : emptyScreenBankPayout(account, bankUsage);
-  return { board, payline, payout };
+  const jackpot = evaluateJackpotBoard(board);
+  return { board, payline: jackpot.payline.length ? jackpot.payline : payline, payout, jackpot };
+}
+
+function buildBankrollGoalCelebrationScreen(account, bankUsage) {
+  const board = Array.from({ length: SLOT_CELL_COUNT }, () => "MISS");
+  [0, 1, 2, 3, 4].forEach(i => { board[i] = "JACKPOT"; });
+  [7, 11, 13].forEach(i => { board[i] = "BANK"; });
+  const jackpot = evaluateJackpotBoard(board);
+  return {
+    board,
+    payline: jackpot.payline,
+    payout: emptyScreenBankPayout(account, bankUsage),
+    jackpot,
+    override: null,
+  };
 }
 
 function calculateScreenBankPayout(board, account, bankUsage) {
@@ -1559,17 +1899,19 @@ async function spin(workspaceId, userId) {
   const spinCost = state.constants.spinCost;
   const settings = normalizeSlotSettings(state.account.settings || {});
   const hasRerollCredit = settings.reroll_credits > 0;
-  if (!hasRerollCredit && state.account.point_balance < spinCost) {
+  const hasJackpotSpinCredit = settings.jackpot_spin_credits > 0;
+  if (!hasRerollCredit && !hasJackpotSpinCredit && state.account.point_balance < spinCost) {
     const err = new Error("Not enough points");
     err.statusCode = 400;
     throw err;
   }
   const drawPool = state.rewards.filter(r => r.kind !== "miss");
-  const outcome = selectThreeStageOutcome(drawPool, settings);
-  const selected = outcome.selected;
+  const outcome = selectThreeStageOutcome(
+    drawPool,
+    hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, bank_builder_hit_rate: 0 } : settings
+  );
+  let selected = outcome.selected;
   const canHitScreenBank = outcome.bank_builder_hit === true;
-  const reserveCost = outcome.jackpot_hit && !outcome.empty_bucket ? reserveCostCents(selected) : 0;
-  const bankReserved = reserveCost;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1578,8 +1920,9 @@ async function spin(workspaceId, userId) {
       [workspaceId]
     );
     const lockedSettings = normalizeSlotSettings(account && account.settings);
-    const usedRerollCredit = lockedSettings.reroll_credits > 0;
-    const lockedSpinCost = usedRerollCredit ? 0 : getSpinCost(account);
+    const usedJackpotSpinCredit = lockedSettings.jackpot_spin_credits > 0;
+    const usedRerollCredit = !usedJackpotSpinCredit && lockedSettings.reroll_credits > 0;
+    const lockedSpinCost = (usedRerollCredit || usedJackpotSpinCredit) ? 0 : getSpinCost(account);
     if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough points");
     const baseScreen = buildSpinScreen(selected, { ...account, settings: lockedSettings }, state.bankUsage, canHitScreenBank);
     const screen = applyTileOverrideToScreen(
@@ -1590,34 +1933,61 @@ async function spin(workspaceId, userId) {
       state.bankUsage,
       canHitScreenBank
     );
-    const bankDelta = outcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
+    const screenJackpot = screen.jackpot || evaluateJackpotBoard(screen.board);
+    let effectiveOutcome = outcome;
+    if (outcome.jackpot_hit && selected.kind !== "bank_builder" && !screenJackpot.hit) {
+      selected = fakeMissReward();
+      effectiveOutcome = {
+        ...outcome,
+        outcome: "miss",
+        jackpot_hit: false,
+        selected,
+        source: null,
+        tier: null,
+        bucket: [],
+        empty_bucket: false,
+        dice_reroll: null,
+      };
+      screen.payline = [];
+    }
+    const reserveCost = effectiveOutcome.jackpot_hit && !effectiveOutcome.empty_bucket ? reserveCostCents(selected) : 0;
+    const bankReserved = reserveCost;
+    const bankDelta = effectiveOutcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
+    const jackpotSpinCount = effectiveOutcome.jackpot_hit ? screenJackpot.spins : 0;
+    const bonusJackpotSpinCredits = Math.max(0, jackpotSpinCount - 1);
     const selectedSnapshot = {
       ...selected,
       source_type: bankDelta > 0 ? "slot_screen_bank_builder" : selected.source_type,
-      payment_source: selected.payment_source || (outcome.source && outcome.source.id) || defaultPaymentSourceForKind(selected.kind),
-      tier_id: selected.tier_id || (outcome.tier && outcome.tier.id) || "tier_i",
+      payment_source: selected.payment_source || (effectiveOutcome.source && effectiveOutcome.source.id) || defaultPaymentSourceForKind(selected.kind),
+      tier_id: selected.tier_id || (effectiveOutcome.tier && effectiveOutcome.tier.id) || "tier_i",
       slot_stages: {
-        outcome: outcome.outcome,
-        jackpot_hit: outcome.jackpot_hit,
+        outcome: effectiveOutcome.outcome,
+        jackpot_hit: effectiveOutcome.jackpot_hit,
         jackpot_hit_rate: settings.jackpot_hit_rate,
-        bank_builder_hit: outcome.bank_builder_hit,
+        jackpot_level: effectiveOutcome.jackpot_hit ? screenJackpot.level : 0,
+        jackpot_spins: jackpotSpinCount,
+        bonus_jackpot_spin_credits: bonusJackpotSpinCredits,
+        jackpot_orientation: effectiveOutcome.jackpot_hit ? screenJackpot.orientation : null,
+        jackpot_payline: effectiveOutcome.jackpot_hit ? screenJackpot.payline : [],
+        bank_builder_hit: effectiveOutcome.bank_builder_hit,
         bank_builder_hit_rate: settings.bank_builder_hit_rate,
-        payment_source: outcome.source,
-        tier: outcome.tier,
-        empty_bucket: outcome.empty_bucket,
-        reroll_credit: outcome.reroll_credit,
-        dice_reroll: outcome.dice_reroll,
-        reward_spin: outcome.jackpot_hit && !outcome.empty_bucket ? (
-          outcome.dice_reroll &&
-          outcome.dice_reroll.default_choice &&
-          outcome.dice_reroll.choices &&
-          outcome.dice_reroll.choices[outcome.dice_reroll.default_choice]
-            ? outcome.dice_reroll.choices[outcome.dice_reroll.default_choice].reward_spin
+        payment_source: effectiveOutcome.source,
+        tier: effectiveOutcome.tier,
+        empty_bucket: effectiveOutcome.empty_bucket,
+        reroll_credit: effectiveOutcome.reroll_credit,
+        dice_reroll: effectiveOutcome.dice_reroll,
+        reward_spin: effectiveOutcome.jackpot_hit && !effectiveOutcome.empty_bucket ? (
+          effectiveOutcome.dice_reroll &&
+          effectiveOutcome.dice_reroll.default_choice &&
+          effectiveOutcome.dice_reroll.choices &&
+          effectiveOutcome.dice_reroll.choices[effectiveOutcome.dice_reroll.default_choice]
+            ? effectiveOutcome.dice_reroll.choices[effectiveOutcome.dice_reroll.default_choice].reward_spin
             : {
               reward_id: selected.id,
               chance_shares: selected.chance_shares || selected.weight || 0,
-              bucket_size: outcome.bucket.length,
-              bucket_total_shares: bucketTotalShares(outcome.bucket),
+              spin_count: jackpotSpinCount || 1,
+              bucket_size: effectiveOutcome.bucket.length,
+              bucket_total_shares: bucketTotalShares(effectiveOutcome.bucket),
             }
         ) : null,
       },
@@ -1626,14 +1996,15 @@ async function spin(workspaceId, userId) {
       bank_screen_payout: screen.payout,
       screen_override: screen.override,
     };
-    const status = outcome.reroll_credit
+    const status = effectiveOutcome.reroll_credit
       ? "reroll_credit"
       : selected.kind === "miss"
       ? "miss"
       : selected.kind === "bank_builder" || bankDelta > 0 || reserveCost > 0 || selected.requires_confirmation
       ? "pending"
       : "awarded";
-    const nextRerollCredits = Math.max(0, lockedSettings.reroll_credits - (usedRerollCredit ? 1 : 0)) + (outcome.reroll_credit ? 1 : 0);
+    const nextRerollCredits = Math.max(0, lockedSettings.reroll_credits - (usedRerollCredit ? 1 : 0)) + (effectiveOutcome.reroll_credit ? 1 : 0);
+    const nextJackpotSpinCredits = Math.max(0, lockedSettings.jackpot_spin_credits - (usedJackpotSpinCredit ? 1 : 0)) + bonusJackpotSpinCredits;
     await client.query(
       `UPDATE slot_accounts
        SET point_balance = point_balance - $2,
@@ -1642,6 +2013,7 @@ async function spin(workspaceId, userId) {
        WHERE workspace_id=$1`,
       [workspaceId, lockedSpinCost, JSON.stringify({
         reroll_credits: nextRerollCredits,
+        jackpot_spin_credits: nextJackpotSpinCredits,
         next_spin_tile_override: null,
       })]
     );
@@ -1812,6 +2184,133 @@ async function confirmPendingBankBuilders(workspaceId) {
   }
 }
 
+async function celebrationSpinForBankrollGoal(workspaceId, userId) {
+  await ensureAccount(workspaceId, userId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = normalizeSlotSettings(account && account.settings);
+    const goal = settings.bankroll_goal;
+    if (!goal.enabled || !goal.reward_id) {
+      const err = new Error("No active bankroll goal");
+      err.statusCode = 400;
+      throw err;
+    }
+    if (goal.celebration_spin_claimed_at) {
+      const err = new Error("Bankroll goal celebration already claimed");
+      err.statusCode = 400;
+      throw err;
+    }
+    const { rows: rewardRows } = await client.query(
+      "SELECT * FROM slot_rewards WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE",
+      [workspaceId, goal.reward_id]
+    );
+    const selected = rewardRows[0];
+    if (!selected || !isSelfFundedPaidReward(selected)) {
+      const err = new Error("Bankroll goal reward is not available");
+      err.statusCode = 400;
+      throw err;
+    }
+    await sweepPendingBankBuildersInTx(client, workspaceId);
+    const { rows: [freshAccount] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const targetCents = Math.max(goal.target_cents || 0, reserveCostCents(selected));
+    if (((freshAccount && freshAccount.bank_balance_cents) || 0) < targetCents) {
+      const err = new Error("Not enough Reward Reserve for that bankroll goal");
+      err.statusCode = 400;
+      throw err;
+    }
+    const bankUsage = { today: 0, week: 0, month: 0, monthlyGoal: settings.monthly_goal_cents };
+    const screen = buildBankrollGoalCelebrationScreen({ ...freshAccount, settings }, bankUsage);
+    const tier = tierStageForReward(settings, selected);
+    const now = new Date().toISOString();
+    const nextGoal = {
+      ...goal,
+      enabled: true,
+      reward_id: selected.id,
+      target_cents: targetCents,
+      icon_id: goal.icon_id || "gift",
+      description: goal.description || selected.notes || "",
+      funded_at: goal.funded_at || now,
+      celebration_spin_claimed_at: now,
+      updated_at: now,
+    };
+    const selectedSnapshot = {
+      ...selected,
+      sponsor_splits: normalizeSponsorSplits(selected.sponsor_splits),
+      source_type: "bankroll_goal_celebration",
+      payment_source: "self",
+      tier_id: selected.tier_id || tier.id || "tier_i",
+      bankroll_goal_celebration: true,
+      bankroll_goal: {
+        reward_id: selected.id,
+        target_cents: targetCents,
+        icon_id: nextGoal.icon_id,
+        description: nextGoal.description,
+        funded_at: nextGoal.funded_at,
+        celebration_spin_claimed_at: now,
+      },
+      requires_jackpot_choice: false,
+      slot_stages: {
+        outcome: "bankroll_goal",
+        jackpot_hit: true,
+        jackpot_hit_rate: 1,
+        jackpot_level: screen.jackpot.level || 3,
+        jackpot_spins: 1,
+        jackpot_orientation: screen.jackpot.orientation || "horizontal",
+        jackpot_payline: screen.jackpot.payline || screen.payline || [],
+        bank_builder_hit: false,
+        bank_builder_hit_rate: settings.bank_builder_hit_rate,
+        payment_source: { id: "self", label: "Self", weight: 0 },
+        tier,
+        empty_bucket: false,
+        reroll_credit: false,
+        dice_reroll: null,
+        reward_spin: {
+          reward_id: selected.id,
+          chance_shares: selected.chance_shares || selected.weight || 0,
+          spin_count: 1,
+          bucket_size: 1,
+          bucket_total_shares: Math.max(1, selected.chance_shares || selected.weight || 0),
+        },
+      },
+      screen_board: screen.board,
+      screen_payline: screen.payline,
+      bank_screen_payout: screen.payout,
+      screen_override: null,
+    };
+    await client.query(
+      `UPDATE slot_accounts
+       SET bank_balance_cents = GREATEST(0, bank_balance_cents - $2),
+           settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb,
+           updated_at=NOW()
+       WHERE workspace_id=$1`,
+      [workspaceId, targetCents, JSON.stringify({ bankroll_goal: nextGoal })]
+    );
+    const { rows: [spinRow] } = await client.query(
+      `INSERT INTO slot_spins
+       (workspace_id,user_id,cost_credits,reward_id,reward_snapshot,status,bank_delta_cents,bank_reserved_cents,confirmed_at)
+       VALUES ($1,$2,0,$3,$4,'confirmed',0,$5,NOW())
+       RETURNING *`,
+      [workspaceId, userId || null, selected.id || null, selectedSnapshot, targetCents]
+    );
+    await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
+    await client.query("COMMIT");
+    return spinRow;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 function notFound(message) {
   const err = new Error(message);
   err.statusCode = 404;
@@ -1824,6 +2323,8 @@ module.exports = {
   updateSettings,
   setNextSpinTileOverride,
   clearNextSpinTileOverride,
+  setBankrollGoal,
+  clearBankrollGoal,
   chooseSpinDiceReroll,
   createReward,
   updateReward,
@@ -1832,6 +2333,7 @@ module.exports = {
   spin,
   confirmSpin,
   confirmPendingBankBuilders,
+  celebrationSpinForBankrollGoal,
   _test: {
     buildSpinScreen,
     calculateScreenBankPayout,
@@ -1839,10 +2341,13 @@ module.exports = {
     normalizeTileBoard,
     normalizeNextSpinTileOverride,
     applyTileOverrideToScreen,
+    buildBankrollGoalState,
+    buildBankrollGoalCelebrationScreen,
     chooseSingleDieRerollAttempt,
     normalizeSlotSettings,
     selectThreeStageOutcome,
     chooseWeighted,
     bankBuilderHits,
+    evaluateJackpotBoard,
   },
 };
