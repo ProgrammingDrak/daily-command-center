@@ -424,6 +424,19 @@
     }
   }
 
+  function handleSlotChanged(){
+    if(isSpinning){
+      refreshSlotsAfterSpin = true;
+      return;
+    }
+    loadSlots();
+  }
+
+  async function loadSlotsAfterSpin(){
+    refreshSlotsAfterSpin = false;
+    await loadSlots();
+  }
+
   function switchSlotSection(section){
     activeSlotSection = section || "machine";
     applySlotSection();
@@ -2211,7 +2224,7 @@
 
   function resultSymbols(spinRow, reward){
     if(reward && Array.isArray(reward.screen_board) && reward.screen_board.length){
-      return dressScreenBoard(reward.screen_board, spinRow || {}, reward || {});
+      return reward.screen_board;
     }
     const seed = hashCode([spinRow.id || 0, spinRow.created_at || "", reward.title || "", reward.kind || ""].join("|"));
     const rng = seededRandom(seed);
@@ -2238,7 +2251,9 @@
     const status = spinRow && spinRow.status;
     const isMiss = status === "miss" || (snap && snap.kind === "miss");
     const payout = (snap && snap.bank_screen_payout) || {};
-    if((spinRow && (spinRow.bank_delta_cents || 0) > 0) && Array.isArray(payout.positions)) {
+    const stages = (snap && snap.slot_stages) || {};
+    const bankScreenHit = stages.bank_builder_hit || (snap && snap.kind === "bank_builder") || (snap && snap.source_type === "slot_screen_bank_builder");
+    if(bankScreenHit && Array.isArray(payout.positions)) {
       return payout.positions;
     }
     if(!isMiss && payline.length) return payline;
