@@ -4,8 +4,12 @@ document.querySelectorAll(".svt-btn").forEach(btn=>{
     schedView=btn.dataset.view;
     document.querySelectorAll(".svt-btn").forEach(b=>b.classList.toggle("active",b.dataset.view===schedView));
     document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
+    const listView=document.getElementById("list-view");
+    if(listView)listView.style.display=schedView==="list"?"flex":"none";
     document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
+    if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
     if(typeof buildScheduleTriage==="function")buildScheduleTriage();
+    if(schedView==="list")buildListView();
     if(schedView==="actual")buildActualView();
   });
 });
@@ -78,9 +82,111 @@ function buildActualView(){
   wrap.appendChild(div);
 }
 
+function buildListView(){
+  const wrap=document.getElementById("list-view");
+  if(!wrap)return;
+  wrap.innerHTML="";
+  const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+  const trivFlags=loadTrivialFlags();
+  const visible=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]);
+  const doneItems=visible.filter(isDone);
+  const openItems=visible.filter(ev=>!isDone(ev)&&!isPushed(ev));
+  const pushedItems=visible.filter(ev=>!isDone(ev)&&isPushed(ev));
+  const activeIds=new Set(openItems.filter(ev=>!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break").map(ev=>ev.id));
+  const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
+  const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
+
+  function section(title,count){
+    const el=document.createElement("div");
+    el.className="it-list-section";
+    el.innerHTML='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
+    wrap.appendChild(el);
+  }
+
+  function listPrivacyChip(ev){
+    if(!ev||isMeeting(ev)||ev.type==="break"||ev.type==="ooo")return "";
+    const visibility=ev.publicVisibility==="private"?"private":"public";
+    const label=visibility==="private"?"Private":"Public";
+    return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
+  }
+
+  function row(ev,idx,mode){
+    const isDoneRow=mode==="done";
+    const isPushedRow=mode==="pushed";
+    const movable=!isDoneRow&&!isPushedRow&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break"&&!ev._locked;
+    const c=cfg(ev.type);
+    const original=origDur(ev.id);
+    const changed=original&&dur(ev)!==original;
+    const el=document.createElement("div");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"");
+    el.dataset.id=ev.id;
+    if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
+    if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
+    el.innerHTML=
+      '<div class="it-list-rank">'+(idx+1)+'</div>'+
+      '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
+      '<button class="chk it-list-check'+(isDoneRow?' on':'')+'" title="'+(isDoneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
+      '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
+      '<div class="it-list-main">'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+srcTag(ev.source)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
+        '<div class="it-list-meta">'+
+          '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
+          '<span>'+ms(dur(ev))+'</span>'+
+          '<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
+          (ev._locked?'<span class="it-list-lock">Locked</span>':'')+
+          (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
+        '</div>'+
+      '</div>'+
+      '<div class="it-list-actions">'+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
+        notesButton(ev)+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+dur(ev)+'" title="Start pomodoro timer">'+pomoSvg+'</button>':'')+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
+      '</div>';
+
+    el.querySelector(".it-list-check").addEventListener("click",e=>{
+      e.stopPropagation();
+      if(isDoneRow)toggleDone(ev.id);
+      else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
+    });
+    const quick=el.querySelector(".chk-quick");
+    if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");toggleDone(ev.id);});
+    const nb=el.querySelector(".notes-btn");
+    if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
+    const pb=el.querySelector(".btn-push-tmr");
+    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId);});
+    const pomo=el.querySelector(".pomo-btn");
+    if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle});});
+    const del=el.querySelector(".btn-del-task");
+    if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
+    return el;
+  }
+
+  section("Work list",activeIds.size);
+  if(!openItems.length){
+    const empty=document.createElement("div");
+    empty.className="it-list-empty";
+    empty.textContent=viewDate===((typeof _actualTodayStr==="function")?_actualTodayStr():viewDate)?"Nothing open for today.":"Nothing open on this day.";
+    wrap.appendChild(empty);
+  }else{
+    openItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
+  }
+  if(pushedItems.length){
+    section("Pushed",pushedItems.length);
+    pushedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"pushed")));
+  }
+  if(doneItems.length){
+    section("Done",doneItems.length);
+    doneItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"done")));
+  }
+}
+
 // ======== SCHEDULE TAB ========
 function buildSchedule(){
   const tl=document.getElementById("timeline");tl.innerHTML="";
+  const listView=document.getElementById("list-view");if(listView)listView.innerHTML="";
+  if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
@@ -251,6 +357,7 @@ function buildSchedule(){
     if(ev.detail)detailParts.push('<div class="detail-summary">'+ev.detail.replace(/\n/g,'<br>')+'</div>');
     const dLinks=[];
     if(ev.notionUrl)dLinks.push('<a href="'+ev.notionUrl+'" target="_blank" onclick="event.stopPropagation()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6v6H4z"/><path d="M14 4h6v6h-6z"/><path d="M4 14h6v6H4z"/><path d="M14 14h6v6h-6z"/></svg>Open in Notion</a>');
+    if(ev.delegatedItemId&&typeof openDelegatedModal==="function")dLinks.push('<button type="button" class="detail-action-link" onclick="event.stopPropagation();openDelegatedModal(\''+String(ev.delegatedItemId).replace(/'/g,"\\'")+'\')">Edit delegated item</button>');
     if(dLinks.length)detailParts.push('<div class="detail-links">'+dLinks.join('')+'</div>');
     const detailMeta=[];
     if(ev.priority)detailMeta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">Priority: '+ev.priority+'</span>');
@@ -560,6 +667,7 @@ function buildSchedule(){
       tl.appendChild(el);
     });
   }
+  if(schedView==="list")buildListView();
   if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels();
 }
 
@@ -1092,6 +1200,14 @@ document.addEventListener('click', function(e) {
 let _beBlocks = []; // working copy
 let _beOriginal = []; // PIN 3: pristine snapshot captured at open(), used for diff on save
 
+function _isDefaultScheduleBlock(b){
+  return !!(b && (b.type === 'schedule_block' || b._blockType === 'schedule_block'));
+}
+
+function _isDatedBlockEditorBlock(b){
+  return !!(b && b._date);
+}
+
 function openBlockEditor(blockId){
   // Close popover
   const popover = document.getElementById('stat-popover');
@@ -1103,6 +1219,9 @@ function openBlockEditor(blockId){
   if(raw.length) {
     _beBlocks = raw.map(b => ({
       id: b.id,
+      type: b.type,
+      _blockType: b.type,
+      _date: b.date || null,
       parent_id: b.parent_id || null,
       sort_order: b.sort_order || 0,
       _isNew: false,
@@ -1595,7 +1714,9 @@ async function _applyBlocksToday(){
       acceptedTags: b.acceptedTags || []
     };
     if (b._isNew || (typeof b.id === 'string' && b.id.indexOf('_new_') === 0)){
-      await blockStore.createBlock('block', bProps, { parentId: b.parent_id, sortOrder: j });
+      const createType = b._createAsScheduleBlock ? 'schedule_block' : 'block';
+      const createDate = createType === 'schedule_block' ? null : undefined;
+      await blockStore.createBlock(createType, bProps, { parentId: b.parent_id, date: createDate, sortOrder: j });
     } else {
       await blockStore.updateBlock(b.id, bProps);
     }
@@ -1680,9 +1801,24 @@ async function _onBsConfirmTodayAndFuture(){
   catch(e){ showToast("Could not compute diff: "+(e&&e.message||e),"error"); return; }
 
   try {
+    var topBlocks = _beBlocks.filter(function(b){return !b.parent_id;});
+    var topOriginals = _beOriginal.filter(function(b){return !b.parent_id;});
+    var usesDefaultScheduleBlocks = topBlocks.some(_isDefaultScheduleBlock) || topOriginals.some(_isDefaultScheduleBlock);
+    var usesDatedBlocks = topBlocks.some(_isDatedBlockEditorBlock) || topOriginals.some(_isDatedBlockEditorBlock);
+    if (usesDefaultScheduleBlocks){
+      _beBlocks.forEach(function(b){
+        if (b._isNew || (typeof b.id === 'string' && b.id.indexOf('_new_') === 0)) b._createAsScheduleBlock = true;
+      });
+    }
     await _applyBlocksToday();
 
     var fromDate = (typeof __state !== 'undefined' && __state && __state.date) ? __state.date : null;
+    if (usesDefaultScheduleBlocks && !usesDatedBlocks){
+      closeBlockEditor();
+      render();
+      showToast("Updated default time blocks for today + future days","success");
+      return;
+    }
     if (!fromDate){
       closeBlockEditor();
       render();

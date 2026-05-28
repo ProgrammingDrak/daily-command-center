@@ -229,6 +229,7 @@ function reloadPersistedEdits() {
           meta:p.meta||("Custom task \u00b7 "+ms(d)),
           detail:p.detail||"",source:p.source||"manual",
           notionUrl:p.notionUrl||"",priority:p.priority||"High",
+          tags:Array.isArray(p.tags)?p.tags:[],
           kind:p.kind||"",
           responsibilityId:p.responsibilityId||null,
           responsibilityTitle:p.responsibilityTitle||"",
@@ -238,6 +239,9 @@ function reloadPersistedEdits() {
           alertType:p.alertType||null,
           publicVisibility:p.publicVisibility||"public",
           triageId:p.triageId||null,
+          delegatedItemId:p.delegatedItemId||null,
+          linkedBlockId:p.linkedBlockId||null,
+          linkedTagId:p.linkedTagId||null,
           ampUrl:p.ampUrl||"",
           hubspotUrl:p.hubspotUrl||""
         };
@@ -257,7 +261,11 @@ function reloadPersistedEdits() {
           meta: t.meta || ("Custom task \u00b7 " + ms(d)),
           detail: t.detail || "", source: t.source || "manual",
           notionUrl: t.notionUrl || "", priority: t.priority || "High",
+          tags: Array.isArray(t.tags) ? t.tags : [],
           triageId: t.triageId || null,
+          delegatedItemId: t.delegatedItemId || null,
+          linkedBlockId: t.linkedBlockId || null,
+          linkedTagId: t.linkedTagId || null,
           commuteMinutes: t.commuteMinutes || t.commute_minutes || null
         });
       });
@@ -406,6 +414,12 @@ async function switchToDate(dateStr) {
     b.classList.toggle("active", b.dataset.view === targetView);
   });
   schedView = targetView;
+  const timelineEl = document.getElementById("timeline");
+  const listViewEl = document.getElementById("list-view");
+  const actualViewEl = document.getElementById("actual-view");
+  if (timelineEl) timelineEl.style.display = schedView === "plan" ? "block" : "none";
+  if (listViewEl) listViewEl.style.display = schedView === "list" ? "flex" : "none";
+  if (actualViewEl) actualViewEl.style.display = schedView === "actual" ? "block" : "none";
 
   // Update date nav display
   updateDateNav();

@@ -206,6 +206,9 @@ function persistAddedTask(item){
       alertKey:item.alertKey||null,
       alertType:item.alertType||null,
       triageId:item.triageId||null,
+      delegatedItemId:item.delegatedItemId||null,
+      linkedBlockId:item.linkedBlockId||null,
+      linkedTagId:item.linkedTagId||null,
       ampUrl:item.ampUrl||null,
       hubspotUrl:item.hubspotUrl||null,
       commuteMinutes:item.commuteMinutes||null,
@@ -216,7 +219,7 @@ function persistAddedTask(item){
   // Fallback: localStorage
   const added=loadAddedTasks();
   if(!added.find(t=>t.id===item.id)){
-    added.push({id:item.id,title:item.title,type:item.type||"task",durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",triageId:item.triageId||null,commuteMinutes:item.commuteMinutes||null,addedAt:new Date().toISOString()});
+    added.push({id:item.id,title:item.title,type:item.type||"task",durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",tags:item.tags||[],triageId:item.triageId||null,delegatedItemId:item.delegatedItemId||null,linkedBlockId:item.linkedBlockId||null,linkedTagId:item.linkedTagId||null,commuteMinutes:item.commuteMinutes||null,addedAt:new Date().toISOString()});
     saveAddedTasks(added);
   }
 }
@@ -675,10 +678,11 @@ function addTaskUniversal(barEl){
 // the task is inserted into the live schedule with a pinned start time. If the
 // date is different, the task is persisted to the blockstore under that date so
 // it appears when navigating to that day.
-let _schedPickerTitle="",_schedPickerDur=30;
-function openSchedulePicker(title,durMin){
+let _schedPickerTitle="",_schedPickerDur=30,_schedPickerOptions={};
+function openSchedulePicker(title,durMin,options){
   _schedPickerTitle=title;
   _schedPickerDur=durMin||30;
+  _schedPickerOptions=options||{};
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay){
     // Fallback if modal markup isn't present: schedule after current.
@@ -704,7 +708,24 @@ function openSchedulePicker(title,durMin){
 function closeSchedulePicker(){
   const overlay=document.getElementById("sched-picker-overlay");
   if(overlay)overlay.classList.remove("open");
-  _schedPickerTitle="";_schedPickerDur=30;
+  _schedPickerTitle="";_schedPickerDur=30;_schedPickerOptions={};
+}
+function schedulePickerFields(durMin,options){
+  options=options||{};
+  return {
+    meta:options.meta||("Custom task · "+ms(durMin)),
+    detail:options.detail||"",
+    source:options.source||"manual",
+    notionUrl:options.notionUrl||"",
+    priority:options.priority||"High",
+    tags:Array.isArray(options.tags)?options.tags:[],
+    delegatedItemId:options.delegatedItemId||null,
+    linkedBlockId:options.linkedBlockId||null,
+    linkedTagId:options.linkedTagId||null,
+    responsibilityId:options.responsibilityId||null,
+    responsibilityTitle:options.responsibilityTitle||null,
+    capacityBucket:options.capacityBucket||null
+  };
 }
 function confirmSchedulePicker(){
   const input=document.getElementById("sched-picker-when");
@@ -714,7 +735,7 @@ function confirmSchedulePicker(){
   const pad=n=>String(n).padStart(2,"0");
   const dateStr=when.getFullYear()+"-"+pad(when.getMonth()+1)+"-"+pad(when.getDate());
   const timeStr=pad(when.getHours())+":"+pad(when.getMinutes());
-  const title=_schedPickerTitle,durMin=_schedPickerDur;
+  const title=_schedPickerTitle,durMin=_schedPickerDur,options=_schedPickerOptions;
   closeSchedulePicker();
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)
     ?viewDate:((__state&&__state.date)?__state.date:null);
@@ -722,9 +743,8 @@ function confirmSchedulePicker(){
     // Same day: insert into schedule and pin the start time to the chosen time
     const id=qaId();
     const s=pt(timeStr);
-    const newItem={id,title,type:"task",start:timeStr,end:fmt(s+durMin),
-      meta:"Custom task · "+ms(durMin),detail:"",source:"manual",
-      notionUrl:"",priority:"High",tags:[],_pinnedStart:timeStr};
+    const newItem=Object.assign({id,title,type:"task",start:timeStr,end:fmt(s+durMin),
+      _pinnedStart:timeStr},schedulePickerFields(durMin,options));
     // Insert in chronological order based on pinned start
     let insertAt=scheduled.findIndex(ev=>pt(ev.start)>=s);
     if(insertAt===-1)insertAt=scheduled.length;
@@ -743,14 +763,16 @@ function confirmSchedulePicker(){
   } else {
     // Different day: persist to blockstore for that target date
     const id=qaId();
-    const newItem={id,title,type:"task",start:timeStr,end:fmt(pt(timeStr)+durMin),
-      meta:"Custom task · "+ms(durMin),detail:"",source:"manual",
-      notionUrl:"",priority:"High",tags:[]};
+    const newItem=Object.assign({id,title,type:"task",start:timeStr,end:fmt(pt(timeStr)+durMin)},
+      schedulePickerFields(durMin,options));
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
       window.blockStore.createBlock("block",{
         local_id:id,title,duration:durMin,start:timeStr,end:newItem.end,
-        priority:"High",meta:newItem.meta,detail:"",notionUrl:"",
-        source:"manual",tags:[],_pinnedStart:timeStr,
+        priority:newItem.priority||"High",meta:newItem.meta,detail:newItem.detail||"",notionUrl:newItem.notionUrl||"",
+        source:newItem.source||"manual",tags:newItem.tags||[],_pinnedStart:timeStr,
+        delegatedItemId:newItem.delegatedItemId||null,
+        linkedBlockId:newItem.linkedBlockId||null,
+        linkedTagId:newItem.linkedTagId||null,
         commuteMinutes:newItem.commuteMinutes||null,
         added_at:new Date().toISOString()
       },{date:dateStr});
@@ -760,8 +782,10 @@ function confirmSchedulePicker(){
       // Fallback: store in a per-date localStorage bucket so it's not lost
       const key="pa-added-tasks-"+dateStr;
       let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){arr=[]}
-      arr.push({id,title,durMin,priority:"High",source:"manual",meta:newItem.meta,
-        detail:"",notionUrl:"",start:timeStr,end:newItem.end,
+      arr.push({id,title,durMin,priority:newItem.priority||"High",source:newItem.source||"manual",meta:newItem.meta,
+        detail:newItem.detail||"",notionUrl:newItem.notionUrl||"",start:timeStr,end:newItem.end,
+        tags:newItem.tags||[],delegatedItemId:newItem.delegatedItemId||null,
+        linkedBlockId:newItem.linkedBlockId||null,linkedTagId:newItem.linkedTagId||null,
         _pinnedStart:timeStr,commuteMinutes:newItem.commuteMinutes||null,addedAt:new Date().toISOString()});
       localStorage.setItem(key,JSON.stringify(arr));
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);

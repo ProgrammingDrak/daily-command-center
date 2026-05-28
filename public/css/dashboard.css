@@ -1214,8 +1214,30 @@
   .schedule-triage-card:hover .tri-quick{opacity:0.45}
   .schedule-triage-card .schedule-triage-schedule{background:rgba(59,130,246,0.12);color:var(--accent-light)}
   .schedule-triage-card .add-btn{white-space:nowrap}
+  /* ---- Itinerary delegated strip ---- */
+  .schedule-delegated-section{margin:0 0 10px 0;padding:10px 0 12px;border-bottom:1px solid rgba(255,255,255,0.06)}
+  .delegated-strip-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+  .delegated-strip-toggle{display:flex;align-items:center;gap:8px;min-width:0;padding:0;background:transparent;border:0;color:inherit;cursor:pointer;text-align:left}
+  .delegated-strip-kicker{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0;color:var(--cyan)}
+  .delegated-strip-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:999px;background:rgba(34,211,238,0.14);color:var(--cyan);font-size:10px;font-weight:800}
+  .delegated-strip-summary{font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .delegated-strip-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+  .delegated-mini-btn{font-size:11px;padding:5px 9px;border-radius:6px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer}
+  .delegated-mini-btn:hover{border-color:var(--accent);color:var(--accent)}
+  .delegated-itinerary-list{display:flex;flex-direction:column;gap:6px}
+  .delegated-itinerary-card{align-items:flex-start;background:rgba(255,255,255,0.025)}
+  .delegated-itinerary-card.overdue{border-color:rgba(239,68,68,0.45)}
+  .delegated-itinerary-card.due-today{border-color:rgba(245,158,11,0.42)}
+  .delegated-card-note{margin-top:4px;color:var(--text-muted);font-size:11px;line-height:1.35;white-space:normal}
+  .manager-open .delegated-filter-bar{margin-bottom:8px}
+  .detail-action-link{display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:11px;color:var(--cyan);background:transparent;border:0;padding:0;cursor:pointer}
+  .detail-action-link:hover{color:var(--accent-light)}
   @media(max-width:720px){
     .schedule-triage-header{align-items:flex-start;flex-direction:column;gap:3px}
+    .delegated-strip-header{align-items:flex-start;flex-direction:column;gap:6px}
+    .delegated-itinerary-card{flex-wrap:wrap}
+    .delegated-card-actions{width:100%;flex-wrap:wrap}
+    .delegated-card-actions button{flex:1 0 auto}
     .schedule-triage-sub{white-space:normal}
     .schedule-triage-card{align-items:flex-start;flex-wrap:wrap}
     .schedule-triage-card .body{flex-basis:calc(100% - 18px)}
@@ -2489,8 +2511,10 @@
 .delegated-card-meta{display:flex;gap:10px;font-size:11px;color:var(--text-muted);margin-top:2px;flex-wrap:wrap}
 .delegated-card-when{font-variant-numeric:tabular-nums}
 .delegated-card-channel{text-transform:capitalize}
-.delegated-card-actions{display:flex;gap:4px;flex-shrink:0}
+.delegated-card-actions{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 .delegated-card-actions button{font-size:10px;padding:3px 8px;border-radius:5px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;transition:border-color 0.12s,color 0.12s}
+.delegated-card-actions button:hover{border-color:var(--accent);color:var(--accent)}
+.delegated-card-actions button[data-delegated-action="delete"]:hover{border-color:var(--red);color:var(--red)}
 .delegated-card-actions .delegated-edit:hover{border-color:var(--accent);color:var(--accent)}
 .delegated-card-actions .delegated-delete:hover{border-color:var(--red);color:var(--red)}
 
