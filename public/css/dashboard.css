@@ -2617,16 +2617,22 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .repeat-resp-tools button{height:32px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-size:11px;font-weight:700;cursor:pointer;padding:0 10px;white-space:nowrap}
 .repeat-resp-tools button:hover{background:var(--accent-light)}
 .repeat-resp-list{display:flex;flex-direction:column;gap:8px}
-.repeat-resp-card{display:grid;grid-template-columns:44px minmax(0,1fr);gap:9px;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:8px;position:relative;overflow:hidden}
+.repeat-resp-card{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:9px;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:8px;position:relative;overflow:hidden;align-items:start}
+.repeat-resp-card.expanded{border-color:rgba(96,165,250,0.32)}
 .repeat-resp-card::before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--border)}
 .repeat-resp-card.green::before{background:var(--green)}
 .repeat-resp-card.blue::before{background:var(--accent-light)}
 .repeat-resp-card.yellow::before{background:var(--amber)}
 .repeat-resp-card.red::before{background:var(--red)}
-.repeat-resp-score{width:36px;height:36px;border-width:3px;font-size:12px;align-self:start}
-.repeat-resp-main{min-width:0}
+.repeat-resp-score{width:36px;height:36px;border-width:3px;font-size:12px;align-self:start;background:transparent;font-family:inherit;cursor:pointer}
+.repeat-resp-score:hover{background:rgba(255,255,255,0.04);box-shadow:0 0 0 2px rgba(255,255,255,0.06)}
+.repeat-resp-score.resp-score-plus:hover{background:rgba(34,197,94,0.1);box-shadow:0 0 0 2px rgba(34,197,94,0.14)}
+.repeat-resp-main{min-width:0;cursor:pointer;border-radius:6px;padding:2px 0;outline:none}
+.repeat-resp-main:hover .repeat-resp-title{color:var(--accent-light)}
+.repeat-resp-main:focus-visible{box-shadow:0 0 0 2px rgba(96,165,250,0.28)}
 .repeat-resp-title-row{display:flex;gap:6px;align-items:center;min-width:0}
 .repeat-resp-title{font-size:12px;font-weight:800;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.repeat-resp-details{margin-top:6px}
 .repeat-resp-meter{height:5px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;margin:7px 0 6px;border:1px solid rgba(255,255,255,0.05)}
 .repeat-resp-meter span{display:block;height:100%;border-radius:inherit}
 .repeat-resp-meter span.green{background:var(--green)}
@@ -2637,7 +2643,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .repeat-resp-subtasks{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
 .repeat-resp-subtasks span{max-width:100%;font-size:10px;line-height:1.2;color:var(--text-muted);border:1px solid var(--border);background:rgba(255,255,255,0.03);border-radius:999px;padding:3px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .repeat-resp-card .resp-preferred-nudge{font-size:10px}
-.repeat-resp-actions{grid-column:1 / -1;display:flex;gap:5px;justify-content:flex-end}
+.repeat-resp-actions{display:flex;gap:5px;justify-content:flex-end;align-items:flex-start;flex-wrap:wrap;max-width:72px}
 .repeat-resp-actions button{font-size:10px;padding:4px 8px;border-radius:5px;background:var(--bg);border:1px solid var(--border);color:var(--text-muted);cursor:pointer}
 .repeat-resp-actions button:hover{border-color:var(--accent);color:var(--accent-light)}
 .repeat-resp-actions .danger:hover{border-color:var(--red);color:var(--red)}
@@ -3012,6 +3018,9 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @keyframes slotPiggyBankImpact{0%{transform:scale(1);filter:brightness(1)}34%{transform:scale(1.055);filter:brightness(1.16)}100%{transform:scale(1);filter:brightness(1)}}
 @keyframes slotPiggyAddPop{0%{opacity:0;transform:translateY(8px) scale(0.68)}16%{opacity:1;transform:translateY(-4px) scale(1.14)}56%{opacity:1;transform:translateY(-14px) scale(1)}100%{opacity:0;transform:translateY(-28px) scale(0.92)}}
 .slot-result{min-height:44px;margin-top:12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,196,87,0.28);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.4;color:var(--text)}
+.slot-result-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.slot-reward-schedule-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.slot-reward-schedule-actions>span{font-size:10px;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:2px 7px}
 .slot-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
 .slot-spin-cost{margin-top:7px;font-size:11px;color:var(--text-muted);text-align:center}
 .slot-spin-btn,.slot-refresh-btn,.slot-small-btn,.slot-mini,.slot-sound-btn{border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-muted);cursor:pointer;font-family:inherit;font-weight:700;transition:border-color 0.12s,color 0.12s,background 0.12s}
@@ -3049,6 +3058,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-cap-row{display:flex;flex-direction:column;gap:4px;margin-top:10px;font-size:11px;color:var(--text-muted)}
 .slot-history{margin-top:14px;display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto}
 .slot-history-row{display:flex;justify-content:space-between;gap:10px;align-items:center;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px}
+.slot-history-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 .slot-history-meta{font-size:10px;color:var(--text-muted);margin-top:2px}
 .slot-history-bank{color:var(--green);font-weight:700}
 .slot-status{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px}
@@ -3221,6 +3231,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .slot-tier-actions{justify-content:flex-start}
   .slot-reward-row,.slot-history-row{align-items:flex-start;flex-direction:column}
   .slot-reward-actions{justify-content:flex-start}
+  .slot-history-actions{justify-content:flex-start}
   .slot-delete-confirm{position:static;order:10;width:100%;box-sizing:border-box;margin-top:4px}
   .slot-delete-confirm:before{display:none}
   .slot-form-grid{grid-template-columns:1fr}

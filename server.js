@@ -38,6 +38,7 @@ const LOCAL_AUTH_USERNAME = process.env.SEED_USERNAME || "drake";
 const LOCAL_AUTH_PASSWORD = process.env.SEED_PASSWORD || "clever123";
 const LOCAL_AUTH_USER_ID = Number(process.env.DCC_LOCAL_USER_ID || 1);
 const LOCAL_AUTH_WORKSPACE_ID = process.env.DCC_LOCAL_WORKSPACE_ID || `ws-${LOCAL_AUTH_USER_ID}`;
+const REALTIME_GCAL_SYNC_ENABLED = false;
 const ADMIN_USERNAMES = new Set(
   String(process.env.DCC_ADMIN_USERNAMES || process.env.ADMIN_USERNAMES || LOCAL_AUTH_USERNAME)
     .split(",")
@@ -313,6 +314,23 @@ function meetingIdentity(meeting) {
     ""
   ).trim();
 }
+function blockProps(block) {
+  const props = block && block.properties;
+  if (!props) return {};
+  if (typeof props === "string") {
+    try { return JSON.parse(props); } catch { return {}; }
+  }
+  return props;
+}
+function isLegacyGcalBlock(block) {
+  if (REALTIME_GCAL_SYNC_ENABLED) return false;
+  const props = blockProps(block);
+  const source = String(props.source || "").toLowerCase();
+  return source === "gcal" || !!props.gcal_event_id || !!props.gcal_calendar_id || !!props.gcal_account_key;
+}
+function filterLegacyGcalBlocks(blocks) {
+  return Array.isArray(blocks) ? blocks.filter(block => !isLegacyGcalBlock(block)) : blocks;
+}
 function timelineMeetingKey(item) {
   const sourceId = String(item?.source_id || item?.event_id || item?.gcal_event_id || "").trim();
   if (sourceId) return `id:${sourceId}`;
@@ -419,6 +437,7 @@ async function recordLoginEvent(req, { userId, username, workspaceId, eventType 
 }
 
 async function getMeetingsFromDB(dateStr, userId, workspaceId) {
+  if (!REALTIME_GCAL_SYNC_ENABLED) return { meetings: [], meetingTimeline: [] };
   const offset = getETOffset(dateStr);
   let rows = [];
   const joinedSql = workspaceId
@@ -1052,7 +1071,7 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map()) {
 async function buildPublicTodoShare(share, dateStr, req) {
   const date = isValidDate(dateStr) ? dateStr : getTodayStr();
   const state = await buildDayResponse(date, null, share.workspace_id);
-  const blocks = await blockDB.getBlocksByDate(date, share.workspace_id);
+  const blocks = filterLegacyGcalBlocks(await blockDB.getBlocksByDate(date, share.workspace_id));
   const root = blocks.find(b => b.type === "day_root");
   const rootProps = root && root.properties ? root.properties : {};
   const rootDone = rootProps._done || {};
@@ -2035,8 +2054,8 @@ app.post("/api/blocks", async (req, res) => { try { const body = req.body, userI
 app.patch("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.updateBlock(req.params.id, req.body); broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 app.delete("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.deleteBlock(req.params.id); broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id] }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 app.post("/api/blocks/batch", async (req, res) => { try { const { operations, _clientId } = req.body; if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" }); const opsWithUser = operations.map(op => op.op === "create" ? { ...op, user_id: req.session.userId, workspace_id: req.workspaceId } : op); const result = await blockDB.batchOp(opsWithUser); broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.get("/api/blocks", async (req, res) => { try { if (req.query.date) { if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" }); await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId); res.json(await blockDB.getBlocksByDate(req.query.date, req.workspaceId)); } else if (req.query.type) { const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t)); if (!types.length) return res.status(400).json({ error: "No valid types" }); res.json(await blockDB.getBlocksByTypes(types, req.workspaceId)); } else { res.status(400).json({ error: "Provide ?date= or ?type=" }); } } catch (e) { res.status(500).json({ error: e.message }); } });
-app.get("/api/blocks/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); res.json(await blockDB.getBlocksByDateRange(start, end, req.workspaceId)); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/blocks", async (req, res) => { try { if (req.query.date) { if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" }); await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId))); } else if (req.query.type) { const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t)); if (!types.length) return res.status(400).json({ error: "No valid types" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByTypes(types, req.workspaceId))); } else { res.status(400).json({ error: "Provide ?date= or ?type=" }); } } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/api/blocks/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(start, end, req.workspaceId))); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.getBlock(req.params.id); if (!block) return res.status(404).json({ error: "Block not found" }); try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); } res.json(block); });
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
@@ -2481,6 +2500,10 @@ app.post("/api/automation/morning", async (req, res) => {
 });
 
 // ── GCal ──
+app.use("/api/gcal", (req, res, next) => {
+  if (REALTIME_GCAL_SYNC_ENABLED) return next();
+  res.status(410).json({ error: "Realtime Google Calendar sync is disabled. Legacy cached calendar blocks are hidden from DCC views." });
+});
 app.get("/api/gcal/auth", async (req, res) => { const userId = req.session.userId || 1; const account = gcalAuth.normalizeAccountKey(req.query.account); const url = await gcalAuth.getAuthUrl(userId, account); if (!url) return res.status(500).json({ error: "No credentials configured" }); res.redirect(url); });
 app.get("/api/gcal/callback", async (req, res) => { try { const { code, state } = req.query; if (!code) return res.status(400).send("Missing auth code"); const parsed = gcalAuth.decodeState(state); const userId = parsed.userId || req.session.userId || 1; const account = gcalAuth.normalizeAccountKey(parsed.accountKey); await gcalAuth.handleCallback(code, userId, account); gcalSync.startPolling(); res.redirect(`/?gcal=connected&account=${encodeURIComponent(account)}`); } catch (e) { res.status(500).send("OAuth error: " + e.message); } });
 app.get("/api/gcal/status", async (req, res) => { res.json(await gcalSync.getSyncStatus()); });
@@ -2777,7 +2800,7 @@ app.listen(PORT, async () => {
     await blockDB.ensureWorkspacesForAllUsers();
   } catch (e) { console.error("[auth] Startup error:", e.message); }
 
-  try { await gcalSync.init(broadcast, defaultUserId); const gcalAccounts = await gcalAuth.listAuthenticatedAccounts(defaultUserId); if (gcalAccounts.length) { console.log(`  GCal:       Connected (${gcalAccounts.map(a => a.key).join(", ")})`); gcalSync.startPolling(); } else { console.log(`  GCal:       Not connected`); } } catch (e) { console.error("[gcal] Init error:", e.message); }
+  console.log(`  GCal:       Realtime sync disabled; hiding legacy cached calendar blocks`);
 
   try { await initVault(); } catch (e) { console.error("[vault] Init error:", e.message); }
   try { await slotStore.ensureSchema(); } catch (e) { console.error("[slots] Schema error:", e.message); }
