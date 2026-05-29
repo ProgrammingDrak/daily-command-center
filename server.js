@@ -196,6 +196,57 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.post("/api/auth/logout", (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
 
+app.get("/api/me", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT username, onboarding_state FROM users WHERE id = $1",
+      [req.session.userId]
+    );
+    const user = rows[0] || {};
+    res.json({
+      username: user.username || req.session.username || "",
+      workspaceId: req.workspaceId || req.session.workspaceId || null,
+      onboardingState: user.onboarding_state || {},
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch("/api/me/onboarding", async (req, res) => {
+  try {
+    const incoming = req.body && typeof req.body === "object" ? req.body : {};
+    const updates = incoming.onboardingState && typeof incoming.onboardingState === "object"
+      ? incoming.onboardingState
+      : incoming;
+    const currentResult = await pool.query(
+      "SELECT onboarding_state FROM users WHERE id = $1",
+      [req.session.userId]
+    );
+    const current = currentResult.rows[0]?.onboarding_state || {};
+    const currentTour = current.dailyCommandCenterTour || {};
+    const next = {
+      ...current,
+      ...updates,
+      dailyCommandCenterTour: {
+        ...currentTour,
+        ...(updates.dailyCommandCenterTour || {}),
+      },
+    };
+    const { rows } = await pool.query(
+      `UPDATE users
+       SET onboarding_state = $1::jsonb, updated_at = $2
+       WHERE id = $3
+       RETURNING onboarding_state`,
+      [JSON.stringify(next), new Date().toISOString(), req.session.userId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: "User not found" });
+    res.json({ ok: true, onboardingState: rows[0].onboarding_state || {} });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { username, password } = req.body || {};

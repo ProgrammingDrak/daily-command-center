@@ -120,6 +120,13 @@
     <a class="admin-link" href="/admin" title="Open admin activity">Admin</a>
     <button class="admin-link todo-share-open" id="todo-share-open" type="button" title="Share a live to-do view">Share list</button>
     <button class="admin-link todo-reactions-toggle" id="todo-reactions-toggle" type="button" title="Refresh guest reactions on itinerary tasks">Refresh reactions</button>
+    <div class="dcc-settings-wrap" id="dcc-settings-wrap">
+      <button class="admin-link dcc-settings-button" id="dcc-settings-button" type="button" aria-haspopup="true" aria-expanded="false" title="Open settings">Settings</button>
+      <div class="dcc-settings-menu" id="dcc-settings-menu" role="menu" aria-hidden="true">
+        <button type="button" id="dcc-replay-tutorial" role="menuitem">Replay tutorial</button>
+        <button type="button" id="dcc-sign-out" role="menuitem">Sign out</button>
+      </div>
+    </div>
     <button class="sn-btn" id="sn-open-btn" onclick="openStickyNotes()">📌 Notes <span class="sn-badge" id="sn-badge" style="display:none">0</span></button>
     <!-- Second Brain Save/Load Backup buttons removed Phase 6: silently broken
          in BlockStore-only mode (backed up empty localStorage, restored to keys
@@ -1464,6 +1471,7 @@
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
 <script src="/public/js/responsibilities.js?v=repeat-responsibility-save-2"></script>
+<script src="/public/js/onboarding-tour.js"></script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js"></script>
 <script src="/public/js/delegated.js"></script>

@@ -26,6 +26,35 @@
   .admin-link:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.08);text-decoration:none}
   .admin-link.todo-reactions-toggle{font-family:inherit;cursor:pointer;background:transparent}
   .admin-link.todo-reactions-toggle.active{border-color:rgba(96,165,250,0.58);color:var(--accent-light);background:rgba(59,130,246,0.14)}
+  .dcc-settings-wrap{position:relative;display:inline-flex}
+  .dcc-settings-button{font-family:inherit;cursor:pointer;background:transparent}
+  .dcc-settings-menu{display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:1200;min-width:170px;padding:6px;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 12px 28px rgba(0,0,0,0.42)}
+  .dcc-settings-wrap.open .dcc-settings-menu{display:block}
+  .dcc-settings-menu button{display:block;width:100%;border:none;background:transparent;color:var(--text);font:inherit;font-size:12px;font-weight:700;text-align:left;cursor:pointer;padding:8px 9px;border-radius:5px}
+  .dcc-settings-menu button:hover{background:rgba(255,255,255,0.06);color:var(--accent-light)}
+
+  /* ── Account onboarding tour ── */
+  .dcc-tour-root{display:none;position:fixed;inset:0;z-index:10030;pointer-events:none}
+  .dcc-tour-root.open{display:block}
+  .dcc-tour-scrim{position:absolute;inset:0;background:rgba(2,6,23,0.72);backdrop-filter:blur(1px);pointer-events:auto}
+  .dcc-tour-highlight{position:fixed;border:2px solid var(--accent-light);border-radius:10px;box-shadow:0 0 0 9999px rgba(2,6,23,0.62),0 0 0 5px rgba(96,165,250,0.18),0 16px 40px rgba(0,0,0,0.44);pointer-events:none;transition:left 160ms ease,top 160ms ease,width 160ms ease,height 160ms ease}
+  .dcc-tour-card{position:fixed;width:min(360px,calc(100vw - 28px));background:var(--bg);border:1px solid rgba(96,165,250,0.5);border-radius:8px;box-shadow:0 24px 70px rgba(0,0,0,0.62);padding:16px;pointer-events:auto;color:var(--text)}
+  .dcc-tour-card-centered{max-width:420px}
+  .dcc-tour-close{position:absolute;right:10px;top:8px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:20px;line-height:1;padding:2px 5px;border-radius:4px}
+  .dcc-tour-close:hover{color:var(--text);background:rgba(255,255,255,0.06)}
+  .dcc-tour-kicker{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:var(--accent-light);margin-bottom:8px;padding-right:28px}
+  .dcc-tour-title{font-size:17px;line-height:1.25;margin:0 0 8px;font-weight:800;letter-spacing:0}
+  .dcc-tour-body{font-size:13px;line-height:1.45;color:var(--text-muted);margin:0 0 14px}
+  .dcc-tour-progress{display:flex;gap:5px;margin-bottom:14px}
+  .dcc-tour-dot{width:6px;height:6px;border-radius:999px;background:rgba(148,163,184,0.38)}
+  .dcc-tour-dot.active{width:18px;background:var(--accent-light)}
+  .dcc-tour-actions{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .dcc-tour-step-actions{display:flex;gap:8px}
+  .dcc-tour-actions button{border:1px solid var(--border);background:var(--card);color:var(--text);font:inherit;font-size:12px;font-weight:800;border-radius:6px;padding:7px 11px;cursor:pointer}
+  .dcc-tour-actions button:hover:not(:disabled){border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
+  .dcc-tour-actions button:disabled{opacity:0.45;cursor:not-allowed}
+  .dcc-tour-next{background:var(--accent)!important;border-color:var(--accent)!important;color:#fff!important}
+  .dcc-tour-skip{color:var(--text-muted)!important}
 
   /* ── Date Navigation ── */
   .date-nav{display:flex;align-items:center;gap:4px;margin-top:4px}
