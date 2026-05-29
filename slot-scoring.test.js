@@ -42,6 +42,27 @@ test("meetings breaks and OOO earn zero", () => {
   }
 });
 
+test("maintenance, light, and no-point multipliers adjust the minute base", () => {
+  const maintenance = scoreTaskPoints({ duration_minutes: 60, point_tier: "maintenance", point_multiplier: 0.5 });
+  const light = scoreTaskPoints({ duration_minutes: 60, point_tier: "light", point_multiplier: 0.25 });
+  const none = scoreTaskPoints({ duration_minutes: 60, point_tier: "none", point_multiplier: 0 });
+
+  assert.equal(maintenance.awardPoints, 30);
+  assert.equal(light.awardPoints, 15);
+  assert.equal(none.awardPoints, 0);
+  assert.equal(none.eligible, false);
+});
+
+test("meeting can earn when the user sorts it into an earning tier, but OOO stays zero", () => {
+  const meeting = scoreTaskPoints({ type: "meeting", duration_minutes: 60, point_multiplier: 0.5 });
+  const ooo = scoreTaskPoints({ type: "ooo", duration_minutes: 60, point_multiplier: 1 });
+
+  assert.equal(meeting.eligible, true);
+  assert.equal(meeting.awardPoints, 30);
+  assert.equal(ooo.eligible, false);
+  assert.equal(ooo.awardPoints, 0);
+});
+
 test("trivial short tasks earn small but nonzero points when eligible", () => {
   const scoring = scoreTaskPoints({ duration_minutes: 10, effort_tier: "trivial", attention_tier: "light" });
   assert.equal(scoring.awardPoints, 2);

@@ -2825,6 +2825,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-cell[data-symbol="miss"]{background:linear-gradient(180deg,#fff8df,#eadfb9);color:#2d2415;border-color:rgba(68,49,14,0.38)}
 .slot-cell[data-symbol="gold"],.slot-cell[data-symbol="jackpot"]{background:linear-gradient(180deg,#fff4a8,#c97f19);color:#201100;border-color:#ffdf6f;box-shadow:inset 0 -5px 0 rgba(62,42,11,0.12),0 0 14px rgba(255,203,64,0.26)}
 .slot-cell[data-symbol="jackpot"]{background:linear-gradient(180deg,#fff2b8,#e44848);color:white;border-color:#ffd86b}
+.slot-cell[data-symbol="spin"],.slot-override-tile[data-symbol="spin"]{background:linear-gradient(180deg,#e0f7ff,#45a9c8);color:#062432;border-color:#a7efff}
 .slot-cell[data-symbol="care"],.slot-cell[data-symbol="treat"],.slot-cell[data-symbol="rest"],.slot-cell[data-symbol="pick"],.slot-cell[data-symbol="partner"],.slot-cell[data-symbol="pledge"],.slot-cell[data-symbol="reroll"]{background:linear-gradient(180deg,#dff6ff,#7fc3d7);color:#092633;border-color:#b9f1ff}
 .slot-cell[data-symbol="treat"]{background:linear-gradient(180deg,#ffdfe9,#d96b91);color:#33091a;border-color:#ffbad0}
 .slot-cell[data-symbol="pledge"]{background:linear-gradient(180deg,#e8ddff,#9574da);color:#1d1239;border-color:#cab8ff}
@@ -3035,14 +3036,33 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-spin-btn:hover:not(:disabled),.slot-small-btn:hover,.slot-refresh-btn:hover,.slot-mini:hover,.slot-sound-btn:hover{border-color:var(--accent-light);color:var(--accent-light)}
 .slot-rules-panel{margin-top:10px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,196,87,0.22);border-radius:8px;padding:12px}
 .slot-rules-card .slot-rules-panel{margin-top:0}
-.slot-rules-grid{display:grid;grid-template-columns:120px 140px 1fr;gap:10px;align-items:end}
+.slot-setup-summary{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;margin-bottom:12px;padding:10px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;background:rgba(255,255,255,0.035)}
+.slot-setup-summary strong{display:block;font-size:13px;color:var(--text)}
+.slot-setup-summary span{display:block;margin-top:3px;font-size:11px;line-height:1.35;color:var(--text-muted)}
+.slot-rules-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:start}
+.slot-rules-grid .span-2{grid-column:span 2}
 .slot-setting-field,.slot-rationale-field{display:flex;flex-direction:column;gap:5px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:800}
-.slot-setting-field input,.slot-rationale-field textarea{width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;padding:8px 9px;outline:none}
-.slot-setting-field input:focus,.slot-rationale-field textarea:focus{border-color:var(--accent)}
+.slot-setting-field input,.slot-setting-field textarea,.slot-rationale-field textarea{width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:12px;padding:8px 9px;outline:none}
+.slot-setting-field input:focus,.slot-setting-field textarea:focus,.slot-rationale-field textarea:focus{border-color:var(--accent)}
+.slot-setting-field textarea{min-height:70px;resize:vertical;text-transform:none;letter-spacing:0;font-weight:500;line-height:1.35}
 .slot-setting-note{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--text-muted)}
 .slot-setting-note strong{color:var(--accent-light);font-size:13px}
 .slot-rule-list{display:flex;flex-direction:column;gap:5px;margin-top:12px;padding:10px;background:rgba(0,0,0,0.18);border:1px solid rgba(255,255,255,0.06);border-radius:6px;font-size:11px;color:var(--text-muted);line-height:1.35}
 .slot-rule-list strong{color:var(--text)}
+.slot-tag-unlock,.slot-tag-sorting{margin-top:12px;padding:10px;border:1px solid rgba(96,165,250,0.22);border-radius:8px;background:rgba(59,130,246,0.06)}
+.slot-tag-unlock strong,.slot-tag-sorting-head strong{display:block;font-size:13px;color:var(--text)}
+.slot-tag-unlock span,.slot-tag-sorting-head span{display:block;margin-top:3px;font-size:11px;line-height:1.35;color:var(--text-muted)}
+.slot-tag-tier-board{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:10px}
+.slot-tag-lane{min-height:116px;padding:8px;border:1px solid rgba(255,255,255,0.09);border-radius:8px;background:rgba(15,23,42,0.5);transition:border-color 0.16s ease,background 0.16s ease}
+.slot-tag-lane.drag-over{border-color:rgba(96,165,250,0.78);background:rgba(59,130,246,0.13)}
+.slot-tag-lane-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px}
+.slot-tag-lane-head strong{font-size:12px;color:var(--text)}
+.slot-tag-lane-head span{font-size:10px;color:var(--text-muted);white-space:nowrap}
+.slot-tag-chip-list{display:flex;align-content:flex-start;gap:6px;flex-wrap:wrap}
+.slot-tag-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;border:1px solid rgba(255,255,255,0.1);border-radius:999px;background:rgba(255,255,255,0.055);color:var(--text);font:800 11px/1 var(--font);padding:6px 8px;cursor:grab}
+.slot-tag-chip i{width:8px;height:8px;border-radius:999px;flex-shrink:0}
+.slot-tag-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.slot-tag-placeholder,.slot-tag-empty{font-size:11px;color:var(--text-muted)}
 .slot-admin-override{margin-top:12px;padding:10px;border:1px solid rgba(96,165,250,0.28);border-radius:8px;background:rgba(15,23,42,0.34)}
 .slot-admin-override-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
 .slot-admin-override-head strong{display:block;color:var(--text);font-size:12px;line-height:1.25}
@@ -3217,6 +3237,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .slot-wheel-option{transform:rotate(var(--slot-wheel-angle)) translateY(calc(-1 * min(106px,29vw)))}
   .slot-wheel-option-label{width:74px;font-size:8px}
   .slot-tier-manager{padding:10px}
+  .slot-setup-summary{grid-template-columns:1fr}
+  .slot-rules-grid .span-2{grid-column:1}
   .slot-tier-manager-head{grid-template-columns:1fr}
   .slot-tier-total-pill{justify-self:start;grid-template-columns:auto auto;gap:7px;min-width:0}
   .slot-tier-total-pill span{font-size:8px}

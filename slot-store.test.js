@@ -270,6 +270,58 @@ test("earnTaskCredit normalizes legacy duration_min payloads into minute-based p
   assert.equal(mockPool.state.ledgerMetadata.inputs.duration_minutes, 60);
 });
 
+test("earnTaskCredit applies point tag tiers from slot settings", async () => {
+  const settings = {
+    points_v2_migrated_at: "already",
+    points_v2_spin_cost_migrated_at: "already",
+    points_v3_migrated_at: "already",
+    points_v3_spin_cost_migrated_at: "already",
+    point_tag_tiers: {
+      maintenance: ["chores"],
+      advancement: ["career"],
+      light: ["email"],
+      none: ["off"],
+    },
+  };
+  const mockPool = createMockPool({
+    pointBalance: 0,
+    migrated: true,
+    settings,
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const maintenance = await store.earnTaskCredit("ws-1", 1, {
+    source_key: "maintenance-task",
+    task_id: "maintenance-task",
+    type: "task",
+    duration_minutes: 60,
+    tags: ["chores"],
+  });
+  const meetingPool = createMockPool({ pointBalance: 0, migrated: true, settings });
+  const meetingStore = loadStoreWithMock(meetingPool);
+  const meeting = await meetingStore.earnTaskCredit("ws-1", 1, {
+    source_key: "meeting-task",
+    task_id: "meeting-task",
+    type: "meeting",
+    duration_minutes: 60,
+    tags: ["chores"],
+  });
+  const oooPool = createMockPool({ pointBalance: 0, migrated: true, settings });
+  const oooStore = loadStoreWithMock(oooPool);
+  const ooo = await oooStore.earnTaskCredit("ws-1", 1, {
+    source_key: "ooo-task",
+    task_id: "ooo-task",
+    type: "ooo",
+    duration_minutes: 60,
+    tags: ["career"],
+  });
+
+  assert.equal(maintenance.delta, 30);
+  assert.equal(meeting.delta, 30);
+  assert.equal(ooo.awarded, false);
+  assert.equal(ooo.delta, 0);
+});
+
 test("earnTaskCredit adjusts old one-point duplicate ledger rows up to minute-based points", async () => {
   const mockPool = createMockPool({ pointBalance: 1, migrated: true, ledgerDelta: 1 });
   mockPool.state.ledgerInserted = true;
@@ -588,7 +640,7 @@ test("celebrationSpinForBankrollGoal forces a free confirmed jackpot and cannot 
 
 test("selectThreeStageOutcome returns a miss when jackpot and bank builder rolls miss", () => {
   const store = loadStoreWithMock(createMockPool());
-  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 0 }, () => 0);
+  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 }, () => 0);
 
   assert.equal(outcome.outcome, "miss");
   assert.equal(outcome.jackpot_hit, false);
@@ -599,7 +651,7 @@ test("selectThreeStageOutcome returns a miss when jackpot and bank builder rolls
 
 test("selectThreeStageOutcome can hit bank builder outside jackpot", () => {
   const store = loadStoreWithMock(createMockPool());
-  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 1 }, () => 0);
+  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 1, free_spin_tile_rate: 0 }, () => 0);
 
   assert.equal(outcome.outcome, "bank");
   assert.equal(outcome.jackpot_hit, false);
@@ -617,6 +669,8 @@ test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => 
     { id: 2, title: "Big thing", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 7 },
   ], {
     jackpot_hit_rate: 1,
+    bank_builder_hit_rate: 0,
+    free_spin_tile_rate: 0,
     payment_source_weights: { self: 0, sponsored: 0, free: 1 },
     reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
   }, rng);
@@ -628,6 +682,23 @@ test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => 
   assert.equal(outcome.empty_bucket, false);
 });
 
+test("selectThreeStageOutcome can bank-build before a jackpot on the same full spin", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const outcome = store._test.selectThreeStageOutcome([
+    { id: 1, title: "Reward", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 1 },
+  ], {
+    jackpot_hit_rate: 1,
+    bank_builder_hit_rate: 1,
+    free_spin_tile_rate: 0,
+    payment_source_weights: { self: 0, sponsored: 0, free: 1 },
+    reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
+  }, () => 0);
+
+  assert.equal(outcome.bank_builder_hit, true);
+  assert.equal(outcome.jackpot_hit, true);
+  assert.equal(outcome.selected.id, 1);
+});
+
 test("default reward tier percentages add up to 100", () => {
   const store = loadStoreWithMock(createMockPool());
   const settings = store._test.normalizeSlotSettings({});
@@ -636,6 +707,42 @@ test("default reward tier percentages add up to 100", () => {
     .reduce((sum, tier) => sum + tier.weight, 0);
 
   assert.equal(total, 100);
+});
+
+test("guided economy profile derives hidden spin cost, bankroll pacing, and rare jackpot defaults", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const settings = store._test.normalizeSlotSettings({
+    economy_profile: {
+      maintenance_hours_per_day: 4,
+      advancement_hours_per_day: 5,
+      monthly_discretionary_cents: 30000,
+    },
+  });
+
+  assert.equal(settings.spin_cost, 15);
+  assert.equal(settings.monthly_goal_cents, 30000);
+  assert.equal(settings.economy_profile.target_daily_spins, 28);
+  assert.equal(settings.jackpot_hit_rate, 0.04);
+  assert.equal(settings.bank_builder_hit_rate, 0.9);
+  assert.equal(settings.free_spin_tile_rate, 0.08);
+  assert.equal(settings.bankroll_pacing.bank_builder_base_percent, 0.00031);
+});
+
+test("taskPointTier uses the highest earning matched tag and keeps OOO at zero", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const settings = {
+    point_tag_tiers: {
+      maintenance: ["chores"],
+      advancement: ["workout"],
+      light: ["email"],
+      none: ["scrolling"],
+    },
+  };
+
+  assert.deepEqual(store._test.taskPointTier({ tags: ["chores"] }, settings).multiplier, 0.5);
+  assert.deepEqual(store._test.taskPointTier({ tags: ["scrolling", "workout"] }, settings).multiplier, 1);
+  assert.deepEqual(store._test.taskPointTier({ type: "meeting", tags: ["chores"] }, settings).multiplier, 0.5);
+  assert.deepEqual(store._test.taskPointTier({ type: "ooo", tags: ["workout"] }, settings).multiplier, 0);
 });
 
 test("selectThreeStageOutcome offers separate die choices when first source-tier bucket is empty", () => {
@@ -680,11 +787,11 @@ test("bank screen payout values each BANK tile from the monthly goal, not curren
     { today: 0, week: 0, monthlyGoal: 10000 }
   );
 
-  assert.equal(payout.percent, 0.0022);
+  assert.equal(payout.percent, 0.00031);
   assert.equal(payout.goal_cents, 10000);
-  assert.equal(payout.base_cents, 22);
+  assert.equal(payout.base_cents, 3);
   assert.equal(payout.base_units, 2);
-  assert.equal(payout.cents, 44);
+  assert.equal(payout.cents, 6);
 });
 
 test("normalizeNextSpinTileOverride requires exactly fifteen known symbols", () => {
@@ -706,7 +813,7 @@ test("normalizeNextSpinTileOverride requires exactly fifteen known symbols", () 
   );
   assert.throws(
     () => store._test.normalizeNextSpinTileOverride({ tiles: Array.from({ length: 15 }, () => "WILD") }),
-    /MISS, BANK, or JACKPOT/
+    /MISS, BANK, JACKPOT, or SPIN/
   );
 });
 
@@ -809,7 +916,7 @@ test("applyTileOverrideToScreen keeps exact tiles and pays bank from override on
   assert.equal(screen.payout.base_units, 3);
   assert.equal(screen.payout.horizontal_bonus_units, 2);
   assert.equal(screen.payout.vertical_bonus_units, 2);
-  assert.equal(screen.payout.cents, 154);
+  assert.equal(screen.payout.cents, 21);
 });
 
 test("spin downgrades a jackpot outcome when override tiles have no jackpot payline", async () => {
@@ -898,7 +1005,7 @@ test("spin stores authoritative bank board, payout positions, and pending reserv
   assert.deepEqual(snap.screen_board, board);
   assert.deepEqual(snap.bank_screen_payout.positions, [1, 2, 7]);
   assert.equal(snap.bank_screen_payout.cents, spin.bank_delta_cents);
-  assert.equal(spin.bank_delta_cents, 154);
+  assert.equal(spin.bank_delta_cents, 21);
 });
 
 test("spin stores jackpot payline metadata when override tiles form a valid jackpot", async () => {
@@ -956,7 +1063,7 @@ test("spin stores jackpot payline metadata when override tiles form a valid jack
   assert.deepEqual(snap.screen_payline, [3, 8, 13]);
 });
 
-test("buildSpinScreen does not pay bank bonus on miss screens", () => {
+test("buildSpinScreen can pay bank bonus on miss screens because bank resolves first", () => {
   const crypto = require("node:crypto");
   const originalRandomInt = crypto.randomInt;
   crypto.randomInt = () => 0;
@@ -969,10 +1076,10 @@ test("buildSpinScreen does not pay bank bonus on miss screens", () => {
       true
     );
 
-    assert.equal(screen.board.includes("BANK"), false);
-    assert.equal(screen.payout.base_units, 0);
-    assert.equal(screen.payout.positions.length, 0);
-    assert.equal(screen.payout.cents, 0);
+    assert.equal(screen.board.includes("BANK"), true);
+    assert.ok(screen.payout.base_units > 0);
+    assert.ok(screen.payout.positions.length > 0);
+    assert.ok(screen.payout.cents > 0);
   } finally {
     crypto.randomInt = originalRandomInt;
   }

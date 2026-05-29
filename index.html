@@ -1350,49 +1350,57 @@
           <button class="slot-refresh-btn" id="slot-refresh-btn" type="button">Refresh</button>
         </div>
         <div class="slot-rules-panel" id="slot-rules-panel">
-          <div class="slot-rules-grid">
-            <label class="slot-setting-field">
-              <span>Spin cost</span>
-              <input id="slot-spin-cost-input" type="number" min="1" max="250" step="1">
-            </label>
-            <label class="slot-setting-field">
-              <span>Jackpot hit %</span>
-              <input id="slot-jackpot-rate" type="number" min="0" max="100" step="1">
-            </label>
-            <label class="slot-setting-field">
-              <span>Bank builder %</span>
-              <input id="slot-bank-builder-rate" type="number" min="0" max="100" step="1">
-            </label>
-            <label class="slot-setting-field">
-              <span>Monthly goal $</span>
-              <input id="slot-monthly-goal" type="number" min="1" max="10000" step="1">
-            </label>
-            <label class="slot-setting-field">
-              <span>Self source weight</span>
-              <input id="slot-source-self-weight" type="number" min="0" step="1">
-            </label>
-            <label class="slot-setting-field">
-              <span>Sponsored source weight</span>
-              <input id="slot-source-sponsored-weight" type="number" min="0" step="1">
-            </label>
-            <label class="slot-setting-field">
-              <span>Free source weight</span>
-              <input id="slot-source-free-weight" type="number" min="0" step="1">
-            </label>
+          <div class="slot-setup-summary">
+            <div>
+              <strong>Daily rhythm</strong>
+              <span id="slot-rhythm-summary">A solid day earns a lot of spins.</span>
+            </div>
             <div class="slot-setting-note">
-              <strong id="slot-current-cost">25 points per spin</strong>
+              <strong id="slot-current-cost">Daily rhythm set</strong>
               <span id="slot-current-goal">Monthly goal: $0.00</span>
             </div>
           </div>
+          <div class="slot-rules-grid">
+            <label class="slot-setting-field span-2">
+              <span>What counts as maintenance for you?</span>
+              <textarea id="slot-maintenance-notes" placeholder="Chores, admin, meals, routines, recurring obligations"></textarea>
+            </label>
+            <label class="slot-setting-field">
+              <span>Maintenance most days</span>
+              <input id="slot-maintenance-hours" type="number" min="0" max="16" step="0.25">
+            </label>
+            <label class="slot-setting-field span-2">
+              <span>What counts as advancement for you?</span>
+              <textarea id="slot-advancement-notes" placeholder="Workouts, career work, studying, creative projects, focused productivity"></textarea>
+            </label>
+            <label class="slot-setting-field">
+              <span>Advancement most days</span>
+              <input id="slot-advancement-hours" type="number" min="0" max="16" step="0.25">
+            </label>
+            <label class="slot-setting-field span-2">
+              <span>Sweet treats budget</span>
+              <input id="slot-monthly-discretionary" type="number" min="1" max="10000" step="1">
+            </label>
+          </div>
           <div class="slot-rule-list">
             <div><strong>Task scoring</strong></div>
-            <div>Points scale from planned or logged minutes.</div>
-            <div>Effort, attention, importance, urgency, and bounty status multiply the award.</div>
-            <div>One self bounty per day locks after placement; a partner/shared bounty can stack once.</div>
-            <div>Meetings, breaks, and OOO blocks do not earn points.</div>
-            <div>Tiny or trivial tasks still earn a small nonzero award when eligible.</div>
-            <div>Bank-builder prizes can fill this month's goal, then stop until next month</div>
-            <div>Bonus reward spins skip the slot reels and start at the tier + payer dice.</div>
+            <div>You decide what feels like maintenance and what feels like advancement.</div>
+            <div>Maintenance and advancement both count; they simply move the reward meter at different paces.</div>
+            <div>Bank building resolves first, then jackpots, free spins, or misses.</div>
+            <div>Bonus reward rolls skip the reels and start at the reward dice.</div>
+          </div>
+          <div class="slot-tag-unlock" id="slot-tag-sorting-locked">
+            <strong>Tag sorting</strong>
+            <span>Save the simple setup first, then sort tags into maintenance, advancement, light, or no-points lanes.</span>
+          </div>
+          <div class="slot-tag-sorting" id="slot-tag-sorting-panel" hidden>
+            <div class="slot-tag-sorting-head">
+              <div>
+                <strong>Tag sorting</strong>
+                <span>Drag tags into the lane that matches how you think about that work.</span>
+              </div>
+            </div>
+            <div class="slot-tag-tier-board" id="slot-tag-tier-board"></div>
           </div>
           <div class="slot-admin-override" id="slot-admin-override">
             <div class="slot-admin-override-head">
@@ -1415,10 +1423,6 @@
           <label class="slot-rationale-field">
             <span>Shortfall consequence</span>
             <textarea id="slot-shortfall-penalty"></textarea>
-          </label>
-          <label class="slot-rationale-field">
-            <span>Rationale</span>
-            <textarea id="slot-scoring-rationale"></textarea>
           </label>
           <div class="slot-form-actions">
             <button id="slot-save-settings-btn" class="slot-small-btn primary" type="button">Save settings</button>
