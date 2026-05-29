@@ -1150,6 +1150,50 @@ test("buildSpinScreen can pay bank bonus on miss screens because bank resolves f
   }
 });
 
+// Longest run (>=1) of each symbol across rows and columns of a 3x5 board.
+function maxRunsBySymbol(board){
+  const ROWS = 3, COLS = 5, found = {};
+  const note = (sym, len) => { found[sym] = Math.max(found[sym] || 0, len); };
+  for(let r = 0; r < ROWS; r++){ let run = 1; for(let c = 1; c < COLS; c++){ const i = r*COLS+c; if(board[i] === board[i-1]) run++; else { note(board[i-1], run); run = 1; } } note(board[r*COLS+COLS-1], run); }
+  for(let c = 0; c < COLS; c++){ let run = 1; for(let r = 1; r < ROWS; r++){ const i = r*COLS+c; if(board[i] === board[(r-1)*COLS+c]) run++; else { note(board[(r-1)*COLS+c], run); run = 1; } } note(board[(ROWS-1)*COLS+c], run); }
+  return found;
+}
+
+test("buildSpinScreen fills every tile with a prize icon and forms exactly one winning line", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const acct = { settings: { monthly_goal_cents: 10000 } };
+  const usage = { today: 0, week: 0, monthlyGoal: 10000 };
+  const cases = [
+    { selected: { kind: "points", source_type: "slot_coin" }, bankHit: false, sym: "COIN" },
+    { selected: { kind: "pet", source_type: "slot_pet" }, bankHit: false, sym: "PAW" },
+    { selected: { kind: "collectible", source_type: "slot_collectible" }, bankHit: false, sym: "GEM" },
+    { selected: { kind: "bank_builder" }, bankHit: true, sym: "BANK" },
+  ];
+  for(const c of cases){
+    for(let n = 0; n < 200; n++){
+      const screen = store._test.buildSpinScreen(c.selected, acct, usage, c.bankHit);
+      assert.equal(screen.board.includes("MISS"), false, c.sym + " board should have no MISS tiles");
+      assert.equal(screen.board.includes(null), false);
+      const runs = maxRunsBySymbol(screen.board);
+      assert.ok((runs[c.sym] || 0) >= 3, c.sym + " should form a 3-in-a-row line");
+      const others = Object.keys(runs).filter(s => s !== c.sym && runs[s] >= 3);
+      assert.deepEqual(others, [], "no other symbol should form a line, got " + others.join(","));
+    }
+  }
+});
+
+test("buildSpinScreen miss board shows prize icons but forms no winning line", () => {
+  const store = loadStoreWithMock(createMockPool());
+  for(let n = 0; n < 200; n++){
+    const screen = store._test.buildSpinScreen({ kind: "miss" }, { settings: { monthly_goal_cents: 10000 } }, { today: 0, week: 0, monthlyGoal: 10000 }, false);
+    assert.equal(screen.board.includes("MISS"), false);
+    const runs = maxRunsBySymbol(screen.board);
+    const lines = Object.keys(runs).filter(s => runs[s] >= 3);
+    assert.deepEqual(lines, [], "miss board should have no 3-in-a-row, got " + lines.join(","));
+    assert.equal(screen.jackpot.hit, false);
+  }
+});
+
 function gambleSpinPool() {
   const gamble = {
     booster_type: "bank_multiplier",

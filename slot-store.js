@@ -78,9 +78,14 @@ const JACKPOT_PAYLINES = [
   ...PAYLINES,
 ];
 const SLOT_SYMBOLS = new Set(["MISS", "BANK", "JACKPOT", "SPIN", "COIN", "STAR", "PAW", "GEM"]);
-// Symbols for the new "small win" floor outcomes - placed as small clusters,
-// never form a payline.
+// "Small win" floor outcomes that pay when their icon forms a 3-in-a-row line.
 const SMALL_WIN_SYMBOLS = new Set(["COIN", "STAR", "PAW", "GEM"]);
+// Prize icons painted across every non-winning cell so the reels always show
+// prizes (no dead MISS tiles). Weighted toward common prizes; jackpot is a rare
+// tease. The fill is scrubbed so none of these accidentally form a 3-in-a-row.
+const COSMETIC_FILLER_SYMBOLS = ["COIN", "COIN", "COIN", "BANK", "BANK", "STAR", "PAW", "GEM", "SPIN", "JACKPOT"];
+// Win lines read as 3-in-a-row; bank occasionally runs longer for a bigger combo.
+const WIN_LINE_LENGTH = 3;
 const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
 const LEGACY_BANK_BUILDER_KIND = "bank_builder";
@@ -2378,40 +2383,80 @@ function placeSymbolCluster(board, protectedCells, symbol, count) {
   return 0;
 }
 
+// Lay a straight run of `length` (>=3) `symbol` tiles on open cells. Falls back
+// to a shorter run, then to singles, if no straight run fits. Returns the cells.
+function placeSymbolLine(board, protectedCells, symbol, length) {
+  for (let want = length; want >= WIN_LINE_LENGTH; want--) {
+    const runs = contiguousRuns(want).filter(cells => cells.every(i => !protectedCells.has(i) && board[i] == null));
+    if (runs.length) {
+      const cells = runs[crypto.randomInt(runs.length)];
+      cells.forEach(i => { board[i] = symbol; protectedCells.add(i); });
+      return cells;
+    }
+  }
+  const open = Array.from({ length: SLOT_CELL_COUNT }, (_, i) => i).filter(i => !protectedCells.has(i) && board[i] == null);
+  const cells = [];
+  for (let k = 0; k < Math.min(WIN_LINE_LENGTH, open.length); k++) {
+    const pick = open.splice(crypto.randomInt(open.length), 1)[0];
+    board[pick] = symbol;
+    protectedCells.add(pick);
+    cells.push(pick);
+  }
+  return cells;
+}
+
+// Paint every still-empty cell with a prize icon so the reels are never dead.
+// Greedy left/up check guarantees no symbol forms a 3-in-a-row, so the only
+// paying pattern on the board is the intended winning line. Excluded symbols
+// (the winners) appear ONLY in their line.
+function fillCosmetic(board, excludeSet) {
+  const pool = COSMETIC_FILLER_SYMBOLS.filter(s => !excludeSet.has(s));
+  const fallback = pool.length ? pool : COSMETIC_FILLER_SYMBOLS;
+  for (let i = 0; i < SLOT_CELL_COUNT; i++) {
+    if (board[i] != null) continue;
+    const col = i % SLOT_COLS;
+    const row = Math.floor(i / SLOT_COLS);
+    const safe = fallback.filter(sym => {
+      const h = col >= 2 && board[i - 1] === sym && board[i - 2] === sym;
+      const v = row >= 2 && board[i - SLOT_COLS] === sym && board[i - 2 * SLOT_COLS] === sym;
+      return !h && !v;
+    });
+    const choices = safe.length ? safe : fallback;
+    board[i] = choices[crypto.randomInt(choices.length)];
+  }
+}
+
 function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
-  const board = Array.from({ length: SLOT_CELL_COUNT }, () => FILLER_SYMBOLS[crypto.randomInt(FILLER_SYMBOLS.length)]);
+  const board = Array.from({ length: SLOT_CELL_COUNT }, () => null);
   const protectedCells = new Set();
   const selectedSymbol = rewardSymbol(selected);
   const isMiss = selected.kind === "miss";
   const canPlaceBankSymbols = !!screenBankHit;
-  const [minCluster, maxCluster] = DEFAULT_BANK_CLUSTER_RANGE;
+  const exclude = new Set();
   let payline = [];
 
-  if (selectedSymbol === "SPIN") {
-    const index = crypto.randomInt(SLOT_CELL_COUNT);
-    board[index] = "SPIN";
-    protectedCells.add(index);
-  } else if (SMALL_WIN_SYMBOLS.has(selectedSymbol)) {
-    // Coin / booster / pet / gem - a small cluster, never a payline.
-    placeSymbolCluster(board, protectedCells, selectedSymbol, minCluster + crypto.randomInt(maxCluster - minCluster + 1));
-  } else if (!isMiss && selected.kind !== "bank_builder") {
+  if (!isMiss && selectedSymbol === "JACKPOT") {
+    // Jackpot keeps its dedicated paylines (3-5 in a row drives the level).
     const line = JACKPOT_PAYLINES[crypto.randomInt(JACKPOT_PAYLINES.length)];
     payline = [...line];
-    line.forEach(i => {
-      board[i] = selectedSymbol;
-      protectedCells.add(i);
-    });
-  } else {
-    for (let i = 0; i < 4; i++) {
-      board[crypto.randomInt(SLOT_CELL_COUNT)] = TEASER_SYMBOLS[crypto.randomInt(TEASER_SYMBOLS.length)];
-    }
+    line.forEach(i => { board[i] = "JACKPOT"; protectedCells.add(i); });
+    exclude.add("JACKPOT");
+  } else if (!isMiss && (SMALL_WIN_SYMBOLS.has(selectedSymbol) || selectedSymbol === "SPIN")) {
+    // Coin / booster / pet / gem / free spin pay on a 3-in-a-row line.
+    payline = placeSymbolLine(board, protectedCells, selectedSymbol, WIN_LINE_LENGTH);
+    exclude.add(selectedSymbol);
   }
 
   if (canPlaceBankSymbols) {
-    // Cluster the bank tiles so the adjacency combo doubles/triples one
-    // satisfying hit instead of sprinkling several lonely singles.
-    placeSymbolCluster(board, protectedCells, "BANK", minCluster + crypto.randomInt(maxCluster - minCluster + 1));
+    // Bank pays on its own line; longer runs (occasional 4) combo into more.
+    const bankLen = WIN_LINE_LENGTH + (crypto.randomInt(4) === 0 ? 1 : 0);
+    const bankLine = placeSymbolLine(board, protectedCells, "BANK", bankLen);
+    if (!payline.length) payline = bankLine;
+    exclude.add("BANK");
   }
+
+  // Fill the rest with scrubbed prize icons - no dead tiles, no accidental wins.
+  fillCosmetic(board, exclude);
 
   const payout = canPlaceBankSymbols
     ? calculateScreenBankPayout(board, account, bankUsage)
@@ -2421,9 +2466,10 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
 }
 
 function buildBankrollGoalCelebrationScreen(account, bankUsage) {
-  const board = Array.from({ length: SLOT_CELL_COUNT }, () => "MISS");
+  const board = Array.from({ length: SLOT_CELL_COUNT }, () => null);
   [0, 1, 2, 3, 4].forEach(i => { board[i] = "JACKPOT"; });
   [7, 11, 13].forEach(i => { board[i] = "BANK"; });
+  fillCosmetic(board, new Set(["JACKPOT", "BANK"]));
   const jackpot = evaluateJackpotBoard(board);
   return {
     board,
@@ -3059,6 +3105,8 @@ module.exports = {
     rollFloorOutcomeKind,
     chooseSpinGamble,
     placeSymbolCluster,
+    placeSymbolLine,
+    fillCosmetic,
     chooseWeighted,
     bankBuilderHits,
     freeSpinTileHits,
