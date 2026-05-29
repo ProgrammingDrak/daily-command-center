@@ -16,9 +16,13 @@ CREATE TABLE IF NOT EXISTS users (
   id            SERIAL PRIMARY KEY,
   username      TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  onboarding_state JSONB NOT NULL DEFAULT '{}',
   created_at    TIMESTAMPTZ NOT NULL,
   updated_at    TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS onboarding_state JSONB NOT NULL DEFAULT '{}';
 
 -- ── Workspaces ──
 CREATE TABLE IF NOT EXISTS workspaces (

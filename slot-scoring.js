@@ -122,7 +122,11 @@ function resolveBountyCount(input = {}) {
 }
 
 function isNonEarningTaskType(input = {}) {
-  return NON_EARNING_TYPES.has(normalizeText(input.type ?? input.kind));
+  const type = normalizeText(input.type ?? input.kind);
+  if (type === "ooo") return true;
+  if (!NON_EARNING_TYPES.has(type)) return false;
+  const multiplier = Number(input.point_multiplier ?? input.pointMultiplier);
+  return !Number.isFinite(multiplier) || multiplier <= 0;
 }
 
 function scoreTaskPoints(input = {}) {
@@ -136,19 +140,25 @@ function scoreTaskPoints(input = {}) {
   const urgency = isUrgent(input) ? 1.15 : 1.0;
   const bountyCount = resolveBountyCount(input);
   const bounty = Math.pow(2, bountyCount);
-  const basePoints = durationMinutes;
+  const requestedPointMultiplier = Number(input.point_multiplier ?? input.pointMultiplier);
+  const pointMultiplier = Number.isFinite(requestedPointMultiplier)
+    ? Math.max(0, Math.min(1, requestedPointMultiplier))
+    : 1;
+  const basePoints = durationMinutes * pointMultiplier;
 
-  if (isNonEarningTaskType(input)) {
+  if (isNonEarningTaskType(input) || pointMultiplier <= 0) {
     return {
       formulaVersion: POINTS_FORMULA_VERSION,
       eligible: false,
-      nonEarningReason: "non_earning_task_type",
+      nonEarningReason: pointMultiplier <= 0 ? "point_tier_zero" : "non_earning_task_type",
       durationMinutes,
       effortTier,
       attentionTier,
       importanceTier,
       bountyCount,
-      multipliers: { effort, attention, importance, urgency, bounty },
+      pointMultiplier,
+      pointTier: input.point_tier || input.pointTier || null,
+      multipliers: { points: pointMultiplier, effort, attention, importance, urgency, bounty },
       basePoints,
       rawPoints: 0,
       awardPoints: 0,
@@ -165,7 +175,9 @@ function scoreTaskPoints(input = {}) {
     attentionTier,
     importanceTier,
     bountyCount,
-    multipliers: { effort, attention, importance, urgency, bounty },
+    pointMultiplier,
+    pointTier: input.point_tier || input.pointTier || null,
+    multipliers: { points: pointMultiplier, effort, attention, importance, urgency, bounty },
     basePoints,
     rawPoints,
     awardPoints,

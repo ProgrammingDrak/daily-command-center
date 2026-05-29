@@ -23,6 +23,7 @@
   let slotRewardAnimationTimer = null;
   let activeBankPetRunRestore = null;
   let slotOverrideDraft = null;
+  let pointTagTierDraft = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
@@ -72,10 +73,16 @@
     romantic_partner: "Romantic partner",
     either_partner: "Either partner"
   };
-  const SPIN_SYMBOLS = ["MISS","BANK","MISS","JACKPOT","MISS","MISS","BANK","MISS","JACKPOT"];
+  const POINT_TAG_TIERS = [
+    { id: "maintenance", label: "Maintenance", hint: "Half points" },
+    { id: "advancement", label: "Advancement", hint: "Full points" },
+    { id: "light", label: "Light", hint: "Quarter points" },
+    { id: "none", label: "No points", hint: "Zero" }
+  ];
+  const SPIN_SYMBOLS = ["MISS","BANK","MISS","JACKPOT","MISS","MISS","BANK","MISS","JACKPOT","SPIN"];
   const FILLER_SYMBOLS = ["MISS","MISS","MISS","BANK","JACKPOT"];
   const TEASER_SYMBOLS = ["JACKPOT","BANK","MISS"];
-  const OVERRIDE_SYMBOLS = ["MISS","BANK","JACKPOT"];
+  const OVERRIDE_SYMBOLS = ["MISS","BANK","JACKPOT","SPIN"];
   const DEFAULT_OVERRIDE_TILES = [
     "MISS","MISS","MISS","MISS","MISS",
     "MISS","MISS","MISS","MISS","MISS",
@@ -396,6 +403,7 @@
     if(!root) return;
     try {
       slotState = await api("/api/slot/state");
+      pointTagTierDraft = null;
       renderSlots();
     } catch(e) {
       const result = document.getElementById("slot-result");
@@ -700,31 +708,34 @@
     if(!slotState) return;
     const constants = slotState.constants || {};
     const spinCost = constants.spinCost || 1;
-    const monthlyGoal = constants.monthlyGoalCents || 10000;
-    const jackpotRate = constants.jackpotHitRate == null ? 0.2 : constants.jackpotHitRate;
-    const bankBuilderRate = constants.bankBuilderHitRate == null ? 0.45 : constants.bankBuilderHitRate;
-    const sourceWeights = constants.paymentSourceWeights || {};
-    const costInput = document.getElementById("slot-spin-cost-input");
-    const jackpotInput = document.getElementById("slot-jackpot-rate");
-    const bankBuilderInput = document.getElementById("slot-bank-builder-rate");
-    const goalInput = document.getElementById("slot-monthly-goal");
-    const selfInput = document.getElementById("slot-source-self-weight");
-    const sponsoredInput = document.getElementById("slot-source-sponsored-weight");
-    const freeInput = document.getElementById("slot-source-free-weight");
+    const profile = constants.economyProfile || {};
+    const unlocks = constants.customizationUnlocks || {};
+    const maintenanceHoursInput = document.getElementById("slot-maintenance-hours");
+    const advancementHoursInput = document.getElementById("slot-advancement-hours");
+    const monthlyBudgetInput = document.getElementById("slot-monthly-discretionary");
+    const maintenanceNotes = document.getElementById("slot-maintenance-notes");
+    const advancementNotes = document.getElementById("slot-advancement-notes");
     const penalty = document.getElementById("slot-shortfall-penalty");
-    const rationale = document.getElementById("slot-scoring-rationale");
-    if(costInput && document.activeElement !== costInput) costInput.value = spinCost;
-    if(jackpotInput && document.activeElement !== jackpotInput) jackpotInput.value = Math.round(jackpotRate * 100);
-    if(bankBuilderInput && document.activeElement !== bankBuilderInput) bankBuilderInput.value = Math.round(bankBuilderRate * 100);
-    if(goalInput && document.activeElement !== goalInput) goalInput.value = ((monthlyGoal || 0) / 100).toFixed(0);
-    if(selfInput && document.activeElement !== selfInput) selfInput.value = sourceWeights.self == null ? 45 : sourceWeights.self;
-    if(sponsoredInput && document.activeElement !== sponsoredInput) sponsoredInput.value = sourceWeights.sponsored == null ? 25 : sourceWeights.sponsored;
-    if(freeInput && document.activeElement !== freeInput) freeInput.value = sourceWeights.free == null ? 30 : sourceWeights.free;
+    const maintenanceHours = profile.maintenance_hours_per_day == null ? 4 : profile.maintenance_hours_per_day;
+    const advancementHours = profile.advancement_hours_per_day == null ? 5 : profile.advancement_hours_per_day;
+    const monthlyDiscretionary = profile.monthly_discretionary_cents == null
+      ? (constants.monthlyGoalCents || 10000)
+      : profile.monthly_discretionary_cents;
+    if(maintenanceHoursInput && document.activeElement !== maintenanceHoursInput) maintenanceHoursInput.value = maintenanceHours;
+    if(advancementHoursInput && document.activeElement !== advancementHoursInput) advancementHoursInput.value = advancementHours;
+    if(monthlyBudgetInput && document.activeElement !== monthlyBudgetInput) monthlyBudgetInput.value = ((monthlyDiscretionary || 0) / 100).toFixed(0);
+    if(maintenanceNotes && document.activeElement !== maintenanceNotes) maintenanceNotes.value = profile.maintenance_notes || "";
+    if(advancementNotes && document.activeElement !== advancementNotes) advancementNotes.value = profile.advancement_notes || "";
     if(penalty && document.activeElement !== penalty) penalty.value = constants.shortfallPenalty || "";
-    if(rationale && document.activeElement !== rationale) rationale.value = constants.scoringRationale || "";
-    setText("slot-current-cost", pointLabel(spinCost) + " per spin");
-    setText("slot-spin-cost-line", pointLabel(spinCost) + " per spin");
-    setText("slot-current-goal", "Jackpot: " + Math.round(jackpotRate * 100) + "%; bank builder: " + Math.round(bankBuilderRate * 100) + "% of non-jackpots.");
+    setText("slot-current-cost", "Daily rhythm set");
+    setText("slot-spin-cost-line", "Spin when your rhythm fills the meter");
+    setText("slot-current-goal", "Sweet treats budget: " + money(monthlyDiscretionary || 0));
+    setText("slot-rhythm-summary", (constants.profileSummary && constants.profileSummary.dailyRhythm) || "A solid day earns a lot of spins.");
+    const tagPanel = document.getElementById("slot-tag-sorting-panel");
+    if(tagPanel) tagPanel.hidden = !unlocks.tag_sorting;
+    const lockedPanel = document.getElementById("slot-tag-sorting-locked");
+    if(lockedPanel) lockedPanel.hidden = !!unlocks.tag_sorting;
+    renderPointTagSorting();
     renderTileOverride();
   }
 
@@ -822,43 +833,126 @@
   }
 
   async function saveSettings(){
-    const costInput = document.getElementById("slot-spin-cost-input");
-    const jackpotInput = document.getElementById("slot-jackpot-rate");
-    const bankBuilderInput = document.getElementById("slot-bank-builder-rate");
-    const goalInput = document.getElementById("slot-monthly-goal");
-    const selfInput = document.getElementById("slot-source-self-weight");
-    const sponsoredInput = document.getElementById("slot-source-sponsored-weight");
-    const freeInput = document.getElementById("slot-source-free-weight");
+    const maintenanceHoursInput = document.getElementById("slot-maintenance-hours");
+    const advancementHoursInput = document.getElementById("slot-advancement-hours");
+    const monthlyBudgetInput = document.getElementById("slot-monthly-discretionary");
+    const maintenanceNotes = document.getElementById("slot-maintenance-notes");
+    const advancementNotes = document.getElementById("slot-advancement-notes");
     const penalty = document.getElementById("slot-shortfall-penalty");
-    const rationale = document.getElementById("slot-scoring-rationale");
-    const spinCost = Math.max(1, Math.min(250, parseInt(costInput && costInput.value, 10) || 25));
-    const jackpotHitRate = Math.max(0, Math.min(100, parseFloat(jackpotInput && jackpotInput.value) || 0)) / 100;
-    const bankBuilderHitRate = Math.max(0, Math.min(100, parseFloat(bankBuilderInput && bankBuilderInput.value) || 0)) / 100;
-    const monthlyGoalCents = Math.max(100, Math.min(1000000, Math.round((parseFloat(goalInput && goalInput.value) || 1) * 100)));
+    const maintenanceHours = Math.max(0, Math.min(16, parseFloat(maintenanceHoursInput && maintenanceHoursInput.value) || 0));
+    const advancementHours = Math.max(0, Math.min(16, parseFloat(advancementHoursInput && advancementHoursInput.value) || 0));
+    const monthlyDiscretionaryCents = Math.max(100, Math.min(1000000, Math.round((parseFloat(monthlyBudgetInput && monthlyBudgetInput.value) || 1) * 100)));
     try {
       await api("/api/slot/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          spin_cost: spinCost,
-          jackpot_hit_rate: jackpotHitRate,
-          bank_builder_hit_rate: bankBuilderHitRate,
-          payment_source_weights: {
-            self: Math.max(0, parseInt(selfInput && selfInput.value, 10) || 0),
-            sponsored: Math.max(0, parseInt(sponsoredInput && sponsoredInput.value, 10) || 0),
-            free: Math.max(0, parseInt(freeInput && freeInput.value, 10) || 0)
+          economy_profile: {
+            maintenance_hours_per_day: maintenanceHours,
+            advancement_hours_per_day: advancementHours,
+            monthly_discretionary_cents: monthlyDiscretionaryCents,
+            maintenance_notes: maintenanceNotes ? maintenanceNotes.value : "",
+            advancement_notes: advancementNotes ? advancementNotes.value : ""
           },
+          point_tag_tiers: pointTagTierDraft || (slotState.constants && slotState.constants.pointTagTiers) || {},
           reward_tiers: rewardTiers(),
-          monthly_goal_cents: monthlyGoalCents,
-          shortfall_penalty: penalty ? penalty.value : "",
-          scoring_rationale: rationale ? rationale.value : ""
+          shortfall_penalty: penalty ? penalty.value : ""
         })
       });
-      setResult("Slot rules saved.");
+      setResult("Slot setup saved.");
       await loadSlots();
     } catch(e) {
       setResult(e.message);
     }
+  }
+
+  function tagName(tag){
+    const props = (tag && tag.properties) || {};
+    return props.name || tag.name || tag.title || "Unnamed tag";
+  }
+
+  function tagColor(tag){
+    const props = (tag && tag.properties) || {};
+    return props.color || "var(--accent)";
+  }
+
+  function clonePointTagTiers(source){
+    const tiers = source || {};
+    const clone = {};
+    POINT_TAG_TIERS.forEach(tier => {
+      clone[tier.id] = Array.isArray(tiers[tier.id]) ? [...tiers[tier.id]].map(String) : [];
+    });
+    return clone;
+  }
+
+  function allKnownTags(){
+    if(typeof refreshTagIndex === "function") {
+      try { refreshTagIndex(); } catch(e) {}
+    }
+    const idx = window.__TAGS__;
+    if(!idx || !idx.byId) return [];
+    return Array.from(idx.byId.values()).sort((a, b) => tagName(a).localeCompare(tagName(b)));
+  }
+
+  function movePointTag(tagId, targetTier){
+    if(!pointTagTierDraft) pointTagTierDraft = clonePointTagTiers(slotState && slotState.constants && slotState.constants.pointTagTiers);
+    POINT_TAG_TIERS.forEach(tier => {
+      pointTagTierDraft[tier.id] = (pointTagTierDraft[tier.id] || []).filter(id => String(id) !== String(tagId));
+    });
+    if(targetTier && pointTagTierDraft[targetTier]) pointTagTierDraft[targetTier].push(String(tagId));
+    renderPointTagSorting();
+  }
+
+  function renderPointTagSorting(){
+    const board = document.getElementById("slot-tag-tier-board");
+    if(!board || !slotState) return;
+    const current = (slotState.constants && slotState.constants.pointTagTiers) || {};
+    if(!pointTagTierDraft) pointTagTierDraft = clonePointTagTiers(current);
+    const tags = allKnownTags();
+    const assigned = new Set();
+    POINT_TAG_TIERS.forEach(tier => (pointTagTierDraft[tier.id] || []).forEach(id => assigned.add(String(id))));
+    const unassigned = tags.filter(tag => !assigned.has(String(tag.id)));
+    const lanes = [
+      ...POINT_TAG_TIERS,
+      { id: "unassigned", label: "Unsorted", hint: "Uses the normal default" }
+    ];
+    if(!tags.length){
+      board.innerHTML = '<div class="slot-tag-empty">No tags yet. Create tags from the tag manager, then sort them here.</div>';
+      return;
+    }
+    board.innerHTML = lanes.map(tier => {
+      const laneTags = tier.id === "unassigned"
+        ? unassigned
+        : (pointTagTierDraft[tier.id] || []).map(id => tags.find(tag => String(tag.id) === String(id))).filter(Boolean);
+      return '<div class="slot-tag-lane" data-point-tier="' + esc(tier.id) + '">' +
+        '<div class="slot-tag-lane-head"><strong>' + esc(tier.label) + '</strong><span>' + esc(tier.hint) + '</span></div>' +
+        '<div class="slot-tag-chip-list">' +
+          (laneTags.length ? laneTags.map(tag =>
+            '<button class="slot-tag-chip" type="button" draggable="true" data-tag-id="' + esc(tag.id) + '">' +
+              '<i style="background:' + esc(tagColor(tag)) + '"></i>' +
+              '<span>' + esc(tagName(tag)) + '</span>' +
+            '</button>'
+          ).join("") : '<span class="slot-tag-placeholder">Drop tags here</span>') +
+        '</div>' +
+      '</div>';
+    }).join("");
+    board.querySelectorAll(".slot-tag-chip").forEach(chip => {
+      chip.addEventListener("dragstart", event => {
+        event.dataTransfer.setData("text/plain", chip.dataset.tagId);
+      });
+    });
+    board.querySelectorAll(".slot-tag-lane").forEach(lane => {
+      lane.addEventListener("dragover", event => {
+        event.preventDefault();
+        lane.classList.add("drag-over");
+      });
+      lane.addEventListener("dragleave", () => lane.classList.remove("drag-over"));
+      lane.addEventListener("drop", event => {
+        event.preventDefault();
+        lane.classList.remove("drag-over");
+        movePointTag(event.dataTransfer.getData("text/plain"), lane.dataset.pointTier);
+      });
+    });
   }
 
   function renderTierManager(){
@@ -1010,14 +1104,11 @@
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          spin_cost: current.spinCost || 25,
-          jackpot_hit_rate: current.jackpotHitRate == null ? 0.2 : current.jackpotHitRate,
-          bank_builder_hit_rate: current.bankBuilderHitRate == null ? 0.45 : current.bankBuilderHitRate,
           payment_source_weights: current.paymentSourceWeights || {},
           reward_tiers: tiers,
-          monthly_goal_cents: current.monthlyGoalCents || 10000,
+          economy_profile: current.economyProfile || {},
+          point_tag_tiers: pointTagTierDraft || current.pointTagTiers || {},
           shortfall_penalty: current.shortfallPenalty || "",
-          scoring_rationale: current.scoringRationale || ""
         })
       });
       await loadSlots();
@@ -1602,13 +1693,16 @@
           await animateBankPayout(spinRow, snap, bankDelta, updateReserveAtDropoff);
           if(!reserveUpdated) updateReserveAtDropoff();
         }
-        setResult(resultText(spinRow, snap));
         slotPlay("win");
         slotPetReact("happy", bankDelta > 0 ? "Bank builder!" : "Bank builder capped.", 2400);
-        isSpinning = false;
-        await loadSlotsAfterSpin();
-        renderSlotResultActions(spinRow);
-        return;
+        if(!stages.jackpot_hit && !stages.free_spin_hit) {
+          setResult(resultText(spinRow, snap));
+          isSpinning = false;
+          await loadSlotsAfterSpin();
+          renderSlotResultActions(spinRow);
+          return;
+        }
+        setResult(stages.jackpot_hit ? "Bank builder first. Jackpot roll locked in." : "Bank builder first. Free spin tile locked in.");
       }
       if(!stages.jackpot_hit){
         updateStageTrack("jackpot", "miss");
@@ -3149,6 +3243,7 @@
   function rewardSymbol(reward){
     if(!reward || reward.kind === "miss") return "MISS";
     if(reward.kind === "bank_builder") return "BANK";
+    if(reward.source_type === "slot_free_spin_tile") return "SPIN";
     return "JACKPOT";
   }
 

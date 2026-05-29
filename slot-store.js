@@ -10,10 +10,25 @@ const {
 } = require("./slot-scoring");
 
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
-const DAILY_BANK_CAP_CENTS = 5000;
-const WEEKLY_BANK_CAP_CENTS = 15000;
-const DEFAULT_BANK_BUILDER_HIT_RATE = 0.45;
-const SCREEN_BANK_BUILDER_PERCENT = 0.0022;
+const DEFAULT_TARGET_DAILY_SPINS = 28;
+const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
+const DEFAULT_ADVANCEMENT_HOURS_PER_DAY = 5;
+const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
+const DEFAULT_JACKPOT_HIT_RATE = 0.04;
+const DEFAULT_FREE_SPIN_TILE_RATE = 0.08;
+const SCREEN_BANK_BUILDER_PERCENT = 0.00031;
+const DEFAULT_POINT_TAG_TIERS = {
+  maintenance: [],
+  advancement: [],
+  light: [],
+  none: [],
+};
+const POINT_TAG_TIER_MULTIPLIERS = {
+  none: 0,
+  light: 0.25,
+  maintenance: 0.5,
+  advancement: 1,
+};
 const SLOT_ROWS = 3;
 const SLOT_COLS = 5;
 const SLOT_CELL_COUNT = SLOT_ROWS * SLOT_COLS;
@@ -39,7 +54,7 @@ const BANK_SCREEN_COUNT_WEIGHTS = [
   [4, 4],
   [5, 1],
 ];
-const SLOT_SYMBOLS = new Set(["MISS", "BANK", "JACKPOT"]);
+const SLOT_SYMBOLS = new Set(["MISS", "BANK", "JACKPOT", "SPIN"]);
 const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
 const LEGACY_BANK_BUILDER_KIND = "bank_builder";
@@ -55,7 +70,6 @@ const DEFAULT_SCORING_RATIONALE = [
 const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partner", "either_partner", "split"]);
 const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "sponsor", "choice", "reroll"]);
 const PAYMENT_SOURCES = new Set(["self", "sponsored", "free"]);
-const DEFAULT_JACKPOT_HIT_RATE = 0.2;
 const DEFAULT_SOURCE_WEIGHTS = { self: 45, sponsored: 25, free: 30 };
 const MAX_BANKROLL_GOAL_CENTS = 10000000;
 const DEFAULT_REWARD_TIERS = [
@@ -321,6 +335,89 @@ function normalizeBankBuilderHitRate(value) {
   return normalizeRate(value, DEFAULT_BANK_BUILDER_HIT_RATE);
 }
 
+function roundToNearestFive(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_SPIN_COST;
+  return Math.max(5, Math.round(n / 5) * 5);
+}
+
+function normalizeHours(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(16, Math.round(n * 4) / 4));
+}
+
+function normalizeProfileNotes(value) {
+  return String(value == null ? "" : value).trim().slice(0, 1000);
+}
+
+function normalizeEconomyProfile(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const monthly = clampInt(
+    raw.monthly_discretionary_cents ??
+    raw.monthlyDiscretionaryCents ??
+    raw.monthly_goal_cents ??
+    raw.monthlyGoalCents ??
+    DEFAULT_MONTHLY_GOAL_CENTS,
+    100,
+    1000000
+  );
+  return {
+    maintenance_hours_per_day: normalizeHours(
+      raw.maintenance_hours_per_day ?? raw.maintenanceHoursPerDay,
+      DEFAULT_MAINTENANCE_HOURS_PER_DAY
+    ),
+    advancement_hours_per_day: normalizeHours(
+      raw.advancement_hours_per_day ?? raw.advancementHoursPerDay,
+      DEFAULT_ADVANCEMENT_HOURS_PER_DAY
+    ),
+    target_daily_spins: DEFAULT_TARGET_DAILY_SPINS,
+    monthly_discretionary_cents: monthly,
+    maintenance_notes: normalizeProfileNotes(raw.maintenance_notes ?? raw.maintenanceNotes ?? raw.maintenance_examples ?? raw.maintenanceExamples),
+    advancement_notes: normalizeProfileNotes(raw.advancement_notes ?? raw.advancementNotes ?? raw.advancement_examples ?? raw.advancementExamples),
+    completed_at: raw.completed_at || raw.completedAt || null,
+    updated_at: raw.updated_at || raw.updatedAt || null,
+  };
+}
+
+function deriveEconomySettings(profile = {}) {
+  const normalized = normalizeEconomyProfile(profile);
+  const dailyPoints =
+    (normalized.advancement_hours_per_day * 60) +
+    (normalized.maintenance_hours_per_day * 60 * POINT_TAG_TIER_MULTIPLIERS.maintenance);
+  return {
+    spin_cost: clampInt(roundToNearestFive(dailyPoints / DEFAULT_TARGET_DAILY_SPINS), 5, 250),
+    monthly_goal_cents: normalized.monthly_discretionary_cents,
+    bankroll_pacing: {
+      target_daily_spins: DEFAULT_TARGET_DAILY_SPINS,
+      bank_builder_base_percent: SCREEN_BANK_BUILDER_PERCENT,
+      daily_bank_cap_percent: 0.1,
+      weekly_bank_cap_percent: 0.25,
+    },
+    bank_builder_hit_rate: DEFAULT_BANK_BUILDER_HIT_RATE,
+    jackpot_hit_rate: DEFAULT_JACKPOT_HIT_RATE,
+    free_spin_tile_rate: DEFAULT_FREE_SPIN_TILE_RATE,
+  };
+}
+
+function normalizeCustomizationUnlocks(value = {}, profile = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    simple_setup: raw.simple_setup !== false,
+    tag_sorting: raw.tag_sorting === true || !!profile.completed_at,
+  };
+}
+
+function normalizePointTagTiers(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const normalized = {};
+  for (const tier of Object.keys(DEFAULT_POINT_TAG_TIERS)) {
+    const ids = Array.isArray(raw[tier]) ? raw[tier] : [];
+    normalized[tier] = [...new Set(ids.map(id => String(id || "").trim()).filter(Boolean))].slice(0, 250);
+  }
+  return normalized;
+}
+
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS slot_accounts (
@@ -538,16 +635,23 @@ async function migrateAccountPointsV3(workspaceId, account) {
 
 function normalizeSlotSettings(settings = {}) {
   const raw = settings && typeof settings === "object" ? settings : {};
+  const economyProfile = normalizeEconomyProfile(raw.economy_profile || raw.economyProfile || raw);
+  const derived = deriveEconomySettings(economyProfile);
   return {
     ...raw,
-    spin_cost: clampInt(raw.spin_cost || DEFAULT_SPIN_COST, 1, 250),
-    jackpot_hit_rate: normalizeJackpotHitRate(raw.jackpot_hit_rate ?? raw.jackpotHitRate),
-    bank_builder_hit_rate: normalizeBankBuilderHitRate(raw.bank_builder_hit_rate ?? raw.bankBuilderHitRate),
+    economy_profile: economyProfile,
+    customization_unlocks: normalizeCustomizationUnlocks(raw.customization_unlocks || raw.customizationUnlocks, economyProfile),
+    point_tag_tiers: normalizePointTagTiers(raw.point_tag_tiers || raw.pointTagTiers),
+    spin_cost: clampInt(raw.spin_cost ?? raw.spinCost ?? derived.spin_cost, 5, 250),
+    jackpot_hit_rate: normalizeJackpotHitRate(raw.jackpot_hit_rate ?? raw.jackpotHitRate ?? derived.jackpot_hit_rate),
+    bank_builder_hit_rate: normalizeBankBuilderHitRate(raw.bank_builder_hit_rate ?? raw.bankBuilderHitRate ?? derived.bank_builder_hit_rate),
+    free_spin_tile_rate: normalizeRate(raw.free_spin_tile_rate ?? raw.freeSpinTileRate ?? derived.free_spin_tile_rate, derived.free_spin_tile_rate),
+    bankroll_pacing: raw.bankroll_pacing && typeof raw.bankroll_pacing === "object" ? { ...derived.bankroll_pacing, ...raw.bankroll_pacing } : derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(raw.payment_source_weights || raw.paymentSourceWeights),
     reward_tiers: normalizeRewardTiers(raw.reward_tiers || raw.rewardTiers),
     reroll_credits: clampInt(raw.reroll_credits ?? raw.rerollCredits ?? 0, 0, 1000),
     jackpot_spin_credits: clampInt(raw.jackpot_spin_credits ?? raw.jackpotSpinCredits ?? 0, 0, 1000),
-    monthly_goal_cents: clampInt(raw.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000),
+    monthly_goal_cents: clampInt(raw.monthly_goal_cents ?? raw.monthlyGoalCents ?? derived.monthly_goal_cents, 100, 1000000),
     bankroll_goal: normalizeBankrollGoal(raw.bankroll_goal || raw.bankrollGoal),
     shortfall_penalty: String(raw.shortfall_penalty || DEFAULT_SHORTFALL_PENALTY),
     scoring_rationale: String(raw.scoring_rationale || DEFAULT_SCORING_RATIONALE),
@@ -760,12 +864,16 @@ async function getBankUsage(workspaceId, settings = {}) {
     [workspaceId]
   );
   const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000);
+  const normalized = normalizeSlotSettings(settings);
+  const pacing = normalized.bankroll_pacing || {};
+  const dailyCap = Math.max(100, Math.round(monthlyGoal * (pacing.daily_bank_cap_percent || 0.1)));
+  const weeklyCap = Math.max(dailyCap, Math.round(monthlyGoal * (pacing.weekly_bank_cap_percent || 0.25)));
   return {
     today: today.cents,
     week: week.cents,
     month: month.cents,
-    dailyCap: DAILY_BANK_CAP_CENTS,
-    weeklyCap: WEEKLY_BANK_CAP_CENTS,
+    dailyCap,
+    weeklyCap,
     monthlyGoal,
     monthlyRemaining: Math.max(0, monthlyGoal - month.cents),
   };
@@ -888,8 +996,18 @@ async function getState(workspaceId, userId) {
       pointsFormulaVersion: POINTS_FORMULA_VERSION,
       maxTaskCredits: null,
       monthlyGoalCents: account.settings.monthly_goal_cents,
+      economyProfile: account.settings.economy_profile,
+      customizationUnlocks: account.settings.customization_unlocks,
+      pointTagTiers: account.settings.point_tag_tiers,
+      profileSummary: {
+        dailyRhythm: "A solid day earns a lot of spins.",
+        sweetTreatsBudgetCents: account.settings.economy_profile.monthly_discretionary_cents,
+        maintenanceLabel: "Maintenance earns steady progress.",
+        advancementLabel: "Advancement earns full progress.",
+      },
       jackpotHitRate: account.settings.jackpot_hit_rate,
       bankBuilderHitRate: account.settings.bank_builder_hit_rate,
+      freeSpinTileRate: account.settings.free_spin_tile_rate,
       paymentSourceWeights: account.settings.payment_source_weights,
       rewardTiers: account.settings.reward_tiers,
       rerollCredits: account.settings.reroll_credits,
@@ -905,19 +1023,38 @@ async function getState(workspaceId, userId) {
 async function updateSettings(workspaceId, userId, body = {}) {
   const account = accountWithSettings(await ensureAccount(workspaceId, userId));
   const current = account.settings || {};
+  const hasProfileUpdate = !!(body.economy_profile || body.economyProfile);
+  const incomingProfile = hasProfileUpdate ? (body.economy_profile || body.economyProfile) : current.economy_profile;
+  const economyProfile = normalizeEconomyProfile({
+    ...(current.economy_profile || {}),
+    ...(incomingProfile || {}),
+    completed_at: (incomingProfile && (incomingProfile.completed_at || incomingProfile.completedAt)) ||
+      (hasProfileUpdate ? new Date().toISOString() : current.economy_profile && current.economy_profile.completed_at),
+    updated_at: hasProfileUpdate ? new Date().toISOString() : current.economy_profile && current.economy_profile.updated_at,
+  });
+  const derived = deriveEconomySettings(economyProfile);
   const rewardTiers = normalizeRewardTiers(
     body.reward_tiers || body.rewardTiers || current.reward_tiers || DEFAULT_REWARD_TIERS
   );
   if (body.reward_tiers || body.rewardTiers) assertRewardTierPercentTotal(rewardTiers);
+  const currentUnlocks = current.customization_unlocks || {};
+  const incomingUnlocks = body.customization_unlocks || body.customizationUnlocks || {};
   const next = {
     ...current,
-    spin_cost: clampInt(body.spin_cost || body.spinCost || current.spin_cost || DEFAULT_SPIN_COST, 1, 250),
-    jackpot_hit_rate: normalizeJackpotHitRate(
-      body.jackpot_hit_rate ?? body.jackpotHitRate ?? current.jackpot_hit_rate ?? DEFAULT_JACKPOT_HIT_RATE
+    economy_profile: economyProfile,
+    customization_unlocks: normalizeCustomizationUnlocks({
+      ...currentUnlocks,
+      ...incomingUnlocks,
+      tag_sorting: incomingUnlocks.tag_sorting ?? currentUnlocks.tag_sorting ?? hasProfileUpdate,
+    }, economyProfile),
+    point_tag_tiers: normalizePointTagTiers(
+      body.point_tag_tiers || body.pointTagTiers || current.point_tag_tiers || DEFAULT_POINT_TAG_TIERS
     ),
-    bank_builder_hit_rate: normalizeBankBuilderHitRate(
-      body.bank_builder_hit_rate ?? body.bankBuilderHitRate ?? current.bank_builder_hit_rate ?? DEFAULT_BANK_BUILDER_HIT_RATE
-    ),
+    spin_cost: derived.spin_cost,
+    jackpot_hit_rate: derived.jackpot_hit_rate,
+    bank_builder_hit_rate: derived.bank_builder_hit_rate,
+    free_spin_tile_rate: derived.free_spin_tile_rate,
+    bankroll_pacing: derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(
       body.payment_source_weights || body.paymentSourceWeights || current.payment_source_weights || DEFAULT_SOURCE_WEIGHTS
     ),
@@ -928,7 +1065,7 @@ async function updateSettings(workspaceId, userId, body = {}) {
       1000
     ),
     monthly_goal_cents: clampInt(
-      body.monthly_goal_cents || body.monthlyGoalCents || current.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS,
+      derived.monthly_goal_cents,
       100,
       1000000
     ),
@@ -1233,12 +1370,56 @@ function normalizeTaskCreditBody(body = {}) {
   };
 }
 
+function normalizeTaskTags(value) {
+  if (Array.isArray(value)) {
+    return value.map(tag => {
+      if (tag && typeof tag === "object") return String(tag.id || tag.name || tag.label || "").trim();
+      return String(tag || "").trim();
+    }).filter(Boolean);
+  }
+  if (typeof value === "string") return value.split(/[,\u00b7|]/).map(tag => tag.trim()).filter(Boolean);
+  return [];
+}
+
+function taskPointTier(body = {}, settings = {}) {
+  const normalized = normalizeSlotSettings(settings);
+  const tiers = normalized.point_tag_tiers || DEFAULT_POINT_TAG_TIERS;
+  const tags = normalizeTaskTags(body.tags ?? body.tag ?? body.tag_ids ?? body.tagIds);
+  const tagSet = new Set(tags);
+  let bestTier = null;
+  let bestMultiplier = -1;
+  for (const [tier, multiplier] of Object.entries(POINT_TAG_TIER_MULTIPLIERS)) {
+    const matches = (tiers[tier] || []).some(tagId => tagSet.has(String(tagId)));
+    if (matches && multiplier > bestMultiplier) {
+      bestTier = tier;
+      bestMultiplier = multiplier;
+    }
+  }
+  const type = String(body.type ?? body.kind ?? "").trim().toLowerCase();
+  if (type === "ooo") return { tier: "none", multiplier: 0, matched_tags: [] };
+  if (bestTier) {
+    return {
+      tier: bestTier,
+      multiplier: POINT_TAG_TIER_MULTIPLIERS[bestTier],
+      matched_tags: (tiers[bestTier] || []).filter(tagId => tagSet.has(String(tagId))),
+    };
+  }
+  if (type === "meeting" || type === "break") return { tier: "none", multiplier: 0, matched_tags: [] };
+  return { tier: "advancement", multiplier: POINT_TAG_TIER_MULTIPLIERS.advancement, matched_tags: [] };
+}
+
 async function earnTaskCredit(workspaceId, userId, body) {
   body = normalizeTaskCreditBody(body || {});
-  await ensureAccount(workspaceId, userId);
+  const account = accountWithSettings(await ensureAccount(workspaceId, userId));
   const sourceKey = String(body.source_key || body.task_id || "").trim();
   if (!sourceKey) throw new Error("source_key required");
   const description = String(body.description || body.title || "Task completed");
+  const pointTier = taskPointTier(body, account.settings);
+  body = {
+    ...body,
+    point_tier: pointTier.tier,
+    point_multiplier: pointTier.multiplier,
+  };
   const scoring = scoreTaskPoints(body);
   const credits = scoring.awardPoints;
   const metadata = {
@@ -1257,6 +1438,9 @@ async function earnTaskCredit(workspaceId, userId, body) {
       actual_minutes: body.actual_minutes ?? body.actualMinutes ?? null,
       effort_tier: body.effort_tier || body.effortTier || null,
       attention_tier: body.attention_tier || body.attentionTier || null,
+      point_tier: pointTier.tier,
+      point_multiplier: pointTier.multiplier,
+      point_tag_matches: pointTier.matched_tags,
       bounty: body.bounty === true,
       bounty_count: body.bounty_count ?? body.bountyCount ?? null,
       partner_bounty: body.partner_bounty === true || body.partnerBounty === true || body.shared_bounty === true || body.sharedBounty === true,
@@ -1354,6 +1538,13 @@ function bankBuilderHits(settings, rng = crypto.randomInt) {
   return rng(1000000) < Math.floor(rate * 1000000);
 }
 
+function freeSpinTileHits(settings, rng = crypto.randomInt) {
+  const rate = normalizeSlotSettings(settings).free_spin_tile_rate;
+  if (rate <= 0) return false;
+  if (rate >= 1) return true;
+  return rng(1000000) < Math.floor(rate * 1000000);
+}
+
 function fakeMissReward() {
   return reward({
     id: null,
@@ -1365,6 +1556,21 @@ function fakeMissReward() {
     chance_shares: 0,
     active: true,
     notes: "No-jackpot outcome.",
+  });
+}
+
+function fakeFreeSpinTileReward() {
+  return reward({
+    id: null,
+    title: "Free full spin",
+    kind: "reroll",
+    source_type: "slot_free_spin_tile",
+    payment_source: "free",
+    tier_id: "tier_i",
+    weight: 0,
+    chance_shares: 0,
+    active: true,
+    notes: "Free spin tile awarded a full slot spin.",
   });
 }
 
@@ -1490,32 +1696,35 @@ function buildDiceRerollChoice(attempt, die, rng) {
 
 function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   const normalized = normalizeSlotSettings(settings);
+  const bankHit = bankBuilderHits(normalized, rng);
   const hit = jackpotHits(normalized, rng);
   if (!hit) {
-    const bankHit = bankBuilderHits(normalized, rng);
+    const freeSpinHit = freeSpinTileHits(normalized, rng);
     if (bankHit) {
       return {
         outcome: "bank",
         jackpot_hit: false,
         bank_builder_hit: true,
-        selected: fakeBankBuilderReward(),
+        free_spin_hit: freeSpinHit,
+        selected: freeSpinHit ? fakeFreeSpinTileReward() : fakeBankBuilderReward(),
         source: null,
         tier: null,
         bucket: [],
         empty_bucket: false,
-        reroll_credit: false,
+        reroll_credit: freeSpinHit,
       };
     }
     return {
-      outcome: "miss",
+      outcome: freeSpinHit ? "free_spin" : "miss",
       jackpot_hit: false,
       bank_builder_hit: false,
-      selected: fakeMissReward(),
+      free_spin_hit: freeSpinHit,
+      selected: freeSpinHit ? fakeFreeSpinTileReward() : fakeMissReward(),
       source: null,
       tier: null,
       bucket: [],
       empty_bucket: false,
-      reroll_credit: false,
+      reroll_credit: freeSpinHit,
     };
   }
   const firstAttempt = chooseBucketAttempt(rewards, normalized, rng);
@@ -1560,7 +1769,8 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
     return {
       outcome: "jackpot",
       jackpot_hit: true,
-      bank_builder_hit: false,
+      bank_builder_hit: bankHit,
+      free_spin_hit: false,
       selected: fakeMissReward(),
       source: firstAttempt.source,
       tier: firstAttempt.tier,
@@ -1575,7 +1785,8 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   return {
     outcome: "jackpot",
     jackpot_hit: true,
-    bank_builder_hit: false,
+    bank_builder_hit: bankHit,
+    free_spin_hit: false,
     selected,
     source,
     tier,
@@ -1593,6 +1804,7 @@ function rewardCostCents(row) {
 function rewardSymbol(row) {
   if (!row || row.kind === "miss") return "MISS";
   if (row.kind === "bank_builder") return "BANK";
+  if (row.source_type === "slot_free_spin_tile") return "SPIN";
   return "JACKPOT";
 }
 
@@ -1600,6 +1812,7 @@ function normalizeTileSymbol(value) {
   const symbol = String(value == null ? "" : value).trim().toUpperCase();
   if (symbol === "JACK" || symbol === "JP") return "JACKPOT";
   if (symbol === "B") return "BANK";
+  if (symbol === "S") return "SPIN";
   if (symbol === "M") return "MISS";
   return symbol;
 }
@@ -1616,7 +1829,7 @@ function normalizeTileBoard(value, strict = false) {
   const invalid = board.find(symbol => !SLOT_SYMBOLS.has(symbol));
   if (invalid) {
     if (!strict) return null;
-    throw new Error("Tiles must be MISS, BANK, or JACKPOT");
+    throw new Error("Tiles must be MISS, BANK, JACKPOT, or SPIN");
   }
   return board;
 }
@@ -1733,8 +1946,7 @@ function applyTileOverrideToScreen(screen, override, selected, account, bankUsag
   const stored = normalizeStoredNextSpinTileOverride(override);
   if (!stored) return { ...screen, override: null };
   const board = [...stored.tiles];
-  const isMiss = selected.kind === "miss";
-  const canPayBank = screenBankHit && !isMiss;
+  const canPayBank = !!screenBankHit;
   return {
     board,
     payline: overridePayline(board, selected),
@@ -1761,10 +1973,14 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
   const protectedCells = new Set();
   const selectedSymbol = rewardSymbol(selected);
   const isMiss = selected.kind === "miss";
-  const canPlaceBankSymbols = screenBankHit && !isMiss;
+  const canPlaceBankSymbols = !!screenBankHit;
   let payline = [];
 
-  if (!isMiss && selected.kind !== "bank_builder") {
+  if (selectedSymbol === "SPIN") {
+    const index = crypto.randomInt(SLOT_CELL_COUNT);
+    board[index] = "SPIN";
+    protectedCells.add(index);
+  } else if (!isMiss && selected.kind !== "bank_builder") {
     const line = JACKPOT_PAYLINES[crypto.randomInt(JACKPOT_PAYLINES.length)];
     payline = [...line];
     line.forEach(i => {
@@ -1853,9 +2069,11 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
   const units = baseUnits + horizontalBonusUnits + verticalBonusUnits;
   const rawCents = baseCents * units;
+  const dailyCap = (bankUsage && bankUsage.dailyCap) || Math.max(100, Math.round(monthlyGoalCents * 0.1));
+  const weeklyCap = (bankUsage && bankUsage.weeklyCap) || Math.max(dailyCap, Math.round(monthlyGoalCents * 0.25));
   const remainingCap = Math.max(0, Math.min(
-    DAILY_BANK_CAP_CENTS - ((bankUsage && bankUsage.today) || 0),
-    WEEKLY_BANK_CAP_CENTS - ((bankUsage && bankUsage.week) || 0)
+    dailyCap - ((bankUsage && bankUsage.today) || 0),
+    weeklyCap - ((bankUsage && bankUsage.week) || 0)
   ));
   const cents = Math.min(rawCents, remainingCap);
 
@@ -1917,7 +2135,7 @@ async function spin(workspaceId, userId) {
   const drawPool = state.rewards.filter(r => r.kind !== "miss");
   const outcome = selectThreeStageOutcome(
     drawPool,
-    hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, bank_builder_hit_rate: 0 } : settings
+    hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 } : settings
   );
   let selected = outcome.selected;
   const canHitScreenBank = outcome.bank_builder_hit === true;
@@ -1980,6 +2198,8 @@ async function spin(workspaceId, userId) {
         jackpot_payline: effectiveOutcome.jackpot_hit ? screenJackpot.payline : [],
         bank_builder_hit: effectiveOutcome.bank_builder_hit,
         bank_builder_hit_rate: settings.bank_builder_hit_rate,
+        free_spin_hit: effectiveOutcome.free_spin_hit === true,
+        free_spin_tile_rate: settings.free_spin_tile_rate,
         payment_source: effectiveOutcome.source,
         tier: effectiveOutcome.tier,
         empty_bucket: effectiveOutcome.empty_bucket,
@@ -2005,7 +2225,9 @@ async function spin(workspaceId, userId) {
       bank_screen_payout: screen.payout,
       screen_override: screen.override,
     };
-    const status = effectiveOutcome.reroll_credit
+    const status = bankDelta > 0
+      ? "pending"
+      : effectiveOutcome.reroll_credit
       ? "reroll_credit"
       : selected.kind === "miss"
       ? "miss"
@@ -2109,7 +2331,11 @@ async function confirmSpin(workspaceId, spinId, options = {}) {
         jackpot_choice_type: jackpotType(reward),
         jackpot_selected_at: new Date().toISOString(),
       };
-    } else if (snapshot.kind === "bank_builder" && spinRow.bank_delta_cents > 0) {
+    } else if (
+      (snapshot.kind === "bank_builder" ||
+        (snapshot.source_type === "slot_screen_bank_builder" && !["small_paid", "bank_gated"].includes(snapshot.kind) && !spinRow.bank_reserved_cents)) &&
+      spinRow.bank_delta_cents > 0
+    ) {
       accountUpdate = "bank_balance_cents = bank_balance_cents + $2,";
       params.push(spinRow.bank_delta_cents);
     } else if (["small_paid", "bank_gated"].includes(snapshot.kind) && spinRow.bank_reserved_cents > 0) {
@@ -2354,9 +2580,14 @@ module.exports = {
     buildBankrollGoalCelebrationScreen,
     chooseSingleDieRerollAttempt,
     normalizeSlotSettings,
+    normalizeEconomyProfile,
+    deriveEconomySettings,
+    normalizePointTagTiers,
+    taskPointTier,
     selectThreeStageOutcome,
     chooseWeighted,
     bankBuilderHits,
+    freeSpinTileHits,
     evaluateJackpotBoard,
   },
 };
