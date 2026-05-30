@@ -420,6 +420,31 @@
     .todo-public-task-top span{white-space:normal}
   }
 
+  /* ── Public share view + share modal: phone pass ── */
+  @media (max-width: 560px){
+    .todo-public-shell{padding:14px 12px}
+    .todo-public-hero{padding:14px 0;margin-bottom:14px}
+    .todo-public-hero h1{font-size:21px}
+    .todo-public-hero p{font-size:12px}
+    .todo-public-actions{justify-content:flex-start;width:100%}
+    .todo-public-login,.todo-public-btn{min-height:44px;padding:0 16px;font-size:13px}
+    .todo-public-main,.todo-sponsor-panel{padding:13px}
+    .todo-public-stats{justify-content:flex-start}
+    .todo-public-controls{grid-template-columns:1fr}
+    .todo-public-controls select,.todo-filter-menu-button{min-height:44px;padding:10px 12px;font-size:16px}
+    .todo-filter-menu-button{height:auto}
+    .todo-public-tab{min-height:44px;padding:10px;font-size:13px}
+    /* 16px font avoids iOS zoom-on-focus; 44px tap targets */
+    .todo-sponsor-panel input,.todo-sponsor-panel select,.todo-sponsor-panel textarea{min-height:44px;font-size:16px;padding:10px 12px}
+    .todo-sponsor-panel textarea{min-height:96px}
+    .todo-public-btn.primary{width:100%}
+    /* Share modal (reused on the owner dashboard) */
+    .todo-share-card{padding:14px}
+    .todo-share-linkbox{grid-template-columns:1fr}
+    .todo-share-linkbox input,.todo-share-linkbox button{grid-column:auto}
+    .todo-share-linkbox button,.todo-share-offer-actions button{min-height:44px}
+  }
+
   /* Quick-add tag row */
   .sp-time{font-size:10px;color:var(--text-muted);font-variant-numeric:tabular-nums;width:64px;flex-shrink:0}
   .sp-label{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3502,3 +3527,182 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .pet-face{left:35px;right:35px;top:69px}
   .pet-avatar:before{left:36px;right:36px}
 }
+
+/* ======================================================================== */
+/* MOBILE SHELL  (phones, <=760px)                                          */
+/* Additive app-shell layer. Desktop matches none of these queries and is   */
+/* therefore untouched. New components below are display:none in the base   */
+/* cascade and only revealed inside the media query.                        */
+/* ======================================================================== */
+
+/* Hidden on desktop by default (revealed at <=760px). */
+#mobile-tabbar,#mobile-more-sheet,#mobile-more-backdrop,#mobile-sheet-segments{display:none}
+
+@media (max-width:760px){
+
+  /* ── Sidecar rail: gone on phones. Tasks reachable via the bottom nav. ── */
+  #sidecar-tabs{display:none!important}
+
+  /* ── Header: clean single column (owner buttons move to the More sheet) ── */
+  .header{
+    display:flex!important;
+    flex-direction:column;
+    align-items:stretch;
+    grid-template-columns:none!important;
+    grid-template-rows:none!important;
+    gap:8px;
+    margin-bottom:14px;
+    padding-bottom:12px;
+  }
+  .header>div:first-child{display:block!important}
+  .header h1{
+    grid-column:auto;grid-row:auto;
+    font-size:18px;font-weight:700;letter-spacing:-0.3px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .header .hdr-sub{display:none}
+  .header .date-nav{
+    grid-column:auto;grid-row:auto;
+    display:flex;align-items:center;gap:6px;margin-top:4px;
+  }
+  .header>div:last-child{display:none!important}  /* owner buttons + clock → More sheet */
+
+  /* ── Stats: condensed single-row hero strip ── */
+  .stats{
+    display:flex!important;
+    grid-template-columns:none!important;
+    flex-wrap:nowrap;
+    gap:6px;
+    margin-bottom:12px;
+    position:relative;
+  }
+  .stats>.stat{
+    flex:1 1 0;min-width:0;
+    padding:7px 4px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;
+  }
+  .stats>.stat-combined{
+    flex:1.7 1 0;padding:0;flex-direction:row;
+  }
+  .stats>.stat-combined .stat-half{padding:7px 4px;display:flex;flex-direction:column;align-items:center;gap:0}
+  .stats>.stat-combined .stat-sep{height:22px}
+  .stats .stat .v{font-size:15px;margin-bottom:0;line-height:1.1}
+  .stats .stat .l{font-size:8px;line-height:1.15;text-align:center;white-space:normal;max-width:100%}
+  .stats .stat-points .stat-sub{display:none}  /* "Available: --" subline */
+
+  /* ── Progress: tighter ── */
+  .progress-box{padding:10px 12px}
+  .progress-track{height:14px}
+  .progress-wrap{margin-bottom:12px}
+
+  /* ── Task add bar: give the title its own full-width row.
+       The base rule sets flex:1 (basis 0), which beats the 480 block's
+       width:100% — so override the basis here. ── */
+  .task-add-bar{flex-wrap:wrap;gap:6px}
+  .task-add-bar .tab-title{flex:1 1 100%;min-height:44px}
+  .task-add-bar .tab-dur,.task-add-bar .tab-dest{flex:1 1 auto;min-height:44px}
+  .task-add-bar .tab-add{flex:1 1 auto;min-height:44px}
+
+  /* ── Tab strip: right-edge fade so it reads as scrollable ── */
+  .tabs{
+    overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+    -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 22px),transparent);
+    mask-image:linear-gradient(to right,#000 calc(100% - 22px),transparent);
+  }
+  .tabs::-webkit-scrollbar{display:none}
+
+  /* ── Leave room for the bottom nav; lift floating affordances above it ── */
+  body{padding-bottom:calc(74px + env(safe-area-inset-bottom,0px))!important}
+  #float-timer{right:10px!important;bottom:calc(80px + env(safe-area-inset-bottom,0px))!important}
+  .feedback-fab{bottom:calc(82px + env(safe-area-inset-bottom,0px))!important}
+  .feedback-panel{bottom:calc(138px + env(safe-area-inset-bottom,0px))!important}
+  .float-trivial{bottom:calc(82px + env(safe-area-inset-bottom,0px))!important}
+
+  /* ── Bottom navigation bar ── */
+  #mobile-tabbar{
+    display:flex;
+    position:fixed;left:0;right:0;bottom:0;z-index:440;
+    background:rgba(15,23,42,0.97);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border-top:1px solid var(--border);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+    box-shadow:0 -4px 20px rgba(0,0,0,0.38);
+  }
+  .mtab{
+    flex:1;min-height:56px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+    background:none;border:none;color:var(--text-muted);
+    font-size:10px;font-weight:700;letter-spacing:0.2px;
+    padding:6px 2px;cursor:pointer;position:relative;
+    transition:color 120ms ease;
+  }
+  .mtab .mtab-icon{font-size:19px;line-height:1}
+  .mtab .mtab-label{line-height:1}
+  .mtab.active{color:var(--accent-light)}
+  .mtab.active .mtab-icon{transform:translateY(-1px)}
+  .mtab-badge{
+    position:absolute;top:5px;left:calc(50% + 7px);
+    min-width:15px;height:15px;padding:0 4px;border-radius:8px;
+    background:var(--accent);color:#fff;font-size:9px;font-weight:800;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  /* ── "More" action sheet ── */
+  #mobile-more-backdrop{
+    display:none;position:fixed;inset:0;z-index:1198;
+    background:rgba(2,6,23,0.62);
+  }
+  #mobile-more-backdrop.open{display:block}
+  #mobile-more-sheet{
+    display:block;
+    position:fixed;left:0;right:0;bottom:0;z-index:1199;
+    background:var(--card);
+    border-top:1px solid var(--border);
+    border-radius:16px 16px 0 0;
+    padding:6px 10px calc(14px + env(safe-area-inset-bottom,0px));
+    max-height:82vh;overflow-y:auto;
+    box-shadow:0 -12px 44px rgba(0,0,0,0.5);
+    transform:translateY(110%);
+    transition:transform 240ms ease;
+  }
+  #mobile-more-sheet.open{transform:translateY(0)}
+  .mmore-handle{width:38px;height:4px;border-radius:2px;background:var(--border);margin:8px auto 6px}
+  .mmore-title{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);padding:10px 12px 4px}
+  .mmore-divider{height:1px;background:var(--border);margin:8px 6px}
+  .mmore-row{
+    display:flex;align-items:center;gap:12px;width:100%;
+    min-height:50px;padding:0 12px;
+    background:none;border:none;border-radius:10px;
+    color:var(--text);font-size:15px;font-weight:600;text-align:left;cursor:pointer;
+  }
+  .mmore-row:active{background:var(--card-hover)}
+  .mmore-icon{font-size:18px;width:24px;text-align:center;flex-shrink:0}
+
+  /* ── Tasks drawer → full-screen slide-up sheet ── */
+  .side-drawer-right .side-drawer-body{
+    top:0;bottom:0;left:0;right:0;
+    width:100vw!important;max-width:none!important;
+    border-left:none;
+    transform:translateY(100%)!important;
+    box-shadow:0 -10px 32px rgba(0,0,0,0.5);
+  }
+  .side-drawer.open .side-drawer-body{transform:translateY(0)!important}
+
+  /* Section pills inside the Tasks sheet (replace the vertical rail) */
+  #mobile-sheet-segments{
+    display:flex;gap:6px;flex-shrink:0;
+    padding:8px 14px 10px;
+    overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+    border-bottom:1px solid var(--border);
+  }
+  #mobile-sheet-segments::-webkit-scrollbar{display:none}
+  .msheet-seg{
+    flex:0 0 auto;min-height:38px;padding:0 14px;
+    border-radius:999px;border:1px solid var(--border);
+    background:var(--card);color:var(--text-muted);
+    font-size:12px;font-weight:700;white-space:nowrap;cursor:pointer;
+    display:inline-flex;align-items:center;
+  }
+  .msheet-seg.active{background:rgba(59,130,246,0.18);color:var(--accent-light);border-color:var(--accent)}
+}
+
