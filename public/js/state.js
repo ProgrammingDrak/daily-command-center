@@ -173,6 +173,17 @@ function getBountyCountForTask(id){
   if(bountyEntryMatches(state.partner,id))count++;
   return Math.min(2,count);
 }
+// Bounty provenance for a task: count plus whether a visitor (partner) placed
+// it and their name, so the itinerary can color sponsor bounties distinctly.
+function getBountyMetaForTask(id){
+  const state=normalizeBountyState(dailyBounty);
+  const meta={count:getBountyCountForTask(id),hasSponsor:false,sponsorName:""};
+  if(state&&bountyEntryMatches(state.partner,id)&&(state.partner.source==="todo-share"||state.partner.sponsorName)){
+    meta.hasSponsor=true;
+    meta.sponsorName=state.partner.sponsorName||"";
+  }
+  return meta;
+}
 function hasSelfBounty(){const state=normalizeBountyState(dailyBounty);return !!(state&&state.self&&state.self.taskId)}
 function hasPartnerBounty(){const state=normalizeBountyState(dailyBounty);return !!(state&&state.partner&&state.partner.taskId)}
 function loadBountyState(){

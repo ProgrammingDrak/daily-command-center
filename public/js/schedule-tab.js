@@ -243,6 +243,7 @@ function buildSchedule(){
   doneItems.forEach(ev=>{
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
     const bountyDoneCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
+    const bountyDoneMeta=typeof getBountyMetaForTask==="function"?getBountyMetaForTask(ev.id):{hasSponsor:false,sponsorName:""};
     // Check if this task was auto-completed and needs review
     const comp = completionsData.find(t => t.task_id === ev.id);
     const needsReview = comp && comp.needs_review && !reviewedState[ev.id];
@@ -256,11 +257,12 @@ function buildSchedule(){
         '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
         '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
         '<span class="c-title">'+ev.title+'</span>'+
-        (bountyDoneCount?'<span class="bounty-chip done">Bounty x'+Math.pow(2,bountyDoneCount)+'</span>':'')+
+        (bountyDoneCount?'<span class="bounty-chip done'+(bountyDoneMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyDoneMeta.hasSponsor?' title="'+("Bounty from "+(bountyDoneMeta.sponsorName||"a visitor")).replace(/"/g,'&quot;')+'"':'')+'>Bounty x'+Math.pow(2,bountyDoneCount)+'</span>':'')+
         reviewBadgeHtml+
         evSrcTag+
         petPrivacyChip(ev)+
         '<span class="c-time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
+        (window.todoShareCompactFeedbackHtml?window.todoShareCompactFeedbackHtml(ev):'')+
       '</div>';
     el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id)});
     const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});
@@ -340,6 +342,8 @@ function buildSchedule(){
     const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
     const bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
     const isBounty=bountyCount>0;
+    const bountyMeta=typeof getBountyMetaForTask==="function"?getBountyMetaForTask(ev.id):{count:bountyCount,hasSponsor:false,sponsorName:""};
+    const bountySponsorTitle=bountyMeta.hasSponsor?("Bounty from "+(bountyMeta.sponsorName||"a visitor")).replace(/"/g,'&quot;'):"";
     const bountyPlaced=typeof hasSelfBounty==="function"?hasSelfBounty():!!(typeof getDailyBounty==="function"&&getDailyBounty());
     const canEditBounty=typeof viewMode==="undefined"||viewMode!=="archive";
     const el=document.createElement("div");el.className="tl-item";el.dataset.id=ev.id;
@@ -434,7 +438,7 @@ function buildSchedule(){
       '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(nearEnd?' near-end':'')+(isNextUp?' next-up':'')+(isPinnedActive?' pinned':'')+(pinnedAging==='yellow'?' aging-yellow':'')+(pinnedAging==='red'?' aging-red':'')+'" data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
-        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+'">'+
+        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
           reactionHtml+
           '<div class="grip" title="Drag to reorder">'+gripSvg+'</div>'+
           '<button class="chk" title="Mark done">'+ckSvg+'</button>'+
@@ -444,7 +448,7 @@ function buildSchedule(){
           '</div>'+
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip">Bounty x'+bountyMultiplier+'</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
+            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
             '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+

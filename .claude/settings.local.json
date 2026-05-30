@@ -33,7 +33,25 @@
       "Bash(python -m json.tool)",
       "Bash(curl -s -X DELETE http://localhost:8090/api/blocks/a0000adf-e8ea-456c-bf73-0c17e3e10594)",
       "Skill(design-review)",
-      "Skill(design-review:*)"
+      "Skill(design-review:*)",
+      "Bash(node -e ' *)",
+      "Bash(node --test slot-store.test.js slot-scoring.test.js)",
+      "Bash(node --test slot-store.test.js)",
+      "Bash(node --test slot-store.test.js slot-scoring.test.js slots-frontend-contract.test.js)",
+      "Bash(grep -n \"chooseSpinDiceReroll,\\\\|selectThreeStageOutcome,\\\\|missHits,\\\\|_test: {\" slot-store.js)",
+      "Bash(node -e \"require\\('./slot-store.js'\\); require\\('./server.js'\\) && 0\")",
+      "Bash(node --check slot-store.js)",
+      "Bash(node --check server.js)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(node --check public/js/slots.js)",
+      "Bash(curl -s http://localhost:8091/css/dashboard.css)",
+      "Bash(curl -s http://localhost:8091/js/slots.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} %{content_type} %{size_download}\\\\n\" http://localhost:8091/css/dashboard.css)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} %{content_type} %{size_download}\\\\n\" http://localhost:8091/js/slots.js)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\offic\\\\portable-programming\\\\Repos\\\\daily-command-center\" -Force)",
+      "Bash(Select-Object Name, FullName, PSIsContainer)",
+      "Bash(grep -n \"nextSpinModifiers: account.settings\\\\|chooseSpinGamble,$\\\\|chooseSpinGamble,\\\\|missHits,\\\\|normalizeNextSpinModifiers,\\\\|placeSymbolLine,\" slot-store.js)"
     ]
   }
 }

@@ -74,7 +74,8 @@
       <aside class="todo-sponsor-panel">
         <div class="todo-public-tabs" role="tablist" aria-label="Guest actions">
           <button id="todo-tab-create" class="todo-public-tab active" type="button" role="tab" aria-selected="true" data-todo-panel="create">Create a Task</button>
-          <button id="todo-tab-encourage" class="todo-public-tab" type="button" role="tab" aria-selected="false" data-todo-panel="encourage">Encouragement</button>
+          <button id="todo-tab-rewards" class="todo-public-tab" type="button" role="tab" aria-selected="false" data-todo-panel="rewards">Rewards</button>
+          <button id="todo-tab-encourage" class="todo-public-tab" type="button" role="tab" aria-selected="false" data-todo-panel="encourage">Offer a Reward</button>
         </div>
 
         <section id="todo-panel-create" class="todo-public-panel active" role="tabpanel" aria-labelledby="todo-tab-create">
@@ -100,24 +101,50 @@
           <div id="todo-create-status" class="todo-sponsor-status"></div>
         </section>
 
+        <section id="todo-panel-rewards" class="todo-public-panel" role="tabpanel" aria-labelledby="todo-tab-rewards">
+          <h2>What they're earning</h2>
+          <p>The rewards in rotation right now. Completing tasks earns points toward a spin for one of these.</p>
+          <div id="todo-rewards-rotation" class="todo-rewards-rotation"></div>
+        </section>
+
         <section id="todo-panel-encourage" class="todo-public-panel" role="tabpanel" aria-labelledby="todo-tab-encourage">
-          <h2>Encouragement</h2>
-          <p id="todo-encourage-auth-note">Sign in to send a reward or bounty. Bounties are limited to one per day.</p>
+          <h2>Offer a Reward</h2>
+          <p id="todo-encourage-auth-note">Offer a reward to celebrate progress. Place bounties right on a task with the bounty button.</p>
           <label>Your name <input id="todo-sponsor-name" type="text" maxlength="80" placeholder="Name"></label>
           <label>Email optional <input id="todo-sponsor-email" type="email" maxlength="180" placeholder="you@example.com"></label>
-          <label>Task <select id="todo-sponsor-task"></select></label>
-          <label>Offer type
-            <select id="todo-sponsor-kind">
-              <option value="bounty">Sponsor a bounty</option>
-              <option value="reward">Offer a reward</option>
+          <label>Attach to
+            <select id="todo-sponsor-target">
+              <option value="task">A specific task</option>
+              <option value="slot">The slot machine</option>
             </select>
           </label>
-          <div id="todo-reward-fields" class="todo-reward-fields" hidden>
-            <label>Reward description <input id="todo-sponsor-title" type="text" maxlength="160" placeholder="Coffee if this gets done"></label>
+          <label id="todo-sponsor-task-wrap">Task <select id="todo-sponsor-task"></select></label>
+          <input type="hidden" id="todo-sponsor-kind" value="reward">
+          <div id="todo-reward-fields" class="todo-reward-fields">
+            <label>Reward
+              <select id="todo-sponsor-reward-source">
+                <option value="new">Add a new reward</option>
+                <option value="existing">Sponsor one in rotation</option>
+              </select>
+            </label>
+            <label id="todo-sponsor-reward-existing-wrap" hidden>Pick a reward <select id="todo-sponsor-reward-id"></select></label>
+            <label id="todo-sponsor-reward-new-wrap">Reward description <input id="todo-sponsor-title" type="text" maxlength="160" placeholder="Coffee if this gets done"></label>
             <label>Dollar value optional <input id="todo-sponsor-value" type="number" min="0" step="0.01" placeholder="0.00"></label>
+            <div id="todo-sponsor-lifespan" class="todo-sponsor-lifespan" hidden>
+              <label>Lasts
+                <select id="todo-sponsor-lifespan-mode">
+                  <option value="forever">Good until canceled</option>
+                  <option value="uses">A set number of wins</option>
+                  <option value="until">Until a date</option>
+                </select>
+              </label>
+              <label id="todo-sponsor-uses-wrap" hidden>How many wins <input id="todo-sponsor-uses" type="number" min="1" step="1" placeholder="3"></label>
+              <label id="todo-sponsor-until-wrap" hidden>Until <input id="todo-sponsor-until" type="date"></label>
+            </div>
+            <label class="todo-sponsor-checkbox"><input id="todo-sponsor-private" type="checkbox"> Make this reward private (only the owner sees what it is)</label>
           </div>
           <label>Note <textarea id="todo-sponsor-note" maxlength="1000" placeholder="Add context or encouragement"></textarea></label>
-          <button id="todo-send-sponsorship" class="todo-public-btn primary" type="button" disabled>Send offer</button>
+          <button id="todo-send-sponsorship" class="todo-public-btn primary" type="button">Send reward</button>
           <div id="todo-sponsor-status" class="todo-sponsor-status"></div>
         </section>
       </aside>

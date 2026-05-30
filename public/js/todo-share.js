@@ -3,9 +3,13 @@
   let sponsorships = [];
   let taskReactions = {};
   let taskReactionsByTitle = {};
+  let taskComments = {};
+  let taskCommentsByTitle = {};
   const reactionOrder = ["👍", "🙌", "🔥", "💪", "🎉", "❤️"];
   let reactionsDate = "";
   let reactionsLoading = null;
+  let commentsDate = "";
+  let commentsLoading = null;
 
   function esc(value){
     return String(value == null ? "" : value).replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
@@ -137,7 +141,8 @@
         '</div>' +
         '<div class="todo-share-offer-actions">' +
           '<em>' + esc(s.status) + '</em>' +
-          (s.status === "pending" ? '<button data-todo-sponsor-id="' + s.id + '" data-todo-sponsor-status="approved">Approve</button><button data-todo-sponsor-id="' + s.id + '" data-todo-sponsor-status="dismissed">Dismiss</button>' : '') +
+          (s.status === "pending" ? '<button data-todo-sponsor-id="' + s.id + '" data-todo-sponsor-status="approved">Approve</button>' : '') +
+          (s.status !== "dismissed" ? '<button data-todo-sponsor-id="' + s.id + '" data-todo-sponsor-status="dismissed">' + (s.status === "pending" ? "Dismiss" : "Remove") + '</button>' : '') +
         '</div>' +
       '</div>';
     }).join("");
@@ -186,17 +191,79 @@
     }
   }
 
+  async function loadComments(date, options){
+    const targetDate = date || currentItineraryDate();
+    const force = !!(options && options.force);
+    if (!force && commentsDate === targetDate) return taskComments;
+    if (!force && commentsLoading && commentsLoading.date === targetDate) return commentsLoading.promise;
+    const promise = (async () => {
+      const data = await api("/api/todo-share/comments?date=" + encodeURIComponent(targetDate));
+      taskComments = data.comments || {};
+      taskCommentsByTitle = {};
+      const seen = new Set();
+      Object.values(taskComments).forEach(comment => {
+        if (!comment || seen.has(comment)) return;
+        seen.add(comment);
+        if (comment.legacy) {
+          const key = reactionTitleKey(comment && comment.taskTitle);
+          if (key && !taskCommentsByTitle[key]) taskCommentsByTitle[key] = comment;
+        }
+        (comment.identityIds || []).forEach(id => {
+          const normalized = String(id || "").trim();
+          if (normalized && !taskComments[normalized]) taskComments[normalized] = comment;
+        });
+      });
+      commentsDate = targetDate;
+      if (typeof window.render === "function") window.render();
+      return taskComments;
+    })();
+    commentsLoading = { date: targetDate, promise };
+    try {
+      return await promise;
+    } finally {
+      if (commentsLoading && commentsLoading.promise === promise) commentsLoading = null;
+    }
+  }
+
+  function relTime(value){
+    if (!value) return "";
+    const then = new Date(value).getTime();
+    if (Number.isNaN(then)) return "";
+    const diff = Math.max(0, Date.now() - then);
+    const min = Math.round(diff / 60000);
+    if (min < 1) return "now";
+    if (min < 60) return min + "m";
+    const hr = Math.round(min / 60);
+    if (hr < 24) return hr + "h";
+    return Math.round(hr / 24) + "d";
+  }
+
   async function refreshItineraryReactions(){
     try {
-      await loadReactions(currentItineraryDate(), { force: true });
-      toast("Guest reactions refreshed");
+      await Promise.all([
+        loadReactions(currentItineraryDate(), { force: true }),
+        loadComments(currentItineraryDate(), { force: true })
+      ]);
+      toast("Guest feedback refreshed");
     } catch (e) { toast(e.message, "error"); }
   }
 
   function ensureReactionsForDate(date){
-    loadReactions(date || currentItineraryDate()).catch(() => {});
+    const target = date || currentItineraryDate();
+    loadReactions(target).catch(() => {});
+    loadComments(target).catch(() => {});
   }
 
+  function resolveTaskComments(task){
+    const keys = taskIdentityKeys(task);
+    let comment = keys.map(key => taskComments[key]).find(Boolean);
+    if (!comment) comment = taskCommentsByTitle[reactionTitleKey(task.title || task.label)];
+    return comment && comment.items ? comment.items : [];
+  }
+
+  // Combined feedback bubble: guest reactions + comments behind one chip in the
+  // top-right corner. Collapsed count is reactions + comments; expanding shows
+  // reaction chips and the comment list together.
   function reactionChipsHtml(task){
     if (!task) return "";
     const keys = taskIdentityKeys(task);
@@ -206,21 +273,58 @@
     const entries = reactionOrder
       .map(emoji => ({ emoji, count: Number(counts[emoji]) || 0 }))
       .filter(entry => entry.count > 0);
-    if (!entries.length) return "";
-    const total = entries.reduce((sum, entry) => sum + entry.count, 0);
-    const stack = entries.slice(0, 3)
-      .map((entry, index) => '<span class="itinerary-reaction-face" style="z-index:' + (4 - index) + '">' + esc(entry.emoji) + '</span>')
-      .join("") + (entries.length > 3 ? '<span class="itinerary-reaction-more">+' + esc(entries.length - 3) + '</span>' : "");
+    const comments = resolveTaskComments(task);
+    const reactionTotal = entries.reduce((sum, entry) => sum + entry.count, 0);
+    const combinedTotal = reactionTotal + comments.length;
+    if (!combinedTotal) return "";
+    const stack = entries.length
+      ? entries.slice(0, 3)
+          .map((entry, index) => '<span class="itinerary-reaction-face" style="z-index:' + (4 - index) + '">' + esc(entry.emoji) + '</span>')
+          .join("") + (entries.length > 3 ? '<span class="itinerary-reaction-more">+' + esc(entries.length - 3) + '</span>' : "")
+      : '<span class="itinerary-reaction-face itinerary-feedback-comment-face">&#128172;</span>';
     const chips = entries
       .map(entry => '<span class="itinerary-reaction-chip"><span>' + esc(entry.emoji) + '</span><b>' + esc(entry.count) + '</b></span>')
       .join("");
-    return '<div class="itinerary-reactions" aria-label="Guest reactions">' +
-      '<button class="itinerary-reactions-toggle" type="button" aria-expanded="false" title="Show guest reactions">' +
+    const commentList = comments.length
+      ? '<div class="itinerary-comment-list" role="list">' + comments.map(c =>
+          '<div class="itinerary-comment" role="listitem">' +
+            '<div class="itinerary-comment-head"><span class="itinerary-comment-author">' + esc(c.authorName || "Guest") + '</span><span class="itinerary-comment-time">' + esc(relTime(c.createdAt)) + '</span></div>' +
+            '<div class="itinerary-comment-body">' + esc(c.body || "") + '</div>' +
+          '</div>'
+        ).join("") + '</div>'
+      : "";
+    return '<div class="itinerary-reactions" aria-label="Guest reactions and comments">' +
+      '<button class="itinerary-reactions-toggle" type="button" aria-expanded="false" title="Show guest reactions and comments">' +
         '<span class="itinerary-reaction-stack">' + stack + '</span>' +
-        '<b class="itinerary-reaction-total">' + esc(total) + '</b>' +
+        '<b class="itinerary-reaction-total">' + esc(combinedTotal) + '</b>' +
       '</button>' +
-      '<div class="itinerary-reaction-tray" role="list">' + chips + '</div>' +
+      '<div class="itinerary-reaction-tray" role="list">' +
+        (chips ? '<div class="itinerary-reaction-chips">' + chips + '</div>' : "") +
+        commentList +
+      '</div>' +
     '</div>';
+  }
+
+  // Always-visible compact feedback card for completed tasks, shown in the dead
+  // space beside the one-line row (reactions stay glanceable after a task is done).
+  function compactFeedbackHtml(task){
+    if (!task) return "";
+    const keys = taskIdentityKeys(task);
+    let reaction = keys.map(key => taskReactions[key]).find(Boolean);
+    if (!reaction) reaction = taskReactionsByTitle[reactionTitleKey(task.title || task.label)];
+    const counts = reaction && reaction.counts ? reaction.counts : {};
+    const entries = reactionOrder
+      .map(emoji => ({ emoji, count: Number(counts[emoji]) || 0 }))
+      .filter(entry => entry.count > 0);
+    const comments = resolveTaskComments(task);
+    if (!entries.length && !comments.length) return "";
+    const chips = entries
+      .map(entry => '<span class="itinerary-feedback-chip"><span>' + esc(entry.emoji) + '</span><b>' + esc(entry.count) + '</b></span>')
+      .join("");
+    const commentChip = comments.length
+      ? '<span class="itinerary-feedback-chip" title="' + esc((comments[comments.length - 1].authorName || "Guest") + ': ' + (comments[comments.length - 1].body || "")) + '">&#128172;<b>' + esc(comments.length) + '</b></span>'
+      : "";
+    return '<div class="itinerary-feedback-card" title="Guest reactions and comments">' + chips + commentChip + '</div>';
   }
 
   function toggleReactionTray(event){
@@ -316,8 +420,12 @@
 
   window.openTodoShareModal = openModal;
   window.todoShareReactionChipsHtml = reactionChipsHtml;
+  window.todoShareCompactFeedbackHtml = compactFeedbackHtml;
   window.todoShareReactionsVisible = () => true;
   window.ensureTodoShareReactionsForDate = ensureReactionsForDate;
   window.toggleTodoShareReactions = refreshItineraryReactions;
-  window.reloadTodoShareReactions = (date) => loadReactions(date || currentItineraryDate(), { force: true });
+  window.reloadTodoShareReactions = (date) => Promise.all([
+    loadReactions(date || currentItineraryDate(), { force: true }),
+    loadComments(date || currentItineraryDate(), { force: true })
+  ]);
 })();
