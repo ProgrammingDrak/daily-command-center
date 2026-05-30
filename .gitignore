@@ -2,6 +2,14 @@ node_modules/
 .env
 .env.local
 
+# Local AI tool settings (machine-specific permissions, never shared)
+.claude/settings.local.json
+
+# Transient server logs (never commit)
+.codex-server.err.log
+.codex-server.out.log
+*.codex-server.*.log
+
 # Data directory — tracked by default; ignore specific local-only paths
 data/.session-secret
 data/.sync-queue.json
