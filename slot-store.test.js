@@ -216,6 +216,11 @@ function createMockPool(options = {}) {
       state.rewardRows = state.rewardRows.map(row => String(row.id) === String(params[0]) ? { ...row, last_won_at: "now" } : row);
       return { rows: [] };
     }
+    if (text.includes("UPDATE slot_spins") && text.includes("reward_snapshot=$3") && text.includes("status=$4")) {
+      const idx = state.spinRows.findIndex(r => String(r.id) === String(params[1]));
+      if (idx >= 0) state.spinRows[idx] = { ...state.spinRows[idx], reward_snapshot: params[2], status: params[3] };
+      return { rows: idx >= 0 ? [state.spinRows[idx]] : [] };
+    }
     if (text.includes("SELECT * FROM slot_spins")) return { rows: state.spinRows };
     throw new Error("Unexpected query: " + text.slice(0, 120));
   }
@@ -649,15 +654,68 @@ test("selectThreeStageOutcome returns a miss when jackpot and bank builder rolls
   assert.equal(outcome.reroll_credit, false);
 });
 
-test("selectThreeStageOutcome can hit bank builder outside jackpot", () => {
+test("selectThreeStageOutcome draws a bank builder from the weighted floor", () => {
   const store = loadStoreWithMock(createMockPool());
-  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 1, free_spin_tile_rate: 0 }, () => 0);
+  const outcome = store._test.selectThreeStageOutcome([], {
+    jackpot_hit_rate: 0,
+    miss_rate: 0,
+    floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
+  }, () => 0);
 
   assert.equal(outcome.outcome, "bank");
   assert.equal(outcome.jackpot_hit, false);
   assert.equal(outcome.bank_builder_hit, true);
   assert.equal(outcome.selected.kind, "bank_builder");
   assert.equal(outcome.reroll_credit, false);
+});
+
+test("selectThreeStageOutcome draws coin / booster / pet / free spin from the floor weights", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const base = { jackpot_hit_rate: 0, miss_rate: 0 };
+  const only = kind => ({ ...base, floor_weights: { bank: 0, coin: 0, booster: 0, pet: 0, free_spin: 0, [kind]: 1 } });
+
+  assert.equal(store._test.selectThreeStageOutcome([], only("coin"), () => 0).outcome, "coin");
+  assert.equal(store._test.selectThreeStageOutcome([], only("booster"), () => 0).outcome, "booster");
+  assert.equal(store._test.selectThreeStageOutcome([], only("free_spin"), () => 0).outcome, "free_spin");
+  // The "pet" bucket covers pet delight and collectible gems.
+  const petKind = store._test.selectThreeStageOutcome([], only("pet"), () => 0).outcome;
+  assert.ok(["pet", "collectible"].includes(petKind));
+});
+
+test("a bank_multiplier booster grants a collectible charge instead of gambling", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const outcome = store._test.selectThreeStageOutcome([], {
+    jackpot_hit_rate: 0,
+    miss_rate: 0,
+    floor_weights: { bank: 0, coin: 0, booster: 1, pet: 0, free_spin: 0 },
+  }, () => 0); // rng 0 -> bank_multiplier type, 2x charge
+
+  assert.equal(outcome.outcome, "booster");
+  assert.equal(outcome.selected.kind, "booster");
+  assert.equal(outcome.gamble, undefined);
+  assert.deepEqual(outcome.multiplier_charge, { tier: 2 });
+});
+
+test("selectThreeStageOutcome pays a bank builder instead of a flat miss when the miss roll misses", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 0, bank_builder_hit_rate: 0, free_spin_tile_rate: 0, miss_rate: 0 }, () => 0);
+
+  assert.equal(outcome.outcome, "bank");
+  assert.equal(outcome.jackpot_hit, false);
+  assert.equal(outcome.bank_builder_hit, true);
+  assert.equal(outcome.selected.kind, "bank_builder");
+  assert.equal(outcome.reroll_credit, false);
+});
+
+test("selectThreeStageOutcome turns an unfillable jackpot into a bank-builder consolation, not a miss", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const outcome = store._test.selectThreeStageOutcome([], { jackpot_hit_rate: 1, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 }, () => 0);
+
+  assert.equal(outcome.outcome, "bank");
+  assert.equal(outcome.jackpot_hit, false);
+  assert.equal(outcome.bank_builder_hit, true);
+  assert.equal(outcome.empty_bucket, true);
+  assert.equal(outcome.selected.kind, "bank_builder");
 });
 
 test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => {
@@ -724,8 +782,9 @@ test("guided economy profile derives hidden spin cost, bankroll pacing, and rare
   assert.equal(settings.economy_profile.target_daily_spins, 28);
   assert.equal(settings.jackpot_hit_rate, 0.04);
   assert.equal(settings.bank_builder_hit_rate, 0.9);
-  assert.equal(settings.free_spin_tile_rate, 0.08);
-  assert.equal(settings.bankroll_pacing.bank_builder_base_percent, 0.00031);
+  assert.equal(settings.free_spin_tile_rate, 0.12);
+  assert.equal(settings.miss_rate, 0.01);
+  assert.equal(settings.bankroll_pacing.bank_builder_base_percent, 0.0012);
 });
 
 test("taskPointTier uses the highest earning matched tag and keeps OOO at zero", () => {
@@ -787,11 +846,12 @@ test("bank screen payout values each BANK tile from the monthly goal, not curren
     { today: 0, week: 0, monthlyGoal: 10000 }
   );
 
-  assert.equal(payout.percent, 0.00031);
+  assert.equal(payout.percent, 0.0012);
   assert.equal(payout.goal_cents, 10000);
-  assert.equal(payout.base_cents, 3);
+  assert.equal(payout.base_cents, 11);
   assert.equal(payout.base_units, 2);
-  assert.equal(payout.cents, 6);
+  // 11 * 2 = 22, but the flat floor lifts any hit to at least 50 cents.
+  assert.equal(payout.cents, 50);
 });
 
 test("normalizeNextSpinTileOverride requires exactly fifteen known symbols", () => {
@@ -916,7 +976,8 @@ test("applyTileOverrideToScreen keeps exact tiles and pays bank from override on
   assert.equal(screen.payout.base_units, 3);
   assert.equal(screen.payout.horizontal_bonus_units, 2);
   assert.equal(screen.payout.vertical_bonus_units, 2);
-  assert.equal(screen.payout.cents, 21);
+  // base_cents 11 * 7 units = 77 (above the flat floor of 50).
+  assert.equal(screen.payout.cents, 77);
 });
 
 test("spin downgrades a jackpot outcome when override tiles have no jackpot payline", async () => {
@@ -987,7 +1048,8 @@ test("spin stores authoritative bank board, payout positions, and pending reserv
       points_v3_migrated_at: "already",
       points_v3_spin_cost_migrated_at: "already",
       jackpot_hit_rate: 0,
-      bank_builder_hit_rate: 1,
+      miss_rate: 0,
+      floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
       monthly_goal_cents: 10000,
       next_spin_tile_override: { tiles: board, created_at: "now" },
     },
@@ -1005,7 +1067,8 @@ test("spin stores authoritative bank board, payout positions, and pending reserv
   assert.deepEqual(snap.screen_board, board);
   assert.deepEqual(snap.bank_screen_payout.positions, [1, 2, 7]);
   assert.equal(snap.bank_screen_payout.cents, spin.bank_delta_cents);
-  assert.equal(spin.bank_delta_cents, 21);
+  // base_cents 11 * 7 units = 77 (above the flat floor of 50).
+  assert.equal(spin.bank_delta_cents, 77);
 });
 
 test("spin stores jackpot payline metadata when override tiles form a valid jackpot", async () => {
@@ -1084,3 +1147,206 @@ test("buildSpinScreen can pay bank bonus on miss screens because bank resolves f
     crypto.randomInt = originalRandomInt;
   }
 });
+
+// Longest run (>=1) of each symbol across rows and columns of a 3x5 board.
+function maxRunsBySymbol(board){
+  const ROWS = 3, COLS = 5, found = {};
+  const note = (sym, len) => { found[sym] = Math.max(found[sym] || 0, len); };
+  for(let r = 0; r < ROWS; r++){ let run = 1; for(let c = 1; c < COLS; c++){ const i = r*COLS+c; if(board[i] === board[i-1]) run++; else { note(board[i-1], run); run = 1; } } note(board[r*COLS+COLS-1], run); }
+  for(let c = 0; c < COLS; c++){ let run = 1; for(let r = 1; r < ROWS; r++){ const i = r*COLS+c; if(board[i] === board[(r-1)*COLS+c]) run++; else { note(board[(r-1)*COLS+c], run); run = 1; } } note(board[(ROWS-1)*COLS+c], run); }
+  return found;
+}
+
+test("buildSpinScreen fills every tile with a prize icon and forms exactly one winning line", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const acct = { settings: { monthly_goal_cents: 10000 } };
+  const usage = { today: 0, week: 0, monthlyGoal: 10000 };
+  const cases = [
+    { selected: { kind: "points", source_type: "slot_coin" }, bankHit: false, sym: "COIN" },
+    { selected: { kind: "pet", source_type: "slot_pet" }, bankHit: false, sym: "PAW" },
+    { selected: { kind: "collectible", source_type: "slot_collectible" }, bankHit: false, sym: "GEM" },
+    { selected: { kind: "bank_builder" }, bankHit: true, sym: "BANK" },
+  ];
+  for(const c of cases){
+    for(let n = 0; n < 200; n++){
+      const screen = store._test.buildSpinScreen(c.selected, acct, usage, c.bankHit);
+      assert.equal(screen.board.includes("MISS"), false, c.sym + " board should have no MISS tiles");
+      assert.equal(screen.board.includes(null), false);
+      const runs = maxRunsBySymbol(screen.board);
+      assert.ok((runs[c.sym] || 0) >= 3, c.sym + " should form a 3-in-a-row line");
+      const others = Object.keys(runs).filter(s => s !== c.sym && runs[s] >= 3);
+      assert.deepEqual(others, [], "no other symbol should form a line, got " + others.join(","));
+    }
+  }
+});
+
+test("buildSpinScreen miss board shows prize icons but forms no winning line", () => {
+  const store = loadStoreWithMock(createMockPool());
+  for(let n = 0; n < 200; n++){
+    const screen = store._test.buildSpinScreen({ kind: "miss" }, { settings: { monthly_goal_cents: 10000 } }, { today: 0, week: 0, monthlyGoal: 10000 }, false);
+    assert.equal(screen.board.includes("MISS"), false);
+    const runs = maxRunsBySymbol(screen.board);
+    const lines = Object.keys(runs).filter(s => runs[s] >= 3);
+    assert.deepEqual(lines, [], "miss board should have no 3-in-a-row, got " + lines.join(","));
+    assert.equal(screen.jackpot.hit, false);
+  }
+});
+
+function gambleSpinPool(boosterType = "wild_hold", ladder = [1, 2, 3, 4]) {
+  const gamble = {
+    booster_type: boosterType,
+    ladder,
+    advance_odds: 0.5,
+    rung: 0,
+    multiplier: ladder[0],
+    status: "open",
+    history: [],
+  };
+  return createMockPool({
+    spinRows: [{
+      id: 7,
+      workspace_id: "ws-1",
+      status: "gamble",
+      bank_delta_cents: 0,
+      bank_reserved_cents: 0,
+      reward_snapshot: { kind: "booster", slot_stages: { outcome: "booster", gamble } },
+    }],
+  });
+}
+
+function chargesPool(charges, extra = {}) {
+  return createMockPool({
+    pointBalance: 1000,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      multiplier_charges: charges,
+      ...extra,
+    },
+  });
+}
+
+test("combineMultiplierCharges trades two 2x charges for one 5x", async () => {
+  const mockPool = chargesPool({ "2": 3 });
+  const store = loadStoreWithMock(mockPool);
+  const r = await store.combineMultiplierCharges("ws-1", 2);
+  assert.equal(r.multiplier_charges["2"], 1);
+  assert.equal(r.multiplier_charges["5"], 1);
+});
+
+test("combineMultiplierCharges trades two 3x charges for one 10x and refuses when short", async () => {
+  const mockPool = chargesPool({ "3": 2 });
+  const store = loadStoreWithMock(mockPool);
+  const r = await store.combineMultiplierCharges("ws-1", 3);
+  assert.equal(r.multiplier_charges["3"], 0);
+  assert.equal(r.multiplier_charges["10"], 1);
+  await assert.rejects(() => store.combineMultiplierCharges("ws-1", 3), /Need two/);
+});
+
+test("setActiveMultiplier arms a stocked tier and refuses an empty one", async () => {
+  const mockPool = chargesPool({ "2": 2 });
+  const store = loadStoreWithMock(mockPool);
+  const armed = await store.setActiveMultiplier("ws-1", 2);
+  assert.equal(armed.active_multiplier, 2);
+  await assert.rejects(() => store.setActiveMultiplier("ws-1", 10), /No 10x/);
+  const off = await store.setActiveMultiplier("ws-1", 0);
+  assert.equal(off.active_multiplier, 0);
+});
+
+test("an armed multiplier burns a charge every spin and multiplies a bank builder", async () => {
+  const board = Array.from({ length: 15 }, () => "MISS");
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 77 cents base
+  const mockPool = chargesPool({ "3": 2 }, {
+    jackpot_hit_rate: 0, miss_rate: 0,
+    floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
+    monthly_goal_cents: 10000,
+    active_multiplier: 3,
+    next_spin_tile_override: { tiles: board, created_at: "now" },
+  });
+  const store = loadStoreWithMock(mockPool);
+  const spin = await store.spin("ws-1", 1);
+  assert.equal(spin.bank_delta_cents, 231); // 77 * 3
+  assert.equal(spin.reward_snapshot.slot_stages.bank_multiplier_applied, 3);
+  assert.equal(mockPool.state.settings.multiplier_charges["3"], 1); // burned one
+  assert.equal(mockPool.state.settings.active_multiplier, 3); // still armed, one charge left
+});
+
+test("an armed multiplier auto-disarms when its last charge burns", async () => {
+  const mockPool = chargesPool({ "2": 1 }, {
+    jackpot_hit_rate: 0, miss_rate: 0,
+    // a coin spin still burns the charge because the toggle is on
+    floor_weights: { bank: 0, coin: 1, booster: 0, pet: 0, free_spin: 0 },
+    active_multiplier: 2,
+  });
+  const store = loadStoreWithMock(mockPool);
+  await store.spin("ws-1", 1);
+  assert.equal(mockPool.state.settings.multiplier_charges["2"], 0);
+  assert.equal(mockPool.state.settings.active_multiplier, 0);
+});
+
+test("banking a wild_hold booster grants guaranteed jackpot spins", async () => {
+  const mockPool = gambleSpinPool("wild_hold", [1, 2, 3, 4]);
+  const store = loadStoreWithMock(mockPool);
+  const after = await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
+  assert.equal(after.status, "awarded");
+  assert.equal(mockPool.state.settings.jackpot_spin_credits, 1);
+});
+
+test("banking a tier_up booster queues a tier bump for the next jackpot", async () => {
+  const mockPool = gambleSpinPool("tier_up", [1, 2, 3, 4]);
+  const store = loadStoreWithMock(mockPool);
+  // risk once (rng 0 advances rung 0->1, value 2), then bank.
+  await store.chooseSpinGamble("ws-1", 7, { action: "risk" }, () => 0);
+  await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
+  assert.equal(mockPool.state.settings.next_spin_modifiers.tier_up, 2);
+});
+
+test("banking a miss_shield booster queues miss shields", async () => {
+  const mockPool = gambleSpinPool("miss_shield", [1, 2, 3, 4]);
+  const store = loadStoreWithMock(mockPool);
+  const after = await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
+  assert.equal(after.status, "awarded");
+  assert.equal(mockPool.state.settings.next_spin_modifiers.miss_shield, 1);
+});
+
+test("buildBoosterOutcome can produce each booster type", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const settings = store._test.normalizeSlotSettings({});
+  const seen = new Set();
+  for(let pick = 0; pick < 4; pick++){
+    const outcome = store._test.selectThreeStageOutcome([], {
+      ...settings, jackpot_hit_rate: 0, miss_rate: 0,
+      floor_weights: { bank: 0, coin: 0, booster: 1, pet: 0, free_spin: 0 },
+    }, max => pick % max);
+    // bank_multiplier grants a charge (no gamble); the others carry a gamble.
+    seen.add(outcome.gamble ? outcome.gamble.booster_type : (outcome.multiplier_charge ? "bank_multiplier" : "?"));
+  }
+  assert.deepEqual([...seen].sort(), ["bank_multiplier", "miss_shield", "tier_up", "wild_hold"]);
+});
+
+test("a queued miss shield converts a miss spin into a bank builder", async () => {
+  const mockPool = createMockPool({
+    pointBalance: 100,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      jackpot_hit_rate: 0,
+      miss_rate: 1,
+      monthly_goal_cents: 10000,
+      next_spin_modifiers: { miss_shield: 2 },
+    },
+  });
+  const store = loadStoreWithMock(mockPool);
+  const spin = await store.spin("ws-1", 1);
+  const snap = spin.reward_snapshot;
+  assert.equal(snap.slot_stages.miss_shielded, true);
+  assert.equal(snap.kind, "bank_builder");
+  assert.notEqual(spin.status, "miss");
+  // one shield spent, one remains
+  assert.equal(mockPool.state.settings.next_spin_modifiers.miss_shield, 1);
+});
+

@@ -15,8 +15,54 @@ const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
 const DEFAULT_ADVANCEMENT_HOURS_PER_DAY = 5;
 const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
 const DEFAULT_JACKPOT_HIT_RATE = 0.04;
-const DEFAULT_FREE_SPIN_TILE_RATE = 0.08;
-const SCREEN_BANK_BUILDER_PERCENT = 0.00031;
+const DEFAULT_FREE_SPIN_TILE_RATE = 0.12;
+// True "nothing happens" outcome. Kept deliberately tiny so the floor is almost
+// always a real outcome - roughly 1 dead spin in 100, by design.
+const DEFAULT_MISS_RATE = 0.01;
+
+// Relative weights for the non-jackpot, non-miss floor. Bank is no longer the
+// default for nearly every spin: it is one of several "small win" outcomes, so
+// each bank hit can be rarer, clustered, and worth more. Tunable per account.
+const DEFAULT_FLOOR_WEIGHTS = {
+  bank: 30,
+  coin: 25,
+  booster: 20,
+  pet: 15,
+  free_spin: 10,
+};
+// Coin outcome: either refund the spin (cashback) or drop a pile of points.
+const DEFAULT_COIN_CASHBACK_CHANCE = 0.4;
+const DEFAULT_COIN_POINT_DROP = [10, 50];
+// Booster gamble ladder. Start at the first rung; each "risk" either climbs a
+// rung (advance odds) or busts to nothing. "Bank" locks the current multiplier
+// onto the next spin. Punchy and stackable, per Drake's call.
+const DEFAULT_BOOSTER_LADDER = [2, 3, 5, 10];
+const DEFAULT_BOOSTER_ADVANCE_ODDS = 0.5;
+const BOOSTER_TYPES = ["bank_multiplier", "tier_up", "miss_shield", "wild_hold"];
+// Each booster type climbs its own ladder. bank_multiplier escalates a payout
+// multiplier; the rest escalate a count (tiers bumped, misses shielded, or
+// guaranteed jackpot spins held).
+const BOOSTER_LADDERS = {
+  tier_up: [1, 2, 3, 4],
+  miss_shield: [1, 2, 3, 4],
+  wild_hold: [1, 2, 3, 4],
+};
+// The bank_multiplier booster grants a collectible charge instead of gambling.
+// A booster drops one 2x or 3x charge (2x is the common base); charges combine
+// up (two 2x make a 5x, two 3x make a 10x). A charge is spent per spin while the
+// player has that tier "armed", multiplying that spin's bank builder.
+const MULTIPLIER_CHARGE_TIERS = [2, 3, 5, 10];
+const BOOSTER_CHARGE_TIERS = [2, 3];
+const BOOSTER_CHARGE_WEIGHTS = [2, 1]; // 2x twice as likely as 3x
+const MULTIPLIER_COMBINE = { 2: 5, 3: 10 }; // two of the key tier make one of the value tier
+// Collectibles: collect gems, completing a set triggers a guaranteed jackpot spin.
+const DEFAULT_COLLECTION_SET_SIZE = 12;
+// Bank rework: a bank hit now drops a contiguous run so the adjacency combo in
+// calculateScreenBankPayout fires, and pays a flat floor so a small bankroll
+// still moves visibly.
+const DEFAULT_BANK_CLUSTER_RANGE = [2, 3];
+const BANK_BUILDER_FLAT_FLOOR_CENTS = 50;
+const SCREEN_BANK_BUILDER_PERCENT = 0.0012;
 const DEFAULT_POINT_TAG_TIERS = {
   maintenance: [],
   advancement: [],
@@ -47,14 +93,15 @@ const JACKPOT_PAYLINES = [
   [10, 11, 12, 13], [11, 12, 13, 14],
   ...PAYLINES,
 ];
-const BANK_SCREEN_COUNT_WEIGHTS = [
-  [1, 55],
-  [2, 30],
-  [3, 10],
-  [4, 4],
-  [5, 1],
-];
-const SLOT_SYMBOLS = new Set(["MISS", "BANK", "JACKPOT", "SPIN"]);
+const SLOT_SYMBOLS = new Set(["MISS", "BANK", "JACKPOT", "SPIN", "COIN", "STAR", "PAW", "GEM"]);
+// "Small win" floor outcomes that pay when their icon forms a 3-in-a-row line.
+const SMALL_WIN_SYMBOLS = new Set(["COIN", "STAR", "PAW", "GEM"]);
+// Prize icons painted across every non-winning cell so the reels always show
+// prizes (no dead MISS tiles). Weighted toward common prizes; jackpot is a rare
+// tease. The fill is scrubbed so none of these accidentally form a 3-in-a-row.
+const COSMETIC_FILLER_SYMBOLS = ["COIN", "COIN", "COIN", "BANK", "BANK", "STAR", "PAW", "GEM", "SPIN", "JACKPOT"];
+// Win lines read as 3-in-a-row; bank occasionally runs longer for a bigger combo.
+const WIN_LINE_LENGTH = 3;
 const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
 const LEGACY_BANK_BUILDER_KIND = "bank_builder";
@@ -397,6 +444,7 @@ function deriveEconomySettings(profile = {}) {
     bank_builder_hit_rate: DEFAULT_BANK_BUILDER_HIT_RATE,
     jackpot_hit_rate: DEFAULT_JACKPOT_HIT_RATE,
     free_spin_tile_rate: DEFAULT_FREE_SPIN_TILE_RATE,
+    miss_rate: DEFAULT_MISS_RATE,
   };
 }
 
@@ -416,6 +464,86 @@ function normalizePointTagTiers(value = {}) {
     normalized[tier] = [...new Set(ids.map(id => String(id || "").trim()).filter(Boolean))].slice(0, 250);
   }
   return normalized;
+}
+
+function normalizeFloorWeights(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const normalized = {};
+  for (const key of Object.keys(DEFAULT_FLOOR_WEIGHTS)) {
+    normalized[key] = clampInt(raw[key] ?? DEFAULT_FLOOR_WEIGHTS[key], 0, 1000000);
+  }
+  // Never let every weight collapse to zero - fall back to a bank builder.
+  if (Object.values(normalized).every(w => w <= 0)) normalized.bank = 1;
+  return normalized;
+}
+
+function normalizeBoosterConfig(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const ladderRaw = Array.isArray(raw.ladder) && raw.ladder.length ? raw.ladder : DEFAULT_BOOSTER_LADDER;
+  const ladder = ladderRaw
+    .map(n => Number(n))
+    .filter(n => Number.isFinite(n) && n > 1)
+    .slice(0, 8);
+  return {
+    ladder: ladder.length ? ladder : [...DEFAULT_BOOSTER_LADDER],
+    advance_odds: normalizeRate(raw.advance_odds ?? raw.advanceOdds, DEFAULT_BOOSTER_ADVANCE_ODDS),
+  };
+}
+
+function normalizeCoinConfig(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const dropRaw = Array.isArray(raw.point_drop ?? raw.pointDrop) ? (raw.point_drop ?? raw.pointDrop) : DEFAULT_COIN_POINT_DROP;
+  const lo = clampInt(dropRaw[0] ?? DEFAULT_COIN_POINT_DROP[0], 1, 100000);
+  const hi = clampInt(dropRaw[1] ?? DEFAULT_COIN_POINT_DROP[1], lo, 100000);
+  return {
+    cashback_chance: normalizeRate(raw.cashback_chance ?? raw.cashbackChance, DEFAULT_COIN_CASHBACK_CHANCE),
+    point_drop: [lo, hi],
+  };
+}
+
+function normalizeCollection(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    gems: clampInt(raw.gems, 0, 1000000),
+    sets_completed: clampInt(raw.sets_completed ?? raw.setsCompleted, 0, 1000000),
+    set_size: clampInt(raw.set_size ?? raw.setSize ?? DEFAULT_COLLECTION_SET_SIZE, 1, 1000),
+  };
+}
+
+function normalizePet(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const cosmeticsRaw = Array.isArray(raw.cosmetics) ? raw.cosmetics : [];
+  return {
+    treats: clampInt(raw.treats, 0, 1000000),
+    cosmetics: [...new Set(cosmeticsRaw.map(id => String(id || "").trim()).filter(Boolean))].slice(0, 250),
+  };
+}
+
+function normalizeNextSpinModifiers(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    tier_up: clampInt(raw.tier_up ?? raw.tierUp, 0, 10),
+    // Count of queued miss shields (each converts one would-be miss to a bank builder).
+    miss_shield: clampInt(raw.miss_shield ?? raw.missShield, 0, 50),
+  };
+}
+
+// Stash of collectible bank-multiplier charges, keyed by multiplier tier.
+function normalizeMultiplierCharges(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const charges = {};
+  for (const tier of MULTIPLIER_CHARGE_TIERS) {
+    charges[tier] = clampInt(raw[tier] ?? raw[String(tier)], 0, 100000);
+  }
+  return charges;
+}
+
+// The tier the player has "armed" to spend each spin (0 = none). Only a tier
+// that actually has charges can stay armed.
+function normalizeActiveMultiplier(value, charges = {}) {
+  const tier = clampInt(value, 0, 10);
+  if (!MULTIPLIER_CHARGE_TIERS.includes(tier)) return 0;
+  return (charges[tier] || 0) > 0 ? tier : 0;
 }
 
 async function ensureSchema() {
@@ -485,6 +613,11 @@ async function ensureSchema() {
 
     ALTER TABLE slot_rewards
       ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0;
+
+    ALTER TABLE slot_rewards
+      ADD COLUMN IF NOT EXISTS public_visibility TEXT NOT NULL DEFAULT 'public',
+      ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS uses_remaining INTEGER;
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_point_ledger_source
       ON slot_point_ledger(workspace_id, source_type, source_key);
@@ -646,6 +779,15 @@ function normalizeSlotSettings(settings = {}) {
     jackpot_hit_rate: normalizeJackpotHitRate(raw.jackpot_hit_rate ?? raw.jackpotHitRate ?? derived.jackpot_hit_rate),
     bank_builder_hit_rate: normalizeBankBuilderHitRate(raw.bank_builder_hit_rate ?? raw.bankBuilderHitRate ?? derived.bank_builder_hit_rate),
     free_spin_tile_rate: normalizeRate(raw.free_spin_tile_rate ?? raw.freeSpinTileRate ?? derived.free_spin_tile_rate, derived.free_spin_tile_rate),
+    miss_rate: normalizeRate(raw.miss_rate ?? raw.missRate ?? derived.miss_rate, derived.miss_rate),
+    floor_weights: normalizeFloorWeights(raw.floor_weights || raw.floorWeights),
+    booster_config: normalizeBoosterConfig(raw.booster_config || raw.boosterConfig),
+    coin_config: normalizeCoinConfig(raw.coin_config || raw.coinConfig),
+    collection: normalizeCollection(raw.collection),
+    pet: normalizePet(raw.pet),
+    next_spin_modifiers: normalizeNextSpinModifiers(raw.next_spin_modifiers || raw.nextSpinModifiers),
+    multiplier_charges: normalizeMultiplierCharges(raw.multiplier_charges || raw.multiplierCharges),
+    active_multiplier: normalizeActiveMultiplier(raw.active_multiplier ?? raw.activeMultiplier, normalizeMultiplierCharges(raw.multiplier_charges || raw.multiplierCharges)),
     bankroll_pacing: raw.bankroll_pacing && typeof raw.bankroll_pacing === "object" ? { ...derived.bankroll_pacing, ...raw.bankroll_pacing } : derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(raw.payment_source_weights || raw.paymentSourceWeights),
     reward_tiers: normalizeRewardTiers(raw.reward_tiers || raw.rewardTiers),
@@ -742,6 +884,19 @@ function normalizeRewardInput(body) {
   if (!SPONSOR_TYPES.has(sponsorType)) throw new Error("invalid sponsor_type");
   const chanceShares = Math.max(0, parseInt(body.chance_shares ?? body.chanceShares ?? body.weight, 10) || 0);
   const durationMinutes = clampInt(body.duration_minutes ?? body.durationMinutes ?? body.duration, 0, 1440);
+  const isPrivate = body.public_visibility === "private" || body.publicVisibility === "private" || body.private === true;
+  const expiresRaw = body.expires_at ?? body.expiresAt;
+  let expiresAt = null;
+  if (expiresRaw) {
+    const d = new Date(expiresRaw);
+    if (!Number.isNaN(d.getTime())) expiresAt = d.toISOString();
+  }
+  const usesRaw = body.uses_remaining ?? body.usesRemaining;
+  let usesRemaining = null;
+  if (usesRaw != null && usesRaw !== "") {
+    const n = parseInt(usesRaw, 10);
+    if (Number.isFinite(n) && n > 0) usesRemaining = Math.min(n, 9999);
+  }
   return {
     title,
     kind,
@@ -760,6 +915,9 @@ function normalizeRewardInput(body) {
     cooldown_days: 0,
     unlock_threshold_cents: Math.max(0, parseInt(body.unlock_threshold_cents, 10) || 0),
     notes: String(body.notes || ""),
+    public_visibility: isPrivate ? "private" : "public",
+    expires_at: expiresAt,
+    uses_remaining: usesRemaining,
   };
 }
 
@@ -815,6 +973,9 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   const chanceShares = Math.max(0, parseInt(row.chance_shares ?? row.weight, 10) || 0);
   const reserveLocked = ["small_paid", "bank_gated"].includes(row.kind) && threshold > 0 && !reserveAffordable;
   const bankrollGoalExcluded = isBankrollGoalExcluded(row, account && account.settings);
+  const expired = !!row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
+  const usesExhausted = row.uses_remaining != null && Number(row.uses_remaining) <= 0;
+  const lifespanExhausted = expired || usesExhausted;
   return {
     ...row,
     payment_source: paymentSource,
@@ -823,7 +984,11 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     weight: chanceShares,
     duration_minutes: Math.max(0, parseInt(row.duration_minutes, 10) || 0),
     sponsor_splits: normalizeSponsorSplits(row.sponsor_splits),
-    eligible: !!row.active && chanceShares > 0 && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded,
+    public_visibility: row.public_visibility === "private" ? "private" : "public",
+    expires_at: row.expires_at || null,
+    uses_remaining: row.uses_remaining != null ? Number(row.uses_remaining) : null,
+    lifespan_exhausted: lifespanExhausted,
+    eligible: !!row.active && chanceShares > 0 && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted,
     jackpot_type: jackpotType(row),
     bankroll_goal_excluded: bankrollGoalExcluded,
     reserve_cost_cents: threshold,
@@ -831,6 +996,7 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     reserve_shortfall_cents: Math.max(0, threshold - bankBalance),
     locked_reason: !row.active ? "inactive" :
       chanceShares <= 0 ? "zero_weight" :
+      lifespanExhausted ? "expired" :
       bankrollGoalExcluded ? "bankroll_goal" :
       reserveLocked ? "bank_too_small" :
       bankCapLocked ? "bank_cap" :
@@ -1008,6 +1174,15 @@ async function getState(workspaceId, userId) {
       jackpotHitRate: account.settings.jackpot_hit_rate,
       bankBuilderHitRate: account.settings.bank_builder_hit_rate,
       freeSpinTileRate: account.settings.free_spin_tile_rate,
+      missRate: account.settings.miss_rate,
+      floorWeights: account.settings.floor_weights,
+      boosterConfig: account.settings.booster_config,
+      coinConfig: account.settings.coin_config,
+      collection: account.settings.collection,
+      pet: account.settings.pet,
+      nextSpinModifiers: account.settings.next_spin_modifiers,
+      multiplierCharges: account.settings.multiplier_charges,
+      activeMultiplier: account.settings.active_multiplier,
       paymentSourceWeights: account.settings.payment_source_weights,
       rewardTiers: account.settings.reward_tiers,
       rerollCredits: account.settings.reroll_credits,
@@ -1294,9 +1469,187 @@ async function chooseSpinDiceReroll(workspaceId, spinId, body = {}) {
        RETURNING *`,
       [workspaceId, spinId, selected.id || null, nextSnapshot, nextStatus, reserveCost]
     );
-    if (selected.id) await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
+    if (selected.id) await client.query("UPDATE slot_rewards SET last_won_at=NOW(), uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE GREATEST(uses_remaining - 1, 0) END WHERE id=$1", [selected.id]);
     await client.query("COMMIT");
     return updatedRows[0];
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Resolve one rung of a booster's press-your-luck gamble.
+//   action "risk" -> roll advance_odds: climb a rung, or bust to nothing.
+//   action "bank" -> lock the current multiplier onto the next spin (stacks).
+// Reaching the top rung auto-banks. A bust ends the booster with nothing.
+async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.randomInt) {
+  const action = String(body.action || body.choice || "").trim().toLowerCase();
+  if (!["risk", "bank"].includes(action)) {
+    const err = new Error("Choose risk or bank");
+    err.statusCode = 400;
+    throw err;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      "SELECT * FROM slot_spins WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+      [workspaceId, spinId]
+    );
+    const spinRow = rows[0];
+    if (!spinRow) throw notFound("Spin not found");
+    const snapshot = spinRow.reward_snapshot || {};
+    const stages = snapshot.slot_stages || {};
+    const gamble = stages.gamble ? { ...stages.gamble } : null;
+    if (spinRow.status !== "gamble" || !gamble || gamble.status !== "open") {
+      const err = new Error("That spin has no open gamble");
+      err.statusCode = 400;
+      throw err;
+    }
+    gamble.history = Array.isArray(gamble.history) ? [...gamble.history] : [];
+    let banked = false;
+    if (action === "risk") {
+      const advanced = rng(1000000) < Math.floor((gamble.advance_odds || 0) * 1000000);
+      if (!advanced) {
+        gamble.multiplier = 1;
+        gamble.status = "busted";
+        gamble.history.push({ action: "risk", result: "bust" });
+      } else if (gamble.rung < gamble.ladder.length - 1) {
+        gamble.rung += 1;
+        gamble.multiplier = gamble.ladder[gamble.rung];
+        gamble.history.push({ action: "risk", result: "advance", multiplier: gamble.multiplier });
+      } else {
+        // Already at the top - a successful risk locks in the max.
+        gamble.status = "banked";
+        banked = true;
+        gamble.history.push({ action: "risk", result: "maxed", multiplier: gamble.multiplier });
+      }
+    } else {
+      gamble.status = "banked";
+      banked = true;
+      gamble.history.push({ action: "bank", multiplier: gamble.multiplier });
+    }
+
+    if (banked) {
+      // Lock the booster onto the account, stacking with anything already queued.
+      const { rows: [account] } = await client.query(
+        "SELECT settings FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+        [workspaceId]
+      );
+      const settings = (account && account.settings) || {};
+      const lockedMods = normalizeNextSpinModifiers(settings.next_spin_modifiers || {});
+      const value = gamble.multiplier || 1;
+      const patch = {};
+      if (gamble.booster_type === "wild_hold") {
+        // Wild hold grants guaranteed jackpot spins (reuses the credit machinery).
+        const credits = clampInt(settings.jackpot_spin_credits ?? settings.jackpotSpinCredits ?? 0, 0, 1000);
+        patch.jackpot_spin_credits = Math.min(1000, credits + value);
+      } else {
+        const next = { ...lockedMods };
+        if (gamble.booster_type === "tier_up") next.tier_up = Math.min(10, (lockedMods.tier_up || 0) + value);
+        else {
+          next.miss_shield = Math.min(50, (lockedMods.miss_shield || 0) + value);
+        }
+        patch.next_spin_modifiers = next;
+      }
+      await client.query(
+        `UPDATE slot_accounts
+         SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb, updated_at=NOW()
+         WHERE workspace_id=$1`,
+        [workspaceId, JSON.stringify(patch)]
+      );
+    }
+
+    const nextStatus = banked ? "awarded" : gamble.status === "busted" ? "miss" : "gamble";
+    const nextSnapshot = {
+      ...snapshot,
+      slot_stages: { ...stages, gamble },
+    };
+    const { rows: [updated] } = await client.query(
+      `UPDATE slot_spins SET reward_snapshot=$3, status=$4 WHERE workspace_id=$1 AND id=$2 RETURNING *`,
+      [workspaceId, spinId, nextSnapshot, nextStatus]
+    );
+    await client.query("COMMIT");
+    return updated;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Combine two charges of a base tier into one of the next tier (2x->5x, 3x->10x).
+async function combineMultiplierCharges(workspaceId, fromTier) {
+  const base = clampInt(fromTier, 0, 10);
+  const target = MULTIPLIER_COMBINE[base];
+  if (!target) {
+    const err = new Error("That multiplier tier cannot be combined");
+    err.statusCode = 400;
+    throw err;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT settings FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = (account && account.settings) || {};
+    const charges = normalizeMultiplierCharges(settings.multiplier_charges);
+    if ((charges[base] || 0) < 2) {
+      const err = new Error(`Need two ${base}x charges to combine`);
+      err.statusCode = 400;
+      throw err;
+    }
+    charges[base] -= 2;
+    charges[target] = (charges[target] || 0) + 1;
+    const activeMultiplier = normalizeActiveMultiplier(settings.active_multiplier, charges);
+    await client.query(
+      `UPDATE slot_accounts SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb, updated_at=NOW() WHERE workspace_id=$1`,
+      [workspaceId, JSON.stringify({ multiplier_charges: charges, active_multiplier: activeMultiplier })]
+    );
+    await client.query("COMMIT");
+    return { ok: true, multiplier_charges: charges, active_multiplier: activeMultiplier };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Arm (or disarm with tier 0) a multiplier tier to spend one charge per spin.
+async function setActiveMultiplier(workspaceId, tier) {
+  const want = clampInt(tier, 0, 10);
+  if (want !== 0 && !MULTIPLIER_CHARGE_TIERS.includes(want)) {
+    const err = new Error("Unknown multiplier tier");
+    err.statusCode = 400;
+    throw err;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT settings FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = (account && account.settings) || {};
+    const charges = normalizeMultiplierCharges(settings.multiplier_charges);
+    if (want !== 0 && (charges[want] || 0) <= 0) {
+      const err = new Error(`No ${want}x charges to arm`);
+      err.statusCode = 400;
+      throw err;
+    }
+    const active = normalizeActiveMultiplier(want, charges);
+    await client.query(
+      `UPDATE slot_accounts SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb, updated_at=NOW() WHERE workspace_id=$1`,
+      [workspaceId, JSON.stringify({ active_multiplier: active })]
+    );
+    await client.query("COMMIT");
+    return { ok: true, active_multiplier: active, multiplier_charges: charges };
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -1309,10 +1662,10 @@ async function createReward(workspaceId, body) {
   const r = normalizeRewardInput(body);
   const { rows } = await pool.query(
     `INSERT INTO slot_rewards
-     (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,duration_minutes,requires_confirmation,cooldown_days,unlock_threshold_cents,notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,duration_minutes,requires_confirmation,cooldown_days,unlock_threshold_cents,notes,public_visibility,expires_at,uses_remaining)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      RETURNING *`,
-    [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
+    [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining]
   );
   return rows[0];
 }
@@ -1324,10 +1677,11 @@ async function updateReward(workspaceId, id, body) {
        title=$3, kind=$4, sponsor_type=$5, sponsor_splits=$6, weight=$7, chance_shares=$8,
        payment_source=$9, tier_id=$10, active=$11, sponsor_active=$12,
        value_cents=$13, bank_delta_cents=$14, duration_minutes=$15, requires_confirmation=$16,
-       cooldown_days=$17, unlock_threshold_cents=$18, notes=$19, updated_at=NOW()
+       cooldown_days=$17, unlock_threshold_cents=$18, notes=$19,
+       public_visibility=$20, expires_at=$21, uses_remaining=$22, updated_at=NOW()
      WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL
      RETURNING *`,
-    [workspaceId, id, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes]
+    [workspaceId, id, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining]
   );
   if (!rows[0]) throw notFound("Reward not found");
   return rows[0];
@@ -1545,6 +1899,13 @@ function freeSpinTileHits(settings, rng = crypto.randomInt) {
   return rng(1000000) < Math.floor(rate * 1000000);
 }
 
+function missHits(settings, rng = crypto.randomInt) {
+  const rate = normalizeSlotSettings(settings).miss_rate;
+  if (rate <= 0) return false;
+  if (rate >= 1) return true;
+  return rng(1000000) < Math.floor(rate * 1000000);
+}
+
 function fakeMissReward() {
   return reward({
     id: null,
@@ -1589,6 +1950,161 @@ function fakeBankBuilderReward() {
   });
 }
 
+function fakeCoinReward(coinKind, points) {
+  return reward({
+    id: null,
+    title: coinKind === "cashback" ? "Cashback: spin refunded" : `Point drop: +${points}`,
+    kind: "points",
+    source_type: "slot_coin",
+    coin_kind: coinKind,
+    points: points || 0,
+    payment_source: "free",
+    tier_id: "tier_i",
+    weight: 0,
+    chance_shares: 0,
+    active: true,
+    notes: "Coin outcome paid in points.",
+  });
+}
+
+function fakePetReward(petKind) {
+  return reward({
+    id: null,
+    title: petKind === "cosmetic" ? "Pet found a cosmetic" : "Pet treat",
+    kind: "pet",
+    source_type: "slot_pet",
+    pet_kind: petKind,
+    payment_source: "free",
+    tier_id: "tier_i",
+    weight: 0,
+    chance_shares: 0,
+    active: true,
+    notes: "Pet delight outcome.",
+  });
+}
+
+function fakeCollectibleReward(setCompleted) {
+  return reward({
+    id: null,
+    title: setCompleted ? "Gem set complete!" : "Collected a gem",
+    kind: "collectible",
+    source_type: "slot_collectible",
+    set_completed: setCompleted === true,
+    payment_source: "free",
+    tier_id: "tier_i",
+    weight: 0,
+    chance_shares: 0,
+    active: true,
+    notes: "Collectible gem outcome.",
+  });
+}
+
+function fakeBoosterReward(boosterType, gamble) {
+  return reward({
+    id: null,
+    title: `Booster: ${boosterType}`,
+    kind: "booster",
+    source_type: "slot_booster",
+    booster_type: boosterType,
+    gamble: gamble || null,
+    payment_source: "free",
+    tier_id: "tier_i",
+    weight: 0,
+    chance_shares: 0,
+    active: true,
+    notes: "Booster outcome with a press-your-luck gamble.",
+  });
+}
+
+function rollFloorOutcomeKind(weights, rng) {
+  const entries = Object.entries(weights || {}).filter(([, w]) => Number(w) > 0);
+  if (!entries.length) return "bank";
+  const total = entries.reduce((sum, [, w]) => sum + Number(w), 0);
+  let roll = rng(total);
+  for (const [kind, w] of entries) {
+    roll -= Number(w);
+    if (roll < 0) return kind;
+  }
+  return entries[entries.length - 1][0];
+}
+
+function buildCoinOutcome(normalized, rng) {
+  const config = normalized.coin_config || normalizeCoinConfig();
+  const isCashback = rng(1000000) < Math.floor(config.cashback_chance * 1000000);
+  const [lo, hi] = config.point_drop;
+  const points = isCashback ? 0 : lo + rng(Math.max(1, hi - lo + 1));
+  return floorResult("coin", {
+    selected: fakeCoinReward(isCashback ? "cashback" : "point_drop", points),
+    coin: { coin_kind: isCashback ? "cashback" : "point_drop", points },
+  });
+}
+
+function buildBoosterOutcome(normalized, rng) {
+  const config = normalized.booster_config || normalizeBoosterConfig();
+  const boosterType = BOOSTER_TYPES[rng(BOOSTER_TYPES.length)];
+  // bank_multiplier no longer gambles - it drops one collectible charge (2x or 3x)
+  // into the stash, awarded immediately.
+  if (boosterType === "bank_multiplier") {
+    const tier = chooseWeighted(
+      BOOSTER_CHARGE_TIERS.map((t, i) => ({ tier: t, weight: BOOSTER_CHARGE_WEIGHTS[i] })),
+      "weight",
+      rng
+    ) || { tier: BOOSTER_CHARGE_TIERS[0] };
+    return floorResult("booster", {
+      selected: fakeBoosterReward("bank_multiplier", null),
+      multiplier_charge: { tier: tier.tier },
+    });
+  }
+  // The other three boosters keep their press-your-luck coin-flip ladder.
+  const ladder = BOOSTER_LADDERS[boosterType] || BOOSTER_LADDERS.tier_up;
+  const gamble = {
+    booster_type: boosterType,
+    ladder,
+    advance_odds: config.advance_odds,
+    rung: 0,
+    multiplier: ladder[0],
+    status: "open",
+    history: [],
+  };
+  return floorResult("booster", {
+    selected: fakeBoosterReward(boosterType, gamble),
+    gamble,
+  });
+}
+
+function buildPetOutcome(rng) {
+  const petKind = rng(4) === 0 ? "cosmetic" : "treat";
+  return floorResult("pet", { selected: fakePetReward(petKind), pet: { pet_kind: petKind } });
+}
+
+function buildCollectibleOutcome(normalized) {
+  const setSize = (normalized.collection && normalized.collection.set_size) || DEFAULT_COLLECTION_SET_SIZE;
+  const gems = (normalized.collection && normalized.collection.gems) || 0;
+  const setCompleted = (gems + 1) >= setSize;
+  return floorResult("collectible", {
+    selected: fakeCollectibleReward(setCompleted),
+    collectible: { set_completed: setCompleted },
+  });
+}
+
+// Shared shape for every non-jackpot floor outcome so spin() can treat them
+// uniformly. Defaults mean "no money, no jackpot" unless the builder overrides.
+function floorResult(outcome, overrides = {}) {
+  return {
+    outcome,
+    jackpot_hit: false,
+    bank_builder_hit: outcome === "bank",
+    free_spin_hit: outcome === "free_spin",
+    selected: null,
+    source: null,
+    tier: null,
+    bucket: [],
+    empty_bucket: false,
+    reroll_credit: outcome === "free_spin",
+    ...overrides,
+  };
+}
+
 function fakeRerollReward(source, tier) {
   return reward({
     id: null,
@@ -1616,7 +2132,14 @@ function bucketForSourceTier(rewards, source, tier) {
 function chooseBucketAttempt(rewards, settings, rng) {
   const normalized = normalizeSlotSettings(settings);
   const source = chooseWeighted(sourceOptions(normalized), "weight", rng) || sourceOptions(normalized)[0];
-  const tier = chooseWeighted(tierOptions(normalized), "weight", rng) || tierOptions(normalized)[0] || DEFAULT_REWARD_TIERS[0];
+  const tiers = tierOptions(normalized);
+  let tier = chooseWeighted(tiers, "weight", rng) || tiers[0] || DEFAULT_REWARD_TIERS[0];
+  // A banked tier_up booster bumps this jackpot toward a higher (rarer) tier.
+  const tierUp = (normalized.next_spin_modifiers && normalized.next_spin_modifiers.tier_up) || 0;
+  if (tierUp > 0 && tiers.length) {
+    const idx = tiers.findIndex(t => String(t.id) === String(tier.id));
+    if (idx >= 0) tier = tiers[Math.min(tiers.length - 1, idx + tierUp)] || tier;
+  }
   return {
     source,
     tier,
@@ -1694,38 +2217,38 @@ function buildDiceRerollChoice(attempt, die, rng) {
   };
 }
 
+// The non-jackpot floor. A rare explicit true miss, otherwise a weighted draw
+// across the "small win" outcomes (bank / coin / booster / pet+collectible /
+// free spin). Bank is no longer the default for nearly every spin.
+function resolveFloorOutcome(normalized, rng) {
+  if (missHits(normalized, rng)) {
+    return floorResult("miss", { selected: fakeMissReward() });
+  }
+  const kind = rollFloorOutcomeKind(normalized.floor_weights, rng);
+  switch (kind) {
+    case "coin":
+      return buildCoinOutcome(normalized, rng);
+    case "booster":
+      return buildBoosterOutcome(normalized, rng);
+    case "pet":
+      // The "pet" bucket covers both pet delight and collectible gems.
+      return rng(2) === 0 ? buildCollectibleOutcome(normalized) : buildPetOutcome(rng);
+    case "free_spin":
+      return floorResult("free_spin", { selected: fakeFreeSpinTileReward() });
+    case "bank":
+    default:
+      return floorResult("bank", { selected: fakeBankBuilderReward() });
+  }
+}
+
 function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   const normalized = normalizeSlotSettings(settings);
+  // bankHit still governs whether a jackpot spin ALSO builds the bank on the
+  // same screen (the bank-build-before-jackpot mechanic), independent of the floor.
   const bankHit = bankBuilderHits(normalized, rng);
   const hit = jackpotHits(normalized, rng);
   if (!hit) {
-    const freeSpinHit = freeSpinTileHits(normalized, rng);
-    if (bankHit) {
-      return {
-        outcome: "bank",
-        jackpot_hit: false,
-        bank_builder_hit: true,
-        free_spin_hit: freeSpinHit,
-        selected: freeSpinHit ? fakeFreeSpinTileReward() : fakeBankBuilderReward(),
-        source: null,
-        tier: null,
-        bucket: [],
-        empty_bucket: false,
-        reroll_credit: freeSpinHit,
-      };
-    }
-    return {
-      outcome: freeSpinHit ? "free_spin" : "miss",
-      jackpot_hit: false,
-      bank_builder_hit: false,
-      free_spin_hit: freeSpinHit,
-      selected: freeSpinHit ? fakeFreeSpinTileReward() : fakeMissReward(),
-      source: null,
-      tier: null,
-      bucket: [],
-      empty_bucket: false,
-      reroll_credit: freeSpinHit,
-    };
+    return resolveFloorOutcome(normalized, rng);
   }
   const firstAttempt = chooseBucketAttempt(rewards, normalized, rng);
   let finalAttempt = firstAttempt;
@@ -1766,12 +2289,16 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
     }
   }
   if (!finalAttempt || !finalAttempt.bucket.length) {
+    // The jackpot dice landed, but no eligible reward exists in any reachable
+    // bucket (and there was nothing to offer a dice reroll into). Rather than
+    // burn the spin as a flat miss, pay a bank-builder consolation so the spin
+    // still lands as "something."
     return {
-      outcome: "jackpot",
-      jackpot_hit: true,
-      bank_builder_hit: bankHit,
+      outcome: "bank",
+      jackpot_hit: false,
+      bank_builder_hit: true,
       free_spin_hit: false,
-      selected: fakeMissReward(),
+      selected: fakeBankBuilderReward(),
       source: firstAttempt.source,
       tier: firstAttempt.tier,
       bucket: [],
@@ -1804,6 +2331,10 @@ function rewardCostCents(row) {
 function rewardSymbol(row) {
   if (!row || row.kind === "miss") return "MISS";
   if (row.kind === "bank_builder") return "BANK";
+  if (row.kind === "points" || row.source_type === "slot_coin") return "COIN";
+  if (row.kind === "booster" || row.source_type === "slot_booster") return "STAR";
+  if (row.kind === "pet" || row.source_type === "slot_pet") return "PAW";
+  if (row.kind === "collectible" || row.source_type === "slot_collectible") return "GEM";
   if (row.source_type === "slot_free_spin_tile") return "SPIN";
   return "JACKPOT";
 }
@@ -1814,6 +2345,9 @@ function normalizeTileSymbol(value) {
   if (symbol === "B") return "BANK";
   if (symbol === "S") return "SPIN";
   if (symbol === "M") return "MISS";
+  if (symbol === "C") return "COIN";
+  if (symbol === "P") return "PAW";
+  if (symbol === "G") return "GEM";
   return symbol;
 }
 
@@ -1958,50 +2492,118 @@ function applyTileOverrideToScreen(screen, override, selected, account, bankUsag
   };
 }
 
-function weightedBankScreenCount() {
-  const total = BANK_SCREEN_COUNT_WEIGHTS.reduce((sum, row) => sum + row[1], 0);
-  let roll = crypto.randomInt(total) + 1;
-  for (const [count, weight] of BANK_SCREEN_COUNT_WEIGHTS) {
-    roll -= weight;
-    if (roll <= 0) return count;
+// All contiguous horizontal and vertical runs of a given length on the grid.
+function contiguousRuns(count) {
+  const runs = [];
+  for (let r = 0; r < SLOT_ROWS; r++) {
+    for (let c = 0; c + count <= SLOT_COLS; c++) {
+      runs.push(Array.from({ length: count }, (_, k) => r * SLOT_COLS + c + k));
+    }
   }
-  return 1;
+  for (let c = 0; c < SLOT_COLS; c++) {
+    for (let r = 0; r + count <= SLOT_ROWS; r++) {
+      runs.push(Array.from({ length: count }, (_, k) => (r + k) * SLOT_COLS + c));
+    }
+  }
+  return runs;
+}
+
+// Drop `count` tiles of `symbol` as a single contiguous run so the adjacency
+// combo in calculateScreenBankPayout fires. Falls back to a shorter run, then a
+// single tile, if no run fits the open cells. Returns the number placed.
+function placeSymbolCluster(board, protectedCells, symbol, count) {
+  for (let want = count; want >= 2; want--) {
+    const runs = contiguousRuns(want).filter(cells => cells.every(i => !protectedCells.has(i)));
+    if (runs.length) {
+      const cells = runs[crypto.randomInt(runs.length)];
+      cells.forEach(i => { board[i] = symbol; protectedCells.add(i); });
+      return cells.length;
+    }
+  }
+  const open = Array.from({ length: SLOT_CELL_COUNT }, (_, i) => i).filter(i => !protectedCells.has(i));
+  if (open.length) {
+    const i = open[crypto.randomInt(open.length)];
+    board[i] = symbol;
+    protectedCells.add(i);
+    return 1;
+  }
+  return 0;
+}
+
+// Lay a straight run of `length` (>=3) `symbol` tiles on open cells. Falls back
+// to a shorter run, then to singles, if no straight run fits. Returns the cells.
+function placeSymbolLine(board, protectedCells, symbol, length) {
+  for (let want = length; want >= WIN_LINE_LENGTH; want--) {
+    const runs = contiguousRuns(want).filter(cells => cells.every(i => !protectedCells.has(i) && board[i] == null));
+    if (runs.length) {
+      const cells = runs[crypto.randomInt(runs.length)];
+      cells.forEach(i => { board[i] = symbol; protectedCells.add(i); });
+      return cells;
+    }
+  }
+  const open = Array.from({ length: SLOT_CELL_COUNT }, (_, i) => i).filter(i => !protectedCells.has(i) && board[i] == null);
+  const cells = [];
+  for (let k = 0; k < Math.min(WIN_LINE_LENGTH, open.length); k++) {
+    const pick = open.splice(crypto.randomInt(open.length), 1)[0];
+    board[pick] = symbol;
+    protectedCells.add(pick);
+    cells.push(pick);
+  }
+  return cells;
+}
+
+// Paint every still-empty cell with a prize icon so the reels are never dead.
+// Greedy left/up check guarantees no symbol forms a 3-in-a-row, so the only
+// paying pattern on the board is the intended winning line. Excluded symbols
+// (the winners) appear ONLY in their line.
+function fillCosmetic(board, excludeSet) {
+  const pool = COSMETIC_FILLER_SYMBOLS.filter(s => !excludeSet.has(s));
+  const fallback = pool.length ? pool : COSMETIC_FILLER_SYMBOLS;
+  for (let i = 0; i < SLOT_CELL_COUNT; i++) {
+    if (board[i] != null) continue;
+    const col = i % SLOT_COLS;
+    const row = Math.floor(i / SLOT_COLS);
+    const safe = fallback.filter(sym => {
+      const h = col >= 2 && board[i - 1] === sym && board[i - 2] === sym;
+      const v = row >= 2 && board[i - SLOT_COLS] === sym && board[i - 2 * SLOT_COLS] === sym;
+      return !h && !v;
+    });
+    const choices = safe.length ? safe : fallback;
+    board[i] = choices[crypto.randomInt(choices.length)];
+  }
 }
 
 function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
-  const board = Array.from({ length: SLOT_CELL_COUNT }, () => FILLER_SYMBOLS[crypto.randomInt(FILLER_SYMBOLS.length)]);
+  const board = Array.from({ length: SLOT_CELL_COUNT }, () => null);
   const protectedCells = new Set();
   const selectedSymbol = rewardSymbol(selected);
   const isMiss = selected.kind === "miss";
   const canPlaceBankSymbols = !!screenBankHit;
+  const exclude = new Set();
   let payline = [];
 
-  if (selectedSymbol === "SPIN") {
-    const index = crypto.randomInt(SLOT_CELL_COUNT);
-    board[index] = "SPIN";
-    protectedCells.add(index);
-  } else if (!isMiss && selected.kind !== "bank_builder") {
+  if (!isMiss && selectedSymbol === "JACKPOT") {
+    // Jackpot keeps its dedicated paylines (3-5 in a row drives the level).
     const line = JACKPOT_PAYLINES[crypto.randomInt(JACKPOT_PAYLINES.length)];
     payline = [...line];
-    line.forEach(i => {
-      board[i] = selectedSymbol;
-      protectedCells.add(i);
-    });
-  } else {
-    for (let i = 0; i < 4; i++) {
-      board[crypto.randomInt(SLOT_CELL_COUNT)] = TEASER_SYMBOLS[crypto.randomInt(TEASER_SYMBOLS.length)];
-    }
+    line.forEach(i => { board[i] = "JACKPOT"; protectedCells.add(i); });
+    exclude.add("JACKPOT");
+  } else if (!isMiss && (SMALL_WIN_SYMBOLS.has(selectedSymbol) || selectedSymbol === "SPIN")) {
+    // Coin / booster / pet / gem / free spin pay on a 3-in-a-row line.
+    payline = placeSymbolLine(board, protectedCells, selectedSymbol, WIN_LINE_LENGTH);
+    exclude.add(selectedSymbol);
   }
 
   if (canPlaceBankSymbols) {
-    const openCells = Array.from({ length: SLOT_CELL_COUNT }, (_, i) => i).filter(i => !protectedCells.has(i));
-    const bankCount = Math.min(weightedBankScreenCount(), openCells.length);
-    for (let i = 0; i < bankCount; i++) {
-      const pick = crypto.randomInt(openCells.length);
-      board[openCells[pick]] = "BANK";
-      openCells.splice(pick, 1);
-    }
+    // Bank pays on its own line; longer runs (occasional 4) combo into more.
+    const bankLen = WIN_LINE_LENGTH + (crypto.randomInt(4) === 0 ? 1 : 0);
+    const bankLine = placeSymbolLine(board, protectedCells, "BANK", bankLen);
+    if (!payline.length) payline = bankLine;
+    exclude.add("BANK");
   }
+
+  // Fill the rest with scrubbed prize icons - no dead tiles, no accidental wins.
+  fillCosmetic(board, exclude);
 
   const payout = canPlaceBankSymbols
     ? calculateScreenBankPayout(board, account, bankUsage)
@@ -2011,9 +2613,10 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
 }
 
 function buildBankrollGoalCelebrationScreen(account, bankUsage) {
-  const board = Array.from({ length: SLOT_CELL_COUNT }, () => "MISS");
+  const board = Array.from({ length: SLOT_CELL_COUNT }, () => null);
   [0, 1, 2, 3, 4].forEach(i => { board[i] = "JACKPOT"; });
   [7, 11, 13].forEach(i => { board[i] = "BANK"; });
+  fillCosmetic(board, new Set(["JACKPOT", "BANK"]));
   const jackpot = evaluateJackpotBoard(board);
   return {
     board,
@@ -2068,7 +2671,11 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   const horizontalBonusUnits = horizontalGroups.reduce((sum, group) => sum + group.length * (group.length - 1), 0);
   const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
   const units = baseUnits + horizontalBonusUnits + verticalBonusUnits;
-  const rawCents = baseCents * units;
+  // Flat floor so a small bankroll still moves visibly: any bank hit is worth at
+  // least BANK_BUILDER_FLAT_FLOOR_CENTS even when percent * goal rounds tiny.
+  const rawCents = units > 0
+    ? Math.max(baseCents * units, BANK_BUILDER_FLAT_FLOOR_CENTS)
+    : 0;
   const dailyCap = (bankUsage && bankUsage.dailyCap) || Math.max(100, Math.round(monthlyGoalCents * 0.1));
   const weeklyCap = (bankUsage && bankUsage.weeklyCap) || Math.max(dailyCap, Math.round(monthlyGoalCents * 0.25));
   const remainingCap = Math.max(0, Math.min(
@@ -2132,13 +2739,12 @@ async function spin(workspaceId, userId) {
     err.statusCode = 400;
     throw err;
   }
-  const drawPool = state.rewards.filter(r => r.kind !== "miss");
-  const outcome = selectThreeStageOutcome(
+  const drawPool = state.rewards.filter(r => r.kind !== "miss" && !r.lifespan_exhausted);
+  let outcome = selectThreeStageOutcome(
     drawPool,
     hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 } : settings
   );
   let selected = outcome.selected;
-  const canHitScreenBank = outcome.bank_builder_hit === true;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -2151,6 +2757,15 @@ async function spin(workspaceId, userId) {
     const usedRerollCredit = !usedJackpotSpinCredit && lockedSettings.reroll_credits > 0;
     const lockedSpinCost = (usedRerollCredit || usedJackpotSpinCredit) ? 0 : getSpinCost(account);
     if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough points");
+    const incomingMods = lockedSettings.next_spin_modifiers || normalizeNextSpinModifiers();
+    // A queued miss shield turns a would-be dead spin into a bank builder.
+    let missShieldUsed = false;
+    if (outcome.outcome === "miss" && (incomingMods.miss_shield || 0) > 0) {
+      selected = fakeBankBuilderReward();
+      outcome = floorResult("bank", { selected, miss_shielded: true });
+      missShieldUsed = true;
+    }
+    const canHitScreenBank = outcome.bank_builder_hit === true;
     const baseScreen = buildSpinScreen(selected, { ...account, settings: lockedSettings }, state.bankUsage, canHitScreenBank);
     const screen = applyTileOverrideToScreen(
       baseScreen,
@@ -2179,9 +2794,58 @@ async function spin(workspaceId, userId) {
     }
     const reserveCost = effectiveOutcome.jackpot_hit && !effectiveOutcome.empty_bucket ? reserveCostCents(selected) : 0;
     const bankReserved = reserveCost;
-    const bankDelta = effectiveOutcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
+    // Armed multiplier charge: while a tier is armed it burns one charge every
+    // spin (even non-bank spins) and multiplies this spin's bank builder.
+    const charges = { ...lockedSettings.multiplier_charges };
+    const armedMultiplier = lockedSettings.active_multiplier || 0;
+    let appliedMultiplier = 1;
+    if (armedMultiplier > 1 && (charges[armedMultiplier] || 0) > 0) {
+      appliedMultiplier = armedMultiplier;
+      charges[armedMultiplier] = Math.max(0, charges[armedMultiplier] - 1);
+    }
+    let bankDelta = effectiveOutcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
+    if (bankDelta > 0 && appliedMultiplier > 1) bankDelta = bankDelta * appliedMultiplier;
+    // A multiplier-charge booster drops a fresh charge into the stash.
+    let earnedChargeTier = 0;
+    if (selected.kind === "booster" && effectiveOutcome.multiplier_charge) {
+      earnedChargeTier = effectiveOutcome.multiplier_charge.tier;
+      charges[earnedChargeTier] = (charges[earnedChargeTier] || 0) + 1;
+    }
+    // Disarm once the armed tier is exhausted.
+    const nextActiveMultiplier = (armedMultiplier > 1 && (charges[armedMultiplier] || 0) > 0) ? armedMultiplier : 0;
     const jackpotSpinCount = effectiveOutcome.jackpot_hit ? screenJackpot.spins : 0;
-    const bonusJackpotSpinCredits = Math.max(0, jackpotSpinCount - 1);
+    let bonusJackpotSpinCredits = Math.max(0, jackpotSpinCount - 1);
+
+    // Immediate-effect floor outcomes (no confirmation needed).
+    let pointsDelta = 0;
+    if (selected.kind === "points") {
+      pointsDelta = selected.coin_kind === "cashback" ? lockedSpinCost : (selected.points || 0);
+    }
+    let nextPet = lockedSettings.pet;
+    if (selected.kind === "pet") {
+      nextPet = { ...lockedSettings.pet };
+      if (selected.pet_kind === "cosmetic") {
+        nextPet.cosmetics = [...new Set([...(nextPet.cosmetics || []), `cos_${(nextPet.cosmetics || []).length + 1}`])];
+      } else {
+        nextPet.treats = (nextPet.treats || 0) + 1;
+      }
+    }
+    let nextCollection = lockedSettings.collection;
+    let collectibleSetCompleted = false;
+    if (selected.kind === "collectible") {
+      const current = lockedSettings.collection || normalizeCollection();
+      const setSize = current.set_size || DEFAULT_COLLECTION_SET_SIZE;
+      let gems = (current.gems || 0) + 1;
+      let setsCompleted = current.sets_completed || 0;
+      if (gems >= setSize) {
+        gems = 0;
+        setsCompleted += 1;
+        collectibleSetCompleted = true;
+        bonusJackpotSpinCredits += 1; // completing a set earns a guaranteed jackpot spin
+      }
+      nextCollection = { ...current, gems, sets_completed: setsCompleted };
+    }
+    const gambleState = selected.kind === "booster" ? (selected.gamble || effectiveOutcome.gamble || null) : null;
     const selectedSnapshot = {
       ...selected,
       source_type: bankDelta > 0 ? "slot_screen_bank_builder" : selected.source_type,
@@ -2219,13 +2883,27 @@ async function spin(workspaceId, userId) {
               bucket_total_shares: bucketTotalShares(effectiveOutcome.bucket),
             }
         ) : null,
+        coin: selected.kind === "points"
+          ? { coin_kind: selected.coin_kind, points: pointsDelta }
+          : null,
+        pet: selected.kind === "pet" ? { pet_kind: selected.pet_kind } : null,
+        collectible: selected.kind === "collectible"
+          ? { set_completed: collectibleSetCompleted, gems: nextCollection.gems, sets_completed: nextCollection.sets_completed }
+          : null,
+        gamble: gambleState,
+        bank_multiplier_applied: appliedMultiplier > 1 ? appliedMultiplier : null,
+        multiplier_charge_earned: earnedChargeTier || null,
+        miss_shielded: missShieldUsed === true,
+        tier_up_applied: effectiveOutcome.jackpot_hit && (incomingMods.tier_up || 0) > 0 ? incomingMods.tier_up : null,
       },
       screen_board: screen.board,
       screen_payline: screen.payline,
       bank_screen_payout: screen.payout,
       screen_override: screen.override,
     };
-    const status = bankDelta > 0
+    const status = selected.kind === "booster" && gambleState
+      ? "gamble"
+      : bankDelta > 0
       ? "pending"
       : effectiveOutcome.reroll_credit
       ? "reroll_credit"
@@ -2236,16 +2914,30 @@ async function spin(workspaceId, userId) {
       : "awarded";
     const nextRerollCredits = Math.max(0, lockedSettings.reroll_credits - (usedRerollCredit ? 1 : 0)) + (effectiveOutcome.reroll_credit ? 1 : 0);
     const nextJackpotSpinCredits = Math.max(0, lockedSettings.jackpot_spin_credits - (usedJackpotSpinCredit ? 1 : 0)) + bonusJackpotSpinCredits;
+    // Net point change: pay the spin cost, then add any coin payout (cashback/drop).
+    const netPointChange = lockedSpinCost - pointsDelta;
+    // Consume each banked modifier only when it actually fired.
+    const nextModifiers = normalizeNextSpinModifiers({
+      // tier_up clears once a jackpot has consumed it
+      tier_up: effectiveOutcome.jackpot_hit ? 0 : incomingMods.tier_up,
+      // one shield is spent per miss it converts
+      miss_shield: missShieldUsed ? Math.max(0, (incomingMods.miss_shield || 0) - 1) : incomingMods.miss_shield,
+    });
     await client.query(
       `UPDATE slot_accounts
        SET point_balance = point_balance - $2,
            settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb,
            updated_at=NOW()
        WHERE workspace_id=$1`,
-      [workspaceId, lockedSpinCost, JSON.stringify({
+      [workspaceId, netPointChange, JSON.stringify({
         reroll_credits: nextRerollCredits,
         jackpot_spin_credits: nextJackpotSpinCredits,
         next_spin_tile_override: null,
+        next_spin_modifiers: nextModifiers,
+        multiplier_charges: charges,
+        active_multiplier: nextActiveMultiplier,
+        pet: nextPet,
+        collection: nextCollection,
       })]
     );
     const { rows } = await client.query(
@@ -2255,7 +2947,7 @@ async function spin(workspaceId, userId) {
       RETURNING *`,
       [workspaceId, userId || null, lockedSpinCost, selected.id || null, selectedSnapshot, status, bankDelta || selected.bank_delta_cents || 0, bankReserved]
     );
-    if (selected.id) await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
+    if (selected.id) await client.query("UPDATE slot_rewards SET last_won_at=NOW(), uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE GREATEST(uses_remaining - 1, 0) END WHERE id=$1", [selected.id]);
     await client.query("COMMIT");
     return rows[0];
   } catch (e) {
@@ -2535,7 +3227,7 @@ async function celebrationSpinForBankrollGoal(workspaceId, userId) {
        RETURNING *`,
       [workspaceId, userId || null, selected.id || null, selectedSnapshot, targetCents]
     );
-    await client.query("UPDATE slot_rewards SET last_won_at=NOW() WHERE id=$1", [selected.id]);
+    await client.query("UPDATE slot_rewards SET last_won_at=NOW(), uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE GREATEST(uses_remaining - 1, 0) END WHERE id=$1", [selected.id]);
     await client.query("COMMIT");
     return spinRow;
   } catch (e) {
@@ -2561,6 +3253,9 @@ module.exports = {
   setBankrollGoal,
   clearBankrollGoal,
   chooseSpinDiceReroll,
+  chooseSpinGamble,
+  combineMultiplierCharges,
+  setActiveMultiplier,
   createReward,
   updateReward,
   deleteReward,
@@ -2585,9 +3280,19 @@ module.exports = {
     normalizePointTagTiers,
     taskPointTier,
     selectThreeStageOutcome,
+    resolveFloorOutcome,
+    rollFloorOutcomeKind,
+    chooseSpinGamble,
+    combineMultiplierCharges,
+    setActiveMultiplier,
+    normalizeMultiplierCharges,
+    placeSymbolCluster,
+    placeSymbolLine,
+    fillCosmetic,
     chooseWeighted,
     bankBuilderHits,
     freeSpinTileHits,
+    missHits,
     evaluateJackpotBoard,
   },
 };

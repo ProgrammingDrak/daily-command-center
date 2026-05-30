@@ -1191,21 +1191,21 @@
         </div>
         <div class="slot-reels-frame">
           <div class="slot-reels" id="slot-reels">
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="bank">BANK</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="jackpot">JACKPOT</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="jackpot">JACKPOT</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="bank">BANK</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
-            <div class="slot-cell" data-symbol="miss">MISS</div>
+            <div class="slot-cell" data-symbol="coin">🪙</div>
+            <div class="slot-cell" data-symbol="star">⭐</div>
+            <div class="slot-cell" data-symbol="bank">💰</div>
+            <div class="slot-cell" data-symbol="paw">🐾</div>
+            <div class="slot-cell" data-symbol="gem">💎</div>
+            <div class="slot-cell" data-symbol="bank">💰</div>
+            <div class="slot-cell" data-symbol="coin">🪙</div>
+            <div class="slot-cell" data-symbol="jackpot">🎰</div>
+            <div class="slot-cell" data-symbol="spin">🔄</div>
+            <div class="slot-cell" data-symbol="paw">🐾</div>
+            <div class="slot-cell" data-symbol="gem">💎</div>
+            <div class="slot-cell" data-symbol="bank">💰</div>
+            <div class="slot-cell" data-symbol="coin">🪙</div>
+            <div class="slot-cell" data-symbol="star">⭐</div>
+            <div class="slot-cell" data-symbol="coin">🪙</div>
           </div>
         </div>
         <div class="slot-result" id="slot-result">Ready when you are.</div>
@@ -1219,6 +1219,8 @@
           <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
           <button class="slot-sound-btn" id="slot-sound-toggle" type="button" aria-pressed="true">Sound: On</button>
         </div>
+        <div class="slot-spin-status" id="slot-spin-status" aria-live="polite"></div>
+        <div class="slot-multiplier-stash" id="slot-multiplier-stash"></div>
         <div class="slot-spin-cost" id="slot-spin-cost-line">25 pts per spin</div>
       </section>
     </div>
@@ -1290,6 +1292,7 @@
           </div>
           <div class="slot-toggle-row">
             <label class="slot-toggle"><input id="slot-form-active" type="checkbox" checked><span>Active</span></label>
+            <label class="slot-toggle"><input id="slot-form-private" type="checkbox"><span>Private (hidden from shared view)</span></label>
           </div>
           <label class="slot-field slot-field-full">
             <span>Notes</span>
@@ -1491,6 +1494,7 @@
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/side-drawers.js"></script>
+<script src="/public/js/mobile-shell.js"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.
 // Phase 5: All flags ON — BlockStore is now the primary data store.

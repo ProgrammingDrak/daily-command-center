@@ -1,2 +1,0 @@
-[check-db] Database connection failed: ECONNREFUSED
-[check-db] Target: postgres://localhost/daily_command_center

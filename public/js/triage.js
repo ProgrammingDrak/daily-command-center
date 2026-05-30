@@ -1201,13 +1201,15 @@ function buildScheduled() {
       const c = cfg(ev.type);
       const bountyCount = typeof getBountyCountForTask === "function" ? getBountyCountForTask(ev.id) : ((typeof isBountyTask === "function" && isBountyTask(ev.id)) ? 1 : 0);
       const isBounty = bountyCount > 0;
+      const bountyMeta = typeof getBountyMetaForTask === "function" ? getBountyMetaForTask(ev.id) : { hasSponsor: false, sponsorName: "" };
+      const bountySponsorAttr = bountyMeta.hasSponsor ? ' bounty-chip-sponsor" title="' + ("Bounty from " + (bountyMeta.sponsorName || "a visitor")).replace(/"/g, "&quot;") + '"' : '"';
       const bountyPlaced = typeof hasSelfBounty === "function" ? hasSelfBounty() : !!(typeof getDailyBounty === "function" && getDailyBounty());
       const canEditBounty = typeof viewMode === "undefined" || viewMode !== "archive";
       html +=
         '<div class="board-card" style="margin-bottom:6px">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
-            '<div class="title-row"><span class="ttl">' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip">Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
+            '<div class="title-row"><span class="ttl">' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + bountySponsorAttr + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
           (!isMeeting(ev) && canEditBounty && (!bountyPlaced || isBounty) ? '<button class="add-btn sched-bounty-btn" data-id="' + ev.id + '" style="background:rgba(251,191,36,0.12);color:var(--amber)">Bounty</button>' : '') +
@@ -1227,11 +1229,13 @@ function buildScheduled() {
       const done = isDone(ev);
       const bountyCount = typeof getBountyCountForTask === "function" ? getBountyCountForTask(ev.id) : ((typeof isBountyTask === "function" && isBountyTask(ev.id)) ? 1 : 0);
       const isBounty = bountyCount > 0;
+      const bountyMeta = typeof getBountyMetaForTask === "function" ? getBountyMetaForTask(ev.id) : { hasSponsor: false, sponsorName: "" };
+      const bountySponsorTitle = bountyMeta.hasSponsor ? ' title="' + ("Bounty from " + (bountyMeta.sponsorName || "a visitor")).replace(/"/g, "&quot;") + '"' : '';
       html +=
         '<div class="board-card" style="margin-bottom:6px;' + (done ? 'opacity:0.4;' : '') + '">' +
           '<div class="bar" style="background:' + c.color + '"></div>' +
           '<div class="body">' +
-            '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + '">Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
+            '<div class="title-row"><span class="ttl"' + (done ? ' style="text-decoration:line-through"' : '') + '>' + ev.title + '</span>' + (isBounty ? '<span class="bounty-chip' + (done ? ' done' : '') + (bountyMeta.hasSponsor ? ' bounty-chip-sponsor' : '') + '"' + bountySponsorTitle + '>Bounty x' + Math.pow(2, bountyCount) + '</span>' : '') + '</div>' +
             '<div class="meta"><span class="tag ' + c.cls + '">' + c.tag + '</span><span>' + f12(ev.start) + ' – ' + f12(ev.end) + '</span><span>' + ms(dur(ev)) + '</span></div>' +
           '</div>' +
           '<button class="add-btn sched-repeat-btn" data-id="' + ev.id + '" title="Turn into a repeat responsibility">Repeat</button>' +

@@ -79,9 +79,11 @@
     { id: "light", label: "Light", hint: "Quarter points" },
     { id: "none", label: "No points", hint: "Zero" }
   ];
-  const SPIN_SYMBOLS = ["MISS","BANK","MISS","JACKPOT","MISS","MISS","BANK","MISS","JACKPOT","SPIN"];
-  const FILLER_SYMBOLS = ["MISS","MISS","MISS","BANK","JACKPOT"];
-  const TEASER_SYMBOLS = ["JACKPOT","BANK","MISS"];
+  const SPIN_SYMBOLS = ["COIN","BANK","STAR","JACKPOT","PAW","COIN","BANK","GEM","SPIN","COIN"];
+  const FILLER_SYMBOLS = ["COIN","COIN","BANK","STAR","PAW","GEM"];
+  const TEASER_SYMBOLS = ["JACKPOT","BANK","COIN"];
+  // Emoji shown on each reel tile. Prize icons are always on screen now - no MISS.
+  const SYMBOL_GLYPHS = { BANK:"💰", COIN:"🪙", STAR:"⭐", PAW:"🐾", GEM:"💎", JACKPOT:"🎰", SPIN:"🔄", MISS:"·" };
   const OVERRIDE_SYMBOLS = ["MISS","BANK","JACKPOT","SPIN"];
   const DEFAULT_OVERRIDE_TILES = [
     "MISS","MISS","MISS","MISS","MISS",
@@ -460,6 +462,90 @@
         ? "Free reroll (" + rerolls + ")"
         : "Spin (" + pointLabel(spinCost) + ")";
     }
+    renderSpinStatusBadges();
+    renderMultiplierStash();
+  }
+
+  function renderSpinStatusBadges(){
+    const el = document.getElementById("slot-spin-status");
+    if(!el) return;
+    const c = (slotState && slotState.constants) || {};
+    const badges = [];
+    const mods = c.nextSpinModifiers || {};
+    const armed = c.activeMultiplier || 0;
+    if(armed > 1){
+      const left = (c.multiplierCharges && c.multiplierCharges[armed]) || 0;
+      badges.push('<span class="slot-next-mult-badge">' + armed + 'x armed (' + left + ' left)</span>');
+    }
+    if((mods.tier_up || 0) > 0){
+      badges.push('<span class="slot-next-mult-badge">+' + mods.tier_up + ' tier next jackpot</span>');
+    }
+    if((mods.miss_shield || 0) > 0){
+      badges.push('<span class="slot-status-chip">🛡️ ' + mods.miss_shield + ' miss shield' + (mods.miss_shield === 1 ? '' : 's') + '</span>');
+    }
+    const jackpotCredits = c.jackpotSpinCredits || c.bonusRewardSpinCredits || 0;
+    if(jackpotCredits > 0){
+      badges.push('<span class="slot-next-mult-badge">🎰 ' + jackpotCredits + ' jackpot spin' + (jackpotCredits === 1 ? '' : 's') + '</span>');
+    }
+    const collection = c.collection || {};
+    if(collection.set_size){
+      badges.push('<span class="slot-status-chip">💎 ' + (collection.gems || 0) + '/' + collection.set_size + ' gems</span>');
+    }
+    const pet = c.pet || {};
+    if((pet.treats || 0) > 0){
+      badges.push('<span class="slot-status-chip">🐾 ' + pet.treats + ' treat' + (pet.treats === 1 ? '' : 's') + '</span>');
+    }
+    el.innerHTML = badges.join("");
+  }
+
+  const MULTIPLIER_COMBINE = { 2: 5, 3: 10 };
+
+  function renderMultiplierStash(){
+    const el = document.getElementById("slot-multiplier-stash");
+    if(!el) return;
+    const c = (slotState && slotState.constants) || {};
+    const charges = c.multiplierCharges || {};
+    const armed = c.activeMultiplier || 0;
+    const tiers = [2, 3, 5, 10];
+    const total = tiers.reduce((s, t) => s + (charges[t] || 0), 0);
+    if(total === 0 && !armed){ el.innerHTML = ""; return; }
+    const rows = tiers.filter(t => (charges[t] || 0) > 0 || armed === t).map(t => {
+      const n = charges[t] || 0;
+      const isArmed = armed === t;
+      const canCombine = MULTIPLIER_COMBINE[t] && n >= 2;
+      return '<div class="slot-mult-row' + (isArmed ? ' is-armed' : '') + '">' +
+        '<span class="slot-mult-tier">' + t + 'x</span>' +
+        '<span class="slot-mult-count">&times;' + n + '</span>' +
+        '<button class="slot-mini' + (isArmed ? ' primary' : '') + '" data-mult-arm="' + (isArmed ? 0 : t) + '" type="button"' + ((n <= 0 && !isArmed) ? ' disabled' : '') + '>' + (isArmed ? 'Armed - stop' : 'Use') + '</button>' +
+        (canCombine ? '<button class="slot-mini" data-mult-combine="' + t + '" type="button">Combine 2 &rarr; ' + MULTIPLIER_COMBINE[t] + 'x</button>' : '') +
+      '</div>';
+    }).join("");
+    el.innerHTML = '<div class="slot-mult-stash-head">Multiplier stash</div>' + rows +
+      '<div class="slot-mult-hint">Arm a tier to spend one charge per spin (it burns even on a non-bank spin). Combine two to trade up.</div>';
+    el.querySelectorAll("[data-mult-arm]").forEach(b => b.addEventListener("click", () => activateMultiplier(parseInt(b.dataset.multArm, 10))));
+    el.querySelectorAll("[data-mult-combine]").forEach(b => b.addEventListener("click", () => combineMultiplier(parseInt(b.dataset.multCombine, 10))));
+  }
+
+  let multiplierActionBusy = false;
+
+  async function activateMultiplier(tier){
+    if(multiplierActionBusy) return;
+    multiplierActionBusy = true;
+    try {
+      await api("/api/slot/multiplier/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier }) });
+      await loadSlots();
+    } catch(e){ setResult(e.message); }
+    finally { multiplierActionBusy = false; }
+  }
+
+  async function combineMultiplier(from){
+    if(multiplierActionBusy) return;
+    multiplierActionBusy = true;
+    try {
+      await api("/api/slot/multiplier/combine", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from }) });
+      await loadSlots();
+    } catch(e){ setResult(e.message); }
+    finally { multiplierActionBusy = false; }
   }
 
   function handleSlotChanged(){
@@ -1276,6 +1362,9 @@
       const bank = r.bank_delta_cents ? '<span>+' + money(r.bank_delta_cents) + ' bank</span>' : '';
       const locked = archived ? '<span class="slot-archived-label">archived</span>' : (r.eligible ? '' : '<span class="slot-locked">' + lockLabel(r.locked_reason) + '</span>');
       const goalExcluded = r.bankroll_goal_excluded ? '<span class="slot-goal-excluded">bankroll goal mode</span>' : '';
+      const privateChip = r.public_visibility === "private" ? '<span class="slot-private-chip" title="Hidden from the shared view">🔒 Private</span>' : '';
+      const usesChip = r.uses_remaining != null ? '<span class="slot-lifespan-chip" title="Wins left before it leaves rotation">' + esc(r.uses_remaining) + ' left</span>' : '';
+      const expiresChip = r.expires_at ? '<span class="slot-lifespan-chip' + (r.lifespan_exhausted ? ' expired' : '') + '" title="Expires ' + esc(new Date(r.expires_at).toLocaleString()) + '">' + (r.lifespan_exhausted ? 'expired' : 'until ' + esc(new Date(r.expires_at).toLocaleDateString())) + '</span>' : '';
       const oddsLabel = oddsText(r, slotState.rewards || []);
       return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + (archived ? ' archived' : '') + '" data-id="' + r.id + '" draggable="' + (archived ? 'false' : 'true') + '">' +
         '<div class="slot-reward-main">' +
@@ -1284,7 +1373,7 @@
             '<span>' + esc(sourceLabel(normalizeRewardSource(r))) + '</span>' +
             '<span>' + esc(tierById(r.tier_id).label) + '</span>' +
             '<span>' + esc(oddsLabel) + '</span>' +
-            value + time + bank + goalExcluded + locked +
+            value + time + bank + privateChip + usesChip + expiresChip + goalExcluded + locked +
           '</div>' +
           '<div class="slot-reward-inline-edit">' +
             '<select class="slot-card-source" aria-label="Paid by">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
@@ -1703,6 +1792,40 @@
           return;
         }
         setResult(stages.jackpot_hit ? "Bank builder first. Jackpot roll locked in." : "Bank builder first. Free spin tile locked in.");
+      }
+      const floorOutcome = stages.outcome;
+      if(!stages.jackpot_hit && ["coin","booster","pet","collectible","free_spin"].includes(floorOutcome)){
+        updateStageTrack("jackpot", "hit");
+        highlightWinningCells(spinRow, snap);
+        animateRewardReveal(spinRow, snap);
+        setResult(resultText(spinRow, snap));
+        if(floorOutcome === "booster"){
+          if(stages.gamble){
+            slotPlay("pending");
+            slotPetReact("happy", "Booster! Bank it or push your luck.", 2600);
+          } else {
+            slotPlay("win");
+            slotPetReact("happy", (stages.multiplier_charge_earned || 2) + "x charge!", 2400);
+          }
+        } else if(floorOutcome === "coin"){
+          const cashback = stages.coin && stages.coin.coin_kind === "cashback";
+          slotPlay("win");
+          slotPetReact("happy", cashback ? "Spin refunded!" : "Coins for you!", 2200);
+        } else if(floorOutcome === "collectible"){
+          const done = stages.collectible && stages.collectible.set_completed;
+          slotPlay(done ? "jackpotHit" : "rewardReveal");
+          slotPetReact("happy", done ? "Gem set complete!" : "A shiny gem!", 2400);
+        } else if(floorOutcome === "free_spin"){
+          slotPlay("rewardReveal");
+          slotPetReact("happy", "Free spin earned!", 2200);
+        } else {
+          slotPlay("rewardReveal");
+          slotPetReact("happy", "Your pet is happy!", 2200);
+        }
+        isSpinning = false;
+        await loadSlotsAfterSpin();
+        renderSlotResultActions(spinRow);
+        return;
       }
       if(!stages.jackpot_hit){
         updateStageTrack("jackpot", "miss");
@@ -2405,6 +2528,10 @@
     if(!isMiss && board && board.length){
       const line = PAYLINES.find(candidate => candidate.every(i => board[i] === symbol));
       if(line) return line;
+      // Cluster outcomes (coin/star/paw/gem/free spin) have no full payline -
+      // highlight every tile that actually carries the reward symbol.
+      const matches = board.map((sym, i) => sym === symbol ? i : -1).filter(i => i >= 0);
+      if(matches.length) return matches;
     }
     return [];
   }
@@ -3243,6 +3370,10 @@
   function rewardSymbol(reward){
     if(!reward || reward.kind === "miss") return "MISS";
     if(reward.kind === "bank_builder") return "BANK";
+    if(reward.kind === "points" || reward.source_type === "slot_coin") return "COIN";
+    if(reward.kind === "booster" || reward.source_type === "slot_booster") return "STAR";
+    if(reward.kind === "pet" || reward.source_type === "slot_pet") return "PAW";
+    if(reward.kind === "collectible" || reward.source_type === "slot_collectible") return "GEM";
     if(reward.source_type === "slot_free_spin_tile") return "SPIN";
     return "JACKPOT";
   }
@@ -3254,8 +3385,9 @@
   }
 
   function setCell(cell, symbol){
-    cell.textContent = symbol;
-    cell.dataset.symbol = symbol.toLowerCase();
+    const key = String(symbol || "MISS").toUpperCase();
+    cell.textContent = SYMBOL_GLYPHS[key] || symbol;
+    cell.dataset.symbol = key.toLowerCase();
   }
 
   function resultText(spinRow, snap){
@@ -3270,9 +3402,36 @@
     if(bankDelta > 0) {
       const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
       const cap = payout.capped ? " Bank cap trimmed the payout." : "";
+      const mult = stages.bank_multiplier_applied ? " " + stages.bank_multiplier_applied + "x booster applied!" : "";
       const choice = snap.requires_jackpot_choice ? " Pick a jackpot from the list." : "";
-      return "Bank Building paid " + money(bankDelta) + units + ". Funds moved into the Reward Reserve." + cap + choice;
+      return "Bank Building paid " + money(bankDelta) + units + "." + mult + " Funds moved into the Reward Reserve." + cap + choice;
     }
+    if(snap.kind === "points" || stages.outcome === "coin"){
+      const coin = stages.coin || {};
+      if(coin.coin_kind === "cashback") return "Cashback! Your spin cost was refunded.";
+      return "Coin drop: +" + (coin.points || 0) + " points.";
+    }
+    if(snap.kind === "booster" || stages.outcome === "booster"){
+      if(stages.multiplier_charge_earned){
+        return stages.multiplier_charge_earned + "x multiplier charge earned! Combine or arm it from your stash.";
+      }
+      const g = stages.gamble || {};
+      const desc = boosterDescriptor(g.booster_type);
+      const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
+      if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
+      if(g.status === "banked") return desc.banked(value);
+      return desc.head(value) + "! Bank it, or risk it for more.";
+    }
+    if(snap.kind === "pet" || stages.outcome === "pet"){
+      const pet = stages.pet || {};
+      return pet.pet_kind === "cosmetic" ? "Your pet found a new accessory!" : "Pet treat! Your pet is delighted.";
+    }
+    if(snap.kind === "collectible" || stages.outcome === "collectible"){
+      const c = stages.collectible || {};
+      if(c.set_completed) return "Gem set complete! A guaranteed jackpot spin is yours.";
+      return "Collected a gem" + (c.gems != null ? " (" + c.gems + " toward the next set)" : "") + ".";
+    }
+    if(stages.outcome === "free_spin" || stages.free_spin_hit) return "Free spin tile! A reroll credit is yours.";
     if(stages.bank_builder_hit) return "Bank Builder hit, but the reserve cap is full.";
     if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
     if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
@@ -3348,8 +3507,124 @@
     const el = document.getElementById("slot-result-actions");
     if(!el) return;
     const snap = spinRow && spinRow.reward_snapshot || {};
+    const stages = snap.slot_stages || {};
+    if(spinRow && spinRow.status === "gamble" && stages.gamble && stages.gamble.status === "open"){
+      el.innerHTML = gambleActionsHtml(spinRow, stages.gamble);
+      bindGambleActions(el, spinRow.id);
+      return;
+    }
     el.innerHTML = rewardScheduleActionsHtml(spinRow, snap);
     bindRewardScheduleActions(el);
+  }
+
+  function boosterDescriptor(type){
+    const plural = (v, word) => v + " " + word + (v > 1 ? "s" : "");
+    const D = {
+      bank_multiplier: { up: v => v + "x", head: v => v + "x bank booster", bank: v => "Bank " + v + "x", risk: v => "Risk for " + v + "x", lockTop: v => "Risk to lock " + v + "x", banked: v => v + "x bank booster locked in for your next bank builder." },
+      tier_up: { up: v => "+" + v, head: v => "Tier-up booster (+" + v + ")", bank: v => "Bank +" + v, risk: v => "Risk for +" + v, lockTop: v => "Risk to lock +" + v, banked: v => plural(v, "jackpot tier") + " queued for your next jackpot." },
+      miss_shield: { up: v => String(v), head: v => plural(v, "miss shield"), bank: v => "Bank " + v, risk: v => "Risk for " + v, lockTop: v => "Risk to lock " + v, banked: v => plural(v, "miss shield") + " queued - a would-be miss becomes a bank builder." },
+      wild_hold: { up: v => String(v), head: v => plural(v, "guaranteed jackpot spin"), bank: v => "Bank " + v, risk: v => "Risk for " + v, lockTop: v => "Risk to lock " + v, banked: v => plural(v, "guaranteed jackpot spin") + " locked in!" },
+    };
+    return D[type] || D.bank_multiplier;
+  }
+
+  function spinsLabel(n){ return n + " spin" + (n === 1 ? "" : "s"); }
+
+  function gambleActionsHtml(spinRow, gamble){
+    const ladder = Array.isArray(gamble.ladder) ? gamble.ladder : [];
+    const rung = gamble.rung || 0;
+    const current = gamble.multiplier || ladder[rung] || ladder[0] || 1;
+    const next = ladder[rung + 1];
+    const atTop = rung >= ladder.length - 1;
+    const windows = Array.isArray(gamble.windows) ? gamble.windows : null;
+
+    if(windows){
+      // Window-trade bank multiplier: climbing is free but shrinks the window.
+      const curWin = gamble.window || windows[rung] || 0;
+      const nextWin = windows[rung + 1];
+      const ladderHtml = ladder.map((m, i) =>
+        '<span class="slot-gamble-rung' + (i === rung ? ' is-current' : (i < rung ? ' is-passed' : '')) + '">' + m + 'x</span>'
+      ).join('<span class="slot-gamble-arrow">&rarr;</span>');
+      const bankLabel = "Lock " + current + "x (" + spinsLabel(curWin) + ")";
+      const riskLabel = atTop ? ("Lock " + current + "x") : ("Go bigger: " + next + "x");
+      const hint = atTop
+        ? ("Top tier: " + current + "x, but just " + spinsLabel(curWin) + " to land a bank builder.")
+        : ("Lock it: " + spinsLabel(curWin) + " to land a bank builder. Or go bigger for fewer spins (" + spinsLabel(nextWin) + ").");
+      return '<div class="slot-gamble">' +
+        '<div class="slot-gamble-head"><strong>' + current + 'x bank booster</strong><span>Bigger multiplier means fewer spins to cash in.</span></div>' +
+        '<div class="slot-gamble-ladder">' + ladderHtml + '</div>' +
+        '<div class="slot-gamble-actions">' +
+          '<button class="slot-mini primary" data-gamble-action="bank" data-id="' + esc(spinRow.id) + '" type="button">' + esc(bankLabel) + '</button>' +
+          (atTop ? '' : '<button class="slot-mini slot-gamble-risk" data-gamble-action="risk" data-id="' + esc(spinRow.id) + '" type="button">' + esc(riskLabel) + '</button>') +
+        '</div>' +
+        '<div class="slot-gamble-hint">' + esc(hint) + '</div>' +
+      '</div>';
+    }
+
+    const odds = Math.round((gamble.advance_odds || 0) * 100);
+    const desc = boosterDescriptor(gamble.booster_type);
+    const ladderHtml = ladder.map((m, i) =>
+      '<span class="slot-gamble-rung' + (i === rung ? ' is-current' : (i < rung ? ' is-passed' : '')) + '">' + esc(desc.up(m)) + '</span>'
+    ).join('<span class="slot-gamble-arrow">&rarr;</span>');
+    const riskLabel = atTop ? desc.lockTop(current) : desc.risk(next);
+    const riskSub = atTop
+      ? ("You are at the top. " + desc.lockTop(current) + ", or lose it all.")
+      : (odds + "% to climb to " + desc.up(next) + ", or bust to nothing.");
+    return '<div class="slot-gamble">' +
+      '<div class="slot-gamble-head"><strong>' + esc(desc.head(current)) + '</strong><span>Bank it now, or push your luck.</span></div>' +
+      '<div class="slot-gamble-ladder">' + ladderHtml + '</div>' +
+      '<div class="slot-gamble-actions">' +
+        '<button class="slot-mini primary" data-gamble-action="bank" data-id="' + esc(spinRow.id) + '" type="button">' + esc(desc.bank(current)) + '</button>' +
+        '<button class="slot-mini slot-gamble-risk" data-gamble-action="risk" data-id="' + esc(spinRow.id) + '" type="button">' + esc(riskLabel) + '</button>' +
+      '</div>' +
+      '<div class="slot-gamble-hint">' + esc(riskSub) + '</div>' +
+    '</div>';
+  }
+
+  function bindGambleActions(root, spinId){
+    if(!root) return;
+    root.querySelectorAll("[data-gamble-action]").forEach(btn => {
+      btn.addEventListener("click", () => handleGamble(btn.dataset.id || spinId, btn.dataset.gambleAction));
+    });
+  }
+
+  async function handleGamble(spinId, action){
+    const actionsEl = document.getElementById("slot-result-actions");
+    if(actionsEl) actionsEl.querySelectorAll("button").forEach(b => { b.disabled = true; });
+    try {
+      const updated = await api("/api/slot/spins/" + spinId + "/gamble", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action })
+      });
+      const stages = (updated.reward_snapshot && updated.reward_snapshot.slot_stages) || {};
+      const gamble = stages.gamble || {};
+      const desc = boosterDescriptor(gamble.booster_type);
+      const value = gamble.multiplier || 1;
+      const windowed = Array.isArray(gamble.windows);
+      if(gamble.status === "busted"){
+        slotPlay("miss");
+        slotPetReact("sad", "Busted!", 2200);
+        setResult("Gamble busted. The booster fizzled to nothing.");
+      } else if(gamble.status === "banked"){
+        slotPlay("win");
+        slotPetReact("happy", "Banked!", 2600);
+        setResult(windowed
+          ? (value + "x locked in - land a bank builder within " + spinsLabel(gamble.window || 0) + ".")
+          : desc.banked(value));
+      } else {
+        slotPlay("jackpotHit");
+        slotPetReact("happy", "Now " + desc.up(value) + "!", 1800);
+        setResult(windowed
+          ? ("Now " + value + "x with " + spinsLabel(gamble.window || 0) + ". Lock it, or go bigger.")
+          : ("Now at " + desc.up(value) + ". Bank it, or risk it again."));
+      }
+      await loadSlotsAfterSpin();
+      renderSlotResultActions(updated);
+    } catch(e){
+      setResult(e.message);
+      if(actionsEl) actionsEl.querySelectorAll("button").forEach(b => { b.disabled = false; });
+    }
   }
 
   function clearSlotResultActions(){
@@ -3406,6 +3681,7 @@
     val("slot-form-duration", reward ? rewardDurationMinutes(reward) : "");
     sponsorSplitsDraft = sponsorSplitsForReward(reward);
     checked("slot-form-active", reward ? reward.active : true);
+    checked("slot-form-private", reward ? reward.public_visibility === "private" : false);
     val("slot-form-notes", reward ? reward.notes : "");
     syncRewardFormUi();
     const title = document.getElementById("slot-form-title");
@@ -3560,13 +3836,17 @@
       tier_id: tierId,
       active: document.getElementById("slot-form-active").checked,
       sponsor_active: true,
+      public_visibility: (document.getElementById("slot-form-private") || {}).checked ? "private" : "public",
       value_cents: valueCents,
       bank_delta_cents: 0,
       duration_minutes: Math.max(0, parseInt(document.getElementById("slot-form-duration").value, 10) || 0),
       requires_confirmation: false,
       cooldown_days: 0,
       unlock_threshold_cents: valueCents,
-      notes: document.getElementById("slot-form-notes").value
+      notes: document.getElementById("slot-form-notes").value,
+      // The full form has no lifespan inputs; preserve any sponsor-set expiry/uses on edit.
+      expires_at: (editingId && findReward(editingId) || {}).expires_at || null,
+      uses_remaining: (editingId && findReward(editingId) || {}).uses_remaining != null ? findReward(editingId).uses_remaining : null
     };
   }
 
@@ -3614,6 +3894,9 @@
       cooldown_days: reward.cooldown_days || 0,
       unlock_threshold_cents: reward.unlock_threshold_cents || valueCents,
       notes: reward.notes || "",
+      public_visibility: reward.public_visibility === "private" ? "private" : "public",
+      expires_at: reward.expires_at || null,
+      uses_remaining: reward.uses_remaining != null ? reward.uses_remaining : null,
       ...(patch || {})
     };
   }
