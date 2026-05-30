@@ -474,6 +474,16 @@
     if((mods.bank_multiplier || 1) > 1){
       badges.push('<span class="slot-next-mult-badge">' + mods.bank_multiplier + 'x next bank builder</span>');
     }
+    if((mods.tier_up || 0) > 0){
+      badges.push('<span class="slot-next-mult-badge">+' + mods.tier_up + ' tier next jackpot</span>');
+    }
+    if((mods.miss_shield || 0) > 0){
+      badges.push('<span class="slot-status-chip">🛡️ ' + mods.miss_shield + ' miss shield' + (mods.miss_shield === 1 ? '' : 's') + '</span>');
+    }
+    const jackpotCredits = c.jackpotSpinCredits || c.bonusRewardSpinCredits || 0;
+    if(jackpotCredits > 0){
+      badges.push('<span class="slot-next-mult-badge">🎰 ' + jackpotCredits + ' jackpot spin' + (jackpotCredits === 1 ? '' : 's') + '</span>');
+    }
     const collection = c.collection || {};
     if(collection.set_size){
       badges.push('<span class="slot-status-chip">💎 ' + (collection.gems || 0) + '/' + collection.set_size + ' gems</span>');
@@ -3345,9 +3355,11 @@
     }
     if(snap.kind === "booster" || stages.outcome === "booster"){
       const g = stages.gamble || {};
+      const desc = boosterDescriptor(g.booster_type);
+      const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
       if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
-      if(g.status === "banked") return (g.multiplier || 1) + "x bank booster locked in for your next bank builder.";
-      return (g.multiplier || 2) + "x bank booster! Bank it, or risk it for a bigger multiplier.";
+      if(g.status === "banked") return desc.banked(value);
+      return desc.head(value) + "! Bank it, or risk it for more.";
     }
     if(snap.kind === "pet" || stages.outcome === "pet"){
       const pet = stages.pet || {};
@@ -3444,25 +3456,37 @@
     bindRewardScheduleActions(el);
   }
 
+  function boosterDescriptor(type){
+    const plural = (v, word) => v + " " + word + (v > 1 ? "s" : "");
+    const D = {
+      bank_multiplier: { up: v => v + "x", head: v => v + "x bank booster", bank: v => "Bank " + v + "x", risk: v => "Risk for " + v + "x", lockTop: v => "Risk to lock " + v + "x", banked: v => v + "x bank booster locked in for your next bank builder." },
+      tier_up: { up: v => "+" + v, head: v => "Tier-up booster (+" + v + ")", bank: v => "Bank +" + v, risk: v => "Risk for +" + v, lockTop: v => "Risk to lock +" + v, banked: v => plural(v, "jackpot tier") + " queued for your next jackpot." },
+      miss_shield: { up: v => String(v), head: v => plural(v, "miss shield"), bank: v => "Bank " + v, risk: v => "Risk for " + v, lockTop: v => "Risk to lock " + v, banked: v => plural(v, "miss shield") + " queued - a would-be miss becomes a bank builder." },
+      wild_hold: { up: v => String(v), head: v => plural(v, "guaranteed jackpot spin"), bank: v => "Bank " + v, risk: v => "Risk for " + v, lockTop: v => "Risk to lock " + v, banked: v => plural(v, "guaranteed jackpot spin") + " locked in!" },
+    };
+    return D[type] || D.bank_multiplier;
+  }
+
   function gambleActionsHtml(spinRow, gamble){
     const ladder = Array.isArray(gamble.ladder) ? gamble.ladder : [];
     const rung = gamble.rung || 0;
-    const current = gamble.multiplier || ladder[rung] || 2;
+    const current = gamble.multiplier || ladder[rung] || ladder[0] || 1;
     const next = ladder[rung + 1];
     const odds = Math.round((gamble.advance_odds || 0) * 100);
     const atTop = rung >= ladder.length - 1;
+    const desc = boosterDescriptor(gamble.booster_type);
     const ladderHtml = ladder.map((m, i) =>
-      '<span class="slot-gamble-rung' + (i === rung ? ' is-current' : (i < rung ? ' is-passed' : '')) + '">' + m + 'x</span>'
+      '<span class="slot-gamble-rung' + (i === rung ? ' is-current' : (i < rung ? ' is-passed' : '')) + '">' + esc(desc.up(m)) + '</span>'
     ).join('<span class="slot-gamble-arrow">&rarr;</span>');
-    const riskLabel = atTop ? ("Risk to lock " + current + "x") : ("Risk for " + next + "x");
+    const riskLabel = atTop ? desc.lockTop(current) : desc.risk(next);
     const riskSub = atTop
-      ? ("You are at the top. Risk to lock " + current + "x, or lose it all.")
-      : (odds + "% to climb to " + next + "x, or bust to nothing.");
+      ? ("You are at the top. " + desc.lockTop(current) + ", or lose it all.")
+      : (odds + "% to climb to " + desc.up(next) + ", or bust to nothing.");
     return '<div class="slot-gamble">' +
-      '<div class="slot-gamble-head"><strong>' + current + 'x bank booster</strong><span>Bank it now, or push your luck.</span></div>' +
+      '<div class="slot-gamble-head"><strong>' + esc(desc.head(current)) + '</strong><span>Bank it now, or push your luck.</span></div>' +
       '<div class="slot-gamble-ladder">' + ladderHtml + '</div>' +
       '<div class="slot-gamble-actions">' +
-        '<button class="slot-mini primary" data-gamble-action="bank" data-id="' + esc(spinRow.id) + '" type="button">Bank ' + current + 'x</button>' +
+        '<button class="slot-mini primary" data-gamble-action="bank" data-id="' + esc(spinRow.id) + '" type="button">' + esc(desc.bank(current)) + '</button>' +
         '<button class="slot-mini slot-gamble-risk" data-gamble-action="risk" data-id="' + esc(spinRow.id) + '" type="button">' + esc(riskLabel) + '</button>' +
       '</div>' +
       '<div class="slot-gamble-hint">' + esc(riskSub) + '</div>' +
@@ -3487,18 +3511,20 @@
       });
       const stages = (updated.reward_snapshot && updated.reward_snapshot.slot_stages) || {};
       const gamble = stages.gamble || {};
+      const desc = boosterDescriptor(gamble.booster_type);
+      const value = gamble.multiplier || 1;
       if(gamble.status === "busted"){
         slotPlay("miss");
         slotPetReact("sad", "Busted!", 2200);
         setResult("Gamble busted. The booster fizzled to nothing.");
       } else if(gamble.status === "banked"){
         slotPlay("win");
-        slotPetReact("happy", (gamble.multiplier || 1) + "x banked!", 2600);
-        setResult((gamble.multiplier || 1) + "x bank booster locked in for your next bank builder.");
+        slotPetReact("happy", "Banked!", 2600);
+        setResult(desc.banked(value));
       } else {
         slotPlay("jackpotHit");
-        slotPetReact("happy", "Up to " + (gamble.multiplier || 2) + "x!", 1800);
-        setResult((gamble.multiplier || 2) + "x! Bank it, or risk it again.");
+        slotPetReact("happy", "Up to " + desc.up(value) + "!", 1800);
+        setResult("Now at " + desc.up(value) + ". Bank it, or risk it again.");
       }
       await loadSlotsAfterSpin();
       renderSlotResultActions(updated);

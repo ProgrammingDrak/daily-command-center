@@ -1194,13 +1194,13 @@ test("buildSpinScreen miss board shows prize icons but forms no winning line", (
   }
 });
 
-function gambleSpinPool() {
+function gambleSpinPool(boosterType = "bank_multiplier", ladder = [2, 3, 5, 10]) {
   const gamble = {
-    booster_type: "bank_multiplier",
-    ladder: [2, 3, 5, 10],
+    booster_type: boosterType,
+    ladder,
     advance_odds: 0.5,
     rung: 0,
-    multiplier: 2,
+    multiplier: ladder[0],
     status: "open",
     history: [],
   };
@@ -1243,6 +1243,70 @@ test("gamble risk can bust to nothing", async () => {
   assert.equal(after.status, "miss");
   assert.equal(after.reward_snapshot.slot_stages.gamble.status, "busted");
   assert.equal(after.reward_snapshot.slot_stages.gamble.multiplier, 1);
+});
+
+test("banking a wild_hold booster grants guaranteed jackpot spins", async () => {
+  const mockPool = gambleSpinPool("wild_hold", [1, 2, 3, 4]);
+  const store = loadStoreWithMock(mockPool);
+  const after = await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
+  assert.equal(after.status, "awarded");
+  assert.equal(mockPool.state.settings.jackpot_spin_credits, 1);
+});
+
+test("banking a tier_up booster queues a tier bump for the next jackpot", async () => {
+  const mockPool = gambleSpinPool("tier_up", [1, 2, 3, 4]);
+  const store = loadStoreWithMock(mockPool);
+  // risk once (rng 0 advances rung 0->1, value 2), then bank.
+  await store.chooseSpinGamble("ws-1", 7, { action: "risk" }, () => 0);
+  await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
+  assert.equal(mockPool.state.settings.next_spin_modifiers.tier_up, 2);
+});
+
+test("banking a miss_shield booster queues miss shields", async () => {
+  const mockPool = gambleSpinPool("miss_shield", [1, 2, 3, 4]);
+  const store = loadStoreWithMock(mockPool);
+  const after = await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
+  assert.equal(after.status, "awarded");
+  assert.equal(mockPool.state.settings.next_spin_modifiers.miss_shield, 1);
+});
+
+test("buildBoosterOutcome can produce each booster type", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const settings = store._test.normalizeSlotSettings({});
+  const seen = new Set();
+  for(let pick = 0; pick < 4; pick++){
+    const outcome = store._test.selectThreeStageOutcome([], {
+      ...settings, jackpot_hit_rate: 0, miss_rate: 0,
+      floor_weights: { bank: 0, coin: 0, booster: 1, pet: 0, free_spin: 0 },
+    }, max => pick % max);
+    seen.add(outcome.gamble.booster_type);
+  }
+  assert.deepEqual([...seen].sort(), ["bank_multiplier", "miss_shield", "tier_up", "wild_hold"]);
+});
+
+test("a queued miss shield converts a miss spin into a bank builder", async () => {
+  const mockPool = createMockPool({
+    pointBalance: 100,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      jackpot_hit_rate: 0,
+      miss_rate: 1,
+      monthly_goal_cents: 10000,
+      next_spin_modifiers: { miss_shield: 2 },
+    },
+  });
+  const store = loadStoreWithMock(mockPool);
+  const spin = await store.spin("ws-1", 1);
+  const snap = spin.reward_snapshot;
+  assert.equal(snap.slot_stages.miss_shielded, true);
+  assert.equal(snap.kind, "bank_builder");
+  assert.notEqual(spin.status, "miss");
+  // one shield spent, one remains
+  assert.equal(mockPool.state.settings.next_spin_modifiers.miss_shield, 1);
 });
 
 test("a banked bank_multiplier scales the next bank builder payout", async () => {

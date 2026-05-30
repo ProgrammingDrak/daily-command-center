@@ -39,6 +39,15 @@ const DEFAULT_COIN_POINT_DROP = [10, 50];
 const DEFAULT_BOOSTER_LADDER = [2, 3, 5, 10];
 const DEFAULT_BOOSTER_ADVANCE_ODDS = 0.5;
 const BOOSTER_TYPES = ["bank_multiplier", "tier_up", "miss_shield", "wild_hold"];
+// Each booster type climbs its own ladder. bank_multiplier escalates a payout
+// multiplier; the rest escalate a count (tiers bumped, misses shielded, or
+// guaranteed jackpot spins held).
+const BOOSTER_LADDERS = {
+  bank_multiplier: [2, 3, 5, 10],
+  tier_up: [1, 2, 3, 4],
+  miss_shield: [1, 2, 3, 4],
+  wild_hold: [1, 2, 3, 4],
+};
 // Collectibles: collect gems, completing a set triggers a guaranteed jackpot spin.
 const DEFAULT_COLLECTION_SET_SIZE = 12;
 // Bank rework: a bank hit now drops a contiguous run so the adjacency combo in
@@ -509,8 +518,8 @@ function normalizeNextSpinModifiers(value = {}) {
   return {
     bank_multiplier: Number.isFinite(multiplier) && multiplier > 1 ? Math.min(1000, Math.round(multiplier)) : 1,
     tier_up: clampInt(raw.tier_up ?? raw.tierUp, 0, 10),
-    miss_shield: raw.miss_shield === true || raw.missShield === true,
-    wild_hold: raw.wild_hold === true || raw.wildHold === true,
+    // Count of queued miss shields (each converts one would-be miss to a bank builder).
+    miss_shield: clampInt(raw.miss_shield ?? raw.missShield, 0, 50),
   };
 }
 
@@ -1497,18 +1506,31 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
     }
 
     if (banked) {
-      // Stack onto any multiplier already waiting for the next spin.
+      // Lock the booster onto the account, stacking with anything already queued.
       const { rows: [account] } = await client.query(
         "SELECT settings FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
         [workspaceId]
       );
-      const lockedMods = normalizeNextSpinModifiers((account && account.settings && account.settings.next_spin_modifiers) || {});
-      const stacked = Math.min(1000, (lockedMods.bank_multiplier || 1) * (gamble.multiplier || 1));
+      const settings = (account && account.settings) || {};
+      const lockedMods = normalizeNextSpinModifiers(settings.next_spin_modifiers || {});
+      const value = gamble.multiplier || 1;
+      const patch = {};
+      if (gamble.booster_type === "wild_hold") {
+        // Wild hold grants guaranteed jackpot spins (reuses the credit machinery).
+        const credits = clampInt(settings.jackpot_spin_credits ?? settings.jackpotSpinCredits ?? 0, 0, 1000);
+        patch.jackpot_spin_credits = Math.min(1000, credits + value);
+      } else {
+        const next = { ...lockedMods };
+        if (gamble.booster_type === "tier_up") next.tier_up = Math.min(10, (lockedMods.tier_up || 0) + value);
+        else if (gamble.booster_type === "miss_shield") next.miss_shield = Math.min(50, (lockedMods.miss_shield || 0) + value);
+        else next.bank_multiplier = Math.min(1000, (lockedMods.bank_multiplier || 1) * value);
+        patch.next_spin_modifiers = next;
+      }
       await client.query(
         `UPDATE slot_accounts
          SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb, updated_at=NOW()
          WHERE workspace_id=$1`,
-        [workspaceId, JSON.stringify({ next_spin_modifiers: { ...lockedMods, bank_multiplier: stacked } })]
+        [workspaceId, JSON.stringify(patch)]
       );
     }
 
@@ -1914,15 +1936,18 @@ function buildCoinOutcome(normalized, rng) {
 
 function buildBoosterOutcome(normalized, rng) {
   const config = normalized.booster_config || normalizeBoosterConfig();
-  // Phase 1: the gamble ladder maps cleanly onto a bank multiplier. Other
-  // booster types (tier_up / miss_shield / wild_hold) are reserved for later.
-  const boosterType = "bank_multiplier";
+  const boosterType = BOOSTER_TYPES[rng(BOOSTER_TYPES.length)];
+  // bank_multiplier honors the account's configurable ladder; others use their
+  // count ladder. `value` (stored as `multiplier`) escalates as you risk.
+  const ladder = boosterType === "bank_multiplier"
+    ? (config.ladder && config.ladder.length ? config.ladder : BOOSTER_LADDERS.bank_multiplier)
+    : (BOOSTER_LADDERS[boosterType] || BOOSTER_LADDERS.bank_multiplier);
   const gamble = {
     booster_type: boosterType,
-    ladder: config.ladder,
+    ladder,
     advance_odds: config.advance_odds,
     rung: 0,
-    multiplier: config.ladder[0],
+    multiplier: ladder[0],
     status: "open",
     history: [],
   };
@@ -1992,7 +2017,14 @@ function bucketForSourceTier(rewards, source, tier) {
 function chooseBucketAttempt(rewards, settings, rng) {
   const normalized = normalizeSlotSettings(settings);
   const source = chooseWeighted(sourceOptions(normalized), "weight", rng) || sourceOptions(normalized)[0];
-  const tier = chooseWeighted(tierOptions(normalized), "weight", rng) || tierOptions(normalized)[0] || DEFAULT_REWARD_TIERS[0];
+  const tiers = tierOptions(normalized);
+  let tier = chooseWeighted(tiers, "weight", rng) || tiers[0] || DEFAULT_REWARD_TIERS[0];
+  // A banked tier_up booster bumps this jackpot toward a higher (rarer) tier.
+  const tierUp = (normalized.next_spin_modifiers && normalized.next_spin_modifiers.tier_up) || 0;
+  if (tierUp > 0 && tiers.length) {
+    const idx = tiers.findIndex(t => String(t.id) === String(tier.id));
+    if (idx >= 0) tier = tiers[Math.min(tiers.length - 1, idx + tierUp)] || tier;
+  }
   return {
     source,
     tier,
@@ -2593,12 +2625,11 @@ async function spin(workspaceId, userId) {
     throw err;
   }
   const drawPool = state.rewards.filter(r => r.kind !== "miss" && !r.lifespan_exhausted);
-  const outcome = selectThreeStageOutcome(
+  let outcome = selectThreeStageOutcome(
     drawPool,
     hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 } : settings
   );
   let selected = outcome.selected;
-  const canHitScreenBank = outcome.bank_builder_hit === true;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -2611,6 +2642,15 @@ async function spin(workspaceId, userId) {
     const usedRerollCredit = !usedJackpotSpinCredit && lockedSettings.reroll_credits > 0;
     const lockedSpinCost = (usedRerollCredit || usedJackpotSpinCredit) ? 0 : getSpinCost(account);
     if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough points");
+    const incomingMods = lockedSettings.next_spin_modifiers || normalizeNextSpinModifiers();
+    // A queued miss shield turns a would-be dead spin into a bank builder.
+    let missShieldUsed = false;
+    if (outcome.outcome === "miss" && (incomingMods.miss_shield || 0) > 0) {
+      selected = fakeBankBuilderReward();
+      outcome = floorResult("bank", { selected, miss_shielded: true });
+      missShieldUsed = true;
+    }
+    const canHitScreenBank = outcome.bank_builder_hit === true;
     const baseScreen = buildSpinScreen(selected, { ...account, settings: lockedSettings }, state.bankUsage, canHitScreenBank);
     const screen = applyTileOverrideToScreen(
       baseScreen,
@@ -2640,7 +2680,6 @@ async function spin(workspaceId, userId) {
     const reserveCost = effectiveOutcome.jackpot_hit && !effectiveOutcome.empty_bucket ? reserveCostCents(selected) : 0;
     const bankReserved = reserveCost;
     // Consume any next-spin modifiers banked from a prior booster gamble.
-    const incomingMods = lockedSettings.next_spin_modifiers || normalizeNextSpinModifiers();
     const bankMultiplier = Math.max(1, incomingMods.bank_multiplier || 1);
     let bankDelta = effectiveOutcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
     if (bankDelta > 0 && bankMultiplier > 1) bankDelta = bankDelta * bankMultiplier;
@@ -2723,6 +2762,8 @@ async function spin(workspaceId, userId) {
           : null,
         gamble: gambleState,
         bank_multiplier_applied: bankMultiplier > 1 ? bankMultiplier : null,
+        miss_shielded: missShieldUsed === true,
+        tier_up_applied: effectiveOutcome.jackpot_hit && (incomingMods.tier_up || 0) > 0 ? incomingMods.tier_up : null,
       },
       screen_board: screen.board,
       screen_payline: screen.payline,
@@ -2744,10 +2785,16 @@ async function spin(workspaceId, userId) {
     const nextJackpotSpinCredits = Math.max(0, lockedSettings.jackpot_spin_credits - (usedJackpotSpinCredit ? 1 : 0)) + bonusJackpotSpinCredits;
     // Net point change: pay the spin cost, then add any coin payout (cashback/drop).
     const netPointChange = lockedSpinCost - pointsDelta;
-    // Keep a banked multiplier waiting until a bank builder actually lands so it
-    // is never wasted on a non-bank spin; clear it only once it has been applied.
-    const modifiersConsumed = bankMultiplier > 1 && bankDelta > 0;
-    const nextModifiers = modifiersConsumed ? normalizeNextSpinModifiers() : incomingMods;
+    // Consume each banked modifier only when it actually fired, so unused
+    // boosters keep waiting for the spin they apply to.
+    const nextModifiers = normalizeNextSpinModifiers({
+      // bank multiplier clears once it has paid out a bank builder
+      bank_multiplier: (bankMultiplier > 1 && bankDelta > 0) ? 1 : incomingMods.bank_multiplier,
+      // tier_up clears once a jackpot has consumed it
+      tier_up: effectiveOutcome.jackpot_hit ? 0 : incomingMods.tier_up,
+      // one shield is spent per miss it converts
+      miss_shield: missShieldUsed ? Math.max(0, (incomingMods.miss_shield || 0) - 1) : incomingMods.miss_shield,
+    });
     await client.query(
       `UPDATE slot_accounts
        SET point_balance = point_balance - $2,
