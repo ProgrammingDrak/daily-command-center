@@ -3104,6 +3104,14 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-gamble-risk{border-color:#fb7185!important;color:#fb7185!important}
 .slot-gamble-hint{font-size:11px;color:var(--text-muted)}
 .slot-next-mult-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;color:#241604;background:linear-gradient(180deg,#fff1c4,#f0992f);border:1px solid #ffd66e;border-radius:10px;padding:2px 8px}
+.slot-multiplier-stash{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.slot-multiplier-stash:empty{display:none}
+.slot-mult-stash-head{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:#ffd66e}
+.slot-mult-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid rgba(240,153,47,0.3);border-radius:8px;background:rgba(240,153,47,0.06)}
+.slot-mult-row.is-armed{border-color:#ffd66e;background:linear-gradient(180deg,rgba(255,214,110,0.18),rgba(240,153,47,0.08))}
+.slot-mult-tier{font-size:15px;font-weight:900;color:#ffd66e;min-width:34px}
+.slot-mult-count{font-size:12px;color:var(--text-muted);margin-right:auto}
+.slot-mult-hint{font-size:10px;color:var(--text-muted)}
 .slot-spin-status{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:8px;min-height:0}
 .slot-spin-status:empty{display:none}
 .slot-status-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--text-muted);background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:2px 8px}

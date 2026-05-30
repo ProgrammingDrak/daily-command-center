@@ -3011,6 +3011,28 @@ app.post("/api/slot/spins/:id/gamble", async (req, res) => {
   }
 });
 
+app.post("/api/slot/multiplier/combine", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await slotStore.combineMultiplierCharges(req.workspaceId, body.from ?? body.tier);
+    broadcast("slot-changed", { action: "multiplier-combine" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/multiplier/activate", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await slotStore.setActiveMultiplier(req.workspaceId, body.tier ?? 0);
+    broadcast("slot-changed", { action: "multiplier-activate" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
 app.post("/api/slot/spins/:id/confirm", async (req, res) => {
   try {
     const spin = await slotStore.confirmSpin(req.workspaceId, req.params.id, req.body || {});

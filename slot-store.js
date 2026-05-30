@@ -43,14 +43,18 @@ const BOOSTER_TYPES = ["bank_multiplier", "tier_up", "miss_shield", "wild_hold"]
 // multiplier; the rest escalate a count (tiers bumped, misses shielded, or
 // guaranteed jackpot spins held).
 const BOOSTER_LADDERS = {
-  bank_multiplier: [2, 3, 5, 10],
   tier_up: [1, 2, 3, 4],
   miss_shield: [1, 2, 3, 4],
   wild_hold: [1, 2, 3, 4],
 };
-// bank_multiplier trades a window of spins for a bigger multiplier instead of a
-// coin flip: a higher multiplier gives fewer spins to land a bank builder.
-const BANK_MULTIPLIER_WINDOWS = [5, 3, 2, 1];
+// The bank_multiplier booster grants a collectible charge instead of gambling.
+// A booster drops one 2x or 3x charge (2x is the common base); charges combine
+// up (two 2x make a 5x, two 3x make a 10x). A charge is spent per spin while the
+// player has that tier "armed", multiplying that spin's bank builder.
+const MULTIPLIER_CHARGE_TIERS = [2, 3, 5, 10];
+const BOOSTER_CHARGE_TIERS = [2, 3];
+const BOOSTER_CHARGE_WEIGHTS = [2, 1]; // 2x twice as likely as 3x
+const MULTIPLIER_COMBINE = { 2: 5, 3: 10 }; // two of the key tier make one of the value tier
 // Collectibles: collect gems, completing a set triggers a guaranteed jackpot spin.
 const DEFAULT_COLLECTION_SET_SIZE = 12;
 // Bank rework: a bank hit now drops a contiguous run so the adjacency combo in
@@ -517,16 +521,29 @@ function normalizePet(value = {}) {
 
 function normalizeNextSpinModifiers(value = {}) {
   const raw = value && typeof value === "object" ? value : {};
-  const multiplier = Number(raw.bank_multiplier ?? raw.bankMultiplier);
-  const bankMultiplier = Number.isFinite(multiplier) && multiplier > 1 ? Math.min(1000, Math.round(multiplier)) : 1;
   return {
-    bank_multiplier: bankMultiplier,
-    // Spins left to land a bank builder before the multiplier lapses (0 when none queued).
-    bank_multiplier_spins_left: bankMultiplier > 1 ? clampInt(raw.bank_multiplier_spins_left ?? raw.bankMultiplierSpinsLeft, 0, 100) : 0,
     tier_up: clampInt(raw.tier_up ?? raw.tierUp, 0, 10),
     // Count of queued miss shields (each converts one would-be miss to a bank builder).
     miss_shield: clampInt(raw.miss_shield ?? raw.missShield, 0, 50),
   };
+}
+
+// Stash of collectible bank-multiplier charges, keyed by multiplier tier.
+function normalizeMultiplierCharges(value = {}) {
+  const raw = value && typeof value === "object" ? value : {};
+  const charges = {};
+  for (const tier of MULTIPLIER_CHARGE_TIERS) {
+    charges[tier] = clampInt(raw[tier] ?? raw[String(tier)], 0, 100000);
+  }
+  return charges;
+}
+
+// The tier the player has "armed" to spend each spin (0 = none). Only a tier
+// that actually has charges can stay armed.
+function normalizeActiveMultiplier(value, charges = {}) {
+  const tier = clampInt(value, 0, 10);
+  if (!MULTIPLIER_CHARGE_TIERS.includes(tier)) return 0;
+  return (charges[tier] || 0) > 0 ? tier : 0;
 }
 
 async function ensureSchema() {
@@ -769,6 +786,8 @@ function normalizeSlotSettings(settings = {}) {
     collection: normalizeCollection(raw.collection),
     pet: normalizePet(raw.pet),
     next_spin_modifiers: normalizeNextSpinModifiers(raw.next_spin_modifiers || raw.nextSpinModifiers),
+    multiplier_charges: normalizeMultiplierCharges(raw.multiplier_charges || raw.multiplierCharges),
+    active_multiplier: normalizeActiveMultiplier(raw.active_multiplier ?? raw.activeMultiplier, normalizeMultiplierCharges(raw.multiplier_charges || raw.multiplierCharges)),
     bankroll_pacing: raw.bankroll_pacing && typeof raw.bankroll_pacing === "object" ? { ...derived.bankroll_pacing, ...raw.bankroll_pacing } : derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(raw.payment_source_weights || raw.paymentSourceWeights),
     reward_tiers: normalizeRewardTiers(raw.reward_tiers || raw.rewardTiers),
@@ -1162,6 +1181,8 @@ async function getState(workspaceId, userId) {
       collection: account.settings.collection,
       pet: account.settings.pet,
       nextSpinModifiers: account.settings.next_spin_modifiers,
+      multiplierCharges: account.settings.multiplier_charges,
+      activeMultiplier: account.settings.active_multiplier,
       paymentSourceWeights: account.settings.payment_source_weights,
       rewardTiers: account.settings.reward_tiers,
       rerollCredits: account.settings.reroll_credits,
@@ -1488,21 +1509,8 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
       throw err;
     }
     gamble.history = Array.isArray(gamble.history) ? [...gamble.history] : [];
-    const windowed = gamble.booster_type === "bank_multiplier" && Array.isArray(gamble.windows);
     let banked = false;
-    if (action === "risk" && windowed) {
-      // Window mode: climbing is free, it just trades spins for a bigger multiplier.
-      if (gamble.rung < gamble.ladder.length - 1) {
-        gamble.rung += 1;
-        gamble.multiplier = gamble.ladder[gamble.rung];
-        gamble.window = gamble.windows[gamble.rung];
-        gamble.history.push({ action: "risk", result: "advance", multiplier: gamble.multiplier, window: gamble.window });
-      } else {
-        gamble.status = "banked";
-        banked = true;
-        gamble.history.push({ action: "risk", result: "maxed", multiplier: gamble.multiplier, window: gamble.window });
-      }
-    } else if (action === "risk") {
+    if (action === "risk") {
       const advanced = rng(1000000) < Math.floor((gamble.advance_odds || 0) * 1000000);
       if (!advanced) {
         gamble.multiplier = 1;
@@ -1521,7 +1529,7 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
     } else {
       gamble.status = "banked";
       banked = true;
-      gamble.history.push({ action: "bank", multiplier: gamble.multiplier, window: gamble.window });
+      gamble.history.push({ action: "bank", multiplier: gamble.multiplier });
     }
 
     if (banked) {
@@ -1541,11 +1549,8 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
       } else {
         const next = { ...lockedMods };
         if (gamble.booster_type === "tier_up") next.tier_up = Math.min(10, (lockedMods.tier_up || 0) + value);
-        else if (gamble.booster_type === "miss_shield") next.miss_shield = Math.min(50, (lockedMods.miss_shield || 0) + value);
         else {
-          // Stack the multiplier and keep whichever window has more spins left.
-          next.bank_multiplier = Math.min(1000, (lockedMods.bank_multiplier || 1) * value);
-          next.bank_multiplier_spins_left = Math.max(lockedMods.bank_multiplier_spins_left || 0, gamble.window || 0);
+          next.miss_shield = Math.min(50, (lockedMods.miss_shield || 0) + value);
         }
         patch.next_spin_modifiers = next;
       }
@@ -1568,6 +1573,83 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
     );
     await client.query("COMMIT");
     return updated;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Combine two charges of a base tier into one of the next tier (2x->5x, 3x->10x).
+async function combineMultiplierCharges(workspaceId, fromTier) {
+  const base = clampInt(fromTier, 0, 10);
+  const target = MULTIPLIER_COMBINE[base];
+  if (!target) {
+    const err = new Error("That multiplier tier cannot be combined");
+    err.statusCode = 400;
+    throw err;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT settings FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = (account && account.settings) || {};
+    const charges = normalizeMultiplierCharges(settings.multiplier_charges);
+    if ((charges[base] || 0) < 2) {
+      const err = new Error(`Need two ${base}x charges to combine`);
+      err.statusCode = 400;
+      throw err;
+    }
+    charges[base] -= 2;
+    charges[target] = (charges[target] || 0) + 1;
+    const activeMultiplier = normalizeActiveMultiplier(settings.active_multiplier, charges);
+    await client.query(
+      `UPDATE slot_accounts SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb, updated_at=NOW() WHERE workspace_id=$1`,
+      [workspaceId, JSON.stringify({ multiplier_charges: charges, active_multiplier: activeMultiplier })]
+    );
+    await client.query("COMMIT");
+    return { ok: true, multiplier_charges: charges, active_multiplier: activeMultiplier };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Arm (or disarm with tier 0) a multiplier tier to spend one charge per spin.
+async function setActiveMultiplier(workspaceId, tier) {
+  const want = clampInt(tier, 0, 10);
+  if (want !== 0 && !MULTIPLIER_CHARGE_TIERS.includes(want)) {
+    const err = new Error("Unknown multiplier tier");
+    err.statusCode = 400;
+    throw err;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT settings FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = (account && account.settings) || {};
+    const charges = normalizeMultiplierCharges(settings.multiplier_charges);
+    if (want !== 0 && (charges[want] || 0) <= 0) {
+      const err = new Error(`No ${want}x charges to arm`);
+      err.statusCode = 400;
+      throw err;
+    }
+    const active = normalizeActiveMultiplier(want, charges);
+    await client.query(
+      `UPDATE slot_accounts SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb, updated_at=NOW() WHERE workspace_id=$1`,
+      [workspaceId, JSON.stringify({ active_multiplier: active })]
+    );
+    await client.query("COMMIT");
+    return { ok: true, active_multiplier: active, multiplier_charges: charges };
   } catch (e) {
     await client.query("ROLLBACK");
     throw e;
@@ -1960,11 +2042,21 @@ function buildCoinOutcome(normalized, rng) {
 function buildBoosterOutcome(normalized, rng) {
   const config = normalized.booster_config || normalizeBoosterConfig();
   const boosterType = BOOSTER_TYPES[rng(BOOSTER_TYPES.length)];
-  // bank_multiplier honors the account's configurable ladder; others use their
-  // count ladder. `value` (stored as `multiplier`) escalates as you risk.
-  const ladder = boosterType === "bank_multiplier"
-    ? (config.ladder && config.ladder.length ? config.ladder : BOOSTER_LADDERS.bank_multiplier)
-    : (BOOSTER_LADDERS[boosterType] || BOOSTER_LADDERS.bank_multiplier);
+  // bank_multiplier no longer gambles - it drops one collectible charge (2x or 3x)
+  // into the stash, awarded immediately.
+  if (boosterType === "bank_multiplier") {
+    const tier = chooseWeighted(
+      BOOSTER_CHARGE_TIERS.map((t, i) => ({ tier: t, weight: BOOSTER_CHARGE_WEIGHTS[i] })),
+      "weight",
+      rng
+    ) || { tier: BOOSTER_CHARGE_TIERS[0] };
+    return floorResult("booster", {
+      selected: fakeBoosterReward("bank_multiplier", null),
+      multiplier_charge: { tier: tier.tier },
+    });
+  }
+  // The other three boosters keep their press-your-luck coin-flip ladder.
+  const ladder = BOOSTER_LADDERS[boosterType] || BOOSTER_LADDERS.tier_up;
   const gamble = {
     booster_type: boosterType,
     ladder,
@@ -1974,11 +2066,6 @@ function buildBoosterOutcome(normalized, rng) {
     status: "open",
     history: [],
   };
-  // bank_multiplier is window-based (no coin flip): climbing trades spins for size.
-  if (boosterType === "bank_multiplier") {
-    gamble.windows = BANK_MULTIPLIER_WINDOWS;
-    gamble.window = BANK_MULTIPLIER_WINDOWS[0];
-  }
   return floorResult("booster", {
     selected: fakeBoosterReward(boosterType, gamble),
     gamble,
@@ -2707,10 +2794,25 @@ async function spin(workspaceId, userId) {
     }
     const reserveCost = effectiveOutcome.jackpot_hit && !effectiveOutcome.empty_bucket ? reserveCostCents(selected) : 0;
     const bankReserved = reserveCost;
-    // Consume any next-spin modifiers banked from a prior booster gamble.
-    const bankMultiplier = Math.max(1, incomingMods.bank_multiplier || 1);
+    // Armed multiplier charge: while a tier is armed it burns one charge every
+    // spin (even non-bank spins) and multiplies this spin's bank builder.
+    const charges = { ...lockedSettings.multiplier_charges };
+    const armedMultiplier = lockedSettings.active_multiplier || 0;
+    let appliedMultiplier = 1;
+    if (armedMultiplier > 1 && (charges[armedMultiplier] || 0) > 0) {
+      appliedMultiplier = armedMultiplier;
+      charges[armedMultiplier] = Math.max(0, charges[armedMultiplier] - 1);
+    }
     let bankDelta = effectiveOutcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
-    if (bankDelta > 0 && bankMultiplier > 1) bankDelta = bankDelta * bankMultiplier;
+    if (bankDelta > 0 && appliedMultiplier > 1) bankDelta = bankDelta * appliedMultiplier;
+    // A multiplier-charge booster drops a fresh charge into the stash.
+    let earnedChargeTier = 0;
+    if (selected.kind === "booster" && effectiveOutcome.multiplier_charge) {
+      earnedChargeTier = effectiveOutcome.multiplier_charge.tier;
+      charges[earnedChargeTier] = (charges[earnedChargeTier] || 0) + 1;
+    }
+    // Disarm once the armed tier is exhausted.
+    const nextActiveMultiplier = (armedMultiplier > 1 && (charges[armedMultiplier] || 0) > 0) ? armedMultiplier : 0;
     const jackpotSpinCount = effectiveOutcome.jackpot_hit ? screenJackpot.spins : 0;
     let bonusJackpotSpinCredits = Math.max(0, jackpotSpinCount - 1);
 
@@ -2789,7 +2891,8 @@ async function spin(workspaceId, userId) {
           ? { set_completed: collectibleSetCompleted, gems: nextCollection.gems, sets_completed: nextCollection.sets_completed }
           : null,
         gamble: gambleState,
-        bank_multiplier_applied: bankMultiplier > 1 ? bankMultiplier : null,
+        bank_multiplier_applied: appliedMultiplier > 1 ? appliedMultiplier : null,
+        multiplier_charge_earned: earnedChargeTier || null,
         miss_shielded: missShieldUsed === true,
         tier_up_applied: effectiveOutcome.jackpot_hit && (incomingMods.tier_up || 0) > 0 ? incomingMods.tier_up : null,
       },
@@ -2798,7 +2901,7 @@ async function spin(workspaceId, userId) {
       bank_screen_payout: screen.payout,
       screen_override: screen.override,
     };
-    const status = selected.kind === "booster"
+    const status = selected.kind === "booster" && gambleState
       ? "gamble"
       : bankDelta > 0
       ? "pending"
@@ -2813,24 +2916,8 @@ async function spin(workspaceId, userId) {
     const nextJackpotSpinCredits = Math.max(0, lockedSettings.jackpot_spin_credits - (usedJackpotSpinCredit ? 1 : 0)) + bonusJackpotSpinCredits;
     // Net point change: pay the spin cost, then add any coin payout (cashback/drop).
     const netPointChange = lockedSpinCost - pointsDelta;
-    // Consume each banked modifier only when it actually fired, so unused
-    // boosters keep waiting for the spin they apply to.
-    let nextBankMultiplier = incomingMods.bank_multiplier;
-    let nextBankMultiplierSpins = incomingMods.bank_multiplier_spins_left;
-    if (bankMultiplier > 1) {
-      if (bankDelta > 0) {
-        // Landed a bank builder inside the window - paid out, now cleared.
-        nextBankMultiplier = 1;
-        nextBankMultiplierSpins = 0;
-      } else {
-        // Used one of the window's spins without a bank builder; lapses at zero.
-        nextBankMultiplierSpins = Math.max(0, (incomingMods.bank_multiplier_spins_left || 0) - 1);
-        if (nextBankMultiplierSpins <= 0) nextBankMultiplier = 1;
-      }
-    }
+    // Consume each banked modifier only when it actually fired.
     const nextModifiers = normalizeNextSpinModifiers({
-      bank_multiplier: nextBankMultiplier,
-      bank_multiplier_spins_left: nextBankMultiplierSpins,
       // tier_up clears once a jackpot has consumed it
       tier_up: effectiveOutcome.jackpot_hit ? 0 : incomingMods.tier_up,
       // one shield is spent per miss it converts
@@ -2847,6 +2934,8 @@ async function spin(workspaceId, userId) {
         jackpot_spin_credits: nextJackpotSpinCredits,
         next_spin_tile_override: null,
         next_spin_modifiers: nextModifiers,
+        multiplier_charges: charges,
+        active_multiplier: nextActiveMultiplier,
         pet: nextPet,
         collection: nextCollection,
       })]
@@ -3165,6 +3254,8 @@ module.exports = {
   clearBankrollGoal,
   chooseSpinDiceReroll,
   chooseSpinGamble,
+  combineMultiplierCharges,
+  setActiveMultiplier,
   createReward,
   updateReward,
   deleteReward,
@@ -3192,6 +3283,9 @@ module.exports = {
     resolveFloorOutcome,
     rollFloorOutcomeKind,
     chooseSpinGamble,
+    combineMultiplierCharges,
+    setActiveMultiplier,
+    normalizeMultiplierCharges,
     placeSymbolCluster,
     placeSymbolLine,
     fillCosmetic,

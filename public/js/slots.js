@@ -463,6 +463,7 @@
         : "Spin (" + pointLabel(spinCost) + ")";
     }
     renderSpinStatusBadges();
+    renderMultiplierStash();
   }
 
   function renderSpinStatusBadges(){
@@ -471,10 +472,10 @@
     const c = (slotState && slotState.constants) || {};
     const badges = [];
     const mods = c.nextSpinModifiers || {};
-    if((mods.bank_multiplier || 1) > 1){
-      const left = mods.bank_multiplier_spins_left || 0;
-      const tail = left > 0 ? ' (' + left + ' spin' + (left === 1 ? '' : 's') + ' left)' : '';
-      badges.push('<span class="slot-next-mult-badge">' + mods.bank_multiplier + 'x next bank builder' + tail + '</span>');
+    const armed = c.activeMultiplier || 0;
+    if(armed > 1){
+      const left = (c.multiplierCharges && c.multiplierCharges[armed]) || 0;
+      badges.push('<span class="slot-next-mult-badge">' + armed + 'x armed (' + left + ' left)</span>');
     }
     if((mods.tier_up || 0) > 0){
       badges.push('<span class="slot-next-mult-badge">+' + mods.tier_up + ' tier next jackpot</span>');
@@ -495,6 +496,56 @@
       badges.push('<span class="slot-status-chip">🐾 ' + pet.treats + ' treat' + (pet.treats === 1 ? '' : 's') + '</span>');
     }
     el.innerHTML = badges.join("");
+  }
+
+  const MULTIPLIER_COMBINE = { 2: 5, 3: 10 };
+
+  function renderMultiplierStash(){
+    const el = document.getElementById("slot-multiplier-stash");
+    if(!el) return;
+    const c = (slotState && slotState.constants) || {};
+    const charges = c.multiplierCharges || {};
+    const armed = c.activeMultiplier || 0;
+    const tiers = [2, 3, 5, 10];
+    const total = tiers.reduce((s, t) => s + (charges[t] || 0), 0);
+    if(total === 0 && !armed){ el.innerHTML = ""; return; }
+    const rows = tiers.filter(t => (charges[t] || 0) > 0 || armed === t).map(t => {
+      const n = charges[t] || 0;
+      const isArmed = armed === t;
+      const canCombine = MULTIPLIER_COMBINE[t] && n >= 2;
+      return '<div class="slot-mult-row' + (isArmed ? ' is-armed' : '') + '">' +
+        '<span class="slot-mult-tier">' + t + 'x</span>' +
+        '<span class="slot-mult-count">&times;' + n + '</span>' +
+        '<button class="slot-mini' + (isArmed ? ' primary' : '') + '" data-mult-arm="' + (isArmed ? 0 : t) + '" type="button"' + ((n <= 0 && !isArmed) ? ' disabled' : '') + '>' + (isArmed ? 'Armed - stop' : 'Use') + '</button>' +
+        (canCombine ? '<button class="slot-mini" data-mult-combine="' + t + '" type="button">Combine 2 &rarr; ' + MULTIPLIER_COMBINE[t] + 'x</button>' : '') +
+      '</div>';
+    }).join("");
+    el.innerHTML = '<div class="slot-mult-stash-head">Multiplier stash</div>' + rows +
+      '<div class="slot-mult-hint">Arm a tier to spend one charge per spin (it burns even on a non-bank spin). Combine two to trade up.</div>';
+    el.querySelectorAll("[data-mult-arm]").forEach(b => b.addEventListener("click", () => activateMultiplier(parseInt(b.dataset.multArm, 10))));
+    el.querySelectorAll("[data-mult-combine]").forEach(b => b.addEventListener("click", () => combineMultiplier(parseInt(b.dataset.multCombine, 10))));
+  }
+
+  let multiplierActionBusy = false;
+
+  async function activateMultiplier(tier){
+    if(multiplierActionBusy) return;
+    multiplierActionBusy = true;
+    try {
+      await api("/api/slot/multiplier/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tier }) });
+      await loadSlots();
+    } catch(e){ setResult(e.message); }
+    finally { multiplierActionBusy = false; }
+  }
+
+  async function combineMultiplier(from){
+    if(multiplierActionBusy) return;
+    multiplierActionBusy = true;
+    try {
+      await api("/api/slot/multiplier/combine", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from }) });
+      await loadSlots();
+    } catch(e){ setResult(e.message); }
+    finally { multiplierActionBusy = false; }
   }
 
   function handleSlotChanged(){
@@ -1749,8 +1800,13 @@
         animateRewardReveal(spinRow, snap);
         setResult(resultText(spinRow, snap));
         if(floorOutcome === "booster"){
-          slotPlay("pending");
-          slotPetReact("happy", "Booster! Bank it or push your luck.", 2600);
+          if(stages.gamble){
+            slotPlay("pending");
+            slotPetReact("happy", "Booster! Bank it or push your luck.", 2600);
+          } else {
+            slotPlay("win");
+            slotPetReact("happy", (stages.multiplier_charge_earned || 2) + "x charge!", 2400);
+          }
         } else if(floorOutcome === "coin"){
           const cashback = stages.coin && stages.coin.coin_kind === "cashback";
           slotPlay("win");
@@ -3356,12 +3412,14 @@
       return "Coin drop: +" + (coin.points || 0) + " points.";
     }
     if(snap.kind === "booster" || stages.outcome === "booster"){
+      if(stages.multiplier_charge_earned){
+        return stages.multiplier_charge_earned + "x multiplier charge earned! Combine or arm it from your stash.";
+      }
       const g = stages.gamble || {};
       const desc = boosterDescriptor(g.booster_type);
       const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
       if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
       if(g.status === "banked") return desc.banked(value);
-      if(Array.isArray(g.windows)) return desc.head(value) + "! Lock it, or trade spins for a bigger one.";
       return desc.head(value) + "! Bank it, or risk it for more.";
     }
     if(snap.kind === "pet" || stages.outcome === "pet"){
