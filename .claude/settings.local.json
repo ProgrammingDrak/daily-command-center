@@ -51,7 +51,13 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code} %{content_type} %{size_download}\\\\n\" http://localhost:8091/js/slots.js)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\offic\\\\portable-programming\\\\Repos\\\\daily-command-center\" -Force)",
       "Bash(Select-Object Name, FullName, PSIsContainer)",
-      "Bash(grep -n \"nextSpinModifiers: account.settings\\\\|chooseSpinGamble,$\\\\|chooseSpinGamble,\\\\|missHits,\\\\|normalizeNextSpinModifiers,\\\\|placeSymbolLine,\" slot-store.js)"
+      "Bash(grep -n \"nextSpinModifiers: account.settings\\\\|chooseSpinGamble,$\\\\|chooseSpinGamble,\\\\|missHits,\\\\|normalizeNextSpinModifiers,\\\\|placeSymbolLine,\" slot-store.js)",
+      "Bash(git push *)",
+      "Bash(gh pr *)",
+      "Bash(git fetch *)",
+      "Bash(git merge *)",
+      "Bash(git checkout *)",
+      "Bash(node --check public/js/onboarding-tour.js)"
     ]
   }
 }

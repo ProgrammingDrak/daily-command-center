@@ -1,6 +1,6 @@
 (function(){
   var TOUR_KEY = "dailyCommandCenterTour";
-  var TOUR_VERSION = 2;
+  var TOUR_VERSION = 1;
   var hasAutoChecked = false;
   var settingsBound = false;
   var active = false;
@@ -9,37 +9,47 @@
 
   var steps = [
     {
-      title: "Welcome",
-      body: "Quick tour of the parts that aren't obvious."
+      title: "Welcome to Daily Command Center",
+      body: "This dashboard keeps the day visible: what is scheduled, what is waiting, what is done, and what needs your attention next."
     },
     {
-      title: "Earn Points",
-      body: "Finishing tasks earns points.",
+      title: "Move Through The Day",
+      body: "Use the date controls to move between today, tomorrow, and prior days without losing your place.",
+      selector: "#date-nav"
+    },
+    {
+      title: "Read The Vital Signs",
+      body: "The stats show time left, tasks left, completions, points, and the current block at a glance.",
       selector: ".stats"
     },
     {
-      title: "Feed Your Pet",
-      body: "Spend points to keep your pet fed.",
-      selector: "#pet-home-tab-btn"
+      title: "Work The Itinerary",
+      body: "The itinerary is the main operating view. Complete tasks, adjust timing, add notes, or push work when the day changes shape.",
+      selector: "#tab-schedule"
     },
     {
-      title: "Spin For Rewards",
-      body: "Spend points to spin the slot machine.",
-      selector: "#slots-tab-btn"
+      title: "Add And Organize Tasks",
+      body: "The task rail opens your queues for backlog, urgent work, side projects, and repeat responsibilities.",
+      selector: "#sidecar-tabs"
     },
     {
-      title: "Set Up Rewards",
-      body: "Free self-care rewards, or paid ones capped by a monthly budget. Pin one as a goal.",
-      selector: "#slots-tab-btn"
+      title: "Capture Notes And Actions",
+      body: "Use sticky notes and task notes to capture context, then turn follow-ups into action items or scheduled work.",
+      selector: "#sn-open-btn"
     },
     {
-      title: "Share Your List",
-      body: "Invite people to a live view of your day. On a task they can react, comment, or hit the bounty button to make it pay 2x points. In Offer a Reward they can fund an existing reward or add a new one (even a private surprise) to a task or straight to the slot machine.",
-      selector: "#todo-share-open"
+      title: "Focus With A Timer",
+      body: "Pick a task, start a focus session, and let the timer keep attention tied to the work in front of you.",
+      selector: "#pomo-task-card"
     },
     {
-      title: "Replay Anytime",
-      body: "Reopen this tour from Settings.",
+      title: "Use The Supporting Tabs",
+      body: "Brief, Delegated, Pet Home, Slots, and Runway are supporting work areas for review, follow-up, rewards, and planning.",
+      selector: "#tab-bar"
+    },
+    {
+      title: "Replay This Anytime",
+      body: "Open Settings and choose Replay tutorial whenever you want to walk through the basics again.",
       selector: "#dcc-settings-button"
     }
   ];
@@ -129,7 +139,6 @@
     var card = els.card;
     var margin = 14;
     card.classList.toggle("dcc-tour-card-centered", !target);
-    els.root.classList.toggle("dcc-tour-has-target", !!target);
     if (!target) {
       els.highlight.style.display = "none";
       card.style.left = "50%";
