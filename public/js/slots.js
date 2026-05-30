@@ -472,7 +472,9 @@
     const badges = [];
     const mods = c.nextSpinModifiers || {};
     if((mods.bank_multiplier || 1) > 1){
-      badges.push('<span class="slot-next-mult-badge">' + mods.bank_multiplier + 'x next bank builder</span>');
+      const left = mods.bank_multiplier_spins_left || 0;
+      const tail = left > 0 ? ' (' + left + ' spin' + (left === 1 ? '' : 's') + ' left)' : '';
+      badges.push('<span class="slot-next-mult-badge">' + mods.bank_multiplier + 'x next bank builder' + tail + '</span>');
     }
     if((mods.tier_up || 0) > 0){
       badges.push('<span class="slot-next-mult-badge">+' + mods.tier_up + ' tier next jackpot</span>');
@@ -3359,6 +3361,7 @@
       const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
       if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
       if(g.status === "banked") return desc.banked(value);
+      if(Array.isArray(g.windows)) return desc.head(value) + "! Lock it, or trade spins for a bigger one.";
       return desc.head(value) + "! Bank it, or risk it for more.";
     }
     if(snap.kind === "pet" || stages.outcome === "pet"){
@@ -3467,13 +3470,40 @@
     return D[type] || D.bank_multiplier;
   }
 
+  function spinsLabel(n){ return n + " spin" + (n === 1 ? "" : "s"); }
+
   function gambleActionsHtml(spinRow, gamble){
     const ladder = Array.isArray(gamble.ladder) ? gamble.ladder : [];
     const rung = gamble.rung || 0;
     const current = gamble.multiplier || ladder[rung] || ladder[0] || 1;
     const next = ladder[rung + 1];
-    const odds = Math.round((gamble.advance_odds || 0) * 100);
     const atTop = rung >= ladder.length - 1;
+    const windows = Array.isArray(gamble.windows) ? gamble.windows : null;
+
+    if(windows){
+      // Window-trade bank multiplier: climbing is free but shrinks the window.
+      const curWin = gamble.window || windows[rung] || 0;
+      const nextWin = windows[rung + 1];
+      const ladderHtml = ladder.map((m, i) =>
+        '<span class="slot-gamble-rung' + (i === rung ? ' is-current' : (i < rung ? ' is-passed' : '')) + '">' + m + 'x</span>'
+      ).join('<span class="slot-gamble-arrow">&rarr;</span>');
+      const bankLabel = "Lock " + current + "x (" + spinsLabel(curWin) + ")";
+      const riskLabel = atTop ? ("Lock " + current + "x") : ("Go bigger: " + next + "x");
+      const hint = atTop
+        ? ("Top tier: " + current + "x, but just " + spinsLabel(curWin) + " to land a bank builder.")
+        : ("Lock it: " + spinsLabel(curWin) + " to land a bank builder. Or go bigger for fewer spins (" + spinsLabel(nextWin) + ").");
+      return '<div class="slot-gamble">' +
+        '<div class="slot-gamble-head"><strong>' + current + 'x bank booster</strong><span>Bigger multiplier means fewer spins to cash in.</span></div>' +
+        '<div class="slot-gamble-ladder">' + ladderHtml + '</div>' +
+        '<div class="slot-gamble-actions">' +
+          '<button class="slot-mini primary" data-gamble-action="bank" data-id="' + esc(spinRow.id) + '" type="button">' + esc(bankLabel) + '</button>' +
+          (atTop ? '' : '<button class="slot-mini slot-gamble-risk" data-gamble-action="risk" data-id="' + esc(spinRow.id) + '" type="button">' + esc(riskLabel) + '</button>') +
+        '</div>' +
+        '<div class="slot-gamble-hint">' + esc(hint) + '</div>' +
+      '</div>';
+    }
+
+    const odds = Math.round((gamble.advance_odds || 0) * 100);
     const desc = boosterDescriptor(gamble.booster_type);
     const ladderHtml = ladder.map((m, i) =>
       '<span class="slot-gamble-rung' + (i === rung ? ' is-current' : (i < rung ? ' is-passed' : '')) + '">' + esc(desc.up(m)) + '</span>'
@@ -3513,6 +3543,7 @@
       const gamble = stages.gamble || {};
       const desc = boosterDescriptor(gamble.booster_type);
       const value = gamble.multiplier || 1;
+      const windowed = Array.isArray(gamble.windows);
       if(gamble.status === "busted"){
         slotPlay("miss");
         slotPetReact("sad", "Busted!", 2200);
@@ -3520,11 +3551,15 @@
       } else if(gamble.status === "banked"){
         slotPlay("win");
         slotPetReact("happy", "Banked!", 2600);
-        setResult(desc.banked(value));
+        setResult(windowed
+          ? (value + "x locked in - land a bank builder within " + spinsLabel(gamble.window || 0) + ".")
+          : desc.banked(value));
       } else {
         slotPlay("jackpotHit");
-        slotPetReact("happy", "Up to " + desc.up(value) + "!", 1800);
-        setResult("Now at " + desc.up(value) + ". Bank it, or risk it again.");
+        slotPetReact("happy", "Now " + desc.up(value) + "!", 1800);
+        setResult(windowed
+          ? ("Now " + value + "x with " + spinsLabel(gamble.window || 0) + ". Lock it, or go bigger.")
+          : ("Now at " + desc.up(value) + ". Bank it, or risk it again."));
       }
       await loadSlotsAfterSpin();
       renderSlotResultActions(updated);

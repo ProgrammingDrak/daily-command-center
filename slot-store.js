@@ -48,6 +48,9 @@ const BOOSTER_LADDERS = {
   miss_shield: [1, 2, 3, 4],
   wild_hold: [1, 2, 3, 4],
 };
+// bank_multiplier trades a window of spins for a bigger multiplier instead of a
+// coin flip: a higher multiplier gives fewer spins to land a bank builder.
+const BANK_MULTIPLIER_WINDOWS = [5, 3, 2, 1];
 // Collectibles: collect gems, completing a set triggers a guaranteed jackpot spin.
 const DEFAULT_COLLECTION_SET_SIZE = 12;
 // Bank rework: a bank hit now drops a contiguous run so the adjacency combo in
@@ -515,8 +518,11 @@ function normalizePet(value = {}) {
 function normalizeNextSpinModifiers(value = {}) {
   const raw = value && typeof value === "object" ? value : {};
   const multiplier = Number(raw.bank_multiplier ?? raw.bankMultiplier);
+  const bankMultiplier = Number.isFinite(multiplier) && multiplier > 1 ? Math.min(1000, Math.round(multiplier)) : 1;
   return {
-    bank_multiplier: Number.isFinite(multiplier) && multiplier > 1 ? Math.min(1000, Math.round(multiplier)) : 1,
+    bank_multiplier: bankMultiplier,
+    // Spins left to land a bank builder before the multiplier lapses (0 when none queued).
+    bank_multiplier_spins_left: bankMultiplier > 1 ? clampInt(raw.bank_multiplier_spins_left ?? raw.bankMultiplierSpinsLeft, 0, 100) : 0,
     tier_up: clampInt(raw.tier_up ?? raw.tierUp, 0, 10),
     // Count of queued miss shields (each converts one would-be miss to a bank builder).
     miss_shield: clampInt(raw.miss_shield ?? raw.missShield, 0, 50),
@@ -1482,8 +1488,21 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
       throw err;
     }
     gamble.history = Array.isArray(gamble.history) ? [...gamble.history] : [];
+    const windowed = gamble.booster_type === "bank_multiplier" && Array.isArray(gamble.windows);
     let banked = false;
-    if (action === "risk") {
+    if (action === "risk" && windowed) {
+      // Window mode: climbing is free, it just trades spins for a bigger multiplier.
+      if (gamble.rung < gamble.ladder.length - 1) {
+        gamble.rung += 1;
+        gamble.multiplier = gamble.ladder[gamble.rung];
+        gamble.window = gamble.windows[gamble.rung];
+        gamble.history.push({ action: "risk", result: "advance", multiplier: gamble.multiplier, window: gamble.window });
+      } else {
+        gamble.status = "banked";
+        banked = true;
+        gamble.history.push({ action: "risk", result: "maxed", multiplier: gamble.multiplier, window: gamble.window });
+      }
+    } else if (action === "risk") {
       const advanced = rng(1000000) < Math.floor((gamble.advance_odds || 0) * 1000000);
       if (!advanced) {
         gamble.multiplier = 1;
@@ -1502,7 +1521,7 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
     } else {
       gamble.status = "banked";
       banked = true;
-      gamble.history.push({ action: "bank", multiplier: gamble.multiplier });
+      gamble.history.push({ action: "bank", multiplier: gamble.multiplier, window: gamble.window });
     }
 
     if (banked) {
@@ -1523,7 +1542,11 @@ async function chooseSpinGamble(workspaceId, spinId, body = {}, rng = crypto.ran
         const next = { ...lockedMods };
         if (gamble.booster_type === "tier_up") next.tier_up = Math.min(10, (lockedMods.tier_up || 0) + value);
         else if (gamble.booster_type === "miss_shield") next.miss_shield = Math.min(50, (lockedMods.miss_shield || 0) + value);
-        else next.bank_multiplier = Math.min(1000, (lockedMods.bank_multiplier || 1) * value);
+        else {
+          // Stack the multiplier and keep whichever window has more spins left.
+          next.bank_multiplier = Math.min(1000, (lockedMods.bank_multiplier || 1) * value);
+          next.bank_multiplier_spins_left = Math.max(lockedMods.bank_multiplier_spins_left || 0, gamble.window || 0);
+        }
         patch.next_spin_modifiers = next;
       }
       await client.query(
@@ -1951,6 +1974,11 @@ function buildBoosterOutcome(normalized, rng) {
     status: "open",
     history: [],
   };
+  // bank_multiplier is window-based (no coin flip): climbing trades spins for size.
+  if (boosterType === "bank_multiplier") {
+    gamble.windows = BANK_MULTIPLIER_WINDOWS;
+    gamble.window = BANK_MULTIPLIER_WINDOWS[0];
+  }
   return floorResult("booster", {
     selected: fakeBoosterReward(boosterType, gamble),
     gamble,
@@ -2787,9 +2815,22 @@ async function spin(workspaceId, userId) {
     const netPointChange = lockedSpinCost - pointsDelta;
     // Consume each banked modifier only when it actually fired, so unused
     // boosters keep waiting for the spin they apply to.
+    let nextBankMultiplier = incomingMods.bank_multiplier;
+    let nextBankMultiplierSpins = incomingMods.bank_multiplier_spins_left;
+    if (bankMultiplier > 1) {
+      if (bankDelta > 0) {
+        // Landed a bank builder inside the window - paid out, now cleared.
+        nextBankMultiplier = 1;
+        nextBankMultiplierSpins = 0;
+      } else {
+        // Used one of the window's spins without a bank builder; lapses at zero.
+        nextBankMultiplierSpins = Math.max(0, (incomingMods.bank_multiplier_spins_left || 0) - 1);
+        if (nextBankMultiplierSpins <= 0) nextBankMultiplier = 1;
+      }
+    }
     const nextModifiers = normalizeNextSpinModifiers({
-      // bank multiplier clears once it has paid out a bank builder
-      bank_multiplier: (bankMultiplier > 1 && bankDelta > 0) ? 1 : incomingMods.bank_multiplier,
+      bank_multiplier: nextBankMultiplier,
+      bank_multiplier_spins_left: nextBankMultiplierSpins,
       // tier_up clears once a jackpot has consumed it
       tier_up: effectiveOutcome.jackpot_hit ? 0 : incomingMods.tier_up,
       // one shield is spent per miss it converts

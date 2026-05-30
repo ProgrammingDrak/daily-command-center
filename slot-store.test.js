@@ -1204,6 +1204,10 @@ function gambleSpinPool(boosterType = "bank_multiplier", ladder = [2, 3, 5, 10])
     status: "open",
     history: [],
   };
+  if (boosterType === "bank_multiplier") {
+    gamble.windows = [5, 3, 2, 1];
+    gamble.window = 5;
+  }
   return createMockPool({
     spinRows: [{
       id: 7,
@@ -1216,33 +1220,68 @@ function gambleSpinPool(boosterType = "bank_multiplier", ladder = [2, 3, 5, 10])
   });
 }
 
-test("gamble risk climbs the ladder and bank locks the multiplier onto the next spin", async () => {
+test("bank multiplier climbs freely, trading window spins for a bigger multiplier", async () => {
   const mockPool = gambleSpinPool();
   const store = loadStoreWithMock(mockPool);
 
-  // advance_odds 0.5 -> rng 0 succeeds, climbs rung 0 (2x) to rung 1 (3x).
-  const afterRisk = await store.chooseSpinGamble("ws-1", 7, { action: "risk" }, () => 0);
+  // Climbing is free (no coin flip): 2x/5 -> 3x/3 (rng is irrelevant here).
+  const afterRisk = await store.chooseSpinGamble("ws-1", 7, { action: "risk" }, () => 999999);
+  const g = afterRisk.reward_snapshot.slot_stages.gamble;
   assert.equal(afterRisk.status, "gamble");
-  assert.equal(afterRisk.reward_snapshot.slot_stages.gamble.rung, 1);
-  assert.equal(afterRisk.reward_snapshot.slot_stages.gamble.multiplier, 3);
-  assert.equal(afterRisk.reward_snapshot.slot_stages.gamble.status, "open");
+  assert.equal(g.rung, 1);
+  assert.equal(g.multiplier, 3);
+  assert.equal(g.window, 3);
+  assert.equal(g.status, "open");
 
-  // bank -> the 3x is locked onto next_spin_modifiers and the spin is resolved.
+  // Bank -> locks 3x with a 3-spin window onto next_spin_modifiers.
   const afterBank = await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
   assert.equal(afterBank.status, "awarded");
-  assert.equal(afterBank.reward_snapshot.slot_stages.gamble.status, "banked");
   assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier, 3);
+  assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier_spins_left, 3);
 });
 
-test("gamble risk can bust to nothing", async () => {
+test("climbing the bank multiplier all the way reaches 10x with a single spin", async () => {
   const mockPool = gambleSpinPool();
   const store = loadStoreWithMock(mockPool);
+  await store.chooseSpinGamble("ws-1", 7, { action: "risk" }); // 3x/3
+  await store.chooseSpinGamble("ws-1", 7, { action: "risk" }); // 5x/2
+  const top = await store.chooseSpinGamble("ws-1", 7, { action: "risk" }); // 10x/1
+  const g = top.reward_snapshot.slot_stages.gamble;
+  assert.equal(g.multiplier, 10);
+  assert.equal(g.window, 1);
+});
 
-  // rng above the advance threshold -> bust.
-  const after = await store.chooseSpinGamble("ws-1", 7, { action: "risk" }, () => 999999);
-  assert.equal(after.status, "miss");
-  assert.equal(after.reward_snapshot.slot_stages.gamble.status, "busted");
-  assert.equal(after.reward_snapshot.slot_stages.gamble.multiplier, 1);
+test("a banked bank multiplier lapses if no bank builder lands in its window", async () => {
+  const mockPool = createMockPool({
+    pointBalance: 1000,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      jackpot_hit_rate: 0, miss_rate: 0,
+      // force coin outcomes so no bank builder lands
+      floor_weights: { bank: 0, coin: 1, booster: 0, pet: 0, free_spin: 0 },
+      next_spin_modifiers: { bank_multiplier: 2, bank_multiplier_spins_left: 2 },
+    },
+  });
+  const store = loadStoreWithMock(mockPool);
+  await store.spin("ws-1", 1); // window 2 -> 1
+  assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier, 2);
+  assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier_spins_left, 1);
+  await store.spin("ws-1", 1); // window 1 -> 0, multiplier lapses
+  assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier, 1);
+  assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier_spins_left, 0);
+});
+
+test("banking a second bank multiplier stacks the value and keeps the longer window", async () => {
+  const mockPool = gambleSpinPool();
+  // already-queued 2x with 4 spins left
+  mockPool.state.settings.next_spin_modifiers = { bank_multiplier: 2, bank_multiplier_spins_left: 4 };
+  const store = loadStoreWithMock(mockPool);
+  // bank the fresh booster at 2x/5
+  await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
+  assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier, 4); // 2 * 2
+  assert.equal(mockPool.state.settings.next_spin_modifiers.bank_multiplier_spins_left, 5); // max(4, 5)
 });
 
 test("banking a wild_hold booster grants guaranteed jackpot spins", async () => {
