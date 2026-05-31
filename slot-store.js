@@ -14,21 +14,41 @@ const DEFAULT_TARGET_DAILY_SPINS = 28;
 const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
 const DEFAULT_ADVANCEMENT_HOURS_PER_DAY = 5;
 const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
-const DEFAULT_JACKPOT_HIT_RATE = 0.04;
+// Jackpot is the rare headline event, not a near-daily occurrence: ~1 in 100
+// spins. Like a real slot's PAR sheet, the headline symbol owns a tiny slice of
+// the draw while the common "bank" symbol owns the bulk (see SLOT_PAR_SHEET).
+const DEFAULT_JACKPOT_HIT_RATE = 0.01;
 const DEFAULT_FREE_SPIN_TILE_RATE = 0.12;
 // True "nothing happens" outcome. Kept deliberately tiny so the floor is almost
 // always a real outcome - roughly 1 dead spin in 100, by design.
 const DEFAULT_MISS_RATE = 0.01;
 
-// Relative weights for the non-jackpot, non-miss floor. Bank is no longer the
-// default for nearly every spin: it is one of several "small win" outcomes, so
-// each bank hit can be rarer, clustered, and worth more. Tunable per account.
+// Relative weights for the non-jackpot, non-miss floor. Bank is the dominant
+// floor outcome again (the bread-and-butter "small win"); coin/pet are the
+// occasional small wins and booster/free_spin are the rarer "bonus" tiles. This
+// is the weighted-reel-strip model: bank owns most of the draw so it reads as
+// the default, while bonuses stay genuinely scarce. Tunable per account.
 const DEFAULT_FLOOR_WEIGHTS = {
-  bank: 30,
-  coin: 25,
-  booster: 20,
-  pet: 15,
-  free_spin: 10,
+  bank: 60,
+  coin: 18,
+  pet: 10,
+  booster: 8,
+  free_spin: 4,
+};
+// PAR sheet (single source of truth for the tuned odds). With the defaults
+// above - jackpot 1%, miss 1%, floor weights summing to 100 - a spin lands as
+// roughly: bank 58.8%, coin 17.6%, pet/gem 9.8%, booster 7.8%, free_spin 3.9%,
+// jackpot 1.0%, miss 1.0%. Bank ends up ~7.5x more common than boosters and
+// ~59x more common than jackpots. The distribution test in slot-store.test.js
+// re-derives these realized frequencies and asserts they stay on target.
+const SLOT_PAR_SHEET = {
+  jackpot: 0.010,
+  bank: 0.588,
+  coin: 0.176,
+  pet: 0.098,
+  booster: 0.078,
+  free_spin: 0.039,
+  miss: 0.010,
 };
 // Coin outcome: either refund the spin (cashback) or drop a pile of points.
 const DEFAULT_COIN_CASHBACK_CHANCE = 0.4;
@@ -3294,5 +3314,9 @@ module.exports = {
     freeSpinTileHits,
     missHits,
     evaluateJackpotBoard,
+    SLOT_PAR_SHEET,
+    DEFAULT_FLOOR_WEIGHTS,
+    DEFAULT_JACKPOT_HIT_RATE,
+    DEFAULT_MISS_RATE,
   },
 };
