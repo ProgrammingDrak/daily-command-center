@@ -891,17 +891,17 @@ test("default reward tier percentages add up to 100", () => {
   assert.equal(total, 100);
 });
 
-test("guided economy profile derives hidden spin cost, bankroll pacing, and rare jackpot defaults", () => {
+test("guided economy profile derives goal, bankroll pacing, and rare jackpot defaults", () => {
   const store = loadStoreWithMock(createMockPool());
   const settings = store._test.normalizeSlotSettings({
     economy_profile: {
-      maintenance_hours_per_day: 4,
-      advancement_hours_per_day: 5,
       monthly_discretionary_cents: 30000,
     },
   });
 
-  assert.equal(settings.spin_cost, 15);
+  // spin_cost is a cold-start placeholder; the live cost is learned from the
+  // user's points-per-day history (see learnedSpinCost), not derived here.
+  assert.equal(settings.spin_cost, 25);
   assert.equal(settings.monthly_goal_cents, 30000);
   assert.equal(settings.economy_profile.target_daily_spins, 28);
   assert.equal(settings.jackpot_hit_rate, 0.01);
@@ -915,26 +915,60 @@ test("taskPointTier uses the highest earning matched tag and keeps OOO at zero",
   const store = loadStoreWithMock(createMockPool());
   const settings = {
     point_tag_tiers: {
-      maintenance: ["chores"],
-      advancement: ["workout"],
-      light: ["email"],
+      half: ["chores"],
+      full: ["workout"],
+      quarter: ["email"],
       none: ["scrolling"],
     },
   };
 
   assert.deepEqual(store._test.taskPointTier({ tags: ["chores"] }, settings).multiplier, 0.5);
+  assert.deepEqual(store._test.taskPointTier({ tags: ["email"] }, settings).multiplier, 0.25);
   assert.deepEqual(store._test.taskPointTier({ tags: ["scrolling", "workout"] }, settings).multiplier, 1);
+  // An unsorted tag (in no bucket) defaults to full points.
+  assert.deepEqual(store._test.taskPointTier({ tags: ["unsorted-tag"] }, settings).multiplier, 1);
   assert.deepEqual(store._test.taskPointTier({ type: "meeting", tags: ["chores"] }, settings).multiplier, 0.5);
   assert.deepEqual(store._test.taskPointTier({ type: "ooo", tags: ["workout"] }, settings).multiplier, 0);
 });
 
-test("selectThreeStageOutcome offers separate die choices when first source-tier bucket is empty", () => {
+test("normalizePointTagTiers folds retired lane names onto point buckets", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const normalized = store._test.normalizePointTagTiers({
+    advancement: ["career"],
+    maintenance: ["chores"],
+    light: ["email"],
+    none: ["scrolling"],
+  });
+
+  assert.deepEqual(normalized.full, ["career"]);
+  assert.deepEqual(normalized.half, ["chores"]);
+  assert.deepEqual(normalized.quarter, ["email"]);
+  assert.deepEqual(normalized.none, ["scrolling"]);
+  // A tag lives in exactly one bucket even if it appears under two names.
+  const deduped = store._test.normalizePointTagTiers({ full: ["x"], advancement: ["x"] });
+  assert.deepEqual(deduped.full, ["x"]);
+});
+
+test("spinCostForDailyPoints prices ~20 spins/day with 10% leniency, defaults under MIN_DAYS, and clamps", () => {
+  const store = loadStoreWithMock(createMockPool());
+  // Fewer than 3 days of history → cold-start default (25).
+  assert.equal(store._test.spinCostForDailyPoints(1000, 2), 25);
+  // 400 pts/day → 400 * 0.9 / 20 = 18 → rounds to 20.
+  assert.equal(store._test.spinCostForDailyPoints(400, 7), 20);
+  // 2000 pts/day → 90 → rounds to 90.
+  assert.equal(store._test.spinCostForDailyPoints(2000, 14), 90);
+  // Tiny average clamps up to the 5-point floor; huge average clamps to 250.
+  assert.equal(store._test.spinCostForDailyPoints(10, 5), 5);
+  assert.equal(store._test.spinCostForDailyPoints(1000000, 14), 250);
+});
+
+test("selectThreeStageOutcome resolves a fallback reward and flags an awaiting dice re-roll when the first bucket is empty", () => {
   const store = loadStoreWithMock(createMockPool());
   const rolls = [0, 0, 0, 0, 0, 0, 0];
   const rng = max => Math.min(max - 1, rolls.shift() || 0);
   const outcome = store._test.selectThreeStageOutcome([
-    { id: 1, title: "Same source new tier", kind: "free", active: true, eligible: true, payment_source: "sponsored", tier_id: "tier_ii", chance_shares: 3 },
-    { id: 2, title: "Same tier new source", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 5 },
+    { id: 1, title: "Sponsored Tier II", kind: "free", active: true, eligible: true, payment_source: "sponsored", tier_id: "tier_ii", chance_shares: 3 },
+    { id: 2, title: "Free Tier I", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 5 },
   ], {
     jackpot_hit_rate: 1,
     payment_source_weights: { self: 0, sponsored: 1, free: 1 },
@@ -945,18 +979,68 @@ test("selectThreeStageOutcome offers separate die choices when first source-tier
   }, rng);
 
   assert.equal(outcome.jackpot_hit, true);
+  // The spin lands a guaranteed-winnable fallback (sponsored/Tier II) but the
+  // empty first roll (sponsored/Tier I) is flagged so the player can re-roll.
   assert.equal(outcome.empty_bucket, false);
-  assert.equal(outcome.reroll_credit, false);
-  assert.equal(outcome.selected.id, 2);
+  assert.equal(outcome.selected.id, 1);
+  assert.equal(outcome.source.id, "sponsored");
+  assert.equal(outcome.tier.id, "tier_ii");
   assert.equal(outcome.dice_reroll.reason, "empty_bucket");
+  assert.equal(outcome.dice_reroll.awaiting, true);
   assert.equal(outcome.dice_reroll.from.payment_source.id, "sponsored");
   assert.equal(outcome.dice_reroll.from.tier.id, "tier_i");
-  assert.equal(outcome.dice_reroll.choices.source.reward.id, 2);
-  assert.equal(outcome.dice_reroll.choices.source.payment_source.id, "free");
-  assert.equal(outcome.dice_reroll.choices.source.tier.id, "tier_i");
-  assert.equal(outcome.dice_reroll.choices.tier.reward.id, 1);
-  assert.equal(outcome.dice_reroll.choices.tier.payment_source.id, "sponsored");
-  assert.equal(outcome.dice_reroll.choices.tier.tier.id, "tier_ii");
+  // No precomputed per-die choices any more - the re-roll is genuine.
+  assert.equal(outcome.dice_reroll.choices, undefined);
+});
+
+test("selectThreeStageOutcome pays a bank consolation when no bucket is winnable", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const rng = () => 0;
+  const outcome = store._test.selectThreeStageOutcome([], {
+    jackpot_hit_rate: 1,
+    payment_source_weights: { self: 1, sponsored: 0, free: 0 },
+    reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
+  }, rng);
+
+  assert.equal(outcome.empty_bucket, true);
+  assert.equal(outcome.jackpot_hit, false);
+  assert.equal(outcome.dice_reroll, null);
+});
+
+test("rollDieReroll re-rolls one die, holds the other, and reports the landed bucket", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const rewards = [
+    { id: 1, kind: "free", active: true, eligible: true, payment_source: "sponsored", tier_id: "tier_ii", chance_shares: 3 },
+    { id: 2, kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 5 },
+  ];
+  const settings = {
+    payment_source_weights: { self: 0, sponsored: 1, free: 1 },
+    reward_tiers: [
+      { id: "tier_i", label: "Tier I", weight: 1, active: true },
+      { id: "tier_ii", label: "Tier II", weight: 1, active: true },
+    ],
+  };
+  const from = {
+    payment_source: { id: "sponsored", label: "Sponsored", weight: 1 },
+    tier: { id: "tier_i", label: "Tier I", weight: 1 },
+  };
+
+  // Re-roll the paid-by die onto "free" (same tier) -> finds reward 2.
+  const srcRoll = store._test.rollDieReroll(rewards, settings, from, "source", () => 1);
+  assert.equal(srcRoll.source.id, "free");
+  assert.equal(srcRoll.tier.id, "tier_i");
+  assert.deepEqual(srcRoll.bucket.map(r => r.id), [2]);
+
+  // Re-roll the tier die onto Tier II (same payer) -> finds reward 1.
+  const tierRoll = store._test.rollDieReroll(rewards, settings, from, "tier", () => 1);
+  assert.equal(tierRoll.source.id, "sponsored");
+  assert.equal(tierRoll.tier.id, "tier_ii");
+  assert.deepEqual(tierRoll.bucket.map(r => r.id), [1]);
+
+  // A genuine roll can land back on the same empty bucket -> caller re-prompts.
+  const emptyRoll = store._test.rollDieReroll(rewards, settings, from, "source", () => 0);
+  assert.equal(emptyRoll.source.id, "sponsored");
+  assert.equal(emptyRoll.bucket.length, 0);
 });
 
 test("bank screen payout values each BANK tile from the monthly goal, not current bank balance", () => {

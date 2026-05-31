@@ -42,13 +42,13 @@ test("meetings breaks and OOO earn zero", () => {
   }
 });
 
-test("maintenance, light, and no-point multipliers adjust the minute base", () => {
-  const maintenance = scoreTaskPoints({ duration_minutes: 60, point_tier: "maintenance", point_multiplier: 0.5 });
-  const light = scoreTaskPoints({ duration_minutes: 60, point_tier: "light", point_multiplier: 0.25 });
+test("half, quarter, and no-point multipliers adjust the minute base", () => {
+  const half = scoreTaskPoints({ duration_minutes: 60, point_tier: "half", point_multiplier: 0.5 });
+  const quarter = scoreTaskPoints({ duration_minutes: 60, point_tier: "quarter", point_multiplier: 0.25 });
   const none = scoreTaskPoints({ duration_minutes: 60, point_tier: "none", point_multiplier: 0 });
 
-  assert.equal(maintenance.awardPoints, 30);
-  assert.equal(light.awardPoints, 15);
+  assert.equal(half.awardPoints, 30);
+  assert.equal(quarter.awardPoints, 15);
   assert.equal(none.awardPoints, 0);
   assert.equal(none.eligible, false);
 });
