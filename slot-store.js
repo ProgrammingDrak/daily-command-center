@@ -18,6 +18,12 @@ const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
 // spins. Like a real slot's PAR sheet, the headline symbol owns a tiny slice of
 // the draw while the common "bank" symbol owns the bulk (see SLOT_PAR_SHEET).
 const DEFAULT_JACKPOT_HIT_RATE = 0.01;
+// Every jackpot lands as a 3-in-a-row (1 spin) by default. From there it can
+// climb to a longer run, and each climb clears an independent roll at this rate.
+// With the 1-in-100 jackpot rate above, a 10% climb rate makes a 3-in-a-row
+// ~1/100, a 4-in-a-row (2 spins) ~1/1000, and a 5-in-a-row (3 spins) ~1/10000 -
+// each tier a clean decade rarer than the last.
+const DEFAULT_JACKPOT_UPGRADE_RATE = 0.1;
 const DEFAULT_FREE_SPIN_TILE_RATE = 0.12;
 // True "nothing happens" outcome. Kept deliberately tiny so the floor is almost
 // always a real outcome - roughly 1 dead spin in 100, by design.
@@ -106,13 +112,18 @@ const PAYLINES = [
   [10, 11, 12], [11, 12, 13], [12, 13, 14],
   [0, 5, 10], [1, 6, 11], [2, 7, 12], [3, 8, 13], [4, 9, 14],
 ];
-const JACKPOT_PAYLINES = [
-  [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14],
-  [0, 1, 2, 3], [1, 2, 3, 4],
-  [5, 6, 7, 8], [6, 7, 8, 9],
-  [10, 11, 12, 13], [11, 12, 13, 14],
-  ...PAYLINES,
-];
+// Jackpot win lines grouped by how many guaranteed jackpot spins they pay. The
+// engine rolls the tier first (rollJackpotSpins) and the board is then laid out
+// to show a real run of the matching length, so the odds stay tunable instead of
+// being a side effect of which line happens to get picked.
+//   1 spin  -> 3-in-a-row (horizontal or vertical)
+//   2 spins -> 4-in-a-row
+//   3 spins -> 5-in-a-row
+const JACKPOT_PAYLINES_BY_SPINS = {
+  3: [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]],
+  2: [[0, 1, 2, 3], [1, 2, 3, 4], [5, 6, 7, 8], [6, 7, 8, 9], [10, 11, 12, 13], [11, 12, 13, 14]],
+  1: PAYLINES,
+};
 const SLOT_SYMBOLS = new Set(["MISS", "BANK", "JACKPOT", "SPIN", "COIN", "STAR", "PAW", "GEM"]);
 // "Small win" floor outcomes that pay when their icon forms a 3-in-a-row line.
 const SMALL_WIN_SYMBOLS = new Set(["COIN", "STAR", "PAW", "GEM"]);
@@ -398,6 +409,10 @@ function normalizeJackpotHitRate(value) {
   return normalizeRate(value, DEFAULT_JACKPOT_HIT_RATE);
 }
 
+function normalizeJackpotUpgradeRate(value) {
+  return normalizeRate(value, DEFAULT_JACKPOT_UPGRADE_RATE);
+}
+
 function normalizeBankBuilderHitRate(value) {
   return normalizeRate(value, DEFAULT_BANK_BUILDER_HIT_RATE);
 }
@@ -463,6 +478,7 @@ function deriveEconomySettings(profile = {}) {
     },
     bank_builder_hit_rate: DEFAULT_BANK_BUILDER_HIT_RATE,
     jackpot_hit_rate: DEFAULT_JACKPOT_HIT_RATE,
+    jackpot_upgrade_rate: DEFAULT_JACKPOT_UPGRADE_RATE,
     free_spin_tile_rate: DEFAULT_FREE_SPIN_TILE_RATE,
     miss_rate: DEFAULT_MISS_RATE,
   };
@@ -797,6 +813,7 @@ function normalizeSlotSettings(settings = {}) {
     point_tag_tiers: normalizePointTagTiers(raw.point_tag_tiers || raw.pointTagTiers),
     spin_cost: clampInt(raw.spin_cost ?? raw.spinCost ?? derived.spin_cost, 5, 250),
     jackpot_hit_rate: normalizeJackpotHitRate(raw.jackpot_hit_rate ?? raw.jackpotHitRate ?? derived.jackpot_hit_rate),
+    jackpot_upgrade_rate: normalizeJackpotUpgradeRate(raw.jackpot_upgrade_rate ?? raw.jackpotUpgradeRate ?? derived.jackpot_upgrade_rate),
     bank_builder_hit_rate: normalizeBankBuilderHitRate(raw.bank_builder_hit_rate ?? raw.bankBuilderHitRate ?? derived.bank_builder_hit_rate),
     free_spin_tile_rate: normalizeRate(raw.free_spin_tile_rate ?? raw.freeSpinTileRate ?? derived.free_spin_tile_rate, derived.free_spin_tile_rate),
     miss_rate: normalizeRate(raw.miss_rate ?? raw.missRate ?? derived.miss_rate, derived.miss_rate),
@@ -1905,6 +1922,21 @@ function jackpotHits(settings, rng = crypto.randomInt) {
   return rng(1000000) < Math.floor(rate * 1000000);
 }
 
+// Once a jackpot lands, decide how long its winning run is (and therefore how many
+// guaranteed jackpot spins it pays). It always starts as a 3-in-a-row (1 spin);
+// each climb to a longer run clears an independent jackpot_upgrade_rate roll. With
+// the tuned 1% jackpot rate and a 10% climb rate this realizes ~1/100 for a
+// 3-in-a-row, ~1/1000 for a 4-in-a-row (2 spins), and ~1/10000 for a 5-in-a-row
+// (3 spins). Each rng draw happens only when the rate is a genuine coin flip, so a
+// 0 rate (e.g. a credit-funded spin) returns 1 without disturbing the rng stream.
+function rollJackpotSpins(settings, rng = crypto.randomInt) {
+  const rate = normalizeSlotSettings(settings).jackpot_upgrade_rate;
+  const climbs = () => rate > 0 && (rate >= 1 || rng(1000000) < Math.floor(rate * 1000000));
+  if (!climbs()) return 1; // 3-in-a-row
+  if (!climbs()) return 2; // 4-in-a-row
+  return 3;                // 5-in-a-row
+}
+
 function bankBuilderHits(settings, rng = crypto.randomInt) {
   const rate = normalizeSlotSettings(settings).bank_builder_hit_rate;
   if (rate <= 0) return false;
@@ -2329,9 +2361,14 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   }
   const { source, tier, bucket } = finalAttempt;
   const selected = selectedChoice ? selectedChoice.reward : chooseWeighted(bucket, "chance_shares", rng);
+  // Roll the run length AFTER the reward is chosen so the existing source/tier/
+  // reward draws keep their positions in the rng stream.
+  const jackpotSpins = rollJackpotSpins(normalized, rng);
   return {
     outcome: "jackpot",
     jackpot_hit: true,
+    jackpot_spins: jackpotSpins,
+    jackpot_level: jackpotSpins,
     bank_builder_hit: bankHit,
     free_spin_hit: false,
     selected,
@@ -2593,7 +2630,7 @@ function fillCosmetic(board, excludeSet) {
   }
 }
 
-function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
+function buildSpinScreen(selected, account, bankUsage, screenBankHit, jackpotSpins = 1) {
   const board = Array.from({ length: SLOT_CELL_COUNT }, () => null);
   const protectedCells = new Set();
   const selectedSymbol = rewardSymbol(selected);
@@ -2603,8 +2640,10 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit) {
   let payline = [];
 
   if (!isMiss && selectedSymbol === "JACKPOT") {
-    // Jackpot keeps its dedicated paylines (3-5 in a row drives the level).
-    const line = JACKPOT_PAYLINES[crypto.randomInt(JACKPOT_PAYLINES.length)];
+    // The engine already rolled the tier; lay a run of the matching length so the
+    // win reads as a real 3/4/5-in-a-row paying 1/2/3 spins.
+    const lines = JACKPOT_PAYLINES_BY_SPINS[jackpotSpins] || JACKPOT_PAYLINES_BY_SPINS[1];
+    const line = lines[crypto.randomInt(lines.length)];
     payline = [...line];
     line.forEach(i => { board[i] = "JACKPOT"; protectedCells.add(i); });
     exclude.add("JACKPOT");
@@ -2762,7 +2801,10 @@ async function spin(workspaceId, userId) {
   const drawPool = state.rewards.filter(r => r.kind !== "miss" && !r.lifespan_exhausted);
   let outcome = selectThreeStageOutcome(
     drawPool,
-    hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 } : settings
+    // A credit-funded spin is a guaranteed single jackpot: force the hit and pin
+    // the upgrade rate to 0 so it can never climb to a multi-spin run and mint
+    // fresh credits (which would make banked credits regenerate, not count down).
+    hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, jackpot_upgrade_rate: 0, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 } : settings
   );
   let selected = outcome.selected;
   const client = await pool.connect();
@@ -2786,7 +2828,7 @@ async function spin(workspaceId, userId) {
       missShieldUsed = true;
     }
     const canHitScreenBank = outcome.bank_builder_hit === true;
-    const baseScreen = buildSpinScreen(selected, { ...account, settings: lockedSettings }, state.bankUsage, canHitScreenBank);
+    const baseScreen = buildSpinScreen(selected, { ...account, settings: lockedSettings }, state.bankUsage, canHitScreenBank, outcome.jackpot_spins || 1);
     const screen = applyTileOverrideToScreen(
       baseScreen,
       lockedSettings.next_spin_tile_override,
@@ -2834,7 +2876,10 @@ async function spin(workspaceId, userId) {
     // Disarm once the armed tier is exhausted.
     const nextActiveMultiplier = (armedMultiplier > 1 && (charges[armedMultiplier] || 0) > 0) ? armedMultiplier : 0;
     const jackpotSpinCount = effectiveOutcome.jackpot_hit ? screenJackpot.spins : 0;
-    let bonusJackpotSpinCredits = Math.max(0, jackpotSpinCount - 1);
+    // Only an organically-won multi-spin jackpot (4/5-in-a-row) banks extra spins.
+    // A credit-funded spin already forces a single 3-in-a-row, but guard here too so
+    // banked credits strictly count down regardless of how the board reads back.
+    let bonusJackpotSpinCredits = usedJackpotSpinCredit ? 0 : Math.max(0, jackpotSpinCount - 1);
 
     // Immediate-effect floor outcomes (no confirmation needed).
     let pointsDelta = 0;
@@ -3313,6 +3358,7 @@ module.exports = {
     bankBuilderHits,
     freeSpinTileHits,
     missHits,
+    rollJackpotSpins,
     evaluateJackpotBoard,
     SLOT_PAR_SHEET,
     DEFAULT_FLOOR_WEIGHTS,
