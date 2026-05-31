@@ -55,7 +55,13 @@ function buildActualView(){
           '</div>'+
         '</div>'+
         (hasActual?'<div class="act-diff '+diffClass+'">'+diffLabel+'</div>':'')+
+        // Let incomplete tasks be rescheduled straight from the Actual view --
+        // this is the default view for past days, so it's how you carry a
+        // missed task forward to today / tomorrow.
+        (!isMeeting(ev)&&!done?'<button class="btn-push-tmr act-push" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
       '</div>';
+    const pb=item.querySelector(".btn-push-tmr");
+    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else if(typeof pushTask==="function")pushTask(pb.dataset.pushId);});
     div.appendChild(item);
   });
 

@@ -450,6 +450,11 @@ function _findTaskBlockForDate(id,dateStr,ev){
     if(exact)return exact;
     const undated=matches.find(b=>!b.date);
     if(undated)return undated;
+    // A specific source date was requested but the task has no block on it
+    // (e.g. rescheduling a day-state task off a past day). Do NOT fall back to
+    // matches[0] -- that can be a block we just created on the *target* date,
+    // and deleting it would undo the move. Better to delete nothing.
+    return null;
   }
   return matches[0]||null;
 }
