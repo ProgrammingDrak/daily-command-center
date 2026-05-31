@@ -718,6 +718,66 @@ test("selectThreeStageOutcome turns an unfillable jackpot into a bank-builder co
   assert.equal(outcome.selected.kind, "bank_builder");
 });
 
+test("selectThreeStageOutcome realized distribution matches the PAR sheet (Monte Carlo)", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const { SLOT_PAR_SHEET } = store._test;
+
+  // Seeded PRNG so this statistical check is reproducible run to run. mulberry32
+  // gives a float in [0,1); the adapter returns an int in [0, max) to match the
+  // crypto.randomInt(max) contract the engine expects.
+  let a = 0x9e3779b9 >>> 0;
+  const prng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const rng = max => Math.floor(prng() * max);
+
+  // A jackpot only registers when a reward bucket is fillable, so collapse the
+  // draw to a single source + tier holding one eligible reward. The jackpot /
+  // miss rates and floor weights are left at their tuned defaults - those are
+  // exactly what this test certifies.
+  const settings = {
+    payment_source_weights: { self: 0, sponsored: 0, free: 1 },
+    reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
+  };
+  const rewards = [
+    { id: 1, title: "Jackpot prize", kind: "small_paid", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 1, value_cents: 500 },
+  ];
+
+  const N = 100000;
+  const counts = {};
+  for (let i = 0; i < N; i++) {
+    const out = store._test.selectThreeStageOutcome(rewards, settings, rng).outcome;
+    // The "pet" floor bucket also yields collectible gems; the PAR sheet folds
+    // the two together under "pet".
+    const key = out === "collectible" ? "pet" : out;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+
+  // +-1.5 percentage points. At N=100k the worst-case standard error is ~0.16%,
+  // so this is a ~9x margin: tight enough to catch a miscalibration, loose
+  // enough never to flake.
+  const tolerance = 0.015;
+  for (const [kind, target] of Object.entries(SLOT_PAR_SHEET)) {
+    const actual = (counts[kind] || 0) / N;
+    assert.ok(
+      Math.abs(actual - target) <= tolerance,
+      `${kind}: realized ${(actual * 100).toFixed(2)}% vs PAR ${(target * 100).toFixed(2)}% (tolerance +-${tolerance * 100}pts)`
+    );
+  }
+  // Bank must be the clear bread-and-butter: more common than every other
+  // outcome combined, and far more common than boosters or jackpots.
+  assert.ok(counts.bank > N / 2, `bank should dominate (>50%), got ${counts.bank}/${N}`);
+  assert.ok(counts.bank > 7 * (counts.booster || 0), "bank should be ~7x+ more common than boosters");
+  assert.ok(counts.bank > 40 * (counts.jackpot || 0), "bank should be far more common than jackpots");
+  // No outcome should appear that the PAR sheet does not account for.
+  for (const kind of Object.keys(counts)) {
+    assert.ok(kind in SLOT_PAR_SHEET, `unexpected outcome kind: ${kind}`);
+  }
+});
+
 test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => {
   const store = loadStoreWithMock(createMockPool());
   const rolls = [0, 0, 5];
@@ -780,7 +840,7 @@ test("guided economy profile derives hidden spin cost, bankroll pacing, and rare
   assert.equal(settings.spin_cost, 15);
   assert.equal(settings.monthly_goal_cents, 30000);
   assert.equal(settings.economy_profile.target_daily_spins, 28);
-  assert.equal(settings.jackpot_hit_rate, 0.04);
+  assert.equal(settings.jackpot_hit_rate, 0.01);
   assert.equal(settings.bank_builder_hit_rate, 0.9);
   assert.equal(settings.free_spin_tile_rate, 0.12);
   assert.equal(settings.miss_rate, 0.01);
