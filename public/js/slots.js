@@ -74,10 +74,10 @@
     either_partner: "Either partner"
   };
   const POINT_TAG_TIERS = [
-    { id: "maintenance", label: "Maintenance", hint: "Half points" },
-    { id: "advancement", label: "Advancement", hint: "Full points" },
-    { id: "light", label: "Light", hint: "Quarter points" },
-    { id: "none", label: "No points", hint: "Zero" }
+    { id: "none", label: "No points", hint: "0×" },
+    { id: "quarter", label: "Quarter points", hint: "¼×" },
+    { id: "half", label: "Half points", hint: "½×" },
+    { id: "full", label: "Full points", hint: "1×" }
   ];
   const SPIN_SYMBOLS = ["COIN","BANK","STAR","JACKPOT","PAW","COIN","BANK","GEM","SPIN","COIN"];
   const FILLER_SYMBOLS = ["COIN","COIN","BANK","STAR","PAW","GEM"];
@@ -794,33 +794,22 @@
     if(!slotState) return;
     const constants = slotState.constants || {};
     const spinCost = constants.spinCost || 1;
+    const basis = constants.spinCostBasis || {};
     const profile = constants.economyProfile || {};
-    const unlocks = constants.customizationUnlocks || {};
-    const maintenanceHoursInput = document.getElementById("slot-maintenance-hours");
-    const advancementHoursInput = document.getElementById("slot-advancement-hours");
     const monthlyBudgetInput = document.getElementById("slot-monthly-discretionary");
-    const maintenanceNotes = document.getElementById("slot-maintenance-notes");
-    const advancementNotes = document.getElementById("slot-advancement-notes");
     const penalty = document.getElementById("slot-shortfall-penalty");
-    const maintenanceHours = profile.maintenance_hours_per_day == null ? 4 : profile.maintenance_hours_per_day;
-    const advancementHours = profile.advancement_hours_per_day == null ? 5 : profile.advancement_hours_per_day;
     const monthlyDiscretionary = profile.monthly_discretionary_cents == null
       ? (constants.monthlyGoalCents || 10000)
       : profile.monthly_discretionary_cents;
-    if(maintenanceHoursInput && document.activeElement !== maintenanceHoursInput) maintenanceHoursInput.value = maintenanceHours;
-    if(advancementHoursInput && document.activeElement !== advancementHoursInput) advancementHoursInput.value = advancementHours;
     if(monthlyBudgetInput && document.activeElement !== monthlyBudgetInput) monthlyBudgetInput.value = ((monthlyDiscretionary || 0) / 100).toFixed(0);
-    if(maintenanceNotes && document.activeElement !== maintenanceNotes) maintenanceNotes.value = profile.maintenance_notes || "";
-    if(advancementNotes && document.activeElement !== advancementNotes) advancementNotes.value = profile.advancement_notes || "";
     if(penalty && document.activeElement !== penalty) penalty.value = constants.shortfallPenalty || "";
-    setText("slot-current-cost", "Daily rhythm set");
-    setText("slot-spin-cost-line", "Spin when your rhythm fills the meter");
+    setText("slot-current-cost", "Spin cost: " + spinCost + " pts");
+    const target = basis.targetDailySpins || 20;
+    setText("slot-spin-cost-line", basis.learned
+      ? "Learned from ~" + (basis.avgDailyPoints || 0) + " pts/day over " + (basis.windowDays || 14) + " days, aiming for ~" + target + " spins/day."
+      : "Default until you have a few days of points; then it learns your ~" + target + " spins/day pace.");
     setText("slot-current-goal", "Sweet treats budget: " + money(monthlyDiscretionary || 0));
     setText("slot-rhythm-summary", (constants.profileSummary && constants.profileSummary.dailyRhythm) || "A solid day earns a lot of spins.");
-    const tagPanel = document.getElementById("slot-tag-sorting-panel");
-    if(tagPanel) tagPanel.hidden = !unlocks.tag_sorting;
-    const lockedPanel = document.getElementById("slot-tag-sorting-locked");
-    if(lockedPanel) lockedPanel.hidden = !!unlocks.tag_sorting;
     renderPointTagSorting();
     renderTileOverride();
   }
@@ -919,29 +908,20 @@
   }
 
   async function saveSettings(){
-    const maintenanceHoursInput = document.getElementById("slot-maintenance-hours");
-    const advancementHoursInput = document.getElementById("slot-advancement-hours");
     const monthlyBudgetInput = document.getElementById("slot-monthly-discretionary");
-    const maintenanceNotes = document.getElementById("slot-maintenance-notes");
-    const advancementNotes = document.getElementById("slot-advancement-notes");
     const penalty = document.getElementById("slot-shortfall-penalty");
-    const maintenanceHours = Math.max(0, Math.min(16, parseFloat(maintenanceHoursInput && maintenanceHoursInput.value) || 0));
-    const advancementHours = Math.max(0, Math.min(16, parseFloat(advancementHoursInput && advancementHoursInput.value) || 0));
     const monthlyDiscretionaryCents = Math.max(100, Math.min(1000000, Math.round((parseFloat(monthlyBudgetInput && monthlyBudgetInput.value) || 1) * 100)));
     try {
+      // Reward tiers are saved separately by the tier editor, so they are not sent
+      // here: an off-100% tier total must never block saving the budget or buckets.
       await api("/api/slot/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           economy_profile: {
-            maintenance_hours_per_day: maintenanceHours,
-            advancement_hours_per_day: advancementHours,
-            monthly_discretionary_cents: monthlyDiscretionaryCents,
-            maintenance_notes: maintenanceNotes ? maintenanceNotes.value : "",
-            advancement_notes: advancementNotes ? advancementNotes.value : ""
+            monthly_discretionary_cents: monthlyDiscretionaryCents
           },
           point_tag_tiers: pointTagTierDraft || (slotState.constants && slotState.constants.pointTagTiers) || {},
-          reward_tiers: rewardTiers(),
           shortfall_penalty: penalty ? penalty.value : ""
         })
       });
@@ -998,19 +978,12 @@
     const assigned = new Set();
     POINT_TAG_TIERS.forEach(tier => (pointTagTierDraft[tier.id] || []).forEach(id => assigned.add(String(id))));
     const unassigned = tags.filter(tag => !assigned.has(String(tag.id)));
-    const lanes = [
-      ...POINT_TAG_TIERS,
-      { id: "unassigned", label: "Unsorted", hint: "Uses the normal default" }
-    ];
     if(!tags.length){
       board.innerHTML = '<div class="slot-tag-empty">No tags yet. Create tags from the tag manager, then sort them here.</div>';
       return;
     }
-    board.innerHTML = lanes.map(tier => {
-      const laneTags = tier.id === "unassigned"
-        ? unassigned
-        : (pointTagTierDraft[tier.id] || []).map(id => tags.find(tag => String(tag.id) === String(id))).filter(Boolean);
-      return '<div class="slot-tag-lane" data-point-tier="' + esc(tier.id) + '">' +
+    const renderLane = (tier, laneTags, extraClass) =>
+      '<div class="slot-tag-lane' + (extraClass ? ' ' + extraClass : '') + '" data-point-tier="' + esc(tier.id) + '">' +
         '<div class="slot-tag-lane-head"><strong>' + esc(tier.label) + '</strong><span>' + esc(tier.hint) + '</span></div>' +
         '<div class="slot-tag-chip-list">' +
           (laneTags.length ? laneTags.map(tag =>
@@ -1021,7 +994,21 @@
           ).join("") : '<span class="slot-tag-placeholder">Drop tags here</span>') +
         '</div>' +
       '</div>';
-    }).join("");
+    // The tag bank (unsorted) is its own strip; the point buckets sit in a row below it.
+    const bankLane = renderLane(
+      { id: "unassigned", label: "Tag bank", hint: "Unsorted tags earn full points" },
+      unassigned,
+      "slot-tag-bank"
+    );
+    const bucketRow = '<div class="slot-tag-bucket-row">' +
+      POINT_TAG_TIERS.map(tier => {
+        const laneTags = (pointTagTierDraft[tier.id] || [])
+          .map(id => tags.find(tag => String(tag.id) === String(id)))
+          .filter(Boolean);
+        return renderLane(tier, laneTags);
+      }).join("") +
+    '</div>';
+    board.innerHTML = bankLane + bucketRow;
     board.querySelectorAll(".slot-tag-chip").forEach(chip => {
       chip.addEventListener("dragstart", event => {
         event.dataTransfer.setData("text/plain", chip.dataset.tagId);
@@ -1851,25 +1838,33 @@
         ? "Reward spin 1 of " + jackpotSpins + ": roll the dice for tier and payer."
         : "Two dice roll now: one for tier, one for who pays.");
       updateStageTrack("bucket", "spinning");
-      const diceReroll = stages.dice_reroll || null;
-      if(diceReroll && diceReroll.from) {
-        const firstDice = {
-          ...stages,
-          payment_source: diceReroll.from.payment_source,
-          tier: diceReroll.from.tier,
-          empty_bucket: true
-        };
-        const rerollDie = await animateBucketDice(firstDice, {
-          holdForReroll: true,
-          choices: diceReroll.choices || {}
-        });
-        if(!rerollDie) throw new Error("No valid die reroll exists for that bucket");
-        updateStageTrack("bucket", "spinning");
-        setResult((rerollDie === "tier" ? "Tier" : "Paid by") + " die re-rolling. Jackpot stays locked.");
-        spinRow = await chooseDiceReroll(spinRow.id, rerollDie);
-        snap = spinRow.reward_snapshot || {};
-        stages = snap.slot_stages || {};
-        await animateBucketDice(stages, { rerollDie });
+      let diceReroll = stages.dice_reroll || null;
+      if(diceReroll && diceReroll.from && diceReroll.awaiting) {
+        // Empty bucket: let the player re-roll either die, as many times as it
+        // takes. Each pick is a genuine roll that can land on another empty
+        // bucket, so loop while the server keeps the re-roll "awaiting".
+        let rerolls = 0;
+        while(diceReroll && diceReroll.from && diceReroll.awaiting) {
+          const fromDice = {
+            ...stages,
+            payment_source: diceReroll.from.payment_source,
+            tier: diceReroll.from.tier,
+            empty_bucket: true
+          };
+          const rerollDie = await animateBucketDice(fromDice, {
+            holdForReroll: true,
+            again: rerolls > 0
+          });
+          if(!rerollDie) break;
+          updateStageTrack("bucket", "spinning");
+          setResult((rerollDie === "tier" ? "Tier" : "Paid by") + " die re-rolling. Jackpot stays locked.");
+          spinRow = await chooseDiceReroll(spinRow.id, rerollDie);
+          snap = spinRow.reward_snapshot || {};
+          stages = snap.slot_stages || {};
+          diceReroll = stages.dice_reroll || null;
+          rerolls += 1;
+        }
+        await animateBucketDice(stages);
       } else {
         await animateBucketDice(stages);
       }
@@ -2167,33 +2162,27 @@
     if(opts.holdForReroll) {
       updateStageTrack("bucket", "empty");
       stage.classList.add("interactive", "reroll-ready");
-      setResult("No rewards in that bucket. Choose which die to re-roll.");
+      setResult(opts.again
+        ? "Still nothing there. Pick a die to re-roll again."
+        : "No rewards in that bucket. Pick which die to re-roll.");
       const note = document.createElement("div");
       note.className = "slot-dice-note";
-      note.textContent = "No rewards live in that bucket.";
+      note.textContent = "No rewards live in that bucket. Re-roll either die.";
       stage.appendChild(note);
-      const choices = opts.choices || {};
+      // Either die is always re-rollable - the re-roll is a real random roll, so
+      // by alternating dice you can always reach a bucket that has rewards.
       stage.querySelectorAll(".slot-jackpot-die").forEach(dieEl => {
         const dieName = dieEl.dataset.die;
-        const hasChoice = !!choices[dieName];
         const btn = document.createElement("button");
         btn.className = "slot-die-reroll-btn";
         btn.type = "button";
-        btn.disabled = !hasChoice;
-        btn.textContent = hasChoice ? "Re-roll" : "No match";
-        btn.setAttribute("aria-label", hasChoice ? "Re-roll " + (dieName === "tier" ? "tier die" : "paid by die") : "No valid " + dieName + " reroll");
+        btn.textContent = "Re-roll";
+        btn.setAttribute("aria-label", "Re-roll " + (dieName === "tier" ? "tier die" : "paid by die"));
         dieEl.appendChild(btn);
       });
       const firstButton = stage.querySelector(".slot-die-reroll-btn:not(:disabled)");
       if(firstButton) firstButton.focus();
       slotPlay("emptyBucket");
-      if(!firstButton) {
-        await wait(1600);
-        stage.classList.add("leaving");
-        await wait(320);
-        stage.remove();
-        return null;
-      }
       const selectedDie = await new Promise(resolve => {
         const finish = event => {
           const btn = event && event.target && event.target.closest ? event.target.closest(".slot-die-reroll-btn") : null;
@@ -3432,7 +3421,7 @@
       return "Collected a gem" + (c.gems != null ? " (" + c.gems + " toward the next set)" : "") + ".";
     }
     if(stages.outcome === "free_spin" || stages.free_spin_hit) return "Free spin tile! A reroll credit is yours.";
-    if(stages.bank_builder_hit) return "Bank Builder hit, but the reserve cap is full.";
+    if(stages.bank_builder_hit) return "Bank Builder hit, but you've already banked your full monthly goal.";
     if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
     if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
     if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";

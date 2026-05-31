@@ -1359,27 +1359,12 @@
               <span id="slot-rhythm-summary">A solid day earns a lot of spins.</span>
             </div>
             <div class="slot-setting-note">
-              <strong id="slot-current-cost">Daily rhythm set</strong>
-              <span id="slot-current-goal">Monthly goal: $0.00</span>
+              <strong id="slot-current-cost">Spin cost: — pts</strong>
+              <span id="slot-spin-cost-line">Learned from your points per day.</span>
+              <span id="slot-current-goal">Sweet treats budget: $0.00</span>
             </div>
           </div>
           <div class="slot-rules-grid">
-            <label class="slot-setting-field span-2">
-              <span>What counts as maintenance for you?</span>
-              <textarea id="slot-maintenance-notes" placeholder="Chores, admin, meals, routines, recurring obligations"></textarea>
-            </label>
-            <label class="slot-setting-field">
-              <span>Maintenance most days</span>
-              <input id="slot-maintenance-hours" type="number" min="0" max="16" step="0.25">
-            </label>
-            <label class="slot-setting-field span-2">
-              <span>What counts as advancement for you?</span>
-              <textarea id="slot-advancement-notes" placeholder="Workouts, career work, studying, creative projects, focused productivity"></textarea>
-            </label>
-            <label class="slot-setting-field">
-              <span>Advancement most days</span>
-              <input id="slot-advancement-hours" type="number" min="0" max="16" step="0.25">
-            </label>
             <label class="slot-setting-field span-2">
               <span>Sweet treats budget</span>
               <input id="slot-monthly-discretionary" type="number" min="1" max="10000" step="1">
@@ -1387,20 +1372,16 @@
           </div>
           <div class="slot-rule-list">
             <div><strong>Task scoring</strong></div>
-            <div>You decide what feels like maintenance and what feels like advancement.</div>
-            <div>Maintenance and advancement both count; they simply move the reward meter at different paces.</div>
+            <div>Sort each tag into a points bucket: full, half, quarter, or no points.</div>
+            <div>A task earns its minutes scaled by its highest-value tag; unsorted tags earn full points.</div>
+            <div>Spin cost is learned from how many points you earn per day, aiming for ~20 spins a day.</div>
             <div>Bank building resolves first, then jackpots, free spins, or misses.</div>
-            <div>Bonus reward rolls skip the reels and start at the reward dice.</div>
           </div>
-          <div class="slot-tag-unlock" id="slot-tag-sorting-locked">
-            <strong>Tag sorting</strong>
-            <span>Save the simple setup first, then sort tags into maintenance, advancement, light, or no-points lanes.</span>
-          </div>
-          <div class="slot-tag-sorting" id="slot-tag-sorting-panel" hidden>
+          <div class="slot-tag-sorting" id="slot-tag-sorting-panel">
             <div class="slot-tag-sorting-head">
               <div>
-                <strong>Tag sorting</strong>
-                <span>Drag tags into the lane that matches how you think about that work.</span>
+                <strong>Tag buckets</strong>
+                <span>Drag each tag from the bank into a points bucket. Tags left in the bank earn full points.</span>
               </div>
             </div>
             <div class="slot-tag-tier-board" id="slot-tag-tier-board"></div>

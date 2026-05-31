@@ -11,6 +11,15 @@ const {
 
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
 const DEFAULT_TARGET_DAILY_SPINS = 28;
+// Spin cost is learned from how many points the user actually earns per day:
+// average the daily point totals over the trailing window, then price a spin so a
+// typical day buys ~SPIN_COST_TARGET_DAILY_SPINS spins. LENIENCY makes spins a
+// touch cheaper than break-even so the target is comfortably reachable. Until the
+// user has MIN_DAYS of earning history we fall back to DEFAULT_SPIN_COST.
+const SPIN_COST_LEARNING_WINDOW_DAYS = 14;
+const SPIN_COST_TARGET_DAILY_SPINS = 20;
+const SPIN_COST_LENIENCY = 0.9;
+const SPIN_COST_MIN_DAYS = 3;
 const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
 const DEFAULT_ADVANCEMENT_HOURS_PER_DAY = 5;
 const DEFAULT_BANK_BUILDER_HIT_RATE = 0.9;
@@ -90,16 +99,23 @@ const DEFAULT_BANK_CLUSTER_RANGE = [2, 3];
 const BANK_BUILDER_FLAT_FLOOR_CENTS = 50;
 const SCREEN_BANK_BUILDER_PERCENT = 0.0012;
 const DEFAULT_POINT_TAG_TIERS = {
-  maintenance: [],
-  advancement: [],
-  light: [],
   none: [],
+  quarter: [],
+  half: [],
+  full: [],
 };
 const POINT_TAG_TIER_MULTIPLIERS = {
   none: 0,
-  light: 0.25,
-  maintenance: 0.5,
-  advancement: 1,
+  quarter: 0.25,
+  half: 0.5,
+  full: 1,
+};
+// Tags assigned under retired lane names map onto the point buckets so existing
+// assignments survive the rename without a data migration.
+const LEGACY_POINT_TAG_TIER_ALIASES = {
+  advancement: "full",
+  maintenance: "half",
+  light: "quarter",
 };
 const SLOT_ROWS = 3;
 const SLOT_COLS = 5;
@@ -464,17 +480,14 @@ function normalizeEconomyProfile(value = {}) {
 
 function deriveEconomySettings(profile = {}) {
   const normalized = normalizeEconomyProfile(profile);
-  const dailyPoints =
-    (normalized.advancement_hours_per_day * 60) +
-    (normalized.maintenance_hours_per_day * 60 * POINT_TAG_TIER_MULTIPLIERS.maintenance);
   return {
-    spin_cost: clampInt(roundToNearestFive(dailyPoints / DEFAULT_TARGET_DAILY_SPINS), 5, 250),
+    // Cold-start placeholder only. The live spin cost is learned from the user's
+    // points-per-day history at read/spin time (see learnedSpinCost).
+    spin_cost: DEFAULT_SPIN_COST,
     monthly_goal_cents: normalized.monthly_discretionary_cents,
     bankroll_pacing: {
       target_daily_spins: DEFAULT_TARGET_DAILY_SPINS,
       bank_builder_base_percent: SCREEN_BANK_BUILDER_PERCENT,
-      daily_bank_cap_percent: 0.1,
-      weekly_bank_cap_percent: 0.25,
     },
     bank_builder_hit_rate: DEFAULT_BANK_BUILDER_HIT_RATE,
     jackpot_hit_rate: DEFAULT_JACKPOT_HIT_RATE,
@@ -494,10 +507,27 @@ function normalizeCustomizationUnlocks(value = {}, profile = {}) {
 
 function normalizePointTagTiers(value = {}) {
   const raw = value && typeof value === "object" ? value : {};
+  // Fold any retired lane names (maintenance/advancement/light) onto their point
+  // bucket so old saved assignments carry over transparently.
+  const merged = {};
+  for (const [key, ids] of Object.entries(raw)) {
+    const bucket = LEGACY_POINT_TAG_TIER_ALIASES[key] || key;
+    if (!(bucket in DEFAULT_POINT_TAG_TIERS)) continue;
+    merged[bucket] = (merged[bucket] || []).concat(Array.isArray(ids) ? ids : []);
+  }
   const normalized = {};
+  const claimed = new Set();
   for (const tier of Object.keys(DEFAULT_POINT_TAG_TIERS)) {
-    const ids = Array.isArray(raw[tier]) ? raw[tier] : [];
-    normalized[tier] = [...new Set(ids.map(id => String(id || "").trim()).filter(Boolean))].slice(0, 250);
+    const ids = Array.isArray(merged[tier]) ? merged[tier] : [];
+    // A tag lives in at most one bucket; first bucket to claim it wins.
+    const unique = [];
+    for (const raw of ids) {
+      const id = String(raw || "").trim();
+      if (!id || claimed.has(id)) continue;
+      claimed.add(id);
+      unique.push(id);
+    }
+    normalized[tier] = unique.slice(0, 250);
   }
   return normalized;
 }
@@ -847,6 +877,49 @@ function getSpinCost(account) {
   return normalizeSlotSettings(account && account.settings).spin_cost;
 }
 
+// Price a spin from how many points the user actually earns on a typical day.
+// Averages the per-day point totals over active days in the trailing window, then
+// sets the cost so a typical day buys ~SPIN_COST_TARGET_DAILY_SPINS spins (with a
+// 10% leniency discount). Falls back to DEFAULT_SPIN_COST until the user has
+// SPIN_COST_MIN_DAYS of earning history. Returns the cost plus the basis the UI
+// shows to explain it.
+// Pure pricing: turn an average points-per-day into a spin cost. Below MIN_DAYS of
+// history we can't trust the average, so we hold at the default.
+function spinCostForDailyPoints(avgDailyPoints, days) {
+  if (!(Number(days) >= SPIN_COST_MIN_DAYS)) return DEFAULT_SPIN_COST;
+  return clampInt(
+    roundToNearestFive((Number(avgDailyPoints) * SPIN_COST_LENIENCY) / SPIN_COST_TARGET_DAILY_SPINS),
+    5,
+    250
+  );
+}
+
+async function learnedSpinCost(workspaceId) {
+  const { rows: [agg] } = await pool.query(
+    `SELECT COALESCE(AVG(daily), 0)::float AS avg_daily, COUNT(*)::int AS days
+       FROM (
+         SELECT SUM(delta) AS daily
+           FROM slot_point_ledger
+          WHERE workspace_id = $1
+            AND source_type = 'task_complete'
+            AND delta > 0
+            AND created_at >= date_trunc('day', NOW()) - ($2::int - 1) * INTERVAL '1 day'
+          GROUP BY date_trunc('day', created_at)
+       ) d`,
+    [workspaceId, SPIN_COST_LEARNING_WINDOW_DAYS]
+  );
+  const avgDailyPoints = Math.round(Number(agg && agg.avg_daily) || 0);
+  const days = Number(agg && agg.days) || 0;
+  return {
+    cost: spinCostForDailyPoints(avgDailyPoints, days),
+    avgDailyPoints,
+    days,
+    learned: days >= SPIN_COST_MIN_DAYS,
+    windowDays: SPIN_COST_LEARNING_WINDOW_DAYS,
+    targetDailySpins: SPIN_COST_TARGET_DAILY_SPINS,
+  };
+}
+
 async function seedRewards(workspaceId) {
   const { rows: [account] } = await pool.query("SELECT settings FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);
   const settings = account && account.settings ? account.settings : {};
@@ -1062,21 +1135,17 @@ async function getBankUsage(workspaceId, settings = {}) {
     `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
      FROM slot_spins
      WHERE workspace_id = $1 AND status IN ('pending','confirmed')
-       AND reward_snapshot->>'kind' = 'bank_builder'
+       AND bank_delta_cents > 0
+       AND (reward_snapshot->>'kind' = 'bank_builder'
+            OR reward_snapshot->>'source_type' = 'slot_screen_bank_builder')
        AND created_at >= date_trunc('month', NOW())`,
     [workspaceId]
   );
   const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000);
-  const normalized = normalizeSlotSettings(settings);
-  const pacing = normalized.bankroll_pacing || {};
-  const dailyCap = Math.max(100, Math.round(monthlyGoal * (pacing.daily_bank_cap_percent || 0.1)));
-  const weeklyCap = Math.max(dailyCap, Math.round(monthlyGoal * (pacing.weekly_bank_cap_percent || 0.25)));
   return {
     today: today.cents,
     week: week.cents,
     month: month.cents,
-    dailyCap,
-    weeklyCap,
     monthlyGoal,
     monthlyRemaining: Math.max(0, monthlyGoal - month.cents),
   };
@@ -1164,7 +1233,8 @@ function buildBankrollGoalState(account, rewardRows, bankUsage, funding) {
 
 async function getState(workspaceId, userId) {
   const account = accountWithSettings(await ensureAccount(workspaceId, userId));
-  const spinCost = getSpinCost(account);
+  const spinCostBasis = await learnedSpinCost(workspaceId);
+  const spinCost = spinCostBasis.cost;
   const bankUsage = await getBankUsage(workspaceId, account.settings);
   const pendingBankDeposit = await getPendingBankDeposit(workspaceId);
   const funding = {
@@ -1195,6 +1265,7 @@ async function getState(workspaceId, userId) {
     constants: {
       spinCost,
       spinCostPoints: spinCost,
+      spinCostBasis,
       pointsPerSpin: POINTS_PER_SPIN,
       pointsFormulaVersion: POINTS_FORMULA_VERSION,
       maxTaskCredits: null,
@@ -1205,8 +1276,6 @@ async function getState(workspaceId, userId) {
       profileSummary: {
         dailyRhythm: "A solid day earns a lot of spins.",
         sweetTreatsBudgetCents: account.settings.economy_profile.monthly_discretionary_cents,
-        maintenanceLabel: "Maintenance earns steady progress.",
-        advancementLabel: "Advancement earns full progress.",
       },
       jackpotHitRate: account.settings.jackpot_hit_rate,
       bankBuilderHitRate: account.settings.bank_builder_hit_rate,
@@ -1248,7 +1317,13 @@ async function updateSettings(workspaceId, userId, body = {}) {
   const rewardTiers = normalizeRewardTiers(
     body.reward_tiers || body.rewardTiers || current.reward_tiers || DEFAULT_REWARD_TIERS
   );
-  if (body.reward_tiers || body.rewardTiers) assertRewardTierPercentTotal(rewardTiers);
+  // Only validate the 100% total when the tiers actually changed. Otherwise an
+  // unrelated save (e.g. the Sweet Treats budget) that merely re-sends the
+  // existing tiers would be rejected whenever the stored tiers drift off 100%.
+  const tiersChanged =
+    (!!(body.reward_tiers || body.rewardTiers)) &&
+    JSON.stringify(rewardTiers) !== JSON.stringify(normalizeRewardTiers(current.reward_tiers || DEFAULT_REWARD_TIERS));
+  if (tiersChanged) assertRewardTierPercentTotal(rewardTiers);
   const currentUnlocks = current.customization_unlocks || {};
   const incomingUnlocks = body.customization_unlocks || body.customizationUnlocks || {};
   const next = {
@@ -1443,13 +1518,28 @@ function statusForSelectedReward(selected, bankDelta = 0, reserveCost = 0) {
   return "awarded";
 }
 
-async function chooseSpinDiceReroll(workspaceId, spinId, body = {}) {
+// Re-roll one of the two jackpot dice (tier or paid-by) after the spin landed
+// on an empty source/tier bucket. The chosen die is genuinely re-rolled while
+// the other stays fixed:
+//   - lands on a bucket with rewards -> swap the spin onto a fresh reward and
+//     finish (awaiting cleared).
+//   - lands on another empty bucket -> keep the walk-away fallback reward and
+//     hand back an still-awaiting dice_reroll so the player can choose again.
+// The player may re-roll EITHER die every time; by alternating dice they can
+// always walk the grid to a non-empty bucket (the only true dead-end - no
+// reward anywhere - is settled as a bank consolation back at spin time).
+async function chooseSpinDiceReroll(workspaceId, spinId, body = {}, userId = null, rng = crypto.randomInt) {
   const die = String(body.die || body.choice || "").trim().toLowerCase();
   if (!["tier", "source"].includes(die)) {
     const err = new Error("Choose tier or source");
     err.statusCode = 400;
     throw err;
   }
+  // Rebuild the live reward pool exactly as the spin did, so the re-roll draws
+  // from the same eligible buckets.
+  const state = await getState(workspaceId, userId);
+  const drawPool = state.rewards.filter(r => r.kind !== "miss" && !r.lifespan_exhausted);
+  const settings = normalizeSlotSettings(state.account.settings || {});
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1462,33 +1552,57 @@ async function chooseSpinDiceReroll(workspaceId, spinId, body = {}) {
     const snapshot = spinRow.reward_snapshot || {};
     const stages = snapshot.slot_stages || {};
     const reroll = stages.dice_reroll || {};
-    const choice = reroll.choices && reroll.choices[die];
-    if (!choice || !choice.reward) {
-      const err = new Error("That die does not have a valid reroll for this bucket");
+    if (!reroll.awaiting || !reroll.from) {
+      const err = new Error("That spin has no dice re-roll waiting");
       err.statusCode = 400;
       throw err;
     }
-    const selected = choice.reward;
+    const rolled = rollDieReroll(drawPool, settings, reroll.from, die, rng);
+    const landedFrom = { payment_source: rolled.source, tier: rolled.tier };
+
+    if (!rolled.bucket.length) {
+      // Still empty - hold the fallback reward and re-prompt from the new combo.
+      const nextSnapshot = {
+        ...snapshot,
+        slot_stages: {
+          ...stages,
+          dice_reroll: { ...reroll, from: landedFrom, awaiting: true, last_die: die, last_empty: true },
+        },
+      };
+      const { rows: held } = await client.query(
+        "UPDATE slot_spins SET reward_snapshot=$3 WHERE workspace_id=$1 AND id=$2 RETURNING *",
+        [workspaceId, spinId, nextSnapshot]
+      );
+      await client.query("COMMIT");
+      return held[0];
+    }
+
+    const selected = chooseWeighted(rolled.bucket, "chance_shares", rng) || rolled.bucket[0];
+    const previousRewardId = spinRow.reward_id;
     const reserveCost = reserveCostCents(selected);
     const nextSnapshot = {
       ...snapshot,
       ...selected,
       source_type: selected.source_type,
-      payment_source: selected.payment_source || (choice.payment_source && choice.payment_source.id) || defaultPaymentSourceForKind(selected.kind),
-      tier_id: selected.tier_id || (choice.tier && choice.tier.id) || "tier_i",
+      payment_source: selected.payment_source || (rolled.source && rolled.source.id) || defaultPaymentSourceForKind(selected.kind),
+      tier_id: selected.tier_id || (rolled.tier && rolled.tier.id) || "tier_i",
       slot_stages: {
         ...stages,
-        payment_source: choice.payment_source,
-        tier: choice.tier,
+        payment_source: rolled.source,
+        tier: rolled.tier,
+        empty_bucket: false,
         dice_reroll: {
           ...reroll,
-          selected_choice: die,
-          to: {
-            payment_source: choice.payment_source,
-            tier: choice.tier,
-          },
+          awaiting: false,
+          last_die: die,
+          to: landedFrom,
         },
-        reward_spin: choice.reward_spin || null,
+        reward_spin: {
+          reward_id: selected.id,
+          chance_shares: selected.chance_shares || selected.weight || 0,
+          bucket_size: rolled.bucket.length,
+          bucket_total_shares: bucketTotalShares(rolled.bucket),
+        },
       },
       screen_board: snapshot.screen_board,
       screen_payline: snapshot.screen_payline,
@@ -1506,7 +1620,14 @@ async function chooseSpinDiceReroll(workspaceId, spinId, body = {}) {
        RETURNING *`,
       [workspaceId, spinId, selected.id || null, nextSnapshot, nextStatus, reserveCost]
     );
-    if (selected.id) await client.query("UPDATE slot_rewards SET last_won_at=NOW(), uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE GREATEST(uses_remaining - 1, 0) END WHERE id=$1", [selected.id]);
+    // Hand the previously-charged fallback its use back before charging the new
+    // reward, so a chain of re-rolls only ever consumes the one finally landed.
+    if (previousRewardId && String(previousRewardId) !== String(selected.id)) {
+      await client.query("UPDATE slot_rewards SET uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE uses_remaining + 1 END WHERE id=$1", [previousRewardId]);
+    }
+    if (selected.id && String(selected.id) !== String(previousRewardId)) {
+      await client.query("UPDATE slot_rewards SET last_won_at=NOW(), uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE GREATEST(uses_remaining - 1, 0) END WHERE id=$1", [selected.id]);
+    }
     await client.query("COMMIT");
     return updatedRows[0];
   } catch (e) {
@@ -1796,7 +1917,8 @@ function taskPointTier(body = {}, settings = {}) {
     };
   }
   if (type === "meeting" || type === "break") return { tier: "none", multiplier: 0, matched_tags: [] };
-  return { tier: "advancement", multiplier: POINT_TAG_TIER_MULTIPLIERS.advancement, matched_tags: [] };
+  // Tags still sitting in the bank (unsorted) earn full points by default.
+  return { tier: "full", multiplier: POINT_TAG_TIER_MULTIPLIERS.full, matched_tags: [] };
 }
 
 async function earnTaskCredit(workspaceId, userId, body) {
@@ -2217,56 +2339,24 @@ function chooseExistingBucketAttempt(rewards, settings, rng) {
   return chooseWeighted(attempts, "weight", rng) || attempts[0] || null;
 }
 
-function chooseSingleDieRerollAttempt(rewards, settings, firstAttempt, die, rng) {
-  const normalized = normalizeSlotSettings(settings);
-  const attempts = [];
-  if (die === "tier") {
-    for (const tier of tierOptions(normalized)) {
-      if (String(tier.id) === String(firstAttempt.tier.id)) continue;
-      const bucket = bucketForSourceTier(rewards, firstAttempt.source, tier);
-      if (!bucket.length) continue;
-      attempts.push({
-        source: firstAttempt.source,
-        tier,
-        bucket,
-        weight: Math.max(0, Number(tier.weight) || 0),
-      });
-    }
-  } else if (die === "source") {
-    for (const source of sourceOptions(normalized)) {
-      if (String(source.id) === String(firstAttempt.source.id)) continue;
-      const bucket = bucketForSourceTier(rewards, source, firstAttempt.tier);
-      if (!bucket.length) continue;
-      attempts.push({
-        source,
-        tier: firstAttempt.tier,
-        bucket,
-        weight: Math.max(0, Number(source.weight) || 0),
-      });
-    }
-  }
-  return chooseWeighted(attempts, "weight", rng) || attempts[0] || null;
-}
-
 function bucketTotalShares(bucket) {
   return (bucket || []).reduce((sum, r) => sum + (Number(r.chance_shares ?? r.weight) || 0), 0);
 }
 
-function buildDiceRerollChoice(attempt, die, rng) {
-  if (!attempt || !attempt.bucket || !attempt.bucket.length) return null;
-  const reward = chooseWeighted(attempt.bucket, "chance_shares", rng);
-  return {
-    die,
-    payment_source: attempt.source,
-    tier: attempt.tier,
-    reward,
-    reward_spin: {
-      reward_id: reward && reward.id,
-      chance_shares: reward && (reward.chance_shares || reward.weight || 0),
-      bucket_size: attempt.bucket.length,
-      bucket_total_shares: bucketTotalShares(attempt.bucket),
-    },
-  };
+// Genuinely re-roll a single jackpot die, keeping the other die fixed at its
+// current value. This is a real weighted roll across that die's active faces,
+// so it can land on the same face or on another empty bucket - the caller
+// (chooseSpinDiceReroll) re-prompts when `bucket` comes back empty.
+function rollDieReroll(rewards, settings, from, die, rng = crypto.randomInt) {
+  const normalized = normalizeSlotSettings(settings);
+  let source = (from && from.payment_source) || sourceOptions(normalized)[0];
+  let tier = (from && from.tier) || tierOptions(normalized)[0];
+  if (die === "source") {
+    source = chooseWeighted(sourceOptions(normalized), "weight", rng) || source;
+  } else if (die === "tier") {
+    tier = chooseWeighted(tierOptions(normalized), "weight", rng) || tier;
+  }
+  return { source, tier, bucket: bucketForSourceTier(rewards, source, tier) };
 }
 
 // The non-jackpot floor. A rare explicit true miss, otherwise a weighted draw
@@ -2305,38 +2395,22 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
   const firstAttempt = chooseBucketAttempt(rewards, normalized, rng);
   let finalAttempt = firstAttempt;
   let diceReroll = null;
-  let selectedChoice = null;
   if (!firstAttempt.bucket.length) {
-    const sourceChoice = buildDiceRerollChoice(
-      chooseSingleDieRerollAttempt(rewards, normalized, firstAttempt, "source", rng),
-      "source",
-      rng
-    );
-    const tierChoice = buildDiceRerollChoice(
-      chooseSingleDieRerollAttempt(rewards, normalized, firstAttempt, "tier", rng),
-      "tier",
-      rng
-    );
-    selectedChoice = sourceChoice || tierChoice;
-    finalAttempt = selectedChoice
-      ? { source: selectedChoice.payment_source, tier: selectedChoice.tier, bucket: [selectedChoice.reward] }
-      : null;
-    if (finalAttempt || sourceChoice || tierChoice) {
+    // The jackpot dice landed on a source/tier bucket with no rewards. Pick a
+    // guaranteed-winnable bucket as the walk-away fallback, then flag the spin
+    // so the player can re-roll EITHER die. The re-roll itself
+    // (chooseSpinDiceReroll) is a genuine weighted roll that may land on yet
+    // another empty bucket and prompt again; this fallback only protects a
+    // player who leaves mid-re-roll.
+    finalAttempt = chooseExistingBucketAttempt(rewards, normalized, rng);
+    if (finalAttempt) {
       diceReroll = {
         reason: "empty_bucket",
+        awaiting: true,
         from: {
           payment_source: firstAttempt.source,
           tier: firstAttempt.tier,
         },
-        choices: {
-          source: sourceChoice,
-          tier: tierChoice,
-        },
-        default_choice: selectedChoice ? selectedChoice.die : "both",
-        to: finalAttempt ? {
-          payment_source: finalAttempt.source,
-          tier: finalAttempt.tier,
-        } : null,
       };
     }
   }
@@ -2360,7 +2434,7 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
     };
   }
   const { source, tier, bucket } = finalAttempt;
-  const selected = selectedChoice ? selectedChoice.reward : chooseWeighted(bucket, "chance_shares", rng);
+  const selected = chooseWeighted(bucket, "chance_shares", rng);
   // Roll the run length AFTER the reward is chosen so the existing source/tier/
   // reward draws keep their positions in the rng stream.
   const jackpotSpins = rollJackpotSpins(normalized, rng);
@@ -2735,12 +2809,10 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   const rawCents = units > 0
     ? Math.max(baseCents * units, BANK_BUILDER_FLAT_FLOOR_CENTS)
     : 0;
-  const dailyCap = (bankUsage && bankUsage.dailyCap) || Math.max(100, Math.round(monthlyGoalCents * 0.1));
-  const weeklyCap = (bankUsage && bankUsage.weeklyCap) || Math.max(dailyCap, Math.round(monthlyGoalCents * 0.25));
-  const remainingCap = Math.max(0, Math.min(
-    dailyCap - ((bankUsage && bankUsage.today) || 0),
-    weeklyCap - ((bankUsage && bankUsage.week) || 0)
-  ));
+  // The only cap on bank-building is the monthly goal: you can bank up to your
+  // full monthly discretionary target each month, with no daily or weekly throttle.
+  const monthBanked = (bankUsage && bankUsage.month) || 0;
+  const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
   const cents = Math.min(rawCents, remainingCap);
 
   return {
@@ -2817,7 +2889,9 @@ async function spin(workspaceId, userId) {
     const lockedSettings = normalizeSlotSettings(account && account.settings);
     const usedJackpotSpinCredit = lockedSettings.jackpot_spin_credits > 0;
     const usedRerollCredit = !usedJackpotSpinCredit && lockedSettings.reroll_credits > 0;
-    const lockedSpinCost = (usedRerollCredit || usedJackpotSpinCredit) ? 0 : getSpinCost(account);
+    // spinCost is the learned points/day cost from getState; the ledger it reads
+    // isn't touched by this spin, so it's stable across the transaction.
+    const lockedSpinCost = (usedRerollCredit || usedJackpotSpinCredit) ? 0 : spinCost;
     if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough points");
     const incomingMods = lockedSettings.next_spin_modifiers || normalizeNextSpinModifiers();
     // A queued miss shield turns a would-be dead spin into a bank builder.
@@ -2934,20 +3008,13 @@ async function spin(workspaceId, userId) {
         empty_bucket: effectiveOutcome.empty_bucket,
         reroll_credit: effectiveOutcome.reroll_credit,
         dice_reroll: effectiveOutcome.dice_reroll,
-        reward_spin: effectiveOutcome.jackpot_hit && !effectiveOutcome.empty_bucket ? (
-          effectiveOutcome.dice_reroll &&
-          effectiveOutcome.dice_reroll.default_choice &&
-          effectiveOutcome.dice_reroll.choices &&
-          effectiveOutcome.dice_reroll.choices[effectiveOutcome.dice_reroll.default_choice]
-            ? effectiveOutcome.dice_reroll.choices[effectiveOutcome.dice_reroll.default_choice].reward_spin
-            : {
-              reward_id: selected.id,
-              chance_shares: selected.chance_shares || selected.weight || 0,
-              spin_count: jackpotSpinCount || 1,
-              bucket_size: effectiveOutcome.bucket.length,
-              bucket_total_shares: bucketTotalShares(effectiveOutcome.bucket),
-            }
-        ) : null,
+        reward_spin: effectiveOutcome.jackpot_hit && !effectiveOutcome.empty_bucket ? {
+          reward_id: selected.id,
+          chance_shares: selected.chance_shares || selected.weight || 0,
+          spin_count: jackpotSpinCount || 1,
+          bucket_size: effectiveOutcome.bucket.length,
+          bucket_total_shares: bucketTotalShares(effectiveOutcome.bucket),
+        } : null,
         coin: selected.kind === "points"
           ? { coin_kind: selected.coin_kind, points: pointsDelta }
           : null,
@@ -3338,12 +3405,14 @@ module.exports = {
     applyTileOverrideToScreen,
     buildBankrollGoalState,
     buildBankrollGoalCelebrationScreen,
-    chooseSingleDieRerollAttempt,
+    rollDieReroll,
+    chooseExistingBucketAttempt,
     normalizeSlotSettings,
     normalizeEconomyProfile,
     deriveEconomySettings,
     normalizePointTagTiers,
     taskPointTier,
+    spinCostForDailyPoints,
     selectThreeStageOutcome,
     resolveFloorOutcome,
     rollFloorOutcomeKind,
