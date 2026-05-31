@@ -737,6 +737,7 @@ async function ensureAccount(workspaceId, userId) {
   );
   let account = await migrateAccountPointsV2(workspaceId, rows[0]);
   account = await migrateAccountPointsV3(workspaceId, account);
+  account = await migrateAccountSlotOdds(workspaceId, account);
   await seedRewards(workspaceId);
   await retireLegacyBankBuilderRewards(workspaceId);
   return account;
@@ -826,6 +827,44 @@ async function migrateAccountPointsV3(workspaceId, account) {
        )
      RETURNING *`,
     [workspaceId, POINTS_V3_BALANCE_MULTIPLIER, JSON.stringify(migration)]
+  );
+  if (updated) return updated;
+  const { rows: [current] } = await pool.query("SELECT * FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);
+  return current || account;
+}
+
+// One-time heal for the bank-dominant / 1% jackpot recalibration (commit e5b9019).
+// Lowering DEFAULT_JACKPOT_HIT_RATE only changed the default for NEW/derived
+// settings - it did NOT migrate accounts that had already persisted an elevated
+// jackpot_hit_rate (e.g. an old QA value of 0.2 = 20%). normalizeSlotSettings
+// prefers the stored value over the derived default (it must, so credit-funded
+// spins can force jackpot_hit_rate: 1 through the same path), so a stale stored
+// 0.2 kept firing ~1 jackpot every 5 spins instead of the intended ~1 in 100.
+// This pulls the engine-controlled odds back onto the current PAR sheet exactly
+// once per account so the recalibration actually lands for existing players.
+const SLOT_ODDS_MIGRATION_KEY = "slot_odds_par_sheet_migrated_at";
+
+async function migrateAccountSlotOdds(workspaceId, account) {
+  const settings = account && account.settings ? account.settings : {};
+  if (settings[SLOT_ODDS_MIGRATION_KEY]) return account;
+  const derived = deriveEconomySettings(normalizeEconomyProfile(settings.economy_profile || settings));
+  const patch = {
+    jackpot_hit_rate: derived.jackpot_hit_rate,
+    jackpot_upgrade_rate: derived.jackpot_upgrade_rate,
+    bank_builder_hit_rate: derived.bank_builder_hit_rate,
+    free_spin_tile_rate: derived.free_spin_tile_rate,
+    miss_rate: derived.miss_rate,
+    floor_weights: { ...DEFAULT_FLOOR_WEIGHTS },
+    [SLOT_ODDS_MIGRATION_KEY]: new Date().toISOString(),
+  };
+  const { rows: [updated] } = await pool.query(
+    `UPDATE slot_accounts
+     SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE workspace_id = $1
+       AND NOT (COALESCE(settings, '{}'::jsonb) ? '${SLOT_ODDS_MIGRATION_KEY}')
+     RETURNING *`,
+    [workspaceId, JSON.stringify(patch)]
   );
   if (updated) return updated;
   const { rows: [current] } = await pool.query("SELECT * FROM slot_accounts WHERE workspace_id = $1", [workspaceId]);

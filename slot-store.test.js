@@ -38,6 +38,14 @@ function createMockPool(options = {}) {
     legacyBankBuildersRetired: false,
   };
 
+  // A mock account that has opted out of the points migrations (by carrying the
+  // points_v3 flag) is treated as already odds-recalibrated too, so a test's
+  // explicit jackpot/floor odds aren't overwritten by migrateAccountSlotOdds.
+  // Fresh-account tests (migrated: false) leave the flag off so the migration runs.
+  if (state.settings.points_v3_migrated_at && !state.settings.slot_odds_par_sheet_migrated_at) {
+    state.settings = { ...state.settings, slot_odds_par_sheet_migrated_at: "already" };
+  }
+
   async function query(sql, params = []) {
     calls.push({ sql, params });
     const text = String(sql);
