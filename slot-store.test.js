@@ -778,6 +778,70 @@ test("selectThreeStageOutcome realized distribution matches the PAR sheet (Monte
   }
 });
 
+test("rollJackpotSpins maps each climb to a longer run and never draws at a 0 rate", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const { rollJackpotSpins } = store._test;
+  const settings = {}; // default jackpot_upgrade_rate = 0.1, threshold = 100000
+
+  // No climb on either roll -> 3-in-a-row (1 spin).
+  assert.equal(rollJackpotSpins(settings, () => 999999), 1);
+  // Climb once then stop -> 4-in-a-row (2 spins).
+  const twoRolls = [0, 999999];
+  assert.equal(rollJackpotSpins(settings, () => twoRolls.shift()), 2);
+  // Climb both times -> 5-in-a-row (3 spins).
+  assert.equal(rollJackpotSpins(settings, () => 0), 3);
+  // A 0 upgrade rate (credit-funded spins use this) is always a single spin and
+  // must not consume an rng draw, or it would desync the rest of the spin's rolls.
+  assert.equal(
+    rollJackpotSpins({ jackpot_upgrade_rate: 0 }, () => { throw new Error("should not draw"); }),
+    1
+  );
+});
+
+test("jackpot run length realizes ~1/100, 1/1000, 1/10000 across the tiers", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const { rollJackpotSpins } = store._test;
+
+  // Seeded PRNG (mulberry32) so this statistical check is reproducible.
+  let a = 0x12345678 >>> 0;
+  const prng = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const rng = max => Math.floor(prng() * max);
+
+  // Default upgrade rate 0.1, so conditional on a jackpot: 1 spin ~90%, 2 spins
+  // ~9%, 3 spins ~1%. Paired with the tuned 1/100 jackpot rate that is exactly
+  // the requested 1/100 (3-in-a-row), 1/1000 (4-in-a-row), 1/10000 (5-in-a-row).
+  const N = 500000;
+  const counts = { 1: 0, 2: 0, 3: 0 };
+  for (let i = 0; i < N; i++) counts[rollJackpotSpins({}, rng)] += 1;
+
+  assert.ok(Math.abs(counts[1] / N - 0.90) <= 0.01, `1 spin: ${(counts[1] / N * 100).toFixed(2)}% vs 90%`);
+  assert.ok(Math.abs(counts[2] / N - 0.09) <= 0.01, `2 spins: ${(counts[2] / N * 100).toFixed(2)}% vs 9%`);
+  assert.ok(Math.abs(counts[3] / N - 0.01) <= 0.004, `3 spins: ${(counts[3] / N * 100).toFixed(2)}% vs 1%`);
+  // Each tier must be roughly a decade rarer than the one below it.
+  assert.ok(counts[1] > 5 * counts[2], "3-in-a-row should be far more common than 4-in-a-row");
+  assert.ok(counts[2] > 5 * counts[3], "4-in-a-row should be far more common than 5-in-a-row");
+});
+
+test("buildSpinScreen lays a jackpot run matching the rolled tier", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const acct = { settings: { monthly_goal_cents: 10000 } };
+  const usage = { today: 0, week: 0, monthlyGoal: 10000 };
+  for (const spins of [1, 2, 3]) {
+    for (let n = 0; n < 100; n++) {
+      const screen = store._test.buildSpinScreen({ kind: "free" }, acct, usage, false, spins);
+      const jp = store._test.evaluateJackpotBoard(screen.board);
+      assert.equal(jp.spins, spins, `tier ${spins} should pay ${spins} spins`);
+      assert.equal(jp.payline.length, spins + 2, `tier ${spins} run should be ${spins + 2} long`);
+      assert.equal(screen.board.includes("MISS"), false);
+    }
+  }
+});
+
 test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => {
   const store = loadStoreWithMock(createMockPool());
   const rolls = [0, 0, 5];
@@ -1351,6 +1415,39 @@ test("banking a wild_hold booster grants guaranteed jackpot spins", async () => 
   const after = await store.chooseSpinGamble("ws-1", 7, { action: "bank" }, () => 0);
   assert.equal(after.status, "awarded");
   assert.equal(mockPool.state.settings.jackpot_spin_credits, 1);
+});
+
+test("spending a jackpot spin credit counts down by one and never regenerates", async () => {
+  const reward = {
+    id: 22, title: "Movie night", kind: "free", payment_source: "free", tier_id: "tier_i",
+    sponsor_type: "self", sponsor_splits: [], sponsor_active: true, value_cents: 0,
+    bank_delta_cents: 0, requires_confirmation: false, cooldown_days: 0,
+    unlock_threshold_cents: 0, notes: "", last_won_at: null, deleted_at: null,
+    active: true, weight: 8, chance_shares: 8,
+  };
+  const mockPool = createMockPool({
+    pointBalance: 100,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      jackpot_spin_credits: 3,
+      bank_builder_hit_rate: 0,
+      payment_source_weights: { self: 0, sponsored: 0, free: 1 },
+      reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
+    },
+    rewardRows: [reward],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  // Three banked credits must drain to 0 over three spins - each forced jackpot is
+  // a single 3-in-a-row that pays no extra credits, so the count strictly falls.
+  for (const expected of [2, 1, 0]) {
+    const spin = await store.spin("ws-1", 1);
+    assert.equal(spin.reward_snapshot.slot_stages.jackpot_hit, true);
+    assert.equal(spin.reward_snapshot.slot_stages.jackpot_spins, 1, "a credit spin is always a single 3-in-a-row");
+    assert.equal(mockPool.state.settings.jackpot_spin_credits, expected, `credits should fall to ${expected}`);
+  }
 });
 
 test("banking a tier_up booster queues a tier bump for the next jackpot", async () => {
