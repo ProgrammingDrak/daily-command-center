@@ -2993,7 +2993,7 @@ app.post("/api/slot/spin", async (req, res) => {
 
 app.post("/api/slot/spins/:id/dice-reroll", async (req, res) => {
   try {
-    const spin = await slotStore.chooseSpinDiceReroll(req.workspaceId, req.params.id, req.body || {});
+    const spin = await slotStore.chooseSpinDiceReroll(req.workspaceId, req.params.id, req.body || {}, req.session.userId);
     broadcast("slot-changed", { action: "spin-dice-reroll" }, req.workspaceId);
     res.json(spin);
   } catch (e) {
