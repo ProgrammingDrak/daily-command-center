@@ -637,7 +637,13 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   }
 
   const block=await schedulePushedOnDate(ev,targetDate,{silent:true,useExisting:true});
-  if(!block)return; // schedulePushedOnDate already toasted the failure
+  if(!block){
+    // silent:true suppresses schedulePushedOnDate's own toast (we want to keep
+    // its success toast quiet and post our own "Moved to X" below). Surface the
+    // failure here so a no-slot day doesn't look like the button did nothing.
+    if(typeof showToast==="function")showToast("No open slot on "+_prettyDateLabel(targetDate)+"'s schedule","error");
+    return;
+  }
 
   // Remove from the source date.
   // Manual / pushed tasks live as blockstore blocks on `fromDate` -- delete the source.
@@ -803,11 +809,14 @@ function openReschedulePopover(id,anchorEl){
 
   const pop=document.createElement("div");
   pop.className="dur-popover resched-popover";
+  // Both quick buttons stay enabled. When the task is already on the day you're
+  // viewing, the click handler re-slots it instead of no-opping, so the button
+  // is never a dead end. (A disabled button reads as "broken".)
   pop.innerHTML=
     '<div class="resched-header">Move "'+ev.title.replace(/"/g,'&quot;')+'" to…</div>'+
     '<div class="resched-quick">'+
-      '<button class="resched-btn" data-target="today"'+(currentDate===today?' disabled':'')+'>Today</button>'+
-      '<button class="resched-btn" data-target="tomorrow"'+((!__tomorrowDate||currentDate===__tomorrowDate)?' disabled':'')+'>Tomorrow</button>'+
+      '<button class="resched-btn" data-target="today">Today</button>'+
+      '<button class="resched-btn" data-target="tomorrow">Tomorrow</button>'+
     '</div>'+
     '<div class="resched-custom">'+
       '<input type="date" class="resched-date-input" />'+
@@ -826,7 +835,6 @@ function openReschedulePopover(id,anchorEl){
   pop.querySelectorAll(".resched-btn").forEach(btn=>{
     btn.addEventListener("click",async e=>{
       e.stopPropagation();
-      if(btn.disabled)return;
       const target=btn.dataset.target;
       let dateStr=null;
       if(target==="today")dateStr=today;
@@ -835,7 +843,14 @@ function openReschedulePopover(id,anchorEl){
       pop.querySelectorAll("button").forEach(b=>{b.disabled=true;});
       btn.textContent="Moving...";
       try{
-        await rescheduleTaskToDate(id,dateStr);
+        if(dateStr===currentDate&&target==="today"&&typeof moveTaskToToday==="function"){
+          // Already viewing today: re-slot the task to the next free slot now.
+          await moveTaskToToday(id);
+        }else{
+          // Cross-day move (and same-day "Tomorrow", which surfaces an
+          // "Already on tomorrow" toast inside rescheduleTaskToDate).
+          await rescheduleTaskToDate(id,dateStr);
+        }
       }finally{
         closePop();
       }
@@ -858,13 +873,33 @@ function openReschedulePopover(id,anchorEl){
     if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
   });
 
-  // Position
-  const rect=anchorEl.getBoundingClientRect();
-  pop.style.top=(rect.bottom+6)+"px";
-  // Right-align with the button so the popover hugs the card's right edge
-  pop.style.right=(window.innerWidth-rect.right)+"px";
+  // Position. The popover is position:fixed, so we work in viewport coords.
+  // Append hidden first so we can measure its real size, then clamp it fully
+  // on-screen. A naive right-align (right = innerWidth - rect.right) pushed the
+  // popover -- and its left-most "Today" button -- off the left edge on narrow
+  // / mobile viewports, making those buttons unclickable.
   pop.style.minWidth="220px";
+  pop.style.visibility="hidden";
   document.body.appendChild(pop);
+  const rect=anchorEl.getBoundingClientRect();
+  const margin=8;
+  const popW=pop.offsetWidth||220;
+  const popH=pop.offsetHeight||0;
+  let left=rect.right-popW; // prefer right-aligned to the button
+  left=Math.max(margin,Math.min(left,window.innerWidth-popW-margin));
+  let top=rect.bottom+6;
+  if(top+popH>window.innerHeight-margin){
+    // No room below -- prefer flipping above the anchor.
+    const above=rect.top-popH-6;
+    if(above>=margin)top=above;
+  }
+  // Final clamp so the popover is always fully within the viewport, even if the
+  // anchor is partially scrolled off-screen.
+  top=Math.max(margin,Math.min(top,window.innerHeight-popH-margin));
+  pop.style.left=left+"px";
+  pop.style.top=top+"px";
+  pop.style.right="auto";
+  pop.style.visibility="";
   setTimeout(()=>document.addEventListener("click",onOutside,true),0);
   document.addEventListener("keydown",onKey,true);
 }

@@ -527,13 +527,34 @@ function buildSchedule(){
         pop.appendChild(nav);
       }
       renderPage();
-      // Position relative to the badge using fixed coords (escapes stacking context)
-      const rect=dbadge.getBoundingClientRect();
-      pop.style.top=(rect.bottom+6)+"px";
-      pop.style.right=(window.innerWidth-rect.right)+"px";
+      // Position relative to the badge using fixed coords (escapes stacking
+      // context). Append hidden first so we can measure the popover's real size,
+      // then clamp it fully on-screen. A naive right-align (right = innerWidth -
+      // rect.right) pushed the popover -- and its left-most preset button -- off
+      // the left edge on narrow / mobile viewports, making it unclickable.
       el.classList.add("has-dur-popover");
       document.body.classList.add("dur-open");
+      pop.style.visibility="hidden";
       document.body.appendChild(pop);
+      const rect=dbadge.getBoundingClientRect();
+      const margin=8;
+      const popW=pop.offsetWidth||148;
+      const popH=pop.offsetHeight||0;
+      let left=rect.right-popW; // prefer right-aligned to the badge
+      left=Math.max(margin,Math.min(left,window.innerWidth-popW-margin));
+      let top=rect.bottom+6;
+      if(top+popH>window.innerHeight-margin){
+        // No room below -- prefer flipping above the anchor.
+        const above=rect.top-popH-6;
+        if(above>=margin)top=above;
+      }
+      // Final clamp so the popover is always fully within the viewport, even if
+      // the badge is partially scrolled off-screen.
+      top=Math.max(margin,Math.min(top,window.innerHeight-popH-margin));
+      pop.style.left=left+"px";
+      pop.style.top=top+"px";
+      pop.style.right="auto";
+      pop.style.visibility="";
       function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==dbadge){closePop();}}
       setTimeout(()=>document.addEventListener("click",onOutside,true),0);
     });}
