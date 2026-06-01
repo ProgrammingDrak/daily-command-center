@@ -21,9 +21,19 @@ function buildActualView(){
   if(!workedTasks.length&&!pomoState.sessionLog.length&&!hasAnySessions){
     wrap.innerHTML='<div class="actual-empty">No time data yet. Complete a task or start a pomodoro session to see actual time spent here.</div>';return;
   }
-  // Build a merged view: for each scheduled item, show planned vs actual
+  // Build a merged view: for each scheduled item, show planned vs actual.
   const div=document.createElement("div");div.className="actual-timeline";
-  scheduled.forEach(ev=>{
+  // Skip tasks that have been rescheduled away (pushed) or deleted -- they no
+  // longer live on this day, so they don't belong in its planned-vs-actual
+  // retrospective. Every other schedule view filters these; the Actual view was
+  // the lone exception, which made rescheduling from here look like it did
+  // nothing (the card stayed put even though the move had succeeded).
+  const actualItems=scheduled.filter(ev=>{
+    if(typeof isPushed==="function"&&isPushed(ev))return false;
+    if(typeof isDeleted==="function"&&isDeleted(ev))return false;
+    return true;
+  });
+  actualItems.forEach(ev=>{
     const plannedMin=dur(ev);
     const taskSessions=allSessions[ev.id]||[];
     const sessionMin=taskSessions.reduce((sum,s)=>sum+s.durationMin,0);
