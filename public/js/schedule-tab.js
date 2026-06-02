@@ -353,6 +353,17 @@ function buildSchedule(){
         next.addEventListener("click",e2=>{e2.stopPropagation();if(page<pages.length-1){page++;renderPage();}});
         nav.appendChild(prev);nav.appendChild(dots);nav.appendChild(next);
         pop.appendChild(nav);
+        // Custom granular duration: any whole-minute value, not snapped to the 15m presets
+        const custom=document.createElement("div");custom.className="dur-custom";
+        const cInput=document.createElement("input");cInput.type="number";cInput.className="dur-custom-input";
+        cInput.min="1";cInput.step="1";cInput.value=String(curMin);cInput.setAttribute("aria-label","Custom minutes");
+        const cBtn=document.createElement("button");cBtn.className="dur-custom-btn";cBtn.textContent="Set";
+        const applyCustom=()=>{const v=Math.max(1,Math.round(parseInt(cInput.value,10)||0));if(v){closePop();setDurAbsolute(ev.id,v);}};
+        cBtn.addEventListener("click",e2=>{e2.stopPropagation();applyCustom();});
+        cInput.addEventListener("click",e2=>e2.stopPropagation());
+        cInput.addEventListener("keydown",e2=>{e2.stopPropagation();if(e2.key==="Enter"){e2.preventDefault();applyCustom();}});
+        custom.appendChild(cInput);custom.appendChild(cBtn);
+        pop.appendChild(custom);
       }
       renderPage();
       // Position relative to the badge using fixed coords (escapes stacking context)

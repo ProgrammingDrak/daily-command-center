@@ -4,6 +4,7 @@
   let editingId = null;
   let isSpinning = false;
   let lastPendingBankCents = 0;
+  let pointDay = null;
   const KIND_LABELS = {
     miss: "No prize",
     free: "Free",
@@ -52,11 +53,16 @@
     if(!root) return;
     try {
       slotState = await api("/api/slot/state");
+      pointDay = await api("/api/points/day?date=" + encodeURIComponent(currentDate())).catch(() => null);
       renderSlots();
     } catch(e) {
       const result = document.getElementById("slot-result");
       if(result) result.textContent = e.message;
     }
+  }
+
+  function currentDate(){
+    return (window.__state && window.__state.date) || (typeof viewDate !== "undefined" && viewDate) || new Date().toISOString().slice(0,10);
   }
 
   function renderSlots(){
@@ -74,10 +80,12 @@
     const bu = slotState.bankUsage || {};
     setText("slot-daily-cap", "Daily bank cap: " + money(bu.today || 0) + " / " + money(bu.dailyCap || 0));
     setText("slot-weekly-cap", "Weekly bank cap: " + money(bu.week || 0) + " / " + money(bu.weeklyCap || 0));
+    setText("slot-spin-cost", "Spin cost: " + (((slotState.constants && slotState.constants.spinCost) || 100)) + " points");
     renderRewards();
+    renderPointFeed();
     if(!isSpinning) renderHistory();
     const btn = document.getElementById("slot-spin-btn");
-    if(btn) btn.disabled = isSpinning || credits < ((slotState.constants && slotState.constants.spinCost) || 1);
+    if(btn) btn.disabled = isSpinning || credits < ((slotState.constants && slotState.constants.spinCost) || 100);
   }
 
   function setText(id, text){
@@ -157,6 +165,25 @@
       '</div>';
     }).join("");
     el.querySelectorAll(".slot-confirm").forEach(btn => btn.addEventListener("click", () => confirmSpin(btn.dataset.id)));
+  }
+
+  function renderPointFeed(){
+    const el = document.getElementById("points-feed");
+    if(!el) return;
+    const rows = pointDay && Array.isArray(pointDay.rows) ? pointDay.rows.slice(0, 5) : [];
+    if(!rows.length){
+      el.innerHTML = '<div class="slot-empty">No points earned today yet.</div>';
+      return;
+    }
+    el.innerHTML = rows.map(row => {
+      const md = row.metadata || {};
+      const title = row.source_type === "task_complete_v2" ? (md.title || row.description || "Task completed") : (window.TaskPoints && window.TaskPoints.bonusLabel ? window.TaskPoints.bonusLabel(md.type) : "Bonus");
+      const meta = row.source_type === "task_complete_v2" ? "task complete" : (row.description || "bonus reflection");
+      return '<div class="points-feed-row">' +
+        '<div><div class="points-feed-title">' + esc(title) + '</div><div class="points-feed-meta">' + esc(meta) + '</div></div>' +
+        '<div class="points-feed-points">+' + esc(row.delta) + '</div>' +
+      '</div>';
+    }).join("");
   }
 
   function findReward(id){
@@ -466,7 +493,7 @@
           title: task.title || task.label || "Task completed"
         })
       });
-      if(result.awarded && typeof showToast === "function") showToast("+1 slot credit");
+      if(result.awarded && typeof showToast === "function") showToast("+100 points");
       await loadSlots();
     } catch(e) {
       console.warn("[slots] earn failed:", e.message);

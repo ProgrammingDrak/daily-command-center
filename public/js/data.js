@@ -152,7 +152,7 @@ function transformState(state) {
       sched.push({
         id: item.id || "tl-" + sched.length,
         meetingBlockId: item.block_id || item.blockId || "",
-        title: item.label || "Untitled",
+        title: item.title || item.label || "Untitled",
         start: startStr, end: endStr,
         type: typeMap[item.type] || "task",
         meta: (item.priority ? item.priority + " priority" : "") +

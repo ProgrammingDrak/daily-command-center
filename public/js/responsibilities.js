@@ -151,7 +151,7 @@
       domain:document.getElementById("resp-domain").value,
       area:document.getElementById("resp-area").value.trim()||"general",
       cadenceDays:Math.max(1,parseInt(document.getElementById("resp-cadence-days").value,10)||7),
-      estimatedMinutes:Math.max(15,parseInt(document.getElementById("resp-estimated-minutes").value,10)||30),
+      estimatedMinutes:Math.max(1,parseInt(document.getElementById("resp-estimated-minutes").value,10)||30),
       capacityBucket:document.getElementById("resp-capacity-bucket").value,
       defaultSubtasks:document.getElementById("resp-default-subtasks").value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),
       status:"active"

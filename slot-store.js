@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const pool = require("./pg-pool");
 
-const DEFAULT_SPIN_COST = 1;
+const DEFAULT_SPIN_COST = 100;
 const DAILY_BANK_CAP_CENTS = 5000;
 const WEEKLY_BANK_CAP_CENTS = 15000;
 
@@ -217,8 +217,12 @@ async function ensureSchema() {
       source_type TEXT NOT NULL,
       source_key TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE slot_point_ledger
+      ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_point_ledger_source
       ON slot_point_ledger(workspace_id, source_type, source_key);
@@ -254,6 +258,20 @@ async function ensureAccount(workspaceId, userId) {
      RETURNING *`,
     [workspaceId, userId || null]
   );
+  const account = rows[0];
+  if (!account.settings || account.settings.taskPointsV2Migrated !== true) {
+    const { rows: migrated } = await pool.query(
+      `UPDATE slot_accounts
+       SET point_balance = point_balance * 100,
+           settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{taskPointsV2Migrated}', 'true'::jsonb, true),
+           updated_at = NOW()
+       WHERE workspace_id = $1
+         AND COALESCE(settings->>'taskPointsV2Migrated', 'false') <> 'true'
+       RETURNING *`,
+      [workspaceId]
+    );
+    if (migrated[0]) rows[0] = migrated[0];
+  }
   await seedRewards(workspaceId);
   return rows[0];
 }
@@ -410,16 +428,16 @@ async function earnTaskCredit(workspaceId, userId, body) {
   if (!sourceKey) throw new Error("source_key required");
   const description = String(body.description || body.title || "Task completed");
   const { rows } = await pool.query(
-    `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description)
-     VALUES ($1,$2,1,'task_complete',$3,$4)
+    `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description, metadata)
+     VALUES ($1,$2,100,'task_complete_v2',$3,$4,$5)
      ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
      RETURNING *`,
-    [workspaceId, userId || null, sourceKey, description]
+    [workspaceId, userId || null, sourceKey, description, { legacyEndpoint: true, title: body.title || null }]
   );
   let awarded = false;
   if (rows[0]) {
     awarded = true;
-    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + 1, updated_at=NOW() WHERE workspace_id=$1", [workspaceId]);
+    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + 100, updated_at=NOW() WHERE workspace_id=$1", [workspaceId]);
   }
   const state = await getState(workspaceId, userId);
   return { awarded, account: state.account };
@@ -439,7 +457,7 @@ function chooseWeighted(rewards) {
 async function spin(workspaceId, userId) {
   const state = await getState(workspaceId, userId);
   if (state.account.point_balance < DEFAULT_SPIN_COST) {
-    const err = new Error("Not enough credits");
+    const err = new Error("Not enough points");
     err.statusCode = 400;
     throw err;
   }
@@ -463,7 +481,7 @@ async function spin(workspaceId, userId) {
       "SELECT point_balance FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
       [workspaceId]
     );
-    if (!account || account.point_balance < DEFAULT_SPIN_COST) throw new Error("Not enough credits");
+    if (!account || account.point_balance < DEFAULT_SPIN_COST) throw new Error("Not enough points");
     await client.query("UPDATE slot_accounts SET point_balance = point_balance - $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, DEFAULT_SPIN_COST]);
     const { rows } = await client.query(
       `INSERT INTO slot_spins
@@ -568,6 +586,7 @@ function notFound(message) {
 
 module.exports = {
   ensureSchema,
+  ensureAccount,
   getState,
   createReward,
   updateReward,

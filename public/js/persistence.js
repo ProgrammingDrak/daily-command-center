@@ -68,6 +68,7 @@ function initKeys() {
   SUBTASK_KEY = "pa-subtasks-" + d;
   TRIV_FLAGS_KEY = "pa-trivial-flags-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
+  if (typeof TRIAGE_DELETED_KEY !== "undefined") TRIAGE_DELETED_KEY = "pa-triage-deleted-" + d;
   // PIN 1: rebind the pinned-active-task key and reload state on date change
   PINNED_ACTIVE_KEY = "pa-pinned-active-" + d;
   try { _pinnedActiveId = JSON.parse(localStorage.getItem(PINNED_ACTIVE_KEY) || "null"); } catch(e) { _pinnedActiveId = null; }

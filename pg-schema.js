@@ -230,8 +230,12 @@ CREATE TABLE IF NOT EXISTS slot_point_ledger (
   source_type  TEXT NOT NULL,
   source_key   TEXT NOT NULL,
   description  TEXT NOT NULL DEFAULT '',
+  metadata     JSONB NOT NULL DEFAULT '{}',
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE slot_point_ledger
+  ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_point_ledger_source
   ON slot_point_ledger(workspace_id, source_type, source_key);

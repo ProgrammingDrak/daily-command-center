@@ -238,6 +238,9 @@ let _dmCallback=null, _dmId=null, _dmEv=null, _dmSessions=[];
 function openDoneModal(id, title, onConfirm, ev){
   _dmId=id; _dmCallback=onConfirm; _dmEv=ev||null;
   document.getElementById("done-modal-title").textContent="Complete: "+title;
+  if(window.TaskPoints&&typeof window.TaskPoints.prepareDoneModal==="function"){
+    window.TaskPoints.prepareDoneModal(ev||{id,title});
+  }
   // Pre-populate notes via block editor
   const notes=loadNotes();
   const noteVal=notes[id];
@@ -660,12 +663,55 @@ function dismissTriage(triageId, note, trivial) {
   const wasDismissed = !!dismissed[triageId];
   dismissed[triageId] = { note: note || (trivial ? "Trivial -- dismissed" : ""), dismissed_at: new Date().toISOString(), trivial: !!trivial };
   saveDismissed(dismissed);
-  if(!wasDismissed&&window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
+  if(!wasDismissed&&window.TaskPoints&&typeof window.TaskPoints.awardTaskCompletion==="function"){
     const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId)||{id:triageId,title:"Triage item completed"};
-    window.SlotRewards.earnTaskCredit({id:"triage-"+triageId,title:item.title||"Triage item completed"});
+    window.TaskPoints.awardTaskCompletion({id:"triage-"+triageId,title:item.title||"Triage item completed",priority:item.priority||"Medium"}).catch(e=>console.warn("[points] triage earn failed:",e.message));
   }
   closeDismissModal();
   buildTriage();
+}
+
+let TRIAGE_DELETED_KEY = "pa-triage-deleted-" + ((__state && __state.date) || "unknown");
+function loadDeletedTriage(){
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_triageDeleted", null);
+    if (Array.isArray(v)) return v;
+  }
+  try { return JSON.parse(localStorage.getItem(TRIAGE_DELETED_KEY) || "[]"); } catch(e) { return []; }
+}
+function saveDeletedTriage(ids){
+  if (_bsSaveProp("_triageDeleted", ids)) return;
+  localStorage.setItem(TRIAGE_DELETED_KEY, JSON.stringify(ids));
+  scheduleIDBSave();
+}
+function isTriageDeleted(id){
+  return loadDeletedTriage().includes(id);
+}
+function deleteTriageItem(triageId){
+  const item = (INIT_TRIAGE || []).find(i => i.id === triageId);
+  if (!item) return;
+  if (!confirm('Delete "' + (item.title || "this triage item") + '" from today?')) return;
+
+  const deleted = loadDeletedTriage();
+  if (!deleted.includes(triageId)) deleted.push(triageId);
+  saveDeletedTriage(deleted);
+
+  const dismissed = loadDismissed();
+  if (dismissed[triageId]) {
+    delete dismissed[triageId];
+    saveDismissed(dismissed);
+  }
+
+  const triageParents = loadTriageParents();
+  if (triageParents[triageId]) {
+    delete triageParents[triageId];
+    saveTriageParents(triageParents);
+  }
+
+  if (typeof showToast === "function") showToast("Deleted triage item", "success");
+  buildTriage();
+  if (typeof buildTaskQueuePanel === "function") buildTaskQueuePanel();
+  if (typeof _updateTaskMenusBadge === "function") _updateTaskMenusBadge();
 }
 
 // Wire up overflow modal
@@ -859,6 +905,9 @@ function buildTriageCard(item) {
     notesButton({id: item.id, title: item.title}) +
     '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
     '<button class="tri-quick" data-dismiss-id="' + item.id + '" title="Quick complete">&#9889;</button>' +
+    '<button class="tri-delete-btn" data-delete-tri="' + item.id + '" title="Delete triage item" aria-label="Delete triage item">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>' +
+    '</button>' +
   '</div>';
 }
 // Triage parent linking
@@ -980,10 +1029,12 @@ function buildTriage() {
   const dismissed = loadDismissed();
   const triageParents = loadTriageParents();
   const priColors = {high:"var(--red)", medium:"var(--amber)", low:"var(--text-muted)"};
+  const deletedTriage = loadDeletedTriage();
 
   // Split into active vs completed (dismissed)
-  const active = INIT_TRIAGE.filter(i => !dismissed[i.id]);
-  const completed = INIT_TRIAGE.filter(i => !!dismissed[i.id]);
+  const visibleTriage = INIT_TRIAGE.filter(i => !deletedTriage.includes(i.id));
+  const active = visibleTriage.filter(i => !dismissed[i.id]);
+  const completed = visibleTriage.filter(i => !!dismissed[i.id]);
 
   const high = active.filter(i => i.priority === "high");
   const med = active.filter(i => i.priority === "medium");
@@ -1101,6 +1152,13 @@ function buildTriage() {
       e.stopPropagation();
       const id = btn.dataset.dismissId;
       dismissTriage(id, "", false);
+    });
+  });
+
+  document.querySelectorAll(".tri-delete-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      deleteTriageItem(btn.dataset.deleteTri);
     });
   });
 

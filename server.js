@@ -28,6 +28,7 @@ const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
+const taskPoints = require("./task-points");
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
@@ -491,7 +492,8 @@ function normalizeResponsibility(block) {
 }
 
 function taskDuration(props) {
-  return Math.max(15, Number(props.estimatedMinutes || props.duration || props.durationMin || 30));
+  // Durations are granular to the minute (floor 1). Only the UI presets snap to 15.
+  return Math.max(1, Math.round(Number(props.estimatedMinutes || props.duration || props.durationMin || 30)));
 }
 
 async function getResponsibilityBlocks(workspaceId) {
@@ -1144,6 +1146,36 @@ app.post("/api/slot/earn-task", async (req, res) => {
   }
 });
 
+// ── Task Points API ──
+app.post("/api/points/task-complete", async (req, res) => {
+  try {
+    const result = await taskPoints.awardTaskCompletion(req.workspaceId, req.session.userId, req.body || {});
+    if (result.awarded) broadcast("slot-changed", { action: "points-earned" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/points/bonus", async (req, res) => {
+  try {
+    const result = await taskPoints.awardBonus(req.workspaceId, req.session.userId, req.body || {});
+    if (result.awarded) broadcast("slot-changed", { action: "bonus-earned" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.get("/api/points/day", async (req, res) => {
+  try {
+    const date = String(req.query.date || getTodayStr());
+    res.json(await taskPoints.getDay(req.workspaceId, date));
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
 app.post("/api/slot/spin", async (req, res) => {
   try {
     const spin = await slotStore.spin(req.workspaceId, req.session.userId);
@@ -1315,7 +1347,7 @@ app.listen(PORT, async () => {
   } catch (e) { console.error("[gcal] Init error:", e.message); }
 
   try { await initVault(); } catch (e) { console.error("[vault] Init error:", e.message); }
-  try { await slotStore.ensureSchema(); } catch (e) { console.error("[slots] Schema error:", e.message); }
+  try { await taskPoints.ensureSchema(); } catch (e) { console.error("[points] Schema error:", e.message); }
 
   try { ensureSkeletonDays(); } catch (e) {}
   try { await seedScheduleBlocksFromYAML(defaultUserId, `ws-${defaultUserId}`); } catch(e) {}
