@@ -1729,7 +1729,7 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     const body = req.body || {};
     const title = String(body.title || "").trim().slice(0, 220);
     if (!title) return res.status(400).json({ error: "Task title is required" });
-    const durationMinutes = Math.max(15, Math.min(240, Number(body.durationMinutes || body.duration || 30) || 30));
+    const durationMinutes = Math.max(1, Math.min(240, Math.round(Number(body.durationMinutes || body.duration || 30) || 30)));
     const visitorName = String(body.visitorName || body.visitor_name || "").trim().slice(0, 80);
     const visitorEmail = String(body.visitorEmail || body.visitor_email || "").trim().slice(0, 180);
     const note = String(body.note || "").trim().slice(0, 1000);
@@ -2212,7 +2212,8 @@ function normalizeResponsibility(block) {
 }
 
 function taskDuration(props) {
-  return Math.max(15, Number(props.estimatedMinutes || props.duration || props.durationMin || 30));
+  // Durations are granular to the minute (floor 1). Only the UI presets snap to 15.
+  return Math.max(1, Math.round(Number(props.estimatedMinutes || props.duration || props.durationMin || 30)));
 }
 
 async function getResponsibilityBlocks(workspaceId) {

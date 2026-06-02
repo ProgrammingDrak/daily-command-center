@@ -452,7 +452,7 @@ function toggleDone(id,opts){
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const c=dur(ev),n=Math.max(15,c+delta);if(n===c)return;
+  const c=dur(ev),n=Math.max(1,c+delta);if(n===c)return;
   const s=pt(ev.start);ev.end=String(Math.floor((s+n)/60)).padStart(2,"0")+":"+String((s+n)%60).padStart(2,"0");
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
@@ -460,7 +460,7 @@ function adjustDur(id,delta){
 }
 function setDurAbsolute(id,newMin){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  const n=Math.max(15,newMin);
+  const n=Math.max(1,Math.round(newMin));
   const c=dur(ev);if(n===c)return;
   const s=pt(ev.start);ev.end=fmt(s+n);
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));

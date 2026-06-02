@@ -956,6 +956,11 @@
   .dur-nav-dots{display:flex;align-items:center;justify-content:center;gap:5px;flex:1}
   .dur-nav-dot{width:5px;height:5px;border-radius:50%;background:var(--border);transition:background 0.15s}
   .dur-nav-dot.active{background:var(--accent-light)}
+  .dur-custom{display:flex;align-items:center;gap:4px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border)}
+  .dur-custom-input{flex:1;min-width:0;height:24px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text);font-size:11px;font-weight:600;text-align:center;padding:0 4px;outline:none}
+  .dur-custom-input:focus{border-color:var(--accent)}
+  .dur-custom-btn{flex:0 0 auto;height:24px;padding:0 10px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;transition:all 0.12s}
+  .dur-custom-btn:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
   body.dur-open .tl-item:not(.has-dur-popover){pointer-events:none}
   body.dur-open .tl-item:not(.has-dur-popover) .btn-move-menu,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-del-task,
