@@ -35,7 +35,7 @@
         const start = t.start ? new Date(t.start) : null;
         const end = t.end ? new Date(t.end) : null;
         const durMin = (start && end && !isNaN(start) && !isNaN(end))
-          ? Math.max(15, Math.round((end - start) / 60000))
+          ? Math.max(1, Math.round((end - start) / 60000))
           : (t.estimated_minutes || 30);
         return {
           id: t.id,
