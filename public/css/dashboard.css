@@ -964,6 +964,7 @@
   body.dur-open .tl-item:not(.has-dur-popover){pointer-events:none}
   body.dur-open .tl-item:not(.has-dur-popover) .btn-move-menu,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-del-task,
+  body.dur-open .tl-item:not(.has-dur-popover) .btn-push-tmr,
   body.dur-open .tl-item:not(.has-dur-popover) .pomo-btn,
   body.dur-open .tl-item:not(.has-dur-popover) .notes-btn{opacity:0!important}
   .dbtn{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;transition:all 0.12s}
@@ -2086,6 +2087,7 @@
   .card .btn-move-menu:hover::after,
   .card .btn-del-task:hover::after{opacity:1}
   body.dur-open .tl-item:not(.has-dur-popover) .btn-meeting-auto,
+  body.dur-open .tl-item:not(.has-dur-popover) .btn-push-tmr,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-lock{opacity:0!important}
 
   @container (max-width:900px){
@@ -3747,6 +3749,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .gb-bible-section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
 .gb-bible-section h3{margin:0 0 8px;font-size:15px;color:var(--accent-light)}
 .gb-bible-section p{margin:0;color:var(--text);font-size:13px;line-height:1.6}
+.gb-bible-q{border-color:var(--accent);background:rgba(59,130,246,0.08)}
 .gb-kv{display:flex;justify-content:space-between;gap:14px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
 .gb-kv:last-child{border-bottom:none}
 .gb-kv-label{color:var(--text-muted);font-weight:700;flex:none}
@@ -3761,4 +3764,115 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 /* Bandwidth chip on the wrap parent: clearly distinct from the block's own duration. */
 .wrap-bw{display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--text-muted);border:1px dashed var(--border);border-radius:6px;padding:1px 6px;white-space:nowrap}
 .it-list-item.wrap-parent .ttl,.tl-item.wrap-parent .ttl{font-weight:700}
+/* Drag feedback: "wrap inside this task" = opaque purple overlay on the target. */
+.it-list-item.drag-over-nest,.tl-item.drag-over-nest{position:relative}
+.it-list-item.drag-over-nest::after,.tl-item.drag-over-nest::after{
+  content:"\2935  wrap inside";display:flex;align-items:center;justify-content:center;gap:6px;
+  position:absolute;inset:0;z-index:7;pointer-events:none;border-radius:8px;
+  font-size:11px;font-weight:700;letter-spacing:.02em;color:#fff;
+  background:rgba(147,51,234,0.66);border:2px solid #9333ea}
+/* Drag feedback: reorder to a new slot = a blue "ghost" of the task at the drop point. */
+.it-list-item.drag-over-top,.tl-item.drag-over-top,
+.it-list-item.drag-over-bottom,.tl-item.drag-over-bottom{position:relative;border:none}
+.it-list-item.drag-over-top::before,.tl-item.drag-over-top::before,
+.it-list-item.drag-over-bottom::after,.tl-item.drag-over-bottom::after{
+  content:"";position:absolute;left:0;right:0;height:34px;z-index:6;pointer-events:none;
+  background:rgba(59,130,246,0.20);border:1.5px dashed #3b82f6;border-radius:8px}
+.it-list-item.drag-over-top::before,.tl-item.drag-over-top::before{top:0;transform:translateY(calc(-100% - 3px))}
+.it-list-item.drag-over-bottom::after,.tl-item.drag-over-bottom::after{bottom:0;transform:translateY(calc(100% + 3px))}
 
+/* ======== SUBTASKS (timeless steps; smaller, collapsible, infinitely nestable) ======== */
+/* Collapse chevron shared by wraps + subtask parents. */
+.wrap-collapse{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:10px;line-height:1;padding:2px 4px;flex:none;align-self:center}
+.wrap-collapse:hover{color:var(--text)}
+.wrap-collapse-spacer{display:inline-block;width:14px;flex:none}
+.subtask-prog{font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:1px 5px;white-space:nowrap}
+.wrap-collapse.collapsed{opacity:.8}
+/* Subtask rows render as a tight, toolbar-like collapsible strip under the parent. */
+.it-list-item.subtask-row{display:flex;align-items:center;gap:5px;min-height:0;padding:1px 8px;font-size:11px;line-height:1.5;opacity:0.9}
+.it-list-item.subtask-row .sub-ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.it-list-item.subtask-row.done .sub-ttl{text-decoration:line-through;opacity:0.5}
+.it-list-item.subtask-row .chk{width:13px;height:13px;flex:none}
+.it-list-item.subtask-row .wrap-collapse{font-size:9px;padding:1px 3px}
+.it-list-item.subtask-row .sub-actions{margin-left:auto;display:flex;gap:2px;opacity:0;transition:opacity .12s}
+.it-list-item.subtask-row:hover .sub-actions{opacity:1}
+.it-list-item.subtask-row .sub-actions .btn-add-menu,.it-list-item.subtask-row .sub-actions .btn-del-task{font-size:11px;padding:0 3px;line-height:1}
+/* Timeline subtask row: compact line under the parent card. */
+.tl-item.tl-sub{display:flex;align-items:center;gap:5px;padding:1px 8px 1px 60px;font-size:11px;line-height:1.5;opacity:0.9}
+.tl-item.tl-sub .sub-ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl-item.tl-sub.done .sub-ttl{text-decoration:line-through;opacity:0.5}
+.tl-item.tl-sub .chk{width:13px;height:13px;flex:none}
+.tl-item.tl-sub .wrap-collapse{font-size:9px;padding:1px 3px}
+.tl-item.tl-sub .sub-add{margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;line-height:1;flex:none}
+.tl-item.tl-sub .sub-add:hover{color:var(--text)}
+/* Quick-add subtask popover: small, fast, anchored at the click. */
+.subtask-add-pop{display:flex;align-items:center;gap:5px;padding:6px}
+.subtask-add-pop .sub-add-input{background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;padding:4px 7px;width:190px;outline:none}
+.subtask-add-pop .sub-add-input:focus{border-color:var(--accent)}
+.subtask-add-pop .sub-add-go{background:var(--accent);border:none;color:#fff;border-radius:5px;font-size:11px;font-weight:700;padding:4px 9px;cursor:pointer}
+.subtask-add-pop .sub-add-more{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:0 4px;line-height:1}
+.subtask-add-pop .sub-add-more:hover{color:var(--text)}
+
+/* ======== MOBILE-FRIENDLY TOUCH TARGETS (<=760px) ========
+   Best practice: Apple HIG 44px, Material 48px, WCAG 2.5.5 (AAA) 44px; >=8px
+   spacing; never make an action hover-only (no hover on touch). Priority targets:
+   complete, lightning quick-complete, add-subtask, plus titles + task creation. */
+@media (max-width:760px){
+  /* Complete (primary action) — the largest, clearest target. */
+  .chk,.it-list-check{width:44px;height:44px;min-width:44px;border-radius:11px;border-width:2px}
+  .chk svg,.it-list-check svg{width:22px;height:22px}
+  /* Lightning quick-complete — ALWAYS visible on touch, full 44px, amber-filled. */
+  .chk-quick{display:inline-flex!important;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;opacity:1!important;font-size:21px;border-radius:11px;border:1px solid rgba(251,191,36,0.4);background:rgba(251,191,36,0.12);color:#fbbf24;padding:0}
+  .card:hover .chk-quick,.it-list-actions .chk-quick{opacity:1!important}
+  /* Add subtask — visible filled button at full target (was a tiny muted glyph). */
+  .btn-add-menu{width:44px;height:44px;min-width:44px;font-size:24px;color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:11px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+  /* Subtask-row actions must never be hover-hidden on touch. */
+  .it-list-item.subtask-row .sub-actions{opacity:1!important;gap:6px}
+  .it-list-item.subtask-row .sub-actions .btn-add-menu,
+  .it-list-item.subtask-row .sub-actions .btn-del-task,
+  .tl-item.tl-sub .sub-add{width:38px;height:38px;min-width:38px;font-size:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px}
+  /* >=8px between targets; let action clusters wrap rather than cram. */
+  .it-list-actions{gap:10px;flex-wrap:wrap}
+  .chk-col{gap:8px}
+  .it-list-meta,.card .meta{gap:10px}
+  /* Subtask checkbox: real target even in the compact strip. */
+  .it-list-item.subtask-row .chk,.tl-item.tl-sub .chk{width:30px;height:30px;min-width:30px}
+  /* Collapse chevron tappable. */
+  .wrap-collapse{min-width:36px;min-height:36px;font-size:13px}
+  /* Task titles — readable, clamped to 2 lines (no infinite vertical wrap). */
+  .ttl,.it-list-title-row .ttl{font-size:16px;line-height:1.3;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:100%}
+  .sub-ttl{font-size:15px;white-space:normal}
+  /* Rebuild the dense timeline card as a clean stack: checkbox + title + the two
+     key actions (quick-complete, add-subtask). The secondary toolbar is hidden so
+     the title gets real width instead of collapsing to 1-2 words per line. */
+  .card{grid-template-columns:auto minmax(0,1fr) auto !important;grid-template-rows:auto !important;column-gap:8px !important;row-gap:2px !important;padding:9px 11px !important;align-items:center !important}
+  .card .grip,.card>.bar{display:none !important}
+  .card .chk{grid-column:1 !important;grid-row:1 !important}
+  .card>.body{grid-column:2 !important;grid-row:1 !important;min-width:0}
+  /* chk-col holds the two key actions (quick-complete + add-subtask), stacked. */
+  .card .chk-col{grid-column:3 !important;grid-row:1 !important;display:flex !important;flex-direction:column !important;gap:6px !important;align-items:center !important;align-self:center !important}
+  .card .chk-quick{display:inline-flex !important}
+  .card .notes-btn,.card .btn-repeat-resp,.card .btn-meeting-auto,.card .pomo-btn,
+  .card .btn-lock,.card .btn-push-tmr,.card .btn-bounty,.card .btn-move-menu,
+  .card .btn-del-task,.card .dur,.card>svg:last-child{display:none !important}
+  /* List view rows: same clean stack — complete + title + (quick-complete / add). */
+  .it-list-item:not(.subtask-row){grid-template-columns:auto minmax(0,1fr) auto !important;align-items:center !important;gap:8px !important;min-height:0 !important}
+  .it-list-item:not(.subtask-row) .it-list-rank,
+  .it-list-item:not(.subtask-row) .it-list-grip,
+  .it-list-item:not(.subtask-row)>.bar{display:none !important}
+  .it-list-item:not(.subtask-row) .it-list-check{grid-column:1 !important}
+  .it-list-item:not(.subtask-row) .it-list-main{grid-column:2 !important;min-width:0}
+  .it-list-item:not(.subtask-row) .it-list-actions{grid-column:3 !important;margin-top:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;justify-content:center !important}
+  .it-list-actions .notes-btn,.it-list-actions .btn-push-tmr,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task{display:none !important}
+  /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
+  .tab-title,#qa-title,.resched-date-input{font-size:16px}
+  .subtask-add-pop{padding:8px}
+  .subtask-add-pop .sub-add-input{font-size:16px;width:60vw;max-width:240px;padding:10px 12px}
+  .subtask-add-pop .sub-add-go{padding:10px 15px;font-size:15px;border-radius:8px}
+  .subtask-add-pop .sub-add-more{font-size:20px;padding:6px 9px}
+}
+/* Touch devices (no hover): guarantee hover-revealed actions are always shown. */
+@media (hover:none){
+  .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
+  .it-list-item.subtask-row .sub-actions{opacity:1!important}
+}

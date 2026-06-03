@@ -116,7 +116,7 @@ function buildListView(){
     return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
   }
 
-  function row(ev,idx,mode){
+  function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
     const isPushedRow=mode==="pushed";
     const movable=!isDoneRow&&!isPushedRow&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break"&&!ev._locked;
@@ -124,12 +124,16 @@ function buildListView(){
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
     const bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null;
+    const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
+    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'';
     const el=document.createElement("div");
     el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");
+    if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     el.innerHTML=
+      chev+
       '<div class="it-list-rank">'+(idx+1)+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<button class="chk it-list-check'+(isDoneRow?' on':'')+'" title="'+(isDoneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
@@ -143,10 +147,12 @@ function buildListView(){
           (ev._locked?'<span class="it-list-lock">Locked</span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
+          (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
         (!isMeeting(ev)&&!isDoneRow?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>':'')+
         notesButton(ev)+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+dur(ev)+'" title="Start pomodoro timer">'+pomoSvg+'</button>':'')+
@@ -168,8 +174,45 @@ function buildListView(){
     if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle});});
     const del=el.querySelector(".btn-del-task");
     if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
+    const am=el.querySelector(".btn-add-menu");
+    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    const cc=el.querySelector(".wrap-collapse");
+    if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     return el;
   }
+
+  // Compact row for a subtask (a timeless step under its parent). Smaller than a
+  // first-class row; collapsible when it has its own subtasks.
+  function subRow(ev,idx,mode,node){
+    const doneRow=mode==="done"||isDone(ev);
+    const movable=!isMeeting(ev)&&!ev._locked&&!doneRow;
+    const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
+    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>';
+    const el=document.createElement("div");
+    el.className="it-list-item subtask-row"+(doneRow?" done":"")+(isActive(ev)?" active":"")+(movable?" movable":"");
+    if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
+    el.dataset.id=ev.id;
+    if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
+    el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));
+    el.innerHTML=
+      chev+
+      '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
+      '<span class="sub-ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+
+      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
+      '<div class="it-list-actions sub-actions">'+
+        '<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>'+
+        (!doneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
+      '</div>';
+    el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
+    const cc=el.querySelector(".wrap-collapse");
+    if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
+    const add=el.querySelector(".btn-add-menu");
+    if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    const del=el.querySelector(".btn-del-task");
+    if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
+    return el;
+  }
+  function emitNode(node,idx,mode){return node.rel==="subtask"?subRow(node.ev,idx,mode,node):row(node.ev,idx,mode,node);}
 
   section("Work list",activeIds.size);
   if(!openItems.length){
@@ -178,7 +221,7 @@ function buildListView(){
     empty.textContent=viewDate===((typeof _actualTodayStr==="function")?_actualTodayStr():viewDate)?"Nothing open for today.":"Nothing open on this day.";
     wrap.appendChild(empty);
   }else{
-    groupRideAlongs(openItems).forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
+    flattenSchedule(openItems).forEach((node,idx)=>wrap.appendChild(emitNode(node,idx,"open")));
   }
   if(pushedItems.length){
     section("Pushed",pushedItems.length);
@@ -186,7 +229,7 @@ function buildListView(){
   }
   if(doneItems.length){
     section("Done",doneItems.length);
-    doneItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"done")));
+    flattenSchedule(doneItems).forEach((node,idx)=>wrap.appendChild(emitNode(node,idx,"done")));
   }
 }
 
@@ -338,8 +381,34 @@ function buildSchedule(){
     ? (activeItems.find(ev => pt(ev.start) >= now()) || {}).id
     : null;
 
-  // Render active/upcoming items as full cards (ride-alongs grouped under their wrap)
-  groupRideAlongs(activeItems).forEach(ev=>{
+  // Compact timeline row for a subtask (timeless step under its parent).
+  function buildTimelineSub(node){
+    const ev=node.ev,doneRow=isDone(ev);
+    const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
+    const el=document.createElement("div");
+    el.className="tl-item tl-sub"+(doneRow?" done":"");
+    if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
+    el.dataset.id=ev.id;
+    const movable=!ev._locked&&!doneRow;
+    if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
+    el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));
+    el.innerHTML=
+      (node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>')+
+      '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
+      '<span class="sub-ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+
+      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
+      '<button class="btn-add-menu sub-add" title="Add subtask" data-add-id="'+ev.id+'">+</button>';
+    el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
+    const add=el.querySelector(".btn-add-menu");if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    return el;
+  }
+  // Delegated collapse toggle: one listener handles every wrap/subtask chevron.
+  if(!tl._collapseWired){tl._collapseWired=true;tl.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".wrap-collapse");if(!b)return;e.stopPropagation();const item=b.closest("[data-id]");if(item&&typeof toggleCollapsed==="function"){toggleCollapsed(item.dataset.id);render();}});}
+
+  // Render active/upcoming items as full cards; subtasks as compact rows (recursion + collapse).
+  flattenSchedule(activeItems).forEach(node=>{
+    const ev=node.ev;
+    if(node.rel==="subtask"){tl.appendChild(buildTimelineSub(node));return;}
     injectBlockHeaders(pt(ev.start));
     const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday);
     // PIN 1: pinned-active state overlays the auto-derived states
@@ -356,6 +425,7 @@ function buildSchedule(){
     const canEditBounty=typeof viewMode==="undefined"||viewMode!=="archive";
     const _bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null;
     const el=document.createElement("div");el.className="tl-item"+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");el.dataset.id=ev.id;
+    if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
     if(isBounty)el.classList.add("bounty");
     // Meetings and locked tasks are fixed anchors -- no drag, but still valid drop targets so other tasks can be positioned around them.
     if(!isMeeting(ev)&&!ev._locked){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
@@ -457,7 +527,7 @@ function buildSchedule(){
           '</div>'+
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
+            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
             '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
@@ -492,7 +562,8 @@ function buildSchedule(){
     const addBtn=el.querySelector(".btn-add-menu");
     if(addBtn)addBtn.addEventListener("click",e=>{
       e.stopPropagation();
-      if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
+      if(typeof openSubtaskAdd==='function')openSubtaskAdd(ev.id,addBtn);
+      else if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
     });
     const tagToggle=el.querySelector(".card-tags-toggle");
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});

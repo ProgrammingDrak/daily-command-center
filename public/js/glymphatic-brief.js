@@ -2,6 +2,7 @@
 (function(){
   var LOCAL_PREFIX = "dcc-glymphatic-brief:";
   var gbRefreshing = false;
+  var gbActivePage = null;
 
   function gbDate(){
     return (__state && __state.date) || new Date().toISOString().slice(0,10);
@@ -476,6 +477,91 @@
     '</div>';
   }
 
+  // --- Four-page brief ------------------------------------------------------
+
+  function gbPages(current){
+    return (current && Array.isArray(current.pages) && current.pages.length) ? current.pages : null;
+  }
+
+  function gbPageNav(pages, activeId){
+    return '<nav class="gb-pagenav">'+pages.map(function(p){
+      return '<button class="gb-pagebtn'+(p.id===activeId?' active':'')+'" data-gb-page="'+gbEsc(p.id)+'">'+gbEsc(p.label||p.id)+'</button>';
+    }).join("")+'</nav>';
+  }
+
+  function gbMetricRow(metrics){
+    if(!metrics || !metrics.length)return "";
+    return '<div class="gb-metric-row">'+metrics.map(function(m){
+      return '<div class="gb-metric"><span class="gb-metric-val">'+gbEsc(m.value)+'</span><span class="gb-metric-label">'+gbEsc(m.label)+'</span></div>';
+    }).join("")+'</div>';
+  }
+
+  function gbPageActualVsPlanned(page, current, ui){
+    var plan = gbPlanTasks(current.suggested_tasks || [], ui);
+    var rows = page.rows || [];
+    var rowsHtml = rows.length ? '<div class="gb-list">'+rows.map(function(r){
+      return '<div class="gb-row gb-status-'+gbEsc(r.status)+'"><span class="gb-row-dot"></span><span class="gb-row-title">'+gbEsc(r.title)+'</span><span class="gb-row-meta">'+gbEsc(r.meta||"")+'</span><span class="gb-row-status">'+gbEsc(r.status)+'</span></div>';
+    }).join("")+'</div>' : '<div class="gb-empty">No DCC task plan for today.</div>';
+    return '<p class="gb-page-summary">'+gbEsc(page.summary||"")+'</p>'+
+      gbMetricRow(page.metrics)+
+      '<section class="gb-section"><div class="gb-section-title">Planned vs done</div>'+rowsHtml+'</section>'+
+      gbTriage(current)+
+      '<section class="gb-section gb-tasks"><div class="gb-section-title">Suggested tasks</div><div class="gb-task-list">'+
+        (plan.length ? plan.map(function(item, idx){ return gbTaskCard(item, idx, plan.length, ui); }).join("") : '<div class="gb-empty">No task suggestions yet.</div>')+
+      '</div></section>';
+  }
+
+  function gbPageStepBack(page){
+    function lane(title, items, render, empty){
+      return '<section class="gb-section"><div class="gb-section-title">'+gbEsc(title)+'</div>'+
+        (items && items.length ? items.map(render).join("") : '<div class="gb-empty">'+gbEsc(empty)+'</div>')+'</section>';
+    }
+    return (page.note ? '<p class="gb-page-summary">'+gbEsc(page.note)+'</p>' : '')+
+      '<div class="gb-stepback-grid">'+
+      lane("Habits", page.habits, function(h){
+        return '<div class="gb-row"><span class="gb-row-title">'+gbEsc(h.habit)+'</span><span class="gb-row-meta">'+gbEsc(h.cadence||"")+'</span><span class="gb-row-status">'+gbEsc(h.status||"")+'</span></div>';
+      }, "No habits tracked yet -- add them in personal/habits.md.")+
+      lane("Current projects", page.projects, function(p){
+        return '<div class="gb-row gb-row-stack"><div class="gb-row-line"><span class="gb-row-title">'+gbEsc(p.name)+'</span><span class="gb-row-status">'+gbEsc(p.status||"")+'</span></div>'+(p.milestone?'<div class="gb-row-sub">'+gbEsc(p.milestone)+'</div>':'')+'</div>';
+      }, "No active projects found.")+
+      lane("Upcoming", page.upcoming, function(u){
+        return '<div class="gb-row"><span class="gb-row-meta">'+gbEsc(u.when||"")+'</span><span class="gb-row-title">'+gbEsc(u.title)+'</span></div>';
+      }, "No upcoming events.")+
+      '</div>';
+  }
+
+  function gbPageBible(page){
+    var sections = page.sections || [];
+    var q = page.question ? '<section class="gb-bible-section gb-bible-q"><h3>Open question</h3><p>'+gbEsc(page.question)+'</p><div class="gb-row-sub">Answer it in personal/personal-bible.md; the next run files it and asks a new one.</div></section>' : "";
+    return (page.source ? '<p class="gb-page-summary">Source: '+gbEsc(page.source)+' &mdash; autonomously maintained, correct anytime</p>' : '')+
+      q+
+      sections.map(function(s){
+        return '<section class="gb-bible-section"><h3>'+gbEsc(s.heading)+'</h3><p>'+gbEsc(s.body||"").replace(/\n/g,"<br>")+'</p></section>';
+      }).join("");
+  }
+
+  function gbPageProcess(page, current){
+    var pow = (page.proof_of_work||[]).map(function(x){
+      return '<div class="gb-kv"><span class="gb-kv-label">'+gbEsc(x.label)+'</span><span class="gb-kv-val">'+gbEsc(x.value)+'</span></div>';
+    }).join("");
+    var notes = page.notes || [];
+    var notesHtml = notes.length ? '<section class="gb-section"><div class="gb-section-title">Integrity findings</div>'+notes.map(function(n){return '<div class="gb-note"><span>'+gbEsc(n)+'</span></div>';}).join("")+'</section>' : "";
+    return '<p class="gb-page-summary">'+gbEsc(page.summary||"")+'</p>'+
+      gbMetricRow(page.metrics)+
+      '<section class="gb-section"><div class="gb-section-title">Proof of work</div>'+(pow||'<div class="gb-empty">No proof-of-work recorded.</div>')+'</section>'+
+      gbSection("Lessons to file", current.lessons, "gb-lessons")+
+      gbSection("Disregarded", current.disregarded, "gb-disregarded")+
+      notesHtml;
+  }
+
+  function gbRenderPage(page, current, ui){
+    if(page.id==="actual-vs-planned")return gbPageActualVsPlanned(page, current, ui);
+    if(page.id==="step-back")return gbPageStepBack(page);
+    if(page.id==="personal-bible")return gbPageBible(page);
+    if(page.id==="process")return gbPageProcess(page, current);
+    return gbMetricRow(page.metrics)+'<pre class="gb-empty">'+gbEsc(JSON.stringify(page,null,2))+'</pre>';
+  }
+
   function buildGlymphaticBrief(){
     var root = document.getElementById("glymphatic-brief-root");
     if(!root)return;
@@ -491,6 +577,30 @@
       badge.textContent = count;
       badge.style.display = count ? "" : "none";
     }
+
+    var pages = gbPages(current);
+    if(pages){
+      if(!gbActivePage || !pages.some(function(p){ return p.id===gbActivePage; }))gbActivePage = pages[0].id;
+      var active = pages.filter(function(p){ return p.id===gbActivePage; })[0] || pages[0];
+      root.innerHTML =
+        '<div class="gb-shell">'+
+          '<header class="gb-hero">'+
+            '<div>'+
+              '<div class="gb-kicker">Glymphatic Brief</div>'+
+              '<h2>'+gbEsc(current.title || "Today")+'</h2>'+
+              '<p>'+gbEsc(current.summary || "")+'</p>'+
+            '</div>'+
+            '<div class="gb-hero-side">'+
+              '<button class="gb-refresh-btn" data-gb-refresh '+(gbRefreshing?'disabled':'')+' title="Refresh DCC brief">'+(gbRefreshing?'Refreshing':'Refresh')+'</button>'+
+            '</div>'+
+          '</header>'+
+          gbPageNav(pages, gbActivePage)+
+          '<div class="gb-page" data-gb-page-panel="'+gbEsc(active.id)+'">'+gbRenderPage(active, current, ui)+'</div>'+
+          gbHistory(briefData.history)+
+        '</div>';
+      return;
+    }
+
     root.innerHTML =
       '<div class="gb-shell">'+
         '<header class="gb-hero">'+
@@ -526,6 +636,8 @@
   }
 
   document.addEventListener("click", function(e){
+    var pageBtn = e.target.closest("[data-gb-page]");
+    if(pageBtn){ gbActivePage = pageBtn.dataset.gbPage; buildGlymphaticBrief(); return; }
     var refresh = e.target.closest("[data-gb-refresh]");
     if(refresh){ gbRefresh(); return; }
     var push = e.target.closest("[data-gb-push]");

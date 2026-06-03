@@ -178,14 +178,14 @@ function workLateOverflow(){
 let ADDED_KEY = "pa-added-tasks-" + ((__state && __state.date) ? __state.date : "unknown");
 function loadAddedTasks(){ try{return JSON.parse(localStorage.getItem(ADDED_KEY)||"[]")}catch(e){return[]} }
 function saveAddedTasks(tasks){
-  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks)return; // blockstore handles it
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore)return; // blockstore handles it
   localStorage.setItem(ADDED_KEY,JSON.stringify(tasks)); scheduleIDBSave();
 }
-function persistAddedTask(item){
+function persistAddedTask(item,targetDate){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
     // Write to blockstore — will be reloaded via property-based query on refresh
-    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null);
-    window.blockStore.createBlock("block",{
+    const date=targetDate||((typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null));
+    return window.blockStore.createBlock("block",{
       kind:item.kind||undefined,
       local_id:item.id,
       type:item.type||"task",
@@ -197,6 +197,7 @@ function persistAddedTask(item){
       meta:item.meta||"",
       detail:item.detail||"",
       notionUrl:item.notionUrl||"",
+      calUrl:item.calUrl||"",
       source:item.source||"manual",
       tags:item.tags||[],
       responsibilityId:item.responsibilityId||null,
@@ -212,15 +213,38 @@ function persistAddedTask(item){
       ampUrl:item.ampUrl||null,
       hubspotUrl:item.hubspotUrl||null,
       commuteMinutes:item.commuteMinutes||null,
+      publicVisibility:item.publicVisibility||"public",
+      wrapId:item.wrapId||null,
+      isWrap:!!item.isWrap,
+      subtaskOf:item.subtaskOf||null,
+      reschedulePlacement:item.reschedulePlacement||null,
+      rescheduledFrom:item.rescheduledFrom||null,
+      sourceTaskId:item.sourceTaskId||null,
       added_at:new Date().toISOString()
     },{date});
-    return;
   }
   // Fallback: localStorage
-  const added=loadAddedTasks();
+  const key=targetDate?("pa-added-tasks-"+targetDate):ADDED_KEY;
+  let added=[];
+  try{added=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){added=[]}
   if(!added.find(t=>t.id===item.id)){
-    added.push({id:item.id,title:item.title,type:item.type||"task",durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",tags:item.tags||[],triageId:item.triageId||null,delegatedItemId:item.delegatedItemId||null,linkedBlockId:item.linkedBlockId||null,linkedTagId:item.linkedTagId||null,commuteMinutes:item.commuteMinutes||null,addedAt:new Date().toISOString()});
-    saveAddedTasks(added);
+    added.push({
+      id:item.id,title:item.title,type:item.type||"task",durMin:dur(item),
+      priority:item.priority||"High",source:item.source||"manual",
+      meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",
+      calUrl:item.calUrl||"",tags:item.tags||[],
+      triageId:item.triageId||null,delegatedItemId:item.delegatedItemId||null,
+      linkedBlockId:item.linkedBlockId||null,linkedTagId:item.linkedTagId||null,
+      ampUrl:item.ampUrl||null,hubspotUrl:item.hubspotUrl||null,
+      commuteMinutes:item.commuteMinutes||null,
+      publicVisibility:item.publicVisibility||"public",
+      wrapId:item.wrapId||null,isWrap:!!item.isWrap,subtaskOf:item.subtaskOf||null,
+      reschedulePlacement:item.reschedulePlacement||null,
+      rescheduledFrom:item.rescheduledFrom||null,
+      sourceTaskId:item.sourceTaskId||null,
+      addedAt:new Date().toISOString()
+    });
+    localStorage.setItem(key,JSON.stringify(added));scheduleIDBSave();
   }
 }
 
@@ -398,6 +422,29 @@ function awardSlotTaskCredit(ev,opts){
   }
 }
 
+// When a parent task is completed:
+//   - subtasks (its steps) complete too, recursively;
+//   - unfinished ride-alongs (independent concurrent work) promote out to standalone tasks.
+function _onParentCompleted(id){
+  if(typeof scheduled==="undefined")return;
+  // 1) Complete subtask descendants recursively (steps of a finished task).
+  (function completeSubs(pid){
+    scheduled.filter(c=>c.subtaskOf===pid).forEach(c=>{
+      if(!manualDone.has(c.id)){manualDone.add(c.id);doneAt[c.id]=new Date();}
+      completeSubs(c.id);
+    });
+  })(id);
+  // 2) Promote unfinished ride-alongs to standalone open tasks.
+  let promoted=0;
+  scheduled.filter(c=>c.wrapId===id&&!isDone(c)).forEach(c=>{
+    c.wrapId=null;
+    if(typeof _clearPin==="function")_clearPin(c);
+    if(typeof _persistEvWrap==="function")_persistEvWrap(c);
+    promoted++;
+  });
+  if(typeof recalcTimes==="function")recalcTimes();
+  if(promoted&&typeof showToast==="function")showToast(promoted+" ride-along"+(promoted>1?"s":"")+" moved out of the completed wrap","info",2600);
+}
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
@@ -425,6 +472,7 @@ function toggleDone(id,opts){
       const ev=scheduled.find(e=>e.id===id);
       const completedAt=new Date();
       manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+      _onParentCompleted(id);
       saveDoneState();render();
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
       if(typeof showToast==="function"){
@@ -446,6 +494,7 @@ function toggleDone(id,opts){
   const ev=scheduled.find(e=>e.id===id);
   const completedAt=new Date();
   manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+  _onParentCompleted(id);
   saveDoneState();render();
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});

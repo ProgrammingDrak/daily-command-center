@@ -226,6 +226,12 @@ function buildBrief({ state, openItems, meetings, health }) {
     disregarded: asArray(deepContext.disregarded).length ? asArray(deepContext.disregarded) : (previousCurrent && previousCurrent.disregarded ? previousCurrent.disregarded : []),
     suggested_tasks: suggestedTasks,
   };
+  // The four-page brief is authored by the brain's glymphatic collector, not here.
+  // Carry it forward across a UI refresh so rebuilding the triage/tasks view does
+  // not wipe the pages.
+  if (previousCurrent && Array.isArray(previousCurrent.pages) && previousCurrent.pages.length) {
+    current.pages = previousCurrent.pages;
+  }
   return {
     current,
     history: previousCurrent ? [previousCurrent, ...asArray(existingBrief.history)].slice(0, 5) : asArray(existingBrief.history).slice(0, 5),

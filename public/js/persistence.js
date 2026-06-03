@@ -78,7 +78,7 @@ function _bsSaveProp(key, value) {
 }
 
 // ======== DATE NAVIGATION ========
-// viewMode: "today" (editable, live) | "tomorrow" (editable, pre-plan) | "archive" (read-only)
+// viewMode: "today" (editable, live) | "tomorrow" (editable, pre-plan) | "future" (editable, planned) | "archive" (read-only)
 let viewMode = "today";
 let viewDate = __state ? __state.date : null;
 
@@ -228,7 +228,7 @@ function reloadPersistedEdits() {
           end:p.end||fmt(d),
           meta:p.meta||("Custom task \u00b7 "+ms(d)),
           detail:p.detail||"",source:p.source||"manual",
-          notionUrl:p.notionUrl||"",priority:p.priority||"High",
+          notionUrl:p.notionUrl||"",calUrl:p.calUrl||"",priority:p.priority||"High",
           tags:Array.isArray(p.tags)?p.tags:[],
           kind:p.kind||"",
           responsibilityId:p.responsibilityId||null,
@@ -245,31 +245,48 @@ function reloadPersistedEdits() {
           ampUrl:p.ampUrl||"",
           hubspotUrl:p.hubspotUrl||"",
           wrapId:p.wrapId||null,
-          isWrap:!!p.isWrap
+          isWrap:!!p.isWrap,
+          subtaskOf:p.subtaskOf||null,
+          reschedulePlacement:p.reschedulePlacement||null,
+          rescheduledFrom:p.rescheduledFrom||null,
+          sourceTaskId:p.sourceTaskId||null
         };
         if(p.commuteMinutes||p.commute_minutes)task.commuteMinutes=p.commuteMinutes||p.commute_minutes;
-        // Pin the start time so recalcTimes() doesn't overwrite it
-        if(hasStoredTime)task._pinnedStart=p.start;
-        scheduled.push(task);
+        // Pin the start time so recalcTimes() doesn't overwrite it (skip nested
+        // items: ride-alongs/subtasks live under their parent, never cascaded).
+        if(hasStoredTime&&!task.subtaskOf)task._pinnedStart=p.start;
+        if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task);
+        else scheduled.push(task);
       });
     } else {
       const added = loadAddedTasks();
       added.forEach(t => {
         if (scheduled.find(e => e.id === t.id)) return; // already in schedule
         const d = t.durMin || 30;
-        scheduled.push({
+        const task={
           id: t.id, title: t.title, type: t.type || "task",
           start: "00:00", end: fmt(d),
           meta: t.meta || ("Custom task \u00b7 " + ms(d)),
           detail: t.detail || "", source: t.source || "manual",
-          notionUrl: t.notionUrl || "", priority: t.priority || "High",
+          notionUrl: t.notionUrl || "", calUrl: t.calUrl || "", priority: t.priority || "High",
           tags: Array.isArray(t.tags) ? t.tags : [],
           triageId: t.triageId || null,
           delegatedItemId: t.delegatedItemId || null,
           linkedBlockId: t.linkedBlockId || null,
           linkedTagId: t.linkedTagId || null,
-          commuteMinutes: t.commuteMinutes || t.commute_minutes || null
-        });
+          ampUrl:t.ampUrl||null,
+          hubspotUrl:t.hubspotUrl||null,
+          commuteMinutes: t.commuteMinutes || t.commute_minutes || null,
+          publicVisibility:t.publicVisibility||"public",
+          wrapId:t.wrapId||null,
+          isWrap:!!t.isWrap,
+          subtaskOf:t.subtaskOf||null,
+          reschedulePlacement:t.reschedulePlacement||null,
+          rescheduledFrom:t.rescheduledFrom||null,
+          sourceTaskId:t.sourceTaskId||null
+        };
+        if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task);
+        else scheduled.push(task);
       });
     }
   } catch(e) {}
@@ -283,8 +300,8 @@ function reloadPersistedEdits() {
       const orderMap = {};
       order.forEach((id, i) => { orderMap[id] = i; });
       active.sort((a, b) => {
-        const ai = orderMap[a.id] !== undefined ? orderMap[a.id] : 9999;
-        const bi = orderMap[b.id] !== undefined ? orderMap[b.id] : 9999;
+        const ai = orderMap[a.id] !== undefined ? orderMap[a.id] : (a.reschedulePlacement === "earliest" ? -1 : 9999);
+        const bi = orderMap[b.id] !== undefined ? orderMap[b.id] : (b.reschedulePlacement === "earliest" ? -1 : 9999);
         return ai - bi;
       });
       scheduled = [...done, ...active];
@@ -362,13 +379,13 @@ async function switchToDate(dateStr) {
         newState = cached; // fall back to whatever we have
       }
     }
-    viewMode = "archive";
+    viewMode = (__todayDate && dateStr > __todayDate) ? "future" : "archive";
   } else {
     // No injected archive — try Express API for this date
     const expressState = await fetchExpressDate(dateStr);
     if (expressState) {
       newState = expressState;
-      viewMode = "archive";
+      viewMode = (__todayDate && dateStr > __todayDate) ? "future" : "archive";
     } else {
       return; // no data for this date anywhere
     }
@@ -426,6 +443,8 @@ async function switchToDate(dateStr) {
   // Update date nav display
   updateDateNav();
 
+  // Migrate any legacy modal subtasks into the unified tree (once per day) before render.
+  if (typeof migrateLegacySubtasks === "function") migrateLegacySubtasks();
   // Re-render all tabs
   if (typeof buildSchedule === "function") buildSchedule();
   if (typeof paintPivotTasks === "function") paintPivotTasks();
