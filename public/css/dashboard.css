@@ -3811,3 +3811,46 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .subtask-add-pop .sub-add-more{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:0 4px;line-height:1}
 .subtask-add-pop .sub-add-more:hover{color:var(--text)}
 
+/* ======== MOBILE-FRIENDLY TOUCH TARGETS (<=760px) ========
+   Best practice: Apple HIG 44px, Material 48px, WCAG 2.5.5 (AAA) 44px; >=8px
+   spacing; never make an action hover-only (no hover on touch). Priority targets:
+   complete, lightning quick-complete, add-subtask, plus titles + task creation. */
+@media (max-width:760px){
+  /* Complete (primary action) — the largest, clearest target. */
+  .chk,.it-list-check{width:44px;height:44px;min-width:44px;border-radius:11px;border-width:2px}
+  .chk svg,.it-list-check svg{width:22px;height:22px}
+  /* Lightning quick-complete — ALWAYS visible on touch, full 44px, amber-filled. */
+  .chk-quick{width:44px;height:44px;min-width:44px;opacity:1!important;font-size:21px;border-radius:11px;border:1px solid rgba(251,191,36,0.4);background:rgba(251,191,36,0.12);color:#fbbf24;padding:0}
+  .card:hover .chk-quick,.it-list-actions .chk-quick{opacity:1!important}
+  /* Add subtask — visible filled button at full target (was a tiny muted glyph). */
+  .btn-add-menu{width:44px;height:44px;min-width:44px;font-size:24px;color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:11px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+  /* Subtask-row actions must never be hover-hidden on touch. */
+  .it-list-item.subtask-row .sub-actions{opacity:1!important;gap:6px}
+  .it-list-item.subtask-row .sub-actions .btn-add-menu,
+  .it-list-item.subtask-row .sub-actions .btn-del-task,
+  .tl-item.tl-sub .sub-add{width:38px;height:38px;min-width:38px;font-size:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px}
+  /* >=8px between targets; let action clusters wrap rather than cram. */
+  .it-list-actions{gap:10px;flex-wrap:wrap}
+  .chk-col{gap:8px}
+  .it-list-meta,.card .meta{gap:10px}
+  /* Subtask checkbox: real target even in the compact strip. */
+  .it-list-item.subtask-row .chk,.tl-item.tl-sub .chk{width:30px;height:30px;min-width:30px}
+  /* Collapse chevron tappable. */
+  .wrap-collapse{min-width:36px;min-height:36px;font-size:13px}
+  /* Task titles — large, legible, wrap to 2 lines instead of hard truncation. */
+  .ttl{font-size:17px;line-height:1.3;white-space:normal;overflow:visible;max-width:100%}
+  .it-list-title-row .ttl{white-space:normal}
+  .sub-ttl{font-size:15px}
+  /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
+  .tab-title,#qa-title,.resched-date-input{font-size:16px}
+  .subtask-add-pop{padding:8px}
+  .subtask-add-pop .sub-add-input{font-size:16px;width:60vw;max-width:240px;padding:10px 12px}
+  .subtask-add-pop .sub-add-go{padding:10px 15px;font-size:15px;border-radius:8px}
+  .subtask-add-pop .sub-add-more{font-size:20px;padding:6px 9px}
+}
+/* Touch devices (no hover): guarantee hover-revealed actions are always shown. */
+@media (hover:none){
+  .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
+  .it-list-item.subtask-row .sub-actions{opacity:1!important}
+}
+
