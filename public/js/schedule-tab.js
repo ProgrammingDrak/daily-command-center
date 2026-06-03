@@ -175,7 +175,7 @@ function buildListView(){
     const del=el.querySelector(".btn-del-task");
     if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
     const am=el.querySelector(".btn-add-menu");
-    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==="function")openAddModal(am.dataset.addId,ev.title);});
+    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     return el;
@@ -207,7 +207,7 @@ function buildListView(){
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     const add=el.querySelector(".btn-add-menu");
-    if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     const del=el.querySelector(".btn-del-task");
     if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
     return el;
@@ -399,7 +399,7 @@ function buildSchedule(){
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
       '<button class="btn-add-menu sub-add" title="Add subtask" data-add-id="'+ev.id+'">+</button>';
     el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
-    const add=el.querySelector(".btn-add-menu");if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    const add=el.querySelector(".btn-add-menu");if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     return el;
   }
   // Delegated collapse toggle: one listener handles every wrap/subtask chevron.
@@ -562,7 +562,8 @@ function buildSchedule(){
     const addBtn=el.querySelector(".btn-add-menu");
     if(addBtn)addBtn.addEventListener("click",e=>{
       e.stopPropagation();
-      if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
+      if(typeof openSubtaskAdd==='function')openSubtaskAdd(ev.id,addBtn);
+      else if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
     });
     const tagToggle=el.querySelector(".card-tags-toggle");
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});

@@ -378,6 +378,35 @@ function getIncompleteSubtasks(taskId){
   const all=loadSubtasks();
   return(all[taskId]||[]).filter(s=>!s.done);
 }
+// Small fast popover anchored at the click to add a subtask. Stays open for
+// rapid multi-add (Enter); Escape / outside-click closes. "More" opens the full
+// Add Items modal for side projects / action items.
+function openSubtaskAdd(parentId, anchorEl){
+  document.querySelectorAll(".subtask-add-pop,.resched-popover,.dur-popover").forEach(p=>p.remove());
+  const pop=document.createElement("div");
+  pop.className="dur-popover subtask-add-pop";
+  pop.innerHTML=
+    '<input type="text" class="sub-add-input" placeholder="Add subtask…" />'+
+    '<button class="sub-add-go">Add</button>'+
+    '<button class="sub-add-more" title="More options (side project, action)">⋯</button>';
+  function close(){pop.remove();document.removeEventListener("click",onOut,true);document.removeEventListener("keydown",onKey,true);}
+  function onOut(e){if(!pop.contains(e.target)&&e.target!==anchorEl)close();}
+  function onKey(e){if(e.key==="Escape")close();}
+  const input=pop.querySelector(".sub-add-input");
+  function add(){const v=input.value.trim();if(!v)return;if(typeof addSubtask==="function")addSubtask(parentId,v);input.value="";setTimeout(()=>input.focus(),0);}
+  pop.querySelector(".sub-add-go").addEventListener("click",e=>{e.stopPropagation();add();});
+  pop.querySelector(".sub-add-more").addEventListener("click",e=>{e.stopPropagation();close();if(typeof openAddModal==="function")openAddModal(parentId,"");});
+  input.addEventListener("keydown",e=>{e.stopPropagation();if(e.key==="Enter"){e.preventDefault();add();}});
+  pop.style.position="fixed";pop.style.visibility="hidden";document.body.appendChild(pop);
+  const rect=anchorEl.getBoundingClientRect(),m=8,pw=pop.offsetWidth||250,ph=pop.offsetHeight||0;
+  let left=Math.max(m,Math.min(rect.left,window.innerWidth-pw-m));
+  let top=rect.bottom+6;
+  if(top+ph>window.innerHeight-m){const above=rect.top-ph-6;if(above>=m)top=above;}
+  top=Math.max(m,Math.min(top,window.innerHeight-ph-m));
+  pop.style.left=left+"px";pop.style.top=top+"px";pop.style.visibility="";
+  input.focus();
+  setTimeout(()=>{document.addEventListener("click",onOut,true);document.addEventListener("keydown",onKey,true);},0);
+}
 // One-time-per-day migration of legacy modal subtasks (the {text,done} map) into
 // real subtask tasks in the unified tree. Idempotent + guarded per day.
 function migrateLegacySubtasks(){

@@ -3785,18 +3785,29 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .wrap-collapse:hover{color:var(--text)}
 .wrap-collapse-spacer{display:inline-block;width:14px;flex:none}
 .subtask-prog{font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:1px 5px;white-space:nowrap}
-/* List subtask row: compact, lighter than a first-class row. */
-.it-list-item.subtask-row{display:flex;align-items:center;gap:6px;min-height:0;padding:3px 8px;font-size:12px;opacity:0.92}
+.wrap-collapse.collapsed{opacity:.8}
+/* Subtask rows render as a tight, toolbar-like collapsible strip under the parent. */
+.it-list-item.subtask-row{display:flex;align-items:center;gap:5px;min-height:0;padding:1px 8px;font-size:11px;line-height:1.5;opacity:0.9}
 .it-list-item.subtask-row .sub-ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .it-list-item.subtask-row.done .sub-ttl{text-decoration:line-through;opacity:0.5}
-.it-list-item.subtask-row .chk{width:15px;height:15px;flex:none}
+.it-list-item.subtask-row .chk{width:13px;height:13px;flex:none}
+.it-list-item.subtask-row .wrap-collapse{font-size:9px;padding:1px 3px}
 .it-list-item.subtask-row .sub-actions{margin-left:auto;display:flex;gap:2px;opacity:0;transition:opacity .12s}
 .it-list-item.subtask-row:hover .sub-actions{opacity:1}
+.it-list-item.subtask-row .sub-actions .btn-add-menu,.it-list-item.subtask-row .sub-actions .btn-del-task{font-size:11px;padding:0 3px;line-height:1}
 /* Timeline subtask row: compact line under the parent card. */
-.tl-item.tl-sub{display:flex;align-items:center;gap:6px;padding:2px 8px 2px 64px;font-size:12px;opacity:0.92}
+.tl-item.tl-sub{display:flex;align-items:center;gap:5px;padding:1px 8px 1px 60px;font-size:11px;line-height:1.5;opacity:0.9}
 .tl-item.tl-sub .sub-ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tl-item.tl-sub.done .sub-ttl{text-decoration:line-through;opacity:0.5}
-.tl-item.tl-sub .chk{width:15px;height:15px;flex:none}
-.tl-item.tl-sub .sub-add{margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;line-height:1;flex:none}
+.tl-item.tl-sub .chk{width:13px;height:13px;flex:none}
+.tl-item.tl-sub .wrap-collapse{font-size:9px;padding:1px 3px}
+.tl-item.tl-sub .sub-add{margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;line-height:1;flex:none}
 .tl-item.tl-sub .sub-add:hover{color:var(--text)}
+/* Quick-add subtask popover: small, fast, anchored at the click. */
+.subtask-add-pop{display:flex;align-items:center;gap:5px;padding:6px}
+.subtask-add-pop .sub-add-input{background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;padding:4px 7px;width:190px;outline:none}
+.subtask-add-pop .sub-add-input:focus{border-color:var(--accent)}
+.subtask-add-pop .sub-add-go{background:var(--accent);border:none;color:#fff;border-radius:5px;font-size:11px;font-weight:700;padding:4px 9px;cursor:pointer}
+.subtask-add-pop .sub-add-more{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:0 4px;line-height:1}
+.subtask-add-pop .sub-add-more:hover{color:var(--text)}
 
