@@ -123,8 +123,9 @@ function buildListView(){
     const c=cfg(ev.type);
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
+    const bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null;
     const el=document.createElement("div");
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
@@ -141,6 +142,7 @@ function buildListView(){
           '<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
           (ev._locked?'<span class="it-list-lock">Locked</span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
+          (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
@@ -176,7 +178,7 @@ function buildListView(){
     empty.textContent=viewDate===((typeof _actualTodayStr==="function")?_actualTodayStr():viewDate)?"Nothing open for today.":"Nothing open on this day.";
     wrap.appendChild(empty);
   }else{
-    openItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
+    groupRideAlongs(openItems).forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
   }
   if(pushedItems.length){
     section("Pushed",pushedItems.length);
@@ -336,8 +338,8 @@ function buildSchedule(){
     ? (activeItems.find(ev => pt(ev.start) >= now()) || {}).id
     : null;
 
-  // Render active/upcoming items as full cards
-  activeItems.forEach(ev=>{
+  // Render active/upcoming items as full cards (ride-alongs grouped under their wrap)
+  groupRideAlongs(activeItems).forEach(ev=>{
     injectBlockHeaders(pt(ev.start));
     const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday);
     // PIN 1: pinned-active state overlays the auto-derived states
@@ -352,7 +354,8 @@ function buildSchedule(){
     const bountySponsorTitle=bountyMeta.hasSponsor?("Bounty from "+(bountyMeta.sponsorName||"a visitor")).replace(/"/g,'&quot;'):"";
     const bountyPlaced=typeof hasSelfBounty==="function"?hasSelfBounty():!!(typeof getDailyBounty==="function"&&getDailyBounty());
     const canEditBounty=typeof viewMode==="undefined"||viewMode!=="archive";
-    const el=document.createElement("div");el.className="tl-item";el.dataset.id=ev.id;
+    const _bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null;
+    const el=document.createElement("div");el.className="tl-item"+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");el.dataset.id=ev.id;
     if(isBounty)el.classList.add("bounty");
     // Meetings and locked tasks are fixed anchors -- no drag, but still valid drop targets so other tasks can be positioned around them.
     if(!isMeeting(ev)&&!ev._locked){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
@@ -455,7 +458,7 @@ function buildSchedule(){
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+evSrcTag+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' \u00b7 Now':'')+'</span></div>'+
-            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+colorMeta(ev)+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
