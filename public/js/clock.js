@@ -62,6 +62,10 @@ function updateDateNav() {
     badge.textContent = "TOMORROW";
     badge.className = "dn-badge tomorrow";
     badge.style.display = "";
+  } else if (viewMode === "future") {
+    badge.textContent = "PLANNED";
+    badge.className = "dn-badge tomorrow";
+    badge.style.display = "";
   } else if (viewMode === "archive") {
     badge.textContent = "ARCHIVE";
     badge.className = "dn-badge archive";
@@ -183,4 +187,3 @@ document.addEventListener("click", function(e) {
 (function initDateNav() {
   updateDateNav();
 })();
-

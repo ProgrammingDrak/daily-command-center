@@ -964,6 +964,7 @@
   body.dur-open .tl-item:not(.has-dur-popover){pointer-events:none}
   body.dur-open .tl-item:not(.has-dur-popover) .btn-move-menu,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-del-task,
+  body.dur-open .tl-item:not(.has-dur-popover) .btn-push-tmr,
   body.dur-open .tl-item:not(.has-dur-popover) .pomo-btn,
   body.dur-open .tl-item:not(.has-dur-popover) .notes-btn{opacity:0!important}
   .dbtn{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;transition:all 0.12s}
@@ -2086,6 +2087,7 @@
   .card .btn-move-menu:hover::after,
   .card .btn-del-task:hover::after{opacity:1}
   body.dur-open .tl-item:not(.has-dur-popover) .btn-meeting-auto,
+  body.dur-open .tl-item:not(.has-dur-popover) .btn-push-tmr,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-lock{opacity:0!important}
 
   @container (max-width:900px){
@@ -3874,4 +3876,3 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
   .it-list-item.subtask-row .sub-actions{opacity:1!important}
 }
-

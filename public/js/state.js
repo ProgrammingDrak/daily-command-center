@@ -433,6 +433,150 @@ function _prettyDateLabel(dateStr){
   try{return new Date(dateStr+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}catch(e){return dateStr}
 }
 
+function _actualDateStr(offsetDays){
+  const n=new Date();
+  n.setDate(n.getDate()+(offsetDays||0));
+  return n.getFullYear()+"-"+String(n.getMonth()+1).padStart(2,"0")+"-"+String(n.getDate()).padStart(2,"0");
+}
+
+function _resolvedTodayDate(){return __todayDate||_actualDateStr(0)}
+function _resolvedTomorrowDate(){return __tomorrowDate||_actualDateStr(1)}
+
+function _rescheduledTaskId(ev,targetDate){
+  const base=String((ev&&ev.sourceTaskId)||((ev&&ev.id)||qaId())).replace(/[^a-zA-Z0-9_-]/g,"-");
+  const dateSlug=String(targetDate||"").replace(/[^0-9]/g,"");
+  return base+"-resched-"+dateSlug;
+}
+
+function _cloneTaskForReschedule(ev,targetDate,fromDate){
+  const d=dur(ev)||30;
+  const tags=Array.isArray(ev.tags)?ev.tags.filter(t=>t!=="wrap"):[];
+  return {
+    id:_rescheduledTaskId(ev,targetDate),
+    title:ev.title,
+    type:ev.type||"task",
+    start:"00:00",
+    end:fmt(d),
+    priority:ev.priority||"High",
+    meta:ev.meta||"",
+    detail:ev.detail||"",
+    notionUrl:ev.notionUrl||"",
+    calUrl:ev.calUrl||"",
+    source:"rescheduled",
+    tags,
+    kind:ev.kind||"",
+    responsibilityId:ev.responsibilityId||null,
+    responsibilityTitle:ev.responsibilityTitle||null,
+    capacityBucket:ev.capacityBucket||null,
+    responsibilityScore:ev.responsibilityScore||null,
+    alertKey:ev.alertKey||null,
+    alertType:ev.alertType||null,
+    publicVisibility:ev.publicVisibility||"public",
+    triageId:ev.triageId||null,
+    delegatedItemId:ev.delegatedItemId||null,
+    linkedBlockId:ev.linkedBlockId||null,
+    linkedTagId:ev.linkedTagId||null,
+    ampUrl:ev.ampUrl||null,
+    hubspotUrl:ev.hubspotUrl||null,
+    commuteMinutes:ev.commuteMinutes||ev.commute_minutes||null,
+    wrapId:null,
+    isWrap:false,
+    subtaskOf:null,
+    reschedulePlacement:"earliest",
+    rescheduledFrom:{date:fromDate||"unknown",taskId:ev.id},
+    sourceTaskId:ev.sourceTaskId||ev.id
+  };
+}
+
+function _clearTaskPinAndLock(ev){
+  if(!ev)return;
+  if(ev._pinnedStart){
+    delete ev._pinnedStart;
+    try{const pins=loadPinnedStarts();delete pins[ev.id];savePinnedStarts(pins)}catch(e){}
+  }
+  if(ev._locked){
+    delete ev._locked;
+    try{const locks=new Set(loadLockedSet());locks.delete(ev.id);saveLockedSet([...locks])}catch(e){}
+  }
+}
+
+function _placeTaskAtNextTodaySlot(id){
+  const idx=scheduled.findIndex(e=>e.id===id);
+  if(idx<0)return null;
+  const moved=scheduled[idx];
+  const d=dur(moved)||30;
+  scheduled.splice(idx,1);
+  _clearTaskPinAndLock(moved);
+  pushedSet.delete(id);delete pushedAt[id];
+  deletedSet.delete(id);
+  if(typeof savePushedState==="function")savePushedState();
+  if(typeof saveDeletedState==="function")saveDeletedState();
+
+  const roundTo15=m=>Math.ceil(m/15)*15;
+  const active=scheduled.find(isActive);
+  const cursor=roundTo15(active?pt(active.end):now());
+  const blockers=(typeof _meetingBlocks==="function")?_meetingBlocks().slice():[];
+  const startMin=(typeof _freeStart==="function")?_freeStart(cursor,d,blockers):cursor;
+  const startStr=fmt(startMin);
+  moved.start=startStr;
+  moved.end=fmt(startMin+d);
+  moved._pinnedStart=startStr;
+
+  try{const pins=loadPinnedStarts();pins[id]=startStr;savePinnedStarts(pins)}catch(e){}
+
+  const activeIdx=scheduled.findIndex(isActive);
+  const insertAt=activeIdx!==-1?activeIdx+1:(()=>{
+    const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));
+    return fi.length?fi[0].i:scheduled.length;
+  })();
+  scheduled.splice(insertAt,0,moved);
+  if(typeof recalcTimes==="function")recalcTimes();
+  if(typeof saveTaskOrder==="function")saveTaskOrder();
+  if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+  return moved;
+}
+
+function _placeTaskAtEarliestCurrentDateSlot(id){
+  const idx=scheduled.findIndex(e=>e.id===id);
+  if(idx<0)return null;
+  const moved=scheduled[idx];
+  const d=dur(moved)||30;
+  scheduled.splice(idx,1);
+  _clearTaskPinAndLock(moved);
+  pushedSet.delete(id);delete pushedAt[id];
+  deletedSet.delete(id);
+  if(typeof savePushedState==="function")savePushedState();
+  if(typeof saveDeletedState==="function")saveDeletedState();
+
+  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
+  const startMin=blocks.length?pt(blocks[0].start):7*60;
+  moved.start=fmt(startMin);
+  moved.end=fmt(startMin+d);
+  scheduled.unshift(moved);
+  if(typeof recalcTimes==="function")recalcTimes();
+  if(typeof saveTaskOrder==="function")saveTaskOrder();
+  if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+  return moved;
+}
+
+async function _hideSourceTaskForReschedule(id,fromDate,ev){
+  pushedSet.delete(id);
+  delete pushedAt[id];
+  if(typeof savePushedState==="function")savePushedState();
+  deletedSet.add(id);
+  if(typeof saveDeletedState==="function")saveDeletedState();
+
+  if(window.blockStore&&(ev.source==="manual"||ev.source==="pushed"||ev.source==="rescheduled"||ev._blockId)){
+    await _removeTaskBlockFromDate(id,fromDate,ev);
+  } else {
+    try{
+      const before=loadAddedTasks();
+      const after=before.filter(t=>t.id!==id);
+      if(after.length!==before.length)saveAddedTasks(after);
+    }catch(e){}
+  }
+}
+
 // Schedule `ev` (a task) onto an arbitrary `targetDate`. Picks a free slot from
 // the day's existing meetings + already-scheduled blocks. Used by push-to-tomorrow
 // and the generalized rescheduler.
@@ -630,26 +774,10 @@ function _purgeManualBlock(ev){
 }
 
 async function moveTaskToToday(id){
-  const ev=scheduled.find(e=>e.id===id);
-  if(!ev)return;
-  const viewDate=(__state&&__state.date)||null;
-  const todayDate=(typeof __todayDate!=="undefined"&&__todayDate)||new Date().toISOString().slice(0,10);
-  if(viewDate===todayDate){
-    deletedSet.add(id);saveDeletedState();
-    _purgeManualBlock(ev);
-    insertTaskNow(ev.title,dur(ev)||30);
-    if(typeof showToast==="function")showToast("Moved to today's next free slot","success");
-    return;
-  }
-  const startTime=await _scheduleTaskOnDate(ev,todayDate,(window.__DCC_STATE__&&window.__DCC_STATE__.date===todayDate)?window.__DCC_STATE__:null);
-  if(!startTime)return;
-  deletedSet.add(id);saveDeletedState();
-  _purgeManualBlock(ev);
-  if(typeof showToast==="function")showToast("Moved to today at "+f12(startTime),"success");
-  render();
+  return rescheduleTaskToDate(id,_resolvedTodayDate());
 }
 
-function moveTaskToTomorrow(id){pushTask(id);}
+function moveTaskToTomorrow(id){return rescheduleTaskToDate(id,_resolvedTomorrowDate());}
 
 async function moveTaskToNextWeek(id){
   const ev=scheduled.find(e=>e.id===id);
@@ -729,44 +857,35 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   if(!ev)return;
   const fromDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   if(fromDate===targetDate){
-    if(typeof showToast==="function")showToast("Already on "+_prettyDateLabel(targetDate),"error");
+    const isActualToday=targetDate===_resolvedTodayDate();
+    const moved=isActualToday?_placeTaskAtNextTodaySlot(id):_placeTaskAtEarliestCurrentDateSlot(id);
+    if(moved){
+      log("rescheduled",id,"Moved within "+targetDate+": "+moved.title);
+      const msg=isActualToday?"Moved to today's next free slot":"Moved to the earliest slot on "+_prettyDateLabel(targetDate);
+      if(!opts.silent&&typeof showToast==="function")showToast(msg,"success");
+      render();
+      if(typeof checkOverflow==="function")checkOverflow();
+    }
+    return moved;
+  }
+
+  const movedTask=_cloneTaskForReschedule(ev,targetDate,fromDate);
+  let block=null;
+  try{
+    block=await persistAddedTask(movedTask,targetDate);
+  }catch(e){
+    if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
     return;
   }
 
-  const block=await schedulePushedOnDate(ev,targetDate,{silent:true,useExisting:true});
-  if(!block){
-    // silent:true suppresses schedulePushedOnDate's own toast (we want to keep
-    // its success toast quiet and post our own "Moved to X" below). Surface the
-    // failure here so a no-slot day doesn't look like the button did nothing.
-    if(typeof showToast==="function")showToast("No open slot on "+_prettyDateLabel(targetDate)+"'s schedule","error");
-    return;
-  }
-
-  // Remove from the source date.
-  // Manual / pushed tasks live as blockstore blocks on `fromDate` -- delete the source.
-  // Native schedule items (meetings, etc.) come from INIT_SCHED -- mark as pushed instead.
-  if(window.blockStore&&(ev.source==="manual"||ev.source==="pushed"||ev._blockId)){
-    await _removeTaskBlockFromDate(id,fromDate,ev);
-    // Drop any local "added task" mirror for this id on the source date
-    try{
-      const added=loadAddedTasks().filter(t=>t.id!==id);
-      saveAddedTasks(added);
-    }catch(e){}
-  }
-  pushedSet.add(id);pushedAt[id]=new Date().toISOString();
-  const deferred=loadDeferred();
-  if(!deferred.find(d=>d.id===id)){
-    deferred.push({...ev,deferred_from:fromDate||"unknown",deferred_at:new Date().toISOString(),pushed_to:targetDate});
-    saveDeferred(deferred);
-  }
-  savePushedState();
+  await _hideSourceTaskForReschedule(id,fromDate,ev);
   log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
 
   if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
 
   if(typeof recalcTimes==="function")recalcTimes();
   render();
-  return block;
+  return block||movedTask;
 }
 
 function pushTask(id){
@@ -944,8 +1063,8 @@ function openReschedulePopover(id,anchorEl){
           // Already viewing today: re-slot the task to the next free slot now.
           await moveTaskToToday(id);
         }else{
-          // Cross-day move (and same-day "Tomorrow", which surfaces an
-          // "Already on tomorrow" toast inside rescheduleTaskToDate).
+          // Cross-day moves create a target-day task; same-day planned views
+          // re-slot within that date.
           await rescheduleTaskToDate(id,dateStr);
         }
       }finally{
@@ -1050,4 +1169,3 @@ function closeCompletionDateConfirm(){
   if(overlay)overlay.classList.remove("open");
   _cdcId=null;_cdcSourceDate=null;_cdcTodayStr=null;
 }
-
