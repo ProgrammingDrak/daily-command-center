@@ -342,32 +342,72 @@ loadSubtasks=function(){
   return _origLoadSubtasks();
 };
 
+// Subtasks are now real tasks in the unified tree (subtaskOf = parent id), so
+// they render inline, nest infinitely, intermix with wraps, and share
+// completion/points with regular tasks. The legacy loadSubtasks/saveSubtasks
+// map is retained only for migration of pre-existing data.
 function addSubtask(taskId, text){
-  if(!text.trim())return;
-  const all=loadSubtasks();
-  if(!all[taskId])all[taskId]=[];
-  all[taskId].push({id:"st-"+Date.now(),text:text.trim(),done:false,created:new Date().toISOString()});
-  saveSubtasks(all);
-  render(); // Global guard in render() handles modal-open deferral
+  if(!text||!text.trim())return;
+  text=text.trim();
+  const id="st-"+Date.now();
+  const parent=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null;
+  const startStr=(parent&&parent.start)||"00:00";
+  const task={id:id,title:text,type:"task",subtaskOf:taskId,source:"manual",
+    start:startStr,end:startStr,priority:"Medium",tags:[],meta:""};
+  if(typeof scheduled!=="undefined")scheduled.push(task);
+  if(window.blockStore&&window.blockStore.createBlock){
+    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+    window.blockStore.createBlock("block",{local_id:id,title:text,type:"task",subtaskOf:taskId,source:"manual",
+      start:startStr,end:startStr,duration:0,priority:"Medium",tags:[],added_at:new Date().toISOString()},{date:date});
+  }
+  render();
 }
 function toggleSubtask(taskId, stId){
-  const all=loadSubtasks();
-  if(!all[taskId])return;
-  const st=all[taskId].find(s=>s.id===stId);
-  if(st)st.done=!st.done;
-  saveSubtasks(all);
+  if(typeof manualDone==="undefined")return;
+  if(manualDone.has(stId)){manualDone.delete(stId);if(typeof doneAt!=="undefined")delete doneAt[stId];}
+  else{manualDone.add(stId);if(typeof doneAt!=="undefined")doneAt[stId]=new Date();}
+  if(typeof saveDoneState==="function")saveDoneState();
   render();
 }
 function deleteSubtask(taskId, stId){
-  const all=loadSubtasks();
-  if(!all[taskId])return;
-  all[taskId]=all[taskId].filter(s=>s.id!==stId);
-  saveSubtasks(all);
+  if(typeof openDeleteConfirm==="function"){openDeleteConfirm(stId);return;}
+  if(typeof scheduled!=="undefined"){const i=scheduled.findIndex(e=>e.id===stId);if(i>=0)scheduled.splice(i,1);}
   render();
 }
 function getIncompleteSubtasks(taskId){
   const all=loadSubtasks();
   return(all[taskId]||[]).filter(s=>!s.done);
+}
+// One-time-per-day migration of legacy modal subtasks (the {text,done} map) into
+// real subtask tasks in the unified tree. Idempotent + guarded per day.
+function migrateLegacySubtasks(){
+  try{
+    if(typeof scheduled==="undefined"||typeof loadSubtasks!=="function")return;
+    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:"unknown");
+    const flag="pa-subtasks-migrated-"+date;
+    if(localStorage.getItem(flag))return;
+    const map=loadSubtasks()||{};
+    let migrated=0;
+    Object.keys(map).forEach(parentId=>{
+      (map[parentId]||[]).forEach(st=>{
+        if(!st||!st.text)return;
+        if(scheduled.find(e=>e.id===st.id))return; // already a real task
+        const parent=scheduled.find(e=>e.id===parentId);
+        const startStr=(parent&&parent.start)||"00:00";
+        scheduled.push({id:st.id,title:st.text,type:"task",subtaskOf:parentId,source:"manual",start:startStr,end:startStr,priority:"Medium",tags:[],meta:""});
+        if(st.done&&typeof manualDone!=="undefined")manualDone.add(st.id);
+        if(window.blockStore&&window.blockStore.createBlock){
+          window.blockStore.createBlock("block",{local_id:st.id,title:st.text,type:"task",subtaskOf:parentId,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[],added_at:(st.created||new Date().toISOString())},{date:date});
+        }
+        migrated++;
+      });
+    });
+    if(migrated){
+      if(typeof saveSubtasks==="function")saveSubtasks({}); // retire the legacy store for this day
+      if(typeof saveDoneState==="function")saveDoneState();
+    }
+    localStorage.setItem(flag,"1");
+  }catch(e){}
 }
 function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
   const all=loadSubtasks();

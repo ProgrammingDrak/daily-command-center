@@ -283,8 +283,9 @@ function renderModalItems(taskId) {
   // Collect all items with their types and timestamps
   var items = [];
 
-  // Subtasks
-  var subs = (typeof loadSubtasks === 'function' ? loadSubtasks() : {})[taskId] || [];
+  // Subtasks (real tasks in the unified tree: subtaskOf === taskId)
+  var subs = (typeof scheduled !== 'undefined' ? scheduled.filter(function(t){return t.subtaskOf===taskId;}) : [])
+    .map(function(t){return { id:t.id, text:t.title, done:(typeof isDone==='function'&&isDone(t)), created:'2000-01-01' };});
   subs.forEach(function(st) {
     items.push({ type: 'subtask', id: st.id, text: st.text, done: !!st.done, created: st.created || '2000-01-01' });
   });

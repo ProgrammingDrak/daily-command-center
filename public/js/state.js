@@ -56,9 +56,71 @@ function groupRideAlongs(items){
 }
 function wrapBandwidth(ev,pool){
   if(!isWrap(ev))return null;
-  const kids=(pool||[]).filter(k=>wrapParentId(k)===ev.id);
+  const kids=(pool||[]).filter(k=>wrapParentId(k)===ev.id&&relOf(k)==="ride-along");
   if(!kids.length)return null;
   return {count:kids.length,mins:kids.reduce((s,k)=>s+(dur(k)||0),0)};
+}
+
+// ======== UNIFIED TASK TREE (wraps + subtasks, infinitely nestable) ========
+// Every item can have a parent via one of two edge types:
+//   wrapId    -> "ride-along" (concurrent, first-class row, has its own time)
+//   subtaskOf -> "subtask"    (timeless step, smaller collapsible row)
+// Both nest arbitrarily and intermix. recalcTimes skips anything nested.
+function parentIdOf(ev){return (ev&&(ev.wrapId||ev.subtaskOf))||null;}
+function relOf(ev){return ev?(ev.wrapId?"ride-along":(ev.subtaskOf?"subtask":null)):null;}
+function isSubtask(ev){return !!(ev&&ev.subtaskOf);}
+function isNested(ev){return !!parentIdOf(ev);}
+function childrenOf(id,pool){return (pool||[]).filter(c=>parentIdOf(c)===id);}
+// Subtask completion progress for a parent (recursive over subtask descendants).
+// _seen guards against accidental parent cycles in the data.
+function subtaskProgress(id,pool,_seen){
+  _seen=_seen||new Set();
+  if(_seen.has(id))return null;
+  _seen.add(id);
+  const subs=(pool||scheduled).filter(c=>c.subtaskOf===id);
+  if(!subs.length)return null;
+  let done=0,total=0;
+  subs.forEach(s=>{total++;if(isDone(s))done++;const sub=subtaskProgress(s.id,pool,_seen);if(sub){total+=sub.total;done+=sub.done;}});
+  return {done,total};
+}
+
+// Collapse state for any parent row (persisted in localStorage).
+let _collapsedSet=null;
+function loadCollapsed(){
+  if(_collapsedSet)return _collapsedSet;
+  try{_collapsedSet=new Set(JSON.parse(localStorage.getItem("pa-collapsed-v1")||"[]"));}
+  catch(e){_collapsedSet=new Set();}
+  return _collapsedSet;
+}
+function isCollapsed(id){return loadCollapsed().has(id);}
+function toggleCollapsed(id){
+  const s=loadCollapsed();
+  if(s.has(id))s.delete(id);else s.add(id);
+  try{localStorage.setItem("pa-collapsed-v1",JSON.stringify([...s]));}catch(e){}
+}
+
+// Recursive flatten of a task list into render order. Returns nodes
+// {ev, depth, rel, hasKids, collapsed}; descendants of a collapsed node are
+// omitted. Children render ride-alongs first (by start), then subtasks.
+function flattenSchedule(items){
+  const byId=new Map(items.map(e=>[e.id,e]));
+  const out=[],seen=new Set();
+  function walk(ev,depth){
+    if(seen.has(ev.id)||depth>20)return; // cycle / runaway guard
+    seen.add(ev.id);
+    const kids=childrenOf(ev.id,items);
+    const hasKids=kids.length>0;
+    const collapsed=hasKids&&isCollapsed(ev.id);
+    out.push({ev,depth,rel:relOf(ev),hasKids,collapsed});
+    if(hasKids&&!collapsed){
+      const ride=kids.filter(k=>relOf(k)==="ride-along").sort((a,b)=>pt(a.start)-pt(b.start));
+      const subs=kids.filter(k=>relOf(k)==="subtask");
+      ride.concat(subs).forEach(k=>walk(k,depth+1));
+    }
+  }
+  // Roots = items whose parent isn't in this list (top-level or orphaned).
+  items.forEach(ev=>{const p=parentIdOf(ev);if(!p||!byId.has(p))walk(ev,0);});
+  return out;
 }
 function now(){return new Date().getHours()*60+new Date().getMinutes()}
 function isDone(ev){return manualDone.has(ev.id)}

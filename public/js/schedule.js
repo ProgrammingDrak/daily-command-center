@@ -398,6 +398,29 @@ function awardSlotTaskCredit(ev,opts){
   }
 }
 
+// When a parent task is completed:
+//   - subtasks (its steps) complete too, recursively;
+//   - unfinished ride-alongs (independent concurrent work) promote out to standalone tasks.
+function _onParentCompleted(id){
+  if(typeof scheduled==="undefined")return;
+  // 1) Complete subtask descendants recursively (steps of a finished task).
+  (function completeSubs(pid){
+    scheduled.filter(c=>c.subtaskOf===pid).forEach(c=>{
+      if(!manualDone.has(c.id)){manualDone.add(c.id);doneAt[c.id]=new Date();}
+      completeSubs(c.id);
+    });
+  })(id);
+  // 2) Promote unfinished ride-alongs to standalone open tasks.
+  let promoted=0;
+  scheduled.filter(c=>c.wrapId===id&&!isDone(c)).forEach(c=>{
+    c.wrapId=null;
+    if(typeof _clearPin==="function")_clearPin(c);
+    if(typeof _persistEvWrap==="function")_persistEvWrap(c);
+    promoted++;
+  });
+  if(typeof recalcTimes==="function")recalcTimes();
+  if(promoted&&typeof showToast==="function")showToast(promoted+" ride-along"+(promoted>1?"s":"")+" moved out of the completed wrap","info",2600);
+}
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
@@ -425,6 +448,7 @@ function toggleDone(id,opts){
       const ev=scheduled.find(e=>e.id===id);
       const completedAt=new Date();
       manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+      _onParentCompleted(id);
       saveDoneState();render();
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
       if(typeof showToast==="function"){
@@ -446,6 +470,7 @@ function toggleDone(id,opts){
   const ev=scheduled.find(e=>e.id===id);
   const completedAt=new Date();
   manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+  _onParentCompleted(id);
   saveDoneState();render();
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});

@@ -7,9 +7,22 @@ function dStart(e,id){
   const el=e.target.closest(".tl-item");if(el)el.classList.add("dragging");
   const listEl=e.target.closest(".it-list-item");if(listEl)listEl.classList.add("dragging");
 }
-function dEnd(){dragId=null;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom"))}
-function dOver(e,id){e.preventDefault();if(id===dragId)return;const r=e.currentTarget.getBoundingClientRect(),mid=r.top+r.height/2;e.currentTarget.classList.toggle("drag-over-top",e.clientY<mid);e.currentTarget.classList.toggle("drag-over-bottom",e.clientY>=mid)}
-function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom")}
+function dEnd(){dragId=null;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest"))}
+function dOver(e,id){
+  e.preventDefault();
+  if(id===dragId)return;
+  const tgt=e.currentTarget,r=tgt.getBoundingClientRect();
+  const y=e.clientY-r.top,h=r.height;
+  tgt.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest");
+  const targetEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===id):null;
+  // Middle band of a wrap row = "nest into this wrap"; edges = reorder as a sibling.
+  if(targetEv&&typeof isWrap==="function"&&isWrap(targetEv)&&y>h*0.28&&y<h*0.72){
+    tgt.classList.add("drag-over-nest");return;
+  }
+  tgt.classList.toggle("drag-over-top",y<h/2);
+  tgt.classList.toggle("drag-over-bottom",y>=h/2);
+}
+function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest")}
 
 // ── Scheduling helpers ──
 
@@ -68,7 +81,7 @@ function recalcTimesTagAware(schedBlocks){
   // Pass 1: place pinned/locked tasks and collect them as blockers alongside meetings.
   const blockers = _meetingBlocks().slice();
   active.forEach(ev => {
-    if(isRideAlong(ev)) return; // concurrent: lives inside its wrap, never a blocker
+    if(isNested(ev)) return; // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev)) return;
     if(ev._pinnedStart || ev._locked){
       const d = dur(ev);
@@ -84,7 +97,7 @@ function recalcTimesTagAware(schedBlocks){
   schedBlocks.forEach(b => { nextFree[b.id] = pt(b.start); });
 
   active.forEach(ev => {
-    if(isRideAlong(ev)) return; // concurrent: doesn't consume the cascade cursor
+    if(isNested(ev)) return; // nested (ride-along/subtask): doesn't consume the cascade cursor
     if(isFixedTimeBlock(ev)){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
@@ -145,7 +158,7 @@ function recalcTimes(){
   // blockers list alongside meetings. Locked tasks pin to their current start.
   const blockers=_meetingBlocks().slice();
   active.forEach(ev=>{
-    if(isRideAlong(ev))return;          // concurrent: lives inside its wrap, never a blocker
+    if(isNested(ev))return;          // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
     if(ev._pinnedStart||ev._locked){
       const d=dur(ev);
@@ -174,7 +187,7 @@ function recalcTimes(){
 
   // Pass 2: cascade non-pinned, non-locked, non-meeting tasks around all blockers.
   active.forEach(ev=>{
-    if(isRideAlong(ev))return;          // concurrent: doesn't consume the cascade cursor
+    if(isNested(ev))return;          // nested (ride-along/subtask): doesn't consume the cascade cursor
     if(isFixedTimeBlock(ev)){
       cursor=Math.max(cursor,pt(ev.end));
       return;
@@ -194,67 +207,120 @@ function recalcTimes(){
   scheduled.sort((a,b)=>pt(a.start)-pt(b.start));
 }
 
+// ── WRAP/NEST DRAG HELPERS (v2) ──
+// Persist an item's parent membership (wrapId/subtaskOf) + times to the
+// blockstore. updateBlock() updates the cache synchronously, so a later
+// syncAddedTaskTimes() won't clobber the membership we just wrote.
+function _persistEvWrap(ev){
+  if(!window.blockStore||!ev)return;
+  let bid=ev._blockId;
+  if(!bid){const b=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===ev.id);bid=b&&b.id;}
+  if(!bid)return;
+  const blk=window.blockStore.get?window.blockStore.get(bid):null;
+  const props={...((blk&&blk.properties)||{})};
+  props.wrapId=ev.wrapId||null;
+  props.subtaskOf=ev.subtaskOf||null;
+  props.start=ev.start;props.end=ev.end;
+  try{window.blockStore.updateBlock(bid,props);}catch(e){}
+}
+// First free slot inside a wrap's [start,end] window for a ride-along.
+function _placeInWrapWindow(moved,wrapEv){
+  const ws=pt(wrapEv.start),we=pt(wrapEv.end),d=dur(moved)||15;
+  const blockers=scheduled.filter(c=>c.wrapId===wrapEv.id&&c.id!==moved.id)
+    .map(c=>({s:pt(c.start),e:pt(c.end)})).sort((a,b)=>a.s-b.s);
+  let s=_freeStart(ws,d,blockers);
+  if(s+d>we)s=ws; // window full: stack at start (over-capacity; bandwidth chip shows it)
+  moved.start=fmt(s);moved.end=fmt(s+d);
+}
+function _reorderActive(movedId,targetId,after){
+  const active=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
+  const fi=active.findIndex(x=>x.id===movedId);if(fi===-1)return;
+  const[m]=active.splice(fi,1);
+  const ti=active.findIndex(x=>x.id===targetId);
+  const idx=ti===-1?active.length:(after?ti+1:ti);
+  active.splice(idx,0,m);
+  let ai=0;for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i])&&!isPushed(scheduled[i]))scheduled[i]=active[ai++];}
+}
+function _clearPin(ev){
+  if(ev&&ev._pinnedStart){
+    delete ev._pinnedStart;
+    if(typeof loadPinnedStarts==="function"&&typeof savePinnedStarts==="function"){
+      const pins=loadPinnedStarts();if(pins[ev.id]){delete pins[ev.id];savePinnedStarts(pins);}
+    }
+  }
+}
+function _finishDrag(old){
+  if(typeof saveTaskOrder==="function")saveTaskOrder();
+  if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+  if(typeof log==="function")log("reorder",dragId,old);
+  dragId=null;
+  document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest"));
+  render();
+}
+
 function dDrop(e,tid){
   e.preventDefault();
-  if(!dragId)return;
+  const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest"));
+  if(!dragId){clearCls();return;}
 
   // External drag from the Tasks drawer backlog: add to schedule instead of reordering.
   if(window._dragFromBacklog){
     window._dragFromBacklog=false;
     const id=dragId; dragId=null;
     if(typeof addToSchedule==="function") addToSchedule(id);
-    return;
+    clearCls();return;
   }
+  if(dragId===tid){clearCls();return;}
 
-  if(dragId===tid)return;
+  const moved=scheduled.find(x=>x.id===dragId);
+  const target=scheduled.find(x=>x.id===tid);
+  if(!moved||!target){dragId=null;clearCls();return;}
   const old=JSON.stringify(scheduled);
 
-  // Operate only on the active (undone) sublist -- these are the only draggable items
-  const active=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
-  const fi=active.findIndex(x=>x.id===dragId);
-  if(fi===-1)return;
+  // Drop zone from cursor position over the target row.
+  const r=e.currentTarget.getBoundingClientRect();
+  const y=e.clientY-r.top,h=r.height;
+  const nest=(typeof isWrap==="function"&&isWrap(target)&&y>h*0.28&&y<h*0.72);
+  const after=y>=h/2;
 
-  // Remove dragged item from active list
-  const[moved]=active.splice(fi,1);
-
-  // Find target in the (now shorter) active list and insert before/after
-  const after=e.clientY>=e.currentTarget.getBoundingClientRect().top+e.currentTarget.getBoundingClientRect().height/2;
-  const ti=active.findIndex(x=>x.id===tid);
-  if(ti===-1)return;
-  const insertIdx=after?ti+1:ti;
-  active.splice(insertIdx,0,moved);
-
-  // Write the reordered active items back into scheduled, preserving done-item slots
-  let ai=0;
-  for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i])&&!isPushed(scheduled[i]))scheduled[i]=active[ai++];}
-
-  // Clear pinned start on the moved task so cascade places it at its new position.
-  // Also drop the persisted pin so the drag effect survives reload.
-  if(moved._pinnedStart){
-    delete moved._pinnedStart;
-    if(typeof loadPinnedStarts==="function"&&typeof savePinnedStarts==="function"){
-      const pins=loadPinnedStarts();
-      if(pins[moved.id]){delete pins[moved.id];savePinnedStarts(pins);}
+  // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
+  if(typeof isWrap==="function"&&isWrap(moved)){
+    const oldStart=pt(moved.start);
+    _clearPin(moved);
+    _reorderActive(moved.id,target.id,after);
+    recalcTimes();
+    const delta=pt(moved.start)-oldStart;
+    if(delta){
+      scheduled.filter(c=>c.wrapId===moved.id).forEach(c=>{
+        c.start=fmt(pt(c.start)+delta);c.end=fmt(pt(c.end)+delta);_persistEvWrap(c);
+      });
     }
+    _finishDrag(old);return;
   }
 
-  // Recascade all times from the first task's anchor
-  recalcTimes();
+  // ---- Decide new ride-along membership (drag-nesting always creates ride-alongs) ----
+  let newWrapId=null;
+  if(nest&&isWrap(target))newWrapId=target.id;                                         // dropped into a wrap's body
+  else if(typeof isRideAlong==="function"&&isRideAlong(target))newWrapId=target.wrapId; // dropped onto a ride-along -> join its wrap
 
-  // If the moved item ended up further in the list than where it was dropped,
-  // a meeting blocked it — show a friendly toast so the user knows why
-  const sortedActive=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
-  const actualIdx=sortedActive.findIndex(x=>x.id===dragId);
-  if(actualIdx>insertIdx){
-    if(typeof showToast==='function')showToast("Not enough time allotted for that task — placed after the meeting.","warn",4000);
+  if(newWrapId){
+    // ---- Case B: NEST as a ride-along (concurrent, inside the wrap window) ----
+    const wrapEv=scheduled.find(x=>x.id===newWrapId);
+    moved.wrapId=newWrapId;moved.subtaskOf=null;
+    _clearPin(moved);
+    if(wrapEv)_placeInWrapWindow(moved,wrapEv);
+    _persistEvWrap(moved);
+    recalcTimes();
+    if(typeof showToast==="function"&&wrapEv)showToast('Nested under "'+wrapEv.title+'"',"success",2200);
+  }else{
+    // ---- Case C: TOP-LEVEL drop -> promote out of any parent, then sequential reorder ----
+    const wasNested=!!parentIdOf(moved);
+    moved.wrapId=null;moved.subtaskOf=null;
+    _clearPin(moved);
+    _reorderActive(moved.id,target.id,after);
+    recalcTimes();
+    if(wasNested){_persistEvWrap(moved);if(typeof showToast==="function")showToast("Promoted to its own task","success",2200);}
   }
-
-  saveTaskOrder();
-  // Sync blockstore added_task times after drag reorder
-  if(typeof syncAddedTaskTimes==='function')syncAddedTaskTimes();
-
-  log("reorder",dragId,old);
-  document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom"));
-  render();
+  _finishDrag(old);
 }
 

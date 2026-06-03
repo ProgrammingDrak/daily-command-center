@@ -245,11 +245,13 @@ function reloadPersistedEdits() {
           ampUrl:p.ampUrl||"",
           hubspotUrl:p.hubspotUrl||"",
           wrapId:p.wrapId||null,
-          isWrap:!!p.isWrap
+          isWrap:!!p.isWrap,
+          subtaskOf:p.subtaskOf||null
         };
         if(p.commuteMinutes||p.commute_minutes)task.commuteMinutes=p.commuteMinutes||p.commute_minutes;
-        // Pin the start time so recalcTimes() doesn't overwrite it
-        if(hasStoredTime)task._pinnedStart=p.start;
+        // Pin the start time so recalcTimes() doesn't overwrite it (skip nested
+        // items: ride-alongs/subtasks live under their parent, never cascaded).
+        if(hasStoredTime&&!task.subtaskOf)task._pinnedStart=p.start;
         scheduled.push(task);
       });
     } else {
@@ -426,6 +428,8 @@ async function switchToDate(dateStr) {
   // Update date nav display
   updateDateNav();
 
+  // Migrate any legacy modal subtasks into the unified tree (once per day) before render.
+  if (typeof migrateLegacySubtasks === "function") migrateLegacySubtasks();
   // Re-render all tabs
   if (typeof buildSchedule === "function") buildSchedule();
   if (typeof paintPivotTasks === "function") paintPivotTasks();
