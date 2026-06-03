@@ -3747,6 +3747,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .gb-bible-section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
 .gb-bible-section h3{margin:0 0 8px;font-size:15px;color:var(--accent-light)}
 .gb-bible-section p{margin:0;color:var(--text);font-size:13px;line-height:1.6}
+.gb-bible-q{border-color:var(--accent);background:rgba(59,130,246,0.08)}
 .gb-kv{display:flex;justify-content:space-between;gap:14px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
 .gb-kv:last-child{border-bottom:none}
 .gb-kv-label{color:var(--text-muted);font-weight:700;flex:none}
@@ -3761,4 +3762,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 /* Bandwidth chip on the wrap parent: clearly distinct from the block's own duration. */
 .wrap-bw{display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--text-muted);border:1px dashed var(--border);border-radius:6px;padding:1px 6px;white-space:nowrap}
 .it-list-item.wrap-parent .ttl,.tl-item.wrap-parent .ttl{font-weight:700}
+/* Drag feedback: "nest into this wrap" drop well (center band of a wrap row). */
+.it-list-item.drag-over-nest,.tl-item.drag-over-nest{outline:2px dashed var(--accent);outline-offset:-2px;border-radius:8px;background:rgba(96,165,250,0.12)}
+.tl-item.drag-over-nest .card{box-shadow:inset 0 0 0 2px var(--accent)}
 
