@@ -3762,9 +3762,22 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 /* Bandwidth chip on the wrap parent: clearly distinct from the block's own duration. */
 .wrap-bw{display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--text-muted);border:1px dashed var(--border);border-radius:6px;padding:1px 6px;white-space:nowrap}
 .it-list-item.wrap-parent .ttl,.tl-item.wrap-parent .ttl{font-weight:700}
-/* Drag feedback: "nest into this wrap" drop well (center band of a wrap row). */
-.it-list-item.drag-over-nest,.tl-item.drag-over-nest{outline:2px dashed var(--accent);outline-offset:-2px;border-radius:8px;background:rgba(96,165,250,0.12)}
-.tl-item.drag-over-nest .card{box-shadow:inset 0 0 0 2px var(--accent)}
+/* Drag feedback: "wrap inside this task" = opaque purple overlay on the target. */
+.it-list-item.drag-over-nest,.tl-item.drag-over-nest{position:relative}
+.it-list-item.drag-over-nest::after,.tl-item.drag-over-nest::after{
+  content:"\2935  wrap inside";display:flex;align-items:center;justify-content:center;gap:6px;
+  position:absolute;inset:0;z-index:7;pointer-events:none;border-radius:8px;
+  font-size:11px;font-weight:700;letter-spacing:.02em;color:#fff;
+  background:rgba(147,51,234,0.66);border:2px solid #9333ea}
+/* Drag feedback: reorder to a new slot = a blue "ghost" of the task at the drop point. */
+.it-list-item.drag-over-top,.tl-item.drag-over-top,
+.it-list-item.drag-over-bottom,.tl-item.drag-over-bottom{position:relative;border:none}
+.it-list-item.drag-over-top::before,.tl-item.drag-over-top::before,
+.it-list-item.drag-over-bottom::after,.tl-item.drag-over-bottom::after{
+  content:"";position:absolute;left:0;right:0;height:34px;z-index:6;pointer-events:none;
+  background:rgba(59,130,246,0.20);border:1.5px dashed #3b82f6;border-radius:8px}
+.it-list-item.drag-over-top::before,.tl-item.drag-over-top::before{top:0;transform:translateY(calc(-100% - 3px))}
+.it-list-item.drag-over-bottom::after,.tl-item.drag-over-bottom::after{bottom:0;transform:translateY(calc(100% + 3px))}
 
 /* ======== SUBTASKS (timeless steps; smaller, collapsible, infinitely nestable) ======== */
 /* Collapse chevron shared by wraps + subtask parents. */

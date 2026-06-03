@@ -15,8 +15,9 @@ function dOver(e,id){
   const y=e.clientY-r.top,h=r.height;
   tgt.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest");
   const targetEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===id):null;
-  // Middle band of a wrap row = "nest into this wrap"; edges = reorder as a sibling.
-  if(targetEv&&typeof isWrap==="function"&&isWrap(targetEv)&&y>h*0.28&&y<h*0.72){
+  // Drop on the body of a task = wrap inside it; drop near the top/bottom edge = reorder to that slot.
+  const canNest=targetEv&&typeof isMeeting==="function"&&!isMeeting(targetEv)&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
+  if(canNest&&y>h*0.25&&y<h*0.75){
     tgt.classList.add("drag-over-nest");return;
   }
   tgt.classList.toggle("drag-over-top",y<h/2);
@@ -220,8 +221,21 @@ function _persistEvWrap(ev){
   const props={...((blk&&blk.properties)||{})};
   props.wrapId=ev.wrapId||null;
   props.subtaskOf=ev.subtaskOf||null;
+  props.isWrap=!!ev.isWrap;
   props.start=ev.start;props.end=ev.end;
   try{window.blockStore.updateBlock(bid,props);}catch(e){}
+}
+// True if ancestorId is somewhere above nodeId in the parent chain (guards against
+// nesting a task into one of its own descendants).
+function _isAncestor(ancestorId,nodeId){
+  let cur=scheduled.find(e=>e.id===nodeId),guard=0;
+  while(cur&&guard++<50){
+    const pid=parentIdOf(cur);
+    if(!pid)return false;
+    if(pid===ancestorId)return true;
+    cur=scheduled.find(e=>e.id===pid);
+  }
+  return false;
 }
 // First free slot inside a wrap's [start,end] window for a ride-along.
 function _placeInWrapWindow(moved,wrapEv){
@@ -280,7 +294,7 @@ function dDrop(e,tid){
   // Drop zone from cursor position over the target row.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nest=(typeof isWrap==="function"&&isWrap(target)&&y>h*0.28&&y<h*0.72);
+  const nest=(typeof isMeeting==="function"&&!isMeeting(target)&&y>h*0.25&&y<h*0.75&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
@@ -298,20 +312,22 @@ function dDrop(e,tid){
     _finishDrag(old);return;
   }
 
-  // ---- Decide new ride-along membership (drag-nesting always creates ride-alongs) ----
-  let newWrapId=null;
-  if(nest&&isWrap(target))newWrapId=target.id;                                         // dropped into a wrap's body
-  else if(typeof isRideAlong==="function"&&isRideAlong(target))newWrapId=target.wrapId; // dropped onto a ride-along -> join its wrap
+  // ---- Decide nesting: dropping on a task's body wraps the moved item inside it ----
+  const newWrapId=nest?target.id:null;
 
   if(newWrapId){
-    // ---- Case B: NEST as a ride-along (concurrent, inside the wrap window) ----
+    // ---- Case B: NEST as a ride-along (concurrent, inside the wrap window). The
+    // target becomes a wrap if it wasn't one. ----
     const wrapEv=scheduled.find(x=>x.id===newWrapId);
     moved.wrapId=newWrapId;moved.subtaskOf=null;
     _clearPin(moved);
-    if(wrapEv)_placeInWrapWindow(moved,wrapEv);
+    if(wrapEv){
+      if(!isWrap(wrapEv)){wrapEv.isWrap=true;_persistEvWrap(wrapEv);} // target is now a wrap
+      _placeInWrapWindow(moved,wrapEv);
+    }
     _persistEvWrap(moved);
     recalcTimes();
-    if(typeof showToast==="function"&&wrapEv)showToast('Nested under "'+wrapEv.title+'"',"success",2200);
+    if(typeof showToast==="function"&&wrapEv)showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
   }else{
     // ---- Case C: TOP-LEVEL drop -> promote out of any parent, then sequential reorder ----
     const wasNested=!!parentIdOf(moved);
