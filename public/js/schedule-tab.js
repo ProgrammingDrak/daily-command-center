@@ -252,7 +252,7 @@ function buildSchedule(){
           notesButton(ev)+
           '<button class="pomo-btn" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
           (!isMeeting(ev)?'<button class="btn-triv-link'+(isTrivialFlagged?' triv-active':'')+'" data-triv-id="'+ev.id+'" data-tooltip="Mark as trivial — move to triage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>':'')+
-          (!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Move to tomorrow"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+          (!isMeeting(ev)?'<button class="btn-resched" data-resched-id="'+ev.id+'" data-tooltip="Reschedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 15h6"/></svg></button>':'')+
           '<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
           '<div class="dur">'+
             '<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>'+
@@ -330,11 +330,11 @@ function buildSchedule(){
     });}
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur))});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
-    const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();pushTask(pb.dataset.pushId)});
+    const rb=el.querySelector(".btn-resched");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openRescheduleMenu(rb.dataset.reschedId,rb)});
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Phase 7: removed old triv-flag-chk (replaced by btn-triv-link on card face)
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".resched-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-resched")||e.target.closest(".btn-push-tmr")||e.target.closest(".btn-del-task")||e.target.closest(".btn-triv-link")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".card-triv-section"))return;const cw=el.querySelector(".card-wrap");toggleDetail(cw);const chev=el.querySelector(".card > svg:last-child");if(chev)chev.style.transform=cw.querySelector(".detail-panel.open")?"rotate(180deg)":""});
 
     // Edge tab toggle listeners
     el.querySelectorAll(".edge-tab").forEach(tab=>{
@@ -414,6 +414,50 @@ function buildSchedule(){
       tl.appendChild(el);
     });
   }
+}
+
+function openRescheduleMenu(id, anchorEl){
+  document.querySelectorAll(".resched-popover").forEach(p=>p.remove());
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return;
+  const pop=document.createElement("div");
+  pop.className="resched-popover";
+  const today=_todayStr();
+  const tomorrow=_tomorrowStr();
+  const minDate=today||new Date().toISOString().slice(0,10);
+  pop.innerHTML=
+    '<button class="rs-quick" data-rs-date="'+today+'">Today</button>'+
+    '<button class="rs-quick" data-rs-date="'+tomorrow+'">Tomorrow</button>'+
+    '<div class="rs-date-row">'+
+      '<input type="date" class="rs-date-input" min="'+minDate+'" value="'+tomorrow+'">'+
+      '<button class="rs-date-go">Schedule</button>'+
+    '</div>';
+  document.body.appendChild(pop);
+  const rect=anchorEl.getBoundingClientRect();
+  pop.style.top=Math.min(rect.bottom+6,window.innerHeight-pop.offsetHeight-8)+"px";
+  pop.style.left=Math.max(8,Math.min(rect.left,window.innerWidth-pop.offsetWidth-8))+"px";
+  function closePop(){
+    pop.remove();
+    document.removeEventListener("click",onOutside,true);
+    document.removeEventListener("keydown",onKey,true);
+  }
+  async function choose(dateStr){
+    if(!dateStr)return;
+    closePop();
+    if(typeof rescheduleTask==="function")await rescheduleTask(id,dateStr);
+  }
+  pop.querySelectorAll(".rs-quick").forEach(btn=>btn.addEventListener("click",e=>{e.stopPropagation();choose(btn.dataset.rsDate);}));
+  pop.querySelector(".rs-date-go").addEventListener("click",e=>{e.stopPropagation();choose(pop.querySelector(".rs-date-input").value);});
+  pop.querySelector(".rs-date-input").addEventListener("keydown",e=>{
+    if(e.key==="Enter"){e.stopPropagation();choose(e.currentTarget.value);}
+    if(e.key==="Escape"){e.stopPropagation();closePop();}
+  });
+  function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl)closePop();}
+  function onKey(e){if(e.key==="Escape")closePop();}
+  setTimeout(()=>{
+    document.addEventListener("click",onOutside,true);
+    document.addEventListener("keydown",onKey,true);
+  },0);
 }
 
 // ======== CONSIDER FOR TODAY TAB ========
@@ -1003,4 +1047,3 @@ document.getElementById("block-editor-save").addEventListener("click",saveBlockE
 document.getElementById("block-editor-overlay").addEventListener("click",e=>{if(e.target===e.currentTarget)closeBlockEditor()});
 document.getElementById("block-editor-manage-tags")?.addEventListener("click",()=>{ if(typeof openTagManager==='function') openTagManager(); });
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("block-editor-overlay").classList.contains("open"))closeBlockEditor()});
-

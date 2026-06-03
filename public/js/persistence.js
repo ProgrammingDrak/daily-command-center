@@ -36,7 +36,7 @@ function _bsSaveProp(key, value) {
 }
 
 // ======== DATE NAVIGATION ========
-// viewMode: "today" (editable, live) | "tomorrow" (editable, pre-plan) | "archive" (read-only)
+// viewMode: "today" (editable, live) | "tomorrow"/"future" (editable pre-plan) | "archive" (read-only)
 let viewMode = "today";
 let viewDate = __state ? __state.date : null;
 
@@ -379,6 +379,14 @@ async function fetchExpressDate(date) {
   } catch { return null; }
 }
 
+async function fetchDayState(date) {
+  try {
+    const res = await fetch("/api/state/day?date=" + encodeURIComponent(date), { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
 async function hydrateFromStorage() {
   const date = (__state && __state.date) || "unknown";
   if (date === "unknown") return;
@@ -544,24 +552,29 @@ function reloadPersistedEdits() {
           end:p.end||fmt(d),
           meta:p.meta||("Custom task \u00b7 "+ms(d)),
           detail:p.detail||"",source:p.source||"manual",
-          notionUrl:p.notionUrl||"",priority:p.priority||"High"
+          notionUrl:p.notionUrl||"",priority:p.priority||"High",
+          calUrl:p.calUrl||"",tags:p.tags||[]
         };
         // Pin the start time so recalcTimes() doesn't overwrite it
         if(hasStoredTime)task._pinnedStart=p.start;
-        scheduled.push(task);
+        if(p.reschedulePlacement==="earliest")scheduled.unshift(task);
+        else scheduled.push(task);
       });
     } else {
       const added = loadAddedTasks();
       added.forEach(t => {
         if (scheduled.find(e => e.id === t.id)) return; // already in schedule
         const d = t.durMin || 30;
-        scheduled.push({
+        const task = {
           id: t.id, title: t.title, type: "task",
           start: "00:00", end: fmt(d),
           meta: t.meta || ("Custom task \u00b7 " + ms(d)),
           detail: t.detail || "", source: t.source || "manual",
-          notionUrl: t.notionUrl || "", priority: t.priority || "High"
-        });
+          notionUrl: t.notionUrl || "", priority: t.priority || "High",
+          calUrl: t.calUrl || "", tags: t.tags || []
+        };
+        if(t.reschedulePlacement==="earliest")scheduled.unshift(task);
+        else scheduled.push(task);
       });
     }
   } catch(e) {}
@@ -637,13 +650,16 @@ async function switchToDate(dateStr) {
     newState = window.__PA_ARCHIVES__[dateStr];
     viewMode = "archive";
   } else {
-    // No injected archive — try Express API for this date
-    const expressState = await fetchExpressDate(dateStr);
-    if (expressState) {
-      newState = { date: dateStr, schedule: [], meetings: [], triage: {} };
-      viewMode = "archive";
+    // No injected archive/pre-plan — ask the app API for an editable future skeleton or persisted day.
+    const dayState = await fetchDayState(dateStr);
+    if (dayState) {
+      newState = dayState;
+      viewMode = (__todayDate && dateStr > __todayDate) ? "future" : "archive";
     } else {
-      return; // no data for this date anywhere
+      const expressState = await fetchExpressDate(dateStr);
+      if (!expressState) return; // no data for this date anywhere
+      newState = expressState;
+      viewMode = "archive";
     }
   }
 
@@ -706,4 +722,3 @@ async function switchToDate(dateStr) {
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
 }
-

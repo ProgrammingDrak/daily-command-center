@@ -174,11 +174,11 @@ function saveAddedTasks(tasks){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks)return; // blockstore handles it
   localStorage.setItem(ADDED_KEY,JSON.stringify(tasks)); scheduleIDBSave();
 }
-function persistAddedTask(item){
+function persistAddedTask(item, targetDate){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
     // Write to SQLite via blockstore — will be reloaded via getByType("added_task") on refresh
-    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null);
-    window.blockStore.createBlock("added_task",{
+    const date=targetDate||((typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null));
+    return window.blockStore.createBlock("added_task",{
       local_id:item.id,
       title:item.title,
       duration:dur(item),
@@ -188,18 +188,24 @@ function persistAddedTask(item){
       meta:item.meta||"",
       detail:item.detail||"",
       notionUrl:item.notionUrl||"",
+      calUrl:item.calUrl||"",
       source:item.source||"manual",
       tags:item.tags||[],
+      reschedulePlacement:item.reschedulePlacement||"",
+      rescheduledFrom:item.rescheduledFrom||"",
+      sourceTaskId:item.sourceTaskId||"",
       added_at:new Date().toISOString()
     },{date});
-    return;
   }
   // Fallback: localStorage
+  const prevKey=ADDED_KEY;
+  if(targetDate)ADDED_KEY="pa-added-tasks-"+targetDate;
   const added=loadAddedTasks();
   if(!added.find(t=>t.id===item.id)){
-    added.push({id:item.id,title:item.title,durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",addedAt:new Date().toISOString()});
+    added.push({id:item.id,title:item.title,durMin:dur(item),priority:item.priority||"High",source:item.source||"manual",meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",calUrl:item.calUrl||"",tags:item.tags||[],reschedulePlacement:item.reschedulePlacement||"",rescheduledFrom:item.rescheduledFrom||"",sourceTaskId:item.sourceTaskId||"",addedAt:new Date().toISOString()});
     saveAddedTasks(added);
   }
+  ADDED_KEY=prevKey;
 }
 
 // After recalcTimes changes positions (e.g. drag reorder), sync blockstore added_task blocks
@@ -280,6 +286,94 @@ function insertTaskFromDrawer(title, durMin){
   log("scheduled",id,"Drawer-added: "+title);
   render();
   checkBlockWarnings(newItem);
+}
+
+function _localDateStr(offsetDays){
+  const d=new Date();
+  d.setDate(d.getDate()+offsetDays);
+  const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0");
+  return y+"-"+m+"-"+day;
+}
+function _todayStr(){return __todayDate||_localDateStr(0)}
+function _tomorrowStr(){return __tomorrowDate||_localDateStr(1)}
+function _rescheduledId(ev,targetDate){
+  const clean=String(ev.id||"task").replace(/[^a-zA-Z0-9_-]/g,"-");
+  return "rs-"+targetDate+"-"+clean+"-"+Date.now().toString(36);
+}
+function _cloneForReschedule(ev,targetDate){
+  const d=dur(ev);
+  return {
+    id:_rescheduledId(ev,targetDate),
+    title:ev.title,
+    type:ev.type||"task",
+    start:"00:00",
+    end:fmt(d),
+    meta:ev.meta||"",
+    detail:ev.detail||"",
+    source:ev.source||"manual",
+    notionUrl:ev.notionUrl||"",
+    calUrl:ev.calUrl||"",
+    priority:ev.priority||"High",
+    tags:ev.tags||[],
+    reschedulePlacement:"earliest",
+    rescheduledFrom:(__state&&__state.date)||viewDate||"",
+    sourceTaskId:ev.id
+  };
+}
+function _nextTodayInsertIndex(id){
+  const activeIdx=scheduled.findIndex(ev=>ev.id!==id&&isActive(ev)&&!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev));
+  if(activeIdx!==-1)return activeIdx+1;
+  const nextIdx=scheduled.findIndex(ev=>ev.id!==id&&!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev)&&pt(ev.start)>=now());
+  if(nextIdx!==-1)return nextIdx;
+  const firstIdx=scheduled.findIndex(ev=>ev.id!==id&&!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev));
+  return firstIdx!==-1?firstIdx:scheduled.length;
+}
+function _markTaskMovedOffCurrentDay(id){
+  pushedSet.delete(id);delete pushedAt[id];
+  deletedSet.add(id);
+  savePushedState();
+  saveDeletedState();
+}
+function _dateLabel(dateStr){
+  if(typeof dateToDisplay==="function")return dateToDisplay(dateStr);
+  return dateStr;
+}
+async function rescheduleTask(id,targetDate){
+  if(!targetDate)return;
+  if(typeof viewMode!=="undefined"&&viewMode==="archive"){
+    if(typeof showToast==="function")showToast("Archived days are read-only.","error");
+    return;
+  }
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||isMeeting(ev)||isDone(ev)||isDeleted(ev))return;
+  const currentDate=(__state&&__state.date)||viewDate||_todayStr();
+  const item=_cloneForReschedule(ev,targetDate);
+
+  if(targetDate===currentDate){
+    const old=JSON.stringify(scheduled);
+    const fromIdx=scheduled.findIndex(e=>e.id===id);
+    if(fromIdx===-1)return;
+    const moved=scheduled.splice(fromIdx,1)[0];
+    const insertAt=Math.min(_nextTodayInsertIndex(id),scheduled.length);
+    if(moved._pinnedStart)delete moved._pinnedStart;
+    scheduled.splice(insertAt,0,moved);
+    pushedSet.delete(id);delete pushedAt[id];savePushedState();
+    deletedSet.delete(id);saveDeletedState();
+    recalcTimes();
+    saveTaskOrder();
+    if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+    log("rescheduled",id,"Moved to next available slot today");
+    if(typeof showToast==="function")showToast("Moved to next available slot today.","success",3000);
+    render();
+    if(old!==JSON.stringify(scheduled)&&typeof checkOverflow==="function")checkOverflow();
+    return;
+  }
+
+  _markTaskMovedOffCurrentDay(id);
+  await persistAddedTask(item,targetDate);
+  log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
+  if(typeof showToast==="function")showToast("Scheduled for "+_dateLabel(targetDate)+".","success",3500);
+  render();
 }
 
 // ======== ACTIONS ========
@@ -447,4 +541,3 @@ function checkBlockWarnings(task){
     }
   }
 }
-

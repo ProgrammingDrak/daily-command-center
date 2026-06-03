@@ -503,6 +503,7 @@
   .dur-nav-dot{width:5px;height:5px;border-radius:50%;background:var(--border);transition:background 0.15s}
   .dur-nav-dot.active{background:var(--accent-light)}
   body.dur-open .tl-item:not(.has-dur-popover){pointer-events:none}
+  body.dur-open .tl-item:not(.has-dur-popover) .btn-resched,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-push-tmr,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-del-task,
   body.dur-open .tl-item:not(.has-dur-popover) .pomo-btn,
@@ -531,15 +532,26 @@
   .tl-compact.pushed .tl-time{text-decoration:none}
   .pushed-divider{display:flex;align-items:center;gap:10px;margin:12px 0 6px;font-size:10px;font-weight:600;color:var(--amber,#f59e0b);text-transform:uppercase;letter-spacing:0.5px}
   .pushed-divider::before,.pushed-divider::after{content:'';flex:1;border-top:1px solid rgba(245,158,11,0.2)}
-  .btn-push-tmr,.btn-del-task{position:relative}
-  .btn-push-tmr::after,.btn-del-task::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
-  .btn-push-tmr:hover::after,.btn-del-task:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
+  .btn-resched,.btn-push-tmr,.btn-del-task{position:relative}
+  .btn-resched::after,.btn-push-tmr::after,.btn-del-task::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
+  .btn-resched:hover::after,.btn-push-tmr:hover::after,.btn-del-task:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
+  .btn-resched{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
+  .tl-item:hover .btn-resched{opacity:0.6}
+  .btn-resched:hover{opacity:1!important;color:var(--accent-light);background:rgba(59,130,246,0.1)}
   .btn-push-tmr{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
   .tl-item:hover .btn-push-tmr{opacity:0.6}
   .btn-push-tmr:hover{opacity:1!important;color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
   .btn-del-task{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
   .tl-item:hover .btn-del-task{opacity:0.4}
   .btn-del-task:hover{opacity:1!important;color:var(--red,#ef4444);background:rgba(239,68,68,0.1)}
+  .resched-popover{position:fixed;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;box-shadow:0 8px 24px rgba(0,0,0,0.45);z-index:9999;display:flex;flex-direction:column;gap:6px;width:212px}
+  .rs-quick{height:28px;border-radius:6px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;transition:all 0.12s}
+  .rs-quick:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
+  .rs-date-row{display:grid;grid-template-columns:1fr 74px;gap:6px;border-top:1px solid var(--border);padding-top:6px}
+  .rs-date-input{min-width:0;height:28px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0 6px;color:var(--text);font-size:12px;font-family:inherit;outline:none}
+  .rs-date-input:focus{border-color:var(--accent)}
+  .rs-date-go{height:28px;border-radius:6px;border:1px solid rgba(59,130,246,0.35);background:rgba(59,130,246,0.12);color:var(--accent-light);font-size:11px;font-weight:700;cursor:pointer}
+  .rs-date-go:hover{background:rgba(59,130,246,0.2)}
   .del-confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:center;justify-content:center}
   .del-confirm-overlay.open{display:flex}
   .del-confirm-box{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px 24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
