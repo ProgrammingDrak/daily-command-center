@@ -3820,7 +3820,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .chk,.it-list-check{width:44px;height:44px;min-width:44px;border-radius:11px;border-width:2px}
   .chk svg,.it-list-check svg{width:22px;height:22px}
   /* Lightning quick-complete — ALWAYS visible on touch, full 44px, amber-filled. */
-  .chk-quick{width:44px;height:44px;min-width:44px;opacity:1!important;font-size:21px;border-radius:11px;border:1px solid rgba(251,191,36,0.4);background:rgba(251,191,36,0.12);color:#fbbf24;padding:0}
+  .chk-quick{display:inline-flex!important;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;opacity:1!important;font-size:21px;border-radius:11px;border:1px solid rgba(251,191,36,0.4);background:rgba(251,191,36,0.12);color:#fbbf24;padding:0}
   .card:hover .chk-quick,.it-list-actions .chk-quick{opacity:1!important}
   /* Add subtask — visible filled button at full target (was a tiny muted glyph). */
   .btn-add-menu{width:44px;height:44px;min-width:44px;font-size:24px;color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:11px;padding:0;display:inline-flex;align-items:center;justify-content:center}
@@ -3853,6 +3853,15 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .card .notes-btn,.card .btn-repeat-resp,.card .btn-meeting-auto,.card .pomo-btn,
   .card .btn-lock,.card .btn-push-tmr,.card .btn-bounty,.card .btn-move-menu,
   .card .btn-del-task,.card .dur,.card>svg:last-child{display:none !important}
+  /* List view rows: same clean stack — complete + title + (quick-complete / add). */
+  .it-list-item:not(.subtask-row){grid-template-columns:auto minmax(0,1fr) auto !important;align-items:center !important;gap:8px !important;min-height:0 !important}
+  .it-list-item:not(.subtask-row) .it-list-rank,
+  .it-list-item:not(.subtask-row) .it-list-grip,
+  .it-list-item:not(.subtask-row)>.bar{display:none !important}
+  .it-list-item:not(.subtask-row) .it-list-check{grid-column:1 !important}
+  .it-list-item:not(.subtask-row) .it-list-main{grid-column:2 !important;min-width:0}
+  .it-list-item:not(.subtask-row) .it-list-actions{grid-column:3 !important;margin-top:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;justify-content:center !important}
+  .it-list-actions .notes-btn,.it-list-actions .btn-push-tmr,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task{display:none !important}
   /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
   .tab-title,#qa-title,.resched-date-input{font-size:16px}
   .subtask-add-pop{padding:8px}
