@@ -68,6 +68,7 @@ function recalcTimesTagAware(schedBlocks){
   // Pass 1: place pinned/locked tasks and collect them as blockers alongside meetings.
   const blockers = _meetingBlocks().slice();
   active.forEach(ev => {
+    if(isRideAlong(ev)) return; // concurrent: lives inside its wrap, never a blocker
     if(isFixedTimeBlock(ev)) return;
     if(ev._pinnedStart || ev._locked){
       const d = dur(ev);
@@ -83,6 +84,7 @@ function recalcTimesTagAware(schedBlocks){
   schedBlocks.forEach(b => { nextFree[b.id] = pt(b.start); });
 
   active.forEach(ev => {
+    if(isRideAlong(ev)) return; // concurrent: doesn't consume the cascade cursor
     if(isFixedTimeBlock(ev)){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
@@ -143,6 +145,7 @@ function recalcTimes(){
   // blockers list alongside meetings. Locked tasks pin to their current start.
   const blockers=_meetingBlocks().slice();
   active.forEach(ev=>{
+    if(isRideAlong(ev))return;          // concurrent: lives inside its wrap, never a blocker
     if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
     if(ev._pinnedStart||ev._locked){
       const d=dur(ev);
@@ -171,6 +174,7 @@ function recalcTimes(){
 
   // Pass 2: cascade non-pinned, non-locked, non-meeting tasks around all blockers.
   active.forEach(ev=>{
+    if(isRideAlong(ev))return;          // concurrent: doesn't consume the cascade cursor
     if(isFixedTimeBlock(ev)){
       cursor=Math.max(cursor,pt(ev.end));
       return;

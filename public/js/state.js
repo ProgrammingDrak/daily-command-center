@@ -30,6 +30,36 @@ function f12(s){const mins=pt(s),h=Math.floor(mins/60)%24,m=mins%60,a=h>=12?"PM"
 function dur(ev){return pt(ev.end)-pt(ev.start)}
 function origDur(id){const o=INIT_SCHED.find(e=>e.id===id);return o?dur(o):0}
 function isMeeting(ev){return ev.type==="meeting"||ev.type==="oneone"}
+
+// ======== WRAPS (v1) ========
+// A "wrap" is a larger container block (a long session / focus block). Tasks
+// nested inside it are "ride-alongs": concurrent work done within the wrap's
+// time window. Ride-alongs carry wrapId = their parent's id; they do not push
+// the cascade and render indented under their parent.
+function isWrap(ev){return !!(ev&&(ev.isWrap||(Array.isArray(ev.tags)&&ev.tags.includes("wrap"))));}
+function wrapParentId(ev){return ev&&ev.wrapId?ev.wrapId:null;}
+function isRideAlong(ev){return !!wrapParentId(ev);}
+// Reorder a flat list so each wrap is immediately followed by its ride-along
+// children. Children whose parent isn't in the list keep their place.
+function groupRideAlongs(items){
+  const byParent={};
+  items.forEach(ev=>{const pid=wrapParentId(ev);if(pid)(byParent[pid]=byParent[pid]||[]).push(ev);});
+  if(!Object.keys(byParent).length)return items.slice();
+  const out=[],placed=new Set();
+  items.forEach(ev=>{
+    if(isRideAlong(ev))return; // placed under its parent below
+    out.push(ev);
+    (byParent[ev.id]||[]).slice().sort((a,b)=>pt(a.start)-pt(b.start)).forEach(k=>{out.push(k);placed.add(k.id);});
+  });
+  items.forEach(ev=>{if(isRideAlong(ev)&&!placed.has(ev.id))out.push(ev);}); // orphans stay visible
+  return out;
+}
+function wrapBandwidth(ev,pool){
+  if(!isWrap(ev))return null;
+  const kids=(pool||[]).filter(k=>wrapParentId(k)===ev.id);
+  if(!kids.length)return null;
+  return {count:kids.length,mins:kids.reduce((s,k)=>s+(dur(k)||0),0)};
+}
 function now(){return new Date().getHours()*60+new Date().getMinutes()}
 function isDone(ev){return manualDone.has(ev.id)}
 function isPast(ev){return!manualDone.has(ev.id)&&now()>=pt(ev.end)}

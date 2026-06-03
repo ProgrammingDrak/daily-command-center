@@ -3720,3 +3720,45 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .msheet-seg.active{background:rgba(59,130,246,0.18);color:var(--accent-light);border-color:var(--accent)}
 }
 
+/* --- Four-page glymphatic brief ------------------------------------------- */
+.gb-pagenav{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 16px;border-bottom:1px solid var(--border);padding-bottom:10px}
+.gb-pagebtn{appearance:none;border:1px solid var(--border);background:var(--card);color:var(--text-muted);font:inherit;font-size:13px;font-weight:700;padding:7px 14px;border-radius:8px;cursor:pointer;transition:all 0.12s}
+.gb-pagebtn:hover{border-color:var(--accent);color:var(--accent-light)}
+.gb-pagebtn.active{background:rgba(59,130,246,0.16);border-color:var(--accent);color:var(--accent-light)}
+.gb-page{display:flex;flex-direction:column;gap:14px}
+.gb-page-summary{color:var(--text-muted);font-size:13px;margin:0 0 4px}
+.gb-metric-row{display:flex;flex-wrap:wrap;gap:10px}
+.gb-metric{flex:1 1 110px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+.gb-metric-val{font-size:22px;font-weight:700;color:var(--accent-light);font-variant-numeric:tabular-nums}
+.gb-metric-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted)}
+.gb-list{display:flex;flex-direction:column;gap:6px}
+.gb-row{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:13px}
+.gb-row-stack{flex-direction:column;align-items:stretch;gap:4px}
+.gb-row-line{display:flex;align-items:center;gap:10px}
+.gb-row-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);flex:none}
+.gb-status-done .gb-row-dot{background:var(--green)}
+.gb-status-planned .gb-row-dot{background:var(--amber)}
+.gb-row-title{font-weight:600;flex:1;color:var(--text)}
+.gb-row-meta{color:var(--text-muted);font-size:12px;font-variant-numeric:tabular-nums}
+.gb-row-status{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-muted)}
+.gb-status-done .gb-row-status{color:var(--green)}
+.gb-row-sub{color:var(--text-muted);font-size:12px;line-height:1.4}
+.gb-stepback-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.gb-bible-section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.gb-bible-section h3{margin:0 0 8px;font-size:15px;color:var(--accent-light)}
+.gb-bible-section p{margin:0;color:var(--text);font-size:13px;line-height:1.6}
+.gb-kv{display:flex;justify-content:space-between;gap:14px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.gb-kv:last-child{border-bottom:none}
+.gb-kv-label{color:var(--text-muted);font-weight:700;flex:none}
+.gb-kv-val{color:var(--text);text-align:right}
+
+/* ======== WRAPS (v1) ======== */
+/* Ride-alongs render as first-class rows, just indented under their wrap. */
+.it-list-item.ride-along{margin-left:30px;position:relative}
+.it-list-item.ride-along::before{content:"";position:absolute;left:-14px;top:6px;bottom:6px;width:2px;border-radius:1px;background:var(--border)}
+.tl-item.ride-along{margin-left:34px;position:relative}
+.tl-item.ride-along .card{border-left:2px dashed var(--border)}
+/* Bandwidth chip on the wrap parent: clearly distinct from the block's own duration. */
+.wrap-bw{display:inline-flex;align-items:center;gap:3px;font-size:9px;color:var(--text-muted);border:1px dashed var(--border);border-radius:6px;padding:1px 6px;white-space:nowrap}
+.it-list-item.wrap-parent .ttl,.tl-item.wrap-parent .ttl{font-weight:700}
+

@@ -243,7 +243,9 @@ function reloadPersistedEdits() {
           linkedBlockId:p.linkedBlockId||null,
           linkedTagId:p.linkedTagId||null,
           ampUrl:p.ampUrl||"",
-          hubspotUrl:p.hubspotUrl||""
+          hubspotUrl:p.hubspotUrl||"",
+          wrapId:p.wrapId||null,
+          isWrap:!!p.isWrap
         };
         if(p.commuteMinutes||p.commute_minutes)task.commuteMinutes=p.commuteMinutes||p.commute_minutes;
         // Pin the start time so recalcTimes() doesn't overwrite it
