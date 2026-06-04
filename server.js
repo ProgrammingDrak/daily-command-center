@@ -25,6 +25,7 @@ const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
+const socialStore = require("./social-store");
 const { scoreTaskPoints } = require("./slot-scoring");
 const capabilities = require("./capabilities");
 const petHomeStore = require("./pet-home-store");
@@ -1588,6 +1589,157 @@ app.post("/api/todo-share/rotate", async (req, res) => {
     );
     res.json({ share: normalizeTodoShare(rows[0], req) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Social layer (multi-user, sponsor-first). Thin adapters over social-store.js.
+// All routes are session-gated by the global auth middleware. The signed-in
+// user is the actor: the owner for their own queue/feed/allowlist, the sponsor
+// when offering a sponsorship to someone else.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Sponsor allowlist (auto-approval source of truth) ──
+app.get("/api/social/allowlist", async (req, res) => {
+  try { res.json(await socialStore.listAllowlist(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/allowlist", async (req, res) => {
+  try {
+    const { allowedUserId, scope = "both", note = "" } = req.body || {};
+    if (!allowedUserId) return res.status(400).json({ error: "allowedUserId required" });
+    const entry = await socialStore.addAllowlistEntry({
+      ownerUserId: req.session.userId, allowedUserId, scope, note,
+      createdByUserId: req.session.userId,
+    });
+    res.status(201).json(entry);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/social/allowlist/:allowedUserId", async (req, res) => {
+  try {
+    await socialStore.removeAllowlistEntry(req.session.userId, parseInt(req.params.allowedUserId, 10));
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Friendships (social graph) ──
+app.get("/api/social/friends", async (req, res) => {
+  try { res.json(await socialStore.listFriends(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/social/friends/requests", async (req, res) => {
+  try { res.json(await socialStore.listFriendRequests(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Find a user to friend or sponsor, by exact username.
+app.get("/api/social/users/lookup", async (req, res) => {
+  try {
+    const user = await auth.findUserByUsername(String(req.query.username || "").trim());
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json({ id: user.id, username: user.username });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/friends/request", async (req, res) => {
+  try {
+    const { addresseeId } = req.body || {};
+    if (!addresseeId) return res.status(400).json({ error: "addresseeId required" });
+    res.status(201).json(await socialStore.requestFriend(req.session.userId, parseInt(addresseeId, 10)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/friends/respond", async (req, res) => {
+  try {
+    const { requesterId, accept } = req.body || {};
+    if (!requesterId) return res.status(400).json({ error: "requesterId required" });
+    res.json(await socialStore.respondFriend(req.session.userId, parseInt(requesterId, 10), accept !== false));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/friends/block", async (req, res) => {
+  try {
+    const { otherId } = req.body || {};
+    if (!otherId) return res.status(400).json({ error: "otherId required" });
+    res.json(await socialStore.blockUser(req.session.userId, parseInt(otherId, 10)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Sponsorships ──
+// Offer a sponsorship to another user. The signed-in user is the sponsor.
+app.post("/api/social/sponsorships", async (req, res) => {
+  try {
+    const { ownerUserId, targetType, targetId, rewardTitle, rewardDefinitionId = null,
+            valueCents = 0, chanceShares = null, note = "" } = req.body || {};
+    if (!ownerUserId || !targetType || !targetId) {
+      return res.status(400).json({ error: "ownerUserId, targetType, targetId required" });
+    }
+    const result = await socialStore.requestSponsorship({
+      ownerUserId, sponsorUserId: req.session.userId, sponsorName: req.session.username || null,
+      targetType, targetId, rewardTitle, rewardDefinitionId, valueCents, chanceShares, note,
+    });
+    res.status(201).json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// The signed-in user's incoming offers awaiting review.
+app.get("/api/social/sponsorships/pending", async (req, res) => {
+  try { res.json(await socialStore.listPendingSponsorships(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/sponsorships/:id/approve", async (req, res) => {
+  try { res.json(await socialStore.approveSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/sponsorships/:id/reject", async (req, res) => {
+  try { res.json(await socialStore.rejectSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/sponsorships/:id/remove", async (req, res) => {
+  try { res.json(await socialStore.removeSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Reward queue ──
+app.get("/api/social/rewards/queue", async (req, res) => {
+  try { res.json(await socialStore.listRewardQueue(req.session.userId, { status: req.query.status || null })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/rewards/queue/:id/claim", async (req, res) => {
+  try { res.json(await socialStore.claimReward(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/rewards/queue/:id/redeem", async (req, res) => {
+  try { res.json(await socialStore.redeemReward(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/rewards/queue/:id/discard", async (req, res) => {
+  try { res.json(await socialStore.discardReward(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Feed (opt-in publishing; private/work tasks can never publish) ──
+app.get("/api/social/feed", async (req, res) => {
+  try { res.json(await socialStore.listFriendsFeed(req.session.userId, { limit: parseInt(req.query.limit, 10) || 50 })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/feed/:id/publish", async (req, res) => {
+  try { res.json(await socialStore.publishPost(parseInt(req.params.id, 10), req.session.userId, { caption: (req.body || {}).caption || null })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/feed/:id/hide", async (req, res) => {
+  try { res.json(await socialStore.hidePost(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get("/api/todo-share/sponsorships", async (req, res) => {
