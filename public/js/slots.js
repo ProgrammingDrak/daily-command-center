@@ -570,6 +570,101 @@
       renderSettings();
       renderHistory();
     }
+    if(activeSlotSection === "review") renderRewardReview();
+  }
+
+  // ── Reward Review tab (pending sponsorships + earned-reward queue) ──
+  function fmtDate(v){
+    if(!v) return "";
+    return String(v).slice(0, 10);
+  }
+
+  function rewardReviewHtml(pending, queue){
+    const liveQueue = ["queued", "claimed"];
+    const pendingHtml = (pending && pending.length)
+      ? pending.map(s => `
+        <div class="reward-review-row" data-sponsorship-id="${s.id}">
+          <div class="rr-main">
+            <div class="rr-title">${esc(s.reward_title || "Reward")}</div>
+            <div class="rr-meta">from ${esc(s.sponsor_name || ("user " + s.sponsor_user_id))} · ${esc(s.target_type || "task")}${s.value_cents ? " · $" + (s.value_cents/100).toFixed(2) : ""}</div>
+            ${s.note ? `<div class="rr-note">${esc(s.note)}</div>` : ""}
+          </div>
+          <div class="rr-actions">
+            <button class="slot-mini" data-rr-action="approve" data-id="${s.id}">Approve</button>
+            <button class="slot-mini" data-rr-action="reject" data-id="${s.id}">Reject</button>
+            ${s.sponsor_user_id ? `<button class="slot-mini" data-rr-action="allow" data-id="${s.id}" data-user="${s.sponsor_user_id}">Always allow</button>` : ""}
+          </div>
+        </div>`).join("")
+      : `<div class="reward-review-empty">No offers waiting for review.</div>`;
+
+    const queueHtml = (queue && queue.length)
+      ? queue.map(q => `
+        <div class="reward-review-row" data-queue-id="${q.id}">
+          <div class="rr-main">
+            <div class="rr-title">${esc(q.title_snapshot || "Reward")}</div>
+            <div class="rr-meta">${esc(q.status)} · won ${esc(fmtDate(q.won_date || q.won_at))}${q.sponsor_user_id ? " · sponsored" : ""}</div>
+          </div>
+          <div class="rr-actions">
+            ${liveQueue.includes(q.status) ? `<button class="slot-mini" data-rq-action="redeem" data-id="${q.id}">Redeem</button>` : ""}
+            ${liveQueue.includes(q.status) ? `<button class="slot-mini slot-discard" data-rq-action="discard" data-id="${q.id}">Discard</button>` : ""}
+          </div>
+        </div>`).join("")
+      : `<div class="reward-review-empty">No earned rewards yet.</div>`;
+
+    return `
+      <section class="slots-panel reward-review-section">
+        <h3>Reward review</h3>
+        <p class="reward-review-sub">Offers from people not on your auto-approve list wait here until you decide.</p>
+        ${pendingHtml}
+      </section>
+      <section class="slots-panel reward-review-section">
+        <h3>Earned rewards</h3>
+        ${queueHtml}
+      </section>`;
+  }
+
+  function wireRewardReview(){
+    const panel = document.getElementById("slot-section-review");
+    if(!panel || panel.dataset.wired) return;
+    panel.dataset.wired = "1";
+    // Delegated handler survives innerHTML re-renders.
+    panel.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-rr-action],[data-rq-action]");
+      if(!btn) return;
+      const id = btn.dataset.id;
+      btn.disabled = true;
+      try {
+        const post = (path, body) => api(path, {
+          method: "POST",
+          headers: body ? { "Content-Type": "application/json" } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const rr = btn.dataset.rrAction, rq = btn.dataset.rqAction;
+        if(rr === "approve") await post(`/api/social/sponsorships/${id}/approve`);
+        else if(rr === "reject") await post(`/api/social/sponsorships/${id}/reject`);
+        else if(rr === "allow") {
+          await post(`/api/social/allowlist`, { allowedUserId: parseInt(btn.dataset.user, 10) });
+          await post(`/api/social/sponsorships/${id}/approve`);
+        }
+        else if(rq === "redeem") await post(`/api/social/rewards/queue/${id}/redeem`);
+        else if(rq === "discard") await post(`/api/social/rewards/queue/${id}/discard`);
+        await renderRewardReview();
+      } catch(e) {
+        btn.disabled = false;
+        alert(e.message || "Action failed");
+      }
+    });
+  }
+
+  async function renderRewardReview(){
+    const panel = document.getElementById("slot-section-review");
+    if(!panel) return;
+    wireRewardReview();
+    panel.innerHTML = `<div class="reward-review-loading">Loading…</div>`;
+    let pending = [], queue = [];
+    try { pending = await api("/api/social/sponsorships/pending"); } catch(e) {}
+    try { queue = await api("/api/social/rewards/queue"); } catch(e) {}
+    panel.innerHTML = rewardReviewHtml(pending, queue);
   }
 
   function applySlotSection(){
