@@ -588,6 +588,7 @@ function persistBacklogItem(item){
       notionUrl:item.notionUrl||"",
       priority:item.priority||"",
       stage:item.stage||"",
+      tags:Array.isArray(item.tags)?item.tags:[],
       commuteMinutes:item.commuteMinutes||null,
       added_at:new Date().toISOString()
     },{date:null});
@@ -621,6 +622,7 @@ function hydrateBacklogFromBlocks(){
       notionUrl:p.notionUrl||"",
       priority:p.priority||"",
       stage:p.stage||"",
+      tags:Array.isArray(p.tags)?p.tags:[],
       commuteMinutes:p.commuteMinutes||null,
       createdAt:b.created_at||p.added_at||"",
       updatedAt:b.updated_at||p.updated_at||"",
@@ -632,37 +634,55 @@ function hydrateBacklogFromBlocks(){
   return added;
 }
 
-function addNewTask(titleArg, durMinArg){
+function addNewTask(titleArg, durMinArg, opts){
+  opts=opts||{};
   const title=titleArg||(function(){const inp=document.getElementById("new-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
   if(!title)return;
   const durMin=durMinArg||30;
-  const item={id:"custom-"+(nextId++),title,type:"task",durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:""};
+  const item={id:"custom-"+(nextId++),title,type:"task",durMin,meta:"Custom task \u00b7 "+ms(durMin),detail:"",source:"manual",notionUrl:"",tags:Array.isArray(opts.tags)?opts.tags:[]};
   backlog.push(item);
   persistBacklogItem(item);
   log("created","custom","New backlog: "+title);render()
 }
 // ======== UNIVERSAL TASK ADD BAR ========
-function addTaskUniversal(barEl){
+async function addTaskUniversal(barEl){
   const inp=barEl.querySelector(".tab-title");
   const title=inp.value.trim();
   if(!title){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();return}
   const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
+  // Optional point-value selector (schedule bar only). Picking one tags the task
+  // and ensures that tag lives in the matching point bucket. Defaults to full.
+  const pointsSel=barEl.querySelector(".tab-points");
+  const pointValue=pointsSel?pointsSel.value:"";
   inp.value="";
   // Snap the type back to Urgent so successive adds always default to Urgent
   // rather than sticking on whatever the user last picked.
   const destSel=barEl.querySelector(".tab-dest");
   if(destSel)destSel.value="urgent";
+  // Reset the point value to full after each add so a one-off choice (e.g. Half
+  // Point for a single chore) doesn't silently carry into the next task.
+  if(pointsSel)pointsSel.value="full";
+  // Resolve the point-value tag before creating the task so it carries the tag
+  // (and the canonical tag is guaranteed to sit in the matching bucket).
+  let tags=[];
+  if(pointValue&&window.PointTags&&typeof window.PointTags.ensure==="function"){
+    try{
+      const tagId=await window.PointTags.ensure(pointValue);
+      if(tagId)tags=[tagId];
+    }catch(e){console.warn("[points] tag resolve failed:",e&&e.message?e.message:e);}
+  }
+  const opts=tags.length?{tags}:undefined;
   switch(dest){
-    case"schedule":openSchedulePicker(title,durMin);break;
-    case"backlog":addNewTask(title,durMin);break;
-    case"urgent":insertTaskNow(title,durMin);break;
+    case"schedule":openSchedulePicker(title,durMin,opts);break;
+    case"backlog":addNewTask(title,durMin,opts);break;
+    case"urgent":insertTaskNow(title,durMin,opts);break;
     case"side_project":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
     }
     case"repeat_responsibility":{
-      if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask({title,type:"task",durMin,source:"manual"});
+      if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask({title,type:"task",durMin,source:"manual",tags});
       else if(typeof showToast==="function")showToast("Repeat responsibilities are still loading. Try again in a moment.","info");
       break;
     }

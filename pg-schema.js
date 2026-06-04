@@ -366,6 +366,165 @@ CREATE INDEX IF NOT EXISTS idx_slot_rewards_workspace
 
 CREATE INDEX IF NOT EXISTS idx_slot_spins_workspace
   ON slot_spins(workspace_id, created_at DESC);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- Social Features (multi-user, sponsor-first). See SOCIAL-FEATURES-PLAN.md.
+-- Additive only: new tables + generalizing columns on existing tables.
+-- ══════════════════════════════════════════════════════════════════════════
+
+-- ── User Profiles (display identity + feed settings) ──
+CREATE TABLE IF NOT EXISTS user_profiles (
+  user_id       INTEGER PRIMARY KEY REFERENCES users(id),
+  display_name  TEXT,
+  avatar        TEXT,
+  feed_settings JSONB NOT NULL DEFAULT '{}',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ── Friendships (social graph; mutual 'accepted' = friends) ──
+CREATE TABLE IF NOT EXISTS friendships (
+  id            SERIAL PRIMARY KEY,
+  requester_id  INTEGER NOT NULL REFERENCES users(id),
+  addressee_id  INTEGER NOT NULL REFERENCES users(id),
+  status        TEXT NOT NULL DEFAULT 'pending', -- pending, accepted, blocked
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(requester_id, addressee_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_friendships_addressee
+  ON friendships(addressee_id, status);
+CREATE INDEX IF NOT EXISTS idx_friendships_requester
+  ON friendships(requester_id, status);
+
+-- ── Sponsor Allowlist (source of truth for auto-approval) ──
+CREATE TABLE IF NOT EXISTS sponsor_allowlist (
+  id                 SERIAL PRIMARY KEY,
+  owner_user_id      INTEGER NOT NULL REFERENCES users(id),
+  allowed_user_id    INTEGER NOT NULL REFERENCES users(id),
+  scope              TEXT NOT NULL DEFAULT 'both', -- task, slot, both
+  note               TEXT NOT NULL DEFAULT '',
+  created_by_user_id INTEGER REFERENCES users(id),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(owner_user_id, allowed_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sponsor_allowlist_owner
+  ON sponsor_allowlist(owner_user_id);
+
+-- ── Reward Definitions (generalized from slot_rewards) ──
+-- slot_rewards already carries chance_shares, payment_source, tier_id,
+-- value_cents, last_won_at. Extend it into the unified reward catalog.
+ALTER TABLE slot_rewards
+  ADD COLUMN IF NOT EXISTS owner_user_id      INTEGER REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS times_won          INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS times_redeemed     INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_redeemed_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS uses_remaining     INTEGER,
+  ADD COLUMN IF NOT EXISTS expires_at         TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS public_visibility  TEXT NOT NULL DEFAULT 'private';
+
+-- ── Reward Queue Items (unified earned-reward instances) ──
+-- Replaces the client-side AWARD_QUEUE_KEY localStorage queue.
+CREATE TABLE IF NOT EXISTS reward_queue_items (
+  id                     SERIAL PRIMARY KEY,
+  owner_user_id          INTEGER NOT NULL REFERENCES users(id),
+  workspace_id           TEXT REFERENCES workspaces(id),
+  reward_definition_id   INTEGER REFERENCES slot_rewards(id),
+  title_snapshot         TEXT NOT NULL,
+  source_type            TEXT NOT NULL, -- slot_spin, task_completion, sponsor_task, manual_self_reward, self_care
+  source_id              TEXT,
+  status                 TEXT NOT NULL DEFAULT 'queued', -- queued, claimed, redeemed, completed, dismissed, expired
+  won_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  won_date               DATE,
+  claimed_at             TIMESTAMPTZ,
+  redeemed_at            TIMESTAMPTZ,
+  redeemed_date          DATE,
+  completed_at           TIMESTAMPTZ,
+  sponsor_user_id        INTEGER REFERENCES users(id),
+  value_snapshot         INTEGER NOT NULL DEFAULT 0,
+  chance_shares_snapshot INTEGER,
+  tier_snapshot          TEXT,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reward_queue_owner_status
+  ON reward_queue_items(owner_user_id, status, won_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reward_queue_owner_won_date
+  ON reward_queue_items(owner_user_id, won_date);
+
+-- ── Reward Events (append-only audit ledger; source of truth) ──
+-- Mirrors the slot_point_ledger / pet_home_events idempotency pattern.
+CREATE TABLE IF NOT EXISTS reward_events (
+  id                   SERIAL PRIMARY KEY,
+  reward_queue_id      INTEGER REFERENCES reward_queue_items(id),
+  reward_definition_id INTEGER REFERENCES slot_rewards(id),
+  owner_user_id        INTEGER NOT NULL REFERENCES users(id),
+  actor_user_id        INTEGER REFERENCES users(id),
+  event_type           TEXT NOT NULL, -- won, queued, claimed, redeemed, completed, dismissed, expired, sponsor_removed
+  source_type          TEXT NOT NULL DEFAULT 'manual',
+  source_id            TEXT NOT NULL DEFAULT '',
+  event_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  event_date           DATE,
+  metadata             JSONB NOT NULL DEFAULT '{}'
+);
+
+-- Idempotency: an event carrying a source_id is deduped; keyless events are not.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reward_events_idem
+  ON reward_events(owner_user_id, event_type, source_type, source_id)
+  WHERE source_id <> '';
+CREATE INDEX IF NOT EXISTS idx_reward_events_queue
+  ON reward_events(reward_queue_id, event_at);
+
+-- ── Sponsorships (generalized from todo_sponsorships) ──
+-- todo_sponsorships already has status (default 'pending'), value_cents,
+-- sponsor_user_id, slot_reward_id. Generalize to task/slot targets, add the
+-- allowlist review lifecycle, and relax the share_id requirement (slot
+-- sponsorships are not tied to a todo share).
+ALTER TABLE todo_sponsorships
+  ADD COLUMN IF NOT EXISTS target_type          TEXT NOT NULL DEFAULT 'task', -- task, slot_machine
+  ADD COLUMN IF NOT EXISTS target_id            TEXT,
+  ADD COLUMN IF NOT EXISTS owner_user_id        INTEGER REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS reward_definition_id INTEGER REFERENCES slot_rewards(id),
+  ADD COLUMN IF NOT EXISTS review_state         TEXT NOT NULL DEFAULT 'pending', -- auto_approved, pending, approved, rejected
+  ADD COLUMN IF NOT EXISTS chance_shares        INTEGER,
+  ADD COLUMN IF NOT EXISTS requested_at         TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reviewed_by_user_id  INTEGER REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS reviewed_at          TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS activated_at         TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS removed_at           TIMESTAMPTZ;
+
+ALTER TABLE todo_sponsorships
+  ALTER COLUMN share_id DROP NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_todo_sponsorships_owner_review
+  ON todo_sponsorships(owner_user_id, review_state, created_at DESC);
+
+-- ── Feed Posts (derive from task completions; publish is opt-in) ──
+CREATE TABLE IF NOT EXISTS feed_posts (
+  id                SERIAL PRIMARY KEY,
+  owner_user_id     INTEGER NOT NULL REFERENCES users(id),
+  workspace_id      TEXT REFERENCES workspaces(id),
+  task_id           TEXT,
+  completion_id     TEXT,
+  points_awarded    INTEGER NOT NULL DEFAULT 0,
+  estimated_minutes INTEGER,
+  actual_minutes    INTEGER,
+  publish_state     TEXT NOT NULL DEFAULT 'hidden',         -- hidden, published, manually_hidden
+  publish_source    TEXT NOT NULL DEFAULT 'default_hidden', -- user_published, default_hidden, private_task
+  caption           TEXT NOT NULL DEFAULT '',
+  media_attachments JSONB NOT NULL DEFAULT '[]',
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  published_at      TIMESTAMPTZ,
+  hidden_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_feed_posts_owner_state
+  ON feed_posts(owner_user_id, publish_state, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feed_posts_published
+  ON feed_posts(publish_state, published_at DESC) WHERE publish_state = 'published';
 `;
 
 async function createSchema() {

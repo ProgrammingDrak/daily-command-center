@@ -969,6 +969,90 @@
     renderPointTagSorting();
   }
 
+  // ── Quick point-value tags (schedule add bar) ──
+  // Canonical tags that map 1:1 onto the point buckets, so picking "Half Point"
+  // on a new task both labels it and drops the tag into the half bucket where the
+  // scorer reads it. Tags are matched by their pointTier property (rename-proof),
+  // falling back to the canonical name so a hand-created tag is reused too.
+  const POINT_TAG_DEFS = {
+    full:    { label: "Full Point",    color: "#22c55e" },
+    half:    { label: "Half Point",    color: "#f59e0b" },
+    quarter: { label: "Quarter Point", color: "#38bdf8" },
+    none:    { label: "No Point",      color: "#64748b" },
+  };
+
+  function findPointTagId(tier){
+    const def = POINT_TAG_DEFS[tier];
+    if(!def) return null;
+    if(typeof refreshTagIndex === "function"){ try { refreshTagIndex(); } catch(e){} }
+    const idx = window.__TAGS__;
+    if(!idx || !idx.byId) return null;
+    let byName = null;
+    for(const [id, tag] of idx.byId){
+      const props = tag.properties || {};
+      if(props.pointTier === tier) return id;
+      if(byName == null && String(props.name || "").trim().toLowerCase() === def.label.toLowerCase()) byName = id;
+    }
+    return byName;
+  }
+
+  async function ensurePointTagState(){
+    if(slotState && slotState.constants) return slotState;
+    try { slotState = await api("/api/slot/state"); } catch(e){}
+    return slotState;
+  }
+
+  // Guarantee the canonical tag for `tier` is the only point bucket it lives in.
+  // Saves slot settings only when the buckets actually change.
+  async function ensurePointTagBucket(tier, tagId){
+    await ensurePointTagState();
+    const source = slotState && slotState.constants && slotState.constants.pointTagTiers;
+    const next = clonePointTagTiers(source);
+    let changed = false;
+    POINT_TAG_TIERS.forEach(t => {
+      const list = (next[t.id] || []).map(String);
+      const has = list.includes(String(tagId));
+      if(t.id === tier && !has){ next[t.id] = [...list, String(tagId)]; changed = true; }
+      else if(t.id !== tier && has){ next[t.id] = list.filter(id => id !== String(tagId)); changed = true; }
+    });
+    if(!changed) return;
+    await api("/api/slot/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ point_tag_tiers: next })
+    });
+    await loadSlots();
+  }
+
+  // Find-or-create the canonical tag for a point value, guarantee it sits in the
+  // matching bucket, and return its id. Resolves to null on failure or unknown tier.
+  async function ensurePointTag(tier){
+    if(!POINT_TAG_DEFS[tier]) return null;
+    let id = findPointTagId(tier);
+    if(!id){
+      if(!window.blockStore || typeof window.blockStore.createBlock !== "function") return null;
+      const def = POINT_TAG_DEFS[tier];
+      const block = await window.blockStore.createBlock("block", {
+        name: def.label,
+        color: def.color,
+        description: def.label + " value tag",
+        pointTier: tier
+      }, { parentId: null, date: null });
+      id = block && block.id;
+      if(typeof refreshTagIndex === "function"){ try { refreshTagIndex(); } catch(e){} }
+    }
+    if(!id) return null;
+    try { await ensurePointTagBucket(tier, id); }
+    catch(e){ console.warn("[points] bucket sync failed:", e && e.message ? e.message : e); }
+    return id;
+  }
+
+  window.PointTags = {
+    DEFS: POINT_TAG_DEFS,
+    ensure: ensurePointTag,
+    findId: findPointTagId
+  };
+
   function renderPointTagSorting(){
     const board = document.getElementById("slot-tag-tier-board");
     if(!board || !slotState) return;

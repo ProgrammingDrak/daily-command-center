@@ -1666,7 +1666,7 @@
   .task-add-bar .tab-title:focus{border-color:var(--accent)}
   .task-add-bar .tab-title.tab-error{border-color:var(--red);animation:qa-shake 0.3s ease}
   @keyframes qa-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
-  .task-add-bar .tab-dur,.task-add-bar .tab-dest{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 8px;color:var(--text);font-size:13px;outline:none}
+  .task-add-bar .tab-dur,.task-add-bar .tab-dest,.task-add-bar .tab-points{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 8px;color:var(--text);font-size:13px;outline:none}
   .task-add-bar .tab-add{background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
   .task-add-bar .tab-add:hover{opacity:0.85}
 
@@ -2423,7 +2423,7 @@
     /* ── Task add bar (mobile) ────────────────────────────────── */
     .task-add-bar{flex-wrap:wrap;gap:6px;padding:8px 0 10px}
     .task-add-bar .tab-title{width:100%;min-width:0;min-height:44px}
-    .task-add-bar .tab-dur,.task-add-bar .tab-dest{flex:1;min-height:44px}
+    .task-add-bar .tab-dur,.task-add-bar .tab-dest,.task-add-bar .tab-points{flex:1;min-height:44px}
     .task-add-bar .tab-add{
       flex:1;min-height:44px;font-size:13px;white-space:nowrap;
       display:inline-flex;align-items:center;justify-content:center;
@@ -3609,7 +3609,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
        width:100% — so override the basis here. ── */
   .task-add-bar{flex-wrap:wrap;gap:6px}
   .task-add-bar .tab-title{flex:1 1 100%;min-height:44px}
-  .task-add-bar .tab-dur,.task-add-bar .tab-dest{flex:1 1 auto;min-height:44px}
+  .task-add-bar .tab-dur,.task-add-bar .tab-dest,.task-add-bar .tab-points{flex:1 1 auto;min-height:44px}
   .task-add-bar .tab-add{flex:1 1 auto;min-height:44px}
 
   /* ── Tab strip: right-edge fade so it reads as scrollable ── */
