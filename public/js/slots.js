@@ -617,6 +617,18 @@
     return String(v).slice(0, 10);
   }
 
+  // Friendly origin label for a queued reward, by source_type.
+  function rewardSourceLabel(q){
+    const t = q.source_type || "";
+    if(q.sponsor_user_id) return "sponsored";
+    if(t === "slot_spin") return "from a spin";
+    if(t === "sponsor_task") return "sponsored task";
+    if(t === "task_completion") return "task reward";
+    if(t === "self_care") return "self-care";
+    if(t === "manual_self_reward") return "self-awarded";
+    return t ? t.replace(/_/g, " ") : "earned";
+  }
+
   function rewardReviewHtml(pending, queue){
     const liveQueue = ["queued", "claimed"];
     const pendingHtml = (pending && pending.length)
@@ -635,19 +647,32 @@
         </div>`).join("")
       : `<div class="reward-review-empty">No offers waiting for review.</div>`;
 
+    const today = new Date().toISOString().slice(0, 10);
+    const wonToday = (queue || []).filter(q => fmtDate(q.won_date || q.won_at) === today).length;
+    const redeemedToday = (queue || []).filter(q => q.redeemed_date && fmtDate(q.redeemed_date) === today).length;
+    const summaryHtml = (queue && queue.length)
+      ? `<div class="reward-queue-summary">Won today: <strong>${wonToday}</strong> · Redeemed today: <strong>${redeemedToday}</strong></div>`
+      : "";
+
     const queueHtml = (queue && queue.length)
-      ? queue.map(q => `
+      ? queue.map(q => {
+          const live = liveQueue.includes(q.status);
+          const redeemedBit = q.redeemed_date ? ` · redeemed ${esc(fmtDate(q.redeemed_date))}` : "";
+          const actions = live
+            ? `${q.status === "queued" ? `<button class="slot-mini" data-rq-action="claim" data-id="${q.id}">Claim</button>` : ""}
+               <button class="slot-mini" data-rq-action="redeem" data-id="${q.id}">Redeem</button>
+               <button class="slot-mini slot-discard" data-rq-action="discard" data-id="${q.id}">Discard</button>`
+            : `<span class="rr-status-chip rr-status-${esc(q.status)}">${esc(q.status)}</span>`;
+          return `
         <div class="reward-review-row" data-queue-id="${q.id}">
           <div class="rr-main">
             <div class="rr-title">${esc(q.title_snapshot || "Reward")}</div>
-            <div class="rr-meta">${esc(q.status)} · won ${esc(fmtDate(q.won_date || q.won_at))}${q.sponsor_user_id ? " · sponsored" : ""}</div>
+            <div class="rr-meta">${esc(rewardSourceLabel(q))} · won ${esc(fmtDate(q.won_date || q.won_at))}${redeemedBit}</div>
           </div>
-          <div class="rr-actions">
-            ${liveQueue.includes(q.status) ? `<button class="slot-mini" data-rq-action="redeem" data-id="${q.id}">Redeem</button>` : ""}
-            ${liveQueue.includes(q.status) ? `<button class="slot-mini slot-discard" data-rq-action="discard" data-id="${q.id}">Discard</button>` : ""}
-          </div>
-        </div>`).join("")
-      : `<div class="reward-review-empty">No earned rewards yet.</div>`;
+          <div class="rr-actions">${actions}</div>
+        </div>`;
+        }).join("")
+      : `<div class="reward-review-empty">No earned rewards yet. Win one at the slot machine to see it here.</div>`;
 
     return `
       <section class="slots-panel reward-review-section">
@@ -657,6 +682,7 @@
       </section>
       <section class="slots-panel reward-review-section">
         <h3>Earned rewards</h3>
+        ${summaryHtml}
         ${queueHtml}
       </section>`;
   }
@@ -684,6 +710,7 @@
           await post(`/api/social/allowlist`, { allowedUserId: parseInt(btn.dataset.user, 10) });
           await post(`/api/social/sponsorships/${id}/approve`);
         }
+        else if(rq === "claim") await post(`/api/social/rewards/queue/${id}/claim`);
         else if(rq === "redeem") await post(`/api/social/rewards/queue/${id}/redeem`);
         else if(rq === "discard") await post(`/api/social/rewards/queue/${id}/discard`);
         await renderRewardReview();
@@ -1490,6 +1517,10 @@
       const usesChip = r.uses_remaining != null ? '<span class="slot-lifespan-chip" title="Wins left before it leaves rotation">' + esc(r.uses_remaining) + ' left</span>' : '';
       const expiresChip = r.expires_at ? '<span class="slot-lifespan-chip' + (r.lifespan_exhausted ? ' expired' : '') + '" title="Expires ' + esc(new Date(r.expires_at).toLocaleString()) + '">' + (r.lifespan_exhausted ? 'expired' : 'until ' + esc(new Date(r.expires_at).toLocaleDateString())) + '</span>' : '';
       const oddsLabel = oddsText(r, slotState.rewards || []);
+      const won = Number(r.times_won || 0), redeemed = Number(r.times_redeemed || 0);
+      const statsChip = (won || redeemed)
+        ? '<span class="slot-reward-stats" title="Times won and redeemed from the reward queue">won ' + won + ' · redeemed ' + redeemed + '</span>'
+        : '';
       return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + (archived ? ' archived' : '') + '" data-id="' + r.id + '" draggable="' + (archived ? 'false' : 'true') + '">' +
         '<div class="slot-reward-main">' +
           '<div class="slot-reward-title">' + esc(r.title) + '</div>' +
@@ -1497,7 +1528,7 @@
             '<span>' + esc(sourceLabel(normalizeRewardSource(r))) + '</span>' +
             '<span>' + esc(tierById(r.tier_id).label) + '</span>' +
             '<span>' + esc(oddsLabel) + '</span>' +
-            value + time + bank + privateChip + usesChip + expiresChip + goalExcluded + locked +
+            value + time + bank + privateChip + usesChip + expiresChip + goalExcluded + statsChip + locked +
           '</div>' +
           '<div class="slot-reward-inline-edit">' +
             '<select class="slot-card-source" aria-label="Paid by">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
