@@ -224,6 +224,21 @@ const TERMINAL_QUEUE_STATES = new Set(["redeemed", "completed", "dismissed", "ex
  * the same win replayed returns the existing item without double-crediting.
  * One transaction: the `won` event + the queue row land together.
  */
+/**
+ * Pure: is a confirmed slot spin a redeemable reward win that belongs in the
+ * unified reward queue? Only catalog-reward wins qualify — they carry a
+ * `reward_id`. Misses, bank builders, and the common point/pet/collectible/
+ * booster outcomes (which have no `reward_id`) are economy mechanics, not queue
+ * rewards. Unit-testable without a DB; the server confirm-spin hook calls this.
+ */
+function isQueueableSpinWin(spin) {
+  if (!spin || spin.status !== "confirmed" || !spin.reward_id) return false;
+  const snap = spin.reward_snapshot || {};
+  if (snap.kind === "miss" || snap.kind === "bank_builder") return false;
+  if (snap.source_type === "slot_screen_bank_builder") return false;
+  return true;
+}
+
 async function enqueueReward({
   ownerUserId,
   workspaceId = null,
@@ -645,6 +660,7 @@ module.exports = {
   resolveWorkspaceId,
   // reward queue + ledger
   recordEvent,
+  isQueueableSpinWin,
   enqueueReward,
   listRewardQueue,
   claimReward,
@@ -666,6 +682,7 @@ module.exports = {
     resolveReviewState,
     scopeMatches,
     isoDate,
+    isQueueableSpinWin,
     TERMINAL_QUEUE_STATES,
   },
 };

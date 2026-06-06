@@ -3254,6 +3254,26 @@ app.post("/api/slot/spins/:id/confirm", async (req, res) => {
   try {
     const spin = await slotStore.confirmSpin(req.workspaceId, req.params.id, req.body || {});
     broadcast("slot-changed", { action: "spin-confirm" }, req.workspaceId);
+    // A confirmed, redeemable win flows into the unified reward queue. Bank
+    // builders, misses, and dry spins are not rewards, so they never queue.
+    // Idempotent on sourceId = spin.id: a double-confirm cannot double-queue.
+    if (socialStore.isQueueableSpinWin(spin)) {
+      const snap = spin.reward_snapshot || {};
+      try {
+        await socialStore.enqueueReward({
+          ownerUserId: req.session.userId,
+          workspaceId: req.workspaceId,
+          rewardDefinitionId: spin.reward_id,
+          titleSnapshot: snap.title || "Reward",
+          sourceType: "slot_spin",
+          sourceId: String(spin.id),
+          valueSnapshot: snap.value_cents || 0,
+          chanceSharesSnapshot: snap.chance_shares || null,
+          tierSnapshot: snap.tier_id || null,
+        });
+        broadcast("slot-changed", { action: "reward-queued" }, req.workspaceId);
+      } catch (e) { console.warn("[reward-queue] enqueue failed:", e.message); }
+    }
     res.json(spin);
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });
