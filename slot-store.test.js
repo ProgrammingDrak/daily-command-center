@@ -153,6 +153,73 @@ function createMockPool(options = {}) {
       state.pendingSpinRows = [];
       return { rows: [] };
     }
+    // updateSettings: write the full settings blob
+    if (text.includes("UPDATE slot_accounts SET settings=$2")) {
+      state.settings = params[1];
+      return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
+    }
+    // updateSettings: reassign rewards out of a deactivated tier
+    if (text.includes("UPDATE slot_rewards") && text.includes("SET tier_id=$2")) {
+      const activeIds = params[2] || [];
+      let count = 0;
+      state.rewardRows = state.rewardRows.map(r => {
+        if (!r.deleted_at && r.active && !activeIds.includes(r.tier_id)) { count++; return { ...r, tier_id: params[1] }; }
+        return r;
+      });
+      return { rowCount: count, rows: [] };
+    }
+    // updateReward: full-field UPDATE ... RETURNING *
+    if (text.includes("UPDATE slot_rewards") && text.includes("title=$3") && text.includes("RETURNING")) {
+      const idx = state.rewardRows.findIndex(row => String(row.id) === String(params[1]) && !row.deleted_at);
+      if (idx < 0) return { rows: [] };
+      const updated = {
+        ...state.rewardRows[idx],
+        title: params[2], kind: params[3], sponsor_type: params[4],
+        sponsor_splits: JSON.parse(params[5] || "[]"),
+        weight: params[6], chance_shares: params[7],
+        payment_source: params[8], tier_id: params[9],
+        active: params[10], sponsor_active: params[11],
+        value_cents: params[12], bank_delta_cents: params[13],
+        duration_minutes: params[14], requires_confirmation: params[15],
+        cooldown_days: params[16], unlock_threshold_cents: params[17],
+        notes: params[18], public_visibility: params[19],
+        expires_at: params[20], uses_remaining: params[21],
+      };
+      state.rewardRows[idx] = updated;
+      return { rows: [updated] };
+    }
+    // createReward: next sort_order at the end of a source+tier bucket
+    if (text.includes("MAX(sort_order)")) {
+      const max = state.rewardRows
+        .filter(r => !r.deleted_at && r.payment_source === params[1] && r.tier_id === params[2])
+        .reduce((m, r) => Math.max(m, Number(r.sort_order) || 0), 0);
+      return { rows: [{ next: max + 1000 }] };
+    }
+    // reorderRewards: per-item write (SET sort_order=$3 WHERE id=$2)
+    if (text.includes("UPDATE slot_rewards") && text.includes("SET sort_order=$3")) {
+      const idx = state.rewardRows.findIndex(row => String(row.id) === String(params[1]) && !row.deleted_at);
+      if (idx >= 0) state.rewardRows[idx] = { ...state.rewardRows[idx], sort_order: params[2] };
+      return { rowCount: idx >= 0 ? 1 : 0, rows: [] };
+    }
+    // reorderRewards: rebalance write (SET sort_order=$2 WHERE id=$1)
+    if (text.includes("UPDATE slot_rewards") && text.includes("SET sort_order=$2")) {
+      const idx = state.rewardRows.findIndex(row => String(row.id) === String(params[0]));
+      if (idx >= 0) state.rewardRows[idx] = { ...state.rewardRows[idx], sort_order: params[1] };
+      return { rowCount: idx >= 0 ? 1 : 0, rows: [] };
+    }
+    // reorderRewards: anchor bucket lookup
+    if (text.includes("SELECT payment_source, tier_id FROM slot_rewards")) {
+      const row = state.rewardRows.find(r => String(r.id) === String(params[1]));
+      return { rows: row ? [{ payment_source: row.payment_source, tier_id: row.tier_id }] : [] };
+    }
+    // reorderRewards: ordered bucket ids
+    if (text.includes("SELECT id FROM slot_rewards") && text.includes("payment_source=$2")) {
+      const rows = state.rewardRows
+        .filter(r => !r.deleted_at && r.payment_source === params[1] && r.tier_id === params[2])
+        .sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) || a.id - b.id)
+        .map(r => ({ id: r.id }));
+      return { rows };
+    }
     if (text.includes("SELECT * FROM slot_rewards") && text.includes("id=$2")) {
       return { rows: state.rewardRows.filter(row => String(row.id) === String(params[1]) && !row.deleted_at) };
     }
@@ -1599,3 +1666,111 @@ test("a queued miss shield converts a miss spin into a bank builder", async () =
   assert.equal(mockPool.state.settings.next_spin_modifiers.miss_shield, 1);
 });
 
+
+test("updateReward preserves kind and gating fields across a bucket move", async () => {
+  // Regression: organizational edits used to be normalized through a path that
+  // hardcoded kind/cooldown/bank_delta/requires_confirmation, wiping them. The
+  // client now round-trips the stored values and the server must keep them.
+  const mockPool = createMockPool({
+    migrated: true,
+    rewardRows: [{
+      id: 7, title: "Pick one of three", kind: "choice", sponsor_type: "self",
+      sponsor_splits: [], weight: 2, chance_shares: 2, payment_source: "free",
+      tier_id: "tier_i", active: true, sponsor_active: true, value_cents: 0,
+      bank_delta_cents: 250, duration_minutes: 0, requires_confirmation: true,
+      cooldown_days: 7, unlock_threshold_cents: 0, sort_order: 1000,
+    }],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const updated = await store.updateReward("ws-1", 7, {
+    title: "Pick one of three", kind: "choice", payment_source: "free",
+    tier_id: "tier_iii", weight: 2, chance_shares: 2, active: true,
+    bank_delta_cents: 250, cooldown_days: 7, requires_confirmation: true,
+    sponsor_active: true,
+  });
+
+  assert.equal(updated.kind, "choice");
+  assert.equal(updated.tier_id, "tier_iii");
+  assert.equal(updated.cooldown_days, 7);
+  assert.equal(updated.bank_delta_cents, 250);
+  assert.equal(updated.requires_confirmation, true);
+  assert.equal(updated.sponsor_active, true);
+});
+
+test("getState locks rewards stranded in a deactivated tier", async () => {
+  const mockPool = createMockPool({
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      reward_tiers: [
+        { id: "tier_i", label: "Tier 1", weight: 100, active: true },
+        { id: "tier_ii", label: "Tier 2", weight: 0, active: false },
+      ],
+    },
+    rewardRows: [
+      { id: 1, title: "Reachable", kind: "free", active: true, payment_source: "free", tier_id: "tier_i", chance_shares: 3, weight: 3 },
+      { id: 2, title: "Stranded", kind: "free", active: true, payment_source: "free", tier_id: "tier_ii", chance_shares: 3, weight: 3 },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+  const state = await store.getState("ws-1", 1);
+
+  const stranded = state.rewards.find(r => r.id === 2);
+  const reachable = state.rewards.find(r => r.id === 1);
+  assert.equal(stranded.eligible, false);
+  assert.equal(stranded.locked_reason, "tier_inactive");
+  assert.equal(reachable.eligible, true);
+});
+
+test("updateSettings reassigns rewards out of a deactivated tier", async () => {
+  const mockPool = createMockPool({
+    migrated: true,
+    rewardRows: [
+      { id: 1, title: "Keep", kind: "free", active: true, payment_source: "free", tier_id: "tier_i", chance_shares: 1, weight: 1, sort_order: 1000 },
+      { id: 2, title: "Strand", kind: "free", active: true, payment_source: "free", tier_id: "tier_iii", chance_shares: 1, weight: 1, sort_order: 1000 },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const saved = await store.updateSettings("ws-1", 1, {
+    reward_tiers: [
+      { id: "tier_i", label: "Tier 1", weight: 100, active: true },
+      { id: "tier_iii", label: "Tier 3", weight: 0, active: false },
+    ],
+  });
+
+  assert.equal(saved.reward_reassignments.tier, 1);
+  assert.equal(mockPool.state.rewardRows.find(r => r.id === 2).tier_id, "tier_i");
+  assert.equal(mockPool.state.rewardRows.find(r => r.id === 1).tier_id, "tier_i");
+});
+
+test("reorderRewards stores the given order and rebalances on collision", async () => {
+  const mockPool = createMockPool({
+    migrated: true,
+    rewardRows: [
+      { id: 1, title: "A", kind: "free", active: true, payment_source: "free", tier_id: "tier_i", chance_shares: 1, weight: 1, sort_order: 1000 },
+      { id: 2, title: "B", kind: "free", active: true, payment_source: "free", tier_id: "tier_i", chance_shares: 1, weight: 1, sort_order: 2000 },
+      { id: 3, title: "C", kind: "free", active: true, payment_source: "free", tier_id: "tier_i", chance_shares: 1, weight: 1, sort_order: 3000 },
+    ],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  // Distinct values: applied verbatim, no rebalance.
+  await store.reorderRewards("ws-1", [
+    { id: 3, sort_order: 1000 },
+    { id: 2, sort_order: 2000 },
+    { id: 1, sort_order: 3000 },
+  ]);
+  assert.equal(mockPool.state.rewardRows.find(r => r.id === 3).sort_order, 1000);
+  assert.equal(mockPool.state.rewardRows.find(r => r.id === 1).sort_order, 3000);
+
+  // Colliding values trigger a clean renumber of the whole bucket.
+  await store.reorderRewards("ws-1", [
+    { id: 1, sort_order: 1000 },
+    { id: 3, sort_order: 1000 },
+  ]);
+  const orders = mockPool.state.rewardRows.map(r => r.sort_order).sort((a, b) => a - b);
+  assert.deepEqual(orders, [1000, 2000, 3000]);
+  assert.equal(new Set(orders).size, 3);
+});

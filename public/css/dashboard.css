@@ -3091,6 +3091,37 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-jackpot-choice-meta em{color:#bbf7d0;border-color:rgba(187,247,208,0.26)}
 .slot-jackpot-choice.locked{opacity:0.46;filter:grayscale(0.72);cursor:not-allowed;background:rgba(148,163,184,0.08);border-color:rgba(148,163,184,0.22)}
 .slot-jackpot-choice.locked .slot-jackpot-choice-meta em{color:#fecaca;border-color:rgba(248,113,113,0.24)}
+/* Reward decision screen: GO DO IT NOW (default) / bank / schedule + stopwatch */
+.slot-reward-dialog{width:min(420px,100%);text-align:center;align-items:stretch;gap:16px;padding:22px 20px}
+.slot-reward-top{display:flex;flex-direction:column;align-items:center;gap:6px}
+.slot-reward-kicker{font-size:11px;font-weight:950;text-transform:uppercase;letter-spacing:1px;color:#ffe08a}
+.slot-reward-prize{display:flex;flex-direction:column;align-items:center;gap:6px}
+.slot-reward-sym{font-size:38px;line-height:1}
+.slot-reward-prize strong{font-size:22px;line-height:1.1;color:#fff7d1}
+.slot-reward-meta{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.slot-reward-meta span{border:1px solid rgba(255,255,255,0.14);border-radius:999px;padding:2px 9px;font-size:11px;color:var(--text-muted)}
+.slot-reward-body{display:flex;flex-direction:column;gap:10px}
+.slot-reward-locking{color:var(--text-muted);font-size:13px;padding:14px 0}
+.slot-reward-go{width:100%;border:none;border-radius:12px;padding:16px 14px;cursor:pointer;font-family:inherit;color:#1a1206;font-weight:950;
+  background:linear-gradient(180deg,#ffe169,#f7b733);box-shadow:0 0 0 2px rgba(255,224,138,0.35),0 10px 30px rgba(250,204,21,0.4);
+  display:flex;flex-direction:column;gap:2px;align-items:center;animation:rewardGoGlow 1.7s ease-in-out infinite}
+.slot-reward-go:hover{filter:brightness(1.06)}
+.slot-reward-go:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.slot-reward-go-lead{font-size:18px;letter-spacing:0.5px}
+.slot-reward-go-sub{font-size:11px;font-weight:800;opacity:0.78}
+@keyframes rewardGoGlow{0%,100%{box-shadow:0 0 0 2px rgba(255,224,138,0.35),0 10px 30px rgba(250,204,21,0.35)}50%{box-shadow:0 0 0 3px rgba(255,224,138,0.6),0 12px 40px rgba(250,204,21,0.6)}}
+.slot-reward-secondary{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.slot-reward-alt{border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.05);color:var(--text);font-family:inherit;font-size:13px;font-weight:800;padding:9px 14px;border-radius:9px;cursor:pointer}
+.slot-reward-alt:hover{border-color:rgba(255,255,255,0.34);background:rgba(255,255,255,0.09)}
+.slot-reward-done{background:linear-gradient(180deg,#86efac,#22c55e);color:#06270f;animation:none;box-shadow:0 8px 24px rgba(34,197,94,0.36)}
+.slot-reward-stopwatch{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0}
+.slot-reward-sw-label{font-size:12px;color:var(--text-muted)}
+.slot-reward-sw-time{font-size:44px;font-weight:900;font-variant-numeric:tabular-nums;color:#fff7d1;letter-spacing:1px}
+.slot-reward-celebrate{font-size:52px;line-height:1;animation:rewardPop 0.5s ease}
+@keyframes rewardPop{0%{transform:scale(0.3);opacity:0}60%{transform:scale(1.2)}100%{transform:scale(1);opacity:1}}
+.slot-reward-done-msg{font-size:16px;font-weight:850;color:#bbf7d0}
+.slot-reward-took{font-size:12px;color:var(--text-muted)}
+.reward-q-sched-pill{font-size:10px;font-weight:800;color:#a5d8ff;border:1px solid rgba(120,170,255,0.34);background:rgba(80,130,255,0.12);border-radius:999px;padding:1px 7px;white-space:nowrap}
 @keyframes slotCoinAmountPop{0%{opacity:0;transform:translateY(10px) scale(0.9)}14%{opacity:1;transform:translateY(0) scale(1.08)}72%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(-8px) scale(0.98)}}
 @keyframes slotGoldToPiggy{0%{opacity:0;transform:translate(0,0) scale(0.6)}12%{opacity:1;transform:translate(0,-10px) scale(1.2)}100%{opacity:0;transform:translate(var(--gold-x),var(--gold-y)) scale(0.28)}}
 @keyframes slotPiggyBankImpact{0%{transform:scale(1);filter:brightness(1)}34%{transform:scale(1.055);filter:brightness(1.16)}100%{transform:scale(1);filter:brightness(1)}}
@@ -3295,6 +3326,33 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-reward-card{align-items:flex-start;margin-bottom:7px;cursor:grab}
 .slot-reward-card.archived{cursor:default}
 .slot-reward-card.dragging{opacity:.48;cursor:grabbing}
+/* ── Punishments wheel ── */
+.punish-spin-card{margin-bottom:14px}
+.punish-owed-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(239,68,68,0.07);margin-bottom:14px}
+.punish-owed-count{display:flex;align-items:baseline;gap:7px}
+.punish-owed-count #punish-owed-num{font-size:26px;font-weight:900;color:#ef6a6a}
+.punish-owed-label{font-size:12px;color:var(--text-muted);font-weight:700}
+.punish-stage{display:flex;flex-direction:column;align-items:center;gap:12px;padding:18px 12px;text-align:center}
+.punish-result{font-size:15px;color:var(--text);min-height:22px}
+.punish-result.spinning{color:var(--text-muted);font-style:italic}
+.punish-result-label{color:var(--text-muted);font-weight:700;margin-right:4px}
+.punish-spin-btn{border:0;border-radius:10px;padding:14px 34px;font-family:inherit;font-size:16px;font-weight:900;letter-spacing:.3px;color:white;background:linear-gradient(135deg,#ef4444,#b91c1c);cursor:pointer;box-shadow:0 6px 20px rgba(239,68,68,0.3)}
+.punish-spin-btn:hover:not(:disabled){filter:brightness(1.08)}
+.punish-spin-btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+.punish-bank-line{font-size:12px;color:var(--text-muted)}
+.punish-chip{display:inline-block;font-size:10px;font-weight:800;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);color:var(--text-muted)}
+.punish-chip.money{background:rgba(239,68,68,0.14);border-color:rgba(239,68,68,0.32);color:#ef8a8a}
+.punish-queue-wrap{margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
+.punish-queue-wrap h4{margin:0 0 8px;font-size:13px}
+.punish-queue-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
+.punish-queue-title{font-size:13px}
+.punish-partner{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}
+.punish-partner h4{margin:0 0 4px;font-size:13px}
+.punish-partner-hint{margin:0 0 8px;font-size:11px;color:var(--text-muted)}
+.punish-partner-linked{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px}
+.punish-partner-bal{font-size:11px;color:var(--text-muted)}
+.punish-partner-modes{display:flex;gap:14px;margin-bottom:8px}
+.punish-partner-setup .slot-form-grid{margin-bottom:8px}
 .slot-reward-inline-edit{display:grid;grid-template-columns:1fr 1fr 64px auto;gap:5px;margin-top:7px;align-items:center}
 .slot-card-active{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);white-space:nowrap}
 .slot-reward-main{min-width:0}
@@ -3306,6 +3364,27 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-symbol-badge[data-symbol="bank"]{background:rgba(34,197,94,0.14);border-color:rgba(34,197,94,0.3);color:var(--green)}
 .slot-reward-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;font-size:10px;color:var(--text-muted)}
 .slot-reward-meta span{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:1px 6px}
+.slot-reward-stats{color:#a5f3fc!important;border-color:rgba(34,211,238,0.28)!important;background:var(--cyan-bg)!important}
+/* ── Reward Review tab: pending sponsorships + earned-reward queue ── */
+.reward-review-section{margin-bottom:14px}
+.reward-review-sub{font-size:11px;color:var(--text-muted);margin:-2px 0 10px}
+.reward-review-empty{font-size:12px;color:var(--text-muted);padding:10px 2px}
+.reward-review-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.06)}
+.reward-review-row:last-child{border-bottom:none}
+.rr-main{min-width:0}
+.rr-title{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rr-meta{font-size:10px;color:var(--text-muted);margin-top:2px}
+.rr-note{font-size:11px;color:var(--text);margin-top:3px;opacity:.85}
+.rr-actions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0}
+/* Rewards queue: earned rewards as Repeat-Responsibilities-style cards.
+   Reuses .repeat-resp-* layout; the green "+" score circle is the burn action. */
+.rewards-q-tools{grid-template-columns:1fr}
+.reward-q-schedule{cursor:pointer;font-size:15px;color:var(--accent);border-color:var(--accent)!important}
+.reward-q-schedule:hover{background:var(--accent);color:#fff}
+.reward-q-parked{font-size:15px;color:var(--text-muted);opacity:.7;cursor:default}
+.reward-q-card.reward-q-scheduled{opacity:.72}
+.reward-q-card.reward-q-burned{opacity:.55}
+.reward-q-done{color:var(--green);border-color:var(--green)!important}
 .slot-locked{color:var(--amber)!important}
 .slot-archived-label{color:#cbd5e1!important;border-color:rgba(148,163,184,.22)!important;background:rgba(148,163,184,.1)!important}
 .slot-private-chip{color:#ddd6fe!important;border-color:rgba(167,139,250,0.35)!important;background:var(--purple-bg)!important}

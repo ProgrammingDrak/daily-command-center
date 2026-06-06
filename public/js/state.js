@@ -101,7 +101,8 @@ function toggleCollapsed(id){
 
 // Recursive flatten of a task list into render order. Returns nodes
 // {ev, depth, rel, hasKids, collapsed}; descendants of a collapsed node are
-// omitted. Children render ride-alongs first (by start), then subtasks.
+// omitted. Children render subtasks first (a task's own steps stay directly
+// under it), then ride-alongs (concurrent work in the wrap, by start).
 function flattenSchedule(items){
   const byId=new Map(items.map(e=>[e.id,e]));
   const out=[],seen=new Set();
@@ -115,7 +116,7 @@ function flattenSchedule(items){
     if(hasKids&&!collapsed){
       const ride=kids.filter(k=>relOf(k)==="ride-along").sort((a,b)=>pt(a.start)-pt(b.start));
       const subs=kids.filter(k=>relOf(k)==="subtask");
-      ride.concat(subs).forEach(k=>walk(k,depth+1));
+      subs.concat(ride).forEach(k=>walk(k,depth+1));
     }
   }
   // Roots = items whose parent isn't in this list (top-level or orphaned).

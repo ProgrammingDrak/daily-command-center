@@ -26,6 +26,8 @@
   let pointTagTierDraft = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
+  const REWARD_VIEW_KEY = "pa-slot-reward-view";
+  let loadSlotsToken = 0;
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
   let slotSoundOn = readSlotSoundPreference();
   let slotAudioCtx = null;
@@ -403,14 +405,50 @@
   async function loadSlots(){
     const root = document.getElementById("tab-slots");
     if(!root) return;
+    // Overlapping loads (e.g. a burst of rapid drags each trailing a refetch) can
+    // resolve out of order; only the newest issued load may apply its snapshot, so
+    // a slow earlier response can't clobber newer state.
+    const token = ++loadSlotsToken;
     try {
-      slotState = await api("/api/slot/state");
+      const next = await api("/api/slot/state");
+      if(token !== loadSlotsToken) return;
+      slotState = next;
       pointTagTierDraft = null;
       renderSlots();
     } catch(e) {
+      if(token !== loadSlotsToken) return;
       const result = document.getElementById("slot-result");
       if(result) result.textContent = e.message;
     }
+  }
+
+  function persistRewardView(){
+    try {
+      localStorage.setItem(REWARD_VIEW_KEY, JSON.stringify({
+        search: rewardSearch, category: rewardCategory, price: rewardPrice,
+        eligibility: rewardEligibility, sort: rewardSort
+      }));
+    } catch(_e){ /* storage unavailable; view state just stays per-session */ }
+  }
+
+  function rehydrateRewardView(){
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(REWARD_VIEW_KEY) || "null"); } catch(_e){ saved = null; }
+    if(!saved || typeof saved !== "object") return;
+    if(typeof saved.search === "string") rewardSearch = saved.search;
+    if(typeof saved.category === "string") rewardCategory = saved.category;
+    if(typeof saved.price === "string") rewardPrice = saved.price;
+    if(typeof saved.eligibility === "string") rewardEligibility = saved.eligibility;
+    if(typeof saved.sort === "string") rewardSort = saved.sort;
+  }
+
+  function applyRewardViewControls(){
+    const set = (id, val) => { const el = document.getElementById(id); if(el && val != null) el.value = val; };
+    set("slot-reward-search", rewardSearch);
+    set("slot-reward-category", rewardCategory);
+    set("slot-reward-price", rewardPrice);
+    set("slot-reward-eligibility", rewardEligibility);
+    set("slot-reward-sort", rewardSort);
   }
 
   function handleSlotChanged(){
@@ -570,6 +608,76 @@
       renderSettings();
       renderHistory();
     }
+    if(activeSlotSection === "review") renderRewardReview();
+  }
+
+  // ── Reward Review tab (pending sponsorships only) ──
+  // Earned rewards live in the Task Menu "Rewards" section (rewards-queue.js),
+  // rendered Repeat-Responsibilities style with a one-time "burn" action.
+  function rewardReviewHtml(pending){
+    const pendingHtml = (pending && pending.length)
+      ? pending.map(s => `
+        <div class="reward-review-row" data-sponsorship-id="${s.id}">
+          <div class="rr-main">
+            <div class="rr-title">${esc(s.reward_title || "Reward")}</div>
+            <div class="rr-meta">from ${esc(s.sponsor_name || ("user " + s.sponsor_user_id))} · ${esc(s.target_type || "task")}${s.value_cents ? " · $" + (s.value_cents/100).toFixed(2) : ""}</div>
+            ${s.note ? `<div class="rr-note">${esc(s.note)}</div>` : ""}
+          </div>
+          <div class="rr-actions">
+            <button class="slot-mini" data-rr-action="approve" data-id="${s.id}">Approve</button>
+            <button class="slot-mini" data-rr-action="reject" data-id="${s.id}">Reject</button>
+            ${s.sponsor_user_id ? `<button class="slot-mini" data-rr-action="allow" data-id="${s.id}" data-user="${s.sponsor_user_id}">Always allow</button>` : ""}
+          </div>
+        </div>`).join("")
+      : `<div class="reward-review-empty">No offers waiting for review.</div>`;
+
+    return `
+      <section class="slots-panel reward-review-section">
+        <h3>Reward review</h3>
+        <p class="reward-review-sub">Offers from people not on your auto-approve list wait here until you decide.</p>
+        ${pendingHtml}
+      </section>`;
+  }
+
+  function wireRewardReview(){
+    const panel = document.getElementById("slot-section-review");
+    if(!panel || panel.dataset.wired) return;
+    panel.dataset.wired = "1";
+    // Delegated handler survives innerHTML re-renders.
+    panel.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-rr-action]");
+      if(!btn) return;
+      const id = btn.dataset.id;
+      btn.disabled = true;
+      try {
+        const post = (path, body) => api(path, {
+          method: "POST",
+          headers: body ? { "Content-Type": "application/json" } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const rr = btn.dataset.rrAction;
+        if(rr === "approve") await post(`/api/social/sponsorships/${id}/approve`);
+        else if(rr === "reject") await post(`/api/social/sponsorships/${id}/reject`);
+        else if(rr === "allow") {
+          await post(`/api/social/allowlist`, { allowedUserId: parseInt(btn.dataset.user, 10) });
+          await post(`/api/social/sponsorships/${id}/approve`);
+        }
+        await renderRewardReview();
+      } catch(e) {
+        btn.disabled = false;
+        alert(e.message || "Action failed");
+      }
+    });
+  }
+
+  async function renderRewardReview(){
+    const panel = document.getElementById("slot-section-review");
+    if(!panel) return;
+    wireRewardReview();
+    panel.innerHTML = `<div class="reward-review-loading">Loading…</div>`;
+    let pending = [];
+    try { pending = await api("/api/social/sponsorships/pending"); } catch(e) {}
+    panel.innerHTML = rewardReviewHtml(pending);
   }
 
   function applySlotSection(){
@@ -1173,7 +1281,7 @@
     }
     const current = (slotState && slotState.constants) || {};
     try {
-      await api("/api/slot/settings", {
+      const saved = await api("/api/slot/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1184,6 +1292,10 @@
           shortfall_penalty: current.shortfallPenalty || "",
         })
       });
+      const moved = saved && saved.reward_reassignments && saved.reward_reassignments.tier;
+      if(moved){
+        setResult("Tiers saved. Moved " + moved + " reward" + (moved === 1 ? "" : "s") + " out of a deactivated tier so they stay in the draw.");
+      }
       await loadSlots();
     } catch(e) {
       setResult(e.message);
@@ -1353,6 +1465,10 @@
       const usesChip = r.uses_remaining != null ? '<span class="slot-lifespan-chip" title="Wins left before it leaves rotation">' + esc(r.uses_remaining) + ' left</span>' : '';
       const expiresChip = r.expires_at ? '<span class="slot-lifespan-chip' + (r.lifespan_exhausted ? ' expired' : '') + '" title="Expires ' + esc(new Date(r.expires_at).toLocaleString()) + '">' + (r.lifespan_exhausted ? 'expired' : 'until ' + esc(new Date(r.expires_at).toLocaleDateString())) + '</span>' : '';
       const oddsLabel = oddsText(r, slotState.rewards || []);
+      const won = Number(r.times_won || 0), redeemed = Number(r.times_redeemed || 0);
+      const statsChip = (won || redeemed)
+        ? '<span class="slot-reward-stats" title="Times won and redeemed from the reward queue">won ' + won + ' · redeemed ' + redeemed + '</span>'
+        : '';
       return '<div class="slot-reward-row slot-reward-card ' + (r.eligible ? '' : 'locked') + (archived ? ' archived' : '') + '" data-id="' + r.id + '" draggable="' + (archived ? 'false' : 'true') + '">' +
         '<div class="slot-reward-main">' +
           '<div class="slot-reward-title">' + esc(r.title) + '</div>' +
@@ -1360,7 +1476,7 @@
             '<span>' + esc(sourceLabel(normalizeRewardSource(r))) + '</span>' +
             '<span>' + esc(tierById(r.tier_id).label) + '</span>' +
             '<span>' + esc(oddsLabel) + '</span>' +
-            value + time + bank + privateChip + usesChip + expiresChip + goalExcluded + locked +
+            value + time + bank + privateChip + usesChip + expiresChip + goalExcluded + statsChip + locked +
           '</div>' +
           '<div class="slot-reward-inline-edit">' +
             '<select class="slot-card-source" aria-label="Paid by">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
@@ -1419,33 +1535,57 @@
         event.preventDefault();
         column.classList.remove("drag-over");
         const id = event.dataTransfer.getData("text/plain") || draggedRewardId;
-        moveRewardToBucket(id, column.dataset.tierId, column.dataset.source);
+        const orderedIds = orderedIdsAfterDrop(column, id, event.clientY);
+        moveRewardToBucket(id, column.dataset.tierId, column.dataset.source, orderedIds);
       });
     });
   }
 
-  async function moveRewardToBucket(id, tierId, source){
+  // Read the column's current card order from the DOM, drop the dragged card in at
+  // the cursor's vertical position, and return the resulting id order. The DOM is
+  // the source of truth for what the user sees, so this stays correct under any
+  // active view sort/filter.
+  function orderedIdsAfterDrop(column, draggedId, clientY){
+    const cards = Array.from(column.querySelectorAll(".slot-reward-card"))
+      .filter(card => String(card.dataset.id) !== String(draggedId));
+    let index = cards.length;
+    for(let i = 0; i < cards.length; i++){
+      const rect = cards[i].getBoundingClientRect();
+      if(clientY < rect.top + rect.height / 2){ index = i; break; }
+    }
+    const ids = cards.map(card => String(card.dataset.id));
+    ids.splice(index, 0, String(draggedId));
+    return ids;
+  }
+
+  async function moveRewardToBucket(id, tierId, source, orderedIds){
     const reward = findReward(id);
     if(!reward || !tierId) return;
     const nextSource = source || normalizeRewardSource(reward);
     const sameTier = String(reward.tier_id || "tier_i") === String(tierId);
     const sameSource = normalizeRewardSource(reward) === nextSource;
-    if(sameTier && sameSource) return;
-    const previous = { ...reward };
-    const payload = payloadFromReward(reward, {
-      payment_source: nextSource,
-      tier_id: tierId
-    });
+    const bucketChanged = !(sameTier && sameSource);
+    const order = Array.isArray(orderedIds) && orderedIds.length ? orderedIds : [String(id)];
+    // Renumber the destination bucket with clean spacing so the order is exact and
+    // never collides. Send the whole bucket so the server stores the same order.
+    const items = order.map((rid, i) => ({ id: rid, sort_order: (i + 1) * 1000 }));
     try {
-      Object.assign(reward, payload);
+      if(bucketChanged){
+        const payload = payloadFromReward(reward, { payment_source: nextSource, tier_id: tierId });
+        Object.assign(reward, payload);
+      }
+      items.forEach(it => { const r = findReward(it.id); if(r) r.sort_order = it.sort_order; });
       renderRewards();
-      await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      setResult("Moved " + (reward.title || "reward") + " to " + tierById(tierId).label + ".");
+      if(bucketChanged){
+        const payload = payloadFromReward(reward, { payment_source: nextSource, tier_id: tierId });
+        await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        setResult("Moved " + (reward.title || "reward") + " to " + tierById(tierId).label + ".");
+      }
+      await api("/api/slot/rewards/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
       await loadSlots();
     } catch(e) {
-      Object.assign(reward, previous);
-      renderRewards();
       setResult(e.message);
+      await loadSlots();
     }
   }
 
@@ -1543,13 +1683,18 @@
     if(rewardSort === "price-desc") return valueB - valueA || titleA.localeCompare(titleB);
     if(rewardSort === "weight-desc") return (b.weight || 0) - (a.weight || 0) || titleA.localeCompare(titleB);
     if(rewardSort === "eligible") return Number(!!b.eligible) - Number(!!a.eligible) || titleA.localeCompare(titleB);
-    return categoryA.localeCompare(categoryB) || valueA - valueB || titleA.localeCompare(titleB);
+    // Default ("category"): follow the persisted within-bucket order the user set by
+    // dragging. Cards re-group by source+tier on render, so this orders each bucket
+    // by its stored sort_order; the other modes above are transient view overrides.
+    return (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id;
   }
 
   function lockLabel(reason){
     return ({
       inactive: "inactive",
       zero_weight: "zero weight",
+      tier_inactive: "tier off",
+      source_disabled: "source off",
       bankroll_goal: "goal mode",
       bank_too_small: "bank locked",
       bank_cap: "bucket full"
@@ -1910,6 +2055,11 @@
       if(snap.requires_jackpot_choice) {
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openJackpotChoice(refreshed);
+      } else if(spinRow.status === "pending" && isDecisionReward(spinRow, snap)) {
+        // A fresh catalog-reward win: surface the GO DO IT NOW / bank / schedule
+        // decision screen instead of leaving a bare Confirm button.
+        const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
+        openRewardDecision(refreshed);
       }
     } catch(e) {
       isSpinning = false;
@@ -3654,6 +3804,242 @@
     }
   }
 
+  // ── Reward decision screen ────────────────────────────────────────────────
+  // The moment you win a catalog reward: GO DO IT NOW (default), bank it for
+  // later, or schedule it into your itinerary. "Now" starts a stopwatch; when
+  // you come back and tap Done, the reward is redeemed and stamped to today.
+  let _rdItem = null;       // the reward_queue_item we're acting on
+  let _rdSnap = null;       // reward snapshot (for display + scheduling)
+  let _rdSpin = null;       // the winning spin row
+  let _rdSwStart = 0;       // stopwatch start (ms)
+  let _rdSwTimer = null;    // stopwatch interval handle
+  let _rdBusy = false;      // guards double-submits
+
+  function isDecisionReward(spinRow, snap){
+    snap = snap || (spinRow && spinRow.reward_snapshot) || {};
+    if(!spinRow || !spinRow.reward_id) return false;
+    if(spinRow.status === "miss" || snap.kind === "miss" || snap.kind === "bank_builder") return false;
+    if(snap.source_type === "slot_screen_bank_builder") return false;
+    if(snap.requires_jackpot_choice) return false;
+    return true;
+  }
+
+  function closeRewardDecision(){
+    if(_rdSwTimer){ clearInterval(_rdSwTimer); _rdSwTimer = null; }
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(modal) modal.remove();
+    _rdItem = null; _rdSnap = null; _rdSpin = null; _rdSwStart = 0; _rdBusy = false;
+  }
+
+  async function openRewardDecision(spinRow){
+    const snap = (spinRow && spinRow.reward_snapshot) || {};
+    _rdSpin = spinRow; _rdSnap = snap; _rdItem = null; _rdBusy = false;
+    clearSlotResultActions();
+    let modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal){
+      modal = document.createElement("div");
+      modal.id = "slot-reward-decision-modal";
+      modal.className = "slot-jackpot-modal slot-reward-modal";
+      document.body.appendChild(modal);
+    }
+    renderRewardDecisionShell("locking");
+    // Confirm the spin to lock the prize + enqueue it; the response hands back
+    // the queue item we then act on (do now / bank / schedule).
+    try {
+      const confirmed = await api("/api/slot/spins/" + spinRow.id + "/confirm", { method: "POST" });
+      _rdItem = (confirmed && confirmed.reward_queue_item) || null;
+      slotPlay("confirm");
+      await loadSlots();
+    } catch(e){
+      // Confirm failed: fall back to the inline actions and bail out of the modal.
+      closeRewardDecision();
+      setResult(e.message || "Could not lock that reward.");
+      renderSlotResultActions(spinRow);
+      return;
+    }
+    if(!document.getElementById("slot-reward-decision-modal")) return; // user bailed
+    renderRewardDecisionChoices();
+  }
+
+  function rewardDecisionHead(){
+    const snap = _rdSnap || {};
+    const sym = rewardSymbol(snap) || "🎁";
+    const dur = rewardDurationLabel(snap);
+    const val = (snap.value_cents || 0) > 0 ? money(snap.value_cents) : "";
+    const metaBits = [dur, val].filter(Boolean).map(b => '<span>' + esc(b) + '</span>').join('');
+    return '<div class="slot-reward-kicker">🎰 You won</div>' +
+      '<div class="slot-reward-prize">' +
+        '<span class="slot-reward-sym">' + esc(sym) + '</span>' +
+        '<strong>' + esc(snap.title || "Reward") + '</strong>' +
+      '</div>' +
+      (metaBits ? '<div class="slot-reward-meta">' + metaBits + '</div>' : '');
+  }
+
+  function renderRewardDecisionShell(state){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    const body = state === "locking"
+      ? '<div class="slot-reward-locking">Locking in your prize…</div>'
+      : '';
+    modal.innerHTML =
+      '<div class="slot-jackpot-backdrop"></div>' +
+      '<section class="slot-jackpot-dialog slot-reward-dialog" role="dialog" aria-modal="true" aria-label="Your reward">' +
+        '<div class="slot-reward-top">' + rewardDecisionHead() + '</div>' +
+        '<div class="slot-reward-body">' + body + '</div>' +
+      '</section>';
+    const backdrop = modal.querySelector(".slot-jackpot-backdrop");
+    // While locking, the backdrop is inert; once choices are up it banks-and-closes.
+    if(backdrop && state !== "locking") backdrop.addEventListener("click", () => rewardBank(true));
+  }
+
+  function renderRewardDecisionChoices(){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    const canSchedule = !!(typeof openSchedulePicker === "function" || typeof insertTaskNow === "function");
+    const body =
+      '<button type="button" class="slot-reward-go" id="rd-go">' +
+        '<span class="slot-reward-go-lead">▶ GO DO IT NOW!</span>' +
+        '<span class="slot-reward-go-sub">Take the win right now</span>' +
+      '</button>' +
+      '<div class="slot-reward-secondary">' +
+        '<button type="button" class="slot-reward-alt" id="rd-bank">Bank it for later</button>' +
+        (canSchedule ? '<button type="button" class="slot-reward-alt" id="rd-schedule">Schedule it…</button>' : '') +
+      '</div>';
+    const bodyEl = modal.querySelector(".slot-reward-body");
+    if(bodyEl) bodyEl.innerHTML = body;
+    const backdrop = modal.querySelector(".slot-jackpot-backdrop");
+    if(backdrop){ backdrop.replaceWith(backdrop.cloneNode(false)); modal.querySelector(".slot-jackpot-backdrop").addEventListener("click", () => rewardBank(true)); }
+    const go = modal.querySelector("#rd-go");
+    if(go){ go.addEventListener("click", rewardGoNow); go.focus(); }
+    const bank = modal.querySelector("#rd-bank");
+    if(bank) bank.addEventListener("click", () => rewardBank(false));
+    const sched = modal.querySelector("#rd-schedule");
+    if(sched) sched.addEventListener("click", rewardSchedule);
+  }
+
+  function fmtStopwatch(totalSec){
+    const s = Math.max(0, Math.floor(totalSec));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const pad = n => String(n).padStart(2, "0");
+    return (h ? h + ":" + pad(m) : m) + ":" + pad(sec);
+  }
+
+  function rewardGoNow(){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    _rdSwStart = Date.now();
+    const bodyEl = modal.querySelector(".slot-reward-body");
+    if(bodyEl){
+      bodyEl.innerHTML =
+        '<div class="slot-reward-stopwatch">' +
+          '<div class="slot-reward-sw-label">Enjoy it — timer running</div>' +
+          '<div class="slot-reward-sw-time" id="rd-sw">0:00</div>' +
+        '</div>' +
+        '<button type="button" class="slot-reward-go slot-reward-done" id="rd-done">✓ Done — log it</button>' +
+        '<div class="slot-reward-secondary">' +
+          '<button type="button" class="slot-reward-alt" id="rd-bank-late">Actually, bank it for later</button>' +
+        '</div>';
+    }
+    slotPlay("rewardReveal");
+    slotPetReact("happy", "Enjoy it!", 2400);
+    const swEl = modal.querySelector("#rd-sw");
+    if(_rdSwTimer) clearInterval(_rdSwTimer);
+    _rdSwTimer = setInterval(() => {
+      if(swEl) swEl.textContent = fmtStopwatch((Date.now() - _rdSwStart) / 1000);
+    }, 250);
+    const done = modal.querySelector("#rd-done");
+    if(done){ done.addEventListener("click", rewardDone); done.focus(); }
+    const bankLate = modal.querySelector("#rd-bank-late");
+    if(bankLate) bankLate.addEventListener("click", () => rewardBank(false));
+  }
+
+  async function rewardDone(){
+    if(_rdBusy) return;
+    _rdBusy = true;
+    const elapsedSec = _rdSwStart ? Math.round((Date.now() - _rdSwStart) / 1000) : null;
+    if(_rdSwTimer){ clearInterval(_rdSwTimer); _rdSwTimer = null; }
+    if(_rdItem && _rdItem.id != null){
+      try {
+        await api("/api/social/rewards/queue/" + _rdItem.id + "/redeem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actualSeconds: elapsedSec })
+        });
+      } catch(e){ /* already locked in the queue; redeem can be retried there */ }
+    }
+    slotPlay("jackpotHit");
+    slotPetReact("happy", "Logged!", 2400);
+    rewardDecisionCelebrate(elapsedSec);
+    if(typeof loadRewardsQueue === "function") loadRewardsQueue();
+    await loadSlots();
+  }
+
+  function rewardDecisionCelebrate(elapsedSec){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    const took = (elapsedSec != null && elapsedSec > 0) ? '<div class="slot-reward-took">You took ' + esc(fmtStopwatch(elapsedSec)) + '. Logged to today.</div>' : '';
+    const bodyEl = modal.querySelector(".slot-reward-body");
+    if(bodyEl){
+      bodyEl.innerHTML =
+        '<div class="slot-reward-celebrate">🎉</div>' +
+        '<div class="slot-reward-done-msg">Nice. That dopamine is yours.</div>' +
+        took +
+        '<button type="button" class="slot-reward-alt" id="rd-close">Done</button>';
+      const close = bodyEl.querySelector("#rd-close");
+      if(close){ close.addEventListener("click", closeRewardDecision); close.focus(); }
+    }
+    setResult("Redeemed: " + ((_rdSnap && _rdSnap.title) || "Reward"));
+    setTimeout(() => { if(document.getElementById("slot-reward-decision-modal")) closeRewardDecision(); }, 4200);
+  }
+
+  function rewardBank(silent){
+    // The reward is already confirmed + sitting in the queue; banking just closes
+    // the screen and leaves it there to burn whenever.
+    if(!silent){
+      setResult("Banked: " + ((_rdSnap && _rdSnap.title) || "Reward") + " — burn it from your Reward Queue anytime.");
+      if(typeof window.showToast === "function") window.showToast("Banked for later", "info");
+      slotPetReact("idle", "Banked it.", 1800);
+    }
+    if(typeof loadRewardsQueue === "function") loadRewardsQueue();
+    closeRewardDecision();
+  }
+
+  function rewardSchedule(){
+    const snap = _rdSnap || {};
+    const item = _rdItem;
+    const duration = rewardDurationMinutes(snap) || 30;
+    const title = rewardTaskTitle(snap);
+    const options = rewardTaskOptions(_rdSpin, snap);
+    options.onScheduled = info => {
+      const when = scheduledForIso(info);
+      if(item && item.id != null){
+        api("/api/social/rewards/queue/" + item.id + "/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scheduledFor: when, blockId: (info && info.blockId) || null })
+        }).then(() => { if(typeof loadRewardsQueue === "function") loadRewardsQueue(); }).catch(() => {});
+      }
+      setResult("Scheduled: " + (snap.title || "Reward") + (info && info.start ? " at " + info.start : ""));
+      slotPetReact("happy", "On the books!", 2200);
+    };
+    closeRewardDecision();
+    if(typeof openSchedulePicker === "function") openSchedulePicker(title, duration, options);
+    else if(typeof insertTaskNow === "function") insertTaskNow(title, duration, options);
+  }
+
+  function scheduledForIso(info){
+    try {
+      if(info && info.dateStr && info.start) return new Date(info.dateStr + "T" + info.start).toISOString();
+      if(info && info.start){
+        const now = new Date();
+        const pad = n => String(n).padStart(2, "0");
+        const d = pad(now.getMonth() + 1), day = pad(now.getDate());
+        return new Date(now.getFullYear() + "-" + d + "-" + day + "T" + info.start).toISOString();
+      }
+    } catch(e){}
+    return null;
+  }
+
   function openForm(reward){
     editingId = reward ? reward.id : null;
     const form = document.getElementById("slot-reward-form");
@@ -3807,7 +4193,14 @@
     const source = (document.getElementById("slot-form-source") || {}).value || "free";
     const tierId = (document.getElementById("slot-form-tier") || {}).value || "tier_i";
     const valueCents = Math.round(valueDollars * 100);
-    const kind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    const existing = editingId ? findReward(editingId) : null;
+    // The form has no kind selector and derives a kind from source+value. That
+    // heuristic only covers free/sponsor/bank_gated. For an existing reward whose
+    // kind is one the form cannot represent (choice/reroll/small_paid/miss),
+    // preserve it rather than collapsing it on save.
+    const SPECIAL_KINDS = ["choice", "reroll", "small_paid", "miss"];
+    const derivedKind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    const kind = existing && SPECIAL_KINDS.includes(existing.kind) ? existing.kind : derivedKind;
     const sponsorSplits = source === "sponsored"
       ? sponsorSplitsDraft.map(row => ({
           name: String(row.name || "").trim(),
@@ -3824,14 +4217,16 @@
       payment_source: source,
       tier_id: tierId,
       active: document.getElementById("slot-form-active").checked,
-      sponsor_active: true,
+      sponsor_active: existing ? existing.sponsor_active !== false : true,
       public_visibility: (document.getElementById("slot-form-private") || {}).checked ? "private" : "public",
       value_cents: valueCents,
-      bank_delta_cents: 0,
+      // The form has no inputs for these gating fields; preserve them on edit so
+      // saving the form does not wipe a sponsor- or seed-set cooldown/bank delta.
+      bank_delta_cents: existing ? (existing.bank_delta_cents || 0) : 0,
       duration_minutes: Math.max(0, parseInt(document.getElementById("slot-form-duration").value, 10) || 0),
-      requires_confirmation: false,
-      cooldown_days: 0,
-      unlock_threshold_cents: valueCents,
+      requires_confirmation: existing ? existing.requires_confirmation === true : false,
+      cooldown_days: existing ? (existing.cooldown_days || 0) : 0,
+      unlock_threshold_cents: existing && existing.unlock_threshold_cents != null ? existing.unlock_threshold_cents : valueCents,
       notes: document.getElementById("slot-form-notes").value,
       // The full form has no lifespan inputs; preserve any sponsor-set expiry/uses on edit.
       expires_at: (editingId && findReward(editingId) || {}).expires_at || null,
@@ -3864,10 +4259,14 @@
   function payloadFromReward(reward, patch){
     const source = (patch && patch.payment_source) || normalizeRewardSource(reward);
     const valueCents = patch && patch.value_cents != null ? patch.value_cents : (reward.value_cents || 0);
-    const kind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    // Preserve-never-infer: an organizational action (move, quick-edit, archive)
+    // only touches the field the user changed. Kind and gating fields are passed
+    // through verbatim; they change solely via the full edit form (or an explicit
+    // patch key). This stops drags from collapsing choice/reroll/small_paid into
+    // free/bank_gated and from silently gating a reward via unlock_threshold.
     return {
       title: reward.title,
-      kind,
+      kind: reward.kind || "free",
       sponsor_type: reward.sponsor_type || "self",
       sponsor_splits: reward.sponsor_splits || [],
       weight: rewardShares(reward),
@@ -3875,13 +4274,13 @@
       payment_source: source,
       tier_id: reward.tier_id || "tier_i",
       active: reward.active !== false,
-      sponsor_active: true,
+      sponsor_active: reward.sponsor_active !== false,
       value_cents: valueCents,
       bank_delta_cents: reward.bank_delta_cents || 0,
       duration_minutes: rewardDurationMinutes(reward),
-      requires_confirmation: false,
+      requires_confirmation: reward.requires_confirmation === true,
       cooldown_days: reward.cooldown_days || 0,
-      unlock_threshold_cents: reward.unlock_threshold_cents || valueCents,
+      unlock_threshold_cents: reward.unlock_threshold_cents || 0,
       notes: reward.notes || "",
       public_visibility: reward.public_visibility === "private" ? "private" : "public",
       expires_at: reward.expires_at || null,
@@ -4464,29 +4863,36 @@
         renderRewards();
       });
     });
+    rehydrateRewardView();
+    applyRewardViewControls();
     const rewardSearchInput = document.getElementById("slot-reward-search");
     if(rewardSearchInput) rewardSearchInput.addEventListener("input", () => {
       rewardSearch = rewardSearchInput.value || "";
+      persistRewardView();
       renderRewards();
     });
     const categorySelect = document.getElementById("slot-reward-category");
     if(categorySelect) categorySelect.addEventListener("change", () => {
       rewardCategory = categorySelect.value || "all";
+      persistRewardView();
       renderRewards();
     });
     const priceSelect = document.getElementById("slot-reward-price");
     if(priceSelect) priceSelect.addEventListener("change", () => {
       rewardPrice = priceSelect.value || "all";
+      persistRewardView();
       renderRewards();
     });
     const eligibilitySelect = document.getElementById("slot-reward-eligibility");
     if(eligibilitySelect) eligibilitySelect.addEventListener("change", () => {
       rewardEligibility = eligibilitySelect.value || "all";
+      persistRewardView();
       renderRewards();
     });
     const sortSelect = document.getElementById("slot-reward-sort");
     if(sortSelect) sortSelect.addEventListener("change", () => {
       rewardSort = sortSelect.value || "category";
+      persistRewardView();
       renderRewards();
     });
     const tabBtn = document.getElementById("slots-tab-btn");

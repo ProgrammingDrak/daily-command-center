@@ -65,4 +65,73 @@ async function registerUser({ username, password }) {
   }
 }
 
-module.exports = { createUser, findUserByUsername, verifyPassword, ensureDefaultUser, registerUser };
+// ── Federated identity (managed widget / OAuth) ──
+// Turn an arbitrary base string (e.g. an email local-part) into a username that
+// satisfies the registration rule: ^[a-z0-9_-]{3,30}$
+function slugifyUsername(base) {
+  let s = String(base || "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (s.length < 3) s = `${s}user`;
+  return s.slice(0, 30) || "user";
+}
+
+// Find a username that collides with neither users.username nor workspaces.slug
+// (registerUser uses the username as the workspace slug, which is UNIQUE).
+async function uniqueUsername(base, client) {
+  const root = slugifyUsername(base);
+  let candidate = root;
+  let n = 1;
+  while (true) {
+    const { rows } = await client.query(
+      "SELECT 1 FROM users WHERE username = $1 UNION SELECT 1 FROM workspaces WHERE slug = $1 LIMIT 1",
+      [candidate]
+    );
+    if (!rows.length) return candidate;
+    n += 1;
+    const suffix = String(n);
+    candidate = `${root.slice(0, 30 - suffix.length)}${suffix}`;
+  }
+}
+
+// Map a managed-widget identity (Clerk) to a local user, creating the user +
+// workspace + owner membership on first sight. Mirrors registerUser's transaction
+// so all downstream code keeps keying off the integer users.id.
+async function findOrCreateExternalUser({ externalId, email, displayName, avatarUrl, provider }) {
+  if (!externalId) throw new Error("externalId required");
+
+  const existing = await pool.query("SELECT * FROM users WHERE external_id = $1", [externalId]);
+  if (existing.rows[0]) {
+    const user = existing.rows[0];
+    const { rows } = await pool.query(
+      "SELECT workspace_id FROM workspace_members WHERE user_id = $1 AND role = 'owner' LIMIT 1",
+      [user.id]
+    );
+    return { user: { id: user.id, username: user.username }, workspaceId: rows[0]?.workspace_id || `ws-${user.id}`, created: false };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const base = email ? email.split("@")[0] : (displayName || "user");
+    const username = await uniqueUsername(base, client);
+    const now = new Date().toISOString();
+    const { rows: urows } = await client.query(
+      `INSERT INTO users (username, email, external_id, auth_provider, display_name, avatar_url, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING id`,
+      [username, email || null, externalId, provider || "external", displayName || null, avatarUrl || null, now]
+    );
+    const user = { id: urows[0].id, username };
+    const workspaceId = `ws-${user.id}`;
+    await client.query(`INSERT INTO workspaces (id, name, slug, owner_id, plan, created_at, updated_at) VALUES ($1, $2, $3, $4, 'free', $5, $6)`, [workspaceId, `${username}'s workspace`, username, user.id, now, now]);
+    await client.query(`INSERT INTO workspace_members (workspace_id, user_id, role, accepted_at, created_at) VALUES ($1, $2, 'owner', $3, $4)`, [workspaceId, user.id, now, now]);
+    await client.query("COMMIT");
+    console.log(`[auth] Linked ${provider || "external"} user '${username}' (${email || "no email"}) -> workspace ${workspaceId}`);
+    return { user, workspaceId, created: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { createUser, findUserByUsername, verifyPassword, ensureDefaultUser, registerUser, findOrCreateExternalUser };

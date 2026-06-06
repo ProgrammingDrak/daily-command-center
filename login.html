@@ -178,6 +178,21 @@
 
     .error.visible { display: block; }
 
+    .clerk-mount { display: none; margin-bottom: 18px; }
+    .clerk-mount.visible { display: block; }
+
+    .divider {
+      display: none;
+      align-items: center;
+      text-align: center;
+      color: #64748b;
+      font-size: 12px;
+      margin: 4px 0 18px;
+    }
+    .divider.visible { display: flex; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #2d3148; }
+    .divider span { padding: 0 12px; }
+
     .fine-print {
       color: #64748b;
       font-size: 12px;
@@ -196,6 +211,9 @@
     </div>
 
     <div class="error" id="error"></div>
+
+    <div id="clerkSignIn" class="clerk-mount"></div>
+    <div id="clerkDivider" class="divider"><span>or continue with a username</span></div>
 
     <div class="auth-tabs" role="tablist" aria-label="Account access">
       <button type="button" class="auth-tab active" id="loginTab" role="tab" aria-selected="true">Sign in</button>
@@ -336,6 +354,80 @@
     });
 
     setMode(mode, false);
+
+    // ── Managed login widget (Clerk) ──
+    // If CLERK_PUBLISHABLE_KEY is configured server-side, render the social
+    // sign-in widget. If not, this is a no-op and the username/password form
+    // remains the only path (graceful degradation).
+    (async function initSocialLogin() {
+      let cfg;
+      try { cfg = await (await fetch("/api/auth/config")).json(); } catch { return; }
+      if (!cfg || !cfg.clerkPublishableKey) return;
+
+      try {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+          s.async = true;
+          s.crossOrigin = "anonymous";
+          s.onload = resolve;
+          s.onerror = () => reject(new Error("Failed to load Clerk"));
+          document.head.appendChild(s);
+        });
+
+        const clerk = new window.Clerk(cfg.clerkPublishableKey);
+        await clerk.load();
+
+        let syncing = false;
+        async function syncSession() {
+          if (syncing) return;
+          syncing = true;
+          try {
+            const token = await clerk.session.getToken();
+            const res = await fetch("/api/auth/clerk-sync", {
+              method: "POST",
+              headers: { Authorization: "Bearer " + token },
+              credentials: "include",
+            });
+            if (res.ok) {
+              const params = new URLSearchParams(window.location.search);
+              window.location.href = params.get("next") || "/";
+            } else {
+              const data = await res.json().catch(() => ({}));
+              errorEl.textContent = data.error || "Sign-in could not be completed.";
+              errorEl.classList.add("visible");
+              syncing = false;
+            }
+          } catch {
+            syncing = false;
+          }
+        }
+
+        // Already signed in to Clerk (returning visitor) — sync straight through.
+        if (clerk.user) { await syncSession(); return; }
+
+        const appearance = {
+          variables: {
+            colorBackground: "#1a1d2e",
+            colorPrimary: "#3b82f6",
+            colorText: "#e2e8f0",
+            colorTextSecondary: "#94a3b8",
+            colorInputBackground: "#0f1117",
+            colorInputText: "#e2e8f0",
+            colorNeutral: "#e2e8f0",
+            borderRadius: "8px",
+          },
+        };
+
+        const mountEl = document.getElementById("clerkSignIn");
+        clerk.mountSignIn(mountEl, { appearance });
+        mountEl.classList.add("visible");
+        document.getElementById("clerkDivider").classList.add("visible");
+        clerk.addListener(({ user }) => { if (user) syncSession(); });
+      } catch (e) {
+        console.warn("Social login unavailable:", e.message);
+      }
+    })();
   </script>
 </body>
 </html>

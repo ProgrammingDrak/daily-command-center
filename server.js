@@ -25,11 +25,26 @@ const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
+const punishmentStore = require("./punishment-store");
+const socialStore = require("./social-store");
 const { scoreTaskPoints } = require("./slot-scoring");
 const capabilities = require("./capabilities");
 const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
 const dccIntelligence = require("./dcc-intelligence");
+
+// ── Clerk (managed login widget) — optional. With no keys, social login is
+// simply hidden and the existing username/password flow is unaffected. ──
+const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY || null;
+const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY || null;
+let clerkClient = null;
+if (CLERK_SECRET_KEY) {
+  try {
+    clerkClient = require("@clerk/backend").createClerkClient({ secretKey: CLERK_SECRET_KEY });
+  } catch (e) {
+    console.warn("[clerk] @clerk/backend not available; social login disabled:", e.message);
+  }
+}
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
@@ -112,8 +127,8 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
-const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback"]);
+const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve", "/api/dcc/quick-task"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
@@ -258,6 +273,46 @@ app.post("/api/auth/register", async (req, res) => {
     await recordLoginEvent(req, { userId: result.user.id, username: result.user.username, workspaceId: result.workspaceId });
     res.status(201).json({ ok: true, username: result.user.username, workspaceId: result.workspaceId });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Public config for the login page: tells the frontend whether the Clerk widget
+// is available and which publishable key to mount it with.
+app.get("/api/auth/config", (req, res) => {
+  res.json({ clerkPublishableKey: (clerkClient && CLERK_PUBLISHABLE_KEY) ? CLERK_PUBLISHABLE_KEY : null });
+});
+
+// Managed-widget login: the browser sends a Clerk session token, we verify it,
+// find-or-create the matching local user, and mint our own dcc_session so every
+// existing route keeps working off req.session.userId.
+app.post("/api/auth/clerk-sync", async (req, res) => {
+  if (!clerkClient) return res.status(503).json({ error: "Social login is not configured" });
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Missing token" });
+
+    const { verifyToken } = require("@clerk/backend");
+    const payload = await verifyToken(token, { secretKey: CLERK_SECRET_KEY });
+    const clerkUserId = payload.sub;
+    if (!clerkUserId) return res.status(401).json({ error: "Invalid token" });
+
+    const cu = await clerkClient.users.getUser(clerkUserId);
+    const email = (cu.emailAddresses.find((e) => e.id === cu.primaryEmailAddressId) || cu.emailAddresses[0])?.emailAddress || null;
+    const displayName = [cu.firstName, cu.lastName].filter(Boolean).join(" ") || (email ? email.split("@")[0] : null);
+    const avatarUrl = cu.imageUrl || null;
+    const rawProvider = cu.externalAccounts?.[0]?.provider || "";
+    const provider = rawProvider.replace(/^oauth_/, "") || "external";
+
+    const { user, workspaceId } = await auth.findOrCreateExternalUser({ externalId: clerkUserId, email, displayName, avatarUrl, provider });
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    req.session.workspaceId = workspaceId;
+    await recordLoginEvent(req, { userId: user.id, username: user.username, workspaceId });
+    res.json({ ok: true, username: user.username, workspaceId });
+  } catch (e) {
+    console.error("[clerk] sync error:", e.message);
+    res.status(401).json({ error: "Could not verify sign-in" });
+  }
 });
 
 // ── SSE ──
@@ -1601,6 +1656,189 @@ app.post("/api/todo-share/rotate", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+// Social layer (multi-user, sponsor-first). Thin adapters over social-store.js.
+// All routes are session-gated by the global auth middleware. The signed-in
+// user is the actor: the owner for their own queue/feed/allowlist, the sponsor
+// when offering a sponsorship to someone else.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Sponsor allowlist (auto-approval source of truth) ──
+app.get("/api/social/allowlist", async (req, res) => {
+  try { res.json(await socialStore.listAllowlist(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/allowlist", async (req, res) => {
+  try {
+    const { allowedUserId, scope = "both", note = "" } = req.body || {};
+    if (!allowedUserId) return res.status(400).json({ error: "allowedUserId required" });
+    const entry = await socialStore.addAllowlistEntry({
+      ownerUserId: req.session.userId, allowedUserId, scope, note,
+      createdByUserId: req.session.userId,
+    });
+    res.status(201).json(entry);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete("/api/social/allowlist/:allowedUserId", async (req, res) => {
+  try {
+    await socialStore.removeAllowlistEntry(req.session.userId, parseInt(req.params.allowedUserId, 10));
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Friendships (social graph) ──
+app.get("/api/social/friends", async (req, res) => {
+  try { res.json(await socialStore.listFriends(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/social/friends/requests", async (req, res) => {
+  try { res.json(await socialStore.listFriendRequests(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Find a user to friend or sponsor, by exact username.
+app.get("/api/social/users/lookup", async (req, res) => {
+  try {
+    const user = await auth.findUserByUsername(String(req.query.username || "").trim());
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json({ id: user.id, username: user.username });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/friends/request", async (req, res) => {
+  try {
+    const { addresseeId } = req.body || {};
+    if (!addresseeId) return res.status(400).json({ error: "addresseeId required" });
+    res.status(201).json(await socialStore.requestFriend(req.session.userId, parseInt(addresseeId, 10)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/friends/respond", async (req, res) => {
+  try {
+    const { requesterId, accept } = req.body || {};
+    if (!requesterId) return res.status(400).json({ error: "requesterId required" });
+    res.json(await socialStore.respondFriend(req.session.userId, parseInt(requesterId, 10), accept !== false));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/friends/block", async (req, res) => {
+  try {
+    const { otherId } = req.body || {};
+    if (!otherId) return res.status(400).json({ error: "otherId required" });
+    res.json(await socialStore.blockUser(req.session.userId, parseInt(otherId, 10)));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Sponsorships ──
+// Offer a sponsorship to another user. The signed-in user is the sponsor.
+app.post("/api/social/sponsorships", async (req, res) => {
+  try {
+    const { ownerUserId, targetType, targetId, rewardTitle, rewardDefinitionId = null,
+            valueCents = 0, chanceShares = null, note = "" } = req.body || {};
+    if (!ownerUserId || !targetType || !targetId) {
+      return res.status(400).json({ error: "ownerUserId, targetType, targetId required" });
+    }
+    const result = await socialStore.requestSponsorship({
+      ownerUserId, sponsorUserId: req.session.userId, sponsorName: req.session.username || null,
+      targetType, targetId, rewardTitle, rewardDefinitionId, valueCents, chanceShares, note,
+    });
+    res.status(201).json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// The signed-in user's incoming offers awaiting review.
+app.get("/api/social/sponsorships/pending", async (req, res) => {
+  try { res.json(await socialStore.listPendingSponsorships(req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/sponsorships/:id/approve", async (req, res) => {
+  try { res.json(await socialStore.approveSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/sponsorships/:id/reject", async (req, res) => {
+  try { res.json(await socialStore.rejectSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/sponsorships/:id/remove", async (req, res) => {
+  try { res.json(await socialStore.removeSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Reward queue ──
+app.get("/api/social/rewards/queue", async (req, res) => {
+  try { res.json(await socialStore.listRewardQueue(req.session.userId, { status: req.query.status || null })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/rewards/queue/:id/claim", async (req, res) => {
+  try { res.json(await socialStore.claimReward(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Schedule a won reward into the itinerary: the front-end places the block,
+// then parks the chosen time + block id on the queue row.
+app.post("/api/social/rewards/queue/:id/schedule", async (req, res) => {
+  try {
+    const { scheduledFor = null, blockId = null } = req.body || {};
+    res.json(await socialStore.scheduleReward(parseInt(req.params.id, 10), req.session.userId, { scheduledFor, blockId }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Undo a schedule: reward returns to the queue (front-end removes the block).
+app.post("/api/social/rewards/queue/:id/unschedule", async (req, res) => {
+  try { res.json(await socialStore.unscheduleReward(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Completing a scheduled reward's itinerary task is the real "burn". The
+// front-end calls this with the completed block id; it redeems the parked
+// reward (no-op when the block has none) and broadcasts so the queue refreshes.
+app.post("/api/social/rewards/redeem-by-block", async (req, res) => {
+  try {
+    const blockId = (req.body && req.body.blockId) || null;
+    const result = await socialStore.redeemScheduledByBlock(req.session.userId, blockId);
+    if (result.changed) broadcast("slot-changed", { action: "reward-redeemed" }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/rewards/queue/:id/redeem", async (req, res) => {
+  try {
+    // `actualSeconds` is the "Go do it now" stopwatch elapsed, recorded on the
+    // redeem event so we can show how long the reward actually took.
+    const actualSeconds = (req.body && req.body.actualSeconds != null) ? Number(req.body.actualSeconds) : null;
+    res.json(await socialStore.redeemReward(parseInt(req.params.id, 10), req.session.userId,
+      Number.isFinite(actualSeconds) ? { actualSeconds } : {}));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/rewards/queue/:id/discard", async (req, res) => {
+  try { res.json(await socialStore.discardReward(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Feed (opt-in publishing; private/work tasks can never publish) ──
+app.get("/api/social/feed", async (req, res) => {
+  try { res.json(await socialStore.listFriendsFeed(req.session.userId, { limit: parseInt(req.query.limit, 10) || 50 })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/feed/:id/publish", async (req, res) => {
+  try { res.json(await socialStore.publishPost(parseInt(req.params.id, 10), req.session.userId, { caption: (req.body || {}).caption || null })); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/feed/:id/hide", async (req, res) => {
+  try { res.json(await socialStore.hidePost(parseInt(req.params.id, 10), req.session.userId)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/todo-share/sponsorships", async (req, res) => {
   try {
     await ensureTodoShareTables();
@@ -2425,6 +2663,65 @@ app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.get
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 
+// ── Quick task: drop a single task straight onto a day's itinerary ──
+// Token/localhost-authed (it's in DCC_ENDPOINTS) so the /dcc-task skill can add
+// a task on demand without a browser session. Creates a unified `block` carrying
+// local_id + pinned start, exactly like the in-app "added task" shape, so it
+// renders on the timeline immediately.
+function nextQuarterHourLocal() {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: APP_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+  const h = Number(parts.find(p => p.type === "hour").value);
+  const m = Number(parts.find(p => p.type === "minute").value);
+  let total = Math.ceil((h * 60 + m + 1) / 15) * 15;       // next quarter, ≥1 min ahead
+  if (total > 24 * 60 - 15) total = 24 * 60 - 15;
+  return String(Math.floor(total / 60)).padStart(2, "0") + ":" + String(total % 60).padStart(2, "0");
+}
+function addMinutesHHMM(hhmm, mins) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  const total = Math.min(24 * 60, (h * 60 + m) + Math.max(0, mins));
+  return String(Math.floor(total / 60)).padStart(2, "0") + ":" + String(total % 60).padStart(2, "0");
+}
+app.post("/api/dcc/quick-task", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const title = String(b.title || "").trim();
+    if (!title) return res.status(400).json({ error: "title required" });
+    const dur = Math.max(5, parseInt(b.durationMinutes || b.duration || 30, 10) || 30);
+    const PRIO = { low: "Low", normal: "Normal", medium: "Medium", high: "High", urgent: "High" };
+    const priority = PRIO[String(b.priority || "").toLowerCase()] || "Medium";
+    const dateStr = (b.date && isValidDate(b.date)) ? b.date : getTodayStr();
+    const start = /^\d{1,2}:\d{2}$/.test(b.start || "") ? String(b.start).padStart(5, "0") : nextQuarterHourLocal();
+    const end = addMinutesHHMM(start, dur);
+
+    // Resolve the owner: explicit header/env, else the workspace owner, else first user.
+    let userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
+    let workspaceId = req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || null;
+    if (!userId) {
+      const { rows } = await pool.query(
+        "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
+        workspaceId ? [workspaceId] : []
+      );
+      userId = rows[0] ? rows[0].user_id : 1;
+    }
+    if (!workspaceId) {
+      const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1", [userId]);
+      workspaceId = rows[0] ? rows[0].workspace_id : `ws-${userId}`;
+    }
+
+    const localId = "qt-" + Date.now().toString(36);
+    const tags = Array.isArray(b.tags) && b.tags.length ? b.tags : ["quick-task"];
+    const properties = {
+      local_id: localId, title, start, end, duration: dur,
+      priority, meta: "Quick task · " + dur + "m", detail: String(b.detail || ""),
+      source: "quick-task", tags, _pinnedStart: start, added_at: new Date().toISOString(),
+    };
+    await blockDB.ensureDayRoot(dateStr, userId, workspaceId);
+    const block = await blockDB.createBlock({ type: "block", date: dateStr, properties, sort_order: 0, user_id: userId, workspace_id: workspaceId });
+    broadcast("blocks-changed", { action: "create", blockIds: [block.id] }, workspaceId);
+    res.json({ ok: true, id: block.id, date: dateStr, start, end, title, priority, durationMinutes: dur });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ── Responsibilities API ──
 app.get("/api/responsibilities", async (req, res) => {
   try {
@@ -2963,6 +3260,17 @@ app.post("/api/slot/rewards", async (req, res) => {
   }
 });
 
+app.post("/api/slot/rewards/reorder", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await slotStore.reorderRewards(req.workspaceId, body.items || body.rewards || []);
+    broadcast("slot-changed", { action: "reward-reorder" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
 app.put("/api/slot/rewards/:id", async (req, res) => {
   try {
     const reward = await slotStore.updateReward(req.workspaceId, req.params.id, req.body || {});
@@ -3049,7 +3357,31 @@ app.post("/api/slot/spins/:id/confirm", async (req, res) => {
   try {
     const spin = await slotStore.confirmSpin(req.workspaceId, req.params.id, req.body || {});
     broadcast("slot-changed", { action: "spin-confirm" }, req.workspaceId);
-    res.json(spin);
+    // A confirmed, redeemable win flows into the unified reward queue. Bank
+    // builders, misses, and dry spins are not rewards, so they never queue.
+    // Idempotent on sourceId = spin.id: a double-confirm cannot double-queue.
+    let rewardQueueItem = null;
+    if (socialStore.isQueueableSpinWin(spin)) {
+      const snap = spin.reward_snapshot || {};
+      try {
+        const enq = await socialStore.enqueueReward({
+          ownerUserId: req.session.userId,
+          workspaceId: req.workspaceId,
+          rewardDefinitionId: spin.reward_id,
+          titleSnapshot: snap.title || "Reward",
+          sourceType: "slot_spin",
+          sourceId: String(spin.id),
+          valueSnapshot: snap.value_cents || 0,
+          chanceSharesSnapshot: snap.chance_shares || null,
+          tierSnapshot: snap.tier_id || null,
+        });
+        // Surface the queue item so the win decision screen can act on it
+        // (Go do it now / Bank / Schedule) without a follow-up fetch.
+        rewardQueueItem = (enq && enq.item) || null;
+        broadcast("slot-changed", { action: "reward-queued" }, req.workspaceId);
+      } catch (e) { console.warn("[reward-queue] enqueue failed:", e.message); }
+    }
+    res.json(rewardQueueItem ? { ...spin, reward_queue_item: rewardQueueItem } : spin);
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });
   }
@@ -3059,6 +3391,111 @@ app.post("/api/slot/bank-builders/confirm", async (req, res) => {
   try {
     const result = await slotStore.confirmPendingBankBuilders(req.workspaceId);
     broadcast("slot-changed", { action: "bank-builders-confirm" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+// ── Punishments Wheel API ──
+// Flat weighted mirror of the rewards spinner. See punishment-store.js.
+app.get("/api/punishment/state", async (req, res) => {
+  try {
+    res.json(await punishmentStore.getPunishmentState(req.workspaceId, req.session.userId));
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/punishments", async (req, res) => {
+  try {
+    const row = await punishmentStore.createPunishment(req.workspaceId, req.session.userId, req.body || {});
+    broadcast("punishment-changed", { action: "create" }, req.workspaceId);
+    res.json(row);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.put("/api/punishment/punishments/:id", async (req, res) => {
+  try {
+    const row = await punishmentStore.updatePunishment(req.workspaceId, req.params.id, req.body || {});
+    broadcast("punishment-changed", { action: "update" }, req.workspaceId);
+    res.json(row);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/punishment/punishments/:id", async (req, res) => {
+  try {
+    const result = await punishmentStore.deletePunishment(req.workspaceId, req.params.id);
+    broadcast("punishment-changed", { action: "delete" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/punishments/reorder", async (req, res) => {
+  try {
+    const result = await punishmentStore.reorderPunishments(req.workspaceId, (req.body && req.body.items) || req.body || []);
+    broadcast("punishment-changed", { action: "reorder" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/owe", async (req, res) => {
+  try {
+    const result = await punishmentStore.addOwedSpin(req.workspaceId, req.session.userId, (req.body && req.body.count) || 1);
+    broadcast("punishment-changed", { action: "owe" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/spin", async (req, res) => {
+  try {
+    const result = await punishmentStore.spinPunishment(req.workspaceId, req.session.userId);
+    broadcast("punishment-changed", { action: "spin" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/spins/:id/done", async (req, res) => {
+  try {
+    const row = await punishmentStore.resolvePunishment(req.workspaceId, req.params.id);
+    broadcast("punishment-changed", { action: "resolve" }, req.workspaceId);
+    res.json(row);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+// Create or link the partner who receives money punishments.
+app.post("/api/punishment/partner", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const mode = body.mode === "link" ? "link" : "create";
+    const partner = mode === "link"
+      ? await punishmentStore.linkExistingPartner(req.workspaceId, req.session.userId, body.username)
+      : await punishmentStore.createPartner(req.workspaceId, req.session.userId, { username: body.username, password: body.password });
+    broadcast("punishment-changed", { action: "partner-link" }, req.workspaceId);
+    res.json({ partner });
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/punishment/partner", async (req, res) => {
+  try {
+    const result = await punishmentStore.unlinkPartner(req.workspaceId);
+    broadcast("punishment-changed", { action: "partner-unlink" }, req.workspaceId);
     res.json(result);
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });
