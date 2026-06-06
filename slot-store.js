@@ -1046,6 +1046,15 @@ function normalizeRewardInput(body) {
     const n = parseInt(usesRaw, 10);
     if (Number.isFinite(n) && n > 0) usesRemaining = Math.min(n, 9999);
   }
+  // Preserve gating fields rather than hardcoding them, so an organizational
+  // edit (drag, archive, share change) that round-trips the reward through this
+  // normalizer does not silently wipe a reward's bank delta, cooldown, sponsor
+  // state, or confirmation requirement. Callers that omit a field still get the
+  // schema default (the client form sends the stored values back).
+  const bankDeltaRaw = parseInt(body.bank_delta_cents ?? body.bankDeltaCents, 10);
+  const bankDeltaCents = Number.isFinite(bankDeltaRaw) ? bankDeltaRaw : 0;
+  const requiresConfirmation =
+    body.requires_confirmation === true || body.requiresConfirmation === true;
   return {
     title,
     kind,
@@ -1056,13 +1065,13 @@ function normalizeRewardInput(body) {
     payment_source: paymentSource,
     tier_id: String(body.tier_id || body.tierId || "tier_i").trim() || "tier_i",
     active: body.active !== false,
-    sponsor_active: true,
+    sponsor_active: (body.sponsor_active ?? body.sponsorActive) !== false,
     value_cents: valueCents,
-    bank_delta_cents: 0,
+    bank_delta_cents: bankDeltaCents,
     duration_minutes: durationMinutes,
-    requires_confirmation: false,
-    cooldown_days: 0,
-    unlock_threshold_cents: Math.max(0, parseInt(body.unlock_threshold_cents, 10) || 0),
+    requires_confirmation: requiresConfirmation,
+    cooldown_days: clampInt(body.cooldown_days ?? body.cooldownDays, 0, 365),
+    unlock_threshold_cents: Math.max(0, parseInt(body.unlock_threshold_cents ?? body.unlockThresholdCents, 10) || 0),
     notes: String(body.notes || ""),
     public_visibility: isPrivate ? "private" : "public",
     expires_at: expiresAt,
@@ -1125,6 +1134,13 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   const expired = !!row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
   const usesExhausted = row.uses_remaining != null && Number(row.uses_remaining) <= 0;
   const lifespanExhausted = expired || usesExhausted;
+  // The jackpot only ever rolls into active tiers and sources whose weight > 0
+  // (see tierOptions/sourceOptions + bucketForSourceTier). A reward assigned to a
+  // deactivated tier or a zeroed-out source is therefore unwinnable; surface that
+  // as a lock instead of letting it read as eligible/green in the UI.
+  const settings = (account && account.settings) || {};
+  const tierActive = tierOptions(settings).some(t => String(t.id) === String(row.tier_id || "tier_i"));
+  const sourceEnabled = sourceOptions(settings).some(s => s.id === paymentSource && Number(s.weight) > 0);
   return {
     ...row,
     payment_source: paymentSource,
@@ -1137,7 +1153,7 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     expires_at: row.expires_at || null,
     uses_remaining: row.uses_remaining != null ? Number(row.uses_remaining) : null,
     lifespan_exhausted: lifespanExhausted,
-    eligible: !!row.active && chanceShares > 0 && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted,
+    eligible: !!row.active && chanceShares > 0 && tierActive && sourceEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted,
     jackpot_type: jackpotType(row),
     bankroll_goal_excluded: bankrollGoalExcluded,
     reserve_cost_cents: threshold,
@@ -1146,6 +1162,8 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     locked_reason: !row.active ? "inactive" :
       chanceShares <= 0 ? "zero_weight" :
       lifespanExhausted ? "expired" :
+      !tierActive ? "tier_inactive" :
+      !sourceEnabled ? "source_disabled" :
       bankrollGoalExcluded ? "bankroll_goal" :
       reserveLocked ? "bank_too_small" :
       bankCapLocked ? "bank_cap" :
@@ -1282,7 +1300,7 @@ async function getState(workspaceId, userId) {
     total: (account.bank_balance_cents || 0) + (pendingBankDeposit.cents || 0),
   };
   const { rows: rewardRows } = await pool.query(
-    "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> $2 AND deleted_at IS NULL ORDER BY active DESC, kind, title",
+    "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> $2 AND deleted_at IS NULL ORDER BY active DESC, sort_order ASC, id ASC",
     [workspaceId, LEGACY_BANK_BUILDER_KIND]
   );
   const bankrollGoal = buildBankrollGoalState(account, rewardRows, bankUsage, funding);
@@ -1410,7 +1428,28 @@ async function updateSettings(workspaceId, userId, body = {}) {
     "UPDATE slot_accounts SET settings=$2, updated_at=NOW() WHERE workspace_id=$1 RETURNING *",
     [workspaceId, next]
   );
-  return accountWithSettings(rows[0]);
+  const saved = accountWithSettings(rows[0]);
+  // When a tier is deactivated, any active reward still assigned to it becomes
+  // unwinnable (the jackpot only rolls into active tiers). Migrate those rewards
+  // to the lowest active tier so they stay in rotation, and report the count so
+  // the caller can tell the user. Source disabling is rarer and fights kind
+  // normalization, so it is surfaced via the source_disabled lock instead.
+  let reassignedTier = 0;
+  if (tiersChanged) {
+    const activeTierIds = tierOptions(next).map(t => String(t.id));
+    const fallbackTier = activeTierIds[0];
+    if (fallbackTier && activeTierIds.length) {
+      const res = await pool.query(
+        `UPDATE slot_rewards SET tier_id=$2, updated_at=NOW()
+         WHERE workspace_id=$1 AND deleted_at IS NULL AND active=TRUE
+           AND NOT (tier_id = ANY($3::text[]))`,
+        [workspaceId, fallbackTier, activeTierIds]
+      );
+      reassignedTier = res.rowCount || 0;
+    }
+  }
+  saved.reward_reassignments = { tier: reassignedTier };
+  return saved;
 }
 
 async function setBankrollGoal(workspaceId, userId, body = {}) {
@@ -1857,14 +1896,77 @@ async function setActiveMultiplier(workspaceId, tier) {
 
 async function createReward(workspaceId, body) {
   const r = normalizeRewardInput(body);
+  // Place new rewards at the end of their source+tier bucket so they appear after
+  // existing cards rather than jumping to the front (sort_order 0).
+  const { rows: [mx] } = await pool.query(
+    `SELECT COALESCE(MAX(sort_order), 0) + 1000 AS next
+       FROM slot_rewards
+      WHERE workspace_id = $1 AND payment_source = $2 AND tier_id = $3 AND deleted_at IS NULL`,
+    [workspaceId, r.payment_source, r.tier_id]
+  );
+  const sortOrder = Number(mx && mx.next) || 1000;
   const { rows } = await pool.query(
     `INSERT INTO slot_rewards
-     (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,duration_minutes,requires_confirmation,cooldown_days,unlock_threshold_cents,notes,public_visibility,expires_at,uses_remaining)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+     (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,duration_minutes,requires_confirmation,cooldown_days,unlock_threshold_cents,notes,public_visibility,expires_at,uses_remaining,sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
      RETURNING *`,
-    [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining]
+    [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining, sortOrder]
   );
   return rows[0];
+}
+
+// Persist within-bucket ordering. Mirrors db.js reorderBlocks: write each
+// {id, sort_order}, then if the new values collide (gap < 0.001) renumber the
+// whole affected source+tier bucket to clean (i+1)*1000 spacing.
+async function reorderRewards(workspaceId, items) {
+  const list = (Array.isArray(items) ? items : [])
+    .map(it => ({ id: parseInt(it && (it.id ?? it.reward_id), 10), sort_order: Number(it && it.sort_order) }))
+    .filter(it => Number.isFinite(it.id) && Number.isFinite(it.sort_order));
+  if (!list.length) return { reordered: 0 };
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const item of list) {
+      await client.query(
+        "UPDATE slot_rewards SET sort_order=$3, updated_at=NOW() WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL",
+        [workspaceId, item.id, item.sort_order]
+      );
+    }
+    if (list.length > 1) {
+      const sorted = [...list].sort((a, b) => a.sort_order - b.sort_order);
+      let needsRebalance = false;
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i].sort_order - sorted[i - 1].sort_order < 0.001) { needsRebalance = true; break; }
+      }
+      if (needsRebalance) {
+        const { rows: [anchor] } = await client.query(
+          "SELECT payment_source, tier_id FROM slot_rewards WHERE workspace_id=$1 AND id=$2",
+          [workspaceId, list[0].id]
+        );
+        if (anchor) {
+          const { rows: bucket } = await client.query(
+            `SELECT id FROM slot_rewards
+             WHERE workspace_id=$1 AND payment_source=$2 AND tier_id=$3 AND deleted_at IS NULL
+             ORDER BY sort_order ASC, id ASC`,
+            [workspaceId, anchor.payment_source, anchor.tier_id]
+          );
+          for (let i = 0; i < bucket.length; i++) {
+            await client.query(
+              "UPDATE slot_rewards SET sort_order=$2, updated_at=NOW() WHERE workspace_id=$3 AND id=$1",
+              [bucket[i].id, (i + 1) * 1000, workspaceId]
+            );
+          }
+        }
+      }
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+  return { reordered: list.length };
 }
 
 async function updateReward(workspaceId, id, body) {
@@ -3430,6 +3532,7 @@ module.exports = {
   createReward,
   updateReward,
   deleteReward,
+  reorderRewards,
   earnTaskCredit,
   spin,
   confirmSpin,

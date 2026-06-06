@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS onboarding_state JSONB NOT NULL DEFAULT '{}';
 
+-- OAuth / managed-widget identities (Clerk). OAuth users have no password.
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email         TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS external_id   TEXT UNIQUE;  -- Clerk user id (user_xxx)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT;          -- 'password' | 'google' | 'apple'
+ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name  TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url    TEXT;
+
 -- ── Workspaces ──
 CREATE TABLE IF NOT EXISTS workspaces (
   id         TEXT PRIMARY KEY,
@@ -289,6 +297,7 @@ CREATE TABLE IF NOT EXISTS slot_rewards (
   chance_shares          INTEGER NOT NULL DEFAULT 1,
   payment_source         TEXT NOT NULL DEFAULT 'self',
   tier_id                TEXT NOT NULL DEFAULT 'tier_i',
+  sort_order             DOUBLE PRECISION NOT NULL DEFAULT 0,
   active                 BOOLEAN NOT NULL DEFAULT TRUE,
   sponsor_active         BOOLEAN NOT NULL DEFAULT TRUE,
   value_cents            INTEGER NOT NULL DEFAULT 0,
@@ -329,6 +338,15 @@ ALTER TABLE slot_rewards
 
 ALTER TABLE slot_rewards
   ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE slot_rewards
+  ADD COLUMN IF NOT EXISTS sort_order DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+-- Seed a stable initial order for existing rewards so the within-bucket order is
+-- deterministic before anyone drags a card (id ascending == creation order).
+UPDATE slot_rewards
+   SET sort_order = id * 1000
+ WHERE sort_order = 0;
 
 UPDATE slot_rewards
    SET chance_shares = GREATEST(0, weight)

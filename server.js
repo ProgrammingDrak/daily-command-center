@@ -32,6 +32,19 @@ const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
 const dccIntelligence = require("./dcc-intelligence");
 
+// ── Clerk (managed login widget) — optional. With no keys, social login is
+// simply hidden and the existing username/password flow is unaffected. ──
+const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY || null;
+const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY || null;
+let clerkClient = null;
+if (CLERK_SECRET_KEY) {
+  try {
+    clerkClient = require("@clerk/backend").createClerkClient({ secretKey: CLERK_SECRET_KEY });
+  } catch (e) {
+    console.warn("[clerk] @clerk/backend not available; social login disabled:", e.message);
+  }
+}
+
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
 const PORT = process.env.PORT || 8090;
@@ -113,7 +126,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/gcal/callback"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
@@ -259,6 +272,46 @@ app.post("/api/auth/register", async (req, res) => {
     await recordLoginEvent(req, { userId: result.user.id, username: result.user.username, workspaceId: result.workspaceId });
     res.status(201).json({ ok: true, username: result.user.username, workspaceId: result.workspaceId });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Public config for the login page: tells the frontend whether the Clerk widget
+// is available and which publishable key to mount it with.
+app.get("/api/auth/config", (req, res) => {
+  res.json({ clerkPublishableKey: (clerkClient && CLERK_PUBLISHABLE_KEY) ? CLERK_PUBLISHABLE_KEY : null });
+});
+
+// Managed-widget login: the browser sends a Clerk session token, we verify it,
+// find-or-create the matching local user, and mint our own dcc_session so every
+// existing route keeps working off req.session.userId.
+app.post("/api/auth/clerk-sync", async (req, res) => {
+  if (!clerkClient) return res.status(503).json({ error: "Social login is not configured" });
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "Missing token" });
+
+    const { verifyToken } = require("@clerk/backend");
+    const payload = await verifyToken(token, { secretKey: CLERK_SECRET_KEY });
+    const clerkUserId = payload.sub;
+    if (!clerkUserId) return res.status(401).json({ error: "Invalid token" });
+
+    const cu = await clerkClient.users.getUser(clerkUserId);
+    const email = (cu.emailAddresses.find((e) => e.id === cu.primaryEmailAddressId) || cu.emailAddresses[0])?.emailAddress || null;
+    const displayName = [cu.firstName, cu.lastName].filter(Boolean).join(" ") || (email ? email.split("@")[0] : null);
+    const avatarUrl = cu.imageUrl || null;
+    const rawProvider = cu.externalAccounts?.[0]?.provider || "";
+    const provider = rawProvider.replace(/^oauth_/, "") || "external";
+
+    const { user, workspaceId } = await auth.findOrCreateExternalUser({ externalId: clerkUserId, email, displayName, avatarUrl, provider });
+    req.session.userId = user.id;
+    req.session.username = user.username;
+    req.session.workspaceId = workspaceId;
+    await recordLoginEvent(req, { userId: user.id, username: user.username, workspaceId });
+    res.json({ ok: true, username: user.username, workspaceId });
+  } catch (e) {
+    console.error("[clerk] sync error:", e.message);
+    res.status(401).json({ error: "Could not verify sign-in" });
+  }
 });
 
 // ── SSE ──
@@ -3099,6 +3152,17 @@ app.post("/api/slot/rewards", async (req, res) => {
     const reward = await slotStore.createReward(req.workspaceId, req.body || {});
     broadcast("slot-changed", { action: "reward-create" }, req.workspaceId);
     res.status(201).json(reward);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/rewards/reorder", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await slotStore.reorderRewards(req.workspaceId, body.items || body.rewards || []);
+    broadcast("slot-changed", { action: "reward-reorder" }, req.workspaceId);
+    res.json(result);
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });
   }

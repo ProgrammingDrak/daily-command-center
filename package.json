@@ -19,6 +19,7 @@
     "node": ">=20 <23"
   },
   "dependencies": {
+    "@clerk/backend": "^3.5.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.8.0",
     "chokidar": "^3.6.0",

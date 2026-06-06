@@ -26,6 +26,8 @@
   let pointTagTierDraft = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
+  const REWARD_VIEW_KEY = "pa-slot-reward-view";
+  let loadSlotsToken = 0;
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
   let slotSoundOn = readSlotSoundPreference();
   let slotAudioCtx = null;
@@ -403,14 +405,50 @@
   async function loadSlots(){
     const root = document.getElementById("tab-slots");
     if(!root) return;
+    // Overlapping loads (e.g. a burst of rapid drags each trailing a refetch) can
+    // resolve out of order; only the newest issued load may apply its snapshot, so
+    // a slow earlier response can't clobber newer state.
+    const token = ++loadSlotsToken;
     try {
-      slotState = await api("/api/slot/state");
+      const next = await api("/api/slot/state");
+      if(token !== loadSlotsToken) return;
+      slotState = next;
       pointTagTierDraft = null;
       renderSlots();
     } catch(e) {
+      if(token !== loadSlotsToken) return;
       const result = document.getElementById("slot-result");
       if(result) result.textContent = e.message;
     }
+  }
+
+  function persistRewardView(){
+    try {
+      localStorage.setItem(REWARD_VIEW_KEY, JSON.stringify({
+        search: rewardSearch, category: rewardCategory, price: rewardPrice,
+        eligibility: rewardEligibility, sort: rewardSort
+      }));
+    } catch(_e){ /* storage unavailable; view state just stays per-session */ }
+  }
+
+  function rehydrateRewardView(){
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(REWARD_VIEW_KEY) || "null"); } catch(_e){ saved = null; }
+    if(!saved || typeof saved !== "object") return;
+    if(typeof saved.search === "string") rewardSearch = saved.search;
+    if(typeof saved.category === "string") rewardCategory = saved.category;
+    if(typeof saved.price === "string") rewardPrice = saved.price;
+    if(typeof saved.eligibility === "string") rewardEligibility = saved.eligibility;
+    if(typeof saved.sort === "string") rewardSort = saved.sort;
+  }
+
+  function applyRewardViewControls(){
+    const set = (id, val) => { const el = document.getElementById(id); if(el && val != null) el.value = val; };
+    set("slot-reward-search", rewardSearch);
+    set("slot-reward-category", rewardCategory);
+    set("slot-reward-price", rewardPrice);
+    set("slot-reward-eligibility", rewardEligibility);
+    set("slot-reward-sort", rewardSort);
   }
 
   function handleSlotChanged(){
@@ -1268,7 +1306,7 @@
     }
     const current = (slotState && slotState.constants) || {};
     try {
-      await api("/api/slot/settings", {
+      const saved = await api("/api/slot/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1279,6 +1317,10 @@
           shortfall_penalty: current.shortfallPenalty || "",
         })
       });
+      const moved = saved && saved.reward_reassignments && saved.reward_reassignments.tier;
+      if(moved){
+        setResult("Tiers saved. Moved " + moved + " reward" + (moved === 1 ? "" : "s") + " out of a deactivated tier so they stay in the draw.");
+      }
       await loadSlots();
     } catch(e) {
       setResult(e.message);
@@ -1514,33 +1556,57 @@
         event.preventDefault();
         column.classList.remove("drag-over");
         const id = event.dataTransfer.getData("text/plain") || draggedRewardId;
-        moveRewardToBucket(id, column.dataset.tierId, column.dataset.source);
+        const orderedIds = orderedIdsAfterDrop(column, id, event.clientY);
+        moveRewardToBucket(id, column.dataset.tierId, column.dataset.source, orderedIds);
       });
     });
   }
 
-  async function moveRewardToBucket(id, tierId, source){
+  // Read the column's current card order from the DOM, drop the dragged card in at
+  // the cursor's vertical position, and return the resulting id order. The DOM is
+  // the source of truth for what the user sees, so this stays correct under any
+  // active view sort/filter.
+  function orderedIdsAfterDrop(column, draggedId, clientY){
+    const cards = Array.from(column.querySelectorAll(".slot-reward-card"))
+      .filter(card => String(card.dataset.id) !== String(draggedId));
+    let index = cards.length;
+    for(let i = 0; i < cards.length; i++){
+      const rect = cards[i].getBoundingClientRect();
+      if(clientY < rect.top + rect.height / 2){ index = i; break; }
+    }
+    const ids = cards.map(card => String(card.dataset.id));
+    ids.splice(index, 0, String(draggedId));
+    return ids;
+  }
+
+  async function moveRewardToBucket(id, tierId, source, orderedIds){
     const reward = findReward(id);
     if(!reward || !tierId) return;
     const nextSource = source || normalizeRewardSource(reward);
     const sameTier = String(reward.tier_id || "tier_i") === String(tierId);
     const sameSource = normalizeRewardSource(reward) === nextSource;
-    if(sameTier && sameSource) return;
-    const previous = { ...reward };
-    const payload = payloadFromReward(reward, {
-      payment_source: nextSource,
-      tier_id: tierId
-    });
+    const bucketChanged = !(sameTier && sameSource);
+    const order = Array.isArray(orderedIds) && orderedIds.length ? orderedIds : [String(id)];
+    // Renumber the destination bucket with clean spacing so the order is exact and
+    // never collides. Send the whole bucket so the server stores the same order.
+    const items = order.map((rid, i) => ({ id: rid, sort_order: (i + 1) * 1000 }));
     try {
-      Object.assign(reward, payload);
+      if(bucketChanged){
+        const payload = payloadFromReward(reward, { payment_source: nextSource, tier_id: tierId });
+        Object.assign(reward, payload);
+      }
+      items.forEach(it => { const r = findReward(it.id); if(r) r.sort_order = it.sort_order; });
       renderRewards();
-      await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      setResult("Moved " + (reward.title || "reward") + " to " + tierById(tierId).label + ".");
+      if(bucketChanged){
+        const payload = payloadFromReward(reward, { payment_source: nextSource, tier_id: tierId });
+        await api("/api/slot/rewards/" + reward.id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        setResult("Moved " + (reward.title || "reward") + " to " + tierById(tierId).label + ".");
+      }
+      await api("/api/slot/rewards/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
       await loadSlots();
     } catch(e) {
-      Object.assign(reward, previous);
-      renderRewards();
       setResult(e.message);
+      await loadSlots();
     }
   }
 
@@ -1638,13 +1704,18 @@
     if(rewardSort === "price-desc") return valueB - valueA || titleA.localeCompare(titleB);
     if(rewardSort === "weight-desc") return (b.weight || 0) - (a.weight || 0) || titleA.localeCompare(titleB);
     if(rewardSort === "eligible") return Number(!!b.eligible) - Number(!!a.eligible) || titleA.localeCompare(titleB);
-    return categoryA.localeCompare(categoryB) || valueA - valueB || titleA.localeCompare(titleB);
+    // Default ("category"): follow the persisted within-bucket order the user set by
+    // dragging. Cards re-group by source+tier on render, so this orders each bucket
+    // by its stored sort_order; the other modes above are transient view overrides.
+    return (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id;
   }
 
   function lockLabel(reason){
     return ({
       inactive: "inactive",
       zero_weight: "zero weight",
+      tier_inactive: "tier off",
+      source_disabled: "source off",
       bankroll_goal: "goal mode",
       bank_too_small: "bank locked",
       bank_cap: "bucket full"
@@ -3902,7 +3973,14 @@
     const source = (document.getElementById("slot-form-source") || {}).value || "free";
     const tierId = (document.getElementById("slot-form-tier") || {}).value || "tier_i";
     const valueCents = Math.round(valueDollars * 100);
-    const kind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    const existing = editingId ? findReward(editingId) : null;
+    // The form has no kind selector and derives a kind from source+value. That
+    // heuristic only covers free/sponsor/bank_gated. For an existing reward whose
+    // kind is one the form cannot represent (choice/reroll/small_paid/miss),
+    // preserve it rather than collapsing it on save.
+    const SPECIAL_KINDS = ["choice", "reroll", "small_paid", "miss"];
+    const derivedKind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    const kind = existing && SPECIAL_KINDS.includes(existing.kind) ? existing.kind : derivedKind;
     const sponsorSplits = source === "sponsored"
       ? sponsorSplitsDraft.map(row => ({
           name: String(row.name || "").trim(),
@@ -3919,14 +3997,16 @@
       payment_source: source,
       tier_id: tierId,
       active: document.getElementById("slot-form-active").checked,
-      sponsor_active: true,
+      sponsor_active: existing ? existing.sponsor_active !== false : true,
       public_visibility: (document.getElementById("slot-form-private") || {}).checked ? "private" : "public",
       value_cents: valueCents,
-      bank_delta_cents: 0,
+      // The form has no inputs for these gating fields; preserve them on edit so
+      // saving the form does not wipe a sponsor- or seed-set cooldown/bank delta.
+      bank_delta_cents: existing ? (existing.bank_delta_cents || 0) : 0,
       duration_minutes: Math.max(0, parseInt(document.getElementById("slot-form-duration").value, 10) || 0),
-      requires_confirmation: false,
-      cooldown_days: 0,
-      unlock_threshold_cents: valueCents,
+      requires_confirmation: existing ? existing.requires_confirmation === true : false,
+      cooldown_days: existing ? (existing.cooldown_days || 0) : 0,
+      unlock_threshold_cents: existing && existing.unlock_threshold_cents != null ? existing.unlock_threshold_cents : valueCents,
       notes: document.getElementById("slot-form-notes").value,
       // The full form has no lifespan inputs; preserve any sponsor-set expiry/uses on edit.
       expires_at: (editingId && findReward(editingId) || {}).expires_at || null,
@@ -3959,10 +4039,14 @@
   function payloadFromReward(reward, patch){
     const source = (patch && patch.payment_source) || normalizeRewardSource(reward);
     const valueCents = patch && patch.value_cents != null ? patch.value_cents : (reward.value_cents || 0);
-    const kind = source === "sponsored" ? "sponsor" : source === "self" && valueCents > 0 ? "bank_gated" : "free";
+    // Preserve-never-infer: an organizational action (move, quick-edit, archive)
+    // only touches the field the user changed. Kind and gating fields are passed
+    // through verbatim; they change solely via the full edit form (or an explicit
+    // patch key). This stops drags from collapsing choice/reroll/small_paid into
+    // free/bank_gated and from silently gating a reward via unlock_threshold.
     return {
       title: reward.title,
-      kind,
+      kind: reward.kind || "free",
       sponsor_type: reward.sponsor_type || "self",
       sponsor_splits: reward.sponsor_splits || [],
       weight: rewardShares(reward),
@@ -3970,13 +4054,13 @@
       payment_source: source,
       tier_id: reward.tier_id || "tier_i",
       active: reward.active !== false,
-      sponsor_active: true,
+      sponsor_active: reward.sponsor_active !== false,
       value_cents: valueCents,
       bank_delta_cents: reward.bank_delta_cents || 0,
       duration_minutes: rewardDurationMinutes(reward),
-      requires_confirmation: false,
+      requires_confirmation: reward.requires_confirmation === true,
       cooldown_days: reward.cooldown_days || 0,
-      unlock_threshold_cents: reward.unlock_threshold_cents || valueCents,
+      unlock_threshold_cents: reward.unlock_threshold_cents || 0,
       notes: reward.notes || "",
       public_visibility: reward.public_visibility === "private" ? "private" : "public",
       expires_at: reward.expires_at || null,
@@ -4559,29 +4643,36 @@
         renderRewards();
       });
     });
+    rehydrateRewardView();
+    applyRewardViewControls();
     const rewardSearchInput = document.getElementById("slot-reward-search");
     if(rewardSearchInput) rewardSearchInput.addEventListener("input", () => {
       rewardSearch = rewardSearchInput.value || "";
+      persistRewardView();
       renderRewards();
     });
     const categorySelect = document.getElementById("slot-reward-category");
     if(categorySelect) categorySelect.addEventListener("change", () => {
       rewardCategory = categorySelect.value || "all";
+      persistRewardView();
       renderRewards();
     });
     const priceSelect = document.getElementById("slot-reward-price");
     if(priceSelect) priceSelect.addEventListener("change", () => {
       rewardPrice = priceSelect.value || "all";
+      persistRewardView();
       renderRewards();
     });
     const eligibilitySelect = document.getElementById("slot-reward-eligibility");
     if(eligibilitySelect) eligibilitySelect.addEventListener("change", () => {
       rewardEligibility = eligibilitySelect.value || "all";
+      persistRewardView();
       renderRewards();
     });
     const sortSelect = document.getElementById("slot-reward-sort");
     if(sortSelect) sortSelect.addEventListener("change", () => {
       rewardSort = sortSelect.value || "category";
+      persistRewardView();
       renderRewards();
     });
     const tabBtn = document.getElementById("slots-tab-btn");
