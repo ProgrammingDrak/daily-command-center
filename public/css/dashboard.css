@@ -3311,8 +3311,6 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .reward-review-section{margin-bottom:14px}
 .reward-review-sub{font-size:11px;color:var(--text-muted);margin:-2px 0 10px}
 .reward-review-empty{font-size:12px;color:var(--text-muted);padding:10px 2px}
-.reward-queue-summary{font-size:11px;color:var(--text-muted);margin-bottom:8px}
-.reward-queue-summary strong{color:var(--text)}
 .reward-review-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,0.06)}
 .reward-review-row:last-child{border-bottom:none}
 .rr-main{min-width:0}
@@ -3320,10 +3318,12 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .rr-meta{font-size:10px;color:var(--text-muted);margin-top:2px}
 .rr-note{font-size:11px;color:var(--text);margin-top:3px;opacity:.85}
 .rr-actions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0}
-.rr-status-chip{font-size:10px;font-weight:700;border-radius:10px;padding:2px 8px;text-transform:capitalize;color:var(--text-muted);background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.22)}
-.rr-status-redeemed{color:var(--green);background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.3)}
-.rr-status-dismissed,.rr-status-expired{color:var(--text-muted)}
-.slot-discard{color:var(--amber)}
+/* Rewards queue: earned rewards as Repeat-Responsibilities-style cards.
+   Reuses .repeat-resp-* layout; the green "+" score circle is the burn action. */
+.rewards-q-tools{grid-template-columns:1fr}
+.reward-q-burn{cursor:pointer}
+.reward-q-card.reward-q-burned{opacity:.62}
+.reward-q-done{color:var(--green);border-color:var(--green)!important}
 .slot-locked{color:var(--amber)!important}
 .slot-archived-label{color:#cbd5e1!important;border-color:rgba(148,163,184,.22)!important;background:rgba(148,163,184,.1)!important}
 .slot-private-chip{color:#ddd6fe!important;border-color:rgba(167,139,250,0.35)!important;background:var(--purple-bg)!important}

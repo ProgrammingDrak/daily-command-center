@@ -422,6 +422,26 @@
           </div>
         </details>
 
+        <details class="tm-section" id="tm-rewards-section">
+          <summary class="tm-section-header">
+            <span class="tm-chevron"></span>
+            Rewards
+            <span class="badge" id="rewards-section-count" style="display:none">0</span>
+          </summary>
+          <div class="tm-section-body" id="tm-rewards">
+            <div class="repeat-resp-tools rewards-q-tools">
+              <select id="rewards-queue-filter" title="Filter rewards">
+                <option value="active">Unburned</option>
+                <option value="redeemed">Burned</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            <div class="repeat-resp-list" id="rewards-queue-list">
+              <div class="delegated-empty">No rewards yet. Win one at the slot machine.</div>
+            </div>
+          </div>
+        </details>
+
       </div>
     </div>
   </div>
@@ -1477,6 +1497,7 @@
 <script src="/public/js/pet-home.js"></script>
 <script src="/public/js/todo-share.js"></script>
 <script src="/public/js/slots.js"></script>
+<script src="/public/js/rewards-queue.js"></script>
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script src="/public/js/mobile-shell.js"></script>

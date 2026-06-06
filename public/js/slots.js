@@ -611,26 +611,10 @@
     if(activeSlotSection === "review") renderRewardReview();
   }
 
-  // ── Reward Review tab (pending sponsorships + earned-reward queue) ──
-  function fmtDate(v){
-    if(!v) return "";
-    return String(v).slice(0, 10);
-  }
-
-  // Friendly origin label for a queued reward, by source_type.
-  function rewardSourceLabel(q){
-    const t = q.source_type || "";
-    if(q.sponsor_user_id) return "sponsored";
-    if(t === "slot_spin") return "from a spin";
-    if(t === "sponsor_task") return "sponsored task";
-    if(t === "task_completion") return "task reward";
-    if(t === "self_care") return "self-care";
-    if(t === "manual_self_reward") return "self-awarded";
-    return t ? t.replace(/_/g, " ") : "earned";
-  }
-
-  function rewardReviewHtml(pending, queue){
-    const liveQueue = ["queued", "claimed"];
+  // ── Reward Review tab (pending sponsorships only) ──
+  // Earned rewards live in the Task Menu "Rewards" section (rewards-queue.js),
+  // rendered Repeat-Responsibilities style with a one-time "burn" action.
+  function rewardReviewHtml(pending){
     const pendingHtml = (pending && pending.length)
       ? pending.map(s => `
         <div class="reward-review-row" data-sponsorship-id="${s.id}">
@@ -647,43 +631,11 @@
         </div>`).join("")
       : `<div class="reward-review-empty">No offers waiting for review.</div>`;
 
-    const today = new Date().toISOString().slice(0, 10);
-    const wonToday = (queue || []).filter(q => fmtDate(q.won_date || q.won_at) === today).length;
-    const redeemedToday = (queue || []).filter(q => q.redeemed_date && fmtDate(q.redeemed_date) === today).length;
-    const summaryHtml = (queue && queue.length)
-      ? `<div class="reward-queue-summary">Won today: <strong>${wonToday}</strong> · Redeemed today: <strong>${redeemedToday}</strong></div>`
-      : "";
-
-    const queueHtml = (queue && queue.length)
-      ? queue.map(q => {
-          const live = liveQueue.includes(q.status);
-          const redeemedBit = q.redeemed_date ? ` · redeemed ${esc(fmtDate(q.redeemed_date))}` : "";
-          const actions = live
-            ? `${q.status === "queued" ? `<button class="slot-mini" data-rq-action="claim" data-id="${q.id}">Claim</button>` : ""}
-               <button class="slot-mini" data-rq-action="redeem" data-id="${q.id}">Redeem</button>
-               <button class="slot-mini slot-discard" data-rq-action="discard" data-id="${q.id}">Discard</button>`
-            : `<span class="rr-status-chip rr-status-${esc(q.status)}">${esc(q.status)}</span>`;
-          return `
-        <div class="reward-review-row" data-queue-id="${q.id}">
-          <div class="rr-main">
-            <div class="rr-title">${esc(q.title_snapshot || "Reward")}</div>
-            <div class="rr-meta">${esc(rewardSourceLabel(q))} · won ${esc(fmtDate(q.won_date || q.won_at))}${redeemedBit}</div>
-          </div>
-          <div class="rr-actions">${actions}</div>
-        </div>`;
-        }).join("")
-      : `<div class="reward-review-empty">No earned rewards yet. Win one at the slot machine to see it here.</div>`;
-
     return `
       <section class="slots-panel reward-review-section">
         <h3>Reward review</h3>
         <p class="reward-review-sub">Offers from people not on your auto-approve list wait here until you decide.</p>
         ${pendingHtml}
-      </section>
-      <section class="slots-panel reward-review-section">
-        <h3>Earned rewards</h3>
-        ${summaryHtml}
-        ${queueHtml}
       </section>`;
   }
 
@@ -693,7 +645,7 @@
     panel.dataset.wired = "1";
     // Delegated handler survives innerHTML re-renders.
     panel.addEventListener("click", async (ev) => {
-      const btn = ev.target.closest("[data-rr-action],[data-rq-action]");
+      const btn = ev.target.closest("[data-rr-action]");
       if(!btn) return;
       const id = btn.dataset.id;
       btn.disabled = true;
@@ -703,16 +655,13 @@
           headers: body ? { "Content-Type": "application/json" } : undefined,
           body: body ? JSON.stringify(body) : undefined,
         });
-        const rr = btn.dataset.rrAction, rq = btn.dataset.rqAction;
+        const rr = btn.dataset.rrAction;
         if(rr === "approve") await post(`/api/social/sponsorships/${id}/approve`);
         else if(rr === "reject") await post(`/api/social/sponsorships/${id}/reject`);
         else if(rr === "allow") {
           await post(`/api/social/allowlist`, { allowedUserId: parseInt(btn.dataset.user, 10) });
           await post(`/api/social/sponsorships/${id}/approve`);
         }
-        else if(rq === "claim") await post(`/api/social/rewards/queue/${id}/claim`);
-        else if(rq === "redeem") await post(`/api/social/rewards/queue/${id}/redeem`);
-        else if(rq === "discard") await post(`/api/social/rewards/queue/${id}/discard`);
         await renderRewardReview();
       } catch(e) {
         btn.disabled = false;
@@ -726,10 +675,9 @@
     if(!panel) return;
     wireRewardReview();
     panel.innerHTML = `<div class="reward-review-loading">Loading…</div>`;
-    let pending = [], queue = [];
+    let pending = [];
     try { pending = await api("/api/social/sponsorships/pending"); } catch(e) {}
-    try { queue = await api("/api/social/rewards/queue"); } catch(e) {}
-    panel.innerHTML = rewardReviewHtml(pending, queue);
+    panel.innerHTML = rewardReviewHtml(pending);
   }
 
   function applySlotSection(){
