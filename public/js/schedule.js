@@ -312,6 +312,9 @@ function insertTaskNow(titleArg, durMinArg, opts){
     log("scheduled",id,"Quick-added at "+startStr+": "+title);
     render();
     checkBlockWarnings(newItem);
+    if(typeof opts.onScheduled==="function"){
+      try{opts.onScheduled({localId:id,blockId:id,start:startStr,dateStr:(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null});}catch(e){}
+    }
   } else {
     // Doesn't fit -- stage as pending and open overflow modal (task NOT in scheduled yet)
     _pendingNewTask = {...newItem, _insertAt: insertAt};
@@ -396,6 +399,19 @@ function awardSlotTaskCredit(ev,opts){
   const normalizedOpts={...opts,sourceDate:opts.sourceDate||opts.completionDate||fallbackDate,completedAt:opts.completedAt||new Date().toISOString()};
   if(window.PetHome&&typeof window.PetHome.awardTask==="function"){
     window.PetHome.awardTask(ev,normalizedOpts).catch(()=>{});
+  }
+  // A scheduled reward parked on the itinerary burns when its task is completed.
+  // Safe no-op for normal tasks (the endpoint only matches scheduled rewards by
+  // block id) and idempotent (redeem is status-guarded).
+  if(ev.source==="reward"||(Array.isArray(ev.tags)&&ev.tags.indexOf("reward")>=0)){
+    fetch("/api/social/rewards/redeem-by-block",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({blockId:ev.id})})
+      .then(r=>r.ok?r.json():null)
+      .then(res=>{
+        if(res&&res.changed){
+          if(!normalizedOpts.silent&&typeof showToast==="function")showToast("Reward enjoyed 🎉","success");
+          if(typeof window.loadRewardsQueue==="function")window.loadRewardsQueue();
+        }
+      }).catch(()=>{});
   }
   if(window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
     window.SlotRewards.earnTaskCredit(ev,normalizedOpts).catch(e=>{
@@ -809,6 +825,9 @@ function confirmSchedulePicker(){
     log("scheduled",id,"Scheduled at "+timeStr+": "+title);
     checkOverflow();render();
     checkBlockWarnings(newItem);
+    if(typeof options.onScheduled==="function"){
+      try{options.onScheduled({localId:id,blockId:id,start:timeStr,dateStr});}catch(e){}
+    }
   } else {
     // Different day: persist to blockstore for that target date
     const id=qaId();
@@ -838,6 +857,9 @@ function confirmSchedulePicker(){
         _pinnedStart:timeStr,commuteMinutes:newItem.commuteMinutes||null,addedAt:new Date().toISOString()});
       localStorage.setItem(key,JSON.stringify(arr));
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
+    }
+    if(typeof options.onScheduled==="function"){
+      try{options.onScheduled({localId:id,blockId:id,start:timeStr,dateStr});}catch(e){}
     }
   }
 }

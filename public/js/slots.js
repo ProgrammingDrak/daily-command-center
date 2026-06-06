@@ -2055,6 +2055,11 @@
       if(snap.requires_jackpot_choice) {
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openJackpotChoice(refreshed);
+      } else if(spinRow.status === "pending" && isDecisionReward(spinRow, snap)) {
+        // A fresh catalog-reward win: surface the GO DO IT NOW / bank / schedule
+        // decision screen instead of leaving a bare Confirm button.
+        const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
+        openRewardDecision(refreshed);
       }
     } catch(e) {
       isSpinning = false;
@@ -3797,6 +3802,242 @@
       insertTaskNow(title, duration, options);
       setResult("Reward queued for now: " + (snap.title || "Prize"));
     }
+  }
+
+  // ── Reward decision screen ────────────────────────────────────────────────
+  // The moment you win a catalog reward: GO DO IT NOW (default), bank it for
+  // later, or schedule it into your itinerary. "Now" starts a stopwatch; when
+  // you come back and tap Done, the reward is redeemed and stamped to today.
+  let _rdItem = null;       // the reward_queue_item we're acting on
+  let _rdSnap = null;       // reward snapshot (for display + scheduling)
+  let _rdSpin = null;       // the winning spin row
+  let _rdSwStart = 0;       // stopwatch start (ms)
+  let _rdSwTimer = null;    // stopwatch interval handle
+  let _rdBusy = false;      // guards double-submits
+
+  function isDecisionReward(spinRow, snap){
+    snap = snap || (spinRow && spinRow.reward_snapshot) || {};
+    if(!spinRow || !spinRow.reward_id) return false;
+    if(spinRow.status === "miss" || snap.kind === "miss" || snap.kind === "bank_builder") return false;
+    if(snap.source_type === "slot_screen_bank_builder") return false;
+    if(snap.requires_jackpot_choice) return false;
+    return true;
+  }
+
+  function closeRewardDecision(){
+    if(_rdSwTimer){ clearInterval(_rdSwTimer); _rdSwTimer = null; }
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(modal) modal.remove();
+    _rdItem = null; _rdSnap = null; _rdSpin = null; _rdSwStart = 0; _rdBusy = false;
+  }
+
+  async function openRewardDecision(spinRow){
+    const snap = (spinRow && spinRow.reward_snapshot) || {};
+    _rdSpin = spinRow; _rdSnap = snap; _rdItem = null; _rdBusy = false;
+    clearSlotResultActions();
+    let modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal){
+      modal = document.createElement("div");
+      modal.id = "slot-reward-decision-modal";
+      modal.className = "slot-jackpot-modal slot-reward-modal";
+      document.body.appendChild(modal);
+    }
+    renderRewardDecisionShell("locking");
+    // Confirm the spin to lock the prize + enqueue it; the response hands back
+    // the queue item we then act on (do now / bank / schedule).
+    try {
+      const confirmed = await api("/api/slot/spins/" + spinRow.id + "/confirm", { method: "POST" });
+      _rdItem = (confirmed && confirmed.reward_queue_item) || null;
+      slotPlay("confirm");
+      await loadSlots();
+    } catch(e){
+      // Confirm failed: fall back to the inline actions and bail out of the modal.
+      closeRewardDecision();
+      setResult(e.message || "Could not lock that reward.");
+      renderSlotResultActions(spinRow);
+      return;
+    }
+    if(!document.getElementById("slot-reward-decision-modal")) return; // user bailed
+    renderRewardDecisionChoices();
+  }
+
+  function rewardDecisionHead(){
+    const snap = _rdSnap || {};
+    const sym = rewardSymbol(snap) || "🎁";
+    const dur = rewardDurationLabel(snap);
+    const val = (snap.value_cents || 0) > 0 ? money(snap.value_cents) : "";
+    const metaBits = [dur, val].filter(Boolean).map(b => '<span>' + esc(b) + '</span>').join('');
+    return '<div class="slot-reward-kicker">🎰 You won</div>' +
+      '<div class="slot-reward-prize">' +
+        '<span class="slot-reward-sym">' + esc(sym) + '</span>' +
+        '<strong>' + esc(snap.title || "Reward") + '</strong>' +
+      '</div>' +
+      (metaBits ? '<div class="slot-reward-meta">' + metaBits + '</div>' : '');
+  }
+
+  function renderRewardDecisionShell(state){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    const body = state === "locking"
+      ? '<div class="slot-reward-locking">Locking in your prize…</div>'
+      : '';
+    modal.innerHTML =
+      '<div class="slot-jackpot-backdrop"></div>' +
+      '<section class="slot-jackpot-dialog slot-reward-dialog" role="dialog" aria-modal="true" aria-label="Your reward">' +
+        '<div class="slot-reward-top">' + rewardDecisionHead() + '</div>' +
+        '<div class="slot-reward-body">' + body + '</div>' +
+      '</section>';
+    const backdrop = modal.querySelector(".slot-jackpot-backdrop");
+    // While locking, the backdrop is inert; once choices are up it banks-and-closes.
+    if(backdrop && state !== "locking") backdrop.addEventListener("click", () => rewardBank(true));
+  }
+
+  function renderRewardDecisionChoices(){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    const canSchedule = !!(typeof openSchedulePicker === "function" || typeof insertTaskNow === "function");
+    const body =
+      '<button type="button" class="slot-reward-go" id="rd-go">' +
+        '<span class="slot-reward-go-lead">▶ GO DO IT NOW!</span>' +
+        '<span class="slot-reward-go-sub">Take the win right now</span>' +
+      '</button>' +
+      '<div class="slot-reward-secondary">' +
+        '<button type="button" class="slot-reward-alt" id="rd-bank">Bank it for later</button>' +
+        (canSchedule ? '<button type="button" class="slot-reward-alt" id="rd-schedule">Schedule it…</button>' : '') +
+      '</div>';
+    const bodyEl = modal.querySelector(".slot-reward-body");
+    if(bodyEl) bodyEl.innerHTML = body;
+    const backdrop = modal.querySelector(".slot-jackpot-backdrop");
+    if(backdrop){ backdrop.replaceWith(backdrop.cloneNode(false)); modal.querySelector(".slot-jackpot-backdrop").addEventListener("click", () => rewardBank(true)); }
+    const go = modal.querySelector("#rd-go");
+    if(go){ go.addEventListener("click", rewardGoNow); go.focus(); }
+    const bank = modal.querySelector("#rd-bank");
+    if(bank) bank.addEventListener("click", () => rewardBank(false));
+    const sched = modal.querySelector("#rd-schedule");
+    if(sched) sched.addEventListener("click", rewardSchedule);
+  }
+
+  function fmtStopwatch(totalSec){
+    const s = Math.max(0, Math.floor(totalSec));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const pad = n => String(n).padStart(2, "0");
+    return (h ? h + ":" + pad(m) : m) + ":" + pad(sec);
+  }
+
+  function rewardGoNow(){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    _rdSwStart = Date.now();
+    const bodyEl = modal.querySelector(".slot-reward-body");
+    if(bodyEl){
+      bodyEl.innerHTML =
+        '<div class="slot-reward-stopwatch">' +
+          '<div class="slot-reward-sw-label">Enjoy it — timer running</div>' +
+          '<div class="slot-reward-sw-time" id="rd-sw">0:00</div>' +
+        '</div>' +
+        '<button type="button" class="slot-reward-go slot-reward-done" id="rd-done">✓ Done — log it</button>' +
+        '<div class="slot-reward-secondary">' +
+          '<button type="button" class="slot-reward-alt" id="rd-bank-late">Actually, bank it for later</button>' +
+        '</div>';
+    }
+    slotPlay("rewardReveal");
+    slotPetReact("happy", "Enjoy it!", 2400);
+    const swEl = modal.querySelector("#rd-sw");
+    if(_rdSwTimer) clearInterval(_rdSwTimer);
+    _rdSwTimer = setInterval(() => {
+      if(swEl) swEl.textContent = fmtStopwatch((Date.now() - _rdSwStart) / 1000);
+    }, 250);
+    const done = modal.querySelector("#rd-done");
+    if(done){ done.addEventListener("click", rewardDone); done.focus(); }
+    const bankLate = modal.querySelector("#rd-bank-late");
+    if(bankLate) bankLate.addEventListener("click", () => rewardBank(false));
+  }
+
+  async function rewardDone(){
+    if(_rdBusy) return;
+    _rdBusy = true;
+    const elapsedSec = _rdSwStart ? Math.round((Date.now() - _rdSwStart) / 1000) : null;
+    if(_rdSwTimer){ clearInterval(_rdSwTimer); _rdSwTimer = null; }
+    if(_rdItem && _rdItem.id != null){
+      try {
+        await api("/api/social/rewards/queue/" + _rdItem.id + "/redeem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actualSeconds: elapsedSec })
+        });
+      } catch(e){ /* already locked in the queue; redeem can be retried there */ }
+    }
+    slotPlay("jackpotHit");
+    slotPetReact("happy", "Logged!", 2400);
+    rewardDecisionCelebrate(elapsedSec);
+    if(typeof loadRewardsQueue === "function") loadRewardsQueue();
+    await loadSlots();
+  }
+
+  function rewardDecisionCelebrate(elapsedSec){
+    const modal = document.getElementById("slot-reward-decision-modal");
+    if(!modal) return;
+    const took = (elapsedSec != null && elapsedSec > 0) ? '<div class="slot-reward-took">You took ' + esc(fmtStopwatch(elapsedSec)) + '. Logged to today.</div>' : '';
+    const bodyEl = modal.querySelector(".slot-reward-body");
+    if(bodyEl){
+      bodyEl.innerHTML =
+        '<div class="slot-reward-celebrate">🎉</div>' +
+        '<div class="slot-reward-done-msg">Nice. That dopamine is yours.</div>' +
+        took +
+        '<button type="button" class="slot-reward-alt" id="rd-close">Done</button>';
+      const close = bodyEl.querySelector("#rd-close");
+      if(close){ close.addEventListener("click", closeRewardDecision); close.focus(); }
+    }
+    setResult("Redeemed: " + ((_rdSnap && _rdSnap.title) || "Reward"));
+    setTimeout(() => { if(document.getElementById("slot-reward-decision-modal")) closeRewardDecision(); }, 4200);
+  }
+
+  function rewardBank(silent){
+    // The reward is already confirmed + sitting in the queue; banking just closes
+    // the screen and leaves it there to burn whenever.
+    if(!silent){
+      setResult("Banked: " + ((_rdSnap && _rdSnap.title) || "Reward") + " — burn it from your Reward Queue anytime.");
+      if(typeof window.showToast === "function") window.showToast("Banked for later", "info");
+      slotPetReact("idle", "Banked it.", 1800);
+    }
+    if(typeof loadRewardsQueue === "function") loadRewardsQueue();
+    closeRewardDecision();
+  }
+
+  function rewardSchedule(){
+    const snap = _rdSnap || {};
+    const item = _rdItem;
+    const duration = rewardDurationMinutes(snap) || 30;
+    const title = rewardTaskTitle(snap);
+    const options = rewardTaskOptions(_rdSpin, snap);
+    options.onScheduled = info => {
+      const when = scheduledForIso(info);
+      if(item && item.id != null){
+        api("/api/social/rewards/queue/" + item.id + "/schedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scheduledFor: when, blockId: (info && info.blockId) || null })
+        }).then(() => { if(typeof loadRewardsQueue === "function") loadRewardsQueue(); }).catch(() => {});
+      }
+      setResult("Scheduled: " + (snap.title || "Reward") + (info && info.start ? " at " + info.start : ""));
+      slotPetReact("happy", "On the books!", 2200);
+    };
+    closeRewardDecision();
+    if(typeof openSchedulePicker === "function") openSchedulePicker(title, duration, options);
+    else if(typeof insertTaskNow === "function") insertTaskNow(title, duration, options);
+  }
+
+  function scheduledForIso(info){
+    try {
+      if(info && info.dateStr && info.start) return new Date(info.dateStr + "T" + info.start).toISOString();
+      if(info && info.start){
+        const now = new Date();
+        const pad = n => String(n).padStart(2, "0");
+        const d = pad(now.getMonth() + 1), day = pad(now.getDate());
+        return new Date(now.getFullYear() + "-" + d + "-" + day + "T" + info.start).toISOString();
+      }
+    } catch(e){}
+    return null;
   }
 
   function openForm(reward){

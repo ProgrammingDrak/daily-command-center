@@ -3538,6 +3538,7 @@ module.exports = {
   confirmSpin,
   confirmPendingBankBuilders,
   celebrationSpinForBankrollGoal,
+  chooseWeighted,
   _test: {
     buildSpinScreen,
     calculateScreenBankPayout,

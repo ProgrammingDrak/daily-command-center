@@ -385,6 +385,45 @@ CREATE INDEX IF NOT EXISTS idx_slot_rewards_workspace
 CREATE INDEX IF NOT EXISTS idx_slot_spins_workspace
   ON slot_spins(workspace_id, created_at DESC);
 
+-- ── Punishments Wheel (flat weighted mirror of the rewards spinner) ──
+-- A separate, intentionally-simple spinner: one flat list of punishments, each
+-- with a "chances" weight. Odds = chance_shares / Σ active chance_shares. Money
+-- punishments carry a negative bank_delta_cents that moves slot_accounts.bank_balance_cents.
+-- The owed-spin counter lives in slot_accounts.settings.punishments_owed (JSONB, no column).
+CREATE TABLE IF NOT EXISTS slot_punishments (
+  id               SERIAL PRIMARY KEY,
+  workspace_id     TEXT NOT NULL REFERENCES workspaces(id),
+  title            TEXT NOT NULL,
+  chance_shares    INTEGER NOT NULL DEFAULT 1,
+  bank_delta_cents INTEGER NOT NULL DEFAULT 0,
+  active           BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order       DOUBLE PRECISION NOT NULL DEFAULT 0,
+  notes            TEXT NOT NULL DEFAULT '',
+  times_landed     INTEGER NOT NULL DEFAULT 0,
+  deleted_at       TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id, title)
+);
+
+CREATE TABLE IF NOT EXISTS slot_punishment_spins (
+  id                  SERIAL PRIMARY KEY,
+  workspace_id        TEXT NOT NULL REFERENCES workspaces(id),
+  user_id             INTEGER REFERENCES users(id),
+  punishment_id       INTEGER REFERENCES slot_punishments(id),
+  punishment_snapshot JSONB NOT NULL,
+  bank_delta_cents    INTEGER NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT 'pending',
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  done_at             TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_slot_punishments_workspace
+  ON slot_punishments(workspace_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_slot_punishment_spins_workspace
+  ON slot_punishment_spins(workspace_id, created_at DESC);
+
 -- ══════════════════════════════════════════════════════════════════════════
 -- Social Features (multi-user, sponsor-first). See SOCIAL-FEATURES-PLAN.md.
 -- Additive only: new tables + generalizing columns on existing tables.
@@ -454,10 +493,12 @@ CREATE TABLE IF NOT EXISTS reward_queue_items (
   title_snapshot         TEXT NOT NULL,
   source_type            TEXT NOT NULL, -- slot_spin, task_completion, sponsor_task, manual_self_reward, self_care
   source_id              TEXT,
-  status                 TEXT NOT NULL DEFAULT 'queued', -- queued, claimed, redeemed, completed, dismissed, expired
+  status                 TEXT NOT NULL DEFAULT 'queued', -- queued, claimed, scheduled, redeemed, completed, dismissed, expired
   won_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   won_date               DATE,
   claimed_at             TIMESTAMPTZ,
+  scheduled_for          TIMESTAMPTZ,  -- when the user parked the reward in their itinerary
+  scheduled_block_id     TEXT,         -- the itinerary block this reward was scheduled into
   redeemed_at            TIMESTAMPTZ,
   redeemed_date          DATE,
   completed_at           TIMESTAMPTZ,
@@ -472,6 +513,13 @@ CREATE INDEX IF NOT EXISTS idx_reward_queue_owner_status
   ON reward_queue_items(owner_user_id, status, won_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reward_queue_owner_won_date
   ON reward_queue_items(owner_user_id, won_date);
+
+-- "Reward Queue" decision screen: a won reward can be done now, banked, or
+-- scheduled into the itinerary. Scheduling parks a timestamp + the itinerary
+-- block id on the queue row (additive; safe on already-deployed tables).
+ALTER TABLE reward_queue_items
+  ADD COLUMN IF NOT EXISTS scheduled_for      TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS scheduled_block_id TEXT;
 
 -- ── Reward Events (append-only audit ledger; source of truth) ──
 -- Mirrors the slot_point_ledger / pet_home_events idempotency pattern.

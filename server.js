@@ -25,6 +25,7 @@ const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
+const punishmentStore = require("./punishment-store");
 const socialStore = require("./social-store");
 const { scoreTaskPoints } = require("./slot-scoring");
 const capabilities = require("./capabilities");
@@ -127,7 +128,7 @@ app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback"]);
-const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve"]);
+const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve", "/api/dcc/quick-task"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
@@ -384,8 +385,19 @@ function isLegacyGcalBlock(block) {
   const source = String(props.source || "").toLowerCase();
   return source === "gcal" || !!props.gcal_event_id || !!props.gcal_calendar_id || !!props.gcal_account_key;
 }
+// Only suppress legacy gcal blocks on live (today/future) days, where the
+// realtime meeting merge would otherwise duplicate them. On past/archive dates
+// these denormalized calendar copies are the ONLY record of that day's schedule
+// (getMeetingsFromDB does not run for history), so keep them -- otherwise
+// reviewing a past day shows a blank schedule. Dateless blocks (?type= globals)
+// are treated as live, preserving prior behavior.
+function isLiveBlockDate(dateStr) {
+  return !dateStr || dateStr >= getTodayStr();
+}
 function filterLegacyGcalBlocks(blocks) {
-  return Array.isArray(blocks) ? blocks.filter(block => !isLegacyGcalBlock(block)) : blocks;
+  return Array.isArray(blocks)
+    ? blocks.filter(block => !(isLiveBlockDate(block && block.date) && isLegacyGcalBlock(block)))
+    : blocks;
 }
 function timelineMeetingKey(item) {
   const sourceId = String(item?.source_id || item?.event_id || item?.gcal_event_id || "").trim();
@@ -1769,9 +1781,41 @@ app.post("/api/social/rewards/queue/:id/claim", async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post("/api/social/rewards/queue/:id/redeem", async (req, res) => {
-  try { res.json(await socialStore.redeemReward(parseInt(req.params.id, 10), req.session.userId)); }
+// Schedule a won reward into the itinerary: the front-end places the block,
+// then parks the chosen time + block id on the queue row.
+app.post("/api/social/rewards/queue/:id/schedule", async (req, res) => {
+  try {
+    const { scheduledFor = null, blockId = null } = req.body || {};
+    res.json(await socialStore.scheduleReward(parseInt(req.params.id, 10), req.session.userId, { scheduledFor, blockId }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Undo a schedule: reward returns to the queue (front-end removes the block).
+app.post("/api/social/rewards/queue/:id/unschedule", async (req, res) => {
+  try { res.json(await socialStore.unscheduleReward(parseInt(req.params.id, 10), req.session.userId)); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Completing a scheduled reward's itinerary task is the real "burn". The
+// front-end calls this with the completed block id; it redeems the parked
+// reward (no-op when the block has none) and broadcasts so the queue refreshes.
+app.post("/api/social/rewards/redeem-by-block", async (req, res) => {
+  try {
+    const blockId = (req.body && req.body.blockId) || null;
+    const result = await socialStore.redeemScheduledByBlock(req.session.userId, blockId);
+    if (result.changed) broadcast("slot-changed", { action: "reward-redeemed" }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/social/rewards/queue/:id/redeem", async (req, res) => {
+  try {
+    // `actualSeconds` is the "Go do it now" stopwatch elapsed, recorded on the
+    // redeem event so we can show how long the reward actually took.
+    const actualSeconds = (req.body && req.body.actualSeconds != null) ? Number(req.body.actualSeconds) : null;
+    res.json(await socialStore.redeemReward(parseInt(req.params.id, 10), req.session.userId,
+      Number.isFinite(actualSeconds) ? { actualSeconds } : {}));
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post("/api/social/rewards/queue/:id/discard", async (req, res) => {
@@ -2619,6 +2663,65 @@ app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.get
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 
+// ── Quick task: drop a single task straight onto a day's itinerary ──
+// Token/localhost-authed (it's in DCC_ENDPOINTS) so the /dcc-task skill can add
+// a task on demand without a browser session. Creates a unified `block` carrying
+// local_id + pinned start, exactly like the in-app "added task" shape, so it
+// renders on the timeline immediately.
+function nextQuarterHourLocal() {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: APP_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+  const h = Number(parts.find(p => p.type === "hour").value);
+  const m = Number(parts.find(p => p.type === "minute").value);
+  let total = Math.ceil((h * 60 + m + 1) / 15) * 15;       // next quarter, ≥1 min ahead
+  if (total > 24 * 60 - 15) total = 24 * 60 - 15;
+  return String(Math.floor(total / 60)).padStart(2, "0") + ":" + String(total % 60).padStart(2, "0");
+}
+function addMinutesHHMM(hhmm, mins) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  const total = Math.min(24 * 60, (h * 60 + m) + Math.max(0, mins));
+  return String(Math.floor(total / 60)).padStart(2, "0") + ":" + String(total % 60).padStart(2, "0");
+}
+app.post("/api/dcc/quick-task", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const title = String(b.title || "").trim();
+    if (!title) return res.status(400).json({ error: "title required" });
+    const dur = Math.max(5, parseInt(b.durationMinutes || b.duration || 30, 10) || 30);
+    const PRIO = { low: "Low", normal: "Normal", medium: "Medium", high: "High", urgent: "High" };
+    const priority = PRIO[String(b.priority || "").toLowerCase()] || "Medium";
+    const dateStr = (b.date && isValidDate(b.date)) ? b.date : getTodayStr();
+    const start = /^\d{1,2}:\d{2}$/.test(b.start || "") ? String(b.start).padStart(5, "0") : nextQuarterHourLocal();
+    const end = addMinutesHHMM(start, dur);
+
+    // Resolve the owner: explicit header/env, else the workspace owner, else first user.
+    let userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
+    let workspaceId = req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || null;
+    if (!userId) {
+      const { rows } = await pool.query(
+        "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
+        workspaceId ? [workspaceId] : []
+      );
+      userId = rows[0] ? rows[0].user_id : 1;
+    }
+    if (!workspaceId) {
+      const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1", [userId]);
+      workspaceId = rows[0] ? rows[0].workspace_id : `ws-${userId}`;
+    }
+
+    const localId = "qt-" + Date.now().toString(36);
+    const tags = Array.isArray(b.tags) && b.tags.length ? b.tags : ["quick-task"];
+    const properties = {
+      local_id: localId, title, start, end, duration: dur,
+      priority, meta: "Quick task · " + dur + "m", detail: String(b.detail || ""),
+      source: "quick-task", tags, _pinnedStart: start, added_at: new Date().toISOString(),
+    };
+    await blockDB.ensureDayRoot(dateStr, userId, workspaceId);
+    const block = await blockDB.createBlock({ type: "block", date: dateStr, properties, sort_order: 0, user_id: userId, workspace_id: workspaceId });
+    broadcast("blocks-changed", { action: "create", blockIds: [block.id] }, workspaceId);
+    res.json({ ok: true, id: block.id, date: dateStr, start, end, title, priority, durationMinutes: dur });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ── Responsibilities API ──
 app.get("/api/responsibilities", async (req, res) => {
   try {
@@ -3257,10 +3360,11 @@ app.post("/api/slot/spins/:id/confirm", async (req, res) => {
     // A confirmed, redeemable win flows into the unified reward queue. Bank
     // builders, misses, and dry spins are not rewards, so they never queue.
     // Idempotent on sourceId = spin.id: a double-confirm cannot double-queue.
+    let rewardQueueItem = null;
     if (socialStore.isQueueableSpinWin(spin)) {
       const snap = spin.reward_snapshot || {};
       try {
-        await socialStore.enqueueReward({
+        const enq = await socialStore.enqueueReward({
           ownerUserId: req.session.userId,
           workspaceId: req.workspaceId,
           rewardDefinitionId: spin.reward_id,
@@ -3271,10 +3375,13 @@ app.post("/api/slot/spins/:id/confirm", async (req, res) => {
           chanceSharesSnapshot: snap.chance_shares || null,
           tierSnapshot: snap.tier_id || null,
         });
+        // Surface the queue item so the win decision screen can act on it
+        // (Go do it now / Bank / Schedule) without a follow-up fetch.
+        rewardQueueItem = (enq && enq.item) || null;
         broadcast("slot-changed", { action: "reward-queued" }, req.workspaceId);
       } catch (e) { console.warn("[reward-queue] enqueue failed:", e.message); }
     }
-    res.json(spin);
+    res.json(rewardQueueItem ? { ...spin, reward_queue_item: rewardQueueItem } : spin);
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });
   }
@@ -3284,6 +3391,111 @@ app.post("/api/slot/bank-builders/confirm", async (req, res) => {
   try {
     const result = await slotStore.confirmPendingBankBuilders(req.workspaceId);
     broadcast("slot-changed", { action: "bank-builders-confirm" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+// ── Punishments Wheel API ──
+// Flat weighted mirror of the rewards spinner. See punishment-store.js.
+app.get("/api/punishment/state", async (req, res) => {
+  try {
+    res.json(await punishmentStore.getPunishmentState(req.workspaceId, req.session.userId));
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/punishments", async (req, res) => {
+  try {
+    const row = await punishmentStore.createPunishment(req.workspaceId, req.session.userId, req.body || {});
+    broadcast("punishment-changed", { action: "create" }, req.workspaceId);
+    res.json(row);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.put("/api/punishment/punishments/:id", async (req, res) => {
+  try {
+    const row = await punishmentStore.updatePunishment(req.workspaceId, req.params.id, req.body || {});
+    broadcast("punishment-changed", { action: "update" }, req.workspaceId);
+    res.json(row);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/punishment/punishments/:id", async (req, res) => {
+  try {
+    const result = await punishmentStore.deletePunishment(req.workspaceId, req.params.id);
+    broadcast("punishment-changed", { action: "delete" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/punishments/reorder", async (req, res) => {
+  try {
+    const result = await punishmentStore.reorderPunishments(req.workspaceId, (req.body && req.body.items) || req.body || []);
+    broadcast("punishment-changed", { action: "reorder" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/owe", async (req, res) => {
+  try {
+    const result = await punishmentStore.addOwedSpin(req.workspaceId, req.session.userId, (req.body && req.body.count) || 1);
+    broadcast("punishment-changed", { action: "owe" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/spin", async (req, res) => {
+  try {
+    const result = await punishmentStore.spinPunishment(req.workspaceId, req.session.userId);
+    broadcast("punishment-changed", { action: "spin" }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/punishment/spins/:id/done", async (req, res) => {
+  try {
+    const row = await punishmentStore.resolvePunishment(req.workspaceId, req.params.id);
+    broadcast("punishment-changed", { action: "resolve" }, req.workspaceId);
+    res.json(row);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+// Create or link the partner who receives money punishments.
+app.post("/api/punishment/partner", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const mode = body.mode === "link" ? "link" : "create";
+    const partner = mode === "link"
+      ? await punishmentStore.linkExistingPartner(req.workspaceId, req.session.userId, body.username)
+      : await punishmentStore.createPartner(req.workspaceId, req.session.userId, { username: body.username, password: body.password });
+    broadcast("punishment-changed", { action: "partner-link" }, req.workspaceId);
+    res.json({ partner });
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/punishment/partner", async (req, res) => {
+  try {
+    const result = await punishmentStore.unlinkPartner(req.workspaceId);
+    broadcast("punishment-changed", { action: "partner-unlink" }, req.workspaceId);
     res.json(result);
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });

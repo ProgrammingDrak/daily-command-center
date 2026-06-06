@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { _test } = require("./social-store");
+const socialStore = require("./social-store");
+const { _test } = socialStore;
 
 const { resolveReviewState, scopeMatches, isoDate, isQueueableSpinWin, TERMINAL_QUEUE_STATES } = _test;
 
@@ -24,6 +25,19 @@ test("terminal queue states do not include the live states", () => {
   for (const s of ["queued", "claimed"]) {
     assert.ok(!TERMINAL_QUEUE_STATES.has(s), `${s} should not be terminal`);
   }
+});
+
+test("scheduled is a live (non-terminal) reward state", () => {
+  // A reward parked in the itinerary is still pending action, not done.
+  assert.ok(!TERMINAL_QUEUE_STATES.has("scheduled"), "scheduled should not be terminal");
+});
+
+test("reward-queue lifecycle transitions are exported", () => {
+  // The decision screen (do now / bank / schedule) needs all three actions.
+  assert.equal(typeof socialStore.scheduleReward, "function");
+  assert.equal(typeof socialStore.redeemReward, "function");
+  assert.equal(typeof socialStore.claimReward, "function");
+  assert.equal(typeof socialStore.discardReward, "function");
 });
 
 test("isoDate returns a YYYY-MM-DD string", () => {

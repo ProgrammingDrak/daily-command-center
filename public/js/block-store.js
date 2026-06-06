@@ -482,6 +482,38 @@
       return "day-root-" + _currentDate;
     },
 
+    // ── Actual time tracking (day-review) ──
+    // Create one actual time-tracking segment for a task on `date` (default the
+    // viewed date). Lives under that day's day_root; loads via date+type query,
+    // so parent-id exactness is not required. Returns the created block.
+    async logTimeEntry({ blockId, taskTitle, start, end, durSec, source, pomoType, note, date } = {}) {
+      const d = date || _currentDate;
+      const parentId = (d === _currentDate) ? this.getDayRootId() : ("day-root-" + d);
+      const props = {
+        blockId: blockId || null,
+        taskTitle: taskTitle || "",
+        start: start || null,
+        end: end || null,
+        durSec: Math.max(0, Math.round(durSec || 0)),
+        source: source || "manual"
+      };
+      if (pomoType) props.pomoType = pomoType;
+      if (note) props.note = note;
+      return this.createBlock("time_entry", props, { parentId, date: d });
+    },
+
+    // All live time_entry blocks for a date — day cache for the current date,
+    // range cache otherwise. Used by the day-review model + HUD.
+    getTimeEntries(dateStr) {
+      const ds = dateStr || _currentDate;
+      if (ds === _currentDate) {
+        return [..._dayCache.values(), ..._globalCache.values()]
+          .filter(b => b.type === "time_entry" && !b.deleted_at && (b.date === ds || !b.date));
+      }
+      const cached = this._rangeCache.get(ds);
+      return cached ? cached.blocks.filter(b => b.type === "time_entry" && !b.deleted_at) : [];
+    },
+
     // ── Range Loading (for Calendar View) ──
     _rangeCache: new Map(), // dateStr -> { blocks: [], dccState: null }
 

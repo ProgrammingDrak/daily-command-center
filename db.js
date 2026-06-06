@@ -57,6 +57,9 @@ async function ensureWorkspacesForAllUsers() {
 // Legacy type names ('added_task', 'schedule_item', etc.) accepted for backward compat.
 const BLOCK_SCHEMAS = { block: { required: [], optional: [] }, day_root: { required: ["date"], optional: [] } };
 const VALID_TYPES = new Set(["block", "day_root",
+  // time_entry — actual time-tracking segments (planned-vs-actual day review).
+  // Stored under the day_root with a date, so it loads with getBlocksByDate/range.
+  "time_entry",
   // Legacy types — accepted during migration transition, all treated as 'block'
   "schedule_item", "consider_item", "triage_item", "note", "action_item", "subtask",
   "pomo_state", "pomo_session", "engram", "mood_entry", "sticky_note", "trivial_task",

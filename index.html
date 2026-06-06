@@ -1174,6 +1174,7 @@
         <button class="slot-section-tab" data-slot-section="rewards" type="button">Rewards</button>
         <button class="slot-section-tab" data-slot-section="review" type="button">Review</button>
         <button class="slot-section-tab" data-slot-section="rules" type="button">Rules</button>
+        <button class="slot-section-tab" data-slot-section="punishments" type="button">Punishments</button>
       </div>
     </div>
     <div class="slots-tab-panel active" id="slot-section-machine" data-slot-section-panel="machine">
@@ -1454,6 +1455,90 @@
         <div class="slot-history" id="slot-history"></div>
       </section>
     </div>
+    <div class="slots-tab-panel" id="slot-section-punishments" data-slot-section-panel="punishments">
+      <section class="slots-panel punish-spin-card">
+        <div class="punish-owed-banner">
+          <div class="punish-owed-count">
+            <span id="punish-owed-num">0</span>
+            <span class="punish-owed-label">spins owed</span>
+          </div>
+          <button id="punish-owe-btn" class="slot-small-btn" type="button">I messed up (+1)</button>
+        </div>
+        <div class="punish-stage">
+          <div class="punish-result" id="punish-result">Spin to face the music.</div>
+          <button id="punish-spin-btn" class="punish-spin-btn" type="button" disabled>Spin the wheel</button>
+          <div class="punish-bank-line">Your reserve: <b id="punish-bank">$0.00</b> · Monthly allocation: <b id="punish-monthly">$0.00</b></div>
+        </div>
+        <div class="punish-partner" id="punish-partner">
+          <div class="punish-partner-linked" id="punish-partner-linked" hidden>
+            <div>Money punishments pay <b id="punish-partner-name">—</b><br>
+              <span class="punish-partner-bal">their reserve <b id="punish-partner-bank">$0.00</b> · monthly <b id="punish-partner-monthly">$0.00</b></span>
+            </div>
+            <button id="punish-partner-unlink" class="slot-mini" type="button">Unlink</button>
+          </div>
+          <div class="punish-partner-setup" id="punish-partner-setup">
+            <h4>Link a partner</h4>
+            <p class="punish-partner-hint">Money punishments move out of your reserve and monthly allocation into your partner's.</p>
+            <div class="punish-partner-modes">
+              <label class="slot-toggle"><input type="radio" name="punish-partner-mode" value="create" checked><span>Create account</span></label>
+              <label class="slot-toggle"><input type="radio" name="punish-partner-mode" value="link"><span>Link existing</span></label>
+            </div>
+            <div class="slot-form-grid">
+              <label class="slot-field"><span>Partner username</span><input id="punish-partner-username" type="text" placeholder="partner" autocomplete="off"></label>
+              <label class="slot-field" data-punish-field="password"><span>Password</span><input id="punish-partner-password" type="password" placeholder="min 8 chars" autocomplete="new-password"></label>
+            </div>
+            <button id="punish-partner-save" class="slot-small-btn primary" type="button">Save partner</button>
+          </div>
+        </div>
+        <div class="punish-queue-wrap" id="punish-queue-wrap" hidden>
+          <h4>Owed punishments</h4>
+          <div class="punish-queue" id="punish-queue"></div>
+        </div>
+      </section>
+      <section class="slots-panel">
+        <div class="slots-panel-hdr">
+          <h3>Punishment Pool</h3>
+          <button id="punish-add-btn" class="slot-small-btn" type="button">Add punishment</button>
+        </div>
+        <div class="slot-reward-form" id="punish-form" style="display:none">
+          <div class="slot-form-head">
+            <div>
+              <div class="slot-form-title" id="punish-form-heading">New punishment</div>
+              <div class="slot-form-subtitle">Higher chances = lands more often.</div>
+            </div>
+            <button id="punish-close-form" class="slot-icon-btn" type="button" aria-label="Close punishment form">&times;</button>
+          </div>
+          <label class="slot-field slot-field-full">
+            <span>Punishment</span>
+            <input id="punish-form-title" type="text" placeholder="Do 25 push-ups">
+          </label>
+          <div class="slot-form-grid">
+            <label class="slot-field">
+              <span>Chances</span>
+              <input id="punish-form-chances" type="number" min="0" step="1" placeholder="10">
+              <em id="punish-form-odds-note">Odds = chances ÷ total.</em>
+            </label>
+            <label class="slot-field">
+              <span>Pay partner ($)</span>
+              <input id="punish-form-amount" type="number" min="0" step="1" placeholder="0">
+              <em>Deducts from your bank when it lands.</em>
+            </label>
+          </div>
+          <div class="slot-toggle-row">
+            <label class="slot-toggle"><input id="punish-form-active" type="checkbox" checked><span>Active</span></label>
+          </div>
+          <label class="slot-field slot-field-full">
+            <span>Notes</span>
+            <textarea id="punish-form-notes" placeholder="Optional notes"></textarea>
+          </label>
+          <div class="slot-form-actions">
+            <button id="punish-save-btn" class="slot-small-btn primary" type="button">Save</button>
+            <button id="punish-cancel-btn" class="slot-small-btn" type="button">Cancel</button>
+          </div>
+        </div>
+        <div class="slot-reward-list" id="punish-list"></div>
+      </section>
+    </div>
   </div>
 </div>
 
@@ -1493,10 +1578,12 @@
 <script src="/public/js/onboarding-tour.js"></script>
 <script src="/public/js/boot.js"></script>
 <script src="/public/js/block-store.js"></script>
+<script src="/public/js/day-review.js"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/pet-home.js"></script>
 <script src="/public/js/todo-share.js"></script>
 <script src="/public/js/slots.js"></script>
+<script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/side-drawers.js"></script>

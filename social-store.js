@@ -330,7 +330,7 @@ async function listRewardQueue(ownerUserId, { status = null } = {}) {
   return rows;
 }
 
-async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, counter }) {
+async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, counter, columns, eventMetadata }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -349,6 +349,13 @@ async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, c
     const args = [queueId, ownerUserId, to];
     if (stamp) { sets.push(`${stamp}=NOW()`); }
     if (stamp === "redeemed_at") { sets.push(`redeemed_date='${isoDate()}'`); }
+    // Extra parameterized column writes (e.g. scheduled_for, scheduled_block_id).
+    if (columns) {
+      for (const [col, value] of Object.entries(columns)) {
+        args.push(value);
+        sets.push(`${col}=$${args.length}`);
+      }
+    }
     const upd = await client.query(
       `UPDATE reward_queue_items SET ${sets.join(", ")} WHERE id=$1 AND owner_user_id=$2 RETURNING *`,
       args
@@ -362,6 +369,7 @@ async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, c
       eventType,
       sourceType: "reward_queue",
       sourceId: `${eventType}:${queueId}`,
+      metadata: eventMetadata || {},
     });
     if (counter && item.reward_definition_id) {
       await client.query(
@@ -382,17 +390,103 @@ async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, c
 const claimReward = (queueId, ownerUserId) =>
   _transition(queueId, ownerUserId, { from: ["queued"], to: "claimed", stamp: "claimed_at", eventType: "claimed" });
 
-const redeemReward = (queueId, ownerUserId) =>
+/** Schedule a won reward into the user's itinerary. Parks the chosen time +
+ *  the itinerary block id on the queue row so the queue can show "scheduled for
+ *  X"; the reward is still redeemed (burned) when the user actually does it.
+ *  `scheduledFor` is an ISO timestamp string (or null); `blockId` links the
+ *  itinerary block. Re-scheduling an already-scheduled reward just moves it. */
+const scheduleReward = (queueId, ownerUserId, { scheduledFor = null, blockId = null } = {}) =>
   _transition(queueId, ownerUserId, {
-    from: ["queued", "claimed"], to: "redeemed", stamp: "redeemed_at", eventType: "redeemed",
-    counter: "times_redeemed = times_redeemed + 1, last_redeemed_at = NOW()",
+    from: ["queued", "claimed", "scheduled"], to: "scheduled", stamp: null, eventType: "scheduled",
+    columns: { scheduled_for: scheduledFor, scheduled_block_id: blockId },
+    eventMetadata: { scheduledFor, blockId },
   });
+
+/** Undo a schedule: a scheduled reward returns to the queue and the parked
+ *  itinerary link is cleared. Status-guarded to `scheduled` (stale undo no-ops).
+ *  The itinerary block itself is removed by the caller (front-end). */
+const unscheduleReward = (queueId, ownerUserId) =>
+  _transition(queueId, ownerUserId, {
+    from: ["scheduled"], to: "queued", stamp: null, eventType: "unscheduled",
+    columns: { scheduled_for: null, scheduled_block_id: null },
+  });
+
+/** Redeem ("burn") a reward. `actualSeconds`, when provided, is the stopwatch
+ *  elapsed from the "Go do it now" flow, recorded on the audit event. Redeem
+ *  stamps redeemed_date to today, so the reward lands on the day it was used. */
+const redeemReward = (queueId, ownerUserId, { actualSeconds = null } = {}) =>
+  _transition(queueId, ownerUserId, {
+    from: ["queued", "claimed", "scheduled"], to: "redeemed", stamp: "redeemed_at", eventType: "redeemed",
+    counter: "times_redeemed = times_redeemed + 1, last_redeemed_at = NOW()",
+    eventMetadata: actualSeconds != null ? { actualSeconds } : {},
+  });
+
+/** Redeem the scheduled reward parked on a given itinerary block, if any. This
+ *  is the real "burn": it fires when the user completes the reward's itinerary
+ *  task. No-ops when no scheduled reward matches the block; redeemReward's status
+ *  guard makes a repeat completion (or a race with "Go do it now") a safe no-op. */
+async function redeemScheduledByBlock(ownerUserId, blockId) {
+  if (!blockId) return { item: null, changed: false };
+  const { rows } = await pool.query(
+    `SELECT id FROM reward_queue_items
+      WHERE owner_user_id=$1 AND scheduled_block_id=$2 AND status='scheduled'
+      LIMIT 1`,
+    [ownerUserId, String(blockId)]
+  );
+  if (!rows[0]) return { item: null, changed: false };
+  return redeemReward(rows[0].id, ownerUserId);
+}
 
 /** Discard (the user-facing "Discard" button): clears a ghosted or unwanted
  *  reward. Sets `dismissed` + an audit event; never counts as redeemed; the
  *  won event stays in the ledger. */
 const discardReward = (queueId, ownerUserId) =>
-  _transition(queueId, ownerUserId, { from: ["queued", "claimed"], to: "dismissed", stamp: null, eventType: "dismissed" });
+  _transition(queueId, ownerUserId, { from: ["queued", "claimed", "scheduled"], to: "dismissed", stamp: null, eventType: "dismissed" });
+
+/** Undo a redeem ("un-burn"): a redeemed reward returns to the queue, clearing
+ *  the redeemed stamps and decrementing the cached redeemed counter. Status-
+ *  guarded to `redeemed`, so a stale/double undo no-ops. won_at is untouched. */
+async function unredeemReward(queueId, ownerUserId) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `SELECT * FROM reward_queue_items WHERE id=$1 AND owner_user_id=$2 FOR UPDATE`,
+      [queueId, ownerUserId]
+    );
+    const item = rows[0];
+    if (!item) { await client.query("ROLLBACK"); throw new Error("reward not found"); }
+    if (item.status !== "redeemed") { await client.query("COMMIT"); return { item, changed: false }; }
+    const upd = await client.query(
+      `UPDATE reward_queue_items
+          SET status='queued', redeemed_at=NULL, redeemed_date=NULL
+        WHERE id=$1 AND owner_user_id=$2 RETURNING *`,
+      [queueId, ownerUserId]
+    );
+    await recordEvent(client, {
+      rewardQueueId: queueId,
+      rewardDefinitionId: item.reward_definition_id,
+      ownerUserId,
+      actorUserId: ownerUserId,
+      eventType: "unredeemed",
+      sourceType: "reward_queue",
+      sourceId: "",
+    });
+    if (item.reward_definition_id) {
+      await client.query(
+        `UPDATE slot_rewards SET times_redeemed = GREATEST(0, times_redeemed - 1) WHERE id=$1`,
+        [item.reward_definition_id]
+      );
+    }
+    await client.query("COMMIT");
+    return { item: upd.rows[0], changed: true };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Sponsorships (allowlist-gated; generalized todo_sponsorships)
@@ -664,6 +758,9 @@ module.exports = {
   enqueueReward,
   listRewardQueue,
   claimReward,
+  scheduleReward,
+  unscheduleReward,
+  redeemScheduledByBlock,
   redeemReward,
   discardReward,
   // sponsorships
