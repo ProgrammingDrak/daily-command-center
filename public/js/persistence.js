@@ -448,7 +448,7 @@ async function switchToDate(dateStr) {
   // Re-render all tabs
   if (typeof buildSchedule === "function") buildSchedule();
   if (typeof paintPivotTasks === "function") paintPivotTasks();
-  if (typeof buildActualView === "function" && schedView === "actual") buildActualView();
+  if (schedView === "actual") { if (typeof buildDayReview === "function") buildDayReview(viewDate); else if (typeof buildActualView === "function") buildActualView(); }
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
 }

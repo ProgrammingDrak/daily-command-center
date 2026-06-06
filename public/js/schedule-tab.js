@@ -10,7 +10,7 @@ document.querySelectorAll(".svt-btn").forEach(btn=>{
     if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
     if(typeof buildScheduleTriage==="function")buildScheduleTriage();
     if(schedView==="list")buildListView();
-    if(schedView==="actual")buildActualView();
+    if(schedView==="actual"){if(typeof buildDayReview==="function")buildDayReview(typeof viewDate!=="undefined"?viewDate:null);else buildActualView();}
   });
 });
 function buildActualView(){
@@ -95,7 +95,10 @@ function buildListView(){
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   const trivFlags=loadTrivialFlags();
   const visible=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]);
-  const doneItems=visible.filter(isDone);
+  // Completed subtasks live inside their parent's detail panel (shown there as
+  // done), not as standalone rows in the Done section -- so long as the parent
+  // is still visible to open. Orphaned done subtasks stay listed so they aren't lost.
+  const doneItems=visible.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
   const openItems=visible.filter(ev=>!isDone(ev)&&!isPushed(ev));
   const pushedItems=visible.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeIds=new Set(openItems.filter(ev=>!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break").map(ev=>ev.id));
@@ -244,7 +247,10 @@ function buildSchedule(){
   // Separate done vs pushed vs active vs deleted vs side-project-marked
   const trivFlags=loadTrivialFlags();
   const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Hide side-project-marked items from the schedule
-  const doneItems=vis.filter(isDone);
+  // Completed subtasks live inside their parent's detail panel (shown there as
+  // done), not as standalone done one-liners -- so long as the parent is still
+  // visible to open. Orphaned done subtasks stay listed so they aren't lost.
+  const doneItems=vis.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&vis.some(p=>p.id===ev.subtaskOf)));
   const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
   const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
