@@ -330,8 +330,19 @@ function isLegacyGcalBlock(block) {
   const source = String(props.source || "").toLowerCase();
   return source === "gcal" || !!props.gcal_event_id || !!props.gcal_calendar_id || !!props.gcal_account_key;
 }
+// Only suppress legacy gcal blocks on live (today/future) days, where the
+// realtime meeting merge would otherwise duplicate them. On past/archive dates
+// these denormalized calendar copies are the ONLY record of that day's schedule
+// (getMeetingsFromDB does not run for history), so keep them -- otherwise
+// reviewing a past day shows a blank schedule. Dateless blocks (?type= globals)
+// are treated as live, preserving prior behavior.
+function isLiveBlockDate(dateStr) {
+  return !dateStr || dateStr >= getTodayStr();
+}
 function filterLegacyGcalBlocks(blocks) {
-  return Array.isArray(blocks) ? blocks.filter(block => !isLegacyGcalBlock(block)) : blocks;
+  return Array.isArray(blocks)
+    ? blocks.filter(block => !(isLiveBlockDate(block && block.date) && isLegacyGcalBlock(block)))
+    : blocks;
 }
 function timelineMeetingKey(item) {
   const sourceId = String(item?.source_id || item?.event_id || item?.gcal_event_id || "").trim();
