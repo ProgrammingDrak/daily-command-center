@@ -1,12 +1,22 @@
 {
-  "date": "2026-05-21",
-  "last_updated_at": "2026-05-08T12:01:03.687Z",
-  "last_updated_by": "skeleton-restored-after-date-correction",
+  "date": "2026-06-12",
+  "last_updated_at": "2026-06-06T11:44:01.028Z",
+  "last_updated_by": "skeleton",
   "watermarks": {},
   "triage": {
     "open_items": [],
     "resolved_items": [],
     "cycle_count": 0
+  },
+  "sweep": {
+    "source_health": [],
+    "readers": [],
+    "open_item_count": 0,
+    "meetings_count": 0
+  },
+  "glymphatic_brief": {
+    "history": [],
+    "current": null
   },
   "completions": {
     "tasks": []
