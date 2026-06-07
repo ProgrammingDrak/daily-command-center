@@ -600,5 +600,7 @@
         "notes": "Scanned Calendar, Gmail, and Slack web for work-responsibility signals and added 4 short triage/discovery items."
       }
     ]
-  }
+  },
+  "source": "api-save",
+  "savedAt": "2026-06-06T11:44:01.041Z"
 }
