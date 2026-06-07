@@ -1445,10 +1445,13 @@ test("buildSpinScreen fills every tile with a prize icon and forms exactly one w
   const acct = { settings: { monthly_goal_cents: 10000 } };
   const usage = { today: 0, week: 0, monthlyGoal: 10000 };
   const cases = [
-    { selected: { kind: "points", source_type: "slot_coin" }, bankHit: false, sym: "COIN" },
-    { selected: { kind: "pet", source_type: "slot_pet" }, bankHit: false, sym: "PAW" },
-    { selected: { kind: "collectible", source_type: "slot_collectible" }, bankHit: false, sym: "GEM" },
-    { selected: { kind: "bank_builder" }, bankHit: true, sym: "BANK" },
+    // minRun = shortest run the winner is guaranteed to form. BANK now drops a
+    // weighted random SHAPE (lone tile / blocks / separated blocks), so it is only
+    // guaranteed to place >= 1 tile, not a full 3-in-a-row.
+    { selected: { kind: "points", source_type: "slot_coin" }, bankHit: false, sym: "COIN", minRun: 3 },
+    { selected: { kind: "pet", source_type: "slot_pet" }, bankHit: false, sym: "PAW", minRun: 3 },
+    { selected: { kind: "collectible", source_type: "slot_collectible" }, bankHit: false, sym: "GEM", minRun: 3 },
+    { selected: { kind: "bank_builder" }, bankHit: true, sym: "BANK", minRun: 1 },
   ];
   for(const c of cases){
     for(let n = 0; n < 200; n++){
@@ -1456,11 +1459,47 @@ test("buildSpinScreen fills every tile with a prize icon and forms exactly one w
       assert.equal(screen.board.includes("MISS"), false, c.sym + " board should have no MISS tiles");
       assert.equal(screen.board.includes(null), false);
       const runs = maxRunsBySymbol(screen.board);
-      assert.ok((runs[c.sym] || 0) >= 3, c.sym + " should form a 3-in-a-row line");
+      assert.ok((runs[c.sym] || 0) >= c.minRun, c.sym + " should place at least " + c.minRun + " tile(s)");
+      // The only symbol allowed to form a 3-in-a-row is the intended winner.
       const others = Object.keys(runs).filter(s => s !== c.sym && runs[s] >= 3);
       assert.deepEqual(others, [], "no other symbol should form a line, got " + others.join(","));
     }
   }
+});
+
+test("bank placement: lone tiles, separated blocks, never empty, and group bonuses are correct", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const acct = { settings: { monthly_goal_cents: 10000 } };
+  const usage = { today: 0, week: 0, monthlyGoal: 10000, month: 0 };
+
+  // Direct payout math on hand-built boards (placement-independent).
+  const empty = Array.from({ length: 15 }, () => "COIN");
+  const lone = [...empty]; lone[6] = "BANK";
+  const loneOut = store._test.calculateScreenBankPayout(lone, acct, usage);
+  assert.equal(loneOut.positions.length, 1);
+  assert.deepEqual(loneOut.horizontal_groups, []);
+  assert.deepEqual(loneOut.vertical_groups, []);
+  assert.equal(loneOut.units, 1, "lone tile is exactly one unit, no multiplier");
+
+  // Two separated horizontal 3-runs (rows 0 and 2): base 6 + horiz 3*2 twice = 6+12 = 18.
+  const split = [...empty];
+  [0, 1, 2, 10, 11, 12].forEach(i => { split[i] = "BANK"; });
+  const splitOut = store._test.calculateScreenBankPayout(split, acct, usage);
+  assert.equal(splitOut.positions.length, 6);
+  assert.equal(splitOut.horizontal_groups.length, 2, "two distinct horizontal groups");
+  assert.equal(splitOut.units, 18, "6 base + 6 + 6 horizontal bonus units");
+
+  // Placement: over many spins we see both lone tiles and separated multi-blocks,
+  // and a bank hit never lands zero tiles.
+  let sawLone = false, sawMultiBlock = false;
+  for(let n = 0; n < 600; n++){
+    const { payout } = store._test.buildSpinScreen({ kind: "bank_builder" }, acct, usage, true);
+    assert.ok(payout.positions.length >= 1, "a bank hit must place at least one tile");
+    if(payout.positions.length === 1 && !payout.horizontal_groups.length && !payout.vertical_groups.length) sawLone = true;
+    if(payout.horizontal_groups.length + payout.vertical_groups.length >= 2) sawMultiBlock = true;
+  }
+  assert.ok(sawLone, "expected at least one lone-tile outcome across 600 spins");
+  assert.ok(sawMultiBlock, "expected at least one separated multi-block outcome across 600 spins");
 });
 
 test("buildSpinScreen miss board shows prize icons but forms no winning line", () => {

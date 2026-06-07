@@ -92,10 +92,21 @@ const BOOSTER_CHARGE_WEIGHTS = [2, 1]; // 2x twice as likely as 3x
 const MULTIPLIER_COMBINE = { 2: 5, 3: 10 }; // two of the key tier make one of the value tier
 // Collectibles: collect gems, completing a set triggers a guaranteed jackpot spin.
 const DEFAULT_COLLECTION_SET_SIZE = 12;
-// Bank rework: a bank hit now drops a contiguous run so the adjacency combo in
-// calculateScreenBankPayout fires, and pays a flat floor so a small bankroll
-// still moves visibly.
-const DEFAULT_BANK_CLUSTER_RANGE = [2, 3];
+// Bank rework: a bank hit now drops one of several weighted SHAPES so placement
+// reads as random instead of "always a 3/4-in-a-row". A shape is a list of cluster
+// lengths laid as separate, non-touching runs; calculateScreenBankPayout then groups
+// each run on its own. A lone tile (cluster [1]) pays a single unit with no combo.
+// Weights are tuned so the mean units/hit stays ~= the old single-line average
+// (~9.95); see the Monte-Carlo sim referenced in the slot bank-rewards plan.
+const BANK_SHAPES = [
+  { key: "single",    clusters: [1],    weight: 9 },  // lone tile -> 1 unit, no multiplier
+  { key: "pair",      clusters: [2],    weight: 10 }, // 2-run -> 4 units
+  { key: "triple",    clusters: [3],    weight: 26 }, // 3-run -> ~7.9 units
+  { key: "quad",      clusters: [4],    weight: 16 }, // 4-run (horizontal) -> 16 units
+  { key: "split_1_3", clusters: [1, 3], weight: 8 },  // lone tile + separated block
+  { key: "split_2_3", clusters: [2, 3], weight: 14 }, // two separated blocks
+  { key: "split_3_3", clusters: [3, 3], weight: 17 }, // two separated 3-blocks
+];
 const BANK_BUILDER_FLAT_FLOOR_CENTS = 50;
 const SCREEN_BANK_BUILDER_PERCENT = 0.0012;
 const DEFAULT_POINT_TAG_TIERS = {
@@ -2824,6 +2835,64 @@ function placeSymbolLine(board, protectedCells, symbol, length) {
   return cells;
 }
 
+// True when none of `cells` sits orthogonally adjacent (same row or same column)
+// to a BANK tile already on the board. calculateScreenBankPayout only groups along
+// rows/columns, so a one-cell row/col gap keeps two clusters as DISTINCT groups
+// (diagonal touching is fine and does not merge them).
+function isSeparatedFromBank(cells, board) {
+  return cells.every(idx => {
+    const row = Math.floor(idx / SLOT_COLS);
+    const col = idx % SLOT_COLS;
+    if (col > 0 && board[idx - 1] === "BANK") return false;
+    if (col < SLOT_COLS - 1 && board[idx + 1] === "BANK") return false;
+    if (row > 0 && board[idx - SLOT_COLS] === "BANK") return false;
+    if (row < SLOT_ROWS - 1 && board[idx + SLOT_COLS] === "BANK") return false;
+    return true;
+  });
+}
+
+// Place one cluster of `length` BANK tiles as a contiguous run that is both open and
+// separated from any BANK already placed this spin. Degrades length -> length-1 ... -> 1
+// (a lone separated open cell) so a crowded board never aborts the hit. Returns the
+// placed cells, or [] only if the board has no separated open cell left at all.
+function placeBankCluster(board, protectedCells, length) {
+  for (let want = length; want >= 2; want--) {
+    const runs = contiguousRuns(want).filter(cells =>
+      cells.every(i => !protectedCells.has(i) && board[i] == null) &&
+      isSeparatedFromBank(cells, board)
+    );
+    if (runs.length) {
+      const cells = runs[crypto.randomInt(runs.length)];
+      cells.forEach(i => { board[i] = "BANK"; protectedCells.add(i); });
+      return cells;
+    }
+  }
+  const open = Array.from({ length: SLOT_CELL_COUNT }, (_, i) => i)
+    .filter(i => !protectedCells.has(i) && board[i] == null && isSeparatedFromBank([i], board));
+  if (open.length) {
+    const i = open[crypto.randomInt(open.length)];
+    board[i] = "BANK";
+    protectedCells.add(i);
+    return [i];
+  }
+  return [];
+}
+
+// Drop a weighted random BANK shape (see BANK_SHAPES). Each cluster is laid largest
+// first as its own separated run so the payout groups them independently. Returns the
+// flat list of every BANK cell placed (used as the payline fallback). Always places at
+// least one tile when called for a real bank hit, unless the board is entirely full.
+function placeBankShape(board, protectedCells) {
+  const shape = chooseWeighted(BANK_SHAPES) || BANK_SHAPES[0];
+  const lengths = [...shape.clusters].sort((a, b) => b - a);
+  const placed = [];
+  for (const len of lengths) {
+    const cells = placeBankCluster(board, protectedCells, len);
+    placed.push(...cells);
+  }
+  return placed;
+}
+
 // Paint every still-empty cell with a prize icon so the reels are never dead.
 // Greedy left/up check guarantees no symbol forms a 3-in-a-row, so the only
 // paying pattern on the board is the intended winning line. Excluded symbols
@@ -2869,10 +2938,10 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit, jackpotSpi
   }
 
   if (canPlaceBankSymbols) {
-    // Bank pays on its own line; longer runs (occasional 4) combo into more.
-    const bankLen = WIN_LINE_LENGTH + (crypto.randomInt(4) === 0 ? 1 : 0);
-    const bankLine = placeSymbolLine(board, protectedCells, "BANK", bankLen);
-    if (!payline.length) payline = bankLine;
+    // Bank drops a weighted random shape: sometimes a lone tile (1 unit, no combo),
+    // sometimes one block, sometimes separated blocks that each combo on their own.
+    const bankCells = placeBankShape(board, protectedCells);
+    if (!payline.length) payline = bankCells;
     exclude.add("BANK");
   }
 

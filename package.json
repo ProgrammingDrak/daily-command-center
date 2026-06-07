@@ -8,6 +8,7 @@
     "db:refresh-local": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1",
     "db:schedule-local-refresh": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1 -InstallDailyTask",
     "sweep:check": "node scripts/sweep-suite-check.js",
+    "ship": "node scripts/ship-pr.js",
     "start": "npm run check:db && node pg-schema.js && node server.js",
     "dev": "npm run start",
     "start:render": "node pg-schema.js && node server.js",

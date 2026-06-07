@@ -217,12 +217,16 @@ app.post("/api/auth/logout", (req, res) => { req.session.destroy(() => res.json(
 app.get("/api/me", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      "SELECT username, onboarding_state FROM users WHERE id = $1",
+      "SELECT id, username, display_name, onboarding_state FROM users WHERE id = $1",
       [req.session.userId]
     );
     const user = rows[0] || {};
+    // Identity fields (id + workspaceId) let an automation/skill uniquely pin
+    // which person's profile it is operating on after a username/password login.
     res.json({
+      userId: user.id || req.session.userId || null,
       username: user.username || req.session.username || "",
+      displayName: user.display_name || null,
       workspaceId: req.workspaceId || req.session.workspaceId || null,
       onboardingState: user.onboarding_state || {},
     });
