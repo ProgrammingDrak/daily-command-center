@@ -362,20 +362,30 @@
     (async function initSocialLogin() {
       let cfg;
       try { cfg = await (await fetch("/api/auth/config")).json(); } catch { return; }
-      if (!cfg || !cfg.clerkPublishableKey) return;
+      const pk = cfg && cfg.clerkPublishableKey;
+      if (!pk) return;
+
+      // The Frontend API host is encoded in the publishable key:
+      //   pk_test_<base64("<frontend-api-host>$")>
+      // Loading clerk.browser.js from that host (with the data-* key attr) is
+      // the canonical method and makes the dev-browser handshake work.
+      let fapiHost;
+      try { fapiHost = atob((pk.split("_")[2] || "")).replace(/\$+$/, ""); } catch { return; }
+      if (!fapiHost) return;
 
       try {
         await new Promise((resolve, reject) => {
           const s = document.createElement("script");
-          s.src = "https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
+          s.src = "https://" + fapiHost + "/npm/@clerk/clerk-js@5/dist/clerk.browser.js";
           s.async = true;
           s.crossOrigin = "anonymous";
+          s.setAttribute("data-clerk-publishable-key", pk);
           s.onload = resolve;
           s.onerror = () => reject(new Error("Failed to load Clerk"));
           document.head.appendChild(s);
         });
 
-        const clerk = new window.Clerk(cfg.clerkPublishableKey);
+        const clerk = window.Clerk;
         await clerk.load();
 
         let syncing = false;
@@ -406,6 +416,8 @@
         // Already signed in to Clerk (returning visitor) — sync straight through.
         if (clerk.user) { await syncSession(); return; }
 
+        // Render Clerk's widget chrome-less so it sits inside our own .card as
+        // a single, unified card (no card-in-a-card).
         const appearance = {
           variables: {
             colorBackground: "#1a1d2e",
@@ -417,13 +429,39 @@
             colorNeutral: "#e2e8f0",
             borderRadius: "8px",
           },
+          elements: {
+            rootBox: { width: "100%" },
+            cardBox: { boxShadow: "none", border: "none" },
+            card: { boxShadow: "none", border: "none", backgroundColor: "transparent", padding: "0" },
+          },
         };
 
         const mountEl = document.getElementById("clerkSignIn");
-        clerk.mountSignIn(mountEl, { appearance });
+        // Return to /login after the OAuth round-trip so syncSession() runs and
+        // mints our own dcc_session before navigating into the app.
+        clerk.mountSignIn(mountEl, { appearance, forceRedirectUrl: "/login", signUpForceRedirectUrl: "/login" });
         mountEl.classList.add("visible");
-        document.getElementById("clerkDivider").classList.add("visible");
         clerk.addListener(({ user }) => { if (user) syncSession(); });
+
+        // Clerk now provides the primary title + card, so hide our duplicate
+        // logo and collapse the legacy username/password form behind a toggle.
+        document.querySelector(".logo").style.display = "none";
+        const tabsEl = document.querySelector(".auth-tabs");
+        const legacyForm = document.getElementById("authForm");
+        tabsEl.style.display = "none";
+        legacyForm.style.display = "none";
+        const divider = document.getElementById("clerkDivider");
+        divider.querySelector("span").textContent = "or sign in with a username";
+        divider.classList.add("visible");
+        divider.style.cursor = "pointer";
+        divider.title = "Use a username and password instead";
+        divider.addEventListener("click", () => {
+          tabsEl.style.display = "";
+          legacyForm.style.display = "";
+          divider.style.cursor = "default";
+          divider.querySelector("span").textContent = "or continue with a username";
+          divider.replaceWith(divider.cloneNode(true)); // drop the listener
+        });
       } catch (e) {
         console.warn("Social login unavailable:", e.message);
       }
