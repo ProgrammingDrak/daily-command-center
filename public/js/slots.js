@@ -2829,11 +2829,11 @@
     const cells = positions.map(i => reels[i]).filter(Boolean);
     if(!cells.length) return;
 
-    cells.forEach(cell => cell.classList.add("bank-hit"));
     slotPlay("bankLine");
     const math = showBankMathOverlay(cells, payout, deltaCents);
-    updateBankMathOverlay(math, "Bank tiles", bankUnitLine(payout.base_units || cells.length, 0, 0), bankTotalLine(payout, deltaCents, "base"));
-    await wait(340);
+
+    // PHASE 1 - reveal the base units one tile at a time, counter ticking 1..N.
+    await animateBankCountUp(math, cells, payout);
 
     const horizontalGroups = Array.isArray(payout.horizontal_groups) ? payout.horizontal_groups : [];
     horizontalGroups.flat().forEach(i => {
@@ -2844,12 +2844,16 @@
       if(reels[i]) reels[i].classList.add("bank-vertical");
     });
 
-    updateBankMathOverlay(math, "Chain reaction", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, payout.vertical_bonus_units || 0), "Bank links are firing together.");
+    // PHASE 2 - the lightning, the multiply count-up, and the pet-runner deposit all
+    // run together. The multiply step grows the panel total from base units to the
+    // combo total as the links fire (skipped for a lone tile - 1 unit, no multiplier).
     const horizontalPromise = playBankLightningGroups(horizontalGroups, reels, "row", "Double Points!");
     const verticalPromise = playBankLightningGroups(verticalGroups, reels, "column", "+1 Bank Unit!");
     const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
     const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents, onDeposit) : Promise.resolve();
-    await wait(520);
+    await animateBankMultiplyStep(math, payout, 760);
+
+    // PHASE 3 - settle to the reserve formula and let the deposit/lightning finish.
     updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
     const [horizontalLinks, verticalLinks] = await Promise.all([horizontalPromise, verticalPromise]);
     await reservePromise;
@@ -2860,12 +2864,79 @@
     cells.forEach(cell => cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical"));
   }
 
-  function bankUnitLine(baseUnits, horizontalUnits, verticalUnits){
-    const parts = [baseUnits + " BANK"];
-    if(horizontalUnits > 0) parts.push("+ " + horizontalUnits + " row");
-    if(verticalUnits > 0) parts.push("+ " + verticalUnits + " column");
-    const total = baseUnits + horizontalUnits + verticalUnits;
-    return parts.join(" ") + " = " + total + " unit" + (total === 1 ? "" : "s");
+  // Reveal each base BANK tile in turn - highlight the cell, pop its "+1" node, and
+  // tick the panel counter 1 -> N. Per-tile delay scales down so big split shapes
+  // stay under ~0.9s total. Returns once the base count is fully shown.
+  async function animateBankCountUp(math, cells, payout){
+    const total = cells.length;
+    if(!total) return;
+    const perTile = Math.min(150, Math.max(70, Math.floor(820 / total)));
+    for(let i = 0; i < total; i++){
+      const cell = cells[i];
+      if(cell){
+        cell.classList.remove("bank-hit");
+        void cell.offsetWidth;
+        cell.classList.add("bank-hit");
+      }
+      if(math && math.nodes && math.nodes[i]) math.nodes[i].classList.add("show");
+      const count = i + 1;
+      slotPlay("tick", { tick: i });
+      if(math){
+        const detail = total === 1
+          ? "One BANK tile, one unit — no multiplier."
+          : "Each BANK tile banks a unit.";
+        updateBankMathOverlay(math, count === 1 ? "Bank unit" : "Banking units", count + " unit" + (count === 1 ? "" : "s"), detail);
+      }
+      await wait(perTile);
+    }
+  }
+
+  // Grow the panel total from base units to the combo total as the links fire. A
+  // lone tile (no group bonus) skips straight to the reserve formula.
+  async function animateBankMultiplyStep(math, payout, durationMs){
+    if(!math) return;
+    const baseUnits = payout.base_units || 0;
+    const finalUnits = payout.units || baseUnits;
+    if(finalUnits <= baseUnits) return;
+    showBankMultChip(math, "× combo +" + (finalUnits - baseUnits));
+    if(math.title) math.title.textContent = "Chain reaction";
+    if(math.total) math.total.textContent = "Connected blocks multiply the bank.";
+    await tweenCount(baseUnits, finalUnits, durationMs, (val) => {
+      if(!math.formula) return;
+      math.formula.textContent = val + " unit" + (val === 1 ? "" : "s");
+      math.formula.classList.remove("counting");
+      void math.formula.offsetWidth;
+      math.formula.classList.add("counting");
+    });
+  }
+
+  // Step an integer from->to over ms, capped at 14 visible steps. onStep(value, done).
+  function tweenCount(from, to, ms, onStep){
+    return new Promise(resolve => {
+      const steps = Math.max(1, Math.min(to - from, 14));
+      const stepMs = Math.max(40, Math.floor(ms / steps));
+      let n = 0;
+      const timer = setInterval(() => {
+        n++;
+        const val = Math.round(from + (to - from) * (n / steps));
+        onStep(val, n >= steps);
+        if(n >= steps){ clearInterval(timer); resolve(); }
+      }, stepMs);
+    });
+  }
+
+  function showBankMultChip(math, label){
+    if(!math || !math.overlay) return;
+    const panel = math.overlay.querySelector(".slot-bank-math-panel");
+    if(!panel || !isSlotsPageActive()) return;
+    const rect = panel.getBoundingClientRect();
+    const chip = document.createElement("span");
+    chip.className = "slot-bank-mult-chip";
+    chip.textContent = label;
+    chip.style.left = (rect.left + rect.width / 2) + "px";
+    chip.style.top = (rect.top - 4) + "px";
+    math.overlay.appendChild(chip);
+    chip.addEventListener("animationend", () => chip.remove(), { once: true });
   }
 
   function bankFinalFormula(payout){
@@ -2897,19 +2968,21 @@
     }
     panel.innerHTML = '<span class="slot-bank-math-title"></span><strong class="slot-bank-math-formula"></strong><em class="slot-bank-math-total"></em>';
     overlay.appendChild(panel);
-    cells.forEach((cell, idx) => {
+    // Nodes start hidden; animateBankCountUp pops them one at a time via `.show`.
+    const nodes = cells.map(cell => {
       const rect = cell.getBoundingClientRect();
       const node = document.createElement("span");
       node.className = "slot-bank-math-node";
       node.textContent = "+1";
       node.style.left = (rect.left + rect.width / 2) + "px";
       node.style.top = (rect.top + rect.height / 2) + "px";
-      node.style.animationDelay = (idx * 45) + "ms";
       overlay.appendChild(node);
+      return node;
     });
     document.body.appendChild(overlay);
     return {
       overlay,
+      nodes,
       title: panel.querySelector(".slot-bank-math-title"),
       formula: panel.querySelector(".slot-bank-math-formula"),
       total: panel.querySelector(".slot-bank-math-total"),
