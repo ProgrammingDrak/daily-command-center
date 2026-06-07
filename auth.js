@@ -108,6 +108,25 @@ async function findOrCreateExternalUser({ externalId, email, displayName, avatar
     return { user: { id: user.id, username: user.username }, workspaceId: rows[0]?.workspace_id || `ws-${user.id}`, created: false };
   }
 
+  // Link by email: if an existing account has this email and no external identity
+  // yet, attach this provider to it rather than creating a duplicate. This is how
+  // an existing username/password user adopts Google sign-in without losing data.
+  if (email) {
+    const byEmail = await pool.query("SELECT * FROM users WHERE lower(email) = lower($1) AND external_id IS NULL", [email]);
+    if (byEmail.rows[0]) {
+      const u = byEmail.rows[0];
+      await pool.query(
+        `UPDATE users SET external_id = $1, auth_provider = $2,
+           display_name = COALESCE(display_name, $3), avatar_url = COALESCE(avatar_url, $4), updated_at = $5
+         WHERE id = $6`,
+        [externalId, provider || "external", displayName || null, avatarUrl || null, new Date().toISOString(), u.id]
+      );
+      const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id = $1 AND role = 'owner' LIMIT 1", [u.id]);
+      console.log(`[auth] Linked ${provider || "external"} identity to existing user '${u.username}' (${email})`);
+      return { user: { id: u.id, username: u.username }, workspaceId: rows[0]?.workspace_id || `ws-${u.id}`, created: false, linked: true };
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

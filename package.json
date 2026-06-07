@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@clerk/backend": "^3.5.0",
+    "@clerk/express": "^2.1.23",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.8.0",
     "chokidar": "^3.6.0",
