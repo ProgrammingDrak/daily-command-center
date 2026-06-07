@@ -131,6 +131,11 @@ const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/a
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve", "/api/dcc/quick-task"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
+// On Render the app runs behind a same-host reverse proxy, so EVERY request's
+// socket peer is 127.0.0.1 — trusting localhost there would open the DCC service
+// endpoints to the public internet. So localhost is only trusted off-production;
+// in production these endpoints require a bearer token (or a real session).
+function trustLocalhost(req) { return process.env.NODE_ENV !== "production" && isLocalhost(req); }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
 function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === token : false; }
 function hasDccIngestToken(req) { return hasDccToken(req) || hasSweepWriteToken(req); }
@@ -162,7 +167,7 @@ app.use((req, res, next) => {
   if (isPublicRoute(req)) return next();
   if (isSweepBlockWrite(req)) { attachSweepServiceAuth(req); return next(); }
   if (isDccStateIngest(req) && hasDccIngestToken(req)) { attachSweepServiceAuth(req); return next(); }
-  if (DCC_ENDPOINTS.has(req.path) && (isLocalhost(req) || hasDccToken(req))) return next();
+  if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || hasDccToken(req))) return next();
   if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
   next();
 });
