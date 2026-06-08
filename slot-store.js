@@ -8,6 +8,15 @@ const {
   POINTS_V3_BALANCE_MULTIPLIER,
   scoreTaskPoints,
 } = require("./slot-scoring");
+// Shared slot_accounts primitives (also used by punishment-store). The monthly
+// default and the account upsert are single-sourced here so the two stores can't
+// drift. See slot-account-common.js.
+const {
+  DEFAULT_MONTHLY_GOAL_CENTS,
+  MONTHLY_MIN,
+  MONTHLY_MAX,
+  upsertSlotAccountRow,
+} = require("./slot-account-common");
 
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
 const DEFAULT_TARGET_DAILY_SPINS = 28;
@@ -160,7 +169,7 @@ const SMALL_WIN_SYMBOLS = new Set(["COIN", "STAR", "PAW", "GEM"]);
 const COSMETIC_FILLER_SYMBOLS = ["COIN", "COIN", "COIN", "BANK", "BANK", "STAR", "PAW", "GEM", "SPIN", "JACKPOT"];
 // Win lines read as 3-in-a-row; bank occasionally runs longer for a bigger combo.
 const WIN_LINE_LENGTH = 3;
-const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
+// DEFAULT_MONTHLY_GOAL_CENTS now imported from slot-account-common (shared with punishment-store).
 const DEFAULT_SHORTFALL_PENALTY = "Leftover goal amount goes to the boring responsible fund.";
 const LEGACY_BANK_BUILDER_KIND = "bank_builder";
 const LEGACY_BANK_BUILDER_RETIRED_SETTING = "legacy_bank_builder_rewards_retired_at";
@@ -739,14 +748,8 @@ async function ensureSchema() {
 
 async function ensureAccount(workspaceId, userId) {
   await ensureSchema();
-  const { rows } = await pool.query(
-    `INSERT INTO slot_accounts (workspace_id, user_id)
-     VALUES ($1, $2)
-     ON CONFLICT (workspace_id) DO UPDATE SET user_id = COALESCE(slot_accounts.user_id, EXCLUDED.user_id)
-     RETURNING *`,
-    [workspaceId, userId || null]
-  );
-  let account = await migrateAccountPointsV2(workspaceId, rows[0]);
+  const row = await upsertSlotAccountRow(pool, workspaceId, userId);
+  let account = await migrateAccountPointsV2(workspaceId, row);
   account = await migrateAccountPointsV3(workspaceId, account);
   account = await migrateAccountSlotOdds(workspaceId, account);
   await seedRewards(workspaceId);
@@ -1209,7 +1212,7 @@ async function getBankUsage(workspaceId, settings = {}) {
        AND created_at >= date_trunc('month', NOW())`,
     [workspaceId]
   );
-  const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, 100, 1000000);
+  const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, MONTHLY_MIN, MONTHLY_MAX);
   return {
     today: today.cents,
     week: week.cents,
