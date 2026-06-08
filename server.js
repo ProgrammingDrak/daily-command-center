@@ -3399,6 +3399,7 @@ app.post("/api/slot/spins/:id/confirm", async (req, res) => {
           valueSnapshot: snap.value_cents || 0,
           chanceSharesSnapshot: snap.chance_shares || null,
           tierSnapshot: snap.tier_id || null,
+          durationMinutesSnapshot: snap.duration_minutes ?? snap.durationMinutes ?? null,
         });
         // Surface the queue item so the win decision screen can act on it
         // (Go do it now / Bank / Schedule) without a follow-up fetch.

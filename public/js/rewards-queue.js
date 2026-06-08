@@ -156,6 +156,21 @@
     }
   }
 
+  // Canonical itinerary task for a reward. SINGLE source so every scheduler (this
+  // queue tab AND the post-win decision modal in slots.js) places an IDENTICAL
+  // task: 🎁 title, the reward's real duration (snapshotted at win time; falls
+  // back to the default block for legacy rows that predate the column), High
+  // priority. tags/source let the completion hook burn the reward.
+  function buildRewardTask(item) {
+    const title = (item && (item.title_snapshot || item.title)) || "Reward";
+    const realMins = Math.max(0, parseInt(item && (item.duration_minutes_snapshot ?? item.duration_minutes), 10) || 0);
+    return {
+      title: "🎁 " + title,
+      minutes: realMins || REWARD_TASK_MINUTES,
+      options: { source: "reward", tags: ["reward"], meta: "Reward · enjoy it", priority: "High" },
+    };
+  }
+
   // Open the standard schedule picker, place a reward task on the itinerary, and
   // park it on the queue row (status -> scheduled). On a fresh schedule, offer
   // Undo. On reschedule, remove the previous itinerary task so it isn't doubled.
@@ -165,10 +180,8 @@
     if (typeof window.openSchedulePicker !== "function") { toast("Scheduler is unavailable here", "error"); return; }
     const oldBlockId = item.scheduled_block_id || null;
     const oldDate = item.scheduled_for ? String(item.scheduled_for).slice(0, 10) : null;
-    window.openSchedulePicker("🎁 " + title, REWARD_TASK_MINUTES, {
-      source: "reward",
-      tags: ["reward"],
-      meta: "Reward · enjoy it",
+    const task = buildRewardTask(item);
+    window.openSchedulePicker(task.title, task.minutes, Object.assign({}, task.options, {
       onScheduled: async (info) => {
         info = info || {};
         const dateStr = info.dateStr || new Date().toISOString().slice(0, 10);
@@ -198,7 +211,7 @@
           }
         } catch (e) { toast("Could not schedule: " + (e.message || e), "error"); }
       }
-    });
+    }));
   }
 
   async function handleAction(id, act) {
@@ -233,4 +246,8 @@
   document.addEventListener("DOMContentLoaded", bind);
   window.loadRewardsQueue = loadRewardsQueue;
   window.renderRewardsQueue = renderRewardsQueue;
+  // Single scheduling entry point, used by the post-win decision modal in
+  // slots.js so reward scheduling lives in exactly one place (this queue owner).
+  //   scheduleRewardQueueItem(queueItem, { reschedule })
+  window.scheduleRewardQueueItem = (item, opts) => { if (item) scheduleFlow(item, !!(opts && opts.reschedule)); };
 })();

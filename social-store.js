@@ -250,6 +250,7 @@ async function enqueueReward({
   valueSnapshot = 0,
   chanceSharesSnapshot = null,
   tierSnapshot = null,
+  durationMinutesSnapshot = null,
 }) {
   const client = await pool.connect();
   try {
@@ -284,12 +285,12 @@ async function enqueueReward({
       `INSERT INTO reward_queue_items
          (owner_user_id, workspace_id, reward_definition_id, title_snapshot,
           source_type, source_id, status, won_at, won_date, sponsor_user_id,
-          value_snapshot, chance_shares_snapshot, tier_snapshot)
-       VALUES ($1,$2,$3,$4,$5,$6,'queued', NOW(), $7, $8, $9, $10, $11)
+          value_snapshot, chance_shares_snapshot, tier_snapshot, duration_minutes_snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,'queued', NOW(), $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [ownerUserId, workspaceId, rewardDefinitionId, titleSnapshot,
        sourceType, sourceId, isoDate(), sponsorUserId,
-       valueSnapshot, chanceSharesSnapshot, tierSnapshot]
+       valueSnapshot, chanceSharesSnapshot, tierSnapshot, durationMinutesSnapshot]
     );
     const item = rows[0];
 

@@ -519,7 +519,11 @@ CREATE INDEX IF NOT EXISTS idx_reward_queue_owner_won_date
 -- block id on the queue row (additive; safe on already-deployed tables).
 ALTER TABLE reward_queue_items
   ADD COLUMN IF NOT EXISTS scheduled_for      TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS scheduled_block_id TEXT;
+  ADD COLUMN IF NOT EXISTS scheduled_block_id TEXT,
+  -- The reward's real duration, snapshotted at win time, so a reward scheduled
+  -- later from the queue gets a correctly-sized itinerary block (not a fixed
+  -- placeholder). NULL on rows queued before this column existed.
+  ADD COLUMN IF NOT EXISTS duration_minutes_snapshot INTEGER;
 
 -- ── Reward Events (append-only audit ledger; source of truth) ──
 -- Mirrors the slot_point_ledger / pet_home_events idempotency pattern.
