@@ -1726,11 +1726,10 @@
         '<div><strong>' + esc(title) + '</strong>' + bank + reserve +
           '<div class="slot-history-meta">' + esc(symbol) + ' ' + esc(metaLabel) + ' · ' + esc(KIND_LABELS[snap.kind] || snap.kind || "") + ' · ' + new Date(s.created_at).toLocaleString() + '</div>' +
         '</div>' +
-        '<div class="slot-history-actions">' + rewardScheduleActionsHtml(s, snap) + statusAction + '</div>' +
+        '<div class="slot-history-actions">' + statusAction + '</div>' +
       '</div>';
     }).join("");
     el.querySelectorAll(".slot-confirm").forEach(btn => btn.addEventListener("click", () => confirmSpin(btn.dataset.id)));
-    bindRewardScheduleActions(el);
     el.querySelectorAll(".slot-pick-jackpot").forEach(btn => btn.addEventListener("click", () => {
       const spinRow = (slotState.spins || []).find(s => String(s.id) === String(btn.dataset.id));
       if(spinRow) openJackpotChoice(spinRow);
@@ -3664,44 +3663,6 @@
     if(el) el.textContent = text;
   }
 
-  function schedulableRewardSpin(spinRow, snap){
-    const reward = snap || (spinRow && spinRow.reward_snapshot) || {};
-    if(rewardDurationMinutes(reward) <= 0) return false;
-    if(!spinRow || spinRow.status === "miss" || reward.kind === "miss") return false;
-    if(reward.kind === "bank_builder" || reward.source_type === "slot_screen_bank_builder") return false;
-    if(reward.requires_jackpot_choice) return false;
-    return true;
-  }
-
-  function rewardTaskTitle(snap){
-    return "Reward: " + ((snap && snap.title) || "Prize");
-  }
-
-  function rewardTaskOptions(spinRow, snap){
-    const wonAt = spinRow && spinRow.created_at ? new Date(spinRow.created_at).toLocaleString() : new Date().toLocaleString();
-    const details = [
-      snap && snap.notes,
-      "Won from slots at " + wonAt + "."
-    ].filter(Boolean).join("\n\n");
-    return {
-      meta: "Slot reward · " + rewardDurationLabel(snap || {}),
-      detail: details,
-      source: "slot_reward",
-      priority: "High",
-      tags: ["reward"]
-    };
-  }
-
-  function rewardScheduleActionsHtml(spinRow, snap){
-    if(!schedulableRewardSpin(spinRow, snap)) return "";
-    const spinId = esc(spinRow && spinRow.id);
-    return '<div class="slot-reward-schedule-actions">' +
-      '<span>' + esc(rewardDurationLabel(snap)) + '</span>' +
-      '<button class="slot-mini primary slot-reward-schedule" data-id="' + spinId + '" data-reward-action="schedule" type="button">Schedule</button>' +
-      '<button class="slot-mini slot-reward-schedule" data-id="' + spinId + '" data-reward-action="urgent" type="button">Do now</button>' +
-    '</div>';
-  }
-
   function renderSlotResultActions(spinRow){
     const el = document.getElementById("slot-result-actions");
     if(!el) return;
@@ -3712,8 +3673,10 @@
       bindGambleActions(el, spinRow.id);
       return;
     }
-    el.innerHTML = rewardScheduleActionsHtml(spinRow, snap);
-    bindRewardScheduleActions(el);
+    // Reward scheduling lives in the post-win decision modal + Rewards Queue tab
+    // (one queue-owning scheduler). The old result-strip "Schedule / Do now"
+    // buttons bypassed the queue and were retired.
+    el.innerHTML = "";
   }
 
   function boosterDescriptor(type){
@@ -3831,38 +3794,6 @@
     if(el) el.innerHTML = "";
   }
 
-  function bindRewardScheduleActions(root){
-    if(!root) return;
-    root.querySelectorAll(".slot-reward-schedule").forEach(btn => {
-      btn.addEventListener("click", () => scheduleRewardFromSpin(btn.dataset.id, btn.dataset.rewardAction || "schedule"));
-    });
-  }
-
-  function scheduleRewardFromSpin(spinId, action){
-    const spinRow = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinId));
-    const snap = spinRow && spinRow.reward_snapshot || {};
-    if(!schedulableRewardSpin(spinRow, snap)) return;
-    const duration = rewardDurationMinutes(snap);
-    const title = rewardTaskTitle(snap);
-    const options = rewardTaskOptions(spinRow, snap);
-    if(action === "urgent"){
-      if(typeof insertTaskNow === "function"){
-        insertTaskNow(title, duration, options);
-        setResult("Reward queued for now: " + (snap.title || "Prize"));
-      } else if(typeof openSchedulePicker === "function") {
-        openSchedulePicker(title, duration, options);
-      }
-      return;
-    }
-    if(typeof openSchedulePicker === "function"){
-      openSchedulePicker(title, duration, options);
-      return;
-    }
-    if(typeof insertTaskNow === "function"){
-      insertTaskNow(title, duration, options);
-      setResult("Reward queued for now: " + (snap.title || "Prize"));
-    }
-  }
 
   // ── Reward decision screen ────────────────────────────────────────────────
   // The moment you win a catalog reward: GO DO IT NOW (default), bank it for
@@ -4067,37 +3998,22 @@
   function rewardSchedule(){
     const snap = _rdSnap || {};
     const item = _rdItem;
-    const duration = rewardDurationMinutes(snap) || 30;
-    const title = rewardTaskTitle(snap);
-    const options = rewardTaskOptions(_rdSpin, snap);
-    options.onScheduled = info => {
-      const when = scheduledForIso(info);
-      if(item && item.id != null){
-        api("/api/social/rewards/queue/" + item.id + "/schedule", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scheduledFor: when, blockId: (info && info.blockId) || null })
-        }).then(() => { if(typeof loadRewardsQueue === "function") loadRewardsQueue(); }).catch(() => {});
-      }
-      setResult("Scheduled: " + (snap.title || "Reward") + (info && info.start ? " at " + info.start : ""));
-      slotPetReact("happy", "On the books!", 2200);
-    };
     closeRewardDecision();
-    if(typeof openSchedulePicker === "function") openSchedulePicker(title, duration, options);
-    else if(typeof insertTaskNow === "function") insertTaskNow(title, duration, options);
-  }
-
-  function scheduledForIso(info){
-    try {
-      if(info && info.dateStr && info.start) return new Date(info.dateStr + "T" + info.start).toISOString();
-      if(info && info.start){
-        const now = new Date();
-        const pad = n => String(n).padStart(2, "0");
-        const d = pad(now.getMonth() + 1), day = pad(now.getDate());
-        return new Date(now.getFullYear() + "-" + d + "-" + day + "T" + info.start).toISOString();
-      }
-    } catch(e){}
-    return null;
+    if(!item || item.id == null){
+      // No queue row to park against (enqueue must have failed). Scheduling is
+      // queue-owned, so there's nothing to schedule rather than placing an
+      // untracked task.
+      if(typeof window.showToast === "function") window.showToast("Couldn't schedule — reward isn't in your queue", "error");
+      return;
+    }
+    // Make sure the one scheduler has the real duration even if this queue row
+    // predates the duration snapshot or came back without it.
+    if(item.duration_minutes_snapshot == null){
+      const mins = rewardDurationMinutes(snap);
+      if(mins > 0) item.duration_minutes_snapshot = mins;
+    }
+    // Single scheduling path — see scheduleRewardQueueItem in rewards-queue.js.
+    if(typeof window.scheduleRewardQueueItem === "function") window.scheduleRewardQueueItem(item, { reschedule: false });
   }
 
   function openForm(reward){
