@@ -40,3 +40,6 @@ vault/
 # pg_dump output (created by scripts/db-backup.sh)
 backups/
 
+
+# Legacy SQLite store — superseded by Postgres; contained live secrets, never track
+data/blocks.db
