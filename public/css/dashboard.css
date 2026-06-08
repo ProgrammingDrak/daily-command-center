@@ -4045,3 +4045,52 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .dr-ed-actions button{border-radius:7px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;border:1px solid var(--border)}
   .dr-ed-cancel{background:transparent;color:var(--text-muted)}
   .dr-ed-save{background:linear-gradient(180deg,#3b82f6,#2563eb);color:#fff;border-color:transparent;box-shadow:0 0 14px rgba(59,130,246,0.4)}
+
+  /* ======== GUEST ITINERARY MIRROR (shared to-do list) ======== */
+  /* Sidebar removed -> single column. */
+  .guest-mode .todo-public-grid{grid-template-columns:1fr}
+  /* Render mirrored cards like the owner timeline: block flow + the node gutter
+     come from the .tl class on #todo-public-list (not the old flex list). */
+  .guest-mode .todo-public-list.tl{display:block;gap:0;padding-left:16px}
+  /* Belt-and-suspenders: the renderer omits all edit chrome for guests, but hide
+     any stray owner affordance / drag cursor if markup ever leaks through. */
+  .guest-mode .tl-item{cursor:default}
+  .guest-mode .tl-item .grip,
+  .guest-mode .tl-item .chk,
+  .guest-mode .tl-item .chk-col,
+  .guest-mode .tl-item .dur,
+  .guest-mode .tl-item .btn-lock,
+  .guest-mode .tl-item .btn-push-tmr,
+  .guest-mode .tl-item .btn-del-task,
+  .guest-mode .tl-item .btn-repeat-resp,
+  .guest-mode .tl-item .btn-meeting-auto,
+  .guest-mode .tl-item .pomo-btn,
+  .guest-mode .tl-item .notes-btn,
+  .guest-mode .tl-item .btn-bounty,
+  .guest-mode .tl-item .pet-privacy-toggle{display:none!important}
+
+  /* Guest-submitted tasks get a distinct accent so the owner can tell at a glance
+     which items a visitor added. */
+  .guest-submitted .card{box-shadow:inset 3px 0 0 var(--cyan,#22d3ee)}
+  .tl-compact.guest-submitted .bar{box-shadow:0 0 0 2px var(--cyan,#22d3ee)}
+
+  /* Inline add-task bar (replaces the old sidebar create panel). */
+  .todo-guest-add{margin:10px 0 14px}
+  .todo-guest-add-toggle{background:rgba(59,130,246,0.12);border:1px dashed rgba(96,165,250,0.4);color:var(--accent-light);border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer;width:100%}
+  .todo-guest-add-form{margin-top:10px;display:flex;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+  .todo-guest-add-form input,.todo-guest-add-form select{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;font-size:13px;padding:8px}
+  .todo-guest-add-row{display:flex;gap:8px}
+  .todo-guest-add-row input{flex:1}
+
+  /* Per-card guest social footer (full width under the card). Reactions sit at the
+     top of the card via the shared renderer; bounty/reward + comments live here. */
+  .todo-guest-footer{display:flex;flex-direction:column;gap:8px;margin:6px 0 2px;padding:0 4px 4px}
+  .todo-guest-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .todo-bounty-btn,.todo-reward-btn{background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);color:var(--cyan,#22d3ee);border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer}
+  .todo-reward-btn{background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.4);color:var(--amber,#f59e0b)}
+  .todo-bounty-btn.locked,.todo-bounty-btn.bountied,.todo-bounty-btn:disabled{opacity:0.55;cursor:not-allowed}
+  .todo-reward-form{display:flex;flex-direction:column;gap:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px}
+  .todo-reward-form input{background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;font-size:13px;padding:8px}
+  .todo-reward-row{display:flex;gap:8px}
+  .todo-reward-row input{flex:1}
+  .todo-reward-row .todo-public-btn{flex:0 0 auto}
