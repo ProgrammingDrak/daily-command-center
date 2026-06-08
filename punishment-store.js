@@ -14,40 +14,22 @@
 const pool = require("./pg-pool");
 const { chooseWeighted } = require("./slot-store");
 const auth = require("./auth");
+// Shared slot_accounts primitives — see slot-account-common.js. Punishments and
+// rewards sit on the same account row, so the upsert, money-delta invariant,
+// monthly clamp and error shapes are one implementation used by both.
+const {
+  DEFAULT_MONTHLY_GOAL_CENTS,
+  badRequest,
+  notFound,
+  upsertSlotAccountRow,
+  applyMoneyDelta,
+} = require("./slot-account-common");
 
-// Mirrors slot-store's monthly clamp (settings.monthly_goal_cents and its source
-// of truth economy_profile.monthly_discretionary_cents are both clamped here).
-const DEFAULT_MONTHLY_GOAL_CENTS = 10000;
-const MONTHLY_MIN = 100;
-const MONTHLY_MAX = 1000000;
-function clampMonthly(n) {
-  return Math.max(MONTHLY_MIN, Math.min(MONTHLY_MAX, Math.round(Number(n) || 0)));
-}
-
-function badRequest(message) {
-  const err = new Error(message);
-  err.statusCode = 400;
-  return err;
-}
-
-function notFound(message) {
-  const err = new Error(message);
-  err.statusCode = 404;
-  return err;
-}
-
-// Minimal account bootstrap — mirrors slot-store.ensureAccount's upsert without
-// the rewards-specific migrations/seeding. We only need the row so we can read
-// bank_balance_cents and stash the owed counter inside settings.
+// Minimal account bootstrap — the shared upsert without the rewards-specific
+// migrations/seeding. We only need the row so we can read bank_balance_cents and
+// stash the owed counter inside settings.
 async function ensureAccount(workspaceId, userId) {
-  const { rows } = await pool.query(
-    `INSERT INTO slot_accounts (workspace_id, user_id)
-     VALUES ($1, $2)
-     ON CONFLICT (workspace_id) DO UPDATE SET user_id = COALESCE(slot_accounts.user_id, EXCLUDED.user_id)
-     RETURNING *`,
-    [workspaceId, userId || null]
-  );
-  return rows[0];
+  return upsertSlotAccountRow(pool, workspaceId, userId);
 }
 
 function readOwed(settings) {
@@ -93,41 +75,6 @@ function normalizePunishmentInput(body = {}) {
     bank_delta_cents: bankDeltaCents,
     active: body.active !== false,
     notes: String(body.notes || ""),
-  };
-}
-
-// Apply a money delta to one account in BOTH dimensions the rewards economy
-// cares about: the unlocked reserve (bank_balance_cents) and the monthly reward
-// allocation. The allocation lives in two places that must move together —
-// settings.monthly_goal_cents (the value the UI/engine reads) and its source of
-// truth settings.economy_profile.monthly_discretionary_cents (which any future
-// settings save recomputes monthly_goal_cents from). We read the row FOR UPDATE,
-// spread the existing settings, and write back so no other keys are clobbered.
-async function applyMoneyDelta(client, workspaceId, deltaCents) {
-  const { rows: [acct] } = await client.query(
-    "SELECT bank_balance_cents, settings FROM slot_accounts WHERE workspace_id = $1 FOR UPDATE",
-    [workspaceId]
-  );
-  if (!acct) return null;
-  const settings = acct.settings && typeof acct.settings === "object" ? acct.settings : {};
-  const profile = settings.economy_profile && typeof settings.economy_profile === "object" ? settings.economy_profile : {};
-  const curGoal = Number.isFinite(+settings.monthly_goal_cents) ? +settings.monthly_goal_cents : DEFAULT_MONTHLY_GOAL_CENTS;
-  const curDiscretionary = Number.isFinite(+profile.monthly_discretionary_cents) ? +profile.monthly_discretionary_cents : curGoal;
-  const nextSettings = {
-    ...settings,
-    monthly_goal_cents: clampMonthly(curGoal + deltaCents),
-    economy_profile: { ...profile, monthly_discretionary_cents: clampMonthly(curDiscretionary + deltaCents) },
-  };
-  const { rows: [upd] } = await client.query(
-    `UPDATE slot_accounts
-        SET bank_balance_cents = GREATEST(0, bank_balance_cents + $2), settings = $3, updated_at = NOW()
-      WHERE workspace_id = $1
-      RETURNING bank_balance_cents, settings`,
-    [workspaceId, deltaCents, nextSettings]
-  );
-  return {
-    bankBalanceCents: upd.bank_balance_cents,
-    monthlyGoalCents: upd.settings.monthly_goal_cents,
   };
 }
 
