@@ -27,6 +27,17 @@ function pt(s){
 function fmt(mins){return String(Math.floor(mins/60)).padStart(2,"0")+":"+String(mins%60).padStart(2,"0")}
 function ms(m){return m>=60?Math.floor(m/60)+"h"+(m%60?" "+m%60+"m":""):m+"m"}
 function f12(s){const mins=pt(s),h=Math.floor(mins/60)%24,m=mins%60,a=h>=12?"PM":"AM",h12=h%12||12;return h12+":"+String(m).padStart(2,"0")+" "+a}
+// Canonical money formatter. Single source for every "$x.xx" in the client.
+//   fmtMoney(1234)                -> "$12.34"
+//   fmtMoney(0, {blankZero:true}) -> ""        (reward-queue style)
+//   fmtMoney(-500, {abs:true})    -> "$5.00"   (punishment cost style)
+function fmtMoney(cents, opts){
+  opts = opts || {};
+  let n = Number(cents) || 0;
+  if(opts.abs) n = Math.abs(n);
+  if(opts.blankZero && n === 0) return "";
+  return "$" + (n / 100).toFixed(2);
+}
 function dur(ev){return pt(ev.end)-pt(ev.start)}
 function origDur(id){const o=INIT_SCHED.find(e=>e.id===id);return o?dur(o):0}
 function isMeeting(ev){return ev.type==="meeting"||ev.type==="oneone"}

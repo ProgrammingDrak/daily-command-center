@@ -16,7 +16,7 @@
   const EDGE_PAD_MIN = 30;  // breathing room above first / below last block
 
   // ── small utils (reuse globals from state.js / data.js where available) ──
-  function esc(s) { return (typeof escHtml === "function") ? escHtml(s) : String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+  function esc(s) { return escHtml(s); } // shared escaper in tag-manager.js
   function toMin(v) { return (typeof pt === "function") ? pt(v) : 0; }            // "HH:MM" / ISO / "9:00 AM" -> minutes
   function fmtClock(min) { return (typeof f12 === "function") ? f12((typeof fmt === "function") ? fmt(((min % 1440) + 1440) % 1440) : min) : (min + "m"); }
   function fmtDur(min) { return (typeof ms === "function") ? ms(Math.max(0, Math.round(min))) : Math.round(min) + "m"; }

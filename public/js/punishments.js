@@ -31,13 +31,9 @@
   function toast(msg, kind) {
     if (typeof window.showToast === "function") window.showToast(msg, kind);
   }
-  function esc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-    }[c]));
-  }
+  function esc(s) { return escHtml(s); } // shared escaper in tag-manager.js
   function el(id) { return document.getElementById(id); }
-  function dollars(cents) { return "$" + (Math.abs(Number(cents) || 0) / 100).toFixed(2); }
+  function dollars(cents) { return fmtMoney(cents, { abs: true }); } // shared formatter in state.js
 
   async function load() {
     try {
