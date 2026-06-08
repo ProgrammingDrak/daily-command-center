@@ -316,6 +316,10 @@
     document.querySelectorAll('input[name="punish-partner-mode"]').forEach((r) =>
       r.addEventListener("change", syncPartnerMode));
     syncPartnerMode();
+    // A spin, owe, edit, or a partner's wheel paying into your bank broadcasts
+    // punishment-changed over SSE. Refresh an already-open panel so owed/balance
+    // stay live across tabs and partners (mirrors rewards-queue's slot-changed).
+    document.addEventListener("punishment-changed", () => { if (state) load(); });
     load();
   }
 

@@ -3103,8 +3103,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-reward-prize{display:flex;flex-direction:column;align-items:center;gap:6px}
 .slot-reward-sym{font-size:38px;line-height:1}
 .slot-reward-prize strong{font-size:22px;line-height:1.1;color:#fff7d1}
-.slot-reward-meta{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
-.slot-reward-meta span{border:1px solid rgba(255,255,255,0.14);border-radius:999px;padding:2px 9px;font-size:11px;color:var(--text-muted)}
+.slot-reward-dialog .slot-reward-meta{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+.slot-reward-dialog .slot-reward-meta span{border:1px solid rgba(255,255,255,0.14);border-radius:999px;padding:2px 9px;font-size:11px;color:var(--text-muted)}
 .slot-reward-body{display:flex;flex-direction:column;gap:10px}
 .slot-reward-locking{color:var(--text-muted);font-size:13px;padding:14px 0}
 .slot-reward-go{width:100%;border:none;border-radius:12px;padding:16px 14px;cursor:pointer;font-family:inherit;color:#1a1206;font-weight:950;
