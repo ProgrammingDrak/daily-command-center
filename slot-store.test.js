@@ -1310,11 +1310,55 @@ test("spin downgrades a jackpot outcome when override tiles have no jackpot payl
   const spin = await store.spin("ws-1", 1);
   const snap = spin.reward_snapshot;
 
-  assert.equal(spin.status, "miss");
+  // The jackpot headline downgrades to a miss (no jackpot payline on the board)...
   assert.equal(snap.kind, "miss");
   assert.equal(snap.slot_stages.jackpot_hit, false);
   assert.deepEqual(snap.screen_board, scattered);
   assert.deepEqual(snap.screen_payline, []);
+  // ...but bankroll ALWAYS resolves first: the three BANK tiles on the board still
+  // pay, so the spin banks them (pending the sweep) instead of landing as a dead miss.
+  assert.deepEqual(snap.bank_screen_payout.positions, [1, 6, 10]);
+  assert.equal(snap.source_type, "slot_screen_bank_builder");
+  assert.ok(spin.bank_delta_cents > 0);
+  assert.equal(spin.status, "pending");
+});
+
+test("a non-bank floor outcome still banks the BANK tiles on its screen (bank resolves first)", async () => {
+  // A coin/refund spin whose board also carries BANK tiles must bank those tiles too -
+  // bankroll resolves before the headline reward, so the spin pays BOTH.
+  const board = Array.from({ length: 15 }, () => "MISS");
+  board[1] = "BANK";
+  board[6] = "BANK"; // vertical pair in column 1 -> base 2 units + 2 vertical bonus = 4 units
+  const mockPool = createMockPool({
+    pointBalance: 100,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already",
+      points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already",
+      points_v3_spin_cost_migrated_at: "already",
+      jackpot_hit_rate: 0,
+      miss_rate: 0,
+      bank_builder_hit_rate: 0,
+      floor_weights: { bank: 0, coin: 1, booster: 0, pet: 0, free_spin: 0 },
+      monthly_goal_cents: 10000,
+      next_spin_tile_override: { tiles: board, created_at: "now" },
+    },
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const spin = await store.spin("ws-1", 1);
+  const snap = spin.reward_snapshot;
+
+  // Headline reward is the coin (a refund or point drop) - not a bank builder...
+  assert.equal(snap.slot_stages.outcome, "coin");
+  assert.ok(snap.slot_stages.coin, "coin stage detail is present");
+  assert.equal(snap.slot_stages.jackpot_hit, false);
+  // ...and the two BANK tiles on the same screen still pay, first.
+  assert.deepEqual(snap.bank_screen_payout.positions, [1, 6]);
+  assert.equal(snap.source_type, "slot_screen_bank_builder");
+  assert.equal(spin.bank_delta_cents, 50); // base_cents 12 * 4 units = 48, lifted to the 50c floor
+  assert.equal(spin.status, "pending");
 });
 
 test("spin stores authoritative bank board, payout positions, and pending reserve delta", async () => {
