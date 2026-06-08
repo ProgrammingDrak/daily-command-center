@@ -1137,6 +1137,51 @@ test("bank screen payout values each BANK tile from the monthly goal, not curren
   assert.equal(payout.cents, 50);
 });
 
+test("bank pacing scales off the REMAINING headroom, so hits shrink as the bar fills", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const board = Array.from({ length: 15 }, () => "MISS");
+  // Five separated BANK tiles -> 5 base units, no group bonus, so units * base is
+  // above the 50c floor and we can read the per-unit base directly.
+  [0, 2, 4, 11, 13].forEach(i => { board[i] = "BANK"; });
+  const acct = { bank_balance_cents: 0, settings: { monthly_goal_cents: 100000 } };
+
+  // Start of month: nothing banked -> remainder == goal -> base off the full 100000.
+  const early = store._test.calculateScreenBankPayout(
+    board, acct,
+    { today: 0, week: 0, month: 0, monthlyGoal: 100000 }
+  );
+  assert.equal(early.final_week, false);
+  assert.equal(early.pacing_base_cents, 100000);
+  assert.equal(early.base_cents, Math.floor(100000 * 0.0012)); // 119
+
+  // Bar 80% full: only 20000 of headroom left -> base off 20000, a much smaller hit.
+  const late = store._test.calculateScreenBankPayout(
+    board, acct,
+    { today: 0, week: 0, month: 80000, monthlyGoal: 100000 }
+  );
+  assert.equal(late.pacing_base_cents, 20000);
+  assert.equal(late.base_cents, Math.floor(20000 * 0.0012)); // 24
+  assert.ok(late.base_cents < early.base_cents, "hits taper as the bar fills");
+});
+
+test("final week reverts bank pacing to the full monthly allotment for a max-out push", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const board = Array.from({ length: 15 }, () => "MISS");
+  [0, 2, 4, 11, 13].forEach(i => { board[i] = "BANK"; });
+  const acct = { bank_balance_cents: 0, settings: { monthly_goal_cents: 100000 } };
+
+  // Same 80%-full state, but now it's the final week: base off the full goal again.
+  const out = store._test.calculateScreenBankPayout(
+    board, acct,
+    { today: 0, week: 0, month: 80000, monthlyGoal: 100000, finalWeek: true }
+  );
+  assert.equal(out.final_week, true);
+  assert.equal(out.pacing_base_cents, 100000);
+  assert.equal(out.base_cents, Math.floor(100000 * 0.0012)); // 119, the full-goal rate
+  // Still capped at the remaining headroom so banking never overshoots the goal.
+  assert.equal(out.monthly_remaining_cents, 20000);
+});
+
 test("normalizeNextSpinTileOverride requires exactly fifteen known symbols", () => {
   const store = loadStoreWithMock(createMockPool());
   const override = store._test.normalizeNextSpinTileOverride({
