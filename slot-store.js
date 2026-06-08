@@ -2766,13 +2766,12 @@ function applyTileOverrideToScreen(screen, override, selected, account, bankUsag
   const stored = normalizeStoredNextSpinTileOverride(override);
   if (!stored) return { ...screen, override: null };
   const board = [...stored.tiles];
-  const canPayBank = !!screenBankHit;
+  // Bank resolves first off the actual tiles, so a forced board pays for whatever
+  // BANK tiles it carries regardless of the rolled outcome.
   return {
     board,
     payline: overridePayline(board, selected),
-    payout: canPayBank
-      ? calculateScreenBankPayout(board, account, bankUsage)
-      : emptyScreenBankPayout(account, bankUsage),
+    payout: calculateScreenBankPayout(board, account, bankUsage),
     jackpot: evaluateJackpotBoard(board),
     override: stored,
   };
@@ -2951,9 +2950,11 @@ function buildSpinScreen(selected, account, bankUsage, screenBankHit, jackpotSpi
   // Fill the rest with scrubbed prize icons - no dead tiles, no accidental wins.
   fillCosmetic(board, exclude);
 
-  const payout = canPlaceBankSymbols
-    ? calculateScreenBankPayout(board, account, bankUsage)
-    : emptyScreenBankPayout(account, bankUsage);
+  // Bankroll ALWAYS resolves first: any BANK tile on the final board pays, whether it
+  // was an intentional bank shape (screenBankHit) or a cosmetic filler tile that landed
+  // alongside some other reward. The payout is read from the board, not from the rolled
+  // outcome, so a gem/refund/jackpot/miss screen still banks whatever BANK tiles show.
+  const payout = calculateScreenBankPayout(board, account, bankUsage);
   const jackpot = evaluateJackpotBoard(board);
   return { board, payline: jackpot.payline.length ? jackpot.payline : payline, payout, jackpot };
 }
@@ -3152,7 +3153,12 @@ async function spin(workspaceId, userId) {
       appliedMultiplier = armedMultiplier;
       charges[armedMultiplier] = Math.max(0, charges[armedMultiplier] - 1);
     }
-    let bankDelta = effectiveOutcome.bank_builder_hit ? (screen.payout.cents || 0) : 0;
+    // Bankroll resolves before every other reward: bank whatever BANK tiles the final
+    // board shows, on any spin (bank, gem, refund, free spin, jackpot, even a miss), not
+    // only when the rolled outcome was "bank". The deposit rides the spin's
+    // slot_screen_bank_builder routing (source_type below) so the sweep / monthly-cap /
+    // confirm machinery stays the single source of truth.
+    let bankDelta = screen.payout.cents || 0;
     if (bankDelta > 0 && appliedMultiplier > 1) bankDelta = bankDelta * appliedMultiplier;
     // A multiplier-charge booster drops a fresh charge into the stash.
     let earnedChargeTier = 0;
