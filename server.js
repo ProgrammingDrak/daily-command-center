@@ -306,8 +306,16 @@ app.post("/api/auth/clerk-sync", async (req, res) => {
     if (!clerkUserId) return res.status(401).json({ error: "Invalid token" });
 
     const cu = await clerkClient.users.getUser(clerkUserId);
-    const email = (cu.emailAddresses.find((e) => e.id === cu.primaryEmailAddressId) || cu.emailAddresses[0])?.emailAddress || null;
-    const displayName = [cu.firstName, cu.lastName].filter(Boolean).join(" ") || (email ? email.split("@")[0] : null);
+    const primaryEmailObj = cu.emailAddresses.find((e) => e.id === cu.primaryEmailAddressId) || cu.emailAddresses[0] || null;
+    const rawEmail = primaryEmailObj?.emailAddress || null;
+    // Only a VERIFIED email may key account identity. findOrCreateExternalUser
+    // adopts any existing local account whose email matches, so trusting an
+    // unverified address would let an attacker claim someone else's account by
+    // signing up with their email. Unverified => treated as "no email", which
+    // forces a fresh account instead of adopting an existing one.
+    const isVerified = (e) => e && e.verification && e.verification.status === "verified";
+    const email = (isVerified(primaryEmailObj) ? primaryEmailObj : cu.emailAddresses.find(isVerified) || null)?.emailAddress || null;
+    const displayName = [cu.firstName, cu.lastName].filter(Boolean).join(" ") || (rawEmail ? rawEmail.split("@")[0] : null);
     const avatarUrl = cu.imageUrl || null;
     const rawProvider = cu.externalAccounts?.[0]?.provider || "";
     const provider = rawProvider.replace(/^oauth_/, "") || "external";
@@ -1755,7 +1763,7 @@ app.post("/api/social/sponsorships", async (req, res) => {
       targetType, targetId, rewardTitle, rewardDefinitionId, valueCents, chanceShares, note,
     });
     res.status(201).json(result);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
 });
 
 // The signed-in user's incoming offers awaiting review.
@@ -2706,6 +2714,14 @@ app.post("/api/dcc/quick-task", async (req, res) => {
     let userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
     let workspaceId = req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || null;
     if (!userId) {
+      // No explicit identity. In production we refuse to guess: the DCC service
+      // token is global, so defaulting to "first workspace owner" (or user 1)
+      // would let a token call silently write onto an arbitrary user's
+      // itinerary. Require an explicit target; only dev keeps the convenience
+      // fallback for single-user local testing.
+      if (process.env.NODE_ENV === "production") {
+        return res.status(400).json({ error: "owner required: supply an x-user-id header or set DCC_SERVICE_USER_ID" });
+      }
       const { rows } = await pool.query(
         "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
         workspaceId ? [workspaceId] : []

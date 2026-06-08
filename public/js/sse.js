@@ -160,6 +160,7 @@
             break;
 
           case 'slot-changed':
+          case 'punishment-changed':
             document.dispatchEvent(new CustomEvent(msg.type, { detail: msg }));
             break;
 

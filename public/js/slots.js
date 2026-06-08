@@ -451,19 +451,6 @@
     set("slot-reward-sort", rewardSort);
   }
 
-  function handleSlotChanged(){
-    if(isSpinning){
-      refreshSlotsAfterSpin = true;
-      return;
-    }
-    loadSlots();
-  }
-
-  async function loadSlotsAfterSpin(){
-    refreshSlotsAfterSpin = false;
-    await loadSlots();
-  }
-
   function renderSlots(){
     if(!slotState) return;
     applySlotSection();

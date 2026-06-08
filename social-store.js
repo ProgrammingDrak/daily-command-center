@@ -515,8 +515,23 @@ async function requestSponsorship({
   workspaceId = null,
 }) {
   const scope = targetType === "slot_machine" ? "slot" : "task";
-  const blocked = sponsorUserId ? await isBlocked(ownerUserId, sponsorUserId) : false;
-  const allowlisted = !blocked && (await isAllowlisted(ownerUserId, sponsorUserId, scope));
+  // The target owner must be a real user — never create an orphan offer against a
+  // guessed id.
+  const ownerExists = (await pool.query("SELECT 1 FROM users WHERE id=$1", [ownerUserId])).rows[0];
+  if (!ownerExists) { const e = new Error("owner not found"); e.statusCode = 404; throw e; }
+  // A blocked sponsor cannot offer at all — not merely be denied auto-approval.
+  if (sponsorUserId && (await isBlocked(ownerUserId, sponsorUserId))) {
+    const e = new Error("cannot sponsor this user"); e.statusCode = 403; throw e;
+  }
+  const allowlisted = await isAllowlisted(ownerUserId, sponsorUserId, scope);
+  // A stranger cannot drop offers into someone's Reward Review queue: the sponsor
+  // must already be the owner's friend or on their allowlist (self-sponsorship is
+  // always allowed). This is the consent gate for *offering*; auto-approval still
+  // additionally requires the allowlist.
+  if (sponsorUserId && sponsorUserId !== ownerUserId && !allowlisted
+      && !(await areFriends(sponsorUserId, ownerUserId))) {
+    const e = new Error("must be friends with this user to sponsor them"); e.statusCode = 403; throw e;
+  }
   const reviewState = resolveReviewState(allowlisted);
   const active = reviewState === "auto_approved";
   const ws = workspaceId || (await resolveWorkspaceId(ownerUserId));

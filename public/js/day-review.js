@@ -149,8 +149,15 @@
     const matchedTitles = new Set(planned.map(p => normTitle(p.title)));
     const extras = [];
     const seenExtra = new Set();
+    // Every title that has a real time_entry. A time_entry is authoritative over
+    // the legacy pomoTaskTime accumulator, so the pomo fallback below must skip
+    // any title already covered here — otherwise a pomo session that wrote a
+    // time_entry (keyed by blockId) AND incremented pomoTaskTime (keyed by title)
+    // gets counted twice in the HUD's unscheduled-time total.
+    const titlesWithEntries = new Set();
     for (const te of ctx.timeEntries) {
       const p = te.properties || {};
+      if (p.taskTitle) titlesWithEntries.add(normTitle(p.taskTitle));
       const matched = planned.some(ev => entryMatchesEvent(p, ev));
       if (matched) continue;
       const key = (p.blockId || normTitle(p.taskTitle) || te.id);
@@ -160,6 +167,7 @@
     }
     Object.entries(ctx.pomoTaskTime || {}).forEach(([title, sec]) => {
       if (matchedTitles.has(normTitle(title))) return;
+      if (titlesWithEntries.has(normTitle(title))) return;
       if (seenExtra.has(normTitle(title))) return;
       extras.push({ title, min: sec / 60, blockId: null });
     });
