@@ -79,10 +79,13 @@
     return (task.sponsorships || []).some(s => s.kind === "bounty" && s.status !== "dismissed");
   }
 
-  // Only one visitor bounty per day per workspace (single partner slot), so once
-  // any task is bountied, the rest are locked until it's cleared.
-  function anyTaskBountied(){
-    return (current && current.tasks || []).some(taskBountied);
+  // One bounty per visitor per day: once you've placed your own bounty (server
+  // marks it `mine`), the rest of your bounty buttons lock until you clear it.
+  // Other visitors' bounties don't count against you.
+  function viewerHasBounty(){
+    return (current && current.tasks || []).some(task =>
+      (task.sponsorships || []).some(s => s.kind === "bounty" && s.status !== "dismissed" && s.mine)
+    );
   }
 
   function bountyButtonHtml(task){
@@ -97,8 +100,8 @@
     if (!allowed) {
       return '<button class="todo-bounty-btn locked" type="button" disabled title="Sign in to place a bounty">💎 Bounty</button>';
     }
-    if (anyTaskBountied()) {
-      return '<button class="todo-bounty-btn locked" type="button" disabled title="One bounty per day - clear the current one first">💎 Bounty</button>';
+    if (viewerHasBounty()) {
+      return '<button class="todo-bounty-btn locked" type="button" disabled title="You\'ve used your bounty for today - clear it first to place another">💎 Bounty</button>';
     }
     return '<button class="todo-bounty-btn" type="button" data-bounty-task-id="' + esc(task.id) + '" data-task-block-id="' + esc(task.blockId || "") + '" title="Place a bounty - completing this pays 2x points">💎 Place bounty</button>';
   }

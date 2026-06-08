@@ -1341,13 +1341,17 @@ async function buildPublicTodoShare(share, dateStr, req) {
   }
 
   const { rows: sponsors } = await pool.query(
-    `SELECT id, task_id, task_date, task_title, sponsor_name, kind, reward_title, note, value_cents, status, created_at
+    `SELECT id, task_id, task_date, task_title, sponsor_name, sponsor_user_id, kind, reward_title, note, value_cents, status, created_at
        FROM todo_sponsorships
       WHERE share_id = $1
       ORDER BY created_at DESC
       LIMIT 100`,
     [share.id]
   );
+  // The "one bounty per day" cap is per visitor (matches the server check on
+  // POST), so the viewer needs to know which active bounties are their own to
+  // decide whether their bounty slot is spent.
+  const viewerUserId = req?.session?.userId || null;
   const sponsorByTask = new Map();
   for (const s of sponsors) {
     const key = String(s.task_id);
@@ -1360,7 +1364,8 @@ async function buildPublicTodoShare(share, dateStr, req) {
       note: s.note,
       valueCents: s.value_cents,
       status: s.status,
-      createdAt: s.created_at
+      createdAt: s.created_at,
+      mine: !!(viewerUserId && s.sponsor_user_id === viewerUserId)
     });
   }
   for (const task of tasks) task.sponsorships = sponsorByTask.get(String(task.id)) || [];
@@ -1450,7 +1455,7 @@ async function buildPublicTodoShare(share, dateStr, req) {
       tier,
       capabilities: capabilities.capabilityMap(tier)
     },
-    sponsorships: sponsors,
+    sponsorships: sponsors.map(({ sponsor_user_id, ...rest }) => rest),
     stats: {
       total: tasks.length,
       done: tasks.filter(t => t.status === "done").length,
