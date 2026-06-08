@@ -3602,61 +3602,95 @@
     cell.dataset.symbol = key.toLowerCase();
   }
 
+  // True when the spin rolled a real reward alongside any incidental bank tiles. The
+  // bank always resolves from the board (even cosmetic BANK tiles pay), so most spins
+  // carry a deposit; this tells the message which spins also have a reward to surface.
+  function spinHasForegroundReward(snap, stages){
+    snap = snap || {}; stages = stages || {};
+    if(snap.kind === "points" || stages.outcome === "coin") return true;
+    if(snap.kind === "booster" || stages.outcome === "booster") return true;
+    if(snap.kind === "pet" || stages.outcome === "pet") return true;
+    if(snap.kind === "collectible" || stages.outcome === "collectible") return true;
+    if(stages.outcome === "free_spin" || stages.free_spin_hit) return true;
+    if(snap.requires_jackpot_choice) return true;
+    if(stages.jackpot_hit) return true;
+    return false; // bank-builder hit, plain miss, or pure cosmetic-bank deposit
+  }
+
+  // Concise "...also banked" clause appended after a reward headline so both show.
+  function bankReserveSuffix(payout, bankDelta, stages){
+    payout = payout || {}; stages = stages || {};
+    const units = payout.units ? " (" + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") + ")" : "";
+    const mult = stages.bank_multiplier_applied ? " " + stages.bank_multiplier_applied + "x booster!" : "";
+    const cap = payout.capped ? " Bank cap trimmed it." : "";
+    return "+" + money(bankDelta) + units + " to the Reward Reserve." + mult + cap;
+  }
+
   function resultText(spinRow, snap, opts){
     const stages = (snap && snap.slot_stages) || {};
-    if(stages.empty_bucket) {
-      const source = stages.payment_source && stages.payment_source.label ? stages.payment_source.label : sourceLabel(snap.payment_source);
-      const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
-      return source + " " + tier + " was empty. No jackpot reroll; roll the dice again after adding rewards to a bucket.";
-    }
     const payout = (snap && snap.bank_screen_payout) || {};
     const bankDelta = spinRow.bank_delta_cents || 0;
-    // ignoreBank: the bank already resolved first; describe the headline reward instead.
-    if(!(opts && opts.ignoreBank) && bankDelta > 0) {
+
+    // The rolled reward headline, independent of any bank deposit. (opts kept for the
+    // animation callers, but the deposit is no longer hidden from the text.)
+    const rewardHeadline = () => {
+      if(stages.empty_bucket) {
+        const source = stages.payment_source && stages.payment_source.label ? stages.payment_source.label : sourceLabel(snap.payment_source);
+        const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
+        return source + " " + tier + " was empty. No jackpot reroll; roll the dice again after adding rewards to a bucket.";
+      }
+      if(snap.kind === "points" || stages.outcome === "coin"){
+        const coin = stages.coin || {};
+        if(coin.coin_kind === "cashback") return "Cashback! Your spin cost was refunded.";
+        return "Coin drop: +" + (coin.points || 0) + " points.";
+      }
+      if(snap.kind === "booster" || stages.outcome === "booster"){
+        if(stages.multiplier_charge_earned){
+          return stages.multiplier_charge_earned + "x multiplier charge earned! Combine or arm it from your stash.";
+        }
+        const g = stages.gamble || {};
+        const desc = boosterDescriptor(g.booster_type);
+        const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
+        if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
+        if(g.status === "banked") return desc.banked(value);
+        return desc.head(value) + "! Bank it, or risk it for more.";
+      }
+      if(snap.kind === "pet" || stages.outcome === "pet"){
+        const pet = stages.pet || {};
+        return pet.pet_kind === "cosmetic" ? "Your pet found a new accessory!" : "Pet treat! Your pet is delighted.";
+      }
+      if(snap.kind === "collectible" || stages.outcome === "collectible"){
+        const c = stages.collectible || {};
+        if(c.set_completed) return "Gem set complete! A guaranteed jackpot spin is yours.";
+        return "Collected a gem" + (c.gems != null ? " (" + c.gems + " toward the next set)" : "") + ".";
+      }
+      if(stages.outcome === "free_spin" || stages.free_spin_hit) return "Free spin tile! A reroll credit is yours.";
+      if(stages.bank_builder_hit) return "Bank Builder hit, but you've already banked your full monthly goal.";
+      if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
+      if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
+      if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
+      const jackpotSpins = Math.max(1, Number(stages.jackpot_spins || 1));
+      const jackpotLevel = Math.max(1, Number(stages.jackpot_level || 1));
+      const jackpotPrefix = stages.jackpot_hit ? jackpotHitLabel(jackpotLevel, jackpotSpins) + ". " : "";
+      if(spinRow.status === "pending" && snap.requires_jackpot_choice) return jackpotPrefix + "Pick a prize from the list.";
+      if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
+      const source = snap.payment_source ? sourceLabel(snap.payment_source) + " " : "";
+      const tier = snap.tier_id ? tierById(snap.tier_id).label + ": " : "";
+      return "Prize reveal: " + source + tier + (snap.title || "Reward");
+    };
+
+    // Pure bank spin: nothing rolled but the deposit, so the bank line is the whole story.
+    if(bankDelta > 0 && !stages.empty_bucket && !spinHasForegroundReward(snap, stages)) {
       const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
       const cap = payout.capped ? " Bank cap trimmed the payout." : "";
       const mult = stages.bank_multiplier_applied ? " " + stages.bank_multiplier_applied + "x booster applied!" : "";
-      const choice = snap.requires_jackpot_choice ? " Pick a jackpot from the list." : "";
-      return "Bank Building paid " + money(bankDelta) + units + "." + mult + " Funds moved into the Reward Reserve." + cap + choice;
+      return "Bank Building paid " + money(bankDelta) + units + "." + mult + " Funds moved into the Reward Reserve." + cap;
     }
-    if(snap.kind === "points" || stages.outcome === "coin"){
-      const coin = stages.coin || {};
-      if(coin.coin_kind === "cashback") return "Cashback! Your spin cost was refunded.";
-      return "Coin drop: +" + (coin.points || 0) + " points.";
-    }
-    if(snap.kind === "booster" || stages.outcome === "booster"){
-      if(stages.multiplier_charge_earned){
-        return stages.multiplier_charge_earned + "x multiplier charge earned! Combine or arm it from your stash.";
-      }
-      const g = stages.gamble || {};
-      const desc = boosterDescriptor(g.booster_type);
-      const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
-      if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
-      if(g.status === "banked") return desc.banked(value);
-      return desc.head(value) + "! Bank it, or risk it for more.";
-    }
-    if(snap.kind === "pet" || stages.outcome === "pet"){
-      const pet = stages.pet || {};
-      return pet.pet_kind === "cosmetic" ? "Your pet found a new accessory!" : "Pet treat! Your pet is delighted.";
-    }
-    if(snap.kind === "collectible" || stages.outcome === "collectible"){
-      const c = stages.collectible || {};
-      if(c.set_completed) return "Gem set complete! A guaranteed jackpot spin is yours.";
-      return "Collected a gem" + (c.gems != null ? " (" + c.gems + " toward the next set)" : "") + ".";
-    }
-    if(stages.outcome === "free_spin" || stages.free_spin_hit) return "Free spin tile! A reroll credit is yours.";
-    if(stages.bank_builder_hit) return "Bank Builder hit, but you've already banked your full monthly goal.";
-    if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
-    if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
-    if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
-    const jackpotSpins = Math.max(1, Number(stages.jackpot_spins || 1));
-    const jackpotLevel = Math.max(1, Number(stages.jackpot_level || 1));
-    const jackpotPrefix = stages.jackpot_hit ? jackpotHitLabel(jackpotLevel, jackpotSpins) + ". " : "";
-    if(spinRow.status === "pending" && snap.requires_jackpot_choice) return jackpotPrefix + "Pick a prize from the list.";
-    if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
-    const source = snap.payment_source ? sourceLabel(snap.payment_source) + " " : "";
-    const tier = snap.tier_id ? tierById(snap.tier_id).label + ": " : "";
-    return "Prize reveal: " + source + tier + (snap.title || "Reward");
+
+    // A real reward rolled: lead with it and, when the screen also banked, append the
+    // deposit so both are visible instead of the bank line masking the reward.
+    const bankSuffix = bankDelta > 0 ? " " + bankReserveSuffix(payout, bankDelta, stages) : "";
+    return rewardHeadline() + bankSuffix;
   }
 
   function jackpotHitLabel(level, spins){
