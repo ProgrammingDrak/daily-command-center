@@ -410,12 +410,16 @@ function toggleTagDropdown(containerEl, selected, onChange) {
 }
 
 // ── Escape HTML helper (may already exist globally, keep safe) ──
+// Canonical HTML-escaper for the whole client. Escapes the single quote too (it
+// matters inside single-quoted attributes) and treats null/undefined as "" so it
+// is a strict superset of the per-file esc() copies that now delegate here.
 function escHtml(str) {
-  return String(str)
+  return String(str == null ? "" : str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // PIN 10.A: returns true if any delegated_item is linked to this tag.

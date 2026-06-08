@@ -13,79 +13,14 @@ document.querySelectorAll(".svt-btn").forEach(btn=>{
     if(schedView==="actual"){if(typeof buildDayReview==="function")buildDayReview(typeof viewDate!=="undefined"?viewDate:null);else buildActualView();}
   });
 });
-function buildActualView(){
-  const wrap=document.getElementById("actual-view");wrap.innerHTML="";
-  const workedTasks=Object.entries(pomoState.taskTime);
-  const allSessions=loadSessions();
-  const hasAnySessions=Object.keys(allSessions).some(k=>allSessions[k]&&allSessions[k].length);
-  if(!workedTasks.length&&!pomoState.sessionLog.length&&!hasAnySessions){
-    wrap.innerHTML='<div class="actual-empty">No time data yet. Complete a task or start a pomodoro session to see actual time spent here.</div>';return;
-  }
-  // Build a merged view: for each scheduled item, show planned vs actual
-  const div=document.createElement("div");div.className="actual-timeline";
-  scheduled.forEach(ev=>{
-    const plannedMin=dur(ev);
-    const taskSessions=allSessions[ev.id]||[];
-    const sessionMin=taskSessions.reduce((sum,s)=>sum+s.durationMin,0);
-    const pomoSec=pomoState.taskTime[ev.title]||0;
-    const pomoMin=Math.round(pomoSec/60);
-    const actualMin=sessionMin>0?sessionMin:pomoMin;
-    const hasActual=actualMin>0;
-    const c=cfg(ev.type);
-    const done=isDone(ev);
-    const diffMin=actualMin-plannedMin;
-    let diffLabel="",diffClass="match";
-    if(hasActual){
-      if(diffMin>0){diffLabel="+"+diffMin+"m over";diffClass="over"}
-      else if(diffMin<0){diffLabel=Math.abs(diffMin)+"m under";diffClass="under"}
-      else{diffLabel="on target";diffClass="match"}
-    }
-    const item=document.createElement("div");item.className="actual-item";
-    item.innerHTML=
-      '<div class="act-time">'+f12(ev.start).replace(" ","").toLowerCase()+'</div>'+
-      '<div class="act-node" style="border-color:'+c.color+';background:'+(done?"var(--green)":hasActual?c.color:"transparent")+'"></div>'+
-      '<div class="actual-card">'+
-        '<div class="act-bar" style="background:'+c.color+'"></div>'+
-        '<div class="act-body">'+
-          '<div class="act-title">'+(done?'<span style="text-decoration:line-through;opacity:0.6">':'')+ev.title+(done?'</span>':'')+'</div>'+
-          '<div class="act-meta">'+
-            '<span>Planned: '+ms(plannedMin)+'</span>'+
-            (hasActual?'<span>Actual: '+ms(actualMin)+'</span>':'')+
-            (done&&!hasActual?'<span style="color:var(--green)">Completed</span>':'')+
-          '</div>'+
-        '</div>'+
-        (hasActual?'<div class="act-diff '+diffClass+'">'+diffLabel+'</div>':'')+
-        // Let incomplete tasks be rescheduled straight from the Actual view --
-        // this is the default view for past days, so it's how you carry a
-        // missed task forward to today / tomorrow.
-        (!isMeeting(ev)&&!done?'<button class="btn-push-tmr act-push" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
-      '</div>';
-    const pb=item.querySelector(".btn-push-tmr");
-    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else if(typeof pushTask==="function")pushTask(pb.dataset.pushId);});
-    div.appendChild(item);
-  });
-
-  // Show any tasks that were focused on but not in the schedule
-  const schedTitles=new Set(scheduled.map(e=>e.title));
-  const extras=Object.entries(pomoState.taskTime).filter(([t])=>!schedTitles.has(t));
-  if(extras.length){
-    const hdr=document.createElement("div");hdr.style.cssText="margin:16px 0 8px 105px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted)";
-    hdr.textContent="Unscheduled Work";div.appendChild(hdr);
-    extras.forEach(([title,sec])=>{
-      const mins=Math.round(sec/60);
-      const item=document.createElement("div");item.className="actual-item";
-      item.innerHTML=
-        '<div class="act-time"></div>'+
-        '<div class="act-node" style="border-color:var(--amber);background:var(--amber)"></div>'+
-        '<div class="actual-card">'+
-          '<div class="act-bar" style="background:var(--amber)"></div>'+
-          '<div class="act-body"><div class="act-title">'+title+'</div>'+
-          '<div class="act-meta"><span>Actual: '+ms(mins)+'</span></div></div>'+
-        '</div>';
-      div.appendChild(item);
-    });
-  }
-  wrap.appendChild(div);
+// The "Actual" tab is rendered by buildDayReview (day-review.js): one
+// blockStore-backed scheduled-vs-actual view that also supports past days and
+// time_entry editing. This shim keeps the legacy entry point working for the
+// callers that still invoke buildActualView() directly (features._doRender,
+// responsibilities refresh) so every path funnels through the one renderer
+// instead of the old scheduled[]-based duplicate that lived here.
+function buildActualView(dateStr){
+  if(typeof buildDayReview==="function") buildDayReview(dateStr);
 }
 
 function buildListView(){

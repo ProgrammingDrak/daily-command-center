@@ -13,11 +13,7 @@
   let _filter = "active";              // active (to-do + scheduled) | redeemed (done) | all
   const _expanded = new Set();
 
-  function esc(s) {
-    if (typeof window.escHtml === "function") return window.escHtml(s);
-    return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
+  function esc(s) { return escHtml(s); } // shared escaper in tag-manager.js
   function toast(msg, kind) { if (typeof window.showToast === "function") window.showToast(msg, kind); }
 
   function fmtDate(v) { return v ? String(v).slice(0, 10) : ""; }
@@ -31,8 +27,7 @@
     return sameDay ? time : (fmtDate(v) + " " + time);
   }
   function money(cents) {
-    const n = Number(cents || 0);
-    return n ? "$" + (n / 100).toFixed(2) : "";
+    return fmtMoney(cents, { blankZero: true }); // shared formatter in state.js
   }
   function sourceLabel(q) {
     if (q.sponsor_user_id) return "sponsored";

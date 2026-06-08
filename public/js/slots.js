@@ -116,7 +116,7 @@
   ];
 
   function money(cents){
-    return "$" + ((cents || 0) / 100).toFixed(2);
+    return fmtMoney(cents); // shared formatter in state.js
   }
 
   function pointLabel(count){
@@ -153,11 +153,7 @@
     return mins + "m";
   }
 
-  function esc(s){
-    return String(s == null ? "" : s).replace(/[&<>"']/g, ch => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
-    })[ch]);
-  }
+  function esc(s){ return escHtml(s); } // shared escaper in tag-manager.js
 
   function bankrollIconById(id){
     return BANKROLL_ICONS.find(icon => icon.id === id) || BANKROLL_ICONS[BANKROLL_ICONS.length - 1];
@@ -607,7 +603,7 @@
         <div class="reward-review-row" data-sponsorship-id="${s.id}">
           <div class="rr-main">
             <div class="rr-title">${esc(s.reward_title || "Reward")}</div>
-            <div class="rr-meta">from ${esc(s.sponsor_name || ("user " + s.sponsor_user_id))} · ${esc(s.target_type || "task")}${s.value_cents ? " · $" + (s.value_cents/100).toFixed(2) : ""}</div>
+            <div class="rr-meta">from ${esc(s.sponsor_name || ("user " + s.sponsor_user_id))} · ${esc(s.target_type || "task")}${s.value_cents ? " · " + fmtMoney(s.value_cents) : ""}</div>
             ${s.note ? `<div class="rr-note">${esc(s.note)}</div>` : ""}
           </div>
           <div class="rr-actions">
