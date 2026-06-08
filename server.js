@@ -27,6 +27,7 @@ const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
 const punishmentStore = require("./punishment-store");
 const socialStore = require("./social-store");
+const { badRequest, notFound } = require("./slot-account-common");
 const { scoreTaskPoints } = require("./slot-scoring");
 const capabilities = require("./capabilities");
 const petHomeStore = require("./pet-home-store");
@@ -1681,180 +1682,139 @@ app.post("/api/todo-share/rotate", async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════
 
 // ── Sponsor allowlist (auto-approval source of truth) ──
-app.get("/api/social/allowlist", async (req, res) => {
-  try { res.json(await socialStore.listAllowlist(req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/api/social/allowlist", async (req, res) => {
+// ── JSON route helpers ──
+// Most handlers below share one shape: run a store call, send the result as
+// JSON, and on a thrown error reply with its statusCode (or 500). `route` wraps
+// that boilerplate so each handler is a one-liner. The fn may also drive res
+// directly (e.g. res.status(201).json(...)) and return nothing to skip the
+// default send. `intParam` parses a numeric path param.
+const intParam = (req, name) => parseInt(req.params[name], 10);
+const route = (fn) => async (req, res) => {
   try {
-    const { allowedUserId, scope = "both", note = "" } = req.body || {};
-    if (!allowedUserId) return res.status(400).json({ error: "allowedUserId required" });
-    const entry = await socialStore.addAllowlistEntry({
-      ownerUserId: req.session.userId, allowedUserId, scope, note,
-      createdByUserId: req.session.userId,
-    });
-    res.status(201).json(entry);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+    const out = await fn(req, res);
+    if (out !== undefined && !res.headersSent) res.json(out);
+  } catch (e) {
+    if (!res.headersSent) res.status(e.statusCode || 500).json({ error: e.message });
+  }
+};
 
-app.delete("/api/social/allowlist/:allowedUserId", async (req, res) => {
-  try {
-    await socialStore.removeAllowlistEntry(req.session.userId, parseInt(req.params.allowedUserId, 10));
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get("/api/social/allowlist", route(req => socialStore.listAllowlist(req.session.userId)));
+
+app.post("/api/social/allowlist", route(async (req, res) => {
+  const { allowedUserId, scope = "both", note = "" } = req.body || {};
+  if (!allowedUserId) throw badRequest("allowedUserId required");
+  res.status(201).json(await socialStore.addAllowlistEntry({
+    ownerUserId: req.session.userId, allowedUserId, scope, note, createdByUserId: req.session.userId,
+  }));
+}));
+
+app.delete("/api/social/allowlist/:allowedUserId", route(async (req) => {
+  await socialStore.removeAllowlistEntry(req.session.userId, intParam(req, "allowedUserId"));
+  return { ok: true };
+}));
 
 // ── Friendships (social graph) ──
-app.get("/api/social/friends", async (req, res) => {
-  try { res.json(await socialStore.listFriends(req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get("/api/social/friends", route(req => socialStore.listFriends(req.session.userId)));
 
-app.get("/api/social/friends/requests", async (req, res) => {
-  try { res.json(await socialStore.listFriendRequests(req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get("/api/social/friends/requests", route(req => socialStore.listFriendRequests(req.session.userId)));
 
 // Find a user to friend or sponsor, by exact username.
-app.get("/api/social/users/lookup", async (req, res) => {
-  try {
-    const user = await auth.findUserByUsername(String(req.query.username || "").trim());
-    if (!user) return res.status(404).json({ error: "User not found" });
-    res.json({ id: user.id, username: user.username });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get("/api/social/users/lookup", route(async (req) => {
+  const user = await auth.findUserByUsername(String(req.query.username || "").trim());
+  if (!user) throw notFound("User not found");
+  return { id: user.id, username: user.username };
+}));
 
-app.post("/api/social/friends/request", async (req, res) => {
-  try {
-    const { addresseeId } = req.body || {};
-    if (!addresseeId) return res.status(400).json({ error: "addresseeId required" });
-    res.status(201).json(await socialStore.requestFriend(req.session.userId, parseInt(addresseeId, 10)));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/friends/request", route(async (req, res) => {
+  const { addresseeId } = req.body || {};
+  if (!addresseeId) throw badRequest("addresseeId required");
+  res.status(201).json(await socialStore.requestFriend(req.session.userId, parseInt(addresseeId, 10)));
+}));
 
-app.post("/api/social/friends/respond", async (req, res) => {
-  try {
-    const { requesterId, accept } = req.body || {};
-    if (!requesterId) return res.status(400).json({ error: "requesterId required" });
-    res.json(await socialStore.respondFriend(req.session.userId, parseInt(requesterId, 10), accept !== false));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/friends/respond", route(async (req) => {
+  const { requesterId, accept } = req.body || {};
+  if (!requesterId) throw badRequest("requesterId required");
+  return socialStore.respondFriend(req.session.userId, parseInt(requesterId, 10), accept !== false);
+}));
 
-app.post("/api/social/friends/block", async (req, res) => {
-  try {
-    const { otherId } = req.body || {};
-    if (!otherId) return res.status(400).json({ error: "otherId required" });
-    res.json(await socialStore.blockUser(req.session.userId, parseInt(otherId, 10)));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/friends/block", route(async (req) => {
+  const { otherId } = req.body || {};
+  if (!otherId) throw badRequest("otherId required");
+  return socialStore.blockUser(req.session.userId, parseInt(otherId, 10));
+}));
 
 // ── Sponsorships ──
 // Offer a sponsorship to another user. The signed-in user is the sponsor.
-app.post("/api/social/sponsorships", async (req, res) => {
-  try {
-    const { ownerUserId, targetType, targetId, rewardTitle, rewardDefinitionId = null,
-            valueCents = 0, chanceShares = null, note = "" } = req.body || {};
-    if (!ownerUserId || !targetType || !targetId) {
-      return res.status(400).json({ error: "ownerUserId, targetType, targetId required" });
-    }
-    const result = await socialStore.requestSponsorship({
-      ownerUserId, sponsorUserId: req.session.userId, sponsorName: req.session.username || null,
-      targetType, targetId, rewardTitle, rewardDefinitionId, valueCents, chanceShares, note,
-    });
-    res.status(201).json(result);
-  } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
-});
+app.post("/api/social/sponsorships", route(async (req, res) => {
+  const { ownerUserId, targetType, targetId, rewardTitle, rewardDefinitionId = null,
+          valueCents = 0, chanceShares = null, note = "" } = req.body || {};
+  if (!ownerUserId || !targetType || !targetId) throw badRequest("ownerUserId, targetType, targetId required");
+  res.status(201).json(await socialStore.requestSponsorship({
+    ownerUserId, sponsorUserId: req.session.userId, sponsorName: req.session.username || null,
+    targetType, targetId, rewardTitle, rewardDefinitionId, valueCents, chanceShares, note,
+  }));
+}));
 
 // The signed-in user's incoming offers awaiting review.
-app.get("/api/social/sponsorships/pending", async (req, res) => {
-  try { res.json(await socialStore.listPendingSponsorships(req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get("/api/social/sponsorships/pending", route(req => socialStore.listPendingSponsorships(req.session.userId)));
 
-app.post("/api/social/sponsorships/:id/approve", async (req, res) => {
-  try { res.json(await socialStore.approveSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/sponsorships/:id/approve", route(req =>
+  socialStore.approveSponsorship(intParam(req, "id"), req.session.userId)));
 
-app.post("/api/social/sponsorships/:id/reject", async (req, res) => {
-  try { res.json(await socialStore.rejectSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/sponsorships/:id/reject", route(req =>
+  socialStore.rejectSponsorship(intParam(req, "id"), req.session.userId)));
 
-app.post("/api/social/sponsorships/:id/remove", async (req, res) => {
-  try { res.json(await socialStore.removeSponsorship(parseInt(req.params.id, 10), req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/sponsorships/:id/remove", route(req =>
+  socialStore.removeSponsorship(intParam(req, "id"), req.session.userId)));
 
 // ── Reward queue ──
-app.get("/api/social/rewards/queue", async (req, res) => {
-  try { res.json(await socialStore.listRewardQueue(req.session.userId, { status: req.query.status || null })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get("/api/social/rewards/queue", route(req =>
+  socialStore.listRewardQueue(req.session.userId, { status: req.query.status || null })));
 
-app.post("/api/social/rewards/queue/:id/claim", async (req, res) => {
-  try { res.json(await socialStore.claimReward(parseInt(req.params.id, 10), req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/rewards/queue/:id/claim", route(req =>
+  socialStore.claimReward(intParam(req, "id"), req.session.userId)));
 
 // Schedule a won reward into the itinerary: the front-end places the block,
 // then parks the chosen time + block id on the queue row.
-app.post("/api/social/rewards/queue/:id/schedule", async (req, res) => {
-  try {
-    const { scheduledFor = null, blockId = null } = req.body || {};
-    res.json(await socialStore.scheduleReward(parseInt(req.params.id, 10), req.session.userId, { scheduledFor, blockId }));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/rewards/queue/:id/schedule", route((req) => {
+  const { scheduledFor = null, blockId = null } = req.body || {};
+  return socialStore.scheduleReward(intParam(req, "id"), req.session.userId, { scheduledFor, blockId });
+}));
 
 // Undo a schedule: reward returns to the queue (front-end removes the block).
-app.post("/api/social/rewards/queue/:id/unschedule", async (req, res) => {
-  try { res.json(await socialStore.unscheduleReward(parseInt(req.params.id, 10), req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/rewards/queue/:id/unschedule", route(req =>
+  socialStore.unscheduleReward(intParam(req, "id"), req.session.userId)));
 
 // Completing a scheduled reward's itinerary task is the real "burn". The
 // front-end calls this with the completed block id; it redeems the parked
 // reward (no-op when the block has none) and broadcasts so the queue refreshes.
-app.post("/api/social/rewards/redeem-by-block", async (req, res) => {
-  try {
-    const blockId = (req.body && req.body.blockId) || null;
-    const result = await socialStore.redeemScheduledByBlock(req.session.userId, blockId);
-    if (result.changed) broadcast("slot-changed", { action: "reward-redeemed" }, req.workspaceId);
-    res.json(result);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/rewards/redeem-by-block", route(async (req) => {
+  const blockId = (req.body && req.body.blockId) || null;
+  const result = await socialStore.redeemScheduledByBlock(req.session.userId, blockId);
+  if (result.changed) broadcast("slot-changed", { action: "reward-redeemed" }, req.workspaceId);
+  return result;
+}));
 
-app.post("/api/social/rewards/queue/:id/redeem", async (req, res) => {
-  try {
-    // `actualSeconds` is the "Go do it now" stopwatch elapsed, recorded on the
-    // redeem event so we can show how long the reward actually took.
-    const actualSeconds = (req.body && req.body.actualSeconds != null) ? Number(req.body.actualSeconds) : null;
-    res.json(await socialStore.redeemReward(parseInt(req.params.id, 10), req.session.userId,
-      Number.isFinite(actualSeconds) ? { actualSeconds } : {}));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/rewards/queue/:id/redeem", route((req) => {
+  // `actualSeconds` is the "Go do it now" stopwatch elapsed, recorded on the
+  // redeem event so we can show how long the reward actually took.
+  const actualSeconds = (req.body && req.body.actualSeconds != null) ? Number(req.body.actualSeconds) : null;
+  return socialStore.redeemReward(intParam(req, "id"), req.session.userId,
+    Number.isFinite(actualSeconds) ? { actualSeconds } : {});
+}));
 
-app.post("/api/social/rewards/queue/:id/discard", async (req, res) => {
-  try { res.json(await socialStore.discardReward(parseInt(req.params.id, 10), req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/rewards/queue/:id/discard", route(req =>
+  socialStore.discardReward(intParam(req, "id"), req.session.userId)));
 
 // ── Feed (opt-in publishing; private/work tasks can never publish) ──
-app.get("/api/social/feed", async (req, res) => {
-  try { res.json(await socialStore.listFriendsFeed(req.session.userId, { limit: parseInt(req.query.limit, 10) || 50 })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get("/api/social/feed", route(req =>
+  socialStore.listFriendsFeed(req.session.userId, { limit: parseInt(req.query.limit, 10) || 50 })));
 
-app.post("/api/social/feed/:id/publish", async (req, res) => {
-  try { res.json(await socialStore.publishPost(parseInt(req.params.id, 10), req.session.userId, { caption: (req.body || {}).caption || null })); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/feed/:id/publish", route(req =>
+  socialStore.publishPost(intParam(req, "id"), req.session.userId, { caption: (req.body || {}).caption || null })));
 
-app.post("/api/social/feed/:id/hide", async (req, res) => {
-  try { res.json(await socialStore.hidePost(parseInt(req.params.id, 10), req.session.userId)); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.post("/api/social/feed/:id/hide", route(req =>
+  socialStore.hidePost(intParam(req, "id"), req.session.userId)));
 
 app.get("/api/todo-share/sponsorships", async (req, res) => {
   try {
@@ -3425,108 +3385,67 @@ app.post("/api/slot/bank-builders/confirm", async (req, res) => {
 
 // ── Punishments Wheel API ──
 // Flat weighted mirror of the rewards spinner. See punishment-store.js.
-app.get("/api/punishment/state", async (req, res) => {
-  try {
-    res.json(await punishmentStore.getPunishmentState(req.workspaceId, req.session.userId));
-  } catch (e) {
-    res.status(e.statusCode || 500).json({ error: e.message });
-  }
-});
+app.get("/api/punishment/state", route(req =>
+  punishmentStore.getPunishmentState(req.workspaceId, req.session.userId)));
 
-app.post("/api/punishment/punishments", async (req, res) => {
-  try {
-    const row = await punishmentStore.createPunishment(req.workspaceId, req.session.userId, req.body || {});
-    broadcast("punishment-changed", { action: "create" }, req.workspaceId);
-    res.json(row);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.post("/api/punishment/punishments", route(async (req) => {
+  const row = await punishmentStore.createPunishment(req.workspaceId, req.session.userId, req.body || {});
+  broadcast("punishment-changed", { action: "create" }, req.workspaceId);
+  return row;
+}));
 
-app.put("/api/punishment/punishments/:id", async (req, res) => {
-  try {
-    const row = await punishmentStore.updatePunishment(req.workspaceId, req.params.id, req.body || {});
-    broadcast("punishment-changed", { action: "update" }, req.workspaceId);
-    res.json(row);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.put("/api/punishment/punishments/:id", route(async (req) => {
+  const row = await punishmentStore.updatePunishment(req.workspaceId, req.params.id, req.body || {});
+  broadcast("punishment-changed", { action: "update" }, req.workspaceId);
+  return row;
+}));
 
-app.delete("/api/punishment/punishments/:id", async (req, res) => {
-  try {
-    const result = await punishmentStore.deletePunishment(req.workspaceId, req.params.id);
-    broadcast("punishment-changed", { action: "delete" }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.delete("/api/punishment/punishments/:id", route(async (req) => {
+  const result = await punishmentStore.deletePunishment(req.workspaceId, req.params.id);
+  broadcast("punishment-changed", { action: "delete" }, req.workspaceId);
+  return result;
+}));
 
-app.post("/api/punishment/punishments/reorder", async (req, res) => {
-  try {
-    const result = await punishmentStore.reorderPunishments(req.workspaceId, (req.body && req.body.items) || req.body || []);
-    broadcast("punishment-changed", { action: "reorder" }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.post("/api/punishment/punishments/reorder", route(async (req) => {
+  const result = await punishmentStore.reorderPunishments(req.workspaceId, (req.body && req.body.items) || req.body || []);
+  broadcast("punishment-changed", { action: "reorder" }, req.workspaceId);
+  return result;
+}));
 
-app.post("/api/punishment/owe", async (req, res) => {
-  try {
-    const result = await punishmentStore.addOwedSpin(req.workspaceId, req.session.userId, (req.body && req.body.count) || 1);
-    broadcast("punishment-changed", { action: "owe" }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.post("/api/punishment/owe", route(async (req) => {
+  const result = await punishmentStore.addOwedSpin(req.workspaceId, req.session.userId, (req.body && req.body.count) || 1);
+  broadcast("punishment-changed", { action: "owe" }, req.workspaceId);
+  return result;
+}));
 
-app.post("/api/punishment/spin", async (req, res) => {
-  try {
-    const result = await punishmentStore.spinPunishment(req.workspaceId, req.session.userId);
-    broadcast("punishment-changed", { action: "spin" }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.post("/api/punishment/spin", route(async (req) => {
+  const result = await punishmentStore.spinPunishment(req.workspaceId, req.session.userId);
+  broadcast("punishment-changed", { action: "spin" }, req.workspaceId);
+  return result;
+}));
 
-app.post("/api/punishment/spins/:id/done", async (req, res) => {
-  try {
-    const row = await punishmentStore.resolvePunishment(req.workspaceId, req.params.id);
-    broadcast("punishment-changed", { action: "resolve" }, req.workspaceId);
-    res.json(row);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.post("/api/punishment/spins/:id/done", route(async (req) => {
+  const row = await punishmentStore.resolvePunishment(req.workspaceId, req.params.id);
+  broadcast("punishment-changed", { action: "resolve" }, req.workspaceId);
+  return row;
+}));
 
 // Create or link the partner who receives money punishments.
-app.post("/api/punishment/partner", async (req, res) => {
-  try {
-    const body = req.body || {};
-    const mode = body.mode === "link" ? "link" : "create";
-    const partner = mode === "link"
-      ? await punishmentStore.linkExistingPartner(req.workspaceId, req.session.userId, body.username)
-      : await punishmentStore.createPartner(req.workspaceId, req.session.userId, { username: body.username, password: body.password });
-    broadcast("punishment-changed", { action: "partner-link" }, req.workspaceId);
-    res.json({ partner });
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.post("/api/punishment/partner", route(async (req) => {
+  const body = req.body || {};
+  const mode = body.mode === "link" ? "link" : "create";
+  const partner = mode === "link"
+    ? await punishmentStore.linkExistingPartner(req.workspaceId, req.session.userId, body.username)
+    : await punishmentStore.createPartner(req.workspaceId, req.session.userId, { username: body.username, password: body.password });
+  broadcast("punishment-changed", { action: "partner-link" }, req.workspaceId);
+  return { partner };
+}));
 
-app.delete("/api/punishment/partner", async (req, res) => {
-  try {
-    const result = await punishmentStore.unlinkPartner(req.workspaceId);
-    broadcast("punishment-changed", { action: "partner-unlink" }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    res.status(e.statusCode || 400).json({ error: e.message });
-  }
-});
+app.delete("/api/punishment/partner", route(async (req) => {
+  const result = await punishmentStore.unlinkPartner(req.workspaceId);
+  broadcast("punishment-changed", { action: "partner-unlink" }, req.workspaceId);
+  return result;
+}));
 
 // ── Vault API (Phase 1) ──
 // The vault is a git-backed markdown store that holds long-term memory.
