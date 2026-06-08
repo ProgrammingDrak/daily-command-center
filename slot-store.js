@@ -1203,7 +1203,9 @@ async function getBankUsage(workspaceId, settings = {}) {
     [workspaceId]
   );
   const { rows: [month] } = await pool.query(
-    `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
+    `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents,
+            EXTRACT(DAY FROM NOW())::int AS day_of_month,
+            EXTRACT(DAY FROM (date_trunc('month', NOW()) + INTERVAL '1 month - 1 day'))::int AS days_in_month
      FROM slot_spins
      WHERE workspace_id = $1 AND status IN ('pending','confirmed')
        AND bank_delta_cents > 0
@@ -1213,12 +1215,19 @@ async function getBankUsage(workspaceId, settings = {}) {
     [workspaceId]
   );
   const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, MONTHLY_MIN, MONTHLY_MAX);
+  // Final week = the last 7 calendar days of the month. During it, bank builders
+  // value off the full monthly allotment instead of the remainder so a strong run
+  // can still max the bar out. (See calculateScreenBankPayout for the pacing.)
+  const dayOfMonth = month.day_of_month || 0;
+  const daysInMonth = month.days_in_month || 0;
+  const finalWeek = daysInMonth > 0 && dayOfMonth > daysInMonth - 7;
   return {
     today: today.cents,
     week: week.cents,
     month: month.cents,
     monthlyGoal,
     monthlyRemaining: Math.max(0, monthlyGoal - month.cents),
+    finalWeek,
   };
 }
 
@@ -3013,20 +3022,27 @@ function calculateScreenBankPayout(board, account, bankUsage) {
     100,
     1000000
   );
-  const baseCents = Math.floor(monthlyGoalCents * SCREEN_BANK_BUILDER_PERCENT);
+  // The only cap on bank-building is the monthly goal: you can bank up to your
+  // full monthly discretionary target each month, with no daily or weekly throttle.
+  const monthBanked = (bankUsage && bankUsage.month) || 0;
+  const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
+  // Remainder-based pacing: for most of the month each BANK tile is worth a
+  // percent of the REMAINING headroom, not the full monthly goal. The bar fills
+  // fast early (big remainder => big hits) and each hit tapers as it approaches
+  // the goal. In the final week we switch the base back to the full monthly
+  // allotment so a strong late run can still push the bar all the way to max.
+  const finalWeek = !!(bankUsage && bankUsage.finalWeek);
+  const pacingBaseCents = finalWeek ? monthlyGoalCents : remainingCap;
+  const baseCents = Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT);
   const baseUnits = positions.length;
   const horizontalBonusUnits = horizontalGroups.reduce((sum, group) => sum + group.length * (group.length - 1), 0);
   const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
   const units = baseUnits + horizontalBonusUnits + verticalBonusUnits;
   // Flat floor so a small bankroll still moves visibly: any bank hit is worth at
-  // least BANK_BUILDER_FLAT_FLOOR_CENTS even when percent * goal rounds tiny.
+  // least BANK_BUILDER_FLAT_FLOOR_CENTS even when percent * base rounds tiny.
   const rawCents = units > 0
     ? Math.max(baseCents * units, BANK_BUILDER_FLAT_FLOOR_CENTS)
     : 0;
-  // The only cap on bank-building is the monthly goal: you can bank up to your
-  // full monthly discretionary target each month, with no daily or weekly throttle.
-  const monthBanked = (bankUsage && bankUsage.month) || 0;
-  const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
   const cents = Math.min(rawCents, remainingCap);
 
   return {
@@ -3036,6 +3052,9 @@ function calculateScreenBankPayout(board, account, bankUsage) {
     vertical_groups: verticalGroups,
     base_cents: baseCents,
     goal_cents: monthlyGoalCents,
+    pacing_base_cents: pacingBaseCents,
+    monthly_remaining_cents: remainingCap,
+    final_week: finalWeek,
     base_units: baseUnits,
     horizontal_bonus_units: horizontalBonusUnits,
     vertical_bonus_units: verticalBonusUnits,
@@ -3055,13 +3074,20 @@ function emptyScreenBankPayout(account, bankUsage) {
     100,
     1000000
   );
+  const monthBanked = (bankUsage && bankUsage.month) || 0;
+  const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
+  const finalWeek = !!(bankUsage && bankUsage.finalWeek);
+  const pacingBaseCents = finalWeek ? monthlyGoalCents : remainingCap;
   return {
     source_type: "slot_screen_bank_builder",
     positions: [],
     horizontal_groups: [],
     vertical_groups: [],
-    base_cents: Math.floor(monthlyGoalCents * SCREEN_BANK_BUILDER_PERCENT),
+    base_cents: Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT),
     goal_cents: monthlyGoalCents,
+    pacing_base_cents: pacingBaseCents,
+    monthly_remaining_cents: remainingCap,
+    final_week: finalWeek,
     base_units: 0,
     horizontal_bonus_units: 0,
     vertical_bonus_units: 0,
