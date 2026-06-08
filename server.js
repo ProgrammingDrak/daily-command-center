@@ -1162,6 +1162,26 @@ async function getPublicCalendarMap() {
   }
 }
 
+// Resolve the workspace tag taxonomy (id -> {name,color}) so guest itinerary
+// cards can show the same tag chips the owner sees. Mirrors the client tag index
+// (buildTagIndex), which is keyed by block id.
+async function getPublicTagMap(workspaceId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, properties
+         FROM blocks
+        WHERE workspace_id = $1 AND type = 'tag' AND deleted_at IS NULL`,
+      [workspaceId]
+    );
+    return new Map(rows.map((row) => {
+      const props = row.properties || {};
+      return [String(row.id), { name: props.name || "", color: props.color || "var(--accent)" }];
+    }));
+  } catch {
+    return new Map();
+  }
+}
+
 function calendarMeta(input, calendarsById) {
   const id = String(input.gcal_calendar_id || input.calendarId || input.calendar_id || "").trim();
   if (!id) return null;
@@ -1194,6 +1214,15 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
   const feedType = publicFeedType(input);
   const calendar = redacted ? null : calendarMeta(input, calendarsById);
   const identityIds = publicTaskIdentityIds(input);
+  // Resolve tag ids -> {name,color} so the guest itinerary mirror can show tag
+  // chips. Hidden on redacted (private) tasks. tagsById is built once per share.
+  const tagsById = opts.tagsById instanceof Map ? opts.tagsById : null;
+  const tags = (redacted || !tagsById)
+    ? []
+    : (Array.isArray(input.tags) ? input.tags : [])
+        .map(id => tagsById.get(String(id)))
+        .filter(t => t && t.name)
+        .slice(0, 8);
   const task = {
     id: identityIds[0] || crypto.randomUUID(),
     blockId: input.blockId || input.block_id || "",
@@ -1213,6 +1242,8 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
     identityIds,
     calendar,
     gcalCalendarId: calendar ? calendar.id : "",
+    tags,
+    createdByGuest: !!input.createdByGuestName,
     redacted
   };
   task.durationMinutes = taskMinutes(task.start, task.end, input.duration || input.estimated_minutes || input.durMin);
@@ -1251,6 +1282,7 @@ async function buildPublicTodoShare(share, dateStr, req) {
     if (aliases.some(id => hiddenIds.has(id))) aliases.forEach(id => hiddenIds.add(id));
   }
   const calendarsById = await getPublicCalendarMap();
+  const tagsById = await getPublicTagMap(share.workspace_id);
   const tasks = [];
   const seen = new Set();
   const addTask = (task) => {
@@ -1284,8 +1316,9 @@ async function buildPublicTodoShare(share, dateStr, req) {
       calendarName: item.calendarName || item.calendar_name,
       calendarColor: item.calendarColor || item.calendar_color,
       completed: item.completed,
+      tags: item.tags,
       kind: item.type
-    }, doneIds, calendarsById, { redacted });
+    }, doneIds, calendarsById, { redacted, tagsById });
     addTask(task);
   }
 
@@ -1303,8 +1336,10 @@ async function buildPublicTodoShare(share, dateStr, req) {
       source: item.source || "public_share",
       source_id: item.source_id || item.id,
       completed: item.completed,
+      tags: item.tags,
+      createdByGuestName: item.createdByGuestName,
       kind: item.type || "public_task"
-    }, doneIds, calendarsById, { redacted: vis === "private" });
+    }, doneIds, calendarsById, { redacted: vis === "private", tagsById });
     addTask(task);
   }
 
@@ -1335,8 +1370,10 @@ async function buildPublicTodoShare(share, dateStr, req) {
       calendarColor: p.calendarColor || p.calendar_color,
       is_recurring: p.is_recurring,
       completed: p.completed,
+      tags: p.tags,
+      createdByGuestName: p.createdByGuestName,
       kind
-    }, doneIds, calendarsById, { redacted });
+    }, doneIds, calendarsById, { redacted, tagsById });
     addTask(task);
   }
 
@@ -1448,6 +1485,11 @@ async function buildPublicTodoShare(share, dateStr, req) {
     updatedAt: new Date().toISOString(),
     tasks,
     calendars: Array.from(calendarsById.values()),
+    // Work/personal time-block sections so the guest itinerary mirror can render
+    // the same block headers the owner sees (name + range only; not sensitive).
+    blocks: ((state.schedule && state.schedule.blocks) || []).map(b => ({
+      id: b.id || "", name: b.name || "", start: b.start || "", end: b.end || "", blockType: b.blockType || ""
+    })),
     rewards,
     viewer: {
       loggedIn: !!req?.session?.userId,
