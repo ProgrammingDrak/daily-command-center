@@ -2771,6 +2771,18 @@ function overridePayline(board, selected) {
   return [];
 }
 
+// A queued tile override is otherwise cosmetic — bank tiles still pay (bankroll
+// resolves first) and the headline outcome stays RNG/floor-driven — with one
+// exception: drawing a real 3-in-a-row JACKPOT line should actually WIN the
+// jackpot instead of leaving it to chance. Force the jackpot hit in that one
+// case so the tiles you deliberately line up register as a jackpot.
+function biasSettingsToOverrideBoard(board, base) {
+  if (Array.isArray(board) && board.length === SLOT_CELL_COUNT && evaluateJackpotBoard(board).hit) {
+    return { ...base, jackpot_hit_rate: 1 };
+  }
+  return base;
+}
+
 function applyTileOverrideToScreen(screen, override, selected, account, bankUsage, screenBankHit) {
   const stored = normalizeStoredNextSpinTileOverride(override);
   if (!stored) return { ...screen, override: null };
@@ -3111,13 +3123,20 @@ async function spin(workspaceId, userId) {
     throw err;
   }
   const drawPool = state.rewards.filter(r => r.kind !== "miss" && !r.lifespan_exhausted);
-  let outcome = selectThreeStageOutcome(
-    drawPool,
-    // A credit-funded spin is a guaranteed single jackpot: force the hit and pin
-    // the upgrade rate to 0 so it can never climb to a multi-spin run and mint
-    // fresh credits (which would make banked credits regenerate, not count down).
-    hasJackpotSpinCredit ? { ...settings, jackpot_hit_rate: 1, jackpot_upgrade_rate: 0, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 } : settings
-  );
+  // A credit-funded spin is a guaranteed single jackpot: force the hit and pin
+  // the upgrade rate to 0 so it can never climb to a multi-spin run and mint
+  // fresh credits (which would make banked credits regenerate, not count down).
+  const creditSpinSettings = hasJackpotSpinCredit
+    ? { ...settings, jackpot_hit_rate: 1, jackpot_upgrade_rate: 0, bank_builder_hit_rate: 0, free_spin_tile_rate: 0 }
+    : settings;
+  // A queued tile override that lines up a real jackpot should actually win the
+  // jackpot, not leave it to the hit-rate roll. Bias the outcome off the board
+  // for that one case; the board is still applied to the screen later in the txn.
+  const overrideForOutcome = normalizeStoredNextSpinTileOverride(settings.next_spin_tile_override);
+  const spinSettings = overrideForOutcome
+    ? biasSettingsToOverrideBoard(overrideForOutcome.tiles, creditSpinSettings)
+    : creditSpinSettings;
+  let outcome = selectThreeStageOutcome(drawPool, spinSettings);
   let selected = outcome.selected;
   const client = await pool.connect();
   try {
@@ -3342,11 +3361,20 @@ async function confirmSpin(workspaceId, spinId, options = {}) {
     const { rows } = await client.query("SELECT * FROM slot_spins WHERE workspace_id=$1 AND id=$2 FOR UPDATE", [workspaceId, spinId]);
     const spinRow = rows[0];
     if (!spinRow) throw notFound("Spin not found");
-    if (spinRow.status !== "pending") {
+    const snapshot = spinRow.reward_snapshot || {};
+    // A free, no-confirmation catalog win locks as "awarded" rather than
+    // "pending", but the GO DO IT NOW / bank / schedule decision screen still
+    // confirms it to drop a reward-queue item it can act on. Promote those the
+    // same as pending wins; the bank/reserve branches below are all guarded and
+    // no-op for a zero-cost reward, so this only flips the status and enqueues.
+    const isAwardedDecisionWin = spinRow.status === "awarded" &&
+      spinRow.reward_id &&
+      snapshot.kind !== "miss" && snapshot.kind !== "bank_builder" &&
+      snapshot.source_type !== "slot_screen_bank_builder";
+    if (spinRow.status !== "pending" && !isAwardedDecisionWin) {
       await client.query("COMMIT");
       return spinRow;
     }
-    const snapshot = spinRow.reward_snapshot || {};
     let accountUpdate = "";
     const params = [workspaceId];
     let nextSnapshot = snapshot;
