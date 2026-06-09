@@ -109,6 +109,13 @@ function toggleCollapsed(id){
   if(s.has(id))s.delete(id);else s.add(id);
   try{localStorage.setItem("pa-collapsed-v1",JSON.stringify([...s]));}catch(e){}
 }
+// Collapse or expand a batch of parent rows at once (used by the itinerary's
+// Collapse all / Expand all controls).
+function setCollapsedAll(ids,collapsed){
+  const s=loadCollapsed();
+  (ids||[]).forEach(id=>{if(collapsed)s.add(id);else s.delete(id);});
+  try{localStorage.setItem("pa-collapsed-v1",JSON.stringify([...s]));}catch(e){}
+}
 
 // Recursive flatten of a task list into render order. Returns nodes
 // {ev, depth, rel, hasKids, collapsed}; descendants of a collapsed node are
