@@ -1016,7 +1016,7 @@ function buildTaskQueuePanel(){
   const tqpBacklogBadge=document.getElementById("tqp-backlog-count");
   if(tqpBacklogBadge)tqpBacklogBadge.textContent=backlogTasks.length;
   if(!backlogTasks.length){
-    backlogPanel.innerHTML='<div class="tqp-empty">Backlog is empty.</div>';
+    backlogPanel.innerHTML='<div class="tqp-empty">Backlog and Ideas is empty.</div>';
   }else{
     const priOrder={High:0,Medium:1,Low:2};
     const sorted=[...backlogTasks].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));
