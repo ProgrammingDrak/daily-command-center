@@ -1678,6 +1678,8 @@
   .task-add-bar .tab-dur,.task-add-bar .tab-dest{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 8px;color:var(--text);font-size:13px;outline:none}
   .task-add-bar .tab-add{background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
   .task-add-bar .tab-add:hover{opacity:0.85}
+  .task-add-bar .tab-catchup{background:transparent;border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text-muted);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .task-add-bar .tab-catchup:hover{color:var(--text);border-color:var(--accent)}
 
   /* Overflow modal */
   .overflow-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:460;justify-content:center;align-items:center;padding:24px}
@@ -2434,7 +2436,7 @@
     .task-add-bar{flex-wrap:wrap;gap:6px;padding:8px 0 10px}
     .task-add-bar .tab-title{width:100%;min-width:0;min-height:44px}
     .task-add-bar .tab-dur,.task-add-bar .tab-dest{flex:1;min-height:44px}
-    .task-add-bar .tab-add{
+    .task-add-bar .tab-add,.task-add-bar .tab-catchup{
       flex:1;min-height:44px;font-size:13px;white-space:nowrap;
       display:inline-flex;align-items:center;justify-content:center;
     }
