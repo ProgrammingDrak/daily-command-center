@@ -1216,7 +1216,7 @@ function buildScheduled() {
           '<button class="add-btn sched-repeat-btn" data-id="' + ev.id + '" title="Turn into a repeat responsibility">Repeat</button>' +
           '<button class="add-btn sched-done-btn" data-id="' + ev.id + '" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>' +
           '<button class="add-btn sched-push-btn" data-id="' + ev.id + '">Priority</button>' +
-          '<button class="add-btn sched-backlog-btn" data-id="' + ev.id + '" style="background:rgba(255,255,255,0.06);color:var(--text-muted)">Backlog</button>' +
+          '<button class="add-btn sched-backlog-btn" data-id="' + ev.id + '" style="background:rgba(255,255,255,0.06);color:var(--text-muted)">Backlog and Ideas</button>' +
         '</div>';
     });
     html += '</div>';

@@ -188,7 +188,7 @@
     { id:"tm-triage-section",                 label:"Triage" },
     { id:"tm-scheduled-section",              label:"Scheduled" },
     { id:"tm-soon-section",                   label:"Priority" },
-    { id:"tm-backlog-section",                label:"Backlog" },
+    { id:"tm-backlog-section",                label:"Backlog and Ideas" },
     { id:"tm-side-projects-section",          label:"Side Projects" },
     { id:"tm-repeat-responsibilities-section",label:"Repeat" }
   ];
