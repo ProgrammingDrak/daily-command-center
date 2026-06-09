@@ -191,7 +191,14 @@ function buildListView(){
 
 // ======== SCHEDULE TAB ========
 function buildSchedule(){
-  const tl=document.getElementById("timeline");tl.innerHTML="";
+  const tl=document.getElementById("timeline");
+  // One-time: accept drops of a preset task group onto empty timeline space.
+  if(!tl._groupDropWired){
+    tl._groupDropWired=true;
+    tl.addEventListener("dragover",e=>{ if(window._dragFromTaskGroup){e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect="copy";} });
+    tl.addEventListener("drop",e=>{ const gid=window._dragFromTaskGroup; if(!gid)return; e.preventDefault(); window._dragFromTaskGroup=null; if(typeof window.addTaskGroupToDay==="function")window.addTaskGroupToDay(gid); });
+  }
+  tl.innerHTML="";
   const listView=document.getElementById("list-view");if(listView)listView.innerHTML="";
   if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
@@ -379,6 +386,15 @@ function buildSchedule(){
       canEditBounty:(typeof viewMode==="undefined"||viewMode!=="archive"),
       bw:(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null
     });
+    // Placeholder task (from a preset group): distinct look + click opens the swap menu.
+    if(ev.isPlaceholder){
+      el.classList.add("placeholder-task");
+      el.addEventListener("click",e=>{
+        if(e.target.closest("button,input,.chk,.chk-quick,.dbtn,.dbadge,.start-time,.btn-add-menu,.card-tags-toggle"))return;
+        e.stopPropagation();
+        if(typeof window.openPlaceholderSwap==="function")window.openPlaceholderSwap(ev);
+      });
+    }
     // Meetings and locked tasks are fixed anchors -- no drag, but still valid drop targets so other tasks can be positioned around them.
     if(!isMeeting(ev)&&!ev._locked){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));

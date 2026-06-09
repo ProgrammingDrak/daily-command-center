@@ -161,6 +161,8 @@
   if (typeof buildNotifications === 'function') buildNotifications();
   if (typeof buildUpcomingBoard === 'function') buildUpcomingBoard();
   if (typeof loadResponsibilities === 'function') loadResponsibilities();
+  if (typeof loadTaskMenus === 'function') loadTaskMenus();
+  if (typeof loadTaskGroups === 'function') loadTaskGroups();
   if (typeof buildDelegated === 'function') buildDelegated();
   if (typeof updateStats === 'function') updateStats();
   if (typeof updateDateNav === 'function') updateDateNav();

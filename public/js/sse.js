@@ -108,6 +108,8 @@
     if(typeof paintPivotTasks === 'function') paintPivotTasks();
     if(typeof updateStats === 'function') updateStats();
     if(typeof loadResponsibilities === 'function') loadResponsibilities();
+    if(typeof loadTaskMenus === 'function') loadTaskMenus();
+    if(typeof loadTaskGroups === 'function') loadTaskGroups();
   }
 
   function connect(){

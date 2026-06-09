@@ -275,6 +275,13 @@ function _finishDrag(old){
 function dDrop(e,tid){
   e.preventDefault();
   const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest"));
+  // External drag of a preset task group card: add the whole group to the day.
+  if(window._dragFromTaskGroup){
+    const gid=window._dragFromTaskGroup; window._dragFromTaskGroup=null;
+    clearCls();
+    if(typeof window.addTaskGroupToDay==="function")window.addTaskGroupToDay(gid);
+    return;
+  }
   if(!dragId){clearCls();return;}
 
   // External drag from the Tasks drawer backlog: add to schedule instead of reordering.

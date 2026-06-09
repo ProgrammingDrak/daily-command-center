@@ -539,6 +539,11 @@
     document.getElementById("resp-preferred-custom-days").value=p.preferredCustomDays||p.cadenceDays||30;
     syncPreferredCompletion();
     document.getElementById("resp-capacity-bucket").value=p.capacityBucket||"work_admin";
+    const menusMount=document.getElementById("resp-menus-list");
+    if(menusMount){
+      menusMount.dataset.selected=(Array.isArray(p.menus)?p.menus:[]).join(",");
+      if(typeof window.renderRespMenuField==="function")window.renderRespMenuField();
+    }
     const subtaskInput=document.getElementById("resp-default-subtask-input");
     if(subtaskInput)subtaskInput.value="";
     setDefaultSubtasks(Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[]);
@@ -575,8 +580,13 @@
       preferredCustomDays:Math.max(1,parseInt(document.getElementById("resp-preferred-custom-days").value,10)||30),
       capacityBucket:document.getElementById("resp-capacity-bucket").value,
       defaultSubtasks:readDefaultSubtasks(),
+      menus:readSelectedMenus(),
       status:"active"
     };
+  }
+
+  function readSelectedMenus(){
+    return Array.from(document.querySelectorAll("#resp-menus-list input[type=checkbox]:checked")).map(c=>c.value);
   }
 
   function syncCadencePreset(){
@@ -723,6 +733,8 @@
 
   document.addEventListener("DOMContentLoaded",bindResponsibilities);
   window.loadResponsibilities=loadResponsibilities;
+  window.refreshScheduleAfterResponsibilityChange=refreshScheduleAfterResponsibilityChange;
+  window.openResponsibilityModalWithMenus=function(menus){ openResponsibilityModal(null,{menus:Array.isArray(menus)?menus:[]}); };
   window.renderResponsibilities=renderResponsibilities;
   window.renderRepeatResponsibilitiesSidebar=renderRepeatResponsibilitiesSidebar;
   window.markResponsibilityTaskCompleted=markResponsibilityTaskCompleted;
