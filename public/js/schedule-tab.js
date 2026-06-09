@@ -152,6 +152,24 @@ function buildListView(){
   }
   function emitNode(node,idx,mode){return node.rel==="subtask"?subRow(node.ev,idx,mode,node):row(node.ev,idx,mode,node);}
 
+  // Parents with at least one child anywhere in the visible list -- these are the
+  // rows the Collapse all / Expand all controls act on.
+  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id);
+  if(parentIds.length){
+    const controls=document.createElement("div");
+    controls.className="it-list-controls";
+    controls.innerHTML=
+      '<button class="it-list-ctrl-btn" data-collapse-action="expand">Expand all</button>'+
+      '<button class="it-list-ctrl-btn" data-collapse-action="collapse">Collapse all</button>';
+    controls.querySelectorAll(".it-list-ctrl-btn").forEach(btn=>{
+      btn.addEventListener("click",e=>{
+        e.stopPropagation();
+        if(typeof setCollapsedAll==="function"){setCollapsedAll(parentIds,btn.dataset.collapseAction==="collapse");render();}
+      });
+    });
+    wrap.appendChild(controls);
+  }
+
   section("Work list",activeIds.size);
   if(!openItems.length){
     const empty=document.createElement("div");

@@ -1251,6 +1251,9 @@
   .it-list-section:first-child{margin-top:2px}
   .it-list-section b{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:999px;background:rgba(59,130,246,0.12);color:var(--accent-light);font-size:10px}
   .it-list-empty{padding:28px 12px;text-align:center;border:1px dashed var(--border);border-radius:8px;color:var(--text-muted);font-size:13px;background:rgba(255,255,255,0.02)}
+  .it-list-controls{display:flex;justify-content:flex-end;gap:6px;margin:2px 0 0}
+  .it-list-ctrl-btn{background:none;border:1px solid var(--border);color:var(--text-muted);cursor:pointer;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:3px 9px;border-radius:6px;transition:background 0.12s,border-color 0.12s,color 0.12s}
+  .it-list-ctrl-btn:hover{background:var(--card-hover);border-color:rgba(148,163,184,0.32);color:var(--text)}
   .it-list-item{position:relative;display:grid;grid-template-columns:34px 18px 28px 3px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:58px;padding:9px 11px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:background 0.12s,border-color 0.12s,opacity 0.2s,transform 0.12s}
   .it-list-item:hover{background:var(--card-hover);border-color:rgba(148,163,184,0.32)}
   .it-list-item.movable{cursor:grab}
