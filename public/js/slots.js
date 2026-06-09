@@ -2026,7 +2026,11 @@
       }
       setResult("Tier and payer locked. Grab the wheel rim and spin it.");
       updateStageTrack("reward", "spinning");
-      await animateRewardWheel(spinRow, snap, stages);
+      // If a takeover screen (jackpot choice / reward decision) is going to open
+      // the instant the wheel stops, skip the wheel's "Nice" acknowledgement so
+      // the big jackpot screen lands immediately instead of behind a button tap.
+      const opensTakeover = !!snap.requires_jackpot_choice || isDecisionReward(spinRow, snap);
+      await animateRewardWheel(spinRow, snap, stages, { autoAdvance: opensTakeover });
       updateStageTrack("reward", "hit");
       // The bank deposit (if any) already animated in the bank-first pass above, which
       // reflected it into the pending reserve — don't add it again here.
@@ -2051,9 +2055,10 @@
       if(snap.requires_jackpot_choice) {
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openJackpotChoice(refreshed);
-      } else if(spinRow.status === "pending" && isDecisionReward(spinRow, snap)) {
-        // A fresh catalog-reward win: surface the GO DO IT NOW / bank / schedule
-        // decision screen instead of leaving a bare Confirm button.
+      } else if(isDecisionReward(spinRow, snap)) {
+        // Any fresh catalog-reward win — whether it locked as "pending" (needs
+        // confirmation) or "awarded" (free, instant) — surfaces the GO DO IT NOW
+        // / bank / schedule decision screen instead of a bare Nice acknowledgement.
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openRewardDecision(refreshed);
       }
@@ -2368,7 +2373,7 @@
       .filter(r => !tier || String(r.tier_id || "tier_i") === String(tier));
   }
 
-  async function animateRewardWheel(spinRow, snap, stages){
+  async function animateRewardWheel(spinRow, snap, stages, opts){
     const frame = document.querySelector(".slot-reels-frame");
     if(!frame) {
       await wait(1200);
@@ -2415,10 +2420,16 @@
     const announcement = wheel.querySelector(".slot-wheel-announcement");
     const announcementTitle = announcement && announcement.querySelector("strong");
     if(announcementTitle) announcementTitle.textContent = selectedTitle;
-    if(announcement) announcement.hidden = false;
     setResult("You won: " + selectedTitle);
     slotPlay("rewardReveal");
-    await waitForWheelAcknowledgement(wheel);
+    if(opts && opts.autoAdvance){
+      // The big takeover screen opens next — let the prize register on the wheel
+      // for a beat, then clear it out from under the screen. No "Nice" tap.
+      await wait(620);
+    } else {
+      if(announcement) announcement.hidden = false;
+      await waitForWheelAcknowledgement(wheel);
+    }
     wheel.classList.add("leaving");
     await wait(340);
     wheel.remove();
