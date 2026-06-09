@@ -2553,6 +2553,7 @@ async function upsertResponsibility({ properties, userId, workspaceId }) {
     estimatedMinutes: Number(properties.estimatedMinutes || 30),
     status: properties.status || "active",
     defaultSubtasks: Array.isArray(properties.defaultSubtasks) ? properties.defaultSubtasks : [],
+    menus: Array.isArray(properties.menus) ? properties.menus : [],
     createdAt: properties.createdAt || nowIso,
     updatedAt: nowIso,
     ...properties
@@ -2618,10 +2619,21 @@ async function scheduleResponsibilityTask({ responsibility, date, userId, worksp
     .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
   const slot = firstFreeSlot(Math.max(dayStart, nowMin), duration, blockers, dayEnd) || Math.max(dayStart, nowMin);
   const localId = "resp-task-" + crypto.randomUUID().slice(0, 12);
+  const taskProps = buildResponsibilityTaskProps(responsibility, { duration, slot, localId, sourceProps });
+  const block = await blockDB.createBlock({ type: "block", date: dateStr, properties: taskProps, sort_order: slot, user_id: userId || null, workspace_id: workspaceId || null });
+  await attachDefaultSubtasks(localId, props, sourceProps, dateStr, userId, workspaceId);
+  return { block, created: true };
+}
+
+// Build the `responsibility_task` properties for a given slot. Shared by the
+// schedule endpoint and the placeholder-resolve endpoint so both produce an
+// identical task shape (DRY — see also attachDefaultSubtasks).
+function buildResponsibilityTaskProps(responsibility, { duration, slot, localId, sourceProps = {} }) {
+  const props = responsibility.properties || {};
   const title = sourceProps.title || props.nextTaskTitle || props.title;
   const score = responsibilityScore(props);
   const priority = sourceProps.priority || (sourceProps.urgent ? "High" : null) || (score >= 90 ? "High" : score >= 60 ? "Medium" : "Low");
-  const taskProps = {
+  return {
     kind: "responsibility_task",
     local_id: localId,
     title,
@@ -2631,7 +2643,7 @@ async function scheduleResponsibilityTask({ responsibility, date, userId, worksp
     priority,
     meta: "Responsibility · " + (props.area || props.domain || "general") + " · " + duration + "m",
     detail: sourceProps.detail || props.description || "",
-    source: "responsibility",
+    source: sourceProps.source || "responsibility",
     tags: ["responsibility", props.domain, props.area, props.capacityBucket].filter(Boolean),
     responsibilityId: responsibility.id,
     responsibilityTitle: props.title,
@@ -2643,18 +2655,19 @@ async function scheduleResponsibilityTask({ responsibility, date, userId, worksp
     hubspotUrl: sourceProps.hubspotUrl || null,
     createdAt: new Date().toISOString()
   };
-  const block = await blockDB.createBlock({ type: "block", date: dateStr, properties: taskProps, sort_order: slot, user_id: userId || null, workspace_id: workspaceId || null });
+}
 
+// Attach a responsibility's default subtasks onto the day root's _subtasks map,
+// keyed by the task's local_id. Extracted from scheduleResponsibilityTask.
+async function attachDefaultSubtasks(localId, props, sourceProps, dateStr, userId, workspaceId) {
   const subtasks = defaultSubtasksForResponsibility(props, sourceProps);
-  if (subtasks.length) {
-    const rootId = await blockDB.ensureDayRoot(dateStr, userId, workspaceId);
-    const root = await blockDB.getBlock(rootId);
-    const rootProps = root.properties || {};
-    const allSubtasks = { ...(rootProps._subtasks || {}) };
-    allSubtasks[localId] = subtasks.map((text, i) => ({ id: "st-" + Date.now() + "-" + i, text, done: false, created: new Date().toISOString() }));
-    await blockDB.updateBlock(rootId, { properties: { ...rootProps, _subtasks: allSubtasks } });
-  }
-  return { block, created: true };
+  if (!subtasks.length) return;
+  const rootId = await blockDB.ensureDayRoot(dateStr, userId, workspaceId);
+  const root = await blockDB.getBlock(rootId);
+  const rootProps = root.properties || {};
+  const allSubtasks = { ...(rootProps._subtasks || {}) };
+  allSubtasks[localId] = subtasks.map((text, i) => ({ id: "st-" + Date.now() + "-" + i, text, done: false, created: new Date().toISOString() }));
+  await blockDB.updateBlock(rootId, { properties: { ...rootProps, _subtasks: allSubtasks } });
 }
 
 function parseOffersAmpAlert(text) {
@@ -2942,6 +2955,221 @@ app.post("/api/responsibilities/capture", async (req, res) => {
     });
     res.json({ responsibility, duplicate: false, parsed: null });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ── Menus + Preset Task Groups ──────────────────────────────────────────────
+// Menus are user-defined named pools (kind:"task_menu"); a Repeat Responsibility
+// records membership via properties.menus[] (an array of menu block ids).
+// A task group (kind:"task_group") is a batch of items; each item is either a
+// fixed task or a placeholder that draws from one or more menus. Adding a group
+// to a day batch-creates its tasks into free slots; placeholders land as
+// placeholder_task blocks that the user clicks to swap for a responsibility.
+
+const slugify = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+async function getBlocksByKind(kind, workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND workspace_id=$2 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind, workspaceId])
+    : await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind]);
+  return rows.map(blockDB.parseBlock);
+}
+
+async function getKindedBlock(id, kind, workspaceId) {
+  const block = await blockDB.getBlock(id);
+  if (!block) return null;
+  assertBlockOwnership(block, workspaceId);
+  if ((block.properties || {}).kind !== kind) return null;
+  return block;
+}
+
+// ── Menus ──
+app.get("/api/task-menus", async (req, res) => {
+  try { res.json({ items: await getBlocksByKind("task_menu", req.workspaceId) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/task-menus", async (req, res) => {
+  try {
+    const incoming = (req.body && req.body.properties) || req.body || {};
+    const title = String(incoming.title || "").trim();
+    if (!title) return res.status(400).json({ error: "title required" });
+    const nowIso = new Date().toISOString();
+    const props = { kind: "task_menu", title, slug: slugify(title), color: incoming.color || null, status: "active", createdAt: nowIso, updatedAt: nowIso };
+    const created = await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: req.session.userId || null, workspace_id: req.workspaceId || null });
+    broadcast("blocks-changed", { action: "task-menu-upsert", blockIds: [created.id] }, req.workspaceId);
+    res.json(created);
+  } catch (e) { res.status(400).json({ error: apiErrorMessage(e) }); }
+});
+
+app.patch("/api/task-menus/:id", async (req, res) => {
+  try {
+    const existing = await getKindedBlock(req.params.id, "task_menu", req.workspaceId);
+    if (!existing) return res.status(404).json({ error: "Menu not found" });
+    const incoming = (req.body && req.body.properties) || req.body || {};
+    const merged = { ...existing.properties, ...incoming, kind: "task_menu", updatedAt: new Date().toISOString() };
+    if (incoming.title) merged.slug = slugify(incoming.title);
+    const updated = await blockDB.updateBlock(req.params.id, { properties: merged });
+    broadcast("blocks-changed", { action: "task-menu-update", blockIds: [updated.id] }, req.workspaceId);
+    res.json(updated);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: apiErrorMessage(e) }); }
+});
+
+app.delete("/api/task-menus/:id", async (req, res) => {
+  try {
+    const existing = await getKindedBlock(req.params.id, "task_menu", req.workspaceId);
+    if (!existing) return res.status(404).json({ error: "Menu not found" });
+    const menuId = req.params.id;
+    // Strip this menu id from every responsibility's menus[] and every group's
+    // placeholder placeholderMenus[] so no dangling references remain.
+    const touched = [];
+    for (const r of await getResponsibilityBlocks(req.workspaceId)) {
+      const menus = Array.isArray(r.properties.menus) ? r.properties.menus : [];
+      if (menus.includes(menuId)) {
+        await blockDB.updateBlock(r.id, { properties: { ...r.properties, menus: menus.filter(m => m !== menuId), updatedAt: new Date().toISOString() } });
+        touched.push(r.id);
+      }
+    }
+    for (const g of await getBlocksByKind("task_group", req.workspaceId)) {
+      const items = Array.isArray(g.properties.items) ? g.properties.items : [];
+      let changed = false;
+      const next = items.map(it => {
+        if (it && it.isPlaceholder && Array.isArray(it.placeholderMenus) && it.placeholderMenus.includes(menuId)) {
+          changed = true;
+          return { ...it, placeholderMenus: it.placeholderMenus.filter(m => m !== menuId) };
+        }
+        return it;
+      });
+      if (changed) { await blockDB.updateBlock(g.id, { properties: { ...g.properties, items: next, updatedAt: new Date().toISOString() } }); touched.push(g.id); }
+    }
+    const result = await blockDB.deleteBlock(menuId);
+    broadcast("blocks-changed", { action: "task-menu-delete", blockIds: [menuId, ...touched] }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+// ── Task groups ──
+app.get("/api/task-groups", async (req, res) => {
+  try { res.json({ items: await getBlocksByKind("task_group", req.workspaceId) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+function normalizeGroupItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items.map((it, i) => {
+    const base = { local_id: it.local_id || ("tgi-" + crypto.randomUUID().slice(0, 12)), duration: Math.max(1, Math.round(Number(it.duration || 30))), priority: it.priority || "Medium" };
+    if (it.isPlaceholder) return { ...base, isPlaceholder: true, placeholderMenus: Array.isArray(it.placeholderMenus) ? it.placeholderMenus : [], label: String(it.label || "Placeholder").trim() };
+    return { ...base, isPlaceholder: false, title: String(it.title || "").trim(), detail: it.detail || "" };
+  }).filter(it => it.isPlaceholder || it.title);
+}
+
+app.post("/api/task-groups", async (req, res) => {
+  try {
+    const incoming = (req.body && req.body.properties) || req.body || {};
+    const title = String(incoming.title || "").trim();
+    if (!title) return res.status(400).json({ error: "title required" });
+    const nowIso = new Date().toISOString();
+    const props = { kind: "task_group", title, slug: slugify(title), status: incoming.status || "active", items: normalizeGroupItems(incoming.items), createdAt: nowIso, updatedAt: nowIso };
+    const created = await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: req.session.userId || null, workspace_id: req.workspaceId || null });
+    broadcast("blocks-changed", { action: "task-group-upsert", blockIds: [created.id] }, req.workspaceId);
+    res.json(created);
+  } catch (e) { res.status(400).json({ error: apiErrorMessage(e) }); }
+});
+
+app.patch("/api/task-groups/:id", async (req, res) => {
+  try {
+    const existing = await getKindedBlock(req.params.id, "task_group", req.workspaceId);
+    if (!existing) return res.status(404).json({ error: "Task group not found" });
+    const incoming = (req.body && req.body.properties) || req.body || {};
+    const merged = { ...existing.properties, ...incoming, kind: "task_group", updatedAt: new Date().toISOString() };
+    if (incoming.title) merged.slug = slugify(incoming.title);
+    if (incoming.items) merged.items = normalizeGroupItems(incoming.items);
+    const updated = await blockDB.updateBlock(req.params.id, { properties: merged });
+    broadcast("blocks-changed", { action: "task-group-update", blockIds: [updated.id] }, req.workspaceId);
+    res.json(updated);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: apiErrorMessage(e) }); }
+});
+
+app.delete("/api/task-groups/:id", async (req, res) => {
+  try {
+    const existing = await getKindedBlock(req.params.id, "task_group", req.workspaceId);
+    if (!existing) return res.status(404).json({ error: "Task group not found" });
+    const result = await blockDB.deleteBlock(req.params.id);
+    broadcast("blocks-changed", { action: "task-group-delete", blockIds: [req.params.id] }, req.workspaceId);
+    res.json(result);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+// Batch-add every item in a group onto a day's itinerary. Threads a growing
+// blockers array so sequential items land in sequential free slots (no pile-up).
+app.post("/api/task-groups/:id/schedule", async (req, res) => {
+  try {
+    const group = await getKindedBlock(req.params.id, "task_group", req.workspaceId);
+    if (!group) return res.status(404).json({ error: "Task group not found" });
+    const userId = req.session.userId, workspaceId = req.workspaceId;
+    const dateStr = (req.body && req.body.date && isValidDate(req.body.date)) ? req.body.date : getTodayStr();
+    const items = Array.isArray(group.properties.items) ? group.properties.items : [];
+    const blocks = await blockDB.getBlocksByDate(dateStr, workspaceId);
+    const dayBlocks = await getScheduleBlocks(userId, workspaceId);
+    const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
+    const dayStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
+    const dayEnd = workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60;
+    const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
+    const blockers = blocks.filter(b => (b.properties || {}).start && (b.properties || {}).end).map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
+    const created = [];
+    for (const item of items) {
+      const duration = Math.max(1, Math.round(Number(item.duration || 30)));
+      const slot = firstFreeSlot(Math.max(dayStart, nowMin), duration, blockers, dayEnd) || Math.max(dayStart, nowMin);
+      blockers.push({ s: slot, e: slot + duration });
+      const common = {
+        local_id: (item.isPlaceholder ? "ph-task-" : "tg-task-") + crypto.randomUUID().slice(0, 12),
+        duration,
+        start: minutesToHHMM(slot),
+        end: minutesToHHMM(slot + duration),
+        priority: item.priority || "Medium",
+        source: "task_group",
+        taskGroupId: group.id,
+        createdAt: new Date().toISOString()
+      };
+      let props;
+      if (item.isPlaceholder) {
+        const menus = Array.isArray(item.placeholderMenus) ? item.placeholderMenus : [];
+        props = { ...common, kind: "placeholder_task", isPlaceholder: true, placeholderMenus: menus, title: (item.label || "Placeholder") + " — pick a task", meta: "Placeholder · " + (item.label || "menu") + " · " + duration + "m", tags: ["placeholder"] };
+      } else {
+        props = { ...common, title: item.title, detail: item.detail || "", meta: "Preset · " + (group.properties.title || "group") + " · " + duration + "m", tags: ["task-group"] };
+      }
+      const block = await blockDB.createBlock({ type: "block", date: dateStr, properties: props, sort_order: slot, user_id: userId || null, workspace_id: workspaceId || null });
+      created.push(block);
+    }
+    broadcast("blocks-changed", { action: "task-group-schedule", blockIds: created.map(b => b.id) }, workspaceId);
+    res.json({ created });
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
+
+// Resolve a scheduled placeholder_task in place: rewrite its properties to a
+// responsibility_task at the SAME slot (reusing buildResponsibilityTaskProps),
+// keeping its local_id and duration so the timeline layout is unchanged.
+app.post("/api/task-groups/resolve-placeholder", async (req, res) => {
+  try {
+    const { placeholderBlockId, responsibilityId } = req.body || {};
+    if (!placeholderBlockId || !responsibilityId) return res.status(400).json({ error: "placeholderBlockId and responsibilityId required" });
+    const ph = await blockDB.getBlock(placeholderBlockId);
+    if (!ph) return res.status(404).json({ error: "Placeholder not found" });
+    assertBlockOwnership(ph, req.workspaceId);
+    const phProps = ph.properties || {};
+    if (!phProps.isPlaceholder && phProps.kind !== "placeholder_task") return res.status(400).json({ error: "Block is not a placeholder" });
+    const responsibility = await getResponsibilityBlock(responsibilityId, req.workspaceId);
+    if (!responsibility) return res.status(404).json({ error: "Responsibility not found" });
+    const dateStr = ph.date || (req.body && req.body.date) || getTodayStr();
+    const duration = Math.max(1, Math.round(Number(phProps.duration || taskDuration(responsibility.properties))));
+    const slot = hhmmToMinutes(phProps.start);
+    const localId = phProps.local_id;
+    const taskProps = buildResponsibilityTaskProps(responsibility, { duration, slot, localId, sourceProps: {} });
+    taskProps.taskGroupId = phProps.taskGroupId || null;
+    const updated = await blockDB.updateBlock(placeholderBlockId, { properties: taskProps });
+    await attachDefaultSubtasks(localId, responsibility.properties, {}, dateStr, req.session.userId, req.workspaceId);
+    broadcast("blocks-changed", { action: "placeholder-resolve", blockIds: [placeholderBlockId] }, req.workspaceId);
+    res.json(updated);
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
 });
 
 // PIN 3: apply a top-level block diff forward across all future days that

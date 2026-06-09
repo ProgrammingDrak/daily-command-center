@@ -1159,7 +1159,8 @@ function _updateTaskMenusBadge(){
   const trivc=parseInt(document.getElementById("trivial-count")?.textContent||"0")||0;
   const sidec=parseInt(document.getElementById("side-projects-section-count")?.textContent||"0")||0;
   const repeatc=parseInt(document.getElementById("repeat-responsibilities-section-count")?.textContent||"0")||0;
-  const total=tc+sc+bc+schedc+trivc+sidec+repeatc;
+  const groupc=parseInt(document.getElementById("task-groups-section-count")?.textContent||"0")||0;
+  const total=tc+sc+bc+schedc+trivc+sidec+repeatc+groupc;
   badge.textContent=total;badge.style.display=total?"":"none";
   if(typeof refreshSidecarTabs==="function")refreshSidecarTabs();
 }
