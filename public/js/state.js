@@ -164,6 +164,7 @@ function toggleDetail(itemEl){
   panel.classList.toggle("open");
 }
 
+
 // ======== COMMUTE LEAVE WINDOWS ========
 let COMMUTE_KEY = "pa-commute-times-" + ((__state && __state.date) ? __state.date : "unknown");
 function normalizeCommuteMinutes(value){

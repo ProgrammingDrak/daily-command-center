@@ -215,10 +215,31 @@ function _persistTaskTags(taskId, tagIds) {
   if (typeof scheduleIDBSave === 'function') scheduleIDBSave();
 }
 
+// Read-only detail line for the Task Details modal (description itself seeds the
+// Notes editor via seedNoteForTask, so this shows only the meta — no duplication).
+function _amBuildDetails(ev){
+  if(!ev) return '';
+  var meta=[];
+  if(ev.priority) meta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">'+ev.priority+' priority</span>');
+  if(typeof dur==='function') meta.push('<span>'+(typeof ms==='function'?ms(dur(ev)):dur(ev)+'m')+'</span>');
+  if(ev.start&&ev.end&&typeof f12==='function') meta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
+  if(ev.source&&typeof srcTag==='function') meta.push('<span class="am-det-src">Source:</span>'+srcTag(ev.source));
+  if(ev.notionUrl) meta.push('<a href="'+ev.notionUrl+'" target="_blank" onclick="event.stopPropagation()">Open in Notion</a>');
+  return meta.join('');
+}
+
 function openAddModal(taskId, taskTitle) {
   _addModalTaskId = taskId;
   document.getElementById('add-modal-title').textContent = taskTitle || 'Task Details';
   var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
+
+  // Read-only details (priority / duration / time / source / link)
+  var detEl = document.getElementById('am-details-section');
+  if (detEl) {
+    var detHtml = _amBuildDetails(taskEntry);
+    detEl.innerHTML = detHtml;
+    detEl.style.display = detHtml ? '' : 'none';
+  }
 
   // Initialize tag picker
   var tagContainer = document.getElementById('am-tag-picker');
