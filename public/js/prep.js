@@ -87,7 +87,8 @@ function openPomodoro(title,durMin,taskRef){
     pomoState.total = prevTotal;
     pomoPaint();
   }
-  // Open floating timer panel
+  // Open floating timer panel (minimizing later defaults back to the live pill)
+  pomoState.collapsedView="mini";
   document.getElementById("ft-panel").style.display="flex";
   document.getElementById("ft-fab").style.display="none";
   document.getElementById("ft-mini").style.display="none";
@@ -290,25 +291,24 @@ document.getElementById("pomo-reset").addEventListener("click",()=>{
 
 // ======== FLOATING TIMER CONTROLS ========
 document.getElementById("ft-fab").addEventListener("click",()=>{
-  document.getElementById("ft-panel").style.display="flex";
-  document.getElementById("ft-fab").style.display="none";
-  document.getElementById("ft-mini").style.display="none";
+  pomoState.collapsedView="mini";
+  ftSetView("panel");
 });
+// Minimize (–): collapse to the live pill, which stays put while running OR paused.
+document.getElementById("ft-panel-min").addEventListener("click",()=>{
+  pomoState.collapsedView="mini";
+  ftSetView(pomoHasTask()?"mini":"fab");
+  savePomoState();
+});
+// Close (×): stash the timer fully away to the round logo.
 document.getElementById("ft-panel-close").addEventListener("click",()=>{
-  document.getElementById("ft-panel").style.display="none";
-  if(pomoState.running){
-    document.getElementById("ft-mini").style.display="flex";
-    document.getElementById("ft-fab").style.display="none";
-    pomoPaint(); // update mini bar
-  } else {
-    document.getElementById("ft-mini").style.display="none";
-    document.getElementById("ft-fab").style.display="flex";
-  }
+  pomoState.collapsedView="fab";
+  ftSetView("fab");
+  savePomoState();
 });
 document.getElementById("ft-mini").addEventListener("click",()=>{
-  document.getElementById("ft-panel").style.display="flex";
-  document.getElementById("ft-mini").style.display="none";
-  document.getElementById("ft-fab").style.display="none";
+  pomoState.collapsedView="mini";
+  ftSetView("panel");
 });
 document.getElementById("ft-mini-pause").addEventListener("click",(e)=>{
   e.stopPropagation(); // don't open panel
