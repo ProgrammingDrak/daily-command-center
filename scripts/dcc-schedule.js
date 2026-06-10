@@ -24,6 +24,9 @@
  *   --detail <str>       optional notes
  *   --tags <a,b,c>       optional comma-separated tags
  *   --base <url>         override DCC_BASE_URL
+ *   --user-id <n>        owner user id (sent as x-user-id; req'd for token auth).
+ *                        Defaults to DCC_USER_ID env, else 1.
+ *   --workspace-id <id>  optional workspace id (sent as x-workspace-id).
  *   --dry-run            print the request without sending
  *   --help               show this help
  */
@@ -60,6 +63,8 @@ async function main() {
 
   const base = (args.base || process.env.DCC_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
   const token = process.env.DCC_PA_TOKEN || process.env.SECRET_PA_TOKEN || "";
+  const userId = String(args["user-id"] || process.env.DCC_USER_ID || "1");
+  const workspaceId = args["workspace-id"] || process.env.DCC_WORKSPACE_ID || "";
 
   const body = { title };
   if (typeof args.date === "string") body.date = args.date;
@@ -75,6 +80,7 @@ async function main() {
     console.log("DRY RUN — would POST:");
     console.log("  URL:", url);
     console.log("  Auth:", token ? "Bearer <token present>" : "(no token set!)");
+    console.log("  x-user-id:", userId, workspaceId ? `| x-workspace-id: ${workspaceId}` : "");
     console.log("  Body:", JSON.stringify(body, null, 2));
     return;
   }
@@ -87,11 +93,9 @@ async function main() {
 
   let res;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify(body),
-    });
+    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}`, "x-user-id": userId };
+    if (workspaceId) headers["x-workspace-id"] = workspaceId;
+    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
   } catch (e) {
     console.error(`✗ Request failed: ${e.message}`);
     process.exit(1);

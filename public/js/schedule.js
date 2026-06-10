@@ -344,6 +344,70 @@ function insertTaskFromDrawer(title, durMin, opts){
 }
 
 // ======== ACTIONS ========
+// Day points currently earned (completed, point-eligible tasks). Used to drive
+// the count-up animation when a task is checked off. Safe before schedule-tab.js
+// loads -- returns 0 if the summary helper isn't available yet.
+function _earnedPointsNow(){
+  try { return (typeof _dayPointSummary === "function") ? (_dayPointSummary().earned || 0) : 0; }
+  catch(e){ return 0; }
+}
+// Locate the checkbox the user just clicked so confetti can erupt from it.
+// Rows carry data-id; the check button is .chk (list) or .c-check (card view).
+function _completionAnchorRect(id){
+  try {
+    var key = (window.CSS && CSS.escape) ? CSS.escape(String(id)) : String(id);
+    var row = document.querySelector('[data-id="' + key + '"]');
+    var chk = row && (row.querySelector(".chk") || row.querySelector(".c-check"));
+    if(chk) return chk.getBoundingClientRect();
+  } catch(e){}
+  return null;
+}
+// Snapshot taken at click time, BEFORE the task is marked done and the list
+// re-renders: where the checkbox sits (confetti origin) and points earned so far.
+function _beginCompletionCelebration(id){
+  return { rect: _completionAnchorRect(id), prevEarned: _earnedPointsNow() };
+}
+// Run AFTER render(): confetti erupts from the just-checked task, whirlwinds
+// together, and streams into the points counter -- which then counts up from
+// the pre-completion total to the new one as the swarm pours in.
+function _finishCompletionCelebration(ctx, id){
+  if(!window.Celebrate || !ctx) return;
+  var rect = ctx.rect || _completionAnchorRect(id);
+  var x = rect ? (rect.left + rect.width / 2) : (window.innerWidth / 2);
+  var y = rect ? (rect.top + rect.height / 2) : (window.innerHeight / 3);
+
+  var summary;
+  try { summary = (typeof _dayPointSummary === "function") ? _dayPointSummary() : null; }
+  catch(e){ summary = null; }
+  var newEarned = summary ? (summary.earned || 0) : 0;
+  var pointEl = document.getElementById("s-points");
+  var gained = !!(pointEl && summary && newEarned > ctx.prevEarned);
+
+  // Target the confetti at the points counter so it flows into it.
+  var target = { x: window.innerWidth - 90, y: 90 };
+  if(pointEl){
+    var pr = pointEl.getBoundingClientRect();
+    if(pr && pr.width){ target = { x: pr.left + pr.width / 2, y: pr.top + pr.height / 2 }; }
+  }
+
+  // When the swarm reaches the counter, pulse it and tick the points up.
+  var onArrive = function(){
+    if(!gained) return;
+    var schedTxt = summary.scheduledPoints;
+    pointEl.classList.remove("points-pop");
+    // Reflow so the animation restarts even if it fired moments ago.
+    void pointEl.offsetWidth;
+    pointEl.classList.add("points-pop");
+    Celebrate.countNumber(pointEl, ctx.prevEarned, newEarned, {
+      duration: 750,
+      format: function(v){ return v + " / " + schedTxt; }
+    });
+    setTimeout(function(){ pointEl.classList.remove("points-pop"); }, 850);
+  };
+
+  Celebrate.confetti({ x: x, y: y, flowTo: target, onArrive: onArrive });
+}
+
 // Mark `id` done in a different date's persistence (not the currently-viewed day).
 // Used when completing a future/past task and pinning the completion to a specific date.
 async function commitDoneOnDate(id,dateStr){
@@ -354,8 +418,10 @@ async function commitDoneOnDate(id,dateStr){
 
   // Same-day completion: take the in-memory fast path
   if(currentDate===dateStr){
+    const _cel=_beginCompletionCelebration(id);
     manualDone.add(id);doneAt[id]=new Date();
     log("checked",id);saveDoneState();render();
+    _finishCompletionCelebration(_cel,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso});
     return;
   }
@@ -487,9 +553,11 @@ function toggleDone(id,opts){
       // viewing that day and checks a task off, persist the completion there.
       const ev=scheduled.find(e=>e.id===id);
       const completedAt=new Date();
+      const _cel=_beginCompletionCelebration(id);
       manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
       _onParentCompleted(id);
       saveDoneState();render();
+      _finishCompletionCelebration(_cel,id);
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
       if(typeof showToast==="function"){
         const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
@@ -509,9 +577,11 @@ function toggleDone(id,opts){
 
   const ev=scheduled.find(e=>e.id===id);
   const completedAt=new Date();
+  const _cel=_beginCompletionCelebration(id);
   manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
   _onParentCompleted(id);
   saveDoneState();render();
+  _finishCompletionCelebration(_cel,id);
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
 }

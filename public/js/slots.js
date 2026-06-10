@@ -1899,9 +1899,13 @@
         setResult("Spin 1: miss, bank, or jackpot...");
         await animateReels(firstStageSymbols(stages, snap, spinRow));
       }
-      if(stages.bank_builder_hit){
+      // Bankroll ALWAYS resolves before any other reward: whatever BANK tiles the screen
+      // shows pay first, on any spin. A pure bank outcome ends here; otherwise the bank is
+      // a bonus layered under the headline reward, which resolves right after.
+      const bankDelta = spinRow.bank_delta_cents || 0;
+      const pureBank = stages.outcome === "bank" && !stages.jackpot_hit;
+      if(bankDelta > 0 || pureBank){
         updateStageTrack("jackpot", "hit");
-        const bankDelta = spinRow.bank_delta_cents || 0;
         highlightWinningCells(spinRow, snap);
         animateRewardReveal(spinRow, snap);
         if(bankDelta > 0) {
@@ -1915,22 +1919,27 @@
           if(!reserveUpdated) updateReserveAtDropoff();
         }
         slotPlay("win");
-        slotPetReact("happy", bankDelta > 0 ? "Bank builder!" : "Bank builder capped.", 2400);
-        if(!stages.jackpot_hit && !stages.free_spin_hit) {
+        if(pureBank){
+          slotPetReact("happy", bankDelta > 0 ? "Bank builder!" : "Bank builder capped.", 2400);
           setResult(resultText(spinRow, snap));
           isSpinning = false;
           await loadSlotsAfterSpin();
           renderSlotResultActions(spinRow);
           return;
         }
-        setResult(stages.jackpot_hit ? "Bank builder first. Jackpot roll locked in." : "Bank builder first. Free spin tile locked in.");
+        slotPetReact("happy", "Bankroll banked first!", 1800);
+        setResult(stages.jackpot_hit ? "Bankroll banked first. Jackpot roll locked in."
+          : stages.free_spin_hit ? "Bankroll banked first. Free spin tile locked in."
+          : "Bankroll banked first. Now your reward...");
+        await wait(450);
       }
+      const headlineOpts = { ignoreBank: true };
       const floorOutcome = stages.outcome;
       if(!stages.jackpot_hit && ["coin","booster","pet","collectible","free_spin"].includes(floorOutcome)){
         updateStageTrack("jackpot", "hit");
-        highlightWinningCells(spinRow, snap);
-        animateRewardReveal(spinRow, snap);
-        setResult(resultText(spinRow, snap));
+        highlightWinningCells(spinRow, snap, headlineOpts);
+        animateRewardReveal(spinRow, snap, headlineOpts);
+        setResult(resultText(spinRow, snap, headlineOpts));
         if(floorOutcome === "booster"){
           if(stages.gamble){
             slotPlay("pending");
@@ -1960,12 +1969,18 @@
         return;
       }
       if(!stages.jackpot_hit){
-        updateStageTrack("jackpot", "miss");
-        slotPlay("miss");
-        slotPetReact("sad", "So close.", 2100);
-        highlightWinningCells(spinRow, snap);
-        animateRewardReveal(spinRow, snap);
-        setResult(resultText(spinRow, snap));
+        if(bankDelta > 0){
+          // The screen banked, so this isn't a dead spin — the bank pass already played.
+          updateStageTrack("jackpot", "hit");
+          setResult(resultText(spinRow, snap));
+        } else {
+          updateStageTrack("jackpot", "miss");
+          slotPlay("miss");
+          slotPetReact("sad", "So close.", 2100);
+          highlightWinningCells(spinRow, snap, headlineOpts);
+          animateRewardReveal(spinRow, snap, headlineOpts);
+          setResult(resultText(spinRow, snap, headlineOpts));
+        }
         isSpinning = false;
         await loadSlotsAfterSpin();
         renderSlotResultActions(spinRow);
@@ -2016,10 +2031,10 @@
       updateStageTrack("bucket", stages.empty_bucket ? "empty" : "hit");
       slotPlay(stages.empty_bucket ? "emptyBucket" : "tierLock");
       if(stages.empty_bucket){
-        setResult(resultText(spinRow, snap));
+        setResult(resultText(spinRow, snap, headlineOpts));
         await animateReels(resultSymbols(spinRow, snap), { duration: 1700 });
-        highlightWinningCells(spinRow, snap);
-        animateRewardReveal(spinRow, snap);
+        highlightWinningCells(spinRow, snap, headlineOpts);
+        animateRewardReveal(spinRow, snap, headlineOpts);
         slotPlay("emptyBucket");
         slotPetReact("sad", "No rewards there.", 2400);
         isSpinning = false;
@@ -2029,11 +2044,14 @@
       }
       setResult("Tier and payer locked. Grab the wheel rim and spin it.");
       updateStageTrack("reward", "spinning");
-      await animateRewardWheel(spinRow, snap, stages);
+      // If a takeover screen (jackpot choice / reward decision) is going to open
+      // the instant the wheel stops, skip the wheel's "Nice" acknowledgement so
+      // the big jackpot screen lands immediately instead of behind a button tap.
+      const opensTakeover = !!snap.requires_jackpot_choice || isDecisionReward(spinRow, snap);
+      await animateRewardWheel(spinRow, snap, stages, { autoAdvance: opensTakeover });
       updateStageTrack("reward", "hit");
-      if((spinRow.bank_delta_cents || 0) > 0) {
-        addPendingDeposit(spinRow.bank_delta_cents || 0);
-      }
+      // The bank deposit (if any) already animated in the bank-first pass above, which
+      // reflected it into the pending reserve — don't add it again here.
       resetSlotMachineBoard();
       setResult(resultText(spinRow, snap));
       if((spinRow.bank_delta_cents || 0) > 0) {
@@ -2055,9 +2073,10 @@
       if(snap.requires_jackpot_choice) {
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openJackpotChoice(refreshed);
-      } else if(spinRow.status === "pending" && isDecisionReward(spinRow, snap)) {
-        // A fresh catalog-reward win: surface the GO DO IT NOW / bank / schedule
-        // decision screen instead of leaving a bare Confirm button.
+      } else if(isDecisionReward(spinRow, snap)) {
+        // Any fresh catalog-reward win — whether it locked as "pending" (needs
+        // confirmation) or "awarded" (free, instant) — surfaces the GO DO IT NOW
+        // / bank / schedule decision screen instead of a bare Nice acknowledgement.
         const refreshed = (slotState && slotState.spins || []).find(s => String(s.id) === String(spinRow.id)) || spinRow;
         openRewardDecision(refreshed);
       }
@@ -2372,7 +2391,7 @@
       .filter(r => !tier || String(r.tier_id || "tier_i") === String(tier));
   }
 
-  async function animateRewardWheel(spinRow, snap, stages){
+  async function animateRewardWheel(spinRow, snap, stages, opts){
     const frame = document.querySelector(".slot-reels-frame");
     if(!frame) {
       await wait(1200);
@@ -2419,10 +2438,16 @@
     const announcement = wheel.querySelector(".slot-wheel-announcement");
     const announcementTitle = announcement && announcement.querySelector("strong");
     if(announcementTitle) announcementTitle.textContent = selectedTitle;
-    if(announcement) announcement.hidden = false;
     setResult("You won: " + selectedTitle);
     slotPlay("rewardReveal");
-    await waitForWheelAcknowledgement(wheel);
+    if(opts && opts.autoAdvance){
+      // The big takeover screen opens next — let the prize register on the wheel
+      // for a beat, then clear it out from under the screen. No "Nice" tap.
+      await wait(620);
+    } else {
+      if(announcement) announcement.hidden = false;
+      await waitForWheelAcknowledgement(wheel);
+    }
     wheel.classList.add("leaving");
     await wait(340);
     wheel.remove();
@@ -2650,7 +2675,7 @@
     return scrubAccidentalWins(board, { allowedSymbol: symbol, allowedLine: line });
   }
 
-  function winningPositions(spinRow, snap){
+  function winningPositions(spinRow, snap, opts){
     const board = snap && Array.isArray(snap.screen_board) ? snap.screen_board : resultSymbols(spinRow, snap || {});
     const payline = snap && Array.isArray(snap.screen_payline) ? snap.screen_payline : [];
     const status = spinRow && spinRow.status;
@@ -2658,7 +2683,9 @@
     const payout = (snap && snap.bank_screen_payout) || {};
     const stages = (snap && snap.slot_stages) || {};
     const bankScreenHit = stages.bank_builder_hit || (snap && snap.kind === "bank_builder") || (snap && snap.source_type === "slot_screen_bank_builder");
-    if(bankScreenHit && Array.isArray(payout.positions)) {
+    // ignoreBank: the bank already resolved first as its own pass, so this call wants the
+    // HEADLINE reward's cells (the gem/coin/jackpot line), not the bank tiles.
+    if(!(opts && opts.ignoreBank) && bankScreenHit && Array.isArray(payout.positions) && payout.positions.length) {
       return payout.positions;
     }
     if(!isMiss && payline.length) return payline;
@@ -2679,20 +2706,22 @@
     document.querySelectorAll(".slot-cell.win-hit").forEach(cell => cell.classList.remove("win-hit"));
   }
 
-  function highlightWinningCells(spinRow, snap){
+  function highlightWinningCells(spinRow, snap, opts){
     const reels = Array.from(document.querySelectorAll(".slot-cell"));
-    const positions = winningPositions(spinRow, snap);
+    const positions = winningPositions(spinRow, snap, opts);
     clearResultHighlights();
     positions.forEach(i => {
       if(reels[i]) reels[i].classList.add("win-hit");
     });
   }
 
-  function rewardAnimationKind(spinRow, snap){
+  function rewardAnimationKind(spinRow, snap, opts){
     const bankDelta = (spinRow && (spinRow.bank_delta_cents || 0)) || 0;
     const status = spinRow && spinRow.status;
     const kind = snap && snap.kind;
-    if(bankDelta > 0 || kind === "bank_builder") return "bank";
+    // ignoreBank: the bank deposit already animated in its own pass; classify the
+    // headline reward (miss/sponsor/jackpot/care) so it gets its own reveal.
+    if(!(opts && opts.ignoreBank) && (bankDelta > 0 || kind === "bank_builder")) return "bank";
     if(status === "miss" || kind === "miss") return "miss";
     if(kind === "sponsor") return "pledge";
     if(kind === "choice") return "choice";
@@ -2717,9 +2746,9 @@
     return configs[kind] || configs.care;
   }
 
-  function animateRewardReveal(spinRow, snap){
+  function animateRewardReveal(spinRow, snap, opts){
     if(!isSlotsPageActive()) return null;
-    const kind = rewardAnimationKind(spinRow || {}, snap || {});
+    const kind = rewardAnimationKind(spinRow || {}, snap || {}, opts);
     const config = rewardAnimationConfig(kind, spinRow || {}, snap || {});
     const machine = document.querySelector(".slots-machine");
     const frame = document.querySelector(".slot-reels-frame");
@@ -2728,7 +2757,7 @@
 
     clearSlotRewardEffects();
     if(machine) machine.classList.add("reward-" + kind);
-    const positions = winningPositions(spinRow || {}, snap || {});
+    const positions = winningPositions(spinRow || {}, snap || {}, opts);
     const cells = (positions.length ? positions : [2, 7, 12]).map(i => reels[i]).filter(Boolean);
     cells.forEach(cell => cell.classList.add("reward-focus"));
     triggerPetRewardAnimation(kind);
@@ -2829,11 +2858,11 @@
     const cells = positions.map(i => reels[i]).filter(Boolean);
     if(!cells.length) return;
 
-    cells.forEach(cell => cell.classList.add("bank-hit"));
     slotPlay("bankLine");
     const math = showBankMathOverlay(cells, payout, deltaCents);
-    updateBankMathOverlay(math, "Bank tiles", bankUnitLine(payout.base_units || cells.length, 0, 0), bankTotalLine(payout, deltaCents, "base"));
-    await wait(340);
+
+    // PHASE 1 - reveal the base units one tile at a time, counter ticking 1..N.
+    await animateBankCountUp(math, cells, payout);
 
     const horizontalGroups = Array.isArray(payout.horizontal_groups) ? payout.horizontal_groups : [];
     horizontalGroups.flat().forEach(i => {
@@ -2844,12 +2873,16 @@
       if(reels[i]) reels[i].classList.add("bank-vertical");
     });
 
-    updateBankMathOverlay(math, "Chain reaction", bankUnitLine(payout.base_units || cells.length, payout.horizontal_bonus_units || 0, payout.vertical_bonus_units || 0), "Bank links are firing together.");
+    // PHASE 2 - the lightning, the multiply count-up, and the pet-runner deposit all
+    // run together. The multiply step grows the panel total from base units to the
+    // combo total as the links fire (skipped for a lone tile - 1 unit, no multiplier).
     const horizontalPromise = playBankLightningGroups(horizontalGroups, reels, "row", "Double Points!");
     const verticalPromise = playBankLightningGroups(verticalGroups, reels, "column", "+1 Bank Unit!");
     const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
     const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents, onDeposit) : Promise.resolve();
-    await wait(520);
+    await animateBankMultiplyStep(math, payout, 760);
+
+    // PHASE 3 - settle to the reserve formula and let the deposit/lightning finish.
     updateBankMathOverlay(math, "Reserve math", bankFinalFormula(payout), bankTotalLine(payout, deltaCents, "final"));
     const [horizontalLinks, verticalLinks] = await Promise.all([horizontalPromise, verticalPromise]);
     await reservePromise;
@@ -2860,12 +2893,79 @@
     cells.forEach(cell => cell.classList.remove("bank-hit", "bank-horizontal", "bank-vertical"));
   }
 
-  function bankUnitLine(baseUnits, horizontalUnits, verticalUnits){
-    const parts = [baseUnits + " BANK"];
-    if(horizontalUnits > 0) parts.push("+ " + horizontalUnits + " row");
-    if(verticalUnits > 0) parts.push("+ " + verticalUnits + " column");
-    const total = baseUnits + horizontalUnits + verticalUnits;
-    return parts.join(" ") + " = " + total + " unit" + (total === 1 ? "" : "s");
+  // Reveal each base BANK tile in turn - highlight the cell, pop its "+1" node, and
+  // tick the panel counter 1 -> N. Per-tile delay scales down so big split shapes
+  // stay under ~0.9s total. Returns once the base count is fully shown.
+  async function animateBankCountUp(math, cells, payout){
+    const total = cells.length;
+    if(!total) return;
+    const perTile = Math.min(150, Math.max(70, Math.floor(820 / total)));
+    for(let i = 0; i < total; i++){
+      const cell = cells[i];
+      if(cell){
+        cell.classList.remove("bank-hit");
+        void cell.offsetWidth;
+        cell.classList.add("bank-hit");
+      }
+      if(math && math.nodes && math.nodes[i]) math.nodes[i].classList.add("show");
+      const count = i + 1;
+      slotPlay("tick", { tick: i });
+      if(math){
+        const detail = total === 1
+          ? "One BANK tile, one unit — no multiplier."
+          : "Each BANK tile banks a unit.";
+        updateBankMathOverlay(math, count === 1 ? "Bank unit" : "Banking units", count + " unit" + (count === 1 ? "" : "s"), detail);
+      }
+      await wait(perTile);
+    }
+  }
+
+  // Grow the panel total from base units to the combo total as the links fire. A
+  // lone tile (no group bonus) skips straight to the reserve formula.
+  async function animateBankMultiplyStep(math, payout, durationMs){
+    if(!math) return;
+    const baseUnits = payout.base_units || 0;
+    const finalUnits = payout.units || baseUnits;
+    if(finalUnits <= baseUnits) return;
+    showBankMultChip(math, "× combo +" + (finalUnits - baseUnits));
+    if(math.title) math.title.textContent = "Chain reaction";
+    if(math.total) math.total.textContent = "Connected blocks multiply the bank.";
+    await tweenCount(baseUnits, finalUnits, durationMs, (val) => {
+      if(!math.formula) return;
+      math.formula.textContent = val + " unit" + (val === 1 ? "" : "s");
+      math.formula.classList.remove("counting");
+      void math.formula.offsetWidth;
+      math.formula.classList.add("counting");
+    });
+  }
+
+  // Step an integer from->to over ms, capped at 14 visible steps. onStep(value, done).
+  function tweenCount(from, to, ms, onStep){
+    return new Promise(resolve => {
+      const steps = Math.max(1, Math.min(to - from, 14));
+      const stepMs = Math.max(40, Math.floor(ms / steps));
+      let n = 0;
+      const timer = setInterval(() => {
+        n++;
+        const val = Math.round(from + (to - from) * (n / steps));
+        onStep(val, n >= steps);
+        if(n >= steps){ clearInterval(timer); resolve(); }
+      }, stepMs);
+    });
+  }
+
+  function showBankMultChip(math, label){
+    if(!math || !math.overlay) return;
+    const panel = math.overlay.querySelector(".slot-bank-math-panel");
+    if(!panel || !isSlotsPageActive()) return;
+    const rect = panel.getBoundingClientRect();
+    const chip = document.createElement("span");
+    chip.className = "slot-bank-mult-chip";
+    chip.textContent = label;
+    chip.style.left = (rect.left + rect.width / 2) + "px";
+    chip.style.top = (rect.top - 4) + "px";
+    math.overlay.appendChild(chip);
+    chip.addEventListener("animationend", () => chip.remove(), { once: true });
   }
 
   function bankFinalFormula(payout){
@@ -2897,19 +2997,21 @@
     }
     panel.innerHTML = '<span class="slot-bank-math-title"></span><strong class="slot-bank-math-formula"></strong><em class="slot-bank-math-total"></em>';
     overlay.appendChild(panel);
-    cells.forEach((cell, idx) => {
+    // Nodes start hidden; animateBankCountUp pops them one at a time via `.show`.
+    const nodes = cells.map(cell => {
       const rect = cell.getBoundingClientRect();
       const node = document.createElement("span");
       node.className = "slot-bank-math-node";
       node.textContent = "+1";
       node.style.left = (rect.left + rect.width / 2) + "px";
       node.style.top = (rect.top + rect.height / 2) + "px";
-      node.style.animationDelay = (idx * 45) + "ms";
       overlay.appendChild(node);
+      return node;
     });
     document.body.appendChild(overlay);
     return {
       overlay,
+      nodes,
       title: panel.querySelector(".slot-bank-math-title"),
       formula: panel.querySelector(".slot-bank-math-formula"),
       total: panel.querySelector(".slot-bank-math-total"),
@@ -3529,60 +3631,95 @@
     cell.dataset.symbol = key.toLowerCase();
   }
 
-  function resultText(spinRow, snap){
+  // True when the spin rolled a real reward alongside any incidental bank tiles. The
+  // bank always resolves from the board (even cosmetic BANK tiles pay), so most spins
+  // carry a deposit; this tells the message which spins also have a reward to surface.
+  function spinHasForegroundReward(snap, stages){
+    snap = snap || {}; stages = stages || {};
+    if(snap.kind === "points" || stages.outcome === "coin") return true;
+    if(snap.kind === "booster" || stages.outcome === "booster") return true;
+    if(snap.kind === "pet" || stages.outcome === "pet") return true;
+    if(snap.kind === "collectible" || stages.outcome === "collectible") return true;
+    if(stages.outcome === "free_spin" || stages.free_spin_hit) return true;
+    if(snap.requires_jackpot_choice) return true;
+    if(stages.jackpot_hit) return true;
+    return false; // bank-builder hit, plain miss, or pure cosmetic-bank deposit
+  }
+
+  // Concise "...also banked" clause appended after a reward headline so both show.
+  function bankReserveSuffix(payout, bankDelta, stages){
+    payout = payout || {}; stages = stages || {};
+    const units = payout.units ? " (" + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") + ")" : "";
+    const mult = stages.bank_multiplier_applied ? " " + stages.bank_multiplier_applied + "x booster!" : "";
+    const cap = payout.capped ? " Bank cap trimmed it." : "";
+    return "+" + money(bankDelta) + units + " to the Reward Reserve." + mult + cap;
+  }
+
+  function resultText(spinRow, snap, opts){
     const stages = (snap && snap.slot_stages) || {};
-    if(stages.empty_bucket) {
-      const source = stages.payment_source && stages.payment_source.label ? stages.payment_source.label : sourceLabel(snap.payment_source);
-      const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
-      return source + " " + tier + " was empty. No jackpot reroll; roll the dice again after adding rewards to a bucket.";
-    }
     const payout = (snap && snap.bank_screen_payout) || {};
     const bankDelta = spinRow.bank_delta_cents || 0;
-    if(bankDelta > 0) {
+
+    // The rolled reward headline, independent of any bank deposit. (opts kept for the
+    // animation callers, but the deposit is no longer hidden from the text.)
+    const rewardHeadline = () => {
+      if(stages.empty_bucket) {
+        const source = stages.payment_source && stages.payment_source.label ? stages.payment_source.label : sourceLabel(snap.payment_source);
+        const tier = stages.tier && stages.tier.label ? stages.tier.label : tierById(snap.tier_id).label;
+        return source + " " + tier + " was empty. No jackpot reroll; roll the dice again after adding rewards to a bucket.";
+      }
+      if(snap.kind === "points" || stages.outcome === "coin"){
+        const coin = stages.coin || {};
+        if(coin.coin_kind === "cashback") return "Cashback! Your spin cost was refunded.";
+        return "Coin drop: +" + (coin.points || 0) + " points.";
+      }
+      if(snap.kind === "booster" || stages.outcome === "booster"){
+        if(stages.multiplier_charge_earned){
+          return stages.multiplier_charge_earned + "x multiplier charge earned! Combine or arm it from your stash.";
+        }
+        const g = stages.gamble || {};
+        const desc = boosterDescriptor(g.booster_type);
+        const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
+        if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
+        if(g.status === "banked") return desc.banked(value);
+        return desc.head(value) + "! Bank it, or risk it for more.";
+      }
+      if(snap.kind === "pet" || stages.outcome === "pet"){
+        const pet = stages.pet || {};
+        return pet.pet_kind === "cosmetic" ? "Your pet found a new accessory!" : "Pet treat! Your pet is delighted.";
+      }
+      if(snap.kind === "collectible" || stages.outcome === "collectible"){
+        const c = stages.collectible || {};
+        if(c.set_completed) return "Gem set complete! A guaranteed jackpot spin is yours.";
+        return "Collected a gem" + (c.gems != null ? " (" + c.gems + " toward the next set)" : "") + ".";
+      }
+      if(stages.outcome === "free_spin" || stages.free_spin_hit) return "Free spin tile! A reroll credit is yours.";
+      if(stages.bank_builder_hit) return "Bank Builder hit, but you've already banked your full monthly goal.";
+      if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
+      if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
+      if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
+      const jackpotSpins = Math.max(1, Number(stages.jackpot_spins || 1));
+      const jackpotLevel = Math.max(1, Number(stages.jackpot_level || 1));
+      const jackpotPrefix = stages.jackpot_hit ? jackpotHitLabel(jackpotLevel, jackpotSpins) + ". " : "";
+      if(spinRow.status === "pending" && snap.requires_jackpot_choice) return jackpotPrefix + "Pick a prize from the list.";
+      if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
+      const source = snap.payment_source ? sourceLabel(snap.payment_source) + " " : "";
+      const tier = snap.tier_id ? tierById(snap.tier_id).label + ": " : "";
+      return "Prize reveal: " + source + tier + (snap.title || "Reward");
+    };
+
+    // Pure bank spin: nothing rolled but the deposit, so the bank line is the whole story.
+    if(bankDelta > 0 && !stages.empty_bucket && !spinHasForegroundReward(snap, stages)) {
       const units = payout.units ? " from " + payout.units + " bank unit" + (payout.units === 1 ? "" : "s") : "";
       const cap = payout.capped ? " Bank cap trimmed the payout." : "";
       const mult = stages.bank_multiplier_applied ? " " + stages.bank_multiplier_applied + "x booster applied!" : "";
-      const choice = snap.requires_jackpot_choice ? " Pick a jackpot from the list." : "";
-      return "Bank Building paid " + money(bankDelta) + units + "." + mult + " Funds moved into the Reward Reserve." + cap + choice;
+      return "Bank Building paid " + money(bankDelta) + units + "." + mult + " Funds moved into the Reward Reserve." + cap;
     }
-    if(snap.kind === "points" || stages.outcome === "coin"){
-      const coin = stages.coin || {};
-      if(coin.coin_kind === "cashback") return "Cashback! Your spin cost was refunded.";
-      return "Coin drop: +" + (coin.points || 0) + " points.";
-    }
-    if(snap.kind === "booster" || stages.outcome === "booster"){
-      if(stages.multiplier_charge_earned){
-        return stages.multiplier_charge_earned + "x multiplier charge earned! Combine or arm it from your stash.";
-      }
-      const g = stages.gamble || {};
-      const desc = boosterDescriptor(g.booster_type);
-      const value = g.multiplier || (Array.isArray(g.ladder) && g.ladder[0]) || 1;
-      if(g.status === "busted") return "Gamble busted. The booster fizzled to nothing.";
-      if(g.status === "banked") return desc.banked(value);
-      return desc.head(value) + "! Bank it, or risk it for more.";
-    }
-    if(snap.kind === "pet" || stages.outcome === "pet"){
-      const pet = stages.pet || {};
-      return pet.pet_kind === "cosmetic" ? "Your pet found a new accessory!" : "Pet treat! Your pet is delighted.";
-    }
-    if(snap.kind === "collectible" || stages.outcome === "collectible"){
-      const c = stages.collectible || {};
-      if(c.set_completed) return "Gem set complete! A guaranteed jackpot spin is yours.";
-      return "Collected a gem" + (c.gems != null ? " (" + c.gems + " toward the next set)" : "") + ".";
-    }
-    if(stages.outcome === "free_spin" || stages.free_spin_hit) return "Free spin tile! A reroll credit is yours.";
-    if(stages.bank_builder_hit) return "Bank Builder hit, but you've already banked your full monthly goal.";
-    if(stages.jackpot_hit === false) return "Miss. No jackpot this spin.";
-    if(spinRow.status === "miss" || snap.kind === "miss") return "No jackpot this spin. The lights are warming up.";
-    if(snap.kind === "bank_builder") return "Reward Reserve grew by " + money(spinRow.bank_delta_cents || snap.bank_delta_cents || 0) + ". Confirm it when you get a chance.";
-    const jackpotSpins = Math.max(1, Number(stages.jackpot_spins || 1));
-    const jackpotLevel = Math.max(1, Number(stages.jackpot_level || 1));
-    const jackpotPrefix = stages.jackpot_hit ? jackpotHitLabel(jackpotLevel, jackpotSpins) + ". " : "";
-    if(spinRow.status === "pending" && snap.requires_jackpot_choice) return jackpotPrefix + "Pick a prize from the list.";
-    if(spinRow.status === "pending") return "Prize pending confirmation: " + (snap.title || "Reward");
-    const source = snap.payment_source ? sourceLabel(snap.payment_source) + " " : "";
-    const tier = snap.tier_id ? tierById(snap.tier_id).label + ": " : "";
-    return "Prize reveal: " + source + tier + (snap.title || "Reward");
+
+    // A real reward rolled: lead with it and, when the screen also banked, append the
+    // deposit so both are visible instead of the bank line masking the reward.
+    const bankSuffix = bankDelta > 0 ? " " + bankReserveSuffix(payout, bankDelta, stages) : "";
+    return rewardHeadline() + bankSuffix;
   }
 
   function jackpotHitLabel(level, spins){

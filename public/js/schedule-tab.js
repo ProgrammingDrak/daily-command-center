@@ -217,6 +217,24 @@ function buildListView(){
   }
   function emitNode(node,idx,mode){return node.rel==="subtask"?subRow(node.ev,idx,mode,node):row(node.ev,idx,mode,node);}
 
+  // Parents with at least one child anywhere in the visible list -- these are the
+  // rows the Collapse all / Expand all controls act on.
+  const parentIds=visible.filter(ev=>childrenOf(ev.id,visible).length>0).map(ev=>ev.id);
+  if(parentIds.length){
+    const controls=document.createElement("div");
+    controls.className="it-list-controls";
+    controls.innerHTML=
+      '<button class="it-list-ctrl-btn" data-collapse-action="expand">Expand all</button>'+
+      '<button class="it-list-ctrl-btn" data-collapse-action="collapse">Collapse all</button>';
+    controls.querySelectorAll(".it-list-ctrl-btn").forEach(btn=>{
+      btn.addEventListener("click",e=>{
+        e.stopPropagation();
+        if(typeof setCollapsedAll==="function"){setCollapsedAll(parentIds,btn.dataset.collapseAction==="collapse");render();}
+      });
+    });
+    wrap.appendChild(controls);
+  }
+
   section("Work list",activeIds.size);
   if(!openItems.length){
     const empty=document.createElement("div");
@@ -801,7 +819,7 @@ function openMoveMenu(id, anchorEl){
     {label:"Today",     action:()=>moveTaskToToday(id)},
     {label:"Next week", action:()=>moveTaskToNextWeek(id)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
-    {label:"Backlog",   action:()=>moveTaskToBacklog(id)},
+    {label:"Backlog and Ideas",   action:()=>moveTaskToBacklog(id)},
     {label:"Priority",  action:()=>moveTaskToPriority(id)}
   ];
   const pop=document.createElement("div");
@@ -892,7 +910,7 @@ function buildBacklog(){
   // Priority-stage items are surfaced in the Priority drawer via buildConsider, not here.
   const items=backlog.filter(t=>t.stage!=="Priority");
   document.getElementById("backlog-count").textContent=items.length;
-  if(!items.length){board.innerHTML='<div class="board-empty">No backlog items. Add tasks above or check your Notion board.</div>';return}
+  if(!items.length){board.innerHTML='<div class="board-empty">Nothing in Backlog and Ideas yet. Add tasks above or check your Notion board.</div>';return}
   // Sort: High > Medium > Low
   const priOrder={High:0,Medium:1,Low:2,undefined:3};
   const sorted=[...items].sort((a,b)=>(priOrder[a.priority]||3)-(priOrder[b.priority]||3));

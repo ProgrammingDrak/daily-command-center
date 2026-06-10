@@ -1263,7 +1263,10 @@ test("applyTileOverrideToScreen keeps exact tiles and pays bank from override on
   assert.equal(screen.payout.cents, 77);
 });
 
-test("spin downgrades a jackpot outcome when override tiles have no jackpot payline", async () => {
+test("spin lands the outcome the override board depicts, not the rolled jackpot", async () => {
+  // Scattered jackpots with no 3-in-a-row line are NOT a jackpot. Because the
+  // board carries BANK tiles, the override drives the spin to a bank builder
+  // even though jackpot_hit_rate is pinned to 1 — the tiles you set win.
   const scattered = [
     "MISS", "BANK", "MISS", "JACKPOT", "MISS",
     "MISS", "BANK", "MISS", "JACKPOT", "MISS",
@@ -1310,8 +1313,7 @@ test("spin downgrades a jackpot outcome when override tiles have no jackpot payl
   const spin = await store.spin("ws-1", 1);
   const snap = spin.reward_snapshot;
 
-  assert.equal(spin.status, "miss");
-  assert.equal(snap.kind, "miss");
+  assert.equal(snap.kind, "bank_builder");
   assert.equal(snap.slot_stages.jackpot_hit, false);
   assert.deepEqual(snap.screen_board, scattered);
   assert.deepEqual(snap.screen_payline, []);

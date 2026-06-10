@@ -15,6 +15,8 @@
 const DEFAULT_BASE = "https://daily-command-center.onrender.com";
 const BASE = (process.env.DCC_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
 const TOKEN = process.env.DCC_PA_TOKEN || process.env.SECRET_PA_TOKEN || "";
+const USER_ID = String(process.env.DCC_USER_ID || "1");
+const WORKSPACE_ID = process.env.DCC_WORKSPACE_ID || "";
 
 const SERVER_INFO = { name: "dcc-mcp", version: "1.0.0" };
 const PROTOCOL_VERSION = "2024-11-05";
@@ -63,9 +65,11 @@ async function scheduleTask(args) {
   if (args.durationMinutes != null) body.durationMinutes = args.durationMinutes;
   if (Array.isArray(args.tags)) body.tags = args.tags;
 
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}`, "x-user-id": USER_ID };
+  if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
   const res = await fetch(`${BASE}/api/dcc/quick-task`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+    headers,
     body: JSON.stringify(body),
   });
   const text = await res.text();

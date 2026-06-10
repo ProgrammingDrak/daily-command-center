@@ -136,7 +136,7 @@
           <div class="carryover-row-meta">${ms(item.durMin)}${item.priority ? " · " + item.priority : ""}</div>
         </div>
         <div class="carryover-row-actions">
-          <button class="carryover-btn carryover-btn-backlog">To Backlog</button>
+          <button class="carryover-btn carryover-btn-backlog">To Backlog and Ideas</button>
           <button class="carryover-btn carryover-btn-schedule">For Today</button>
           <button class="carryover-btn carryover-btn-drop">Drop</button>
         </div>`;

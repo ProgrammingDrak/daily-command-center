@@ -224,7 +224,7 @@ function buildPickerList(query){
   const groups=[
     {label:"Schedule",items:scheduled.map(ev=>({id:ev.id,source:"schedule",title:ev.title,dur:dur(ev),color:cfg(ev.type).color,type:ev.type}))},
     {label:"Consider for Today",items:consider.map(t=>({id:t.id,source:"consider",title:t.title,dur:t.durMin,color:cfg(t.type).color,type:t.type}))},
-    {label:"Backlog",items:backlog.map(t=>({id:t.id,source:"backlog",title:t.title,dur:t.durMin,color:cfg(t.type).color,type:t.type}))}
+    {label:"Backlog and Ideas",items:backlog.map(t=>({id:t.id,source:"backlog",title:t.title,dur:t.durMin,color:cfg(t.type).color,type:t.type}))}
   ];
   groups.forEach(g=>{
     const filtered=g.items.filter(i=>!q||i.title.toLowerCase().includes(q));
