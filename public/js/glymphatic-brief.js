@@ -483,6 +483,16 @@
     return (current && Array.isArray(current.pages) && current.pages.length) ? current.pages : null;
   }
 
+  function gbGeneratedLabel(current){
+    var ts = current && current.generated_at;
+    if(!ts)return "";
+    var d = new Date(ts);
+    if(isNaN(d.getTime()))return "";
+    var date = d.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric"});
+    var time = d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+    return "Generated " + date + ", " + time;
+  }
+
   function gbPageNav(pages, activeId){
     return '<nav class="gb-pagenav">'+pages.map(function(p){
       return '<button class="gb-pagebtn'+(p.id===activeId?' active':'')+'" data-gb-page="'+gbEsc(p.id)+'">'+gbEsc(p.label||p.id)+'</button>';
@@ -679,7 +689,10 @@
               '<button class="gb-refresh-btn" data-gb-refresh '+(gbRefreshing?'disabled':'')+' title="Refresh DCC brief">'+(gbRefreshing?'Refreshing':'Refresh')+'</button>'+
             '</div>'+
           '</header>'+
-          gbPageNav(pages, gbActivePage)+
+          '<div class="gb-pagenav-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">'+
+            gbPageNav(pages, gbActivePage)+
+            '<div class="gb-generated" style="font-size:11px;color:var(--text-muted);white-space:nowrap" title="When this brief was generated">'+gbEsc(gbGeneratedLabel(current))+'</div>'+
+          '</div>'+
           '<div class="gb-page" data-gb-page-panel="'+gbEsc(active.id)+'">'+gbRenderPage(active, current, ui)+'</div>'+
           gbHistory(briefData.history)+
         '</div>';
