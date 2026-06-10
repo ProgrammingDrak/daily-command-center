@@ -61,7 +61,7 @@
         </select>
         <select class="tab-dest">
           <option value="schedule">Schedule</option>
-          <option value="backlog">Backlog</option>
+          <option value="backlog">Backlog and Ideas</option>
           <option value="urgent" selected>Urgent</option>
           <option value="side_project">Side Project</option>
           <option value="repeat_responsibility">Repeat Responsibility</option>
@@ -166,7 +166,7 @@
       </select>
       <select class="tab-dest">
         <option value="schedule">Schedule</option>
-        <option value="backlog">Backlog</option>
+        <option value="backlog">Backlog and Ideas</option>
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
         <option value="repeat_responsibility">Repeat Responsibility</option>
@@ -241,12 +241,13 @@
     </select>
     <select class="tab-dest">
       <option value="schedule">Schedule</option>
-      <option value="backlog">Backlog</option>
+      <option value="backlog">Backlog and Ideas</option>
       <option value="urgent" selected>Urgent</option>
       <option value="side_project">Side Project</option>
       <option value="repeat_responsibility">Repeat Responsibility</option>
     </select>
     <button class="tab-add">+ Add</button>
+    <button class="tab-catchup" id="unfinished-tasks-btn" type="button" title="Reschedule unfinished past tasks">Catch up</button>
   </div>
   <section class="schedule-delegated-section" id="schedule-delegated-section" style="display:none" aria-label="Delegated"></section>
   <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
@@ -286,7 +287,7 @@
         <option value="120">2h</option>
       </select>
       <select class="tab-dest">
-        <option value="backlog">Backlog</option>
+        <option value="backlog">Backlog and Ideas</option>
         <option value="schedule">Schedule</option>
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
@@ -369,7 +370,7 @@
         <details class="tm-section" id="tm-backlog-section">
           <summary class="tm-section-header">
             <span class="tm-chevron"></span>
-            Backlog
+            Backlog and Ideas
             <span class="badge" id="backlog-count">0</span>
           </summary>
           <div class="tm-section-body" id="tm-backlog">
@@ -589,7 +590,10 @@
     <div class="ft-resize-grip" id="ft-resize-grip" title="Drag to resize"></div>
     <div class="ft-panel-bar">
       <span class="ft-panel-title">Focus Timer</span>
-      <button class="ft-panel-close" id="ft-panel-close">&times;</button>
+      <div class="ft-panel-bar-btns">
+        <button class="ft-panel-min" id="ft-panel-min" title="Minimize to pill"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 12h12"/></svg></button>
+        <button class="ft-panel-close" id="ft-panel-close" title="Stash to logo">&times;</button>
+      </div>
     </div>
     <div class="ft-panel-body">
       <!-- Empty state -->
@@ -1559,6 +1563,7 @@
 <script src="/public/js/persistence.js"></script>
 <script src="/public/js/state.js"></script>
 <script src="/public/js/points.js"></script>
+<script src="/public/js/celebrate.js"></script>
 <script src="/public/js/schedule.js"></script>
 <script src="/public/js/drag.js"></script>
 <script src="/public/js/clock.js"></script>
@@ -1586,6 +1591,7 @@
 <script src="/public/js/punishments.js"></script>
 <script src="/public/js/rewards-queue.js"></script>
 <script src="/public/js/carryover-review.js"></script>
+<script src="/public/js/unfinished-tasks.js"></script>
 <script src="/public/js/side-drawers.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
 <script>

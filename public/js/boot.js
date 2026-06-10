@@ -108,6 +108,7 @@
         pomoState.taskDone = savedPomo.taskDone || false;
         pomoState.stackedSessions = savedPomo.stackedSessions || {};
         pomoState.pivotTasks = savedPomo.pivotTasks || [];
+        pomoState.collapsedView = savedPomo.collapsedView || "mini";
         if (typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
         const emptyEl = document.getElementById("pomo-empty");
         const activeEl = document.getElementById("pomo-active");
@@ -191,6 +192,7 @@ setInterval(updateClock, 1000);
   pomoState.taskDone = saved.taskDone || false;
   pomoState.stackedSessions = saved.stackedSessions || {};
   pomoState.pivotTasks = saved.pivotTasks || [];
+  pomoState.collapsedView = saved.collapsedView || "mini";
   if (typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
   // Show the timer UI (hide empty state, show active)
   const emptyEl = document.getElementById("pomo-empty");
