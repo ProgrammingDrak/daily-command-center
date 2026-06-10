@@ -4357,7 +4357,7 @@
           source_key: sourceKey,
           task_id: task.id,
           title: task.title || task.label || "Task completed",
-          type: task.type || "task",
+          type: payload.type || task.type || "task",
           source: task.source || "",
           priority: task.priority || "",
           tags: Array.isArray(task.tags) ? task.tags : [],

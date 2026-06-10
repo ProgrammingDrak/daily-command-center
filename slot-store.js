@@ -6,6 +6,7 @@ const {
   DEFAULT_SPIN_COST_POINTS,
   LEGACY_POINTS_V2_MULTIPLIER,
   POINTS_V3_BALANCE_MULTIPLIER,
+  classifyTaskForPoints,
   scoreTaskPoints,
 } = require("./slot-scoring");
 
@@ -1933,6 +1934,15 @@ function normalizeTaskTags(value) {
 }
 
 function taskPointTier(body = {}, settings = {}) {
+  const classification = classifyTaskForPoints(body);
+  if (classification.pointTier) {
+    return {
+      tier: classification.pointTier,
+      multiplier: classification.pointMultiplier,
+      matched_tags: [],
+      classification_reason: classification.reason,
+    };
+  }
   const normalized = normalizeSlotSettings(settings);
   const tiers = normalized.point_tag_tiers || DEFAULT_POINT_TAG_TIERS;
   const tags = normalizeTaskTags(body.tags ?? body.tag ?? body.tag_ids ?? body.tagIds);

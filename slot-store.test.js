@@ -335,6 +335,35 @@ test("earnTaskCredit applies point tag tiers from slot settings", async () => {
   assert.equal(ooo.delta, 0);
 });
 
+test("earnTaskCredit applies title-based break and maintenance classification", async () => {
+  const lunchPool = createMockPool({ pointBalance: 0, migrated: true });
+  const lunchStore = loadStoreWithMock(lunchPool);
+  const lunch = await lunchStore.earnTaskCredit("ws-1", 1, {
+    source_key: "lunch-task",
+    task_id: "lunch-task",
+    title: "Lunch",
+    type: "task",
+    duration_minutes: 45,
+  });
+
+  const routinePool = createMockPool({ pointBalance: 0, migrated: true });
+  const routineStore = loadStoreWithMock(routinePool);
+  const routine = await routineStore.earnTaskCredit("ws-1", 1, {
+    source_key: "routine-task",
+    task_id: "routine-task",
+    title: "Morning routine",
+    type: "task",
+    duration_minutes: 60,
+  });
+
+  assert.equal(lunch.awarded, false);
+  assert.equal(lunch.delta, 0);
+  assert.equal(lunch.scoring.classifiedType, "break");
+  assert.equal(routine.awarded, true);
+  assert.equal(routine.delta, 30);
+  assert.equal(routine.scoring.pointTier, "half");
+});
+
 test("earnTaskCredit adjusts old one-point duplicate ledger rows up to minute-based points", async () => {
   const mockPool = createMockPool({ pointBalance: 1, migrated: true, ledgerDelta: 1 });
   mockPool.state.ledgerInserted = true;
@@ -1598,4 +1627,3 @@ test("a queued miss shield converts a miss spin into a bank builder", async () =
   // one shield spent, one remains
   assert.equal(mockPool.state.settings.next_spin_modifiers.miss_shield, 1);
 });
-

@@ -1,0 +1,606 @@
+{
+  "date": "2026-05-19",
+  "last_updated_at": "2026-05-20T00:17:31.350Z",
+  "last_updated_by": "triage-delete",
+  "watermarks": {
+    "calendar": {
+      "last_at": "2026-05-19T13:45:33Z",
+      "last_id": "google-calendar:primary:2026-05-19"
+    },
+    "gmail": {
+      "last_at": "2026-05-19T12:05:00Z",
+      "last_id": "gmail:19e40204f74aa895"
+    },
+    "slack": {
+      "last_at": "2026-05-19T16:20:00Z",
+      "last_id": "slack:C097MM612UD:1779200811.700469",
+      "status": "ok"
+    }
+  },
+  "triage": {
+    "open_items": [
+      {
+        "id": "dcc:2026-05-19:packet-render",
+        "type": "system",
+        "sub_type": "dcc_readiness",
+        "source_ref": "C:/Users/offic/portable-programming/Repos/daily-command-center/data/state/days/2026-05-19.json",
+        "link": "http://localhost:8090",
+        "link_label": "Open DCC",
+        "title": "Confirm the Tuesday DCC packet renders in the live app",
+        "summary": "The May 19 file replaced a skeleton. Open DCC and confirm today's calendar, source health, and remaining-day schedule render correctly.",
+        "priority": "high",
+        "estimated_minutes": 10,
+        "duration_minutes": 10,
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-19T13:45:33Z",
+        "last_seen_at": "2026-05-19T13:45:33Z",
+        "notes": "Done when the dashboard shows May 19, not the stale May 14 packet or an empty skeleton."
+      },
+      {
+        "id": "sweep-suite:2026-05-19:live-reader-gap",
+        "type": "system",
+        "sub_type": "reader_runtime",
+        "source_ref": "C:/Users/offic/portable-programming/claude-brain/plugins/local/sweep-suite/scripts/sweep_suite_check.py",
+        "link": "file:///C:/Users/offic/portable-programming/claude-brain/plugins/local/sweep-suite/skills/read-calendar/SKILL.md",
+        "link_label": "Open spec",
+        "title": "Close the Sweep Suite live-reader gap",
+        "summary": "The executable Sweep Suite harness passed, but its live Calendar/Gmail/Slack readers are still specs. Today's live sweep had to be done manually through connectors.",
+        "priority": "high",
+        "estimated_minutes": 15,
+        "duration_minutes": 15,
+        "escalation_level": "normal",
+        "cycle_count": 1,
+        "first_seen_at": "2026-05-19T13:45:33Z",
+        "last_seen_at": "2026-05-19T13:45:33Z",
+        "notes": "Harness result: pass. Writer idempotency passed with success then skipped duplicates. Next step is implementing or wiring live reader scripts."
+      },
+      {
+        "id": "gmail:19e2b89672a508cf",
+        "type": "email",
+        "sub_type": "bill",
+        "source_ref": "https://mail.google.com/mail/#all/19e2b89672a508cf",
+        "evidence_link": "https://mail.google.com/mail/#all/19e2b89672a508cf",
+        "link": "https://www.piedmontng.com/Home/Billing-and-Payment",
+        "link_label": "Pay bill",
+        "title": "Piedmont Natural Gas bill ready - $8.00 due June 9",
+        "summary": "Utility bill surfaced in the Gmail sweep. Due date is June 9, 2026.",
+        "priority": "medium",
+        "estimated_minutes": 10,
+        "duration_minutes": 10,
+        "escalation": 0,
+        "first_seen_at": "2026-05-19T13:45:33Z",
+        "received_at": "2026-05-15T12:08:04Z",
+        "seen_count": 1
+      },
+      {
+        "id": "gmail:19e2b7c2f23010dc",
+        "type": "email",
+        "sub_type": "bill",
+        "source_ref": "https://mail.google.com/mail/#all/19e2b7c2f23010dc",
+        "evidence_link": "https://mail.google.com/mail/#all/19e2b7c2f23010dc",
+        "link": "https://www.greenvillewater.com/pay-bill/payment-options/",
+        "link_label": "Pay bill",
+        "title": "Greenville Water bill ready",
+        "summary": "Water bill notification surfaced in the Gmail sweep. Amount was not visible in the email snippet, so review the portal or bill before closeout.",
+        "priority": "normal",
+        "estimated_minutes": 15,
+        "duration_minutes": 15,
+        "escalation": 0,
+        "first_seen_at": "2026-05-19T13:45:33Z",
+        "received_at": "2026-05-15T11:53:37Z",
+        "seen_count": 1
+      },
+      {
+        "id": "gmail:19e3d4b0bdb91cf2",
+        "type": "email",
+        "sub_type": "unsolicited_outreach",
+        "source_ref": "https://mail.google.com/mail/#all/19e3d4b0bdb91cf2",
+        "evidence_link": "https://mail.google.com/mail/#all/19e3d4b0bdb91cf2",
+        "link": "https://mail.google.com/mail/u/0/#drafts?compose=r-235773029247077852",
+        "link_label": "Review draft",
+        "draft_id": "r-235773029247077852",
+        "draft_type": "gmail",
+        "draft_link": "https://mail.google.com/mail/u/0/#drafts?compose=r-235773029247077852",
+        "draft_message_id": "19e40845f9daf670",
+        "draft_thread_id": "19e3d4b0bdb91cf2",
+        "draft_preview": "Hi Riley,\n\nThanks for reaching out and for the kind words about daily-command-center. I am not looking for freelance help on the project right now, but I appreciate you taking the time to send this over.\n\nBest,\nDrake",
+        "title": "Unsolicited freelance outreach about daily-command-center",
+        "summary": "A developer asked about freelance backlog work for daily-command-center. No response needed unless you want to pursue it.",
+        "priority": "low",
+        "estimated_minutes": 5,
+        "duration_minutes": 5,
+        "escalation": 0,
+        "first_seen_at": "2026-05-19T13:45:33Z",
+        "received_at": "2026-05-18T22:53:07Z",
+        "seen_count": 1
+      }
+    ],
+    "resolved_items": [],
+    "cycle_count": 1,
+    "deleted_items": [
+      {
+        "id": "gmail:19e40204f74aa895",
+        "title": "Duke Energy statement ready - $29.77 due June 15",
+        "source_ref": "https://mail.google.com/mail/#all/19e40204f74aa895",
+        "deleted_at": "2026-05-20T00:16:42.289Z",
+        "deleted_by": "user"
+      },
+      {
+        "id": "slack:C097MM612UD:1779200811.700469",
+        "title": "Check Matching & Delays for 37 Copper Leaf",
+        "source_ref": "https://cleverrealestate.slack.com/archives/C097MM612UD/p1779200811700469",
+        "deleted_at": "2026-05-20T00:17:08.640Z",
+        "deleted_by": "user"
+      },
+      {
+        "id": "slack:C03RNES1AQM:1779204155.726249",
+        "title": "Decide if low-investor deal should get agent sourcing",
+        "source_ref": "https://cleverrealestate.slack.com/archives/C03RNES1AQM/p1779204155726249",
+        "deleted_at": "2026-05-20T00:17:15.597Z",
+        "deleted_by": "user"
+      },
+      {
+        "id": "slack:D04Q9012BSS:1779205488.939029",
+        "title": "Check Coty Flessert referral agreement progress",
+        "source_ref": "https://cleverrealestate.slack.com/archives/D04Q9012BSS/p1779205488939029",
+        "deleted_at": "2026-05-20T00:17:24.295Z",
+        "deleted_by": "user"
+      },
+      {
+        "id": "slack:C03RNES1AQM:1779196769.317919",
+        "title": "Review manufactured-home offer guidance thread",
+        "source_ref": "https://cleverrealestate.slack.com/archives/C03RNES1AQM/p1779196769317919?thread_ts=1779196769.317919&cid=C03RNES1AQM",
+        "deleted_at": "2026-05-20T00:17:27.936Z",
+        "deleted_by": "user"
+      },
+      {
+        "id": "gmail:19e26730cb0371a3",
+        "title": "Pennymac monthly statement available",
+        "source_ref": "https://mail.google.com/mail/#all/19e26730cb0371a3",
+        "deleted_at": "2026-05-20T00:17:31.330Z",
+        "deleted_by": "user"
+      }
+    ]
+  },
+  "sweep": {
+    "source_health": [
+      {
+        "source": "sweep-suite-harness",
+        "status": "ok",
+        "summary": "Harness passed: 8 skills present, writer idempotency succeeded, duplicate writes skipped correctly.",
+        "items": 1
+      },
+      {
+        "source": "calendar",
+        "status": "ok",
+        "summary": "Calendar scanned for May 19. Found all-day Griffin House, Crossroads Coffee, and Southside Tennis.",
+        "items": 3
+      },
+      {
+        "source": "gmail",
+        "status": "partial",
+        "summary": "Unread/starred search returned a noisy batch. Actionable items were bills/statements; promotions and newsletters were ignored.",
+        "items": 6
+      },
+      {
+        "source": "slack",
+        "status": "ok",
+        "summary": "Slack web search scanned recent DMs, mentions, and Offers channels. Actionable items: zero-match AMP alert, low-investor deal sourcing decision, Coty referral-progress ping, and one low-priority manufactured-home guidance thread.",
+        "items": 4
+      }
+    ],
+    "readers": [
+      "sweep-suite-harness",
+      "calendar",
+      "gmail",
+      "slack-web"
+    ],
+    "open_item_count": 11,
+    "meetings_count": 3
+  },
+  "notifications": [
+    {
+      "id": "sources:2026-05-19",
+      "type": "source_readiness",
+      "title": "Tuesday sweep completed across calendar, Gmail, and Slack web",
+      "body": "Sweep Suite harness passed. Calendar scanned successfully. Gmail surfaced utility/admin items plus noise. Slack web search found work-responsibility signals in Offers channels and HubSpot Breeze DMs.",
+      "priority": "medium",
+      "created_at": "2026-05-19T16:20:00Z"
+    }
+  ],
+  "assessment": {
+    "day_theme": "Use the open home-work block to make DCC/Sweep Suite more trustworthy, batch admin once, then protect tennis.",
+    "hard_commitments": [
+      "All day: Work from the Griffin House",
+      "07:00-08:30 Crossroads Coffee",
+      "18:30-21:00 Southside Tennis"
+    ],
+    "must_do": [
+      "Confirm the May 19 DCC packet renders in the live app.",
+      "Turn today's manual sweep into a concrete Sweep Suite live-reader next step.",
+      "Handle Slack work-responsibility checks: 37 Copper Leaf zero-match alert, low-investor deal sourcing decision, and Coty referral agreement progress.",
+      "Handle the utility/admin Gmail batch without letting it sprawl.",
+      "Close out before the tennis buffer so Wednesday starts cleanly."
+    ],
+    "nice_to_do": [
+      "Archive or label obvious Gmail noise after the admin batch.",
+      "Decide whether the unsolicited daily-command-center outreach deserves any response.",
+      "Review YouTube Music trial/cancellation only if subscriptions are already on your mind."
+    ],
+    "risks": [
+      "Slack was not swept, so avoid treating communications as fully clear.",
+      "Gmail is noisy enough that broad unread/starred should stay a triage source, not a priority source.",
+      "Tennis compresses the evening; closeout needs to happen before 17:00."
+    ]
+  },
+  "schedule": {
+    "working_hours": {
+      "start": "07:00",
+      "end": "17:30",
+      "timezone": "America/New_York"
+    },
+    "timeline": [
+      {
+        "id": "cal-c83bbd81572540e7b29c48fdd1cdc82d",
+        "type": "meeting",
+        "label": "Work from the Griffin House",
+        "description": "All-day transparent calendar context.",
+        "start": "2026-05-19T00:00:00-04:00",
+        "end": "2026-05-20T00:00:00-04:00",
+        "source": "calendar",
+        "source_id": "c83bbd81572540e7b29c48fdd1cdc82d",
+        "category": "Context",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=YzgzYmJkODE1NzI1NDBlN2IyOWM0OGZkZDFjZGM4MmQgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "c83bbd81572540e7b29c48fdd1cdc82d"
+      },
+      {
+        "id": "cal-a7428ab4aad742f6becd74d3b257aae4",
+        "type": "meeting",
+        "label": "Crossroads Coffee",
+        "description": "Crossroads 4 Coffee and Tea, 112 E Standing Springs Rd, Simpsonville, SC 29680",
+        "start": "2026-05-19T07:00:00-04:00",
+        "end": "2026-05-19T08:30:00-04:00",
+        "source": "calendar",
+        "source_id": "a7428ab4aad742f6becd74d3b257aae4",
+        "category": "Personal",
+        "completed": true,
+        "calendar_link": "https://www.google.com/calendar/event?eid=YTc0MjhhYjRhYWQ3NDJmNmJlY2Q3NGQzYjI1N2FhZTQgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "a7428ab4aad742f6becd74d3b257aae4"
+      },
+      {
+        "id": "task-2026-05-19-dcc-render",
+        "type": "task",
+        "label": "DCC packet render check",
+        "description": "Open the local DCC and verify it is showing the May 19 packet, not the old May 14 packet or a skeleton.",
+        "notes": "Checklist: confirm the date; confirm Crossroads Coffee is marked complete; confirm Southside Tennis appears at 18:30; confirm the source-health notification shows Slack as blocked; click one task card and verify notes render. Done when the live dashboard can be used for the rest of the day.",
+        "start": "2026-05-19T09:50:00-04:00",
+        "end": "2026-05-19T10:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-19:packet-render",
+        "priority": "high",
+        "estimated_minutes": 10,
+        "category": "Planning",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-19-sweep-reader-gap",
+        "type": "task",
+        "label": "Sweep Suite live-reader gap",
+        "description": "Convert today's manual sweep path into the next concrete reader implementation step.",
+        "notes": "Checklist: record that sweep_suite_check.py passes but readers are specs; choose whether to script calendar first or Gmail filtering first; preserve Slack as blocked until tools are exposed; write the next small implementation task so future sweeps are less manual. Done when there is a specific next PR-sized step, not just a vague automation wish.",
+        "start": "2026-05-19T10:00:00-04:00",
+        "end": "2026-05-19T10:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "sweep-suite:2026-05-19:live-reader-gap",
+        "priority": "high",
+        "estimated_minutes": 15,
+        "category": "Systems",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-19-dcc-focus",
+        "type": "task",
+        "label": "Daily Command Center focus block",
+        "description": "Use one clean block for the highest-leverage DCC fix or planning task that emerges from the render check.",
+        "notes": "Pick one: DCC state-source reliability, sweep packet rendering polish, or reader/writer integration. Avoid broad refactors. Done when one user-visible reliability issue is either fixed, clearly scoped, or intentionally parked.",
+        "start": "2026-05-19T10:15:00-04:00",
+        "end": "2026-05-19T11:45:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-19:focus-block",
+        "priority": "medium",
+        "estimated_minutes": 90,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-19-lunch",
+        "type": "free_time",
+        "label": "Lunch / reset",
+        "description": "Step away before the afternoon block.",
+        "start": "2026-05-19T11:45:00-04:00",
+        "end": "2026-05-19T12:25:00-04:00",
+        "source": "codex-packet",
+        "category": "Break",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-19-admin-bills",
+        "type": "task",
+        "label": "Admin and bills batch",
+        "description": "Quickly review the utility/statement emails surfaced by Gmail and decide pay, schedule, archive, or defer.",
+        "notes": "Fast batch, not a big admin project. Items: Duke Energy $29.77 due June 15; Piedmont Natural Gas $8.00 due June 9; Greenville Water bill amount needs portal review; Pennymac monthly statement; YouTube Music trial/cancellation only if relevant. Done when each item has a next action or is archived.",
+        "start": "2026-05-19T12:25:00-04:00",
+        "end": "2026-05-19T12:45:00-04:00",
+        "source": "gmail-sweep",
+        "source_id": "gmail-admin-batch:2026-05-19",
+        "priority": "medium",
+        "estimated_minutes": 20,
+        "category": "Admin",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-19-sweep-document",
+        "type": "task",
+        "label": "Document today's sweep routine",
+        "description": "Write down the exact source order, query filters, and source-confidence rules used for today's plan.",
+        "notes": "Source order: Sweep Suite harness, Calendar May 19, Gmail unread/starred since last watermark with noisy senders filtered, DCC carryover files, local block DB sanity check. Source gaps: Slack unavailable, DCC day files were skeletons, local block DB was stale. Done when future you can recreate this packet without reading this chat.",
+        "start": "2026-05-19T12:45:00-04:00",
+        "end": "2026-05-19T13:30:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-19:routine",
+        "priority": "medium",
+        "estimated_minutes": 45,
+        "category": "Systems",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-19-project-carryover",
+        "type": "task",
+        "label": "One carried project block",
+        "description": "Choose one stale carryover project and make a bounded move: Audit Angel QA, HYHH backup-first follow-through, or the DCC reliability item from this morning.",
+        "notes": "Use this as a decision-quality block, not a second planning session. Done means one repo/task is left in a more intentional state than it started.",
+        "start": "2026-05-19T13:30:00-04:00",
+        "end": "2026-05-19T15:15:00-04:00",
+        "source": "codex-packet",
+        "source_id": "carryover:2026-05-19",
+        "priority": "medium",
+        "estimated_minutes": 105,
+        "category": "Project",
+        "completed": false
+      },
+      {
+        "id": "task-2026-05-19-closeout",
+        "type": "task",
+        "label": "Closeout and Wednesday inputs",
+        "description": "Mark actuals, park unfinished work honestly, and set up the next morning before tennis takes over.",
+        "notes": "Checklist: update completed/skipped blocks; record whether Slack remained unswept; move unfinished DCC/Sweep Suite work to Wednesday or a later bucket; jot the next admin due-date action; protect tennis buffer. Done when Wednesday has the first next step.",
+        "start": "2026-05-19T15:15:00-04:00",
+        "end": "2026-05-19T16:00:00-04:00",
+        "source": "codex-packet",
+        "source_id": "dcc:2026-05-19:closeout",
+        "priority": "high",
+        "estimated_minutes": 45,
+        "category": "Planning",
+        "completed": false
+      },
+      {
+        "id": "break-2026-05-19-tennis-buffer",
+        "type": "free_time",
+        "label": "Dinner / tennis buffer",
+        "description": "Food, gear, drive, and decompression before Southside Tennis.",
+        "start": "2026-05-19T16:00:00-04:00",
+        "end": "2026-05-19T18:30:00-04:00",
+        "source": "codex-packet",
+        "category": "Buffer",
+        "completed": false
+      },
+      {
+        "id": "cal-b2237db8f5d64133a59d49f4b1abaeac",
+        "type": "meeting",
+        "label": "Southside Tennis",
+        "description": "Southside Park, 417 Baldwin Rd, Simpsonville, SC 29680",
+        "start": "2026-05-19T18:30:00-04:00",
+        "end": "2026-05-19T21:00:00-04:00",
+        "source": "calendar",
+        "source_id": "b2237db8f5d64133a59d49f4b1abaeac",
+        "category": "Personal",
+        "completed": false,
+        "calendar_link": "https://www.google.com/calendar/event?eid=YjIyMzdkYjhmNWQ2NDEzM2E1OWQ0OWY0YjFhYmFlYWMgb2ZmaWNpYWwuZHJha2VzaGFkd2VsbEBt&ctz=America/New_York",
+        "dedupeKey": "b2237db8f5d64133a59d49f4b1abaeac"
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "task_id": "task-2026-05-19-dcc-render",
+        "title": "DCC packet render check",
+        "estimated_minutes": 10,
+        "priority": "high"
+      },
+      {
+        "task_id": "task-2026-05-19-sweep-reader-gap",
+        "title": "Sweep Suite live-reader gap",
+        "estimated_minutes": 15,
+        "priority": "high"
+      },
+      {
+        "task_id": "task-2026-05-19-dcc-focus",
+        "title": "Daily Command Center focus block",
+        "estimated_minutes": 90,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-19-admin-bills",
+        "title": "Admin and bills batch",
+        "estimated_minutes": 20,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-19-sweep-document",
+        "title": "Document today's sweep routine",
+        "estimated_minutes": 45,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-19-project-carryover",
+        "title": "One carried project block",
+        "estimated_minutes": 105,
+        "priority": "medium"
+      },
+      {
+        "task_id": "task-2026-05-19-closeout",
+        "title": "Closeout and Wednesday inputs",
+        "estimated_minutes": 45,
+        "priority": "high"
+      }
+    ],
+    "tasks_couldnt_fit": [
+      {
+        "task_id": "task-2026-05-19-youtube-music",
+        "title": "Review YouTube Music trial/cancellation",
+        "description": "Google Play says the YouTube Music subscription will cancel on June 17, 2026. Only review if subscription cleanup is already in scope.",
+        "priority": "low",
+        "estimated_minutes": 10,
+        "source": "gmail-sweep",
+        "source_id": "gmail:19e3c11694d77faf"
+      }
+    ],
+    "stats": {
+      "calendar_events": 3,
+      "planned_task_minutes": 330,
+      "planned_meeting_minutes": 240,
+      "source_confidence": "partial_plus",
+      "source_gaps": [
+        "Sweep Suite live readers are specs, not executable scripts",
+        "DCC dated files for May 18 and May 19 were skeletons",
+        "Local block database appeared stale"
+      ]
+    },
+    "blocks": [
+      {
+        "end": "10:00",
+        "name": "Morning Deep Work",
+        "start": "08:00",
+        "blockType": "work",
+        "id": "a50671bd-a117-4b01-8a60-441b0aa3b7e0",
+        "parent_id": null,
+        "sort_order": 0
+      },
+      {
+        "end": "11:00",
+        "name": "Admin & Email",
+        "start": "10:00",
+        "blockType": "work",
+        "id": "f3f70c8a-177a-407f-9f97-1918cfb7ea9e",
+        "parent_id": null,
+        "sort_order": 1
+      },
+      {
+        "end": "13:00",
+        "name": "Lunch",
+        "start": "12:00",
+        "blockType": "personal",
+        "id": "13eb0ad3-d193-484a-95e2-f58df8bd056c",
+        "parent_id": null,
+        "sort_order": 2
+      },
+      {
+        "end": "16:00",
+        "name": "Afternoon Focus",
+        "start": "13:00",
+        "blockType": "work",
+        "id": "ddcbb180-1a16-4d66-af21-7db0f2e882b1",
+        "parent_id": null,
+        "sort_order": 3
+      },
+      {
+        "end": "17:30",
+        "name": "Wind Down",
+        "start": "16:00",
+        "blockType": "work",
+        "id": "77d547ea-affa-4f1f-9290-72da73862baa",
+        "parent_id": null,
+        "sort_order": 4
+      }
+    ]
+  },
+  "mutations": [
+    {
+      "skill": "sweep-suite-check",
+      "action": "run_harness",
+      "at": "2026-05-19T13:45:33Z",
+      "status": "ok",
+      "summary": "Harness passed. Manifest found 8 skills. Writer repeat checks produced success then duplicate skips."
+    },
+    {
+      "skill": "codex-sweep-suite-itinerary",
+      "action": "create_dcc_packet",
+      "at": "2026-05-19T13:45:33Z",
+      "target_date": "2026-05-19",
+      "calendar_events": 3,
+      "gmail_candidate_messages_scanned": 14,
+      "gmail_actionable_items": 6,
+      "slack_results_found": null,
+      "triage_items_added": 7,
+      "status": "partial",
+      "notes": "Slack tools were not exposed in this Codex session, so Slack was marked blocked."
+    },
+    {
+      "skill": "codex-triage-deeplinks",
+      "action": "add_action_links",
+      "at": "2026-05-19T14:05:00Z",
+      "target_date": "2026-05-19",
+      "status": "ok",
+      "items_updated": 7,
+      "drafts_created": 1,
+      "notes": "Added direct action links for DCC, Sweep Suite specs, bill portals, and a Gmail reply draft for the outreach message."
+    },
+    {
+      "skill": "codex-work-responsibility-sweep",
+      "action": "scan_calendar_gmail_slack",
+      "at": "2026-05-19T16:20:00Z",
+      "target_date": "2026-05-19",
+      "status": "ok",
+      "calendar_events_scanned": 9,
+      "gmail_candidate_messages_scanned": 25,
+      "slack_results_found": 4,
+      "triage_items_added": 4,
+      "notes": "Used Slack web search/connectors, not a desktop Slack install. Added direct Slack links plus AMP/HubSpot task links where available."
+    }
+  ],
+  "meta": {
+    "skill_runs": [
+      {
+        "skill": "sweep-suite-check",
+        "started_at": "2026-05-19T13:45:33Z",
+        "finished_at": "2026-05-19T13:45:35Z",
+        "status": "ok",
+        "notes": "Ran scripts/sweep_suite_check.py --date 2026-05-19."
+      },
+      {
+        "skill": "codex-sweep-suite-itinerary",
+        "started_at": "2026-05-19T13:45:33Z",
+        "finished_at": "2026-05-19T13:45:33Z",
+        "status": "partial",
+        "notes": "Calendar and Gmail connector reads completed. Slack connector reads were unavailable."
+      },
+      {
+        "skill": "codex-triage-deeplinks",
+        "started_at": "2026-05-19T14:05:00Z",
+        "finished_at": "2026-05-19T14:05:00Z",
+        "status": "ok",
+        "notes": "Created Gmail draft r-235773029247077852 and added action links to triage items."
+      },
+      {
+        "skill": "codex-work-responsibility-sweep",
+        "started_at": "2026-05-19T16:20:00Z",
+        "finished_at": "2026-05-19T16:20:00Z",
+        "status": "ok",
+        "notes": "Scanned Calendar, Gmail, and Slack web for work-responsibility signals and added 4 short triage/discovery items."
+      }
+    ]
+  },
+  "source": "api-save",
+  "savedAt": "2026-06-03T21:21:04.625Z"
+}

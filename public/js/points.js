@@ -5,14 +5,32 @@
   const ATTENTION = { light: 0.9, normal: 1, focused: 1.1, intense: 1.2 };
   const IMPORTANCE = { low: 0.9, normal: 1, important: 1.15, high: 1.25, critical: 1.4 };
   const NON_EARNING = new Set(["meeting", "break", "ooo"]);
+  const GENERIC_TYPES = new Set(["", "task", "added_task", "pending_task", "trivial_task", "chat_action", "sweep_suite_task", "meeting_action", "backlog"]);
   const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
   const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
+  const BREAK_PATTERNS = [/\blunch\b/, /\bbreak\b/, /\bbreakfast\b/, /\bdinner\b/, /\bsnack\b/, /\bcoffee\b/, /\brest\b/, /\bnap\b/];
+  const MAINTENANCE_PATTERNS = [/\broutine\b/, /\bchores?\b/, /\blaundry\b/, /\bdishes\b/, /\bclean(?:ing)?\b/, /\btidy(?:ing)?\b/, /\bgrocer(?:y|ies)\b/, /\berrands?\b/, /\btrash\b/, /\brecycling\b/, /\bmeal prep\b/, /\badmin\b/];
 
   function norm(value){ return String(value == null ? "" : value).trim().toLowerCase(); }
   function tags(value){
     if(Array.isArray(value)) return value.map(norm).filter(Boolean);
     if(typeof value === "string") return value.split(/[,|]/).map(norm).filter(Boolean);
     return [];
+  }
+  function taskText(input){
+    input = input || {};
+    return [input.title,input.label,input.description,input.detail,input.notes,input.category,tags(input.tags||input.tag).join(" ")]
+      .map(norm).filter(Boolean).join(" ");
+  }
+  function classify(input){
+    input = input || {};
+    const explicit = norm(input.type || input.kind);
+    const type = explicit || "task";
+    const text = taskText(input);
+    if(type === "ooo") return { type:"ooo", pointTier:"none", pointMultiplier:0, reason:"ooo" };
+    if(GENERIC_TYPES.has(type) && BREAK_PATTERNS.some(p=>p.test(text))) return { type:"break", pointTier:"none", pointMultiplier:0, reason:"break_keyword" };
+    if(GENERIC_TYPES.has(type) && MAINTENANCE_PATTERNS.some(p=>p.test(text))) return { type:type||"task", pointTier:"half", pointMultiplier:0.5, reason:"maintenance_keyword" };
+    return { type, pointTier:null, pointMultiplier:null, reason:null };
   }
   function num(value){
     const n = Number(value);
@@ -104,6 +122,7 @@
   }
   function estimate(input){
     input = input || {};
+    const classification = classify(input);
     const duration = durationMinutes(input);
     const effort = effortTier(input, duration);
     const attention = attentionTier(input);
@@ -116,16 +135,27 @@
       urgency: urgent(input) ? 1.15 : 1,
       bounty: Math.pow(2, bounties)
     };
-    const basePoints = duration;
-    if(NON_EARNING.has(norm(input.type || input.kind))){
-      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
+    const requested = Number(input.point_multiplier != null ? input.point_multiplier : input.pointMultiplier);
+    const pointMultiplier = classification.type === "break" || classification.type === "ooo"
+      ? 0
+      : Number.isFinite(requested)
+        ? Math.max(0, Math.min(1, requested))
+        : Number.isFinite(classification.pointMultiplier)
+          ? Math.max(0, Math.min(1, classification.pointMultiplier))
+          : 1;
+    multipliers.points = pointMultiplier;
+    const pointTier = input.point_tier || input.pointTier || classification.pointTier || null;
+    const basePoints = duration * pointMultiplier;
+    if(NON_EARNING.has(classification.type) && pointMultiplier <= 0){
+      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointMultiplier, pointTier, classifiedType: classification.type, classificationReason: classification.reason, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
     }
     const rawPoints = basePoints * multipliers.effort * multipliers.attention * multipliers.importance * multipliers.urgency * multipliers.bounty;
-    return { formulaVersion: FORMULA_VERSION, eligible: true, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, multipliers, basePoints, rawPoints, awardPoints: Math.max(1, Math.round(rawPoints)) };
+    return { formulaVersion: FORMULA_VERSION, eligible: rawPoints > 0, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointMultiplier, pointTier, classifiedType: classification.type, classificationReason: classification.reason, multipliers, basePoints, rawPoints, awardPoints: rawPoints > 0 ? Math.max(1, Math.round(rawPoints)) : 0 };
   }
   function buildPayload(task, options){
     task = task || {};
     options = options || {};
+    const classification = classify(task);
     const actual = actualMinutes(task);
     const planned = plannedMinutes(task);
     const bounty = options.bounty === true || task.bounty === true;
@@ -136,7 +166,7 @@
     return {
       task_id: task.id,
       title: task.title || task.label || "Task completed",
-      type: task.type || task.kind || "task",
+      type: classification.type || task.type || task.kind || "task",
       priority: task.priority || "",
       importance: task.importance || task.importance_tier || task.importanceTier || "",
       urgency: task.urgency || "",
@@ -151,6 +181,9 @@
       duration_minutes: planned,
       effort_tier: task.effort_tier || task.effortTier,
       attention_tier: task.attention_tier || task.attentionTier,
+      point_tier: task.point_tier || task.pointTier || classification.pointTier,
+      point_multiplier: task.point_multiplier != null ? task.point_multiplier : (task.pointMultiplier != null ? task.pointMultiplier : classification.pointMultiplier),
+      classification_reason: classification.reason,
       trivial: task.trivial === true || (typeof loadTrivialFlags === "function" && task.id && !!loadTrivialFlags()[task.id])
     };
   }
@@ -159,6 +192,7 @@
     formulaVersion: FORMULA_VERSION,
     pointsPerSpin: POINTS_PER_SPIN,
     estimate,
+    classify,
     buildPayload
   };
 })();

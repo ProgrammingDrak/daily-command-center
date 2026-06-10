@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { scoreTaskPoints } = require("./slot-scoring");
+const { classifyTaskForPoints, scoreTaskPoints } = require("./slot-scoring");
 
 test("8 hours of medium normal work yields about 480 points", () => {
   const scoring = scoreTaskPoints({ duration_minutes: 480, effort_tier: "medium", attention_tier: "normal" });
@@ -72,4 +72,27 @@ test("duration precedence uses actual minutes before scheduled duration", () => 
   const scoring = scoreTaskPoints({ actual_minutes: 25, duration_minutes: 90, effort_tier: "medium", attention_tier: "normal" });
   assert.equal(scoring.durationMinutes, 25);
   assert.equal(scoring.awardPoints, 25);
+});
+
+test("generic lunch tasks are classified as non-earning breaks", () => {
+  const classification = classifyTaskForPoints({ title: "Lunch", type: "task", duration_minutes: 45 });
+  const scoring = scoreTaskPoints({ title: "Lunch", type: "task", duration_minutes: 45 });
+
+  assert.equal(classification.type, "break");
+  assert.equal(scoring.classifiedType, "break");
+  assert.equal(scoring.pointMultiplier, 0);
+  assert.equal(scoring.awardPoints, 0);
+  assert.equal(scoring.eligible, false);
+});
+
+test("generic routines and chores default to half points", () => {
+  const routine = scoreTaskPoints({ title: "Morning routine", type: "task", duration_minutes: 60 });
+  const chores = scoreTaskPoints({ title: "Clean kitchen chores", type: "task", duration_minutes: 60 });
+
+  assert.equal(routine.pointTier, "half");
+  assert.equal(routine.pointMultiplier, 0.5);
+  assert.equal(routine.awardPoints, 30);
+  assert.equal(chores.pointTier, "half");
+  assert.equal(chores.pointMultiplier, 0.5);
+  assert.equal(chores.awardPoints, 30);
 });

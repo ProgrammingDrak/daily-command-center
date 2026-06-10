@@ -28,8 +28,33 @@ const IMPORTANCE_MULTIPLIERS = {
 };
 
 const NON_EARNING_TYPES = new Set(["meeting", "break", "ooo"]);
+const GENERIC_EARNING_TYPES = new Set(["", "task", "added_task", "pending_task", "trivial_task", "chat_action", "sweep_suite_task", "meeting_action", "backlog"]);
 const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
 const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
+const BREAK_PATTERNS = [
+  /\blunch\b/,
+  /\bbreak\b/,
+  /\bbreakfast\b/,
+  /\bdinner\b/,
+  /\bsnack\b/,
+  /\bcoffee\b/,
+  /\brest\b/,
+  /\bnap\b/,
+];
+const MAINTENANCE_PATTERNS = [
+  /\broutine\b/,
+  /\bchores?\b/,
+  /\blaundry\b/,
+  /\bdishes\b/,
+  /\bclean(?:ing)?\b/,
+  /\btidy(?:ing)?\b/,
+  /\bgrocer(?:y|ies)\b/,
+  /\berrands?\b/,
+  /\btrash\b/,
+  /\brecycling\b/,
+  /\bmeal prep\b/,
+  /\badmin\b/,
+];
 
 function normalizeText(value) {
   return String(value == null ? "" : value).trim().toLowerCase();
@@ -39,6 +64,41 @@ function normalizeTags(value) {
   if (Array.isArray(value)) return value.map(normalizeText).filter(Boolean);
   if (typeof value === "string") return value.split(/[,\u00b7|]/).map(normalizeText).filter(Boolean);
   return [];
+}
+
+function taskText(input = {}) {
+  const tags = normalizeTags(input.tags ?? input.tag).join(" ");
+  return [
+    input.title,
+    input.label,
+    input.description,
+    input.detail,
+    input.notes,
+    input.category,
+    tags,
+  ].map(normalizeText).filter(Boolean).join(" ");
+}
+
+function matchesAny(text, patterns) {
+  return patterns.some(pattern => pattern.test(text));
+}
+
+function classifyTaskForPoints(input = {}) {
+  const explicitType = normalizeText(input.type ?? input.kind);
+  const type = explicitType || "task";
+  const text = taskText(input);
+  const generic = GENERIC_EARNING_TYPES.has(type);
+
+  if (type === "ooo") {
+    return { type: "ooo", pointTier: "none", pointMultiplier: 0, reason: "ooo" };
+  }
+  if (generic && matchesAny(text, BREAK_PATTERNS)) {
+    return { type: "break", pointTier: "none", pointMultiplier: 0, reason: "break_keyword" };
+  }
+  if (generic && matchesAny(text, MAINTENANCE_PATTERNS)) {
+    return { type: type || "task", pointTier: "half", pointMultiplier: 0.5, reason: "maintenance_keyword" };
+  }
+  return { type, pointTier: null, pointMultiplier: null, reason: null };
 }
 
 function positiveNumber(value) {
@@ -122,7 +182,7 @@ function resolveBountyCount(input = {}) {
 }
 
 function isNonEarningTaskType(input = {}) {
-  const type = normalizeText(input.type ?? input.kind);
+  const type = classifyTaskForPoints(input).type;
   if (type === "ooo") return true;
   if (!NON_EARNING_TYPES.has(type)) return false;
   const multiplier = Number(input.point_multiplier ?? input.pointMultiplier);
@@ -130,6 +190,7 @@ function isNonEarningTaskType(input = {}) {
 }
 
 function scoreTaskPoints(input = {}) {
+  const classification = classifyTaskForPoints(input);
   const durationMinutes = resolveDurationMinutes(input);
   const effortTier = inferEffortTier(input, durationMinutes);
   const attentionTier = inferAttentionTier(input);
@@ -141,9 +202,15 @@ function scoreTaskPoints(input = {}) {
   const bountyCount = resolveBountyCount(input);
   const bounty = Math.pow(2, bountyCount);
   const requestedPointMultiplier = Number(input.point_multiplier ?? input.pointMultiplier);
-  const pointMultiplier = Number.isFinite(requestedPointMultiplier)
-    ? Math.max(0, Math.min(1, requestedPointMultiplier))
-    : 1;
+  const classifiedMultiplier = classification.pointMultiplier;
+  const pointMultiplier = classification.type === "break" || classification.type === "ooo"
+    ? 0
+    : Number.isFinite(requestedPointMultiplier)
+      ? Math.max(0, Math.min(1, requestedPointMultiplier))
+      : Number.isFinite(classifiedMultiplier)
+        ? Math.max(0, Math.min(1, classifiedMultiplier))
+        : 1;
+  const pointTier = input.point_tier || input.pointTier || classification.pointTier || null;
   const basePoints = durationMinutes * pointMultiplier;
 
   if (isNonEarningTaskType(input) || pointMultiplier <= 0) {
@@ -157,7 +224,9 @@ function scoreTaskPoints(input = {}) {
       importanceTier,
       bountyCount,
       pointMultiplier,
-      pointTier: input.point_tier || input.pointTier || null,
+      pointTier,
+      classifiedType: classification.type,
+      classificationReason: classification.reason,
       multipliers: { points: pointMultiplier, effort, attention, importance, urgency, bounty },
       basePoints,
       rawPoints: 0,
@@ -176,7 +245,9 @@ function scoreTaskPoints(input = {}) {
     importanceTier,
     bountyCount,
     pointMultiplier,
-    pointTier: input.point_tier || input.pointTier || null,
+    pointTier,
+    classifiedType: classification.type,
+    classificationReason: classification.reason,
     multipliers: { points: pointMultiplier, effort, attention, importance, urgency, bounty },
     basePoints,
     rawPoints,
@@ -197,6 +268,7 @@ module.exports = {
   inferEffortTier,
   inferAttentionTier,
   inferImportanceTier,
+  classifyTaskForPoints,
   isNonEarningTaskType,
   scoreTaskPoints,
 };
