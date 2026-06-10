@@ -1,5 +1,29 @@
 # Repository Instructions
 
+## Environments — local AND production are both live
+
+This app runs in two places at once. Know which you're touching before any write.
+
+- **Local dev:** `http://localhost:8090` (local Postgres + legacy `data/blocks.db`).
+  `NODE_ENV` unset → localhost is trusted, so service endpoints work without a token.
+- **Production:** `https://daily-command-center.onrender.com` — live on Render,
+  Supabase Postgres, auto-deploys from `main`. `NODE_ENV=production` → localhost is
+  NOT trusted, so programmatic writes require `Authorization: Bearer <SECRET_PA_TOKEN>`.
+  Health check: `/api/health`.
+
+Render dashboard service name is `daily-command-center` (the `render.yaml` name
+`daily-command-center-personal` is stale). Production Clerk/custom-domain cutover is
+not done yet — see `CLERK-PRODUCTION-SETUP.md`.
+
+Assistant task scheduling: `POST {BASE}/api/dcc/quick-task` with the bearer token —
+body `{ title, date, start, durationMinutes, priority, detail, tags }`. Don't hand-roll
+it — use one of the built tools:
+- CLI: `node scripts/dcc-schedule.js --title "..." [--date --start --duration --priority --tags]`
+  (env: `DCC_BASE_URL`, `DCC_PA_TOKEN`/`SECRET_PA_TOKEN`; `--dry-run` to preview).
+- MCP: `mcp/dcc-mcp/server.js` → `schedule_task` tool (see `mcp/dcc-mcp/README.md`).
+
+Prereq: `SECRET_PA_TOKEN` set on the Render service + same value in the caller's env.
+
 ## Git Worktrees
 
 - Put all Daily Command Center auxiliary worktrees under `.worktrees/` inside this repo.

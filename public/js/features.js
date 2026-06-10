@@ -835,6 +835,7 @@ function toggleSnCreateTask(){
 
 // ======== FOCUS BANNER ========
 function _focusBannerOpenTimerPanel(){
+  if(typeof pomoState!=="undefined")pomoState.collapsedView="mini";
   const panel=document.getElementById("ft-panel");
   const fab=document.getElementById("ft-fab");
   const mini=document.getElementById("ft-mini");

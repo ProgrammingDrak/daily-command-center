@@ -4,7 +4,7 @@ const pomoSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 const POMO_C=2*Math.PI*54;
 // Each tick segment = 5.65 on, 2.83 gap. Total ticks ~ 40.
 const POMO_SEG=5.65,POMO_GAP=2.83,POMO_UNIT=POMO_SEG+POMO_GAP;
-let pomoState={title:"",currentTaskRef:null,workMin:25,mode:"work",total:25*60,remaining:25*60,running:false,iv:null,sessions:0,soundOn:true,sessionLog:[],taskTime:{},startedAt:null,taskDone:false,stackedSessions:{},pivotTasks:[]};
+let pomoState={title:"",currentTaskRef:null,workMin:25,mode:"work",total:25*60,remaining:25*60,running:false,iv:null,sessions:0,soundOn:true,sessionLog:[],taskTime:{},startedAt:null,taskDone:false,stackedSessions:{},pivotTasks:[],collapsedView:"mini"};
 
 // Timer-facing task references resolve against the live itinerary pools. Persist
 // ids; keep titles only as a legacy/custom fallback.
@@ -227,23 +227,46 @@ function pomoTick(){
   }
   pomoState.remaining--;pomoPaint();savePomoState(true);
 }
+// A task is "loaded" once it has a real title (running or paused).
+function pomoHasTask(){
+  const t=(pomoState.title||"").trim();
+  return !!t&&t!=="--"&&t!=="Untitled";
+}
+// Single source of truth for which of the three float-timer faces is showing:
+// "panel" (expanded), "mini" (oblong pill), or "fab" (round logo).
+function ftSetView(view){
+  const panel=document.getElementById("ft-panel");
+  const mini=document.getElementById("ft-mini");
+  const fab=document.getElementById("ft-fab");
+  if(panel)panel.style.display=view==="panel"?"flex":"none";
+  if(mini)mini.style.display=view==="mini"?"flex":"none";
+  if(fab)fab.style.display=view==="fab"?"flex":"none";
+  if(view==="mini")pomoPaint(); // refresh ring/time/task on the pill
+}
 function updateTimerBadge(){
   // Update FAB badge
   const fabBadge=document.getElementById("ft-fab-badge");
   if(fabBadge) fabBadge.style.display=pomoState.running?"":"none";
-  // Show/hide mini bar vs FAB based on running state when panel is closed
+  // Reflect run/pause on the pill's control + styling so it reads as a live stopwatch
+  const mini=document.getElementById("ft-mini");
+  if(mini)mini.classList.toggle("paused",!pomoState.running);
+  const miniPause=document.getElementById("ft-mini-pause");
+  if(miniPause){
+    miniPause.title=pomoState.running?"Pause":"Resume";
+    miniPause.innerHTML=pomoState.running
+      ?'<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>'
+      :'<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>';
+  }
+  // Only manage the collapsed face when the panel is closed
   const panel=document.getElementById("ft-panel");
   const panelVisible=panel&&panel.style.display!=="none";
-  if(!panelVisible){
-    const mini=document.getElementById("ft-mini");
-    const fab=document.getElementById("ft-fab");
-    if(pomoState.running){
-      if(mini)mini.style.display="flex";
-      if(fab)fab.style.display="none";
-    }else{
-      if(mini)mini.style.display="none";
-      if(fab)fab.style.display="flex";
-    }
+  if(panelVisible)return;
+  // When minimized, show the live pill whenever a task is loaded (running OR paused),
+  // unless the user explicitly stashed it back to the round logo.
+  if(pomoHasTask()&&pomoState.collapsedView!=="fab"){
+    ftSetView("mini");
+  }else{
+    ftSetView("fab");
   }
 }
 
