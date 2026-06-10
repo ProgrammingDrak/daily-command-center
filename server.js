@@ -33,6 +33,7 @@ const capabilities = require("./capabilities");
 const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
 const dccIntelligence = require("./dcc-intelligence");
+const serviceTaskPolicy = require("./service-task-policy");
 
 // ── Clerk (managed login widget) — optional. With no keys, social login is
 // simply hidden and the existing username/password flow is unaffected. ──
@@ -137,18 +138,34 @@ function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr =
 // endpoints to the public internet. So localhost is only trusted off-production;
 // in production these endpoints require a bearer token (or a real session).
 function trustLocalhost(req) { return process.env.NODE_ENV !== "production" && isLocalhost(req); }
-function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
-function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === token : false; }
+function bearerToken(req) { const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) : ""; }
+function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; return bearerToken(req) === dccToken; }
+function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; return bearerToken(req) === token; }
+function hasDccTaskOpsToken(req) {
+  const token = bearerToken(req);
+  if (!token) return false;
+  return [
+    process.env.SECRET_DCC_TASK_OPS_TOKEN,
+    process.env.SECRET_SWEEP_SUITE_TOKEN,
+    process.env.SECRET_DCC_TOKEN,
+    process.env.SECRET_PA_TOKEN,
+  ].filter(Boolean).includes(token);
+}
 function hasDccIngestToken(req) { return hasDccToken(req) || hasSweepWriteToken(req); }
-function isSweepBlockWrite(req) { return req.method === "POST" && req.path === "/api/blocks" && hasSweepWriteToken(req); }
+function isDccTaskOpsBlockAccess(req) {
+  if (!hasDccTaskOpsToken(req)) return false;
+  if (req.method === "POST" && (req.path === "/api/blocks" || req.path === "/api/blocks/batch")) return true;
+  if (req.method === "PATCH" && /^\/api\/blocks\/[^/]+$/.test(req.path)) return true;
+  if (req.method === "GET" && (req.path === "/api/blocks" || req.path === "/api/blocks/range" || /^\/api\/blocks\/[^/]+(?:\/children)?$/.test(req.path))) return true;
+  return false;
+}
 function isDccStateIngest(req) { return req.method === "POST" && req.path === "/api/ingest/day-state"; }
 function attachSweepServiceAuth(req) {
   const userId = Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 1);
   const workspaceId = req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${userId}`;
-  req.dccServiceAuth = { userId, workspaceId, source: "sweep-suite" };
+  req.dccServiceAuth = { userId, workspaceId, source: req.headers["x-service-source"] || "sweep-suite" };
   req.workspaceId = workspaceId;
 }
-function isAllowedSweepBlockItem(item) { const props = item && item.properties; return item && item.type === "block" && props && props.kind === "sweep_suite_task"; }
 function getRequestOrigin(req) {
   const forwardedFor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   const proxyIp = req.headers["cf-connecting-ip"] || req.headers["x-real-ip"] || forwardedFor;
@@ -166,7 +183,7 @@ function requireAdmin(req, res, next) {
 app.use((req, res, next) => {
   if (AUTH_PUBLIC.has(req.path)) return next();
   if (isPublicRoute(req)) return next();
-  if (isSweepBlockWrite(req)) { attachSweepServiceAuth(req); return next(); }
+  if (isDccTaskOpsBlockAccess(req)) { attachSweepServiceAuth(req); return next(); }
   if (isDccStateIngest(req) && hasDccIngestToken(req)) { attachSweepServiceAuth(req); return next(); }
   if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || hasDccToken(req))) return next();
   if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
@@ -784,6 +801,72 @@ app.post("/api/ingest/day-state", async (req, res) => {
   try { await blockDB.saveDccState(incoming.date, merged, ingestUserId, ingestWorkspaceId); } catch(e) { console.error("[dcc-state ingest] save failed:", e.message); }
   broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, ingestWorkspaceId);
   res.json({ ok: true, date: incoming.date });
+});
+
+// ── Glymphatic Brief spine (Second Brain Loop M1) ──
+// Both routes are allow-listed in DCC_ENDPOINTS; until now they had no
+// implementation, which is why the Brief tab's refresh button was a dead end.
+function persistDccDay(date, merged, req, source) {
+  writeJSON(getDayFilePath(date), merged);
+  writeJSON(DAY_STATE_FILE, merged);
+  const userId = req.dccServiceAuth?.userId || req.session?.userId || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
+  const workspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || "ws-1";
+  blockDB.saveDccState(date, merged, userId, workspaceId).catch((e) => console.error(`[${source}] db save failed:`, e.message));
+  broadcast("dcc-state-changed", { source, date }, workspaceId);
+}
+
+app.post("/api/dcc/deep-sweep/ingest", (req, res) => {
+  try {
+    const body = req.body || {};
+    const date = body.date || (body.packet && body.packet.date) || new Date().toISOString().slice(0, 10);
+    const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+    const nextState = dccIntelligence.ingestDeepSweepPacket({ date, state: existing, packet: body.packet || body, source: body.source });
+    persistDccDay(date, nextState, req, "deep-sweep-ingest");
+    res.json({ ok: true, date, packet_id: nextState.deep_sweep.last_packet_id, pages: (nextState.glymphatic_brief?.current?.pages || []).length });
+  } catch (e) {
+    console.error("[deep-sweep ingest] failed:", e);
+    res.status(500).json({ error: e.message || "deep-sweep ingest failed" });
+  }
+});
+
+// Records front-page brief decisions (accept / schedule / backlog / drop) as
+// durable day-state data. This is the seed of M2 actuals: every reviewed task
+// has a decision record even before outcome controls land. Morning scheduling
+// reads decisions to build the next day's itinerary.
+app.post("/api/dcc/brief/decision", (req, res) => {
+  try {
+    const { date, task_id, action, time } = req.body || {};
+    const VALID = new Set(["accept", "schedule", "backlog", "drop", "reset"]);
+    if (!task_id || !VALID.has(action)) return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|reset }" });
+    const day = date || new Date().toISOString().slice(0, 10);
+    const state = readJSON(getDayFilePath(day), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(day);
+    const brief = state.glymphatic_brief || (state.glymphatic_brief = { history: [], current: null });
+    const decisions = brief.decisions || (brief.decisions = {});
+    const at = new Date().toISOString();
+    if (action === "reset") delete decisions[task_id];
+    else decisions[task_id] = { action, time: time || null, decided_at: at };
+    brief.decision_log = [...(brief.decision_log || []), { task_id, action, time: time || null, at }].slice(-200);
+    state.last_updated_at = at;
+    state.last_updated_by = "brief-decision";
+    persistDccDay(day, state, req, "brief-decision");
+    res.json({ ok: true, date: day, task_id, action });
+  } catch (e) {
+    console.error("[brief decision] failed:", e);
+    res.status(500).json({ error: e.message || "decision save failed" });
+  }
+});
+
+app.post("/api/dcc/refresh", async (req, res) => {
+  try {
+    const date = (req.body && req.body.date) || readJSON(DAY_STATE_FILE, {}).date || new Date().toISOString().slice(0, 10);
+    const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+    const { state: nextState } = await dccIntelligence.refreshDccState({ date, state: existing, dataDir: DATA_DIR });
+    persistDccDay(date, nextState, req, "dcc-refresh");
+    res.json({ ok: true, date, state: nextState });
+  } catch (e) {
+    console.error("[dcc refresh] failed:", e);
+    res.status(500).json({ error: e.message || "DCC refresh failed" });
+  }
 });
 
 app.post("/api/clean-tidy/approve", (req, res) => {
@@ -2690,11 +2773,90 @@ function parseOffersAmpAlert(text) {
   };
 }
 
-app.post("/api/blocks", async (req, res) => { try { const body = req.body, userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || null; const workspaceId = req.workspaceId || (req.dccServiceAuth && req.dccServiceAuth.workspaceId) || null; const items = Array.isArray(body) ? body : [body]; if (req.dccServiceAuth && !items.every(isAllowedSweepBlockItem)) return res.status(403).json({ error: "Sweep Suite token may only create sweep_suite_task blocks" }); const results = []; for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId })); broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, workspaceId); res.json(results.length === 1 ? results[0] : results); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.patch("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.updateBlock(req.params.id, req.body); broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
+app.post("/api/blocks", async (req, res) => {
+  try {
+    const body = req.body;
+    const userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || null;
+    const workspaceId = req.workspaceId || (req.dccServiceAuth && req.dccServiceAuth.workspaceId) || null;
+    const rawItems = Array.isArray(body) ? body : [body];
+    const items = req.dccServiceAuth
+      ? rawItems.map(item => serviceTaskPolicy.validateServiceCreateItem(item))
+      : rawItems;
+    const results = [];
+    for (const item of items) {
+      results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId }));
+    }
+    broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, workspaceId);
+    res.json(results.length === 1 ? results[0] : results);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.patch("/api/blocks/:id", async (req, res) => {
+  try {
+    const existing = await blockDB.getBlock(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Block not found" });
+    assertBlockOwnership(existing, req.workspaceId);
+    const body = req.dccServiceAuth
+      ? serviceTaskPolicy.validateServicePatchBody(existing, req.body)
+      : req.body;
+    const result = await blockDB.updateBlock(req.params.id, body);
+    broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
 app.delete("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.deleteBlock(req.params.id); broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id] }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
-app.post("/api/blocks/batch", async (req, res) => { try { const { operations, _clientId } = req.body; if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" }); const opsWithUser = operations.map(op => op.op === "create" ? { ...op, user_id: req.session.userId, workspace_id: req.workspaceId } : op); const result = await blockDB.batchOp(opsWithUser); broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.get("/api/blocks", async (req, res) => { try { if (req.query.date) { if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" }); await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId))); } else if (req.query.type) { const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t)); if (!types.length) return res.status(400).json({ error: "No valid types" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByTypes(types, req.workspaceId))); } else { res.status(400).json({ error: "Provide ?date= or ?type=" }); } } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post("/api/blocks/batch", async (req, res) => {
+  try {
+    const { operations, _clientId } = req.body;
+    if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" });
+    const userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || null;
+    const opsWithUser = [];
+    for (const op of operations) {
+      if (req.dccServiceAuth) {
+        if (op.op === "create") {
+          opsWithUser.push({ ...serviceTaskPolicy.validateServiceCreateItem(op), user_id: userId, workspace_id: req.workspaceId });
+          continue;
+        }
+        if (op.op === "update") {
+          const existing = await blockDB.getBlock(op.id);
+          if (!existing) return res.status(404).json({ error: "Block not found" });
+          assertBlockOwnership(existing, req.workspaceId);
+          const { op: _op, id: _id, ...patchBody } = op;
+          opsWithUser.push({ op: "update", id: op.id, ...serviceTaskPolicy.validateServicePatchBody(existing, patchBody) });
+          continue;
+        }
+        return res.status(403).json({ error: "Trusted DCC task batch writes only support create and update operations" });
+      }
+      opsWithUser.push(op.op === "create" ? { ...op, user_id: req.session.userId, workspace_id: req.workspaceId } : op);
+    }
+    const result = await blockDB.batchOp(opsWithUser);
+    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.get("/api/blocks", async (req, res) => {
+  try {
+    if (req.query.date) {
+      if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" });
+      const userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || null;
+      await blockDB.ensureDayRoot(req.query.date, userId, req.workspaceId);
+      res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId)));
+    } else if (req.query.type) {
+      const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
+      if (!types.length) return res.status(400).json({ error: "No valid types" });
+      res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByTypes(types, req.workspaceId)));
+    } else {
+      res.status(400).json({ error: "Provide ?date= or ?type=" });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.get("/api/blocks/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(start, end, req.workspaceId))); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.getBlock(req.params.id); if (!block) return res.status(404).json({ error: "Block not found" }); try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); } res.json(block); });
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });

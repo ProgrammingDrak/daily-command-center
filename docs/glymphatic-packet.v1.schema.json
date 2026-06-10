@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "glymphatic_packet.v1",
+  "title": "Glymphatic deep-sweep packet (v1)",
+  "description": "Payload POSTed to /api/dcc/deep-sweep/ingest by the brain's glymphatic collector. The brief 'pages' array drives the multi-page DCC Brief. Decisions made on the front page are written back to day-state glymphatic_brief.decisions via /api/dcc/brief/decision and consumed by morning scheduling.",
+  "type": "object",
+  "required": ["date", "source", "generated_at"],
+  "properties": {
+    "date": { "type": "string", "format": "date" },
+    "source": { "type": "string", "description": "Packet author, e.g. glymphatic-nightly" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "summary": { "type": "string" },
+    "suggested_tasks": { "type": "array", "items": { "$ref": "#/$defs/task" } },
+    "lessons": { "type": "array" },
+    "disregarded": { "type": "array" },
+    "retro": { "type": ["object", "null"] },
+    "open_items": { "type": "array" },
+    "meetings": { "type": "array" },
+    "source_health": { "type": "array" },
+    "pages": {
+      "type": "array",
+      "description": "Ordered Brief pages. Known ids: front, actual-vs-planned, step-back, personal-bible, process. Unknown ids render as raw JSON.",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "summary": { "type": "string" },
+          "metrics": { "type": "array", "items": { "type": "object", "properties": { "label": { "type": "string" }, "value": {} } } },
+
+          "done_today": {
+            "type": "array",
+            "description": "front page section 1: completed work grouped by project/category",
+            "items": {
+              "type": "object",
+              "required": ["project", "items"],
+              "properties": {
+                "project": { "type": "string" },
+                "items": { "type": "array", "items": { "type": "object", "required": ["title"], "properties": { "title": { "type": "string" }, "detail": { "type": "string" } } } }
+              }
+            }
+          },
+          "tomorrow": {
+            "type": "array",
+            "description": "front page section 2: proposed itinerary; each row gets accept/move/backlog/drop controls",
+            "items": { "$ref": "#/$defs/task" }
+          },
+
+          "rows": { "type": "array", "description": "actual-vs-planned rows: {title, status, meta}" },
+
+          "habits": { "type": "array", "description": "step-back: {habit, cadence, status}" },
+          "projects": { "type": "array", "description": "step-back: {name, status, milestone}" },
+          "upcoming": { "type": "array", "description": "step-back: {when, title}" },
+          "note": { "type": "string" },
+
+          "source": { "type": "string", "description": "personal-bible: provenance line" },
+          "question": { "type": "string", "description": "personal-bible: open question of the day" },
+          "sections": { "type": "array", "description": "personal-bible: {heading, body}" },
+
+          "proof_of_work": { "type": "array", "description": "process: {label, value}" },
+          "notes": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "suggested_start": { "type": "string", "description": "HH:MM" },
+        "recommended_start": { "type": "string", "description": "HH:MM (suggested_tasks alias)" },
+        "duration": { "type": "integer", "description": "minutes" },
+        "priority": { "type": "string", "enum": ["High", "Medium", "Low"] },
+        "project": { "type": "string" },
+        "reason": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "confidence": { "type": "string" }
+      }
+    }
+  }
+}
