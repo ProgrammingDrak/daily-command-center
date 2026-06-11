@@ -19,14 +19,14 @@ const {
 } = require("./slot-account-common");
 
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
-const DEFAULT_TARGET_DAILY_SPINS = 28;
+const DEFAULT_TARGET_DAILY_SPINS = 12;
 // Spin cost is learned from how many points the user actually earns per day:
 // average the daily point totals over the trailing window, then price a spin so a
 // typical day buys ~SPIN_COST_TARGET_DAILY_SPINS spins. LENIENCY makes spins a
 // touch cheaper than break-even so the target is comfortably reachable. Until the
 // user has MIN_DAYS of earning history we fall back to DEFAULT_SPIN_COST.
 const SPIN_COST_LEARNING_WINDOW_DAYS = 14;
-const SPIN_COST_TARGET_DAILY_SPINS = 20;
+const SPIN_COST_TARGET_DAILY_SPINS = 10;
 const SPIN_COST_LENIENCY = 0.9;
 const SPIN_COST_MIN_DAYS = 3;
 const DEFAULT_MAINTENANCE_HOURS_PER_DAY = 4;
@@ -116,8 +116,7 @@ const BANK_SHAPES = [
   { key: "split_2_3", clusters: [2, 3], weight: 14 }, // two separated blocks
   { key: "split_3_3", clusters: [3, 3], weight: 17 }, // two separated 3-blocks
 ];
-const BANK_BUILDER_FLAT_FLOOR_CENTS = 50;
-const SCREEN_BANK_BUILDER_PERCENT = 0.0012;
+const SCREEN_BANK_BUILDER_PERCENT = 0.002;
 const DEFAULT_POINT_TAG_TIERS = {
   none: [],
   quarter: [],
@@ -3050,11 +3049,9 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   const horizontalBonusUnits = horizontalGroups.reduce((sum, group) => sum + group.length * (group.length - 1), 0);
   const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
   const units = baseUnits + horizontalBonusUnits + verticalBonusUnits;
-  // Flat floor so a small bankroll still moves visibly: any bank hit is worth at
-  // least BANK_BUILDER_FLAT_FLOOR_CENTS even when percent * base rounds tiny.
-  const rawCents = units > 0
-    ? Math.max(baseCents * units, BANK_BUILDER_FLAT_FLOOR_CENTS)
-    : 0;
+  // No flat floor: a bank hit scales purely with the monthly goal headroom, so a
+  // tiny remaining balance yields a tiny (or zero) hit by design.
+  const rawCents = units > 0 ? baseCents * units : 0;
   const cents = Math.min(rawCents, remainingCap);
 
   return {
@@ -3111,13 +3108,17 @@ function emptyScreenBankPayout(account, bankUsage) {
   };
 }
 
-async function spin(workspaceId, userId) {
+async function spin(workspaceId, userId, options = {}) {
   const state = await getState(workspaceId, userId);
   const spinCost = state.constants.spinCost;
+  // Double Wager: pay 2x the points to get 2x the bank payout and 2x the jackpot
+  // prize. Only meaningful on point-funded spins; clamped to 1 for credit/free
+  // spins below (those are 0-cost, so there's nothing to double).
+  const wager = Number(options.wager) === 2 ? 2 : 1;
   const settings = normalizeSlotSettings(state.account.settings || {});
   const hasRerollCredit = settings.reroll_credits > 0;
   const hasJackpotSpinCredit = settings.jackpot_spin_credits > 0;
-  if (!hasRerollCredit && !hasJackpotSpinCredit && state.account.point_balance < spinCost) {
+  if (!hasRerollCredit && !hasJackpotSpinCredit && state.account.point_balance < spinCost * wager) {
     const err = new Error("Not enough points");
     err.statusCode = 400;
     throw err;
@@ -3148,9 +3149,12 @@ async function spin(workspaceId, userId) {
     const lockedSettings = normalizeSlotSettings(account && account.settings);
     const usedJackpotSpinCredit = lockedSettings.jackpot_spin_credits > 0;
     const usedRerollCredit = !usedJackpotSpinCredit && lockedSettings.reroll_credits > 0;
+    // A credit/free spin is 0-cost, so the wager has nothing to double — clamp it
+    // to 1 there. Otherwise the player pays spinCost x wager.
+    const effectiveWager = (usedRerollCredit || usedJackpotSpinCredit) ? 1 : wager;
     // spinCost is the learned points/day cost from getState; the ledger it reads
     // isn't touched by this spin, so it's stable across the transaction.
-    const lockedSpinCost = (usedRerollCredit || usedJackpotSpinCredit) ? 0 : spinCost;
+    const lockedSpinCost = (usedRerollCredit || usedJackpotSpinCredit) ? 0 : spinCost * effectiveWager;
     if (!account || account.point_balance < lockedSpinCost) throw new Error("Not enough points");
     const incomingMods = lockedSettings.next_spin_modifiers || normalizeNextSpinModifiers();
     // A queued miss shield turns a would-be dead spin into a bank builder.
@@ -3205,6 +3209,9 @@ async function spin(workspaceId, userId) {
     // confirm machinery stays the single source of truth.
     let bankDelta = screen.payout.cents || 0;
     if (bankDelta > 0 && appliedMultiplier > 1) bankDelta = bankDelta * appliedMultiplier;
+    // Double Wager doubles the bank payout, stacking on top of any armed
+    // multiplier charge.
+    if (bankDelta > 0 && effectiveWager > 1) bankDelta = bankDelta * effectiveWager;
     // A multiplier-charge booster drops a fresh charge into the stash.
     let earnedChargeTier = 0;
     if (selected.kind === "booster" && effectiveOutcome.multiplier_charge) {
@@ -3217,7 +3224,11 @@ async function spin(workspaceId, userId) {
     // Only an organically-won multi-spin jackpot (4/5-in-a-row) banks extra spins.
     // A credit-funded spin already forces a single 3-in-a-row, but guard here too so
     // banked credits strictly count down regardless of how the board reads back.
-    let bonusJackpotSpinCredits = usedJackpotSpinCredit ? 0 : Math.max(0, jackpotSpinCount - 1);
+    // Double Wager doubles the jackpot prize: the headline reward pays directly,
+    // and the wager-multiplied reward-spin count beyond the first banks as bonus
+    // reward rolls (jackpot_spin_credits). A 1-spin jackpot at 2x => headline + 1
+    // bonus roll; a 4/5-in-a-row jackpot doubles too.
+    let bonusJackpotSpinCredits = usedJackpotSpinCredit ? 0 : Math.max(0, jackpotSpinCount * effectiveWager - 1);
 
     // Immediate-effect floor outcomes (no confirmation needed).
     let pointsDelta = 0;
@@ -3288,6 +3299,7 @@ async function spin(workspaceId, userId) {
           : null,
         gamble: gambleState,
         bank_multiplier_applied: appliedMultiplier > 1 ? appliedMultiplier : null,
+        wager: effectiveWager,
         multiplier_charge_earned: earnedChargeTier || null,
         miss_shielded: missShieldUsed === true,
         tier_up_applied: effectiveOutcome.jackpot_hit && (incomingMods.tier_up || 0) > 0 ? incomingMods.tier_up : null,

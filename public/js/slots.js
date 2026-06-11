@@ -26,10 +26,12 @@
   let pointTagTierDraft = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
+  const SLOT_WAGER_KEY = "pa-slot-wager-2x";
   const REWARD_VIEW_KEY = "pa-slot-reward-view";
   let loadSlotsToken = 0;
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
   let slotSoundOn = readSlotSoundPreference();
+  let slotWagerDouble = readSlotWagerPreference();
   let slotAudioCtx = null;
   const KIND_LABELS = {
     miss: "No prize",
@@ -225,6 +227,60 @@
     writeSlotSoundPreference();
     updateSlotSoundButton();
     if(slotSoundOn) slotPlay("toggle");
+  }
+
+  function readSlotWagerPreference(){
+    try {
+      return localStorage.getItem(SLOT_WAGER_KEY) === "on";
+    } catch(e) {
+      return false;
+    }
+  }
+
+  function writeSlotWagerPreference(){
+    try {
+      localStorage.setItem(SLOT_WAGER_KEY, slotWagerDouble ? "on" : "off");
+    } catch(e) {}
+  }
+
+  // Double Wager only applies to point-funded spins. A free reroll or a queued
+  // bonus reward roll is 0-cost, so the wager is forced to 1 (and the toggle is
+  // muted) while one is pending.
+  function wagerLockedOut(){
+    if(!slotState) return false;
+    const rerolls = (slotState.constants && slotState.constants.rerollCredits)
+      || ((slotState.account && slotState.account.settings && slotState.account.settings.reroll_credits) || 0);
+    return hasBonusRewardSpin(slotState) || rerolls > 0;
+  }
+
+  function effectiveWager(){
+    return (slotWagerDouble && !wagerLockedOut()) ? 2 : 1;
+  }
+
+  function updateSlotWagerButton(){
+    const btn = document.getElementById("slot-wager-toggle");
+    if(!btn) return;
+    const lockedOut = wagerLockedOut();
+    const armed = slotWagerDouble && !lockedOut;
+    btn.classList.toggle("on", armed);
+    btn.classList.toggle("muted", slotWagerDouble && lockedOut);
+    btn.setAttribute("aria-pressed", slotWagerDouble ? "true" : "false");
+    btn.disabled = lockedOut;
+    const machine = document.querySelector(".slots-machine");
+    if(machine) machine.classList.toggle("wager-2x", armed);
+  }
+
+  function toggleSlotWager(){
+    slotWagerDouble = !slotWagerDouble;
+    writeSlotWagerPreference();
+    updateSlotWagerButton();
+    renderSpinButton();
+    if(slotWagerDouble && !wagerLockedOut()){
+      slotPlay("toggle");
+      slotPetReact("happy", "High roller mode! 2x in, 2x out.", 1800);
+    } else {
+      slotPlay("toggle");
+    }
   }
 
   function getSlotAudioContext(){
@@ -471,20 +527,29 @@
     renderTierManager();
     renderRewards();
     if(!isSpinning) renderHistory();
+    renderSpinButton();
+    updateSlotWagerButton();
+    renderSpinStatusBadges();
+    renderMultiplierStash();
+  }
+
+  function renderSpinButton(){
     const btn = document.getElementById("slot-spin-btn");
+    if(!btn) return;
+    const credits = (slotState && slotState.account && slotState.account.point_balance) || 0;
     const spinCost = (slotState.constants && slotState.constants.spinCost) || 1;
     const rerolls = (slotState.constants && slotState.constants.rerollCredits) || ((slotState.account && slotState.account.settings && slotState.account.settings.reroll_credits) || 0);
     const bonusRewardCredits = bonusRewardSpinCredits(slotState);
-    if(btn) {
-      btn.disabled = isSpinning || (credits < spinCost && rerolls <= 0 && bonusRewardCredits <= 0);
-      btn.textContent = bonusRewardCredits > 0
-        ? "Bonus reward roll (" + bonusRewardCredits + ")"
-        : rerolls > 0
-        ? "Free reroll (" + rerolls + ")"
-        : "Spin (" + pointLabel(spinCost) + ")";
-    }
-    renderSpinStatusBadges();
-    renderMultiplierStash();
+    const wager = effectiveWager();
+    const wageredCost = spinCost * wager;
+    btn.disabled = isSpinning || (credits < wageredCost && rerolls <= 0 && bonusRewardCredits <= 0);
+    btn.textContent = bonusRewardCredits > 0
+      ? "Bonus reward roll (" + bonusRewardCredits + ")"
+      : rerolls > 0
+      ? "Free reroll (" + rerolls + ")"
+      : wager > 1
+      ? "Spin (" + pointLabel(wageredCost) + ") · 2x"
+      : "Spin (" + pointLabel(spinCost) + ")";
   }
 
   function renderSpinStatusBadges(){
@@ -895,7 +960,7 @@
     if(monthlyBudgetInput && document.activeElement !== monthlyBudgetInput) monthlyBudgetInput.value = ((monthlyDiscretionary || 0) / 100).toFixed(0);
     if(penalty && document.activeElement !== penalty) penalty.value = constants.shortfallPenalty || "";
     setText("slot-current-cost", "Spin cost: " + spinCost + " pts");
-    const target = basis.targetDailySpins || 20;
+    const target = basis.targetDailySpins || 10;
     setText("slot-spin-cost-line", basis.learned
       ? "Learned from ~" + (basis.avgDailyPoints || 0) + " pts/day over " + (basis.windowDays || 14) + " days, aiming for ~" + target + " spins/day."
       : "Default until you have a few days of points; then it learns your ~" + target + " spins/day pace.");
@@ -1871,7 +1936,11 @@
     if(!bonusRewardRoll) slotPlay("lever");
     try {
       document.querySelectorAll(".slot-stage-chip").forEach(chip => { chip.dataset.state = ""; });
-      let spinRow = await api("/api/slot/spin", { method: "POST" });
+      let spinRow = await api("/api/slot/spin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wager: effectiveWager() })
+      });
       let snap = spinRow.reward_snapshot || {};
       let stages = snap.slot_stages || {};
       if(bonusRewardRoll) {
@@ -4849,6 +4918,9 @@
     const soundBtn = document.getElementById("slot-sound-toggle");
     if(soundBtn) soundBtn.addEventListener("click", toggleSlotSound);
     updateSlotSoundButton();
+    const wagerBtn = document.getElementById("slot-wager-toggle");
+    if(wagerBtn) wagerBtn.addEventListener("click", toggleSlotWager);
+    updateSlotWagerButton();
     const saveSettingsBtn = document.getElementById("slot-save-settings-btn");
     if(saveSettingsBtn) saveSettingsBtn.addEventListener("click", saveSettings);
     const saveOverrideBtn = document.getElementById("slot-save-override-btn");

@@ -126,7 +126,8 @@ app.post("/api/slot/earn-task", async (req, res) => {
 
 app.post("/api/slot/spin", async (req, res) => {
   try {
-    const spin = await slotStore.spin(req.workspaceId, req.session.userId);
+    const wager = (req.body && Number(req.body.wager)) === 2 ? 2 : 1;
+    const spin = await slotStore.spin(req.workspaceId, req.session.userId, { wager });
     broadcast("slot-changed", { action: "spin" }, req.workspaceId);
     res.json(spin);
   } catch (e) {

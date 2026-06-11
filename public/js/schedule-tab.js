@@ -379,10 +379,10 @@ function buildSchedule(){
     const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday);
     // PIN 1: pinned-active state overlays the auto-derived states
     const isPinnedActive = isToday && _pinnedActiveId === ev.id;
-    const pinnedAging = isPinnedActive && typeof getPinnedAgingState === "function" ? getPinnedAgingState(ev) : null;
+    const pinnedStyle = isPinnedActive && typeof getPinnedOverdueStyle === "function" ? getPinnedOverdueStyle(ev) : null;
     const active=trueActive||isNextUp||isPinnedActive,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
     const el=renderItineraryCard(ev,{
-      node:node,active:active,isNextUp:isNextUp,isPinnedActive:isPinnedActive,pinnedAging:pinnedAging,nearEnd:nearEnd,isToday:isToday,
+      node:node,active:active,isNextUp:isNextUp,isPinnedActive:isPinnedActive,pinnedStyle:pinnedStyle,nearEnd:nearEnd,isToday:isToday,
       canEditBounty:(typeof viewMode==="undefined"||viewMode!=="archive"),
       bw:(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null
     });
@@ -505,6 +505,25 @@ function buildSchedule(){
       tnode.style.cursor="pointer";
       tnode.title="Click to pin as your active task";
       tnode.addEventListener("click",e=>{e.stopPropagation();if(typeof togglePinnedActiveId==="function")togglePinnedActiveId(ev.id);});
+    }
+    // Drag the live now-pill onto any task to make that task your pinned-active
+    // one. The pill is the .tl-node.active that carries the time text; dragging
+    // it sets _dragNowPill so dDrop pins instead of reordering (see drag.js).
+    const nowPill=el.querySelector(".tl-node.active");
+    if(nowPill&&nowPill.querySelector(".tl-now-time")&&isToday){
+      nowPill.draggable=true;
+      nowPill.style.cursor="grab";
+      nowPill.title="Drag onto the task you're working on, or click to pin/unpin";
+      nowPill.addEventListener("dragstart",e=>{
+        e.stopPropagation();
+        window._dragNowPill=true;
+        e.dataTransfer.effectAllowed="move";
+        try{e.dataTransfer.setData("text/plain","__nowpill__");}catch(_){}
+      });
+      nowPill.addEventListener("dragend",e=>{
+        window._dragNowPill=false;
+        document.querySelectorAll(".pin-drop-target").forEach(x=>x.classList.remove("pin-drop-target"));
+      });
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)

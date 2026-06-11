@@ -376,9 +376,11 @@ function isPushed(ev){return pushedSet.has(ev.id)}
 
 // ======== PINNED ACTIVE TASK (PIN 1) ========
 // Separate from _pinnedStart (schedule.js) — this is a *single* task id
-// the user has "pinned as active" via clicking its timeline dot. It
-// overrides auto-derived next-up in buildSchedule, and drives the
-// .tl-node aging colors (blue within window → yellow past end → red >60m past).
+// the user has "pinned as active" by dragging the now-pill onto it (or
+// clicking its timeline dot). It overrides auto-derived next-up in
+// buildSchedule, and drives the .tl-node "how far behind" gradient (see
+// getPinnedOverdueStyle: blue at +1 min overdue → flashing red at +6 h,
+// measured from the task's scheduled START).
 let PINNED_ACTIVE_KEY = "pa-pinned-active-" + ((__state && __state.date) ? __state.date : "unknown");
 let _pinnedActiveId = null;
 (function loadPinnedActive(){
@@ -396,14 +398,45 @@ function togglePinnedActiveId(id){
   log("pin-active", id, _pinnedActiveId ? "Pinned active" : "Unpinned active");
   if (typeof render === "function") render();
 }
-// Aging state for the pinned task: "blue" | "yellow" | "red" | null
-function getPinnedAgingState(ev){
+// "How far behind" gradient for the pinned task. The pill walks a fixed set of
+// color stops as the task slips further past its scheduled start: the gradient
+// starts at +1 min overdue (blue) and ends at +6 h overdue (a flashing,
+// pulsating red). Returns null when this task isn't pinned or isn't overdue yet
+// (the pill stays its normal active blue for the first minute).
+const PINNED_OVERDUE_START_MIN = 1;     // +1 min overdue → start of gradient
+const PINNED_OVERDUE_END_MIN = 360;     // +6 h overdue → end of gradient (flashing red)
+const PINNED_AGING_STOPS = [
+  [59,130,246],   // blue
+  [30,58,138],    // dark blue
+  [22,101,52],    // dark green
+  [34,197,94],    // green
+  [134,239,172],  // light green
+  [250,204,21],   // yellow
+  [202,138,4],    // dark yellow
+  [249,115,22],   // orange
+  [194,65,12],    // burnt orange
+  [239,68,68],    // red
+  [220,38,38],    // deep red (flashing + pulsating at the end)
+];
+function _mixRgb(a,b,t){
+  return [Math.round(a[0]+(b[0]-a[0])*t),Math.round(a[1]+(b[1]-a[1])*t),Math.round(a[2]+(b[2]-a[2])*t)];
+}
+function getPinnedOverdueStyle(ev){
   if (!ev || _pinnedActiveId !== ev.id) return null;
-  const endMin = pt(ev.end);
-  const nowMin = now();
-  if (nowMin < endMin) return "blue";
-  if (nowMin - endMin <= 60) return "yellow";
-  return "red";
+  const overdue = now() - pt(ev.start);
+  if (overdue < PINNED_OVERDUE_START_MIN) return null;   // not behind yet → normal blue pill
+  const span = PINNED_OVERDUE_END_MIN - PINNED_OVERDUE_START_MIN;
+  const t = Math.max(0, Math.min(1, (overdue - PINNED_OVERDUE_START_MIN) / span));
+  const stops = PINNED_AGING_STOPS, segs = stops.length - 1;
+  const pos = t * segs, i = Math.min(segs - 1, Math.floor(pos));
+  const rgb = _mixRgb(stops[i], stops[i+1], pos - i);
+  const lum = 0.299*rgb[0] + 0.587*rgb[1] + 0.114*rgb[2];
+  return {
+    bg: "rgb("+rgb[0]+","+rgb[1]+","+rgb[2]+")",
+    fg: lum > 150 ? "#0b1220" : "#ffffff",   // dark text on the light-green/yellow band, white elsewhere
+    pulse: overdue >= PINNED_OVERDUE_END_MIN,
+    minutes: overdue,
+  };
 }
 
 // ======== DURATION CHANGES PERSISTENCE ========
