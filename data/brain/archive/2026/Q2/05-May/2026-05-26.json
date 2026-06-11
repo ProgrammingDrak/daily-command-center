@@ -208,5 +208,7 @@
       "source_confidence": "manual_itinerary",
       "planned_task_minutes": 355
     }
-  }
+  },
+  "source": "api-save",
+  "savedAt": "2026-06-10T22:10:50.512Z"
 }
