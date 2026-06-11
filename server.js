@@ -802,6 +802,73 @@ app.post("/api/ingest/day-state", async (req, res) => {
   res.json({ ok: true, date: incoming.date });
 });
 
+// ── Glymphatic Brief spine (Second Brain Loop M1) ──
+// /api/dcc/refresh and /api/dcc/deep-sweep/ingest are allow-listed in
+// DCC_ENDPOINTS; until now they had no implementation, which is why the Brief
+// tab's refresh button was a dead end.
+function persistDccDay(date, merged, req, source) {
+  writeJSON(getDayFilePath(date), merged);
+  writeJSON(DAY_STATE_FILE, merged);
+  const userId = req.dccServiceAuth?.userId || req.session?.userId || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
+  const workspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || "ws-1";
+  blockDB.saveDccState(date, merged, userId, workspaceId).catch((e) => console.error(`[${source}] db save failed:`, e.message));
+  broadcast("dcc-state-changed", { source, date }, workspaceId);
+}
+
+app.post("/api/dcc/deep-sweep/ingest", (req, res) => {
+  try {
+    const body = req.body || {};
+    const date = body.date || (body.packet && body.packet.date) || new Date().toISOString().slice(0, 10);
+    const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+    const nextState = dccIntelligence.ingestDeepSweepPacket({ date, state: existing, packet: body.packet || body, source: body.source });
+    persistDccDay(date, nextState, req, "deep-sweep-ingest");
+    res.json({ ok: true, date, packet_id: nextState.deep_sweep.last_packet_id, pages: (nextState.glymphatic_brief?.current?.pages || []).length });
+  } catch (e) {
+    console.error("[deep-sweep ingest] failed:", e);
+    res.status(500).json({ error: e.message || "deep-sweep ingest failed" });
+  }
+});
+
+// Records front-page brief decisions (accept / schedule / backlog / drop) as
+// durable day-state data. This is the seed of M2 actuals: every reviewed task
+// has a decision record even before outcome controls land. Morning scheduling
+// reads decisions to build the next day's itinerary.
+app.post("/api/dcc/brief/decision", (req, res) => {
+  try {
+    const { date, task_id, action, time } = req.body || {};
+    const VALID = new Set(["accept", "schedule", "backlog", "drop", "reset"]);
+    if (!task_id || !VALID.has(action)) return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|reset }" });
+    const day = date || new Date().toISOString().slice(0, 10);
+    const state = readJSON(getDayFilePath(day), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(day);
+    const brief = state.glymphatic_brief || (state.glymphatic_brief = { history: [], current: null });
+    const decisions = brief.decisions || (brief.decisions = {});
+    const at = new Date().toISOString();
+    if (action === "reset") delete decisions[task_id];
+    else decisions[task_id] = { action, time: time || null, decided_at: at };
+    brief.decision_log = [...(brief.decision_log || []), { task_id, action, time: time || null, at }].slice(-200);
+    state.last_updated_at = at;
+    state.last_updated_by = "brief-decision";
+    persistDccDay(day, state, req, "brief-decision");
+    res.json({ ok: true, date: day, task_id, action });
+  } catch (e) {
+    console.error("[brief decision] failed:", e);
+    res.status(500).json({ error: e.message || "decision save failed" });
+  }
+});
+
+app.post("/api/dcc/refresh", async (req, res) => {
+  try {
+    const date = (req.body && req.body.date) || readJSON(DAY_STATE_FILE, {}).date || new Date().toISOString().slice(0, 10);
+    const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+    const { state: nextState } = await dccIntelligence.refreshDccState({ date, state: existing, dataDir: DATA_DIR });
+    persistDccDay(date, nextState, req, "dcc-refresh");
+    res.json({ ok: true, date, state: nextState });
+  } catch (e) {
+    console.error("[dcc refresh] failed:", e);
+    res.status(500).json({ error: e.message || "DCC refresh failed" });
+  }
+});
+
 app.post("/api/clean-tidy/approve", (req, res) => {
   const { ids, action } = req.body; if (!ids || !Array.isArray(ids) || !["approve", "deny"].includes(action)) return res.status(400).json({ error: "Expected { ids, action }" });
   const state = readJSON(DAY_STATE_FILE, {}); const ct = state.clean_tidy || {}; const pending = ct.pending_approvals || []; let changed = 0;

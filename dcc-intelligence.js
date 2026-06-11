@@ -227,9 +227,12 @@ function buildBrief({ state, openItems, meetings, health }) {
     suggested_tasks: suggestedTasks,
   };
   // The four-page brief is authored by the brain's glymphatic collector, not here.
-  // Carry it forward across a UI refresh so rebuilding the triage/tasks view does
-  // not wipe the pages.
-  if (previousCurrent && Array.isArray(previousCurrent.pages) && previousCurrent.pages.length) {
+  // Prefer freshly ingested pages from the deep-sweep context, then carry forward
+  // across a UI refresh so rebuilding the triage/tasks view does not wipe them.
+  const contextPages = asArray(deepContext.pages);
+  if (contextPages.length) {
+    current.pages = contextPages;
+  } else if (previousCurrent && Array.isArray(previousCurrent.pages) && previousCurrent.pages.length) {
     current.pages = previousCurrent.pages;
   }
   return {
@@ -330,6 +333,7 @@ function normalizeDeepPacket(packet, fallbackSource) {
     disregarded: asArray(raw.disregarded).length ? raw.disregarded : asArray(briefRoot.disregarded),
     retro: raw.retro || briefRoot.retro || null,
     sourceHealth,
+    pages: asArray(raw.pages).length ? asArray(raw.pages) : asArray(briefRoot.pages),
   };
 }
 
@@ -359,16 +363,28 @@ function ingestDeepSweepPacket({ date, state, packet, source }) {
     disregarded: dedupeBy([...asArray(existingContext.disregarded), ...normalized.disregarded], (item) => item.id || item.title || item.text || JSON.stringify(item)).slice(0, 24),
     retro: normalized.retro || existingContext.retro || null,
     source_health: normalized.sourceHealth,
+    pages: normalized.pages.length ? normalized.pages : asArray(existingContext.pages),
   };
+  const mergedOpenItems = mergeOpenItems(base.triage.open_items, normalized.openItems);
+  const mergedMeetings = mergeMeetings(base.meetings, normalized.meetings);
+  // Rebuild the brief immediately so an ingested packet (including its pages)
+  // renders on the next reload without requiring a separate /api/dcc/refresh.
+  const rebuiltBrief = buildBrief({
+    state: { ...base, glymphatic_context: nextContext },
+    openItems: mergedOpenItems,
+    meetings: mergedMeetings,
+    health: asArray(nextContext.source_health),
+  });
   return {
     ...base,
     last_updated_at: runAt,
     last_updated_by: "deep-sweep-ingest",
     triage: {
       ...base.triage,
-      open_items: mergeOpenItems(base.triage.open_items, normalized.openItems),
+      open_items: mergedOpenItems,
     },
-    meetings: mergeMeetings(base.meetings, normalized.meetings),
+    meetings: mergedMeetings,
+    glymphatic_brief: rebuiltBrief,
     glymphatic_context: nextContext,
     deep_sweep: {
       ...(base.deep_sweep || {}),

@@ -483,6 +483,16 @@
     return (current && Array.isArray(current.pages) && current.pages.length) ? current.pages : null;
   }
 
+  function gbGeneratedLabel(current){
+    var ts = current && current.generated_at;
+    if(!ts)return "";
+    var d = new Date(ts);
+    if(isNaN(d.getTime()))return "";
+    var date = d.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric"});
+    var time = d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+    return "Generated " + date + ", " + time;
+  }
+
   function gbPageNav(pages, activeId){
     return '<nav class="gb-pagenav">'+pages.map(function(p){
       return '<button class="gb-pagebtn'+(p.id===activeId?' active':'')+'" data-gb-page="'+gbEsc(p.id)+'">'+gbEsc(p.label||p.id)+'</button>';
@@ -554,7 +564,92 @@
       notesHtml;
   }
 
+  // --- Front page: done today + tomorrow itinerary --------------------------
+
+  function gbDecisions(ui){
+    return (ui && ui.decisions) || {};
+  }
+
+  function gbRecordDecision(taskId, action, time){
+    var ui = gbLoadUi();
+    ui.decisions = ui.decisions || {};
+    if(action === "reset")delete ui.decisions[taskId];
+    else ui.decisions[taskId] = { action: action, time: time || null, at: new Date().toISOString() };
+    gbSaveUi(ui);
+    fetch("/api/dcc/brief/decision", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ date: gbDate(), task_id: taskId, action: action, time: time || null })
+    }).catch(function(e){ console.error("[Glymphatic Brief] decision save failed:", e); });
+    buildGlymphaticBrief();
+  }
+
+  function gbDecisionBadge(decision){
+    if(!decision)return "";
+    var label = decision.action === "accept" ? "Accepted " + (decision.time || "")
+      : decision.action === "schedule" ? "Scheduled " + (decision.time || "")
+      : decision.action === "backlog" ? "Backlogged"
+      : decision.action === "drop" ? "Dropped" : decision.action;
+    return '<span class="gb-pill gb-decision-'+gbEsc(decision.action)+'">'+gbEsc(label)+'</span>';
+  }
+
+  function gbFrontTaskRow(task, ui){
+    var decision = gbDecisions(ui)[task.id];
+    var decided = !!decision;
+    var timeRow = '<div class="gb-controls" data-gb-decide-controls="'+gbEsc(task.id)+'" style="display:none">'+
+      '<label>Time <input type="time" value="'+gbEsc(task.suggested_start || "09:00")+'" data-gb-decide-time="'+gbEsc(task.id)+'"></label>'+
+      '<button class="gb-add-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="schedule-confirm">Set</button>'+
+    '</div>';
+    return '<article class="gb-task-card'+(decided && (decision.action==="backlog"||decision.action==="drop")?' gb-pushed':'')+'" data-gb-front-task="'+gbEsc(task.id)+'">'+
+      '<div class="gb-task-top">'+
+        '<div class="gb-task-main">'+
+          '<div class="gb-task-title">'+gbEsc(task.title)+'</div>'+
+          '<div class="gb-task-meta">'+
+            '<span>'+gbEsc(task.suggested_start || "anytime")+(task.duration?' &middot; '+gbEsc(task.duration)+'m':'')+'</span>'+
+            '<span>'+gbEsc(task.priority || "Medium")+'</span>'+
+            (task.project ? '<span class="gb-pill">'+gbEsc(task.project)+'</span>' : "")+
+            gbDecisionBadge(decision)+
+          '</div>'+
+          (task.reason ? '<div class="gb-task-reason">'+gbEsc(task.reason)+'</div>' : "")+
+        '</div>'+
+        '<div class="gb-task-actions">'+
+          (decided
+            ? '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="reset" title="Undo decision">Undo</button>'
+            : '<button class="gb-add-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="accept" title="Accept at suggested time">Accept</button>'+
+              '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="schedule" title="Pick a different time">Move</button>'+
+              '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="backlog" title="Send to backlog">Backlog</button>'+
+              '<button class="gb-icon-btn" data-gb-decide="'+gbEsc(task.id)+'" data-gb-action="drop" title="Drop entirely">Drop</button>')+
+        '</div>'+
+      '</div>'+
+      timeRow+
+    '</article>';
+  }
+
+  function gbPageFront(page, current, ui){
+    var groups = page.done_today || [];
+    var doneHtml = groups.length ? groups.map(function(g){
+      return '<div class="gb-row-stack">'+
+        '<div class="gb-section-title" style="margin-top:10px">'+gbEsc(g.project || "Other")+'</div>'+
+        (g.items || []).map(function(it){
+          return '<div class="gb-row gb-status-done"><span class="gb-row-dot"></span><span class="gb-row-title">'+gbEsc(it.title)+'</span><span class="gb-row-meta">'+gbEsc(it.detail || "")+'</span></div>';
+        }).join("")+
+      '</div>';
+    }).join("") : '<div class="gb-empty">No completed work detected today yet.</div>';
+    var tomorrow = page.tomorrow || [];
+    var pendingCount = tomorrow.filter(function(t){ return !gbDecisions(ui)[t.id]; }).length;
+    var tomorrowHtml = tomorrow.length
+      ? tomorrow.map(function(t){ return gbFrontTaskRow(t, ui); }).join("")
+      : '<div class="gb-empty">No proposed itinerary for tomorrow yet.</div>';
+    return '<p class="gb-page-summary">'+gbEsc(page.summary || "")+'</p>'+
+      '<section class="gb-section"><div class="gb-section-title">Done today</div>'+doneHtml+'</section>'+
+      '<section class="gb-section gb-tasks"><div class="gb-section-title">Tomorrow ('+pendingCount+' to review)</div>'+
+        '<div class="gb-row-sub" style="margin-bottom:8px">Accept at the suggested time, move it, send it to the backlog, or drop it. Every choice is recorded.</div>'+
+        '<div class="gb-task-list">'+tomorrowHtml+'</div>'+
+      '</section>';
+  }
+
   function gbRenderPage(page, current, ui){
+    if(page.id==="front")return gbPageFront(page, current, ui);
     if(page.id==="actual-vs-planned")return gbPageActualVsPlanned(page, current, ui);
     if(page.id==="step-back")return gbPageStepBack(page);
     if(page.id==="personal-bible")return gbPageBible(page);
@@ -594,7 +689,10 @@
               '<button class="gb-refresh-btn" data-gb-refresh '+(gbRefreshing?'disabled':'')+' title="Refresh DCC brief">'+(gbRefreshing?'Refreshing':'Refresh')+'</button>'+
             '</div>'+
           '</header>'+
-          gbPageNav(pages, gbActivePage)+
+          '<div class="gb-pagenav-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">'+
+            gbPageNav(pages, gbActivePage)+
+            '<div class="gb-generated" style="font-size:11px;color:var(--text-muted);white-space:nowrap" title="When this brief was generated">'+gbEsc(gbGeneratedLabel(current))+'</div>'+
+          '</div>'+
           '<div class="gb-page" data-gb-page-panel="'+gbEsc(active.id)+'">'+gbRenderPage(active, current, ui)+'</div>'+
           gbHistory(briefData.history)+
         '</div>';
@@ -640,6 +738,32 @@
     if(pageBtn){ gbActivePage = pageBtn.dataset.gbPage; buildGlymphaticBrief(); return; }
     var refresh = e.target.closest("[data-gb-refresh]");
     if(refresh){ gbRefresh(); return; }
+    var decide = e.target.closest("[data-gb-decide]");
+    if(decide){
+      var taskId = decide.dataset.gbDecide;
+      var action = decide.dataset.gbAction;
+      if(action === "schedule"){
+        var controls = document.querySelector('[data-gb-decide-controls="'+taskId+'"]');
+        if(controls)controls.style.display = controls.style.display === "none" ? "" : "none";
+        return;
+      }
+      if(action === "schedule-confirm"){
+        var input = document.querySelector('[data-gb-decide-time="'+taskId+'"]');
+        gbRecordDecision(taskId, "schedule", input ? input.value : null);
+        return;
+      }
+      if(action === "accept"){
+        var card = decide.closest("[data-gb-front-task]");
+        var brief = gbBrief().current;
+        var pages = gbPages(brief) || [];
+        var front = pages.filter(function(p){ return p.id === "front"; })[0];
+        var task = front && (front.tomorrow || []).filter(function(t){ return t.id === taskId; })[0];
+        gbRecordDecision(taskId, "accept", task ? task.suggested_start : null);
+        return;
+      }
+      gbRecordDecision(taskId, action, null);
+      return;
+    }
     var push = e.target.closest("[data-gb-push]");
     if(push){ gbPushTask(push.dataset.gbPush); return; }
     var move = e.target.closest("[data-gb-move]");
