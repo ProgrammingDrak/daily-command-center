@@ -611,12 +611,15 @@
   .tl-node.done{background:var(--green);border-color:var(--green)}
   .tl-node.done::after{content:'\2713';position:absolute;top:-5px;left:-4px;font-size:8px;font-weight:700;color:white;width:12px;height:12px;display:flex;align-items:center;justify-content:center}
   .tl-node.active{background:var(--accent);border-color:var(--accent);width:auto;height:auto;min-width:12px;padding:1px 5px;font-size:9px;font-weight:700;color:white;font-variant-numeric:tabular-nums;border-width:2px;left:-20px;display:flex;align-items:center;justify-content:center}
-  /* PIN 1: pinned-active ring + blue \u2192 yellow \u2192 red aging */
+  /* PIN: pinned-active ring + continuous "how far behind" gradient. The pill's
+     background/text/ring are set inline per-minute from getPinnedOverdueStyle
+     (blue at +1m overdue \u2192 flashing red at +6h). This rule owns only the default
+     ring and the terminal flash; everything else is inline. */
   .tl-node.active.pinned{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent)}
-  .tl-node.active.aging-yellow{background:var(--amber);border-color:var(--amber);color:var(--bg)}
-  .tl-node.active.aging-red{background:var(--red);border-color:var(--red);color:white}
-  .tl-node.active.pinned.aging-yellow{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--amber)}
-  .tl-node.active.pinned.aging-red{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--red)}
+  .tl-node.active.aging-pulse{animation:aging-flash 1s ease-in-out infinite}
+  @keyframes aging-flash{0%,100%{opacity:1;box-shadow:0 0 0 2px var(--bg),0 0 0 4px rgba(220,38,38,0.95)}50%{opacity:0.45;box-shadow:0 0 0 2px var(--bg),0 0 0 9px rgba(220,38,38,0)}}
+  /* Drag-the-now-pill: highlight the card you're about to pin onto. */
+  .tl-item.pin-drop-target .card{box-shadow:inset 0 0 0 2px var(--accent),0 0 12px rgba(59,130,246,0.35)!important}
   .card-active{border-color:rgba(59,130,246,0.4)!important;background:rgba(59,130,246,0.04)!important;box-shadow:inset 3px 0 0 var(--accent)}
   .card-bounty{border-color:rgba(251,191,36,0.5)!important;box-shadow:inset 3px 0 0 var(--amber)}
   /* Sponsor (visitor-placed) bounty: purple instead of the amber self-bounty. Must follow .card-bounty to win. */
@@ -2868,8 +2871,31 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-marquee span{height:12px;border-radius:999px;color:#ffd66e;background:#ffd66e;box-shadow:0 0 16px rgba(250,204,21,0.78);animation:slotBulbGlow 1.2s ease-in-out infinite}
 .slot-marquee span:nth-child(2n){animation-delay:0.22s;color:#ff8fb3;background:#ff8fb3;box-shadow:0 0 16px rgba(255,143,179,0.65)}
 .slot-marquee span:nth-child(3n){animation-delay:0.38s;color:#7dd3fc;background:#7dd3fc;box-shadow:0 0 16px rgba(125,211,252,0.66)}
-.slot-machine-top{display:grid;grid-template-columns:minmax(240px,.9fr) minmax(220px,1fr) minmax(170px,230px);gap:12px;align-items:stretch;margin-bottom:12px}
-.slots-machine .slots-balance{background:rgba(3,7,18,0.48);border-color:rgba(255,196,87,0.24);box-shadow:inset 0 1px 0 rgba(255,255,255,0.05)}
+/* Machine body: reels/controls on the left, a persistent side rail (wager
+   toggle + balances + pet) on the right. The rail collapses to a compact
+   horizontal strip on narrow screens so the whole machine fits one window. */
+.slot-machine-body{display:flex;gap:14px;align-items:stretch}
+.slot-stage-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.slot-side-rail{flex:0 0 232px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.slots-machine .slots-balances{flex-direction:column;gap:8px}
+.slots-machine .slots-balance{min-width:0;background:rgba(3,7,18,0.48);border-color:rgba(255,196,87,0.24);box-shadow:inset 0 1px 0 rgba(255,255,255,0.05)}
+/* Double Wager toggle: a tappable pill that signals high-roller mode. */
+.slot-wager-toggle{display:flex;align-items:center;gap:10px;width:100%;text-align:left;cursor:pointer;padding:9px 11px;border-radius:10px;border:1px solid rgba(255,196,87,0.34);background:rgba(3,7,18,0.5);color:var(--text);transition:border-color .18s ease,box-shadow .18s ease,background .18s ease,transform .12s ease}
+.slot-wager-toggle:hover{border-color:rgba(255,214,110,0.6)}
+.slot-wager-badge{flex:0 0 auto;display:grid;place-items:center;width:34px;height:34px;border-radius:8px;font-weight:950;font-size:15px;color:#2a1402;background:linear-gradient(180deg,#ffe9a3,#caa23a);box-shadow:inset 0 -3px 0 rgba(62,42,11,0.18)}
+.slot-wager-copy{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}
+.slot-wager-title{font-size:12px;font-weight:900;line-height:1.1}
+.slot-wager-sub{font-size:10px;color:var(--text-muted);line-height:1.1;overflow-wrap:anywhere}
+.slot-wager-switch{flex:0 0 auto;position:relative;width:34px;height:18px;border-radius:999px;background:rgba(148,163,184,0.3);transition:background .18s ease}
+.slot-wager-switch:after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#e2e8f0;transition:transform .18s ease,background .18s ease}
+.slot-wager-toggle.on{border-color:rgba(255,214,110,0.85);background:linear-gradient(180deg,rgba(120,72,12,0.55),rgba(40,20,4,0.6));box-shadow:0 0 22px rgba(250,204,21,0.32),inset 0 0 0 1px rgba(255,214,110,0.4)}
+.slot-wager-toggle.on .slot-wager-switch{background:linear-gradient(180deg,#ffd66e,#f59e0b)}
+.slot-wager-toggle.on .slot-wager-switch:after{transform:translateX(16px);background:#2a1402}
+.slot-wager-toggle.on .slot-wager-sub{color:#ffe9a3}
+.slot-wager-toggle.muted{opacity:.5}
+.slot-wager-toggle:disabled{opacity:.42;cursor:not-allowed}
+/* Whole-machine accent while 2x is armed. */
+.slots-machine.wager-2x{border-color:rgba(255,214,110,0.78);box-shadow:inset 0 0 0 2px rgba(255,196,87,0.2),0 22px 48px rgba(0,0,0,0.28),0 0 42px rgba(250,204,21,0.26)}
 .slot-pet-companion{position:relative;min-height:112px;display:grid;grid-template-columns:1fr 42px 74px;gap:8px;align-items:end;padding:10px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;background:rgba(255,255,255,0.045)}
 .slot-pet-speech{align-self:start;min-height:32px;padding:7px 9px;border-radius:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);color:var(--text);font-size:12px;font-weight:800;line-height:1.25}
 .slot-lever{align-self:stretch;min-height:86px;position:relative;border:0;background:transparent;cursor:pointer}
@@ -3434,13 +3460,24 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .ev-grid,.ev-result-grid{grid-template-columns:1fr 1fr}
   .ev-outcomes-head,.ev-outcome-row{grid-template-columns:1fr 84px 84px 34px}
   .slots-grid{grid-template-columns:1fr}
-  .slot-machine-top{grid-template-columns:1fr}
   .slot-tier-manager-head{grid-template-columns:minmax(0,1fr) auto}
   .slot-tier-manager-head .slot-mini{grid-column:1/-1;justify-self:start}
   .slot-bankroll-manager-grid{grid-template-columns:1fr 1fr}
-  .slot-pet-companion{grid-template-columns:1fr 42px 74px}
   .slot-form-grid{grid-template-columns:1fr 1fr}
   .slot-kind-picker{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+/* Narrow: drop the side rail below the reels as a compact horizontal strip so
+   the whole machine still fits one window without scrolling. */
+@media (max-width: 720px){
+  .slot-machine-body{flex-direction:column;gap:10px}
+  .slot-side-rail{flex:0 0 auto;flex-direction:row;flex-wrap:wrap;align-items:stretch;gap:8px;order:-1}
+  .slot-wager-toggle{flex:1 1 180px;width:auto}
+  .slots-machine .slots-balances{flex:1 1 200px;flex-direction:row}
+  .slots-machine .slots-balance{flex:1 1 0}
+  .slot-bankroll-goal-panel{flex:1 1 200px;min-height:0}
+  .slot-pet-companion{flex:1 1 200px;min-height:0;align-items:center}
+  .slot-multiplier-stash{flex:1 1 100%}
+  .slot-spin-cost{display:none}
 }
 @media (max-width: 560px){
   .slot-section-tabs{width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}

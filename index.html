@@ -1272,70 +1272,82 @@
     <div class="slots-tab-panel active" id="slot-section-machine" data-slot-section-panel="machine">
       <section class="slots-machine">
         <div class="slot-marquee" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
-        <div class="slot-machine-top">
-          <div class="slots-balances">
-            <div class="slots-balance"><span>Task Points</span><strong id="slot-credit-balance">0</strong></div>
-            <div class="slots-balance slots-bank">
-              <div class="slot-bank-heading">
-                <span>Reward Reserve</span>
-                <button class="slot-bank-info" type="button" aria-label="How unlocking works">i
-                  <span class="slot-bank-info-tip" role="tooltip">
-                    Set a monthly Discretionary Spending budget. Bank Building hits unlock that budget for spending. Jackpot Prizes unlock as funds accumulate in your Reward Reserve.
-                  </span>
+        <div class="slot-machine-body">
+          <div class="slot-stage-main">
+            <div class="slot-reels-frame">
+              <div class="slot-reels" id="slot-reels">
+                <div class="slot-cell" data-symbol="coin">🪙</div>
+                <div class="slot-cell" data-symbol="star">⭐</div>
+                <div class="slot-cell" data-symbol="bank">💰</div>
+                <div class="slot-cell" data-symbol="paw">🐾</div>
+                <div class="slot-cell" data-symbol="gem">💎</div>
+                <div class="slot-cell" data-symbol="bank">💰</div>
+                <div class="slot-cell" data-symbol="coin">🪙</div>
+                <div class="slot-cell" data-symbol="jackpot">🎰</div>
+                <div class="slot-cell" data-symbol="spin">🔄</div>
+                <div class="slot-cell" data-symbol="paw">🐾</div>
+                <div class="slot-cell" data-symbol="gem">💎</div>
+                <div class="slot-cell" data-symbol="bank">💰</div>
+                <div class="slot-cell" data-symbol="coin">🪙</div>
+                <div class="slot-cell" data-symbol="star">⭐</div>
+                <div class="slot-cell" data-symbol="coin">🪙</div>
+              </div>
+            </div>
+            <div class="slot-result" id="slot-result">Ready when you are.</div>
+            <div class="slot-result-actions" id="slot-result-actions" aria-live="polite"></div>
+            <div class="slot-stage-track" id="slot-stage-track" aria-live="polite">
+              <span class="slot-stage-chip" data-stage="jackpot">Miss / Bank / Jackpot</span>
+              <span class="slot-stage-chip" data-stage="bucket">Tier + Source</span>
+              <span class="slot-stage-chip" data-stage="reward">Reward</span>
+            </div>
+            <div class="slot-actions">
+              <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
+              <button class="slot-sound-btn" id="slot-sound-toggle" type="button" aria-pressed="true">Sound: On</button>
+            </div>
+            <div class="slot-spin-status" id="slot-spin-status" aria-live="polite"></div>
+          </div>
+          <aside class="slot-side-rail">
+            <button class="slot-wager-toggle" id="slot-wager-toggle" type="button" aria-pressed="false" aria-label="Toggle double wager">
+              <span class="slot-wager-badge">2×</span>
+              <span class="slot-wager-copy">
+                <span class="slot-wager-title">Double Wager</span>
+                <span class="slot-wager-sub">2× cost · 2× bank &amp; jackpot</span>
+              </span>
+              <span class="slot-wager-switch" aria-hidden="true"></span>
+            </button>
+            <div class="slots-balances">
+              <div class="slots-balance"><span>Task Points</span><strong id="slot-credit-balance">0</strong></div>
+              <div class="slots-balance slots-bank">
+                <div class="slot-bank-heading">
+                  <span>Reward Reserve</span>
+                  <button class="slot-bank-info" type="button" aria-label="How unlocking works">i
+                    <span class="slot-bank-info-tip" role="tooltip">
+                      Set a monthly Discretionary Spending budget. Bank Building hits unlock that budget for spending. Jackpot Prizes unlock as funds accumulate in your Reward Reserve.
+                    </span>
+                  </button>
+                </div>
+                <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" aria-expanded="false" aria-controls="slot-bank-details">
+                  <strong id="slot-bank-balance">$0.00</strong>
+                  <span class="slot-bank-meter"><span id="slot-bank-fill"></span></span>
+                  <span class="slot-pop-label" id="slot-bank-action-label">No reserve pending</span>
                 </button>
               </div>
-              <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" aria-expanded="false" aria-controls="slot-bank-details">
-                <strong id="slot-bank-balance">$0.00</strong>
-                <span class="slot-bank-meter"><span id="slot-bank-fill"></span></span>
-                <span class="slot-pop-label" id="slot-bank-action-label">No reserve pending</span>
-              </button>
             </div>
-          </div>
-          <div class="slot-bankroll-goal-panel" id="slot-bankroll-goal-panel"></div>
-          <div class="slot-pet-companion" id="slot-pet-companion" aria-live="polite">
-            <div class="slot-pet-speech" id="slot-pet-speech">Ready.</div>
-            <button class="slot-lever" id="slot-helper-lever" type="button" aria-label="Pull lever"><span></span></button>
-            <div class="slot-pet-avatar" id="slot-pet-avatar" data-mood="idle">
-              <span class="slot-pet-ears"></span>
-              <strong id="slot-pet-glyph">S</strong>
-              <span class="slot-pet-face"></span>
-              <em id="slot-pet-accessory"></em>
+            <div class="slot-bankroll-goal-panel" id="slot-bankroll-goal-panel"></div>
+            <div class="slot-pet-companion" id="slot-pet-companion" aria-live="polite">
+              <div class="slot-pet-speech" id="slot-pet-speech">Ready.</div>
+              <button class="slot-lever" id="slot-helper-lever" type="button" aria-label="Pull lever"><span></span></button>
+              <div class="slot-pet-avatar" id="slot-pet-avatar" data-mood="idle">
+                <span class="slot-pet-ears"></span>
+                <strong id="slot-pet-glyph">S</strong>
+                <span class="slot-pet-face"></span>
+                <em id="slot-pet-accessory"></em>
+              </div>
             </div>
-          </div>
+            <div class="slot-multiplier-stash" id="slot-multiplier-stash"></div>
+            <div class="slot-spin-cost" id="slot-spin-cost-line">25 pts per spin</div>
+          </aside>
         </div>
-        <div class="slot-reels-frame">
-          <div class="slot-reels" id="slot-reels">
-            <div class="slot-cell" data-symbol="coin">🪙</div>
-            <div class="slot-cell" data-symbol="star">⭐</div>
-            <div class="slot-cell" data-symbol="bank">💰</div>
-            <div class="slot-cell" data-symbol="paw">🐾</div>
-            <div class="slot-cell" data-symbol="gem">💎</div>
-            <div class="slot-cell" data-symbol="bank">💰</div>
-            <div class="slot-cell" data-symbol="coin">🪙</div>
-            <div class="slot-cell" data-symbol="jackpot">🎰</div>
-            <div class="slot-cell" data-symbol="spin">🔄</div>
-            <div class="slot-cell" data-symbol="paw">🐾</div>
-            <div class="slot-cell" data-symbol="gem">💎</div>
-            <div class="slot-cell" data-symbol="bank">💰</div>
-            <div class="slot-cell" data-symbol="coin">🪙</div>
-            <div class="slot-cell" data-symbol="star">⭐</div>
-            <div class="slot-cell" data-symbol="coin">🪙</div>
-          </div>
-        </div>
-        <div class="slot-result" id="slot-result">Ready when you are.</div>
-        <div class="slot-result-actions" id="slot-result-actions" aria-live="polite"></div>
-        <div class="slot-stage-track" id="slot-stage-track" aria-live="polite">
-          <span class="slot-stage-chip" data-stage="jackpot">Miss / Bank / Jackpot</span>
-          <span class="slot-stage-chip" data-stage="bucket">Tier + Source</span>
-          <span class="slot-stage-chip" data-stage="reward">Reward</span>
-        </div>
-        <div class="slot-actions">
-          <button class="slot-spin-btn" id="slot-spin-btn" type="button">Spin</button>
-          <button class="slot-sound-btn" id="slot-sound-toggle" type="button" aria-pressed="true">Sound: On</button>
-        </div>
-        <div class="slot-spin-status" id="slot-spin-status" aria-live="polite"></div>
-        <div class="slot-multiplier-stash" id="slot-multiplier-stash"></div>
-        <div class="slot-spin-cost" id="slot-spin-cost-line">25 pts per spin</div>
       </section>
     </div>
     <div class="slots-tab-panel" id="slot-section-rewards" data-slot-section-panel="rewards">

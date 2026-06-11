@@ -978,12 +978,12 @@ test("guided economy profile derives goal, bankroll pacing, and rare jackpot def
   // user's points-per-day history (see learnedSpinCost), not derived here.
   assert.equal(settings.spin_cost, 25);
   assert.equal(settings.monthly_goal_cents, 30000);
-  assert.equal(settings.economy_profile.target_daily_spins, 28);
+  assert.equal(settings.economy_profile.target_daily_spins, 12);
   assert.equal(settings.jackpot_hit_rate, 0.01);
   assert.equal(settings.bank_builder_hit_rate, 0.9);
   assert.equal(settings.free_spin_tile_rate, 0.12);
   assert.equal(settings.miss_rate, 0.01);
-  assert.equal(settings.bankroll_pacing.bank_builder_base_percent, 0.0012);
+  assert.equal(settings.bankroll_pacing.bank_builder_base_percent, 0.002);
 });
 
 test("taskPointTier uses the highest earning matched tag and keeps OOO at zero", () => {
@@ -1024,14 +1024,14 @@ test("normalizePointTagTiers folds retired lane names onto point buckets", () =>
   assert.deepEqual(deduped.full, ["x"]);
 });
 
-test("spinCostForDailyPoints prices ~20 spins/day with 10% leniency, defaults under MIN_DAYS, and clamps", () => {
+test("spinCostForDailyPoints prices ~10 spins/day with 10% leniency, defaults under MIN_DAYS, and clamps", () => {
   const store = loadStoreWithMock(createMockPool());
   // Fewer than 3 days of history → cold-start default (25).
   assert.equal(store._test.spinCostForDailyPoints(1000, 2), 25);
-  // 400 pts/day → 400 * 0.9 / 20 = 18 → rounds to 20.
-  assert.equal(store._test.spinCostForDailyPoints(400, 7), 20);
-  // 2000 pts/day → 90 → rounds to 90.
-  assert.equal(store._test.spinCostForDailyPoints(2000, 14), 90);
+  // 400 pts/day → 400 * 0.9 / 10 = 36 → rounds to 35.
+  assert.equal(store._test.spinCostForDailyPoints(400, 7), 35);
+  // 2000 pts/day → 2000 * 0.9 / 10 = 180 → rounds to 180.
+  assert.equal(store._test.spinCostForDailyPoints(2000, 14), 180);
   // Tiny average clamps up to the 5-point floor; huge average clamps to 250.
   assert.equal(store._test.spinCostForDailyPoints(10, 5), 5);
   assert.equal(store._test.spinCostForDailyPoints(1000000, 14), 250);
@@ -1129,12 +1129,12 @@ test("bank screen payout values each BANK tile from the monthly goal, not curren
     { today: 0, week: 0, monthlyGoal: 10000 }
   );
 
-  assert.equal(payout.percent, 0.0012);
+  assert.equal(payout.percent, 0.002);
   assert.equal(payout.goal_cents, 10000);
-  assert.equal(payout.base_cents, 11);
+  assert.equal(payout.base_cents, 20);
   assert.equal(payout.base_units, 2);
-  // 11 * 2 = 22, but the flat floor lifts any hit to at least 50 cents.
-  assert.equal(payout.cents, 50);
+  // 20 * 2 = 40, no flat floor — the hit scales purely with the goal.
+  assert.equal(payout.cents, 40);
 });
 
 test("bank pacing scales off the REMAINING headroom, so hits shrink as the bar fills", () => {
@@ -1152,7 +1152,7 @@ test("bank pacing scales off the REMAINING headroom, so hits shrink as the bar f
   );
   assert.equal(early.final_week, false);
   assert.equal(early.pacing_base_cents, 100000);
-  assert.equal(early.base_cents, Math.floor(100000 * 0.0012)); // 119
+  assert.equal(early.base_cents, Math.floor(100000 * 0.002)); // 200
 
   // Bar 80% full: only 20000 of headroom left -> base off 20000, a much smaller hit.
   const late = store._test.calculateScreenBankPayout(
@@ -1160,7 +1160,7 @@ test("bank pacing scales off the REMAINING headroom, so hits shrink as the bar f
     { today: 0, week: 0, month: 80000, monthlyGoal: 100000 }
   );
   assert.equal(late.pacing_base_cents, 20000);
-  assert.equal(late.base_cents, Math.floor(20000 * 0.0012)); // 24
+  assert.equal(late.base_cents, Math.floor(20000 * 0.002)); // 40
   assert.ok(late.base_cents < early.base_cents, "hits taper as the bar fills");
 });
 
@@ -1177,7 +1177,7 @@ test("final week reverts bank pacing to the full monthly allotment for a max-out
   );
   assert.equal(out.final_week, true);
   assert.equal(out.pacing_base_cents, 100000);
-  assert.equal(out.base_cents, Math.floor(100000 * 0.0012)); // 119, the full-goal rate
+  assert.equal(out.base_cents, Math.floor(100000 * 0.002)); // 200, the full-goal rate
   // Still capped at the remaining headroom so banking never overshoots the goal.
   assert.equal(out.monthly_remaining_cents, 20000);
 });
@@ -1304,8 +1304,8 @@ test("applyTileOverrideToScreen keeps exact tiles and pays bank from override on
   assert.equal(screen.payout.base_units, 3);
   assert.equal(screen.payout.horizontal_bonus_units, 2);
   assert.equal(screen.payout.vertical_bonus_units, 2);
-  // base_cents 11 * 7 units = 77 (above the flat floor of 50).
-  assert.equal(screen.payout.cents, 77);
+  // base_cents 20 * 7 units = 140, no flat floor.
+  assert.equal(screen.payout.cents, 140);
 });
 
 test("spin lands the outcome the override board depicts, not the rolled jackpot", async () => {
@@ -1405,7 +1405,7 @@ test("a non-bank floor outcome still banks the BANK tiles on its screen (bank re
   // ...and the two BANK tiles on the same screen still pay, first.
   assert.deepEqual(snap.bank_screen_payout.positions, [1, 6]);
   assert.equal(snap.source_type, "slot_screen_bank_builder");
-  assert.equal(spin.bank_delta_cents, 50); // base_cents 12 * 4 units = 48, lifted to the 50c floor
+  assert.equal(spin.bank_delta_cents, 80); // base_cents 20 * 4 units = 80, no flat floor
   assert.equal(spin.status, "pending");
 });
 
@@ -1442,8 +1442,8 @@ test("spin stores authoritative bank board, payout positions, and pending reserv
   assert.deepEqual(snap.screen_board, board);
   assert.deepEqual(snap.bank_screen_payout.positions, [1, 2, 7]);
   assert.equal(snap.bank_screen_payout.cents, spin.bank_delta_cents);
-  // base_cents 11 * 7 units = 77 (above the flat floor of 50).
-  assert.equal(spin.bank_delta_cents, 77);
+  // base_cents 20 * 7 units = 140, no flat floor.
+  assert.equal(spin.bank_delta_cents, 140);
 });
 
 test("spin stores jackpot payline metadata when override tiles form a valid jackpot", async () => {
@@ -1670,7 +1670,7 @@ test("setActiveMultiplier arms a stocked tier and refuses an empty one", async (
 
 test("an armed multiplier burns a charge every spin and multiplies a bank builder", async () => {
   const board = Array.from({ length: 15 }, () => "MISS");
-  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 77 cents base
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 140 cents base
   const mockPool = chargesPool({ "3": 2 }, {
     jackpot_hit_rate: 0, miss_rate: 0,
     floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
@@ -1680,7 +1680,7 @@ test("an armed multiplier burns a charge every spin and multiplies a bank builde
   });
   const store = loadStoreWithMock(mockPool);
   const spin = await store.spin("ws-1", 1);
-  assert.equal(spin.bank_delta_cents, 231); // 77 * 3
+  assert.equal(spin.bank_delta_cents, 420); // 140 * 3
   assert.equal(spin.reward_snapshot.slot_stages.bank_multiplier_applied, 3);
   assert.equal(mockPool.state.settings.multiplier_charges["3"], 1); // burned one
   assert.equal(mockPool.state.settings.active_multiplier, 3); // still armed, one charge left
@@ -1904,4 +1904,111 @@ test("reorderRewards stores the given order and rebalances on collision", async 
   const orders = mockPool.state.rewardRows.map(r => r.sort_order).sort((a, b) => a - b);
   assert.deepEqual(orders, [1000, 2000, 3000]);
   assert.equal(new Set(orders).size, 3);
+});
+
+function wagerBankPool() {
+  const board = Array.from({ length: 15 }, () => "MISS");
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 140 cents base
+  return createMockPool({
+    pointBalance: 1000,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      jackpot_hit_rate: 0, miss_rate: 0,
+      floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
+      monthly_goal_cents: 10000,
+      next_spin_tile_override: { tiles: board, created_at: "now" },
+    },
+  });
+}
+
+test("Double Wager charges 2x points and doubles the bank payout", async () => {
+  const single = wagerBankPool();
+  const spin1 = await loadStoreWithMock(single).spin("ws-1", 1, { wager: 1 });
+  const dbl = wagerBankPool();
+  const spin2 = await loadStoreWithMock(dbl).spin("ws-1", 1, { wager: 2 });
+
+  assert.ok(spin1.cost_credits > 0, "baseline spin must cost points");
+  assert.equal(spin2.cost_credits, spin1.cost_credits * 2, "2x wager doubles the point cost");
+  assert.equal(spin2.bank_delta_cents, spin1.bank_delta_cents * 2, "2x wager doubles the bank payout");
+  assert.equal(single.state.pointBalance, 1000 - spin1.cost_credits);
+  assert.equal(dbl.state.pointBalance, 1000 - spin2.cost_credits);
+  assert.equal(spin1.reward_snapshot.slot_stages.wager, 1);
+  assert.equal(spin2.reward_snapshot.slot_stages.wager, 2);
+});
+
+test("Double Wager stacks on top of an armed multiplier charge", async () => {
+  const board = Array.from({ length: 15 }, () => "MISS");
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 140 cents base
+  const mockPool = chargesPool({ "3": 2 }, {
+    jackpot_hit_rate: 0, miss_rate: 0,
+    floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
+    monthly_goal_cents: 10000,
+    active_multiplier: 3,
+    next_spin_tile_override: { tiles: board, created_at: "now" },
+  });
+  const spin = await loadStoreWithMock(mockPool).spin("ws-1", 1, { wager: 2 });
+  assert.equal(spin.bank_delta_cents, 840); // 140 * 3 (charge) * 2 (wager)
+  assert.equal(spin.reward_snapshot.slot_stages.bank_multiplier_applied, 3);
+  assert.equal(spin.reward_snapshot.slot_stages.wager, 2);
+});
+
+test("Double Wager turns a single jackpot into the headline reward plus one bonus roll", async () => {
+  const board = Array.from({ length: 15 }, () => "MISS");
+  [3, 8, 13].forEach(index => { board[index] = "JACKPOT"; });
+  const mockPool = createMockPool({
+    pointBalance: 100,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      jackpot_hit_rate: 1,
+      bank_builder_hit_rate: 0,
+      payment_source_weights: { self: 0, sponsored: 0, free: 1 },
+      reward_tiers: [{ id: "tier_i", label: "Tier 1", weight: 1, active: true }],
+      next_spin_tile_override: { tiles: board, created_at: "now" },
+    },
+    rewardRows: [{
+      id: 22, title: "Movie night", kind: "free", payment_source: "free", tier_id: "tier_i",
+      sponsor_type: "self", sponsor_splits: [], sponsor_active: true, value_cents: 0,
+      bank_delta_cents: 0, requires_confirmation: false, cooldown_days: 0,
+      unlock_threshold_cents: 0, notes: "", last_won_at: null, deleted_at: null,
+      active: true, weight: 8, chance_shares: 8,
+    }],
+  });
+  const spin = await loadStoreWithMock(mockPool).spin("ws-1", 1, { wager: 2 });
+  assert.equal(spin.reward_snapshot.slot_stages.jackpot_hit, true);
+  assert.equal(spin.reward_snapshot.slot_stages.jackpot_spins, 1);
+  // 1 reward spin * 2 wager - 1 paid as headline = 1 bonus reward roll banked.
+  assert.equal(spin.reward_snapshot.slot_stages.bonus_jackpot_spin_credits, 1);
+  assert.equal(mockPool.state.settings.jackpot_spin_credits, 1);
+  assert.equal(spin.reward_snapshot.slot_stages.wager, 2);
+});
+
+test("Double Wager is ignored on a free jackpot-credit spin (0 cost, no doubling)", async () => {
+  const reward = {
+    id: 22, title: "Movie night", kind: "free", payment_source: "free", tier_id: "tier_i",
+    sponsor_type: "self", sponsor_splits: [], sponsor_active: true, value_cents: 0,
+    bank_delta_cents: 0, requires_confirmation: false, cooldown_days: 0,
+    unlock_threshold_cents: 0, notes: "", last_won_at: null, deleted_at: null,
+    active: true, weight: 8, chance_shares: 8,
+  };
+  const mockPool = createMockPool({
+    pointBalance: 100,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      jackpot_spin_credits: 3,
+      bank_builder_hit_rate: 0,
+      payment_source_weights: { self: 0, sponsored: 0, free: 1 },
+      reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
+    },
+    rewardRows: [reward],
+  });
+  const spin = await loadStoreWithMock(mockPool).spin("ws-1", 1, { wager: 2 });
+  assert.equal(spin.cost_credits, 0, "a credit spin is free even with 2x requested");
+  assert.equal(spin.reward_snapshot.slot_stages.wager, 1, "wager clamps to 1 on a 0-cost spin");
+  assert.equal(mockPool.state.settings.jackpot_spin_credits, 2, "credit strictly counts down, never doubles");
 });

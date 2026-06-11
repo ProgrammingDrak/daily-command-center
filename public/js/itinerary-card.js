@@ -12,7 +12,8 @@
 // opts (all optional unless noted):
 //   guest            true on the guest page -> omits all edit chrome + detail panel
 //   node             {depth,hasKids,collapsed} schedule node (owner). Defaults flat.
-//   active,isNextUp,isPinnedActive,pinnedAging,nearEnd,isToday   timeline state flags
+//   active,isNextUp,isPinnedActive,pinnedStyle,nearEnd,isToday   timeline state flags
+//   pinnedStyle      {bg,fg,pulse} from getPinnedOverdueStyle, or null
 //   canEditBounty    owner passes (viewMode !== 'archive'); guest unused
 //   bw               wrapBandwidth(ev) result (owner); guest null
 //   bountyCount,bountyMeta   override the bounty store (guest passes from sponsorships)
@@ -34,6 +35,16 @@
 
   function W(name){ return (typeof window !== "undefined") ? window[name] : undefined; }
   function defEsc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(ch){ return ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" })[ch]; }); }
+
+  // Inline style for the pinned "how far behind" pill. ps comes from
+  // getPinnedOverdueStyle (state.js): {bg, fg, pulse}. When pulsing we leave the
+  // ring to the aging-flash keyframe (CSS); otherwise we tint the pinned ring to
+  // match the current gradient color.
+  function nodeOverdueStyle(ps, isPinnedActive){
+    if(!ps) return "";
+    var ring = (isPinnedActive && !ps.pulse) ? ";box-shadow:0 0 0 2px var(--bg),0 0 0 4px "+ps.bg : "";
+    return ' style="background:'+ps.bg+';border-color:'+ps.bg+';color:'+ps.fg+ring+'"';
+  }
 
   function renderItineraryCard(ev, opts){
     opts = opts || {};
@@ -84,7 +95,7 @@
 
     var node = opts.node || {depth:0,hasKids:false,collapsed:false};
     var active = !!opts.active, isNextUp = !!opts.isNextUp, isPinnedActive = !!opts.isPinnedActive;
-    var pinnedAging = opts.pinnedAging || null, nearEnd = !!opts.nearEnd;
+    var pinnedStyle = opts.pinnedStyle || null, nearEnd = !!opts.nearEnd;
     var nc = active ? "active" : "upcoming";
 
     var d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
@@ -183,7 +194,7 @@
 
     el.innerHTML=
       timeHtml+
-      '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(nearEnd?' near-end':'')+(isNextUp?' next-up':'')+(isPinnedActive?' pinned':'')+(pinnedAging==='yellow'?' aging-yellow':'')+(pinnedAging==='red'?' aging-red':'')+'" data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
+      '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(nearEnd?' near-end':'')+(isNextUp?' next-up':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
         '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+

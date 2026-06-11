@@ -7,9 +7,17 @@ function dStart(e,id){
   const el=e.target.closest(".tl-item");if(el)el.classList.add("dragging");
   const listEl=e.target.closest(".it-list-item");if(listEl)listEl.classList.add("dragging");
 }
-function dEnd(){dragId=null;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest"))}
+function dEnd(){dragId=null;window._dragNowPill=false;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest","pin-drop-target"))}
 function dOver(e,id){
   e.preventDefault();
+  // Dragging the live now-pill: highlight the hovered card as the pin target
+  // instead of showing reorder (top/bottom/nest) feedback.
+  if(window._dragNowPill){
+    const t=e.currentTarget;
+    document.querySelectorAll(".pin-drop-target").forEach(x=>{if(x!==t)x.classList.remove("pin-drop-target");});
+    t.classList.add("pin-drop-target");
+    return;
+  }
   if(id===dragId)return;
   const tgt=e.currentTarget,r=tgt.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
@@ -23,7 +31,7 @@ function dOver(e,id){
   tgt.classList.toggle("drag-over-top",y<h/2);
   tgt.classList.toggle("drag-over-bottom",y>=h/2);
 }
-function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest")}
+function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","pin-drop-target")}
 
 // ── Scheduling helpers ──
 
@@ -274,7 +282,19 @@ function _finishDrag(old){
 
 function dDrop(e,tid){
   e.preventDefault();
-  const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest"));
+  // Dropping the live now-pill onto a card pins that task as "active" instead of
+  // reordering anything. _dragNowPill is set by the pill's dragstart (schedule-tab.js).
+  if(window._dragNowPill){
+    window._dragNowPill=false;
+    document.querySelectorAll(".pin-drop-target").forEach(x=>x.classList.remove("pin-drop-target"));
+    if(typeof setPinnedActiveId==="function"){
+      setPinnedActiveId(tid);
+      if(typeof log==="function")log("pin-active",tid,"Pinned via drag");
+      if(typeof render==="function")render();
+    }
+    return;
+  }
+  const clearCls=()=>document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","pin-drop-target"));
   // External drag of a preset task group card: add the whole group to the day.
   if(window._dragFromTaskGroup){
     const gid=window._dragFromTaskGroup; window._dragFromTaskGroup=null;
