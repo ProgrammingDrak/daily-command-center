@@ -25,3 +25,34 @@ test("TaskPoints payload carries stacked self and partner bounty", () => {
   assert.equal(scoring.multipliers.bounty, 4);
   assert.equal(scoring.awardPoints, 120);
 });
+
+test("tag bucket multiplier scales the live estimate", () => {
+  const TaskPoints = loadTaskPoints();
+  const task = { duration_minutes: 90, tags: ["Tag-Social-123"] };
+
+  // Unset tiers -> no change (full points, no regression).
+  assert.equal(TaskPoints.estimate(task).awardPoints, 90);
+
+  // Quarter bucket -> 0.25x. Case-sensitive id match (no lowercasing).
+  TaskPoints.setPointTagTiers({ quarter: ["Tag-Social-123"] });
+  const quarter = TaskPoints.estimate(task);
+  assert.equal(quarter.pointTier, "quarter");
+  assert.equal(quarter.pointMultiplier, 0.25);
+  assert.equal(quarter.awardPoints, 23); // round(90 * 0.25)
+
+  // "No points" bucket -> ineligible, badge hidden.
+  TaskPoints.setPointTagTiers({ none: ["Tag-Social-123"] });
+  const none = TaskPoints.estimate(task);
+  assert.equal(none.eligible, false);
+  assert.equal(none.awardPoints, 0);
+
+  // Highest matched multiplier wins when a task spans buckets.
+  TaskPoints.setPointTagTiers({ quarter: ["Tag-Social-123"], half: ["other"] });
+  task.tags = ["Tag-Social-123", "other"];
+  assert.equal(TaskPoints.estimate(task).pointMultiplier, 0.5);
+
+  // Reset clears it back to full.
+  TaskPoints.setPointTagTiers(null);
+  task.tags = ["Tag-Social-123"];
+  assert.equal(TaskPoints.estimate(task).awardPoints, 90);
+});

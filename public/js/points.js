@@ -8,6 +8,46 @@
   const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
   const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
 
+  // Tag-bucket point tiers. Source of truth: slot-store.js taskPointTier() +
+  // POINT_TAG_TIER_MULTIPLIERS. Kept in sync manually (same FE/BE duplication as
+  // the EFFORT/ATTENTION tables above; the browser has no module system here).
+  const POINT_TAG_TIER_MULTIPLIERS = { none: 0, quarter: 0.25, half: 0.5, full: 1 };
+  // Bucket config (tag-id arrays per tier). Pushed in by slots.js loadSlots();
+  // null until loaded -> multiplier defaults to 1 (no behavior change).
+  let pointTagTiers = null;
+
+  function tierTags(value){
+    // Mirror backend normalizeTaskTags: trim only, case-PRESERVING. Tag ids are
+    // UUID/server ids and case-sensitive, so do NOT lowercase via norm() here.
+    if(Array.isArray(value)) return value.map(t => (t && typeof t === "object") ? String(t.id || t.name || t.label || "").trim() : String(t == null ? "" : t).trim()).filter(Boolean);
+    if(typeof value === "string") return value.split(/[,·|]/).map(t => t.trim()).filter(Boolean);
+    return [];
+  }
+  function tagPointMultiplier(input){
+    // Mirrors slot-store.js taskPointTier(): highest multiplier among matched
+    // buckets; no config or no match -> full (unsorted tags earn full points).
+    if(!pointTagTiers) return { tier: "full", multiplier: 1 };
+    const tagSet = new Set(tierTags(input.tags != null ? input.tags : input.tag));
+    let bestTier = null, bestMult = -1;
+    for(const tier in POINT_TAG_TIER_MULTIPLIERS){
+      const mult = POINT_TAG_TIER_MULTIPLIERS[tier];
+      const ids = pointTagTiers[tier] || [];
+      if(mult > bestMult && ids.some(id => tagSet.has(String(id)))){ bestTier = tier; bestMult = mult; }
+    }
+    return bestTier ? { tier: bestTier, multiplier: POINT_TAG_TIER_MULTIPLIERS[bestTier] } : { tier: "full", multiplier: 1 };
+  }
+  function setPointTagTiers(tiers){
+    if(tiers && typeof tiers === "object" && !Array.isArray(tiers)){
+      const next = {};
+      for(const tier in POINT_TAG_TIER_MULTIPLIERS){
+        next[tier] = Array.isArray(tiers[tier]) ? tiers[tier].map(id => String(id)) : [];
+      }
+      pointTagTiers = next;
+    } else {
+      pointTagTiers = null;
+    }
+  }
+
   function norm(value){ return String(value == null ? "" : value).trim().toLowerCase(); }
   function tags(value){
     if(Array.isArray(value)) return value.map(norm).filter(Boolean);
@@ -109,19 +149,24 @@
     const attention = attentionTier(input);
     const importance = importanceTier(input);
     const bounties = bountyCount(input);
+    const tier = tagPointMultiplier(input);
+    const pointMultiplier = tier.multiplier;
     const multipliers = {
       effort: EFFORT[effort] || EFFORT.medium,
       attention: ATTENTION[attention] || ATTENTION.normal,
       importance: IMPORTANCE[importance] || IMPORTANCE.normal,
       urgency: urgent(input) ? 1.15 : 1,
-      bounty: Math.pow(2, bounties)
+      bounty: Math.pow(2, bounties),
+      points: pointMultiplier
     };
-    const basePoints = duration;
-    if(NON_EARNING.has(norm(input.type || input.kind))){
-      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
+    const basePoints = duration * pointMultiplier;
+    // Non-earning task type, or a 0x ("No points") tag bucket -> not eligible
+    // (mirrors backend point_tier_zero in slot-scoring.js).
+    if(NON_EARNING.has(norm(input.type || input.kind)) || pointMultiplier <= 0){
+      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointTier: tier.tier, pointMultiplier, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
     }
     const rawPoints = basePoints * multipliers.effort * multipliers.attention * multipliers.importance * multipliers.urgency * multipliers.bounty;
-    return { formulaVersion: FORMULA_VERSION, eligible: true, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, multipliers, basePoints, rawPoints, awardPoints: Math.max(1, Math.round(rawPoints)) };
+    return { formulaVersion: FORMULA_VERSION, eligible: true, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointTier: tier.tier, pointMultiplier, multipliers, basePoints, rawPoints, awardPoints: Math.max(1, Math.round(rawPoints)) };
   }
   function buildPayload(task, options){
     task = task || {};
@@ -159,6 +204,7 @@
     formulaVersion: FORMULA_VERSION,
     pointsPerSpin: POINTS_PER_SPIN,
     estimate,
-    buildPayload
+    buildPayload,
+    setPointTagTiers
   };
 })();

@@ -410,6 +410,11 @@
       if(token !== loadSlotsToken) return;
       slotState = next;
       pointTagTierDraft = null;
+      // Keep the live PTS-badge estimator (points.js) in sync with the tag
+      // buckets so it applies the same multiplier the backend awards.
+      if(window.TaskPoints && typeof window.TaskPoints.setPointTagTiers === "function"){
+        window.TaskPoints.setPointTagTiers((slotState.constants && slotState.constants.pointTagTiers) || {});
+      }
       renderSlots();
     } catch(e) {
       if(token !== loadSlotsToken) return;
