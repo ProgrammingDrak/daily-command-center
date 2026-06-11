@@ -43,3 +43,8 @@ backups/
 
 # Legacy SQLite store — superseded by Postgres; contained live secrets, never track
 data/blocks.db
+
+# Transient agent artifacts (never commit)
+.codex-*.log
+.codex-*.patch
+tmp-*.json
