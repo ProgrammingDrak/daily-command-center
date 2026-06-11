@@ -5,7 +5,7 @@ module.exports = function mount(app, ctx) {
   const { blockDB, broadcast, isValidDate, pool } = ctx;
 
 // ── Evaluation API (task scoring engine) ──
-app.use(require("./evaluation/routes")(blockDB));
+app.use(require("../evaluation/routes")(blockDB));
 
 // ── PA State API ──
 app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
