@@ -35,7 +35,8 @@
     "googleapis": "^171.4.0",
     "gray-matter": "^4.0.3",
     "pg": "^8.13.0",
-    "simple-git": "^3.25.0"
+    "simple-git": "^3.25.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

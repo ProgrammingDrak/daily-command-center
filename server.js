@@ -29,6 +29,9 @@ const punishmentStore = require("./punishment-store");
 const socialStore = require("./social-store");
 const { badRequest, notFound } = require("./slot-account-common");
 const routeHelpers = require("./lib/route-helpers");
+const tokenStore = require("./token-store");
+const validate = require("./middleware/validate");
+const schemas = require("./middleware/schemas");
 const { coerceDateString, isValidDate, addMinutesHHMM, intParam, route } = routeHelpers;
 const { scoreTaskPoints } = require("./slot-scoring");
 const capabilities = require("./capabilities");
@@ -143,9 +146,16 @@ function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr =
 function trustLocalhost(req) { return process.env.NODE_ENV !== "production" && isLocalhost(req); }
 function hasDccToken(req) { const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!dccToken) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === dccToken : false; }
 function hasSweepWriteToken(req) { const token = process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN; if (!token) return false; const authHeader = req.headers.authorization || ""; return authHeader.startsWith("Bearer ") ? authHeader.slice(7) === token : false; }
-function hasDccIngestToken(req) { return hasDccToken(req) || hasSweepWriteToken(req); }
-function isSweepBlockWrite(req) { return req.method === "POST" && req.path === "/api/blocks" && hasSweepWriteToken(req); }
 function isDccStateIngest(req) { return req.method === "POST" && req.path === "/api/ingest/day-state"; }
+// DB-backed service tokens (token-store.js, rotatable/revocable via
+// /api/admin/tokens) with the legacy env-var tokens kept as a fallback.
+async function hasServiceToken(req, scope) {
+  if (scope === "sweep" ? hasSweepWriteToken(req) : hasDccToken(req)) return true; // env fallback
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) return false;
+  try { return await tokenStore.verifyToken(authHeader.slice(7), scope); }
+  catch (e) { console.error("[token-store] verify failed:", e.message); return false; }
+}
 function attachSweepServiceAuth(req) {
   const userId = Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 1);
   const workspaceId = req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${userId}`;
@@ -167,14 +177,16 @@ function requireAdmin(req, res, next) {
   return res.status(403).send("Admin access required");
 }
 
-app.use((req, res, next) => {
-  if (AUTH_PUBLIC.has(req.path)) return next();
-  if (isPublicRoute(req)) return next();
-  if (isSweepBlockWrite(req)) { attachSweepServiceAuth(req); return next(); }
-  if (isDccStateIngest(req) && hasDccIngestToken(req)) { attachSweepServiceAuth(req); return next(); }
-  if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || hasDccToken(req))) return next();
-  if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
-  next();
+app.use(async (req, res, next) => {
+  try {
+    if (AUTH_PUBLIC.has(req.path)) return next();
+    if (isPublicRoute(req)) return next();
+    if (req.method === "POST" && req.path === "/api/blocks" && await hasServiceToken(req, "sweep")) { attachSweepServiceAuth(req); return next(); }
+    if (isDccStateIngest(req) && ((await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
+    if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
+    if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
+    next();
+  } catch (err) { next(err); }
 });
 
 // ── Workspace Middleware ──
@@ -199,7 +211,7 @@ function sendAuthPage(req, res) {
 app.get("/login", sendAuthPage);
 app.get("/register", sendAuthPage);
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", validate(schemas.login), async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: "Username and password required" });
   if (LOCAL_AUTH_ENABLED && username === LOCAL_AUTH_USERNAME && password === LOCAL_AUTH_PASSWORD) {
@@ -279,7 +291,7 @@ app.patch("/api/me/onboarding", async (req, res) => {
   }
 });
 
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", validate(schemas.register), async (req, res) => {
   try {
     const { username, password } = req.body || {};
     const result = await auth.registerUser({ username, password });
@@ -850,6 +862,7 @@ require("./routes/gcal")(app, ctx);
 require("./routes/slots")(app, ctx);
 require("./routes/punishments")(app, ctx);
 require("./routes/vault")(app, ctx);
+require("./routes/admin-tokens")(app, ctx);
 
 // ── Static + Fallback ──
 app.get("/pet/:shareSlug", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "public-pet.html")); });
