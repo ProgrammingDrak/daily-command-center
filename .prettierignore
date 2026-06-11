@@ -1,0 +1,9 @@
+node_modules/
+public/js/
+data/
+backups/
+docs/
+.worktrees/
+vault/
+*.html
+package-lock.json

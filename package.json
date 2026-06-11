@@ -36,5 +36,10 @@
     "gray-matter": "^4.0.3",
     "pg": "^8.13.0",
     "simple-git": "^3.25.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0"
   }
 }
