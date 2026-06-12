@@ -2012,3 +2012,49 @@ test("Double Wager is ignored on a free jackpot-credit spin (0 cost, no doubling
   assert.equal(spin.reward_snapshot.slot_stages.wager, 1, "wager clamps to 1 on a 0-cost spin");
   assert.equal(mockPool.state.settings.jackpot_spin_credits, 2, "credit strictly counts down, never doubles");
 });
+
+test("normalizeWager accepts the 1/2/5/10/100 tiers and falls back to 1 otherwise", () => {
+  const store = loadStoreWithMock(createMockPool({}));
+  for (const v of [1, 2, 5, 10, 100]) assert.equal(store.normalizeWager(v), v);
+  assert.equal(store.normalizeWager("10"), 10, "numeric strings coerce");
+  for (const bad of [3, 0, 50, -2, undefined, null, NaN, "x"]) {
+    assert.equal(store.normalizeWager(bad), 1, "off-tier value " + bad + " falls back to 1");
+  }
+  for (const c of [1, 2, 5, 10]) assert.equal(store.normalizeWheelCount(c), c);
+  for (const bad of [3, 7, 100, 0, undefined]) assert.equal(store.normalizeWheelCount(bad), 1);
+});
+
+test("a 10x wager charges 10x points and decuples the bank payout", async () => {
+  const single = wagerBankPool();
+  const spin1 = await loadStoreWithMock(single).spin("ws-1", 1, { wager: 1 });
+  const ten = wagerBankPool();
+  const spin10 = await loadStoreWithMock(ten).spin("ws-1", 1, { wager: 10 });
+  assert.equal(spin10.cost_credits, spin1.cost_credits * 10, "10x wager costs 10x points");
+  assert.equal(spin10.bank_delta_cents, spin1.bank_delta_cents * 10, "10x wager pays 10x bank");
+  assert.equal(spin10.reward_snapshot.slot_stages.wager, 10);
+});
+
+test("spinBatch runs N independent spins and deducts each wheel's cost", async () => {
+  const pool = wagerBankPool();
+  const spins = await loadStoreWithMock(pool).spinBatch("ws-1", 1, { count: 5, wager: 1 });
+  assert.equal(spins.length, 5, "five wheels => five spin rows");
+  assert.ok(spins[0].cost_credits > 0, "each wheel costs points");
+  const totalCost = spins.reduce((sum, r) => sum + r.cost_credits, 0);
+  assert.equal(pool.state.pointBalance, 1000 - totalCost, "balance drops by the sum of every wheel");
+});
+
+test("spinBatch refuses up front when points can't cover the whole batch", async () => {
+  const pool = createMockPool({
+    pointBalance: 30,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+    },
+  });
+  await assert.rejects(
+    () => loadStoreWithMock(pool).spinBatch("ws-1", 1, { count: 10, wager: 1 }),
+    /Not enough points/,
+  );
+  assert.equal(pool.state.pointBalance, 30, "nothing is charged when the batch can't afford itself");
+});

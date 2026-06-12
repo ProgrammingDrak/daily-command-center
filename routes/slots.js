@@ -126,10 +126,22 @@ app.post("/api/slot/earn-task", async (req, res) => {
 
 app.post("/api/slot/spin", async (req, res) => {
   try {
-    const wager = (req.body && Number(req.body.wager)) === 2 ? 2 : 1;
+    const wager = slotStore.normalizeWager(req.body && req.body.wager);
     const spin = await slotStore.spin(req.workspaceId, req.session.userId, { wager });
     broadcast("slot-changed", { action: "spin" }, req.workspaceId);
     res.json(spin);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
+app.post("/api/slot/spin-batch", async (req, res) => {
+  try {
+    const wager = slotStore.normalizeWager(req.body && req.body.wager);
+    const count = slotStore.normalizeWheelCount(req.body && req.body.count);
+    const spins = await slotStore.spinBatch(req.workspaceId, req.session.userId, { count, wager });
+    broadcast("slot-changed", { action: "spin-batch" }, req.workspaceId);
+    res.json({ spins });
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });
   }

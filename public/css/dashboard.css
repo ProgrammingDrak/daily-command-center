@@ -2960,22 +2960,30 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slots-machine .slots-balances{flex-direction:column;gap:8px}
 .slots-machine .slots-balance{min-width:0;background:rgba(3,7,18,0.48);border-color:rgba(255,196,87,0.24);box-shadow:inset 0 1px 0 rgba(255,255,255,0.05)}
 /* Double Wager toggle: a tappable pill that signals high-roller mode. */
-.slot-wager-toggle{display:flex;align-items:center;gap:10px;width:100%;text-align:left;cursor:pointer;padding:9px 11px;border-radius:10px;border:1px solid rgba(255,196,87,0.34);background:rgba(3,7,18,0.5);color:var(--text);transition:border-color .18s ease,box-shadow .18s ease,background .18s ease,transform .12s ease}
-.slot-wager-toggle:hover{border-color:rgba(255,214,110,0.6)}
-.slot-wager-badge{flex:0 0 auto;display:grid;place-items:center;width:34px;height:34px;border-radius:8px;font-weight:950;font-size:15px;color:#2a1402;background:linear-gradient(180deg,#ffe9a3,#caa23a);box-shadow:inset 0 -3px 0 rgba(62,42,11,0.18)}
-.slot-wager-copy{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1 1 auto}
-.slot-wager-title{font-size:12px;font-weight:900;line-height:1.1}
-.slot-wager-sub{font-size:10px;color:var(--text-muted);line-height:1.1;overflow-wrap:anywhere}
-.slot-wager-switch{flex:0 0 auto;position:relative;width:34px;height:18px;border-radius:999px;background:rgba(148,163,184,0.3);transition:background .18s ease}
-.slot-wager-switch:after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#e2e8f0;transition:transform .18s ease,background .18s ease}
-.slot-wager-toggle.on{border-color:rgba(255,214,110,0.85);background:linear-gradient(180deg,rgba(120,72,12,0.55),rgba(40,20,4,0.6));box-shadow:0 0 22px rgba(250,204,21,0.32),inset 0 0 0 1px rgba(255,214,110,0.4)}
-.slot-wager-toggle.on .slot-wager-switch{background:linear-gradient(180deg,#ffd66e,#f59e0b)}
-.slot-wager-toggle.on .slot-wager-switch:after{transform:translateX(16px);background:#2a1402}
-.slot-wager-toggle.on .slot-wager-sub{color:#ffe9a3}
-.slot-wager-toggle.muted{opacity:.5}
-.slot-wager-toggle:disabled{opacity:.42;cursor:not-allowed}
-/* Whole-machine accent while 2x is armed. */
-.slots-machine.wager-2x{border-color:rgba(255,214,110,0.78);box-shadow:inset 0 0 0 2px rgba(255,196,87,0.2),0 22px 48px rgba(0,0,0,0.28),0 0 42px rgba(250,204,21,0.26)}
+/* Wager + wheel-count controls: rows of greyed buttons, one armed (gold). */
+.slot-wager-control{display:flex;flex-direction:column;gap:4px;padding:9px 11px;border-radius:10px;border:1px solid rgba(255,196,87,0.34);background:rgba(3,7,18,0.5)}
+.slot-control-label{font-size:11px;font-weight:900;color:var(--text);line-height:1.1}
+.slot-control-sub{font-size:10px;color:var(--text-muted);line-height:1.1;overflow-wrap:anywhere}
+.slot-wager-tiers,.slot-wheel-count{display:flex;gap:6px}
+.slot-wager-tier,.slot-wheel-count-btn{flex:1 1 auto;min-width:0;cursor:pointer;padding:6px 4px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text-muted);font-weight:900;font-size:12px;line-height:1;transition:border-color .18s ease,box-shadow .18s ease,background .18s ease,color .18s ease,transform .12s ease}
+.slot-wager-tier:hover:not(:disabled),.slot-wheel-count-btn:hover:not(:disabled){border-color:rgba(255,214,110,0.6);color:var(--text);transform:translateY(-1px)}
+.slot-wager-tier.on,.slot-wheel-count-btn.on{border-color:rgba(255,214,110,0.85);color:#2a1402;background:linear-gradient(180deg,#ffe9a3,#caa23a);box-shadow:0 0 18px rgba(250,204,21,0.32),inset 0 -3px 0 rgba(62,42,11,0.18)}
+.slot-wager-tiers.muted,.slot-wheel-count.muted{opacity:.5}
+.slot-wager-tier:disabled,.slot-wheel-count-btn:disabled{cursor:not-allowed}
+/* Whole-machine accent while a wager multiplier is armed. */
+.slots-machine.wager-armed{border-color:rgba(255,214,110,0.78);box-shadow:inset 0 0 0 2px rgba(255,196,87,0.2),0 22px 48px rgba(0,0,0,0.28),0 0 42px rgba(250,204,21,0.26)}
+/* Parallel multi-wheel layout: clones of the reel frame tile across the stage. */
+.slot-wheels.multi{display:grid;gap:10px;grid-template-columns:repeat(2,minmax(0,1fr))}
+.slot-wheels.multi[data-count="5"],.slot-wheels.multi[data-count="10"]{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+.slot-wheels.multi .slot-reels-frame{padding:8px}
+.slot-wheels.multi .slot-reels{gap:4px;padding:7px}
+.slot-wheels.multi .slot-cell{min-height:0;aspect-ratio:1.08;font-size:18px;border-radius:5px}
+.slot-wheels.multi[data-count="10"] .slot-cell{font-size:14px}
+.slot-wheel-caption{margin-top:6px;text-align:center;font-size:11px;font-weight:800;line-height:1.15;min-height:14px;color:var(--text-muted)}
+.slot-wheel-caption .mw-bank{color:#86efac}
+.slot-wheel-caption .mw-win{color:#ffe9a3}
+.slot-wheel-caption .mw-review{color:#fbbf24}
+.slot-wheel-caption .mw-miss{color:var(--text-muted);opacity:.8}
 .slot-pet-companion{position:relative;min-height:112px;display:grid;grid-template-columns:1fr 42px 74px;gap:8px;align-items:end;padding:10px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;background:rgba(255,255,255,0.045)}
 .slot-pet-speech{align-self:start;min-height:32px;padding:7px 9px;border-radius:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);color:var(--text);font-size:12px;font-weight:800;line-height:1.25}
 .slot-lever{align-self:stretch;min-height:86px;position:relative;border:0;background:transparent;cursor:pointer}
@@ -3551,7 +3559,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @media (max-width: 720px){
   .slot-machine-body{flex-direction:column;gap:10px}
   .slot-side-rail{flex:0 0 auto;flex-direction:row;flex-wrap:wrap;align-items:stretch;gap:8px;order:-1}
-  .slot-wager-toggle{flex:1 1 180px;width:auto}
+  .slot-wager-control{flex:1 1 180px;width:auto}
   .slots-machine .slots-balances{flex:1 1 200px;flex-direction:row}
   .slots-machine .slots-balance{flex:1 1 0}
   .slot-bankroll-goal-panel{flex:1 1 200px;min-height:0}
