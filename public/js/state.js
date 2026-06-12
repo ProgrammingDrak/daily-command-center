@@ -937,6 +937,31 @@ function _moveTaskToBacklogStage(id,stage,toastMsg){
 function moveTaskToBacklog(id){_moveTaskToBacklogStage(id,"Backlog","Moved to backlog");}
 function moveTaskToPriority(id){_moveTaskToBacklogStage(id,"Priority","Moved to priority");}
 
+// Convert an existing scheduled task into a Delegated / Blocked item: open the
+// delegated modal prefilled with this task as "what you're working on". The
+// original scheduled task is removed only once the blocked item is saved (see
+// removeTaskForConversion, called from delegated.js saveDelegatedItem) so a
+// cancelled convert leaves the task untouched.
+function convertTaskToDelegated(id){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return;
+  if(typeof openDelegatedFromTask==="function")openDelegatedFromTask({title:ev.title,durMin:dur(ev)||30,sourceTaskId:id});
+  else if(typeof showToast==="function")showToast("Delegated / Blocked is still loading. Try again in a moment.","info");
+}
+
+// Remove a scheduled task after it's been converted to another type (mirrors the
+// purge tail of _moveTaskToBacklogStage). Exposed for delegated.js's deferred convert.
+function removeTaskForConversion(id){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return;
+  deletedSet.add(id);
+  saveDeletedState();
+  _purgeManualBlock(ev);
+  if(typeof recalcTimes==="function")recalcTimes();
+  render();
+}
+window.removeTaskForConversion=removeTaskForConversion;
+
 async function unschedulePushedFromTomorrow(id){
   if(!__tomorrowDate)return;
   return unscheduleTaskFromDate(id,__tomorrowDate);
@@ -1131,6 +1156,9 @@ function openReschedulePopover(id,anchorEl){
     '<div class="resched-custom">'+
       '<input type="date" class="resched-date-input" />'+
       '<button class="resched-go">Move</button>'+
+    '</div>'+
+    '<div class="resched-convert">'+
+      '<button class="resched-convert-btn" type="button">Waiting on someone? → Delegated / Blocked</button>'+
     '</div>';
 
   function closePop(){
@@ -1181,6 +1209,12 @@ function openReschedulePopover(id,anchorEl){
   });
   dateInput.addEventListener("keydown",e=>{
     if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
+  });
+  const convBtn=pop.querySelector(".resched-convert-btn");
+  if(convBtn)convBtn.addEventListener("click",e=>{
+    e.stopPropagation();
+    closePop();
+    if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(id);
   });
 
   // Position. The popover is position:fixed, so we work in viewport coords.
