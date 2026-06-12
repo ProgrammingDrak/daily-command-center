@@ -8,6 +8,7 @@
     "db:refresh-local": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1",
     "db:schedule-local-refresh": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1 -InstallDailyTask",
     "brief:materialize": "node scripts/morning-brief-materializer.js",
+    "triage:ingest": "node scripts/triage-check-ingest.js",
     "sweep:check": "node scripts/sweep-suite-check.js",
     "ship": "node scripts/ship-pr.js",
     "test": "node --test",

@@ -18,6 +18,46 @@ workflow, not a direct script-only cron job. The readiness command exists so
 worktree/cloud runs have a deterministic preflight entrypoint before they read
 live Gmail, Calendar, Slack, and DCC state.
 
+## Daytime Triage Checks
+
+Primary DCC ingest command:
+
+```sh
+npm run triage:ingest -- --file packet.json
+```
+
+Dry-run:
+
+```sh
+npm run triage:ingest -- --file packet.json --dry-run
+```
+
+The packet must contain only items that need Drake attention. Each item should
+include the original source URL, an urgency score, a short reason attention is
+needed, and a draft URL when the AI was able to prepare a Gmail/Slack draft.
+The DCC endpoint is:
+
+```sh
+POST /api/dcc/triage-check/ingest
+```
+
+The local macOS publisher is installed by the `claude-brain` LaunchAgent setup
+as `com.drakeshadwell.claude-brain.triage-check`. It runs weekdays at 8:30 AM,
+11:30 AM, 2:30 PM, and 4:15 PM, reads pending packets from:
+
+```sh
+/Users/drakeshadwell/portable-programming/claude-brain/inbox/triage-checks/pending
+```
+
+and logs to:
+
+```sh
+/Users/drakeshadwell/portable-programming/claude-brain/logs/triage-check.log
+```
+
+No-attention/FYI items should not be published into DCC during the day. They can
+be summarized in the end-of-day Glymphatic review.
+
 ## Morning Brief Materializer
 
 Primary scheduler: local macOS launchd on Drake's Mac,

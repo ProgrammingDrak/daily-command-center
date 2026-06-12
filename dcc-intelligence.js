@@ -42,6 +42,15 @@ function normalizePriority(value) {
   return "Medium";
 }
 
+function urgencyPriority(score) {
+  const n = Number(score);
+  if (Number.isFinite(n)) {
+    if (n >= 75) return "High";
+    if (n <= 34) return "Low";
+  }
+  return "Medium";
+}
+
 function addMinutesHHMM(start, minutes) {
   const startMin = parseMinute(start);
   if (startMin == null) return "";
@@ -73,6 +82,42 @@ function normalizeTriageItem(source, raw) {
     link: raw.link || raw.url || raw.source_link || "",
     created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
     status: raw.status || "open",
+  };
+}
+
+function normalizeTriageCheckItem(raw, index) {
+  const source = String(raw.source || raw.channel || raw.type || "triage-check").toLowerCase();
+  const sourceId = raw.source_id || raw.thread_id || raw.message_id || raw.id || raw.source_url || raw.source_ref || raw.title || `item-${index}`;
+  const urgencyScore = Math.max(0, Math.min(100, Number(raw.urgency_score ?? raw.urgency ?? raw.score ?? 50) || 50));
+  const priority = raw.priority ? normalizePriority(raw.priority) : urgencyPriority(urgencyScore);
+  const sourceUrl = raw.source_url || raw.source_ref || raw.link || raw.url || "";
+  const draftUrl = raw.draft_url || raw.draft_link || "";
+  const reason = raw.needs_attention_reason || raw.reason || raw.summary || "";
+  const title = raw.title || raw.subject || raw.text || `Review ${source} response`;
+  return {
+    id: raw.id || stableId("triage-check", [source, sourceId, draftUrl, title]),
+    source: "triage-check",
+    source_id: `${source}|${sourceId}`,
+    type: source === "gmail" || source === "email" ? "email_needs_response" : (source === "slack" ? "slack_mention" : "unanswered_dm"),
+    title,
+    summary: reason,
+    priority,
+    urgency_score: urgencyScore,
+    needs_attention_reason: reason,
+    link: sourceUrl,
+    source_url: sourceUrl,
+    link_label: raw.link_label || "Open source",
+    draft_link: draftUrl,
+    draft_url: draftUrl,
+    draft_id: raw.draft_id || draftUrl || "",
+    draft_type: raw.draft_type || (source === "gmail" || source === "email" ? "gmail" : source),
+    action_label: raw.action_label || "Review draft",
+    recommended_action: raw.recommended_action || "review_edit_send",
+    deadline: raw.deadline || raw.due_at || "",
+    created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
+    status: raw.status || "open",
+    queue_label: raw.queue_label || "Triage Check",
+    triage_check: true,
   };
 }
 
@@ -411,6 +456,66 @@ function ingestDeepSweepPacket({ date, state, packet, source }) {
   };
 }
 
+function normalizeTriageCheckPacket(packet) {
+  const raw = packet || {};
+  const items = [
+    ...asArray(raw.items),
+    ...asArray(raw.triage_items),
+    ...asArray(raw.needs_attention),
+    ...asArray(raw.attention_items),
+  ];
+  return {
+    id: raw.id || stableId("triage-check-packet", [raw.source || "triage-check", raw.generated_at || raw.created_at || new Date().toISOString()]),
+    source: raw.source || "triage-check",
+    generated_at: raw.generated_at || raw.created_at || new Date().toISOString(),
+    items: items.filter((item) => item && item.needs_attention !== false).map(normalizeTriageCheckItem),
+    omitted_count: Number(raw.omitted_count || raw.no_attention_count || 0) || 0,
+  };
+}
+
+function ingestTriageCheckPacket({ date, state, packet }) {
+  const normalized = normalizeTriageCheckPacket(packet);
+  const runAt = new Date().toISOString();
+  const base = {
+    ...state,
+    date,
+    triage: { open_items: [], resolved_items: [], cycle_count: 0, ...(state.triage || {}) },
+    sweep: { source_health: [], readers: [], open_item_count: 0, meetings_count: 0, ...(state.sweep || {}) },
+    mutations: asArray(state.mutations),
+  };
+  const mergedOpenItems = mergeOpenItems(base.triage.open_items, normalized.items);
+  return {
+    ...base,
+    last_updated_at: runAt,
+    last_updated_by: "triage-check-ingest",
+    triage: {
+      ...base.triage,
+      open_items: mergedOpenItems,
+      cycle_count: (base.triage.cycle_count || 0) + 1,
+      last_triage_check_at: runAt,
+    },
+    sweep: {
+      ...base.sweep,
+      open_item_count: mergedOpenItems.length,
+      last_triage_check: {
+        id: normalized.id,
+        source: normalized.source,
+        generated_at: normalized.generated_at,
+        ingested_at: runAt,
+        attention_items: normalized.items.length,
+      },
+      source_health: [
+        sourceHealth("triage-check", "ok", normalized.items.length ? `Added ${normalized.items.length} attention item(s).` : "Checked; no attention items published to DCC.", normalized.items.length),
+        ...asArray(base.sweep.source_health).filter((h) => h.id !== "triage-check"),
+      ],
+    },
+    mutations: [
+      ...base.mutations,
+      { id: stableId("mutation", [date, normalized.id, runAt]), type: "triage-check-ingest", at: runAt, packet_id: normalized.id, open_items: normalized.items.length, omitted_count: normalized.omitted_count },
+    ].slice(-100),
+  };
+}
+
 function frontPageTasks(state) {
   const current = state && state.glymphatic_brief && state.glymphatic_brief.current;
   const pages = asArray(current && current.pages);
@@ -502,6 +607,7 @@ function materializeBriefPlan({ sourceState, targetDate, existingBlocks = [] }) 
 module.exports = {
   refreshDccState,
   ingestDeepSweepPacket,
+  ingestTriageCheckPacket,
   normalizeDeepPacket,
   runReaders,
   buildBrief,

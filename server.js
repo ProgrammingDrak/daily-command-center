@@ -136,7 +136,7 @@ app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback"]);
-const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task"]);
+const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
@@ -830,6 +830,21 @@ app.post("/api/dcc/deep-sweep/ingest", (req, res) => {
   } catch (e) {
     console.error("[deep-sweep ingest] failed:", e);
     res.status(500).json({ error: e.message || "deep-sweep ingest failed" });
+  }
+});
+
+app.post("/api/dcc/triage-check/ingest", (req, res) => {
+  try {
+    const body = req.body || {};
+    const date = body.date || (body.packet && body.packet.date) || getTodayStr();
+    const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+    const nextState = dccIntelligence.ingestTriageCheckPacket({ date, state: existing, packet: body.packet || body });
+    persistDccDay(date, nextState, req, "triage-check-ingest");
+    const last = nextState.sweep?.last_triage_check || {};
+    res.json({ ok: true, date, packet_id: last.id || null, attention_items: last.attention_items || 0, open_items: nextState.triage?.open_items?.length || 0 });
+  } catch (e) {
+    console.error("[triage-check ingest] failed:", e);
+    res.status(500).json({ error: e.message || "triage-check ingest failed" });
   }
 });
 
