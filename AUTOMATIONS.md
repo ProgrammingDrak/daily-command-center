@@ -33,6 +33,11 @@ It runs at 7:15 AM local time and logs to:
 /Users/drakeshadwell/portable-programming/claude-brain/logs/morning-brief-materializer.log
 ```
 
+The local launchd wrapper defaults to
+`https://daily-command-center-personal.onrender.com`, which is the Render
+service declared by this repo's `render.yaml`. Override with `DCC_BASE_URL`
+only when intentionally targeting a different DCC instance.
+
 Canonical dry-run command:
 
 ```sh
