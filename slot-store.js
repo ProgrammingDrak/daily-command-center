@@ -107,14 +107,19 @@ const DEFAULT_COLLECTION_SET_SIZE = 12;
 // each run on its own. A lone tile (cluster [1]) pays a single unit with no combo.
 // Weights are tuned so the mean units/hit stays ~= the old single-line average
 // (~9.95); see the Monte-Carlo sim referenced in the slot bank-rewards plan.
+// Bank-hit shapes, weighted so a connected RUN (the boost) follows roughly the
+// feel Drake asked for: a 1- or 2-tile hit is common, while a 3/4/5-in-a-row is
+// recognizable-but-exciting. By longest run across these weights (sum 100):
+//   1 tile  -> 12%   2-in-a-row -> 30%   3-in-a-row -> 28%   4 -> 20%   5 -> 10%
+// split_2_2 (two separated 2-runs) keeps the multi-block feel without inflating
+// the 3+-in-a-row rate; a 5-run is a full BANK row (mega boost, reserve-capped).
 const BANK_SHAPES = [
-  { key: "single",    clusters: [1],    weight: 9 },  // lone tile -> 1 unit, no multiplier
-  { key: "pair",      clusters: [2],    weight: 10 }, // 2-run -> 4 units
-  { key: "triple",    clusters: [3],    weight: 26 }, // 3-run -> ~7.9 units
-  { key: "quad",      clusters: [4],    weight: 16 }, // 4-run (horizontal) -> 16 units
-  { key: "split_1_3", clusters: [1, 3], weight: 8 },  // lone tile + separated block
-  { key: "split_2_3", clusters: [2, 3], weight: 14 }, // two separated blocks
-  { key: "split_3_3", clusters: [3, 3], weight: 17 }, // two separated 3-blocks
+  { key: "single",    clusters: [1],    weight: 12 }, // lone tile -> 1 unit, no boost
+  { key: "pair",      clusters: [2],    weight: 14 }, // 2-run -> small boost (common)
+  { key: "split_2_2", clusters: [2, 2], weight: 16 }, // two separated 2-runs (multi-block, no 3-run)
+  { key: "triple",    clusters: [3],    weight: 28 }, // 3-in-a-row boost
+  { key: "quad",      clusters: [4],    weight: 20 }, // 4-in-a-row boost
+  { key: "quint",     clusters: [5],    weight: 10 }, // 5-in-a-row mega boost (full row)
 ];
 const SCREEN_BANK_BUILDER_PERCENT = 0.002;
 const DEFAULT_POINT_TAG_TIERS = {
