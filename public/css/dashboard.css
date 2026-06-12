@@ -3263,6 +3263,68 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-reward-secondary{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
 .slot-reward-alt{border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.05);color:var(--text);font-family:inherit;font-size:13px;font-weight:800;padding:9px 14px;border-radius:9px;cursor:pointer}
 .slot-reward-alt:hover{border-color:rgba(255,255,255,0.34);background:rgba(255,255,255,0.09)}
+
+/* ===== Gamble: modal grows per rung climbed (data-level 1..5) ===== */
+.slot-gamble-dialog{transition:transform .28s cubic-bezier(.18,1.3,.24,1),box-shadow .28s ease}
+.slot-gamble-dialog[data-level="2"]{transform:scale(1.05)}
+.slot-gamble-dialog[data-level="3"]{transform:scale(1.11)}
+.slot-gamble-dialog[data-level="4"]{transform:scale(1.17);box-shadow:0 24px 80px rgba(0,0,0,.55),0 0 52px rgba(251,113,133,.5)}
+.slot-gamble-dialog[data-level="5"]{transform:scale(1.24);box-shadow:0 26px 90px rgba(0,0,0,.6),0 0 70px rgba(250,204,21,.6)}
+.slot-gamble-dialog[data-level="3"] .slot-reward-prize strong,.slot-gamble-dialog[data-level="4"] .slot-reward-prize strong,.slot-gamble-dialog[data-level="5"] .slot-reward-prize strong{font-size:clamp(20px,5vw,30px)}
+.slot-gamble-dialog[data-level="4"] .slot-reward-go-lead,.slot-gamble-dialog[data-level="5"] .slot-reward-go-lead{font-size:22px}
+.slot-gamble-dialog[data-level="5"] .slot-reward-go.risk{animation:rewardRiskGlow .85s ease-in-out infinite}
+
+/* ===== Celebration FX layer (above the modal at 10020) ===== */
+#slot-gamble-fx{position:fixed;inset:0;z-index:10026;pointer-events:none;overflow:hidden}
+.slot-gamble-firework{position:absolute;width:0;height:0}
+.slot-gamble-firework i{position:absolute;left:0;top:0;width:9px;height:9px;border-radius:50%;
+  background:radial-gradient(circle,#fff 0 30%,#ffe169 31% 60%,rgba(255,225,105,0) 61%);
+  box-shadow:0 0 12px rgba(255,225,105,.95),0 0 22px rgba(125,249,255,.7);
+  transform:rotate(var(--a)) translateX(0);animation:slotGambleSpark 1s ease-out both}
+.slot-gamble-firework i:nth-child(3n){background:radial-gradient(circle,#fff 0 30%,#7df9ff 31% 60%,rgba(125,249,255,0) 61%)}
+.slot-gamble-firework i:nth-child(3n+1){background:radial-gradient(circle,#fff 0 30%,#fb7185 31% 60%,rgba(251,113,133,0) 61%)}
+@keyframes slotGambleSpark{0%{opacity:0;transform:rotate(var(--a)) translateX(0) scale(.5)}20%{opacity:1}100%{opacity:0;transform:rotate(var(--a)) translateX(var(--d)) scale(.4)}}
+.slot-gamble-bolt{position:absolute;top:-2%;width:5px;height:0;border-radius:3px;
+  background:linear-gradient(180deg,rgba(186,230,253,0),#e0f2fe 20%,#22d3ee 55%,#fff8c5 80%,rgba(255,248,197,0));
+  filter:drop-shadow(0 0 8px rgba(34,211,238,1)) drop-shadow(0 0 16px rgba(250,204,21,.8));
+  transform-origin:top center;animation:slotGambleBolt .55s ease-out both}
+@keyframes slotGambleBolt{0%{opacity:0;height:0}20%{opacity:1;height:62%}70%{opacity:1;height:62%}100%{opacity:0;height:62%}}
+.slot-gamble-sparkle{position:absolute;width:12px;height:12px;
+  background:radial-gradient(circle,#fff 0 25%,#ffe169 26% 55%,rgba(255,225,105,0) 56%);
+  clip-path:polygon(50% 0,60% 40%,100% 50%,60% 60%,50% 100%,40% 60%,0 50%,40% 40%);
+  animation:slotGambleSparkle 1.1s ease-in-out both}
+@keyframes slotGambleSparkle{0%{opacity:0;transform:scale(.2) rotate(0)}40%{opacity:1;transform:scale(1.2) rotate(60deg)}100%{opacity:0;transform:scale(.3) rotate(140deg)}}
+
+/* ===== BUSTED takeover ===== */
+.slot-busted-overlay{position:fixed;inset:0;z-index:10027;display:grid;place-items:center;align-content:center;gap:8px;pointer-events:none;
+  background:radial-gradient(circle at 50% 40%,rgba(127,29,29,.5),rgba(8,6,10,.86) 62%);animation:slotBustedIn .3s ease both}
+.slot-busted-overlay strong{font-size:clamp(54px,16vw,148px);font-weight:950;letter-spacing:2px;color:#fca5a5;
+  text-shadow:0 0 26px rgba(239,68,68,.9),0 4px 0 rgba(69,10,10,.9);animation:slotBustedHit .5s cubic-bezier(.18,1.5,.3,1) both}
+.slot-busted-overlay span{font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:1px;color:#fecaca;opacity:.9}
+.slot-busted-overlay i{position:absolute;top:38%;left:50%;width:12px;height:12px;border-radius:2px;background:#ef4444;
+  box-shadow:0 0 12px rgba(239,68,68,.8);animation:slotBustedDebris 1.2s ease-in both}
+@keyframes slotBustedIn{from{opacity:0}to{opacity:1}}
+@keyframes slotBustedHit{0%{opacity:0;transform:scale(2.2);filter:blur(6px)}55%{opacity:1;transform:scale(.92);filter:blur(0)}100%{transform:scale(1)}}
+@keyframes slotBustedDebris{0%{opacity:0;transform:translate(0,0) rotate(0)}25%{opacity:1}100%{opacity:0;transform:translate(var(--x,0),70vh) rotate(420deg)}}
+.slot-busted-overlay.leaving{animation:slotJackpotLeave .34s ease both}
+
+/* ===== Screen shake ===== */
+@keyframes slotShake1{0%,100%{transform:translate(0,0)}25%{transform:translate(-3px,2px)}75%{transform:translate(3px,-2px)}}
+@keyframes slotShake2{0%,100%{transform:translate(0,0)}20%{transform:translate(-6px,3px)}40%{transform:translate(5px,-4px)}60%{transform:translate(-4px,4px)}80%{transform:translate(4px,-2px)}}
+@keyframes slotShake3{0%,100%{transform:translate(0,0)}15%{transform:translate(-9px,4px) rotate(-1deg)}35%{transform:translate(8px,-5px) rotate(1deg)}55%{transform:translate(-7px,5px) rotate(-1deg)}75%{transform:translate(7px,-4px) rotate(1deg)}}
+.slot-shake-1{animation:slotShake1 .42s ease}
+.slot-shake-2{animation:slotShake2 .56s ease}
+.slot-shake-3{animation:slotShake3 .62s ease}
+
+/* ===== Review queue takeover ===== */
+.slot-review-dialog{width:min(460px,100%);text-align:left}
+.slot-review-list{display:flex;flex-direction:column;gap:8px;max-height:min(52vh,420px);overflow-y:auto}
+.slot-review-row{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;border:1px solid rgba(255,214,110,.28);background:rgba(3,7,18,.5)}
+.slot-review-sym{flex:0 0 auto;font-size:22px;line-height:1}
+.slot-review-info{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px}
+.slot-review-info strong{font-size:13px;font-weight:900;line-height:1.15}
+.slot-review-info span{font-size:11px;color:var(--text-muted)}
+.slot-review-act{flex:0 0 auto}
 .slot-reward-done{background:linear-gradient(180deg,#86efac,#22c55e);color:#06270f;animation:none;box-shadow:0 8px 24px rgba(34,197,94,0.36)}
 .slot-reward-stopwatch{display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 0}
 .slot-reward-sw-label{font-size:12px;color:var(--text-muted)}

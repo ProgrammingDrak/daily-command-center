@@ -2041,6 +2041,9 @@
     const total = spins.length;
     const wins = spins.filter(s => s && s.status !== "miss" && (s.reward_snapshot || {}).kind !== "miss").length;
     const gambles = spins.filter(isOpenGamble);
+    // Only count wins that actually have a review action (a Confirm / Pick-prize).
+    // Bank-builder hits aren't reviewable — they're already in the pending reserve.
+    const reviewable = spins.filter(needsReview);
     const parts = [total + " wheels"];
     if(totalBank > 0) parts.push("+" + money(totalBank) + " reserve");
     parts.push(wins + " win" + (wins === 1 ? "" : "s"));
@@ -2049,19 +2052,19 @@
     if(actions){
       let html = "";
       if(gambles.length) html += '<button class="slot-mini primary" id="slot-mw-gamble">🎲 ' + gambles.length + ' booster' + (gambles.length === 1 ? '' : 's') + ' — risk it?</button>';
-      if(pending.length) html += '<button class="slot-mini' + (gambles.length ? '' : ' primary') + '" id="slot-mw-review">' + pending.length + ' win' + (pending.length === 1 ? '' : 's') + ' need review →</button>';
+      if(reviewable.length) html += '<button class="slot-mini' + (gambles.length ? '' : ' primary') + '" id="slot-mw-review">' + reviewable.length + ' win' + (reviewable.length === 1 ? '' : 's') + ' to claim →</button>';
       actions.innerHTML = html;
       const gambleBtn = document.getElementById("slot-mw-gamble");
       if(gambleBtn) gambleBtn.addEventListener("click", () => openGambleBatch(gambles));
       const reviewBtn = document.getElementById("slot-mw-review");
-      if(reviewBtn) reviewBtn.addEventListener("click", () => switchSlotSection("rules"));
+      if(reviewBtn) reviewBtn.addEventListener("click", () => openReviewQueue(reviewable));
     }
     if(gambles.length){
       slotPlay("pending");
       slotPetReact("happy", gambles.length + " booster" + (gambles.length === 1 ? "" : "s") + " — push your luck?", 2600);
-    } else if(pending.length){
+    } else if(reviewable.length){
       slotPlay("pending");
-      slotPetReact("happy", pending.length + " win" + (pending.length === 1 ? "" : "s") + " to review.", 2600);
+      slotPetReact("happy", reviewable.length + " win" + (reviewable.length === 1 ? "" : "s") + " to claim.", 2600);
     } else {
       slotPlay("win");
       slotPetReact("happy", "Batch done!", 2000);
@@ -4206,6 +4209,17 @@
     const g = curGamble(s);
     return !!(s && s.status === "gamble" && g && g.status === "open");
   }
+  // A spin that genuinely needs a claim decision — mirrors exactly which history
+  // rows render an action button. Bank-builder / reserve-pending hits are excluded
+  // (they're already in the pending Reward Reserve; there's nothing to "review").
+  function needsReview(s){
+    if(!s || isOpenGamble(s)) return false; // gambles handled by their own button
+    if(s.status !== "pending") return false;
+    const snap = s.reward_snapshot || {};
+    if(snap.requires_jackpot_choice) return true;
+    const bankBuilderPending = (s.bank_delta_cents || 0) > 0 && !s.bank_reserved_cents;
+    return !bankBuilderPending;
+  }
   function gamblePost(id, action){
     return api("/api/slot/spins/" + id + "/gamble", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action })
@@ -4268,7 +4282,7 @@
 
     modal.innerHTML =
       '<div class="slot-jackpot-backdrop"></div>' +
-      '<section class="slot-jackpot-dialog slot-reward-dialog" role="dialog" aria-modal="true" aria-label="Booster decision">' +
+      '<section class="slot-jackpot-dialog slot-reward-dialog slot-gamble-dialog" data-level="' + Math.min(5, rung + 1) + '" role="dialog" aria-modal="true" aria-label="Booster decision">' +
         '<div class="slot-reward-top">' +
           '<div class="slot-reward-kicker">🎲 Booster — push your luck?</div>' +
           '<div class="slot-reward-prize"><strong>' + esc(headText) + '</strong></div>' +
@@ -4292,6 +4306,154 @@
     if(safe) safe.addEventListener("click", () => gambleAct("bank"));
   }
 
+  // ===== Escalating "push your luck" celebration FX. Rendered in a fixed layer
+  // ABOVE the gamble modal (modal is z-index 10020; this layer is 10026; the
+  // confetti canvas is 99999). Effects grow with `level` (the rung reached).
+  function gambleFxLayer(){
+    let layer = document.getElementById("slot-gamble-fx");
+    if(!layer){ layer = document.createElement("div"); layer.id = "slot-gamble-fx"; document.body.appendChild(layer); }
+    return layer;
+  }
+  function gambleShake(intensity){
+    const el = document.querySelector("#slot-gamble-decision-modal .slot-jackpot-dialog") || document.querySelector(".slots-machine");
+    if(!el) return;
+    const cls = "slot-shake-" + Math.max(1, Math.min(3, intensity));
+    el.classList.remove("slot-shake-1", "slot-shake-2", "slot-shake-3");
+    void el.offsetWidth;
+    el.classList.add(cls);
+    setTimeout(() => el.classList.remove(cls), 640);
+  }
+  function fireGambleConfetti(power){
+    if(typeof Celebrate === "undefined" || !Celebrate.confetti) return;
+    Celebrate.confetti({ x: window.innerWidth / 2, y: window.innerHeight * 0.42, count: 50 + power * 55,
+      colors: ["#ffe169", "#f7b733", "#7df9ff", "#fb7185", "#bbf7d0", "#c4b5fd", "#ffffff"] });
+  }
+  function fireGambleFireworks(power){
+    const layer = gambleFxLayer();
+    const bursts = 2 + power;
+    for(let b = 0; b < bursts; b++){
+      const fw = document.createElement("div");
+      fw.className = "slot-gamble-firework";
+      fw.style.left = (12 + Math.random() * 76) + "%";
+      fw.style.top = (18 + Math.random() * 42) + "%";
+      fw.style.animationDelay = (b * 170) + "ms";
+      let sparks = "";
+      for(let i = 0; i < 12; i++) sparks += '<i style="--a:' + (i * 30) + 'deg;--d:' + (44 + power * 14) + 'px"></i>';
+      fw.innerHTML = sparks;
+      layer.appendChild(fw);
+      setTimeout(() => fw.remove(), 1500 + b * 170);
+    }
+  }
+  function fireGambleBoltsAndMagic(power){
+    const layer = gambleFxLayer();
+    for(let i = 0; i < 3 + power; i++){
+      const bolt = document.createElement("span");
+      bolt.className = "slot-gamble-bolt";
+      bolt.style.left = (8 + Math.random() * 84) + "%";
+      bolt.style.animationDelay = (i * 80) + "ms";
+      layer.appendChild(bolt);
+      setTimeout(() => bolt.remove(), 900 + i * 80);
+    }
+    for(let i = 0; i < 18; i++){
+      const s = document.createElement("span");
+      s.className = "slot-gamble-sparkle";
+      s.style.left = (Math.random() * 100) + "%";
+      s.style.top = (Math.random() * 92) + "%";
+      s.style.animationDelay = (i * 45) + "ms";
+      layer.appendChild(s);
+      setTimeout(() => s.remove(), 1200 + i * 45);
+    }
+  }
+  // level 1: confetti · 2: + fireworks · 3: + shake · 4+/finale: + lightning & magic
+  function gambleCelebrate(level, opts){
+    opts = opts || {};
+    const L = Math.max(1, level || 1);
+    fireGambleConfetti(Math.min(3, L));
+    if(L >= 2 || opts.finale) fireGambleFireworks(Math.min(4, L));
+    if(L >= 3 || opts.finale) gambleShake(Math.min(3, L - 1));
+    if(L >= 4 || opts.finale) fireGambleBoltsAndMagic(Math.min(4, L));
+    if(L >= 4 || opts.finale) slotPlay("coins");
+    else if(L >= 2) slotPlay("jackpotHit");
+    else slotPlay("win");
+  }
+  async function gambleBustOverlay(){
+    slotPlay("miss");
+    gambleShake(3);
+    const layer = gambleFxLayer();
+    const overlay = document.createElement("div");
+    overlay.className = "slot-busted-overlay";
+    let debris = ""; for(let i = 0; i < 9; i++) debris += '<i style="--x:' + ((i - 4) * 11) + 'vw"></i>';
+    overlay.innerHTML = '<strong>BUSTED</strong><span>The booster fizzled to nothing.</span>' + debris;
+    layer.appendChild(overlay);
+    await wait(1500);
+    overlay.classList.add("leaving");
+    await wait(340);
+    overlay.remove();
+  }
+
+  // ===== Review queue: a takeover listing the multi-wheel wins that actually
+  // need a claim decision, each with one inline action. Replaces the old dead
+  // "switch to the Rules tab" behavior.
+  function closeReviewQueue(){
+    const modal = document.getElementById("slot-review-queue-modal");
+    if(modal) modal.remove();
+  }
+  function openReviewQueue(spinRows){
+    const list = (spinRows || []).filter(needsReview);
+    if(!list.length) return;
+    let modal = document.getElementById("slot-review-queue-modal");
+    if(!modal){ modal = document.createElement("div"); modal.id = "slot-review-queue-modal"; modal.className = "slot-jackpot-modal slot-reward-modal"; document.body.appendChild(modal); }
+    renderReviewQueue(modal, list);
+  }
+  function renderReviewQueue(modal, list){
+    // Re-read from fresh state so resolved wins drop out; close when none remain.
+    const ids = new Set(list.map(s => String(s.id)));
+    const fresh = (slotState && slotState.spins || []).filter(s => ids.has(String(s.id)) && needsReview(s));
+    if(!fresh.length){ closeReviewQueue(); return; }
+    const rows = fresh.map(s => {
+      const snap = s.reward_snapshot || {};
+      const jackpot = !!snap.requires_jackpot_choice;
+      const sym = rewardSymbol(snap) || "🎁";
+      const val = (snap.value_cents || 0) > 0 ? money(snap.value_cents) : "";
+      return '<div class="slot-review-row">' +
+        '<span class="slot-review-sym">' + esc(sym) + '</span>' +
+        '<div class="slot-review-info"><strong>' + esc(snap.title || "Reward") + '</strong>' + (val ? '<span>' + esc(val) + '</span>' : '') + '</div>' +
+        '<button type="button" class="slot-mini primary slot-review-act" data-id="' + esc(s.id) + '" data-kind="' + (jackpot ? 'jackpot' : 'confirm') + '">' + (jackpot ? 'Pick prize' : 'Confirm') + '</button>' +
+      '</div>';
+    }).join("");
+    modal.innerHTML =
+      '<div class="slot-jackpot-backdrop"></div>' +
+      '<section class="slot-jackpot-dialog slot-reward-dialog slot-review-dialog" role="dialog" aria-modal="true" aria-label="Claim your wins">' +
+        '<div class="slot-reward-top">' +
+          '<div class="slot-reward-kicker">🎁 ' + fresh.length + ' win' + (fresh.length === 1 ? '' : 's') + ' to claim</div>' +
+          '<div class="slot-reward-prize"><strong>Claim your rewards</strong></div>' +
+        '</div>' +
+        '<div class="slot-reward-body">' +
+          '<div class="slot-review-list">' + rows + '</div>' +
+          '<div class="slot-reward-secondary"><button type="button" class="slot-reward-alt" id="rq-close">Close</button></div>' +
+        '</div>' +
+      '</section>';
+    const bd = modal.querySelector(".slot-jackpot-backdrop");
+    if(bd) bd.addEventListener("click", closeReviewQueue);
+    const closeBtn = modal.querySelector("#rq-close");
+    if(closeBtn) closeBtn.addEventListener("click", closeReviewQueue);
+    modal.querySelectorAll(".slot-review-act").forEach(btn => btn.addEventListener("click", () => handleReviewAction(btn.dataset.id, btn.dataset.kind, modal, list)));
+  }
+  async function handleReviewAction(id, kind, modal, list){
+    const row = (slotState && slotState.spins || []).find(s => String(s.id) === String(id));
+    if(!row) return;
+    if(kind === "jackpot"){ closeReviewQueue(); openJackpotChoice(row); return; }
+    const btn = modal.querySelector('.slot-review-act[data-id="' + id + '"]');
+    if(btn) btn.disabled = true;
+    try {
+      await confirmSpin(id);          // confirmSpin already reloads state
+      renderReviewQueue(modal, list); // re-render from fresh state; auto-closes when empty
+    } catch(e){
+      if(btn) btn.disabled = false;
+      if(typeof showToast === "function") showToast(e.message || "Couldn't confirm", "error");
+    }
+  }
+
   async function gambleAct(action){
     if(_gdBusy || !_gdSpin) return;
     _gdBusy = true;
@@ -4305,8 +4467,10 @@
       const windowed = Array.isArray(gamble.windows);
       const value = gamble.multiplier || 1;
       await loadSlotsAfterSpin();
+      const level = (gamble.rung || 0) + 1;
       if(gamble.status === "open"){
-        slotPlay("jackpotHit");
+        // Climbed a rung — celebrate bigger each step, then re-present (modal scales up).
+        gambleCelebrate(level);
         slotPetReact("happy", "Now " + desc.up(value) + "! Again?", 1600);
         _gdBusy = false;
         renderGambleDecision();
@@ -4314,11 +4478,14 @@
       }
       closeGambleDecision();
       if(gamble.status === "busted"){
-        slotPlay("miss"); slotPetReact("sad", "Busted!", 2400);
+        slotPetReact("sad", "Busted!", 2400);
         setResult("Gamble busted — the booster fizzled to nothing.");
+        await gambleBustOverlay();
         if(typeof showToast === "function") showToast("Busted — you pushed your luck and lost the booster.", "error", 5000);
       } else {
-        slotPlay("win"); slotPetReact("happy", "Banked!", 2600);
+        // Locked it in — full celebration scaled to how high they climbed.
+        gambleCelebrate(level, { finale: true });
+        slotPetReact("happy", "Banked!", 2600);
         const msg = windowed
           ? (value + "x locked in — land a bank builder within " + spinsLabel(gamble.window || 0) + ".")
           : desc.banked(value);
