@@ -605,8 +605,6 @@
   .phi-doc{background:rgba(59,130,246,0.12);color:var(--accent-light)}
   .phi-dash{background:rgba(34,211,238,0.12);color:var(--cyan)}
   .tl-node{position:absolute;left:-14px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;border:3px solid var(--accent);background:var(--bg);z-index:2;transition:top 0.5s ease}
-  .tl-node.active.near-end{top:auto;bottom:0;transform:none}
-  .tl-node.active.next-up{top:0;transform:none}
   .tl-node.has-prep{border-color:var(--amber)}
   .tl-node.done{background:var(--green);border-color:var(--green)}
   .tl-node.done::after{content:'\2713';position:absolute;top:-5px;left:-4px;font-size:8px;font-weight:700;color:white;width:12px;height:12px;display:flex;align-items:center;justify-content:center}
