@@ -26,12 +26,18 @@
   let pointTagTierDraft = null;
   const AWARD_QUEUE_KEY = "pa-slot-award-queue";
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
-  const SLOT_WAGER_KEY = "pa-slot-wager-2x";
+  const SLOT_WAGER_KEY = "pa-slot-wager-mult";
+  const SLOT_WHEEL_COUNT_KEY = "pa-slot-wheel-count";
+  // Wager multipliers the player can arm (1 = normal). Buttons render the >1 tiers.
+  const WAGER_TIERS = [2, 5, 10, 100];
+  // Wheel counts for a parallel multi-wheel batch (1 = the single canonical wheel).
+  const WHEEL_COUNTS = [2, 5, 10];
   const REWARD_VIEW_KEY = "pa-slot-reward-view";
   let loadSlotsToken = 0;
   const coinPhysics = { coins: [], raf: null, lastTs: 0 };
   let slotSoundOn = readSlotSoundPreference();
-  let slotWagerDouble = readSlotWagerPreference();
+  let slotWagerMultiplier = readSlotWagerPreference();
+  let slotWheelCount = readSlotWheelCountPreference();
   let slotAudioCtx = null;
   const KIND_LABELS = {
     miss: "No prize",
@@ -231,21 +237,38 @@
 
   function readSlotWagerPreference(){
     try {
-      return localStorage.getItem(SLOT_WAGER_KEY) === "on";
+      const v = Number(localStorage.getItem(SLOT_WAGER_KEY));
+      return WAGER_TIERS.includes(v) ? v : 1;
     } catch(e) {
-      return false;
+      return 1;
     }
   }
 
   function writeSlotWagerPreference(){
     try {
-      localStorage.setItem(SLOT_WAGER_KEY, slotWagerDouble ? "on" : "off");
+      localStorage.setItem(SLOT_WAGER_KEY, String(slotWagerMultiplier));
     } catch(e) {}
   }
 
-  // Double Wager only applies to point-funded spins. A free reroll or a queued
-  // bonus reward roll is 0-cost, so the wager is forced to 1 (and the toggle is
-  // muted) while one is pending.
+  function readSlotWheelCountPreference(){
+    try {
+      const v = Number(localStorage.getItem(SLOT_WHEEL_COUNT_KEY));
+      return WHEEL_COUNTS.includes(v) ? v : 1;
+    } catch(e) {
+      return 1;
+    }
+  }
+
+  function writeSlotWheelCountPreference(){
+    try {
+      localStorage.setItem(SLOT_WHEEL_COUNT_KEY, String(slotWheelCount));
+    } catch(e) {}
+  }
+
+  // The wager and multi-wheel batch only apply to point-funded spins. A free
+  // reroll or a queued bonus reward roll is 0-cost and runs its own single-wheel
+  // flow, so both are forced to their base (1) and their buttons muted while one
+  // is pending.
   function wagerLockedOut(){
     if(!slotState) return false;
     const rerolls = (slotState.constants && slotState.constants.rerollCredits)
@@ -254,32 +277,65 @@
   }
 
   function effectiveWager(){
-    return (slotWagerDouble && !wagerLockedOut()) ? 2 : 1;
+    return wagerLockedOut() ? 1 : slotWagerMultiplier;
+  }
+
+  function effectiveWheelCount(){
+    return wagerLockedOut() ? 1 : slotWheelCount;
   }
 
   function updateSlotWagerButton(){
-    const btn = document.getElementById("slot-wager-toggle");
-    if(!btn) return;
+    const group = document.getElementById("slot-wager-tiers");
+    if(!group) return;
     const lockedOut = wagerLockedOut();
-    const armed = slotWagerDouble && !lockedOut;
-    btn.classList.toggle("on", armed);
-    btn.classList.toggle("muted", slotWagerDouble && lockedOut);
-    btn.setAttribute("aria-pressed", slotWagerDouble ? "true" : "false");
-    btn.disabled = lockedOut;
+    group.classList.toggle("muted", lockedOut);
+    group.querySelectorAll(".slot-wager-tier").forEach(btn => {
+      const tier = Number(btn.dataset.wager);
+      const armed = !lockedOut && slotWagerMultiplier === tier;
+      btn.classList.toggle("on", armed);
+      btn.setAttribute("aria-pressed", slotWagerMultiplier === tier ? "true" : "false");
+      btn.disabled = lockedOut;
+    });
     const machine = document.querySelector(".slots-machine");
-    if(machine) machine.classList.toggle("wager-2x", armed);
+    if(machine) machine.classList.toggle("wager-armed", !lockedOut && slotWagerMultiplier > 1);
   }
 
-  function toggleSlotWager(){
-    slotWagerDouble = !slotWagerDouble;
+  function updateSlotWheelCountButton(){
+    const group = document.getElementById("slot-wheel-count");
+    if(!group) return;
+    const lockedOut = wagerLockedOut();
+    group.classList.toggle("muted", lockedOut);
+    group.querySelectorAll(".slot-wheel-count-btn").forEach(btn => {
+      const count = Number(btn.dataset.count);
+      const active = !lockedOut && slotWheelCount === count;
+      btn.classList.toggle("on", active);
+      btn.setAttribute("aria-pressed", slotWheelCount === count ? "true" : "false");
+      btn.disabled = lockedOut;
+    });
+  }
+
+  // Click a tier to arm that wager; click the armed tier again to drop to normal.
+  function setSlotWager(mult){
+    slotWagerMultiplier = (slotWagerMultiplier === mult) ? 1 : mult;
     writeSlotWagerPreference();
     updateSlotWagerButton();
     renderSpinButton();
-    if(slotWagerDouble && !wagerLockedOut()){
-      slotPlay("toggle");
-      slotPetReact("happy", "High roller mode! 2x in, 2x out.", 1800);
-    } else {
-      slotPlay("toggle");
+    slotPlay("toggle");
+    if(slotWagerMultiplier > 1 && !wagerLockedOut()){
+      slotPetReact("happy", "High roller! " + slotWagerMultiplier + "x in, " + slotWagerMultiplier + "x out.", 1800);
+    }
+  }
+
+  // Click a count to spin that many wheels at once; click the active one to reset
+  // to a single wheel.
+  function setSlotWheelCount(count){
+    slotWheelCount = (slotWheelCount === count) ? 1 : count;
+    writeSlotWheelCountPreference();
+    updateSlotWheelCountButton();
+    renderSpinButton();
+    slotPlay("toggle");
+    if(slotWheelCount > 1 && !wagerLockedOut()){
+      slotPetReact("happy", "Pulling " + slotWheelCount + " wheels at once!", 1800);
     }
   }
 
@@ -534,6 +590,7 @@
     if(!isSpinning) renderHistory();
     renderSpinButton();
     updateSlotWagerButton();
+    updateSlotWheelCountButton();
     renderSpinStatusBadges();
     renderMultiplierStash();
   }
@@ -546,14 +603,18 @@
     const rerolls = (slotState.constants && slotState.constants.rerollCredits) || ((slotState.account && slotState.account.settings && slotState.account.settings.reroll_credits) || 0);
     const bonusRewardCredits = bonusRewardSpinCredits(slotState);
     const wager = effectiveWager();
-    const wageredCost = spinCost * wager;
+    const count = effectiveWheelCount();
+    const wageredCost = spinCost * wager * count;
     btn.disabled = isSpinning || (credits < wageredCost && rerolls <= 0 && bonusRewardCredits <= 0);
+    const wagerTag = wager > 1 ? " · " + wager + "x" : "";
     btn.textContent = bonusRewardCredits > 0
       ? "Bonus reward roll (" + bonusRewardCredits + ")"
       : rerolls > 0
       ? "Free reroll (" + rerolls + ")"
+      : count > 1
+      ? "Spin " + count + " wheels (" + pointLabel(wageredCost) + ")" + wagerTag
       : wager > 1
-      ? "Spin (" + pointLabel(wageredCost) + ") · 2x"
+      ? "Spin (" + pointLabel(wageredCost) + ")" + wagerTag
       : "Spin (" + pointLabel(spinCost) + ")";
   }
 
@@ -1928,6 +1989,122 @@
     }
   }
 
+  // Spin-button entry point. A single wheel runs the canonical, fully-interactive
+  // flow (spin) untouched; 2+ wheels run a parallel batch (spinMultiWheel).
+  async function spinAll(){
+    if(isSpinning) return;
+    const count = effectiveWheelCount();
+    if(count <= 1) return spin();
+    return spinMultiWheel(count);
+  }
+
+  // Short label shown under each wheel after it lands.
+  function multiWheelCaption(spinRow, snap){
+    const bank = spinRow.bank_delta_cents || 0;
+    const kind = (snap && snap.kind) || "";
+    if(spinRow.status === "miss" || kind === "miss") return '<span class="mw-miss">No prize</span>';
+    if(snap && snap.requires_jackpot_choice) return '<span class="mw-review">🎰 Pick prize →</span>';
+    if(spinRow.status === "pending") return '<span class="mw-review">Review →</span>';
+    if(bank > 0) return '<span class="mw-bank">+' + money(bank) + '</span>';
+    return '<span class="mw-win">' + esc((snap && snap.title) || "Reward") + '</span>';
+  }
+
+  function renderMultiWheelSummary(spins, pending, totalBank){
+    const total = spins.length;
+    const wins = spins.filter(s => s && s.status !== "miss" && (s.reward_snapshot || {}).kind !== "miss").length;
+    const parts = [total + " wheels"];
+    if(totalBank > 0) parts.push("+" + money(totalBank) + " reserve");
+    parts.push(wins + " win" + (wins === 1 ? "" : "s"));
+    setResult(parts.join(" · "));
+    const actions = document.getElementById("slot-result-actions");
+    if(actions){
+      actions.innerHTML = pending.length
+        ? '<button class="slot-mini primary" id="slot-mw-review">' + pending.length + ' win' + (pending.length === 1 ? '' : 's') + ' need review →</button>'
+        : '';
+      const reviewBtn = document.getElementById("slot-mw-review");
+      if(reviewBtn) reviewBtn.addEventListener("click", () => switchSlotSection("rules"));
+    }
+    if(pending.length){
+      slotPlay("pending");
+      slotPetReact("happy", pending.length + " win" + (pending.length === 1 ? "" : "s") + " to review.", 2600);
+    } else {
+      slotPlay("win");
+      slotPetReact("happy", "Batch done!", 2000);
+    }
+  }
+
+  // Parallel multi-wheel batch: clone the canonical reel grid `count` times, run
+  // one batch API call, then animate every wheel at once with its own result.
+  // Only the first-stage reel + a short caption render per wheel; any win needing
+  // confirmation or a choice is left as a pending spin for the history/review
+  // list rather than opening a modal mid-batch.
+  async function spinMultiWheel(count){
+    const container = document.getElementById("slot-wheels");
+    const template = container && container.querySelector(".slot-reels-frame");
+    if(!container || !template) return spin();
+    isSpinning = true;
+    const spinBtn = document.getElementById("slot-spin-btn");
+    if(spinBtn) spinBtn.disabled = true;
+    clearSlotResultActions();
+    const wager = effectiveWager();
+    setResult("Pulling " + count + " wheels at once...");
+    slotPetReact("pull", "Here we go, all of them!", 1400);
+    slotPlay("lever");
+    const originalHTML = container.innerHTML;
+    container.classList.add("multi");
+    container.dataset.count = String(count);
+    const frames = [];
+    container.innerHTML = "";
+    for(let i = 0; i < count; i++){
+      const frame = template.cloneNode(true);
+      frame.querySelectorAll("[id]").forEach(el => el.removeAttribute("id"));
+      const cap = document.createElement("div");
+      cap.className = "slot-wheel-caption";
+      cap.textContent = "Spinning...";
+      frame.appendChild(cap);
+      container.appendChild(frame);
+      frames.push(frame);
+    }
+    const restoreSingleWheel = () => {
+      container.classList.remove("multi");
+      container.removeAttribute("data-count");
+      container.innerHTML = originalHTML;
+    };
+    let spins = [];
+    try {
+      const res = await api("/api/slot/spin-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ count, wager })
+      });
+      spins = (res && res.spins) || [];
+    } catch(e){
+      restoreSingleWheel();
+      setResult(e.message);
+      slotPlay("error");
+      slotPetReact("sad", "Need more points.", 2200);
+      isSpinning = false;
+      await loadSlotsAfterSpin();
+      return;
+    }
+    await Promise.all(frames.map((frame, i) => {
+      const spinRow = spins[i];
+      const cap = frame.querySelector(".slot-wheel-caption");
+      if(!spinRow){ if(cap) cap.textContent = "—"; return Promise.resolve(); }
+      const snap = spinRow.reward_snapshot || {};
+      return animateReels(resultSymbols(spinRow, snap), { duration: 1600, silent: i > 0 }, frame).then(() => {
+        highlightWinningCells(spinRow, snap, {}, frame);
+        if(cap) cap.innerHTML = multiWheelCaption(spinRow, snap);
+      });
+    }));
+    const totalBank = spins.reduce((sum, sp) => sum + ((sp && sp.bank_delta_cents) || 0), 0);
+    if(totalBank > 0) addPendingDeposit(totalBank);
+    const pending = spins.filter(sp => sp && (sp.status === "pending" || (sp.reward_snapshot || {}).requires_jackpot_choice));
+    isSpinning = false;
+    await loadSlotsAfterSpin();
+    renderMultiWheelSummary(spins, pending, totalBank);
+  }
+
   async function spin(){
     if(isSpinning) return;
     const btn = document.getElementById("slot-spin-btn");
@@ -2656,8 +2833,12 @@
     });
   }
 
-  function animateReels(finalSymbols, options){
-    const reels = document.querySelectorAll(".slot-cell");
+  // root scopes which reel grid animates; defaults to the whole document (the
+  // single canonical wheel). Multi-wheel mode passes each cloned frame so every
+  // wheel animates independently with its own result.
+  function animateReels(finalSymbols, options, root){
+    const scope = root || document;
+    const reels = scope.querySelectorAll(".slot-cell");
     if(!reels.length) return Promise.resolve();
     const opts = options || {};
     const targets = finalSymbols && finalSymbols.length ? finalSymbols : SPIN_SYMBOLS;
@@ -2666,12 +2847,15 @@
     const stopBase = Math.max(360, opts.stopBase || Math.round(duration * 0.36));
     const colGap = opts.colGap == null ? Math.max(70, Math.round(duration * 0.074)) : opts.colGap;
     const rowGap = opts.rowGap == null ? Math.max(85, Math.round(duration * 0.09)) : opts.rowGap;
-    clearResultHighlights();
+    clearResultHighlights(scope);
+    // silent skips sound — used for every wheel but the first in a parallel batch
+    // so N wheels don't stack N copies of the reel SFX.
+    const silent = !!opts.silent;
     reels.forEach(r => {
       r.classList.remove("reveal");
       r.classList.add("spinning");
     });
-    slotPlay("reelStart");
+    if(!silent) slotPlay("reelStart");
     return new Promise(resolve => {
       const timer = setInterval(() => {
         reels.forEach((r, i) => {
@@ -2679,7 +2863,7 @@
           setCell(r, SPIN_SYMBOLS[(tick + i * 5) % SPIN_SYMBOLS.length]);
           r.classList.toggle("pulse", tick % 2 === 0);
         });
-        if(tick % 3 === 0) slotPlay("tick", { tick });
+        if(!silent && tick % 3 === 0) slotPlay("tick", { tick });
         tick++;
       }, 48);
       reels.forEach((r, i) => {
@@ -2687,7 +2871,7 @@
           r.classList.add("stopped");
           setCell(r, targets[i % targets.length] || "MISS");
           r.classList.add("reveal");
-          slotPlay("stop", { index: i });
+          if(!silent) slotPlay("stop", { index: i });
         }, stopBase + (i % 5) * colGap + Math.floor(i / 5) * rowGap);
       });
       setTimeout(() => {
@@ -2758,14 +2942,15 @@
     return [];
   }
 
-  function clearResultHighlights(){
-    document.querySelectorAll(".slot-cell.win-hit").forEach(cell => cell.classList.remove("win-hit"));
+  function clearResultHighlights(root){
+    (root || document).querySelectorAll(".slot-cell.win-hit").forEach(cell => cell.classList.remove("win-hit"));
   }
 
-  function highlightWinningCells(spinRow, snap, opts){
-    const reels = Array.from(document.querySelectorAll(".slot-cell"));
+  function highlightWinningCells(spinRow, snap, opts, root){
+    const scope = root || document;
+    const reels = Array.from(scope.querySelectorAll(".slot-cell"));
     const positions = winningPositions(spinRow, snap, opts);
-    clearResultHighlights();
+    clearResultHighlights(scope);
     positions.forEach(i => {
       if(reels[i]) reels[i].classList.add("win-hit");
     });
@@ -4920,17 +5105,26 @@
       btn.addEventListener("click", () => switchSlotSection(btn.dataset.slotSection || "machine"));
     });
     const spinBtn = document.getElementById("slot-spin-btn");
-    if(spinBtn) spinBtn.addEventListener("click", spin);
+    if(spinBtn) spinBtn.addEventListener("click", spinAll);
     const helperLever = document.getElementById("slot-helper-lever");
-    if(helperLever) helperLever.addEventListener("click", spin);
+    if(helperLever) helperLever.addEventListener("click", spinAll);
     const refreshBtn = document.getElementById("slot-refresh-btn");
     if(refreshBtn) refreshBtn.addEventListener("click", loadSlots);
     const soundBtn = document.getElementById("slot-sound-toggle");
     if(soundBtn) soundBtn.addEventListener("click", toggleSlotSound);
     updateSlotSoundButton();
-    const wagerBtn = document.getElementById("slot-wager-toggle");
-    if(wagerBtn) wagerBtn.addEventListener("click", toggleSlotWager);
+    const wagerGroup = document.getElementById("slot-wager-tiers");
+    if(wagerGroup) wagerGroup.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".slot-wager-tier");
+      if(btn && !btn.disabled) setSlotWager(Number(btn.dataset.wager));
+    });
     updateSlotWagerButton();
+    const wheelCountGroup = document.getElementById("slot-wheel-count");
+    if(wheelCountGroup) wheelCountGroup.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".slot-wheel-count-btn");
+      if(btn && !btn.disabled) setSlotWheelCount(Number(btn.dataset.count));
+    });
+    updateSlotWheelCountButton();
     const saveSettingsBtn = document.getElementById("slot-save-settings-btn");
     if(saveSettingsBtn) saveSettingsBtn.addEventListener("click", saveSettings);
     const saveOverrideBtn = document.getElementById("slot-save-override-btn");

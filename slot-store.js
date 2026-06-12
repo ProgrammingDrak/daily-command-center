@@ -3122,13 +3122,31 @@ function emptyScreenBankPayout(account, bankUsage) {
   };
 }
 
+// Wager tiers a player can arm: pay Nx the points for Nx the bank payout and Nx
+// the jackpot prize. Anything off this list (or a credit/free spin) falls back
+// to 1x. Shared with routes/slots.js so the API and store agree on what's valid.
+const ALLOWED_WAGERS = [1, 2, 5, 10, 100];
+function normalizeWager(value) {
+  const n = Number(value);
+  return ALLOWED_WAGERS.includes(n) ? n : 1;
+}
+
+// Wheel-count tiers for a multi-wheel batch spin: run N independent spins in one
+// action (the inverse of the wager — many plain spins instead of one richer one).
+// Anything off this list falls back to 1.
+const ALLOWED_WHEEL_COUNTS = [1, 2, 5, 10];
+function normalizeWheelCount(value) {
+  const n = Number(value);
+  return ALLOWED_WHEEL_COUNTS.includes(n) ? n : 1;
+}
+
 async function spin(workspaceId, userId, options = {}) {
   const state = await getState(workspaceId, userId);
   const spinCost = state.constants.spinCost;
-  // Double Wager: pay 2x the points to get 2x the bank payout and 2x the jackpot
-  // prize. Only meaningful on point-funded spins; clamped to 1 for credit/free
-  // spins below (those are 0-cost, so there's nothing to double).
-  const wager = Number(options.wager) === 2 ? 2 : 1;
+  // Wager: pay Nx the points to get Nx the bank payout and Nx the jackpot prize.
+  // Only meaningful on point-funded spins; clamped to 1 for credit/free spins
+  // below (those are 0-cost, so there's nothing to multiply).
+  const wager = normalizeWager(options.wager);
   const settings = normalizeSlotSettings(state.account.settings || {});
   const hasRerollCredit = settings.reroll_credits > 0;
   const hasJackpotSpinCredit = settings.jackpot_spin_credits > 0;
@@ -3378,6 +3396,39 @@ async function spin(workspaceId, userId, options = {}) {
   } finally {
     client.release();
   }
+}
+
+// Multi-wheel batch: run `count` independent spins in one action, each at the
+// armed wager. Spins MUST run sequentially — each takes the FOR UPDATE row lock
+// inside spin() and mutates multiplier charges / credits, so concurrent calls
+// would race on the same account row. Validates the full point cost up front
+// (common case: no credits) so a batch that can't afford itself fails before
+// charging anything.
+async function spinBatch(workspaceId, userId, options = {}) {
+  const wager = normalizeWager(options.wager);
+  const count = normalizeWheelCount(options.count);
+  if (count <= 1) return [await spin(workspaceId, userId, { wager })];
+  const state = await getState(workspaceId, userId);
+  const settings = normalizeSlotSettings(state.account.settings || {});
+  const hasCredits = settings.reroll_credits > 0 || settings.jackpot_spin_credits > 0;
+  const spinCost = state.constants.spinCost;
+  if (!hasCredits && state.account.point_balance < spinCost * wager * count) {
+    const err = new Error("Not enough points for " + count + " wheels");
+    err.statusCode = 400;
+    throw err;
+  }
+  const spins = [];
+  for (let i = 0; i < count; i++) {
+    try {
+      spins.push(await spin(workspaceId, userId, { wager }));
+    } catch (e) {
+      // Ran dry partway (only reachable once banked credits run out mid-batch):
+      // keep the spins that landed and stop, rather than discarding committed work.
+      if (e && e.statusCode === 400 && spins.length > 0) break;
+      throw e;
+    }
+  }
+  return spins;
 }
 
 async function confirmSpin(workspaceId, spinId, options = {}) {
@@ -3693,6 +3744,9 @@ module.exports = {
   reorderRewards,
   earnTaskCredit,
   spin,
+  spinBatch,
+  normalizeWager,
+  normalizeWheelCount,
   confirmSpin,
   confirmPendingBankBuilders,
   celebrationSpinForBankrollGoal,

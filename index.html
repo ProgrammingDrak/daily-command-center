@@ -1312,23 +1312,25 @@
         <div class="slot-marquee" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
         <div class="slot-machine-body">
           <div class="slot-stage-main">
-            <div class="slot-reels-frame">
-              <div class="slot-reels" id="slot-reels">
-                <div class="slot-cell" data-symbol="coin">🪙</div>
-                <div class="slot-cell" data-symbol="star">⭐</div>
-                <div class="slot-cell" data-symbol="bank">💰</div>
-                <div class="slot-cell" data-symbol="paw">🐾</div>
-                <div class="slot-cell" data-symbol="gem">💎</div>
-                <div class="slot-cell" data-symbol="bank">💰</div>
-                <div class="slot-cell" data-symbol="coin">🪙</div>
-                <div class="slot-cell" data-symbol="jackpot">🎰</div>
-                <div class="slot-cell" data-symbol="spin">🔄</div>
-                <div class="slot-cell" data-symbol="paw">🐾</div>
-                <div class="slot-cell" data-symbol="gem">💎</div>
-                <div class="slot-cell" data-symbol="bank">💰</div>
-                <div class="slot-cell" data-symbol="coin">🪙</div>
-                <div class="slot-cell" data-symbol="star">⭐</div>
-                <div class="slot-cell" data-symbol="coin">🪙</div>
+            <div class="slot-wheels" id="slot-wheels">
+              <div class="slot-reels-frame">
+                <div class="slot-reels" id="slot-reels">
+                  <div class="slot-cell" data-symbol="coin">🪙</div>
+                  <div class="slot-cell" data-symbol="star">⭐</div>
+                  <div class="slot-cell" data-symbol="bank">💰</div>
+                  <div class="slot-cell" data-symbol="paw">🐾</div>
+                  <div class="slot-cell" data-symbol="gem">💎</div>
+                  <div class="slot-cell" data-symbol="bank">💰</div>
+                  <div class="slot-cell" data-symbol="coin">🪙</div>
+                  <div class="slot-cell" data-symbol="jackpot">🎰</div>
+                  <div class="slot-cell" data-symbol="spin">🔄</div>
+                  <div class="slot-cell" data-symbol="paw">🐾</div>
+                  <div class="slot-cell" data-symbol="gem">💎</div>
+                  <div class="slot-cell" data-symbol="bank">💰</div>
+                  <div class="slot-cell" data-symbol="coin">🪙</div>
+                  <div class="slot-cell" data-symbol="star">⭐</div>
+                  <div class="slot-cell" data-symbol="coin">🪙</div>
+                </div>
               </div>
             </div>
             <div class="slot-result" id="slot-result">Ready when you are.</div>
@@ -1345,14 +1347,25 @@
             <div class="slot-spin-status" id="slot-spin-status" aria-live="polite"></div>
           </div>
           <aside class="slot-side-rail">
-            <button class="slot-wager-toggle" id="slot-wager-toggle" type="button" aria-pressed="false" aria-label="Toggle double wager">
-              <span class="slot-wager-badge">2×</span>
-              <span class="slot-wager-copy">
-                <span class="slot-wager-title">Double Wager</span>
-                <span class="slot-wager-sub">2× cost · 2× bank &amp; jackpot</span>
-              </span>
-              <span class="slot-wager-switch" aria-hidden="true"></span>
-            </button>
+            <div class="slot-wager-control">
+              <div class="slot-control-label">Wager multiplier</div>
+              <div class="slot-wager-tiers" id="slot-wager-tiers" role="group" aria-label="Wager multiplier">
+                <button class="slot-wager-tier" type="button" data-wager="2" aria-pressed="false">2×</button>
+                <button class="slot-wager-tier" type="button" data-wager="5" aria-pressed="false">5×</button>
+                <button class="slot-wager-tier" type="button" data-wager="10" aria-pressed="false">10×</button>
+                <button class="slot-wager-tier" type="button" data-wager="100" aria-pressed="false">100×</button>
+              </div>
+              <div class="slot-control-sub">N× cost · N× bank &amp; jackpot</div>
+            </div>
+            <div class="slot-wager-control">
+              <div class="slot-control-label">Wheels at once</div>
+              <div class="slot-wheel-count" id="slot-wheel-count" role="group" aria-label="Wheels per spin">
+                <button class="slot-wheel-count-btn" type="button" data-count="2" aria-pressed="false">2</button>
+                <button class="slot-wheel-count-btn" type="button" data-count="5" aria-pressed="false">5</button>
+                <button class="slot-wheel-count-btn" type="button" data-count="10" aria-pressed="false">10</button>
+              </div>
+              <div class="slot-control-sub">Spin many wheels in one pull</div>
+            </div>
             <div class="slots-balances">
               <div class="slots-balance"><span>Task Points</span><strong id="slot-credit-balance">0</strong></div>
               <div class="slots-balance slots-bank">
