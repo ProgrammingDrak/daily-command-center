@@ -71,6 +71,8 @@ function openPomodoro(title,durMin,taskRef){
   }
   clearInterval(pomoState.iv);
   pomoState.title=title;pomoState.currentTaskRef=taskRef;pomoState.workMin=Math.min(durMin||25,120);pomoState.sessions=0;pomoState.taskDone=false;
+  const shouldPinFocus=taskRef&&taskRef.id&&taskRef.source==="schedule"&&typeof setPinnedActiveId==="function";
+  if(shouldPinFocus)setPinnedActiveId(taskRef.id);
   document.querySelectorAll(".pomo-dot").forEach(d=>d.className="pomo-dot");
   document.getElementById("pomo-empty").style.display="none";
   document.getElementById("pomo-active").style.display="block";
@@ -100,6 +102,7 @@ function openPomodoro(title,durMin,taskRef){
   pomoUpdateStartBtn();
   updateTimerBadge();
   savePomoState();
+  if(shouldPinFocus&&typeof render==="function")render();
 }
 
 // Wire up timer controls

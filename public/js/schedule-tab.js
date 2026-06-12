@@ -337,15 +337,17 @@ function buildSchedule(){
   const eiBadge={ready:'<span class="ei-badge eib-ready">Ready</span>',todo:'<span class="ei-badge eib-todo">To-do</span>',ref:'<span class="ei-badge eib-ref">Ref</span>',new:'<span class="ei-badge eib-new">New</span>'};
   const chevSm='<svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>';
 
-  // Determine if any task is currently active; if not, find the next upcoming one
+  // The timeline pill is a focus marker, not a clock marker. Prefer the explicit
+  // pinned task, then the loaded pomodoro task, then the first open itinerary item.
   const isToday = __state && __state.date === new Date().toISOString().split("T")[0];
-  const _anyActive = activeItems.some(ev => isActive(ev));
-  // PIN 1: a user-pinned active task overrides the auto-derived next-up
   const _pinnedActiveId = (typeof getPinnedActiveId === "function") ? getPinnedActiveId() : null;
   const _pinnedActiveExists = !!(_pinnedActiveId && activeItems.some(ev => ev.id === _pinnedActiveId));
-  const _nextUpId = (!_anyActive && !_pinnedActiveExists)
-    ? (activeItems.find(ev => pt(ev.start) >= now()) || {}).id
+  const _pomoFocusId = (typeof pomoState !== "undefined" && pomoState && pomoState.currentTaskRef && pomoState.currentTaskRef.id)
+    ? String(pomoState.currentTaskRef.id)
     : null;
+  const _pomoFocusExists = !!(_pomoFocusId && activeItems.some(ev => String(ev.id) === _pomoFocusId));
+  const _defaultFocusId = (activeItems.find(ev => !ev.subtaskOf && !isMeeting(ev) && ev.type !== "ooo" && ev.type !== "break") || activeItems[0] || {}).id;
+  const _focusActiveId = _pinnedActiveExists ? String(_pinnedActiveId) : (_pomoFocusExists ? _pomoFocusId : (_defaultFocusId ? String(_defaultFocusId) : null));
 
   // Compact timeline row for a subtask (timeless step under its parent).
   function buildTimelineSub(node){
@@ -376,13 +378,12 @@ function buildSchedule(){
     const ev=node.ev;
     if(node.rel==="subtask"){tl.appendChild(buildTimelineSub(node));return;}
     injectBlockHeaders(pt(ev.start));
-    const trueActive=isActive(ev)&&isToday,isNextUp=(!trueActive&&ev.id===_nextUpId&&isToday);
-    // PIN 1: pinned-active state overlays the auto-derived states
-    const isPinnedActive = isToday && _pinnedActiveId === ev.id;
+    const isFocusActive = isToday && _focusActiveId && String(ev.id) === _focusActiveId;
+    const isPinnedActive = isToday && _pinnedActiveExists && String(_pinnedActiveId) === String(ev.id);
     const pinnedStyle = isPinnedActive && typeof getPinnedOverdueStyle === "function" ? getPinnedOverdueStyle(ev) : null;
-    const active=trueActive||isNextUp||isPinnedActive,nearEnd=trueActive&&(pt(ev.end)-now()<=5),nc=active?"active":"upcoming";
+    const active=!!isFocusActive;
     const el=renderItineraryCard(ev,{
-      node:node,active:active,isNextUp:isNextUp,isPinnedActive:isPinnedActive,pinnedStyle:pinnedStyle,nearEnd:nearEnd,isToday:isToday,
+      node:node,active:active,isPinnedActive:isPinnedActive,pinnedStyle:pinnedStyle,isToday:isToday,
       canEditBounty:(typeof viewMode==="undefined"||viewMode!=="archive"),
       bw:(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null
     });

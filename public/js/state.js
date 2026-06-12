@@ -413,8 +413,7 @@ function isPushed(ev){return pushedSet.has(ev.id)}
 // ======== PINNED ACTIVE TASK (PIN 1) ========
 // Separate from _pinnedStart (schedule.js) — this is a *single* task id
 // the user has "pinned as active" by dragging the now-pill onto it (or
-// clicking its timeline dot). It overrides auto-derived next-up in
-// buildSchedule, and drives the .tl-node "how far behind" gradient (see
+// clicking its timeline dot). It drives the .tl-node "how far behind" gradient (see
 // getPinnedOverdueStyle: blue at +1 min overdue → flashing red at +6 h,
 // measured from the task's scheduled START).
 let PINNED_ACTIVE_KEY = "pa-pinned-active-" + ((__state && __state.date) ? __state.date : "unknown");

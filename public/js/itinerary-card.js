@@ -12,7 +12,7 @@
 // opts (all optional unless noted):
 //   guest            true on the guest page -> omits all edit chrome + detail panel
 //   node             {depth,hasKids,collapsed} schedule node (owner). Defaults flat.
-//   active,isNextUp,isPinnedActive,pinnedStyle,nearEnd,isToday   timeline state flags
+//   active,isPinnedActive,pinnedStyle,isToday   timeline state flags
 //   pinnedStyle      {bg,fg,pulse} from getPinnedOverdueStyle, or null
 //   canEditBounty    owner passes (viewMode !== 'archive'); guest unused
 //   bw               wrapBandwidth(ev) result (owner); guest null
@@ -94,8 +94,8 @@
     };
 
     var node = opts.node || {depth:0,hasKids:false,collapsed:false};
-    var active = !!opts.active, isNextUp = !!opts.isNextUp, isPinnedActive = !!opts.isPinnedActive;
-    var pinnedStyle = opts.pinnedStyle || null, nearEnd = !!opts.nearEnd;
+    var active = !!opts.active, isPinnedActive = !!opts.isPinnedActive;
+    var pinnedStyle = opts.pinnedStyle || null;
     var nc = active ? "active" : "upcoming";
 
     var d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
@@ -194,7 +194,7 @@
 
     el.innerHTML=
       timeHtml+
-      '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(nearEnd?' near-end':'')+(isNextUp?' next-up':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
+      '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
         '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
