@@ -18,7 +18,8 @@ function parseArgs(argv) {
   return args;
 }
 
-function requestJson(url, payload, token) {
+function requestJson(url, payload, options = {}) {
+  const { token = "", cookie = "" } = options;
   const parsed = new URL(url);
   const transport = parsed.protocol === "https:" ? https : http;
   const body = JSON.stringify(payload);
@@ -28,6 +29,7 @@ function requestJson(url, payload, token) {
     "Content-Length": Buffer.byteLength(body),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (cookie) headers.Cookie = cookie;
   if (process.env.DCC_SERVICE_USER_ID) headers["X-User-Id"] = process.env.DCC_SERVICE_USER_ID;
   if (process.env.DCC_SERVICE_WORKSPACE_ID) headers["X-Workspace-Id"] = process.env.DCC_SERVICE_WORKSPACE_ID;
   return new Promise((resolve, reject) => {
@@ -42,13 +44,18 @@ function requestJson(url, payload, token) {
           reject(new Error(json.error || `HTTP ${res.statusCode}`));
           return;
         }
-        resolve(json);
+        resolve({ json, headers: res.headers });
       });
     });
     req.on("error", reject);
     req.write(body);
     req.end();
   });
+}
+
+function cookieHeader(setCookie) {
+  const cookies = Array.isArray(setCookie) ? setCookie : [];
+  return cookies.map((line) => String(line).split(";")[0]).filter(Boolean).join("; ");
 }
 
 function packetItems(packet) {
@@ -81,8 +88,16 @@ async function main() {
   }
   const baseUrl = (args.baseUrl || process.env.DCC_BASE_URL || process.env.DCC_API_BASE_URL || "https://daily-command-center-personal.onrender.com").replace(/\/$/, "");
   const token = process.env.DCC_TOKEN || process.env.DCC_API_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_PA_TOKEN || "";
-  const response = await requestJson(`${baseUrl}/api/dcc/triage-check/ingest`, payload, token);
-  console.log(JSON.stringify(response, null, 2));
+  const username = process.env.DCC_USERNAME || process.env.SEED_USERNAME || "";
+  const password = process.env.DCC_PASSWORD || process.env.SEED_PASSWORD || "";
+  let cookie = "";
+  if (!token && username && password) {
+    const login = await requestJson(`${baseUrl}/api/auth/login`, { username, password });
+    cookie = cookieHeader(login.headers && login.headers["set-cookie"]);
+    if (!cookie) throw new Error("Login succeeded but no session cookie was returned");
+  }
+  const response = await requestJson(`${baseUrl}/api/dcc/triage-check/ingest`, payload, { token, cookie });
+  console.log(JSON.stringify(response.json, null, 2));
   return 0;
 }
 
