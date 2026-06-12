@@ -3720,6 +3720,87 @@ async function celebrationSpinForBankrollGoal(workspaceId, userId) {
   }
 }
 
+// Claim a funded bankroll goal WITHOUT a celebration spin: deduct the goal cost
+// from the Reward Reserve, mark the goal complete, and return the reward so the
+// route can drop it into the reward queue (a coupon to redeem later). Mirrors the
+// validation/deduction of celebrationSpinForBankrollGoal but inserts no spin.
+async function claimBankrollGoalReward(workspaceId, userId) {
+  await ensureAccount(workspaceId, userId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = normalizeSlotSettings(account && account.settings);
+    const goal = settings.bankroll_goal;
+    if (!goal.enabled || !goal.reward_id) {
+      const err = new Error("No active bankroll goal");
+      err.statusCode = 400;
+      throw err;
+    }
+    if (goal.celebration_spin_claimed_at) {
+      const err = new Error("Bankroll goal reward already claimed");
+      err.statusCode = 400;
+      throw err;
+    }
+    const { rows: rewardRows } = await client.query(
+      "SELECT * FROM slot_rewards WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE",
+      [workspaceId, goal.reward_id]
+    );
+    const selected = rewardRows[0];
+    if (!selected || !isSelfFundedPaidReward(selected)) {
+      const err = new Error("Bankroll goal reward is not available");
+      err.statusCode = 400;
+      throw err;
+    }
+    await sweepPendingBankBuildersInTx(client, workspaceId);
+    const { rows: [freshAccount] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id=$1 FOR UPDATE",
+      [workspaceId]
+    );
+    const targetCents = Math.max(goal.target_cents || 0, reserveCostCents(selected));
+    if (((freshAccount && freshAccount.bank_balance_cents) || 0) < targetCents) {
+      const err = new Error("Not enough Reward Reserve for that bankroll goal");
+      err.statusCode = 400;
+      throw err;
+    }
+    const now = new Date().toISOString();
+    const nextGoal = {
+      ...goal,
+      enabled: true,
+      reward_id: selected.id,
+      target_cents: targetCents,
+      icon_id: goal.icon_id || "gift",
+      description: goal.description || selected.notes || "",
+      funded_at: goal.funded_at || now,
+      celebration_spin_claimed_at: now,
+      updated_at: now,
+    };
+    await client.query(
+      `UPDATE slot_accounts
+       SET bank_balance_cents = GREATEST(0, bank_balance_cents - $2),
+           settings = COALESCE(settings, '{}'::jsonb) || $3::jsonb,
+           updated_at=NOW()
+       WHERE workspace_id=$1`,
+      [workspaceId, targetCents, JSON.stringify({ bankroll_goal: nextGoal })]
+    );
+    await client.query("UPDATE slot_rewards SET last_won_at=NOW(), uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE GREATEST(uses_remaining - 1, 0) END WHERE id=$1", [selected.id]);
+    await client.query("COMMIT");
+    return {
+      claimed: true,
+      target_cents: targetCents,
+      reward: { ...selected, sponsor_splits: normalizeSponsorSplits(selected.sponsor_splits) },
+    };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 function notFound(message) {
   const err = new Error(message);
   err.statusCode = 404;
@@ -3750,6 +3831,7 @@ module.exports = {
   confirmSpin,
   confirmPendingBankBuilders,
   celebrationSpinForBankrollGoal,
+  claimBankrollGoalReward,
   chooseWeighted,
   _test: {
     buildSpinScreen,

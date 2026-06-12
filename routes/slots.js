@@ -53,6 +53,41 @@ app.post("/api/slot/bankroll-goal/celebration-spin", async (req, res) => {
   }
 });
 
+// Claim a funded bankroll goal: deduct the reserve, mark the goal complete, and
+// drop the reward into the reward queue as a coupon to redeem later (no spin).
+app.post("/api/slot/bankroll-goal/claim", async (req, res) => {
+  try {
+    const result = await slotStore.claimBankrollGoalReward(req.workspaceId, req.session.userId);
+    let rewardQueueItem = null;
+    const r = result && result.reward;
+    if (r) {
+      try {
+        const enq = await socialStore.enqueueReward({
+          ownerUserId: req.session.userId,
+          workspaceId: req.workspaceId,
+          rewardDefinitionId: r.id || null,
+          titleSnapshot: r.title || "Bankroll goal reward",
+          sourceType: "bankroll_goal",
+          sourceId: "bankroll-goal-" + (r.id || "x") + "-" + Date.now(),
+          sponsorUserId: null,
+          valueSnapshot: r.value_cents ?? result.target_cents ?? 0,
+          chanceSharesSnapshot: r.chance_shares || r.weight || 0,
+          tierSnapshot: r.tier_id || null,
+          durationMinutesSnapshot: r.duration_minutes ?? r.durationMinutes ?? null,
+        });
+        rewardQueueItem = (enq && enq.item) || null;
+        broadcast("slot-changed", { action: "reward-queued" }, req.workspaceId);
+      } catch (e) {
+        console.warn("[bankroll-claim] enqueue failed:", e.message);
+      }
+    }
+    broadcast("slot-changed", { action: "bankroll-goal-claim" }, req.workspaceId);
+    res.json(rewardQueueItem ? { ...result, reward_queue_item: rewardQueueItem } : result);
+  } catch (e) {
+    res.status(e.statusCode || 400).json({ error: e.message });
+  }
+});
+
 app.put("/api/slot/admin/next-spin-tiles", requireAdmin, async (req, res) => {
   try {
     const result = await slotStore.setNextSpinTileOverride(req.workspaceId, req.session.userId, req.body || {});
