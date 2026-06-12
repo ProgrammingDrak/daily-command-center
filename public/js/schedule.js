@@ -422,11 +422,12 @@ async function commitDoneOnDate(id,dateStr){
 
   // Same-day completion: take the in-memory fast path
   if(currentDate===dateStr){
+    const _award=_pointAwardOverride(id);
     const _cel=_beginCompletionCelebration(id);
     manualDone.add(id);doneAt[id]=new Date();
     log("checked",id);saveDoneState();render();
     _finishCompletionCelebration(_cel,id);
-    awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso});
+    awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_award});
     return;
   }
 
@@ -459,12 +460,32 @@ async function commitDoneOnDate(id,dateStr){
     }catch(e){}
   }
   log("checked-on",id,"Marked done on "+dateStr);
-  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso});
+  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_pointAwardOverride(id)});
+}
+
+// Points override for a completion, when the task participates in a parent's
+// point pie. Returns:
+//   - a parent's completion award (bonus + still-open subtask slices) when the
+//     task has subtasks — MUST be read BEFORE _onParentCompleted cascades them;
+//   - a subtask's own slice when it is a subtask of a parent;
+//   - undefined for everything else (normal duration-based scoring), including
+//     "stacked" (ride-along) tasks, whose points are independent.
+function _pointAwardOverride(id){
+  if(!window.PointPlan||typeof childrenOf!=="function"||typeof relOf!=="function")return undefined;
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev)return undefined;
+  const hasSubKids=childrenOf(id,scheduled).some(c=>relOf(c)==="subtask");
+  if(hasSubKids)return window.PointPlan.awardForParentCompletion(id);
+  if(ev.subtaskOf)return window.PointPlan.shareFor(ev.subtaskOf,id);
+  return undefined;
 }
 
 function awardSlotTaskCredit(ev,opts){
   if(!ev||!ev.id)return;
   opts=opts||{};
+  // An explicit zero slice (e.g. a subtask allocated 0 pts) means "credit
+  // nothing" — without this guard a 0 would fall through to normal scoring.
+  if(opts.awardPoints!=null&&Number.isFinite(Number(opts.awardPoints))&&Number(opts.awardPoints)<=0)return;
   const fallbackDate=(typeof viewDate!=="undefined"&&viewDate)||((__state&&__state.date)||new Date().toISOString().split("T")[0]);
   const normalizedOpts={...opts,sourceDate:opts.sourceDate||opts.completionDate||fallbackDate,completedAt:opts.completedAt||new Date().toISOString()};
   if(window.PetHome&&typeof window.PetHome.awardTask==="function"){
@@ -529,7 +550,7 @@ function _onParentCompleted(id){
     promoted++;
   });
   if(typeof recalcTimes==="function")recalcTimes();
-  if(promoted&&typeof showToast==="function")showToast(promoted+" ride-along"+(promoted>1?"s":"")+" moved out of the completed wrap","info",2600);
+  if(promoted&&typeof showToast==="function")showToast(promoted+" stacked task"+(promoted>1?"s":"")+" moved out of the completed task","info",2600);
 }
 function toggleDone(id,opts){
   opts=opts||{};
@@ -557,12 +578,13 @@ function toggleDone(id,opts){
       // viewing that day and checks a task off, persist the completion there.
       const ev=scheduled.find(e=>e.id===id);
       const completedAt=new Date();
+      const _award=_pointAwardOverride(id); // read pie BEFORE subtasks cascade
       const _cel=_beginCompletionCelebration(id);
       manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
       _onParentCompleted(id);
       saveDoneState();render();
       _finishCompletionCelebration(_cel,id);
-      awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
+      awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
       if(typeof showToast==="function"){
         const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
         showToast("Marked done on "+label,"success");
@@ -581,13 +603,14 @@ function toggleDone(id,opts){
 
   const ev=scheduled.find(e=>e.id===id);
   const completedAt=new Date();
+  const _award=_pointAwardOverride(id); // read pie BEFORE subtasks cascade
   const _cel=_beginCompletionCelebration(id);
   manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
   _onParentCompleted(id);
   saveDoneState();render();
   _finishCompletionCelebration(_cel,id);
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
-  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString()});
+  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;

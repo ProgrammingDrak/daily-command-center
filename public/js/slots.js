@@ -4857,6 +4857,10 @@
         };
     const sourceDate = options.sourceDate || options.completionDate || (window.__state && window.__state.date) || "unknown";
     const sourceKey = options.sourceKey || (String(sourceDate) + ":" + task.id);
+    // Explicit point override (subtask slice / parent completion bonus): replaces
+    // the duration-derived score server-side while keeping the idempotent ledger.
+    const pointsOverride = (options.awardPoints != null && Number.isFinite(Number(options.awardPoints)) && Number(options.awardPoints) > 0)
+      ? Math.round(Number(options.awardPoints)) : undefined;
     try {
       const result = await api("/api/slot/earn-task", {
         method: "POST",
@@ -4872,6 +4876,7 @@
           tags: Array.isArray(task.tags) ? task.tags : [],
           duration_minutes: payload.duration_minutes || taskDurationMinutes(task),
           actual_minutes: payload.actual_minutes || taskFocusMinutes(task),
+          points_override: pointsOverride,
           completed_at: options.completedAt || new Date().toISOString()
         })
       });

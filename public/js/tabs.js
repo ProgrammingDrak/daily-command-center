@@ -360,6 +360,31 @@ function addSubtask(taskId, text){
     window.blockStore.createBlock("block",{local_id:id,title:text,type:"task",subtaskOf:taskId,source:"manual",
       start:startStr,end:startStr,duration:0,priority:"Medium",tags:[],added_at:new Date().toISOString()},{date:date});
   }
+  // Snapshot/rebalance the parent's point pie now that it has (one more) subtask.
+  if(window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(taskId);
+  render();
+}
+// A "stacked" task ("stacked time"): independent concurrent work done in the
+// gaps / partial focus of a larger task. Reuses the ride-along edge (wrapId), so
+// it gets its OWN time window and its OWN duration-based points — unlike a
+// subtask, it does not draw from the parent's pie.
+function addStackedTask(taskId, text){
+  if(!text||!text.trim())return;
+  text=text.trim();
+  const id="sk-"+Date.now();
+  const parent=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null;
+  const startStr=(parent&&parent.start)||"00:00";
+  const durMin=30;
+  const endStr=(typeof fmt==="function")?fmt((typeof pt==="function"?pt(startStr):0)+durMin):startStr;
+  const task={id:id,title:text,type:"task",wrapId:taskId,source:"manual",
+    start:startStr,end:endStr,priority:"Medium",tags:[],meta:(typeof ms==="function"?("Stacked · "+ms(durMin)):"Stacked")};
+  if(typeof scheduled!=="undefined")scheduled.push(task);
+  if(window.blockStore&&window.blockStore.createBlock){
+    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+    window.blockStore.createBlock("block",{local_id:id,title:text,type:"task",wrapId:taskId,source:"manual",
+      start:startStr,end:endStr,duration:durMin,priority:"Medium",tags:[],added_at:new Date().toISOString()},{date:date});
+  }
+  if(typeof recalcTimes==="function")recalcTimes();
   render();
 }
 function toggleSubtask(taskId, stId){
@@ -372,6 +397,8 @@ function toggleSubtask(taskId, stId){
 function deleteSubtask(taskId, stId){
   if(typeof openDeleteConfirm==="function"){openDeleteConfirm(stId);return;}
   if(typeof scheduled!=="undefined"){const i=scheduled.findIndex(e=>e.id===stId);if(i>=0)scheduled.splice(i,1);}
+  // Rebalance the parent's remaining slices after a subtask is removed.
+  if(taskId&&window.PointPlan&&typeof window.PointPlan.reconcile==="function")window.PointPlan.reconcile(taskId);
   render();
 }
 function getIncompleteSubtasks(taskId){

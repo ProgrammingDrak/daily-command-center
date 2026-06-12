@@ -231,10 +231,14 @@
     if(!ev||!ev.id)return;
     const payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"?window.TaskPoints.buildPayload(ev,{}):{task_id:ev.id,title:ev.title,duration_minutes:30};
     const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"?window.TaskPoints.estimate(payload):{awardPoints:8};
+    // Explicit override (subtask slice / parent completion bonus) wins over the
+    // duration-based estimate; the server clamps it (1–80).
+    const _ov=opts&&opts.awardPoints;
+    const award=(_ov!=null&&Number.isFinite(Number(_ov))&&Number(_ov)>0)?Math.round(Number(_ov)):(scoring.awardPoints||8);
     const result=await api("/api/pet-home/feed-task",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...payload,task_id:ev.id,title:ev.title,sourceDate:opts&&opts.sourceDate,completedAt:opts&&opts.completedAt,awardPoints:scoring.awardPoints||8})
+      body:JSON.stringify({...payload,task_id:ev.id,title:ev.title,sourceDate:opts&&opts.sourceDate,completedAt:opts&&opts.completedAt,awardPoints:award})
     }).catch(()=>null);
     if(result&&result.home){
       if(state)state.home=result.home;
