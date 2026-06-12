@@ -791,7 +791,7 @@ app.post("/api/save-engram-index", (req, res) => { const body = req.body; body.s
 app.post("/api/ingest/day-state", async (req, res) => {
   const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
   const dayFile = getDayFilePath(incoming.date); const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
-  const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "clean_tidy", "orchestrator", "mutations", "completions", "personal", "meetings"];
+  const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
   const USER_SECTIONS = ["done", "pushed", "deleted", "durChanges", "notes", "actions", "sessions", "mood", "reviewed", "subtasks"];
   const merged = { ...existing };
   for (const key of DCC_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }
