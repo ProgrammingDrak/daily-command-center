@@ -136,7 +136,7 @@ app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback"]);
-const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/clean-tidy/approve", "/api/dcc/quick-task"]);
+const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
@@ -170,6 +170,12 @@ function getRequestOrigin(req) {
 }
 function isAdminSession(req) {
   return ADMIN_USERNAMES.has(String(req.session?.username || "").toLowerCase());
+}
+
+function previousDateStr(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 function requireAdmin(req, res, next) {
   if (isAdminSession(req)) return next();
@@ -779,8 +785,6 @@ app.get("/api/admin/activity", requireAdmin, async (req, res) => {
 });
 
 // ── POST: State Persistence ──
-// /api/save-day retired Phase 6 -- BlockStore is the source of truth, no client calls this.
-// /api/brain/recent (legacy reconcileWithServer endpoint) similarly retired.
 app.post("/api/save-globals", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(GLOBALS_FILE, body); broadcast("save", { source: "globals" }); res.json({ ok: true }); });
 app.post("/api/save-engram-index", (req, res) => { const body = req.body; body.savedAt = new Date().toISOString(); writeJSON(path.join(ENGRAMS_DIR, "index.json"), body); broadcast("save", { source: "engrams" }); res.json({ ok: true }); });
 
@@ -856,6 +860,67 @@ app.post("/api/dcc/brief/decision", (req, res) => {
   }
 });
 
+async function resolveDccWriteOwner(req) {
+  let userId = req.session?.userId || req.dccServiceAuth?.userId || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
+  let workspaceId = req.workspaceId || req.dccServiceAuth?.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || null;
+  if (!userId) {
+    if (process.env.NODE_ENV === "production") {
+      const err = new Error("owner required: supply an x-user-id header or set DCC_SERVICE_USER_ID");
+      err.status = 400;
+      throw err;
+    }
+    const { rows } = await pool.query(
+      "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
+      workspaceId ? [workspaceId] : []
+    );
+    userId = rows[0] ? rows[0].user_id : 1;
+  }
+  if (!workspaceId) {
+    const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1", [userId]);
+    workspaceId = rows[0] ? rows[0].workspace_id : `ws-${userId}`;
+  }
+  return { userId, workspaceId };
+}
+
+app.post("/api/dcc/brief/materialize", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const targetDate = body.targetDate || body.target_date || getTodayStr();
+    const sourceDate = body.sourceDate || body.source_date || previousDateStr(targetDate);
+    const dryRun = body.dryRun !== false && body.dry_run !== false;
+    if (!isValidDate(sourceDate) || !isValidDate(targetDate)) return res.status(400).json({ error: "Expected sourceDate and targetDate as YYYY-MM-DD" });
+    const { userId, workspaceId } = await resolveDccWriteOwner(req);
+    const sourceState = readJSON(getDayFilePath(sourceDate), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(sourceDate);
+    const existingBlocks = await blockDB.getBlocksByDate(targetDate, workspaceId);
+    const plan = dccIntelligence.materializeBriefPlan({ sourceState, targetDate, existingBlocks });
+    const created = [];
+    if (!dryRun) {
+      await blockDB.ensureDayRoot(targetDate, userId, workspaceId);
+      for (const item of plan.items) {
+        const props = item.properties;
+        const sortOrder = props.start ? Number(props.start.slice(0, 2)) * 60 + Number(props.start.slice(3, 5)) : 0;
+        created.push(await blockDB.createBlock({ type: "block", date: targetDate, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId }));
+      }
+      if (created.length) broadcast("blocks-changed", { action: "brief-materialize", blockIds: created.map((b) => b.id), date: targetDate }, workspaceId);
+    }
+    const counts = { ...plan.counts, created: created.length, pending: dryRun ? plan.items.length : Math.max(0, plan.items.length - created.length) };
+    res.json({
+      ok: true,
+      dryRun,
+      sourceDate,
+      targetDate,
+      counts,
+      created: created.map((b) => ({ id: b.id, title: b.properties.title, start: b.properties.start, status: b.properties.status })),
+      unreviewed: plan.unreviewed.map((task) => ({ id: task.id, title: task.title })),
+      skipped: plan.skipped.map(({ task, decision }) => ({ id: task.id, title: task.title, action: decision.action })),
+      alreadyExisting: plan.alreadyExisting.map(({ task }) => ({ id: task.id, title: task.title })),
+    });
+  } catch (e) {
+    console.error("[brief materialize] failed:", e);
+    res.status(e.status || 500).json({ error: e.message || "brief materialize failed" });
+  }
+});
+
 app.post("/api/dcc/refresh", async (req, res) => {
   try {
     const date = (req.body && req.body.date) || readJSON(DAY_STATE_FILE, {}).date || new Date().toISOString().slice(0, 10);
@@ -867,14 +932,6 @@ app.post("/api/dcc/refresh", async (req, res) => {
     console.error("[dcc refresh] failed:", e);
     res.status(500).json({ error: e.message || "DCC refresh failed" });
   }
-});
-
-app.post("/api/clean-tidy/approve", (req, res) => {
-  const { ids, action } = req.body; if (!ids || !Array.isArray(ids) || !["approve", "deny"].includes(action)) return res.status(400).json({ error: "Expected { ids, action }" });
-  const state = readJSON(DAY_STATE_FILE, {}); const ct = state.clean_tidy || {}; const pending = ct.pending_approvals || []; let changed = 0;
-  for (const item of pending) { if (ids.includes(item.id) && item.status === "pending") { item.status = action === "approve" ? "approved" : "denied"; item.resolved_at = new Date().toISOString(); changed++; } }
-  if (changed) { state.clean_tidy = ct; state.last_updated_at = new Date().toISOString(); state.last_updated_by = "dcc-approval"; writeJSON(DAY_STATE_FILE, state); broadcast("ingest", { source: "clean-tidy-approval", changed }); }
-  res.json({ ok: true, action, changed });
 });
 
 app.get("/api/health", async (req, res) => {

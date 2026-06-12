@@ -42,6 +42,12 @@ function normalizePriority(value) {
   return "Medium";
 }
 
+function addMinutesHHMM(start, minutes) {
+  const startMin = parseMinute(start);
+  if (startMin == null) return "";
+  return formatMinute(startMin + (parseInt(minutes, 10) || 30));
+}
+
 function sourceHealth(id, status, detail, count) {
   return {
     id,
@@ -405,10 +411,100 @@ function ingestDeepSweepPacket({ date, state, packet, source }) {
   };
 }
 
+function frontPageTasks(state) {
+  const current = state && state.glymphatic_brief && state.glymphatic_brief.current;
+  const pages = asArray(current && current.pages);
+  const front = pages.find((page) => page && page.id === "front");
+  return asArray(front && front.tomorrow);
+}
+
+function briefDecisions(state) {
+  return (state && state.glymphatic_brief && state.glymphatic_brief.decisions) || {};
+}
+
+function buildMaterializedBriefTask({ task, decision, targetDate }) {
+  const duration = parseInt(task.duration || task.duration_minutes || task.durationMinutes || 30, 10) || 30;
+  const start = decision.time || task.suggested_start || task.recommended_start || task.start || "";
+  const end = start ? addMinutesHHMM(start, duration) : "";
+  const priority = normalizePriority(task.priority);
+  return {
+    local_id: `gb-${targetDate}-${String(task.id || task.title).replace(/[^a-z0-9-]+/gi, "-").slice(0, 48)}`,
+    kind: "glymphatic_itinerary_proposal",
+    title: task.title || "Untitled Brief task",
+    detail: task.reason || task.detail || "",
+    meta: `Glymphatic Brief · ${duration}m`,
+    source: "glymphatic-brief",
+    source_id: task.id || null,
+    glymphatic_task_id: task.id || null,
+    glymphatic_decision: decision.action,
+    status: "pending_approval",
+    priority,
+    project: task.project || "",
+    duration,
+    start,
+    end,
+    _pinnedStart: start || undefined,
+    tags: asArray(task.tags).length ? task.tags : ["glymphatic", "brief"],
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function materializeBriefPlan({ sourceState, targetDate, existingBlocks = [] }) {
+  const tasks = frontPageTasks(sourceState);
+  const decisions = briefDecisions(sourceState);
+  const existingIds = new Set(asArray(existingBlocks).map((block) => {
+    const props = (block && block.properties) || {};
+    return props.glymphatic_task_id || props.source_id || null;
+  }).filter(Boolean));
+  const items = [];
+  const skipped = [];
+  const unreviewed = [];
+  const alreadyExisting = [];
+
+  for (const task of tasks) {
+    if (!task || !task.id) continue;
+    const decision = decisions[task.id];
+    if (!decision) {
+      unreviewed.push(task);
+      continue;
+    }
+    if (decision.action === "backlog" || decision.action === "drop") {
+      skipped.push({ task, decision });
+      continue;
+    }
+    if (decision.action !== "accept" && decision.action !== "schedule") {
+      skipped.push({ task, decision });
+      continue;
+    }
+    if (existingIds.has(task.id)) {
+      alreadyExisting.push({ task, decision });
+      continue;
+    }
+    items.push({ task, decision, properties: buildMaterializedBriefTask({ task, decision, targetDate }) });
+  }
+
+  return {
+    items,
+    counts: {
+      created: 0,
+      pending: items.length,
+      skipped: skipped.length,
+      alreadyExisting: alreadyExisting.length,
+      unreviewed: unreviewed.length,
+      total: tasks.length,
+    },
+    skipped,
+    unreviewed,
+    alreadyExisting,
+  };
+}
+
 module.exports = {
   refreshDccState,
   ingestDeepSweepPacket,
   normalizeDeepPacket,
   runReaders,
   buildBrief,
+  materializeBriefPlan,
+  frontPageTasks,
 };
