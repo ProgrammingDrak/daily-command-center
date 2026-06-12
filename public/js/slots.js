@@ -38,6 +38,10 @@
   let slotSoundOn = readSlotSoundPreference();
   let slotWagerMultiplier = readSlotWagerPreference();
   let slotWheelCount = readSlotWheelCountPreference();
+  // Pristine single-wheel markup for #slot-wheels, captured once at init. Multi-wheel
+  // mode clones frames into the container; this lets us rebuild the canonical single
+  // grid (with #slot-reels) so a later single spin doesn't animate leftover clones.
+  let slotWheelBaseHtml = null;
   let slotAudioCtx = null;
   const KIND_LABELS = {
     miss: "No prize",
@@ -332,6 +336,9 @@
     slotWheelCount = (slotWheelCount === count) ? 1 : count;
     writeSlotWheelCountPreference();
     updateSlotWheelCountButton();
+    // Clear any leftover multi-wheel clones so changing/deactivating the count
+    // immediately shows a single idle wheel instead of the last batch's frames.
+    restoreSingleWheelDom();
     renderSpinButton();
     slotPlay("toggle");
     if(slotWheelCount > 1 && !wagerLockedOut()){
@@ -1989,12 +1996,24 @@
     }
   }
 
+  // Rebuild the canonical single reel grid in #slot-wheels, discarding any clones
+  // left behind by a prior multi-wheel batch. Without this, a later single spin
+  // would animate the leftover frames (looking like it "still spins N wheels").
+  function restoreSingleWheelDom(){
+    const c = document.getElementById("slot-wheels");
+    if(!c || slotWheelBaseHtml == null) return;
+    if(!c.classList.contains("multi") && c.querySelectorAll(".slot-reels-frame").length <= 1) return;
+    c.classList.remove("multi");
+    c.removeAttribute("data-count");
+    c.innerHTML = slotWheelBaseHtml;
+  }
+
   // Spin-button entry point. A single wheel runs the canonical, fully-interactive
   // flow (spin) untouched; 2+ wheels run a parallel batch (spinMultiWheel).
   async function spinAll(){
     if(isSpinning) return;
     const count = effectiveWheelCount();
-    if(count <= 1) return spin();
+    if(count <= 1){ restoreSingleWheelDom(); return spin(); }
     return spinMultiWheel(count);
   }
 
@@ -2040,8 +2059,12 @@
   // list rather than opening a modal mid-batch.
   async function spinMultiWheel(count){
     const container = document.getElementById("slot-wheels");
-    const template = container && container.querySelector(".slot-reels-frame");
-    if(!container || !template) return spin();
+    if(!container) return spin();
+    // Always build from the pristine single grid so stale clones from a prior
+    // batch never leak into this one.
+    restoreSingleWheelDom();
+    const template = container.querySelector(".slot-reels-frame");
+    if(!template) return spin();
     isSpinning = true;
     const spinBtn = document.getElementById("slot-spin-btn");
     if(spinBtn) spinBtn.disabled = true;
@@ -2050,7 +2073,6 @@
     setResult("Pulling " + count + " wheels at once...");
     slotPetReact("pull", "Here we go, all of them!", 1400);
     slotPlay("lever");
-    const originalHTML = container.innerHTML;
     container.classList.add("multi");
     container.dataset.count = String(count);
     const frames = [];
@@ -2065,11 +2087,6 @@
       container.appendChild(frame);
       frames.push(frame);
     }
-    const restoreSingleWheel = () => {
-      container.classList.remove("multi");
-      container.removeAttribute("data-count");
-      container.innerHTML = originalHTML;
-    };
     let spins = [];
     try {
       const res = await api("/api/slot/spin-batch", {
@@ -2079,7 +2096,7 @@
       });
       spins = (res && res.spins) || [];
     } catch(e){
-      restoreSingleWheel();
+      restoreSingleWheelDom();
       setResult(e.message);
       slotPlay("error");
       slotPetReact("sad", "Need more points.", 2200);
@@ -2099,6 +2116,7 @@
     }));
     const totalBank = spins.reduce((sum, sp) => sum + ((sp && sp.bank_delta_cents) || 0), 0);
     if(totalBank > 0) addPendingDeposit(totalBank);
+    notifyReserveCapped(spins);
     const pending = spins.filter(sp => sp && (sp.status === "pending" || (sp.reward_snapshot || {}).requires_jackpot_choice));
     isSpinning = false;
     await loadSlotsAfterSpin();
@@ -2132,6 +2150,9 @@
         setResult("Spin 1: miss, bank, or jackpot...");
         await animateReels(firstStageSymbols(stages, snap, spinRow));
       }
+      // If a bank builder landed but the reserve was full/capped, explain the
+      // still reserve (fires only when the snapshot reports a clamp).
+      notifyReserveCapped(spinRow);
       // Bankroll ALWAYS resolves before any other reward: whatever BANK tiles the screen
       // shows pay first, on any spin. A pure bank outcome ends here; otherwise the bank is
       // a bonus layered under the headline reward, which resolves right after.
@@ -4717,10 +4738,10 @@
         '<span>' + money(goal.total_cents || 0) + ' / ' + money(goal.target_cents || 0) + '</span>' +
         '<span>' + (completed ? 'Claimed' : claimable ? 'Ready' : money(goal.remaining_cents || 0) + ' left') + '</span>' +
       '</div>' +
-      (claimable ? '<button class="slot-small-btn primary" id="slot-bankroll-celebrate-btn" type="button">Celebration spin</button>' : '') +
+      (claimable ? '<button class="slot-small-btn primary" id="slot-bankroll-claim-btn" type="button">Claim reward</button>' : '') +
       (completed ? '<button class="slot-mini" id="slot-bankroll-open-rewards" type="button">Set next goal</button>' : '');
-    const celebrate = panel.querySelector("#slot-bankroll-celebrate-btn");
-    if(celebrate) celebrate.addEventListener("click", celebrationSpin);
+    const claim = panel.querySelector("#slot-bankroll-claim-btn");
+    if(claim) claim.addEventListener("click", claimBankrollReward);
     const open = panel.querySelector("#slot-bankroll-open-rewards");
     if(open) open.addEventListener("click", () => switchSlotSection("rewards"));
   }
@@ -4833,41 +4854,33 @@
     }
   }
 
-  async function celebrationSpin(){
-    if(isSpinning) return;
-    isSpinning = true;
-    const btn = document.getElementById("slot-bankroll-celebrate-btn");
+  // Hitting the bankroll goal no longer forces another spin. The user just claims
+  // the reward: it drops into their reward queue (a coupon to redeem whenever),
+  // the goal's cost comes out of the Reward Reserve, and the machine returns to
+  // normal. A quick fireworks beat celebrates without a full spin sequence.
+  async function claimBankrollReward(){
+    const btn = document.getElementById("slot-bankroll-claim-btn");
     if(btn) btn.disabled = true;
-    setResult("YOU HIT YOUR GOAL!");
-    slotPlay("jackpotHit");
-    slotPetReact("happy", "YOU DID IT!", 2600);
     try {
-      document.querySelectorAll(".slot-stage-chip").forEach(chip => { chip.dataset.state = ""; });
-      const spinRow = await api("/api/slot/bankroll-goal/celebration-spin", { method: "POST" });
-      const snap = spinRow.reward_snapshot || {};
-      const stages = snap.slot_stages || {};
-      updateStageTrack("jackpot", "spinning");
-      await animateReels(firstStageSymbols(stages, snap, spinRow), { duration: 1700 });
-      highlightWinningCells(spinRow, snap);
-      updateStageTrack("jackpot", "hit");
-      await animateGoalFireworks(snap);
-      await animateJackpotBurst();
-      updateStageTrack("bucket", "hit");
-      updateStageTrack("reward", "spinning");
-      await animateRewardWheel(spinRow, snap, stages);
-      updateStageTrack("reward", "hit");
-      resetSlotMachineBoard();
-      animateRewardReveal(spinRow, snap);
-      setResult("YOU HIT YOUR GOAL! " + (snap.title || "Reward") + " is yours.");
-      slotPlay("rewardReveal");
+      const res = await api("/api/slot/bankroll-goal/claim", { method: "POST" });
+      const title = (res && res.reward && res.reward.title) || "Your reward";
+      const moved = res && res.target_cents ? money(res.target_cents) : "";
+      slotPlay("jackpotHit");
       slotPetReact("happy", "Goal claimed!", 2600);
-      isSpinning = false;
+      await animateGoalFireworks((res && res.reward) || {});
+      setResult("YOU HIT YOUR GOAL! " + title + " is in your reward queue.");
+      slotPlay("rewardReveal");
+      if(typeof showToast === "function"){
+        showToast(title + " added to your reward queue — redeem it whenever you're ready."
+          + (moved ? " " + moved + " moved out of the Reward Reserve." : ""), "success", 12000);
+      }
       await loadSlots();
     } catch(e) {
-      isSpinning = false;
+      if(btn) btn.disabled = false;
       setResult(e.message);
       slotPlay("error");
-      slotPetReact("sad", "Goal needs more reserve.", 2200);
+      slotPetReact("sad", "Couldn't claim that yet.", 2200);
+      if(typeof showToast === "function") showToast(e.message || "Claim failed", "error");
       await loadSlots();
     }
   }
@@ -4976,6 +4989,34 @@
     }
     renderPiggyBank(true);
     renderBankrollGoalPanel();
+  }
+
+  // A bank builder landed but the Reward Reserve had no (or limited) headroom, so
+  // the payout was clamped — possibly to zero. A still reserve then looks broken,
+  // so surface WHY. Reads the authoritative cap from the spin snapshot's
+  // bank_screen_payout (raw_cents = earned, cents = actually banked). Accepts a
+  // single spin row or an array (multi-wheel batch), and fires at most one toast.
+  function notifyReserveCapped(spinRows){
+    if(typeof showToast !== "function") return;
+    const rows = Array.isArray(spinRows) ? spinRows : [spinRows];
+    let earned = 0, banked = 0, capped = false;
+    rows.forEach(r => {
+      const p = (r && r.reward_snapshot && r.reward_snapshot.bank_screen_payout) || {};
+      if(p.capped && (p.raw_cents || 0) > 0){
+        capped = true;
+        earned += p.raw_cents || 0;
+        banked += p.cents || 0;
+      }
+    });
+    if(!capped) return;
+    const msg = banked > 0
+      ? "Reward Reserve nearly full — only " + money(banked) + " of " + money(earned) + " from that bank builder fit. Raise your monthly budget to bank more."
+      : "Reward Reserve is full — that bank builder (" + money(earned) + ") had nowhere to go. Raise your monthly budget to keep banking.";
+    showToast(msg, "info", 7000, { label: "Adjust budget", onClick: () => {
+      switchSlotSection("rules");
+      const input = document.getElementById("slot-monthly-discretionary");
+      if(input){ input.focus(); if(input.scrollIntoView) input.scrollIntoView({ block: "center" }); }
+    }});
   }
 
   async function popPendingDeposit(){
@@ -5104,6 +5145,8 @@
     document.querySelectorAll(".slot-section-tab").forEach(btn => {
       btn.addEventListener("click", () => switchSlotSection(btn.dataset.slotSection || "machine"));
     });
+    const wheelsContainer = document.getElementById("slot-wheels");
+    if(wheelsContainer && slotWheelBaseHtml == null) slotWheelBaseHtml = wheelsContainer.innerHTML;
     const spinBtn = document.getElementById("slot-spin-btn");
     if(spinBtn) spinBtn.addEventListener("click", spinAll);
     const helperLever = document.getElementById("slot-helper-lever");
