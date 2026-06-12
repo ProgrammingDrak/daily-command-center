@@ -1,6 +1,7 @@
 (function(){
-  const FORMULA_VERSION = "task_points_v3";
+  const FORMULA_VERSION = "task_points_v4";
   const POINTS_PER_SPIN = 25;
+  const COMMUTE_POINT_RATE = 0.1;
   const EFFORT = { trivial: 0.25, low: 0.75, medium: 1, high: 1.2, intense: 1.4 };
   const ATTENTION = { light: 0.9, normal: 1, focused: 1.1, intense: 1.2 };
   const IMPORTANCE = { low: 0.9, normal: 1, important: 1.15, high: 1.25, critical: 1.4 };
@@ -94,6 +95,14 @@
     const planned = num(input.duration_minutes || input.durationMinutes || input.durMin || input.duration);
     return planned > 0 ? Math.round(planned) : 30;
   }
+  function commuteMinutes(input){
+    input = input || {};
+    const explicitTotal = num(input.commute_total_minutes || input.commuteTotalMinutes || input.totalCommuteMinutes);
+    if(explicitTotal > 0) return Math.round(explicitTotal);
+    const to = num(input.commute_to_minutes || input.commuteToMinutes || input.commute_minutes_to || input.commuteMinutesTo || input.commuteMinutes || input.commute_minutes || input.commuteTime);
+    const back = num(input.commute_back_minutes || input.commuteBackMinutes || input.commute_return_minutes || input.commuteReturnMinutes || input.returnCommuteMinutes || input.commute_minutes_back || input.commuteMinutesBack);
+    return Math.round(to + back);
+  }
   function highPriority(input){
     const p = norm(input.priority);
     return p === "high" || p === "urgent" || p === "p1" || p === "critical";
@@ -145,6 +154,7 @@
   function estimate(input){
     input = input || {};
     const duration = durationMinutes(input);
+    const commute = commuteMinutes(input);
     const effort = effortTier(input, duration);
     const attention = attentionTier(input);
     const importance = importanceTier(input);
@@ -160,19 +170,23 @@
       points: pointMultiplier
     };
     const basePoints = duration * pointMultiplier;
+    const commutePoints = commute * COMMUTE_POINT_RATE * pointMultiplier;
     // Non-earning task type, or a 0x ("No points") tag bucket -> not eligible
     // (mirrors backend point_tier_zero in slot-scoring.js).
     if(NON_EARNING.has(norm(input.type || input.kind)) || pointMultiplier <= 0){
-      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointTier: tier.tier, pointMultiplier, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
+      return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, commuteMinutes: commute, commutePointRate: COMMUTE_POINT_RATE, commutePoints, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointTier: tier.tier, pointMultiplier, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
     }
-    const rawPoints = basePoints * multipliers.effort * multipliers.attention * multipliers.importance * multipliers.urgency * multipliers.bounty;
-    return { formulaVersion: FORMULA_VERSION, eligible: true, durationMinutes: duration, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointTier: tier.tier, pointMultiplier, multipliers, basePoints, rawPoints, awardPoints: Math.max(1, Math.round(rawPoints)) };
+    const workPoints = basePoints * multipliers.effort * multipliers.attention * multipliers.importance * multipliers.urgency * multipliers.bounty;
+    const rawPoints = workPoints + commutePoints;
+    return { formulaVersion: FORMULA_VERSION, eligible: true, durationMinutes: duration, commuteMinutes: commute, commutePointRate: COMMUTE_POINT_RATE, commutePoints, workPoints, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointTier: tier.tier, pointMultiplier, multipliers, basePoints, rawPoints, awardPoints: Math.max(1, Math.round(rawPoints)) };
   }
   function buildPayload(task, options){
     task = task || {};
     options = options || {};
     const actual = actualMinutes(task);
     const planned = plannedMinutes(task);
+    const commuteTo = num(task.commuteToMinutes || task.commute_to_minutes || task.commuteMinutes || task.commute_minutes || task.commuteTime);
+    const commuteBack = num(task.commuteBackMinutes || task.commute_back_minutes || task.commuteReturnMinutes || task.commute_return_minutes || task.returnCommuteMinutes);
     const bounty = options.bounty === true || task.bounty === true;
     const optionBountyCount = Number(options.bounty_count != null ? options.bounty_count : options.bountyCount);
     const resolvedBountyCount = Number.isFinite(optionBountyCount) ? Math.max(0, Math.min(2, Math.round(optionBountyCount))) : (task.bounty_count || task.bountyCount);
@@ -194,6 +208,9 @@
       partner_bounty: partnerBounty || resolvedBountyCount > 1,
       actual_minutes: actual > 0 ? actual : undefined,
       duration_minutes: planned,
+      commute_to_minutes: commuteTo > 0 ? Math.round(commuteTo) : undefined,
+      commute_back_minutes: commuteBack > 0 ? Math.round(commuteBack) : undefined,
+      commute_total_minutes: Math.round(commuteTo + commuteBack) || undefined,
       effort_tier: task.effort_tier || task.effortTier,
       attention_tier: task.attention_tier || task.attentionTier,
       trivial: task.trivial === true || (typeof loadTrivialFlags === "function" && task.id && !!loadTrivialFlags()[task.id])
@@ -203,6 +220,7 @@
   window.TaskPoints = {
     formulaVersion: FORMULA_VERSION,
     pointsPerSpin: POINTS_PER_SPIN,
+    commutePointRate: COMMUTE_POINT_RATE,
     estimate,
     buildPayload,
     setPointTagTiers

@@ -324,7 +324,7 @@ test("earnTaskCredit stores formula metadata and does not double-award duplicate
   assert.equal(duplicate.awarded, false);
   assert.equal(duplicate.delta, 0);
   assert.equal(mockPool.state.pointAdds, 1);
-  assert.equal(mockPool.state.ledgerMetadata.formulaVersion, "task_points_v3");
+  assert.equal(mockPool.state.ledgerMetadata.formulaVersion, "task_points_v4");
   assert.equal(mockPool.state.ledgerMetadata.scoring.awardPoints, 60);
   assert.equal(mockPool.state.ledgerMetadata.inputs.duration_minutes, 60);
 });
@@ -432,7 +432,7 @@ test("getState migrates old one-spin credits into minute-based points once", asy
   assert.equal(state.account.point_balance, 175);
   assert.equal(state.constants.spinCostPoints, 25);
   assert.equal(state.constants.pointsPerSpin, 25);
-  assert.equal(state.constants.pointsFormulaVersion, "task_points_v3");
+  assert.equal(state.constants.pointsFormulaVersion, "task_points_v4");
 });
 
 test("getState migrates v2 spin cost to minute-based v3 spin cost", async () => {

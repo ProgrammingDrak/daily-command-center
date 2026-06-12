@@ -2042,6 +2042,9 @@ function normalizeTaskCreditBody(body = {}) {
     ...body,
     duration_minutes: body.duration_minutes ?? body.durationMinutes ?? body.duration_min ?? body.dur_min ?? body.duration ?? body.durMin,
     actual_minutes: body.actual_minutes ?? body.actualMinutes ?? body.focus_minutes ?? body.focusMin,
+    commute_to_minutes: body.commute_to_minutes ?? body.commuteToMinutes ?? body.commute_minutes_to ?? body.commuteMinutesTo ?? body.commuteMinutes ?? body.commute_minutes ?? body.commuteTime,
+    commute_back_minutes: body.commute_back_minutes ?? body.commuteBackMinutes ?? body.commute_return_minutes ?? body.commuteReturnMinutes ?? body.returnCommuteMinutes ?? body.commute_minutes_back ?? body.commuteMinutesBack,
+    commute_total_minutes: body.commute_total_minutes ?? body.commuteTotalMinutes ?? body.totalCommuteMinutes,
   };
 }
 

@@ -255,6 +255,8 @@ function reloadPersistedEdits() {
           sourceTaskId:p.sourceTaskId||null
         };
         if(p.commuteMinutes||p.commute_minutes)task.commuteMinutes=p.commuteMinutes||p.commute_minutes;
+        if(p.commuteToMinutes||p.commute_to_minutes)task.commuteToMinutes=p.commuteToMinutes||p.commute_to_minutes;
+        if(p.commuteBackMinutes||p.commute_back_minutes||p.commuteReturnMinutes||p.commute_return_minutes)task.commuteBackMinutes=p.commuteBackMinutes||p.commute_back_minutes||p.commuteReturnMinutes||p.commute_return_minutes;
         // Pin the start time so recalcTimes() doesn't overwrite it (skip nested
         // items: ride-alongs/subtasks live under their parent, never cascaded).
         if(hasStoredTime&&!task.subtaskOf)task._pinnedStart=p.start;
@@ -280,6 +282,8 @@ function reloadPersistedEdits() {
           ampUrl:t.ampUrl||null,
           hubspotUrl:t.hubspotUrl||null,
           commuteMinutes: t.commuteMinutes || t.commute_minutes || null,
+          commuteToMinutes: t.commuteToMinutes || t.commute_to_minutes || t.commuteMinutes || t.commute_minutes || null,
+          commuteBackMinutes: t.commuteBackMinutes || t.commute_back_minutes || t.commuteReturnMinutes || t.commute_return_minutes || null,
           publicVisibility:t.publicVisibility||"public",
           wrapId:t.wrapId||null,
           isWrap:!!t.isWrap,
