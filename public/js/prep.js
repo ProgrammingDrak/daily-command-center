@@ -89,9 +89,7 @@ function openPomodoro(title,durMin,taskRef){
   }
   // Open floating timer panel (minimizing later defaults back to the live pill)
   pomoState.collapsedView="mini";
-  document.getElementById("ft-panel").style.display="flex";
-  document.getElementById("ft-fab").style.display="none";
-  document.getElementById("ft-mini").style.display="none";
+  ftSetView("panel");
   pomoRenderReport();
   if(typeof paintPivotTasks==='function')paintPivotTasks();
   if(typeof updateFocusBanner==='function')updateFocusBanner();
@@ -290,20 +288,19 @@ document.getElementById("pomo-reset").addEventListener("click",()=>{
 });
 
 // ======== FLOATING TIMER CONTROLS ========
-document.getElementById("ft-fab").addEventListener("click",()=>{
-  pomoState.collapsedView="mini";
-  ftSetView("panel");
-});
+// (The old #ft-fab resting button is gone; the bottom-right "+" launcher opens the
+// panel via window.dccOpenTimer. See launcher.js + timer.js.)
 // Minimize (–): collapse to the live pill, which stays put while running OR paused.
 document.getElementById("ft-panel-min").addEventListener("click",()=>{
   pomoState.collapsedView="mini";
-  ftSetView(pomoHasTask()?"mini":"fab");
+  ftSetView(pomoHasTask()?"mini":"hidden");
   savePomoState();
 });
-// Close (×): stash the timer fully away to the round logo.
+// Close (×): stash the timer fully away. collapsedView stays "fab" as the
+// "don't auto-promote to the pill" flag; the resolved view is now "hidden".
 document.getElementById("ft-panel-close").addEventListener("click",()=>{
   pomoState.collapsedView="fab";
-  ftSetView("fab");
+  ftSetView("hidden");
   savePomoState();
 });
 document.getElementById("ft-mini").addEventListener("click",()=>{

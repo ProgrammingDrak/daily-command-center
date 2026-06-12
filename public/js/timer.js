@@ -232,21 +232,24 @@ function pomoHasTask(){
   const t=(pomoState.title||"").trim();
   return !!t&&t!=="--"&&t!=="Untitled";
 }
-// Single source of truth for which of the three float-timer faces is showing:
-// "panel" (expanded), "mini" (oblong pill), or "fab" (round logo).
+// Single source of truth for which float-timer face is showing:
+// "panel" (expanded), "mini" (oblong pill), or "hidden" (no task -> the bottom-right
+// "+" launcher is the only resting affordance; #float-timer collapses away entirely).
 function ftSetView(view){
+  const wrap=document.getElementById("float-timer");
   const panel=document.getElementById("ft-panel");
   const mini=document.getElementById("ft-mini");
-  const fab=document.getElementById("ft-fab");
   if(panel)panel.style.display=view==="panel"?"flex":"none";
   if(mini)mini.style.display=view==="mini"?"flex":"none";
-  if(fab)fab.style.display=view==="fab"?"flex":"none";
+  if(wrap)wrap.style.display=view==="hidden"?"none":"flex";
   if(view==="mini")pomoPaint(); // refresh ring/time/task on the pill
 }
+// Open the focus-timer panel (called by the launcher radial's "Start timer").
+window.dccOpenTimer=function(){
+  pomoState.collapsedView="mini";
+  ftSetView("panel");
+};
 function updateTimerBadge(){
-  // Update FAB badge
-  const fabBadge=document.getElementById("ft-fab-badge");
-  if(fabBadge) fabBadge.style.display=pomoState.running?"":"none";
   // Reflect run/pause on the pill's control + styling so it reads as a live stopwatch
   const mini=document.getElementById("ft-mini");
   if(mini)mini.classList.toggle("paused",!pomoState.running);
@@ -266,7 +269,7 @@ function updateTimerBadge(){
   if(pomoHasTask()&&pomoState.collapsedView!=="fab"){
     ftSetView("mini");
   }else{
-    ftSetView("fab");
+    ftSetView("hidden");
   }
 }
 
@@ -558,24 +561,25 @@ function buildDistractionTaskList(){
   const el=document.getElementById("float-timer");
   if(!el)return;
 
-  // Restore saved position
+  // Restore saved position (#float-timer is now anchored bottom-LEFT, so we track left+bottom;
+  // the key is bumped so any stale right-anchored coords from the old layout are ignored).
   try{
-    const saved=localStorage.getItem("ft-pos");
-    if(saved){const {bottom,right}=JSON.parse(saved);el.style.bottom=bottom+"px";el.style.right=right+"px";}
+    const saved=localStorage.getItem("ft-pos-left");
+    if(saved){const {bottom,left}=JSON.parse(saved);el.style.bottom=bottom+"px";el.style.left=left+"px";}
   }catch(e){}
 
-  let dragging=false,hasDragged=false,startX,startY,startRight,startBottom;
+  let dragging=false,hasDragged=false,startX,startY,startLeft,startBottom;
 
   el.addEventListener("mousedown",e=>{
     const panel=document.getElementById("ft-panel");
     const panelOpen=panel&&panel.style.display!=="none";
     const isPanelDrag=panelOpen&&e.target.closest(".ft-panel-bar")&&!e.target.closest("button,a,input,select,textarea,.ft-resize-grip");
-    const isClosedDrag=!panelOpen&&e.target.closest(".ft-fab,.ft-mini");
+    const isClosedDrag=!panelOpen&&e.target.closest(".ft-mini");
     if(!isPanelDrag&&!isClosedDrag)return;
     e.preventDefault();
     dragging=true;hasDragged=false;
     startX=e.clientX;startY=e.clientY;
-    startRight=parseInt(getComputedStyle(el).right)||30;
+    startLeft=parseInt(getComputedStyle(el).left)||30;
     startBottom=parseInt(getComputedStyle(el).bottom)||30;
     document.body.style.userSelect="none";
   });
@@ -586,9 +590,9 @@ function buildDistractionTaskList(){
     if(!hasDragged&&Math.abs(dx)<5&&Math.abs(dy)<5)return;
     hasDragged=true;
     const r=el.getBoundingClientRect();
-    const maxRight=Math.max(0,window.innerWidth-r.width);
+    const maxLeft=Math.max(0,window.innerWidth-r.width);
     const maxBottom=Math.max(0,window.innerHeight-r.height);
-    el.style.right=Math.min(maxRight,Math.max(0,startRight-dx))+"px";
+    el.style.left=Math.min(maxLeft,Math.max(0,startLeft+dx))+"px";
     el.style.bottom=Math.min(maxBottom,Math.max(0,startBottom-dy))+"px";
   });
 
@@ -597,9 +601,9 @@ function buildDistractionTaskList(){
     dragging=false;
     document.body.style.userSelect="";
     if(hasDragged){
-      localStorage.setItem("ft-pos",JSON.stringify({
+      localStorage.setItem("ft-pos-left",JSON.stringify({
         bottom:parseInt(el.style.bottom),
-        right:parseInt(el.style.right)
+        left:parseInt(el.style.left)
       }));
     }
   });

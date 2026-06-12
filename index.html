@@ -229,26 +229,8 @@
       <span class="sched-drag-hint" style="margin-left:10px">Drag to reorder &middot; +/- to adjust time &middot; Check to complete</span>
     </span>
   </div>
-  <div class="task-add-bar" id="task-add-schedule">
-    <input class="tab-title" type="text" placeholder="+ Add a task..." />
-    <select class="tab-dur">
-      <option value="15">15m</option>
-      <option value="30" selected>30m</option>
-      <option value="45">45m</option>
-      <option value="60">1h</option>
-      <option value="90">1.5h</option>
-      <option value="120">2h</option>
-    </select>
-    <select class="tab-dest">
-      <option value="schedule">Schedule</option>
-      <option value="backlog">Backlog and Ideas</option>
-      <option value="urgent" selected>Urgent</option>
-      <option value="side_project">Side Project</option>
-      <option value="repeat_responsibility">Repeat Responsibility</option>
-    </select>
-    <button class="tab-add">+ Add</button>
-    <button class="tab-catchup" id="unfinished-tasks-btn" type="button" title="Reschedule unfinished past tasks">Catch up</button>
-  </div>
+  <!-- The Itinerary add-task bar moved into the bottom-right "+" launcher (tap = compose,
+       hold = radial with Start timer / Add task / Give feedback / Catch up). See launcher.js. -->
   <section class="schedule-delegated-section" id="schedule-delegated-section" style="display:none" aria-label="Delegated"></section>
   <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
   <div class="tl" id="timeline"></div>
@@ -585,13 +567,7 @@
 </div>
 
 <!-- ======== FLOATING TIMER ======== -->
-<div class="float-timer" id="float-timer">
-  <!-- FAB button (default state) -->
-  <button class="ft-fab" id="ft-fab" title="Focus Timer">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>
-    <span class="ft-fab-badge" id="ft-fab-badge" style="display:none"></span>
-  </button>
-
+<div class="float-timer" id="float-timer" style="display:none">
   <!-- Mini bar (shown when timer running + panel closed) -->
   <div class="ft-mini" id="ft-mini" style="display:none">
     <svg class="ft-mini-ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="2"/><circle id="ft-mini-arc" cx="18" cy="18" r="16" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="100.5" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(-90 18 18)"/></svg>
@@ -697,6 +673,54 @@
     </div>
   </div>
 </div>
+
+<!-- ======== UNIVERSAL "+" LAUNCHER ======== -->
+<div class="dcc-launcher" id="dcc-launcher">
+  <!-- Compose popover (quick tap) -->
+  <div class="dcc-compose" id="dcc-compose" aria-hidden="true">
+    <div class="task-add-bar" id="task-add-launcher">
+      <input class="tab-title" type="text" placeholder="+ Add a task..." />
+      <select class="tab-dur">
+        <option value="15">15m</option>
+        <option value="30" selected>30m</option>
+        <option value="45">45m</option>
+        <option value="60">1h</option>
+        <option value="90">1.5h</option>
+        <option value="120">2h</option>
+      </select>
+      <select class="tab-dest">
+        <option value="schedule">Schedule</option>
+        <option value="backlog">Backlog and Ideas</option>
+        <option value="urgent" selected>Urgent</option>
+        <option value="side_project">Side Project</option>
+        <option value="repeat_responsibility">Repeat Responsibility</option>
+      </select>
+      <button class="tab-add">+ Add</button>
+    </div>
+  </div>
+
+  <!-- Radial HUD menu (press-and-hold) -->
+  <div class="dcc-radial" id="dcc-radial" aria-hidden="true">
+    <button class="dcc-radial-item" data-action="timer" style="--i:0" type="button" title="Start timer" aria-label="Start timer">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3L2 6"/><path d="M22 6l-3-3"/></svg>
+    </button>
+    <button class="dcc-radial-item" data-action="task" style="--i:1" type="button" title="Add task" aria-label="Add task">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button class="dcc-radial-item" data-action="feedback" style="--i:2" type="button" title="Give feedback" aria-label="Give feedback">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    </button>
+    <button class="dcc-radial-item" data-action="catchup" style="--i:3" type="button" title="Catch up (reschedule unfinished tasks)" aria-label="Catch up on unfinished tasks">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+    </button>
+  </div>
+
+  <!-- The "+" circle -->
+  <button class="dcc-launcher-btn" id="dcc-launcher-btn" type="button" title="Add task (hold for more)" aria-label="Add task; press and hold for menu">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+</div>
+<div class="dcc-scrim" id="dcc-scrim"></div>
 
 <!-- Triage dismiss modal -->
 <div class="tri-dismiss-modal-overlay" id="tri-dismiss-overlay">
@@ -1669,6 +1693,7 @@
 <script src="/public/js/clock.js"></script>
 <script src="/public/js/timer.js"></script>
 <script src="/public/js/prep.js"></script>
+<script src="/public/js/launcher.js"></script>
 <script src="/public/js/sidebar.js"></script>
 <script src="/public/js/tag-manager.js"></script>
 <script src="/public/js/itinerary-card.js"></script>
@@ -1725,7 +1750,6 @@ window.USE_BLOCKSTORE = {
   <span class="save-status-tooltip" id="save-status-tooltip">All changes synced</span>
 </div>
 
-<button class="feedback-fab" id="feedback-fab" type="button" title="Send feedback" aria-label="Send feedback">🐛</button>
 <div class="feedback-panel" id="feedback-panel" aria-hidden="true">
   <div class="feedback-panel-head">
     <strong>Feedback</strong>

@@ -857,12 +857,7 @@ function toggleSnCreateTask(){
 // ======== FOCUS BANNER ========
 function _focusBannerOpenTimerPanel(){
   if(typeof pomoState!=="undefined")pomoState.collapsedView="mini";
-  const panel=document.getElementById("ft-panel");
-  const fab=document.getElementById("ft-fab");
-  const mini=document.getElementById("ft-mini");
-  if(panel)panel.style.display="flex";
-  if(fab)fab.style.display="none";
-  if(mini)mini.style.display="none";
+  if(typeof ftSetView==="function")ftSetView("panel");
 }
 function persistAddModalCommute() {
   if (!_addModalTaskId) return;

@@ -45,12 +45,14 @@
     }
   }
 
+  // Opened from the launcher radial menu's "Give feedback" option (the old standalone
+  // #feedback-fab is gone; this is the single entry point now).
+  window.dccOpenFeedback = function(){ setOpen(true); };
+
   document.addEventListener("DOMContentLoaded", function(){
-    var fab = $("feedback-fab");
     var close = $("feedback-close");
     var submit = $("feedback-submit");
     var input = $("feedback-message");
-    if (fab) fab.addEventListener("click", function(){ setOpen(!$("feedback-panel").classList.contains("open")); });
     if (close) close.addEventListener("click", function(){ setOpen(false); });
     if (submit) submit.addEventListener("click", submitFeedback);
     if (input) input.addEventListener("keydown", function(e){
