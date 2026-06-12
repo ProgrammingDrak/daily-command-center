@@ -251,11 +251,13 @@ function openAddModal(taskId, taskTitle) {
     });
   }
 
-  var commuteInput = document.getElementById('am-commute-input');
+  var commuteToInput = document.getElementById('am-commute-to-input');
+  var commuteBackInput = document.getElementById('am-commute-back-input');
   var commuteHint = document.getElementById('am-commute-hint');
-  if (commuteInput) {
-    var minutes = taskEntry ? (taskEntry.commuteMinutes || 0) : 0;
-    commuteInput.value = minutes ? String(minutes) : '';
+  if (commuteToInput || commuteBackInput) {
+    var pair = (typeof commutePairForTask === 'function') ? commutePairForTask(taskEntry) : { to: taskEntry ? (taskEntry.commuteMinutes || 0) : 0, back: taskEntry ? (taskEntry.commuteBackMinutes || 0) : 0 };
+    if (commuteToInput) commuteToInput.value = pair.to ? String(pair.to) : '';
+    if (commuteBackInput) commuteBackInput.value = pair.back ? String(pair.back) : '';
     updateAddModalCommuteHint();
   } else if (commuteHint) {
     commuteHint.textContent = 'No leave window';
@@ -392,15 +394,16 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
     if (e.target === e.currentTarget) closeAddModal();
   });
-  var commuteInput = document.getElementById('am-commute-input');
-  if (commuteInput) {
+  ['am-commute-to-input','am-commute-back-input'].forEach(function(id) {
+    var commuteInput = document.getElementById(id);
+    if (!commuteInput) return;
     commuteInput.addEventListener('input', updateAddModalCommuteHint);
     commuteInput.addEventListener('change', function() {
       persistAddModalCommute();
       updateAddModalCommuteHint();
       if (typeof render === 'function') render();
     });
-  }
+  });
 
   // Add item (subtask, side project, or action -- based on type dropdown)
   function addModalItem() {
@@ -861,24 +864,32 @@ function _focusBannerOpenTimerPanel(){
 }
 function persistAddModalCommute() {
   if (!_addModalTaskId) return;
-  var input = document.getElementById('am-commute-input');
-  if (!input || typeof setTaskCommuteMinutes !== 'function') return;
-  setTaskCommuteMinutes(_addModalTaskId, input.value);
+  var toInput = document.getElementById('am-commute-to-input');
+  var backInput = document.getElementById('am-commute-back-input');
+  if ((!toInput && !backInput) || typeof setTaskCommuteTimes !== 'function') return;
+  setTaskCommuteTimes(_addModalTaskId, {
+    to: toInput ? toInput.value : 0,
+    back: backInput ? backInput.value : 0
+  });
 }
 
 function updateAddModalCommuteHint() {
-  var input = document.getElementById('am-commute-input');
+  var toInput = document.getElementById('am-commute-to-input');
+  var backInput = document.getElementById('am-commute-back-input');
   var hint = document.getElementById('am-commute-hint');
-  if (!input || !hint) return;
+  if ((!toInput && !backInput) || !hint) return;
   var taskEntry = (typeof scheduled !== 'undefined' && _addModalTaskId) ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null;
-  var minutes = typeof normalizeCommuteMinutes === 'function' ? normalizeCommuteMinutes(input.value) : (parseInt(input.value, 10) || 0);
-  if (!taskEntry || !minutes || typeof commuteLeaveWindow !== 'function') {
-    hint.textContent = 'No leave window';
+  var to = typeof normalizeCommuteMinutes === 'function' ? normalizeCommuteMinutes(toInput ? toInput.value : 0) : (parseInt(toInput && toInput.value, 10) || 0);
+  var back = typeof normalizeCommuteMinutes === 'function' ? normalizeCommuteMinutes(backInput ? backInput.value : 0) : (parseInt(backInput && backInput.value, 10) || 0);
+  var pts = Math.round((to + back) * 0.1);
+  var pointsText = (to || back) ? ((pts > 0 ? '+' + pts : '<1') + ' pts') : '';
+  if (!taskEntry || !to || typeof commuteLeaveWindow !== 'function') {
+    hint.textContent = pointsText || 'No leave window';
     return;
   }
-  var preview = Object.assign({}, taskEntry, { commuteMinutes: minutes });
+  var preview = Object.assign({}, taskEntry, { commuteMinutes: to, commuteToMinutes: to, commuteBackMinutes: back });
   var win = commuteLeaveWindow(preview);
-  hint.textContent = win ? win.label : 'No leave window';
+  hint.textContent = win ? (win.label + (pointsText ? ' · ' + pointsText : '')) : (pointsText || 'No leave window');
 }
 function _focusBannerNextItem(){
   if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return null;

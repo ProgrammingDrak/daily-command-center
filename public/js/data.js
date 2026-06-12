@@ -175,6 +175,8 @@ function transformState(state) {
         is_recurring: item.is_recurring || false,
         all_day: item.all_day || false,
         commuteMinutes: item.commuteMinutes || item.commute_minutes || item.commute_time_minutes || item.travel_minutes || null,
+        commuteToMinutes: item.commuteToMinutes || item.commute_to_minutes || item.commuteMinutes || item.commute_minutes || item.commute_time_minutes || item.travel_minutes || null,
+        commuteBackMinutes: item.commuteBackMinutes || item.commute_back_minutes || item.commuteReturnMinutes || item.commute_return_minutes || null,
         notionUrl: item.source === "notion" && item.source_id ?
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
         priority: item.priority || "",
@@ -194,6 +196,8 @@ function transformState(state) {
         title: task.title, type: "task",
         durMin: task.estimated_minutes || 30,
         commuteMinutes: task.commuteMinutes || task.commute_minutes || task.travel_minutes || null,
+        commuteToMinutes: task.commuteToMinutes || task.commute_to_minutes || task.commuteMinutes || task.commute_minutes || task.travel_minutes || null,
+        commuteBackMinutes: task.commuteBackMinutes || task.commute_back_minutes || task.commuteReturnMinutes || task.commute_return_minutes || null,
         meta: (task.priority || "Medium") + " \u00b7 " + (task.reason || ""),
         detail: "", source: "notion",
         notionUrl: task.url || "", priority: task.priority || "Medium"

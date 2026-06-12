@@ -56,3 +56,20 @@ test("tag bucket multiplier scales the live estimate", () => {
   task.tags = ["Tag-Social-123"];
   assert.equal(TaskPoints.estimate(task).awardPoints, 90);
 });
+
+test("commute time adds one tenth point per minute across both legs", () => {
+  const TaskPoints = loadTaskPoints();
+  const payload = TaskPoints.buildPayload({
+    id: "task-commute",
+    title: "Appointment",
+    durMin: 60,
+    commuteToMinutes: 20,
+    commuteBackMinutes: 30,
+  });
+
+  assert.equal(payload.commute_total_minutes, 50);
+  const scoring = TaskPoints.estimate(payload);
+  assert.equal(scoring.commuteMinutes, 50);
+  assert.equal(scoring.commutePoints, 5);
+  assert.equal(scoring.awardPoints, 65);
+});

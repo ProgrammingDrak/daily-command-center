@@ -213,6 +213,8 @@ function persistAddedTask(item,targetDate){
       ampUrl:item.ampUrl||null,
       hubspotUrl:item.hubspotUrl||null,
       commuteMinutes:item.commuteMinutes||null,
+      commuteToMinutes:item.commuteToMinutes||item.commuteMinutes||null,
+      commuteBackMinutes:item.commuteBackMinutes||item.commuteReturnMinutes||null,
       publicVisibility:item.publicVisibility||"public",
       wrapId:item.wrapId||null,
       isWrap:!!item.isWrap,
@@ -237,6 +239,8 @@ function persistAddedTask(item,targetDate){
       linkedBlockId:item.linkedBlockId||null,linkedTagId:item.linkedTagId||null,
       ampUrl:item.ampUrl||null,hubspotUrl:item.hubspotUrl||null,
       commuteMinutes:item.commuteMinutes||null,
+      commuteToMinutes:item.commuteToMinutes||item.commuteMinutes||null,
+      commuteBackMinutes:item.commuteBackMinutes||item.commuteReturnMinutes||null,
       publicVisibility:item.publicVisibility||"public",
       wrapId:item.wrapId||null,isWrap:!!item.isWrap,subtaskOf:item.subtaskOf||null,
       reschedulePlacement:item.reschedulePlacement||null,
@@ -686,7 +690,7 @@ function addToSchedule(blId){
   if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+task.durMin;
-  const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority,commuteMinutes:task.commuteMinutes||null};
+  const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority,commuteMinutes:task.commuteMinutes||null,commuteToMinutes:task.commuteToMinutes||task.commuteMinutes||null,commuteBackMinutes:task.commuteBackMinutes||task.commuteReturnMinutes||null};
   scheduled.push(newItem);
   if(fromBacklog)deleteBacklogBlock(blId);
   // Persist as a scheduled block so the move survives reload (the backlog block is gone now).
@@ -724,6 +728,8 @@ function persistBacklogItem(item){
       priority:item.priority||"",
       stage:item.stage||"",
       commuteMinutes:item.commuteMinutes||null,
+      commuteToMinutes:item.commuteToMinutes||item.commuteMinutes||null,
+      commuteBackMinutes:item.commuteBackMinutes||item.commuteReturnMinutes||null,
       added_at:new Date().toISOString()
     },{date:null});
   }catch(e){console.warn("[backlog] persist failed:",e)}
@@ -757,6 +763,8 @@ function hydrateBacklogFromBlocks(){
       priority:p.priority||"",
       stage:p.stage||"",
       commuteMinutes:p.commuteMinutes||null,
+      commuteToMinutes:p.commuteToMinutes||p.commuteMinutes||null,
+      commuteBackMinutes:p.commuteBackMinutes||p.commuteReturnMinutes||null,
       createdAt:b.created_at||p.added_at||"",
       updatedAt:b.updated_at||p.updated_at||"",
       _blockId:b.id,
@@ -859,7 +867,10 @@ function schedulePickerFields(durMin,options){
     linkedTagId:options.linkedTagId||null,
     responsibilityId:options.responsibilityId||null,
     responsibilityTitle:options.responsibilityTitle||null,
-    capacityBucket:options.capacityBucket||null
+    capacityBucket:options.capacityBucket||null,
+    commuteMinutes:options.commuteMinutes||options.commute_minutes||null,
+    commuteToMinutes:options.commuteToMinutes||options.commute_to_minutes||options.commuteMinutes||options.commute_minutes||null,
+    commuteBackMinutes:options.commuteBackMinutes||options.commute_back_minutes||options.commuteReturnMinutes||options.commute_return_minutes||null
   };
 }
 function confirmSchedulePicker(){
@@ -912,6 +923,8 @@ function confirmSchedulePicker(){
         linkedBlockId:newItem.linkedBlockId||null,
         linkedTagId:newItem.linkedTagId||null,
         commuteMinutes:newItem.commuteMinutes||null,
+        commuteToMinutes:newItem.commuteToMinutes||newItem.commuteMinutes||null,
+        commuteBackMinutes:newItem.commuteBackMinutes||newItem.commuteReturnMinutes||null,
         added_at:new Date().toISOString()
       },{date:dateStr});
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
@@ -924,7 +937,7 @@ function confirmSchedulePicker(){
         detail:newItem.detail||"",notionUrl:newItem.notionUrl||"",start:timeStr,end:newItem.end,
         tags:newItem.tags||[],delegatedItemId:newItem.delegatedItemId||null,
         linkedBlockId:newItem.linkedBlockId||null,linkedTagId:newItem.linkedTagId||null,
-        _pinnedStart:timeStr,commuteMinutes:newItem.commuteMinutes||null,addedAt:new Date().toISOString()});
+        _pinnedStart:timeStr,commuteMinutes:newItem.commuteMinutes||null,commuteToMinutes:newItem.commuteToMinutes||newItem.commuteMinutes||null,commuteBackMinutes:newItem.commuteBackMinutes||newItem.commuteReturnMinutes||null,addedAt:new Date().toISOString()});
       localStorage.setItem(key,JSON.stringify(arr));
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
     }

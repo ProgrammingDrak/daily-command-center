@@ -73,3 +73,16 @@ test("duration precedence uses actual minutes before scheduled duration", () => 
   assert.equal(scoring.durationMinutes, 25);
   assert.equal(scoring.awardPoints, 25);
 });
+
+test("commute time earns one tenth point per minute across outbound and return legs", () => {
+  const scoring = scoreTaskPoints({
+    duration_minutes: 60,
+    commute_to_minutes: 20,
+    commute_back_minutes: 30,
+    effort_tier: "medium",
+    attention_tier: "normal",
+  });
+  assert.equal(scoring.commuteMinutes, 50);
+  assert.equal(scoring.commutePoints, 5);
+  assert.equal(scoring.awardPoints, 65);
+});

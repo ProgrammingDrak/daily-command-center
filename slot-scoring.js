@@ -1,5 +1,6 @@
-const POINTS_FORMULA_VERSION = "task_points_v3";
+const POINTS_FORMULA_VERSION = "task_points_v4";
 const POINTS_PER_SPIN = 25;
+const COMMUTE_POINT_RATE = 0.1;
 const DEFAULT_SPIN_COST_POINTS = 25;
 const LEGACY_POINTS_V2_MULTIPLIER = 10;
 const POINTS_V3_BALANCE_MULTIPLIER = DEFAULT_SPIN_COST_POINTS / LEGACY_POINTS_V2_MULTIPLIER;
@@ -52,6 +53,30 @@ function resolveDurationMinutes(input = {}) {
   const scheduled = positiveNumber(input.duration_minutes ?? input.durationMinutes ?? input.duration ?? input.durMin);
   if (scheduled > 0) return Math.round(scheduled);
   return 30;
+}
+
+function resolveCommuteMinutes(input = {}) {
+  const total = positiveNumber(input.commute_total_minutes ?? input.commuteTotalMinutes ?? input.totalCommuteMinutes);
+  if (total > 0) return Math.round(total);
+  const to = positiveNumber(
+    input.commute_to_minutes ??
+    input.commuteToMinutes ??
+    input.commute_minutes_to ??
+    input.commuteMinutesTo ??
+    input.commuteMinutes ??
+    input.commute_minutes ??
+    input.commuteTime
+  );
+  const back = positiveNumber(
+    input.commute_back_minutes ??
+    input.commuteBackMinutes ??
+    input.commute_return_minutes ??
+    input.commuteReturnMinutes ??
+    input.returnCommuteMinutes ??
+    input.commute_minutes_back ??
+    input.commuteMinutesBack
+  );
+  return Math.round(to + back);
 }
 
 function isHighPriority(input = {}) {
@@ -131,6 +156,7 @@ function isNonEarningTaskType(input = {}) {
 
 function scoreTaskPoints(input = {}) {
   const durationMinutes = resolveDurationMinutes(input);
+  const commuteMinutes = resolveCommuteMinutes(input);
   const effortTier = inferEffortTier(input, durationMinutes);
   const attentionTier = inferAttentionTier(input);
   const importanceTier = inferImportanceTier(input);
@@ -145,6 +171,7 @@ function scoreTaskPoints(input = {}) {
     ? Math.max(0, Math.min(1, requestedPointMultiplier))
     : 1;
   const basePoints = durationMinutes * pointMultiplier;
+  const commutePoints = commuteMinutes * COMMUTE_POINT_RATE * pointMultiplier;
 
   if (isNonEarningTaskType(input) || pointMultiplier <= 0) {
     return {
@@ -152,6 +179,9 @@ function scoreTaskPoints(input = {}) {
       eligible: false,
       nonEarningReason: pointMultiplier <= 0 ? "point_tier_zero" : "non_earning_task_type",
       durationMinutes,
+      commuteMinutes,
+      commutePointRate: COMMUTE_POINT_RATE,
+      commutePoints,
       effortTier,
       attentionTier,
       importanceTier,
@@ -165,12 +195,17 @@ function scoreTaskPoints(input = {}) {
     };
   }
 
-  const rawPoints = basePoints * effort * attention * importance * urgency * bounty;
+  const workPoints = basePoints * effort * attention * importance * urgency * bounty;
+  const rawPoints = workPoints + commutePoints;
   const awardPoints = Math.max(1, Math.round(rawPoints));
   return {
     formulaVersion: POINTS_FORMULA_VERSION,
     eligible: true,
     durationMinutes,
+    commuteMinutes,
+    commutePointRate: COMMUTE_POINT_RATE,
+    commutePoints,
+    workPoints,
     effortTier,
     attentionTier,
     importanceTier,
@@ -194,6 +229,7 @@ module.exports = {
   ATTENTION_MULTIPLIERS,
   IMPORTANCE_MULTIPLIERS,
   resolveDurationMinutes,
+  resolveCommuteMinutes,
   inferEffortTier,
   inferAttentionTier,
   inferImportanceTier,
