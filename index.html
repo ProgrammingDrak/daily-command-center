@@ -65,6 +65,7 @@
           <option value="urgent" selected>Urgent</option>
           <option value="side_project">Side Project</option>
           <option value="repeat_responsibility">Repeat Responsibility</option>
+          <option value="delegated">Delegated / Blocked</option>
         </select>
         <button class="tab-add">+ Add</button>
       </div>
@@ -170,6 +171,7 @@
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
         <option value="repeat_responsibility">Repeat Responsibility</option>
+        <option value="delegated">Delegated / Blocked</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -203,7 +205,6 @@
 <div class="tabs" id="tab-bar">
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
-  <button class="tab" data-tab="delegated" id="delegated-tab-btn">Delegated <span class="badge" id="delegated-count" style="display:none">0</span></button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
@@ -231,7 +232,6 @@
   </div>
   <!-- The Itinerary add-task bar moved into the bottom-right "+" launcher (tap = compose,
        hold = radial with Start timer / Add task / Give feedback / Catch up). See launcher.js. -->
-  <section class="schedule-delegated-section" id="schedule-delegated-section" style="display:none" aria-label="Delegated"></section>
   <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
   <div class="tl" id="timeline"></div>
   <div id="list-view" class="it-list-view" style="display:none"></div>
@@ -274,6 +274,7 @@
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
         <option value="repeat_responsibility">Repeat Responsibility</option>
+        <option value="delegated">Delegated / Blocked</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -401,6 +402,19 @@
             </div>
             <div class="repeat-resp-list" id="repeat-responsibilities-list">
               <div class="delegated-empty">No repeat responsibilities yet.</div>
+            </div>
+          </div>
+        </details>
+
+        <details class="tm-section" id="tm-delegated-blocked-section">
+          <summary class="tm-section-header">
+            <span class="tm-chevron"></span>
+            Delegated / Blocked
+            <span class="badge" id="delegated-blocked-count" style="display:none">0</span>
+          </summary>
+          <div class="tm-section-body" id="tm-delegated-blocked">
+            <div class="delegated-sidebar-list" id="delegated-blocked-list">
+              <div class="delegated-empty">Nothing blocked yet.</div>
             </div>
           </div>
         </details>
@@ -694,6 +708,7 @@
         <option value="urgent" selected>Urgent</option>
         <option value="side_project">Side Project</option>
         <option value="repeat_responsibility">Repeat Responsibility</option>
+        <option value="delegated">Delegated / Blocked</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -901,6 +916,7 @@
     </div>
     <div class="add-modal-footer">
       <button class="dm-btn-cancel am-repeat-btn" id="add-modal-repeat" type="button">Make repeat</button>
+      <button class="dm-btn-cancel am-repeat-btn" id="add-modal-delegated" type="button">Delegated / Blocked</button>
       <button class="dm-btn-cancel" id="add-modal-done">Done</button>
     </div>
   </div>
@@ -941,37 +957,22 @@
   </div>
 </div>
 
-<!-- PIN 10.A: delegated item create/edit modal -->
+<!-- PIN 10.A: blocked / waiting-on item create/edit modal -->
 <div class="delegated-modal-overlay" id="delegated-modal-overlay">
   <div class="delegated-modal-box">
-    <h3 class="delegated-modal-title" id="delegated-modal-title">New delegated item</h3>
+    <h3 class="delegated-modal-title" id="delegated-modal-title">New blocked item</h3>
     <form id="delegated-modal-form" onsubmit="return false">
       <input type="hidden" id="dm-id" />
       <input type="hidden" id="dm-linked-tag-id" />
       <input type="hidden" id="dm-linked-block-id" />
-      <label class="delegated-modal-label">Title<span class="dm-req">*</span></label>
-      <input type="text" id="dm-title" class="delegated-modal-input" maxlength="200" placeholder="Follow up on Q2 review" />
-      <label class="delegated-modal-label">Delegatee name</label>
+      <label class="delegated-modal-label">Task you're working on</label>
+      <input type="text" id="dm-my-task" class="delegated-modal-input" maxlength="200" placeholder="Ship the Q2 review deck" />
+      <label class="delegated-modal-label">What you're waiting on<span class="dm-req">*</span></label>
+      <input type="text" id="dm-title" class="delegated-modal-input" maxlength="200" placeholder="Final numbers from finance" />
+      <label class="delegated-modal-label">Who you're waiting on</label>
       <input type="text" id="dm-delegatee-name" class="delegated-modal-input" maxlength="100" placeholder="Alice Carter" />
-      <label class="delegated-modal-label">Delegatee email</label>
-      <input type="email" id="dm-delegatee-email" class="delegated-modal-input" maxlength="200" placeholder="alice@example.com" />
-      <label class="delegated-modal-label">Slack target URL</label>
-      <input type="url" id="dm-delegatee-slack-url" class="delegated-modal-input" maxlength="500" placeholder="https://slack.com/app_redirect?..." />
-      <label class="delegated-modal-label">Channel</label>
-      <select id="dm-channel" class="delegated-modal-input">
-        <option value="manual" selected>Manual</option>
-        <option value="email">Email</option>
-        <option value="slack">Slack</option>
-      </select>
-      <label class="delegated-modal-label">Check-in at</label>
-      <input type="datetime-local" id="dm-check-in-at" class="delegated-modal-input" />
-      <label class="delegated-modal-label">Cadence</label>
-      <select id="dm-cadence" class="delegated-modal-input">
-        <option value="once" selected>Once</option>
-        <option value="daily">Daily</option>
-        <option value="weekly">Weekly</option>
-        <option value="monthly">Monthly</option>
-      </select>
+      <label class="delegated-modal-label">Check in every (days)</label>
+      <input type="number" id="dm-check-in-days" class="delegated-modal-input" min="1" max="365" step="1" placeholder="7" />
       <label class="delegated-modal-label">Notes</label>
       <textarea id="dm-notes" class="delegated-modal-input" rows="3" maxlength="1000" placeholder="Context / background"></textarea>
       <div class="delegated-modal-actions">
@@ -1185,22 +1186,6 @@
       <button class="clk-cancel" id="dm-clock-cancel">Cancel</button>
       <button class="clk-ok" id="dm-clock-ok">OK</button>
     </div>
-  </div>
-</div>
-
-<div class="tab-content" id="tab-delegated">
-  <div class="delegated-header">
-    <h2 class="delegated-title">Delegated</h2>
-    <button class="primary" id="delegated-new-btn">+ New delegated item</button>
-  </div>
-  <div class="delegated-filter-bar">
-    <button class="delegated-filter-btn active" data-filter="all">All</button>
-    <button class="delegated-filter-btn" data-filter="upcoming">Upcoming</button>
-    <button class="delegated-filter-btn" data-filter="overdue">Overdue</button>
-    <button class="delegated-filter-btn" data-filter="done">Done</button>
-  </div>
-  <div class="delegated-list" id="delegated-list">
-    <div class="delegated-empty">No delegated items yet. Click "+ New delegated item" to create one.</div>
   </div>
 </div>
 
@@ -1708,6 +1693,7 @@
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
+<script src="/public/js/urgency.js"></script>
 <script src="/public/js/responsibilities.js?v=repeat-responsibility-save-2"></script>
 <script src="/public/js/task-groups.js?v=preset-task-groups-1"></script>
 <script src="/public/js/onboarding-tour.js"></script>

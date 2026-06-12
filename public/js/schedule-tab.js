@@ -499,6 +499,7 @@ function buildSchedule(){
     });}
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     const rb=el.querySelector(".btn-repeat-resp");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);});
+    const delb=el.querySelector(".btn-delegated");if(delb)delb.addEventListener("click",e=>{e.stopPropagation();if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});

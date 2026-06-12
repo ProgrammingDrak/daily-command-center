@@ -16,11 +16,10 @@
       .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"));
   }
 
+  // Delegates to the shared urgency helper (window.urgency) so responsibilities
+  // and blocked items color-code identically. See public/js/urgency.js.
   function scoreClass(score){
-    if(score >= 85) return "red";
-    if(score >= 70) return "yellow";
-    if(score >= 35) return "blue";
-    return "green";
+    return window.urgency.scoreClass(score);
   }
 
   function isAsNeeded(props){
@@ -106,13 +105,9 @@
   function responsibilityTiming(props){
     props=props||{};
     if(isAsNeeded(props))return {cadence:null,elapsed:0,remaining:null,progress:0,asNeeded:true};
-    const cadence=Math.max(1,Number(props.cadenceDays||props.cadence_days||7));
     const anchor=props.lastCompletedAt||props.createdAt||props.created_at||props.added_at;
-    const start=anchor?new Date(anchor):new Date();
-    const elapsed=isNaN(start.getTime())?0:Math.max(0,(Date.now()-start.getTime())/86400000);
-    const remaining=Math.ceil(cadence-elapsed);
-    const progress=Math.max(0,Math.min(100,Math.round((elapsed/cadence)*100)));
-    return {cadence,elapsed,remaining,progress};
+    // Shared time-decay math (public/js/urgency.js).
+    return window.urgency.timing(props.cadenceDays||props.cadence_days||7, anchor);
   }
 
   function dueLabel(props){

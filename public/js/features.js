@@ -442,6 +442,15 @@ document.addEventListener('DOMContentLoaded', function() {
     closeAddModal();
     setTimeout(function() { openRepeatResponsibilityFromTask(task); }, 0);
   });
+  var delegatedBtn = document.getElementById('add-modal-delegated');
+  if (delegatedBtn) delegatedBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!_addModalTaskId || typeof openDelegatedFromTask !== 'function') return;
+    var task = taskForRepeatResponsibility(_addModalTaskId);
+    closeAddModal();
+    setTimeout(function() { openDelegatedFromTask({ title: (task && (task.title || task.text)) || '', durMin: (task && task.durMin) || 30 }); }, 0);
+  });
   document.getElementById('add-modal-overlay').addEventListener('click', function(e) {
     if (e.target === e.currentTarget) closeAddModal();
   });
@@ -571,6 +580,7 @@ function _renderSmallTaskSection(opts){
         '<div class="small-task-actions">'+
           scheduleBtn+
           '<button class="add-btn small-task-action small-task-icon small-task-repeat-btn" data-tid="'+t.id+'" title="Turn into a repeat responsibility" aria-label="Turn into a repeat responsibility"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>'+
+          '<button class="add-btn small-task-action small-task-icon small-task-delegated-btn" data-tid="'+t.id+'" title="Delegated / Blocked" aria-label="Delegated / Blocked"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M16 11l2 2 4-4"/></svg></button>'+
           '<button class="add-btn small-task-action small-task-done triv-check-btn" data-tid="'+t.id+'">Done</button>'+
           '<span class="small-task-actions-spacer"></span>'+
           '<button class="task-bank-icon-btn triv-edit-btn" data-tid="'+t.id+'" title="Edit" aria-label="Edit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
@@ -580,6 +590,8 @@ function _renderSmallTaskSection(opts){
     card.querySelector(".triv-check-btn").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
     const repeat=card.querySelector(".small-task-repeat-btn");
     if(repeat)repeat.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask({id:t.id,title:t.text,type:kind,durMin:t.durMin||30,detail:t.detail||""})});
+    const delegated=card.querySelector(".small-task-delegated-btn");
+    if(delegated)delegated.addEventListener("click",e=>{e.stopPropagation();if(typeof openDelegatedFromTask==="function")openDelegatedFromTask({title:t.text,durMin:t.durMin||30})});
     const schedule=card.querySelector(".small-task-schedule-btn");
     if(schedule) schedule.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePicker==="function")openSchedulePicker(t.text,t.durMin||30)});
     const editBtn=card.querySelector(".triv-edit-btn");

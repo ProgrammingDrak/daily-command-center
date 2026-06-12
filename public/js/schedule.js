@@ -832,6 +832,11 @@ function addTaskUniversal(barEl){
       else if(typeof showToast==="function")showToast("Repeat responsibilities are still loading. Try again in a moment.","info");
       break;
     }
+    case"delegated":{
+      if(typeof openDelegatedFromTask==="function")openDelegatedFromTask({title,durMin});
+      else if(typeof showToast==="function")showToast("Delegated / Blocked is still loading. Try again in a moment.","info");
+      break;
+    }
     case"trivial":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
