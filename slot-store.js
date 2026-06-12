@@ -2100,7 +2100,17 @@ async function earnTaskCredit(workspaceId, userId, body) {
     point_multiplier: pointTier.multiplier,
   };
   const scoring = scoreTaskPoints(body);
-  const credits = scoring.awardPoints;
+  let credits = scoring.awardPoints;
+  // Explicit point override (a subtask's slice of its parent's pie, or a
+  // parent's completion bonus). Replaces the duration-derived value but still
+  // flows through the same idempotent ledger path. Recorded for audit.
+  const overrideRaw = Number(body.points_override);
+  if (Number.isFinite(overrideRaw) && overrideRaw > 0) {
+    credits = Math.max(1, Math.min(500, Math.round(overrideRaw)));
+    scoring.awardPoints = credits;
+    scoring.eligible = true;
+    scoring.pointsOverride = credits;
+  }
   const metadata = {
     formulaVersion: POINTS_FORMULA_VERSION,
     scoring,
@@ -2124,6 +2134,7 @@ async function earnTaskCredit(workspaceId, userId, body) {
       bounty_count: body.bounty_count ?? body.bountyCount ?? null,
       partner_bounty: body.partner_bounty === true || body.partnerBounty === true || body.shared_bounty === true || body.sharedBounty === true,
       trivial: body.trivial === true,
+      points_override: scoring.pointsOverride != null ? scoring.pointsOverride : null,
       completed_at: body.completed_at || body.completedAt || null,
     },
   };

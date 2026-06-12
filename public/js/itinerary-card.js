@@ -192,6 +192,20 @@
     var reactionHtml=reactionChipsHtml(ev)||"";
     var footerHtml=(guest&&opts.footerHtml)?opts.footerHtml:'';
 
+    // Subtask point pie: a linear progress bar (earned / pool) on the parent.
+    // When present it replaces the duration-based points chip — the pool IS the
+    // task's points, split among its subtasks + completion bonus.
+    var pplan=(!guest&&window.PointPlan&&typeof window.PointPlan.compute==="function")?window.PointPlan.compute(ev.id):null;
+    var pieBarHtml='';
+    if(pplan){
+      var piePct=pplan.pool>0?Math.max(0,Math.min(100,Math.round(pplan.earned/pplan.pool*100))):0;
+      var pieTitle=(pplan.earned+' of '+pplan.pool+' pts earned · '+pplan.doneCount+'/'+pplan.total+' subtasks done'+(pplan.bonus?' · '+pplan.bonus+' pt completion bonus':'')).replace(/"/g,'&quot;');
+      pieBarHtml='<span class="pie-bar" title="'+pieTitle+'"><span class="pie-bar-fill" style="width:'+piePct+'%"></span></span><span class="pie-bar-lbl">'+pplan.earned+'/'+pplan.pool+' pts</span>';
+    }
+    // "Stacked" badge marks a ride-along: independent concurrent work whose time
+    // and points are separate from the parent.
+    var stackedBadge=isRideAlong(ev)?'<span class="stacked-badge" title="Stacked time — independent points & schedule">Stacked</span>':'';
+
     el.innerHTML=
       timeHtml+
       '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
@@ -203,12 +217,12 @@
           (guest?'':'<button class="chk" title="Mark done">'+ckSvg+'</button>')+
           (guest?'':'<div class="chk-col">'+
             '<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>'+
-            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or side project" data-add-id="'+ev.id+'">+</button>':'')+
+            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or stacked task" data-add-id="'+ev.id+'">+</button>':'')+
           '</div>')+
           '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+'<span class="tinline"><span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span></div>'+
-            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+pointsChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(pplan?pieBarHtml:pointsChip(ev))+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+

@@ -334,19 +334,70 @@ function renderModalItems(taskId) {
     return;
   }
 
+  // Subtask point allocation ("the pie"): pool, completion bonus, per-subtask
+  // slices. Only present when this task has subtasks.
+  var plan = (window.PointPlan && typeof window.PointPlan.compute === 'function') ? window.PointPlan.compute(taskId) : null;
+
   // Render in order added (by creation time)
   var tagColors = { subtask: 'var(--text-muted)', trivial: 'var(--cyan)', action: 'var(--amber)' };
   var tagLabels = { subtask: 'Sub', trivial: 'Side', action: 'Action' };
 
-  list.innerHTML = items.map(function(item) {
+  var pieHtml = '';
+  if (plan) {
+    var dWord = plan.discrepancy < 0 ? 'over' : 'under';
+    var dHtml = plan.discrepancy === 0
+      ? '<span class="am-pie-ok">balanced</span>'
+      : '<span class="am-pie-warn">' + Math.abs(plan.discrepancy) + ' pts ' + dWord + '</span>';
+    pieHtml =
+      '<div class="am-pie">' +
+        '<div class="am-pie-row">' +
+          '<label>Pool <input type="number" min="1" class="am-pie-pool" value="' + plan.pool + '"></label>' +
+          '<label title="Awarded only when you check the whole task done">Completion bonus <input type="number" min="0" class="am-pie-bonus" value="' + plan.bonus + '"></label>' +
+          dHtml +
+        '</div>' +
+      '</div>';
+  }
+
+  list.innerHTML = pieHtml + items.map(function(item) {
+    var shareHtml = '';
+    if (item.type === 'subtask' && plan && plan.shares[item.id]) {
+      var locked = plan.shares[item.id].locked;
+      shareHtml = '<input type="number" min="0" class="am-share' + (locked ? ' locked' : '') + '" data-id="' + item.id + '" value="' + plan.shares[item.id].pts + '" title="' + (locked ? 'Manually set — others rebalance around it' : 'Auto-split; edit to lock') + '"><span class="am-share-unit">pts</span>';
+    }
     return '<div class="am-item" data-type="' + item.type + '" data-id="' + item.id + '">' +
       '<div class="am-check' + (item.done ? ' done' : '') + '">' + (item.done ? '✓' : '') + '</div>' +
       '<span class="am-text' + (item.done ? ' done' : '') + '">' + item.text + '</span>' +
+      shareHtml +
       '<span class="am-tag" style="color:' + tagColors[item.type] + '">' + tagLabels[item.type] + '</span>' +
       (item.priority ? '<span class="am-pri" style="color:' + (item.priority === 'High' ? 'var(--red)' : item.priority === 'Medium' ? 'var(--amber)' : 'var(--text-muted)') + '">' + item.priority + '</span>' : '') +
       '<button class="am-del">✕</button>' +
     '</div>';
   }).join('');
+
+  // Pie editing: pool / bonus / per-subtask slice. After each change, rebalance
+  // and toast if the allocation no longer sums to the pool.
+  function _pieToast(p) {
+    if (!p || p.discrepancy === 0 || typeof showToast !== 'function') return;
+    showToast(Math.abs(p.discrepancy) + ' points ' + (p.discrepancy < 0 ? 'over' : 'under'), p.discrepancy < 0 ? 'error' : 'info', 2200);
+  }
+  var poolInput = list.querySelector('.am-pie-pool');
+  if (poolInput) poolInput.addEventListener('change', function() {
+    var p = window.PointPlan.setPool(taskId, this.value); _pieToast(p);
+    renderModalItems(taskId); if (typeof render === 'function') render();
+  });
+  var bonusInput = list.querySelector('.am-pie-bonus');
+  if (bonusInput) bonusInput.addEventListener('change', function() {
+    var p = window.PointPlan.setBonus(taskId, this.value); _pieToast(p);
+    renderModalItems(taskId); if (typeof render === 'function') render();
+  });
+  list.querySelectorAll('.am-share').forEach(function(inp) {
+    inp.addEventListener('change', function(e) {
+      e.stopPropagation();
+      var p = window.PointPlan.setShare(taskId, this.dataset.id, this.value); _pieToast(p);
+      renderModalItems(taskId); if (typeof render === 'function') render();
+    });
+    inp.addEventListener('click', function(e) { e.stopPropagation(); });
+  });
 
   // Wire up event listeners
   list.querySelectorAll('.am-item').forEach(function(el) {
@@ -415,6 +466,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (type === 'subtask') {
       addSubtask(_addModalTaskId, text);
+    } else if (type === 'stacked') {
+      if (typeof addStackedTask === 'function') addStackedTask(_addModalTaskId, text);
     } else if (type === 'trivial') {
       addLinkedTrivialTask(_addModalTaskId, text);
       // Longer delay for async BlockStore write

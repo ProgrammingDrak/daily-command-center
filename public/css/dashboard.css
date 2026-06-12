@@ -3982,6 +3982,27 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .tl-item.tl-sub .wrap-collapse{font-size:9px;padding:1px 3px}
 .tl-item.tl-sub .sub-add{margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;line-height:1;flex:none}
 .tl-item.tl-sub .sub-add:hover{color:var(--text)}
+/* ======== SUBTASK POINT PIE (shared pool) ======== */
+/* A subtask's slice of its parent's points. Muted until earned, then accent. */
+.sub-share{font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:1px 5px;white-space:nowrap;flex:none}
+.sub-share.earned{color:var(--accent,#22c55e);border-color:var(--accent,#22c55e)}
+/* "Stacked" badge: independent (ride-along) work — distinct from the pie. */
+.stacked-badge{display:inline-flex;align-items:center;font-size:9px;font-weight:700;letter-spacing:.02em;color:var(--cyan,#22d3ee);border:1px dashed var(--cyan,#22d3ee);border-radius:6px;padding:1px 6px;white-space:nowrap}
+/* Parent linear progress bar: earned / pool points. */
+.pie-bar{display:inline-block;position:relative;width:70px;height:6px;border-radius:3px;background:var(--border);overflow:hidden;vertical-align:middle}
+.pie-bar-fill{position:absolute;left:0;top:0;bottom:0;background:var(--accent,#22c55e);border-radius:3px;transition:width .25s ease}
+.pie-bar-lbl{font-size:9px;color:var(--text-muted);white-space:nowrap;margin-left:1px}
+/* Allocation editor inside the Add Items modal. */
+.am-pie{margin:2px 0 8px;padding:7px 8px;border:1px solid var(--border);border-radius:7px;background:rgba(255,255,255,0.03)}
+.am-pie-row{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--text-muted)}
+.am-pie-row label{display:inline-flex;align-items:center;gap:4px}
+.am-pie-pool,.am-pie-bonus,.am-share{width:52px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;padding:2px 5px;outline:none}
+.am-pie-pool:focus,.am-pie-bonus:focus,.am-share:focus{border-color:var(--accent,#22c55e)}
+.am-share{width:46px}
+.am-share.locked{border-color:var(--amber,#f59e0b)}
+.am-share-unit{font-size:9px;color:var(--text-muted)}
+.am-pie-ok{font-size:10px;color:var(--text-muted)}
+.am-pie-warn{font-size:10px;font-weight:700;color:var(--amber,#f59e0b)}
 /* Quick-add subtask popover: small, fast, anchored at the click. */
 .subtask-add-pop{display:flex;align-items:center;gap:5px;padding:6px}
 .subtask-add-pop .sub-add-input{background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;padding:4px 7px;width:190px;outline:none}

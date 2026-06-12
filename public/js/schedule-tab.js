@@ -353,6 +353,8 @@ function buildSchedule(){
   function buildTimelineSub(node){
     const ev=node.ev,doneRow=isDone(ev);
     const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
+    // This subtask's slice of its parent's point pie.
+    const slice=(ev.subtaskOf&&window.PointPlan&&typeof window.PointPlan.shareFor==="function")?window.PointPlan.shareFor(ev.subtaskOf,ev.id):null;
     const el=document.createElement("div");
     el.className="tl-item tl-sub"+(doneRow?" done":"");
     if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
@@ -364,6 +366,7 @@ function buildSchedule(){
       (node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>')+
       '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
       '<span class="sub-ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+
+      (slice!=null?'<span class="sub-share'+(doneRow?' earned':'')+'" title="'+(doneRow?'Earned ':'Worth ')+slice+' pts of the parent’s pie">'+slice+' pts</span>':'')+
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
       '<button class="btn-add-menu sub-add" title="Add subtask" data-add-id="'+ev.id+'">+</button>';
     el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
