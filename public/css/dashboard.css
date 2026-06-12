@@ -3257,6 +3257,9 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-reward-go-lead{font-size:18px;letter-spacing:0.5px}
 .slot-reward-go-sub{font-size:11px;font-weight:800;opacity:0.78}
 @keyframes rewardGoGlow{0%,100%{box-shadow:0 0 0 2px rgba(255,224,138,0.35),0 10px 30px rgba(250,204,21,0.35)}50%{box-shadow:0 0 0 3px rgba(255,224,138,0.6),0 12px 40px rgba(250,204,21,0.6)}}
+/* "Risk it" variant of the big book-it-now button: same size/shape, hot red. */
+.slot-reward-go.risk{color:#fff;background:linear-gradient(180deg,#fb7185,#e11d48);box-shadow:0 0 0 2px rgba(251,113,133,0.4),0 10px 30px rgba(225,29,72,0.45);animation:rewardRiskGlow 1.4s ease-in-out infinite}
+@keyframes rewardRiskGlow{0%,100%{box-shadow:0 0 0 2px rgba(251,113,133,0.4),0 10px 30px rgba(225,29,72,0.4)}50%{box-shadow:0 0 0 3px rgba(251,113,133,0.7),0 12px 40px rgba(225,29,72,0.7)}}
 .slot-reward-secondary{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
 .slot-reward-alt{border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.05);color:var(--text);font-family:inherit;font-size:13px;font-weight:800;padding:9px 14px;border-radius:9px;cursor:pointer}
 .slot-reward-alt:hover{border-color:rgba(255,255,255,0.34);background:rgba(255,255,255,0.09)}
