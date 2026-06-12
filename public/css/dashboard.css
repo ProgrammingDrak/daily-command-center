@@ -1985,8 +1985,7 @@
   .toast-close:hover{color:var(--text)}
   @keyframes toast-in{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
 
-  .feedback-fab{position:fixed;left:22px;bottom:22px;z-index:420;width:46px;height:46px;border-radius:50%;border:1px solid rgba(96,165,250,0.75);background:var(--accent);color:white;font-size:22px;font-weight:800;line-height:1;box-shadow:0 10px 28px rgba(0,0,0,0.38);cursor:pointer;transition:transform 0.12s,background 0.12s}
-  .feedback-fab:hover{transform:translateY(-2px);background:var(--accent-light)}
+  /* Feedback is opened from the launcher radial menu (the standalone .feedback-fab was removed). */
   .feedback-panel{display:none;position:fixed;left:22px;bottom:78px;z-index:421;width:min(340px,calc(100vw - 32px));background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 18px 44px rgba(0,0,0,0.45);padding:12px}
   .feedback-panel.open{display:block}
   .feedback-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:13px}
@@ -2285,10 +2284,9 @@
   .acc-btn:hover{color:var(--accent);border-color:var(--accent)}
 
   /* ======== FLOATING TIMER ======== */
-  .float-timer{position:fixed;bottom:30px;right:30px;z-index:1000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;user-select:none}
-  .ft-fab{width:48px;height:48px;border-radius:50%;background:var(--accent);border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(59,130,246,0.4);transition:transform 0.15s,box-shadow 0.15s;position:relative}
-  .ft-fab:hover{transform:scale(1.08);box-shadow:0 6px 20px rgba(59,130,246,0.5)}
-  .ft-fab-badge{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:var(--green);border:2px solid var(--bg)}
+  /* #float-timer now lives bottom-LEFT (the bottom-right corner is the universal "+" launcher).
+     It only ever shows the running pill (#ft-mini) or the expanded panel (#ft-panel). */
+  .float-timer{position:fixed;bottom:30px;left:30px;z-index:1000;display:flex;flex-direction:column;align-items:flex-start;gap:8px;user-select:none}
 
   /* Collapsed pill = just the ring + time. Task name and pause reveal on hover; click opens the full panel. */
   .ft-mini{display:flex;align-items:center;gap:0;background:var(--card);border:1px solid rgba(59,130,246,0.45);border-radius:999px;padding:6px 14px;box-shadow:0 4px 16px rgba(0,0,0,0.3);cursor:pointer;width:auto;max-width:300px;transition:box-shadow 0.15s,border-color 0.15s,transform 0.12s}
@@ -2328,6 +2326,35 @@
   .ft-panel-body .pomo-stat{padding:6px 8px}
   .ft-panel-body .ps-val{font-size:16px}
   .ft-panel-body .ps-label{font-size:9px}
+
+  /* ======== UNIVERSAL "+" LAUNCHER (bottom-right) ======== */
+  .dcc-launcher{position:fixed;bottom:30px;right:30px;z-index:1500;width:48px;height:48px;user-select:none}
+  .dcc-launcher-btn{position:absolute;bottom:0;right:0;width:48px;height:48px;border-radius:50%;background:var(--accent);border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(59,130,246,0.4);transition:transform 0.2s cubic-bezier(.2,.8,.3,1.2),box-shadow 0.15s;touch-action:none;z-index:2}
+  .dcc-launcher-btn:hover{transform:scale(1.08);box-shadow:0 6px 20px rgba(59,130,246,0.5)}
+  .dcc-launcher-btn svg{transition:transform 0.2s cubic-bezier(.2,.8,.3,1.2)}
+  .dcc-launcher-btn.radial-open{box-shadow:0 6px 22px rgba(59,130,246,0.55)}
+  .dcc-launcher-btn.radial-open svg{transform:rotate(45deg)}
+
+  /* Radial HUD: three items fan into the upper-left quadrant */
+  .dcc-radial{position:absolute;bottom:0;right:0;width:48px;height:48px;pointer-events:none}
+  .dcc-radial-item{position:absolute;bottom:1px;right:1px;width:46px;height:46px;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text);cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(0,0,0,0.4);
+    --angle:calc(182deg + var(--i) * 30deg); --radius:104px;
+    transform:rotate(var(--angle)) translate(0) rotate(calc(-1 * var(--angle))) scale(0);
+    opacity:0;pointer-events:none;transition:transform 0.24s cubic-bezier(.2,.8,.3,1.2),opacity 0.18s,background 0.12s,border-color 0.12s;transition-delay:calc(var(--i) * 35ms)}
+  .dcc-radial-item:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+  .dcc-radial.open{pointer-events:auto}
+  .dcc-radial.open .dcc-radial-item{transform:rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))) scale(1);opacity:1;pointer-events:auto}
+
+  /* Compose popover (quick tap): anchored above the launcher */
+  .dcc-compose{position:absolute;bottom:64px;right:0;width:min(360px,86vw);background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.5);padding:12px 14px;display:none;transform-origin:bottom right}
+  .dcc-compose.open{display:block;animation:dccComposeIn 0.16s ease}
+  @keyframes dccComposeIn{from{opacity:0;transform:translateY(6px) scale(0.98)}to{opacity:1;transform:none}}
+  .dcc-compose .task-add-bar{flex-wrap:wrap;gap:8px;padding:0;margin:0;border-bottom:none}
+  .dcc-compose .task-add-bar .tab-title{flex:1 1 100%}
+
+  /* Shared dismiss scrim for radial + compose */
+  .dcc-scrim{position:fixed;inset:0;z-index:1400;background:transparent;display:none}
+  .dcc-scrim.open{display:block}
 
   /* ============================================================
      MOBILE — 480px and below
@@ -2610,9 +2637,11 @@
     .small-task-icon{width:30px;padding:0}
     .small-task-main{padding:10px}
 
-    /* ── Float timer panel ────────────────────────────────────── */
-    #float-timer{right:8px!important;bottom:8px!important}
-    .ft-panel{width:min(320px,96vw)!important;right:8px!important;bottom:56px!important}
+    /* ── Float timer panel (bottom-left) + "+" launcher (bottom-right) ── */
+    #float-timer{left:8px!important;bottom:8px!important}
+    .ft-panel{width:min(320px,96vw)!important;left:8px!important;bottom:56px!important}
+    #dcc-launcher{right:8px!important;bottom:8px!important}
+    .dcc-radial-item{--radius:96px!important}
 
     /* ── Triage cards ─────────────────────────────────────────── */
     .tri-card{padding:10px}
@@ -3778,8 +3807,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 
   /* ── Leave room for the bottom nav; lift floating affordances above it ── */
   body{padding-bottom:calc(74px + env(safe-area-inset-bottom,0px))!important}
-  #float-timer{right:10px!important;bottom:calc(80px + env(safe-area-inset-bottom,0px))!important}
-  .feedback-fab{bottom:calc(82px + env(safe-area-inset-bottom,0px))!important}
+  #float-timer{left:10px!important;bottom:calc(80px + env(safe-area-inset-bottom,0px))!important}
+  #dcc-launcher{right:10px!important;bottom:calc(80px + env(safe-area-inset-bottom,0px))!important}
   .feedback-panel{bottom:calc(138px + env(safe-area-inset-bottom,0px))!important}
   .float-trivial{bottom:calc(82px + env(safe-area-inset-bottom,0px))!important}
 
