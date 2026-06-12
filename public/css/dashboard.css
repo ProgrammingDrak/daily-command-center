@@ -1740,6 +1740,27 @@
   .sched-picker-cancel:hover{color:var(--text);background:rgba(255,255,255,0.05)}
   .sched-picker-confirm{padding:7px 16px;border-radius:6px;border:none;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer}
   .sched-picker-confirm:hover{opacity:0.85}
+  /* 2-step schedule picker (day → after) + default-times settings */
+  .sched-picker-step{display:flex;flex-direction:column;gap:8px}
+  .sched-chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
+  .sched-chip{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;color:var(--text);font-size:13px;font-weight:600;cursor:pointer;transition:border-color .12s,background .12s}
+  .sched-chip:hover{border-color:var(--accent);background:rgba(80,140,255,0.12)}
+  .sched-chip-alt{color:var(--text-muted);font-weight:500}
+  .sched-back{align-self:flex-start;background:none;border:none;color:var(--text-muted);font-size:12px;cursor:pointer;padding:2px 0}
+  .sched-back:hover{color:var(--accent-light)}
+  .sched-after-daylabel{color:var(--accent-light);text-transform:none;letter-spacing:0;font-weight:600}
+  .sched-after-tasks{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;margin-top:2px}
+  .sched-after-task{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-size:12px;cursor:pointer;text-align:left;width:100%}
+  .sched-after-task:hover{border-color:var(--accent)}
+  .sched-after-task .sat-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sched-after-task .sat-end{color:var(--accent-light);font-weight:600;white-space:nowrap}
+  .sched-after-empty{color:var(--text-muted);font-size:12px;padding:4px 2px}
+  .sched-after-custom{display:flex;gap:8px;align-items:center;margin-top:6px;padding-top:10px;border-top:1px solid var(--border)}
+  .sched-after-custom .sched-picker-input{flex:1}
+  .sched-defaults-list{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0}
+  .sched-default-chip{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text)}
+  .sched-default-chip button{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:15px;line-height:1;padding:0}
+  .sched-default-chip button:hover{color:#ff6b6b}
 
   /* ======== CARRYOVER REVIEW MODAL ======== */
   .carryover-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:465;justify-content:center;align-items:center;padding:24px}

@@ -820,7 +820,7 @@ function addTaskUniversal(barEl){
   const destSel=barEl.querySelector(".tab-dest");
   if(destSel)destSel.value="urgent";
   switch(dest){
-    case"schedule":openSchedulePicker(title,durMin);break;
+    case"schedule":openSchedulePicker(title,durMin,{sourceBar:barEl});break;
     case"backlog":addNewTask(title,durMin);break;
     case"urgent":insertTaskNow(title,durMin);break;
     case"side_project":{
@@ -844,16 +844,47 @@ function addTaskUniversal(barEl){
   }
 }
 
-// ======== SCHEDULE-AT PICKER ========
-// Opens a small modal to pick a date+time for a new task. If the date is today,
-// the task is inserted into the live schedule with a pinned start time. If the
-// date is different, the task is persisted to the blockstore under that date so
-// it appears when navigating to that day.
-let _schedPickerTitle="",_schedPickerDur=30,_schedPickerOptions={};
+// ======== SCHEDULE-AT PICKER (2-step) ========
+// Step 1 picks a day (Today / Tomorrow / a date). Step 2 ("After…") offers the
+// user's default time presets plus every task already on that day, so a new
+// task can be dropped right after an existing one ends. Whatever anchor is
+// chosen resolves to a concrete HH:MM start time; if that day is the one being
+// viewed the task is inserted live with a pinned start, otherwise it's
+// persisted to the blockstore under that date. Default time presets are
+// customizable from Settings → "Schedule default times".
+
+const SCHED_TIME_PRESETS_KEY="dcc-sched-time-presets";
+const SCHED_TIME_PRESETS_DEFAULT=["08:00","12:00","17:00"];
+function loadSchedTimePresets(){
+  try{
+    const raw=JSON.parse(localStorage.getItem(SCHED_TIME_PRESETS_KEY)||"null");
+    if(Array.isArray(raw)){
+      const clean=raw.filter(t=>/^\d{2}:\d{2}$/.test(t));
+      if(clean.length)return clean;
+    }
+  }catch(e){}
+  return SCHED_TIME_PRESETS_DEFAULT.slice();
+}
+function saveSchedTimePresets(arr){
+  const clean=(arr||[]).filter(t=>/^\d{2}:\d{2}$/.test(t));
+  const uniq=[...new Set(clean)].sort();
+  try{localStorage.setItem(SCHED_TIME_PRESETS_KEY,JSON.stringify(uniq))}catch(e){}
+  return uniq;
+}
+// 12-hour label for an HH:MM string (e.g. "08:00" -> "8 AM", "17:30" -> "5:30 PM")
+function _schedTimeLabel(hhmm){
+  const m=pt(hhmm);if(isNaN(m))return hhmm;
+  let h=Math.floor(m/60);const min=m%60;const ap=h>=12?"PM":"AM";
+  h=h%12;if(h===0)h=12;
+  return h+(min?":"+String(min).padStart(2,"0"):"")+" "+ap;
+}
+
+let _schedPickerTitle="",_schedPickerDur=30,_schedPickerOptions={},_schedPickerDate="";
 function openSchedulePicker(title,durMin,options){
   _schedPickerTitle=title;
   _schedPickerDur=durMin||30;
   _schedPickerOptions=options||{};
+  _schedPickerDate="";
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay){
     // Fallback if modal markup isn't present: schedule after current.
@@ -862,24 +893,109 @@ function openSchedulePicker(title,durMin,options){
   }
   const titleEl=document.getElementById("sched-picker-title");
   if(titleEl)titleEl.textContent=title;
-  const input=document.getElementById("sched-picker-when");
-  if(input){
-    // Default to the next round half-hour today
-    const now=new Date();
-    const base=new Date(now.getTime()+30*60000);
-    base.setSeconds(0,0);
-    const rounded=new Date(Math.ceil(base.getTime()/(15*60000))*(15*60000));
-    const pad=n=>String(n).padStart(2,"0");
-    input.value=rounded.getFullYear()+"-"+pad(rounded.getMonth()+1)+"-"+pad(rounded.getDate())
-      +"T"+pad(rounded.getHours())+":"+pad(rounded.getMinutes());
-  }
+  _schedShowStep("day");
+  const dateInput=document.getElementById("sched-date-input");
+  if(dateInput){dateInput.style.display="none";dateInput.value="";}
   overlay.classList.add("open");
-  setTimeout(()=>{if(input)input.focus()},0);
 }
 function closeSchedulePicker(){
   const overlay=document.getElementById("sched-picker-overlay");
   if(overlay)overlay.classList.remove("open");
-  _schedPickerTitle="";_schedPickerDur=30;_schedPickerOptions={};
+  _schedPickerTitle="";_schedPickerDur=30;_schedPickerOptions={};_schedPickerDate="";
+}
+function _schedShowStep(step){
+  const dayEl=document.getElementById("sched-step-day");
+  const afterEl=document.getElementById("sched-step-after");
+  if(dayEl)dayEl.style.display=step==="day"?"flex":"none";
+  if(afterEl)afterEl.style.display=step==="after"?"flex":"none";
+}
+// Lock in a day and advance to the "After…" step.
+function _schedPickDay(dateStr){
+  if(!dateStr)return;
+  _schedPickerDate=dateStr;
+  _schedShowStep("after");
+  _renderSchedAfterStep(dateStr);
+}
+async function _renderSchedAfterStep(dateStr){
+  const label=document.getElementById("sched-after-daylabel");
+  if(label)label.textContent=" "+(typeof _prettyDateLabel==="function"?_prettyDateLabel(dateStr):dateStr);
+  // Default time-preset chips
+  const chipWrap=document.getElementById("sched-after-chips");
+  if(chipWrap){
+    chipWrap.innerHTML="";
+    loadSchedTimePresets().forEach(t=>{
+      const b=document.createElement("button");
+      b.type="button";b.className="sched-chip";b.textContent=_schedTimeLabel(t);
+      b.addEventListener("click",()=>_schedCommit(dateStr,t));
+      chipWrap.appendChild(b);
+    });
+  }
+  // Every task already on that day, "After <title> · ends <end>"
+  const taskWrap=document.getElementById("sched-after-tasks");
+  if(taskWrap){
+    taskWrap.innerHTML='<div class="sched-after-empty">Loading day&hellip;</div>';
+    let items=[];
+    try{items=await _schedDayTasks(dateStr)}catch(e){items=[]}
+    // Guard against a stale render if the user navigated away meanwhile.
+    if(_schedPickerDate!==dateStr)return;
+    taskWrap.innerHTML="";
+    if(!items.length){
+      taskWrap.innerHTML='<div class="sched-after-empty">No tasks scheduled that day yet.</div>';
+    }else{
+      items.forEach(it=>{
+        const b=document.createElement("button");
+        b.type="button";b.className="sched-after-task";
+        const t=document.createElement("span");t.className="sat-title";t.textContent="After "+it.title;
+        const e=document.createElement("span");e.className="sat-end";e.textContent="ends "+_schedTimeLabel(it.end);
+        b.appendChild(t);b.appendChild(e);
+        b.addEventListener("click",()=>_schedCommit(dateStr,it.end));
+        taskWrap.appendChild(b);
+      });
+    }
+  }
+}
+// Collect {title,end} for tasks already on a date, sorted by end time. Uses the
+// live in-memory schedule for the day currently being viewed, otherwise reads
+// the day's state + persisted blocks from the API.
+async function _schedDayTasks(dateStr){
+  const out=[];
+  const viewing=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state&&__state.date)?__state.date:null);
+  const toHHMM=(typeof _toHHMM==="function")?_toHHMM:(s=>s);
+  if(dateStr===viewing&&typeof scheduled!=="undefined"&&Array.isArray(scheduled)){
+    scheduled.forEach(ev=>{if(ev&&ev.title&&ev.end)out.push({title:ev.title,end:toHHMM(ev.end)})});
+  }else{
+    let state=null;
+    if(dateStr===__todayDate&&window.__DCC_STATE__)state=window.__DCC_STATE__;
+    else if(dateStr===__tomorrowDate&&window.__DCC_TOMORROW__)state=window.__DCC_TOMORROW__;
+    if(!state){try{state=await fetch("/api/state/day?date="+encodeURIComponent(dateStr)).then(r=>r.json())}catch(e){}}
+    const timeline=(state&&state.schedule&&state.schedule.timeline)||[];
+    timeline.forEach(e=>{if(e&&e.title&&e.end&&e.type!=="break"&&e.type!=="ooo")out.push({title:e.title,end:toHHMM(e.end)})});
+    // Tasks persisted directly to that date (added/scheduled blocks)
+    try{
+      const blks=await fetch("/api/blocks?date="+encodeURIComponent(dateStr)).then(r=>r.json());
+      (blks||[]).forEach(b=>{
+        const p=(b&&(b.properties||b.props))||{};
+        if(b&&!b.deleted_at&&p.title&&p.end)out.push({title:p.title,end:toHHMM(p.end)});
+      });
+    }catch(e){}
+  }
+  // Dedup by title+end, drop entries with an unparseable end, sort by end time.
+  const seen=new Set();const uniq=[];
+  out.forEach(it=>{
+    if(isNaN(pt(it.end)))return;
+    const k=it.title+"@"+it.end;
+    if(!seen.has(k)){seen.add(k);uniq.push(it)}
+  });
+  uniq.sort((a,b)=>pt(a.end)-pt(b.end));
+  return uniq;
+}
+// Resolve the chosen day+time into an actual scheduled task, then close.
+function _schedCommit(dateStr,timeStr){
+  const title=_schedPickerTitle,durMin=_schedPickerDur,options=_schedPickerOptions;
+  const bar=options&&options.sourceBar;
+  closeSchedulePicker();
+  commitScheduledTask(title,durMin,dateStr,timeStr,options);
+  if(bar){const inp=bar.querySelector(".tab-title");if(inp){inp.value="";inp.classList.remove("tab-error");}}
 }
 function schedulePickerFields(durMin,options){
   options=options||{};
@@ -901,18 +1017,14 @@ function schedulePickerFields(durMin,options){
     commuteBackMinutes:options.commuteBackMinutes||options.commute_back_minutes||options.commuteReturnMinutes||options.commute_return_minutes||null
   };
 }
-function confirmSchedulePicker(){
-  const input=document.getElementById("sched-picker-when");
-  if(!input||!input.value||!_schedPickerTitle){closeSchedulePicker();return}
-  const when=new Date(input.value);
-  if(isNaN(when.getTime())){closeSchedulePicker();return}
-  const pad=n=>String(n).padStart(2,"0");
-  const dateStr=when.getFullYear()+"-"+pad(when.getMonth()+1)+"-"+pad(when.getDate());
-  const timeStr=pad(when.getHours())+":"+pad(when.getMinutes());
-  const title=_schedPickerTitle,durMin=_schedPickerDur,options=_schedPickerOptions;
-  closeSchedulePicker();
+// Resolve a chosen day (dateStr) + time (HH:MM) into a real task. If that day is
+// the one currently being viewed, insert it live with a pinned start; otherwise
+// persist it to the blockstore (or a per-date localStorage bucket) for that day.
+function commitScheduledTask(title,durMin,dateStr,timeStr,options){
+  options=options||{};
+  if(!title||!dateStr||!timeStr)return;
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)
-    ?viewDate:((__state&&__state.date)?__state.date:null);
+    ?viewDate:((typeof __state!=="undefined"&&__state&&__state.date)?__state.date:null);
   if(dateStr===currentDate){
     // Same day: insert into schedule and pin the start time to the chosen time
     const id=qaId();
@@ -975,27 +1087,105 @@ function confirmSchedulePicker(){
   }
 }
 
-// Wire up schedule-picker controls (buttons + Enter/Escape keys)
+// Wire up the 2-step schedule picker.
 (function(){
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay)return;
   const closeBtn=document.getElementById("sched-picker-close");
-  const cancelBtn=document.getElementById("sched-picker-cancel");
-  const confirmBtn=document.getElementById("sched-picker-confirm");
-  const input=document.getElementById("sched-picker-when");
   if(closeBtn)closeBtn.addEventListener("click",closeSchedulePicker);
-  if(cancelBtn)cancelBtn.addEventListener("click",closeSchedulePicker);
-  if(confirmBtn)confirmBtn.addEventListener("click",confirmSchedulePicker);
   overlay.addEventListener("click",e=>{if(e.target===overlay)closeSchedulePicker()});
-  if(input)input.addEventListener("keydown",e=>{
-    if(e.key==="Enter"){e.preventDefault();confirmSchedulePicker()}
-    else if(e.key==="Escape"){e.preventDefault();closeSchedulePicker()}
+  // Step 1: Today / Tomorrow
+  overlay.querySelectorAll("[data-sched-day]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const tok=btn.getAttribute("data-sched-day");
+      const d=tok==="today"?_resolvedTodayDate():tok==="tomorrow"?_resolvedTomorrowDate():null;
+      if(d)_schedPickDay(d);
+    });
   });
+  // Step 1: pick an arbitrary date
+  const pickDateBtn=document.getElementById("sched-pick-date-btn");
+  const dateInput=document.getElementById("sched-date-input");
+  if(pickDateBtn&&dateInput){
+    pickDateBtn.addEventListener("click",()=>{
+      dateInput.style.display="block";
+      try{dateInput.showPicker?dateInput.showPicker():dateInput.focus()}catch(e){dateInput.focus()}
+    });
+    dateInput.addEventListener("change",()=>{if(dateInput.value)_schedPickDay(dateInput.value)});
+  }
+  // Step 2: back + custom time
+  const backBtn=document.getElementById("sched-after-back");
+  if(backBtn)backBtn.addEventListener("click",()=>_schedShowStep("day"));
+  const customGo=document.getElementById("sched-custom-go");
+  const customTime=document.getElementById("sched-custom-time");
+  const commitCustom=()=>{if(customTime&&customTime.value&&_schedPickerDate)_schedCommit(_schedPickerDate,customTime.value)};
+  if(customGo)customGo.addEventListener("click",commitCustom);
+  if(customTime)customTime.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();commitCustom()}});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&overlay.classList.contains("open"))closeSchedulePicker()});
+})();
+
+// Settings → "Schedule default times": customize the After-step time presets.
+function _renderSchedDefaultsList(){
+  const wrap=document.getElementById("sched-defaults-list");
+  if(!wrap)return;
+  wrap.innerHTML="";
+  const presets=loadSchedTimePresets();
+  if(!presets.length){wrap.innerHTML='<div class="sched-after-empty">No times yet — add one below.</div>';return}
+  presets.forEach(t=>{
+    const chip=document.createElement("span");chip.className="sched-default-chip";
+    const lbl=document.createElement("span");lbl.textContent=_schedTimeLabel(t);
+    const rm=document.createElement("button");rm.type="button";rm.textContent="×";rm.title="Remove";
+    rm.addEventListener("click",()=>{saveSchedTimePresets(presets.filter(x=>x!==t));_renderSchedDefaultsList()});
+    chip.appendChild(lbl);chip.appendChild(rm);wrap.appendChild(chip);
+  });
+}
+function openSchedDefaults(){
+  const ov=document.getElementById("sched-defaults-overlay");
+  if(!ov)return;_renderSchedDefaultsList();ov.classList.add("open");
+}
+function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-overlay");if(ov)ov.classList.remove("open")}
+(function(){
+  const menuItem=document.getElementById("dcc-schedule-defaults");
+  if(menuItem)menuItem.addEventListener("click",()=>{
+    const wrap=document.getElementById("dcc-settings-wrap");if(wrap)wrap.classList.remove("open");
+    openSchedDefaults();
+  });
+  const ov=document.getElementById("sched-defaults-overlay");
+  if(!ov)return;
+  const closeBtn=document.getElementById("sched-defaults-close");
+  if(closeBtn)closeBtn.addEventListener("click",closeSchedDefaults);
+  ov.addEventListener("click",e=>{if(e.target===ov)closeSchedDefaults()});
+  const addBtn=document.getElementById("sched-defaults-add");
+  const addTime=document.getElementById("sched-defaults-add-time");
+  const doAdd=()=>{if(!addTime||!addTime.value)return;const cur=loadSchedTimePresets();cur.push(addTime.value);saveSchedTimePresets(cur);addTime.value="";_renderSchedDefaultsList()};
+  if(addBtn)addBtn.addEventListener("click",doAdd);
+  if(addTime)addTime.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();doAdd()}});
+  const resetBtn=document.getElementById("sched-defaults-reset");
+  if(resetBtn)resetBtn.addEventListener("click",()=>{saveSchedTimePresets(SCHED_TIME_PRESETS_DEFAULT.slice());_renderSchedDefaultsList()});
+  const saveBtn=document.getElementById("sched-defaults-save");
+  if(saveBtn)saveBtn.addEventListener("click",closeSchedDefaults);
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeSchedDefaults()});
 })();
 // Wire up all task-add bars
 document.querySelectorAll(".task-add-bar").forEach(bar=>{
   bar.querySelector(".tab-add").addEventListener("click",()=>addTaskUniversal(bar));
   bar.querySelector(".tab-title").addEventListener("keydown",e=>{if(e.key==="Enter")addTaskUniversal(bar)});
+  // Choosing "Schedule" in the priority dropdown opens the day/time picker right
+  // away. The dropdown snaps back to Urgent (the picker holds the task), so the
+  // bar is reset whether or not the user follows through.
+  const dest=bar.querySelector(".tab-dest");
+  if(dest)dest.addEventListener("change",()=>{
+    if(dest.value!=="schedule")return;
+    const inp=bar.querySelector(".tab-title");
+    const title=inp?inp.value.trim():"";
+    const durEl=bar.querySelector(".tab-dur");
+    const durMin=(durEl&&parseInt(durEl.value))||30;
+    dest.value="urgent";
+    if(!title){
+      if(inp){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();}
+      return;
+    }
+    openSchedulePicker(title,durMin,{sourceBar:bar});
+  });
 });
 
 // ======== UNIFIED BLOCK QUERY HELPERS ========
