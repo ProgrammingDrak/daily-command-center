@@ -23,6 +23,106 @@ function buildActualView(dateStr){
   if(typeof buildDayReview==="function") buildDayReview(dateStr);
 }
 
+function subtaskMoveState(id){
+  const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(x=>x.id===id):null;
+  if(!ev||!ev.subtaskOf)return {canUp:false,canDown:false};
+  const siblings=scheduled.filter(x=>x.subtaskOf===ev.subtaskOf&&!(typeof isDeleted==="function"&&isDeleted(x)));
+  const idx=siblings.findIndex(x=>x.id===id);
+  return {canUp:idx>0,canDown:idx>=0&&idx<siblings.length-1};
+}
+
+function moveSubtaskSibling(id,direction){
+  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
+  const ev=scheduled.find(x=>x.id===id);
+  if(!ev||!ev.subtaskOf)return;
+  const siblings=scheduled.filter(x=>x.subtaskOf===ev.subtaskOf&&!(typeof isDeleted==="function"&&isDeleted(x)));
+  const idx=siblings.findIndex(x=>x.id===id);
+  const to=idx+direction;
+  if(idx<0||to<0||to>=siblings.length)return;
+  const target=siblings[to];
+  const fromIndex=scheduled.findIndex(x=>x.id===ev.id);
+  const toIndex=scheduled.findIndex(x=>x.id===target.id);
+  if(fromIndex<0||toIndex<0)return;
+  const tmp=scheduled[fromIndex];
+  scheduled[fromIndex]=scheduled[toIndex];
+  scheduled[toIndex]=tmp;
+  if(typeof saveTaskOrder==="function")saveTaskOrder();
+  if(typeof saveSubtaskOrder==="function")saveSubtaskOrder(ev.subtaskOf);
+  if(typeof log==="function")log("reorder",id,"Moved subtask "+(direction<0?"up":"down"));
+  if(typeof render==="function")render();
+}
+
+function startSubtaskTitleEdit(id,titleEl){
+  if(!titleEl||titleEl.querySelector("input"))return;
+  const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(x=>x.id===id):null;
+  if(!ev)return;
+  const input=document.createElement("input");
+  input.type="text";
+  input.className="sub-ttl-edit";
+  input.value=ev.title||"";
+  input.setAttribute("aria-label","Subtask title");
+  input.style.width=Math.max(90,(titleEl.offsetWidth||80)+24)+"px";
+  titleEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let finished=false;
+  function finish(save){
+    if(finished)return;
+    finished=true;
+    const next=input.value.trim();
+    if(save&&next&&next!==ev.title){
+      ev.title=next;
+      if(typeof _persistTaskTitle==="function")_persistTaskTitle(id,next);
+      if(typeof showToast==="function")showToast("Subtask updated","success",2200);
+    }
+    if(typeof render==="function")render();
+  }
+  input.addEventListener("click",e=>e.stopPropagation());
+  input.addEventListener("keydown",e=>{
+    e.stopPropagation();
+    if(e.key==="Enter"){e.preventDefault();finish(true);}
+    if(e.key==="Escape"){e.preventDefault();finish(false);}
+  });
+  input.addEventListener("blur",()=>finish(true));
+}
+
+function subtaskActionsHtml(ev){
+  const move=subtaskMoveState(ev.id);
+  const disabledUp=move.canUp?"":' disabled aria-disabled="true"';
+  const disabledDown=move.canDown?"":' disabled aria-disabled="true"';
+  return '<div class="sub-actions" aria-label="Subtask actions">'+
+    '<button type="button" class="sub-action-btn sub-edit" data-sub-edit-id="'+ev.id+'" title="Edit subtask" aria-label="Edit subtask">&#9998;</button>'+
+    '<button type="button" class="sub-action-btn sub-move" data-sub-move-id="'+ev.id+'" data-dir="-1" title="Move subtask up" aria-label="Move subtask up"'+disabledUp+'>&#8593;</button>'+
+    '<button type="button" class="sub-action-btn sub-move" data-sub-move-id="'+ev.id+'" data-dir="1" title="Move subtask down" aria-label="Move subtask down"'+disabledDown+'>&#8595;</button>'+
+    '<button type="button" class="btn-add-menu sub-action-btn sub-add" title="Add child subtask" aria-label="Add child subtask" data-add-id="'+ev.id+'">+</button>'+
+    '<button type="button" class="btn-del-task sub-action-btn sub-delete" data-del-id="'+ev.id+'" title="Delete subtask" aria-label="Delete subtask"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
+  '</div>';
+}
+
+function bindSubtaskActions(el,ev){
+  const title=el.querySelector(".sub-ttl");
+  if(title){
+    title.setAttribute("tabindex","0");
+    title.setAttribute("role","button");
+    title.setAttribute("aria-label","Edit subtask title");
+    title.addEventListener("click",e=>{e.stopPropagation();startSubtaskTitleEdit(ev.id,title);});
+    title.addEventListener("keydown",e=>{
+      if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();startSubtaskTitleEdit(ev.id,title);}
+    });
+  }
+  const edit=el.querySelector(".sub-edit");
+  if(edit)edit.addEventListener("click",e=>{e.stopPropagation();startSubtaskTitleEdit(ev.id,el.querySelector(".sub-ttl"));});
+  el.querySelectorAll(".sub-move").forEach(btn=>btn.addEventListener("click",e=>{
+    e.stopPropagation();
+    if(btn.disabled)return;
+    moveSubtaskSibling(btn.dataset.subMoveId,parseInt(btn.dataset.dir,10));
+  }));
+  const add=el.querySelector(".btn-add-menu");
+  if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+  const del=el.querySelector(".btn-del-task");
+  if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
+}
+
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
@@ -137,17 +237,11 @@ function buildListView(){
       '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
       '<span class="sub-ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
-      '<div class="it-list-actions sub-actions">'+
-        '<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>'+
-        (!doneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
-      '</div>';
+      subtaskActionsHtml(ev);
     el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
-    const add=el.querySelector(".btn-add-menu");
-    if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
-    const del=el.querySelector(".btn-del-task");
-    if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
+    bindSubtaskActions(el,ev);
     return el;
   }
   function emitNode(node,idx,mode){return node.rel==="subtask"?subRow(node.ev,idx,mode,node):row(node.ev,idx,mode,node);}
@@ -368,9 +462,9 @@ function buildSchedule(){
       '<span class="sub-ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+
       (slice!=null?'<span class="sub-share'+(doneRow?' earned':'')+'" title="'+(doneRow?'Earned ':'Worth ')+slice+' pts of the parent’s pie">'+slice+' pts</span>':'')+
       (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
-      '<button class="btn-add-menu sub-add" title="Add subtask" data-add-id="'+ev.id+'">+</button>';
+      subtaskActionsHtml(ev);
     el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
-    const add=el.querySelector(".btn-add-menu");if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    bindSubtaskActions(el,ev);
     return el;
   }
   // Delegated collapse toggle: one listener handles every wrap/subtask chevron.

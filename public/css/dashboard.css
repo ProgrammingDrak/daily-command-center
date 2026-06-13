@@ -4096,17 +4096,23 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .it-list-item.subtask-row.done .sub-ttl{text-decoration:line-through;opacity:0.5}
 .it-list-item.subtask-row .chk{width:13px;height:13px;flex:none}
 .it-list-item.subtask-row .wrap-collapse{font-size:9px;padding:1px 3px}
-.it-list-item.subtask-row .sub-actions{margin-left:auto;display:flex;gap:2px;opacity:0;transition:opacity .12s}
-.it-list-item.subtask-row:hover .sub-actions{opacity:1}
-.it-list-item.subtask-row .sub-actions .btn-add-menu,.it-list-item.subtask-row .sub-actions .btn-del-task{font-size:11px;padding:0 3px;line-height:1}
+.sub-actions{margin-left:auto;display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .12s}
+.it-list-item.subtask-row:hover .sub-actions,.it-list-item.subtask-row:focus-within .sub-actions,.tl-item.tl-sub:hover .sub-actions,.tl-item.tl-sub:focus-within .sub-actions{opacity:1}
+.sub-action-btn{width:22px;height:22px;min-width:22px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;font-size:12px;line-height:1}
+.sub-action-btn:hover,.sub-action-btn:focus{color:var(--text);border-color:rgba(255,255,255,0.16);background:rgba(255,255,255,0.06);outline:none}
+.sub-action-btn:disabled{opacity:0.32;cursor:default}
+.sub-action-btn:disabled:hover{color:var(--text-muted);border-color:transparent;background:transparent}
+.sub-delete:hover,.sub-delete:focus{color:var(--red);border-color:rgba(239,68,68,0.35);background:rgba(239,68,68,0.1)}
+.sub-ttl[role="button"]{cursor:text}
+.sub-ttl[role="button"]:focus{outline:1px solid var(--accent);outline-offset:2px;border-radius:3px}
+.sub-ttl-edit{background:rgba(255,255,255,0.06);border:1px solid var(--accent);border-radius:5px;color:var(--text);font:inherit;font-size:12px;line-height:1.4;padding:2px 6px;outline:none;min-width:90px;max-width:min(320px,70vw)}
 /* Timeline subtask row: compact line under the parent card. */
 .tl-item.tl-sub{display:flex;align-items:center;gap:5px;padding:1px 8px 1px 60px;font-size:11px;line-height:1.5;opacity:0.9}
 .tl-item.tl-sub .sub-ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tl-item.tl-sub.done .sub-ttl{text-decoration:line-through;opacity:0.5}
 .tl-item.tl-sub .chk{width:13px;height:13px;flex:none}
 .tl-item.tl-sub .wrap-collapse{font-size:9px;padding:1px 3px}
-.tl-item.tl-sub .sub-add{margin-left:auto;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:13px;line-height:1;flex:none}
-.tl-item.tl-sub .sub-add:hover{color:var(--text)}
+.tl-item.tl-sub .sub-actions{flex:none}
 /* ======== SUBTASK POINT PIE (shared pool) ======== */
 /* A subtask's slice of its parent's points. Muted until earned, then accent. */
 .sub-share{font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:1px 5px;white-space:nowrap;flex:none}
@@ -4150,10 +4156,12 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   /* Add subtask — visible filled button at full target (was a tiny muted glyph). */
   .btn-add-menu{width:44px;height:44px;min-width:44px;font-size:24px;color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:11px;padding:0;display:inline-flex;align-items:center;justify-content:center}
   /* Subtask-row actions must never be hover-hidden on touch. */
-  .it-list-item.subtask-row .sub-actions{opacity:1!important;gap:6px}
+  .it-list-item.subtask-row .sub-actions,.tl-item.tl-sub .sub-actions{opacity:1!important;gap:6px}
   .it-list-item.subtask-row .sub-actions .btn-add-menu,
   .it-list-item.subtask-row .sub-actions .btn-del-task,
-  .tl-item.tl-sub .sub-add{width:38px;height:38px;min-width:38px;font-size:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px}
+  .tl-item.tl-sub .sub-actions .btn-add-menu,
+  .tl-item.tl-sub .sub-actions .btn-del-task,
+  .sub-action-btn{width:38px;height:38px;min-width:38px;font-size:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px}
   /* >=8px between targets; let action clusters wrap rather than cram. */
   .it-list-actions{gap:10px;flex-wrap:wrap}
   .chk-col{gap:8px}
@@ -4197,7 +4205,18 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 /* Touch devices (no hover): guarantee hover-revealed actions are always shown. */
 @media (hover:none){
   .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
-  .it-list-item.subtask-row .sub-actions{opacity:1!important}
+  .it-list-item.subtask-row .sub-actions,.tl-item.tl-sub .sub-actions{opacity:1!important}
+}
+
+@media (max-width:760px), (hover:none){
+  .it-list-item.subtask-row>.sub-actions,
+  .tl-item.tl-sub>.sub-actions{opacity:1!important;visibility:visible!important;gap:6px}
+  .it-list-item.subtask-row>.sub-actions>.sub-action-btn,
+  .it-list-item.subtask-row>.sub-actions>.btn-add-menu,
+  .it-list-item.subtask-row>.sub-actions>.btn-del-task,
+  .tl-item.tl-sub>.sub-actions>.sub-action-btn,
+  .tl-item.tl-sub>.sub-actions>.btn-add-menu,
+  .tl-item.tl-sub>.sub-actions>.btn-del-task{width:38px!important;height:38px!important;min-width:38px!important;font-size:18px!important;display:inline-flex!important;align-items:center;justify-content:center;border-radius:9px}
 }
 
   /* ======== DAY REVIEW (game-styled scheduled-vs-actual) ======== */
