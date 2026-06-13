@@ -81,6 +81,7 @@ function _bsSaveProp(key, value) {
 // viewMode: "today" (editable, live) | "tomorrow" (editable, pre-plan) | "future" (editable, planned) | "archive" (read-only)
 let viewMode = "today";
 let viewDate = __state ? __state.date : null;
+let SUBTASK_ORDER_KEY = "pa-subtask-order-" + ((__state && __state.date) ? __state.date : "unknown");
 
 // Compute the "today" date string from injected state
 let __todayDate = (window.__DCC_STATE__ && window.__DCC_STATE__.date) || null;
@@ -108,6 +109,7 @@ function initKeys() {
   LOCKED_KEY = "pa-locked-tasks-" + d;
   ORDER_KEY = "pa-task-order-" + d;
   SUBTASK_KEY = "pa-subtasks-" + d;
+  SUBTASK_ORDER_KEY = "pa-subtask-order-" + d;
   TRIV_FLAGS_KEY = "pa-trivial-flags-" + d;
   TRIAGE_PARENTS_KEY = "pa-triage-parents-" + d;
   if (typeof TRIAGE_SCHEDULED_KEY !== "undefined") TRIAGE_SCHEDULED_KEY = "pa-triage-scheduled-" + d;
@@ -123,6 +125,51 @@ function initKeys() {
   } else if (__state && __state.schedule && __state.schedule.end_time) {
     EOD = pt(__state.schedule.end_time);
   }
+}
+
+function loadSubtaskOrder(){
+  const fromBlocks=_bsProp("_subtaskOrder", null);
+  if(fromBlocks&&typeof fromBlocks==="object")return fromBlocks;
+  try{return JSON.parse(localStorage.getItem(SUBTASK_ORDER_KEY)||"{}")}catch(e){return{}}
+}
+
+function saveSubtaskOrder(parentId){
+  if(!parentId||typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
+  const order=scheduled
+    .filter(ev=>ev&&ev.subtaskOf===parentId&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+    .map(ev=>ev.id);
+  const all=loadSubtaskOrder();
+  all[parentId]=order;
+  if(!_bsSaveProp("_subtaskOrder",all)){
+    try{localStorage.setItem(SUBTASK_ORDER_KEY,JSON.stringify(all))}catch(e){}
+  }
+  if(window.USE_BLOCKSTORE&&window.blockStore&&window.blockStore.reorder){
+    const orderMap={};order.forEach((id,i)=>{orderMap[id]=i});
+    const blocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block")]
+      .filter(b=>b.properties&&orderMap[b.properties.local_id]!==undefined)
+      .map(b=>({id:b.id,sort_order:(orderMap[b.properties.local_id]+1)*1000}));
+    if(blocks.length)window.blockStore.reorder(blocks).catch(()=>{});
+  }
+  if(typeof scheduleIDBSave==="function")scheduleIDBSave();
+}
+
+function applySubtaskOrder(){
+  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
+  const saved=loadSubtaskOrder();
+  Object.entries(saved).forEach(([parentId,order])=>{
+    if(!Array.isArray(order)||!order.length)return;
+    const positions=[];
+    const kids=[];
+    scheduled.forEach((ev,i)=>{if(ev&&ev.subtaskOf===parentId){positions.push(i);kids.push(ev);}});
+    if(kids.length<2)return;
+    const orderMap={};order.forEach((id,i)=>{orderMap[id]=i});
+    const sorted=kids.slice().sort((a,b)=>{
+      const ai=orderMap[a.id]!==undefined?orderMap[a.id]:9999;
+      const bi=orderMap[b.id]!==undefined?orderMap[b.id]:9999;
+      return ai-bi;
+    });
+    positions.forEach((pos,i)=>{scheduled[pos]=sorted[i]});
+  });
 }
 
 // ======== (Phase 6 cleanup) RETIRED PERSISTENCE TIERS ========
@@ -313,6 +360,9 @@ function reloadPersistedEdits() {
       });
       scheduled = [...done, ...active];
     }
+  } catch(e) {}
+  try {
+    if (typeof applySubtaskOrder === "function") applySubtaskOrder();
   } catch(e) {}
   // Restore pinned start times (from day_root._pinnedStarts or localStorage)
   try {
