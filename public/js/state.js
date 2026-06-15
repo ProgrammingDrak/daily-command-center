@@ -667,6 +667,48 @@ async function _hideSourceTaskForReschedule(id,fromDate,ev){
   }
 }
 
+// Subtasks are real tasks in the unified tree (subtaskOf === parent id). When a
+// parent is rescheduled to another date it gets a fresh clone id, so its
+// subtasks must be re-parented and carried onto the target date too — otherwise
+// they're orphaned on the source day under a parent that's been hidden.
+// Recurses so nested subtask trees move as a unit. _seen guards data cycles.
+async function _rescheduleSubtaskSubtree(oldParentId,newParentId,targetDate,fromDate,_seen){
+  _seen=_seen||new Set();
+  if(_seen.has(oldParentId))return;
+  _seen.add(oldParentId);
+  // Snapshot before any hiding so recursion sees the original tree.
+  const kids=scheduled.filter(c=>c.subtaskOf===oldParentId);
+  for(const kid of kids){
+    const newId=_rescheduledTaskId(kid,targetDate);
+    const d=dur(kid)||0;
+    const clone={
+      id:newId,
+      title:kid.title,
+      type:kid.type||"task",
+      start:"00:00",
+      end:fmt(d),
+      priority:kid.priority||"Medium",
+      meta:kid.meta||"",
+      detail:kid.detail||"",
+      notionUrl:kid.notionUrl||"",
+      source:"rescheduled",
+      tags:Array.isArray(kid.tags)?kid.tags.filter(t=>t!=="wrap"):[],
+      subtaskOf:newParentId,
+      rescheduledFrom:{date:fromDate||"unknown",taskId:kid.id},
+      sourceTaskId:kid.sourceTaskId||kid.id
+    };
+    try{await persistAddedTask(clone,targetDate);}catch(e){}
+    // Carry over completion so partial progress survives the move.
+    if(typeof manualDone!=="undefined"&&typeof isDone==="function"&&isDone(kid)){
+      manualDone.add(newId);
+      if(typeof saveDoneState==="function")saveDoneState();
+    }
+    // Move this kid's own subtasks before hiding it from the source day.
+    await _rescheduleSubtaskSubtree(kid.id,newId,targetDate,fromDate,_seen);
+    await _hideSourceTaskForReschedule(kid.id,fromDate,kid);
+  }
+}
+
 // Schedule `ev` (a task) onto an arbitrary `targetDate`. Picks a free slot from
 // the day's existing meetings + already-scheduled blocks. Used by push-to-tomorrow
 // and the generalized rescheduler.
@@ -874,15 +916,9 @@ async function moveTaskToToday(id){
 function moveTaskToTomorrow(id){return rescheduleTaskToDate(id,_resolvedTomorrowDate());}
 
 async function moveTaskToNextWeek(id){
-  const ev=scheduled.find(e=>e.id===id);
-  if(!ev)return;
-  const sunday=_nextSundayDate();
-  const startTime=await _scheduleTaskOnDate(ev,sunday,null);
-  if(!startTime)return;
-  deletedSet.add(id);saveDeletedState();
-  _purgeManualBlock(ev);
-  if(typeof showToast==="function")showToast("Moved to Sunday at "+f12(startTime),"success");
-  render();
+  // Route through the generalized rescheduler so the task's subtask subtree is
+  // carried to next Sunday too, instead of being orphaned on the source day.
+  return rescheduleTaskToDate(id,_nextSundayDate());
 }
 
 function moveTaskToTrivial(id){
@@ -996,6 +1032,10 @@ async function rescheduleTaskToDate(id,targetDate,opts){
     if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
     return;
   }
+
+  // Carry the subtask subtree to the target date, re-parented onto the clone,
+  // before hiding the original parent (so the tree snapshot is still intact).
+  await _rescheduleSubtaskSubtree(id,movedTask.id,targetDate,fromDate);
 
   await _hideSourceTaskForReschedule(id,fromDate,ev);
   log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
