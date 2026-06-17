@@ -19,7 +19,7 @@
     "source_health": { "type": "array" },
     "pages": {
       "type": "array",
-      "description": "Ordered Brief pages. Known ids: front, actual-vs-planned, step-back, personal-bible, process. Unknown ids render as raw JSON.",
+      "description": "Ordered Brief pages. Known ids: canvas, front, actual-vs-planned, step-back, personal-bible, process. The 'canvas' page (if present, usually first) is the agent-authored expressive view; its canvas_html renders inside a sandboxed iframe. Unknown ids render as raw JSON.",
       "items": {
         "type": "object",
         "required": ["id", "label"],
@@ -27,6 +27,8 @@
           "id": { "type": "string" },
           "label": { "type": "string" },
           "summary": { "type": "string" },
+          "canvas_html": { "type": "string", "description": "canvas page: self-contained HTML document rendered in a sandboxed iframe (no same-origin). Display-only; carries no actionable controls." },
+          "height": { "type": "integer", "description": "canvas page: iframe height in px (default 1180)" },
           "metrics": { "type": "array", "items": { "type": "object", "properties": { "label": { "type": "string" }, "value": {} } } },
 
           "done_today": {
