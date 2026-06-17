@@ -77,6 +77,7 @@ function cookieHeader(setCookie) {
 function printHelp() {
   console.log(`Usage: node scripts/morning-brief-materializer.js [--source-date YYYY-MM-DD] [--target-date YYYY-MM-DD] [--apply]
 
+Source and target both default to today (the morning brief lives under today).
 Dry-runs by default. For production, either set DCC_TOKEN, SECRET_DCC_TOKEN,
 SECRET_SWEEP_SUITE_TOKEN, or SECRET_PA_TOKEN, or set DCC_USERNAME/DCC_PASSWORD
 (SEED_USERNAME/SEED_PASSWORD are accepted as a local fallback).
@@ -100,7 +101,11 @@ async function main() {
     if (!cookie) throw new Error("Login succeeded but no session cookie was returned");
   }
   const targetDate = args.targetDate || localDate(0);
-  const sourceDate = args.sourceDate || localDate(-1);
+  // Source today's brief by default: the morning brief (build_morning_brief.py)
+  // publishes under today's date and carries last night's decisions forward, so
+  // today's brief is the single source of approvals. Pass --source-date to
+  // materialize straight from an older (e.g. nightly) brief instead.
+  const sourceDate = args.sourceDate || localDate(0);
   const response = await requestJson(`${baseUrl}/api/dcc/brief/materialize`, {
     sourceDate,
     targetDate,
