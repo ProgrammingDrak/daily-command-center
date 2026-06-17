@@ -648,7 +648,23 @@
       '</section>';
   }
 
+  // Agent-authored expressive layer. The HTML is generated fresh each morning
+  // and treated as untrusted: it renders ONLY inside a sandboxed iframe with no
+  // same-origin access, so its scripts cannot read the session, the parent DOM,
+  // or call DCC APIs as the user. The canvas is display-only — the actionable
+  // itinerary controls live on the structured "front" page.
+  function gbPageCanvas(page){
+    var html = page.canvas_html || page.html || "";
+    if(!html)return '<div class="gb-empty">No canvas generated for today.</div>';
+    var h = parseInt(page.height, 10) || 1180;
+    return (page.summary ? '<p class="gb-page-summary">'+gbEsc(page.summary)+'</p>' : '')+
+      '<iframe class="gb-canvas-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" '+
+        'style="width:100%;height:'+h+'px;border:0;border-radius:12px;background:#F5F5F5;display:block" '+
+        'srcdoc="'+gbEsc(html)+'"></iframe>';
+  }
+
   function gbRenderPage(page, current, ui){
+    if(page.id==="canvas")return gbPageCanvas(page);
     if(page.id==="front")return gbPageFront(page, current, ui);
     if(page.id==="actual-vs-planned")return gbPageActualVsPlanned(page, current, ui);
     if(page.id==="step-back")return gbPageStepBack(page);
