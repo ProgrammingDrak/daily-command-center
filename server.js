@@ -852,7 +852,12 @@ app.post("/api/dcc/triage-check/ingest", (req, res) => {
 // durable day-state data. This is the seed of M2 actuals: every reviewed task
 // has a decision record even before outcome controls land. Morning scheduling
 // reads decisions to build the next day's itinerary.
-app.post("/api/dcc/brief/decision", (req, res) => {
+//
+// Live sync: accept/schedule immediately materializes the task as an itinerary
+// block (idempotent), and reset/backlog/drop removes any block previously
+// materialized from that task. This keeps the itinerary a live mirror of the
+// brief decisions instead of waiting for the once-a-day materializer pass.
+app.post("/api/dcc/brief/decision", async (req, res) => {
   try {
     const { date, task_id, action, time } = req.body || {};
     const VALID = new Set(["accept", "schedule", "backlog", "drop", "reset"]);
@@ -868,7 +873,52 @@ app.post("/api/dcc/brief/decision", (req, res) => {
     state.last_updated_at = at;
     state.last_updated_by = "brief-decision";
     persistDccDay(day, state, req, "brief-decision");
-    res.json({ ok: true, date: day, task_id, action });
+
+    // Live-sync the itinerary so the block tracks the decision immediately.
+    let itinerary = { changed: false };
+    try {
+      const { userId, workspaceId } = await resolveDccWriteOwner(req);
+      const existingBlocks = await blockDB.getBlocksByDate(day, workspaceId);
+      const blocksForTask = existingBlocks.filter((b) => {
+        const props = (b && b.properties) || {};
+        return (props.glymphatic_task_id || props.source_id) === task_id;
+      });
+      if (action === "accept" || action === "schedule") {
+        if (blocksForTask.length) {
+          itinerary = { changed: false, status: "already-present", blockId: blocksForTask[0].id };
+        } else {
+          const plan = dccIntelligence.materializeBriefPlan({ sourceState: state, targetDate: day, existingBlocks });
+          const item = plan.items.find((it) => (it.task && it.task.id) === task_id);
+          if (item) {
+            await blockDB.ensureDayRoot(day, userId, workspaceId);
+            const props = item.properties;
+            const sortOrder = props.start ? Number(props.start.slice(0, 2)) * 60 + Number(props.start.slice(3, 5)) : 0;
+            const created = await blockDB.createBlock({ type: "block", date: day, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId });
+            broadcast("blocks-changed", { action: "brief-decision-create", blockIds: [created.id], date: day }, workspaceId);
+            itinerary = { changed: true, status: "created", blockId: created.id, start: props.start };
+          } else {
+            // No matching front-page task (e.g. task not in today's brief); decision still saved.
+            itinerary = { changed: false, status: "no-matching-task" };
+          }
+        }
+      } else {
+        // reset / backlog / drop: pull any block we previously materialized.
+        const removed = [];
+        for (const b of blocksForTask) { await blockDB.deleteBlock(b.id); removed.push(b.id); }
+        if (removed.length) {
+          broadcast("blocks-changed", { action: "brief-decision-remove", blockIds: removed, date: day }, workspaceId);
+          itinerary = { changed: true, status: "removed", blockIds: removed };
+        } else {
+          itinerary = { changed: false, status: "nothing-to-remove" };
+        }
+      }
+    } catch (syncErr) {
+      // The decision is already durably saved; surface the sync problem without failing the request.
+      console.error("[brief decision] itinerary sync failed:", syncErr);
+      itinerary = { changed: false, status: "sync-error", error: syncErr.message };
+    }
+
+    res.json({ ok: true, date: day, task_id, action, itinerary });
   } catch (e) {
     console.error("[brief decision] failed:", e);
     res.status(500).json({ error: e.message || "decision save failed" });
