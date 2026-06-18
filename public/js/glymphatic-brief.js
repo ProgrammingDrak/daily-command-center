@@ -653,12 +653,16 @@
   // same-origin access, so its scripts cannot read the session, the parent DOM,
   // or call DCC APIs as the user. The canvas is display-only — the actionable
   // itinerary controls live on the structured "front" page.
+  // allow-popups (+ escape-sandbox) lets in-canvas links (e.g. "Open the full
+  // Data Wall") open in a NEW top-level tab with their own real origin instead
+  // of navigating this cookie-less frame to the app root (which would render the
+  // login page). The popup still has no same-origin access to the DCC session.
   function gbPageCanvas(page){
     var html = page.canvas_html || page.html || "";
     if(!html)return '<div class="gb-empty">No canvas generated for today.</div>';
     var h = parseInt(page.height, 10) || 1180;
     return (page.summary ? '<p class="gb-page-summary">'+gbEsc(page.summary)+'</p>' : '')+
-      '<iframe class="gb-canvas-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" '+
+      '<iframe class="gb-canvas-frame" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" '+
         'style="width:100%;height:'+h+'px;border:0;border-radius:12px;background:#F5F5F5;display:block" '+
         'srcdoc="'+gbEsc(html)+'"></iframe>';
   }
