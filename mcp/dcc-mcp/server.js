@@ -18,6 +18,49 @@ const TOKEN = process.env.DCC_PA_TOKEN || process.env.SECRET_PA_TOKEN || "";
 const USER_ID = String(process.env.DCC_USER_ID || "1");
 const WORKSPACE_ID = process.env.DCC_WORKSPACE_ID || "";
 
+// Cold-start tolerance (see scripts/dcc-schedule.js for rationale): a free-tier
+// DCC can spin down and take ~30-60s to wake, so a single naked fetch hangs/fails
+// on first contact. Warm with a health ping, then retry the POST with timeouts.
+const REQUEST_TIMEOUT_MS = Number(process.env.DCC_TIMEOUT_MS || 20000);
+const WARMUP_TIMEOUT_MS = Number(process.env.DCC_WARMUP_TIMEOUT_MS || 60000);
+const MAX_ATTEMPTS = Math.max(1, Number(process.env.DCC_MAX_RETRIES || 3));
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function fetchWithTimeout(url, opts = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function warmup() {
+  try {
+    await fetchWithTimeout(`${BASE}/api/health`, { method: "GET" }, WARMUP_TIMEOUT_MS);
+  } catch { /* advisory only */ }
+}
+
+async function postWithRetry(url, opts) {
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetchWithTimeout(url, opts, REQUEST_TIMEOUT_MS);
+      if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) return res;
+      lastErr = new Error(`${res.status} ${res.statusText}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    if (attempt < MAX_ATTEMPTS) {
+      if (attempt === 1) await warmup();
+      await sleep(1000 * attempt);
+    }
+  }
+  throw lastErr || new Error("request failed");
+}
+
 const SERVER_INFO = { name: "dcc-mcp", version: "1.0.0" };
 const PROTOCOL_VERSION = "2024-11-05";
 
@@ -67,7 +110,7 @@ async function scheduleTask(args) {
 
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}`, "x-user-id": USER_ID };
   if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
-  const res = await fetch(`${BASE}/api/dcc/quick-task`, {
+  const res = await postWithRetry(`${BASE}/api/dcc/quick-task`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),

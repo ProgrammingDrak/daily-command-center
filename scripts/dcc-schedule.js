@@ -34,6 +34,57 @@
 
 const DEFAULT_BASE = "https://daily-command-center.onrender.com";
 
+// Cold-start tolerance: the DCC may be a free-tier service that spins down when
+// idle, so the first request after a quiet period can take ~30-60s to wake. A
+// single naked fetch with no timeout will hang or fail on that cold start, which
+// looks like "the packet never reached production" on scheduled runs. We warm the
+// service with a health ping, then retry the real request with bounded timeouts.
+// All knobs are env-overridable.
+const REQUEST_TIMEOUT_MS = Number(process.env.DCC_TIMEOUT_MS || 20000);
+const WARMUP_TIMEOUT_MS = Number(process.env.DCC_WARMUP_TIMEOUT_MS || 60000);
+const MAX_ATTEMPTS = Math.max(1, Number(process.env.DCC_MAX_RETRIES || 3));
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function fetchWithTimeout(url, opts = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...opts, signal: ac.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Best-effort wake-up ping; never throws.
+async function warmup(base) {
+  try {
+    await fetchWithTimeout(`${base}/api/health`, { method: "GET" }, WARMUP_TIMEOUT_MS);
+  } catch { /* health check is advisory only */ }
+}
+
+// POST with bounded timeout + retry. Retries network/timeout errors and 5xx /
+// 429 (cold-start, transient). Fails fast on 4xx (auth/validation won't improve).
+async function postWithRetry(url, opts) {
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetchWithTimeout(url, opts, REQUEST_TIMEOUT_MS);
+      if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 429)) {
+        return res;
+      }
+      lastErr = new Error(`${res.status} ${res.statusText}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    if (attempt < MAX_ATTEMPTS) {
+      if (attempt === 1) await warmup(url.replace(/\/api\/.*$/, "")); // wake a sleeping service once
+      await sleep(1000 * attempt); // linear backoff: 1s, 2s, ...
+    }
+  }
+  throw lastErr || new Error("request failed");
+}
+
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
@@ -95,9 +146,10 @@ async function main() {
   try {
     const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}`, "x-user-id": userId };
     if (workspaceId) headers["x-workspace-id"] = workspaceId;
-    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    res = await postWithRetry(url, { method: "POST", headers, body: JSON.stringify(body) });
   } catch (e) {
-    console.error(`✗ Request failed: ${e.message}`);
+    const reason = e.name === "AbortError" ? `timed out after ${REQUEST_TIMEOUT_MS}ms (is ${base} awake/reachable?)` : e.message;
+    console.error(`✗ Request failed: ${reason}`);
     process.exit(1);
   }
 
