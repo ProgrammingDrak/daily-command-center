@@ -48,11 +48,61 @@
     return 7;
   }
 
-  // {score, cls, timing} for an item, anchored on the last check-in (or creation).
+  // Which check-in style an item uses. Explicit checkInMode wins; otherwise infer
+  // from the data (a stored checkInDate means a one-time date) so legacy items
+  // keep working with no migration.
+  function checkInModeFor(props) {
+    props = props || {};
+    if (props.checkInMode === "date" || props.checkInMode === "repeat") return props.checkInMode;
+    return props.checkInDate ? "date" : "repeat";
+  }
+
+  // Parse a yyyy-mm-dd string as a LOCAL calendar date (avoids the UTC shift you
+  // get from new Date("2026-06-25")). Returns null if unparseable.
+  function parseLocalDate(s) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || ""));
+    if (!m) return null;
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+
+  // Whole-day difference (target date - today), using local midnight on both
+  // sides so "today" reads 0, "tomorrow" reads 1, and past dates go negative.
+  function dayDiffFromToday(targetDate, now) {
+    const today0 = new Date(now || Date.now());
+    today0.setHours(0, 0, 0, 0);
+    const tgt0 = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
+    return Math.round((tgt0.getTime() - today0.getTime()) / 86400000);
+  }
+
+  // {score, cls, timing} for an item. Repeating items use the shared cadence
+  // creep anchored on the last check-in; dated items creep from the anchor toward
+  // the chosen calendar day, hitting 100 on that day.
   function itemUrgency(item) {
     const p = item.properties || {};
-    const anchor = p.lastCheckedAt || item.created_at || p.createdAt || null;
-    const timing = window.urgency.timing(checkInDaysFor(p), anchor);
+    const anchorIso = p.lastCheckedAt || item.created_at || p.createdAt || null;
+
+    if (checkInModeFor(p) === "date" && p.checkInDate) {
+      const target = parseLocalDate(p.checkInDate);
+      if (target) {
+        const now = new Date();
+        const anchor = anchorIso ? new Date(anchorIso) : now;
+        // End of the target day is the true deadline for the progress meter.
+        const deadline = new Date(target.getFullYear(), target.getMonth(), target.getDate(), 23, 59, 59, 999);
+        const total = Math.max(1, deadline.getTime() - anchor.getTime());
+        const elapsed = Math.max(0, now.getTime() - anchor.getTime());
+        const progress = Math.max(0, Math.min(100, Math.round((elapsed / total) * 100)));
+        const remaining = dayDiffFromToday(target, now);
+        const timing = {
+          cadence: total / 86400000,
+          elapsed: elapsed / 86400000,
+          remaining,
+          progress
+        };
+        return { score: progress, cls: window.urgency.scoreClass(progress), timing };
+      }
+    }
+
+    const timing = window.urgency.timing(checkInDaysFor(p), anchorIso);
     const score = timing.progress;
     return { score, cls: window.urgency.scoreClass(score), timing };
   }
@@ -395,10 +445,20 @@
     setVal("dm-my-task", p.myTask || prefill.myTask || "");
     setVal("dm-title", p.title || prefill.title || "");
     setVal("dm-delegatee-name", delegatee.name || "");
-    setVal("dm-check-in-days", item ? checkInDaysFor(p) : (prefill.checkInDays || 7));
     setVal("dm-notes", p.notes || "");
     setVal("dm-linked-tag-id", p.linkedTagId || prefill.linkedTagId || "");
     setVal("dm-linked-block-id", p.linkedBlockId || prefill.linkedBlockId || "");
+
+    // Task-link picker: reflect the currently linked task (if any). Editing the
+    // free-text field afterward clears the link (wired in init).
+    populateTaskLinkSelect(valueOf("dm-linked-block-id"));
+
+    // Check-in controls. New items default to a one-time date; existing items
+    // restore whichever style they were saved with.
+    const mode = item ? checkInModeFor(p) : (prefill.checkInMode || "date");
+    setVal("dm-check-in-days", (item && checkInModeFor(p) === "repeat") ? checkInDaysFor(p) : (prefill.checkInDays || 7));
+    setVal("dm-check-in-date", (item && p.checkInDate) ? p.checkInDate : (prefill.checkInDate || ""));
+    setCheckInMode(mode);
 
     const titleEl = document.getElementById("delegated-modal-title");
     if (titleEl) titleEl.textContent = idOrNull ? "Edit delegated / blocked item" : "New delegated / blocked item";
@@ -425,6 +485,56 @@
     if (el) el.value = value == null ? "" : value;
   }
 
+  // Tasks the user can link "the task you're working on" to: today's itinerary
+  // rows plus backlog items, deduped by id.
+  function getLinkableTasks() {
+    const out = [];
+    const seen = new Set();
+    const push = (t) => {
+      if (!t) return;
+      const id = t.id || t.local_id || t.blockId;
+      const title = String(t.title || t.text || "").trim();
+      if (!id || !title || seen.has(String(id))) return;
+      seen.add(String(id));
+      out.push({ id: String(id), title });
+    };
+    if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) scheduled.forEach(push);
+    if (typeof backlog !== "undefined" && Array.isArray(backlog)) backlog.forEach(push);
+    return out;
+  }
+
+  function populateTaskLinkSelect(selectedId) {
+    const sel = document.getElementById("dm-task-link");
+    if (!sel) return;
+    const tasks = getLinkableTasks();
+    let html = '<option value="">— Type a new task below —</option>';
+    tasks.forEach(t => {
+      html += '<option value="' + esc(t.id) + '">' + esc(truncate(t.title, 80)) + '</option>';
+    });
+    sel.innerHTML = html;
+    // Only preselect when the linked id is actually present in the current list.
+    sel.value = (selectedId && tasks.some(t => t.id === String(selectedId))) ? String(selectedId) : "";
+  }
+
+  function toDateInputValue(d) {
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+
+  // Show one check-in pane (date | repeat) and sync the toggle + hidden field.
+  function setCheckInMode(mode) {
+    mode = mode === "repeat" ? "repeat" : "date";
+    setVal("dm-check-in-mode", mode);
+    const datePane = document.getElementById("dm-checkin-pane-date");
+    const repeatPane = document.getElementById("dm-checkin-pane-repeat");
+    if (datePane) datePane.style.display = mode === "date" ? "" : "none";
+    if (repeatPane) repeatPane.style.display = mode === "repeat" ? "" : "none";
+    document.querySelectorAll(".dm-checkin-tab").forEach(tab => {
+      tab.classList.toggle("active", tab.dataset.checkinMode === mode);
+    });
+  }
+
   function closeDelegatedModal() {
     const overlay = document.getElementById("delegated-modal-overlay");
     if (overlay) overlay.classList.remove("open");
@@ -434,15 +544,20 @@
     const id = valueOf("dm-id") || null;
     const title = valueOf("dm-title").trim();
     if (!title) { toast("Tell me what you're waiting on", "error"); return; }
+    const mode = valueOf("dm-check-in-mode") === "repeat" ? "repeat" : "date";
     let checkInDays = parseInt(valueOf("dm-check-in-days"), 10);
     if (!Number.isFinite(checkInDays) || checkInDays < 1) checkInDays = 7;
+    const checkInDate = mode === "date" ? (valueOf("dm-check-in-date") || "") : "";
+    if (mode === "date" && !checkInDate) { toast("Pick a check-in date, or switch to Repeating", "error"); return; }
     const existing = id ? getDelegatedItemById(id) : null;
     const nameVal = valueOf("dm-delegatee-name").trim();
     const properties = {
       title,
       myTask: valueOf("dm-my-task").trim() || "",
       delegatee: { name: nameVal || null },
+      checkInMode: mode,
       checkInDays,
+      checkInDate: mode === "date" ? checkInDate : null,
       notes: valueOf("dm-notes").trim() || "",
       linkedTagId: valueOf("dm-linked-tag-id") || null,
       linkedBlockId: valueOf("dm-linked-block-id") || null,
@@ -533,6 +648,37 @@
     if (checkBtn) checkBtn.addEventListener("click", () => markDelegatedItemCheckedById(valueOf("dm-id")));
     if (overlay) overlay.addEventListener("click", e => {
       if (e.target === overlay) closeDelegatedModal();
+    });
+
+    // Task-link picker: selecting an existing task fills the working-task text and
+    // records the link; typing into the text box afterward breaks the link.
+    const taskLink = document.getElementById("dm-task-link");
+    if (taskLink) taskLink.addEventListener("change", () => {
+      const opt = taskLink.options[taskLink.selectedIndex];
+      const id = taskLink.value;
+      setVal("dm-linked-block-id", id || "");
+      if (id && opt) setVal("dm-my-task", opt.textContent.trim());
+    });
+    const myTask = document.getElementById("dm-my-task");
+    if (myTask) myTask.addEventListener("input", () => {
+      if (valueOf("dm-linked-block-id")) {
+        setVal("dm-linked-block-id", "");
+        const sel = document.getElementById("dm-task-link");
+        if (sel) sel.value = "";
+      }
+    });
+
+    // Check-in mode toggle + quick-date shortcuts.
+    document.querySelectorAll(".dm-checkin-tab").forEach(tab => {
+      tab.addEventListener("click", () => setCheckInMode(tab.dataset.checkinMode));
+    });
+    document.querySelectorAll(".dm-quick-date").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const d = new Date();
+        if (btn.dataset.quickDate === "tomorrow") d.setDate(d.getDate() + 1);
+        setVal("dm-check-in-date", toDateInputValue(d));
+        setCheckInMode("date");
+      });
     });
   }
 

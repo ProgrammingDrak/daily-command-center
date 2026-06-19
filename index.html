@@ -993,15 +993,39 @@
       <input type="hidden" id="dm-linked-tag-id" />
       <input type="hidden" id="dm-linked-block-id" />
       <label class="delegated-modal-label">Task you're working on</label>
+      <select id="dm-task-link" class="delegated-modal-input dm-task-link">
+        <option value="">— Type a new task below —</option>
+      </select>
       <input type="text" id="dm-my-task" class="delegated-modal-input" maxlength="200" placeholder="Ship the Q2 review deck" />
-      <label class="delegated-modal-label">What you're waiting on<span class="dm-req">*</span></label>
-      <input type="text" id="dm-title" class="delegated-modal-input" maxlength="200" placeholder="Final numbers from finance" />
       <label class="delegated-modal-label">Who you're waiting on</label>
       <input type="text" id="dm-delegatee-name" class="delegated-modal-input" maxlength="100" placeholder="Alice Carter" />
-      <label class="delegated-modal-label">Check in every (days)</label>
-      <input type="number" id="dm-check-in-days" class="delegated-modal-input" min="1" max="365" step="1" placeholder="7" />
+      <label class="delegated-modal-label">Check-in</label>
+      <input type="hidden" id="dm-check-in-mode" value="date" />
+      <div class="dm-checkin-toggle" role="tablist">
+        <button type="button" class="dm-checkin-tab active" data-checkin-mode="date">On a date</button>
+        <button type="button" class="dm-checkin-tab" data-checkin-mode="repeat">Repeating</button>
+      </div>
+      <div class="dm-checkin-pane" id="dm-checkin-pane-date">
+        <div class="dm-quick-dates">
+          <button type="button" class="dm-quick-date" data-quick-date="today">Today</button>
+          <button type="button" class="dm-quick-date" data-quick-date="tomorrow">Tomorrow</button>
+        </div>
+        <input type="date" id="dm-check-in-date" class="delegated-modal-input" />
+      </div>
+      <div class="dm-checkin-pane" id="dm-checkin-pane-repeat" style="display:none">
+        <div class="dm-repeat-row">
+          <span class="dm-hint">Check in every</span>
+          <input type="number" id="dm-check-in-days" class="delegated-modal-input dm-repeat-days" min="1" max="365" step="1" placeholder="7" />
+          <span class="dm-hint">days &middot; urgency resets each check-in</span>
+        </div>
+      </div>
       <label class="delegated-modal-label">Notes</label>
-      <textarea id="dm-notes" class="delegated-modal-input" rows="3" maxlength="1000" placeholder="Context / background"></textarea>
+      <div class="dm-notes-group">
+        <span class="dm-sublabel">What you're waiting on<span class="dm-req">*</span></span>
+        <input type="text" id="dm-title" class="delegated-modal-input" maxlength="200" placeholder="Final numbers from finance" />
+        <span class="dm-sublabel">Context / background</span>
+        <textarea id="dm-notes" class="delegated-modal-input" rows="3" maxlength="1000" placeholder="Anything else worth remembering"></textarea>
+      </div>
       <div class="delegated-modal-actions">
         <button type="button" class="secondary" id="dm-cancel">Cancel</button>
         <button type="button" class="secondary" id="dm-mark-checked" style="display:none">Mark as checked-in</button>
