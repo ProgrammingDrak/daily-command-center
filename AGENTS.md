@@ -6,14 +6,26 @@ This app runs in two places at once. Know which you're touching before any write
 
 - **Local dev:** `http://localhost:8090` (local Postgres + legacy `data/blocks.db`).
   `NODE_ENV` unset → localhost is trusted, so service endpoints work without a token.
-- **Production:** `https://daily-command-center.onrender.com` — live on Render,
-  Supabase Postgres, auto-deploys from `main`. `NODE_ENV=production` → localhost is
-  NOT trusted, so programmatic writes require `Authorization: Bearer <SECRET_PA_TOKEN>`.
-  Health check: `/api/health`.
+- **Production (canonical):** `https://daily-command-center.onrender.com` — live on
+  Render, Supabase Postgres, auto-deploys from `main`. `NODE_ENV=production` →
+  localhost is NOT trusted, so programmatic writes require
+  `Authorization: Bearer <SECRET_PA_TOKEN>`. Health check: `/api/health`. All tooling
+  (`scripts/dcc-schedule.js`, `mcp/dcc-mcp`, the `add-task` skill) must point here.
 
-Render dashboard service name is `daily-command-center` (the `render.yaml` name
-`daily-command-center-personal` is stale). Production Clerk/custom-domain cutover is
-not done yet — see `CLERK-PRODUCTION-SETUP.md`.
+> Host naming — this was previously documented in a confusing way; the canonical
+> production URL is `daily-command-center.onrender.com`.
+> `daily-command-center-personal.onrender.com` is the legacy duplicate — it is still
+> the `name:` in `render.yaml`, and as of 2026-06-19 it was the warm instance while
+> the canonical host cold-started. It is being retired; do not point new tooling at
+> it. Reconciling `render.yaml` + the Render dashboard onto the canonical name is a
+> production-deploy task — get explicit sign-off before changing `render.yaml`.
+>
+> Cold starts: the canonical host can spin down on the free tier (~30-60s to wake).
+> Callers now tolerate this via a warmup ping + bounded retry, tunable with
+> `DCC_TIMEOUT_MS`, `DCC_WARMUP_TIMEOUT_MS`, `DCC_MAX_RETRIES`. The permanent cure is
+> an always-on plan or a keep-warm cron ping on the canonical service.
+
+Production Clerk/custom-domain cutover is not done yet — see `CLERK-PRODUCTION-SETUP.md`.
 
 Assistant task scheduling: `POST {BASE}/api/dcc/quick-task` with the bearer token —
 body `{ title, date, start, durationMinutes, priority, detail, tags }`. Don't hand-roll
