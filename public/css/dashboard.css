@@ -2761,6 +2761,26 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .delegated-modal-actions button.primary:hover{opacity:0.9}
 .delegated-modal-actions button.secondary{background:var(--card);color:var(--text-muted)}
 .delegated-modal-actions button.secondary:hover{color:var(--text);border-color:var(--accent)}
+/* Task-link picker spacing */
+.dm-task-link{margin-bottom:6px}
+/* Check-in: segmented toggle + panes */
+.dm-checkin-toggle{display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:8px}
+.dm-checkin-tab{flex:1;padding:7px 10px;background:var(--card);color:var(--text-muted);border:none;border-right:1px solid var(--border);font-size:12px;font-family:inherit;cursor:pointer}
+.dm-checkin-tab:last-child{border-right:none}
+.dm-checkin-tab:hover{color:var(--text)}
+.dm-checkin-tab.active{background:var(--accent);color:#fff}
+.dm-checkin-pane{margin-bottom:2px}
+.dm-quick-dates{display:flex;gap:6px;margin-bottom:6px}
+.dm-quick-date{flex:0 0 auto;padding:6px 14px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;font-family:inherit;cursor:pointer}
+.dm-quick-date:hover{border-color:var(--accent);color:var(--accent)}
+.dm-repeat-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dm-repeat-days{width:72px;flex:0 0 auto}
+/* Notes group with nested "what you're waiting on" + context */
+.dm-notes-group{border:1px solid var(--border);border-radius:6px;padding:10px;background:var(--card)}
+.dm-notes-group .delegated-modal-input{background:var(--bg)}
+.dm-sublabel{display:block;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);font-weight:600;margin-bottom:4px}
+.dm-notes-group .delegated-modal-input{margin-bottom:8px}
+.dm-notes-group .delegated-modal-input:last-child{margin-bottom:0}
 .resp-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .delegated-header .primary{font-size:12px;padding:8px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;font-weight:600}
 .delegated-header .primary:hover{background:var(--accent-light)}
