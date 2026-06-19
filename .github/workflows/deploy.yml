@@ -39,12 +39,15 @@ jobs:
           fi
 
           DB_PATHS='^(pg-schema\.js|migrate\.js|migrate-to-unified-blocks\.js|sqlite-to-pg\.js|db\.js|migrations/.*)$'
-          KEYWORD_RX='^\+.*\b(DROP[[:space:]]+(TABLE|COLUMN|INDEX|DATABASE)|TRUNCATE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE)\b'
+          # Match destructive SQL only in *statement* form. Bare keywords (e.g. TRUNCATE)
+          # false-positive on ordinary JS identifiers like a `truncate(title, 80)` UI helper.
+          KEYWORD_RX='^\+.*\b(DROP[[:space:]]+(TABLE|COLUMN|INDEX|DATABASE)|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE)\b'
 
           CHANGED="$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || true)"
           PATH_HITS="$(printf '%s\n' "$CHANGED" | grep -E "$DB_PATHS" || true)"
 
-          DIFF_BODY="$(git diff "$BEFORE" "$AFTER" -- '*.js' '*.sql' 2>/dev/null || true)"
+          # Scan server/db code only; client-side assets under public/ never contain real SQL.
+          DIFF_BODY="$(git diff "$BEFORE" "$AFTER" -- '*.js' '*.sql' ':(exclude)public/**' 2>/dev/null || true)"
           KEYWORD_HITS="$(printf '%s\n' "$DIFF_BODY" | grep -iE "$KEYWORD_RX" || true)"
 
           if [ -z "$PATH_HITS" ] && [ -z "$KEYWORD_HITS" ]; then
