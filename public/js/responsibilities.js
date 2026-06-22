@@ -288,7 +288,7 @@
       const asNeeded=isAsNeeded(p);
       const expanded=_sidebarExpanded.has(item.id);
       return '<div class="repeat-resp-card '+cls+(expanded?' expanded':'')+'" data-id="'+esc(item.id)+'">'+
-        (asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="urgent-schedule" title="Add as urgent" aria-label="Add as urgent">+</button>':'<button type="button" class="repeat-resp-score resp-score '+cls+'" data-act="complete" title="Mark complete" aria-label="Mark '+esc(p.title||"repeat responsibility")+' complete">'+score+'</button>')+
+        (asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule for today">+</button>':'<button type="button" class="repeat-resp-score resp-score '+cls+'" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule '+esc(p.title||"repeat responsibility")+' for today">'+score+'</button>')+
         '<div class="repeat-resp-main" role="button" tabindex="0" data-act="toggle" aria-expanded="'+(expanded?'true':'false')+'">'+
           '<div class="repeat-resp-title-row">'+
             '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+
@@ -306,7 +306,7 @@
           '</div>':'')+
         '</div>'+
         '<div class="repeat-resp-actions">'+
-          '<button type="button" data-act="schedule">Schedule</button>'+
+          '<button type="button" data-act="complete">Complete</button>'+
           (expanded?'<button type="button" data-act="edit">Edit</button><button type="button" class="danger" data-act="remove">Remove</button>':'')+
         '</div>'+
       '</div>';
@@ -339,14 +339,39 @@
     const item=_items.find(i=>i.id===id);
     if(!item)return;
     try{
-      if(act==="schedule"||act==="urgent-schedule"){
-        const body=act==="urgent-schedule"?{force:true,task:{priority:"High",urgent:true}}:{force:true};
-        const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/schedule",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-        if(!res.ok)throw new Error((await res.json()).error||res.statusText);
-        const data=await res.json();
-        if(typeof showToast==="function")showToast(data.created?(act==="urgent-schedule"?"Urgent responsibility added":"Responsibility scheduled"):"That responsibility is already scheduled","success");
-        await loadResponsibilities();
-        await refreshScheduleAfterResponsibilityChange();
+      if(act==="schedule-pick"){
+        // Big-number (and as-needed "+") button: schedule this responsibility onto
+        // today as urgent, letting the user pick a time bucket via the shared
+        // "After 8 AM / 12 PM / 5 PM" picker. The created itinerary task stays
+        // linked to the responsibility (responsibilityId), so checking it off there
+        // resets the countdown (see markResponsibilityTaskCompleted wired into
+        // toggleDone). Default subtasks are attached client-side once scheduled.
+        if(typeof openSchedulePicker!=="function"){
+          if(typeof showToast==="function")showToast("Schedule picker unavailable","error");
+          return;
+        }
+        const p=item.properties||{};
+        const title=p.title||"(untitled)";
+        const dur=Number(p.estimatedMinutes)||30;
+        const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
+        openSchedulePicker(title,dur,{
+          responsibilityId:id,
+          responsibilityTitle:title,
+          capacityBucket:p.capacityBucket||null,
+          priority:"High",
+          source:"responsibility",
+          tags:["responsibility",p.domain,p.area,p.capacityBucket].filter(Boolean),
+          meta:"Responsibility · "+(p.area||p.domain||"general")+" · "+dur+"m",
+          detail:p.description||"",
+          onScheduled:function(info){
+            try{
+              if(typeof addSubtask==="function"&&info&&info.localId){
+                defaults.forEach(function(t){if(t)addSubtask(info.localId,t);});
+              }
+            }catch(e){console.warn("[responsibilities] subtask attach failed",e);}
+            loadResponsibilities();
+          }
+        });
       }else if(act==="complete"){
         const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);

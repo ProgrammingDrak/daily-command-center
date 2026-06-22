@@ -387,6 +387,84 @@ function addStackedTask(taskId, text){
   if(typeof recalcTimes==="function")recalcTimes();
   render();
 }
+// Re-parent an EXISTING task so it becomes a SUBTASK of another (umbrella). Unlike
+// a ride-along (wrapId) — which keeps its own time and duration-based points — a
+// subtask shares the parent's point pie, travels with it, and renders as the small
+// subtask row. The task itself is unchanged (no copy/alias): it simply moves under
+// the new parent and can be pulled back out later (drag to an edge clears the edge).
+// Mirrors the drag "Case B" re-parent in drag.js but targets subtaskOf, and is
+// shared by the "Make subtask of…" menu and the Shift-drag-to-nest drop zone.
+function reparentAsSubtask(childId, parentId){
+  if(!childId||!parentId||childId===parentId)return false;
+  if(typeof scheduled==="undefined")return false;
+  const child=scheduled.find(e=>e.id===childId);
+  const parent=scheduled.find(e=>e.id===parentId);
+  if(!child||!parent)return false;
+  // Guard against cycles: never nest a task under one of its own descendants.
+  if(typeof _isAncestor==="function"&&_isAncestor(childId,parentId)){
+    if(typeof showToast==="function")showToast("Can't nest a task under its own subtask","error",2600);
+    return false;
+  }
+  if(child.subtaskOf===parentId)return false; // already a subtask of this parent
+  const prevParent=(typeof parentIdOf==="function")?parentIdOf(child):(child.subtaskOf||child.wrapId||null);
+  child.subtaskOf=parentId;
+  child.wrapId=null;
+  if(typeof _clearPin==="function")_clearPin(child);
+  // A subtask has no independent time; align it to the parent's start (like addSubtask).
+  child.start=parent.start||child.start;child.end=child.start;
+  if(typeof _persistEvWrap==="function")_persistEvWrap(child);
+  // Fold the child into the new parent's pie; rebalance the old parent's, if any.
+  if(window.PointPlan){
+    if(typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(parentId);
+    if(prevParent&&prevParent!==parentId&&typeof window.PointPlan.reconcile==="function")window.PointPlan.reconcile(prevParent);
+  }
+  if(typeof recalcTimes==="function")recalcTimes();
+  render();
+  if(typeof showToast==="function")showToast('Made a subtask of "'+(parent.title||"task")+'"',"success",2200);
+  return true;
+}
+// Popover anchored at the click that lists candidate parent tasks; choosing one
+// re-parents the task as a subtask via reparentAsSubtask(). Reuses the dur-popover
+// shell/positioning from openSubtaskAdd.
+function openMakeSubtaskOf(childId, anchorEl){
+  document.querySelectorAll(".subtask-add-pop,.resched-popover,.dur-popover,.make-subtask-pop").forEach(p=>p.remove());
+  if(typeof scheduled==="undefined")return;
+  const esc=(typeof escHtml==="function")?escHtml:(s=>String(s==null?"":s));
+  const meeting=(typeof isMeeting==="function")?isMeeting:(()=>false);
+  const done=(typeof isDone==="function")?isDone:(()=>false);
+  const candidates=scheduled.filter(e=>
+    e&&e.id!==childId&&
+    !meeting(e)&&e.type!=="break"&&e.type!=="ooo"&&
+    !done(e)&&
+    e.subtaskOf!==childId&&
+    !(typeof _isAncestor==="function"&&_isAncestor(childId,e.id))&&
+    !(typeof parentIdOf==="function"&&parentIdOf(scheduled.find(x=>x.id===childId)||{})===e.id)
+  );
+  const pop=document.createElement("div");
+  pop.className="dur-popover make-subtask-pop";
+  if(!candidates.length){
+    pop.innerHTML='<div class="make-subtask-empty">No other open tasks to nest under.</div>';
+  }else{
+    pop.innerHTML='<div class="make-subtask-label">Make subtask of…</div>'+
+      '<div class="make-subtask-list">'+
+        candidates.map(e=>'<button type="button" class="make-subtask-opt" data-parent-id="'+esc(e.id)+'">'+esc(e.title||"(untitled)")+'</button>').join("")+
+      '</div>';
+  }
+  function close(){pop.remove();document.removeEventListener("click",onOut,true);document.removeEventListener("keydown",onKey,true);}
+  function onOut(ev){if(!pop.contains(ev.target)&&ev.target!==anchorEl)close();}
+  function onKey(ev){if(ev.key==="Escape")close();}
+  pop.querySelectorAll(".make-subtask-opt").forEach(btn=>{
+    btn.addEventListener("click",ev=>{ev.stopPropagation();const pid=btn.dataset.parentId;close();if(typeof reparentAsSubtask==="function")reparentAsSubtask(childId,pid);});
+  });
+  pop.style.position="fixed";pop.style.visibility="hidden";document.body.appendChild(pop);
+  const rect=anchorEl.getBoundingClientRect(),m=8,pw=pop.offsetWidth||220,ph=pop.offsetHeight||0;
+  let left=Math.max(m,Math.min(rect.left,window.innerWidth-pw-m));
+  let top=rect.bottom+6;
+  if(top+ph>window.innerHeight-m){const above=rect.top-ph-6;if(above>=m)top=above;}
+  top=Math.max(m,Math.min(top,window.innerHeight-ph-m));
+  pop.style.left=left+"px";pop.style.top=top+"px";pop.style.visibility="";
+  setTimeout(()=>{document.addEventListener("click",onOut,true);document.addEventListener("keydown",onKey,true);},0);
+}
 function toggleSubtask(taskId, stId){
   if(typeof manualDone==="undefined")return;
   if(manualDone.has(stId)){manualDone.delete(stId);if(typeof doneAt!=="undefined")delete doneAt[stId];}

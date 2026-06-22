@@ -2024,6 +2024,8 @@
   /* Combined + button (replaces +sub) */
   .btn-add-menu{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;font-weight:700;padding:2px 4px;border-radius:4px;transition:all 0.1s;line-height:1}
   .btn-add-menu:hover{color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.1)}
+  .btn-nest-sub{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:all 0.1s;line-height:1;display:inline-flex;align-items:center}
+  .btn-nest-sub:hover{color:var(--teal,#14b8a6);background:rgba(20,184,166,0.12)}
 
   /* + button dropdown menu — fixed positioning to escape card overflow */
   .add-menu-popup{position:fixed;z-index:9000;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);overflow:hidden;min-width:140px}
@@ -4093,6 +4095,9 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   position:absolute;inset:0;z-index:7;pointer-events:none;border-radius:8px;
   font-size:11px;font-weight:700;letter-spacing:.02em;color:#fff;
   background:rgba(147,51,234,0.66);border:2px solid #9333ea}
+/* Shift held over the nest zone = nest as a SUBTASK (umbrella) instead of a ride-along. */
+.it-list-item.drag-over-nest-sub::after,.tl-item.drag-over-nest-sub::after{
+  content:"\2935  as subtask";background:rgba(13,148,136,0.72);border:2px solid #14b8a6}
 /* Drag feedback: reorder to a new slot = a blue "ghost" of the task at the drop point. */
 .it-list-item.drag-over-top,.tl-item.drag-over-top,
 .it-list-item.drag-over-bottom,.tl-item.drag-over-bottom{position:relative;border:none}
@@ -4161,6 +4166,13 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .subtask-add-pop .sub-add-go{background:var(--accent);border:none;color:#fff;border-radius:5px;font-size:11px;font-weight:700;padding:4px 9px;cursor:pointer}
 .subtask-add-pop .sub-add-more{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:0 4px;line-height:1}
 .subtask-add-pop .sub-add-more:hover{color:var(--text)}
+/* "Make subtask of…" parent picker popover (reuses the dur-popover shell). */
+.make-subtask-pop{padding:6px;max-width:260px}
+.make-subtask-pop .make-subtask-label{font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--text-muted);padding:2px 4px 5px}
+.make-subtask-pop .make-subtask-list{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto}
+.make-subtask-pop .make-subtask-opt{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);cursor:pointer;font-size:12px;padding:5px 7px;border-radius:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.make-subtask-pop .make-subtask-opt:hover{background:rgba(20,184,166,0.14);color:var(--teal,#14b8a6)}
+.make-subtask-pop .make-subtask-empty{font-size:11px;color:var(--text-muted);padding:6px 7px}
 
 /* ======== MOBILE-FRIENDLY TOUCH TARGETS (<=760px) ========
    Best practice: Apple HIG 44px, Material 48px, WCAG 2.5.5 (AAA) 44px; >=8px
