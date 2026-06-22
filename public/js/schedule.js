@@ -582,6 +582,7 @@ function toggleDone(id,opts){
       const _cel=_beginCompletionCelebration(id);
       manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
       _onParentCompleted(id);
+      if(ev&&ev.responsibilityId&&typeof window.markResponsibilityTaskCompleted==="function")window.markResponsibilityTaskCompleted(ev);
       saveDoneState();render();
       _finishCompletionCelebration(_cel,id);
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
@@ -607,6 +608,7 @@ function toggleDone(id,opts){
   const _cel=_beginCompletionCelebration(id);
   manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
   _onParentCompleted(id);
+  if(ev&&ev.responsibilityId&&typeof window.markResponsibilityTaskCompleted==="function")window.markResponsibilityTaskCompleted(ev);
   saveDoneState();render();
   _finishCompletionCelebration(_cel,id);
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);

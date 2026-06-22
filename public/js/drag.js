@@ -7,7 +7,7 @@ function dStart(e,id){
   const el=e.target.closest(".tl-item");if(el)el.classList.add("dragging");
   const listEl=e.target.closest(".it-list-item");if(listEl)listEl.classList.add("dragging");
 }
-function dEnd(){dragId=null;window._dragNowPill=false;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest","pin-drop-target"))}
+function dEnd(){dragId=null;window._dragNowPill=false;document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("dragging","drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target"))}
 function dOver(e,id){
   e.preventDefault();
   // Dragging the live now-pill: highlight the hovered card as the pin target
@@ -21,17 +21,20 @@ function dOver(e,id){
   if(id===dragId)return;
   const tgt=e.currentTarget,r=tgt.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  tgt.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest");
+  tgt.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub");
   const targetEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===id):null;
-  // Drop on the body of a task = wrap inside it; drop near the top/bottom edge = reorder to that slot.
+  // Drop on the body of a task = nest inside it; drop near the top/bottom edge = reorder to that slot.
+  // Plain body-drop = ride-along (own time/points); hold Shift = subtask (shares the parent's pie).
   const canNest=targetEv&&typeof isMeeting==="function"&&!isMeeting(targetEv)&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
   if(canNest&&y>h*0.25&&y<h*0.75){
-    tgt.classList.add("drag-over-nest");return;
+    tgt.classList.add("drag-over-nest");
+    tgt.classList.toggle("drag-over-nest-sub",!!e.shiftKey);
+    return;
   }
   tgt.classList.toggle("drag-over-top",y<h/2);
   tgt.classList.toggle("drag-over-bottom",y>=h/2);
 }
-function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","pin-drop-target")}
+function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub","pin-drop-target")}
 
 // ── Scheduling helpers ──
 
@@ -276,7 +279,7 @@ function _finishDrag(old){
   if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
   if(typeof log==="function")log("reorder",dragId,old);
   dragId=null;
-  document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest"));
+  document.querySelectorAll(".tl-item,.it-list-item").forEach(el=>el.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub"));
   render();
 }
 
@@ -342,6 +345,12 @@ function dDrop(e,tid){
   // ---- Decide nesting: dropping on a task's body wraps the moved item inside it ----
   const newWrapId=nest?target.id:null;
 
+  if(newWrapId&&e.shiftKey){
+    // ---- Case B': NEST as a SUBTASK (umbrella; shares the parent's point pie and
+    // travels with it). Shift held during the drop selects this over a ride-along. ----
+    if(typeof reparentAsSubtask==="function")reparentAsSubtask(moved.id,newWrapId);
+    _finishDrag(old);return;
+  }
   if(newWrapId){
     // ---- Case B: NEST as a ride-along (concurrent, inside the wrap window). The
     // target becomes a wrap if it wasn't one. ----

@@ -191,6 +191,7 @@ function buildListView(){
       '<div class="it-list-actions">'+
         (!isMeeting(ev)&&!isDoneRow?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>':'')+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-nest-sub" title="Make subtask of…" data-nest-id="'+ev.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v10a4 4 0 0 0 4 4h12M15 13l5 5-5 5"/></svg></button>':'')+
         notesButton(ev)+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+dur(ev)+'" title="Start pomodoro timer">'+pomoSvg+'</button>':'')+
@@ -214,6 +215,8 @@ function buildListView(){
     if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
     const am=el.querySelector(".btn-add-menu");
     if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    const ns=el.querySelector(".btn-nest-sub");
+    if(ns)ns.addEventListener("click",e=>{e.stopPropagation();if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ns.dataset.nestId,ns);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     return el;
@@ -592,6 +595,7 @@ function buildSchedule(){
       setTimeout(()=>document.addEventListener("click",onOutside,true),0);
     });}
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
+    const nsb=el.querySelector(".btn-nest-sub");if(nsb)nsb.addEventListener("click",e=>{e.stopPropagation();if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(nsb.dataset.nestId,nsb);});
     const rb=el.querySelector(".btn-repeat-resp");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);});
     const delb=el.querySelector(".btn-delegated");if(delb)delb.addEventListener("click",e=>{e.stopPropagation();if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
