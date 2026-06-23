@@ -1590,6 +1590,8 @@
       const goalExcluded = r.bankroll_goal_excluded ? '<span class="slot-goal-excluded">bankroll goal mode</span>' : '';
       const privateChip = r.public_visibility === "private" ? '<span class="slot-private-chip" title="Hidden from the shared view">🔒 Private</span>' : '';
       const usesChip = r.uses_remaining != null ? '<span class="slot-lifespan-chip" title="Wins left before it leaves rotation">' + esc(r.uses_remaining) + ' left</span>' : '';
+      const redemptionsLeft = r.redemptions_left != null ? r.redemptions_left : (r.redemption_limit != null ? Math.max(0, Number(r.redemption_limit) - Number(r.times_redeemed || 0)) : null);
+      const redemptionChip = r.redemption_limit != null ? '<span class="slot-lifespan-chip' + (redemptionsLeft <= 0 ? ' expired' : '') + '" title="Redemptions left before this reward auto-archives">' + esc(redemptionsLeft) + ' of ' + esc(r.redemption_limit) + ' redemptions left</span>' : '';
       const expiresChip = r.expires_at ? '<span class="slot-lifespan-chip' + (r.lifespan_exhausted ? ' expired' : '') + '" title="Expires ' + esc(new Date(r.expires_at).toLocaleString()) + '">' + (r.lifespan_exhausted ? 'expired' : 'until ' + esc(new Date(r.expires_at).toLocaleDateString())) + '</span>' : '';
       const oddsLabel = oddsText(r, slotState.rewards || []);
       const won = Number(r.times_won || 0), redeemed = Number(r.times_redeemed || 0);
@@ -1603,7 +1605,7 @@
             '<span>' + esc(sourceLabel(normalizeRewardSource(r))) + '</span>' +
             '<span>' + esc(tierById(r.tier_id).label) + '</span>' +
             '<span>' + esc(oddsLabel) + '</span>' +
-            value + time + bank + privateChip + usesChip + expiresChip + goalExcluded + statsChip + locked +
+            value + time + bank + privateChip + usesChip + redemptionChip + expiresChip + goalExcluded + statsChip + locked +
           '</div>' +
           '<div class="slot-reward-inline-edit">' +
             '<select class="slot-card-source" aria-label="Paid by">' + sourceOptionsHtml.replace('value="' + esc(normalizeRewardSource(r)) + '"', 'value="' + esc(normalizeRewardSource(r)) + '" selected') + '</select>' +
@@ -4997,6 +4999,9 @@
     checked("slot-form-active", reward ? reward.active : true);
     checked("slot-form-private", reward ? reward.public_visibility === "private" : false);
     val("slot-form-notes", reward ? reward.notes : "");
+    const rLimit = reward && reward.redemption_limit != null ? Number(reward.redemption_limit) : null;
+    val("slot-form-recurring", rLimit ? "limited" : "recurring");
+    val("slot-form-redemption-limit", rLimit || "");
     syncRewardFormUi();
     const title = document.getElementById("slot-form-title");
     if(title) title.focus();
@@ -5037,6 +5042,15 @@
       val("slot-form-sponsor", "self");
     }
     if(!needsPrice) val("slot-form-value", "");
+    // Recurring vs limited: reveal the count input only when "limited".
+    const recurringEl = document.getElementById("slot-form-recurring");
+    const limitEl = document.getElementById("slot-form-redemption-limit");
+    const noteEl = document.getElementById("slot-form-redemption-note");
+    const limited = recurringEl && recurringEl.value === "limited";
+    if(limitEl) limitEl.style.display = limited ? "" : "none";
+    if(noteEl) noteEl.textContent = limited
+      ? "Auto-archives once it's been redeemed this many times."
+      : "Recurring rewards can be won and redeemed forever.";
     renderSponsorSplits();
     updateOddsHint();
   }
@@ -5132,6 +5146,11 @@
     const source = (document.getElementById("slot-form-source") || {}).value || "free";
     const tierId = (document.getElementById("slot-form-tier") || {}).value || "tier_i";
     const valueCents = Math.round(valueDollars * 100);
+    // Recurring (unlimited) vs limited-to-N redemptions. "limited" with a positive
+    // count caps redemptions and auto-archives the reward once it's used up.
+    const recurring = (document.getElementById("slot-form-recurring") || {}).value || "recurring";
+    const limitRaw = parseInt((document.getElementById("slot-form-redemption-limit") || {}).value, 10);
+    const redemptionLimit = recurring === "limited" && Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : null;
     const existing = editingId ? findReward(editingId) : null;
     // The form has no kind selector and derives a kind from source+value. That
     // heuristic only covers free/sponsor/bank_gated. For an existing reward whose
@@ -5169,7 +5188,8 @@
       notes: document.getElementById("slot-form-notes").value,
       // The full form has no lifespan inputs; preserve any sponsor-set expiry/uses on edit.
       expires_at: (editingId && findReward(editingId) || {}).expires_at || null,
-      uses_remaining: (editingId && findReward(editingId) || {}).uses_remaining != null ? findReward(editingId).uses_remaining : null
+      uses_remaining: (editingId && findReward(editingId) || {}).uses_remaining != null ? findReward(editingId).uses_remaining : null,
+      redemption_limit: redemptionLimit
     };
   }
 
@@ -5829,6 +5849,8 @@
     if(valueInput) valueInput.addEventListener("input", syncRewardFormUi);
     const sponsorSelect = document.getElementById("slot-form-sponsor");
     if(sponsorSelect) sponsorSelect.addEventListener("change", syncRewardFormUi);
+    const recurringSelect = document.getElementById("slot-form-recurring");
+    if(recurringSelect) recurringSelect.addEventListener("change", syncRewardFormUi);
     const addSponsorPersonBtn = document.getElementById("slot-add-sponsor-person");
     if(addSponsorPersonBtn) addSponsorPersonBtn.addEventListener("click", () => addSponsorSplit("", remainingSponsorPercent()));
     const weightInput = document.getElementById("slot-form-weight");

@@ -1064,6 +1064,14 @@ function normalizeRewardInput(body) {
     const n = parseInt(usesRaw, 10);
     if (Number.isFinite(n) && n > 0) usesRemaining = Math.min(n, 9999);
   }
+  // Redemption cap ("buy N"). NULL = recurring/unlimited. Same parse shape as
+  // uses_remaining, but a distinct concept: this drives auto-archive on redeem.
+  const redemptionRaw = body.redemption_limit ?? body.redemptionLimit;
+  let redemptionLimit = null;
+  if (redemptionRaw != null && redemptionRaw !== "") {
+    const n = parseInt(redemptionRaw, 10);
+    if (Number.isFinite(n) && n > 0) redemptionLimit = Math.min(n, 9999);
+  }
   // Preserve gating fields rather than hardcoding them, so an organizational
   // edit (drag, archive, share change) that round-trips the reward through this
   // normalizer does not silently wipe a reward's bank delta, cooldown, sponsor
@@ -1094,6 +1102,7 @@ function normalizeRewardInput(body) {
     public_visibility: isPrivate ? "private" : "public",
     expires_at: expiresAt,
     uses_remaining: usesRemaining,
+    redemption_limit: redemptionLimit,
   };
 }
 
@@ -1170,6 +1179,8 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     public_visibility: row.public_visibility === "private" ? "private" : "public",
     expires_at: row.expires_at || null,
     uses_remaining: row.uses_remaining != null ? Number(row.uses_remaining) : null,
+    redemption_limit: row.redemption_limit != null ? Number(row.redemption_limit) : null,
+    redemptions_left: row.redemption_limit != null ? Math.max(0, Number(row.redemption_limit) - Number(row.times_redeemed || 0)) : null,
     lifespan_exhausted: lifespanExhausted,
     eligible: !!row.active && chanceShares > 0 && tierActive && sourceEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted,
     jackpot_type: jackpotType(row),
@@ -1934,10 +1945,10 @@ async function createReward(workspaceId, body) {
   const sortOrder = Number(mx && mx.next) || 1000;
   const { rows } = await pool.query(
     `INSERT INTO slot_rewards
-     (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,duration_minutes,requires_confirmation,cooldown_days,unlock_threshold_cents,notes,public_visibility,expires_at,uses_remaining,sort_order)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+     (workspace_id,title,kind,sponsor_type,sponsor_splits,weight,chance_shares,payment_source,tier_id,active,sponsor_active,value_cents,bank_delta_cents,duration_minutes,requires_confirmation,cooldown_days,unlock_threshold_cents,notes,public_visibility,expires_at,uses_remaining,redemption_limit,sort_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
      RETURNING *`,
-    [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining, sortOrder]
+    [workspaceId, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining, r.redemption_limit, sortOrder]
   );
   return rows[0];
 }
@@ -2004,10 +2015,10 @@ async function updateReward(workspaceId, id, body) {
        payment_source=$9, tier_id=$10, active=$11, sponsor_active=$12,
        value_cents=$13, bank_delta_cents=$14, duration_minutes=$15, requires_confirmation=$16,
        cooldown_days=$17, unlock_threshold_cents=$18, notes=$19,
-       public_visibility=$20, expires_at=$21, uses_remaining=$22, updated_at=NOW()
+       public_visibility=$20, expires_at=$21, uses_remaining=$22, redemption_limit=$23, updated_at=NOW()
      WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL
      RETURNING *`,
-    [workspaceId, id, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining]
+    [workspaceId, id, r.title, r.kind, r.sponsor_type, JSON.stringify(r.sponsor_splits), r.weight, r.chance_shares, r.payment_source, r.tier_id, r.active, r.sponsor_active, r.value_cents, r.bank_delta_cents, r.duration_minutes, r.requires_confirmation, r.cooldown_days, r.unlock_threshold_cents, r.notes, r.public_visibility, r.expires_at, r.uses_remaining, r.redemption_limit]
   );
   if (!rows[0]) throw notFound("Reward not found");
   return rows[0];
@@ -3847,6 +3858,7 @@ module.exports = {
   claimBankrollGoalReward,
   chooseWeighted,
   _test: {
+    normalizeRewardInput,
     buildSpinScreen,
     calculateScreenBankPayout,
     emptyScreenBankPayout,

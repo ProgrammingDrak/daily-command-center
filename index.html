@@ -1474,6 +1474,15 @@
               <input id="slot-form-duration" type="number" min="0" step="5" placeholder="0">
               <em>Minutes to enjoy after winning.</em>
             </label>
+            <label class="slot-field">
+              <span>Redemptions</span>
+              <select id="slot-form-recurring">
+                <option value="recurring">Recurring (unlimited)</option>
+                <option value="limited">Limited to…</option>
+              </select>
+              <input id="slot-form-redemption-limit" type="number" min="1" step="1" placeholder="How many?" style="display:none;margin-top:6px">
+              <em id="slot-form-redemption-note">Recurring rewards can be won and redeemed forever.</em>
+            </label>
             <label class="slot-field" data-slot-field="sponsor">
               <span>Sponsor</span>
               <select id="slot-form-sponsor">

@@ -343,7 +343,7 @@ async function listRewardQueue(ownerUserId, { status = null } = {}) {
   return rows;
 }
 
-async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, counter, columns, eventMetadata }) {
+async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, counter, columns, eventMetadata, archiveOnRedeemLimit }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -390,6 +390,19 @@ async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, c
         [item.reward_definition_id]
       );
     }
+    // Auto-archive a "buy N" reward once it has been redeemed N times. Runs after
+    // the counter bump above, so times_redeemed reflects this redemption. Sets only
+    // deleted_at (leaving active=TRUE) — that is the auto-archive signature, distinct
+    // from a manual delete (which also sets active=FALSE, weight=0), so unredeem can
+    // tell the two apart and only resurrect an auto-archived reward.
+    if (archiveOnRedeemLimit && item.reward_definition_id) {
+      await client.query(
+        `UPDATE slot_rewards SET deleted_at = NOW()
+          WHERE id=$1 AND redemption_limit IS NOT NULL
+            AND times_redeemed >= redemption_limit AND deleted_at IS NULL`,
+        [item.reward_definition_id]
+      );
+    }
     await client.query("COMMIT");
     return { item: next, changed: true };
   } catch (err) {
@@ -432,6 +445,7 @@ const redeemReward = (queueId, ownerUserId, { actualSeconds = null } = {}) =>
     from: ["queued", "claimed", "scheduled"], to: "redeemed", stamp: "redeemed_at", eventType: "redeemed",
     counter: "times_redeemed = times_redeemed + 1, last_redeemed_at = NOW()",
     eventMetadata: actualSeconds != null ? { actualSeconds } : {},
+    archiveOnRedeemLimit: true,
   });
 
 /** Redeem the scheduled reward parked on a given itinerary block, if any. This
@@ -488,6 +502,16 @@ async function unredeemReward(queueId, ownerUserId) {
     if (item.reward_definition_id) {
       await client.query(
         `UPDATE slot_rewards SET times_redeemed = GREATEST(0, times_redeemed - 1) WHERE id=$1`,
+        [item.reward_definition_id]
+      );
+      // Reverse an auto-archive if this un-redeem drops the count back below the cap.
+      // Guarded to active=TRUE so a manually deleted reward (active=FALSE) is never
+      // resurrected — only the redemption-cap auto-archive (deleted_at set, still
+      // active) is undone.
+      await client.query(
+        `UPDATE slot_rewards SET deleted_at = NULL
+          WHERE id=$1 AND redemption_limit IS NOT NULL
+            AND times_redeemed < redemption_limit AND deleted_at IS NOT NULL AND active = TRUE`,
         [item.reward_definition_id]
       );
     }
@@ -790,6 +814,7 @@ module.exports = {
   unscheduleReward,
   redeemScheduledByBlock,
   redeemReward,
+  unredeemReward,
   discardReward,
   // sponsorships
   requestSponsorship,

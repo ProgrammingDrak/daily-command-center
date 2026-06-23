@@ -1006,6 +1006,20 @@ test("taskPointTier uses the highest earning matched tag and keeps OOO at zero",
   assert.deepEqual(store._test.taskPointTier({ type: "ooo", tags: ["workout"] }, settings).multiplier, 0);
 });
 
+test("normalizeRewardInput parses recurring vs limited redemption_limit", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const norm = b => store._test.normalizeRewardInput({ title: "R", ...b });
+  // Recurring: nothing / empty / non-positive -> null (unlimited).
+  assert.equal(norm({}).redemption_limit, null);
+  assert.equal(norm({ redemption_limit: "" }).redemption_limit, null);
+  assert.equal(norm({ redemption_limit: 0 }).redemption_limit, null);
+  assert.equal(norm({ redemption_limit: -3 }).redemption_limit, null);
+  // Limited: positive integer kept, camelCase accepted, clamped to 9999.
+  assert.equal(norm({ redemption_limit: 5 }).redemption_limit, 5);
+  assert.equal(norm({ redemptionLimit: "3" }).redemption_limit, 3);
+  assert.equal(norm({ redemption_limit: 100000 }).redemption_limit, 9999);
+});
+
 test("taskPointTier scores rewards at the quarter rate via source or tag", () => {
   const store = loadStoreWithMock(createMockPool());
   // A reward-bank task (source) earns quarter points with no tag config at all.

@@ -480,6 +480,10 @@ ALTER TABLE slot_rewards
   ADD COLUMN IF NOT EXISTS times_redeemed     INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS last_redeemed_at   TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS uses_remaining     INTEGER,
+  -- Redemption cap (distinct from uses_remaining, which is a win-cap). NULL =
+  -- recurring/unlimited; an integer = "buy N": the reward auto-archives
+  -- (deleted_at set) once times_redeemed reaches it.
+  ADD COLUMN IF NOT EXISTS redemption_limit   INTEGER,
   ADD COLUMN IF NOT EXISTS expires_at         TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS public_visibility  TEXT NOT NULL DEFAULT 'private';
 
