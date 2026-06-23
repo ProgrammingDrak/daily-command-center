@@ -16,6 +16,7 @@
   let draggedRewardId = null;
   let bankDetailsOpen = false;
   let activeSlotSection = "machine";
+  let spinHistoryPeriodIdx = 0;
   let activeJackpotChoiceSpin = null;
   let activeJackpotChoiceFilter = "any";
   let slotPetHome = null;
@@ -28,6 +29,10 @@
   const SLOT_SOUND_KEY = "pa-slot-sound-on";
   const SLOT_WAGER_KEY = "pa-slot-wager-mult";
   const SLOT_WHEEL_COUNT_KEY = "pa-slot-wheel-count";
+  // Client-side log of every spin's per-wheel dollar payouts, mirroring the
+  // award-queue localStorage pattern (readSpinHistory / writeSpinHistory below).
+  // Each row: { ts: Date.now(), wheels: [2.50, 1.00], total: 3.50 } in dollars.
+  const SPIN_HISTORY_KEY = "pa-slot-spin-history";
   // Wager multipliers the player can arm (1 = normal). Buttons render the >1 tiers.
   const WAGER_TIERS = [2, 5, 10, 100];
   // Wheel counts for a parallel multi-wheel batch (1 = the single canonical wheel).
@@ -595,6 +600,7 @@
     renderTierManager();
     renderRewards();
     if(!isSpinning) renderHistory();
+    renderSpinHistory();
     renderSpinButton();
     updateSlotWagerButton();
     updateSlotWheelCountButton();
@@ -948,7 +954,7 @@
     const field = document.getElementById("slot-coin-field");
     if(field) field.remove();
     restoreActiveBankPetRunner();
-    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-bank-pet-dust,.slot-bank-pet-money,.slot-bank-collect-pop,.slot-piggy-add-pop,.slot-bank-total-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-impact-spark,.slot-bank-math-overlay").forEach(el => el.remove());
+    document.querySelectorAll(".slot-gold-transfer,.slot-bank-flow,.slot-bank-pet-dust,.slot-bank-pet-money,.slot-bank-collect-pop,.slot-piggy-add-pop,.slot-bank-total-pop,.slot-bank-link,.slot-bank-multiplier-pop,.slot-bank-impact-spark,.slot-bank-math-overlay,.slot-mw-converge-layer").forEach(el => el.remove());
     document.querySelectorAll(".slot-pending-deposit.receiving").forEach(el => el.classList.remove("receiving"));
     clearSlotRewardEffects();
   }
@@ -1878,6 +1884,147 @@
     }));
   }
 
+  // ── Spin History (client-side, localStorage) ──
+  // Persists every spin as { ts, wheels: [dollars...], total } so the Spin
+  // History panel can summarize earnings over a rolling/calendar window. Stored
+  // in dollars (per the feature contract); the rest of the app works in cents,
+  // so recordSpinHistory takes a cents array and converts on the way in.
+  function readSpinHistory(){
+    try {
+      const rows = JSON.parse(localStorage.getItem(SPIN_HISTORY_KEY) || "[]");
+      return Array.isArray(rows) ? rows : [];
+    } catch(e) {
+      return [];
+    }
+  }
+
+  function writeSpinHistory(rows){
+    try {
+      localStorage.setItem(SPIN_HISTORY_KEY, JSON.stringify((rows || []).slice(-1000)));
+    } catch(e) {}
+  }
+
+  // centsArray: one entry per wheel spun, that wheel's reserve payout in cents
+  // (0 for misses / non-cash wins). Records a single dollar-denominated row.
+  function recordSpinHistory(centsArray){
+    const cents = Array.isArray(centsArray) ? centsArray : [centsArray];
+    const wheels = cents.map(c => Math.round(c || 0) / 100);
+    const totalCents = cents.reduce((sum, c) => sum + (c || 0), 0);
+    const entry = { ts: Date.now(), wheels, total: Math.round(totalCents) / 100 };
+    const rows = readSpinHistory();
+    rows.push(entry);
+    writeSpinHistory(rows);
+    renderSpinHistory();
+    return entry;
+  }
+
+  // Dollar value (as stored in spin history) -> shared cents formatter.
+  function fmtDollars(dollars){
+    return money(Math.round((dollars || 0) * 100));
+  }
+
+  // Clickable period button cycles through these in order. The "1 X" group is
+  // calendar-to-date (since the start of today/week/month/quarter/year); the
+  // "Past N Days" group is a rolling window of the last N*24h.
+  const SPIN_HISTORY_PERIODS = [
+    { id: "last", label: "Last Spin" },
+    { id: "1d", label: "1 Day" },
+    { id: "1w", label: "1 Week" },
+    { id: "1mo", label: "1 Month" },
+    { id: "1q", label: "1 Quarter" },
+    { id: "1y", label: "1 Year" },
+    { id: "p7", label: "Past 7 Days" },
+    { id: "p30", label: "Past 30 Days" },
+    { id: "p90", label: "Past 90 Days" },
+    { id: "p365", label: "Past 365 Days" },
+    { id: "all", label: "All Time" }
+  ];
+  const DAY_MS = 86400000;
+
+  // Earliest ts (inclusive) that belongs to the given period. "last"/"all" are
+  // handled by the caller and never reach here.
+  function spinPeriodCutoff(periodId){
+    const now = new Date();
+    switch(periodId){
+      case "1d": { const d = new Date(now); d.setHours(0,0,0,0); return d.getTime(); }
+      case "1w": { const d = new Date(now); d.setHours(0,0,0,0); d.setDate(d.getDate() - d.getDay()); return d.getTime(); }
+      case "1mo": return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+      case "1q": return new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1).getTime();
+      case "1y": return new Date(now.getFullYear(), 0, 1).getTime();
+      case "p7": return now.getTime() - 7 * DAY_MS;
+      case "p30": return now.getTime() - 30 * DAY_MS;
+      case "p90": return now.getTime() - 90 * DAY_MS;
+      case "p365": return now.getTime() - 365 * DAY_MS;
+      default: return 0;
+    }
+  }
+
+  function renderSpinHistory(){
+    const el = document.getElementById("slot-spin-history");
+    if(!el) return;
+    if(spinHistoryPeriodIdx < 0 || spinHistoryPeriodIdx >= SPIN_HISTORY_PERIODS.length) spinHistoryPeriodIdx = 0;
+    const period = SPIN_HISTORY_PERIODS[spinHistoryPeriodIdx];
+    const rows = readSpinHistory().slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    let body;
+    if(period.id === "last"){
+      body = spinHistoryLastView(rows[0]);
+    } else {
+      const scoped = period.id === "all" ? rows : rows.filter(e => (e.ts || 0) >= spinPeriodCutoff(period.id));
+      body = spinHistoryPeriodView(scoped, period);
+    }
+    el.innerHTML =
+      '<div class="spin-history-head">' +
+        '<h3>Spin History</h3>' +
+        '<button class="spin-history-period" id="spin-history-period" type="button" title="Click to change window">' + esc(period.label) + ' ▾</button>' +
+      '</div>' + body;
+    const btn = document.getElementById("spin-history-period");
+    if(btn) btn.addEventListener("click", () => {
+      spinHistoryPeriodIdx = (spinHistoryPeriodIdx + 1) % SPIN_HISTORY_PERIODS.length;
+      renderSpinHistory();
+    });
+  }
+
+  // Last Spin: each wheel's individual amount, the timestamp, and the total.
+  function spinHistoryLastView(entry){
+    if(!entry) return '<div class="slot-empty">No spins yet.</div>';
+    const wheels = entry.wheels || [];
+    const chips = wheels.length
+      ? wheels.map((w, i) => '<span class="spin-wheel-chip"><span class="swc-i">W' + (i + 1) + '</span>' + fmtDollars(w) + '</span>').join("")
+      : '<span class="slot-empty">No wheels recorded.</span>';
+    return '<div class="spin-history-last">' +
+      '<div class="spin-last-wheels">' + chips + '</div>' +
+      '<div class="spin-last-foot">' +
+        '<span class="spin-last-time">' + esc(new Date(entry.ts).toLocaleString()) + '</span>' +
+        '<span class="spin-last-total">Total ' + fmtDollars(entry.total) + '</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // Other periods: total earned, # spins, avg per spin, plus the 5 most recent
+  // spins with per-wheel breakdowns inline.
+  function spinHistoryPeriodView(rows, period){
+    if(!rows.length) return '<div class="slot-empty">No spins in ' + esc(period.label) + '.</div>';
+    const spins = rows.length;
+    const totalEarned = rows.reduce((sum, e) => sum + (e.total || 0), 0);
+    const avg = totalEarned / spins;
+    const recent = rows.slice(0, 5).map(e => {
+      const wheels = e.wheels || [];
+      const breakdown = wheels.length > 1
+        ? wheels.map(fmtDollars).join(" + ") + " = " + fmtDollars(e.total)
+        : fmtDollars(e.total);
+      return '<div class="spin-mini-row">' +
+        '<span class="spin-mini-break">' + esc(breakdown) + '</span>' +
+        '<span class="spin-mini-time">' + esc(new Date(e.ts).toLocaleDateString()) + '</span>' +
+      '</div>';
+    }).join("");
+    return '<div class="spin-history-stats">' +
+      '<div class="shs-stat"><span class="shs-num">' + fmtDollars(totalEarned) + '</span><span class="shs-lbl">Total earned</span></div>' +
+      '<div class="shs-stat"><span class="shs-num">' + spins + '</span><span class="shs-lbl">Spin' + (spins === 1 ? '' : 's') + '</span></div>' +
+      '<div class="shs-stat"><span class="shs-num">' + fmtDollars(avg) + '</span><span class="shs-lbl">Avg / spin</span></div>' +
+    '</div>' +
+    '<div class="spin-history-mini"><div class="shm-title">5 most recent</div>' + recent + '</div>';
+  }
+
   function findReward(id){
     return (slotState && slotState.rewards || []).find(r => String(r.id) === String(id));
   }
@@ -2134,16 +2281,19 @@
       });
     }));
     const totalBank = spins.reduce((sum, sp) => sum + ((sp && sp.bank_delta_cents) || 0), 0);
+    // Log every wheel's reserve payout (0 for misses) so the Spin History panel
+    // can show each wheel's individual contribution and the combined total.
+    recordSpinHistory(frames.map((f, i) => (spins[i] && spins[i].bank_delta_cents) || 0));
     if(totalBank > 0){
-      // The pet runner collects from each machine that produced coins (the wheel
-      // frames are the "tiles" now), the same pathing as the single-wheel bank
-      // sweep, then carries the batch total back to the Reward Reserve.
-      const producing = frames.filter((f, i) => spins[i] && (spins[i].bank_delta_cents || 0) > 0);
+      // Each wheel floats up its own dollar amount, then they converge into one
+      // combined "+$X → Reserve" total before being banked.
       const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
       let deposited = false;
       const deposit = () => { if(!deposited){ deposited = true; addPendingDeposit(totalBank); } };
-      await animateBankReserveDrain(producing.length ? producing : frames, target, totalBank, deposit);
+      if(target) target.classList.add("receiving");
+      await animateMultiWheelConverge(frames, spins, totalBank, target, deposit);
       deposit();
+      if(target){ await wait(200); target.classList.remove("receiving"); }
     }
     notifyReserveCapped(spins);
     const pending = spins.filter(sp => sp && (sp.status === "pending" || (sp.reward_snapshot || {}).requires_jackpot_choice));
@@ -2172,6 +2322,8 @@
       });
       let snap = spinRow.reward_snapshot || {};
       let stages = snap.slot_stages || {};
+      // Log this single spin as a one-wheel entry for the Spin History panel.
+      recordSpinHistory([spinRow.bank_delta_cents || 0]);
       if(bonusRewardRoll) {
         updateStageTrack("jackpot", "hit");
       } else {
@@ -3503,6 +3655,67 @@
     const spinRow = { id: Date.now(), status: scenario.status, bank_delta_cents: scenario.bank_delta_cents || 0 };
     highlightWinningCells(spinRow, snap);
     return animateRewardReveal(spinRow, snap);
+  }
+
+  // Multi-wheel reserve convergence: float each producing wheel's own dollar
+  // amount up from its wheel, let the player read them for a beat, then animate
+  // them all toward the Reward Reserve where they merge into one combined
+  // "+$X.XX → Reserve" chip that gets absorbed as the deposit lands. Replaces
+  // the generic pet-coin sweep for batches so each wheel's contribution is
+  // visible before it's summed.
+  async function animateMultiWheelConverge(frames, spins, totalBank, target, onDeposit){
+    const deposit = () => { if(typeof onDeposit === "function") onDeposit(); };
+    if(!isSlotsPageActive() || totalBank <= 0){ deposit(); return; }
+    const layer = document.createElement("div");
+    layer.className = "slot-mw-converge-layer";
+    document.body.appendChild(layer);
+
+    const chips = [];
+    frames.forEach((frame, i) => {
+      const cents = (spins[i] && spins[i].bank_delta_cents) || 0;
+      if(cents <= 0) return;
+      const r = frame.getBoundingClientRect();
+      const chip = document.createElement("div");
+      chip.className = "slot-mw-amount";
+      chip.textContent = "+" + money(cents);
+      chip.style.left = (r.left + r.width / 2) + "px";
+      chip.style.top = (r.top + r.height / 2) + "px";
+      layer.appendChild(chip);
+      chips.push(chip);
+    });
+    if(!chips.length){ layer.remove(); deposit(); return; }
+
+    // Pop each amount in, then hold so the per-wheel contributions are readable.
+    await wait(40);
+    chips.forEach(c => c.classList.add("show"));
+    await wait(950);
+
+    // Converge toward the reserve (or screen center as a fallback).
+    const tRect = target ? target.getBoundingClientRect() : null;
+    const cx = tRect ? (tRect.left + tRect.width / 2) : (window.innerWidth / 2);
+    const cy = tRect ? (tRect.top + tRect.height / 2) : (window.innerHeight / 2);
+    slotPlay("sweep", { cents: totalBank });
+    chips.forEach(c => { c.style.left = cx + "px"; c.style.top = cy + "px"; c.classList.add("converging"); });
+    await wait(540);
+    chips.forEach(c => c.remove());
+
+    // Merge into the single combined total heading for the Reserve.
+    const total = document.createElement("div");
+    total.className = "slot-mw-total";
+    total.innerHTML = "+" + money(totalBank) + ' <span class="slot-mw-arrow">→ Reserve</span>';
+    total.style.left = cx + "px";
+    total.style.top = cy + "px";
+    layer.appendChild(total);
+    await wait(40);
+    total.classList.add("show");
+    await wait(720);
+
+    deposit();
+    if(target) showBankReserveTotalPop(target, totalBank);
+    slotPlay("deposit", { cents: totalBank });
+    total.classList.add("absorb");
+    await wait(420);
+    layer.remove();
   }
 
   async function animateBankReserveDrain(cells, target, deltaCents, onDeposit){

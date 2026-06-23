@@ -3006,6 +3006,36 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-wheel-caption .mw-win{color:#ffe9a3}
 .slot-wheel-caption .mw-review{color:#fbbf24}
 .slot-wheel-caption .mw-miss{color:var(--text-muted);opacity:.8}
+/* Multi-wheel reserve convergence: per-wheel amounts float to the Reserve and merge */
+.slot-mw-converge-layer{position:fixed;inset:0;pointer-events:none;z-index:1200}
+.slot-mw-amount{position:fixed;transform:translate(-50%,-50%) scale(.55);opacity:0;font-weight:900;font-size:15px;color:#86efac;text-shadow:0 1px 7px rgba(0,0,0,.65);white-space:nowrap;transition:left .54s cubic-bezier(.55,0,.3,1),top .54s cubic-bezier(.55,0,.3,1),opacity .42s ease,transform .42s ease}
+.slot-mw-amount.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.slot-mw-amount.converging{opacity:.9;transform:translate(-50%,-50%) scale(.8)}
+.slot-mw-total{position:fixed;transform:translate(-50%,-50%) scale(.5);opacity:0;font-weight:900;font-size:22px;color:#bbf7d0;text-shadow:0 2px 13px rgba(34,197,94,.55);white-space:nowrap;transition:opacity .3s ease,transform .36s cubic-bezier(.2,1.45,.4,1)}
+.slot-mw-total.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.slot-mw-total .slot-mw-arrow{font-size:14px;color:#86efac;opacity:.92}
+.slot-mw-total.absorb{opacity:0;transform:translate(-50%,-50%) scale(.4)}
+/* Spin History panel */
+.spin-history-section{margin-top:14px}
+.spin-history-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.spin-history-head h3{margin:0}
+.spin-history-period{border:1px solid var(--border);border-radius:999px;background:rgba(96,165,250,0.12);color:var(--accent-light);font-family:inherit;font-size:12px;font-weight:850;padding:6px 12px;cursor:pointer;white-space:nowrap}
+.spin-history-period:hover{background:rgba(96,165,250,0.2)}
+.spin-history-last{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px}
+.spin-last-wheels{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.spin-wheel-chip{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:13px;font-weight:850;color:#86efac}
+.spin-wheel-chip .swc-i{font-size:10px;font-weight:800;color:var(--text-muted)}
+.spin-last-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:8px;border-top:1px solid var(--border);font-size:12px}
+.spin-last-time{color:var(--text-muted)}
+.spin-last-total{font-weight:900;color:#bbf7d0}
+.spin-history-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.shs-stat{display:flex;flex-direction:column;gap:2px;align-items:center;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 6px;text-align:center}
+.shs-num{font-size:17px;font-weight:900;color:var(--text)}
+.shs-lbl{font-size:10px;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em}
+.spin-history-mini .shm-title{font-size:10px;font-weight:800;color:var(--text-muted);text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px}
+.spin-mini-row{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:12px;margin-bottom:5px}
+.spin-mini-break{font-weight:800;color:var(--text)}
+.spin-mini-time{color:var(--text-muted);white-space:nowrap}
 .slot-pet-companion{position:relative;min-height:112px;display:grid;grid-template-columns:1fr 42px 74px;gap:8px;align-items:end;padding:10px;border:1px solid rgba(255,255,255,0.1);border-radius:8px;background:rgba(255,255,255,0.045)}
 .slot-pet-speech{align-self:start;min-height:32px;padding:7px 9px;border-radius:8px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.1);color:var(--text);font-size:12px;font-weight:800;line-height:1.25}
 .slot-lever{align-self:stretch;min-height:86px;position:relative;border:0;background:transparent;cursor:pointer}
