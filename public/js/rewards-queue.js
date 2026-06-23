@@ -164,10 +164,13 @@
   function buildRewardTask(item) {
     const title = (item && (item.title_snapshot || item.title)) || "Reward";
     const realMins = Math.max(0, parseInt(item && (item.duration_minutes_snapshot ?? item.duration_minutes), 10) || 0);
+    // The reward definition's notes (snapshotted at win time) become the task's
+    // description so the reward's instructions/details ride along on the itinerary.
+    const detail = String((item && (item.notes_snapshot ?? item.notes)) || "").trim();
     return {
       title: "🎁 " + title,
       minutes: realMins || REWARD_TASK_MINUTES,
-      options: { source: "reward", tags: ["reward"], meta: "Reward · enjoy it", priority: "High" },
+      options: { source: "reward", tags: ["reward"], meta: "Reward · enjoy it", priority: "High", detail },
     };
   }
 

@@ -57,6 +57,24 @@ test("tag bucket multiplier scales the live estimate", () => {
   assert.equal(TaskPoints.estimate(task).awardPoints, 90);
 });
 
+test("rewards estimate at the quarter rate via source or tag", () => {
+  const TaskPoints = loadTaskPoints();
+
+  // Reward-bank task (source) -> quarter, no tag-tier config needed.
+  const bySource = TaskPoints.estimate({ duration_minutes: 80, source: "reward" });
+  assert.equal(bySource.pointTier, "quarter");
+  assert.equal(bySource.pointMultiplier, 0.25);
+  assert.equal(bySource.awardPoints, 20); // round(80 * 0.25)
+
+  // Reward tag alone -> quarter.
+  assert.equal(TaskPoints.estimate({ duration_minutes: 80, tags: ["reward"] }).pointMultiplier, 0.25);
+
+  // Reward wins even if its tag was bucketed into a higher tier.
+  TaskPoints.setPointTagTiers({ full: ["reward"] });
+  assert.equal(TaskPoints.estimate({ duration_minutes: 80, tags: ["reward"] }).pointMultiplier, 0.25);
+  TaskPoints.setPointTagTiers(null);
+});
+
 test("commute time adds one tenth point per minute across both legs", () => {
   const TaskPoints = loadTaskPoints();
   const payload = TaskPoints.buildPayload({

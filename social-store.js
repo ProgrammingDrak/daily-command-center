@@ -251,6 +251,7 @@ async function enqueueReward({
   chanceSharesSnapshot = null,
   tierSnapshot = null,
   durationMinutesSnapshot = null,
+  notesSnapshot = "",
 }) {
   const client = await pool.connect();
   try {
@@ -281,16 +282,27 @@ async function enqueueReward({
       return { item: existing.rows[0] || null, duplicate: true };
     }
 
+    // Snapshot the reward definition's notes so they can become the scheduled
+    // itinerary task's description. Slot-spin enqueues don't pass notes through,
+    // so fall back to the definition's current notes when we have its id.
+    let notes = String(notesSnapshot || "");
+    if (!notes && rewardDefinitionId) {
+      const def = await client.query(`SELECT notes FROM slot_rewards WHERE id=$1`, [rewardDefinitionId]);
+      if (def.rows[0] && def.rows[0].notes) notes = String(def.rows[0].notes);
+    }
+
     const { rows } = await client.query(
       `INSERT INTO reward_queue_items
          (owner_user_id, workspace_id, reward_definition_id, title_snapshot,
           source_type, source_id, status, won_at, won_date, sponsor_user_id,
-          value_snapshot, chance_shares_snapshot, tier_snapshot, duration_minutes_snapshot)
-       VALUES ($1,$2,$3,$4,$5,$6,'queued', NOW(), $7, $8, $9, $10, $11, $12)
+          value_snapshot, chance_shares_snapshot, tier_snapshot, duration_minutes_snapshot,
+          notes_snapshot)
+       VALUES ($1,$2,$3,$4,$5,$6,'queued', NOW(), $7, $8, $9, $10, $11, $12, $13)
        RETURNING *`,
       [ownerUserId, workspaceId, rewardDefinitionId, titleSnapshot,
        sourceType, sourceId, isoDate(), sponsorUserId,
-       valueSnapshot, chanceSharesSnapshot, tierSnapshot, durationMinutesSnapshot]
+       valueSnapshot, chanceSharesSnapshot, tierSnapshot, durationMinutesSnapshot,
+       notes]
     );
     const item = rows[0];
 

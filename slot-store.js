@@ -2080,6 +2080,14 @@ function taskPointTier(body = {}, settings = {}) {
   }
   const type = String(body.type ?? body.kind ?? "").trim().toLowerCase();
   if (type === "ooo") return { tier: "none", multiplier: 0, matched_tags: [] };
+  // Rewards always score at the quarter rate ("reward time at quarter points"),
+  // regardless of tag-bucket config. Keyed on the reward source OR tag so both
+  // reward-bank tasks and any task carrying the reward tag qualify. Kept in sync
+  // with tagPointMultiplier() in public/js/points.js.
+  const source = String(body.source ?? "").trim().toLowerCase();
+  if (source === "reward" || tagSet.has("reward")) {
+    return { tier: "quarter", multiplier: POINT_TAG_TIER_MULTIPLIERS.quarter, matched_tags: [] };
+  }
   if (bestTier) {
     return {
       tier: bestTier,

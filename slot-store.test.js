@@ -1006,6 +1006,20 @@ test("taskPointTier uses the highest earning matched tag and keeps OOO at zero",
   assert.deepEqual(store._test.taskPointTier({ type: "ooo", tags: ["workout"] }, settings).multiplier, 0);
 });
 
+test("taskPointTier scores rewards at the quarter rate via source or tag", () => {
+  const store = loadStoreWithMock(createMockPool());
+  // A reward-bank task (source) earns quarter points with no tag config at all.
+  assert.deepEqual(store._test.taskPointTier({ source: "reward" }, {}).tier, "quarter");
+  assert.deepEqual(store._test.taskPointTier({ source: "reward" }, {}).multiplier, 0.25);
+  // Any task carrying the reward tag earns quarter points too.
+  assert.deepEqual(store._test.taskPointTier({ tags: ["reward"] }, {}).multiplier, 0.25);
+  // Reward wins even if its tag was bucketed into a higher tier.
+  const fullBucket = { point_tag_tiers: { full: ["reward"] } };
+  assert.deepEqual(store._test.taskPointTier({ tags: ["reward"] }, fullBucket).multiplier, 0.25);
+  // OOO still short-circuits to zero ahead of the reward rule.
+  assert.deepEqual(store._test.taskPointTier({ type: "ooo", source: "reward" }, {}).multiplier, 0);
+});
+
 test("normalizePointTagTiers folds retired lane names onto point buckets", () => {
   const store = loadStoreWithMock(createMockPool());
   const normalized = store._test.normalizePointTagTiers({

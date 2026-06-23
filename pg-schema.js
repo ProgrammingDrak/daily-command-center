@@ -523,7 +523,11 @@ ALTER TABLE reward_queue_items
   -- The reward's real duration, snapshotted at win time, so a reward scheduled
   -- later from the queue gets a correctly-sized itinerary block (not a fixed
   -- placeholder). NULL on rows queued before this column existed.
-  ADD COLUMN IF NOT EXISTS duration_minutes_snapshot INTEGER;
+  ADD COLUMN IF NOT EXISTS duration_minutes_snapshot INTEGER,
+  -- The reward definition's notes, snapshotted at win time, so they can be shown
+  -- as the description of the itinerary task created when the reward is scheduled.
+  -- NULL/empty on rows queued before this column existed or rewards without notes.
+  ADD COLUMN IF NOT EXISTS notes_snapshot TEXT;
 
 -- ── Reward Events (append-only audit ledger; source of truth) ──
 -- Mirrors the slot_point_ledger / pet_home_events idempotency pattern.

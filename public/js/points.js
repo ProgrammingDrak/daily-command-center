@@ -27,6 +27,13 @@
   function tagPointMultiplier(input){
     // Mirrors slot-store.js taskPointTier(): highest multiplier among matched
     // buckets; no config or no match -> full (unsorted tags earn full points).
+    // Rewards always score at the quarter rate (their "time at quarter points"),
+    // regardless of tag-bucket config. Keyed on the reward source OR tag so both
+    // reward-bank tasks and any task carrying the reward tag qualify. Kept in
+    // sync with taskPointTier() in slot-store.js.
+    const src = String(input.source != null ? input.source : "").trim().toLowerCase();
+    const rewardTagSet = new Set(tierTags(input.tags != null ? input.tags : input.tag));
+    if(src === "reward" || rewardTagSet.has("reward")) return { tier: "quarter", multiplier: POINT_TAG_TIER_MULTIPLIERS.quarter };
     if(!pointTagTiers) return { tier: "full", multiplier: 1 };
     const tagSet = new Set(tierTags(input.tags != null ? input.tags : input.tag));
     let bestTier = null, bestMult = -1;
