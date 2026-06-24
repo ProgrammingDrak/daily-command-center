@@ -917,26 +917,25 @@ test("buildSpinScreen lays a jackpot run matching the rolled tier", () => {
   }
 });
 
-test("selectThreeStageOutcome rolls source, tier, then reward by shares", () => {
+test("selectThreeStageOutcome rolls a category, then a reward from that category's wheel", () => {
   const store = loadStoreWithMock(createMockPool());
-  const rolls = [0, 0, 5];
-  const rng = () => rolls.shift() || 0;
+  const rng = () => 0;
   const outcome = store._test.selectThreeStageOutcome([
-    { id: 1, title: "Small thing", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 3 },
-    { id: 2, title: "Big thing", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 7 },
+    { id: 1, title: "Reserve thing", kind: "small_paid", active: true, eligible: true, payment_source: "self", tier_id: "tier_i", chance_shares: 5 },
+    { id: 2, title: "Free thing", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 7 },
   ], {
     jackpot_hit_rate: 1,
     bank_builder_hit_rate: 0,
     free_spin_tile_rate: 0,
-    payment_source_weights: { self: 0, sponsored: 0, free: 1 },
-    reward_tiers: [{ id: "tier_i", label: "Tier I", weight: 1, active: true }],
+    // Force the Free Self Care category; its wheel contains only reward 2.
+    category_weights: { free: 1, self: 0, sponsored: 0 },
   }, rng);
 
   assert.equal(outcome.jackpot_hit, true);
-  assert.equal(outcome.source.id, "free");
-  assert.equal(outcome.tier.id, "tier_i");
-  assert.equal(outcome.selected.id, 2);
+  assert.equal(outcome.source.id, "free");      // the rolled category
+  assert.equal(outcome.selected.id, 2);          // only free-category reward on the wheel
   assert.equal(outcome.empty_bucket, false);
+  assert.equal(outcome.tier.id, "tier_i");       // cosmetic tier, taken from the won reward
 });
 
 test("selectThreeStageOutcome can bank-build before a jackpot on the same full spin", () => {
@@ -1065,35 +1064,47 @@ test("spinCostForDailyPoints prices ~10 spins/day with 10% leniency, defaults un
   assert.equal(store._test.spinCostForDailyPoints(1000000, 14), 250);
 });
 
-test("selectThreeStageOutcome resolves a fallback reward and flags an awaiting dice re-roll when the first bucket is empty", () => {
+test("selectThreeStageOutcome resolves a fallback reward and flags an awaiting re-roll when the rolled category is empty", () => {
   const store = loadStoreWithMock(createMockPool());
-  const rolls = [0, 0, 0, 0, 0, 0, 0];
-  const rng = max => Math.min(max - 1, rolls.shift() || 0);
+  const rng = () => 0;
   const outcome = store._test.selectThreeStageOutcome([
-    { id: 1, title: "Sponsored Tier II", kind: "free", active: true, eligible: true, payment_source: "sponsored", tier_id: "tier_ii", chance_shares: 3 },
-    { id: 2, title: "Free Tier I", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 5 },
+    { id: 1, title: "Sponsored", kind: "free", active: true, eligible: true, payment_source: "sponsored", tier_id: "tier_ii", chance_shares: 3 },
+    { id: 2, title: "Free", kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 5 },
   ], {
     jackpot_hit_rate: 1,
-    payment_source_weights: { self: 0, sponsored: 1, free: 1 },
-    reward_tiers: [
-      { id: "tier_i", label: "Tier I", weight: 1, active: true },
-      { id: "tier_ii", label: "Tier II", weight: 1, active: true },
-    ],
+    bank_builder_hit_rate: 0,
+    // Force the Reward Reserve (self) category, which has no rewards -> empty.
+    category_weights: { free: 0, self: 1, sponsored: 0 },
   }, rng);
 
   assert.equal(outcome.jackpot_hit, true);
-  // The spin lands a guaranteed-winnable fallback (sponsored/Tier II) but the
-  // empty first roll (sponsored/Tier I) is flagged so the player can re-roll.
+  // The rolled category (self) is empty, so the spin lands a guaranteed-winnable
+  // fallback category and flags the empty roll so the player can re-roll.
   assert.equal(outcome.empty_bucket, false);
-  assert.equal(outcome.selected.id, 1);
-  assert.equal(outcome.source.id, "sponsored");
-  assert.equal(outcome.tier.id, "tier_ii");
+  assert.equal(outcome.selected.id, 2);           // first non-empty category (free)
+  assert.equal(outcome.source.id, "free");
+  assert.equal(outcome.tier.id, "tier_i");        // cosmetic, from the won reward
   assert.equal(outcome.dice_reroll.reason, "empty_bucket");
   assert.equal(outcome.dice_reroll.awaiting, true);
-  assert.equal(outcome.dice_reroll.from.payment_source.id, "sponsored");
-  assert.equal(outcome.dice_reroll.from.tier.id, "tier_i");
-  // No precomputed per-die choices any more - the re-roll is genuine.
+  assert.equal(outcome.dice_reroll.from.payment_source.id, "self");  // the empty category rolled
+  // Tiers are retired: the re-roll "from" no longer carries a tier die.
+  assert.equal(outcome.dice_reroll.from.tier, null);
   assert.equal(outcome.dice_reroll.choices, undefined);
+});
+
+test("category selection ignores reward tier weights entirely", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const rewards = [
+    { id: 1, kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_vi", chance_shares: 4 },
+  ];
+  const base = { jackpot_hit_rate: 1, bank_builder_hit_rate: 0, free_spin_tile_rate: 0, category_weights: { free: 1, self: 0, sponsored: 0 } };
+  // The reward sits in the rarest tier; tiers no longer gate or weight selection.
+  const a = store._test.selectThreeStageOutcome(rewards, { ...base, reward_tiers: [{ id: "tier_vi", label: "x", weight: 1, active: true }] }, () => 0);
+  // Even with that tier "deactivated" and zero-weight, the reward is still won.
+  const b = store._test.selectThreeStageOutcome(rewards, { ...base, reward_tiers: [{ id: "tier_i", label: "y", weight: 999, active: false }] }, () => 0);
+  assert.equal(a.selected.id, 1);
+  assert.equal(a.source.id, "free");
+  assert.equal(b.selected.id, 1);
 });
 
 test("selectThreeStageOutcome pays a bank consolation when no bucket is winnable", () => {
@@ -1110,39 +1121,28 @@ test("selectThreeStageOutcome pays a bank consolation when no bucket is winnable
   assert.equal(outcome.dice_reroll, null);
 });
 
-test("rollDieReroll re-rolls one die, holds the other, and reports the landed bucket", () => {
+test("rollDieReroll re-rolls the category wheel and reports the landed bucket", () => {
   const store = loadStoreWithMock(createMockPool());
   const rewards = [
     { id: 1, kind: "free", active: true, eligible: true, payment_source: "sponsored", tier_id: "tier_ii", chance_shares: 3 },
     { id: 2, kind: "free", active: true, eligible: true, payment_source: "free", tier_id: "tier_i", chance_shares: 5 },
   ];
-  const settings = {
-    payment_source_weights: { self: 0, sponsored: 1, free: 1 },
-    reward_tiers: [
-      { id: "tier_i", label: "Tier I", weight: 1, active: true },
-      { id: "tier_ii", label: "Tier II", weight: 1, active: true },
-    ],
-  };
-  const from = {
-    payment_source: { id: "sponsored", label: "Sponsored", weight: 1 },
-    tier: { id: "tier_i", label: "Tier I", weight: 1 },
-  };
+  const from = { payment_source: { id: "self" }, tier: null };
 
-  // Re-roll the paid-by die onto "free" (same tier) -> finds reward 2.
-  const srcRoll = store._test.rollDieReroll(rewards, settings, from, "source", () => 1);
-  assert.equal(srcRoll.source.id, "free");
-  assert.equal(srcRoll.tier.id, "tier_i");
-  assert.deepEqual(srcRoll.bucket.map(r => r.id), [2]);
+  // Re-roll lands on the Free Self Care category -> finds reward 2.
+  const freeRoll = store._test.rollDieReroll(rewards, { category_weights: { free: 1, self: 0, sponsored: 0 } }, from, "source", () => 0);
+  assert.equal(freeRoll.source.id, "free");
+  assert.equal(freeRoll.tier, null);
+  assert.deepEqual(freeRoll.bucket.map(r => r.id), [2]);
 
-  // Re-roll the tier die onto Tier II (same payer) -> finds reward 1.
-  const tierRoll = store._test.rollDieReroll(rewards, settings, from, "tier", () => 1);
-  assert.equal(tierRoll.source.id, "sponsored");
-  assert.equal(tierRoll.tier.id, "tier_ii");
-  assert.deepEqual(tierRoll.bucket.map(r => r.id), [1]);
+  // Re-roll lands on the Sponsored category -> finds reward 1 (die arg is ignored now).
+  const sponsoredRoll = store._test.rollDieReroll(rewards, { category_weights: { free: 0, self: 0, sponsored: 1 } }, from, "tier", () => 0);
+  assert.equal(sponsoredRoll.source.id, "sponsored");
+  assert.deepEqual(sponsoredRoll.bucket.map(r => r.id), [1]);
 
-  // A genuine roll can land back on the same empty bucket -> caller re-prompts.
-  const emptyRoll = store._test.rollDieReroll(rewards, settings, from, "source", () => 0);
-  assert.equal(emptyRoll.source.id, "sponsored");
+  // A re-roll can land on an empty category -> caller re-prompts.
+  const emptyRoll = store._test.rollDieReroll(rewards, { category_weights: { free: 0, self: 1, sponsored: 0 } }, from, "source", () => 0);
+  assert.equal(emptyRoll.source.id, "self");
   assert.equal(emptyRoll.bucket.length, 0);
 });
 
@@ -1857,29 +1857,36 @@ test("updateReward preserves kind and gating fields across a bucket move", async
   assert.equal(updated.sponsor_active, true);
 });
 
-test("getState locks rewards stranded in a deactivated tier", async () => {
+test("tiers no longer gate eligibility; a zeroed category locks its rewards", async () => {
   const mockPool = createMockPool({
     settings: {
       points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
       points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      // Tier II is deactivated (irrelevant now); the Sponsored category is zeroed out.
       reward_tiers: [
         { id: "tier_i", label: "Tier 1", weight: 100, active: true },
         { id: "tier_ii", label: "Tier 2", weight: 0, active: false },
       ],
+      category_weights: { free: 60, self: 40, sponsored: 0 },
     },
     rewardRows: [
       { id: 1, title: "Reachable", kind: "free", active: true, payment_source: "free", tier_id: "tier_i", chance_shares: 3, weight: 3 },
-      { id: 2, title: "Stranded", kind: "free", active: true, payment_source: "free", tier_id: "tier_ii", chance_shares: 3, weight: 3 },
+      { id: 2, title: "Old deactivated tier", kind: "free", active: true, payment_source: "free", tier_id: "tier_ii", chance_shares: 3, weight: 3 },
+      { id: 3, title: "Sponsored, zeroed category", kind: "sponsor", active: true, payment_source: "sponsored", tier_id: "tier_i", chance_shares: 3, weight: 3 },
     ],
   });
   const store = loadStoreWithMock(mockPool);
   const state = await store.getState("ws-1", 1);
 
-  const stranded = state.rewards.find(r => r.id === 2);
-  const reachable = state.rewards.find(r => r.id === 1);
-  assert.equal(stranded.eligible, false);
-  assert.equal(stranded.locked_reason, "tier_inactive");
-  assert.equal(reachable.eligible, true);
+  // A reward in a "deactivated tier" is now fully eligible (tiers are retired).
+  const oldTier = state.rewards.find(r => r.id === 2);
+  assert.equal(oldTier.eligible, true);
+  // A reward whose category weight is zero is locked.
+  const zeroedCategory = state.rewards.find(r => r.id === 3);
+  assert.equal(zeroedCategory.eligible, false);
+  assert.equal(zeroedCategory.locked_reason, "source_disabled");
+  // The reachable one stays eligible.
+  assert.equal(state.rewards.find(r => r.id === 1).eligible, true);
 });
 
 test("updateSettings reassigns rewards out of a deactivated tier", async () => {

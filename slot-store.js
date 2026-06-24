@@ -189,6 +189,12 @@ const SPONSOR_TYPES = new Set(["self", "accountability_partner", "romantic_partn
 const REWARD_KINDS = new Set(["miss", "free", "small_paid", "bank_gated", "sponsor", "choice", "reroll"]);
 const PAYMENT_SOURCES = new Set(["self", "sponsored", "free"]);
 const DEFAULT_SOURCE_WEIGHTS = { self: 45, sponsored: 25, free: 30 };
+// Category roll for a jackpot: pick a funding category, then spin that category's
+// wheel (rewards weighted by chance_shares). Replaces the old source x tier roll.
+// Categories ARE the payment sources: free = Free Self Care, self = Reward Reserve
+// Funded, sponsored = Sponsored. Editable in Advanced; defaults below.
+const DEFAULT_CATEGORY_WEIGHTS = { free: 60, self: 25, sponsored: 15 };
+const CATEGORY_LABELS = { free: "Free Self Care", self: "Reward Reserve Funded", sponsored: "Sponsored" };
 const MAX_BANKROLL_GOAL_CENTS = 10000000;
 const DEFAULT_REWARD_TIERS = [
   { id: "tier_i", label: "Tier 1", weight: 36, active: true },
@@ -420,6 +426,18 @@ function normalizeSourceWeights(value) {
     self: clampInt(raw.self ?? DEFAULT_SOURCE_WEIGHTS.self, 0, 1000000),
     sponsored: clampInt(raw.sponsored ?? raw.sponsor ?? DEFAULT_SOURCE_WEIGHTS.sponsored, 0, 1000000),
     free: clampInt(raw.free ?? DEFAULT_SOURCE_WEIGHTS.free, 0, 1000000),
+  };
+}
+
+// Category roll weights (free / self / sponsored). Stored as raw weights; the
+// roll is proportional, so they need not sum to 100, but the UI presents/edits
+// them as percentages that sum to 100.
+function normalizeCategoryWeights(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    free: clampInt(raw.free ?? DEFAULT_CATEGORY_WEIGHTS.free, 0, 1000000),
+    self: clampInt(raw.self ?? DEFAULT_CATEGORY_WEIGHTS.self, 0, 1000000),
+    sponsored: clampInt(raw.sponsored ?? raw.sponsor ?? DEFAULT_CATEGORY_WEIGHTS.sponsored, 0, 1000000),
   };
 }
 
@@ -914,6 +932,7 @@ function normalizeSlotSettings(settings = {}) {
     active_multiplier: normalizeActiveMultiplier(raw.active_multiplier ?? raw.activeMultiplier, normalizeMultiplierCharges(raw.multiplier_charges || raw.multiplierCharges)),
     bankroll_pacing: raw.bankroll_pacing && typeof raw.bankroll_pacing === "object" ? { ...derived.bankroll_pacing, ...raw.bankroll_pacing } : derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(raw.payment_source_weights || raw.paymentSourceWeights),
+    category_weights: normalizeCategoryWeights(raw.category_weights || raw.categoryWeights),
     reward_tiers: normalizeRewardTiers(raw.reward_tiers || raw.rewardTiers),
     reroll_credits: clampInt(raw.reroll_credits ?? raw.rerollCredits ?? 0, 0, 1000),
     jackpot_spin_credits: clampInt(raw.jackpot_spin_credits ?? raw.jackpotSpinCredits ?? 0, 0, 1000),
@@ -1161,13 +1180,12 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   const expired = !!row.expires_at && new Date(row.expires_at).getTime() <= Date.now();
   const usesExhausted = row.uses_remaining != null && Number(row.uses_remaining) <= 0;
   const lifespanExhausted = expired || usesExhausted;
-  // The jackpot only ever rolls into active tiers and sources whose weight > 0
-  // (see tierOptions/sourceOptions + bucketForSourceTier). A reward assigned to a
-  // deactivated tier or a zeroed-out source is therefore unwinnable; surface that
-  // as a lock instead of letting it read as eligible/green in the UI.
+  // The jackpot rolls a category, then that category's wheel (chance_shares).
+  // A reward whose category weight is zeroed out is therefore unwinnable; surface
+  // that as a lock instead of letting it read as eligible/green in the UI. Tiers
+  // no longer gate eligibility.
   const settings = (account && account.settings) || {};
-  const tierActive = tierOptions(settings).some(t => String(t.id) === String(row.tier_id || "tier_i"));
-  const sourceEnabled = sourceOptions(settings).some(s => s.id === paymentSource && Number(s.weight) > 0);
+  const categoryEnabled = categoryOptions(settings).some(c => c.id === paymentSource && Number(c.weight) > 0);
   return {
     ...row,
     payment_source: paymentSource,
@@ -1182,7 +1200,7 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     redemption_limit: row.redemption_limit != null ? Number(row.redemption_limit) : null,
     redemptions_left: row.redemption_limit != null ? Math.max(0, Number(row.redemption_limit) - Number(row.times_redeemed || 0)) : null,
     lifespan_exhausted: lifespanExhausted,
-    eligible: !!row.active && chanceShares > 0 && tierActive && sourceEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted,
+    eligible: !!row.active && chanceShares > 0 && categoryEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted,
     jackpot_type: jackpotType(row),
     bankroll_goal_excluded: bankrollGoalExcluded,
     reserve_cost_cents: threshold,
@@ -1191,8 +1209,7 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     locked_reason: !row.active ? "inactive" :
       chanceShares <= 0 ? "zero_weight" :
       lifespanExhausted ? "expired" :
-      !tierActive ? "tier_inactive" :
-      !sourceEnabled ? "source_disabled" :
+      !categoryEnabled ? "source_disabled" :
       bankrollGoalExcluded ? "bankroll_goal" :
       reserveLocked ? "bank_too_small" :
       bankCapLocked ? "bank_cap" :
@@ -1439,6 +1456,9 @@ async function updateSettings(workspaceId, userId, body = {}) {
     bankroll_pacing: derived.bankroll_pacing,
     payment_source_weights: normalizeSourceWeights(
       body.payment_source_weights || body.paymentSourceWeights || current.payment_source_weights || DEFAULT_SOURCE_WEIGHTS
+    ),
+    category_weights: normalizeCategoryWeights(
+      body.category_weights || body.categoryWeights || current.category_weights || DEFAULT_CATEGORY_WEIGHTS
     ),
     reward_tiers: rewardTiers,
     reroll_credits: clampInt(
@@ -2231,6 +2251,30 @@ function tierOptions(settings) {
     .map(tier => ({ ...tier, weight: Number(tier.weight) || 0 }));
 }
 
+// The three jackpot categories with their roll weights. A category maps 1:1 to a
+// payment_source. This replaces the source x tier grid: a jackpot rolls ONE
+// category, then spins that category's wheel (rewards by chance_shares).
+function categoryOptions(settings) {
+  const weights = normalizeSlotSettings(settings).category_weights;
+  return [
+    { id: "free", label: CATEGORY_LABELS.free, weight: weights.free },
+    { id: "self", label: CATEGORY_LABELS.self, weight: weights.self },
+    { id: "sponsored", label: CATEGORY_LABELS.sponsored, weight: weights.sponsored },
+  ];
+}
+
+// A category's wheel: every eligible reward in that category (any tier), with a
+// positive slice count (chance_shares). Tier is ignored by selection now.
+function bucketForCategory(rewards, category) {
+  const id = category && category.id;
+  return (rewards || []).filter(r =>
+    r &&
+    r.eligible &&
+    normalizePaymentSource(r.payment_source, r.kind) === id &&
+    (Number(r.chance_shares ?? r.weight) || 0) > 0
+  );
+}
+
 function tierStageForReward(settings, reward) {
   const tierId = String((reward && reward.tier_id) || "tier_i");
   return tierOptions(settings).find(tier => String(tier.id) === tierId) ||
@@ -2506,36 +2550,29 @@ function bucketForSourceTier(rewards, source, tier) {
 
 function chooseBucketAttempt(rewards, settings, rng) {
   const normalized = normalizeSlotSettings(settings);
-  const source = chooseWeighted(sourceOptions(normalized), "weight", rng) || sourceOptions(normalized)[0];
-  const tiers = tierOptions(normalized);
-  let tier = chooseWeighted(tiers, "weight", rng) || tiers[0] || DEFAULT_REWARD_TIERS[0];
-  // A banked tier_up booster bumps this jackpot toward a higher (rarer) tier.
-  const tierUp = (normalized.next_spin_modifiers && normalized.next_spin_modifiers.tier_up) || 0;
-  if (tierUp > 0 && tiers.length) {
-    const idx = tiers.findIndex(t => String(t.id) === String(tier.id));
-    if (idx >= 0) tier = tiers[Math.min(tiers.length - 1, idx + tierUp)] || tier;
-  }
+  const categories = categoryOptions(normalized);
+  const category = chooseWeighted(categories, "weight", rng) || categories[0];
+  // `source` carries the rolled category (its id is the payment_source). `tier` is
+  // retired from selection and set from the won reward later in selectThreeStageOutcome.
   return {
-    source,
-    tier,
-    bucket: bucketForSourceTier(rewards, source, tier),
+    source: category,
+    tier: null,
+    bucket: bucketForCategory(rewards, category),
   };
 }
 
 function chooseExistingBucketAttempt(rewards, settings, rng) {
   const normalized = normalizeSlotSettings(settings);
   const attempts = [];
-  for (const source of sourceOptions(normalized)) {
-    for (const tier of tierOptions(normalized)) {
-      const bucket = bucketForSourceTier(rewards, source, tier);
-      if (!bucket.length) continue;
-      attempts.push({
-        source,
-        tier,
-        bucket,
-        weight: Math.max(0, Number(source.weight) || 0) * Math.max(0, Number(tier.weight) || 0),
-      });
-    }
+  for (const category of categoryOptions(normalized)) {
+    const bucket = bucketForCategory(rewards, category);
+    if (!bucket.length) continue;
+    attempts.push({
+      source: category,
+      tier: null,
+      bucket,
+      weight: Math.max(0, Number(category.weight) || 0),
+    });
   }
   return chooseWeighted(attempts, "weight", rng) || attempts[0] || null;
 }
@@ -2549,15 +2586,12 @@ function bucketTotalShares(bucket) {
 // so it can land on the same face or on another empty bucket - the caller
 // (chooseSpinDiceReroll) re-prompts when `bucket` comes back empty.
 function rollDieReroll(rewards, settings, from, die, rng = crypto.randomInt) {
+  // Tiers are retired: there is a single die (the category). Either die choice
+  // re-rolls the category wheel. `die` is accepted for signature/back-compat.
   const normalized = normalizeSlotSettings(settings);
-  let source = (from && from.payment_source) || sourceOptions(normalized)[0];
-  let tier = (from && from.tier) || tierOptions(normalized)[0];
-  if (die === "source") {
-    source = chooseWeighted(sourceOptions(normalized), "weight", rng) || source;
-  } else if (die === "tier") {
-    tier = chooseWeighted(tierOptions(normalized), "weight", rng) || tier;
-  }
-  return { source, tier, bucket: bucketForSourceTier(rewards, source, tier) };
+  const categories = categoryOptions(normalized);
+  const category = chooseWeighted(categories, "weight", rng) || categories[0];
+  return { source: category, tier: null, bucket: bucketForCategory(rewards, category) };
 }
 
 // The non-jackpot floor. A rare explicit true miss, otherwise a weighted draw
@@ -2634,9 +2668,12 @@ function selectThreeStageOutcome(rewards, settings, rng = crypto.randomInt) {
       dice_reroll: null,
     };
   }
-  const { source, tier, bucket } = finalAttempt;
+  const { source, bucket } = finalAttempt;
   const selected = chooseWeighted(bucket, "chance_shares", rng);
-  // Roll the run length AFTER the reward is chosen so the existing source/tier/
+  // Tiers no longer gate selection; surface the won reward's own tier so snapshots
+  // and the screen keep a coherent (cosmetic) tier value.
+  const tier = tierStageForReward(normalized, selected);
+  // Roll the run length AFTER the reward is chosen so the existing category/
   // reward draws keep their positions in the rng stream.
   const jackpotSpins = rollJackpotSpins(normalized, rng);
   return {
@@ -3859,6 +3896,9 @@ module.exports = {
   chooseWeighted,
   _test: {
     normalizeRewardInput,
+    normalizeCategoryWeights,
+    categoryOptions,
+    bucketForCategory,
     buildSpinScreen,
     calculateScreenBankPayout,
     emptyScreenBankPayout,
