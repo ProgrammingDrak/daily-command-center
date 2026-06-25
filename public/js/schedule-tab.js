@@ -1673,6 +1673,13 @@ function beDelete(idx){
   renderBlockEditor();
 }
 
+function beClearAll(){
+  if(!_beBlocks.length) return;
+  if(!confirm('Remove all '+_beBlocks.length+' time block'+(_beBlocks.length===1?'':'s')+'? This takes effect when you click Save.')) return;
+  _beBlocks = [];
+  renderBlockEditor();
+}
+
 function beAddBlock(){
   _beBlocks.push({
     id: '_new_'+Date.now()+'_'+Math.random().toString(36).substr(2,4),
@@ -1809,6 +1816,17 @@ async function _applyBlocksToday(){
     var state = await resp.json();
     if (state.schedule) __state.schedule = state.schedule;
   } catch(e){}
+  // Schedule blocks are global (stored date-less), so a save here changes the
+  // blocks rendered on every day. switchToDate() builds the "tomorrow" view from
+  // the boot-cached window.__DCC_TOMORROW__ snapshot, so refresh it too —
+  // otherwise the tomorrow view shows stale blocks after an edit/Clear All.
+  try {
+    if (typeof window !== 'undefined' && window.__DCC_TOMORROW__) {
+      var tResp = await fetch('/api/state/tomorrow');
+      var tState = await tResp.json();
+      if (tState && tState.schedule) window.__DCC_TOMORROW__ = tState;
+    }
+  } catch(e){}
   var blocks = (__state && __state.schedule && __state.schedule.blocks) || [];
   var wb = blocks.filter(function(b){return (b.blockType||b.type)==='work';});
   if (wb.length) EOD = pt(wb[wb.length-1].end);
@@ -1939,6 +1957,7 @@ async function _onBsConfirmTodayAndFuture(){
 document.getElementById("block-editor-close").addEventListener("click",closeBlockEditor);
 document.getElementById("block-editor-cancel").addEventListener("click",closeBlockEditor);
 document.getElementById("block-editor-save").addEventListener("click",saveBlockEditor);
+document.getElementById("block-editor-clear")?.addEventListener("click",beClearAll);
 document.getElementById("block-editor-overlay").addEventListener("click",e=>{if(e.target===e.currentTarget)closeBlockEditor()});
 document.getElementById("block-editor-manage-tags")?.addEventListener("click",()=>{ if(typeof openTagManager==='function') openTagManager(); });
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.getElementById("block-editor-overlay").classList.contains("open"))closeBlockEditor()});
