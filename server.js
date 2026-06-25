@@ -189,6 +189,7 @@ app.use(async (req, res, next) => {
     if (isPublicRoute(req)) return next();
     if (req.method === "POST" && req.path === "/api/blocks" && await hasServiceToken(req, "sweep")) { attachSweepServiceAuth(req); return next(); }
     if (isDccStateIngest(req) && ((await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
+    if (req.method === "POST" && req.path === "/api/dcc/quick-task" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
     if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
     next();
@@ -804,6 +805,62 @@ app.post("/api/ingest/day-state", async (req, res) => {
   try { await blockDB.saveDccState(incoming.date, merged, ingestUserId, ingestWorkspaceId); } catch(e) { console.error("[dcc-state ingest] save failed:", e.message); }
   broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, ingestWorkspaceId);
   res.json({ ok: true, date: incoming.date });
+});
+
+// Additive single-task drop for token-only clients (no password session).
+// /api/blocks needs a session cookie or a sweep-scoped token, and day-state ingest
+// full-replaces the schedule section — neither lets a dcc-scoped token add ONE task
+// safely. This creates exactly one itinerary block (idempotent on idempotency_key)
+// using the same helpers as the brief materializer, leaving the rest of the day intact.
+app.post("/api/dcc/quick-task", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const title = String(body.title || "").trim();
+    if (!title) return res.status(400).json({ error: "Missing title" });
+    const date = isValidDate(body.date) ? body.date : getTodayStr();
+    const { userId, workspaceId } = await resolveDccWriteOwner(req);
+
+    const idemKey = body.idempotency_key || body.idempotencyKey || null;
+    const existingBlocks = await blockDB.getBlocksByDate(date, workspaceId);
+    if (idemKey) {
+      const dup = existingBlocks.find((b) => ((b.properties || {}).idempotency_key) === idemKey);
+      if (dup) return res.json({ ok: true, date, status: "skipped_duplicate", block: { id: dup.id, title: (dup.properties || {}).title || title } });
+    }
+
+    const minutes = Math.max(1, Math.round(Number(body.minutes || body.durationMinutes || body.estimatedMinutes || body.duration || 30)));
+    const start = (typeof body.start === "string" && /^\d{2}:\d{2}$/.test(body.start)) ? body.start : null;
+    const props = {
+      title,
+      status: body.status || "open",
+      kind: body.kind || "task",
+      estimatedMinutes: minutes,
+      priority: body.priority ? String(body.priority) : "Medium",
+      source: body.source || "quick-task",
+      created_by: body.created_by || "quick-task",
+      created_at: new Date().toISOString(),
+    };
+    if (start) { props.start = start; props.end = addMinutesHHMM(start, minutes); }
+    if (idemKey) props.idempotency_key = idemKey;
+    if (body.source_id) props.source_id = body.source_id;
+    if (body.notes) props.notes = body.notes;
+    if (body.type) props.type = body.type;
+    if (body.point_tier) props.point_tier = body.point_tier;
+    if (body.point_multiplier != null) props.point_multiplier = body.point_multiplier;
+    try {
+      const scored = scoreTaskPoints({ ...props, durationMinutes: minutes });
+      props.points = scored.awardPoints;
+      props.pointsBreakdown = scored;
+    } catch (scoreErr) { console.error("[quick-task] scoring failed (non-fatal):", scoreErr.message); }
+
+    await blockDB.ensureDayRoot(date, userId, workspaceId);
+    const sortOrder = start ? Number(start.slice(0, 2)) * 60 + Number(start.slice(3, 5)) : 0;
+    const created = await blockDB.createBlock({ type: "block", date, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId });
+    broadcast("blocks-changed", { action: "quick-task-create", blockIds: [created.id], date }, workspaceId);
+    res.json({ ok: true, date, status: "created", block: { id: created.id, title, start: props.start || null, end: props.end || null, priority: props.priority } });
+  } catch (e) {
+    console.error("[quick-task] failed:", e);
+    res.status(e.status || 500).json({ error: e.message || "quick-task failed" });
+  }
 });
 
 // ── Glymphatic Brief spine (Second Brain Loop M1) ──
