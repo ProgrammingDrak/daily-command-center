@@ -5,7 +5,7 @@
  * Zero dependencies (uses built-in fetch; Node 18+). Posts to /api/dcc/quick-task.
  *
  * Config via env (never hardcode secrets):
- *   DCC_BASE_URL   default https://daily-command-center.onrender.com
+ *   DCC_BASE_URL   default https://daily-command-center-production-1d04.up.railway.app
  *   DCC_PA_TOKEN   bearer token (falls back to SECRET_PA_TOKEN). Required in prod.
  *
  * Usage:
@@ -32,7 +32,7 @@
  */
 "use strict";
 
-const DEFAULT_BASE = "https://daily-command-center.onrender.com";
+const DEFAULT_BASE = "https://daily-command-center-production-1d04.up.railway.app";
 
 // Cold-start tolerance: the DCC may be a free-tier service that spins down when
 // idle, so the first request after a quiet period can take ~30-60s to wake. A

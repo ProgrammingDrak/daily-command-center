@@ -86,7 +86,7 @@ async function main() {
     console.log(JSON.stringify({ ok: true, dryRun: true, date: payload.date || null, attention_items: packetItems(packet).length }, null, 2));
     return 0;
   }
-  const baseUrl = (args.baseUrl || process.env.DCC_BASE_URL || process.env.DCC_API_BASE_URL || "https://daily-command-center-personal.onrender.com").replace(/\/$/, "");
+  const baseUrl = (args.baseUrl || process.env.DCC_BASE_URL || process.env.DCC_API_BASE_URL || "https://daily-command-center-production-1d04.up.railway.app").replace(/\/$/, "");
   const token = process.env.DCC_TOKEN || process.env.DCC_API_TOKEN || process.env.SECRET_DCC_TOKEN || process.env.SECRET_SWEEP_SUITE_TOKEN || process.env.SECRET_PA_TOKEN || "";
   const username = process.env.DCC_USERNAME || process.env.SEED_USERNAME || "";
   const password = process.env.DCC_PASSWORD || process.env.SEED_PASSWORD || "";
