@@ -138,6 +138,13 @@ function createMockPool(options = {}) {
       state.pointAdds += 1;
       return { rows: [] };
     }
+    if (text.includes("session_won")) {
+      return { rows: [{
+        session_won: 0, session_banked: 0, today_won: 0, today_banked: 0,
+        week_won: 0, week_banked: 0, month_won: 0, month_banked: 0,
+        quarter_won: 0, quarter_banked: 0,
+      }] };
+    }
     if (text.includes("date_trunc('day'")) return { rows: [{ cents: 0 }] };
     if (text.includes("date_trunc('week'")) return { rows: [{ cents: 0 }] };
     if (text.includes("date_trunc('month'")) return { rows: [{ cents: 0 }] };
@@ -983,7 +990,7 @@ test("guided economy profile derives goal, bankroll pacing, and rare jackpot def
   assert.equal(settings.bank_builder_hit_rate, 0.9);
   assert.equal(settings.free_spin_tile_rate, 0.12);
   assert.equal(settings.miss_rate, 0.01);
-  assert.equal(settings.bankroll_pacing.bank_builder_base_percent, 0.002);
+  assert.equal(settings.bankroll_pacing.bank_builder_base_percent, 0.0015);
 });
 
 test("taskPointTier uses the highest earning matched tag and keeps OOO at zero", () => {
@@ -1129,19 +1136,19 @@ test("bank screen payout values each BANK tile from the monthly goal, not curren
     { today: 0, week: 0, monthlyGoal: 10000 }
   );
 
-  assert.equal(payout.percent, 0.002);
+  assert.equal(payout.percent, 0.0015);
   assert.equal(payout.goal_cents, 10000);
-  assert.equal(payout.base_cents, 20);
+  // remainder == goal at month start -> base off the full goal: floor(10000 * 0.0015) = 15
+  assert.equal(payout.base_cents, 15);
   assert.equal(payout.base_units, 2);
-  // 20 * 2 = 40, no flat floor — the hit scales purely with the goal.
-  assert.equal(payout.cents, 40);
+  // 15 * 2 = 30, no flat floor — the hit scales purely with the goal.
+  assert.equal(payout.cents, 30);
 });
 
-test("bank pacing scales off the REMAINING headroom, so hits shrink as the bar fills", () => {
+test("bank pacing blends goal and remaining (γ<1), so hits taper gently as the bar fills", () => {
   const store = loadStoreWithMock(createMockPool());
   const board = Array.from({ length: 15 }, () => "MISS");
-  // Five separated BANK tiles -> 5 base units, no group bonus, so units * base is
-  // above the 50c floor and we can read the per-unit base directly.
+  // Five separated BANK tiles -> 5 base units, no group bonus, so we can read base directly.
   [0, 2, 4, 11, 13].forEach(i => { board[i] = "BANK"; });
   const acct = { bank_balance_cents: 0, settings: { monthly_goal_cents: 100000 } };
 
@@ -1151,35 +1158,188 @@ test("bank pacing scales off the REMAINING headroom, so hits shrink as the bar f
     { today: 0, week: 0, month: 0, monthlyGoal: 100000 }
   );
   assert.equal(early.final_week, false);
+  assert.equal(early.in_shield, false);
   assert.equal(early.pacing_base_cents, 100000);
-  assert.equal(early.base_cents, Math.floor(100000 * 0.002)); // 200
+  assert.equal(early.base_cents, Math.floor(100000 * 0.0015)); // 150
 
-  // Bar 80% full: only 20000 of headroom left -> base off 20000, a much smaller hit.
+  // Bar 80% full: 20000 of headroom left. The geometric blend (γ=0.8) keeps the
+  // pacing base ABOVE the bare remainder but BELOW the full goal, and the hit
+  // still tapers vs the early-month one.
   const late = store._test.calculateScreenBankPayout(
     board, acct,
     { today: 0, week: 0, month: 80000, monthlyGoal: 100000 }
   );
-  assert.equal(late.pacing_base_cents, 20000);
-  assert.equal(late.base_cents, Math.floor(20000 * 0.002)); // 40
+  assert.ok(late.pacing_base_cents > 20000 && late.pacing_base_cents < 100000,
+    "γ<1 keeps the late hit more lenient than pure-remainder but below the goal");
   assert.ok(late.base_cents < early.base_cents, "hits taper as the bar fills");
 });
 
-test("final week reverts bank pacing to the full monthly allotment for a max-out push", () => {
+test("final week uses a more lenient γ — a bigger finish, still remainder-based (not the full goal)", () => {
   const store = loadStoreWithMock(createMockPool());
   const board = Array.from({ length: 15 }, () => "MISS");
   [0, 2, 4, 11, 13].forEach(i => { board[i] = "BANK"; });
   const acct = { bank_balance_cents: 0, settings: { monthly_goal_cents: 100000 } };
 
-  // Same 80%-full state, but now it's the final week: base off the full goal again.
-  const out = store._test.calculateScreenBankPayout(
-    board, acct,
-    { today: 0, week: 0, month: 80000, monthlyGoal: 100000, finalWeek: true }
+  const usage = { today: 0, week: 0, month: 80000, monthlyGoal: 100000 };
+  const normal = store._test.calculateScreenBankPayout(board, acct, usage);
+  const finalWk = store._test.calculateScreenBankPayout(board, acct, { ...usage, finalWeek: true });
+
+  assert.equal(finalWk.final_week, true);
+  assert.ok(finalWk.base_cents > normal.base_cents, "final week pays bigger for the same remaining");
+  assert.ok(finalWk.pacing_base_cents < 100000, "still remainder-based, not the full-goal rate");
+  // Still capped at the remaining headroom so banking never overshoots the goal mid-month.
+  assert.equal(finalWk.monthly_remaining_cents, 20000);
+});
+
+test("bank building overflows into the shield past the goal at a brutally low rate", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const board = Array.from({ length: 15 }, () => "MISS");
+  [0, 2, 4, 11, 13].forEach(i => { board[i] = "BANK"; });
+  const acct = { bank_balance_cents: 0, settings: { monthly_goal_cents: 100000 } };
+
+  const early = store._test.calculateScreenBankPayout(
+    board, acct, { today: 0, week: 0, month: 0, monthlyGoal: 100000 }
   );
-  assert.equal(out.final_week, true);
-  assert.equal(out.pacing_base_cents, 100000);
-  assert.equal(out.base_cents, Math.floor(100000 * 0.002)); // 200, the full-goal rate
-  // Still capped at the remaining headroom so banking never overshoots the goal.
-  assert.equal(out.monthly_remaining_cents, 20000);
+  // Goal fully banked: every further hit overflows into the shield.
+  const shield = store._test.calculateScreenBankPayout(
+    board, acct, { today: 0, week: 0, month: 100000, monthlyGoal: 100000 }
+  );
+  assert.equal(shield.in_shield, true);
+  assert.equal(shield.monthly_remaining_cents, 0);
+  // The shield trickle is tiny but nonzero (total is rounded, not per-unit) and far
+  // below a normal early hit.
+  assert.ok(shield.cents > 0, "the shield still pays something");
+  assert.ok(shield.cents < early.cents / 5, "shield rate is far below a normal hit");
+});
+
+test("getWinningsSummary maps the aggregate row into per-range {won,banked}", async () => {
+  const store = loadStoreWithMock(createMockPool());
+  let captured = null;
+  const exec = { query: async (sql, params) => {
+    captured = { sql: String(sql), params };
+    return { rows: [{
+      session_won: 100, session_banked: 50,
+      today_won: 200, today_banked: 75,
+      week_won: 300, week_banked: 120,
+      month_won: 400, month_banked: 600,
+      quarter_won: 900, quarter_banked: 1500,
+    }] };
+  }};
+  const out = await store.getWinningsSummary("ws-1", { sessionFrom: "2026-06-01T00:00:00Z" }, exec);
+  assert.deepEqual(out.session, { won: 100, banked: 50 });
+  assert.deepEqual(out.today,   { won: 200, banked: 75 });
+  assert.deepEqual(out.week,    { won: 300, banked: 120 });
+  assert.deepEqual(out.month,   { won: 400, banked: 600 });
+  assert.deepEqual(out.quarter, { won: 900, banked: 1500 });
+  // passes workspace + sessionFrom; "won" excludes misses and bank-builder accrual
+  assert.equal(captured.params[0], "ws-1");
+  assert.equal(captured.params[1], "2026-06-01T00:00:00Z");
+  assert.match(captured.sql, /NOT IN \('miss','bank_builder'\)/);
+});
+
+test("getWinningsSummaryCustom returns one {won,banked} with an inclusive end day", async () => {
+  const store = loadStoreWithMock(createMockPool());
+  let captured = null;
+  const exec = { query: async (sql, params) => { captured = { sql: String(sql), params }; return { rows: [{ won: 250, banked: 80 }] }; } };
+  const out = await store.getWinningsSummaryCustom("ws-1", "2026-06-01", "2026-06-15", exec);
+  assert.deepEqual(out, { won: 250, banked: 80, from: "2026-06-01", to: "2026-06-15" });
+  assert.equal(captured.params[0], "ws-1");
+  assert.equal(captured.params[1], "2026-06-01");
+  assert.equal(captured.params[2], "2026-06-15");
+  assert.match(captured.sql, /\+ INTERVAL '1 day'/);
+});
+
+test("getBankUsage carries last month's over-goal overflow forward as this month's head start", async () => {
+  const store = loadStoreWithMock(createMockPool());
+  // Distinguish the month-banked query (EXTRACT(DAY ...)) from the last-month query
+  // (which subtracts an INTERVAL '1 month' off the month boundary).
+  const exec = { query: async (sql) => {
+    const t = String(sql);
+    if (t.includes("NOW()) - INTERVAL '1 month'")) return { rows: [{ cents: 130000 }] }; // last month over a 100k goal
+    if (t.includes("EXTRACT(DAY FROM NOW())")) return { rows: [{ cents: 20000, day_of_month: 5, days_in_month: 30 }] };
+    return { rows: [{ cents: 0 }] };
+  }};
+  const usage = await store._test.getBankUsage("ws-1", { monthly_goal_cents: 100000 }, exec);
+  // headStart = min(goal, max(0, 130000 - 100000)) = 30000; effective = raw 20000 + 30000
+  assert.equal(usage.rawMonth, 20000);
+  assert.equal(usage.headStart, 30000);
+  assert.equal(usage.month, 50000);
+  assert.equal(usage.monthlyRemaining, 50000);
+});
+
+test("getBankUsage caps the head start at the full goal even after a runaway last month", async () => {
+  const store = loadStoreWithMock(createMockPool());
+  const exec = { query: async (sql) => {
+    const t = String(sql);
+    if (t.includes("NOW()) - INTERVAL '1 month'")) return { rows: [{ cents: 500000 }] }; // wildly over a 100k goal
+    if (t.includes("EXTRACT(DAY FROM NOW())")) return { rows: [{ cents: 0, day_of_month: 2, days_in_month: 30 }] };
+    return { rows: [{ cents: 0 }] };
+  }};
+  const usage = await store._test.getBankUsage("ws-1", { monthly_goal_cents: 100000 }, exec);
+  assert.equal(usage.headStart, 100000, "head start can't pre-fill more than the whole bar");
+  assert.equal(usage.month, 100000);
+  assert.equal(usage.monthlyRemaining, 0);
+});
+
+// spin() reads bank usage on `pool` (pre-txn) then RE-READS it on `client` inside the
+// FOR UPDATE lock and recomputes the payout. This probe returns month=0 to the first
+// month-query (the pre-txn getState) and a fully-banked goal to the second (the in-txn
+// recompute) — so if the recompute fires, the spin pays the shield rate off remaining=0,
+// not the big early payout the pre-txn snapshot implied.
+function recomputeProbePool() {
+  const board = Array.from({ length: 15 }, () => "MISS");
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK";
+  const base = createMockPool({
+    pointBalance: 1000,
+    migrated: true,
+    settings: {
+      points_v2_migrated_at: "already", points_v2_spin_cost_migrated_at: "already",
+      points_v3_migrated_at: "already", points_v3_spin_cost_migrated_at: "already",
+      jackpot_hit_rate: 0, miss_rate: 0,
+      floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
+      monthly_goal_cents: 10000,
+      next_spin_tile_override: { tiles: board, created_at: "now" },
+    },
+  });
+  let monthCalls = 0;
+  async function query(sql, params) {
+    const t = String(sql);
+    if (t.includes("EXTRACT(DAY FROM NOW())")) {
+      const cents = monthCalls === 0 ? 0 : 10000; // pre-txn: empty bar; in-txn: goal already banked
+      monthCalls += 1;
+      return { rows: [{ cents, day_of_month: 5, days_in_month: 30 }] };
+    }
+    return base.query(sql, params);
+  }
+  return { query, connect: async () => ({ query, release() {} }), get calls() { return base.calls; }, get state() { return base.state; } };
+}
+
+test("spin recomputes the bank payout against the LIVE remainder inside the txn", async () => {
+  const spin = await loadStoreWithMock(recomputeProbePool()).spin("ws-1", 1);
+  const payout = spin.reward_snapshot.bank_screen_payout;
+  // The in-txn re-read saw the goal already fully banked, so the payout is the shield
+  // overflow off a zero remainder — proving it used the live value, not the pre-txn 0.
+  assert.equal(payout.in_shield, true);
+  assert.equal(payout.monthly_remaining_cents, 0);
+  assert.ok(spin.bank_delta_cents > 0, "the shield still trickles something");
+  assert.ok(spin.bank_delta_cents < 30, "shield rate is far below the ~105c early hit it would have paid pre-recompute");
+});
+
+test("getWinningsSummary issues the real aggregation SQL and maps an empty result to zeros", async () => {
+  const mock = createMockPool();
+  const store = loadStoreWithMock(mock);
+  // No custom exec -> the store runs its real query against the (mock) pool, so the
+  // shipped SQL is actually exercised rather than bypassed by a hand-rolled stub.
+  const out = await store.getWinningsSummary("ws-1", { sessionFrom: null });
+  const q = mock.calls.find(c => String(c.sql).includes("session_won"));
+  assert.ok(q, "the winnings aggregation query was issued on the pool");
+  assert.match(String(q.sql), /FILTER \(WHERE/);
+  assert.match(String(q.sql), /status IN \('pending','confirmed','awarded'\)/);
+  assert.match(String(q.sql), /NOT IN \('miss','bank_builder'\)/);
+  assert.equal(q.params[0], "ws-1");
+  for (const k of ["session", "today", "week", "month", "quarter"]) {
+    assert.deepEqual(out[k], { won: 0, banked: 0 });
+  }
 });
 
 test("normalizeNextSpinTileOverride requires exactly fifteen known symbols", () => {
@@ -1304,8 +1464,8 @@ test("applyTileOverrideToScreen keeps exact tiles and pays bank from override on
   assert.equal(screen.payout.base_units, 3);
   assert.equal(screen.payout.horizontal_bonus_units, 2);
   assert.equal(screen.payout.vertical_bonus_units, 2);
-  // base_cents 20 * 7 units = 140, no flat floor.
-  assert.equal(screen.payout.cents, 140);
+  // base_cents 15 (floor(10000 * 0.0015), remainder == goal) * 7 units = 105.
+  assert.equal(screen.payout.cents, 105);
 });
 
 test("spin lands the outcome the override board depicts, not the rolled jackpot", async () => {
@@ -1405,7 +1565,7 @@ test("a non-bank floor outcome still banks the BANK tiles on its screen (bank re
   // ...and the two BANK tiles on the same screen still pay, first.
   assert.deepEqual(snap.bank_screen_payout.positions, [1, 6]);
   assert.equal(snap.source_type, "slot_screen_bank_builder");
-  assert.equal(spin.bank_delta_cents, 80); // base_cents 20 * 4 units = 80, no flat floor
+  assert.equal(spin.bank_delta_cents, 60); // base_cents 15 (10000 * 0.0015) * 4 units = 60
   assert.equal(spin.status, "pending");
 });
 
@@ -1442,8 +1602,8 @@ test("spin stores authoritative bank board, payout positions, and pending reserv
   assert.deepEqual(snap.screen_board, board);
   assert.deepEqual(snap.bank_screen_payout.positions, [1, 2, 7]);
   assert.equal(snap.bank_screen_payout.cents, spin.bank_delta_cents);
-  // base_cents 20 * 7 units = 140, no flat floor.
-  assert.equal(spin.bank_delta_cents, 140);
+  // base_cents 15 (10000 * 0.0015) * 7 units = 105.
+  assert.equal(spin.bank_delta_cents, 105);
 });
 
 test("spin stores jackpot payline metadata when override tiles form a valid jackpot", async () => {
@@ -1670,7 +1830,7 @@ test("setActiveMultiplier arms a stocked tier and refuses an empty one", async (
 
 test("an armed multiplier burns a charge every spin and multiplies a bank builder", async () => {
   const board = Array.from({ length: 15 }, () => "MISS");
-  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 140 cents base
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 105 cents base
   const mockPool = chargesPool({ "3": 2 }, {
     jackpot_hit_rate: 0, miss_rate: 0,
     floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
@@ -1680,7 +1840,7 @@ test("an armed multiplier burns a charge every spin and multiplies a bank builde
   });
   const store = loadStoreWithMock(mockPool);
   const spin = await store.spin("ws-1", 1);
-  assert.equal(spin.bank_delta_cents, 420); // 140 * 3
+  assert.equal(spin.bank_delta_cents, 315); // 105 * 3
   assert.equal(spin.reward_snapshot.slot_stages.bank_multiplier_applied, 3);
   assert.equal(mockPool.state.settings.multiplier_charges["3"], 1); // burned one
   assert.equal(mockPool.state.settings.active_multiplier, 3); // still armed, one charge left
@@ -1908,7 +2068,7 @@ test("reorderRewards stores the given order and rebalances on collision", async 
 
 function wagerBankPool() {
   const board = Array.from({ length: 15 }, () => "MISS");
-  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 140 cents base
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 7 units -> 105 cents base
   return createMockPool({
     pointBalance: 1000,
     migrated: true,
@@ -1940,7 +2100,7 @@ test("Double Wager charges 2x points and doubles the bank payout", async () => {
 
 test("Double Wager stacks on top of an armed multiplier charge", async () => {
   const board = Array.from({ length: 15 }, () => "MISS");
-  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 140 cents base
+  board[1] = "BANK"; board[2] = "BANK"; board[7] = "BANK"; // 105 cents base
   const mockPool = chargesPool({ "3": 2 }, {
     jackpot_hit_rate: 0, miss_rate: 0,
     floor_weights: { bank: 1, coin: 0, booster: 0, pet: 0, free_spin: 0 },
@@ -1949,7 +2109,7 @@ test("Double Wager stacks on top of an armed multiplier charge", async () => {
     next_spin_tile_override: { tiles: board, created_at: "now" },
   });
   const spin = await loadStoreWithMock(mockPool).spin("ws-1", 1, { wager: 2 });
-  assert.equal(spin.bank_delta_cents, 840); // 140 * 3 (charge) * 2 (wager)
+  assert.equal(spin.bank_delta_cents, 630); // 105 * 3 (charge) * 2 (wager)
   assert.equal(spin.reward_snapshot.slot_stages.bank_multiplier_applied, 3);
   assert.equal(spin.reward_snapshot.slot_stages.wager, 2);
 });

@@ -1393,23 +1393,26 @@
             </div>
             <div class="slots-balances">
               <div class="slots-balance"><span>Task Points</span><strong id="slot-credit-balance">0</strong></div>
-              <div class="slots-balance slots-bank">
-                <div class="slot-bank-heading">
-                  <span>Reward Reserve</span>
-                  <button class="slot-bank-info" type="button" aria-label="How unlocking works">i
-                    <span class="slot-bank-info-tip" role="tooltip">
-                      Set a monthly Discretionary Spending budget. Bank Building hits unlock that budget for spending. Jackpot Prizes unlock as funds accumulate in your Reward Reserve.
-                    </span>
-                  </button>
-                </div>
-                <button id="slot-pending-deposit" class="slot-pending-deposit" type="button" aria-expanded="false" aria-controls="slot-bank-details">
-                  <strong id="slot-bank-balance">$0.00</strong>
-                  <span class="slot-bank-meter"><span id="slot-bank-fill"></span></span>
-                  <span class="slot-pop-label" id="slot-bank-action-label">No reserve pending</span>
-                </button>
+            </div>
+            <div class="slot-reserve-goal" id="slot-reserve-goal">
+              <div class="srg-gauge" id="srg-gauge">
+                <div class="srg-ring" id="srg-ring-goal" style="--c:#fbbf24;--size:140px;--t:13px"></div>
+                <div class="srg-ring" id="srg-ring-month" style="--c:#34d399;--size:100px;--t:12px"></div>
+                <div class="srg-marker" id="srg-marker">🎁</div>
+                <div class="srg-center"><span class="srg-cval" id="srg-cval">$0.00</span></div>
+              </div>
+              <div class="srg-goal-name" id="srg-goal-name"></div>
+              <div class="srg-stats" id="srg-stats"></div>
+              <div class="srg-actions" id="srg-actions"></div>
+              <div class="slot-shield" id="slot-shield" role="status" aria-label="Bank shield" hidden>
+                <span class="slot-shield-bubble" id="slot-shield-bubble">🛡️</span>
+                <span class="slot-shield-text">
+                  <b id="slot-shield-amount">$0.00</b>
+                  <span class="slot-shield-note">shield → next month</span>
+                </span>
               </div>
             </div>
-            <div class="slot-bankroll-goal-panel" id="slot-bankroll-goal-panel"></div>
+            <button class="slot-winnings-card" id="slot-winnings-card" type="button" aria-label="Winnings — tap to flip view, hold for ranges"></button>
             <div class="slot-pet-companion" id="slot-pet-companion" aria-live="polite">
               <div class="slot-pet-speech" id="slot-pet-speech">Ready.</div>
               <button class="slot-lever" id="slot-helper-lever" type="button" aria-label="Pull lever"><span></span></button>

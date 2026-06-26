@@ -7,7 +7,19 @@ module.exports = function mount(app, ctx) {
 // ── Slot Rewards API ──
 app.get("/api/slot/state", async (req, res) => {
   try {
-    res.json(await slotStore.getState(req.workspaceId, req.session.userId));
+    res.json(await slotStore.getState(req.workspaceId, req.session.userId, { sessionFrom: req.query.session_from || null }));
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+// Winnings (won + banked) for an arbitrary date range — powers the history card's
+// two Custom slots. The standard ranges ship inside /api/slot/state.winnings.
+app.get("/api/slot/winnings", async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    if (!from || !to) { res.status(400).json({ error: "from and to are required" }); return; }
+    res.json(await slotStore.getWinningsSummaryCustom(req.workspaceId, from, to));
   } catch (e) {
     res.status(e.statusCode || 500).json({ error: e.message });
   }

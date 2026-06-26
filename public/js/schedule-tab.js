@@ -517,6 +517,9 @@ function buildSchedule(){
     const dbadge=el.querySelector(".dbadge");
     if(dbadge){dbadge.addEventListener("click",e=>{
       e.stopPropagation();
+      // On touch / narrow viewports the fixed popover is fiddly to place and tap,
+      // so use a slide-up bottom sheet instead. Desktop keeps the popover.
+      if(isCoarseOrNarrowViewport()){ openDurationSheet(ev); return; }
       document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
       document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
       document.body.classList.remove("dur-open");
@@ -1967,4 +1970,81 @@ document.getElementById("bs-confirm-cancel")?.addEventListener("click", _closeBs
 document.getElementById("bs-confirm-today")?.addEventListener("click", _onBsConfirmTodayOnly);
 document.getElementById("bs-confirm-future")?.addEventListener("click", _onBsConfirmTodayAndFuture);
 document.getElementById("bs-confirm-overlay")?.addEventListener("click", e=>{ if(e.target===e.currentTarget) _closeBsConfirm(); });
+
+
+// ======== MOBILE DURATION BOTTOM SHEET ========
+// Touch / narrow viewports get a slide-up sheet instead of the fixed duration
+// popover (which was easy to mis-place and hard to tap on a phone). Composes a
+// local value via big steppers / preset chips / a number field, then commits
+// once via setDurAbsolute. Desktop is unchanged.
+function isCoarseOrNarrowViewport(){
+  try{
+    return window.matchMedia("(hover: none) and (pointer: coarse)").matches || window.innerWidth <= 540;
+  }catch(_){ return window.innerWidth <= 540; }
+}
+
+function openDurationSheet(ev){
+  document.querySelectorAll(".dur-sheet-backdrop").forEach(s=>s.remove());
+  const DUR_PRESETS=[15,30,45,60,90,120,150,180,210,240,300,360];
+  let val=Math.max(1,dur(ev)||30);
+
+  const backdrop=document.createElement("div");
+  backdrop.className="dur-sheet-backdrop";
+  const sheet=document.createElement("div");
+  sheet.className="dur-sheet";
+  sheet.innerHTML=
+    '<div class="dur-sheet-handle"></div>'+
+    '<div class="dur-sheet-head">Duration<span class="dur-sheet-task"></span></div>'+
+    '<div class="dur-sheet-stepper">'+
+      '<button class="dur-sheet-step" data-d="-15" type="button" aria-label="Minus 15 minutes">&minus;15</button>'+
+      '<div class="dur-sheet-val" id="dur-sheet-val"></div>'+
+      '<button class="dur-sheet-step" data-d="15" type="button" aria-label="Plus 15 minutes">+15</button>'+
+    '</div>'+
+    '<div class="dur-sheet-presets"></div>'+
+    '<div class="dur-sheet-custom"><input type="number" min="1" step="1" inputmode="numeric" class="dur-sheet-input" aria-label="Custom minutes"><span class="dur-sheet-unit">min</span></div>'+
+    '<div class="dur-sheet-actions"><button class="dur-sheet-cancel" type="button">Cancel</button><button class="dur-sheet-done" type="button">Done</button></div>';
+  backdrop.appendChild(sheet);
+  document.body.appendChild(backdrop);
+
+  sheet.querySelector(".dur-sheet-task").textContent=ev.title||"";
+  const valEl=sheet.querySelector("#dur-sheet-val");
+  const input=sheet.querySelector(".dur-sheet-input");
+  const presetWrap=sheet.querySelector(".dur-sheet-presets");
+  DUR_PRESETS.forEach(m=>{
+    const b=document.createElement("button");
+    b.type="button";b.className="dur-sheet-preset";b.dataset.m=String(m);b.textContent=ms(m);
+    b.addEventListener("click",e=>{e.stopPropagation();setVal(m);});
+    presetWrap.appendChild(b);
+  });
+
+  function setVal(n){
+    val=Math.max(1,Math.round(n||0));
+    valEl.textContent=ms(val);
+    if(document.activeElement!==input)input.value=String(val);
+    presetWrap.querySelectorAll(".dur-sheet-preset").forEach(p=>{
+      p.classList.toggle("active",parseInt(p.dataset.m,10)===val);
+    });
+  }
+  function close(){
+    backdrop.classList.remove("open");
+    setTimeout(()=>backdrop.remove(),200);
+    document.removeEventListener("keydown",onKey,true);
+  }
+  function commit(){ const v=val; close(); setDurAbsolute(ev.id,v); }
+  function onKey(e){ if(e.key==="Escape"){e.preventDefault();close();} }
+
+  sheet.querySelectorAll(".dur-sheet-step").forEach(s=>s.addEventListener("click",e=>{e.stopPropagation();setVal(val+parseInt(s.dataset.d,10));}));
+  input.addEventListener("input",e=>{e.stopPropagation();const v=parseInt(input.value,10);if(v>0)setVal(v);});
+  input.addEventListener("keydown",e=>{e.stopPropagation();if(e.key==="Enter"){e.preventDefault();commit();}});
+  input.addEventListener("click",e=>e.stopPropagation());
+  sheet.querySelector(".dur-sheet-done").addEventListener("click",e=>{e.stopPropagation();commit();});
+  sheet.querySelector(".dur-sheet-cancel").addEventListener("click",e=>{e.stopPropagation();close();});
+  sheet.addEventListener("click",e=>e.stopPropagation());
+  backdrop.addEventListener("click",()=>close());
+  document.addEventListener("keydown",onKey,true);
+
+  setVal(val);
+  // next frame: trigger slide-up transition
+  requestAnimationFrame(()=>backdrop.classList.add("open"));
+}
 
