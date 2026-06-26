@@ -969,6 +969,31 @@
   .dur-custom-input:focus{border-color:var(--accent)}
   .dur-custom-btn{flex:0 0 auto;height:24px;padding:0 10px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;transition:all 0.12s}
   .dur-custom-btn:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
+  /* Mobile duration bottom sheet (touch / narrow viewports) */
+  .dur-sheet-backdrop{position:fixed;inset:0;z-index:10000;background:rgba(2,6,23,0.55);display:flex;align-items:flex-end;justify-content:center;opacity:0;transition:opacity 0.2s ease}
+  .dur-sheet-backdrop.open{opacity:1}
+  .dur-sheet{width:100%;max-width:520px;background:var(--card);border:1px solid var(--border);border-bottom:none;border-radius:16px 16px 0 0;padding:10px 16px calc(16px + env(safe-area-inset-bottom)) 16px;box-shadow:0 -8px 32px rgba(0,0,0,0.5);transform:translateY(100%);transition:transform 0.22s cubic-bezier(0.32,0.72,0,1)}
+  .dur-sheet-backdrop.open .dur-sheet{transform:translateY(0)}
+  .dur-sheet-handle{width:38px;height:4px;border-radius:999px;background:var(--border);margin:2px auto 12px}
+  .dur-sheet-head{font-size:13px;font-weight:800;color:var(--text);display:flex;flex-direction:column;gap:2px;margin-bottom:14px}
+  .dur-sheet-task{font-size:12px;font-weight:600;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dur-sheet-stepper{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px}
+  .dur-sheet-step{flex:0 0 auto;width:64px;height:56px;border-radius:14px;border:1px solid var(--border);background:rgba(255,255,255,0.04);color:var(--text);font-size:17px;font-weight:800;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .dur-sheet-step:active{background:rgba(59,130,246,0.18);border-color:var(--accent)}
+  .dur-sheet-val{flex:1;text-align:center;font-size:30px;font-weight:900;color:var(--accent-light);font-variant-numeric:tabular-nums}
+  .dur-sheet-presets{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
+  .dur-sheet-preset{height:42px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text-muted);font-size:13px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .dur-sheet-preset:active{background:rgba(59,130,246,0.12)}
+  .dur-sheet-preset.active{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.16)}
+  .dur-sheet-custom{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+  .dur-sheet-input{flex:1;min-width:0;height:48px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,0.04);color:var(--text);font-size:18px;font-weight:700;text-align:center;padding:0 10px;outline:none}
+  .dur-sheet-input:focus{border-color:var(--accent)}
+  .dur-sheet-unit{flex:0 0 auto;color:var(--text-muted);font-size:13px;font-weight:700}
+  .dur-sheet-actions{display:flex;gap:10px}
+  .dur-sheet-cancel,.dur-sheet-done{flex:1;height:50px;border-radius:12px;font-size:15px;font-weight:800;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .dur-sheet-cancel{border:1px solid var(--border);background:transparent;color:var(--text-muted)}
+  .dur-sheet-done{border:1px solid var(--accent);background:var(--accent);color:#fff}
+  @media (prefers-reduced-motion:reduce){.dur-sheet-backdrop,.dur-sheet{transition:none}}
   body.dur-open .tl-item:not(.has-dur-popover){pointer-events:none}
   body.dur-open .tl-item:not(.has-dur-popover) .btn-move-menu,
   body.dur-open .tl-item:not(.has-dur-popover) .btn-del-task,
@@ -2910,6 +2935,45 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-pending-deposit strong{margin:0;font-size:22px;color:var(--green);line-height:1}
 .slot-bank-meter{height:9px;width:100%;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;border:1px solid rgba(255,255,255,0.06)}
 .slot-bank-meter span{display:block!important;height:100%;width:0%;border-radius:inherit;background:linear-gradient(90deg,#34c46d,#ffd66e);transition:width 0.28s ease}
+/* Shield bubble: grows as the Bank Builder banks past the monthly goal (the
+   overflow that rolls into next month's head start). Diameter is driven by --d
+   set in renderShieldBubble; it bobs gently and pops when it grows. */
+.slot-shield{display:flex;align-items:center;gap:10px;margin-top:8px;padding:7px 10px;border:1px solid rgba(163,113,247,0.32);border-radius:8px;background:rgba(163,113,247,0.08)}
+.slot-shield-bubble{--d:26px;width:var(--d);height:var(--d);flex:0 0 auto;display:grid;place-items:center;border-radius:999px;background:radial-gradient(circle at 32% 28%,rgba(224,204,255,0.96),rgba(139,92,246,0.9) 72%);box-shadow:0 0 0 3px rgba(163,113,247,0.16),0 4px 12px rgba(124,58,237,0.35),inset 0 2px 5px rgba(255,255,255,0.5);font-size:calc(var(--d) * 0.52);line-height:1;transition:width 0.45s cubic-bezier(0.34,1.56,0.64,1),height 0.45s cubic-bezier(0.34,1.56,0.64,1);animation:slotShieldBob 3.2s ease-in-out infinite}
+.slot-shield-bubble.grow{animation:slotShieldPop 0.62s ease-out}
+.slot-shield-text{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+.slot-shield-text b{font-size:15px;font-weight:800;color:#c4b5fd;font-variant-numeric:tabular-nums}
+.slot-shield-note{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.02em;color:var(--text-muted)}
+@keyframes slotShieldBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@keyframes slotShieldPop{0%{transform:scale(0.72)}55%{transform:scale(1.2)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.slot-shield-bubble{animation:none}.slot-shield-bubble.grow{animation:none}}
+/* Winnings history card — cyan "stats" identity (distinct from the green Reserve,
+   warm Bankroll, and purple shield). Flips to green when showing bank-building. */
+.slot-winnings-card{width:100%;margin-top:8px;padding:9px 11px;display:flex;flex-direction:column;gap:5px;text-align:left;border-radius:8px;cursor:pointer;font-family:inherit;color:var(--text);background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.26);transition:border-color .15s,background .15s;-webkit-user-select:none;user-select:none;touch-action:none}
+.slot-winnings-card:hover{border-color:rgba(56,189,248,0.5);background:rgba(56,189,248,0.11)}
+.slot-winnings-card.bank-view{background:rgba(34,197,94,0.07);border-color:rgba(34,197,94,0.26)}
+.slot-winnings-card.bank-view:hover{border-color:rgba(34,197,94,0.5);background:rgba(34,197,94,0.11)}
+.slot-wc-kicker{font-size:10px;font-weight:800;letter-spacing:.02em;text-transform:uppercase;color:var(--text-muted)}
+.slot-wc-big{font-size:22px;font-weight:900;line-height:1;color:#7dd3fc;font-variant-numeric:tabular-nums}
+.slot-winnings-card.bank-view .slot-wc-big{color:#4ade80}
+.slot-wc-of{font-size:13px;font-weight:700;color:var(--text-muted)}
+.slot-wc-sub{font-size:10px;font-weight:700;color:var(--text-muted)}
+.slot-wc-banked{color:#7dd3fc}
+.slot-winnings-card.bank-view .slot-wc-banked{color:#4ade80}
+.slot-wc-meter{height:7px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;border:1px solid rgba(255,255,255,0.06)}
+.slot-wc-meter span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#16a34a,#4ade80);transition:width .28s ease}
+.slot-winnings-menu{min-width:232px;max-width:300px;padding:8px;border-radius:10px;background:#0f1626;border:1px solid rgba(148,163,184,0.24);box-shadow:0 12px 32px rgba(0,0,0,0.5);display:flex;flex-direction:column;gap:3px}
+.slot-wm-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;color:var(--text-muted);padding:2px 4px 4px}
+.slot-wm-item{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;padding:7px 9px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--text);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.slot-wm-item:hover{background:rgba(56,189,248,0.1);border-color:rgba(56,189,248,0.28)}
+.slot-wm-item.active{background:rgba(56,189,248,0.14);border-color:rgba(56,189,248,0.45)}
+.slot-wm-item b{color:#7dd3fc;font-variant-numeric:tabular-nums}
+.slot-wm-sep{height:1px;background:rgba(148,163,184,0.18);margin:5px 2px}
+.slot-wm-custom{padding:4px}
+.slot-wm-custom-label{font-size:10px;font-weight:800;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px}
+.slot-wm-custom-row{display:flex;gap:5px;align-items:center}
+.slot-wm-custom-row input[type=date]{flex:1;min-width:0;background:rgba(2,6,23,0.5);border:1px solid rgba(148,163,184,0.24);border-radius:5px;color:var(--text);font-family:inherit;font-size:11px;padding:4px 5px}
+.slot-wm-apply{flex:0 0 auto}
 .slot-bank-details{margin-top:8px;padding:8px;border:1px solid rgba(148,163,184,0.14);border-radius:6px;background:rgba(2,6,23,0.18)}
 .slot-bank-breakdown{display:grid!important;grid-template-columns:1fr;gap:3px;font-size:10px!important;color:var(--text-muted)!important;text-transform:none!important;letter-spacing:0!important;font-weight:600!important}
 .slot-bank-breakdown span{display:flex!important;justify-content:space-between;gap:8px}
@@ -2923,6 +2987,27 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .slot-bankroll-goal-panel.completed{border-color:rgba(34,197,94,0.46);background:rgba(34,197,94,0.08);animation:none}
 .slot-bankroll-card-top{display:grid;grid-template-columns:58px minmax(0,1fr);gap:9px;align-items:center;min-width:0}
 .slot-bankroll-art{width:58px;aspect-ratio:1;border-radius:8px;display:grid;place-items:center;background:linear-gradient(180deg,rgba(255,248,197,0.16),rgba(250,204,21,0.06));border:1px solid rgba(250,204,21,0.28);color:#fff7d1;box-shadow:inset 0 0 18px rgba(255,255,255,0.04)}
+/* Merged Reserve+Goal card: concentric gauge (gold goal ring + green month ring),
+   goal icon riding the gold arc, reserve $ in the center. */
+.slot-reserve-goal{margin-top:8px;padding:14px 12px 12px;border:1px solid rgba(148,163,184,0.18);border-radius:12px;background:linear-gradient(180deg,rgba(30,41,59,.4),rgba(15,23,42,.45));box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.srg-gauge{position:relative;width:140px;height:140px;margin:4px auto 0}
+.srg-ring{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);border-radius:50%;background:conic-gradient(var(--c) calc(var(--p,0)*1%),rgba(255,255,255,.09) 0);width:var(--size);height:var(--size);-webkit-mask:radial-gradient(farthest-side,#0000 calc(100% - var(--t)),#000 calc(100% - var(--t)));mask:radial-gradient(farthest-side,#0000 calc(100% - var(--t)),#000 calc(100% - var(--t)));transition:background .3s ease}
+.srg-marker{position:absolute;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:#1b1206;border:2px solid #fbbf24;color:#fff7d1;font-size:14px;transform:translate(-50%,-50%);box-shadow:0 2px 8px rgba(0,0,0,.5);z-index:3;transition:left .35s ease,top .35s ease}
+.srg-marker .slot-bankroll-icon-svg,.srg-marker svg{width:16px;height:16px}
+.srg-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:84px;height:84px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1}
+/* Shrink to fit: large reserve totals ($1,234.56) would crowd the ring at 24px,
+   so cap at 20px with tight tracking — comfortable for the common $XX.XX values. */
+.srg-cval{font-size:20px;letter-spacing:-.4px;font-weight:900;font-variant-numeric:tabular-nums;color:#34d399}
+.srg-goal-name{text-align:center;margin-top:12px;font-size:14px;font-weight:800;color:#fcd34d;overflow-wrap:anywhere;line-height:1.15}
+.srg-stats{margin-top:10px;display:flex;flex-direction:column;gap:5px}
+.srg-stat{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:11px}
+.srg-stat .lab{color:var(--text-muted);font-weight:600;white-space:nowrap}
+.srg-stat .val{font-weight:800;font-variant-numeric:tabular-nums;color:var(--text);white-space:nowrap}
+.srg-stat.goal .val{color:#fcd34d}
+.srg-stat.month .val{color:#34d399}
+.srg-actions{display:flex;justify-content:center;margin-top:10px}
+.srg-actions:empty{display:none}
+.slot-reserve-goal .slot-shield{margin-top:12px}
 .slot-bankroll-icon-svg{width:38px;height:38px;display:block}
 .slot-bankroll-icon-svg path{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .slot-bankroll-copy{min-width:0}

@@ -121,7 +121,22 @@ const BANK_SHAPES = [
   { key: "quad",      clusters: [4],    weight: 20 }, // 4-in-a-row boost
   { key: "quint",     clusters: [5],    weight: 10 }, // 5-in-a-row mega boost (full row)
 ];
-const SCREEN_BANK_BUILDER_PERCENT = 0.002;
+const SCREEN_BANK_BUILDER_PERCENT = 0.0015;
+// Bank Builder pacing. Each BANK unit is worth `percent` of a geometric blend
+// between the full monthly goal and the remaining headroom:
+//   base = goal^(1-γ) · remaining^γ
+// γ = 1 is the old pure-remainder curve (steep, huge early hits). γ < 1 flattens
+// the front-load so early hits are gently — not hugely — bigger than late ones.
+const SCREEN_BANK_BUILDER_GAMMA = 0.80;
+// Final week (last 7 days) uses a lower γ: still remainder-based, just more lenient
+// so the finish pays bigger while still tapering as it nears the goal.
+const SCREEN_BANK_FINAL_WEEK_GAMMA = 0.20;
+// No single hit may take more than this fraction of the remaining headroom. 1.0 = off.
+const SCREEN_BANK_MAX_SPIN_DRAIN = 1.00;
+// Shield: once the monthly goal is reached, banking doesn't stop — it overflows into
+// a shield that seeds next month's head start, but valued as if the remainder were
+// only this fraction of the goal (the harshest payout on the board).
+const SCREEN_BANK_SHIELD_REMAINDER_FRAC = 0.020;
 const DEFAULT_POINT_TAG_TIERS = {
   none: [],
   quarter: [],
@@ -1142,9 +1157,11 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   const bankBalance = Number.isFinite(fundingAvailableCents) ? fundingAvailableCents : (account ? account.bank_balance_cents : 0);
   const threshold = reserveCostCents(row);
   const reserveAffordable = threshold <= bankBalance;
-  const bankCapLocked = row.kind === "bank_builder" && bankUsage && (
-    bankUsage.month + row.bank_delta_cents > bankUsage.monthlyGoal
-  );
+  // Bank building no longer hard-stops at the monthly goal: once the goal is reached
+  // it overflows into the shield (see calculateScreenBankPayout) which seeds next
+  // month's head start. So bank builders stay eligible past the goal — they just pay
+  // the harsh shield rate rather than locking out.
+  const bankCapLocked = false;
   const paymentSource = normalizePaymentSource(row.payment_source, row.kind);
   const chanceShares = Math.max(0, parseInt(row.chance_shares ?? row.weight, 10) || 0);
   const reserveLocked = ["small_paid", "bank_gated"].includes(row.kind) && threshold > 0 && !reserveAffordable;
@@ -1189,8 +1206,8 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
   };
 }
 
-async function getBankUsage(workspaceId, settings = {}) {
-  const { rows: [today] } = await pool.query(
+async function getBankUsage(workspaceId, settings = {}, exec = pool) {
+  const { rows: [today] } = await exec.query(
     `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
      FROM slot_spins
      WHERE workspace_id = $1 AND status IN ('pending','confirmed')
@@ -1198,7 +1215,7 @@ async function getBankUsage(workspaceId, settings = {}) {
        AND created_at >= date_trunc('day', NOW())`,
     [workspaceId]
   );
-  const { rows: [week] } = await pool.query(
+  const { rows: [week] } = await exec.query(
     `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
      FROM slot_spins
      WHERE workspace_id = $1 AND status IN ('pending','confirmed')
@@ -1206,7 +1223,7 @@ async function getBankUsage(workspaceId, settings = {}) {
        AND created_at >= date_trunc('week', NOW())`,
     [workspaceId]
   );
-  const { rows: [month] } = await pool.query(
+  const { rows: [month] } = await exec.query(
     `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents,
             EXTRACT(DAY FROM NOW())::int AS day_of_month,
             EXTRACT(DAY FROM (date_trunc('month', NOW()) + INTERVAL '1 month - 1 day'))::int AS days_in_month
@@ -1218,21 +1235,114 @@ async function getBankUsage(workspaceId, settings = {}) {
        AND created_at >= date_trunc('month', NOW())`,
     [workspaceId]
   );
+  // Last calendar month's bank-builder total — anything banked beyond the goal last
+  // month is the shield, which rolls forward as this month's HEAD START.
+  const { rows: [lastMonth] } = await exec.query(
+    `SELECT COALESCE(SUM(bank_delta_cents), 0)::int AS cents
+     FROM slot_spins
+     WHERE workspace_id = $1 AND status IN ('pending','confirmed')
+       AND bank_delta_cents > 0
+       AND (reward_snapshot->>'kind' = 'bank_builder'
+            OR reward_snapshot->>'source_type' = 'slot_screen_bank_builder')
+       AND created_at >= date_trunc('month', NOW()) - INTERVAL '1 month'
+       AND created_at <  date_trunc('month', NOW())`,
+    [workspaceId]
+  );
   const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, MONTHLY_MIN, MONTHLY_MAX);
-  // Final week = the last 7 calendar days of the month. During it, bank builders
-  // value off the full monthly allotment instead of the remainder so a strong run
-  // can still max the bar out. (See calculateScreenBankPayout for the pacing.)
+  // Head start = last month's overflow above goal (the shield), capped at the goal so
+  // a runaway month can't pre-fill more than the whole bar.
+  const rawMonth = month.cents;
+  const headStart = Math.min(monthlyGoal, Math.max(0, lastMonth.cents - monthlyGoal));
+  // Effective banked this month = new deposits + rolled-over head start. All remainder
+  // math (remainingCap, the bank-cap, the progress bar) keys off this.
+  const effectiveMonth = rawMonth + headStart;
+  // Final week = the last 7 calendar days of the month. During it, bank builders use a
+  // more lenient (but still remainder-based) γ. (See calculateScreenBankPayout.)
   const dayOfMonth = month.day_of_month || 0;
   const daysInMonth = month.days_in_month || 0;
   const finalWeek = daysInMonth > 0 && dayOfMonth > daysInMonth - 7;
   return {
     today: today.cents,
     week: week.cents,
-    month: month.cents,
+    month: effectiveMonth,
+    rawMonth,
+    headStart,
     monthlyGoal,
-    monthlyRemaining: Math.max(0, monthlyGoal - month.cents),
+    monthlyRemaining: Math.max(0, monthlyGoal - effectiveMonth),
     finalWeek,
   };
+}
+
+// Per-spin "won" = the prize value of real reward wins (excludes misses and the
+// bank_builder accumulation, which is tracked separately as "banked"). Guarded
+// cast so dirty/absent value_cents never throws.
+const WON_CENTS_EXPR =
+  `CASE WHEN s.reward_snapshot->>'kind' NOT IN ('miss','bank_builder')
+            AND s.reward_snapshot->>'value_cents' ~ '^[0-9]+$'
+        THEN (s.reward_snapshot->>'value_cents')::int ELSE 0 END`;
+
+// Winnings across the standard ranges in ONE round trip. `won` = prize value,
+// `banked` = bank_delta_cents. Session is "since the slots tab opened" — the client
+// passes sessionFrom; absent, it falls back to today. Buckets are computed with
+// FILTER over the widest standard window (quarter, lower-bounded by sessionFrom).
+async function getWinningsSummary(workspaceId, { sessionFrom = null } = {}, exec = pool) {
+  const { rows: [r] } = await exec.query(
+    `WITH b AS (
+       SELECT date_trunc('day', NOW())     AS d_day,
+              date_trunc('week', NOW())    AS d_week,
+              date_trunc('month', NOW())   AS d_month,
+              date_trunc('quarter', NOW()) AS d_quarter,
+              COALESCE($2::timestamptz, date_trunc('day', NOW())) AS d_session
+     ),
+     rows AS (
+       SELECT s.created_at,
+              s.bank_delta_cents AS banked,
+              ${WON_CENTS_EXPR} AS won
+       FROM slot_spins s, b
+       WHERE s.workspace_id = $1
+         AND s.status IN ('pending','confirmed','awarded')
+         AND s.created_at >= LEAST(b.d_quarter, b.d_session)
+     )
+     SELECT
+       COALESCE(SUM(rows.won)    FILTER (WHERE rows.created_at >= b.d_session),0)::int AS session_won,
+       COALESCE(SUM(rows.banked) FILTER (WHERE rows.created_at >= b.d_session),0)::int AS session_banked,
+       COALESCE(SUM(rows.won)    FILTER (WHERE rows.created_at >= b.d_day),0)::int     AS today_won,
+       COALESCE(SUM(rows.banked) FILTER (WHERE rows.created_at >= b.d_day),0)::int     AS today_banked,
+       COALESCE(SUM(rows.won)    FILTER (WHERE rows.created_at >= b.d_week),0)::int    AS week_won,
+       COALESCE(SUM(rows.banked) FILTER (WHERE rows.created_at >= b.d_week),0)::int    AS week_banked,
+       COALESCE(SUM(rows.won)    FILTER (WHERE rows.created_at >= b.d_month),0)::int   AS month_won,
+       COALESCE(SUM(rows.banked) FILTER (WHERE rows.created_at >= b.d_month),0)::int   AS month_banked,
+       COALESCE(SUM(rows.won),0)::int    AS quarter_won,
+       COALESCE(SUM(rows.banked),0)::int AS quarter_banked
+     FROM rows, b`,
+    [workspaceId, sessionFrom]
+  );
+  const row = r || {};
+  const pair = (won, banked) => ({ won: won || 0, banked: banked || 0 });
+  return {
+    session: pair(row.session_won, row.session_banked),
+    today: pair(row.today_won, row.today_banked),
+    week: pair(row.week_won, row.week_banked),
+    month: pair(row.month_won, row.month_banked),
+    quarter: pair(row.quarter_won, row.quarter_banked),
+  };
+}
+
+// One {won,banked} for an arbitrary date range (the card's two Custom slots). `to`
+// is treated as an inclusive calendar day.
+async function getWinningsSummaryCustom(workspaceId, from, to, exec = pool) {
+  const { rows: [r] } = await exec.query(
+    `SELECT
+       COALESCE(SUM(${WON_CENTS_EXPR}),0)::int AS won,
+       COALESCE(SUM(s.bank_delta_cents),0)::int AS banked
+     FROM slot_spins s
+     WHERE s.workspace_id = $1
+       AND s.status IN ('pending','confirmed','awarded')
+       AND s.created_at >= $2::timestamptz
+       AND s.created_at <  ($3::timestamptz + INTERVAL '1 day')`,
+    [workspaceId, from, to]
+  );
+  return { won: (r && r.won) || 0, banked: (r && r.banked) || 0, from, to };
 }
 
 async function getPendingBankDeposit(workspaceId) {
@@ -1315,11 +1425,12 @@ function buildBankrollGoalState(account, rewardRows, bankUsage, funding) {
   };
 }
 
-async function getState(workspaceId, userId) {
+async function getState(workspaceId, userId, options = {}) {
   const account = accountWithSettings(await ensureAccount(workspaceId, userId));
   const spinCostBasis = await learnedSpinCost(workspaceId);
   const spinCost = spinCostBasis.cost;
   const bankUsage = await getBankUsage(workspaceId, account.settings);
+  const winnings = await getWinningsSummary(workspaceId, { sessionFrom: options.sessionFrom || null });
   const pendingBankDeposit = await getPendingBankDeposit(workspaceId);
   const funding = {
     ready: account.bank_balance_cents || 0,
@@ -1343,6 +1454,7 @@ async function getState(workspaceId, userId) {
     rewards,
     spins,
     bankUsage,
+    winnings,
     pendingBankDeposit,
     funding,
     bankrollGoal,
@@ -3052,26 +3164,40 @@ function calculateScreenBankPayout(board, account, bankUsage) {
     100,
     1000000
   );
-  // The only cap on bank-building is the monthly goal: you can bank up to your
-  // full monthly discretionary target each month, with no daily or weekly throttle.
+  // `monthBanked` is the EFFECTIVE banked total — this month's bank deltas plus any
+  // head start rolled over from last month's shield (see getBankUsage).
   const monthBanked = (bankUsage && bankUsage.month) || 0;
   const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
-  // Remainder-based pacing: for most of the month each BANK tile is worth a
-  // percent of the REMAINING headroom, not the full monthly goal. The bar fills
-  // fast early (big remainder => big hits) and each hit tapers as it approaches
-  // the goal. In the final week we switch the base back to the full monthly
-  // allotment so a strong late run can still push the bar all the way to max.
   const finalWeek = !!(bankUsage && bankUsage.finalWeek);
-  const pacingBaseCents = finalWeek ? monthlyGoalCents : remainingCap;
+  // Once the goal is reached the bar doesn't stop: banking overflows into a SHIELD
+  // that seeds next month's head start, but valued as if only a tiny sliver of the
+  // goal remained — the harshest payout on the board.
+  const inShield = remainingCap <= 0;
+  // Geometric-blend pacing (see constants): base = goal^(1-γ) · remaining^γ.
+  // γ < 1 flattens the front-load so the curve reads big-early / low-middle, and
+  // the final week drops γ further (more lenient) for a bigger — but still
+  // remainder-tapered — finish.
+  const gamma = finalWeek ? SCREEN_BANK_FINAL_WEEK_GAMMA : SCREEN_BANK_BUILDER_GAMMA;
+  const pacingRemaining = inShield
+    ? monthlyGoalCents * SCREEN_BANK_SHIELD_REMAINDER_FRAC
+    : remainingCap;
+  const pacingBaseCents = Math.pow(monthlyGoalCents, 1 - gamma) * Math.pow(pacingRemaining, gamma);
   const baseCents = Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT);
   const baseUnits = positions.length;
   const horizontalBonusUnits = horizontalGroups.reduce((sum, group) => sum + group.length * (group.length - 1), 0);
   const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
   const units = baseUnits + horizontalBonusUnits + verticalBonusUnits;
-  // No flat floor: a bank hit scales purely with the monthly goal headroom, so a
-  // tiny remaining balance yields a tiny (or zero) hit by design.
-  const rawCents = units > 0 ? baseCents * units : 0;
-  const cents = Math.min(rawCents, remainingCap);
+  // In the shield zone the per-unit base can be a fraction of a cent and would floor
+  // to zero, so round the TOTAL instead — that keeps the shield a tiny-but-nonzero
+  // trickle. Normal hits floor per unit (baseCents) so the well-tested values hold.
+  const rawCents = units > 0
+    ? (inShield ? Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT * units) : baseCents * units)
+    : 0;
+  // In the shield zone the overflow is uncapped (but tiny). Otherwise cap a single
+  // hit at the remaining headroom and at MAX_SPIN_DRAIN of it.
+  const cents = inShield
+    ? rawCents
+    : Math.min(rawCents, remainingCap, Math.floor(remainingCap * SCREEN_BANK_MAX_SPIN_DRAIN));
 
   return {
     source_type: "slot_screen_bank_builder",
@@ -3080,9 +3206,10 @@ function calculateScreenBankPayout(board, account, bankUsage) {
     vertical_groups: verticalGroups,
     base_cents: baseCents,
     goal_cents: monthlyGoalCents,
-    pacing_base_cents: pacingBaseCents,
+    pacing_base_cents: Math.floor(pacingBaseCents),
     monthly_remaining_cents: remainingCap,
     final_week: finalWeek,
+    in_shield: inShield,
     base_units: baseUnits,
     horizontal_bonus_units: horizontalBonusUnits,
     vertical_bonus_units: verticalBonusUnits,
@@ -3105,7 +3232,12 @@ function emptyScreenBankPayout(account, bankUsage) {
   const monthBanked = (bankUsage && bankUsage.month) || 0;
   const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
   const finalWeek = !!(bankUsage && bankUsage.finalWeek);
-  const pacingBaseCents = finalWeek ? monthlyGoalCents : remainingCap;
+  const inShield = remainingCap <= 0;
+  const gamma = finalWeek ? SCREEN_BANK_FINAL_WEEK_GAMMA : SCREEN_BANK_BUILDER_GAMMA;
+  const pacingRemaining = inShield
+    ? monthlyGoalCents * SCREEN_BANK_SHIELD_REMAINDER_FRAC
+    : remainingCap;
+  const pacingBaseCents = Math.pow(monthlyGoalCents, 1 - gamma) * Math.pow(pacingRemaining, gamma);
   return {
     source_type: "slot_screen_bank_builder",
     positions: [],
@@ -3113,9 +3245,10 @@ function emptyScreenBankPayout(account, bankUsage) {
     vertical_groups: [],
     base_cents: Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT),
     goal_cents: monthlyGoalCents,
-    pacing_base_cents: pacingBaseCents,
+    pacing_base_cents: Math.floor(pacingBaseCents),
     monthly_remaining_cents: remainingCap,
     final_week: finalWeek,
+    in_shield: inShield,
     base_units: 0,
     horizontal_bonus_units: 0,
     vertical_bonus_units: 0,
@@ -3211,6 +3344,15 @@ async function spin(workspaceId, userId, options = {}) {
       state.bankUsage,
       canHitScreenBank
     );
+    // Re-value the bank screen against the LIVE remainder. state.bankUsage was read
+    // on `pool` before this transaction took its FOR UPDATE lock, so a spin that
+    // committed in between would leave it stale and overpay. Re-query the month total
+    // on `client` (inside the lock) and recompute the payout from the final board —
+    // the board layout is independent of the remainder, so this only corrects the
+    // cents. This is what makes each spin pace off the current remainder, not a
+    // snapshot that only refreshed on a full state reload.
+    const liveBankUsage = await getBankUsage(workspaceId, lockedSettings, client);
+    screen.payout = calculateScreenBankPayout(screen.board, { ...account, settings: lockedSettings }, liveBankUsage);
     const screenJackpot = screen.jackpot || evaluateJackpotBoard(screen.board);
     let effectiveOutcome = outcome;
     if (outcome.jackpot_hit && selected.kind !== "bank_builder" && !screenJackpot.hit) {
@@ -3815,6 +3957,8 @@ function notFound(message) {
 module.exports = {
   ensureSchema,
   getState,
+  getWinningsSummary,
+  getWinningsSummaryCustom,
   updateSettings,
   setNextSpinTileOverride,
   clearNextSpinTileOverride,
@@ -3842,6 +3986,7 @@ module.exports = {
     buildSpinScreen,
     calculateScreenBankPayout,
     emptyScreenBankPayout,
+    getBankUsage,
     normalizeTileBoard,
     normalizeNextSpinTileOverride,
     applyTileOverrideToScreen,

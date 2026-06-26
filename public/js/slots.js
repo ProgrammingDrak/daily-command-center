@@ -10,6 +10,13 @@
   let sponsorSplitsDraft = [];
   let isSpinning = false;
   let lastPendingBankCents = 0;
+  let lastShieldCents = 0;
+  // Winnings history card. Session = since the slots tab first loaded this visit.
+  let slotSessionStart = null;
+  let winningsView = "won";   // "won" | "bank" (tap flips)
+  let winningsRange = "today"; // session|today|week|month|quarter|customA|customB (hold sets)
+  const winningsCustom = { customA: null, customB: null }; // each: {from,to,won,banked}
+  let shieldGrowTimer = null; // so rapid shield growth can't orphan a .grow-clearing timeout
   let refreshSlotsAfterSpin = false;
   let pendingDeleteRewardId = null;
   let pendingTierDelete = null;
@@ -530,7 +537,8 @@
     // a slow earlier response can't clobber newer state.
     const token = ++loadSlotsToken;
     try {
-      const next = await api("/api/slot/state");
+      if(!slotSessionStart) slotSessionStart = new Date().toISOString();
+      const next = await api("/api/slot/state?session_from=" + encodeURIComponent(slotSessionStart));
       if(token !== loadSlotsToken) return;
       slotState = next;
       pointTagTierDraft = null;
@@ -584,7 +592,8 @@
     const credits = account.point_balance || 0;
     setText("slot-credit-balance", String(credits));
     renderPiggyBank(false);
-    renderBankrollGoalPanel();
+    renderReserveGoalCard(false);
+    renderWinningsCard();
     renderSettings();
     const badge = document.getElementById("slots-credit-badge");
     if(badge){
@@ -2287,7 +2296,7 @@
     if(totalBank > 0){
       // Each wheel floats up its own dollar amount, then they converge into one
       // combined "+$X → Reserve" total before being banked.
-      const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
+      const target = document.getElementById("srg-gauge") || document.getElementById("slot-pending-deposit");
       let deposited = false;
       const deposit = () => { if(!deposited){ deposited = true; addPendingDeposit(totalBank); } };
       if(target) target.classList.add("receiving");
@@ -3325,7 +3334,7 @@
     // combo total as the links fire (skipped for a lone tile - 1 unit, no multiplier).
     const horizontalPromise = playBankLightningGroups(horizontalGroups, reels, "row", "Double Points!");
     const verticalPromise = playBankLightningGroups(verticalGroups, reels, "column", "+1 Bank Unit!");
-    const target = document.getElementById("slot-bank-balance") || document.getElementById("slot-pending-deposit");
+    const target = document.getElementById("srg-gauge") || document.getElementById("slot-pending-deposit");
     const reservePromise = target ? animateBankReserveDrain(cells, target, deltaCents, onDeposit) : Promise.resolve();
     await animateBankMultiplyStep(math, payout, 760);
 
@@ -3909,7 +3918,7 @@
 
   async function animateCoinPileToPiggy(deltaCents){
     if(!isSlotsPageActive()) return;
-    const target = document.getElementById("slot-pending-deposit") || document.getElementById("slot-bank-balance");
+    const target = document.getElementById("srg-gauge") || document.getElementById("slot-pending-deposit");
     if(!target) return;
     const targetRect = target.getBoundingClientRect();
     const tx = targetRect.left + targetRect.width / 2;
@@ -5324,49 +5333,201 @@
     }
   }
 
-  function renderBankrollGoalPanel(){
-    const panel = document.getElementById("slot-bankroll-goal-panel");
-    if(!panel) return;
+  // Merged Reserve + Bankroll Goal gauge. Gold ring = goal progress (reserve total /
+  // target), green ring = banked this month / monthly cap, goal icon rides the gold
+  // arc, and the center shows the reserve $ (which IS the amount toward the goal).
+  // renderPiggyBank still populates the rules-tab detail panel; the shield bubble
+  // lives in this card.
+  const SRG_GAUGE = { size: 140, t: 13 }; // matches the markup's gold ring
+  function renderReserveGoalCard(animate){
+    const card = document.getElementById("slot-reserve-goal");
+    if(!card || !slotState) return;
+    const funding = slotState.funding || {};
+    const bu = slotState.bankUsage || {};
+    const account = slotState.account || {};
     const goal = bankrollGoal();
-    if(!goal.enabled){
-      panel.className = "slot-bankroll-goal-panel empty";
-      panel.innerHTML =
-        '<div class="slot-bankroll-kicker">Bankroll Goal</div>' +
-        '<strong>No goal selected</strong>' +
-        '<button class="slot-mini" id="slot-bankroll-open-rewards" type="button">Choose goal</button>';
-      const open = panel.querySelector("#slot-bankroll-open-rewards");
-      if(open) open.addEventListener("click", () => switchSlotSection("rewards"));
-      return;
+    const totalCents = funding.total != null ? funding.total : (account.bank_balance_cents || 0);
+    const monthCents = bu.month || 0;
+    const monthlyGoal = bu.monthlyGoal || ((slotState.constants && slotState.constants.monthlyGoalCents) || 0);
+    const monthPct = monthlyGoal > 0 ? Math.max(monthCents > 0 ? 4 : 0, Math.min(100, Math.round((monthCents / monthlyGoal) * 100))) : 0;
+
+    let goalPct = 0, iconHtml = "🎁", goalName = "No goal yet", hasGoal = false;
+    let actionsHtml = '<button class="slot-mini" id="slot-bankroll-open-rewards" type="button">Choose goal</button>';
+    if(goal.enabled){
+      hasGoal = true;
+      const reward = goal.reward || {};
+      goalPct = Math.max(0, Math.min(100, goal.progress_percent || 0));
+      const inferredIconId = inferBankrollIconId((reward.title || "") + " " + (goal.description || reward.notes || ""));
+      const iconId = goal.icon_id && goal.icon_id !== "gift" ? goal.icon_id : inferredIconId;
+      iconHtml = bankrollIconSvg(iconId);
+      goalName = goal.claimable ? "YOU HIT YOUR GOAL!" : (reward.title || "Goal");
+      if(goal.claimable) actionsHtml = '<button class="slot-small-btn primary" id="slot-bankroll-claim-btn" type="button">Claim reward</button>';
+      else if(goal.completed) actionsHtml = '<button class="slot-mini" id="slot-bankroll-open-rewards" type="button">Set next goal</button>';
+      else actionsHtml = "";
     }
-    const reward = goal.reward || {};
-    const pct = Math.max(0, Math.min(100, goal.progress_percent || 0));
-    const completed = !!goal.completed;
-    const claimable = !!goal.claimable;
-    const inferredIconId = inferBankrollIconId((reward.title || "") + " " + (goal.description || reward.notes || ""));
-    const iconId = goal.icon_id && goal.icon_id !== "gift" ? goal.icon_id : inferredIconId;
-    const description = goal.description || reward.notes || "Build the reserve until this reward is fully funded.";
-    panel.className = "slot-bankroll-goal-panel" + (claimable ? " ready" : "") + (completed ? " completed" : "");
-    panel.innerHTML =
-      '<div class="slot-bankroll-card-top">' +
-        '<div class="slot-bankroll-art" data-icon="' + esc(iconId) + '">' + bankrollIconSvg(iconId) + '</div>' +
-        '<div class="slot-bankroll-copy">' +
-          '<div class="slot-bankroll-kicker">Bankroll Goal</div>' +
-          '<div class="slot-bankroll-title">' + esc(claimable ? "YOU HIT YOUR GOAL!" : (reward.title || "Goal missing")) + '</div>' +
-          '<div class="slot-bankroll-target">' + esc(reward.title || "Choose a new goal") + '</div>' +
-          '<p class="slot-bankroll-description">' + esc(description) + '</p>' +
-        '</div>' +
+
+    setSrgRing("srg-ring-goal", goalPct);
+    setSrgRing("srg-ring-month", monthPct);
+
+    const marker = document.getElementById("srg-marker");
+    if(marker){
+      marker.innerHTML = hasGoal ? iconHtml : "🎁";
+      marker.style.display = hasGoal ? "" : "none";
+      const c = SRG_GAUGE.size / 2, R = c - SRG_GAUGE.t / 2, ang = goalPct / 100 * 2 * Math.PI;
+      marker.style.left = (c + R * Math.sin(ang)) + "px";
+      marker.style.top = (c - R * Math.cos(ang)) + "px";
+    }
+
+    // Center = the reserve $ (which IS the amount toward the goal — same pot).
+    setText("srg-cval", money(totalCents));
+    setText("srg-goal-name", hasGoal ? goalName : "No goal yet");
+
+    const stats = document.getElementById("srg-stats");
+    if(stats){
+      stats.innerHTML =
+        '<div class="srg-stat goal"><span class="lab">Toward goal</span><span class="val">' + (hasGoal ? money(totalCents) + ' / ' + goalPct + '%' : "—") + '</span></div>' +
+        '<div class="srg-stat month"><span class="lab">This month</span><span class="val">' + money(monthCents) + ' / ' + money(monthlyGoal) + ' (' + monthPct + '%)</span></div>';
+    }
+
+    const actions = document.getElementById("srg-actions");
+    if(actions){
+      actions.innerHTML = actionsHtml;
+      const claim = actions.querySelector("#slot-bankroll-claim-btn");
+      if(claim) claim.addEventListener("click", claimBankrollReward);
+      const open = actions.querySelector("#slot-bankroll-open-rewards");
+      if(open) open.addEventListener("click", () => switchSlotSection("rewards"));
+    }
+
+    // Shield bubble lives in this card now (moved out of renderPiggyBank).
+    renderShieldBubble(Math.max(0, monthCents - monthlyGoal), monthlyGoal, animate);
+  }
+
+  function setSrgRing(id, pct){ const e = document.getElementById(id); if(e) e.style.setProperty("--p", pct); }
+
+  // ── Winnings history card ──────────────────────────────────────────────
+  // Tap flips between "Won" (the selected range) and "Bank building this month".
+  // Press-and-hold opens a range menu (session/today/week/month/quarter + 2 custom).
+  const WINNINGS_LABELS = { session: "This session", today: "Today", week: "This week", month: "This month", quarter: "This quarter" };
+
+  function winningsRangeInfo(){
+    const w = (slotState && slotState.winnings) || {};
+    if(winningsRange === "customA" || winningsRange === "customB"){
+      const c = winningsCustom[winningsRange];
+      if(c) return { won: c.won || 0, banked: c.banked || 0, label: (c.from || "") + " → " + (c.to || "") };
+      return { won: 0, banked: 0, label: "Custom" };
+    }
+    const d = w[winningsRange] || w.today || { won: 0, banked: 0 };
+    return { won: d.won || 0, banked: d.banked || 0, label: WINNINGS_LABELS[winningsRange] || "Today" };
+  }
+
+  function renderWinningsCard(){
+    const card = document.getElementById("slot-winnings-card");
+    if(!card || !slotState) return;
+    if(card.dataset.bound !== "1") bindWinningsCard(card);
+    if(winningsView === "bank"){
+      const bu = slotState.bankUsage || {};
+      const banked = bu.month || 0, goal = bu.monthlyGoal || 0;
+      const pct = goal > 0 ? Math.max(banked > 0 ? 6 : 0, Math.min(100, Math.round((banked / goal) * 100))) : 0;
+      card.classList.add("bank-view"); card.classList.remove("won-view");
+      card.innerHTML =
+        '<div class="slot-wc-kicker">🏦 Bank building · this month</div>' +
+        '<div class="slot-wc-big">' + money(banked) + ' <span class="slot-wc-of">/ ' + money(goal) + '</span></div>' +
+        '<div class="slot-wc-meter"><span style="width:' + pct + '%"></span></div>' +
+        '<div class="slot-wc-sub">tap: winnings · hold: ranges</div>';
+    } else {
+      const info = winningsRangeInfo();
+      card.classList.add("won-view"); card.classList.remove("bank-view");
+      card.innerHTML =
+        '<div class="slot-wc-kicker">🎰 Won · ' + esc(info.label) + '</div>' +
+        '<div class="slot-wc-big">' + money(info.won) + '</div>' +
+        '<div class="slot-wc-sub"><span class="slot-wc-banked">+' + money(info.banked) + ' banked</span> · hold: ranges</div>';
+    }
+  }
+
+  function bindWinningsCard(card){
+    card.dataset.bound = "1";
+    const HOLD_MS = 420, MOVE_CANCEL = 8;
+    let holdTimer = null, sx = 0, sy = 0, didHold = false, pid = null;
+    card.addEventListener("pointerdown", e => {
+      if(e.button !== undefined && e.button !== 0) return;
+      pid = e.pointerId; didHold = false; sx = e.clientX; sy = e.clientY;
+      try { card.setPointerCapture(pid); } catch(_){}
+      holdTimer = setTimeout(() => { holdTimer = null; didHold = true; openWinningsMenu(card); }, HOLD_MS);
+    });
+    card.addEventListener("pointermove", e => {
+      if(!holdTimer) return;
+      if(Math.abs(e.clientX - sx) > MOVE_CANCEL || Math.abs(e.clientY - sy) > MOVE_CANCEL){ clearTimeout(holdTimer); holdTimer = null; }
+    });
+    card.addEventListener("pointerup", () => { if(holdTimer){ clearTimeout(holdTimer); holdTimer = null; } });
+    card.addEventListener("click", e => {
+      if(didHold){ didHold = false; e.preventDefault(); return; } // the hold already opened the menu
+      winningsView = winningsView === "won" ? "bank" : "won";
+      renderWinningsCard();
+    });
+    card.addEventListener("contextmenu", e => e.preventDefault());
+  }
+
+  function winningsCustomRow(slot){
+    const c = winningsCustom[slot] || {};
+    const label = slot === "customA" ? "Custom A" : "Custom B";
+    return '<div class="slot-wm-custom">' +
+      '<div class="slot-wm-custom-label">' + label + (c.from ? ' · ' + money(c.won || 0) + ' won' : '') + '</div>' +
+      '<div class="slot-wm-custom-row">' +
+        '<input type="date" data-slot="' + slot + '" data-end="from" value="' + esc(c.from || "") + '">' +
+        '<input type="date" data-slot="' + slot + '" data-end="to" value="' + esc(c.to || "") + '">' +
+        '<button class="slot-mini slot-wm-apply" data-slot="' + slot + '" type="button">Apply</button>' +
       '</div>' +
-      '<div class="slot-bankroll-meter"><span style="width:' + pct + '%"></span></div>' +
-      '<div class="slot-bankroll-stats">' +
-        '<span>' + money(goal.total_cents || 0) + ' / ' + money(goal.target_cents || 0) + '</span>' +
-        '<span>' + (completed ? 'Claimed' : claimable ? 'Ready' : money(goal.remaining_cents || 0) + ' left') + '</span>' +
-      '</div>' +
-      (claimable ? '<button class="slot-small-btn primary" id="slot-bankroll-claim-btn" type="button">Claim reward</button>' : '') +
-      (completed ? '<button class="slot-mini" id="slot-bankroll-open-rewards" type="button">Set next goal</button>' : '');
-    const claim = panel.querySelector("#slot-bankroll-claim-btn");
-    if(claim) claim.addEventListener("click", claimBankrollReward);
-    const open = panel.querySelector("#slot-bankroll-open-rewards");
-    if(open) open.addEventListener("click", () => switchSlotSection("rewards"));
+    '</div>';
+  }
+
+  function openWinningsMenu(anchor){
+    document.querySelectorAll(".slot-winnings-menu").forEach(m => m.remove());
+    const w = (slotState && slotState.winnings) || {};
+    const menu = document.createElement("div");
+    menu.className = "slot-winnings-menu";
+    menu.innerHTML =
+      '<div class="slot-wm-title">Winnings for…</div>' +
+      Object.keys(WINNINGS_LABELS).map(k => {
+        const d = w[k] || { won: 0, banked: 0 };
+        return '<button class="slot-wm-item' + (winningsRange === k ? ' active' : '') + '" data-range="' + k + '" type="button">' +
+          '<span>' + WINNINGS_LABELS[k] + '</span><b>' + money(d.won || 0) + '</b></button>';
+      }).join("") +
+      '<div class="slot-wm-sep"></div>' +
+      winningsCustomRow("customA") + winningsCustomRow("customB");
+    document.body.appendChild(menu);
+    const r = anchor.getBoundingClientRect();
+    menu.style.position = "fixed";
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - menu.offsetWidth - 8, r.left)) + "px";
+    let top = r.bottom + 6;
+    if(top + menu.offsetHeight > window.innerHeight - 8) top = Math.max(8, r.top - menu.offsetHeight - 6);
+    menu.style.top = top + "px";
+    menu.style.zIndex = "9999";
+    function close(){ menu.remove(); document.removeEventListener("click", onOutside, true); }
+    function onOutside(e){ if(!menu.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) close(); }
+    menu.querySelectorAll(".slot-wm-item[data-range]").forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        winningsRange = btn.dataset.range; winningsView = "won";
+        close(); renderWinningsCard();
+      });
+    });
+    menu.querySelectorAll(".slot-wm-apply").forEach(btn => {
+      btn.addEventListener("click", async e => {
+        e.stopPropagation();
+        const slot = btn.dataset.slot;
+        const from = menu.querySelector('input[data-slot="' + slot + '"][data-end="from"]').value;
+        const to = menu.querySelector('input[data-slot="' + slot + '"][data-end="to"]').value;
+        if(!from || !to) return;
+        btn.disabled = true; btn.textContent = "…";
+        try {
+          const res = await api("/api/slot/winnings?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(to));
+          winningsCustom[slot] = { from, to, won: res.won || 0, banked: res.banked || 0 };
+          winningsRange = slot; winningsView = "won";
+          close(); renderWinningsCard();
+        } catch(err){ btn.disabled = false; btn.textContent = "Retry"; }
+      });
+    });
+    setTimeout(() => document.addEventListener("click", onOutside, true), 0);
   }
 
   function renderBankrollManager(){
@@ -5538,33 +5699,46 @@
     const monthCents = bu.month || 0;
     const monthlyGoal = bu.monthlyGoal || ((slotState.constants && slotState.constants.monthlyGoalCents) || 0);
     const shortfall = bu.monthlyRemaining != null ? bu.monthlyRemaining : Math.max(0, monthlyGoal - monthCents);
-    const btn = document.getElementById("slot-pending-deposit");
-    const fill = document.getElementById("slot-bank-fill");
-    const details = document.getElementById("slot-bank-details");
-    const sweepBtn = document.getElementById("slot-bank-sweep-btn");
-    if(!btn) return;
+    // The side-rail reserve card was merged into the gauge (renderReserveGoalCard);
+    // this now just keeps the rules-tab detail panel + sweep button in sync.
     setText("slot-bank-balance", money(totalCents));
     setText("slot-bank-ready", money(readyCents));
     setText("slot-bank-pending", money(pendingCents));
     setText("slot-bank-total", money(totalCents));
     setText("slot-bank-month", money(monthCents) + " / " + money(monthlyGoal));
     setText("slot-bank-shortfall", money(shortfall));
-    setText("slot-bank-action-label", "Unlocked total - click for details");
-    btn.disabled = false;
-    btn.classList.toggle("urgent", pendingCents > 0);
-    btn.setAttribute("aria-expanded", bankDetailsOpen ? "true" : "false");
-    btn.title = "Click to see how much is ready and how much still needs to be swept.";
+    const details = document.getElementById("slot-bank-details");
     if(details) details.hidden = !bankDetailsOpen;
+    const sweepBtn = document.getElementById("slot-bank-sweep-btn");
     if(sweepBtn){
       sweepBtn.disabled = pendingCents <= 0;
       sweepBtn.textContent = pendingCents > 0 ? "Confirm " + money(pendingCents) + " reserved" : "No reserve pending";
     }
-    if(fill){
-      const pct = monthlyGoal <= 0 ? 0 : Math.max(monthCents > 0 ? 8 : 0, Math.min(100, Math.round((monthCents / monthlyGoal) * 100)));
-      fill.style.width = pct + "%";
-    }
     if(animate && pendingCents > lastPendingBankCents) inflatePendingDeposit(pendingCents - lastPendingBankCents);
     lastPendingBankCents = pendingCents;
+  }
+
+  // The shield bubble swells with the overflow: diameter scales from 24px up to 64px,
+  // hitting max when the shield reaches half the monthly goal. Pops when it grows.
+  function renderShieldBubble(shieldCents, goalCents, animate){
+    const wrap = document.getElementById("slot-shield");
+    const bubble = document.getElementById("slot-shield-bubble");
+    if(!wrap || !bubble) return;
+    if(shieldCents <= 0){ wrap.hidden = true; lastShieldCents = 0; return; }
+    wrap.hidden = false;
+    setText("slot-shield-amount", money(shieldCents));
+    const denom = goalCents > 0 ? goalCents * 0.5 : 5000;
+    const frac = Math.max(0, Math.min(1, shieldCents / denom));
+    bubble.style.setProperty("--d", Math.round(24 + frac * 40) + "px");
+    wrap.title = "Shield: " + money(shieldCents) + " banked past your goal. Rolls into next month's head start.";
+    if(animate && shieldCents > lastShieldCents){
+      if(shieldGrowTimer) clearTimeout(shieldGrowTimer);
+      bubble.classList.remove("grow");
+      void bubble.offsetWidth;
+      bubble.classList.add("grow");
+      shieldGrowTimer = setTimeout(() => { bubble.classList.remove("grow"); shieldGrowTimer = null; }, 700);
+    }
+    lastShieldCents = shieldCents;
   }
 
   function togglePiggyBankDetails(){
@@ -5611,7 +5785,8 @@
       goal.claimable = !!goal.reward && goal.funded && !goal.completed;
     }
     renderPiggyBank(true);
-    renderBankrollGoalPanel();
+    renderReserveGoalCard(true);
+    renderWinningsCard();
   }
 
   // A bank builder landed but the Reward Reserve had no (or limited) headroom, so
