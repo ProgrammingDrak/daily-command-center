@@ -16,8 +16,9 @@ This app runs in two places at once. Know which you're touching before any write
 > tolerate this via a warmup ping + bounded retry, tunable with `DCC_TIMEOUT_MS`,
 > `DCC_WARMUP_TIMEOUT_MS`, `DCC_MAX_RETRIES`.
 
-Production Clerk/custom-domain cutover is not done yet — see `CLERK-PRODUCTION-SETUP.md`
-(its Render-specific DNS steps are obsolete and need a Railway rewrite).
+Production Clerk auth runs on Railway. (The old Render custom-domain cutover doc was
+removed 2026-06-26 once Clerk worked on Railway; if you ever need it, the prod-DB
+Google-login email pre-link note is in this file's git history.)
 
 Assistant task scheduling: `POST {BASE}/api/dcc/quick-task` with the bearer token —
 body `{ title, date, start, durationMinutes, priority, detail, tags }`. Don't hand-roll
