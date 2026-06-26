@@ -6,26 +6,18 @@ This app runs in two places at once. Know which you're touching before any write
 
 - **Local dev:** `http://localhost:8090` (local Postgres + legacy `data/blocks.db`).
   `NODE_ENV` unset → localhost is trusted, so service endpoints work without a token.
-- **Production (canonical):** `https://daily-command-center.onrender.com` — live on
-  Render, Supabase Postgres, auto-deploys from `main`. `NODE_ENV=production` →
-  localhost is NOT trusted, so programmatic writes require
+- **Production:** `https://daily-command-center-production-1d04.up.railway.app` — live on
+  Railway (migrated off Render 2026-06-26), Supabase Postgres, auto-deploys from `main`.
+  `NODE_ENV=production` → localhost is NOT trusted, so programmatic writes require
   `Authorization: Bearer <SECRET_PA_TOKEN>`. Health check: `/api/health`. All tooling
   (`scripts/dcc-schedule.js`, `mcp/dcc-mcp`, the `add-task` skill) must point here.
 
-> Host naming — this was previously documented in a confusing way; the canonical
-> production URL is `daily-command-center.onrender.com`.
-> `daily-command-center-personal.onrender.com` is the legacy duplicate — it is still
-> the `name:` in `render.yaml`, and as of 2026-06-19 it was the warm instance while
-> the canonical host cold-started. It is being retired; do not point new tooling at
-> it. Reconciling `render.yaml` + the Render dashboard onto the canonical name is a
-> production-deploy task — get explicit sign-off before changing `render.yaml`.
->
-> Cold starts: the canonical host can spin down on the free tier (~30-60s to wake).
-> Callers now tolerate this via a warmup ping + bounded retry, tunable with
-> `DCC_TIMEOUT_MS`, `DCC_WARMUP_TIMEOUT_MS`, `DCC_MAX_RETRIES`. The permanent cure is
-> an always-on plan or a keep-warm cron ping on the canonical service.
+> Cold starts: the host can spin down on lower tiers (~30-60s to wake). Callers
+> tolerate this via a warmup ping + bounded retry, tunable with `DCC_TIMEOUT_MS`,
+> `DCC_WARMUP_TIMEOUT_MS`, `DCC_MAX_RETRIES`.
 
-Production Clerk/custom-domain cutover is not done yet — see `CLERK-PRODUCTION-SETUP.md`.
+Production Clerk/custom-domain cutover is not done yet — see `CLERK-PRODUCTION-SETUP.md`
+(its Render-specific DNS steps are obsolete and need a Railway rewrite).
 
 Assistant task scheduling: `POST {BASE}/api/dcc/quick-task` with the bearer token —
 body `{ title, date, start, durationMinutes, priority, detail, tags }`. Don't hand-roll
@@ -34,7 +26,7 @@ it — use one of the built tools:
   (env: `DCC_BASE_URL`, `DCC_PA_TOKEN`/`SECRET_PA_TOKEN`; `--dry-run` to preview).
 - MCP: `mcp/dcc-mcp/server.js` → `schedule_task` tool (see `mcp/dcc-mcp/README.md`).
 
-Prereq: `SECRET_PA_TOKEN` set on the Render service + same value in the caller's env.
+Prereq: `SECRET_PA_TOKEN` set on the Railway service + same value in the caller's env.
 
 ## Git Worktrees
 
