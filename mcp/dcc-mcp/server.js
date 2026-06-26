@@ -7,12 +7,12 @@
  * No SDK / npm install required — runs anywhere Node 18+ is present.
  *
  * Config (env, set in your MCP client config — never hardcode):
- *   DCC_BASE_URL  default https://daily-command-center.onrender.com
+ *   DCC_BASE_URL  default https://daily-command-center-production-1d04.up.railway.app
  *   DCC_PA_TOKEN  bearer token (falls back to SECRET_PA_TOKEN). Required.
  */
 "use strict";
 
-const DEFAULT_BASE = "https://daily-command-center.onrender.com";
+const DEFAULT_BASE = "https://daily-command-center-production-1d04.up.railway.app";
 const BASE = (process.env.DCC_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
 const TOKEN = process.env.DCC_PA_TOKEN || process.env.SECRET_PA_TOKEN || "";
 const USER_ID = String(process.env.DCC_USER_ID || "1");

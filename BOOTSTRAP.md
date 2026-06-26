@@ -55,7 +55,7 @@ Letting Claude schedule tasks into the DCC needs only the **prod URL** plus
 `SECRET_PA_TOKEN` — it does not depend on this bootstrap or on Google auth:
 
 ```
-POST https://daily-command-center.onrender.com/api/dcc/quick-task
+POST https://daily-command-center-production-1d04.up.railway.app/api/dcc/quick-task
 Authorization: Bearer <SECRET_PA_TOKEN>
 Content-Type: application/json
 { "title": "...", "date": "YYYY-MM-DD", "start": "HH:MM",

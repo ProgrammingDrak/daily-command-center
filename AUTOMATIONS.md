@@ -74,9 +74,10 @@ It runs at 7:15 AM local time and logs to:
 ```
 
 The local launchd wrapper defaults to
-`https://daily-command-center-personal.onrender.com`, which is the Render
-service declared by this repo's `render.yaml`. Override with `DCC_BASE_URL`
-only when intentionally targeting a different DCC instance.
+`https://daily-command-center-production-1d04.up.railway.app`, the production DCC
+on Railway (migrated off Render 2026-06-26; the old `*-personal.onrender.com`
+host is suspended). Override with `DCC_BASE_URL` only when intentionally
+targeting a different DCC instance.
 
 Canonical dry-run command:
 

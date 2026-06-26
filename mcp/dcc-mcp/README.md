@@ -15,7 +15,7 @@ Add this under `mcpServers` (Claude Desktop / Cowork config). Set the token in t
       "command": "node",
       "args": ["ABSOLUTE/PATH/TO/portable-programming/Repos/daily-command-center/mcp/dcc-mcp/server.js"],
       "env": {
-        "DCC_BASE_URL": "https://daily-command-center.onrender.com",
+        "DCC_BASE_URL": "https://daily-command-center-production-1d04.up.railway.app",
         "DCC_PA_TOKEN": "<your SECRET_PA_TOKEN>"
       }
     }

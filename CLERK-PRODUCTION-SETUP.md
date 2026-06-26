@@ -61,7 +61,7 @@ so I'll confirm first).
 ## 6. Deploy the code  **[YOU]** approve the merge; **[ME]** can open the PR
 The integration lives on branch `feat/social-features` (committed locally).
 - Merge `feat/social-features` → `main`. Render auto-deploys `main`.
-- On boot, `start:render` runs `pg-schema.js`, which applies the new OAuth columns to
+- On boot, `start:prod` runs `pg-schema.js`, which applies the new OAuth columns to
   the production DB (additive, idempotent, safe).
 
 ## 7. Verify  **[ME]**
