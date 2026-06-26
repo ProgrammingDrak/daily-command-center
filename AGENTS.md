@@ -11,8 +11,9 @@ This app runs in two places at once. Know which you're touching before any write
   `NODE_ENV=production` → localhost is NOT trusted, so programmatic writes require
   `Authorization: Bearer <SECRET_PA_TOKEN>`. Health check: `/api/health`.
 
-Production Clerk/custom-domain cutover is not done yet — see `CLERK-PRODUCTION-SETUP.md`
-(its Render-specific DNS steps are obsolete and need a Railway rewrite).
+Production Clerk auth runs on Railway. (The old Render custom-domain cutover doc was
+removed 2026-06-26 once Clerk worked on Railway; if you ever need it, the prod-DB
+Google-login email pre-link note lives in git history at commit d65d8ac.)
 
 Assistant task scheduling: `POST {BASE}/api/dcc/quick-task` with the bearer token —
 body `{ title, date, start, durationMinutes, priority, detail, tags }`. Don't hand-roll
