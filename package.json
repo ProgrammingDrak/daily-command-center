@@ -17,6 +17,7 @@
     "start": "npm run check:db && node pg-schema.js && node server.js",
     "dev": "npm run start",
     "start:prod": "node pg-schema.js && node server.js",
+    "start:render": "node pg-schema.js && node server.js",
     "schema": "node pg-schema.js",
     "migrate-data": "node sqlite-to-pg.js",
     "backup": "bash scripts/db-backup.sh"
