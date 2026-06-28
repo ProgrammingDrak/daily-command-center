@@ -1648,27 +1648,6 @@
   .dm-sess-time-arr:hover{color:var(--text);background:rgba(255,255,255,0.08)}
   .dm-sess-time-val{font-size:12px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;line-height:1;padding:1px 0;cursor:pointer}
   .dm-sess-time-sep{font-size:12px;color:var(--text-muted);padding:0 1px;align-self:center}
-  .dm-clock-overlay{display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,0.3)}
-  .dm-clock-overlay.open{display:block}
-  .dm-clock-popup{position:absolute;width:220px;height:220px;background:var(--bg);border:1px solid var(--border);border-radius:50%;box-shadow:0 8px 32px rgba(0,0,0,0.5);z-index:501}
-  .dm-clock-center{position:absolute;top:50%;left:50%;width:6px;height:6px;border-radius:50%;background:var(--accent);transform:translate(-50%,-50%);z-index:3}
-  .dm-clock-hand{position:absolute;top:50%;left:50%;width:2px;background:var(--accent);transform-origin:bottom center;border-radius:1px;z-index:2}
-  .dm-clock-num{position:absolute;font-size:10px;font-weight:600;color:var(--text-muted);cursor:pointer;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:50%;transition:background 0.1s,color 0.1s;font-variant-numeric:tabular-nums}
-  .dm-clock-num:hover{background:rgba(255,255,255,0.1);color:var(--text)}
-  .dm-clock-num.sel{background:var(--accent);color:white}
-  .dm-clock-num.outer{font-size:11px;font-weight:500;color:var(--text);width:28px;height:28px}
-  .dm-clock-num.outer.sel{background:var(--accent);color:white}
-  .dm-clock-ring-label{position:absolute;font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);pointer-events:none}
-  .dm-clock-ampm{position:absolute;display:flex;gap:8px;font-size:11px;font-weight:700;letter-spacing:0.5px;user-select:none}
-  .dm-clock-ampm-opt{cursor:pointer;color:var(--text-muted);padding:1px 3px;border-radius:3px;transition:color 0.1s,background 0.1s}
-  .dm-clock-ampm-opt:hover{color:var(--text);background:rgba(255,255,255,0.06)}
-  .dm-clock-ampm-opt.active{color:var(--accent-light,var(--accent));background:rgba(59,130,246,0.15)}
-  .dm-clock-actions{position:absolute;bottom:-40px;left:50%;transform:translateX(-50%);display:flex;gap:6px}
-  .dm-clock-actions button{padding:4px 12px;border-radius:5px;border:none;font-size:11px;font-weight:600;cursor:pointer}
-  .dm-clock-actions .clk-ok{background:var(--accent);color:white}
-  .dm-clock-actions .clk-ok:hover{opacity:0.85}
-  .dm-clock-actions .clk-cancel{background:rgba(255,255,255,0.06);color:var(--text-muted);border:1px solid var(--border)}
-  .dm-clock-actions .clk-cancel:hover{color:var(--text)}
   .dm-sess-dur-wrap{display:flex;align-items:center;gap:0;border:1px solid var(--border);border-radius:5px;overflow:hidden;flex-shrink:0}
   .dm-sess-dur-btn{background:rgba(255,255,255,0.04);border:none;color:var(--text-muted);cursor:pointer;font-size:13px;font-weight:600;padding:3px 8px;transition:background 0.1s,color 0.1s;line-height:1}
   .dm-sess-dur-btn:hover{background:rgba(255,255,255,0.1);color:var(--text)}
@@ -4542,3 +4521,75 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 /* Modal hints. */
 .dm-hint{font-size:11px;color:var(--text-muted);font-weight:400}
 .dm-hint-link{color:var(--accent,#a78bfa);cursor:pointer;text-decoration:underline;font-size:11px;margin-left:6px}
+
+/* ======== SHARED TIME / DATE PICKER (time-picker.js) ========
+   One iOS-style wheel for time, one month grid for date. Used everywhere via
+   openTimeWheel()/openDateCal() and auto-enhanced native time/date inputs. */
+.tw-overlay{display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.45)}
+.tw-overlay.open{display:block}
+.tw-pop{position:fixed;background:var(--card);border:1px solid var(--border);border-radius:16px;
+  box-shadow:0 16px 48px rgba(0,0,0,0.55);padding:14px;z-index:10001;
+  font-family:inherit;color:var(--text);user-select:none;width:max-content}
+/* Mobile / anchorless: dock to the bottom as a sheet. */
+.tw-pop.sheet{left:0!important;right:0;bottom:0;top:auto!important;width:auto;
+  border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom))}
+@keyframes tw-rise{from{transform:translateY(18px);opacity:.4}to{transform:translateY(0);opacity:1}}
+.tw-pop.sheet{animation:tw-rise .18s ease}
+
+/* Time wheel */
+.tw-head{text-align:center;font-size:22px;font-weight:700;letter-spacing:.5px;
+  color:var(--text);margin-bottom:10px;font-variant-numeric:tabular-nums}
+.tw-wheels{position:relative;display:flex;align-items:center;justify-content:center;gap:2px}
+.tw-colon{font-size:22px;font-weight:700;color:var(--text-muted);padding:0 2px}
+.tw-col{height:200px;overflow-y:scroll;scroll-snap-type:y mandatory;scrollbar-width:none;
+  -ms-overflow-style:none;outline:none;border-radius:10px;flex:0 0 auto;width:62px;
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 32%,#000 68%,transparent);
+  mask-image:linear-gradient(180deg,transparent,#000 32%,#000 68%,transparent)}
+.tw-col::-webkit-scrollbar{display:none}
+.tw-col-inner{padding:80px 0}
+.tw-opt{height:40px;display:flex;align-items:center;justify-content:center;
+  scroll-snap-align:center;font-size:19px;font-weight:500;color:var(--text-muted);
+  cursor:pointer;font-variant-numeric:tabular-nums;transition:color .12s,transform .12s}
+.tw-opt.sel{color:var(--text);font-weight:700;transform:scale(1.08)}
+.tw-col:focus .tw-opt.sel{color:var(--accent-light)}
+/* Center selection band sits behind the numbers. */
+.tw-band{position:absolute;left:0;right:0;top:50%;height:40px;transform:translateY(-50%);
+  background:rgba(255,255,255,0.06);border-top:1px solid var(--border);
+  border-bottom:1px solid var(--border);border-radius:8px;pointer-events:none}
+
+/* Calendar */
+.tw-cal{width:286px}
+.tw-cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.tw-cal-title{font-size:15px;font-weight:700;color:var(--text)}
+.tw-cal-nav{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);
+  background:var(--bg);color:var(--text);font-size:18px;line-height:1;cursor:pointer}
+.tw-cal-nav:hover{background:var(--card-hover);border-color:var(--accent)}
+.tw-cal-dow,.tw-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.tw-cal-dow span{text-align:center;font-size:11px;font-weight:600;color:var(--text-muted);padding:4px 0}
+.tw-cal-day{height:36px;border:none;background:transparent;color:var(--text);
+  border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}
+.tw-cal-day:hover{background:var(--card-hover)}
+.tw-cal-day.today{box-shadow:inset 0 0 0 1px var(--accent)}
+.tw-cal-day.sel{background:var(--accent);color:#fff;font-weight:700}
+
+/* Footer actions (shared by wheel + calendar) */
+.tw-actions{display:flex;align-items:center;gap:8px;margin-top:12px}
+.tw-btn{padding:7px 16px;border-radius:9px;border:1px solid var(--border);background:var(--bg);
+  color:var(--text);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.tw-btn:hover{background:var(--card-hover)}
+.tw-btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.tw-btn-primary:hover{background:var(--accent-light);border-color:var(--accent-light)}
+.tw-now{padding:6px 12px;border:none;background:transparent;color:var(--accent-light);
+  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border-radius:8px}
+.tw-now:hover{background:var(--card-hover)}
+
+/* Enhanced-input trigger button (replaces native time/date inputs) */
+.tw-field{display:inline-flex;align-items:center;gap:6px;background:var(--bg);
+  border:1px solid var(--border);border-radius:7px;padding:6px 10px;color:var(--text);
+  font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;text-align:left;
+  font-variant-numeric:tabular-nums;min-width:96px}
+.tw-field:hover{border-color:var(--accent)}
+.tw-field:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(59,130,246,0.25)}
+.tw-field.tw-empty{color:var(--text-muted);font-weight:500}
+.tw-field-time::before{content:"\1F551";font-size:12px;opacity:.7}
+.tw-field-date::before{content:"\1F4C5";font-size:12px;opacity:.7}

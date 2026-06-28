@@ -465,141 +465,24 @@ function addDmSession(){
 }
 function removeDmSession(idx){_dmSessions.splice(idx,1);renderDmSessions()}
 
-// ======== CLOCK FACE PICKER ========
-let _clockIdx=null,_clockH=12,_clockM=0,_clockMode='hour',_clockCallback=null;
+// ======== TIME PICKER ========
+// Thin wrapper over the shared scroll-wheel picker (time-picker.js). Kept under
+// the original name so every existing caller (done-modal sessions, card start
+// time, block editor) upgrades to the new wheel with no call-site changes.
+// Two modes:
+//   openClockPicker("14:30", anchor, cb)  -> external, cb gets "HH:MM"
+//   openClockPicker(idx, anchor)          -> done-modal session at _dmSessions[idx]
 function openClockPicker(idx,anchor,callback){
-  _clockIdx=idx;
-  _clockCallback=callback||null;
-  // Support both done-modal sessions (idx into _dmSessions) and external callers (callback with initial time)
-  if(_clockCallback && typeof idx==='string'){
-    // External mode: idx is a time string like "14:30"
-    const parts=idx.split(':').map(Number);
-    _clockH=parts[0];_clockM=parts[1];
+  if(typeof openTimeWheel!=='function') return;
+  if(callback && typeof idx==='string'){
+    openTimeWheel(idx, anchor, callback);
   } else {
-    const parts=_dmSessions[idx].start.split(':').map(Number);
-    _clockH=parts[0];_clockM=parts[1];
-  }
-  _clockMode='hour';
-  const overlay=document.getElementById('dm-clock-overlay');
-  const popup=document.getElementById('dm-clock-popup');
-  // Position near the anchor
-  const r=anchor.getBoundingClientRect();
-  popup.style.left=Math.max(10,r.left-80)+'px';
-  popup.style.top=Math.max(10,r.bottom+8)+'px';
-  overlay.classList.add('open');
-  renderClockFace();
-}
-function closeClockPicker(){
-  document.getElementById('dm-clock-overlay').classList.remove('open');
-  _clockIdx=null;_clockCallback=null;
-}
-function confirmClockPicker(){
-  if(_clockIdx===null)return;
-  const timeStr=String(_clockH).padStart(2,'0')+':'+String(_clockM).padStart(2,'0');
-  if(_clockCallback){
-    // External caller (e.g. card start time picker)
-    _clockCallback(timeStr);
-    closeClockPicker();
-  } else {
-    // Done-modal session mode
-    _dmSessions[_clockIdx].start=timeStr;
-    closeClockPicker();
-    renderDmSessions();
-  }
-}
-function renderClockFace(){
-  const nums=document.getElementById('dm-clock-nums');
-  const hand=document.getElementById('dm-clock-hand');
-  nums.innerHTML='';
-  const cx=110,cy=110;
-  if(_clockMode==='hour'){
-    // Hours 1-12 on inner ring
-    for(let i=1;i<=12;i++){
-      const angle=(i*30-90)*Math.PI/180;
-      const r=70;
-      const x=cx+r*Math.cos(angle)-12;
-      const y=cy+r*Math.sin(angle)-12;
-      const h24=_clockH>=12?(i===12?12:i+12):(i===12?0:i);
-      const sel=(_clockH%12===i%12)?'sel':'';
-      const el=document.createElement('div');
-      el.className='dm-clock-num '+sel;
-      el.style.left=x+'px';el.style.top=y+'px';
-      el.textContent=i;
-      el.addEventListener('click',function(){
-        const isPM=_clockH>=12;
-        _clockH=isPM?(i===12?12:i+12):(i===12?0:i);
-        _clockMode='minute';
-        renderClockFace();
-      });
-      nums.appendChild(el);
-    }
-    // AM/PM toggle: both options visible side-by-side, active one in accent.
-    const ampm=document.createElement('div');
-    ampm.className='dm-clock-ampm';
-    ampm.style.left=(cx-26)+'px';
-    ampm.style.top=(cy-9)+'px';
-    const isPM=_clockH>=12;
-    const am=document.createElement('span');
-    am.className='dm-clock-ampm-opt'+(isPM?'':' active');
-    am.textContent='AM';
-    am.addEventListener('click',function(e){e.stopPropagation();if(_clockH>=12){_clockH-=12;renderClockFace();}});
-    const pm=document.createElement('span');
-    pm.className='dm-clock-ampm-opt'+(isPM?' active':'');
-    pm.textContent='PM';
-    pm.addEventListener('click',function(e){e.stopPropagation();if(_clockH<12){_clockH+=12;renderClockFace();}});
-    ampm.appendChild(am);
-    ampm.appendChild(pm);
-    nums.appendChild(ampm);
-    // Hand
-    const hAngle=(_clockH%12)*30-90;
-    hand.style.height='60px';hand.style.transform='rotate('+hAngle+'deg)';hand.style.marginTop='-60px';hand.style.display='block';
-  } else {
-    // Minutes: 00,15,30,45 on outer ring; 05,10,20,25,35,40,50,55 on inner
-    const outerMins=[0,15,30,45];
-    const innerMins=[5,10,20,25,35,40,50,55];
-    outerMins.forEach(m=>{
-      const angle=(m*6-90)*Math.PI/180;
-      const r=82;
-      const x=cx+r*Math.cos(angle)-14;
-      const y=cy+r*Math.sin(angle)-14;
-      const sel=_clockM===m?'sel':'';
-      const el=document.createElement('div');
-      el.className='dm-clock-num outer '+sel;
-      el.style.left=x+'px';el.style.top=y+'px';
-      el.textContent=String(m).padStart(2,'0');
-      el.addEventListener('click',function(){_clockM=m;confirmClockPicker()});
-      nums.appendChild(el);
+    openTimeWheel(_dmSessions[idx].start, anchor, function(timeStr){
+      _dmSessions[idx].start=timeStr;
+      renderDmSessions();
     });
-    innerMins.forEach(m=>{
-      const angle=(m*6-90)*Math.PI/180;
-      const r=55;
-      const x=cx+r*Math.cos(angle)-12;
-      const y=cy+r*Math.sin(angle)-12;
-      const sel=_clockM===m?'sel':'';
-      const el=document.createElement('div');
-      el.className='dm-clock-num '+sel;
-      el.style.left=x+'px';el.style.top=y+'px';
-      el.textContent=String(m).padStart(2,'0');
-      el.addEventListener('click',function(){_clockM=m;confirmClockPicker()});
-      nums.appendChild(el);
-    });
-    // Center label showing selected time
-    const lbl=document.createElement('div');
-    lbl.className='dm-clock-ring-label';
-    lbl.style.left=(cx-16)+'px';lbl.style.top=(cy-6)+'px';
-    const lh=_clockH>12?_clockH-12:_clockH||12;
-    lbl.textContent=lh+':'+String(_clockM).padStart(2,'0');
-    lbl.style.fontSize='11px';lbl.style.color='var(--text)';
-    nums.appendChild(lbl);
-    // Hand
-    const mAngle=_clockM*6-90;
-    hand.style.height='72px';hand.style.transform='rotate('+mAngle+'deg)';hand.style.marginTop='-72px';hand.style.display='block';
   }
 }
-document.getElementById('dm-clock-ok').addEventListener('click',function(e){e.stopPropagation();e.preventDefault();confirmClockPicker()});
-document.getElementById('dm-clock-cancel').addEventListener('click',function(e){e.stopPropagation();e.preventDefault();closeClockPicker()});
-document.getElementById('dm-clock-overlay').addEventListener('click',function(e){e.stopPropagation();e.preventDefault();if(e.target===this)closeClockPicker()});
-document.getElementById('dm-clock-popup').addEventListener('click',function(e){e.stopPropagation()});
 
 function renderDmActions(id){
   const actions=loadActions(), items=(actions[id]||[]);

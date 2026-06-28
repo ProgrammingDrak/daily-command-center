@@ -807,7 +807,7 @@
           <button type="button" class="sched-chip" data-sched-day="tomorrow">Tomorrow</button>
           <button type="button" class="sched-chip sched-chip-alt" id="sched-pick-date-btn">📅 Pick a date</button>
         </div>
-        <input id="sched-date-input" type="date" class="sched-picker-input" style="display:none" />
+        <input id="sched-date-input" type="date" class="sched-picker-input" data-tw-trigger="hidden" />
       </div>
 
       <!-- Step 2: after what -->
@@ -1224,19 +1224,6 @@
     <div class="placeholder-swap-list" id="placeholder-swap-list"></div>
     <div class="delegated-modal-actions">
       <button type="button" class="secondary" id="placeholder-swap-close">Close</button>
-    </div>
-  </div>
-</div>
-
-<!-- Clock face picker -->
-<div class="dm-clock-overlay" id="dm-clock-overlay">
-  <div class="dm-clock-popup" id="dm-clock-popup">
-    <div class="dm-clock-center"></div>
-    <div class="dm-clock-hand" id="dm-clock-hand"></div>
-    <div id="dm-clock-nums"></div>
-    <div class="dm-clock-actions">
-      <button class="clk-cancel" id="dm-clock-cancel">Cancel</button>
-      <button class="clk-ok" id="dm-clock-ok">OK</button>
     </div>
   </div>
 </div>
@@ -1757,6 +1744,7 @@
 <script src="/public/js/schedule-tab.js"></script>
 <script src="/public/js/meeting-automation.js"></script>
 <script src="/public/js/sync.js"></script>
+<script src="/public/js/time-picker.js"></script>
 <script src="/public/js/triage.js"></script>
 <script src="/public/js/tabs.js"></script>
 <script src="/public/js/features.js"></script>
