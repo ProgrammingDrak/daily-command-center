@@ -203,6 +203,7 @@
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
+  <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
 </div>
 
 <div class="tab-content active" id="tab-schedule">
@@ -1730,6 +1731,10 @@
   <iframe class="tool-frame" src="/public/tools/quit-runway-simple.html" title="Simple Burn vs Income Runway"></iframe>
 </div>
 
+<div class="tab-content" id="tab-budget">
+  <div id="budget-root"></div>
+</div>
+
 <div class="footer">
   Data from Notion and the PA itinerary &middot; Generated for Drake Shadwell &middot; <span id="gen-time">--</span>
 </div>
@@ -1778,6 +1783,7 @@
 <script src="/public/js/carryover-review.js"></script>
 <script src="/public/js/unfinished-tasks.js"></script>
 <script src="/public/js/side-drawers.js"></script>
+<script src="/public/js/budget.js"></script>
 <script src="/public/js/mobile-shell.js"></script>
 <script>
 // Feature flags — controls which features use the new BlockStore vs old localStorage.

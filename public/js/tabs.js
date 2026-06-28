@@ -19,6 +19,7 @@ document.querySelectorAll(".tab").forEach(tab=>{
     }
     if(tab.dataset.tab==="pet-home"&&window.PetHome&&typeof window.PetHome.render==="function"){window.PetHome.render();}
     if(tab.dataset.tab==="responsibilities"&&typeof renderResponsibilities==="function"){renderResponsibilities();}
+    if(tab.dataset.tab==="budget"&&typeof renderBudget==="function"){renderBudget();}
   });
 });
 
