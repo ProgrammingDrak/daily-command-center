@@ -4522,6 +4522,102 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .dm-hint{font-size:11px;color:var(--text-muted);font-weight:400}
 .dm-hint-link{color:var(--accent,#a78bfa);cursor:pointer;text-decoration:underline;font-size:11px;margin-left:6px}
 
+/* ================= BUDGET TANK ================= */
+.bt-wrap{max-width:980px;margin:0 auto;padding:8px 4px 40px}
+.bt-head{margin-bottom:16px}
+.bt-title{font-size:22px;font-weight:700;color:var(--text);margin:0 0 4px}
+.bt-sub{font-size:13px;color:var(--text-muted);margin:0;max-width:560px;line-height:1.45}
+
+/* --- controls --- */
+.bt-controls{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;
+  background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:18px}
+.bt-income{flex:1 1 280px;min-width:240px}
+.bt-income-label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:2px}
+.bt-income-val{font-size:26px;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums;line-height:1.1}
+.bt-income-range{width:100%;margin-top:8px;accent-color:var(--green);cursor:pointer}
+.bt-chips{display:flex;flex-wrap:wrap;gap:8px;flex:2 1 320px}
+.bt-chip{font-size:12px;font-weight:600;padding:5px 10px;border-radius:999px;white-space:nowrap;border:1px solid transparent}
+.bt-chip--ok{background:var(--green-bg);color:var(--green);border-color:rgba(34,197,94,.35)}
+.bt-chip--warn{background:var(--amber-bg);color:var(--amber);border-color:rgba(245,158,11,.35)}
+.bt-chip--info{background:var(--purple-bg);color:var(--purple);border-color:rgba(167,139,250,.35)}
+.bt-edit-btn{background:var(--card-hover);border:1px solid var(--border);color:var(--text);
+  border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;height:fit-content}
+.bt-edit-btn:hover{border-color:var(--accent)}
+
+/* --- layout --- */
+.bt-main{display:grid;grid-template-columns:240px 1fr;gap:28px;align-items:stretch}
+@media(max-width:680px){.bt-main{grid-template-columns:1fr;gap:20px}}
+
+/* --- the tank --- */
+.bt-tank-col{display:flex;justify-content:center}
+.bt-tank{position:relative;width:200px;height:540px;border-radius:18px;overflow:hidden;
+  border:1px solid var(--border);background:#0a0f1d;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 8px 30px rgba(0,0,0,.45)}
+@media(max-width:680px){.bt-tank{width:100%;max-width:280px;height:460px}}
+
+/* zone bands (full colour; the mask dims the unfunded part above the line) */
+.bt-zones{position:absolute;inset:0;display:flex;flex-direction:column-reverse}
+.bt-zone{position:relative;display:flex;align-items:center;min-height:0;
+  border-top:1px solid rgba(255,255,255,.06);overflow:hidden;transition:filter .25s}
+.bt-zones .bt-zone:first-child{border-top:none}
+.bt-zone-bar{position:absolute;inset:0;background:var(--zc);opacity:.9}
+.bt-zone--disc .bt-zone-bar{opacity:.82}
+.bt-zone-label{position:relative;z-index:2;display:flex;align-items:center;justify-content:space-between;
+  width:100%;padding:0 10px;gap:6px;color:#06121f;font-weight:700;font-size:11px;
+  text-shadow:0 1px 1px rgba(255,255,255,.25)}
+.bt-zone-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-zone-status{font-variant-numeric:tabular-nums;flex:0 0 auto}
+
+/* the dimming mask = everything above the waterline (unfunded / locked) */
+.bt-mask{position:absolute;left:0;right:0;top:0;height:100%;
+  background:linear-gradient(180deg,rgba(8,12,22,.86),rgba(8,12,22,.74));
+  backdrop-filter:saturate(.25) brightness(.5);-webkit-backdrop-filter:saturate(.25) brightness(.5);
+  transition:height .55s cubic-bezier(.4,1.2,.5,1);pointer-events:none;z-index:3}
+
+/* glowing surface line at the current fill level */
+.bt-waterline{position:absolute;left:0;right:0;bottom:0;height:2px;z-index:4;pointer-events:none;
+  background:rgba(255,255,255,.9);
+  box-shadow:0 0 12px 2px rgba(255,255,255,.55),0 -6px 18px 0 rgba(34,211,238,.35);
+  transition:bottom .55s cubic-bezier(.4,1.2,.5,1)}
+.bt-waterline::before{content:"";position:absolute;left:0;right:0;top:-1px;height:3px;
+  background:repeating-linear-gradient(90deg,transparent 0,rgba(255,255,255,.5) 6px,transparent 12px);
+  animation:bt-wave 2.4s linear infinite;opacity:.6}
+@keyframes bt-wave{from{background-position:0 0}to{background-position:24px 0}}
+.bt-water-amt{position:absolute;right:6px;bottom:5px;font-size:11px;font-weight:700;color:#fff;
+  text-shadow:0 1px 3px rgba(0,0,0,.8);font-variant-numeric:tabular-nums}
+
+/* necessities / discretionary divider */
+.bt-divider{position:absolute;left:0;right:0;bottom:0;height:0;z-index:5;pointer-events:none;
+  border-top:2px dashed rgba(226,232,240,.5);transition:bottom .55s cubic-bezier(.4,1.2,.5,1)}
+.bt-divider span{position:absolute;left:50%;top:-8px;transform:translateX(-50%);
+  background:var(--bg);padding:0 6px;font-size:9px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--text-muted);white-space:nowrap}
+.bt-surplus{position:absolute;top:8px;left:0;right:0;text-align:center;z-index:6;
+  font-size:12px;font-weight:700;color:var(--green);transition:opacity .4s;pointer-events:none;
+  text-shadow:0 1px 3px rgba(0,0,0,.7)}
+
+/* --- breakdown legend --- */
+.bt-breakdown{display:flex;flex-direction:column;gap:16px}
+.bt-group{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.bt-group-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
+.bt-group-title{font-size:14px;font-weight:700;color:var(--text)}
+.bt-group-sub{font-size:11px;color:var(--text-muted)}
+.bt-row{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;
+  border-radius:6px;transition:opacity .25s}
+.bt-row-dot{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
+.bt-row-name{color:var(--text);flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-row-amt{color:var(--text-muted);font-variant-numeric:tabular-nums;cursor:pointer;flex:0 0 auto}
+.bt-row-amt:hover{color:var(--accent-light);text-decoration:underline}
+.bt-row-fund{font-size:11px;font-variant-numeric:tabular-nums;flex:0 0 auto;min-width:96px;text-align:right}
+.bt-row.bt--funded .bt-row-fund{color:var(--green)}
+.bt-row.bt--filling .bt-row-fund{color:var(--amber)}
+.bt-row.bt--locked{opacity:.5}
+.bt-row.bt--locked .bt-row-fund{color:var(--text-muted)}
+.bt-row-del{margin-left:4px;background:none;border:none;color:var(--red);font-size:16px;
+  cursor:pointer;line-height:1;padding:0 4px}
+.bt-add{margin-top:6px;background:none;border:1px dashed var(--border);color:var(--text-muted);
+  width:100%;padding:6px;border-radius:6px;font-size:12px;cursor:pointer}
+.bt-add:hover{border-color:var(--accent);color:var(--accent-light)}
 /* ======== SHARED TIME / DATE PICKER (time-picker.js) ========
    One iOS-style wheel for time, one month grid for date. Used everywhere via
    openTimeWheel()/openDateCal() and auto-enhanced native time/date inputs. */
