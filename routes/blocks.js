@@ -361,6 +361,56 @@ app.post("/api/dcc/quick-task", validate(schemas.quickTask), async (req, res) =>
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// ── GET variant of quick-task for sandbox/web_fetch callers (no custom headers)
+// Auth: ?t=<DCC_TOKEN> query param (mirrors Bearer token check)
+// Usage: GET /api/dcc/quick-task-get?t=TOKEN&title=...&date=...&start=...&duration=30&priority=normal&tags=work,health&detail=...&userId=1
+app.get("/api/dcc/quick-task-get", async (req, res) => {
+  try {
+    const q = req.query || {};
+    const dccToken = process.env.SECRET_DCC_TOKEN || process.env.SECRET_PA_TOKEN;
+    if (!dccToken || q.t !== dccToken) return res.status(401).json({ error: "unauthorized" });
+
+    const title = String(q.title || "").trim();
+    if (!title) return res.status(400).json({ error: "title required" });
+
+    const dur = Math.max(5, parseInt(q.duration || q.durationMinutes || 30, 10) || 30);
+    const PRIO = { low: "Low", normal: "Normal", medium: "Medium", high: "High", urgent: "High" };
+    const priority = PRIO[String(q.priority || "").toLowerCase()] || "Medium";
+    const dateStr = (q.date && isValidDate(q.date)) ? q.date : getTodayStr();
+    const start = /^\d{1,2}:\d{2}$/.test(q.start || "") ? String(q.start).padStart(5, "0") : nextQuarterHourLocal();
+    const end = addMinutesHHMM(start, dur);
+
+    let userId = Number(q.userId || q.user_id || process.env.DCC_SERVICE_USER_ID || 0) || null;
+    let workspaceId = q.workspaceId || q.workspace_id || process.env.DCC_SERVICE_WORKSPACE_ID || null;
+    if (!userId) {
+      if (process.env.NODE_ENV === "production") {
+        return res.status(400).json({ error: "owner required: supply userId query param or set DCC_SERVICE_USER_ID" });
+      }
+      const { rows } = await pool.query(
+        "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
+        workspaceId ? [workspaceId] : []
+      );
+      userId = rows[0] ? rows[0].user_id : 1;
+    }
+    if (!workspaceId) {
+      const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1", [userId]);
+      workspaceId = rows[0] ? rows[0].workspace_id : `ws-${userId}`;
+    }
+
+    const localId = "qt-" + Date.now().toString(36);
+    const rawTags = q.tags ? String(q.tags).split(",").map(t => t.trim()).filter(Boolean) : ["quick-task"];
+    const properties = {
+      local_id: localId, title, start, end, duration: dur,
+      priority, meta: "Quick task · " + dur + "m", detail: String(q.detail || ""),
+      source: "quick-task", tags: rawTags, _pinnedStart: start, added_at: new Date().toISOString(),
+    };
+    await blockDB.ensureDayRoot(dateStr, userId, workspaceId);
+    const block = await blockDB.createBlock({ type: "block", date: dateStr, properties, sort_order: 0, user_id: userId, workspace_id: workspaceId });
+    broadcast("blocks-changed", { action: "create", blockIds: [block.id] }, workspaceId);
+    res.json({ ok: true, id: block.id, date: dateStr, start, end, title, priority, durationMinutes: dur });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // ── Responsibilities API ──
 app.get("/api/responsibilities", async (req, res) => {
   try {
@@ -867,71 +917,4 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
 });
 
 // ── Delegated Items API (PIN 10.A) ──
-// Wraps blockDB CRUD, stamping properties.kind = "delegated_item" on create.
-// GET list uses a dedicated db query; mutations reuse the generic
-// createBlock/updateBlock/deleteBlock primitives. PATCH and DELETE both
-// verify the target's kind discriminator so these routes can't be used
-// to modify tags or other type:"block" data.
-app.get("/api/delegated-items", async (req, res) => {
-  try {
-    const items = await blockDB.getDelegatedItems(req.workspaceId);
-    res.json(items);
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/api/delegated-items", async (req, res) => {
-  try {
-    const body = req.body || {};
-    if (!body.properties || typeof body.properties !== "object") {
-      return res.status(400).json({ error: "properties required" });
-    }
-    const props = { ...body.properties, kind: "delegated_item" };
-    if (!props.title || typeof props.title !== "string" || !props.title.trim()) {
-      return res.status(400).json({ error: "properties.title required" });
-    }
-    const created = await blockDB.createBlock({
-      type: "block",
-      parent_id: null,
-      date: null,
-      properties: props,
-      sort_order: 0,
-      user_id: req.session.userId,
-      workspace_id: req.workspaceId
-    });
-    broadcast("blocks-changed", { action: "delegated-create", blockIds: [created.id] }, req.workspaceId);
-    res.json(created);
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
-
-app.patch("/api/delegated-items/:id", async (req, res) => {
-  try {
-    const existing = await blockDB.getBlock(req.params.id);
-    if (!existing) return res.status(404).json({ error: "Delegated item not found" });
-    assertBlockOwnership(existing, req.workspaceId);
-    if ((existing.properties || {}).kind !== "delegated_item") {
-      return res.status(404).json({ error: "Delegated item not found" });
-    }
-    const incoming = (req.body && req.body.properties) || {};
-    // Preserve kind discriminator — clients cannot unset it via PATCH
-    const merged = { ...existing.properties, ...incoming, kind: "delegated_item" };
-    const result = await blockDB.updateBlock(req.params.id, { properties: merged });
-    broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id] }, req.workspaceId);
-    res.json(result);
-  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
-});
-
-app.delete("/api/delegated-items/:id", async (req, res) => {
-  try {
-    const existing = await blockDB.getBlock(req.params.id);
-    if (!existing) return res.status(404).json({ error: "Delegated item not found" });
-    assertBlockOwnership(existing, req.workspaceId);
-    if ((existing.properties || {}).kind !== "delegated_item") {
-      return res.status(404).json({ error: "Delegated item not found" });
-    }
-    const result = await blockDB.deleteBlock(req.params.id);
-    broadcast("blocks-changed", { action: "delegated-delete", blockIds: [req.params.id] }, req.workspaceId);
-    res.json(result);
-  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
-});
-
-};
+// Wraps blockDB CRUD, stamping properties.k
