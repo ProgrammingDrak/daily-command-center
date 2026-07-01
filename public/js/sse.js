@@ -98,6 +98,16 @@
   // Handle block changes from another tab
   async function handleBlockEvent(msg){
     if(!window.blockStore) return;
+    // Ignore the echo of our OWN writes. The server broadcasts every
+    // create/update/delete/reschedule back to all clients, including the one that
+    // made it. Reacting to our own echo mid-operation (reloadPersistedEdits +
+    // render before the local mutation settled) was the reschedule "snap-back".
+    // handleBlocksChanged already dedupes cache by clientId; the render side must too.
+    if(msg.clientId && window.blockStore.CLIENT_ID && msg.clientId===window.blockStore.CLIENT_ID) return;
+    // Belt-and-suspenders: never reload/re-render mid-reschedule, so a scheduled
+    // server-task broadcast racing our multi-write move can't yank state out from
+    // under it.
+    if(window.__RESCHEDULE_IN_FLIGHT__) return;
     // Let BlockStore handle cross-tab sync (updates in-memory cache)
     await window.blockStore.handleBlocksChanged(msg);
     console.log('[SSE] Block update from another source:', msg.action, msg.blockIds?.length || 0, 'blocks');

@@ -1003,6 +1003,80 @@ async function unschedulePushedFromTomorrow(id){
   return unscheduleTaskFromDate(id,__tomorrowDate);
 }
 
+// Find a free slot on `targetDate` for a true move WITHOUT creating a block
+// (mirrors schedulePushedOnDate's slot math; that one creates a block, we don't).
+// Returns {start,end,duration} or null when the day has no room.
+async function _computeRescheduleSlot(ev,targetDate){
+  let targetState=null;
+  if(targetDate===__todayDate&&window.__DCC_STATE__)targetState=window.__DCC_STATE__;
+  else if(targetDate===__tomorrowDate&&window.__DCC_TOMORROW__)targetState=window.__DCC_TOMORROW__;
+  if(!targetState){try{targetState=await fetch("/api/state/day?date="+encodeURIComponent(targetDate)).then(r=>r.json())}catch(e){}}
+  const tTimeline=(targetState&&targetState.schedule&&targetState.schedule.timeline)||[];
+  const tMeetings=tTimeline
+    .filter(e=>e.type==="meeting"||e.type==="oneone"||e.type==="ooo"||e.type==="break")
+    .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))})).sort((a,b)=>a.s-b.s);
+  const tBlocks=(targetState&&targetState.schedule&&targetState.schedule.blocks)||[];
+  const dayStart=tBlocks.length?pt(tBlocks[0].start):7*60;
+  const dayEnd=tBlocks.length?pt(tBlocks[tBlocks.length-1].end):17*60+30;
+  let existingBlockers=[];
+  try{
+    const tBlks=await fetch("/api/blocks?date="+targetDate).then(r=>r.json());
+    existingBlockers=tBlks
+      .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end&&b.properties.local_id!==ev.id)
+      .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
+  }catch(e){}
+  const allBlockers=[...tMeetings,...existingBlockers].sort((a,b)=>a.s-b.s);
+  const d=dur(ev)||30;
+  let cursor=dayStart;
+  if(targetDate===_actualTodayStr()){const round15=m=>Math.ceil(m/15)*15;cursor=Math.max(dayStart,round15(now()));}
+  const slot=_freeStart(cursor,d,allBlockers);
+  if(slot+d>dayEnd+60)return null;
+  return {start:fmt(slot),end:fmt(slot+d),duration:d};
+}
+
+// Optimistically drop a task and its whole nested subtree (subtaskOf/wrapId) from
+// the current day's `scheduled` view after a true move. Returns the removed ids.
+function _removeSubtreeFromScheduled(rootId){
+  const ids=new Set([rootId]);
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const e of scheduled){
+      const pid=parentIdOf(e);
+      if(pid&&ids.has(pid)&&!ids.has(e.id)){ids.add(e.id);changed=true;}
+    }
+  }
+  for(let i=scheduled.length-1;i>=0;i--){
+    if(ids.has(scheduled[i].id)){
+      const rid=scheduled[i].id;
+      _clearTaskPinAndLock(scheduled[i]);
+      scheduled.splice(i,1);
+      pushedSet.delete(rid);delete pushedAt[rid];
+    }
+  }
+  if(typeof savePushedState==="function")savePushedState();
+  return ids;
+}
+
+// Day-state-only fallback: leave a tombstone on the origin day so the moved task
+// shows in the amber "Rescheduled away" list. (Block-backed moves get their
+// tombstone written server-side inside the reschedule transaction.)
+async function _writeRescheduleTombstone(ev,fromDate,targetDate){
+  if(!window.blockStore||!fromDate)return;
+  try{
+    await window.blockStore.createBlock("block",{
+      local_id:"resched-tomb-"+ev.id+"-"+String(targetDate).replace(/[^0-9]/g,""),
+      kind:"reschedule_tombstone",
+      title:ev.title||"Task",
+      priority:ev.priority||"Medium",
+      sourceLocalId:ev.id,
+      rescheduledFrom:{date:fromDate},
+      rescheduledTo:targetDate,
+      at:new Date().toISOString()
+    },{date:fromDate});
+  }catch(e){}
+}
+
 // Move a task off of the currently-viewed date and onto `targetDate`. Used by
 // the reschedule popover (Today / Tomorrow / custom date) on every task card.
 async function rescheduleTaskToDate(id,targetDate,opts){
@@ -1024,27 +1098,94 @@ async function rescheduleTaskToDate(id,targetDate,opts){
     return moved;
   }
 
-  const movedTask=_cloneTaskForReschedule(ev,targetDate,fromDate);
-  let block=null;
+  // Cross-date move. Prefer a TRUE MOVE for block-backed tasks: change the origin
+  // block's date (keeping its id) plus its whole subtask subtree, in ONE server
+  // transaction with ONE broadcast we ignore as our own — so no snap-back, no
+  // duplication, no stranded children. Fall back to the legacy clone only for
+  // day-state-only tasks (Notion/DCC-scheduled items with no origin block).
+  window.__RESCHEDULE_IN_FLIGHT__=true;
   try{
-    block=await persistAddedTask(movedTask,targetDate);
-  }catch(e){
-    if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
-    return;
+    const srcBlock=_findTaskBlockForDate(id,fromDate,ev);
+    if(srcBlock&&window.blockStore&&typeof window.blockStore.rescheduleBlock==="function"){
+      const slot=await _computeRescheduleSlot(ev,targetDate);
+      if(!slot){
+        if(!opts.silent&&typeof showToast==="function")showToast("No free slot on "+_prettyDateLabel(targetDate)+"'s schedule","error");
+        return;
+      }
+      let result;
+      try{
+        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot.start,parentEnd:slot.end});
+      }catch(e){
+        if(!opts.silent&&typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
+        return;
+      }
+      _removeSubtreeFromScheduled(id);
+      log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
+      if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+      if(typeof recalcTimes==="function")recalcTimes();
+      render();
+      return result;
+    }
+
+    // Fallback: no origin block to move (day-state-only task). Clone to the target
+    // date + hide the source as before, and drop a tombstone for the amber list.
+    const movedTask=_cloneTaskForReschedule(ev,targetDate,fromDate);
+    let block=null;
+    try{
+      block=await persistAddedTask(movedTask,targetDate);
+    }catch(e){
+      if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
+      return;
+    }
+    // Carry the subtask subtree to the target date, re-parented onto the clone,
+    // before hiding the original parent (so the tree snapshot is still intact).
+    await _rescheduleSubtaskSubtree(id,movedTask.id,targetDate,fromDate);
+    await _hideSourceTaskForReschedule(id,fromDate,ev);
+    await _writeRescheduleTombstone(ev,fromDate,targetDate);
+    log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
+    if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+    if(typeof recalcTimes==="function")recalcTimes();
+    render();
+    return block||movedTask;
+  }finally{
+    window.__RESCHEDULE_IN_FLIGHT__=false;
   }
+}
 
-  // Carry the subtask subtree to the target date, re-parented onto the clone,
-  // before hiding the original parent (so the tree snapshot is still intact).
-  await _rescheduleSubtaskSubtree(id,movedTask.id,targetDate,fromDate);
-
-  await _hideSourceTaskForReschedule(id,fromDate,ev);
-  log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
-
-  if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
-
-  if(typeof recalcTimes==="function")recalcTimes();
-  render();
-  return block||movedTask;
+// Restore a task from the amber "Rescheduled away" list: move its block back onto
+// the currently-viewed day and clear the tombstone. Symmetric with the true move.
+async function restoreRescheduledAway(tombBlockId){
+  if(!window.blockStore||!tombBlockId)return;
+  const tomb=window.blockStore.get(tombBlockId);
+  if(!tomb)return;
+  const p=tomb.properties||{};
+  const viewDate=(typeof __state!=="undefined"&&__state&&__state.date)||_resolvedTodayDate();
+  window.__RESCHEDULE_IN_FLIGHT__=true;
+  try{
+    if(p.movedBlockId){
+      // Fetch the moved block so we slot it back with its real duration.
+      let moved=null;
+      try{moved=await fetch("/api/blocks/"+p.movedBlockId).then(r=>r.ok?r.json():null)}catch(e){}
+      const mp=(moved&&moved.properties)||{};
+      const ev={id:mp.local_id||p.sourceLocalId||p.movedBlockId,title:mp.title||p.title,priority:mp.priority||p.priority,start:mp.start||"00:00",end:mp.end||fmt(mp.duration||30)};
+      const slot=await _computeRescheduleSlot(ev,viewDate);
+      try{
+        await window.blockStore.rescheduleBlock(p.movedBlockId,viewDate,slot?{parentStart:slot.start,parentEnd:slot.end}:{});
+      }catch(e){
+        if(typeof showToast==="function")showToast("Could not restore","error");
+        return;
+      }
+    }
+    try{await window.blockStore.deleteBlock(tombBlockId);}catch(e){}
+    try{await window.blockStore.loadDay(viewDate);}catch(e){}
+    log("rescheduled",tombBlockId,"Restored to "+viewDate);
+    if(typeof showToast==="function")showToast("Restored to "+_prettyDateLabel(viewDate),"success");
+    if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+    if(typeof recalcTimes==="function")recalcTimes();
+    render();
+  }finally{
+    window.__RESCHEDULE_IN_FLIGHT__=false;
+  }
 }
 
 function pushTask(id){

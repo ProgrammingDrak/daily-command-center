@@ -217,7 +217,7 @@
     if (!entry || !err) return false;
     if (err.status === 401 || err.status === 403) return false;
     if (err.status === 400) return true;
-    if ((entry.op === "update" || entry.op === "delete") && err.status === 404) return true;
+    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule") && err.status === 404) return true;
     return false;
   }
 
@@ -243,6 +243,9 @@
             break;
           case "batch":
             await apiPost("/api/blocks/batch", entry.data);
+            break;
+          case "reschedule":
+            await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
             break;
         }
         walRemove(entry._walId);
@@ -376,6 +379,30 @@
       } catch (e) {
         setError("Batch save failed — buffered for retry");
         return { blocks: [] };
+      }
+    },
+
+    // Move a task + its whole subtask subtree to another date in one server-side
+    // transaction (see POST /api/blocks/:id/reschedule). One round-trip regardless
+    // of subtree size, one broadcast the origin client ignores (own clientId) — so
+    // no snap-back, no duplication, no stranded children. The moved blocks now live
+    // on targetDate, so evict them from the current-day cache.
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd } = {}) {
+      setSaving();
+      const body = { targetDate, parentStart, parentEnd };
+      const walId = walPush({ op: "reschedule", id: blockId, data: body });
+      try {
+        const result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
+        (result.moved || []).forEach(id => cacheDelete(id));
+        // Tombstone(s) land on the ORIGIN (current) day — cache them so the amber
+        // "Rescheduled away" list renders now, since we ignore our own SSE echo.
+        (result.created || []).forEach(b => { if (b && b.id) cacheSet(b); });
+        walRemove(walId);
+        setSaved();
+        return result;
+      } catch (e) {
+        setError("Reschedule failed — buffered for retry");
+        throw e;
       }
     },
 

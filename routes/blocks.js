@@ -3,6 +3,7 @@
 
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
+const { collectSubtreeBlockIds } = require("../lib/reschedule");
 
 module.exports = function mount(app, ctx) {
   const { APP_TIME_ZONE, DCC_ENDPOINTS, addMinutesHHMM, blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool, session } = ctx;
@@ -291,13 +292,87 @@ function parseOffersAmpAlert(text) {
 
 app.post("/api/blocks", validate(schemas.blockCreate), async (req, res) => { try { const body = req.body, userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || null; const workspaceId = req.workspaceId || (req.dccServiceAuth && req.dccServiceAuth.workspaceId) || null; const items = Array.isArray(body) ? body : [body]; if (req.dccServiceAuth && !items.every(isAllowedSweepBlockItem)) return res.status(403).json({ error: "Sweep Suite token may only create sweep_suite_task blocks" }); const results = []; for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId })); broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, workspaceId); res.json(results.length === 1 ? results[0] : results); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.patch("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.updateBlock(req.params.id, req.body); broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
-app.delete("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.deleteBlock(req.params.id); broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id] }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
+app.delete("/api/blocks/:id", async (req, res) => { try { const existing = await blockDB.getBlock(req.params.id); if (!existing) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(existing, req.workspaceId); const result = await blockDB.deleteBlock(req.params.id); broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
 app.post("/api/blocks/batch", async (req, res) => { try { const { operations, _clientId } = req.body; if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" }); const opsWithUser = operations.map(op => op.op === "create" ? { ...op, user_id: req.session.userId, workspace_id: req.workspaceId } : op); const result = await blockDB.batchOp(opsWithUser); broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.get("/api/blocks", async (req, res) => { try { if (req.query.date) { if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" }); await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId))); } else if (req.query.type) { const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t)); if (!types.length) return res.status(400).json({ error: "No valid types" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByTypes(types, req.workspaceId))); } else { res.status(400).json({ error: "Provide ?date= or ?type=" }); } } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/blocks/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(start, end, req.workspaceId))); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.getBlock(req.params.id); if (!block) return res.status(404).json({ error: "Block not found" }); try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); } res.json(block); });
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
+
+// ── Reschedule: move a task (and its whole subtask subtree) to another date ──
+// A TRUE MOVE: the parent block and every descendant keep their ids and just
+// change `date`, all in one transaction, with a single broadcast. Replaces the
+// old clone-new-id + soft-delete-old flow that duplicated tasks, stranded
+// subtasks, and (via its per-write broadcasts) made the UI snap back.
+// Subtasks link by LOCAL id (properties.subtaskOf / .wrapId == parent local_id),
+// not the DB parent_id column, so the subtree is discovered by walking those.
+// A lightweight "reschedule_tombstone" is left on the origin day so the amber
+// "Rescheduled away" list can render without a cross-date scan.
+app.post("/api/blocks/:id/reschedule", async (req, res) => {
+  try {
+    const { targetDate, parentStart, parentEnd, _clientId } = req.body || {};
+    if (!targetDate || !isValidDate(targetDate)) return res.status(400).json({ error: "Invalid targetDate" });
+    // parentStart/parentEnd are written straight into properties.start/end; guard the
+    // format so a hand-crafted call can't poison a task's time fields with junk.
+    const isHHMM = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+    if (parentStart != null && !isHHMM(parentStart)) return res.status(400).json({ error: "Invalid parentStart (want HH:MM)" });
+    if (parentEnd != null && !isHHMM(parentEnd)) return res.status(400).json({ error: "Invalid parentEnd (want HH:MM)" });
+    const parent = await blockDB.getBlock(req.params.id);
+    if (!parent) return res.status(404).json({ error: "Block not found" });
+    assertBlockOwnership(parent, req.workspaceId);
+    const fromDate = parent.date;
+    if (!fromDate) return res.status(400).json({ error: "Block has no source date to move from" });
+    if (fromDate === targetDate) return res.status(400).json({ error: "Already on that date" });
+    const parentLocalId = (parent.properties || {}).local_id || null;
+
+    // Gather the origin day's task blocks and walk the subtaskOf/wrapId tree.
+    const dayBlocks = (await blockDB.getBlocksByDate(fromDate, req.workspaceId))
+      .filter(b => b.type === "block" && (b.properties || {}).local_id);
+    const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
+    const byId = new Map(dayBlocks.map(b => [b.id, b]));
+    byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
+    const now = new Date().toISOString();
+    const moves = subtreeIds.map(bid => {
+      const b = byId.get(bid);
+      if (bid !== parent.id) return { id: bid, date: targetDate };
+      const properties = { ...((b && b.properties) || {}), rescheduledFrom: { date: fromDate, at: now } };
+      if (parentStart) { properties.start = parentStart; properties._pinnedStart = parentStart; }
+      if (parentEnd) properties.end = parentEnd;
+      return { id: bid, date: targetDate, properties };
+    });
+
+    // One tombstone per (moved task, origin day) so the amber list stays clean
+    // across repeated reschedules. Reuse an existing one instead of piling up.
+    const creates = [];
+    const existingTomb = dayBlocks.find(b => (b.properties || {}).kind === "reschedule_tombstone" && (b.properties || {}).movedBlockId === parent.id);
+    if (!existingTomb) {
+      creates.push({
+        type: "block",
+        date: fromDate,
+        user_id: parent.user_id || req.session.userId || null,
+        workspace_id: parent.workspace_id || req.workspaceId || null,
+        properties: {
+          local_id: "resched-tomb-" + parent.id,
+          kind: "reschedule_tombstone",
+          title: (parent.properties || {}).title || "Task",
+          priority: (parent.properties || {}).priority || "Medium",
+          movedBlockId: parent.id,
+          sourceLocalId: parentLocalId,
+          rescheduledFrom: { date: fromDate },
+          rescheduledTo: targetDate,
+          at: now
+        }
+      });
+    }
+
+    const result = await blockDB.rescheduleBlocks(moves, creates);
+    const movedIds = moves.map(m => m.id);
+    const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
+    broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
+    res.json({ moved: movedIds, created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
+  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+});
 
 // ── Quick task: drop a single task straight onto a day's itinerary ──
 // Token/localhost-authed (it's in DCC_ENDPOINTS) so the /dcc-task skill can add
