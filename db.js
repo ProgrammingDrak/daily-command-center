@@ -216,6 +216,52 @@ async function batchOp(operations) {
   return { batchId, blocks: results };
 }
 
+// ── Reschedule (atomic subtree move) ──
+
+// Move a parent block and its whole subtask subtree to another date in ONE
+// transaction, optionally creating side blocks (a "rescheduled away" tombstone)
+// in the same commit. This replaces the old clone-new-id + soft-delete-old
+// design, which could half-fail and strand or duplicate subtasks. `moves` is
+// [{ id, date, properties? }] (properties omitted => keep existing). `creates`
+// is [createBlock-shaped payloads] run on the same client.
+//
+// NOTE: batchOp() can't be reused here — its "update" branch calls updateBlock(),
+// which uses `pool` directly, so batched updates run OUTSIDE the transaction.
+async function rescheduleBlocks(moves, creates) {
+  const now = new Date().toISOString();
+  const client = await pool.connect();
+  const results = [];
+  try {
+    await client.query("BEGIN");
+    for (const m of moves) {
+      const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [m.id]);
+      const existing = rows[0];
+      if (!existing) throw new Error(`Block not found: ${m.id}`);
+      if (existing.deleted_at) throw new Error(`Block is deleted: ${m.id}`);
+      let newProps = existing.properties;
+      if (m.properties !== undefined) {
+        const parsed = typeof m.properties === "string" ? JSON.parse(m.properties) : m.properties;
+        validateBlock(existing.type, parsed);
+        newProps = parsed;
+      }
+      const newDate = m.date !== undefined ? m.date : existing.date;
+      await client.query(`UPDATE blocks SET properties = $1, date = $2, updated_at = $3 WHERE id = $4`, [newProps, newDate, now, m.id]);
+      await client.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [m.id, existing.properties, newProps, now]);
+      results.push({ id: m.id, type: existing.type, parent_id: existing.parent_id, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: existing.sort_order, created_at: existing.created_at, updated_at: now, deleted_at: null });
+    }
+    for (const c of (creates || [])) {
+      results.push(await createBlock(c, client));
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+  return { blocks: results };
+}
+
 // ── Reorder with Auto-Rebalance ──
 
 async function reorderBlocks(items) {
@@ -329,7 +375,7 @@ module.exports = {
   createBlock, updateBlock, deleteBlock,
   getBlocksByDate, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
-  batchOp, reorderBlocks, ensureDayRoot,
+  batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers
 };

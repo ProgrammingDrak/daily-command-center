@@ -311,6 +311,14 @@ function buildSchedule(){
   const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
   const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
   const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
+  // Tasks originally on this day that were rescheduled AWAY to another date. The
+  // move leaves a "reschedule_tombstone" block on this day carrying the
+  // destination; we render it amber at the bottom (mirror of Pushed to Tomorrow).
+  const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
+    ? window.blockStore.getByType("block")
+        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
+        .sort((a,b)=>String((a.properties||{}).title||"").localeCompare(String((b.properties||{}).title||"")))
+    : [];
 
   // Schedule block section headers
   const schedBlocks=((__state&&__state.schedule&&__state.schedule.blocks)||[]).slice().sort((a,b)=>a.start.localeCompare(b.start));
@@ -749,6 +757,28 @@ function buildSchedule(){
           '<span class="c-time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
         '</div>';
       el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();unpushTask(ev.id)});
+      tl.appendChild(el);
+    });
+  }
+
+  // Rescheduled-away items at the bottom, in amber (reuse the pushed styling).
+  if(rescheduledAwayItems.length){
+    const rd=document.createElement("div");rd.className="pushed-divider";rd.innerHTML='<span>Rescheduled away</span>';tl.appendChild(rd);
+    const restoreArrowSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>';
+    rescheduledAwayItems.forEach(b=>{
+      const p=b.properties||{};
+      const dest=p.rescheduledTo?_prettyDateLabel(p.rescheduledTo):"another day";
+      const el=document.createElement("div");el.className="tl-compact pushed";el.dataset.id=b.id;
+      el.innerHTML=
+        '<div class="tl-time"></div>'+
+        '<div class="tl-node"></div>'+
+        '<div class="compact-row">'+
+          '<div class="c-check" title="Restore to this day">'+restoreArrowSvg+'</div>'+
+          '<div class="bar" style="background:var(--amber,#f59e0b)"></div>'+
+          '<span class="c-title">'+(p.title||"Task")+'</span>'+
+          '<span class="c-time">→ '+dest+'</span>'+
+        '</div>';
+      el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();if(typeof restoreRescheduledAway==="function")restoreRescheduledAway(b.id)});
       tl.appendChild(el);
     });
   }
