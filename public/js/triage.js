@@ -113,7 +113,7 @@ function buildAITabCard(item){
   return '<div class="board-card'+(isDone?" board-card-done":"")+'" style="'+(isDone?"opacity:0.5":"")+'" data-ai-id="'+item.id+'">'+
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
-      '<div class="title-row"><span class="ttl"'+(isDone?' style="text-decoration:line-through"':'')+'>'+item.title+'</span></div>'+
+      '<div class="title-row"><span class="ttl"'+(isDone?' style="text-decoration:line-through"':'')+'>'+DCC.esc(item.title)+'</span></div>'+
       '<div class="meta">'+
         '<span class="'+priCls+'">'+(item.priority||"Medium")+'</span>'+
         (item._sourceLabel?'<span>'+item._sourceLabel+'</span>':'')+
@@ -121,7 +121,7 @@ function buildAITabCard(item){
       '</div>'+
     '</div>'+
     '<div class="ai-tab-chk" '+dataAttrs+' style="width:24px;height:24px;border:2px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:12px;'+(isDone?'background:var(--green);border-color:var(--green);color:white':'color:var(--text-muted)')+'">'+(isDone?"\u2713":"")+'</div>'+
-    (!isDone?'<button class="add-btn ai-tab-sched-btn" data-ai-title="'+item.title.replace(/"/g,'&quot;')+'" '+dataAttrs+'><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Schedule</button>':'')+
+    (!isDone?'<button class="add-btn ai-tab-sched-btn" data-ai-title="'+DCC.esc(item.title)+'" '+dataAttrs+'><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Schedule</button>':'')+
     '<button class="btn-del-task ai-tab-del-btn" '+dataAttrs+' title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
   '</div>';
 }

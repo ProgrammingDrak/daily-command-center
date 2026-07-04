@@ -130,9 +130,9 @@ function buildSideConsider(){
     const el=document.createElement("div");el.className="pomo-side-card";
     el.innerHTML=
       '<span class="side-bar" style="background:'+c.color+'"></span>'+
-      '<div class="side-body"><div class="side-title">'+t.title+'</div>'+
+      '<div class="side-body"><div class="side-title">'+DCC.esc(t.title)+'</div>'+
       '<div class="side-meta"><span>'+c.tag+'</span><span>'+ms(t.durMin)+'</span>'+(t.priority?'<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>':'')+'</div></div>'+
-      '<button class="pomo-mini-pomo" data-id="'+t.id+'" data-source="consider" data-t="'+t.title.replace(/"/g,'&quot;')+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
+      '<button class="pomo-mini-pomo" data-id="'+t.id+'" data-source="consider" data-t="'+DCC.esc(t.title)+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
     el.querySelector(".pomo-mini-pomo").addEventListener("click",e=>{
       e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.t,parseInt(b.dataset.d),{id:b.dataset.id,source:b.dataset.source,title:b.dataset.t});
     });
@@ -162,9 +162,9 @@ function buildSideBacklog(){
     const el=document.createElement("div");el.className="pomo-side-card";
     el.innerHTML=
       '<span class="side-bar" style="background:'+c.color+'"></span>'+
-      '<div class="side-body"><div class="side-title">'+t.title+'</div>'+
+      '<div class="side-body"><div class="side-title">'+DCC.esc(t.title)+'</div>'+
       '<div class="side-meta"><span>'+c.tag+'</span><span>'+ms(t.durMin)+'</span>'+(t.priority?'<span class="pri-'+(t.priority==="High"?"hi":t.priority==="Medium"?"med":"lo")+'">'+t.priority+'</span>':'')+(t.stage?'<span>'+t.stage+'</span>':'')+'</div></div>'+
-      '<button class="pomo-mini-pomo" data-id="'+t.id+'" data-source="backlog" data-t="'+t.title.replace(/"/g,'&quot;')+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
+      '<button class="pomo-mini-pomo" data-id="'+t.id+'" data-source="backlog" data-t="'+DCC.esc(t.title)+'" data-d="'+t.durMin+'" title="Focus on this task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/></svg></button>';
     el.querySelector(".pomo-mini-pomo").addEventListener("click",e=>{
       e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.t,parseInt(b.dataset.d),{id:b.dataset.id,source:b.dataset.source,title:b.dataset.t});
     });
@@ -232,7 +232,7 @@ function buildPickerList(query){
     const hdr=document.createElement("div");hdr.className="pomo-picker-group";hdr.textContent=g.label;list.appendChild(hdr);
     filtered.forEach(item=>{
       const el=document.createElement("div");el.className="pomo-picker-item";
-      el.innerHTML='<div class="ppi-bar" style="background:'+item.color+'"></div><div class="ppi-body"><div class="ppi-title">'+item.title+'</div><div class="ppi-meta">'+cfg(item.type).tag+' &middot; '+ms(item.dur)+'</div></div><div class="ppi-dur">'+ms(item.dur)+'</div>';
+      el.innerHTML='<div class="ppi-bar" style="background:'+item.color+'"></div><div class="ppi-body"><div class="ppi-title">'+DCC.esc(item.title)+'</div><div class="ppi-meta">'+cfg(item.type).tag+' &middot; '+ms(item.dur)+'</div></div><div class="ppi-dur">'+ms(item.dur)+'</div>';
       el.addEventListener("click",()=>{closeTaskPicker();openPomodoro(item.title,item.dur,{id:item.id,source:item.source,title:item.title})});
       list.appendChild(el);
     });

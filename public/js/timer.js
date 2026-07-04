@@ -192,7 +192,7 @@ function pomoRenderReport(){
       logEntries.innerHTML=pomoState.sessionLog.map((e,idx)=>{
         const durMin=Math.round(e.durSec/60);
         const dotColor=e.type==="work"?"var(--accent)":e.type==="short"?"var(--green)":e.type==="distraction"?"var(--red)":"var(--purple)";
-        let entryHtml='<div class="pomo-log-entry"><span class="ple-dot" style="background:'+dotColor+'"></span><span class="ple-time">'+e.time+'</span><span class="ple-task">'+e.title+'</span><span class="ple-dur">'+durMin+'m</span></div>';
+        let entryHtml='<div class="pomo-log-entry"><span class="ple-dot" style="background:'+dotColor+'"></span><span class="ple-time">'+e.time+'</span><span class="ple-task">'+DCC.esc(e.title)+'</span><span class="ple-dur">'+durMin+'m</span></div>';
 
         // If this entry has a stacked-on field, show it as indented/nested
         if(e.stackedOn){
@@ -296,7 +296,7 @@ function openTaskCompletionModal(taskTitle){
     const c=cfg(s.type);
     const timeStr=f12(s.start)+" - "+f12(s.end);
     const isDoneItem=isDone(s);
-    html+='<div class="completion-item clickable" data-block-id="'+s.id+'"><span class="ci-bar" style="background:'+c.color+'"></span><div class="ci-body"><div class="ci-title">'+s.title+'</div>'+(s.detail?'<div class="ci-detail">'+s.detail+'</div>':'')+'<div class="ci-meta"><span>'+timeStr+'</span></div></div></div>';
+    html+='<div class="completion-item clickable" data-block-id="'+s.id+'"><span class="ci-bar" style="background:'+c.color+'"></span><div class="ci-body"><div class="ci-title">'+DCC.esc(s.title)+'</div>'+(s.detail?'<div class="ci-detail">'+DCC.esc(s.detail)+'</div>':'')+'<div class="ci-meta"><span>'+timeStr+'</span></div></div></div>';
   });
   html+='</div>';
 
@@ -307,7 +307,7 @@ function openTaskCompletionModal(taskTitle){
   }else{
     pomoState.sessionLog.forEach((entry,idx)=>{
       const durMin=Math.round(entry.durSec/60);
-      html+='<div class="completion-item clickable" data-pomo-idx="'+idx+'"><span class="ci-bar" style="background:var(--accent);opacity:0.7"></span><div class="ci-body"><div class="ci-title">'+(entry.title||'(unassigned)')+'</div><div class="ci-meta"><span>'+entry.time+'</span><span>'+durMin+'m</span></div></div></div>';
+      html+='<div class="completion-item clickable" data-pomo-idx="'+idx+'"><span class="ci-bar" style="background:var(--accent);opacity:0.7"></span><div class="ci-body"><div class="ci-title">'+DCC.esc(entry.title||'(unassigned)')+'</div><div class="ci-meta"><span>'+entry.time+'</span><span>'+durMin+'m</span></div></div></div>';
     });
   }
   html+='</div>';
@@ -354,7 +354,7 @@ function selectCompletionItem(el){
 }
 
 function showConflictPrompt(newTask,existingBlock,container){
-  const conflictHtml='<div class="conflict-prompt"><div class="conflict-prompt-text">This block already has "<strong>'+existingBlock.title+'</strong>". What would you like to do?</div><div class="conflict-prompt-btns"><button class="conflict-btn primary" id="conflict-replace">Replace</button><button class="conflict-btn" id="conflict-stack">Stack</button></div></div>';
+  const conflictHtml='<div class="conflict-prompt"><div class="conflict-prompt-text">This block already has "<strong>'+DCC.esc(existingBlock.title)+'</strong>". What would you like to do?</div><div class="conflict-prompt-btns"><button class="conflict-btn primary" id="conflict-replace">Replace</button><button class="conflict-btn" id="conflict-stack">Stack</button></div></div>';
   const tempDiv=document.createElement("div");
   tempDiv.innerHTML=conflictHtml;
   container.insertBefore(tempDiv,container.firstChild);
@@ -543,9 +543,9 @@ function buildDistractionTaskList(){
   if(!tasks.length){ list.innerHTML=""; return; }
   list.innerHTML = tasks.slice(0,6).map(t => {
     const c = cfg(t.type);
-    return '<div class="distraction-task-item" data-title="'+t.title.replace(/"/g,'&quot;')+'">'
+    return '<div class="distraction-task-item" data-title="'+DCC.esc(t.title)+'">'
       +'<span class="dti-bar" style="background:'+c.color+'"></span>'
-      +'<span class="dti-title">'+t.title+'</span></div>';
+      +'<span class="dti-title">'+DCC.esc(t.title)+'</span></div>';
   }).join('');
   list.querySelectorAll(".distraction-task-item").forEach(el => {
     el.addEventListener("click", () => {
