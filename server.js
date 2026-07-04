@@ -31,6 +31,7 @@ const routeHelpers = require("./lib/route-helpers");
 const tokenStore = require("./token-store");
 const validate = require("./middleware/validate");
 const schemas = require("./middleware/schemas");
+const { resolveOwnerStrict, resolveOwnerLenient } = require("./middleware/resolve-owner");
 const { coerceDateString, isValidDate, addMinutesHHMM, intParam, route } = routeHelpers;
 const { scoreTaskPoints } = require("./slot-scoring");
 const capabilities = require("./capabilities");
@@ -798,8 +799,7 @@ app.post("/api/ingest/day-state", async (req, res) => {
   for (const key of USER_SECTIONS) { if (key in existing && !(key in incoming)) merged[key] = existing[key]; if (key in incoming && !(key in existing)) merged[key] = incoming[key]; }
   merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
   delete merged.meetings_tomorrow;
-  const ingestUserId = req.dccServiceAuth?.userId || req.session.userId || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
-  const ingestWorkspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || "ws-1";
+  const { userId: ingestUserId, workspaceId: ingestWorkspaceId } = resolveOwnerLenient(req);
   writeJSON(dayFile, merged); writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || merged.meetings || [] });
   try { await blockDB.saveDccState(incoming.date, merged, ingestUserId, ingestWorkspaceId); } catch(e) { console.error("[dcc-state ingest] save failed:", e.message); }
   broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, ingestWorkspaceId);
@@ -817,7 +817,7 @@ app.post("/api/dcc/quick-task", async (req, res) => {
     const title = String(body.title || "").trim();
     if (!title) return res.status(400).json({ error: "Missing title" });
     const date = isValidDate(body.date) ? body.date : getTodayStr();
-    const { userId, workspaceId } = await resolveDccWriteOwner(req);
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
 
     const idemKey = body.idempotency_key || body.idempotencyKey || null;
     const existingBlocks = await blockDB.getBlocksByDate(date, workspaceId);
@@ -869,8 +869,7 @@ app.post("/api/dcc/quick-task", async (req, res) => {
 function persistDccDay(date, merged, req, source) {
   writeJSON(getDayFilePath(date), merged);
   writeJSON(DAY_STATE_FILE, merged);
-  const userId = req.dccServiceAuth?.userId || req.session?.userId || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
-  const workspaceId = req.dccServiceAuth?.workspaceId || req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || "ws-1";
+  const { userId, workspaceId } = resolveOwnerLenient(req);
   blockDB.saveDccState(date, merged, userId, workspaceId).catch((e) => console.error(`[${source}] db save failed:`, e.message));
   broadcast("dcc-state-changed", { source, date }, workspaceId);
 }
@@ -931,27 +930,6 @@ app.post("/api/dcc/brief/decision", (req, res) => {
   }
 });
 
-async function resolveDccWriteOwner(req) {
-  let userId = req.session?.userId || req.dccServiceAuth?.userId || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
-  let workspaceId = req.workspaceId || req.dccServiceAuth?.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || null;
-  if (!userId) {
-    if (process.env.NODE_ENV === "production") {
-      const err = new Error("owner required: supply an x-user-id header or set DCC_SERVICE_USER_ID");
-      err.status = 400;
-      throw err;
-    }
-    const { rows } = await pool.query(
-      "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
-      workspaceId ? [workspaceId] : []
-    );
-    userId = rows[0] ? rows[0].user_id : 1;
-  }
-  if (!workspaceId) {
-    const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1", [userId]);
-    workspaceId = rows[0] ? rows[0].workspace_id : `ws-${userId}`;
-  }
-  return { userId, workspaceId };
-}
 
 app.post("/api/dcc/brief/materialize", async (req, res) => {
   try {
@@ -960,7 +938,7 @@ app.post("/api/dcc/brief/materialize", async (req, res) => {
     const sourceDate = body.sourceDate || body.source_date || previousDateStr(targetDate);
     const dryRun = body.dryRun !== false && body.dry_run !== false;
     if (!isValidDate(sourceDate) || !isValidDate(targetDate)) return res.status(400).json({ error: "Expected sourceDate and targetDate as YYYY-MM-DD" });
-    const { userId, workspaceId } = await resolveDccWriteOwner(req);
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
     const sourceState = readJSON(getDayFilePath(sourceDate), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(sourceDate);
     const existingBlocks = await blockDB.getBlocksByDate(targetDate, workspaceId);
     const plan = dccIntelligence.materializeBriefPlan({ sourceState, targetDate, existingBlocks });

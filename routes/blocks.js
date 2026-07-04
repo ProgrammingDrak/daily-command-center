@@ -4,6 +4,7 @@
 const validate = require("../middleware/validate");
 const schemas = require("../middleware/schemas");
 const { collectSubtreeBlockIds } = require("../lib/reschedule");
+const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 
 module.exports = function mount(app, ctx) {
   const { APP_TIME_ZONE, DCC_ENDPOINTS, addMinutesHHMM, blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool, session } = ctx;
@@ -399,27 +400,17 @@ app.post("/api/dcc/quick-task", validate(schemas.quickTask), async (req, res) =>
     const start = /^\d{1,2}:\d{2}$/.test(b.start || "") ? String(b.start).padStart(5, "0") : nextQuarterHourLocal();
     const end = addMinutesHHMM(start, dur);
 
-    // Resolve the owner: explicit header/env, else the workspace owner, else first user.
-    let userId = req.session.userId || (req.dccServiceAuth && req.dccServiceAuth.userId) || Number(req.headers["x-user-id"] || process.env.DCC_SERVICE_USER_ID || 0) || null;
-    let workspaceId = req.workspaceId || req.headers["x-workspace-id"] || process.env.DCC_SERVICE_WORKSPACE_ID || null;
-    if (!userId) {
-      // No explicit identity. In production we refuse to guess: the DCC service
-      // token is global, so defaulting to "first workspace owner" (or user 1)
-      // would let a token call silently write onto an arbitrary user's
-      // itinerary. Require an explicit target; only dev keeps the convenience
-      // fallback for single-user local testing.
-      if (process.env.NODE_ENV === "production") {
-        return res.status(400).json({ error: "owner required: supply an x-user-id header or set DCC_SERVICE_USER_ID" });
-      }
-      const { rows } = await pool.query(
-        "SELECT user_id FROM workspace_members WHERE role='owner'" + (workspaceId ? " AND workspace_id=$1" : "") + " ORDER BY user_id LIMIT 1",
-        workspaceId ? [workspaceId] : []
-      );
-      userId = rows[0] ? rows[0].user_id : 1;
-    }
-    if (!workspaceId) {
-      const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id=$1 AND role='owner' LIMIT 1", [userId]);
-      workspaceId = rows[0] ? rows[0].workspace_id : `ws-${userId}`;
+    // Resolve the owner via the shared strict resolver (middleware/resolve-owner.js):
+    // session first, refuses to guess in production. Only intentional behavior
+    // change vs the old inline copy: a service-token call now uses the token's
+    // workspace before the env default (the old chain skipped dccServiceAuth
+    // for workspace -- drift, not design).
+    let userId, workspaceId;
+    try {
+      ({ userId, workspaceId } = await resolveOwnerStrict(req));
+    } catch (err) {
+      if (err.status === 400) return res.status(400).json({ error: err.message });
+      throw err;
     }
 
     const localId = "qt-" + Date.now().toString(36);
