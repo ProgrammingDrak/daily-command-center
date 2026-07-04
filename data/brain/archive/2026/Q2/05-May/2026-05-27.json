@@ -123,7 +123,11 @@
         "durMin": 45,
         "duration_minutes": 45,
         "priority": "high",
-        "tags": ["partners", "metrics", "offers"],
+        "tags": [
+          "partners",
+          "metrics",
+          "offers"
+        ],
         "notes": "Use deals.vendor as the partner axis unless the task explicitly asks for downstream buyer/investor."
       },
       {
@@ -135,7 +139,10 @@
         "durMin": 30,
         "duration_minutes": 30,
         "priority": "high",
-        "tags": ["sow", "metrics"],
+        "tags": [
+          "sow",
+          "metrics"
+        ],
         "notes": "Output should be a short metric packet, not an exploratory notebook."
       },
       {
@@ -147,7 +154,10 @@
         "durMin": 45,
         "duration_minutes": 45,
         "priority": "high",
-        "tags": ["sow", "team"],
+        "tags": [
+          "sow",
+          "team"
+        ],
         "notes": "Best Drake-available slot is 11:30 AM ET. Fallback is 4:15 PM ET. Required attendee set likely starts from prior SOW kickoff: Ben, Mike Bennett, Jay, Collins, Mike Provinzino."
       },
       {
@@ -159,7 +169,11 @@
         "durMin": 75,
         "duration_minutes": 75,
         "priority": "high",
-        "tags": ["education", "cash-offer-tool", "inventory"],
+        "tags": [
+          "education",
+          "cash-offer-tool",
+          "inventory"
+        ],
         "notes": "Check HubSpot forms/workflows, Slack launch/update references, agent emails, and any portal/handbook copy. Local offers_amp search found no static education-copy hits."
       },
       {
@@ -180,7 +194,11 @@
         "durMin": 45,
         "duration_minutes": 45,
         "priority": "high",
-        "tags": ["education", "copy", "cash-offer-tool"],
+        "tags": [
+          "education",
+          "copy",
+          "cash-offer-tool"
+        ],
         "notes": "Use https://compare.cleveroffers.com/cash-offers as the reference. Keep copy action-oriented: go to the tool, compare options, use the tool as source of truth."
       },
       {
@@ -201,7 +219,11 @@
         "durMin": 75,
         "duration_minutes": 75,
         "priority": "high",
-        "tags": ["ship", "metrics", "education"],
+        "tags": [
+          "ship",
+          "metrics",
+          "education"
+        ],
         "notes": "Use this block for confirmed edits only. If inventory reveals owned surfaces outside local repo access, produce the exact change list and owner handoff."
       },
       {
@@ -213,7 +235,10 @@
         "durMin": 15,
         "duration_minutes": 15,
         "priority": "medium",
-        "tags": ["dcc", "closeout"],
+        "tags": [
+          "dcc",
+          "closeout"
+        ],
         "notes": "Capture done/deferred/blocked reasons so the glymphatic review has actuals."
       }
     ],
@@ -353,7 +378,11 @@
         "recommended_start": "09:00",
         "confidence": "user request + brain glossary",
         "reason": "Partner means inbound vendor/deals.vendor in this context; confirm denominators before sharing metrics.",
-        "tags": ["partners", "metrics", "offers"]
+        "tags": [
+          "partners",
+          "metrics",
+          "offers"
+        ]
       },
       {
         "id": "deep-task-sow-meeting",
@@ -363,7 +392,11 @@
         "recommended_start": "10:30",
         "confidence": "calendar availability",
         "reason": "Drake has an open 11:30 AM ET slot before lunch; fallback is 4:15 PM ET.",
-        "tags": ["sow", "team", "calendar"]
+        "tags": [
+          "sow",
+          "team",
+          "calendar"
+        ]
       },
       {
         "id": "deep-task-education-inventory",
@@ -373,7 +406,10 @@
         "recommended_start": "11:15",
         "confidence": "slack + workspace sweep",
         "reason": "Slack says education/emails should point to the new tool; local code did not reveal all send surfaces.",
-        "tags": ["education", "cash-offer-tool"]
+        "tags": [
+          "education",
+          "cash-offer-tool"
+        ]
       },
       {
         "id": "deep-task-comparison-tool-copy",
@@ -383,7 +419,11 @@
         "recommended_start": "13:00",
         "confidence": "slack evidence",
         "reason": "Use https://compare.cleveroffers.com/cash-offers as the reference destination.",
-        "tags": ["copy", "education", "offers"]
+        "tags": [
+          "copy",
+          "education",
+          "offers"
+        ]
       }
     ],
     "lessons": [
@@ -474,7 +514,11 @@
           "recommended_start": "09:00",
           "confidence": "user request + brain glossary",
           "reason": "Partner means inbound vendor/deals.vendor in this context.",
-          "tags": ["partners", "metrics", "offers"]
+          "tags": [
+            "partners",
+            "metrics",
+            "offers"
+          ]
         },
         {
           "id": "deep-task-sow-meeting",
@@ -484,7 +528,11 @@
           "recommended_start": "10:30",
           "confidence": "calendar availability",
           "reason": "Drake has an open 11:30 AM ET slot; 4:15 PM ET is fallback.",
-          "tags": ["sow", "team", "calendar"]
+          "tags": [
+            "sow",
+            "team",
+            "calendar"
+          ]
         },
         {
           "id": "deep-task-education-inventory",
@@ -494,7 +542,10 @@
           "recommended_start": "11:15",
           "confidence": "slack + workspace sweep",
           "reason": "Find every current send before changing references.",
-          "tags": ["education", "cash-offer-tool"]
+          "tags": [
+            "education",
+            "cash-offer-tool"
+          ]
         },
         {
           "id": "deep-task-comparison-tool-copy",
@@ -504,7 +555,11 @@
           "recommended_start": "13:00",
           "confidence": "slack evidence",
           "reason": "Use https://compare.cleveroffers.com/cash-offers as the destination.",
-          "tags": ["copy", "education", "offers"]
+          "tags": [
+            "copy",
+            "education",
+            "offers"
+          ]
         }
       ]
     },
@@ -538,5 +593,7 @@
       "Work calendar/team calendars were not fully available; SOW time is based on Drake primary calendar availability.",
       "HubSpot/workflow education surfaces were not directly readable from local code search."
     ]
-  }
+  },
+  "source": "api-save",
+  "savedAt": "2026-07-01T15:39:12.101Z"
 }

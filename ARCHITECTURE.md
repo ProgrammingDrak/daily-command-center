@@ -2,7 +2,7 @@
 
 A standalone Express app serving a vanilla-JS single-page dashboard. One Node
 process, no build step. Runs locally (`http://localhost:8090`, local Postgres)
-and in production (Render + Supabase Postgres, auto-deploy from `main`).
+and in production (Railway + Postgres, auto-deploy from `main`; migrated off Render 2026-06-26).
 
 ## Layout
 
@@ -43,7 +43,7 @@ request if any of the following holds:
    `attachSweepServiceAuth()`.
 
 3. **Localhost trust (dev only).** `trustLocalhost()` admits 127.0.0.1
-   sockets only when `NODE_ENV !== "production"`. On Render every request
+   sockets only when `NODE_ENV !== "production"`. On Railway every request
    arrives via a local reverse proxy, so localhost is deliberately NOT
    trusted there.
 
@@ -63,7 +63,19 @@ generic message to the client in production.
 
 `npm start` runs schema patch then server. `npm test` runs the `node --test`
 suite. `npm run ship` is the only sanctioned path to production (sync branch
-→ PR → merge → Render auto-deploy). The deploy workflow in
+→ PR → merge → Railway auto-deploy). The deploy workflow in
 `.github/workflows/deploy.yml` blocks DB-risky changes unless acknowledged
-with `[migration-ok]`. The vault repo is cloned fresh on each Render cold
+with `[migration-ok]`. The vault repo is cloned fresh on each Railway cold
 boot since the filesystem is ephemeral.
+
+## Frontend conventions (2026-07-04 overhaul)
+
+- **Mobile boundary is 760px** — matches `mobile-shell.js` `MOBILE_QUERY` and the
+  touch-target block in `dashboard.css`. New responsive rules use 480/760/1024,
+  not new ad-hoc breakpoints.
+- **Shared frontend core**: common helpers (escape, fetch wrapper, toast, dates,
+  badges, modal/sheet factory) live in `public/js/core.js` on the `window.DCC`
+  namespace, loaded FIRST in index.html. Never reimplement these per tab —
+  follow the `urgency.js` single-source pattern.
+- **Boy-scout CSS tokens**: any PR touching a CSS block converts that block's
+  hard-coded sizes to the tokens in `public/css/tokens.css` (once it lands).

@@ -1,0 +1,117 @@
+{
+  "date": "2026-06-25",
+  "sweep": {
+    "readers": [],
+    "source_health": [],
+    "meetings_count": 0,
+    "open_item_count": 0
+  },
+  "triage": {
+    "open_items": [
+      {
+        "id": "gmail:19f002378a58d7eb",
+        "type": "email",
+        "title": "Can you send the Q3 numbers today?",
+        "summary": "Ben is asking for the Q3 cash-offer numbers before EOD.",
+        "draft_id": "r4817428196031584564",
+        "priority": "high",
+        "draft_url": "https://mail.google.com/mail/u/0/#drafts/19f002378a58d7eb",
+        "draft_link": "https://mail.google.com/mail/u/0/#drafts/19f002378a58d7eb",
+        "draft_type": "gmail",
+        "seen_count": 2,
+        "source_ref": "https://mail.google.com/mail/u/0/#all/19f002378a58d7eb",
+        "action_label": "Review & send",
+        "draft_status": "drafted",
+        "draft_preview": "Hi Ben, attaching the Q3 cash-offer numbers now. Shout if you need a per-market breakdown.",
+        "first_seen_at": "2026-06-25T11:05:00Z",
+        "recommended_action": "review_edit_send"
+      },
+      {
+        "id": "slack:mention:C123:1719315600.001",
+        "type": "slack",
+        "title": "#offers-eng: @drake can you review the AMP PR?",
+        "summary": "Mention awaiting your reply in #offers-eng.",
+        "draft_id": "slack-draft-1",
+        "priority": "medium",
+        "sub_type": "mention",
+        "draft_url": "https://app.slack.com/client/T123/C123",
+        "draft_link": "https://app.slack.com/client/T123/C123",
+        "draft_type": "slack",
+        "seen_count": 1,
+        "source_ref": "https://clever-realestate.slack.com/archives/C123/p1719315600001",
+        "action_label": "Review & send",
+        "draft_status": "drafted",
+        "draft_preview": "On it, reviewing the AMP PR now. Will leave comments within the hour.",
+        "first_seen_at": "2026-06-25T10:05:00Z",
+        "recommended_action": "review_edit_send"
+      },
+      {
+        "id": "gmail:newsletter-fyi",
+        "type": "email",
+        "title": "The Hustle: 5 startup trends this week",
+        "summary": "Newsletter, no reply needed.",
+        "priority": "low",
+        "seen_count": 1,
+        "source_ref": "https://mail.google.com/mail/u/0/#all/newsletter-fyi",
+        "first_seen_at": "2026-06-25T09:05:00Z"
+      }
+    ],
+    "resolved_items": []
+  },
+  "schedule": {
+    "stats": {},
+    "timeline": [],
+    "working_hours": {
+      "end": "17:30",
+      "start": "07:00"
+    },
+    "tasks_scheduled": [],
+    "tasks_couldnt_fit": []
+  },
+  "watermarks": {},
+  "completions": {
+    "tasks": []
+  },
+  "last_updated_at": "2026-06-25T19:07:45.988Z",
+  "last_updated_by": "sweep-suite-verify",
+  "glymphatic_brief": {
+    "current": {
+      "id": "brief-2026-06-25",
+      "date": "2026-06-25",
+      "pages": [
+        {
+          "id": "front",
+          "summary": "Two replies are drafted and waiting for your approval.",
+          "tomorrow": [
+            {
+              "id": "t1",
+              "title": "Review SOW data wall",
+              "project": "Ops",
+              "duration": 30,
+              "priority": "medium",
+              "suggested_start": "09:00"
+            }
+          ],
+          "done_today": [
+            {
+              "items": [
+                {
+                  "title": "Shipped ownership rollout phase 3",
+                  "detail": "merged"
+                }
+              ],
+              "project": "AMP"
+            }
+          ]
+        }
+      ],
+      "title": "Thursday brief",
+      "summary": "Two replies are drafted and waiting for your approval.",
+      "decisions": {},
+      "decision_log": [],
+      "generated_at": "2026-06-25T13:00:00Z",
+      "suggested_tasks": []
+    },
+    "history": []
+  }
+}
