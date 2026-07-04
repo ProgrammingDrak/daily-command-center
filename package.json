@@ -1,7 +1,7 @@
 {
   "name": "daily-command-center",
   "version": "1.0.0",
-  "description": "Drake's Daily Command Center — standalone Express dashboard",
+  "description": "Drake's Daily Command Center \u2014 standalone Express dashboard",
   "main": "server.js",
   "scripts": {
     "check:db": "node scripts/check-db.js",
@@ -17,9 +17,7 @@
     "start": "npm run check:db && node pg-schema.js && node server.js",
     "dev": "npm run start",
     "start:prod": "node pg-schema.js && node server.js",
-    "start:render": "node pg-schema.js && node server.js",
     "schema": "node pg-schema.js",
-    "migrate-data": "node sqlite-to-pg.js",
     "backup": "bash scripts/db-backup.sh"
   },
   "engines": {
@@ -29,7 +27,6 @@
     "@clerk/backend": "^3.5.0",
     "@clerk/express": "^2.1.23",
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.8.0",
     "chokidar": "^3.6.0",
     "connect-pg-simple": "^10.0.0",
     "dotenv": "^16.4.0",

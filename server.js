@@ -20,7 +20,6 @@ const session = require("express-session");
 const pgSession = require("connect-pg-simple")(session);
 const pool = require("./pg-pool");
 const blockDB = require("./db");
-const migration = require("./migrate");
 const auth = require("./auth");
 const VaultStore = require("./vault-store");
 const SyncManager = require("./sync-manager");
