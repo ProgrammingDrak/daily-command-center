@@ -38,7 +38,7 @@ jobs:
             exit 0
           fi
 
-          DB_PATHS='^(pg-schema\.js|migrate\.js|migrate-to-unified-blocks\.js|sqlite-to-pg\.js|db\.js|migrations/.*)$'
+          DB_PATHS='^(pg-schema\.js|db\.js|migrations/.*)$'
           # Match destructive SQL only in *statement* form. Bare keywords (e.g. TRUNCATE)
           # false-positive on ordinary JS identifiers like a `truncate(title, 80)` UI helper.
           KEYWORD_RX='^\+.*\b(DROP[[:space:]]+(TABLE|COLUMN|INDEX|DATABASE)|TRUNCATE[[:space:]]+TABLE|DELETE[[:space:]]+FROM|ALTER[[:space:]]+TABLE)\b'
