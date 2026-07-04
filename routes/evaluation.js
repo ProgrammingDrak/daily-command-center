@@ -7,10 +7,6 @@ module.exports = function mount(app, ctx) {
 // ── Evaluation API (task scoring engine) ──
 app.use(require("../evaluation/routes")(blockDB));
 
-// ── PA State API ──
-app.get("/api/pa-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const states = await blockDB.getPaStateRange(start, end, req.workspaceId); const result = {}; for (const s of states) result[s.date] = s.state_json; res.json(result); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.get("/api/pa-state/:date", async (req, res) => { if (!isValidDate(req.params.date)) return res.status(400).json({ error: "Invalid date" }); const state = await blockDB.getPaState(req.params.date, req.workspaceId); res.json(state || { date: req.params.date, state_json: null }); });
-app.post("/api/pa-state/ingest", async (req, res) => { try { const { date, ...stateData } = req.body; if (!date || !isValidDate(date)) return res.status(400).json({ error: "Valid date required" }); let userId = req.session.userId || null, workspaceId = req.workspaceId || null; if (!userId) { workspaceId = req.headers["x-workspace-id"] || "ws-1"; const { rows } = await pool.query("SELECT user_id FROM workspace_members WHERE workspace_id = $1 AND role = 'owner' LIMIT 1", [workspaceId]); userId = rows[0] ? rows[0].user_id : 1; } await blockDB.savePaState(date, stateData, userId, workspaceId); broadcast("pa-state-changed", { date }); res.json({ ok: true, date }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ── Migration (legacy) ──
 app.post("/api/migrate", async (req, res) => { res.json({ ok: true, message: "Data is now in Postgres." }); });
