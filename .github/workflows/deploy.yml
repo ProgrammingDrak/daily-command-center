@@ -1,9 +1,10 @@
-name: Render deploy guardrails
+name: Deploy guardrails (Railway)
 
 on:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
     inputs:
       acknowledge_db_risk:
@@ -13,7 +14,19 @@ on:
         default: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
   guardrails:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -51,16 +64,16 @@ jobs:
           KEYWORD_HITS="$(printf '%s\n' "$DIFF_BODY" | grep -iE "$KEYWORD_RX" || true)"
 
           if [ -z "$PATH_HITS" ] && [ -z "$KEYWORD_HITS" ]; then
-            echo "DB-risk guardrail: no risky changes detected. Render auto-deploy can proceed."
+            echo "DB-risk guardrail: no risky changes detected. Railway auto-deploy can proceed."
             exit 0
           fi
 
           if printf '%s' "${COMMIT_MSG:-}" | grep -qE '\[(migration-ok|db-ok)\]'; then
-            echo "DB-risk acknowledged via commit tag. Render auto-deploy can proceed."
+            echo "DB-risk acknowledged via commit tag. Railway auto-deploy can proceed."
             exit 0
           fi
           if [ "${ACK:-false}" = "true" ]; then
-            echo "DB-risk acknowledged via workflow_dispatch input. Render auto-deploy can proceed."
+            echo "DB-risk acknowledged via workflow_dispatch input. Railway auto-deploy can proceed."
             exit 0
           fi
 
