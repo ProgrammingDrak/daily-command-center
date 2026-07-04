@@ -8,37 +8,10 @@ function updateSaveStatus(state, text) {
   if (tooltip) tooltip.textContent = text || "";
 }
 
+// showToast moved to core.js (DCC.toast) 2026-07-04 \u2014 this shim keeps the
+// legacy global working until consumer-migration PRs retire it.
 function showToast(message, type = "error", duration = 5000, action = null) {
-  if (duration && typeof duration === "object") {
-    action = duration;
-    duration = 5000;
-  }
-  const container = document.getElementById("toast-container");
-  if (!container) return;
-  const toast = document.createElement("div");
-  toast.className = "toast toast--" + type;
-  const text = document.createElement("span");
-  text.textContent = message;
-  toast.appendChild(text);
-  if (action && typeof action.onClick === "function") {
-    const actionBtn = document.createElement("button");
-    actionBtn.type = "button";
-    actionBtn.className = "toast-action";
-    actionBtn.textContent = action.label || "Undo";
-    actionBtn.addEventListener("click", () => {
-      toast.remove();
-      action.onClick();
-    });
-    toast.appendChild(actionBtn);
-  }
-  const closeBtn = document.createElement("button");
-  closeBtn.type = "button";
-  closeBtn.className = "toast-close";
-  closeBtn.textContent = "\u00d7";
-  closeBtn.addEventListener("click", () => toast.remove());
-  toast.appendChild(closeBtn);
-  container.appendChild(toast);
-  if (duration > 0) setTimeout(() => toast.remove(), duration);
+  return window.DCC.toast(message, type, duration, action);
 }
 
 async function checkServerHealthForSaveStatus() {
