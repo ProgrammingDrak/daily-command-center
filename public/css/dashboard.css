@@ -536,7 +536,7 @@
   .gb-triage-link:hover{text-decoration:none;border-color:var(--accent-light);color:var(--accent-light)}
   .gb-triage-link.primary{background:var(--accent);border-color:var(--accent);color:white}
   .gb-triage-empty{font-size:12px;color:var(--text-muted);background:rgba(15,23,42,0.42);border:1px dashed var(--border);border-radius:8px;padding:12px;line-height:1.45}
-  .gb-grid{display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,0.9fr) minmax(360px,1.35fr);gap:12px;align-items:start}
+  .gb-grid{display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,0.9fr) minmax(min(360px,100%),1.35fr);gap:12px;align-items:start}
   .gb-section{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;min-width:0}
   .gb-section-title{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:10px}
   .gb-note{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:9px 0;border-top:1px solid rgba(255,255,255,0.05);font-size:12px;line-height:1.45}
@@ -3799,7 +3799,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .pet-btn.primary,.pet-mini.primary{background:var(--green);border-color:var(--green);color:#04140b}
 .pet-btn:hover,.pet-mini:hover{border-color:var(--accent-light);color:var(--accent-light)}
 .pet-btn.primary:hover,.pet-mini.primary:hover{filter:brightness(1.08);color:#04140b}
-.pet-grid{display:grid;grid-template-columns:minmax(420px,1.35fr) minmax(280px,.9fr);gap:14px}
+.pet-grid{display:grid;grid-template-columns:minmax(min(420px,100%),1.35fr) minmax(min(280px,100%),.9fr);gap:14px}
 .pet-home-stage,.pet-panel,.pet-public-panel{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px}
 .pet-room{position:relative;min-height:420px;overflow:hidden;border-radius:8px;border:1px solid rgba(255,255,255,.12);background:radial-gradient(circle at 24% 16%,rgba(255,215,143,.2),transparent 28%),linear-gradient(180deg,#263940 0%,#203238 50%,#4c3828 51%,#30231b 100%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),inset 0 -90px 90px rgba(33,20,13,.4);perspective:900px;isolation:isolate}
 .pet-room:before{content:"";position:absolute;left:0;right:0;bottom:0;height:46%;background:linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px) 0 0/38px 100%,linear-gradient(180deg,rgba(201,154,92,.22),rgba(48,35,26,.72));clip-path:polygon(8% 0,92% 0,100% 100%,0 100%);transform:translateY(8px);z-index:1}
@@ -3898,7 +3898,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .pet-public-hero h1{margin:0;font-size:42px;letter-spacing:0;color:#fff7df}
 .pet-public-hero p{margin:8px 0 0;color:#d6e1d7;font-size:15px}
 .pet-public-login{display:inline-flex;align-items:center;min-height:36px;padding:0 13px;border:1px solid rgba(255,255,255,.22);border-radius:6px;color:#fff7df;text-decoration:none;font-weight:850}
-.pet-public-grid{display:grid;grid-template-columns:minmax(420px,1.35fr) minmax(280px,.85fr);gap:14px}
+.pet-public-grid{display:grid;grid-template-columns:minmax(min(420px,100%),1.35fr) minmax(min(280px,100%),.85fr);gap:14px}
 .pet-home-stage.public{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.14)}
 .pet-public-panel{background:rgba(17,24,31,.9);border-color:rgba(255,255,255,.12)}
 .pet-public-panel h2{margin:0 0 10px;font-size:17px}
@@ -4546,14 +4546,14 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 
 /* --- layout --- */
 .bt-main{display:grid;grid-template-columns:240px 1fr;gap:28px;align-items:stretch}
-@media(max-width:680px){.bt-main{grid-template-columns:1fr;gap:20px}}
+@media(max-width:760px){.bt-main{grid-template-columns:1fr;gap:20px}}
 
 /* --- the tank --- */
 .bt-tank-col{display:flex;justify-content:center}
 .bt-tank{position:relative;width:200px;height:540px;border-radius:18px;overflow:hidden;
   border:1px solid var(--border);background:#0a0f1d;
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 8px 30px rgba(0,0,0,.45)}
-@media(max-width:680px){.bt-tank{width:100%;max-width:280px;height:460px}}
+@media(max-width:760px){.bt-tank{width:100%;max-width:280px;height:460px}}
 
 /* zone bands (full colour; the mask dims the unfunded part above the line) */
 .bt-zones{position:absolute;inset:0;display:flex;flex-direction:column-reverse}
