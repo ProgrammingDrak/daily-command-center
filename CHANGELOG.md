@@ -1,5 +1,9 @@
-# Daily Command Center - Development TODO
+# Daily Command Center - Changelog (historical PR notes)
 
+
+> Renamed from TODO-README 2026-07-04: this file was a per-PR QA log, not a live
+> TODO (it still described the SQLite era). Kept as history. Live conventions:
+> ARCHITECTURE.md. Manual QA: QA-CHECKLIST.md.
 ## Current PR: Task Persistence + Overflow + UI Polish
 
 ### What Changed

@@ -1,0 +1,185 @@
+{
+  "date": "2026-07-04",
+  "last_updated_at": "2026-06-26T22:17:16.699Z",
+  "last_updated_by": "skeleton",
+  "watermarks": {},
+  "triage": {
+    "open_items": [],
+    "resolved_items": [],
+    "cycle_count": 0
+  },
+  "sweep": {
+    "source_health": [],
+    "readers": [],
+    "open_item_count": 0,
+    "meetings_count": 0
+  },
+  "glymphatic_brief": {
+    "history": [],
+    "current": {
+      "id": "brief-2026-07-04",
+      "date": "2026-07-04",
+      "title": "Glymphatic Brief",
+      "summary": "",
+      "triage": null,
+      "lessons": [],
+      "disregarded": [],
+      "suggested_tasks": [],
+      "pages": [
+        {
+          "id": "canvas",
+          "label": "Organism",
+          "canvas_html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>\n:root{--bg:#0f1115;--card:#191d24;--ink:#e8eaf0;--dim:#9aa3b2;--acc:#5eead4;--ok:#34d399;--bad:#f87171;--line:#2a2f3a}\n*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--ink);\nfont:13px/1.5 -apple-system,system-ui,sans-serif;padding:14px}\nh1{font-size:16px}.sub{color:var(--dim);font-size:11px;margin-bottom:12px}\n.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px}\n.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}\n.card h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--acc);margin-bottom:8px}\n.kv{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed var(--line);font-size:12px}\n.kv:last-child{border-bottom:0}.kv .k{color:var(--dim);white-space:nowrap}.kv .d{color:var(--dim);text-align:right}\n.ok{color:var(--ok)}.bad{color:var(--bad)}ul{padding-left:16px}li{font-size:12px;color:var(--dim);margin:2px 0}\n.upd{font:11px ui-monospace,Menlo,monospace;color:var(--dim);padding:2px 0;border-bottom:1px dashed var(--line)}\n.upd:last-child{border-bottom:0}</style></head><body>\n<h1>The Organism</h1>\n<div class=\"sub\">Living system document \u00b7 rebuilt 2026-07-04 09:31 by the night heartbeat</div>\n<div class=\"grid\">\n<div class=\"card\"><h2>Personality</h2><ul><li>Reports, plans, copy examples: lean but complete -- trim filler, keep the</li><li>Copy Drake will ship to others: warm up, less terse, still tight.</li><li>When Drake says &quot;expand,&quot; &quot;go deep,&quot; or &quot;explain&quot;: drop brevity until he says</li></ul>\n  <div class=\"kv\"><span class=\"k\">Soul last changed</span><span class=\"d\">2026-07-04 \u00b7 brain-sync: 2026-07-04 09:25 from MacBook-Air-4</span></div></div>\n<div class=\"card\"><h2>Schedule</h2>\n  <div class=\"kv\"><span class=\"k\">Night Consolidation</span><span>17:00 mac \u00b7 17:10 darrow</span></div>\n  <div class=\"kv\"><span class=\"k\">Morning Awakening</span><span>07:00 mac \u00b7 07:10 darrow</span></div>\n  <div class=\"kv\"><span class=\"k\">2026-07-03 night \u00b7 macbook-air-4</span><span>full \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-03 morning \u00b7 macbook-air-4</span><span>light \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-03 morning \u00b7 darrow</span><span>full \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-02 morning \u00b7 macbook-air-4</span><span>full \u00b7 claimed global</span></div></div>\n<div class=\"card\"><h2>Skills</h2><div class=\"kv\"><span class=\"k\">brain-core v0.2.10 (23)</span><span class=\"d\">brainupdate, daily-glymphatic-review, dcc-task, deploy-and-close, evidence-collector, feature-broadcast, feature-report, glymphatic, lessons-router, meeting-review-router, meeting-transcript-review, plan-critique, plan-dashboard, project-cleanup, project-plan, project-retrospective, register-mcp-perms, session-handoff, ship-it, stable-preview, submit-for-review, workspace-hygiene, workspace-steward</span></div><div class=\"kv\"><span class=\"k\">dcc-task-ops v0.1.3 (6)</span><span class=\"d\">add-dcc-subtasks, capture-chat-actions, complete-dcc-task, create-dcc-task, read-dcc-tasks, update-dcc-task</span></div><div class=\"kv\"><span class=\"k\">sweep-suite v0.2.3 (7)</span><span class=\"d\">draft-replies, publish-dcc-state, read-calendar, read-custom, read-gmail, read-notion, read-slack</span></div></div>\n<div class=\"card\"><h2>Now</h2>\n  <div class=\"kv\"><span class=\"k\">Sweep freshness</span><span class=\"ok\">2026-07-03 17:42Z (19.8h)</span></div>\n  <div class=\"kv\"><span class=\"k\">Git backup</span><span class=\"d\">git-backup complete: 2 ref(s) pushed, no failures</span></div>\n  <div class=\"kv\"><span class=\"k\">Flags</span><span>0 open \u00b7 0 shipped</span></div>\n  <div class=\"kv\"><span class=\"k\">Full dashboard</span><span class=\"d\">outputs/organism/organism-dashboard.html</span></div></div>\n<div class=\"card\" style=\"grid-column:1/-1\"><h2>Most recent updates (when \u00b7 what)</h2><div class=\"upd\">07-04 09:29 \u00b7 Morning self-heal: backfill the brief when both machines missed 17:00</div><div class=\"upd\">07-04 09:25 \u00b7 brain-sync: 2026-07-04 09:25 from MacBook-Air-4</div><div class=\"upd\">07-04 09:25 \u00b7 Brief tab: fix morning blankness + ship the living Organism page</div><div class=\"upd\">07-04 08:38 \u00b7 Stagger Darrow heartbeats to :10 past (Gate-B claim race fix)</div><div class=\"upd\">07-04 07:11 \u00b7 Merge remote-tracking branch &#x27;origin/main&#x27;</div><div class=\"upd\">07-04 07:11 \u00b7 brain-sync: 2026-07-04 07:11 from Darrow</div></div>\n</div></body></html>",
+          "height": 980,
+          "summary": "Quiet night: nothing new shipped; systems ran clean.",
+          "shipped": [
+            "quiet night"
+          ],
+          "open_flags": [],
+          "metrics": [
+            {
+              "label": "Sweep freshness",
+              "value": "19.8h ago"
+            },
+            {
+              "label": "Git backup",
+              "value": "git-backup complete: 2 ref(s) pushed, no failures"
+            }
+          ],
+          "heartbeats": [
+            "2026-07-03 night \u00b7 macbook-air-4: full +global",
+            "2026-07-03 morning \u00b7 macbook-air-4: light +global",
+            "2026-07-03 morning \u00b7 darrow: full +global",
+            "2026-07-02 morning \u00b7 macbook-air-4: full +global"
+          ],
+          "dashboard": "outputs/organism/organism-dashboard.html"
+        },
+        {
+          "id": "actual-vs-planned",
+          "label": "Actual vs Planned",
+          "summary": "0 of 10 planned tasks completed; 0 could not fit.",
+          "metrics": [
+            {
+              "label": "Planned tasks",
+              "value": 10
+            },
+            {
+              "label": "Completed",
+              "value": 0
+            },
+            {
+              "label": "Couldn't fit",
+              "value": 0
+            },
+            {
+              "label": "Planned minutes",
+              "value": 0
+            },
+            {
+              "label": "Completion records",
+              "value": 0
+            }
+          ],
+          "rows": [
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": ""
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:00"
+            },
+            {
+              "title": "(untitled)",
+              "status": "planned",
+              "meta": "14:00-14:45"
+            }
+          ]
+        },
+        {
+          "id": "personal-bible",
+          "label": "Bible",
+          "question": "What's one thing that, ten years out, would make the decade feel well-spent?",
+          "sections": [
+            {
+              "heading": "Who I am (today)",
+              "body": "The honest current snapshot -- roles, strengths, the patterns I actually run. - My core driver is operating at an extreme level. What I actually care about is not any single hobby but doing things so far past expectations that people assume I must be unwell to pull them off. I half-jokingly call it \"my hobby is being insane.\" (evidence: 2026-06-04 journal) - The reward is the gap, not the task. I get a rush of dopamine and energy from exceeding expectations and altering what someone believes is possible, not from the activity itself; whether the thing is \"good or bad\" is beside the point. (evidence: 2026-06-04 journal) - Moderation is a trap for me. My most depressed stretches have lined..."
+            },
+            {
+              "heading": "Who I want to become",
+              "body": "The person on the other side of the work -- a way of operating and being. - Someone whose days go to building more and more product and knowledge that helps people and makes their lives better and easier."
+            },
+            {
+              "heading": "What matters to me (values)",
+              "body": "The handful of things I'd defend under pressure -- the tiebreakers when two good options compete. - Intensity over moderation. I'd defend going to the extreme over playing it safe or balanced; \"be normal\" is the thing I push against. (evidence: 2026-06-04 journal) - Exceeding expectations. The paths I reach for are the ones that blast past what's expected and change what people think is possible. (evidence: 2026-06-04 journal)"
+            },
+            {
+              "heading": "How I show up in hard conversations (HALT / RESUME)",
+              "body": "A paired framework I use with Fae. This section is mine; the system does not edit it. **HALT -- when to pause.** Do not have the hard conversation while I am: - **H**ungry - **A**ngry - **L**onely - **T**ired These are the four states that make me worse at connecting. If one is true, take care of it first and come back. **RESUME -- how to come back.** Built with Claude during our most recent HALT, then used to actually re-enter the conversation. The postures I want to bring when I resume: - **R**eset -- drop the residue from before the pause - **E**mpathetic -- lead with her experience, not my case - **S**incere -- no performing, no scoring points - **U**nited -- me and Fae vs. the proble..."
+            },
+            {
+              "heading": "Dreams and the long arc",
+              "body": "The big ones -- what would make a decade feel well-spent. - _(the system collects these as you voice them; edit to claim them)_"
+            },
+            {
+              "heading": "Goals (the bridge from values to work)",
+              "body": "Auto-synced from `brain/goals-ledger.md` each run. Edit the ledger, not this block. - Increase AI autonomy: agents should make reversible decisions, front-load - Improve decision quality: evaluate choices by process, probability, expected - Reduce friction and token waste: fewer repeated chats, fewer unnecessary - Make Daily Command Center the cleanest source of truth for planned work, - Keep durable memory organized so Claude, Codex, and future assistants can find ---"
+            }
+          ],
+          "source": "personal/personal-bible.md"
+        }
+      ],
+      "generated_at": "2026-07-04T09:31:38-04:00"
+    }
+  },
+  "completions": {
+    "tasks": []
+  },
+  "schedule": {
+    "working_hours": {
+      "start": "07:00",
+      "end": "17:30"
+    },
+    "timeline": [],
+    "tasks_scheduled": [],
+    "tasks_couldnt_fit": [],
+    "stats": {}
+  }
+}
