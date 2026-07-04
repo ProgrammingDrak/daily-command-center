@@ -800,8 +800,23 @@ app.post("/api/ingest/day-state", async (req, res) => {
   merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
   delete merged.meetings_tomorrow;
   const { userId: ingestUserId, workspaceId: ingestWorkspaceId } = resolveOwnerLenient(req);
-  writeJSON(dayFile, merged); writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || merged.meetings || [] });
-  try { await blockDB.saveDccState(incoming.date, merged, ingestUserId, ingestWorkspaceId); } catch(e) { console.error("[dcc-state ingest] save failed:", e.message); }
+  // Postgres is the durable store (Railway's filesystem is ephemeral) -- its
+  // write must succeed or the caller must hear about it. The old shape wrote
+  // the JSON unguarded and swallowed a DB failure into console.error while
+  // returning ok:true, which is how file and DB silently diverged.
+  try {
+    await blockDB.saveDccState(incoming.date, merged, ingestUserId, ingestWorkspaceId);
+  } catch (e) {
+    console.error("[dcc-state ingest] db save FAILED:", e.message);
+    return res.status(500).json({ ok: false, error: "db save failed: " + e.message });
+  }
+  // JSON day files are the best-effort local mirror (offline record, fast reads).
+  try {
+    writeJSON(dayFile, merged);
+    writeJSON(DAY_STATE_FILE, { ...merged, meetings: incoming.meetings || merged.meetings || [] });
+  } catch (e) {
+    console.error("[dcc-state ingest] file mirror failed (db save succeeded):", e.message);
+  }
   broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, ingestWorkspaceId);
   res.json({ ok: true, date: incoming.date });
 });
@@ -866,21 +881,29 @@ app.post("/api/dcc/quick-task", async (req, res) => {
 // /api/dcc/refresh and /api/dcc/deep-sweep/ingest are allow-listed in
 // DCC_ENDPOINTS; until now they had no implementation, which is why the Brief
 // tab's refresh button was a dead end.
-function persistDccDay(date, merged, req, source) {
-  writeJSON(getDayFilePath(date), merged);
-  writeJSON(DAY_STATE_FILE, merged);
+async function persistDccDay(date, merged, req, source) {
+  // Same honesty contract as /api/ingest/day-state: the Postgres write is the
+  // durable one and THROWS on failure (callers' try/catch turns that into a
+  // 500 instead of the old silent console.error + ok:true). JSON mirror is
+  // best-effort.
   const { userId, workspaceId } = resolveOwnerLenient(req);
-  blockDB.saveDccState(date, merged, userId, workspaceId).catch((e) => console.error(`[${source}] db save failed:`, e.message));
+  await blockDB.saveDccState(date, merged, userId, workspaceId);
+  try {
+    writeJSON(getDayFilePath(date), merged);
+    writeJSON(DAY_STATE_FILE, merged);
+  } catch (e) {
+    console.error(`[${source}] file mirror failed (db save succeeded):`, e.message);
+  }
   broadcast("dcc-state-changed", { source, date }, workspaceId);
 }
 
-app.post("/api/dcc/deep-sweep/ingest", (req, res) => {
+app.post("/api/dcc/deep-sweep/ingest", async (req, res) => {
   try {
     const body = req.body || {};
     const date = body.date || (body.packet && body.packet.date) || new Date().toISOString().slice(0, 10);
     const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
     const nextState = dccIntelligence.ingestDeepSweepPacket({ date, state: existing, packet: body.packet || body, source: body.source });
-    persistDccDay(date, nextState, req, "deep-sweep-ingest");
+    await persistDccDay(date, nextState, req, "deep-sweep-ingest");
     res.json({ ok: true, date, packet_id: nextState.deep_sweep.last_packet_id, pages: (nextState.glymphatic_brief?.current?.pages || []).length });
   } catch (e) {
     console.error("[deep-sweep ingest] failed:", e);
@@ -888,13 +911,13 @@ app.post("/api/dcc/deep-sweep/ingest", (req, res) => {
   }
 });
 
-app.post("/api/dcc/triage-check/ingest", (req, res) => {
+app.post("/api/dcc/triage-check/ingest", async (req, res) => {
   try {
     const body = req.body || {};
     const date = body.date || (body.packet && body.packet.date) || getTodayStr();
     const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
     const nextState = dccIntelligence.ingestTriageCheckPacket({ date, state: existing, packet: body.packet || body });
-    persistDccDay(date, nextState, req, "triage-check-ingest");
+    await persistDccDay(date, nextState, req, "triage-check-ingest");
     const last = nextState.sweep?.last_triage_check || {};
     res.json({ ok: true, date, packet_id: last.id || null, attention_items: last.attention_items || 0, open_items: nextState.triage?.open_items?.length || 0 });
   } catch (e) {
@@ -907,7 +930,7 @@ app.post("/api/dcc/triage-check/ingest", (req, res) => {
 // durable day-state data. This is the seed of M2 actuals: every reviewed task
 // has a decision record even before outcome controls land. Morning scheduling
 // reads decisions to build the next day's itinerary.
-app.post("/api/dcc/brief/decision", (req, res) => {
+app.post("/api/dcc/brief/decision", async (req, res) => {
   try {
     const { date, task_id, action, time } = req.body || {};
     const VALID = new Set(["accept", "schedule", "backlog", "drop", "reset"]);
@@ -922,7 +945,7 @@ app.post("/api/dcc/brief/decision", (req, res) => {
     brief.decision_log = [...(brief.decision_log || []), { task_id, action, time: time || null, at }].slice(-200);
     state.last_updated_at = at;
     state.last_updated_by = "brief-decision";
-    persistDccDay(day, state, req, "brief-decision");
+    await persistDccDay(day, state, req, "brief-decision");
     res.json({ ok: true, date: day, task_id, action });
   } catch (e) {
     console.error("[brief decision] failed:", e);
@@ -975,7 +998,7 @@ app.post("/api/dcc/refresh", async (req, res) => {
     const date = (req.body && req.body.date) || readJSON(DAY_STATE_FILE, {}).date || new Date().toISOString().slice(0, 10);
     const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
     const { state: nextState } = await dccIntelligence.refreshDccState({ date, state: existing, dataDir: DATA_DIR });
-    persistDccDay(date, nextState, req, "dcc-refresh");
+    await persistDccDay(date, nextState, req, "dcc-refresh");
     res.json({ ok: true, date, state: nextState });
   } catch (e) {
     console.error("[dcc refresh] failed:", e);
