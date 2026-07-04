@@ -409,17 +409,11 @@ function toggleTagDropdown(containerEl, selected, onChange) {
   setTimeout(() => document.addEventListener('mousedown', onOutsideClick, true), 0);
 }
 
-// ── Escape HTML helper (may already exist globally, keep safe) ──
-// Canonical HTML-escaper for the whole client. Escapes the single quote too (it
-// matters inside single-quoted attributes) and treats null/undefined as "" so it
-// is a strict superset of the per-file esc() copies that now delegate here.
+// ── Escape HTML helper ──
+// Canonical implementation moved to core.js (DCC.esc) 2026-07-04. This shim
+// keeps the legacy global working until consumer-migration PRs retire it.
 function escHtml(str) {
-  return String(str == null ? "" : str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return window.DCC.esc(str);
 }
 
 // PIN 10.A: returns true if any delegated_item is linked to this tag.

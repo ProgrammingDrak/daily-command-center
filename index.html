@@ -1730,6 +1730,8 @@
 <div class="sync-bar" id="sync-bar"></div>
 
 
+<!-- core.js MUST load first: every later script may use window.DCC at parse time -->
+<script src="/public/js/core.js?v=core-1"></script>
 <script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>
 <script src="/public/js/persistence.js"></script>
