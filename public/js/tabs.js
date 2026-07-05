@@ -1,4 +1,38 @@
 // ======== TABS ========
+// Render registry: each tab names the function to run when it activates, in one
+// table instead of an if-ladder. A tab file can also self-register at load with
+// DCC.tabs.register("name", fn) -- both are consulted. Entries whose function
+// isn't defined are simply skipped (some tabs render statically).
+window.DCC = window.DCC || {};
+DCC.tabs = DCC.tabs || (function () {
+  const registry = {};
+  return {
+    register(name, fn) { registry[name] = fn; },
+    run(name) {
+      const fn = registry[name];
+      if (typeof fn === "function") { try { fn(); } catch (e) { console.error("[tab:" + name + "]", e); } }
+    },
+  };
+})();
+
+// Built-in renderers, resolved lazily by name (functions live in their own
+// files, loaded after this one). No entry = static tab, nothing to render.
+DCC.tabs.register("glymphatic", () => typeof buildGlymphaticBrief === "function" && buildGlymphaticBrief());
+DCC.tabs.register("pet-home", () => window.PetHome && typeof PetHome.render === "function" && PetHome.render());
+DCC.tabs.register("budget", () => typeof renderBudget === "function" && renderBudget());
+DCC.tabs.register("tasks", () => {
+  // PIN 9: mount the mini-month sidebar into the Task Menu split view. Cheap
+  // (string concat); picks up the current _gcalSidebarState each time.
+  if (typeof renderCalendarSidebar !== "function") return;
+  const m = document.getElementById("tm-cal-mount");
+  if (m) m.innerHTML = renderCalendarSidebar();
+});
+// These two had no top-bar button when the registry landed, so their entries
+// never fire today -- kept (harmless) rather than dropped, so re-adding a
+// button later Just Works.
+DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && buildCalendar());
+DCC.tabs.register("responsibilities", () => typeof renderResponsibilities === "function" && renderResponsibilities());
+
 document.querySelectorAll(".tab").forEach(tab=>{
   tab.addEventListener("click",()=>{
     if(tab.dataset.tab !== "slots" && typeof window.clearSlotCoinEffects === "function"){
@@ -7,19 +41,7 @@ document.querySelectorAll(".tab").forEach(tab=>{
     document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
     document.querySelectorAll(".tab-content").forEach(c=>c.classList.remove("active"));
     tab.classList.add("active");document.getElementById("tab-"+tab.dataset.tab).classList.add("active");
-    if(tab.dataset.tab==="calendar"&&typeof buildCalendar==="function"){buildCalendar();}
-    if(tab.dataset.tab==="glymphatic"&&typeof buildGlymphaticBrief==="function"){buildGlymphaticBrief();}
-    // PIN 9: mount the mini-month sidebar into the Task Menu split view
-    // whenever the user activates the tasks tab. Cheap (just string
-    // concatenation); picks up the current _gcalSidebarState from
-    // calendar-sidebar.js's async IIFE each time.
-    if(tab.dataset.tab==="tasks"&&typeof renderCalendarSidebar==="function"){
-      var _tmMount=document.getElementById("tm-cal-mount");
-      if(_tmMount)_tmMount.innerHTML=renderCalendarSidebar();
-    }
-    if(tab.dataset.tab==="pet-home"&&window.PetHome&&typeof window.PetHome.render==="function"){window.PetHome.render();}
-    if(tab.dataset.tab==="responsibilities"&&typeof renderResponsibilities==="function"){renderResponsibilities();}
-    if(tab.dataset.tab==="budget"&&typeof renderBudget==="function"){renderBudget();}
+    DCC.tabs.run(tab.dataset.tab);
   });
 });
 
