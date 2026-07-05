@@ -1614,7 +1614,7 @@ function beCheckOverlaps(){
   }
 }
 
-function esc(s){ return s.replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function esc(s){ return window.DCC.esc(s); } // was a 2-entity escaper; DCC.esc covers all five
 
 function beUpdate(idx, field, value){
   if(_beBlocks[idx]) _beBlocks[idx][field] = value;
