@@ -48,10 +48,7 @@
   }
 
   // ---- helpers ----------------------------------------------------------
-  function esc(s){
-    return String(s==null?"":s).replace(/[&<>"']/g, c=>({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  }
+  function esc(s) { return window.DCC.esc(s); } // delegates to core.js
   function bands(){ return config.necessities.concat(config.discretionary); }
   function total(){ return bands().reduce((s,b)=>s + (b.amount||0), 0); }
   function necessitiesTotal(){ return config.necessities.reduce((s,b)=>s+(b.amount||0),0); }

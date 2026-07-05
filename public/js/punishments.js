@@ -15,12 +15,7 @@
   let editingId = null;      // id being edited, or null for create
   let isSpinning = false;
 
-  async function api(path, opts) {
-    const res = await fetch(path, opts);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Punishment request failed");
-    return data;
-  }
+  function api(path, opts) { return window.DCC.api(path, { ...(opts||{}), errorLabel: "Punishment request failed" }); } // delegates to core.js
   function postJSON(path, body) {
     return api(path, {
       method: "POST",
@@ -28,9 +23,7 @@
       body: body ? JSON.stringify(body) : undefined,
     });
   }
-  function toast(msg, kind) {
-    if (typeof window.showToast === "function") window.showToast(msg, kind);
-  }
+  function toast(msg, kind) { return window.DCC.toast(msg, kind); } // delegates to core.js
   function esc(s) { return escHtml(s); } // shared escaper in tag-manager.js
   function el(id) { return document.getElementById(id); }
   function dollars(cents) { return fmtMoney(cents, { abs: true }); } // shared formatter in state.js

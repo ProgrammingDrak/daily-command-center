@@ -15,12 +15,7 @@
   // successful create the source scheduled task is removed so there's no duplicate.
   let _pendingSourceTaskId = null;
 
-  function esc(s) {
-    if (s == null) return "";
-    if (typeof escHtml === "function") return escHtml(String(s));
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
+  function esc(s) { return window.DCC.esc(s); } // delegates to core.js
 
   function getAllDelegatedItems() {
     if (!window.blockStore) return [];
@@ -427,9 +422,7 @@
     toast("Message copied; schedule picker is unavailable.", "info");
   }
 
-  function toast(message, type) {
-    if (typeof showToast === "function") showToast(message, type || "info");
-  }
+  function toast(message, type) { return window.DCC.toast(message, type); } // delegates to core.js
 
   function openDelegatedModal(idOrNull, prefill) {
     const overlay = document.getElementById("delegated-modal-overlay");

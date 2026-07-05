@@ -10,11 +10,7 @@
   let editingBacklogId = null;
   let editingTrivialId = null;
 
-  function esc(v){
-    return String(v == null ? "" : v).replace(/[&<>"']/g, ch => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-    }[ch]));
-  }
+  function esc(v) { return window.DCC.esc(v); } // delegates to core.js
 
   function saveUi(){
     try { localStorage.setItem(UI_KEY, JSON.stringify(state)); } catch(e) {}

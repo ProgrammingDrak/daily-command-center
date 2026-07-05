@@ -14,7 +14,7 @@
   const _expanded = new Set();
 
   function esc(s) { return escHtml(s); } // shared escaper in tag-manager.js
-  function toast(msg, kind) { if (typeof window.showToast === "function") window.showToast(msg, kind); }
+  function toast(msg, kind) { return window.DCC.toast(msg, kind); } // delegates to core.js
 
   function fmtDate(v) { return v ? String(v).slice(0, 10) : ""; }
   function fmtDateTime(v) {

@@ -1,11 +1,7 @@
 (function(){
   function $(id){ return document.getElementById(id); }
   function text(id, value){ var el = $(id); if (el) el.textContent = value; }
-  function esc(value){
-    return String(value == null ? "" : value).replace(/[&<>"']/g, function(ch){
-      return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch];
-    });
-  }
+  function esc(value) { return window.DCC.esc(value); } // delegates to core.js
   function fmtTime(value){
     if (!value) return "--";
     var date = new Date(value);
