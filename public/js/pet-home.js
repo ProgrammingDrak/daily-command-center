@@ -3,20 +3,10 @@
   let shareUrl=null;
   let loading=false;
 
-  function esc(value){
-    return String(value==null?"":value).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
-  }
+  function esc(value) { return window.DCC.esc(value); } // delegates to core.js
   function pct(value){ return Math.max(0,Math.min(100,Number(value)||0)); }
-  function api(path,opts){
-    return fetch(path,opts).then(async res=>{
-      const data=await res.json().catch(()=>({}));
-      if(!res.ok)throw new Error(data.error||"Pet Home request failed");
-      return data;
-    });
-  }
-  function toast(message,type,duration){
-    if(typeof showToast==="function")showToast(message,type||"success",duration||2400);
-  }
+  function api(path, opts) { return window.DCC.api(path, { ...(opts||{}), errorLabel: "Pet Home request failed" }); } // delegates to core.js
+  function toast(message,type,duration) { return window.DCC.toast(message,type,duration); } // delegates to core.js
   function petGlyph(base){
     return {sprout:"S",mossling:"M",moonpup:"P",pufflet:"F"}[base]||"S";
   }

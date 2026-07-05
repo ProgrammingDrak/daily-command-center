@@ -32,9 +32,7 @@
     return true;
   }
 
-  function esc(value){
-    return String(value == null ? "" : value).replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
-  }
+  function esc(value) { return window.DCC.esc(value); } // delegates to core.js
 
   function money(cents){
     const n = Number(cents) || 0;

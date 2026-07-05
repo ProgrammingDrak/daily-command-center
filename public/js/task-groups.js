@@ -14,11 +14,7 @@
   let _expanded = new Set();
   let _swapBlockId = null;
 
-  function esc(s){
-    if(s==null)return "";
-    return (typeof escHtml==="function")?escHtml(String(s)):String(s)
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-  }
+  function esc(s) { return window.DCC.esc(s); } // delegates to core.js
   function uid(prefix){ return prefix+"-"+Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4); }
   async function errMsg(res){
     try{ const d=await res.clone().json(); return d.error||d.message||res.statusText; }catch(e){}
@@ -29,7 +25,7 @@
     if(!res.ok)throw new Error(await errMsg(res));
     return res.status===204?null:res.json();
   }
-  function toast(msg,kind){ if(typeof showToast==="function")showToast(msg,kind||"success"); }
+  function toast(msg,kind) { return window.DCC.toast(msg,kind); } // delegates to core.js
   function viewDateStr(){
     if(typeof viewDate!=="undefined"&&viewDate)return viewDate;
     return (window.__DCC_STATE__&&window.__DCC_STATE__.date)||null;

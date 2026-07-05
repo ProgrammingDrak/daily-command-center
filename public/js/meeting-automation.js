@@ -2,13 +2,9 @@
   const cache = new Map();
   const loading = new Set();
 
-  function esc(s){
-    return String(s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
+  function esc(s) { return window.DCC.esc(s); } // delegates to core.js
 
-  function toast(msg,type){
-    if(typeof showToast==="function") showToast(msg,type||"success");
-  }
+  function toast(msg,type) { return window.DCC.toast(msg,type); } // delegates to core.js
 
   function cssId(id){
     if(window.CSS&&typeof CSS.escape==="function")return CSS.escape(id);

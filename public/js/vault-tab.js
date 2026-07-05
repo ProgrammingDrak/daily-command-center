@@ -18,12 +18,7 @@
   let selectedSlug = null;
   let cachedList = [];
 
-  function escapeHtml(s) {
-    if (s == null) return "";
-    return String(s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
+  function escapeHtml(s) { return window.DCC.esc(s); } // delegates to core.js
 
   function setStatusPill(status) {
     const pill = document.getElementById("vault-status-pill");

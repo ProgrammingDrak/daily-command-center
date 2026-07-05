@@ -11,9 +11,7 @@
   let commentsDate = "";
   let commentsLoading = null;
 
-  function esc(value){
-    return String(value == null ? "" : value).replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[ch]));
-  }
+  function esc(value) { return window.DCC.esc(value); } // delegates to core.js
 
   function money(cents){
     const n = Number(cents) || 0;
@@ -21,16 +19,9 @@
     return "$" + (n / 100).toFixed(n % 100 ? 2 : 0);
   }
 
-  async function api(path, options){
-    const res = await fetch(path, options);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Todo share request failed");
-    return data;
-  }
+  function api(path, options) { return window.DCC.api(path, { ...(options||{}), errorLabel: "Todo share request failed" }); } // delegates to core.js
 
-  function toast(message, type){
-    if (typeof showToast === "function") showToast(message, type || "success", 2600);
-  }
+  function toast(message, type) { return window.DCC.toast(message, type); } // delegates to core.js
 
   function reactionTitleKey(value){
     return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();

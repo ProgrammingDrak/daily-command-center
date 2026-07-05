@@ -10,11 +10,7 @@
   let _sidebarExpanded = new Set();
   let _captureEditor = null;
 
-  function esc(s){
-    if(s==null)return "";
-    return (typeof escHtml==="function"?escHtml(String(s)):String(s)
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"));
-  }
+  function esc(s) { return window.DCC.esc(s); } // delegates to core.js
 
   // Delegates to the shared urgency helper (window.urgency) so responsibilities
   // and blocked items color-code identically. See public/js/urgency.js.

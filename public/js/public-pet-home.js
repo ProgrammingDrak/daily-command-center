@@ -1,18 +1,11 @@
 (function(){
   const slug=location.pathname.split("/").filter(Boolean).pop();
   let state=null;
-  function esc(value){
-    return String(value==null?"":value).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
-  }
+  function esc(value) { return window.DCC.esc(value); } // delegates to core.js
   function pct(value){return Math.max(0,Math.min(100,Number(value)||0));}
   function petGlyph(base){return {sprout:"S",mossling:"M",moonpup:"P",pufflet:"F"}[base]||"S";}
   function accessoryGlyph(accessory){return {bandana:"◇",hat:"^",necklace:"o",flower:"*"}[accessory]||"";}
-  async function api(path,opts){
-    const res=await fetch(path,opts);
-    const data=await res.json().catch(()=>({}));
-    if(!res.ok)throw new Error(data.error||"Pet Home is unavailable");
-    return data;
-  }
+  function api(path, opts) { return window.DCC.api(path, { ...(opts||{}), errorLabel: "Pet Home is unavailable" }); } // delegates to core.js
   function setError(message){
     document.getElementById("public-pet-content").hidden=true;
     const err=document.getElementById("public-pet-error");
