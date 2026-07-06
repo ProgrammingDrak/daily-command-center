@@ -1,0 +1,73 @@
+/* core-ui.css — styles for the DCC.modal / DCC.sheet primitives (core-ui.js).
+ * Uses the design tokens from tokens.css. The bottom sheet is derived from the
+ * proven .dur-sheet (slide-up, safe-area padding, reduced-motion guard). */
+
+.dcc-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(2, 6, 23, 0.55);
+  display: flex; justify-content: center;
+  opacity: 0; transition: opacity 0.2s ease;
+}
+.dcc-overlay.open { opacity: 1; }
+
+/* modal: centered dialog */
+.dcc-overlay--modal { align-items: center; padding: var(--sp-4); }
+.dcc-modal {
+  width: 100%; max-width: 520px; max-height: 88vh; overflow: auto;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: var(--sp-4);
+  transform: translateY(8px) scale(0.98);
+  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.dcc-overlay--modal.open .dcc-modal { transform: none; }
+
+/* sheet: bottom slide-up (mobile-first) */
+.dcc-overlay--sheet { align-items: flex-end; }
+.dcc-sheet {
+  width: 100%; max-width: 520px; max-height: 88vh; overflow: auto;
+  background: var(--card); border: 1px solid var(--border); border-bottom: none;
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5);
+  padding: var(--sp-3) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom)) var(--sp-4);
+  transform: translateY(100%);
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.dcc-overlay--sheet.open .dcc-sheet { transform: translateY(0); }
+.dcc-sheet-handle {
+  width: 38px; height: 4px; border-radius: var(--r-full);
+  background: var(--border); margin: var(--sp-1) auto var(--sp-3);
+}
+
+/* shared chrome */
+.dcc-overlay-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-3); margin-bottom: var(--sp-3);
+}
+.dcc-overlay-title { font-size: var(--fs-lg); font-weight: 800; color: var(--text); }
+.dcc-overlay-close {
+  flex: 0 0 auto; width: 32px; height: 32px; border-radius: var(--r-md);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-muted); font-size: 20px; line-height: 1; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dcc-overlay-close--floating { position: absolute; top: var(--sp-3); right: var(--sp-3); }
+.dcc-overlay-close:hover { color: var(--text); border-color: var(--text-muted); }
+.dcc-overlay-body { color: var(--text); font-size: var(--fs-md); }
+.dcc-overlay-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); }
+.dcc-overlay-btn {
+  flex: 1; height: 46px; border-radius: var(--r-lg);
+  font-size: var(--fs-base); font-weight: 800; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.dcc-overlay-btn--secondary { border: 1px solid var(--border); background: transparent; color: var(--text-muted); }
+.dcc-overlay-btn--primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+
+/* touch: the close button is a comfortable target on phones */
+@media (max-width: 760px) {
+  .dcc-overlay-close { width: 40px; height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dcc-overlay, .dcc-modal, .dcc-sheet { transition: none; }
+}
