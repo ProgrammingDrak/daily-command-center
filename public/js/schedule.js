@@ -94,13 +94,22 @@ function persistAddedTask(item,targetDate){
 // After recalcTimes changes positions (e.g. drag reorder), sync blockstore added_task blocks
 function syncAddedTaskTimes(){
   if(!window.USE_BLOCKSTORE||!window.USE_BLOCKSTORE.addedTasks||!window.blockStore)return;
-  // Match the date filter in reloadPersistedEdits — otherwise we'd rewrite start/end on blocks from other days.
+  // Match the date + foldability filters in reloadPersistedEdits — otherwise we'd
+  // rewrite start/end on blocks from other days. Startless blocks (API inserts /
+  // untimed rows) are included so a drag out of the Unscheduled section persists
+  // its newly assigned time; rows still sitting in that section are skipped below.
   const currentDate=window.blockStore.getCurrentDate();
-  const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).local_id&&(b.properties||{}).start&&(!b.date||b.date===currentDate))];
+  const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>{
+    const p=b.properties||{};
+    if(p.kind&&/^responsibility/.test(p.kind))return false;
+    if(!p.local_id&&p.kind!=="task")return false;
+    return !b.date||b.date===currentDate;
+  })];
   addedBlocks.forEach(block=>{
     const p=block.properties||{};
-    const ev=scheduled.find(e=>e.id===p.local_id);
+    const ev=scheduled.find(e=>e.id===(p.local_id||block.id));
     if(!ev)return;
+    if(ev.untimed)return; // still unscheduled: keep the block startless
     if(p.start!==ev.start||p.end!==ev.end){
       window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end});
     }

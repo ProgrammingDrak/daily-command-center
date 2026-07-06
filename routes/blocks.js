@@ -905,8 +905,10 @@ app.post("/api/delegated-items", async (req, res) => {
       return res.status(400).json({ error: "properties required" });
     }
     const props = { ...body.properties, kind: "delegated_item" };
-    if (!props.title || typeof props.title !== "string" || !props.title.trim()) {
-      return res.status(400).json({ error: "properties.title required" });
+    // The slimmed modal anchors items on myTask; title survives for legacy items.
+    const named = v => typeof v === "string" && v.trim();
+    if (!named(props.title) && !named(props.myTask)) {
+      return res.status(400).json({ error: "properties.title or properties.myTask required" });
     }
     const created = await blockDB.createBlock({
       type: "block",
