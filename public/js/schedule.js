@@ -1289,8 +1289,9 @@ function markDoneOnDate(id, date){
 }
 
 // undoLast() and resetAll() removed Phase 6 -- both broken; see features.js.
-// actionLog still populated by log() because sync.js builds the "Copy for Claude"
-// activity report from it (sync.js:5-15) -- that path is alive.
+// actionLog still populated by log() because updateSync() renders the header
+// activity summary ("N done · N adj") from it (sync.js) -- that path is alive.
+// (The Copy-for-Claude button that also read actionLog was removed 2026-07.)
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");
