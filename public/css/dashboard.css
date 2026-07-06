@@ -4313,7 +4313,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .it-list-item:not(.subtask-row) .it-list-check{grid-column:1 !important}
   .it-list-item:not(.subtask-row) .it-list-main{grid-column:2 !important;min-width:0}
   .it-list-item:not(.subtask-row) .it-list-actions{grid-column:3 !important;margin-top:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;justify-content:center !important}
-  .it-list-actions .notes-btn,.it-list-actions .btn-push-tmr,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task{display:none !important}
+  .it-list-actions .notes-btn,.it-list-actions .btn-push-tmr,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task,.it-list-actions .dbtn,.it-list-actions .btn-delegated,.it-list-actions .btn-lock,.it-list-actions .btn-repeat-resp{display:none !important}
   /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
   .tab-title,#qa-title,.resched-date-input{font-size:16px}
   .subtask-add-pop{padding:8px}
