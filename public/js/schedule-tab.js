@@ -163,7 +163,11 @@ function buildListView(){
     const changed=original&&dur(ev)!==original;
     const bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null;
     const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
-    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'';
+    // Always emit a leading cell (button when expandable, else a spacer) so every
+    // row has the same child count and lands in the same grid columns. Without the
+    // spacer, expandable rows had one extra leading child that overflowed the
+    // fixed-column grid -- shoving the title right and wrapping actions to a 2nd line.
+    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>';
     const el=document.createElement("div");
     el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";

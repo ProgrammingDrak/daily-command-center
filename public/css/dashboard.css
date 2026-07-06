@@ -1289,7 +1289,7 @@
   .it-list-controls{display:flex;justify-content:flex-end;gap:6px;margin:2px 0 0}
   .it-list-ctrl-btn{background:none;border:1px solid var(--border);color:var(--text-muted);cursor:pointer;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:3px 9px;border-radius:6px;transition:background 0.12s,border-color 0.12s,color 0.12s}
   .it-list-ctrl-btn:hover{background:var(--card-hover);border-color:rgba(148,163,184,0.32);color:var(--text)}
-  .it-list-item{position:relative;display:grid;grid-template-columns:34px 18px 28px 3px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:58px;padding:9px 11px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:background 0.12s,border-color 0.12s,opacity 0.2s,transform 0.12s}
+  .it-list-item{position:relative;display:grid;grid-template-columns:16px 34px 18px 28px 3px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:58px;padding:9px 11px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:background 0.12s,border-color 0.12s,opacity 0.2s,transform 0.12s}
   .it-list-item:hover{background:var(--card-hover);border-color:rgba(148,163,184,0.32)}
   .it-list-item.movable{cursor:grab}
   .it-list-item.dragging{opacity:0.35}
@@ -1320,7 +1320,7 @@
   .it-list-actions .pomo-btn:hover,
   .it-list-actions .btn-del-task:hover{opacity:1}
   @media(max-width:760px){
-    .it-list-item{grid-template-columns:24px 18px 28px 3px minmax(0,1fr);align-items:flex-start}
+    .it-list-item{grid-template-columns:16px 24px 18px 28px 3px minmax(0,1fr);align-items:flex-start}
     .it-list-actions{grid-column:5;justify-content:flex-start;margin-top:6px}
     .it-list-rank{padding-top:7px}
   }
@@ -4316,6 +4316,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .it-list-item:not(.subtask-row){grid-template-columns:auto minmax(0,1fr) auto !important;align-items:center !important;gap:8px !important;min-height:0 !important}
   .it-list-item:not(.subtask-row) .it-list-rank,
   .it-list-item:not(.subtask-row) .it-list-grip,
+  .it-list-item:not(.subtask-row)>.wrap-collapse,
+  .it-list-item:not(.subtask-row)>.wrap-collapse-spacer,
   .it-list-item:not(.subtask-row)>.bar{display:none !important}
   .it-list-item:not(.subtask-row) .it-list-check{grid-column:1 !important}
   .it-list-item:not(.subtask-row) .it-list-main{grid-column:2 !important;min-width:0}
