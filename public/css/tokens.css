@@ -1,0 +1,50 @@
+/* tokens.css — the design-token layer. Loaded BEFORE dashboard.css so every
+ * rule can reference these, and so future PRs migrate hard-coded px values to
+ * tokens block-by-block (the "boy-scout" rule in ARCHITECTURE.md).
+ *
+ * PURE ADDITIVE: this file only DEFINES variables. Nothing consumes them yet,
+ * so it changes zero pixels on its own. Root font-size stays at the browser
+ * default (100%), so the ~1000 existing `font-size:NNpx` rules render
+ * identically until a later PR converts a given block to --fs-*.
+ *
+ * Colors are re-declared here (mirroring dashboard.css :root) so tokens.css is
+ * the single home for the design system; dashboard.css keeps its own :root for
+ * now to avoid a cascade surprise, and the two are kept in sync by hand until
+ * the color block is migrated too.
+ */
+:root {
+  /* Type scale — rem-based (root = 16px). Body copy is --fs-md. clamp() only on
+   * the two heading sizes so they breathe on wide screens without turning every
+   * label fluid. */
+  --fs-xs: 0.75rem;    /* 12px — badges, meta, timestamps */
+  --fs-sm: 0.8125rem;  /* 13px — secondary text, list rows */
+  --fs-md: 0.875rem;   /* 14px — default body */
+  --fs-base: 1rem;     /* 16px — inputs (iOS no-zoom floor), emphasis */
+  --fs-lg: 1.125rem;   /* 18px — card titles */
+  --fs-xl: clamp(1.25rem, 1.1rem + 0.6vw, 1.5rem);   /* section headings */
+  --fs-2xl: clamp(1.5rem, 1.2rem + 1.2vw, 2rem);     /* page / hero headings */
+
+  /* Spacing — 4px base scale. */
+  --sp-1: 0.25rem;   /* 4  */
+  --sp-2: 0.5rem;    /* 8  */
+  --sp-3: 0.75rem;   /* 12 */
+  --sp-4: 1rem;      /* 16 */
+  --sp-5: 1.25rem;   /* 20 */
+  --sp-6: 1.5rem;    /* 24 */
+  --sp-8: 2rem;      /* 32 */
+  --sp-10: 2.5rem;   /* 40 */
+
+  /* Radius. */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-full: 9999px;
+
+  /* Breakpoints are documented here as the canonical set (used in @media by
+   * hand; CSS custom props can't drive media queries):
+   *   480px  small phone
+   *   760px  the mobile boundary (matches mobile-shell.js MOBILE_QUERY)
+   *   1024px desktop
+   * New responsive rules use these three; don't add ad-hoc values. */
+}
