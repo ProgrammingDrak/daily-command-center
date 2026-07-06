@@ -421,29 +421,9 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
   return { ...(await getAutomation(blockId, workspaceId)), approvedCount: created.length, approvedBlocks: created };
 }
 
-async function runMorning(date, { workspaceId, userId }) {
-  const blocks = await blockDB.getBlocksByDate(date, workspaceId);
-  const meetings = blocks.filter(b => {
-    const p = propsOf(b);
-    return p && (p.source === "gcal" || p.type === "meeting" || p.type === "oneone" || p.gcal_event_id || p.source_id);
-  });
-  const results = [];
-  for (const meeting of meetings) {
-    const artifacts = await loadArtifacts(meeting.id, workspaceId);
-    if (newestByKind(artifacts, "meeting_prep")) {
-      results.push({ blockId: meeting.id, title: titleOf(meeting), status: "already_prepped" });
-      continue;
-    }
-    await generatePrep(meeting.id, { workspaceId, userId });
-    results.push({ blockId: meeting.id, title: titleOf(meeting), status: "prep_generated" });
-  }
-  return { date, meetingCount: meetings.length, results };
-}
-
 module.exports = {
   getAutomation,
   generatePrep,
   ingestTranscript,
   approveActions,
-  runMorning,
 };
