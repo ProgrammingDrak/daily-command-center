@@ -1298,6 +1298,21 @@
   .it-list-item.active{box-shadow:inset 3px 0 0 var(--accent)}
   .it-list-item.done{opacity:0.62}
   .it-list-item.done .ttl{text-decoration:line-through}
+  /* Completed top-level rows shrink + grey in place (inline, in their schedule
+     slot) instead of moving to a bottom Done section: hide the meta line, the
+     action buttons, and the color bar so each is a slim struck-through line.
+     The check stays (to un-complete). Subtask done rows are already compact. */
+  .it-list-item.done:not(.subtask-row){min-height:0;padding:5px 11px;opacity:0.5}
+  /* Hide meta + actions to shrink. NOT the .bar -- it's grid column 5, and
+     display:none-ing a grid item shifts later items into its track (collapsed
+     the title into the 3px bar column). visibility:hidden keeps the track. */
+  .it-list-item.done:not(.subtask-row) .it-list-meta,
+  .it-list-item.done:not(.subtask-row) .it-list-actions{display:none}
+  .it-list-item.done:not(.subtask-row)>.bar{visibility:hidden}
+  /* single struck-through line: drop the source/privacy/tag chips too, keep .ttl */
+  .it-list-item.done:not(.subtask-row) .it-list-title-row{gap:0}
+  .it-list-item.done:not(.subtask-row) .it-list-title-row > *:not(.ttl){display:none}
+  .it-list-item.done:not(.subtask-row) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .it-list-item.pushed{opacity:0.72}
   .it-list-rank{font-size:12px;font-weight:800;color:var(--text-muted);font-variant-numeric:tabular-nums;text-align:right}
   .it-list-grip{opacity:0.34}
