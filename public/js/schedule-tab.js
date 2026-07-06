@@ -1029,9 +1029,9 @@ function _actualMin(ev){
   return dur(ev);
 }
 const REMAINING_STAT_SCOPE_KEY="pa-remaining-stat-scope";
-function _remainingStatScope(){
-  try{return localStorage.getItem(REMAINING_STAT_SCOPE_KEY)==="block"?"block":"day";}catch(e){return"day";}
-}
+// Time-block containers removed 2026-07 -> remaining stats are always day-scoped.
+// (Kept the fn so its many call sites are untouched; toggle is now a no-op.)
+function _remainingStatScope(){ return "day"; }
 function _setRemainingStatScope(scope){
   try{localStorage.setItem(REMAINING_STAT_SCOPE_KEY,scope==="block"?"block":"day");}catch(e){}
 }
@@ -1158,13 +1158,8 @@ function _dayPointSummary(){
   };
 }
 function toggleRemainingStatScope(event){
+  // No-op since time-block containers were removed (stats are day-scoped).
   if(event)event.stopPropagation();
-  const next=_remainingStatScope()==="block"?"day":"block";
-  _setRemainingStatScope(next);
-  const popover=document.getElementById("stat-popover");
-  if(popover){popover.style.display="none";popover.dataset.openFor="";}
-  document.querySelectorAll(".stat.sp-open").forEach(el=>el.classList.remove("sp-open"));
-  updateStats();
 }
 function updateStats(){
   const done=scheduled.filter(isDone), scope=_remainingStatScope(), rem=_remainingForScope(scope);
@@ -1178,23 +1173,13 @@ function updateStats(){
   const pointAvailEl=document.getElementById("s-points-available");
   if(pointEl)pointEl.textContent=pointSummary.earned+" / "+pointSummary.scheduledPoints;
   if(pointAvailEl)pointAvailEl.textContent="Available: "+pointSummary.availableToMax+" pts";
-  document.getElementById("s-block").textContent=getCurrentBlockEnd();
+  const sBlock=document.getElementById("s-block");
+  if(sBlock)sBlock.textContent=getCurrentBlockEnd();
   _updateRemainingStatLabels(scope);
 }
-function getCurrentBlockEnd(){
-  const blocks=(__state&&__state.schedule&&__state.schedule.blocks)||[];
-  if(!blocks.length){
-    if(scheduled.length) return f12(scheduled[scheduled.length-1].end).replace(" ","").toLowerCase();
-    return "--";
-  }
-  const now=new Date();
-  const nowMin=now.getHours()*60+now.getMinutes();
-  for(const b of blocks){
-    const bStart=pt(b.start),bEnd=pt(b.end);
-    if(nowMin>=bStart&&nowMin<bEnd) return f12(b.end).replace(" ","").toLowerCase();
-  }
-  return "Done";
-}
+// Block Ends stat tile removed 2026-07 (time-block containers gone). Kept the
+// fn as a guarded no-op in case a stale reference calls it.
+function getCurrentBlockEnd(){ return "--"; }
 
 // ======== STAT POPOVERS ========
 function showStatPopover(statId, event) {

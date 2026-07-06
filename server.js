@@ -925,7 +925,7 @@ app.listen(PORT, async () => {
   try { await slotStore.ensureSchema(); } catch (e) { console.error("[slots] Schema error:", e.message); }
 
   try { ensureSkeletonDays(); } catch (e) {}
-  try { await seedScheduleBlocksFromYAML(defaultUserId, `ws-${defaultUserId}`); } catch(e) {}
+  // Time-block containers (Morning Work/Lunch/etc.) removed 2026-07 -- no longer seeded.
   try { const purged = await blockDB.purgeSoftDeleted(30); if (purged > 0) console.log(`[Purge] Startup: removed ${purged}`); } catch(e) {}
 
   setInterval(() => { try { ensureSkeletonDays(); } catch (e) {} }, 6 * 60 * 60 * 1000);
