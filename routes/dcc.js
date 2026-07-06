@@ -3,9 +3,9 @@
 // module.exports(app, ctx) pattern; every dependency comes from ctx.
 module.exports = function mount(app, ctx) {
   const {
-    DAY_STATE_FILE, DATA_DIR, blockDB, broadcast, buildSkeletonState,
+    DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
     dccIntelligence, getDayFilePath, getTodayStr, isValidDate, previousDateStr,
-    pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, writeJSON,
+    pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, scoreTaskPoints, writeJSON,
   } = ctx;
 
   app.post("/api/ingest/day-state", async (req, res) => {
