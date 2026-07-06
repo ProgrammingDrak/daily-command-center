@@ -1302,17 +1302,22 @@
      slot) instead of moving to a bottom Done section: hide the meta line, the
      action buttons, and the color bar so each is a slim struck-through line.
      The check stays (to un-complete). Subtask done rows are already compact. */
-  .it-list-item.done:not(.subtask-row){min-height:0;padding:5px 11px;opacity:0.5}
-  /* Hide meta + actions to shrink. NOT the .bar -- it's grid column 5, and
-     display:none-ing a grid item shifts later items into its track (collapsed
-     the title into the 3px bar column). visibility:hidden keeps the track. */
+  /* Completed rows collapse to nearly subtask size (11px, tight padding, tiny
+     check) -- greyed + struck, staying in their schedule slot. Keep the grid
+     intact: only meta + actions (last col) are display:none'd; grip + bar use
+     visibility:hidden so their tracks hold (display:none on a middle grid child
+     shifts later items into its track -- that's what collapsed the title). */
+  .it-list-item.done:not(.subtask-row){min-height:0;padding:1px 8px;opacity:0.5;font-size:11px;line-height:1.4;gap:6px}
   .it-list-item.done:not(.subtask-row) .it-list-meta,
   .it-list-item.done:not(.subtask-row) .it-list-actions{display:none}
+  .it-list-item.done:not(.subtask-row) .it-list-grip,
   .it-list-item.done:not(.subtask-row)>.bar{visibility:hidden}
-  /* single struck-through line: drop the source/privacy/tag chips too, keep .ttl */
+  .it-list-item.done:not(.subtask-row) .it-list-rank{font-size:10px}
+  .it-list-item.done:not(.subtask-row) .it-list-check{width:14px;height:14px;min-width:14px}
+  /* single struck-through line: drop the source/privacy/tag chips, keep .ttl */
   .it-list-item.done:not(.subtask-row) .it-list-title-row{gap:0}
   .it-list-item.done:not(.subtask-row) .it-list-title-row > *:not(.ttl){display:none}
-  .it-list-item.done:not(.subtask-row) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .it-list-item.done:not(.subtask-row) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:500}
   .it-list-item.pushed{opacity:0.72}
   .it-list-rank{font-size:12px;font-weight:800;color:var(--text-muted);font-variant-numeric:tabular-nums;text-align:right}
   .it-list-grip{opacity:0.34}
