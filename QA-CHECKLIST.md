@@ -2,6 +2,22 @@
 
 Comprehensive verification that all features work after the migration to local repo.
 
+## Automated preamble (run first)
+
+Before working through the manual checklist, run the scripted smoke test against
+a running local server (`npm start` on :3987, then in another shell):
+
+```
+npm run smoke              # or: node scripts/smoke.mjs [baseURL] [user] [pass]
+```
+
+It logs in, loads the app, and asserts: `window.DCC` core present; every top-bar
+tab activates + renders; `DCC.modal`/`DCC.sheet` open and Escape-close; no
+horizontal overflow at 375px on any tab; no app-code console errors (JS
+exceptions or failed `/public/` asset loads — API/SSE transport noise is out of
+scope). Exit 0 = green. Run it before merging any UI PR; it captures ~90% of the
+manual checks below in a few seconds.
+
 ---
 
 ## 1. SCHEDULE MANAGEMENT
