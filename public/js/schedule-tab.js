@@ -271,22 +271,29 @@ function buildListView(){
     wrap.appendChild(controls);
   }
 
+  // One unified list in schedule order: open AND done inline (done rows shrink
+  // + grey in place, staying in their time slot -- not yanked to a bottom
+  // "Done" section). Pushed stays its own section. Numbering counts only
+  // top-level rows (subtasks render under their parent and take no number), so
+  // the ranks read 1,2,3,4 with no gaps.
+  const mainItems=visible.filter(ev=>!isPushed(ev)&&!(isDone(ev)&&isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
   section("Work list",activeIds.size);
-  if(!openItems.length){
+  if(!mainItems.length){
     const empty=document.createElement("div");
     empty.className="it-list-empty";
-    empty.textContent=viewDate===((typeof _actualTodayStr==="function")?_actualTodayStr():viewDate)?"Nothing open for today.":"Nothing open on this day.";
+    empty.textContent=viewDate===((typeof _actualTodayStr==="function")?_actualTodayStr():viewDate)?"Nothing scheduled for today.":"Nothing scheduled on this day.";
     wrap.appendChild(empty);
   }else{
-    flattenSchedule(openItems).forEach((node,idx)=>wrap.appendChild(emitNode(node,idx,"open")));
+    let rank=0;
+    flattenSchedule(mainItems).forEach(node=>{
+      const isSub=node.rel==="subtask";
+      const displayIdx=isSub?0:rank++;            // only non-subtasks consume a number
+      wrap.appendChild(emitNode(node,displayIdx,isDone(node.ev)?"done":"open"));
+    });
   }
   if(pushedItems.length){
     section("Pushed",pushedItems.length);
     pushedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"pushed")));
-  }
-  if(doneItems.length){
-    section("Done",doneItems.length);
-    flattenSchedule(doneItems).forEach((node,idx)=>wrap.appendChild(emitNode(node,idx,"done")));
   }
 }
 
