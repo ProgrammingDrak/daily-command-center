@@ -226,8 +226,7 @@
     <span class="source-dot" style="background:var(--purple)"></span> Notion Kanban
     <span style="margin-left:auto">
       <span class="sched-view-toggle" id="sched-view-toggle">
-        <button class="svt-btn active" data-view="plan">Blocks</button>
-        <button class="svt-btn" data-view="list">List</button>
+        <button class="svt-btn active" data-view="list">List</button>
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
       <button class="ma-morning-btn" id="ma-morning-btn" type="button" title="Generate prep for today's meetings">Morning prep</button>
@@ -237,8 +236,8 @@
   <!-- The Itinerary add-task bar moved into the bottom-right "+" launcher (tap = compose,
        hold = radial with Start timer / Add task / Give feedback / Catch up). See launcher.js. -->
   <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
-  <div class="tl" id="timeline"></div>
-  <div id="list-view" class="it-list-view" style="display:none"></div>
+  <div class="tl" id="timeline" style="display:none"></div>
+  <div id="list-view" class="it-list-view"></div>
   <div id="actual-view" style="display:none"></div>
 </div>
 
