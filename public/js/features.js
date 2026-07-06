@@ -1216,7 +1216,7 @@ function _persistTaskTitle(taskId, newTitle) {
 
 // Check if any modal/overlay is currently open
 function _anyModalOpen() {
-  var overlays = document.querySelectorAll('.done-modal-overlay.open, .add-modal-overlay.open, .del-confirm-overlay.open, .sn-overlay.open, .notes-drawer-overlay.open, .overflow-modal-overlay.open, .delegated-modal-overlay.open');
+  var overlays = document.querySelectorAll('.done-modal-overlay.open, .add-modal-overlay.open, .del-confirm-overlay.open, .sn-overlay.open, .notes-drawer-overlay.open, .delegated-modal-overlay.open');
   return overlays.length > 0;
 }
 
@@ -1259,13 +1259,7 @@ function _updateTaskMenusBadge(){
 }
 
 // ======== BUTTONS ========
-document.getElementById("btn-copy").addEventListener("click",function(){
-  const t=buildClip();if(!t)return;
-  navigator.clipboard.writeText(t).then(()=>{
-    const b=document.getElementById("btn-copy");b.classList.add("copied");b.textContent="Copied!";
-    setTimeout(()=>{b.classList.remove("copied");b.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> Copy for Claude'},2000)
-  });
-});
+// Copy-for-Claude button removed 2026-07 (obsolete). btn-copy + buildClip gone.
 // btn-undo and btn-reset removed Phase 6 -- both were broken-but-wired:
 // undoLast() handled only 3 of 8 actionLog types; resetAll() wiped `scheduled`
 // without touching BlockStore / pushedSet / deletedSet, leaving inconsistent UI.

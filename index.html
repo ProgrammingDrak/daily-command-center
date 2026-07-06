@@ -141,10 +141,6 @@
          The Copy-for-Claude button + activity summary are preserved here. -->
     <div class="sync-section" id="sync-section" style="display:flex;align-items:center;gap:8px">
       <div class="sync-sum" id="sync-sum" style="font-size:10px;color:var(--text-muted)"></div>
-      <button class="sbtn sbtn-copy" id="btn-copy" title="Copy activity log for Claude">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
-        Copy
-      </button>
     </div>
     <div class="time-now"><div class="clock" id="clock">--:--</div><div id="tz-label">--</div></div>
   </div>
@@ -222,13 +218,11 @@
     <button class="fb-open-timer" id="fb-open-timer" title="Open timer panel">⏱</button>
   </div>
   <div class="source-row">
-    <span class="source-dot" style="background:var(--purple)"></span> Notion Kanban
     <span style="margin-left:auto">
       <span class="sched-view-toggle" id="sched-view-toggle">
         <button class="svt-btn active" data-view="list">List</button>
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
-      <button class="ma-morning-btn" id="ma-morning-btn" type="button" title="Generate prep for today's meetings">Morning prep</button>
       <span class="sched-drag-hint" style="margin-left:10px">Drag to reorder &middot; +/- to adjust time &middot; Check to complete</span>
     </span>
   </div>
@@ -763,38 +757,6 @@
   </div>
 </div>
 
-<!-- Overflow modal -->
-<div class="overflow-modal-overlay" id="overflow-modal-overlay">
-  <div class="overflow-modal">
-    <div class="overflow-modal-hdr">
-      <h3>Schedule overflow</h3>
-      <button class="pvb-close" id="overflow-modal-close">&times;</button>
-    </div>
-    <div class="overflow-modal-body">
-      <div class="overflow-new-task" id="overflow-new-task"></div>
-      <div class="overflow-deficit" id="overflow-deficit"></div>
-      <!-- Pending new task section — shown only when overflow is triggered by quick-add -->
-      <div id="overflow-pending-section" style="display:none">
-        <div class="overflow-pending-label">New task — can't fit today:</div>
-        <div class="overflow-task-row overflow-task-row--pending">
-          <input type="checkbox" class="overflow-task-chk" id="overflow-pending-chk" data-id="" data-dur=""
-            onchange="updateOverflowDeficit();this.closest('.overflow-task-row').classList.toggle('checked',this.checked)" />
-          <span class="overflow-task-title" id="overflow-pending-title"></span>
-          <span class="overflow-task-dur" id="overflow-pending-dur"></span>
-          <span class="overflow-task-time overflow-task-time--muted">→ push to tomorrow</span>
-        </div>
-        <div class="overflow-pending-divider"></div>
-        <div class="overflow-pending-sub">Or free up time by pushing existing tasks below:</div>
-      </div>
-      <div class="overflow-modal-sub" id="overflow-modal-sub">Check tasks to push to tomorrow until you've freed enough time.</div>
-      <div id="overflow-task-list"></div>
-    </div>
-    <div class="overflow-modal-footer">
-      <button class="overflow-btn-late" id="overflow-work-late">I'm working late</button>
-      <button class="overflow-btn-push" id="overflow-push-btn" disabled>Push selected to tomorrow</button>
-    </div>
-  </div>
-</div>
 
 <!-- Schedule-at picker: 2-step — pick a day, then a time ("After…") -->
 <div class="sched-picker-overlay" id="sched-picker-overlay">

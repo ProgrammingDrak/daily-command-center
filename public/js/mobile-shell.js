@@ -85,7 +85,6 @@
     { label:"Share list",       icon:"🔗", find(){ return byId("todo-share-open"); } },
     { label:"Refresh reactions",icon:"🔄", find(){ return byId("todo-reactions-toggle"); } },
     { label:"Sticky Notes",     icon:"📌", find(){ return byId("sn-open-btn"); } },
-    { label:"Copy for Claude",  icon:"📋", find(){ return byId("btn-copy"); } },
     { label:"Replay tutorial",  icon:"🎓", find(){ return byId("dcc-replay-tutorial"); } },
     { label:"Sign out",         icon:"⏻", find(){ return byId("dcc-sign-out"); } }
   ];

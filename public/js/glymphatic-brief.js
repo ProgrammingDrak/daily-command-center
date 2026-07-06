@@ -276,7 +276,6 @@
     if(typeof persistAddedTask === "function")persistAddedTask(newItem);
     gbMarkPushed(task.id);
     if(typeof log === "function")log("scheduled", id, "Glymphatic: " + task.title);
-    if(typeof checkOverflow === "function")checkOverflow();
     if(typeof render === "function")render();
     buildGlymphaticBrief();
     if(typeof showToast === "function")showToast("Added to itinerary at " + (typeof f12 === "function" ? f12(item.start) : item.start), "success");

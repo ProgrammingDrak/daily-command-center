@@ -151,23 +151,6 @@
     }
   },true);
 
-  document.addEventListener("DOMContentLoaded",()=>{
-    const morning=document.getElementById("ma-morning-btn");
-    if(morning){
-      morning.addEventListener("click",async e=>{
-        e.stopPropagation();
-        const date=(window.__DCC_STATE__&&window.__DCC_STATE__.date)||new Date().toISOString().slice(0,10);
-        morning.disabled=true;morning.textContent="Prepping...";
-        try{
-          const result=await postJson('/api/automation/morning?date='+encodeURIComponent(date),{});
-          cache.clear();
-          refreshMeetingAutomationPanels();
-          toast("Morning prep checked "+result.meetingCount+" meeting"+(result.meetingCount===1?"":"s"));
-        }catch(err){toast(err.message||"Morning prep failed","error")}
-        finally{morning.disabled=false;morning.textContent="Morning prep";}
-      });
-    }
-  });
 
   window.meetingAutomationPanelHtml=meetingAutomationPanelHtml;
   window.refreshMeetingAutomationPanels=refreshMeetingAutomationPanels;

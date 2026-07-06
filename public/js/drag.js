@@ -163,7 +163,10 @@ function recalcTimes(){
     return;
   }
 
-  const active=scheduled.filter(ev=>!isDone(ev)&&!isDeleted(ev));
+  // Untimed tasks (no start; e.g. Slack-bookmark inserts) are excluded from the
+  // cascade -- they live in the Unscheduled section, not the timeline, so they
+  // must not consume a time slot or shift real tasks.
+  const active=scheduled.filter(ev=>!isDone(ev)&&!isDeleted(ev)&&!ev.untimed);
   if(!active.length)return;
 
   // Pass 1: place pinned/locked tasks at their pinned start and add them to the

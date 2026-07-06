@@ -12,167 +12,6 @@ let EOD = (function(){
   return pt("17:30");
 })();
 
-let _overflowDeficit = 0;
-let _overflowItems = [];
-let _pendingNewTask = null; // task staged for add but not yet committed to scheduled
-
-function checkOverflow(){
-  // Only show overflow for today and tomorrow — archives are read-only, no point alerting
-  if(typeof viewMode !== "undefined" && viewMode === "archive") return;
-
-  // Find the last scheduled end time among non-done, non-pushed TASK items only.
-  // Meetings are immovable — their end times should never count as user-controllable overflow.
-  const active = scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev));
-  const taskActive = active.filter(ev=>!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break");
-  const lastEnd = taskActive.reduce((max,ev)=>Math.max(max,pt(ev.end)),0);
-  const overflow = lastEnd - EOD;
-  if(overflow <= 0){
-    const ov=document.getElementById("overflow-modal-overlay");
-    if(ov&&ov.classList.contains("open"))closeOverflowModal();
-    return;
-  }
-  openOverflowModal(overflow);
-}
-
-function openOverflowModal(deficitMinutes){
-  _overflowDeficit = deficitMinutes;
-  // Show ALL remaining tasks (not meetings/ooo), excluding any pending task (shown separately)
-  _overflowItems = scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev)&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break"
-    &&(!_pendingNewTask||ev.id!==_pendingNewTask.id));
-
-  const _overflowLabel = (typeof viewMode === "undefined" || viewMode === "today")
-    ? "today's schedule"
-    : (typeof dateToDisplay === "function" && typeof viewDate !== "undefined")
-      ? dateToDisplay(viewDate) + "'s schedule"
-      : "this day's schedule";
-  const _overflowSub = (typeof viewMode !== "undefined" && viewMode === "tomorrow")
-    ? "Check tasks to push out until you've freed enough time."
-    : "Check tasks to push to tomorrow until you've freed enough time.";
-  document.getElementById("overflow-new-task").textContent = "Need to free " + ms(deficitMinutes) + " to fit " + _overflowLabel;
-
-  // Show or hide the pending new task section
-  const pendingSection = document.getElementById("overflow-pending-section");
-  if(_pendingNewTask && pendingSection){
-    pendingSection.style.display = "";
-    document.getElementById("overflow-pending-title").textContent = _pendingNewTask.title;
-    document.getElementById("overflow-pending-dur").textContent = ms(dur(_pendingNewTask));
-    const chk = document.getElementById("overflow-pending-chk");
-    chk.dataset.id = _pendingNewTask.id;
-    chk.dataset.dur = String(dur(_pendingNewTask));
-    chk.checked = false;
-    // Hide the generic sub-text when pending section has its own explanation
-    document.getElementById("overflow-modal-sub").style.display = "none";
-  } else {
-    if(pendingSection) pendingSection.style.display = "none";
-    document.getElementById("overflow-modal-sub").textContent = _overflowSub;
-    document.getElementById("overflow-modal-sub").style.display = "";
-  }
-
-  const list=document.getElementById("overflow-task-list");
-  list.innerHTML=_overflowItems.map(ev=>
-    '<div class="overflow-task-row" data-row-id="'+ev.id+'">'+
-      '<input type="checkbox" class="overflow-task-chk" data-id="'+ev.id+'" data-dur="'+dur(ev)+'" onchange="updateOverflowDeficit();this.closest(\'.overflow-task-row\').classList.toggle(\'checked\',this.checked)" />'+
-      '<span class="overflow-task-title">'+ev.title+'</span>'+
-      '<span class="overflow-task-dur">'+ms(dur(ev))+'</span>'+
-      '<span class="overflow-task-time">'+f12(ev.start).replace(" ","").toLowerCase()+'</span>'+
-    '</div>'
-  ).join('');
-
-  document.getElementById("overflow-push-btn").disabled = true;
-  updateOverflowDeficit();
-  document.getElementById("overflow-modal-overlay").classList.add("open");
-}
-
-function updateOverflowDeficit(){
-  const checked=[...document.querySelectorAll(".overflow-task-chk:checked")];
-  const freed=checked.reduce((sum,el)=>sum+parseInt(el.dataset.dur||"0"),0);
-  const remaining=Math.max(0,_overflowDeficit-freed);
-  const el=document.getElementById("overflow-deficit");
-  if(remaining===0){
-    el.textContent="\u2714 Ready \u2014 all time accounted for";
-    el.className="overflow-deficit satisfied";
-  } else {
-    el.textContent=remaining+" min still needed";
-    el.className="overflow-deficit";
-  }
-  document.getElementById("overflow-push-btn").disabled=(remaining>0);
-}
-
-function closeOverflowModal(){
-  document.getElementById("overflow-modal-overlay").classList.remove("open");
-  _overflowDeficit=0;
-  _overflowItems=[];
-  _pendingNewTask=null; // discard any uncommitted task — nothing added to schedule
-  // A task committed by a non-urgent path (e.g. the Schedule picker) before the
-  // overflow check triggered would have queued a deferred render while this
-  // modal was open. Flush it now that the modal is closed so the task actually
-  // appears on the timeline.
-  if(typeof _flushDeferredRender==='function')_flushDeferredRender();
-}
-
-function pushSelectedToTomorrow(){
-  const pendingChk = document.getElementById("overflow-pending-chk");
-  const pushPendingTask = pendingChk && pendingChk.checked;
-
-  // IDs of checked existing tasks (exclude the pending task checkbox — handled separately)
-  const pendingId = _pendingNewTask ? _pendingNewTask.id : null;
-  const checked = [...document.querySelectorAll(".overflow-task-chk:checked")]
-    .map(el=>el.dataset.id)
-    .filter(id=>id!==pendingId);
-
-  if(!checked.length && !pushPendingTask && !_pendingNewTask){ closeOverflowModal(); return; }
-
-  if(_pendingNewTask && !pushPendingTask){
-    // User didn't push the new task -- commit it (they freed up enough room via other pushes)
-    const item = (({_insertAt,...rest})=>rest)(_pendingNewTask);
-    const insertAt = _pendingNewTask._insertAt;
-    scheduled.splice(insertAt, 0, item);
-    recalcTimes();
-    if(item._pinnedStart){const pins=loadPinnedStarts();pins[item.id]=item._pinnedStart;savePinnedStarts(pins);}
-    persistAddedTask(item);
-    const pending=loadPendingTasks();
-    pending.push({id:item.id,title:item.title,priority:"High",source_task:"Urgent bar",
-      source_task_id:"urgent",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
-    savePendingTasks(pending);
-    log("scheduled",item.id,"Quick-added: "+item.title);
-  }
-  // Push selected existing tasks
-  checked.forEach(id=>pushTask(id));
-  closeOverflowModal();
-  recalcTimes();
-  render();
-}
-
-function workLateOverflow(){
-  // Commit the pending new task first (working late means we want it today)
-  if(_pendingNewTask){
-    const item = (({_insertAt,...rest})=>rest)(_pendingNewTask);
-    const insertAt = _pendingNewTask._insertAt;
-    scheduled.splice(insertAt, 0, item);
-    recalcTimes();
-    if(item._pinnedStart){const pins=loadPinnedStarts();pins[item.id]=item._pinnedStart;savePinnedStarts(pins);}
-    persistAddedTask(item);
-    const pending=loadPendingTasks();
-    pending.push({id:item.id,title:item.title,priority:"High",source_task:"Urgent bar",
-      source_task_id:"urgent",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
-    savePendingTasks(pending);
-    log("scheduled",item.id,"Quick-added (late): "+item.title);
-  }
-  // Push any checked existing items
-  const pendingId = _pendingNewTask ? _pendingNewTask.id : null;
-  [...document.querySelectorAll(".overflow-task-chk:checked")]
-    .filter(el=>el.dataset.id!==pendingId)
-    .forEach(el=>pushTask(el.dataset.id));
-  // Extend EOD by remaining deficit
-  const freed=[...document.querySelectorAll(".overflow-task-chk:checked")]
-    .filter(el=>el.dataset.id!==pendingId)
-    .reduce((sum,el)=>sum+parseInt(el.dataset.dur||"0"),0);
-  const remaining=_overflowDeficit-freed;
-  if(remaining>0){ EOD += remaining; }
-  closeOverflowModal();
-  recalcTimes();
-  render();
-}
 
 // ======== QUICK ADD (inline schedule insertion) ========
 let ADDED_KEY = "pa-added-tasks-" + ((__state && __state.date) ? __state.date : "unknown");
@@ -303,27 +142,22 @@ function insertTaskNow(titleArg, durMinArg, opts){
   scheduled.splice(scheduled.indexOf(newItem), 1);
   recalcTimes(); // restore cascade without the new item
 
-  if(simulatedEnd <= EOD){
-    // Fits -- commit for real
-    scheduled.splice(insertAt, 0, newItem);
-    recalcTimes();
-    const pins=loadPinnedStarts();pins[id]=startStr;savePinnedStarts(pins);
-    persistAddedTask(newItem);
-    const pending=loadPendingTasks();
-    pending.push({id,title,priority:"High",source_task:"Task bar",
-      source_task_id:"taskbar",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
-    savePendingTasks(pending);
-    log("scheduled",id,"Quick-added at "+startStr+": "+title);
-    render();
-    checkBlockWarnings(newItem);
-    if(typeof opts.onScheduled==="function"){
-      try{opts.onScheduled({localId:id,blockId:id,start:startStr,dateStr:(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null});}catch(e){}
-    }
-  } else {
-    // Doesn't fit -- stage as pending and open overflow modal (task NOT in scheduled yet)
-    _pendingNewTask = {...newItem, _insertAt: insertAt};
-    const deficit = simulatedEnd - EOD;
-    openOverflowModal(deficit);
+  // Always commit the task. (The old overflow-modal detour that staged a
+  // "doesn't fit" task and asked you to push things to tomorrow was removed
+  // 2026-07 -- tasks just get added; the day can run long.)
+  scheduled.splice(insertAt, 0, newItem);
+  recalcTimes();
+  const pins=loadPinnedStarts();pins[id]=startStr;savePinnedStarts(pins);
+  persistAddedTask(newItem);
+  const pending=loadPendingTasks();
+  pending.push({id,title,priority:"High",source_task:"Task bar",
+    source_task_id:"taskbar",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
+  savePendingTasks(pending);
+  log("scheduled",id,"Quick-added at "+startStr+": "+title);
+  render();
+  checkBlockWarnings(newItem);
+  if(typeof opts.onScheduled==="function"){
+    try{opts.onScheduled({localId:id,blockId:id,start:startStr,dateStr:(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null});}catch(e){}
   }
 }
 
@@ -340,7 +174,7 @@ function insertTaskFromDrawer(title, durMin, opts){
   scheduled.splice(insertAt, 0, newItem);
   persistAddedTask(newItem);
   recalcTimes();
-  checkOverflow();
+  
   log("scheduled",id,"Drawer-added: "+title);
   render();
   checkBlockWarnings(newItem);
@@ -620,7 +454,7 @@ function adjustDur(id,delta){
   const s=pt(ev.start);ev.end=String(Math.floor((s+n)/60)).padStart(2,"0")+":"+String((s+n)%60).padStart(2,"0");
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
-  recalcTimes();checkOverflow();saveDurChanges();render()
+  recalcTimes();saveDurChanges();render()
 }
 function setDurAbsolute(id,newMin){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
@@ -629,7 +463,7 @@ function setDurAbsolute(id,newMin){
   const s=pt(ev.start);ev.end=fmt(s+n);
   if(ev.meta)ev.meta=ev.meta.replace(/·\s*\d+h?\s*\d*m?/,"· "+ms(n));
   durChanges[id]={original:origDur(id)||c,current:n};log("duration",id,c+"->"+n);
-  recalcTimes();checkOverflow();saveDurChanges();render()
+  recalcTimes();saveDurChanges();render()
 }
 // ======== START TIME ADJUSTMENT ========
 function openStartTimePicker(id, anchorEl){
@@ -661,14 +495,14 @@ function pinStartTime(id,timeStr){
   ev.start=timeStr;ev.end=fmt(s+d);
   const pins=loadPinnedStarts(); pins[id]=timeStr; savePinnedStarts(pins);
   log("pin-start",id,"Pinned start to "+timeStr);
-  recalcTimes();checkOverflow();render();
+  recalcTimes();render();
 }
 function unpinStartTime(id){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
   delete ev._pinnedStart;
   const pins=loadPinnedStarts(); delete pins[id]; savePinnedStarts(pins);
   log("unpin-start",id,"Removed start pin");
-  recalcTimes();checkOverflow();render();
+  recalcTimes();render();
 }
 
 // ======== TASK LOCK ========
@@ -700,7 +534,7 @@ function toggleLock(id){
     log("lock",id,"Locked at "+ev.start+": "+ev.title);
   }
   saveLockedSet([...set]);
-  recalcTimes();checkOverflow();render();
+  recalcTimes();render();
 }
 // Apply persisted locks to in-memory schedule items (called on boot + date switch).
 function hydrateLockedTasks(){
@@ -720,7 +554,7 @@ function addToSchedule(blId){
   if(fromBacklog)deleteBacklogBlock(blId);
   // Persist as a scheduled block so the move survives reload (the backlog block is gone now).
   if(typeof persistAddedTask==="function")persistAddedTask(newItem);
-  recalcTimes();checkOverflow();log("scheduled",task.id,"Added: "+task.title);render()
+  recalcTimes();log("scheduled",task.id,"Added: "+task.title);render()
 }
 function addFollowupToSchedule(fu,parentId){
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
@@ -732,7 +566,7 @@ function addFollowupToSchedule(fu,parentId){
   if(parent&&parent.followups){parent.followups=parent.followups.filter(f=>f.id!==fu.id)}
   // Persist so the followup-as-scheduled-task survives reload (parity with insertTaskNow / addToSchedule).
   if(typeof persistAddedTask==="function")persistAddedTask(newItem);
-  recalcTimes();checkOverflow();log("scheduled",fu.id,"Action item: "+fu.title);render()
+  recalcTimes();log("scheduled",fu.id,"Action item: "+fu.title);render()
 }
 // ======== BACKLOG PERSISTENCE ========
 // Backlog items live in window.blockStore as type="block" with kind="backlog".
@@ -1046,7 +880,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
       status:"scheduled",_scheduled:true});
     savePendingTasks(pending);
     log("scheduled",id,"Scheduled at "+timeStr+": "+title);
-    checkOverflow();render();
+    render();
     checkBlockWarnings(newItem);
     if(typeof options.onScheduled==="function"){
       try{options.onScheduled({localId:id,blockId:id,start:timeStr,dateStr});}catch(e){}
@@ -1289,8 +1123,9 @@ function markDoneOnDate(id, date){
 }
 
 // undoLast() and resetAll() removed Phase 6 -- both broken; see features.js.
-// actionLog still populated by log() because sync.js builds the "Copy for Claude"
-// activity report from it (sync.js:5-15) -- that path is alive.
+// actionLog still populated by log() because updateSync() renders the header
+// activity summary ("N done · N adj") from it (sync.js) -- that path is alive.
+// (The Copy-for-Claude button that also read actionLog was removed 2026-07.)
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");

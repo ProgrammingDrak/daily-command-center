@@ -56,19 +56,5 @@ app.post("/api/meetings/:blockId/actions/approve", async (req, res) => {
   }
 });
 
-app.post("/api/automation/morning", async (req, res) => {
-  try {
-    const date = req.query.date || getTodayStr();
-    if (!isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
-    const result = await meetingAutomation.runMorning(date, {
-      workspaceId: req.workspaceId,
-      userId: req.session.userId,
-    });
-    broadcast("blocks-changed", { action: "meeting-morning-prep", date }, req.workspaceId);
-    res.json(result);
-  } catch (e) {
-    res.status(e.statusCode || 500).json({ error: e.message });
-  }
-});
 
 };

@@ -375,57 +375,10 @@ app.post("/api/blocks/:id/reschedule", async (req, res) => {
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
 });
 
-// ── Quick task: drop a single task straight onto a day's itinerary ──
-// Token/localhost-authed (it's in DCC_ENDPOINTS) so the /dcc-task skill can add
-// a task on demand without a browser session. Creates a unified `block` carrying
-// local_id + pinned start, exactly like the in-app "added task" shape, so it
-// renders on the timeline immediately.
-function nextQuarterHourLocal() {
-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: APP_TIME_ZONE, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
-  const h = Number(parts.find(p => p.type === "hour").value);
-  const m = Number(parts.find(p => p.type === "minute").value);
-  let total = Math.ceil((h * 60 + m + 1) / 15) * 15;       // next quarter, ≥1 min ahead
-  if (total > 24 * 60 - 15) total = 24 * 60 - 15;
-  return String(Math.floor(total / 60)).padStart(2, "0") + ":" + String(total % 60).padStart(2, "0");
-}
-app.post("/api/dcc/quick-task", validate(schemas.quickTask), async (req, res) => {
-  try {
-    const b = req.body || {};
-    const title = String(b.title || "").trim();
-    if (!title) return res.status(400).json({ error: "title required" });
-    const dur = Math.max(5, parseInt(b.durationMinutes || b.duration || 30, 10) || 30);
-    const PRIO = { low: "Low", normal: "Normal", medium: "Medium", high: "High", urgent: "High" };
-    const priority = PRIO[String(b.priority || "").toLowerCase()] || "Medium";
-    const dateStr = (b.date && isValidDate(b.date)) ? b.date : getTodayStr();
-    const start = /^\d{1,2}:\d{2}$/.test(b.start || "") ? String(b.start).padStart(5, "0") : nextQuarterHourLocal();
-    const end = addMinutesHHMM(start, dur);
-
-    // Resolve the owner via the shared strict resolver (middleware/resolve-owner.js):
-    // session first, refuses to guess in production. Only intentional behavior
-    // change vs the old inline copy: a service-token call now uses the token's
-    // workspace before the env default (the old chain skipped dccServiceAuth
-    // for workspace -- drift, not design).
-    let userId, workspaceId;
-    try {
-      ({ userId, workspaceId } = await resolveOwnerStrict(req));
-    } catch (err) {
-      if (err.status === 400) return res.status(400).json({ error: err.message });
-      throw err;
-    }
-
-    const localId = "qt-" + Date.now().toString(36);
-    const tags = Array.isArray(b.tags) && b.tags.length ? b.tags : ["quick-task"];
-    const properties = {
-      local_id: localId, title, start, end, duration: dur,
-      priority, meta: "Quick task · " + dur + "m", detail: String(b.detail || ""),
-      source: "quick-task", tags, _pinnedStart: start, added_at: new Date().toISOString(),
-    };
-    await blockDB.ensureDayRoot(dateStr, userId, workspaceId);
-    const block = await blockDB.createBlock({ type: "block", date: dateStr, properties, sort_order: 0, user_id: userId, workspace_id: workspaceId });
-    broadcast("blocks-changed", { action: "create", blockIds: [block.id] }, workspaceId);
-    res.json({ ok: true, id: block.id, date: dateStr, start, end, title, priority, durationMinutes: dur });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
+// Quick-task route removed from blocks.js 2026-07: it duplicated (and shadowed)
+// the richer handler in routes/dcc.js, which preserves source_id / notes /
+// idempotency_key (needed for the Slack-bookmark deeplink + dedup). dcc.js is
+// now the single POST /api/dcc/quick-task handler.
 
 // ── Responsibilities API ──
 app.get("/api/responsibilities", async (req, res) => {

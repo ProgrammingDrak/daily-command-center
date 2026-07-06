@@ -11,50 +11,6 @@ function updateSync(){
   if(reorders)p.push('<span class="ch">reorder</span>');if(adds)p.push('<span class="ch">'+adds+" added</span>");
   sum.innerHTML=p.join(" &middot; ");
 }
-function buildClip(){
-  if(!actionLog.length)return"";
-  let t="Daily Command Center Sync -- "+new Date().toLocaleString("en-US",{hour:"numeric",minute:"2-digit",hour12:true})+"\n\n";
-  const checked=scheduled.filter(ev=>manualDone.has(ev.id));
-  if(checked.length){t+="COMPLETED:\n";checked.forEach(ev=>{t+="- "+ev.title+" ("+f12(ev.start)+" - "+f12(ev.end)+")"+(ev.notionUrl?" [Notion: "+ev.notionUrl+"]":"")+"\n"});t+="\n"}
-  const dk=Object.keys(durChanges);
-  if(dk.length){t+="DURATION CHANGES:\n";dk.forEach(id=>{const ev=scheduled.find(e=>e.id===id)||{title:id};const dc=durChanges[id];t+="- "+ev.title+": "+dc.original+"min -> "+dc.current+"min\n"});t+="\n"}
-  const orig=INIT_SCHED.map(e=>e.id).join(","),cur=scheduled.map(e=>e.id).join(",");
-  if(orig!==cur){t+="REORDERED SCHEDULE:\n";scheduled.forEach((ev,i)=>{t+=(i+1)+". "+ev.title+" ("+f12(ev.start)+" - "+f12(ev.end)+")\n"});t+="\n"}
-  const added=scheduled.filter(ev=>!INIT_SCHED.find(o=>o.id===ev.id));
-  if(added.length){t+="NEWLY SCHEDULED:\n";added.forEach(ev=>{t+="- "+ev.title+" ("+dur(ev)+"min)"+(ev.notionUrl?" [Notion: "+ev.notionUrl+"]":"")+"\n"});t+="\n"}
-  const allFu=scheduled.flatMap(ev=>(ev.followups||[]).map(f=>({...f,from:ev.title})));
-  if(allFu.length){t+="UNSCHEDULED ACTION ITEMS:\n";allFu.forEach(f=>{t+="- "+f.title+" (from: "+f.from+")"+(f.href?" [Notion: "+f.href+"]":"")+"\n"});t+="\n"}
-  if(consider.length){t+="CONSIDER FOR TODAY (not yet scheduled):\n";consider.forEach(b=>{t+="- "+b.title+" ("+b.durMin+"min, "+b.priority+" priority)"+(b.notionUrl?" [Notion: "+b.notionUrl+"]":"")+"\n"});t+="\n"}
-  if(backlog.length){t+="STILL IN BACKLOG:\n";backlog.forEach(b=>{t+="- "+b.title+" ("+b.durMin+"min, "+b.stage+")"+(b.notionUrl?" [Notion: "+b.notionUrl+"]":"")+"\n"});t+="\n"}
-  // Include action items from triage, consider, and backlog cards
-  const allActions=loadActions();
-  const triageActionIds=INIT_TRIAGE.map(i=>i.id).filter(id=>allActions[id]&&allActions[id].length);
-  const otherActionIds=[...consider.map(c=>c.id),...backlog.map(b=>b.id)].filter(id=>allActions[id]&&allActions[id].length);
-  const allItemActionIds=[...triageActionIds,...otherActionIds];
-  if(allItemActionIds.length){
-    t+="ACTION ITEMS FROM TRIAGE/BOARD:\n";
-    allItemActionIds.forEach(id=>{
-      const items=allActions[id].filter(a=>!a.done);
-      if(items.length){
-        const source=INIT_TRIAGE.find(i=>i.id===id)||consider.find(c=>c.id===id)||backlog.find(b=>b.id===id)||{title:id};
-        t+="  "+source.title+":\n";
-        items.forEach(a=>{t+="    - ["+a.priority+"] "+a.text+"\n"});
-      }
-    });
-    t+="\n";
-  }
-  // Include items needing review
-  const reviewed=loadReviewed();
-  const completionsData=(__state&&__state.completions&&__state.completions.tasks)||[];
-  const unreviewed=completionsData.filter(c=>c.needs_review&&!reviewed[c.task_id]);
-  if(unreviewed.length){
-    t+="NEEDS REVIEW (auto-completed):\n";
-    unreviewed.forEach(c=>{t+="- "+c.title+" -- "+c.evidence_summary+"\n"});
-    t+="\n";
-  }
-  t+="Please update Notion, close completed tasks, and note any duration changes.";
-  return t;
-}
 
 // ======== NOTES & ACTION ITEMS ========
 // Dual-mode: checks USE_BLOCKSTORE flags, falls back to localStorage

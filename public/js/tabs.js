@@ -587,7 +587,7 @@ function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
       scheduled.push(newItem);
       if(typeof persistAddedTask==="function")persistAddedTask(newItem);
     });
-    saveScheduleOrder();recalcTimes();checkOverflow();
+    saveScheduleOrder();recalcTimes();
   } else if(resolution==="grouped"){
     const id="st-grp-"+Date.now();
     const title=toProcess.map(s=>s.text).join(", ");
@@ -596,7 +596,7 @@ function executeSubtaskResolution(taskId, resolution, subIds, moveTargetId){
     const newItem={id,title:"Remaining: "+title,start:fmt(s),end:fmt(e),type:"task",meta:ms(d)+" · Grouped from: "+parentTitle,detail:"",source:"manual",priority:"Medium"};
     scheduled.push(newItem);
     if(typeof persistAddedTask==="function")persistAddedTask(newItem);
-    saveScheduleOrder();recalcTimes();checkOverflow();
+    saveScheduleOrder();recalcTimes();
   } else if(resolution==="move"&&moveTargetId){
     if(!all[moveTargetId])all[moveTargetId]=[];
     toProcess.forEach(st=>{

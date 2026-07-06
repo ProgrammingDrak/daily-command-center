@@ -670,10 +670,6 @@ function saveDeletedTriage(ids){
 }
 
 // Wire up overflow modal
-document.getElementById("overflow-modal-close").addEventListener("click", closeOverflowModal);
-document.getElementById("overflow-work-late").addEventListener("click", workLateOverflow);
-document.getElementById("overflow-push-btn").addEventListener("click", pushSelectedToTomorrow);
-document.getElementById("overflow-modal-overlay").addEventListener("click", e=>{ if(e.target===e.currentTarget) closeOverflowModal(); });
 
 // Wire up unified done modal
 document.getElementById("done-modal-close").addEventListener("click", closeDoneModal);
