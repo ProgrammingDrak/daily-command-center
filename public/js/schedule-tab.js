@@ -154,6 +154,15 @@ function buildListView(){
     return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
   }
 
+  // Jump-to-source link for API-inserted tasks whose source_id is a URL (e.g.
+  // the Slack-bookmark poller stores the message permalink). Opens in a new tab.
+  function sourceJumpLink(ev){
+    const url=ev&&ev.source_id;
+    if(!url||!/^https?:\/\//.test(url))return "";
+    const label=/slack\.com/.test(url)?"Slack":"Source";
+    return '<a class="src-jump" href="'+escHtml(url)+'" target="_blank" rel="noopener" title="Open source ('+label+')" onclick="event.stopPropagation()">'+label+' ↗</a>';
+  }
+
   function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
     const isPushedRow=mode==="pushed";
@@ -181,11 +190,11 @@ function buildListView(){
       '<button class="chk it-list-check'+(isDoneRow?' on':'')+'" title="'+(isDoneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
       '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
       '<div class="it-list-main">'+
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+srcTag(ev.source)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
         '<div class="it-list-meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           '<span>'+ms(dur(ev))+'</span>'+
-          '<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
+          (ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')+
           (ev._locked?'<span class="it-list-lock">Locked</span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
@@ -276,7 +285,12 @@ function buildListView(){
   // "Done" section). Pushed stays its own section. Numbering counts only
   // top-level rows (subtasks render under their parent and take no number), so
   // the ranks read 1,2,3,4 with no gaps.
-  const mainItems=visible.filter(ev=>!isPushed(ev)&&!(isDone(ev)&&isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
+  // Untimed tasks (no start -- e.g. API/Slack inserts with no scheduled time)
+  // get their own section at the bottom instead of being dropped or forced to
+  // 00:00 in the timeline.
+  const untimedItems=visible.filter(ev=>ev.untimed&&!isPushed(ev)&&!isDone(ev)&&!isSubtask(ev));
+  const untimedIds=new Set(untimedItems.map(e=>e.id));
+  const mainItems=visible.filter(ev=>!isPushed(ev)&&!untimedIds.has(ev.id)&&!(isDone(ev)&&isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
   section("Work list",activeIds.size);
   if(!mainItems.length){
     const empty=document.createElement("div");
@@ -290,6 +304,10 @@ function buildListView(){
       const displayIdx=isSub?0:rank++;            // only non-subtasks consume a number
       wrap.appendChild(emitNode(node,displayIdx,isDone(node.ev)?"done":"open"));
     });
+  }
+  if(untimedItems.length){
+    section("Unscheduled",untimedItems.length);
+    untimedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
   }
   if(pushedItems.length){
     section("Pushed",pushedItems.length);

@@ -1296,6 +1296,8 @@
   .it-list-item.drag-over-top{border-top:2px solid var(--accent)}
   .it-list-item.drag-over-bottom{border-bottom:2px solid var(--accent)}
   .it-list-item.active{box-shadow:inset 3px 0 0 var(--accent)}
+  .src-jump{font-size:10px;font-weight:700;color:var(--cyan);text-decoration:none;border:1px solid var(--cyan);border-radius:5px;padding:0 6px;line-height:1.6;flex:none;opacity:0.85}
+  .src-jump:hover{opacity:1;background:var(--cyan-bg)}
   .it-list-item.done{opacity:0.62}
   .it-list-item.done .ttl{text-decoration:line-through}
   /* Completed top-level rows shrink + grey in place (inline, in their schedule

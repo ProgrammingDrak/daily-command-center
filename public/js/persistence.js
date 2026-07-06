@@ -234,13 +234,26 @@ function reloadPersistedEdits() {
       // Filter by date: loadGlobals() pulls every type="block" row regardless of date,
       // so without this check manual tasks from other days bleed onto today's schedule.
       const currentDate=window.blockStore.getCurrentDate();
-      const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>(b.properties||{}).local_id&&(b.properties||{}).start&&(!b.date||b.date===currentDate))];
+      // Fold task-shaped "block" rows into the itinerary. Admit a row with a
+      // local_id (UI quick-add / proposals) OR kind==="task" (API inserts like
+      // the Slack-bookmark poller, which have no local_id). Never fold
+      // responsibility scaffolding. Startless tasks are admitted too -> they land
+      // in the Unscheduled section instead of being dropped. (Previously required
+      // local_id AND start, which silently dropped every API-inserted task.)
+      const isFoldableTask=b=>{
+        const p=b.properties||{};
+        if(p.kind&&/^responsibility/.test(p.kind))return false;
+        if(!p.local_id&&p.kind!=="task")return false;
+        return (!b.date||b.date===currentDate);
+      };
+      const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)];
       addedBlocks.forEach(block=>{
         const p=block.properties||{};
-        const taskId=p.local_id;
+        const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
         if(!taskId||scheduled.find(e=>e.id===taskId))return;
-        const d=p.duration||30;
+        const d=p.duration||p.estimatedMinutes||30;
         const hasStoredTime=p.start&&p.start!=="00:00";
+        const untimed=!p.start;              // no scheduled time -> Unscheduled section
         const task={
           id:taskId,title:p.title,type:p.type||"task",
           _blockId:block.id,
@@ -248,6 +261,7 @@ function reloadPersistedEdits() {
           end:p.end||fmt(d),
           meta:p.meta||("Custom task \u00b7 "+ms(d)),
           detail:p.detail||"",source:p.source||"manual",
+          source_id:p.source_id||"",notes:p.notes||"",untimed:untimed,
           notionUrl:p.notionUrl||"",calUrl:p.calUrl||"",priority:p.priority||"High",
           tags:Array.isArray(p.tags)?p.tags:[],
           kind:p.kind||"",
