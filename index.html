@@ -967,8 +967,6 @@
         <option value="">— Type a new task below —</option>
       </select>
       <input type="text" id="dm-my-task" class="delegated-modal-input" maxlength="200" placeholder="Ship the Q2 review deck" />
-      <label class="delegated-modal-label">Who you're waiting on</label>
-      <input type="text" id="dm-delegatee-name" class="delegated-modal-input" maxlength="100" placeholder="Alice Carter" />
       <label class="delegated-modal-label">Check-in</label>
       <input type="hidden" id="dm-check-in-mode" value="date" />
       <div class="dm-checkin-toggle" role="tablist">
@@ -989,13 +987,8 @@
           <span class="dm-hint">days &middot; urgency resets each check-in</span>
         </div>
       </div>
-      <label class="delegated-modal-label">Notes</label>
-      <div class="dm-notes-group">
-        <span class="dm-sublabel">What you're waiting on<span class="dm-req">*</span></span>
-        <input type="text" id="dm-title" class="delegated-modal-input" maxlength="200" placeholder="Final numbers from finance" />
-        <span class="dm-sublabel">Context / background</span>
-        <textarea id="dm-notes" class="delegated-modal-input" rows="3" maxlength="1000" placeholder="Anything else worth remembering"></textarea>
-      </div>
+      <label class="delegated-modal-label">Context / background</label>
+      <textarea id="dm-notes" class="delegated-modal-input" rows="3" maxlength="1000" placeholder="Who, what you're waiting on and anything else worth remembering"></textarea>
       <div class="delegated-modal-actions">
         <button type="button" class="secondary" id="dm-cancel">Cancel</button>
         <button type="button" class="secondary" id="dm-mark-checked" style="display:none">Mark as checked-in</button>

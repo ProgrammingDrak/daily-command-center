@@ -647,9 +647,9 @@
   .ttl{font-size:14px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:inline-block;vertical-align:bottom}
   .ttl:hover{white-space:normal;overflow:visible;position:relative;z-index:5;background:var(--card-hover);padding:2px 4px;border-radius:4px}
   .tinline{font-size:11px;color:var(--text-muted);font-variant-numeric:tabular-nums}
-  .tinline .start-time{cursor:pointer;border-bottom:1px dashed var(--border);transition:all 0.12s}
-  .tinline .start-time:hover{color:var(--accent-light);border-color:var(--accent)}
-  .tinline .start-time.pinned{color:var(--amber);border-color:var(--amber)}
+  .tinline .start-time,.it-list-meta .start-time{cursor:pointer;border-bottom:1px dashed var(--border);transition:all 0.12s}
+  .tinline .start-time:hover,.it-list-meta .start-time:hover{color:var(--accent-light);border-color:var(--accent)}
+  .tinline .start-time.pinned,.it-list-meta .start-time.pinned{color:var(--amber);border-color:var(--amber)}
   .start-time-popover{position:fixed;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px;box-shadow:0 8px 24px rgba(0,0,0,0.45);z-index:9999;display:flex;flex-direction:column;gap:6px;min-width:150px}
   .start-time-popover input[type="time"]{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-size:13px;font-family:inherit;outline:none;width:100%}
   .start-time-popover input[type="time"]:focus{border-color:var(--accent)}
@@ -1024,9 +1024,9 @@
   .tl-compact.pushed .tl-time{text-decoration:none}
   .pushed-divider{display:flex;align-items:center;gap:10px;margin:12px 0 6px;font-size:10px;font-weight:600;color:var(--amber,#f59e0b);text-transform:uppercase;letter-spacing:0.5px}
   .pushed-divider::before,.pushed-divider::after{content:'';flex:1;border-top:1px solid rgba(245,158,11,0.2)}
-  .btn-move-menu,.btn-del-task,.btn-triv-link,.btn-push-tmr,.btn-bounty,.btn-repeat-resp,.btn-delegated{position:relative}
-  .btn-move-menu::after,.btn-del-task::after,.btn-triv-link::after,.btn-push-tmr::after,.btn-bounty::after,.btn-repeat-resp::after,.btn-delegated::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
-  .btn-move-menu:hover::after,.btn-del-task:hover::after,.btn-triv-link:hover::after,.btn-push-tmr:hover::after,.btn-bounty:hover::after,.btn-repeat-resp:hover::after,.btn-delegated:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
+  .btn-move-menu,.btn-del-task,.btn-triv-link,.btn-push-tmr,.btn-bounty,.btn-repeat-resp{position:relative}
+  .btn-move-menu::after,.btn-del-task::after,.btn-triv-link::after,.btn-push-tmr::after,.btn-bounty::after,.btn-repeat-resp::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
+  .btn-move-menu:hover::after,.btn-del-task:hover::after,.btn-triv-link:hover::after,.btn-push-tmr:hover::after,.btn-bounty:hover::after,.btn-repeat-resp:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
   .btn-move-menu{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
   .tl-item:hover .btn-move-menu{opacity:0.6}
   .btn-move-menu:hover{opacity:1!important;color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
@@ -1036,12 +1036,11 @@
   .btn-del-task{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
   .tl-item:hover .btn-del-task{opacity:0.4}
   .btn-del-task:hover{opacity:1!important;color:var(--red,#ef4444);background:rgba(239,68,68,0.1)}
-  .btn-triv-link,.btn-push-tmr,.btn-bounty,.btn-repeat-resp,.btn-delegated{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:border-color 0.12s,color 0.12s,background 0.12s,opacity 0.12s;flex-shrink:0}
+  .btn-triv-link,.btn-push-tmr,.btn-bounty,.btn-repeat-resp{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:border-color 0.12s,color 0.12s,background 0.12s,opacity 0.12s;flex-shrink:0}
   .btn-triv-link:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.08)}
   .btn-triv-link.triv-active{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12)}
   .btn-push-tmr:hover{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
   .btn-repeat-resp:hover{border-color:var(--purple,#a78bfa);color:var(--purple,#a78bfa);background:rgba(168,85,247,0.1)}
-  .btn-delegated:hover{border-color:#f472b6;color:#f472b6;background:rgba(244,114,182,0.12)}
   .btn-bounty:hover,.btn-bounty.locked{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(251,191,36,0.12)}
   .btn-bounty.locked{opacity:1;font-size:9px;font-weight:800;cursor:default}
   .del-confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:center;justify-content:center}
@@ -1289,7 +1288,7 @@
   .it-list-controls{display:flex;justify-content:flex-end;gap:6px;margin:2px 0 0}
   .it-list-ctrl-btn{background:none;border:1px solid var(--border);color:var(--text-muted);cursor:pointer;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:3px 9px;border-radius:6px;transition:background 0.12s,border-color 0.12s,color 0.12s}
   .it-list-ctrl-btn:hover{background:var(--card-hover);border-color:rgba(148,163,184,0.32);color:var(--text)}
-  .it-list-item{position:relative;display:grid;grid-template-columns:16px 34px 18px 28px 3px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:58px;padding:9px 11px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:background 0.12s,border-color 0.12s,opacity 0.2s,transform 0.12s}
+  .it-list-item{position:relative;display:grid;grid-template-columns:14px 20px 18px 28px 3px minmax(0,1fr) auto;align-items:center;gap:6px;min-height:58px;padding:9px 11px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:background 0.12s,border-color 0.12s,opacity 0.2s,transform 0.12s}
   .it-list-item:hover{background:var(--card-hover);border-color:rgba(148,163,184,0.32)}
   .it-list-item.movable{cursor:grab}
   .it-list-item.dragging{opacity:0.35}
@@ -1332,7 +1331,9 @@
   .it-list-lock{color:var(--amber)}
   .it-list-changed{color:var(--amber)}
   .it-list-actions{display:flex;align-items:center;gap:5px;justify-content:flex-end}
-  .it-list-actions .chk-quick{opacity:0.45}
+  .it-list-check-col{display:flex;flex-direction:column;align-items:center;gap:3px}
+  .it-list-check-col .chk-quick{opacity:0.45;width:24px;height:20px}
+  .it-list-check-col .btn-add-menu{width:24px;padding:1px 0}
   .it-list-actions .notes-btn,
   .it-list-actions .btn-push-tmr,
   .it-list-actions .pomo-btn,
@@ -1342,7 +1343,7 @@
   .it-list-actions .pomo-btn:hover,
   .it-list-actions .btn-del-task:hover{opacity:1}
   @media(max-width:760px){
-    .it-list-item{grid-template-columns:16px 24px 18px 28px 3px minmax(0,1fr);align-items:flex-start}
+    .it-list-item{grid-template-columns:14px 20px 18px 28px 3px minmax(0,1fr);align-items:flex-start}
     .it-list-actions{grid-column:5;justify-content:flex-start;margin-top:6px}
     .it-list-rank{padding-top:7px}
   }
@@ -2710,9 +2711,20 @@
 .delegated-sidebar-tools .delegated-mini-btn:hover{background:var(--accent-light)}
 .delegated-sidebar-list .delegated-card-actions button{font-size:10px;padding:3px 7px}
 /* Convert-to-Delegated affordance inside the reschedule popover. */
-.resched-popover .resched-convert{margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
-.resched-popover .resched-convert-btn{width:100%;padding:6px 8px;border-radius:5px;border:1px solid var(--border);background:rgba(244,114,182,0.08);color:#f472b6;font-size:11px;font-weight:600;cursor:pointer;transition:all 0.12s}
-.resched-popover .resched-convert-btn:hover{border-color:#f472b6;background:rgba(244,114,182,0.16)}
+.resched-popover .resched-adjust{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
+.resched-popover .resched-dur{display:flex;align-items:center;gap:6px}
+.resched-popover .resched-dur-btn{width:26px;height:26px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text);font-size:13px;font-weight:600;cursor:pointer;transition:all 0.12s;flex-shrink:0}
+.resched-popover .resched-dur-btn:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
+.resched-popover .resched-dur-label{flex:1;text-align:center;font-size:11px;font-weight:600;color:var(--text)}
+.resched-popover .resched-time{display:flex;gap:6px;align-items:stretch}
+.resched-popover .resched-time-input{flex:1;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:5px;padding:5px 8px;color:var(--text);font-size:11px;outline:none;color-scheme:dark}
+.resched-popover .resched-time-input:focus{border-color:var(--accent)}
+.resched-popover .resched-time-go{padding:5px 10px;border-radius:5px;border:1px solid var(--accent);background:rgba(59,130,246,0.18);color:var(--accent-light);font-size:11px;font-weight:600;cursor:pointer}
+.resched-popover .resched-time-go:hover{background:rgba(59,130,246,0.32)}
+.resched-popover .resched-tools{display:flex;gap:6px;margin-top:8px}
+.resched-popover .resched-tool{flex:1;height:26px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.12s}
+.resched-popover .resched-tool:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
+.resched-popover .resched-tool[data-tool=delegate]:hover{border-color:#f472b6;color:#f472b6;background:rgba(244,114,182,0.12)}
 /* Urgency progress meter (mirrors .repeat-resp-meter). */
 .delegated-card-meter{height:5px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;margin:7px 0 4px;border:1px solid rgba(255,255,255,0.05)}
 .delegated-card-meter span{display:block;height:100%;border-radius:inherit}
@@ -4269,7 +4281,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .chk svg,.it-list-check svg{width:22px;height:22px}
   /* Lightning quick-complete — ALWAYS visible on touch, full 44px, amber-filled. */
   .chk-quick{display:inline-flex!important;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;opacity:1!important;font-size:21px;border-radius:11px;border:1px solid rgba(251,191,36,0.4);background:rgba(251,191,36,0.12);color:#fbbf24;padding:0}
-  .card:hover .chk-quick,.it-list-actions .chk-quick{opacity:1!important}
+  .card:hover .chk-quick,.it-list-check-col .chk-quick{opacity:1!important}
   /* Add subtask — visible filled button at full target (was a tiny muted glyph). */
   .btn-add-menu{width:44px;height:44px;min-width:44px;font-size:24px;color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:11px;padding:0;display:inline-flex;align-items:center;justify-content:center}
   /* Subtask-row actions must never be hover-hidden on touch. */
@@ -4300,7 +4312,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   /* chk-col holds the two key actions (quick-complete + add-subtask), stacked. */
   .card .chk-col{grid-column:3 !important;grid-row:1 !important;display:flex !important;flex-direction:column !important;gap:6px !important;align-items:center !important;align-self:center !important}
   .card .chk-quick{display:inline-flex !important}
-  .card .notes-btn,.card .btn-repeat-resp,.card .btn-delegated,.card .btn-meeting-auto,.card .pomo-btn,
+  .card .notes-btn,.card .btn-repeat-resp,.card .btn-meeting-auto,.card .pomo-btn,
   .card .btn-lock,.card .btn-push-tmr,.card .btn-bounty,.card .btn-move-menu,
   .card .btn-del-task,.card .dur,.card>svg:last-child{display:none !important}
   /* List view rows: same clean stack — complete + title + (quick-complete / add). */
@@ -4313,7 +4325,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .it-list-item:not(.subtask-row) .it-list-check{grid-column:1 !important}
   .it-list-item:not(.subtask-row) .it-list-main{grid-column:2 !important;min-width:0}
   .it-list-item:not(.subtask-row) .it-list-actions{grid-column:3 !important;margin-top:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;justify-content:center !important}
-  .it-list-actions .notes-btn,.it-list-actions .btn-push-tmr,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task,.it-list-actions .dbtn,.it-list-actions .btn-delegated,.it-list-actions .btn-lock,.it-list-actions .btn-repeat-resp{display:none !important}
+  .it-list-actions .notes-btn,.it-list-actions .btn-push-tmr,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task,.it-list-actions .dbtn,.it-list-actions .btn-lock,.it-list-actions .btn-repeat-resp{display:none !important}
   /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
   .tab-title,#qa-title,.resched-date-input{font-size:16px}
   .subtask-add-pop{padding:8px}

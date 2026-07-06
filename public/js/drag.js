@@ -324,6 +324,20 @@ function dDrop(e,tid){
   if(!moved||!target){dragId=null;clearCls();return;}
   const old=JSON.stringify(scheduled);
 
+  // Dragging a row out of the Unscheduled section onto a timed row schedules it:
+  // once untimed is cleared it joins the normal cascade (recalcTimes skips
+  // untimed items) and its assigned time persists via syncAddedTaskTimes in
+  // _finishDrag. Seed its start from the drop target first — untimed rows carry
+  // start "00:00", and an active 00:00 would become recalcTimes' Math.min
+  // anchor, cascading the whole day's unpinned tasks from midnight. A drop onto
+  // another Unscheduled row is just a reorder within the section: stays untimed.
+  if(moved.untimed&&!target.untimed){
+    moved.untimed=false;
+    const _d=dur(moved)||30;
+    const _s=pt(target.start)||(typeof now==="function"?Math.ceil(now()/15)*15:8*60);
+    moved.start=fmt(_s);moved.end=fmt(_s+_d);
+  }
+
   // Drop zone from cursor position over the target row.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
