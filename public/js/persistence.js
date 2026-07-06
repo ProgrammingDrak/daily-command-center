@@ -456,8 +456,8 @@ async function switchToDate(dateStr) {
   // Toggle tomorrow indicator
   document.body.classList.toggle("view-tomorrow", viewMode === "tomorrow");
 
-  // Default to Actual tab for archives, Plan tab otherwise
-  const targetView = (viewMode === "archive") ? "actual" : "plan";
+  // Default to Actual tab for archives, List otherwise (Blocks view removed 2026-07)
+  const targetView = (viewMode === "archive") ? "actual" : "list";
   const toggleBtns = document.querySelectorAll("#sched-view-toggle .svt-btn");
   toggleBtns.forEach(b => {
     b.classList.toggle("active", b.dataset.view === targetView);
@@ -479,6 +479,7 @@ async function switchToDate(dateStr) {
   if (typeof buildSchedule === "function") buildSchedule();
   if (typeof paintPivotTasks === "function") paintPivotTasks();
   if (schedView === "actual") { if (typeof buildDayReview === "function") buildDayReview(viewDate); else if (typeof buildActualView === "function") buildActualView(); }
+  else if (schedView === "list" && typeof buildListView === "function") buildListView();
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
 }
