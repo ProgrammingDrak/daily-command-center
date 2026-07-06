@@ -4328,10 +4328,14 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .subtask-add-pop .sub-add-go{padding:10px 15px;font-size:15px;border-radius:8px}
   .subtask-add-pop .sub-add-more{font-size:20px;padding:6px 9px}
 }
-/* Touch devices (no hover): guarantee hover-revealed actions are always shown. */
+/* Touch devices (no hover): guarantee hover-revealed actions are always shown.
+ * CONVENTION: any control that defaults to opacity:0 and is revealed by a
+ * parent :hover MUST be listed here, or it is unreachable on a phone. Tooltips
+ * (::after opacity:0) are intentionally excluded -- they stay hover-only. */
 @media (hover:none){
   .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
   .it-list-item.subtask-row .sub-actions,.tl-item.tl-sub .sub-actions{opacity:1!important}
+  .st-quick-btn,.tri-quick,.btn-lock{opacity:1!important}
 }
 
 @media (max-width:760px), (hover:none){
