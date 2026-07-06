@@ -1216,7 +1216,7 @@ function _persistTaskTitle(taskId, newTitle) {
 
 // Check if any modal/overlay is currently open
 function _anyModalOpen() {
-  var overlays = document.querySelectorAll('.done-modal-overlay.open, .add-modal-overlay.open, .del-confirm-overlay.open, .sn-overlay.open, .notes-drawer-overlay.open, .overflow-modal-overlay.open, .delegated-modal-overlay.open');
+  var overlays = document.querySelectorAll('.done-modal-overlay.open, .add-modal-overlay.open, .del-confirm-overlay.open, .sn-overlay.open, .notes-drawer-overlay.open, .delegated-modal-overlay.open');
   return overlays.length > 0;
 }
 

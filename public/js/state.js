@@ -1093,7 +1093,6 @@ async function rescheduleTaskToDate(id,targetDate,opts){
       const msg=isActualToday?"Moved to today's next free slot":"Moved to the earliest slot on "+_prettyDateLabel(targetDate);
       if(!opts.silent&&typeof showToast==="function")showToast(msg,"success");
       render();
-      if(typeof checkOverflow==="function")checkOverflow();
     }
     return moved;
   }

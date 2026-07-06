@@ -1717,37 +1717,6 @@
   .task-add-bar .tab-catchup{background:transparent;border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text-muted);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
   .task-add-bar .tab-catchup:hover{color:var(--text);border-color:var(--accent)}
 
-  /* Overflow modal */
-  .overflow-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:460;justify-content:center;align-items:center;padding:24px}
-  .overflow-modal-overlay.open{display:flex}
-  .overflow-modal{background:var(--bg);border:1px solid var(--border);border-radius:12px;width:460px;max-width:95vw;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.6)}
-  .overflow-modal-hdr{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
-  .overflow-modal-hdr h3{font-size:14px;font-weight:700;margin:0;color:var(--amber)}
-  .overflow-modal-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
-  .overflow-modal-sub{font-size:12px;color:var(--text-muted)}
-  .overflow-task-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}
-  .overflow-task-row:last-child{border-bottom:none}
-  .overflow-task-chk{width:16px;height:16px;cursor:pointer;accent-color:var(--accent);flex-shrink:0}
-  .overflow-task-title{flex:1;font-size:13px}
-  .overflow-task-dur{font-size:11px;color:var(--text-muted);flex-shrink:0}
-  .overflow-task-time{font-size:11px;color:var(--amber);flex-shrink:0;min-width:52px;text-align:right}
-  .overflow-deficit{text-align:center;padding:10px;margin-bottom:8px;border-radius:8px;background:rgba(245,158,11,0.1);font-size:20px;font-weight:700;color:var(--amber);transition:all 0.3s}
-  .overflow-deficit.satisfied{background:rgba(34,197,94,0.1);color:var(--green)}
-  .overflow-new-task{font-size:12px;color:var(--accent-light);margin-bottom:4px;font-weight:600}
-  .overflow-task-row.checked .overflow-task-title{opacity:0.4;text-decoration:line-through}
-  .overflow-task-row.checked .overflow-task-dur,.overflow-task-row.checked .overflow-task-time{opacity:0.4}
-  .overflow-modal-footer{padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
-  .overflow-btn-late{padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:13px;cursor:pointer}
-  .overflow-btn-late:hover{color:var(--text);background:rgba(255,255,255,0.05)}
-  .overflow-btn-push{padding:7px 16px;border-radius:6px;border:none;background:var(--accent);color:white;font-size:13px;font-weight:600;cursor:pointer}
-  .overflow-btn-push:hover{opacity:0.85}
-  .overflow-btn-push:disabled{opacity:0.3;cursor:not-allowed}
-  /* Pending task (new task that triggered overflow) */
-  .overflow-pending-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--amber);margin-bottom:6px}
-  .overflow-task-row--pending{background:rgba(245,158,11,0.07);border-radius:6px;border:1px solid rgba(245,158,11,0.25);padding:8px 10px;margin-bottom:4px}
-  .overflow-pending-divider{height:1px;background:var(--border);margin:10px 0}
-  .overflow-pending-sub{font-size:11px;color:var(--text-muted);margin-bottom:6px}
-  .overflow-task-time--muted{color:var(--text-muted);font-style:italic}
 
   /* ======== SCHEDULE-AT PICKER MODAL ======== */
   .sched-picker-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:470;justify-content:center;align-items:center;padding:24px}
