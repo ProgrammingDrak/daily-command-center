@@ -35,8 +35,8 @@ function makeDay(scheduled, opts = {}) {
     isPushed: (ev) => !!ev.pushed,
     isNested: (ev) => !!(ev.wrapId || ev.subtaskOf),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
-    parentIdOf: (ev) => ev.subtaskOf || ev.wrapId || null,
-    isWrap: (ev) => !!ev.isWrap,
+    parentIdOf: (ev) => ev.wrapId || ev.subtaskOf || null,
+    isWrap: (ev) => !!ev.isWrap || (Array.isArray(ev.tags) && ev.tags.includes("wrap")),
     loadPinnedStarts: () => pins,
     savePinnedStarts: () => { pinsSaved++; },
   };
@@ -242,9 +242,11 @@ test("edge drop under a ride-along joins the wrap and re-chains the nest", () =>
     t("c", "10:30", "11:00"),
   ];
   const { context } = makeDay(sched);
-  const handled = context._dropAtTargetLevel(find(sched, "x"), find(sched, "r1"), true);
+  const joined = context._dropAtTargetLevel(find(sched, "x"), find(sched, "r1"), true);
+  const jWs = context.pt(joined.start); // dDrop Case C' sequence: reflow, then delta-shift
   context.recalcTimes({ orderWins: true });
-  assert.equal(handled, true);
+  context._shiftWrapChildren(joined, jWs);
+  assert.equal(joined.id, "wrapA"); // ride-along join returns the wrap
   assert.equal(find(sched, "x").wrapId, "wrapA"); // joined the nest, not top level
   assert.equal(find(sched, "x").subtaskOf, null);
   assert.equal(find(sched, "r1").start, "09:00"); // nest chained in order
@@ -313,4 +315,46 @@ test("_chainWrapChildren stacks overflow back at the window start", () => {
   assert.equal(find(sched, "r1").start, "09:00"); // 30m
   assert.equal(find(sched, "r2").start, "09:30"); // 30m, ends past window (over-capacity)
   assert.equal(find(sched, "r3").start, "09:00"); // cursor past window end: stacked at start
+});
+
+test("wrap moves during the reflow: joined nest shifts with it (post-reflow delta)", () => {
+  const sched = [
+    t("a", "09:00", "09:30"),
+    t("x", "09:30", "10:00"), // vacates this top-level slot by joining the nest
+    t("wrapB", "10:00", "11:00", { isWrap: true }),
+    t("k", "10:00", "10:20", { wrapId: "wrapB" }),
+  ];
+  const { context } = makeDay(sched);
+  const joined = context._dropAtTargetLevel(find(sched, "x"), find(sched, "k"), false);
+  const jWs = context.pt(joined.start);
+  context.recalcTimes({ orderWins: true });
+  context._shiftWrapChildren(joined, jWs);
+  assert.equal(find(sched, "wrapB").start, "09:30"); // wrap pulled up behind x
+  assert.equal(find(sched, "x").start, "09:30"); // nest followed the wrap
+  assert.equal(find(sched, "x").end, "10:00");
+  assert.equal(find(sched, "k").start, "10:00"); // still inside the new window
+  assert.equal(find(sched, "k").end, "10:20");
+});
+
+test("subtask join uses the real reparentAsSubtask when present (time collapses to parent)", () => {
+  const sched = [
+    t("p", "09:00", "10:00"),
+    t("s1", "09:00", "09:00", { subtaskOf: "p" }),
+    t("x", "13:00", "13:30"),
+  ];
+  const day = makeDay(sched);
+  const calls = [];
+  day.context.reparentAsSubtask = (childId, parentId) => { // mirrors tabs.js reparentAsSubtask
+    calls.push([childId, parentId]);
+    const child = sched.find((e) => e.id === childId), parent = sched.find((e) => e.id === parentId);
+    child.subtaskOf = parentId; child.wrapId = null;
+    child.start = parent.start; child.end = child.start;
+    return true;
+  };
+  const handled = day.context._dropAtTargetLevel(find(sched, "x"), find(sched, "s1"), true);
+  assert.equal(handled, true);
+  assert.deepEqual(calls, [["x", "p"]]);
+  assert.equal(find(sched, "x").start, "09:00"); // collapsed to the parent's start
+  assert.equal(find(sched, "x").end, "09:00");
+  assert.deepEqual(sched.filter((e) => e.subtaskOf === "p").map((e) => e.id), ["s1", "x"]);
 });
