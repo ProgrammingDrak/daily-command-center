@@ -553,6 +553,9 @@
   .gb-task-title{font-size:14px;font-weight:700;line-height:1.25;overflow-wrap:anywhere}
   .gb-task-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:5px;font-size:10px;color:var(--text-muted)}
   .gb-task-meta span,.gb-pill{border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:2px 7px;background:rgba(255,255,255,0.03)}
+  .gb-pill.gb-health-ok{background:var(--green-bg);color:var(--green)}
+  .gb-pill.gb-health-stale{background:var(--amber-bg);color:var(--amber)}
+  .gb-pill.gb-health-gap{background:rgba(239,68,68,0.12);color:var(--red)}
   .gb-task-reason{font-size:12px;color:var(--text-muted);line-height:1.45;margin:8px 0 0 32px}
   .gb-task-actions{display:flex;gap:5px;flex-shrink:0}
   .gb-icon-btn,.gb-add-btn{height:26px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:10px;font-weight:700;cursor:pointer;padding:0 8px;transition:all 0.12s}
