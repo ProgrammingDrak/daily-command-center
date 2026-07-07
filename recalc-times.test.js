@@ -10,6 +10,11 @@ const vm = require("node:vm");
 
 const dragSource = fs.readFileSync(require.resolve("./public/js/drag.js"), "utf8");
 
+// addToSchedule only (schedule.js has DOM side effects at load; slice the one
+// top-level function under test, same string-surgery spirit as the slots harness).
+const scheduleSource = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
+const addToScheduleSource = scheduleSource.match(/\/\/ opts \(drag drops\)[\s\S]*?function addToSchedule[\s\S]*?\n\}/)[0];
+
 // Build a fresh vm context around a scheduled[] day. Time helpers mirror
 // state.js (pt/fmt/dur); pins map is a plain object exposed for assertions.
 function makeDay(scheduled, opts = {}) {
@@ -34,8 +39,17 @@ function makeDay(scheduled, opts = {}) {
     savePinnedStarts: () => { pinsSaved++; },
   };
   context.dur = context.dur.bind(context);
+  // addToSchedule collaborators (no-ops except the backlog source list)
+  context.consider = [];
+  context.backlog = opts.backlog || [];
+  context.deleteBacklogBlock = () => {};
+  context.persistAddedTask = () => {};
+  context.checkOverflow = () => {};
+  context.log = () => {};
+  context.render = () => {};
   vm.createContext(context);
   vm.runInContext(dragSource, context);
+  vm.runInContext(addToScheduleSource, context);
   return { context, pins, pinsSavedCount: () => pinsSaved };
 }
 
@@ -159,6 +173,32 @@ test("orderWins: done tasks keep their time and don't consume the chain", () => 
   assert.equal(find(sched, "d").start, "08:00"); // untouched
   assert.equal(find(sched, "a").start, "09:00");
   assert.equal(find(sched, "c").start, "09:30"); // chains from a, not from d
+});
+
+test("backlog drop lands at the drop position and chains from there", () => {
+  const sched = [
+    t("a", "09:00", "09:30"),
+    t("b", "09:30", "10:00", { _pinnedStart: "09:30" }),
+  ];
+  const backlog = [{ id: "new", title: "New task", durMin: 45, type: "task", meta: "", priority: "High" }];
+  const { context } = makeDay(sched, { backlog });
+  context.addToSchedule("new", { targetId: "a", after: true, orderWins: true });
+  assert.equal(find(sched, "new").start, "09:30"); // dropped right after a
+  assert.equal(find(sched, "new").end, "10:15");
+  assert.equal(find(sched, "b").start, "10:15"); // pinned successor bumped
+});
+
+test("addToSchedule without opts keeps the append-at-end behavior", () => {
+  const sched = [
+    t("a", "09:00", "09:30"),
+    t("b", "09:30", "10:00"),
+  ];
+  const backlog = [{ id: "new", title: "New task", durMin: 30, type: "task", meta: "", priority: "High" }];
+  const { context } = makeDay(sched, { backlog });
+  context.addToSchedule("new");
+  assert.equal(find(sched, "new").start, "10:00"); // appended after the last task
+  assert.equal(find(sched, "a").start, "09:00");
+  assert.equal(find(sched, "b").start, "09:30");
 });
 
 test("tag-aware mode still outranks orderWins: pinned task does not bump", () => {
