@@ -281,6 +281,58 @@ function _placeInWrapWindow(moved,wrapEv){
   if(s+d>we)s=ws; // window full: stack at start (over-capacity; bandwidth chip shows it)
   moved.start=fmt(s);moved.end=fmt(s+d);
 }
+// Re-time a wrap's ride-alongs to chain in list order from the window start
+// (child N+1 starts when child N ends). Window full: remaining children stack
+// from the start again (over-capacity; the bandwidth chip shows it).
+function _chainWrapChildren(wrapEv){
+  const ws=pt(wrapEv.start),we=pt(wrapEv.end);
+  let cursor=ws;
+  scheduled.filter(c=>c.wrapId===wrapEv.id&&!isDone(c)&&!isDeleted(c)).forEach(c=>{
+    const d=dur(c)||15;
+    if(cursor>=we)cursor=ws;
+    c.start=fmt(cursor);c.end=fmt(cursor+d);
+    cursor+=d;
+    _persistEvWrap(c);
+  });
+}
+// Shift a wrap's ride-alongs by the wrap's own movement during a reflow, so
+// their intra-window layout survives the wrap changing start time (Case A's
+// delta idiom, shared by every path that reflows after touching a nest).
+function _shiftWrapChildren(wrapEv,oldStart){
+  const delta=pt(wrapEv.start)-oldStart;
+  if(!delta)return;
+  scheduled.filter(c=>c.wrapId===wrapEv.id).forEach(c=>{
+    c.start=fmt(pt(c.start)+delta);c.end=fmt(pt(c.end)+delta);_persistEvWrap(c);
+  });
+}
+// Edge drop on a NESTED row: join the target's parent at the target's level
+// (ride-along or subtask), ordered before/after the target, then re-chain the
+// nest. Returns false (drop not handled) when the target is top-level or the
+// join would create a cycle -- caller falls back to the top-level path.
+// Returns the wrap task on a ride-along join so the caller can delta-shift the
+// nest after the top-level reflow moves the wrap; true on a subtask join.
+function _dropAtTargetLevel(moved,target,after){
+  const tParent=parentIdOf(target);
+  if(!tParent||tParent===moved.id||_isAncestor(moved.id,tParent))return false;
+  if(target.subtaskOf){
+    if(typeof reparentAsSubtask==="function")reparentAsSubtask(moved.id,tParent);
+    else{moved.subtaskOf=tParent;moved.wrapId=null;_clearPin(moved);_persistEvWrap(moved);}
+    _reorderActive(moved.id,target.id,after);
+    if(typeof saveSubtaskOrder==="function")saveSubtaskOrder(tParent);
+    return true;
+  }
+  const wrapEv=scheduled.find(x=>x.id===tParent);
+  moved.wrapId=tParent;moved.subtaskOf=null;
+  _clearPin(moved);
+  _reorderActive(moved.id,target.id,after);
+  if(wrapEv){
+    if(!isWrap(wrapEv)){wrapEv.isWrap=true;_persistEvWrap(wrapEv);}
+    _chainWrapChildren(wrapEv);
+    if(typeof showToast==="function")showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
+  }
+  _persistEvWrap(moved);
+  return wrapEv||true;
+}
 function _reorderActive(movedId,targetId,after){
   const active=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
   const fi=active.findIndex(x=>x.id===movedId);if(fi===-1)return;
@@ -377,17 +429,13 @@ function dDrop(e,tid){
     _clearPin(moved);
     _reorderActive(moved.id,target.id,after);
     recalcTimes({orderWins:true});
-    const delta=pt(moved.start)-oldStart;
-    if(delta){
-      scheduled.filter(c=>c.wrapId===moved.id).forEach(c=>{
-        c.start=fmt(pt(c.start)+delta);c.end=fmt(pt(c.end)+delta);_persistEvWrap(c);
-      });
-    }
+    _shiftWrapChildren(moved,oldStart);
     _finishDrag(old);return;
   }
 
   // ---- Decide nesting: dropping on a task's body wraps the moved item inside it ----
   const newWrapId=nest?target.id:null;
+  let joined=null;
 
   if(newWrapId&&e.shiftKey){
     // ---- Case B': NEST as a SUBTASK (umbrella; shares the parent's point pie and
@@ -406,8 +454,19 @@ function dDrop(e,tid){
       _placeInWrapWindow(moved,wrapEv);
     }
     _persistEvWrap(moved);
+    // The reflow can move the wrap itself (moved just left the top level);
+    // shift the nest by the wrap's delta so the children stay in its window.
+    const bWs=wrapEv?pt(wrapEv.start):0;
     recalcTimes({orderWins:true});
+    if(wrapEv)_shiftWrapChildren(wrapEv,bWs);
     if(typeof showToast==="function"&&wrapEv)showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
+  }else if((joined=_dropAtTargetLevel(moved,target,after))){
+    // ---- Case C': edge drop on a NESTED row -> joined the target's level;
+    // reflow the top-level chain (the moved task left it or never consumed it),
+    // then shift the joined wrap's nest by the wrap's own movement. ----
+    const jWs=joined&&joined.id?pt(joined.start):0;
+    recalcTimes({orderWins:true});
+    if(joined&&joined.id)_shiftWrapChildren(joined,jWs);
   }else{
     // ---- Case C: TOP-LEVEL drop -> promote out of any parent, then sequential reorder ----
     const wasNested=!!parentIdOf(moved);
