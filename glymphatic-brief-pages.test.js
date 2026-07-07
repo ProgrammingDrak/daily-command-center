@@ -87,3 +87,49 @@ assert.strictEqual(bhPage.toolbox[0].skills[0].name, "brain-prune", "toolbox row
 assert.strictEqual(bhPage.glossary[0].term, "Glymphatic", "glossary intact");
 
 console.log("glymphatic-brief-pages: brain-health assertions passed");
+
+// 6. Renderer smoke (no DOM): gbPageBrainHealth must render a machine row
+// with a MISSING status without throwing (the pill hardening), and an empty
+// page must fall back to its empty states.
+const fs = require("fs");
+const vm = require("vm");
+const noop = () => {};
+const sandbox = {
+  window: {},
+  document: { addEventListener: noop, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], createElement: () => ({ style: {} }) },
+  localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+  fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
+  setInterval: noop, setTimeout: noop, clearInterval: noop, console,
+};
+sandbox.globalThis = sandbox;
+vm.createContext(sandbox);
+// Inject the test hook at load time (same pattern as slots-frontend-contract.test.js)
+// so the production source carries no test-only globals.
+const briefSrc = fs
+  .readFileSync(__dirname + "/public/js/glymphatic-brief.js", "utf8")
+  .replace(
+    "window.buildGlymphaticBrief = buildGlymphaticBrief;",
+    "window.buildGlymphaticBrief = buildGlymphaticBrief; window.__gbTestRenderPage = gbRenderPage;"
+  );
+vm.runInContext(briefSrc, sandbox);
+const renderPage = sandbox.window.__gbTestRenderPage;
+assert.strictEqual(typeof renderPage, "function", "__gbTestRenderPage hook injected");
+const bhHtml = renderPage({
+  id: "brain-health", label: "Brain Health", summary: "eye into the brain",
+  trend: [{ date: "2026-07-06", link_integrity: "98%", drift: "2", staleness: "1", duplication: "0" }],
+  machines: [{ machine: "ghost-machine" }, { machine: "healthy", last_sync: "2026-07-07", last_evidence: "2026-07-07", status: "ok" }],
+  stale: [{ kind: "routing packet open", detail: "daily-review-2026-07-06-routing.md" }],
+  toolbox: [{ plugin: "brain-core", skills: [{ name: "brain-prune", what: "Prunes.", when: "Use nightly." }] }],
+  glossary: [{ term: "Glymphatic", def: "Nightly loop." }],
+}, {}, {});
+assert.ok(bhHtml.includes("ghost-machine"), "machine row without status still renders");
+assert.ok(bhHtml.includes("gb-health-unknown"), "missing status falls back to the unknown pill");
+assert.ok(bhHtml.includes("gb-health-ok") && bhHtml.includes("OK"), "ok status renders the class-based pill");
+assert.ok(bhHtml.includes("brain-prune") && bhHtml.includes("Glymphatic"), "toolbox and glossary render");
+assert.ok(bhHtml.includes("routing packet open") && bhHtml.includes("daily-review-2026-07-06-routing.md"), "populated stale list renders kind and detail");
+const emptyHtml = renderPage({ id: "brain-health", label: "Brain Health" }, {}, {});
+assert.ok(emptyHtml.includes("Nothing out of date"), "empty stale list shows its empty state");
+assert.ok(emptyHtml.includes("No machine activity detected"), "empty page renders machine empty state");
+assert.ok(emptyHtml.includes("No health-metrics history yet"), "empty page renders trend empty state");
+
+console.log("glymphatic-brief-pages: brain-health renderer smoke passed");

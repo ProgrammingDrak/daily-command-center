@@ -667,10 +667,10 @@
   // data is collected deterministically by claude-brain's build_brief_packet.py;
   // this page is display-only.
   function gbPageBrainHealth(page){
-    var STATUS_COLOR = { ok: "#10b981", stale: "#f59e0b", gap: "#ef4444" };
     function pill(status){
-      var c = STATUS_COLOR[status] || "#9ca3af";
-      return '<span class="gb-pill" style="color:'+c+';border:1px solid '+c+'55;background:'+c+'14">'+gbEsc(status.toUpperCase())+'</span>';
+      var s = status == null ? "" : String(status);
+      var cls = s.toLowerCase().replace(/[^a-z0-9-]/g, "") || "unknown";
+      return '<span class="gb-pill gb-health-'+cls+'">'+gbEsc(s ? s.toUpperCase() : "?")+'</span>';
     }
     var trend = page.trend || [];
     var trendHtml = trend.length
