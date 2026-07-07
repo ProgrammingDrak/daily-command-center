@@ -187,14 +187,18 @@ function buildListView(){
       chev+
       '<div class="it-list-rank">'+(idx+1)+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
-      '<button class="chk it-list-check'+(isDoneRow?' on':'')+'" title="'+(isDoneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
+      '<div class="it-list-check-col">'+
+        '<button class="chk it-list-check'+(isDoneRow?' on':'')+'" title="'+(isDoneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>':'')+
+      '</div>'+
       '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
         '<div class="it-list-meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           '<span>'+ms(dur(ev))+'</span>'+
-          (ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')+
+          (ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isMeeting(ev)&&!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'))+
           (ev._locked?'<span class="it-list-lock">Locked</span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
@@ -202,16 +206,12 @@ function buildListView(){
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-nest-sub" title="Make subtask of…" data-nest-id="'+ev.id+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v10a4 4 0 0 0 4 4h12M15 13l5 5-5 5"/></svg></button>':'')+
         // Duration +/- (parity with the old Blocks card)
         (!isMeeting(ev)&&!isDoneRow?'<button class="dbtn" data-id="'+ev.id+'" data-d="-15" title="15 min shorter">&minus;</button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="dbtn" data-id="'+ev.id+'" data-d="15" title="15 min longer">+</button>':'')+
-        // Delegate / Lock / Repeat-responsibility (parity with the old Blocks card)
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-delegated" data-delegated-id="'+ev.id+'" data-tooltip="Delegated / Blocked — waiting on someone" aria-label="Delegate"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M16 11l2 2 4-4"/></svg></button>':'')+
+        // Lock (parity with the old Blocks card). Delegate / repeat-responsibility /
+        // make-subtask-of all live in the reschedule popover, not per-card buttons.
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-repeat-resp" data-repeat-id="'+ev.id+'" data-tooltip="Make repeat responsibility" aria-label="Make repeat responsibility"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>':'')+
         notesButton(ev)+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+dur(ev)+'" title="Start pomodoro timer">'+pomoSvg+'</button>':'')+
@@ -227,9 +227,8 @@ function buildListView(){
     if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");toggleDone(ev.id);});
     // Duration +/-, delegate, lock, repeat-responsibility -- parity with the Blocks card.
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();if(typeof adjustDur==="function")adjustDur(b.dataset.id,parseInt(b.dataset.d));}));
-    const delb=el.querySelector(".btn-delegated");if(delb)delb.addEventListener("click",e=>{e.stopPropagation();if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);});
     const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId);});
-    const rrb=el.querySelector(".btn-repeat-resp");if(rrb)rrb.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);});
+    const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openStartTimePicker==="function")openStartTimePicker(ev.id,stSpan);});
     const nb=el.querySelector(".notes-btn");
     if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");
@@ -240,8 +239,6 @@ function buildListView(){
     if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
     const am=el.querySelector(".btn-add-menu");
     if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
-    const ns=el.querySelector(".btn-nest-sub");
-    if(ns)ns.addEventListener("click",e=>{e.stopPropagation();if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ns.dataset.nestId,ns);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     return el;
@@ -647,9 +644,6 @@ function buildSchedule(){
       setTimeout(()=>document.addEventListener("click",onOutside,true),0);
     });}
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
-    const nsb=el.querySelector(".btn-nest-sub");if(nsb)nsb.addEventListener("click",e=>{e.stopPropagation();if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(nsb.dataset.nestId,nsb);});
-    const rb=el.querySelector(".btn-repeat-resp");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);});
-    const delb=el.querySelector(".btn-delegated");if(delb)delb.addEventListener("click",e=>{e.stopPropagation();if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);});
     el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});

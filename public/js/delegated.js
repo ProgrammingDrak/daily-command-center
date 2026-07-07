@@ -232,17 +232,16 @@
     const cls = done ? "" : u.cls;
 
     const who = (p.delegatee && p.delegatee.name) || "";
-    const waiting = p.title || "(unspecified)";
+    const waiting = (p.title || "").trim();
     const myTask = (p.myTask || "").trim();
-    const headline = myTask || waiting;
+    const headline = myTask || waiting || "(untitled)";
     const note = truncate(p.notes || "", 120);
 
-    // Subline: when myTask is the headline, surface what/who underneath; the
-    // due label always shows.
+    // Subline: legacy items may still carry a separate what/who; surface them
+    // under the headline. The due label always shows.
     const subParts = [];
-    if (myTask) subParts.push('Waiting on ' + esc(waiting));
-    if (who) subParts.push((myTask ? 'from ' : 'Waiting on ') + esc(who));
-    else if (!myTask) subParts.push('No one assigned');
+    if (myTask && waiting) subParts.push('Waiting on ' + esc(waiting));
+    if (who) subParts.push((myTask && waiting ? 'from ' : 'Waiting on ') + esc(who));
     const sub = subParts.map(s => '<span>' + s + '</span>').join("");
 
     const cardCls = [
@@ -293,7 +292,7 @@
         } else if (action === "check-in") {
           markDelegatedItemCheckedById(id);
         } else if (action === "schedule") {
-          scheduleDelegatedItem(id);
+          scheduleDelegatedItem(id, btn);
         } else if (action === "edit") {
           openDelegatedModal(id);
         } else if (action === "done") {
@@ -328,7 +327,7 @@
     const p = item.properties || {};
     const name = (p.delegatee && p.delegatee.name) || "";
     const greeting = name ? ("Hi " + name + ",") : "Hi,";
-    const title = p.title || "this";
+    const title = p.title || p.myTask || "this";
     const notes = p.notes ? ("\n\nContext: " + p.notes) : "";
     return greeting + "\n\nQuick check-in on \"" + title + "\". Could you send me a brief update when you can?" + notes + "\n\nThanks.";
   }
@@ -394,7 +393,9 @@
     }, "Blocked item closed.");
   }
 
-  function scheduleDelegatedItem(id) {
+  // Schedule a follow-up task for a blocked item. Uses the same popover UI and
+  // free-slot engine (schedulePushedOnDate) as the task reschedule feature.
+  function scheduleDelegatedItem(id, anchorEl) {
     const item = getDelegatedItemById(id);
     if (!item) return;
     const p = item.properties || {};
@@ -402,24 +403,52 @@
       toast("A linked itinerary row already exists.", "info");
       return;
     }
-    const title = "Follow up: " + (p.title || "blocked item");
-    const who = (p.delegatee && p.delegatee.name) || "someone";
-    const detail = "Follow-up with " + who + (p.myTask ? "\n\nBlocking: " + p.myTask : "") + (p.notes ? "\n\n" + p.notes : "");
-    if (typeof openSchedulePicker === "function") {
-      openSchedulePicker(title, 15, {
-        source: "delegated",
-        delegatedItemId: id,
-        linkedBlockId: p.linkedBlockId || null,
-        linkedTagId: p.linkedTagId || null,
-        meta: "Follow-up - 15m",
-        detail,
-        priority: "Medium",
-        tags: ["delegated"]
-      });
+    if (typeof openDatePickPopover !== "function" || typeof schedulePushedOnDate !== "function" || !window.blockStore) {
+      copyText(buildDelegatedMessage(item));
+      toast("Message copied; scheduler is unavailable.", "info");
       return;
     }
-    copyText(buildDelegatedMessage(item));
-    toast("Message copied; schedule picker is unavailable.", "info");
+    const what = p.title || p.myTask || "blocked item";
+    const who = (p.delegatee && p.delegatee.name) || "";
+    const ev = {
+      id: "delegated-follow-" + id,
+      title: "Follow up: " + what,
+      type: "task",
+      start: "00:00",
+      end: "00:15",
+      priority: "Medium",
+      meta: "Follow-up - 15m",
+      detail: "Follow-up" + (who ? " with " + who : "") + (p.myTask && p.title ? "\n\nBlocking: " + p.myTask : "") + (p.notes ? "\n\n" + p.notes : ""),
+      source: "delegated",
+      tags: ["delegated"],
+      delegatedItemId: id,
+      linkedBlockId: p.linkedBlockId || null,
+      linkedTagId: p.linkedTagId || null
+    };
+    openDatePickPopover(anchorEl, {
+      header: 'Schedule "' + ev.title + '" for…',
+      actionLabel: "Schedule",
+      onPick: async (dateStr) => {
+        const block = await schedulePushedOnDate(ev, dateStr, { useExisting: true, silent: true });
+        if (!block) {
+          toast("No free slot on " + dateStr, "error");
+          return;
+        }
+        const bp = block.properties || {};
+        const label = (typeof _prettyDateLabel === "function") ? _prettyDateLabel(dateStr) : dateStr;
+        const at = (bp.start && typeof f12 === "function") ? " at " + f12(bp.start) : "";
+        toast("Follow-up scheduled " + label + at, "success");
+        // If we just wrote onto the day being viewed, fold it into the live
+        // schedule the same way a restored reschedule does.
+        const viewing = (typeof viewDate !== "undefined" && viewDate) ? viewDate : ((typeof __state !== "undefined" && __state && __state.date) ? __state.date : null);
+        if (dateStr === viewing) {
+          try { await window.blockStore.loadDay(dateStr); } catch (e) {}
+          if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
+          if (typeof recalcTimes === "function") recalcTimes();
+          if (typeof render === "function") render();
+        }
+      }
+    });
   }
 
   function toast(message, type) { return window.DCC.toast(message, type); } // delegates to core.js
@@ -432,12 +461,9 @@
     _pendingSourceTaskId = prefill.sourceTaskId || null;
     const item = idOrNull ? getDelegatedItemById(idOrNull) : null;
     const p = item ? (item.properties || {}) : {};
-    const delegatee = p.delegatee || {};
 
     setVal("dm-id", idOrNull || "");
-    setVal("dm-my-task", p.myTask || prefill.myTask || "");
-    setVal("dm-title", p.title || prefill.title || "");
-    setVal("dm-delegatee-name", delegatee.name || "");
+    setVal("dm-my-task", p.myTask || prefill.myTask || prefill.title || "");
     setVal("dm-notes", p.notes || "");
     setVal("dm-linked-tag-id", p.linkedTagId || prefill.linkedTagId || "");
     setVal("dm-linked-block-id", p.linkedBlockId || prefill.linkedBlockId || "");
@@ -535,19 +561,21 @@
 
   async function saveDelegatedItem() {
     const id = valueOf("dm-id") || null;
-    const title = valueOf("dm-title").trim();
-    if (!title) { toast("Tell me what you're waiting on", "error"); return; }
+    const myTaskVal = valueOf("dm-my-task").trim();
+    if (!myTaskVal) { toast("Name the task you're working on", "error"); return; }
     const mode = valueOf("dm-check-in-mode") === "repeat" ? "repeat" : "date";
     let checkInDays = parseInt(valueOf("dm-check-in-days"), 10);
     if (!Number.isFinite(checkInDays) || checkInDays < 1) checkInDays = 7;
     const checkInDate = mode === "date" ? (valueOf("dm-check-in-date") || "") : "";
     if (mode === "date" && !checkInDate) { toast("Pick a check-in date, or switch to Repeating", "error"); return; }
     const existing = id ? getDelegatedItemById(id) : null;
-    const nameVal = valueOf("dm-delegatee-name").trim();
+    const existingProps = existing ? (existing.properties || {}) : {};
+    // The modal is just task + check-in + context now; legacy title/delegatee
+    // values survive edits untouched.
     const properties = {
-      title,
-      myTask: valueOf("dm-my-task").trim() || "",
-      delegatee: { name: nameVal || null },
+      title: existingProps.title || "",
+      myTask: myTaskVal,
+      delegatee: existingProps.delegatee || { name: null },
       checkInMode: mode,
       checkInDays,
       checkInDate: mode === "date" ? checkInDate : null,
