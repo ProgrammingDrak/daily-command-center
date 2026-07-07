@@ -394,16 +394,22 @@ function addSubtask(taskId, text){
 // gaps / partial focus of a larger task. Reuses the ride-along edge (wrapId), so
 // it gets its OWN time window and its OWN duration-based points — unlike a
 // subtask, it does not draw from the parent's pie.
-function addStackedTask(taskId, text){
+function addStackedTask(taskId, text, durMinArg){
   if(!text||!text.trim())return;
   text=text.trim();
   const id="sk-"+Date.now();
   const parent=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null;
-  const startStr=(parent&&parent.start)||"00:00";
-  const durMin=30;
-  const endStr=(typeof fmt==="function")?fmt((typeof pt==="function"?pt(startStr):0)+durMin):startStr;
+  let startStr=(parent&&parent.start)||"00:00";
+  const durMin=durMinArg||30;
+  let endStr=(typeof fmt==="function")?fmt((typeof pt==="function"?pt(startStr):0)+durMin):startStr;
   const task={id:id,title:text,type:"task",wrapId:taskId,source:"manual",
     start:startStr,end:endStr,priority:"Medium",tags:[],meta:(typeof ms==="function"?("Stacked · "+ms(durMin)):"Stacked")};
+  // Inside a rollup container (shell), land at the next free slot in the
+  // parent's window instead of stacking every child at the parent's start.
+  if(parent&&window.TaskTypes&&window.TaskTypes.isRollup(parent)&&typeof _placeInWrapWindow==="function"){
+    _placeInWrapWindow(task,parent);
+    startStr=task.start;endStr=task.end;
+  }
   if(typeof scheduled!=="undefined")scheduled.push(task);
   if(window.blockStore&&window.blockStore.createBlock){
     const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
@@ -523,22 +529,56 @@ function getIncompleteSubtasks(taskId){
   const all=loadSubtasks();
   return(all[taskId]||[]).filter(s=>!s.done);
 }
-// Small fast popover anchored at the click to add a subtask. Stays open for
-// rapid multi-add (Enter); Escape / outside-click closes. "More" opens the full
-// Add Items modal for side projects / action items.
-function openSubtaskAdd(parentId, anchorEl){
+// Universal task-add popover, anchored to a row's "+" button. Pick WHERE the
+// new task goes relative to the anchor task — After / Before (full standalone
+// tasks in the list order), Subtask (timeless pie step), or Nested (full task
+// inside via the wrap edge). Rollup containers (shells) hide Subtask and
+// default to Nested. Duration applies to full tasks only. Stays open for rapid
+// multi-add (Enter); Escape / outside-click closes; "More" opens the full
+// Add Items modal.
+function openTaskAdd(parentId, anchorEl){
   document.querySelectorAll(".subtask-add-pop,.resched-popover,.dur-popover").forEach(p=>p.remove());
+  const target=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===parentId):null;
+  const wrapOnly=!!(target&&window.TaskTypes&&window.TaskTypes.rule(target,"childEdge")==="wrap");
+  const places=wrapOnly
+    ?[["nested","Nested"],["after","After"],["before","Before"]]
+    :[["after","After"],["before","Before"],["subtask","Subtask"],["nested","Nested"]];
+  const holders={subtask:"Add subtask…",nested:"Add task inside…",after:"Add task after…",before:"Add task before…"};
   const pop=document.createElement("div");
-  pop.className="dur-popover subtask-add-pop";
+  pop.className="dur-popover subtask-add-pop task-add-pop";
   pop.innerHTML=
-    '<input type="text" class="sub-add-input" placeholder="Add subtask…" />'+
-    '<button class="sub-add-go">Add</button>'+
-    '<button class="sub-add-more" title="More options (side project, action)">⋯</button>';
+    '<div class="task-add-places">'+places.map((p,i)=>'<button class="task-add-place'+(i===0?" on":"")+'" data-place="'+p[0]+'">'+p[1]+'</button>').join("")+'</div>'+
+    '<div class="task-add-row">'+
+      '<input type="text" class="sub-add-input" placeholder="'+holders[places[0][0]]+'" />'+
+      '<select class="task-add-dur"><option value="15">15m</option><option value="30" selected>30m</option><option value="45">45m</option><option value="60">1h</option><option value="90">1.5h</option><option value="120">2h</option></select>'+
+      '<button class="sub-add-go">Add</button>'+
+      '<button class="sub-add-more" title="More options (side project, action)">⋯</button>'+
+    '</div>';
   function close(){pop.remove();document.removeEventListener("click",onOut,true);document.removeEventListener("keydown",onKey,true);}
   function onOut(e){if(!pop.contains(e.target)&&e.target!==anchorEl)close();}
   function onKey(e){if(e.key==="Escape")close();}
   const input=pop.querySelector(".sub-add-input");
-  function add(){const v=input.value.trim();if(!v)return;if(typeof addSubtask==="function")addSubtask(parentId,v);input.value="";setTimeout(()=>input.focus(),0);}
+  const durSel=pop.querySelector(".task-add-dur");
+  let place=places[0][0];
+  function syncPlace(){
+    input.placeholder=holders[place];
+    durSel.style.display=(place==="subtask")?"none":""; // subtasks are timeless
+  }
+  pop.querySelectorAll(".task-add-place").forEach(b=>b.addEventListener("click",e=>{
+    e.stopPropagation();
+    place=b.dataset.place;
+    pop.querySelectorAll(".task-add-place").forEach(x=>x.classList.toggle("on",x===b));
+    syncPlace();input.focus();
+  }));
+  syncPlace();
+  function add(){
+    const v=input.value.trim();if(!v)return;
+    const durMin=parseInt(durSel.value)||30;
+    if(place==="subtask"&&typeof addSubtask==="function")addSubtask(parentId,v);
+    else if(place==="nested"&&typeof addStackedTask==="function")addStackedTask(parentId,v,durMin);
+    else if(typeof addTaskAdjacent==="function")addTaskAdjacent(parentId,v,durMin,place);
+    input.value="";setTimeout(()=>input.focus(),0);
+  }
   pop.querySelector(".sub-add-go").addEventListener("click",e=>{e.stopPropagation();add();});
   pop.querySelector(".sub-add-more").addEventListener("click",e=>{e.stopPropagation();close();if(typeof openAddModal==="function")openAddModal(parentId,"");});
   input.addEventListener("keydown",e=>{e.stopPropagation();if(e.key==="Enter"){e.preventDefault();add();}});
@@ -551,6 +591,38 @@ function openSubtaskAdd(parentId, anchorEl){
   pop.style.left=left+"px";pop.style.top=top+"px";pop.style.visibility="";
   input.focus();
   setTimeout(()=>{document.addEventListener("click",onOut,true);document.addEventListener("keydown",onKey,true);},0);
+}
+// Legacy name; every old "add subtask" affordance now opens the universal picker.
+function openSubtaskAdd(parentId, anchorEl){return openTaskAdd(parentId, anchorEl);}
+
+// Insert a full standalone task immediately before/after an existing row in
+// the list order. If the anchor is nested in a wrap (e.g. inside a shell), the
+// new task becomes its sibling inside the same parent. "After" a wrap parent
+// means after its entire subtree: nested children render with their parent, so
+// the next top-level array slot IS past the subtree.
+function addTaskAdjacent(targetId,title,durMin,where){
+  if(!title||!title.trim()||typeof scheduled==="undefined")return;
+  title=title.trim();durMin=durMin||30;
+  const target=scheduled.find(e=>e.id===targetId);
+  if(!target)return;
+  const id="aj-"+Date.now();
+  const baseStart=(where==="before"?target.start:target.end)||"00:00";
+  const endStr=(typeof fmt==="function"&&typeof pt==="function")?fmt(pt(baseStart)+durMin):baseStart;
+  const task={id:id,title:title,type:"task",source:"manual",priority:"Medium",tags:[],
+    start:baseStart,end:endStr,meta:"Custom task · "+(typeof ms==="function"?ms(durMin):durMin+"m"),
+    wrapId:target.wrapId||null};
+  scheduled.push(task);
+  if(typeof _reorderActive==="function")_reorderActive(id,targetId,where!=="before");
+  if(typeof recalcTimes==="function")recalcTimes({orderWins:true});
+  if(window.blockStore&&window.blockStore.createBlock){
+    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+    window.blockStore.createBlock("block",{local_id:id,title:title,type:"task",source:"manual",
+      start:task.start,end:task.end,duration:durMin,priority:"Medium",tags:[],
+      wrapId:task.wrapId||null,added_at:new Date().toISOString()},{date:date});
+  }
+  if(typeof saveTaskOrder==="function")saveTaskOrder();
+  if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+  render();
 }
 // One-time-per-day migration of legacy modal subtasks (the {text,done} map) into
 // real subtask tasks in the unified tree. Idempotent + guarded per day.

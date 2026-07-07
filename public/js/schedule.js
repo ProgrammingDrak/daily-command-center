@@ -132,7 +132,9 @@ function insertTaskNow(titleArg, durMinArg, opts){
   const startMin=_freeStart(roundTo15(now()),durMin,meetings);
   const startStr=fmt(startMin);
 
-  const newItem=Object.assign({id,title,type:"task",start:startStr,end:fmt(startMin+durMin),
+  const newItem=Object.assign({id,title,type:opts.type||"task",start:startStr,end:fmt(startMin+durMin),
+    // Rollup containers are wraps from birth so drag carries their children.
+    isWrap:(window.TaskTypes&&window.TaskTypes.rule(opts.type,"dragMovesSubtree"))||undefined,
     _pinnedStart:startStr},schedulePickerFields(durMin,opts));
 
   // Calculate insertion position
@@ -751,6 +753,7 @@ function addTaskUniversal(barEl){
     case"schedule":openSchedulePicker(title,durMin,{sourceBar:barEl});break;
     case"backlog":addNewTask(title,durMin);break;
     case"urgent":insertTaskNow(title,durMin);break;
+    case"shell":insertTaskNow(title,durMin,{type:"shell"});break;
     case"side_project":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;

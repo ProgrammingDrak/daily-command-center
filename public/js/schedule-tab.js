@@ -188,6 +188,7 @@ function buildListView(){
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(idx+1)+'</div>'+
+      (!isDoneRow&&!isPushedRow?'<button class="btn-add-menu btn-task-add" title="Add a task before / after / inside" data-add-id="'+ev.id+'">+</button>':'')+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<div class="it-list-check-col">'+
         '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done'))+'">'+ckSvg+'</button>'+

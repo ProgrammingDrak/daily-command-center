@@ -4272,6 +4272,18 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .am-pie-warn{font-size:10px;font-weight:700;color:var(--amber,#f59e0b)}
 /* Quick-add subtask popover: small, fast, anchored at the click. */
 .subtask-add-pop{display:flex;align-items:center;gap:5px;padding:6px}
+/* Universal task-add picker: placement chips on top, input row below. */
+.task-add-pop{flex-direction:column;align-items:stretch;gap:6px}
+.task-add-places{display:flex;gap:4px}
+.task-add-place{flex:1;background:none;border:1px solid var(--border);color:var(--text-muted);border-radius:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;padding:4px 6px;cursor:pointer;white-space:nowrap;transition:all 0.12s}
+.task-add-place:hover{color:var(--text)}
+.task-add-place.on{border-color:rgba(34,211,238,0.5);background:rgba(34,211,238,0.10);color:var(--cyan)}
+.task-add-row{display:flex;align-items:center;gap:5px}
+.task-add-dur{background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:11px;padding:4px}
+/* List-view "+" beside the rank number (the universal add affordance). */
+.it-list-item .btn-task-add{width:18px;height:18px;min-width:0;border-radius:5px;border:1px solid transparent;background:transparent;color:var(--cyan);cursor:pointer;font-size:13px;line-height:1;padding:0;opacity:0;transition:all 0.15s;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
+.it-list-item:hover .btn-task-add{opacity:0.5}
+.it-list-item .btn-task-add:hover{opacity:1;background:rgba(34,211,238,0.12);border-color:rgba(34,211,238,0.4)}
 .subtask-add-pop .sub-add-input{background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:12px;padding:4px 7px;width:190px;outline:none}
 .subtask-add-pop .sub-add-input:focus{border-color:var(--accent)}
 .subtask-add-pop .sub-add-go{background:var(--accent);border:none;color:#fff;border-radius:5px;font-size:11px;font-weight:700;padding:4px 9px;cursor:pointer}
@@ -4296,8 +4308,10 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   /* Lightning quick-complete — ALWAYS visible on touch, full 44px, amber-filled. */
   .chk-quick{display:inline-flex!important;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;opacity:1!important;font-size:21px;border-radius:11px;border:1px solid rgba(251,191,36,0.4);background:rgba(251,191,36,0.12);color:#fbbf24;padding:0}
   .card:hover .chk-quick,.it-list-check-col .chk-quick{opacity:1!important}
-  /* Add subtask — visible filled button at full target (was a tiny muted glyph). */
+  /* Add task — visible filled button at full target (was a tiny muted glyph). */
   .btn-add-menu{width:44px;height:44px;min-width:44px;font-size:24px;color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:11px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+  /* The rank-adjacent universal "+" needs the same treatment (its desktop rule is more specific). */
+  .it-list-item .btn-task-add{width:38px;height:38px;min-width:38px;font-size:18px;opacity:1;background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:9px}
   /* Subtask-row actions must never be hover-hidden on touch. */
   .it-list-item.subtask-row .sub-actions,.tl-item.tl-sub .sub-actions{opacity:1!important;gap:6px}
   .it-list-item.subtask-row .sub-actions .btn-add-menu,

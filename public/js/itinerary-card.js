@@ -223,7 +223,7 @@
           (guest?'':'<button class="chk'+(chkBlocked?' chk-blocked':'')+'" title="'+(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')+'">'+ckSvg+'</button>')+
           (guest?'':'<div class="chk-col">'+
             (!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>':'')+
-            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or stacked task" data-add-id="'+ev.id+'">+</button>':'')+
+            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add a task before / after / inside" data-add-id="'+ev.id+'">+</button>':'')+
           '</div>')+
           '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
