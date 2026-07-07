@@ -271,6 +271,7 @@ async function commitDoneOnDate(id,dateStr){
     log("checked",id);saveDoneState();render();
     _finishCompletionCelebration(_cel,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_award});
+    _autoCompleteShellAncestors(id,dateStr);
     return;
   }
 
@@ -304,19 +305,93 @@ async function commitDoneOnDate(id,dateStr){
   }
   log("checked-on",id,"Marked done on "+dateStr);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_pointAwardOverride(id)});
+  _autoCompleteShellAncestors(id,dateStr);
+}
+
+// Completion bonus for a rollup container (shell): bonusPct × the estimated
+// value of its whole subtree. Each descendant that isn't a pie subtask
+// contributes its own estimate (PointPlan.estimatePool — the points-chip
+// number); a descendant that owns a pie contributes its pool instead (which
+// already covers its subtasks). Nested rollup containers contribute nothing
+// themselves (their own bonus banks when THEY complete) but their subtrees
+// count. Client-computed like the PointPlan pie bonus and sent as a
+// points_override — the server clamps and ledgers it idempotently.
+function _shellBonusPoints(id){
+  if(typeof scheduled==="undefined"||!window.TaskTypes)return undefined;
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||!window.TaskTypes.isRollup(ev))return undefined;
+  const pct=Number(window.TaskTypes.rule(ev,"bonusPct"))||0;
+  if(pct<=0)return undefined;
+  let sum=0;
+  const seen=new Set();
+  (function walk(pid){
+    if(seen.has(pid))return;
+    seen.add(pid);
+    childrenOf(pid,scheduled).forEach(c=>{
+      if(relOf(c)==="subtask")return; // pie slices are covered by their parent's pool
+      const isRollupChild=window.TaskTypes.isRollup(c);
+      if(!isRollupChild&&window.PointPlan){
+        const hasPie=childrenOf(c.id,scheduled).some(k=>relOf(k)==="subtask");
+        if(hasPie&&typeof window.PointPlan.compute==="function"){
+          const plan=window.PointPlan.compute(c.id);
+          sum+=(plan&&plan.pool)||0;
+        } else if(typeof window.PointPlan.estimatePool==="function"){
+          sum+=window.PointPlan.estimatePool(c.id)||0;
+        }
+      }
+      walk(c.id); // ride-along (and nested-shell) descendants earn separately
+    });
+  })(id);
+  if(sum<=0)return undefined;
+  return Math.max(1,Math.min(500,Math.round(sum*pct)));
+}
+
+// After any completion, walk the parent chain: a rollup ancestor (shell) whose
+// children are now ALL done auto-completes and banks its bonus. Completion is
+// applied directly (not via toggleDone) so the manual-complete guard and the
+// child cascade are skipped — every child is already done. Idempotent: the
+// bonus rides the normal ledger sourceKey (<date>:<shellId>).
+function _autoCompleteShellAncestors(id,sourceDate){
+  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof parentIdOf!=="function")return;
+  const seen=new Set();
+  let cur=scheduled.find(e=>e.id===id);
+  while(cur){
+    const pid=parentIdOf(cur);
+    if(!pid||seen.has(pid))return;
+    seen.add(pid);
+    const parent=scheduled.find(e=>e.id===pid);
+    if(!parent)return;
+    if(window.TaskTypes.rule(parent,"autoCompleteWhenChildrenDone")&&!isDone(parent)){
+      if(childrenOf(parent.id,scheduled).some(c=>!isDone(c)))return; // still open work inside
+      const bonus=_shellBonusPoints(parent.id);
+      const completedAt=new Date();
+      manualDone.add(parent.id);doneAt[parent.id]=completedAt;
+      log("checked",parent.id,"Auto-completed: all nested tasks done");
+      saveDoneState();render();
+      awardSlotTaskCredit(parent,{sourceDate:sourceDate,completedAt:completedAt.toISOString(),awardPoints:bonus});
+      if(typeof showToast==="function")showToast('"'+(parent.title||"Shell")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
+    } else if(!isDone(parent)){
+      return; // an open non-rollup ancestor blocks everything above it
+    }
+    cur=parent;
+  }
 }
 
 // Points override for a completion, when the task participates in a parent's
-// point pie. Returns:
+// point pie or is itself a rollup container. Returns:
+//   - a rollup container's completion bonus (covers the manual recheck path;
+//     the normal path banks it via _autoCompleteShellAncestors);
 //   - a parent's completion award (bonus + still-open subtask slices) when the
 //     task has subtasks — MUST be read BEFORE _onParentCompleted cascades them;
 //   - a subtask's own slice when it is a subtask of a parent;
 //   - undefined for everything else (normal duration-based scoring), including
 //     "stacked" (ride-along) tasks, whose points are independent.
 function _pointAwardOverride(id){
-  if(!window.PointPlan||typeof childrenOf!=="function"||typeof relOf!=="function")return undefined;
+  if(typeof childrenOf!=="function"||typeof relOf!=="function")return undefined;
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return undefined;
+  if(window.TaskTypes&&window.TaskTypes.isRollup(ev))return _shellBonusPoints(id);
+  if(!window.PointPlan)return undefined;
   const hasSubKids=childrenOf(id,scheduled).some(c=>relOf(c)==="subtask");
   if(hasSubKids)return window.PointPlan.awardForParentCompletion(id);
   if(ev.subtaskOf)return window.PointPlan.shareFor(ev.subtaskOf,id);
@@ -450,6 +525,7 @@ function toggleDone(id,opts){
       saveDoneState();render();
       _finishCompletionCelebration(_cel,id);
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
+      _autoCompleteShellAncestors(id,currentDate);
       if(typeof showToast==="function"){
         const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
         showToast("Marked done on "+label,"success");
@@ -477,6 +553,7 @@ function toggleDone(id,opts){
   _finishCompletionCelebration(_cel,id);
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
+  _autoCompleteShellAncestors(id,currentDate);
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
