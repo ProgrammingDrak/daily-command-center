@@ -178,7 +178,9 @@ function buildListView(){
     // fixed-column grid -- shoving the title right and wrapping actions to a 2nd line.
     const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>';
     const el=document.createElement("div");
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");
+    const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
+    const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
@@ -188,16 +190,16 @@ function buildListView(){
       '<div class="it-list-rank">'+(idx+1)+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<div class="it-list-check-col">'+
-        '<button class="chk it-list-check'+(isDoneRow?' on':'')+'" title="'+(isDoneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>':'')+
+        '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done'))+'">'+ckSvg+'</button>'+
+        (!isMeeting(ev)&&!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
       '</div>'+
-      '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
+      '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
         '<div class="it-list-meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           '<span>'+ms(dur(ev))+'</span>'+
+          (tt&&tt.rollupMode&&typeof shellRollupChip==="function"?shellRollupChip(ev):'')+
           (ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isMeeting(ev)&&!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'))+
           (ev._locked?'<span class="it-list-lock" title="Locked — holds its time when tasks reflow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
@@ -220,7 +222,8 @@ function buildListView(){
 
     el.querySelector(".it-list-check").addEventListener("click",e=>{
       e.stopPropagation();
-      if(isDoneRow)toggleDone(ev.id);
+      // Blocked rollup container: skip the notes modal, let toggleDone toast why.
+      if(isDoneRow||chkBlocked)toggleDone(ev.id);
       else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
     });
     const quick=el.querySelector(".chk-quick");
@@ -547,8 +550,14 @@ function buildSchedule(){
     el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));
 
     // Event listeners
-    el.querySelector(".chk").addEventListener("click",e=>{e.stopPropagation();openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);});
-    el.querySelector(".chk-quick").addEventListener("click",e=>{e.stopPropagation();e.currentTarget.classList.add("flash");toggleDone(ev.id);});
+    el.querySelector(".chk").addEventListener("click",e=>{
+      e.stopPropagation();
+      // Blocked rollup container: skip the notes modal, let toggleDone toast why.
+      if(typeof shellCompleteBlocked==="function"&&shellCompleteBlocked(ev))toggleDone(ev.id);
+      else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
+    });
+    const _q=el.querySelector(".chk-quick"); // absent on rollup containers
+    if(_q)_q.addEventListener("click",e=>{e.stopPropagation();e.currentTarget.classList.add("flash");toggleDone(ev.id);});
     // + button opens task detail modal directly (no dropdown)
     const addBtn=el.querySelector(".btn-add-menu");
     if(addBtn)addBtn.addEventListener("click",e=>{

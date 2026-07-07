@@ -95,6 +95,55 @@ function subtaskProgress(id,pool,_seen){
   return {done,total};
 }
 
+// Rollup summary for a container type (shell): estimated points of the whole
+// subtree — every descendant that isn't a pie subtask contributes its own
+// estimate (PointPlan.estimatePool); a descendant owning a pie contributes its
+// pool, which already covers its subtasks; nested rollup containers contribute
+// only their subtrees. done/total counts direct children. This walker is the
+// single source for both the card chip and _shellBonusPoints in schedule.js.
+function shellRollup(id,pool){
+  pool=pool||((typeof scheduled!=="undefined")?scheduled:[]);
+  let points=0;
+  const seen=new Set();
+  (function walk(pid){
+    if(seen.has(pid))return;
+    seen.add(pid);
+    childrenOf(pid,pool).forEach(c=>{
+      if(relOf(c)==="subtask")return; // pie slices are covered by their parent's pool
+      if(!(window.TaskTypes&&window.TaskTypes.isRollup(c))&&window.PointPlan){
+        const hasPie=childrenOf(c.id,pool).some(k=>relOf(k)==="subtask");
+        if(hasPie&&typeof window.PointPlan.compute==="function"){
+          const plan=window.PointPlan.compute(c.id);
+          points+=(plan&&plan.pool)||0;
+        } else if(typeof window.PointPlan.estimatePool==="function"){
+          points+=window.PointPlan.estimatePool(c.id)||0;
+        }
+      }
+      walk(c.id);
+    });
+  })(id);
+  const kids=childrenOf(id,pool);
+  return {points:Math.round(points),done:kids.filter(k=>isDone(k)).length,total:kids.length};
+}
+
+// True when a rollup container still has open children — its checkbox is
+// display-only until they finish (toggleDone enforces the same rule).
+function shellCompleteBlocked(ev){
+  return !!(ev&&window.TaskTypes&&window.TaskTypes.rule(ev,"blockManualCompleteWithOpenChildren")&&
+    typeof scheduled!=="undefined"&&childrenOf(ev.id,scheduled).some(c=>!isDone(c)));
+}
+
+// Meta chip for a rollup container: children's points, progress, bonus preview.
+function shellRollupChip(ev){
+  if(!(ev&&window.TaskTypes&&window.TaskTypes.isRollup(ev)))return "";
+  const r=shellRollup(ev.id);
+  if(!r.total)return "";
+  const pct=Number(window.TaskTypes.rule(ev,"bonusPct"))||0;
+  const bonus=(r.points>0&&pct>0)?Math.max(1,Math.min(500,Math.round(r.points*pct))):0;
+  const title=(r.points+" pts across nested tasks · "+r.done+"/"+r.total+" done"+(bonus?" · +"+bonus+" pt bonus when all finish":"")).replace(/"/g,"&quot;");
+  return '<span class="points-chip shell-chip" title="'+title+'">&Sigma; '+r.points+' pts · '+r.done+'/'+r.total+(bonus?' · +'+bonus+' bonus':'')+'</span>';
+}
+
 // Collapse state for any parent row (persisted in localStorage).
 let _collapsedSet=null;
 function loadCollapsed(){

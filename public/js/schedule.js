@@ -317,31 +317,12 @@ async function commitDoneOnDate(id,dateStr){
 // count. Client-computed like the PointPlan pie bonus and sent as a
 // points_override — the server clamps and ledgers it idempotently.
 function _shellBonusPoints(id){
-  if(typeof scheduled==="undefined"||!window.TaskTypes)return undefined;
+  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof shellRollup!=="function")return undefined;
   const ev=scheduled.find(e=>e.id===id);
   if(!ev||!window.TaskTypes.isRollup(ev))return undefined;
   const pct=Number(window.TaskTypes.rule(ev,"bonusPct"))||0;
   if(pct<=0)return undefined;
-  let sum=0;
-  const seen=new Set();
-  (function walk(pid){
-    if(seen.has(pid))return;
-    seen.add(pid);
-    childrenOf(pid,scheduled).forEach(c=>{
-      if(relOf(c)==="subtask")return; // pie slices are covered by their parent's pool
-      const isRollupChild=window.TaskTypes.isRollup(c);
-      if(!isRollupChild&&window.PointPlan){
-        const hasPie=childrenOf(c.id,scheduled).some(k=>relOf(k)==="subtask");
-        if(hasPie&&typeof window.PointPlan.compute==="function"){
-          const plan=window.PointPlan.compute(c.id);
-          sum+=(plan&&plan.pool)||0;
-        } else if(typeof window.PointPlan.estimatePool==="function"){
-          sum+=window.PointPlan.estimatePool(c.id)||0;
-        }
-      }
-      walk(c.id); // ride-along (and nested-shell) descendants earn separately
-    });
-  })(id);
+  const sum=shellRollup(id,scheduled).points;
   if(sum<=0)return undefined;
   return Math.max(1,Math.min(500,Math.round(sum*pct)));
 }
