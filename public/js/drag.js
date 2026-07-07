@@ -154,9 +154,14 @@ function recalcTimesTagAware(schedBlocks){
 // pinned (or locked) task as immovable. Unpinned tasks flow around all of
 // them so inserting an Urgent task at a fixed time bumps later tasks
 // forward.
+// opts.orderWins (drag reflow): list order is truth — pinned tasks join the
+// chain and their pins re-sync to the new starts; only meetings/OOO/breaks
+// and _locked tasks still hold.
 // When any schedule block has acceptedTags, delegates to recalcTimesTagAware.
-function recalcTimes(){
-  // Tag-aware mode: delegate when any block has accepted tags configured
+function recalcTimes(opts){
+  opts=opts||{};
+  // Tag-aware mode: delegate when any block has accepted tags configured.
+  // Block tag constraints outrank list order, so orderWins is ignored here.
   const schedBlocks = (__state && __state.schedule && __state.schedule.blocks) || [];
   if(schedBlocks.some(b => (b.acceptedTags || []).length > 0)){
     recalcTimesTagAware(schedBlocks);
@@ -171,11 +176,12 @@ function recalcTimes(){
 
   // Pass 1: place pinned/locked tasks at their pinned start and add them to the
   // blockers list alongside meetings. Locked tasks pin to their current start.
+  // Under orderWins, pinned tasks are NOT blockers — they chain like the rest.
   const blockers=_meetingBlocks().slice();
   active.forEach(ev=>{
     if(isNested(ev))return;          // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
-    if(ev._pinnedStart||ev._locked){
+    if(ev._locked||(!opts.orderWins&&ev._pinnedStart)){
       const d=dur(ev);
       const ps=pt(ev._pinnedStart||ev.start);
       ev.start=fmt(ps);ev.end=fmt(ps+d);
@@ -201,21 +207,36 @@ function recalcTimes(){
   }
 
   // Pass 2: cascade non-pinned, non-locked, non-meeting tasks around all blockers.
+  const repinned=[];
   active.forEach(ev=>{
     if(isNested(ev))return;          // nested (ride-along/subtask): doesn't consume the cascade cursor
     if(isFixedTimeBlock(ev)){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
-    if(ev._pinnedStart||ev._locked){
+    if(ev._locked||(!opts.orderWins&&ev._pinnedStart)){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
     const d=dur(ev);
     const s=_freeStart(cursor,d,blockers);
     ev.start=fmt(s);ev.end=fmt(s+d);
+    if(opts.orderWins&&ev._pinnedStart&&ev._pinnedStart!==ev.start){
+      ev._pinnedStart=ev.start;
+      repinned.push(ev);
+    }
     cursor=s+d;
   });
+
+  // orderWins bumped some pinned tasks: rewrite their entries in the explicit
+  // pin map (only ids already present) so a reload doesn't snap them back.
+  if(repinned.length&&typeof loadPinnedStarts==="function"&&typeof savePinnedStarts==="function"){
+    const pins=loadPinnedStarts();let changed=false;
+    repinned.forEach(ev=>{
+      if(pins[ev.id]!==undefined&&pins[ev.id]!==ev._pinnedStart){pins[ev.id]=ev._pinnedStart;changed=true;}
+    });
+    if(changed)savePinnedStarts(pins);
+  }
 
   // Re-sort scheduled by time so list order always matches clock order.
   // Tasks pushed past meetings will automatically appear after them in the list.
@@ -310,11 +331,17 @@ function dDrop(e,tid){
   }
   if(!dragId){clearCls();return;}
 
-  // External drag from the Tasks drawer backlog: add to schedule instead of reordering.
+  // External drag from the Tasks drawer backlog: add to schedule at the drop
+  // position and chain-reflow. This branch skips _finishDrag, so persist
+  // order + shifted times here.
   if(window._dragFromBacklog){
     window._dragFromBacklog=false;
     const id=dragId; dragId=null;
-    if(typeof addToSchedule==="function") addToSchedule(id);
+    const br=e.currentTarget.getBoundingClientRect();
+    const bAfter=(e.clientY-br.top)>=br.height/2;
+    if(typeof addToSchedule==="function") addToSchedule(id,{targetId:tid,after:bAfter,orderWins:true});
+    if(typeof saveTaskOrder==="function")saveTaskOrder();
+    if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
     clearCls();return;
   }
   if(dragId===tid){clearCls();return;}
@@ -349,7 +376,7 @@ function dDrop(e,tid){
     const oldStart=pt(moved.start);
     _clearPin(moved);
     _reorderActive(moved.id,target.id,after);
-    recalcTimes();
+    recalcTimes({orderWins:true});
     const delta=pt(moved.start)-oldStart;
     if(delta){
       scheduled.filter(c=>c.wrapId===moved.id).forEach(c=>{
@@ -379,7 +406,7 @@ function dDrop(e,tid){
       _placeInWrapWindow(moved,wrapEv);
     }
     _persistEvWrap(moved);
-    recalcTimes();
+    recalcTimes({orderWins:true});
     if(typeof showToast==="function"&&wrapEv)showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
   }else{
     // ---- Case C: TOP-LEVEL drop -> promote out of any parent, then sequential reorder ----
@@ -387,7 +414,7 @@ function dDrop(e,tid){
     moved.wrapId=null;moved.subtaskOf=null;
     _clearPin(moved);
     _reorderActive(moved.id,target.id,after);
-    recalcTimes();
+    recalcTimes({orderWins:true});
     if(wasNested){_persistEvWrap(moved);if(typeof showToast==="function")showToast("Promoted to its own task","success",2200);}
   }
   _finishDrag(old);
