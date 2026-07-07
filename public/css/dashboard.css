@@ -1328,7 +1328,9 @@
   .it-list-title-row{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
   .it-list-title-row .ttl{font-size:14px}
   .it-list-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:4px;font-size:10px;color:var(--text-muted)}
-  .it-list-lock{color:var(--amber)}
+  .it-list-lock{color:var(--amber);display:inline-flex;align-items:center}
+  .lock-ind{color:var(--amber);display:inline-flex;align-items:center;margin-right:4px;vertical-align:middle}
+  .lock-ind svg,.it-list-lock svg{display:block}
   .it-list-changed{color:var(--amber)}
   .it-list-actions{display:flex;align-items:center;gap:5px;justify-content:flex-end}
   .it-list-check-col{display:flex;flex-direction:column;align-items:center;gap:3px}

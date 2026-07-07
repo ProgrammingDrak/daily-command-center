@@ -199,7 +199,7 @@ function buildListView(){
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           '<span>'+ms(dur(ev))+'</span>'+
           (ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isMeeting(ev)&&!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'))+
-          (ev._locked?'<span class="it-list-lock">Locked</span>':'')+
+          (ev._locked?'<span class="it-list-lock" title="Locked — holds its time when tasks reflow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
           (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+

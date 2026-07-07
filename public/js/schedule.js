@@ -553,17 +553,21 @@ function hydrateLockedTasks(){
   scheduled.forEach(ev=>{ if(idSet.has(ev.id)) ev._locked=true; });
 }
 
-function addToSchedule(blId){
+// opts (drag drops): {targetId, after, orderWins} — place the new task at the
+// drop position instead of the end, then chain-reflow. Button callers pass nothing.
+function addToSchedule(blId,opts){
+  opts=opts||{};
   let idx=consider.findIndex(b=>b.id===blId),task,fromBacklog=false;
   if(idx!==-1){task=consider.splice(idx,1)[0]}else{idx=backlog.findIndex(b=>b.id===blId);if(idx===-1)return;task=backlog.splice(idx,1)[0];fromBacklog=true}
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+task.durMin;
   const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority,commuteMinutes:task.commuteMinutes||null,commuteToMinutes:task.commuteToMinutes||task.commuteMinutes||null,commuteBackMinutes:task.commuteBackMinutes||task.commuteReturnMinutes||null};
   scheduled.push(newItem);
+  if(opts.targetId&&typeof _reorderActive==="function")_reorderActive(newItem.id,opts.targetId,opts.after);
   if(fromBacklog)deleteBacklogBlock(blId);
   // Persist as a scheduled block so the move survives reload (the backlog block is gone now).
   if(typeof persistAddedTask==="function")persistAddedTask(newItem);
-  recalcTimes();log("scheduled",task.id,"Added: "+task.title);render()
+  recalcTimes(opts.orderWins?{orderWins:true}:undefined);log("scheduled",task.id,"Added: "+task.title);render()
 }
 function addFollowupToSchedule(fu,parentId){
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
