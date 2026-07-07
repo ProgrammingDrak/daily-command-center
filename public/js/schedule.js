@@ -384,7 +384,14 @@ function _onParentCompleted(id){
       completeSubs(c.id);
     });
   })(id);
-  // 2) Promote unfinished ride-alongs to standalone open tasks.
+  // 2) Promote unfinished ride-alongs to standalone open tasks. Rollup
+  // containers (shells) never eject their children — they can only complete
+  // when every child is already done, so there is nothing to promote.
+  const _parentEv=scheduled.find(e=>e.id===id);
+  if(_parentEv&&window.TaskTypes&&window.TaskTypes.isRollup(_parentEv)){
+    if(typeof recalcTimes==="function")recalcTimes();
+    return;
+  }
   let promoted=0;
   scheduled.filter(c=>c.wrapId===id&&!isDone(c)).forEach(c=>{
     c.wrapId=null;
@@ -400,6 +407,20 @@ function toggleDone(id,opts){
   if(manualDone.has(id)){
     manualDone.delete(id);delete doneAt[id];log("unchecked",id);
     saveDoneState();render();return;
+  }
+
+  // A rollup container (shell) can't be checked while children are open — its
+  // bonus depends on ALL children finishing, and it auto-completes when the
+  // last one does (that path bypasses this via opts._fromAutoComplete).
+  if(!opts._fromAutoComplete&&window.TaskTypes&&typeof childrenOf==="function"){
+    const shellEv=scheduled.find(e=>e.id===id);
+    if(shellEv&&window.TaskTypes.rule(shellEv,"blockManualCompleteWithOpenChildren")){
+      const open=childrenOf(id,scheduled).filter(c=>!isDone(c)).length;
+      if(open){
+        if(typeof showToast==="function")showToast("Finish its "+open+" remaining task"+(open>1?"s":"")+" first","info",2600);
+        return;
+      }
+    }
   }
 
   // Caller forced a specific completion date (Done-on-date confirmation flow)

@@ -372,7 +372,9 @@ function dDrop(e,tid){
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
-  if(typeof isWrap==="function"&&isWrap(moved)){
+  // Rollup containers (shells) always carry their subtree, even without the
+  // isWrap flag (e.g. API-created shells).
+  if((typeof isWrap==="function"&&isWrap(moved))||(window.TaskTypes&&window.TaskTypes.rule(moved,"dragMovesSubtree"))){
     const oldStart=pt(moved.start);
     _clearPin(moved);
     _reorderActive(moved.id,target.id,after);

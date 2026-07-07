@@ -372,8 +372,11 @@ loadSubtasks=function(){
 function addSubtask(taskId, text){
   if(!text||!text.trim())return;
   text=text.trim();
-  const id="st-"+Date.now();
   const parent=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null;
+  // Rollup containers (shells) only take full-fledged nested tasks, never
+  // timeless pie subtasks — reroute so the parent's pie is never created.
+  if(parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")return addStackedTask(taskId,text);
+  const id="st-"+Date.now();
   const startStr=(parent&&parent.start)||"00:00";
   const task={id:id,title:text,type:"task",subtaskOf:taskId,source:"manual",
     start:startStr,end:startStr,priority:"Medium",tags:[],meta:""};
@@ -427,6 +430,20 @@ function reparentAsSubtask(childId, parentId){
   if(typeof _isAncestor==="function"&&_isAncestor(childId,parentId)){
     if(typeof showToast==="function")showToast("Can't nest a task under its own subtask","error",2600);
     return false;
+  }
+  // Rollup containers (shells) take nested tasks via the wrap edge instead:
+  // the child keeps its own time and its own duration-based points.
+  if(window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap"){
+    if(child.wrapId===parentId)return false; // already nested in this parent
+    const prevP=(typeof parentIdOf==="function")?parentIdOf(child):(child.subtaskOf||child.wrapId||null);
+    child.wrapId=parentId;child.subtaskOf=null;
+    if(typeof _clearPin==="function")_clearPin(child);
+    if(typeof _persistEvWrap==="function")_persistEvWrap(child);
+    if(prevP&&prevP!==parentId&&window.PointPlan&&typeof window.PointPlan.reconcile==="function")window.PointPlan.reconcile(prevP);
+    if(typeof recalcTimes==="function")recalcTimes();
+    render();
+    if(typeof showToast==="function")showToast('Nested inside "'+(parent.title||"task")+'"',"success",2200);
+    return true;
   }
   if(child.subtaskOf===parentId)return false; // already a subtask of this parent
   const prevParent=(typeof parentIdOf==="function")?parentIdOf(child):(child.subtaskOf||child.wrapId||null);
