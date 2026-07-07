@@ -662,6 +662,59 @@
         'srcdoc="'+gbEsc(html)+'"></iframe>';
   }
 
+  // The eye INTO the brain: health trend, per-machine backup recency, what's
+  // going stale, the full skill toolbox, and the how-it-works glossary. All
+  // data is collected deterministically by claude-brain's build_brief_packet.py;
+  // this page is display-only.
+  function gbPageBrainHealth(page){
+    var STATUS_COLOR = { ok: "#10b981", stale: "#f59e0b", gap: "#ef4444" };
+    function pill(status){
+      var c = STATUS_COLOR[status] || "#9ca3af";
+      return '<span class="gb-pill" style="color:'+c+';border:1px solid '+c+'55;background:'+c+'14">'+gbEsc(status.toUpperCase())+'</span>';
+    }
+    var trend = page.trend || [];
+    var trendHtml = trend.length
+      ? '<div class="gb-list">'+
+          '<div class="gb-row" style="opacity:.65"><span class="gb-row-meta" style="min-width:86px">Date</span><span class="gb-row-meta">Link integrity</span><span class="gb-row-meta">Drift</span><span class="gb-row-meta">Staleness</span><span class="gb-row-meta">Duplication</span></div>'+
+          trend.map(function(t){
+            return '<div class="gb-row"><span class="gb-row-meta" style="min-width:86px">'+gbEsc(t.date)+'</span><span class="gb-row-meta">'+gbEsc(t.link_integrity)+'</span><span class="gb-row-meta">'+gbEsc(t.drift)+'</span><span class="gb-row-meta">'+gbEsc(t.staleness)+'</span><span class="gb-row-meta">'+gbEsc(t.duplication)+'</span></div>';
+          }).join("")+'</div>'
+      : '<div class="gb-empty">No health-metrics history yet.</div>';
+    var machines = page.machines || [];
+    var machinesHtml = machines.length
+      ? machines.map(function(m){
+          return '<div class="gb-row"><span class="gb-row-title">'+gbEsc(m.machine)+'</span>'+
+            '<span class="gb-row-meta">sync '+gbEsc(m.last_sync)+'</span>'+
+            '<span class="gb-row-meta">evidence '+gbEsc(m.last_evidence)+'</span>'+pill(m.status)+'</div>';
+        }).join("")
+      : '<div class="gb-empty">No machine activity detected.</div>';
+    var stale = page.stale || [];
+    var staleHtml = stale.length
+      ? stale.map(function(s){ return '<div class="gb-note"><span><strong>'+gbEsc(s.kind)+':</strong> '+gbEsc(s.detail)+'</span></div>'; }).join("")
+      : '<div class="gb-empty">Nothing out of date. Clean cabinet.</div>';
+    var toolboxHtml = (page.toolbox || []).map(function(g){
+      return '<div class="gb-row-stack">'+
+        '<div class="gb-section-title" style="margin-top:10px">'+gbEsc(g.plugin)+'</div>'+
+        (g.description ? '<div class="gb-row-sub">'+gbEsc(g.description)+'</div>' : '')+
+        (g.skills || []).map(function(s){
+          return '<details class="gb-row gb-row-stack" style="display:block">'+
+            '<summary style="cursor:pointer"><span class="gb-row-title">/'+gbEsc(g.plugin)+':'+gbEsc(s.name)+'</span> <span class="gb-row-meta">'+gbEsc(s.what)+'</span></summary>'+
+            (s.when ? '<div class="gb-row-sub" style="margin:6px 0 2px 14px">'+gbEsc(s.when)+'</div>' : '')+
+          '</details>';
+        }).join("")+
+      '</div>';
+    }).join("") || '<div class="gb-empty">No skills discovered.</div>';
+    var glossaryHtml = (page.glossary || []).map(function(t){
+      return '<section class="gb-bible-section"><h3>'+gbEsc(t.term)+'</h3><p>'+gbEsc(t.def)+'</p></section>';
+    }).join("");
+    return '<p class="gb-page-summary">'+gbEsc(page.summary || "")+'</p>'+
+      '<section class="gb-section"><div class="gb-section-title">Machine backups</div>'+machinesHtml+'</section>'+
+      '<section class="gb-section"><div class="gb-section-title">Health trend (last '+trend.length+' runs)</div>'+trendHtml+'</section>'+
+      '<section class="gb-section"><div class="gb-section-title">Going stale</div>'+staleHtml+'</section>'+
+      '<section class="gb-section"><div class="gb-section-title">Toolbox — every skill, what it does, when to call it</div>'+toolboxHtml+'</section>'+
+      (glossaryHtml ? '<section class="gb-section"><div class="gb-section-title">How the brain works</div>'+glossaryHtml+'</section>' : '');
+  }
+
   function gbRenderPage(page, current, ui){
     if(page.id==="canvas")return gbPageCanvas(page);
     if(page.id==="front")return gbPageFront(page, current, ui);
@@ -669,6 +722,7 @@
     if(page.id==="step-back")return gbPageStepBack(page);
     if(page.id==="personal-bible")return gbPageBible(page);
     if(page.id==="process")return gbPageProcess(page, current);
+    if(page.id==="brain-health")return gbPageBrainHealth(page);
     return gbMetricRow(page.metrics)+'<pre class="gb-empty">'+gbEsc(JSON.stringify(page,null,2))+'</pre>';
   }
 

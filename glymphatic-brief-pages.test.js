@@ -54,3 +54,36 @@ assert.strictEqual(followUp.glymphatic_context.pages.length, 3, "pages persist a
 assert.strictEqual(followUp.glymphatic_brief.current.pages.length, 3, "brief keeps pages across pages-less packets");
 
 console.log("glymphatic-brief-pages: all assertions passed");
+
+// 5. Brain Health page (glymphatic_packet with id "brain-health") survives
+// ingest untouched — trend/machines/stale/toolbox/glossary reach the Brief.
+const BH_DATE = "2026-07-07";
+const BH_PACKET = {
+  date: BH_DATE,
+  source: "glymphatic-nightly",
+  generated_at: "2026-07-07T23:00:00.000Z",
+  summary: "Nightly with brain health.",
+  pages: [
+    { id: "front", label: "Today + Tomorrow", done_today: [], tomorrow: [] },
+    {
+      id: "brain-health",
+      label: "Brain Health",
+      summary: "The eye into the brain.",
+      trend: [{ date: "2026-07-06", link_integrity: "98%", drift: "2", staleness: "1", duplication: "0" }],
+      machines: [{ machine: "macbook-air-4", last_sync: "2026-07-07", last_evidence: "2026-07-07", status: "ok" }],
+      stale: [{ kind: "routing packet open", detail: "daily-review-2026-07-06-routing.md" }],
+      toolbox: [{ plugin: "brain-core", description: "Core skills", skills: [{ name: "brain-prune", what: "Prunes memory.", when: "Use as glymphatic Phase 3.5." }] }],
+      glossary: [{ term: "Glymphatic", def: "Nightly consolidate-and-clean loop." }],
+    },
+  ],
+};
+const bhState = ingestDeepSweepPacket({ date: BH_DATE, state: { date: BH_DATE }, packet: BH_PACKET, source: "glymphatic-nightly" });
+const bhPages = bhState.glymphatic_brief.current.pages;
+assert.strictEqual(bhPages.length, 2, "brain-health packet pages must survive ingest");
+const bhPage = bhPages.find((p) => p.id === "brain-health");
+assert.ok(bhPage, "brain-health page present on the brief");
+assert.strictEqual(bhPage.machines[0].status, "ok", "machine rows intact");
+assert.strictEqual(bhPage.toolbox[0].skills[0].name, "brain-prune", "toolbox rows intact");
+assert.strictEqual(bhPage.glossary[0].term, "Glymphatic", "glossary intact");
+
+console.log("glymphatic-brief-pages: brain-health assertions passed");
