@@ -4,7 +4,37 @@
 > Renamed from TODO-README 2026-07-04: this file was a per-PR QA log, not a live
 > TODO (it still described the SQLite era). Kept as history. Live conventions:
 > ARCHITECTURE.md. Manual QA: QA-CHECKLIST.md.
-## Current PR: Task Persistence + Overflow + UI Polish
+## Current PR: Shell task type + TASK_TYPES registry + universal add picker
+
+### What Changed
+- **TASK_TYPES registry** (`public/js/task-types.js`, UMD): declarative per-type
+  rules (earnsOwnPoints, rollupMode, bonusPct, childEdge, movable, …) shared by
+  the frontend and the backend scoring (`slot-scoring.js` derives
+  NON_EARNING_TYPES from it). Future types with rules are config, not
+  conditionals. Existing types are described; their historical call sites
+  (isMeeting etc.) remain the live enforcement.
+- **Shell type**: a container ("Work Day") whose points roll up from children.
+  Children are full tasks on the wrap edge (own time, own duration points).
+  Shell earns nothing itself (backend hard-zero, like ooo); when the last child
+  completes it auto-completes and banks a 10% bonus of the children's estimated
+  points via points_override (idempotent ledger sourceKey `<date>:<shellId>`).
+  Manual check is blocked while children are open. No clawback on un-check.
+  Silver bar + tinted `.card-shell` + `Σ pts · done/total · +bonus` chip.
+- **Universal "+" picker**: every row's add button (next to the rank number in
+  List view) opens Before / After / Subtask / Nested. Shells hide Subtask and
+  default to Nested (`_placeInWrapWindow` lands children at the next free slot
+  inside). The old add-subtask-only button is gone; ⚡ quick-complete shares the
+  check cluster (hidden on shells).
+
+### QA Checklist
+- [x] `npm test` (167, incl. new task-types.test.js contract tests)
+- [x] `npm run smoke http://localhost:8090` (no app-code console errors)
+- [x] Headless walkthrough: create shell → 2 nested children sequence correctly
+      → picker chips right on shell vs normal task → silver bar/tint/chip →
+      manual check blocked with toast → auto-complete + bonus toast on last
+      child → ledger shows 30/45/8(override) → uncheck/recheck = no double award
+
+---
 
 ### What Changed
 18 files, ~800 lines. Four major fix areas plus UI polish.
