@@ -35,10 +35,17 @@ function makeDay(scheduled, opts = {}) {
     isPushed: (ev) => !!ev.pushed,
     isNested: (ev) => !!(ev.wrapId || ev.subtaskOf),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
+    parentIdOf: (ev) => ev.subtaskOf || ev.wrapId || null,
+    isWrap: (ev) => !!ev.isWrap,
     loadPinnedStarts: () => pins,
     savePinnedStarts: () => { pinsSaved++; },
   };
   context.dur = context.dur.bind(context);
+  // _dropAtTargetLevel collaborators (subtask-order spy; reparentAsSubtask left
+  // undefined so the helper's manual fallback branch is what gets exercised)
+  const subtaskOrderSaves = [];
+  context.saveSubtaskOrder = (pid) => { subtaskOrderSaves.push(pid); };
+  context.__subtaskOrderSaves = subtaskOrderSaves;
   // addToSchedule collaborators (no-ops except the backlog source list)
   context.consider = [];
   context.backlog = opts.backlog || [];
@@ -50,7 +57,7 @@ function makeDay(scheduled, opts = {}) {
   vm.createContext(context);
   vm.runInContext(dragSource, context);
   vm.runInContext(addToScheduleSource, context);
-  return { context, pins, pinsSavedCount: () => pinsSaved };
+  return { context, pins, pinsSavedCount: () => pinsSaved, subtaskOrderSaves };
 }
 
 const t = (id, start, end, extra) => Object.assign({ id, title: id, type: "task", start, end }, extra);
@@ -223,4 +230,87 @@ test("tag-aware mode still outranks orderWins: pinned task does not bump", () =>
   const { context } = makeDay(sched, { blocks });
   context.recalcTimes({ orderWins: true });
   assert.equal(find(sched, "p").start, "10:00"); // tag-aware pass keeps the pin
+});
+
+// ---- _dropAtTargetLevel: edge drops on nested rows join the target's level ----
+
+test("edge drop under a ride-along joins the wrap and re-chains the nest", () => {
+  const sched = [
+    t("wrapA", "09:00", "10:00", { isWrap: true }),
+    t("r1", "09:00", "09:20", { wrapId: "wrapA" }),
+    t("x", "10:00", "10:30"),
+    t("c", "10:30", "11:00"),
+  ];
+  const { context } = makeDay(sched);
+  const handled = context._dropAtTargetLevel(find(sched, "x"), find(sched, "r1"), true);
+  context.recalcTimes({ orderWins: true });
+  assert.equal(handled, true);
+  assert.equal(find(sched, "x").wrapId, "wrapA"); // joined the nest, not top level
+  assert.equal(find(sched, "x").subtaskOf, null);
+  assert.equal(find(sched, "r1").start, "09:00"); // nest chained in order
+  assert.equal(find(sched, "x").start, "09:20");
+  assert.equal(find(sched, "x").end, "09:50");
+  assert.equal(find(sched, "c").start, "10:00"); // top-level gap closed behind x
+});
+
+test("edge drop under a subtask joins as a sibling subtask at the drop position", () => {
+  const sched = [
+    t("p", "09:00", "10:00"),
+    t("s1", "09:00", "09:00", { subtaskOf: "p" }),
+    t("s2", "09:00", "09:00", { subtaskOf: "p" }),
+    t("x", "10:00", "10:30"),
+  ];
+  const day = makeDay(sched);
+  const handled = day.context._dropAtTargetLevel(find(sched, "x"), find(sched, "s1"), true);
+  assert.equal(handled, true);
+  assert.equal(find(sched, "x").subtaskOf, "p");
+  assert.equal(find(sched, "x").wrapId, null);
+  const sibs = sched.filter((e) => e.subtaskOf === "p").map((e) => e.id);
+  assert.deepEqual(sibs, ["s1", "x", "s2"]); // landed between s1 and s2
+  assert.deepEqual(day.subtaskOrderSaves, ["p"]); // order persisted for the parent
+});
+
+test("edge drop within the same subtask nest reorders without promoting", () => {
+  const sched = [
+    t("p", "09:00", "10:00"),
+    t("s1", "09:00", "09:00", { subtaskOf: "p" }),
+    t("s2", "09:00", "09:00", { subtaskOf: "p" }),
+  ];
+  const { context } = makeDay(sched);
+  const handled = context._dropAtTargetLevel(find(sched, "s2"), find(sched, "s1"), false);
+  assert.equal(handled, true);
+  assert.equal(find(sched, "s2").subtaskOf, "p"); // still nested
+  const sibs = sched.filter((e) => e.subtaskOf === "p").map((e) => e.id);
+  assert.deepEqual(sibs, ["s2", "s1"]);
+});
+
+test("edge drop of a parent under its own subtask is refused (cycle guard)", () => {
+  const sched = [
+    t("p", "09:00", "10:00"),
+    t("s1", "09:00", "09:00", { subtaskOf: "p" }),
+  ];
+  const { context } = makeDay(sched);
+  const handled = context._dropAtTargetLevel(find(sched, "p"), find(sched, "s1"), true);
+  assert.equal(handled, false); // caller falls back to the top-level path
+  assert.equal(find(sched, "p").subtaskOf, undefined);
+});
+
+test("edge drop on a top-level target is not handled by the nest path", () => {
+  const sched = [t("a", "09:00", "09:30"), t("b", "09:30", "10:00")];
+  const { context } = makeDay(sched);
+  assert.equal(context._dropAtTargetLevel(find(sched, "b"), find(sched, "a"), true), false);
+});
+
+test("_chainWrapChildren stacks overflow back at the window start", () => {
+  const sched = [
+    t("wrapA", "09:00", "09:45", { isWrap: true }),
+    t("r1", "09:00", "09:30", { wrapId: "wrapA" }),
+    t("r2", "09:30", "10:00", { wrapId: "wrapA" }),
+    t("r3", "09:00", "09:20", { wrapId: "wrapA" }),
+  ];
+  const { context } = makeDay(sched);
+  context._chainWrapChildren(find(sched, "wrapA"));
+  assert.equal(find(sched, "r1").start, "09:00"); // 30m
+  assert.equal(find(sched, "r2").start, "09:30"); // 30m, ends past window (over-capacity)
+  assert.equal(find(sched, "r3").start, "09:00"); // cursor past window end: stacked at start
 });

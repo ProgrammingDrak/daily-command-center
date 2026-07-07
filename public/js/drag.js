@@ -281,6 +281,46 @@ function _placeInWrapWindow(moved,wrapEv){
   if(s+d>we)s=ws; // window full: stack at start (over-capacity; bandwidth chip shows it)
   moved.start=fmt(s);moved.end=fmt(s+d);
 }
+// Re-time a wrap's ride-alongs to chain in list order from the window start
+// (child N+1 starts when child N ends). Window full: remaining children stack
+// from the start again (over-capacity; the bandwidth chip shows it).
+function _chainWrapChildren(wrapEv){
+  const ws=pt(wrapEv.start),we=pt(wrapEv.end);
+  let cursor=ws;
+  scheduled.filter(c=>c.wrapId===wrapEv.id&&!isDone(c)&&!isDeleted(c)).forEach(c=>{
+    const d=dur(c)||15;
+    if(cursor>=we)cursor=ws;
+    c.start=fmt(cursor);c.end=fmt(cursor+d);
+    cursor+=d;
+    _persistEvWrap(c);
+  });
+}
+// Edge drop on a NESTED row: join the target's parent at the target's level
+// (ride-along or subtask), ordered before/after the target, then re-chain the
+// nest. Returns false (drop not handled) when the target is top-level or the
+// join would create a cycle -- caller falls back to the top-level path.
+function _dropAtTargetLevel(moved,target,after){
+  const tParent=parentIdOf(target);
+  if(!tParent||tParent===moved.id||_isAncestor(moved.id,tParent))return false;
+  if(target.subtaskOf){
+    if(typeof reparentAsSubtask==="function")reparentAsSubtask(moved.id,tParent);
+    else{moved.subtaskOf=tParent;moved.wrapId=null;_clearPin(moved);_persistEvWrap(moved);}
+    _reorderActive(moved.id,target.id,after);
+    if(typeof saveSubtaskOrder==="function")saveSubtaskOrder(tParent);
+    return true;
+  }
+  const wrapEv=scheduled.find(x=>x.id===tParent);
+  moved.wrapId=tParent;moved.subtaskOf=null;
+  _clearPin(moved);
+  _reorderActive(moved.id,target.id,after);
+  if(wrapEv){
+    if(!isWrap(wrapEv)){wrapEv.isWrap=true;_persistEvWrap(wrapEv);}
+    _chainWrapChildren(wrapEv);
+    if(typeof showToast==="function")showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
+  }
+  _persistEvWrap(moved);
+  return true;
+}
 function _reorderActive(movedId,targetId,after){
   const active=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
   const fi=active.findIndex(x=>x.id===movedId);if(fi===-1)return;
@@ -408,6 +448,10 @@ function dDrop(e,tid){
     _persistEvWrap(moved);
     recalcTimes({orderWins:true});
     if(typeof showToast==="function"&&wrapEv)showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
+  }else if(_dropAtTargetLevel(moved,target,after)){
+    // ---- Case C': edge drop on a NESTED row -> joined the target's level;
+    // reflow the top-level chain (the moved task left it or never consumed it). ----
+    recalcTimes({orderWins:true});
   }else{
     // ---- Case C: TOP-LEVEL drop -> promote out of any parent, then sequential reorder ----
     const wasNested=!!parentIdOf(moved);
