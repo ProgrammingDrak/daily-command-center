@@ -22,7 +22,8 @@
     tagCls: "tag-task",
     barColor: null,          // null -> legacy TC color path (data.js)
     cardClass: null,         // extra .card / .it-list-item modifier class
-    earnsOwnPoints: true,    // false -> duration scoring always ineligible
+    earnsOwnPoints: true,    // false -> non-earning (a positive point_multiplier can still rescue it)
+    hardZero: false,         // true -> NEVER earns duration points, no tag/multiplier can rescue it
     rollupMode: null,        // "children" -> points display = sum of children
     bonusPct: 0,             // completion bonus as a fraction of children's points
     autoCompleteWhenChildrenDone: false,
@@ -47,6 +48,7 @@
       barColor: "#e2e8f0",
       cardClass: "card-shell",
       earnsOwnPoints: false,
+      hardZero: true,
       rollupMode: "children",
       bonusPct: 0.10,
       autoCompleteWhenChildrenDone: true,
@@ -60,7 +62,7 @@
     meeting: { label: "Meeting", tagCls: "tag-meeting", earnsOwnPoints: false, movable: false, fixedTime: true },
     oneone:  { label: "1:1",     tagCls: "tag-oneone",  movable: false, fixedTime: true },
     break:   { label: "Break",   tagCls: "tag-break",   earnsOwnPoints: false, fixedTime: true },
-    ooo:     { label: "OOO",     tagCls: "tag-ooo",     earnsOwnPoints: false, movable: false, fixedTime: true },
+    ooo:     { label: "OOO",     tagCls: "tag-ooo",     earnsOwnPoints: false, hardZero: true, movable: false, fixedTime: true },
   };
 
   function normType(evOrType) {
@@ -83,6 +85,12 @@
       return Object.assign({}, DEFAULTS, TYPES[k]).earnsOwnPoints === false;
     });
   }
+  // The unconditional tier: no tag tier or point_multiplier can make these earn.
+  function hardZeroTypes() {
+    return Object.keys(TYPES).filter(function (k) {
+      return Object.assign({}, DEFAULTS, TYPES[k]).hardZero === true;
+    });
+  }
 
-  return { TYPES: TYPES, DEFAULTS: DEFAULTS, get: get, rule: rule, isRollup: isRollup, nonEarningTypes: nonEarningTypes };
+  return { TYPES: TYPES, DEFAULTS: DEFAULTS, get: get, rule: rule, isRollup: isRollup, nonEarningTypes: nonEarningTypes, hardZeroTypes: hardZeroTypes };
 });

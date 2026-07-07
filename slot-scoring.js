@@ -37,6 +37,12 @@ try { TaskTypes = require("./public/js/task-types"); } catch (e) { /* fallback b
 const NON_EARNING_TYPES = new Set(
   TaskTypes ? TaskTypes.nonEarningTypes() : ["meeting", "break", "ooo", "shell"]
 );
+// The unconditional tier: these never earn duration points, even with a
+// positive point_multiplier or a full-tier tag (unlike meeting/break, which a
+// positive multiplier can rescue).
+const HARD_ZERO_TYPES = new Set(
+  TaskTypes && TaskTypes.hardZeroTypes ? TaskTypes.hardZeroTypes() : ["ooo", "shell"]
+);
 const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
 const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
 
@@ -156,9 +162,9 @@ function resolveBountyCount(input = {}) {
 
 function isNonEarningTaskType(input = {}) {
   const type = normalizeText(input.type ?? input.kind);
-  // ooo and shell are unconditionally non-earning: ooo is time off, and a
-  // shell's points arrive only as a rollup bonus via points_override.
-  if (type === "ooo" || type === "shell") return true;
+  // Unconditional tier (ooo: time off; shell: its points arrive only as a
+  // rollup bonus via points_override) — no multiplier check can rescue these.
+  if (HARD_ZERO_TYPES.has(type)) return true;
   if (!NON_EARNING_TYPES.has(type)) return false;
   const multiplier = Number(input.point_multiplier ?? input.pointMultiplier);
   return !Number.isFinite(multiplier) || multiplier <= 0;
@@ -245,4 +251,5 @@ module.exports = {
   inferImportanceTier,
   isNonEarningTaskType,
   scoreTaskPoints,
+  HARD_ZERO_TYPES,
 };

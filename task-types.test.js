@@ -43,6 +43,14 @@ test("registry: non-earning set is exactly the historical set plus shell", () =>
   assert.equal(set.has("oneone"), false);
 });
 
+test("registry: hard-zero tier is exactly ooo + shell (meeting/break stay rescuable)", () => {
+  assert.deepEqual([...new Set(TaskTypes.hardZeroTypes())].sort(), ["ooo", "shell"]);
+  assert.deepEqual([...scoring.HARD_ZERO_TYPES].sort(), ["ooo", "shell"]);
+  // A positive multiplier rescues meeting (conditional tier) but never shell.
+  assert.equal(scoring.isNonEarningTaskType({ type: "meeting", point_multiplier: 1 }), false);
+  assert.equal(scoring.isNonEarningTaskType({ type: "shell", point_multiplier: 1 }), true);
+});
+
 test("backend: shell is never duration-scored, even with a point multiplier", () => {
   assert.equal(scoring.isNonEarningTaskType({ type: "shell" }), true);
   assert.equal(scoring.isNonEarningTaskType({ kind: "shell", point_multiplier: 1 }), true);

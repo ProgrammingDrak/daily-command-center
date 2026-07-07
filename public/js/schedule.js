@@ -319,14 +319,11 @@ async function commitDoneOnDate(id,dateStr){
 // count. Client-computed like the PointPlan pie bonus and sent as a
 // points_override — the server clamps and ledgers it idempotently.
 function _shellBonusPoints(id){
-  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof shellRollup!=="function")return undefined;
+  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof shellRollup!=="function"||typeof shellBonus!=="function")return undefined;
   const ev=scheduled.find(e=>e.id===id);
   if(!ev||!window.TaskTypes.isRollup(ev))return undefined;
-  const pct=Number(window.TaskTypes.rule(ev,"bonusPct"))||0;
-  if(pct<=0)return undefined;
-  const sum=shellRollup(id,scheduled).points;
-  if(sum<=0)return undefined;
-  return Math.max(1,Math.min(500,Math.round(sum*pct)));
+  const bonus=shellBonus(shellRollup(id,scheduled).points,Number(window.TaskTypes.rule(ev,"bonusPct"))||0);
+  return bonus>0?bonus:undefined;
 }
 
 // After any completion, walk the parent chain: a rollup ancestor (shell) whose
@@ -389,6 +386,11 @@ function awardSlotTaskCredit(ev,opts){
   if(opts.awardPoints!=null&&Number.isFinite(Number(opts.awardPoints))&&Number(opts.awardPoints)<=0)return;
   const fallbackDate=(typeof viewDate!=="undefined"&&viewDate)||((__state&&__state.date)||new Date().toISOString().split("T")[0]);
   const normalizedOpts={...opts,sourceDate:opts.sourceDate||opts.completionDate||fallbackDate,completedAt:opts.completedAt||new Date().toISOString()};
+  // A rollup container's bonus must dedupe across calendar dates: the default
+  // ledger key is <sourceDate>:<id>, so unchecking a shell and re-completing it
+  // under a different completion date would mint a fresh key and double-award.
+  // Pin the key to the shell instance itself (ids are unique per instance).
+  if(normalizedOpts.sourceKey==null&&window.TaskTypes&&window.TaskTypes.isRollup(ev))normalizedOpts.sourceKey="shell:"+ev.id;
   if(window.PetHome&&typeof window.PetHome.awardTask==="function"){
     window.PetHome.awardTask(ev,normalizedOpts).catch(()=>{});
   }

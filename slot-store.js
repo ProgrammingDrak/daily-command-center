@@ -7,6 +7,7 @@ const {
   LEGACY_POINTS_V2_MULTIPLIER,
   POINTS_V3_BALANCE_MULTIPLIER,
   scoreTaskPoints,
+  HARD_ZERO_TYPES,
 } = require("./slot-scoring");
 // Shared slot_accounts primitives (also used by punishment-store). The monthly
 // default and the account upsert are single-sourced here so the two stores can't
@@ -2191,9 +2192,10 @@ function taskPointTier(body = {}, settings = {}) {
     }
   }
   const type = String(body.type ?? body.kind ?? "").trim().toLowerCase();
-  // ooo and shell zero out before tag matching: even a full-tier tag must not
-  // let a shell earn duration points (its award is the rollup bonus override).
-  if (type === "ooo" || type === "shell") return { tier: "none", multiplier: 0, matched_tags: [] };
+  // The registry's hard-zero tier zeroes out before tag matching: even a
+  // full-tier tag must not let ooo/shell earn duration points (a shell's award
+  // is the rollup bonus override).
+  if (HARD_ZERO_TYPES.has(type)) return { tier: "none", multiplier: 0, matched_tags: [] };
   if (bestTier) {
     return {
       tier: bestTier,

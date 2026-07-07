@@ -126,6 +126,14 @@ function shellRollup(id,pool){
   return {points:Math.round(points),done:kids.filter(k=>isDone(k)).length,total:kids.length};
 }
 
+// Completion bonus for a rollup container: bonusPct × the subtree's estimated
+// points, clamped to the ledger's 1..500 override range. THE single formula —
+// the preview chip (shellRollupChip) and the awarded points_override
+// (_shellBonusPoints in schedule.js) must both call this so they can't drift.
+function shellBonus(points,pct){
+  return (points>0&&pct>0)?Math.max(1,Math.min(500,Math.round(points*pct))):0;
+}
+
 // True when a rollup container still has open children — its checkbox is
 // display-only until they finish (toggleDone enforces the same rule).
 function shellCompleteBlocked(ev){
@@ -139,7 +147,7 @@ function shellRollupChip(ev){
   const r=shellRollup(ev.id);
   if(!r.total)return "";
   const pct=Number(window.TaskTypes.rule(ev,"bonusPct"))||0;
-  const bonus=(r.points>0&&pct>0)?Math.max(1,Math.min(500,Math.round(r.points*pct))):0;
+  const bonus=shellBonus(r.points,pct);
   const title=(r.points+" pts across nested tasks · "+r.done+"/"+r.total+" done"+(bonus?" · +"+bonus+" pt bonus when all finish":"")).replace(/"/g,"&quot;");
   return '<span class="points-chip shell-chip" title="'+title+'">&Sigma; '+r.points+' pts · '+r.done+'/'+r.total+(bonus?' · +'+bonus+' bonus':'')+'</span>';
 }
