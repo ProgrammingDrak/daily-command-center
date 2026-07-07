@@ -2191,7 +2191,9 @@ function taskPointTier(body = {}, settings = {}) {
     }
   }
   const type = String(body.type ?? body.kind ?? "").trim().toLowerCase();
-  if (type === "ooo") return { tier: "none", multiplier: 0, matched_tags: [] };
+  // ooo and shell zero out before tag matching: even a full-tier tag must not
+  // let a shell earn duration points (its award is the rollup bonus override).
+  if (type === "ooo" || type === "shell") return { tier: "none", multiplier: 0, matched_tags: [] };
   if (bestTier) {
     return {
       tier: bestTier,

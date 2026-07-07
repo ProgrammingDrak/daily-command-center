@@ -28,7 +28,15 @@ const IMPORTANCE_MULTIPLIERS = {
   critical: 1.4,
 };
 
-const NON_EARNING_TYPES = new Set(["meeting", "break", "ooo"]);
+// Derived from the shared TASK_TYPES registry (public/js/task-types.js) so the
+// backend and the frontend mirror (points.js) can never disagree on which
+// types earn duration points. Literal fallback keeps scoring alive if the
+// registry ever fails to load.
+let TaskTypes = null;
+try { TaskTypes = require("./public/js/task-types"); } catch (e) { /* fallback below */ }
+const NON_EARNING_TYPES = new Set(
+  TaskTypes ? TaskTypes.nonEarningTypes() : ["meeting", "break", "ooo", "shell"]
+);
 const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
 const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
 
@@ -148,7 +156,9 @@ function resolveBountyCount(input = {}) {
 
 function isNonEarningTaskType(input = {}) {
   const type = normalizeText(input.type ?? input.kind);
-  if (type === "ooo") return true;
+  // ooo and shell are unconditionally non-earning: ooo is time off, and a
+  // shell's points arrive only as a rollup bonus via points_override.
+  if (type === "ooo" || type === "shell") return true;
   if (!NON_EARNING_TYPES.has(type)) return false;
   const multiplier = Number(input.point_multiplier ?? input.pointMultiplier);
   return !Number.isFinite(multiplier) || multiplier <= 0;
