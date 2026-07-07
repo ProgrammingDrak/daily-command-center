@@ -201,6 +201,19 @@ test("addToSchedule without opts keeps the append-at-end behavior", () => {
   assert.equal(find(sched, "b").start, "09:30");
 });
 
+test("orderWins: untimed rows are excluded and don't poison the anchor", () => {
+  const sched = [
+    t("a", "09:00", "09:30"),
+    t("u", "00:00", "00:30", { untimed: true }),
+    t("c", "10:00", "10:30"),
+  ];
+  const { context } = makeDay(sched);
+  context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "u").start, "00:00"); // untouched
+  assert.equal(find(sched, "a").start, "09:00"); // anchor is 09:00, not midnight
+  assert.equal(find(sched, "c").start, "09:30");
+});
+
 test("tag-aware mode still outranks orderWins: pinned task does not bump", () => {
   const sched = [
     t("a", "09:00", "09:30"),
