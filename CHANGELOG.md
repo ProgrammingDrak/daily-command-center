@@ -4,6 +4,37 @@
 > Renamed from TODO-README 2026-07-04: this file was a per-PR QA log, not a live
 > TODO (it still described the SQLite era). Kept as history. Live conventions:
 > ARCHITECTURE.md. Manual QA: QA-CHECKLIST.md.
+## Current PR: Reschedule unification + radial task destinations + true-move hardening
+
+### What Changed
+- **Reschedule fixes**: undated task-bar blocks 400ed on every true move; the
+  client now sends the viewed day as `fromDate`, the server accepts it as the
+  origin fallback and stamps a real date (self-healing). Undated
+  subtaskOf/wrapId-linked blocks join the subtree walk (filtered so delegated
+  items stay out). Tombstones no longer fold into the day as lookalike task
+  rows. WAL hardening: 400/404 rejections drop their entry (stamped
+  `e.permanent`), buffered reschedules older than 15 min dead-letter
+  (pre-#167 reversal guard). Full target day no longer refuses a move.
+- **Placement standard**: `openPlacementPicker` generalizes the 2-step day →
+  "After…" picker; `moveTaskViaPlacement` is the canonical mover (popover day
+  buttons, custom date, move menu). `rescheduleTaskToDate` honors
+  `opts.pinnedStart`; picker titles are editable and rename before the move.
+- **Radial destinations**: `TASK_DESTINATIONS` registry (Urgent / Schedule /
+  Backlog-Idea / Shell) drives every task-add bar; + Add or Enter fans out
+  the options and picking commits in one gesture; hover shows a mini preview
+  that expands on approach. Launcher FAB quick tap picks the type FIRST,
+  then opens the compose armed with it. Blank titles raise a confirm toast.
+- **App-wide toast visibility fix**: the legacy `.toast` opacity:0 rule hid
+  every container toast after its entry animation; scoped override restores
+  them.
+
+### QA
+- `npm test` 193/193 (6 new WAL contract tests, frozen vm clock);
+  `npm run smoke` passed; every flow driven headlessly on desktop + mobile
+  viewports (move with preset / after-task anchor / earliest, amber restore,
+  radial adds to all four destinations, FAB choose-type-first, hover-promote,
+  blank-title confirm, editable titles in both picker modes).
+
 ## Current PR: Shell task type + TASK_TYPES registry + universal add picker
 
 ### What Changed
