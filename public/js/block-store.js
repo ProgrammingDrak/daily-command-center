@@ -316,16 +316,20 @@
     },
 
     // Update a block (full properties replacement)
-    async updateBlock(id, properties) {
+    async updateBlock(id, properties, extra) {
       setSaving();
+      // extra carries top-level column changes the server PATCH accepts beyond
+      // properties — today just {date}, used when an Unscheduled row is
+      // promoted onto a day.
+      extra = extra || {};
       // Optimistic cache update BEFORE API call — so reads are instant
       const existing = cacheGet(id);
-      const optimistic = existing ? { ...existing, properties, updated_at: new Date().toISOString() } : null;
+      const optimistic = existing ? { ...existing, ...extra, properties, updated_at: new Date().toISOString() } : null;
       if (optimistic) cacheSet(optimistic);
       // Pre-write to WAL so the mutation survives a mid-flight reload / close.
-      const walId = walPush({ op: "update", id, data: { properties } });
+      const walId = walPush({ op: "update", id, data: { properties, ...extra } });
       try {
-        const block = await apiPatch("/api/blocks/" + id, { properties });
+        const block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
         cacheSet(block); // Replace optimistic with server response
         walRemove(walId);
         setSaved();
@@ -546,10 +550,16 @@
 
     async loadDateRange(startDate, endDate) {
       try {
-        const [blocks, dccStates] = await Promise.all([
+        // dcc-state is nice-to-have here; blocks are what the range consumers
+        // (day-review, Catch up, Unfinished) need. Don't let one failure nuke
+        // the whole cache fill.
+        const [blocksRes, dccRes] = await Promise.allSettled([
           apiGet(`/api/blocks/range?start=${startDate}&end=${endDate}`),
           apiGet(`/api/dcc-state/range?start=${startDate}&end=${endDate}`)
         ]);
+        if (blocksRes.status !== "fulfilled") throw blocksRes.reason;
+        const blocks = blocksRes.value || [];
+        const dccStates = (dccRes.status === "fulfilled" && dccRes.value) || {};
         // Group blocks by date
         const byDate = {};
         for (const b of blocks) {

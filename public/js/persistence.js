@@ -240,20 +240,27 @@ function reloadPersistedEdits() {
       // responsibility scaffolding. Startless tasks are admitted too -> they land
       // in the Unscheduled section instead of being dropped. (Previously required
       // local_id AND start, which silently dropped every API-inserted task.)
-      // Backlog copies (kind pending_task/backlog, stored dateless by
-      // savePendingTasks in sync.js) belong to the Pending UI, never the
-      // itinerary — without this exclusion they render on EVERY day.
-      // Dateless rows are only admitted for kind==="task": a local_id row
-      // without a date is legacy quick-add residue, not today's work.
+      // Day-scoping rules:
+      //  - dated row: folds only on its own date.
+      //  - dateless row: genuinely unscheduled work -> folds as untimed (the
+      //    Unscheduled section) on whatever day is viewed, UNLESS a dated
+      //    sibling shares its local_id. That sibling means the task IS
+      //    scheduled and the dateless row is a leftover copy (the old quick-add
+      //    dual-write minted these) — suppress it. No title fallback here:
+      //    recurring titles ("Coffee") would false-suppress real work.
+      //  - pending rows already closed in the Action Items tab stay out.
+      const datedLocalIds=new Set(window.blockStore.getByType("block")
+        .filter(x=>x.date&&(x.properties||{}).local_id)
+        .map(x=>x.properties.local_id));
       const isFoldableTask=b=>{
         const p=b.properties||{};
         if(p.kind&&/^responsibility/.test(p.kind))return false;
-        if(p.kind==="pending_task"||p.kind==="backlog")return false;
+        if(p.status==="deleted"||p.status==="archived"||p.status==="done")return false;
         // API-inserted shells carry kind or type "shell" and no local_id.
         const isShell=p.kind==="shell"||p.type==="shell";
         if(!p.local_id&&p.kind!=="task"&&!isShell)return false;
         if(b.date)return b.date===currentDate;
-        return p.kind==="task"||isShell;
+        return !(p.local_id&&datedLocalIds.has(p.local_id));
       };
       const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)];
       addedBlocks.forEach(block=>{
@@ -261,11 +268,17 @@ function reloadPersistedEdits() {
         const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
         if(!taskId||scheduled.find(e=>e.id===taskId))return;
         const d=p.duration||p.estimatedMinutes||30;
-        const hasStoredTime=p.start&&p.start!=="00:00";
-        const untimed=!p.start;              // no scheduled time -> Unscheduled section
+        // A dateless row is unscheduled by definition: any stored start on it is
+        // stale (e.g. stamped by an old reflow), so ignore it and keep the row
+        // in the Unscheduled section until a drag gives it a real slot.
+        const dateless=!block.date;
+        const hasStoredTime=!dateless&&p.start&&p.start!=="00:00";
+        const untimed=!p.start||dateless;    // no scheduled time -> Unscheduled section
         const task={
           id:taskId,title:p.title,type:p.type||"task",
           _blockId:block.id,
+          _dateless:dateless,   // day-agnostic row: Unscheduled everywhere, excluded from day stats
+          createdAt:block.created_at||p.created_at||p.createdAt||null,
           start:p.start||"00:00",
           end:p.end||fmt(d),
           meta:p.meta||("Custom task \u00b7 "+ms(d)),

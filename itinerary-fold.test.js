@@ -1,8 +1,12 @@
 // Contract tests for the itinerary fold guard (isFoldableTask) in
 // public/js/persistence.js. Regression for the prod incident where dateless
-// kind:"pending_task" backlog copies (written by savePendingTasks in sync.js)
-// folded into the itinerary on EVERY day and read as tasks duplicating from
-// yesterday onto today and tomorrow.
+// kind:"pending_task" copies of scheduled tasks (minted by the old quick-add
+// dual-write) folded into the itinerary on EVERY day.
+// Day-scoping semantics under test:
+//   - dated rows fold only on their own date
+//   - dateless rows fold (into the Unscheduled section) UNLESS a dated sibling
+//     shares their local_id — then they're a leftover copy and are suppressed
+//   - closed pending rows (status deleted/archived/done) never fold
 // Harness pattern: recalc-times.test.js (raw source sliced into a node:vm
 // context with stubbed globals).
 const test = require("node:test");
@@ -14,8 +18,13 @@ const persistenceSource = fs.readFileSync(require.resolve("./public/js/persisten
 const foldSource = persistenceSource.match(/const isFoldableTask=b=>\{[\s\S]*?\n\s*\};/);
 assert.ok(foldSource, "isFoldableTask definition not found in persistence.js");
 
-function makeFold(currentDate) {
-  return vm.runInNewContext(`(() => { ${foldSource[0]} return isFoldableTask; })()`, { currentDate });
+// The guard closes over `currentDate` and the precomputed `datedLocalIds` set;
+// the harness supplies both.
+function makeFold(currentDate, datedLocalIds) {
+  return vm.runInNewContext(`(() => { ${foldSource[0]} return isFoldableTask; })()`, {
+    currentDate,
+    datedLocalIds: datedLocalIds || new Set(),
+  });
 }
 
 const TODAY = "2026-07-08";
@@ -27,28 +36,37 @@ test("dated quick-add folds only on its own date", () => {
   assert.equal(fold(block("2026-07-07", { local_id: "qa-1", title: "t" })), false);
 });
 
-test("dateless pending_task backlog copy never folds (the duplication bug)", () => {
-  const fold = makeFold(TODAY);
+test("dateless row WITHOUT a dated sibling folds (Unscheduled section)", () => {
+  const fold = makeFold(TODAY, new Set());
+  assert.equal(fold(block(null, { local_id: "qa-solo", kind: "pending_task" })), true);
+  assert.equal(fold(block(undefined, { local_id: "carry-1", kind: "backlog" })), true);
+  assert.equal(fold(block(null, { local_id: "qa-legacy" })), true);
+});
+
+test("dateless twin WITH a dated sibling is suppressed (the duplication bug)", () => {
+  const fold = makeFold(TODAY, new Set(["qa-2", "qa-3"]));
   assert.equal(fold(block(null, { local_id: "qa-2", kind: "pending_task" })), false);
-  assert.equal(fold(block(undefined, { local_id: "carry-1", kind: "backlog" })), false);
-  // even a dated one stays out of the itinerary — backlog rows belong to the Pending UI
-  assert.equal(fold(block(TODAY, { local_id: "qa-3", kind: "pending_task" })), false);
+  assert.equal(fold(block(null, { local_id: "qa-3" })), false);
+  // an unrelated dateless row still folds
+  assert.equal(fold(block(null, { local_id: "qa-other", kind: "pending_task" })), true);
+});
+
+test("closed pending rows never fold", () => {
+  const fold = makeFold(TODAY, new Set());
+  assert.equal(fold(block(null, { local_id: "qa-4", kind: "pending_task", status: "deleted" })), false);
+  assert.equal(fold(block(null, { local_id: "qa-5", kind: "pending_task", status: "archived" })), false);
+  assert.equal(fold(block(null, { local_id: "qa-6", kind: "pending_task", status: "done" })), false);
 });
 
 test("API-inserted kind:task folds dated or dateless (Slack-bookmark fix preserved)", () => {
-  const fold = makeFold(TODAY);
+  const fold = makeFold(TODAY, new Set());
   assert.equal(fold(block(TODAY, { kind: "task", title: "from api" })), true);
   assert.equal(fold(block(null, { kind: "task", title: "from api" })), true);
   assert.equal(fold(block("2026-07-09", { kind: "task", title: "from api" })), false);
 });
 
-test("dateless legacy quick-add residue (local_id, no kind) does not fold", () => {
-  const fold = makeFold(TODAY);
-  assert.equal(fold(block(null, { local_id: "qa-legacy" })), false);
-});
-
 test("responsibility scaffolding and kindless rows without local_id stay excluded", () => {
-  const fold = makeFold(TODAY);
+  const fold = makeFold(TODAY, new Set());
   assert.equal(fold(block(TODAY, { local_id: "r-1", kind: "responsibility_item" })), false);
   assert.equal(fold(block(TODAY, { title: "no identity" })), false);
 });

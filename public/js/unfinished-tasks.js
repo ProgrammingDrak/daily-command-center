@@ -12,7 +12,9 @@
   "use strict";
 
   const SKIP_TYPES = new Set(["meeting", "oneone", "ooo", "break", "focus", "focus_time", "free_time", "prep"]);
-  const MAX_LOOKBACK_DAYS = 60;   // matches the agreed scope: recent past only
+  // Lookback is unlimited (every archived day) — an unfinished task stays
+  // visible until completed, rescheduled, or dropped. MAX_ROWS only caps how
+  // many render at once; `total` still reports the full count.
   const MAX_ROWS = 100;           // guard against an unbounded archive
 
   // ── small utils ──
@@ -52,12 +54,9 @@
     const today = todayStr();
     const archive = (typeof __archiveDates !== "undefined" && Array.isArray(__archiveDates)) ? __archiveDates : [];
     const todayD = new Date(today + "T00:00:00");
-    const windowStartD = new Date(todayD);
-    windowStartD.setDate(windowStartD.getDate() - MAX_LOOKBACK_DAYS);
-    const windowStart = ymd(windowStartD);
 
-    // Archived days strictly before today and within the lookback window.
-    const scanDates = archive.filter(d => d < today && d >= windowStart).sort();
+    // Every archived day strictly before today — no lookback cap.
+    const scanDates = archive.filter(d => d < today).sort();
     if (!scanDates.length) return { rows: [], total: 0 };
 
     const start = scanDates[0];
@@ -93,7 +92,9 @@
         }
         rows.push({
           sourceId: b.id,
+          sourceLocalId: p.local_id || null,
           sourceDate: date,
+          createdAt: b.created_at || null,
           title: p.title || "Untitled",
           durMin: durMin || 30,
           priority: p.priority || "",
@@ -120,6 +121,8 @@
     if (!bs) return;
     try { await bs.deleteBlock(row.sourceId); } catch (e) {}
     if (typeof bs.invalidateRangeCache === "function") bs.invalidateRangeCache(row.sourceDate);
+    // Keep the inline Unfinished section (schedule-tab.js) in step with the modal.
+    if (typeof invalidateUnfinishedSection === "function") invalidateUnfinishedSection();
   }
 
   function cloneForDate(row) {
@@ -208,7 +211,7 @@
     listEl.innerHTML = "";
 
     if (!rows.length) {
-      hintEl.textContent = "Nothing to catch up on — no unfinished tasks from the last " + MAX_LOOKBACK_DAYS + " days.";
+      hintEl.textContent = "Nothing to catch up on — no unfinished past tasks.";
       return;
     }
     hintEl.textContent = total > rows.length
@@ -285,4 +288,6 @@
   }
 
   window.openUnfinishedTasks = openUnfinishedTasks;
+  // Shared with the itinerary's inline "Unfinished" section (schedule-tab.js).
+  window.collectUnfinishedTasks = collectUnfinished;
 })();

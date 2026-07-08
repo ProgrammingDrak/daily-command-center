@@ -123,6 +123,43 @@ function bindSubtaskActions(el,ev){
   if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
 }
 
+// ── Section sorting (Unscheduled / Unfinished): A→Z or time-of-creation ──
+function _sectionSort(key){ try{return localStorage.getItem("pa-sort-"+key)||"created"}catch(e){return "created"} }
+function _setSectionSort(key,mode){ try{localStorage.setItem("pa-sort-"+key,mode==="alpha"?"alpha":"created")}catch(e){} }
+function _applySectionSort(items,mode,getTitle,getCreated){
+  const arr=items.slice();
+  if(mode==="alpha")arr.sort((a,b)=>String(getTitle(a)||"").localeCompare(String(getTitle(b)||"")));
+  else arr.sort((a,b)=>String(getCreated(b)||"").localeCompare(String(getCreated(a)||""))); // newest first
+  return arr;
+}
+
+// ── Unfinished (past-dated, never completed) — inline section state ──
+// collectUnfinishedTasks (unfinished-tasks.js) is async; buildListView is sync.
+// Cache one collection per rendered today-date and re-render when it lands.
+let _unfinishedCache=null;      // {rows,total}
+let _unfinishedFetchedFor=null; // the today-date the cache was collected for
+let _unfinishedLoading=false;
+function invalidateUnfinishedSection(){ _unfinishedCache=null; _unfinishedFetchedFor=null; }
+function _ensureUnfinished(today){
+  if(_unfinishedFetchedFor===today||_unfinishedLoading)return;
+  if(typeof window.collectUnfinishedTasks!=="function")return;
+  _unfinishedLoading=true;
+  window.collectUnfinishedTasks()
+    .then(res=>{ _unfinishedCache=res||{rows:[],total:0}; _unfinishedFetchedFor=today; })
+    .catch(()=>{ _unfinishedCache={rows:[],total:0}; _unfinishedFetchedFor=today; })
+    .finally(()=>{ _unfinishedLoading=false; buildListView(); });
+}
+function _unfRemoveRow(r){
+  if(!_unfinishedCache)return;
+  _unfinishedCache.rows=_unfinishedCache.rows.filter(x=>x!==r);
+  _unfinishedCache.total=Math.max(0,(_unfinishedCache.total||1)-1);
+}
+function _unfPrettyDate(iso){
+  const d=new Date(iso+"T00:00:00");
+  if(isNaN(d.getTime()))return iso;
+  return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+}
+
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
@@ -140,10 +177,21 @@ function buildListView(){
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
 
-  function section(title,count){
+  function section(title,count,sortKey){
     const el=document.createElement("div");
     el.className="it-list-section";
-    el.innerHTML='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
+    let html='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
+    if(sortKey){
+      const mode=_sectionSort(sortKey);
+      html+='<span class="it-sort-toggle">'+
+        '<button class="it-sort-btn'+(mode==="alpha"?' on':'')+'" data-mode="alpha" title="Sort A to Z">A–Z</button>'+
+        '<button class="it-sort-btn'+(mode!=="alpha"?' on':'')+'" data-mode="created" title="Sort by time of creation (newest first)">New</button>'+
+      '</span>';
+    }
+    el.innerHTML=html;
+    if(sortKey)el.querySelectorAll(".it-sort-btn").forEach(b=>b.addEventListener("click",e=>{
+      e.stopPropagation();_setSectionSort(sortKey,b.dataset.mode);buildListView();
+    }));
     wrap.appendChild(el);
   }
 
@@ -322,12 +370,150 @@ function buildListView(){
     });
   }
   if(untimedItems.length){
-    section("Unscheduled",untimedItems.length);
-    untimedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
+    section("Unscheduled",untimedItems.length,"unscheduled");
+    _applySectionSort(untimedItems,_sectionSort("unscheduled"),ev=>ev.title,ev=>ev.createdAt||"")
+      .forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
   }
+
+  // Unfinished: tasks dated in the PAST that were never completed. Shown only on
+  // the actual today view; complete lands on the origin day, reschedule is a
+  // true move (server tombstone -> the origin day shows it amber).
+  const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
+  if(viewDate===actualToday){
+    _ensureUnfinished(actualToday);
+    const unf=_unfinishedCache;
+    if(unf&&unf.rows.length){
+      section("Unfinished",unf.total,"unfinished");
+      _applySectionSort(unf.rows,_sectionSort("unfinished"),r=>r.title,r=>r.createdAt||r.sourceDate||"")
+        .forEach(r=>wrap.appendChild(unfinishedRow(r)));
+      if(unf.total>unf.rows.length){
+        const more=document.createElement("div");
+        more.className="it-list-empty";
+        more.textContent="+"+(unf.total-unf.rows.length)+" more unfinished — complete or reschedule some to see the rest.";
+        wrap.appendChild(more);
+      }
+    }
+  }
+
   if(pushedItems.length){
     section("Pushed",pushedItems.length);
     pushedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"pushed")));
+  }
+
+  // Rescheduled away (amber) — parity with the timeline view's bottom section.
+  const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
+    ? window.blockStore.getByType("block")
+        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
+        .sort((a,b)=>String((a.properties||{}).title||"").localeCompare(String((b.properties||{}).title||"")))
+    : [];
+  if(rescheduledAwayItems.length){
+    section("Rescheduled away",rescheduledAwayItems.length);
+    rescheduledAwayItems.forEach(b=>{
+      const p=b.properties||{};
+      const el=document.createElement("div");
+      el.className="it-list-item resched-away-row";
+      el.innerHTML=
+        '<span class="wrap-collapse-spacer"></span>'+
+        '<div class="it-list-rank">·</div>'+
+        '<div class="grip it-list-grip" title="Fixed item">'+gripSvg+'</div>'+
+        '<div class="it-list-check-col"><button class="chk it-list-check" title="Restore to this day">'+ckSvg+'</button></div>'+
+        '<div class="bar" style="background:var(--amber,#f59e0b)"></div>'+
+        '<div class="it-list-main">'+
+          '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(p.title||"Task")+'">'+escHtml(p.title||"Task")+'</span></div>'+
+          '<div class="it-list-meta"><span class="it-list-resched-away">Rescheduled to '+escHtml(p.rescheduledTo||"another day")+'</span></div>'+
+        '</div>'+
+        '<div class="it-list-actions"></div>';
+      el.querySelector(".it-list-check").addEventListener("click",e=>{
+        e.stopPropagation();
+        if(typeof restoreRescheduledAway==="function")restoreRescheduledAway(b.id);
+      });
+      wrap.appendChild(el);
+    });
+  }
+
+  // Compact row + actions for an Unfinished entry (a raw past-day block, NOT a
+  // scheduled[] task — so no drag/duration/lock; just resolve-or-move actions).
+  function unfinishedRow(r){
+    const el=document.createElement("div");
+    el.className="it-list-item unfinished-row";
+    const c=cfg(r.type||"task");
+    el.innerHTML=
+      '<span class="wrap-collapse-spacer"></span>'+
+      '<div class="it-list-rank">·</div>'+
+      '<div class="grip it-list-grip" title="Fixed item">'+gripSvg+'</div>'+
+      '<div class="it-list-check-col"><button class="chk it-list-check" title="Mark done on '+escHtml(_unfPrettyDate(r.sourceDate))+'">'+ckSvg+'</button></div>'+
+      '<div class="bar" style="background:var(--amber,#f59e0b)"></div>'+
+      '<div class="it-list-main">'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(r.title)+'">'+escHtml(r.title)+'</span>'+srcTag(r.source)+'</div>'+
+        '<div class="it-list-meta">'+
+          '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
+          '<span>'+ms(r.durMin)+'</span>'+
+          '<span class="it-list-unfinished">Unfinished · from '+escHtml(_unfPrettyDate(r.sourceDate))+'</span>'+
+        '</div>'+
+      '</div>'+
+      '<div class="it-list-actions unfinished-actions">'+
+        '<button class="carryover-btn unf-il-today">Today</button>'+
+        '<button class="carryover-btn unf-il-tmr">Tomorrow</button>'+
+        '<input type="date" class="resched-date-input unf-il-date"/>'+
+        '<button class="carryover-btn unf-il-move">Move</button>'+
+        '<button class="btn-del-task unf-il-drop" data-tooltip="Drop for good"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
+      '</div>';
+    const busy=()=>el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
+    async function moveTo(targetDate){
+      if(!targetDate||!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)){if(typeof showToast==="function")showToast("Pick a valid date","error");return;}
+      if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
+      busy();
+      let slot=null;
+      try{
+        if(typeof _computeRescheduleSlot==="function")
+          slot=await _computeRescheduleSlot({id:r.sourceLocalId||r.sourceId,title:r.title,start:r.start||"00:00",end:r.end||fmt(pt(r.start||"00:00")+r.durMin)},targetDate);
+      }catch(e){}
+      window.__RESCHEDULE_IN_FLIGHT__=true;
+      try{
+        await window.blockStore.rescheduleBlock(r.sourceId,targetDate,slot?{parentStart:slot.start,parentEnd:slot.end}:{});
+      }catch(e){
+        if(typeof showToast==="function")showToast("Could not move "+r.title,"error");
+        el.querySelectorAll("button,input").forEach(x=>{x.disabled=false;});
+        return;
+      }finally{
+        window.__RESCHEDULE_IN_FLIGHT__=false;
+      }
+      _unfRemoveRow(r);
+      if(typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+      if(typeof log==="function")log("rescheduled",r.sourceId,"Unfinished moved to "+targetDate+": "+r.title);
+      if(typeof showToast==="function")showToast("Moved to "+_unfPrettyDate(targetDate)+": "+r.title,"success");
+      if(targetDate===viewDate){
+        try{await window.blockStore.loadDay(viewDate);}catch(e){}
+        if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+        if(typeof recalcTimes==="function")recalcTimes();
+      }
+      render();
+    }
+    el.querySelector(".it-list-check").addEventListener("click",async e=>{
+      e.stopPropagation();busy();
+      try{if(typeof commitDoneOnDate==="function")await commitDoneOnDate(r.sourceLocalId||r.sourceId,r.sourceDate);}catch(e2){}
+      _unfRemoveRow(r);
+      if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+      if(typeof showToast==="function")showToast("Done on "+_unfPrettyDate(r.sourceDate)+": "+r.title,"success");
+      render();
+    });
+    el.querySelector(".unf-il-today").addEventListener("click",e=>{e.stopPropagation();moveTo(actualToday);});
+    el.querySelector(".unf-il-tmr").addEventListener("click",e=>{
+      e.stopPropagation();
+      const tmr=(typeof __tomorrowDate!=="undefined"&&__tomorrowDate)?__tomorrowDate:new Date(Date.now()+86400000).toISOString().slice(0,10);
+      moveTo(tmr);
+    });
+    el.querySelector(".unf-il-move").addEventListener("click",e=>{e.stopPropagation();moveTo(el.querySelector(".unf-il-date").value);});
+    el.querySelector(".unf-il-drop").addEventListener("click",async e=>{
+      e.stopPropagation();busy();
+      try{await window.blockStore.deleteBlock(r.sourceId);}catch(e2){}
+      _unfRemoveRow(r);
+      if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+      if(typeof log==="function")log("dropped",r.sourceId,"Dropped unfinished: "+r.title);
+      if(typeof showToast==="function")showToast("Dropped: "+r.title,"info");
+      render();
+    });
+    return el;
   }
 }
 
@@ -1053,14 +1239,15 @@ function _scheduleTaskHasDelegate(taskId){
 function buildProgress(){
   const track=document.getElementById("ptrack"),ds=pt("08:45"),de=pt("17:30"),tot=de-ds;
   track.innerHTML="";let cursor=ds;
-  scheduled.forEach(ev=>{
+  const dayItems=scheduled.filter(ev=>!ev._dateless); // Unscheduled-everywhere rows aren't today's plan
+  dayItems.forEach(ev=>{
     const s=pt(ev.start),e=pt(ev.end);
     if(s>cursor)addPS(track,cursor,s,"Free","rgba(255,255,255,0.08)",false,tot);
     addPS(track,s,e,ev.title,cfg(ev.type).color,isDone(ev),tot);cursor=e;
   });
   if(cursor<de)addPS(track,cursor,de,"Free","rgba(255,255,255,0.08)",false,tot);
-  const dc=scheduled.filter(isDone).length;
-  document.getElementById("ppct").textContent=dc+"/"+scheduled.length+" done ("+Math.round(dc/scheduled.length*100)+"%)";
+  const dc=dayItems.filter(isDone).length;
+  document.getElementById("ppct").textContent=dc+"/"+dayItems.length+" done ("+Math.round(dc/(dayItems.length||1)*100)+"%)";
 }
 function addPS(track,s,e,title,color,done,tot){
   const w=((e-s)/tot)*100,seg=document.createElement("div");seg.className="pseg";
@@ -1095,7 +1282,8 @@ function _currentBlockWindow(){
   return null;
 }
 function _remainingForScope(scope){
-  const rem=scheduled.filter(ev=>!isDone(ev));
+  // _dateless rows (Unscheduled-everywhere) aren't part of this day's plan.
+  const rem=scheduled.filter(ev=>!isDone(ev)&&!ev._dateless);
   if(scope!=="block")return rem;
   const win=_currentBlockWindow();
   if(!win)return [];
@@ -1184,6 +1372,7 @@ function _pointEligibleScheduleItems(){
   const trivFlags=typeof loadTrivialFlags==="function"?loadTrivialFlags():{};
   return scheduled.filter(ev=>{
     if(!ev||trivFlags[ev.id])return false;
+    if(ev._dateless)return false; // day-agnostic Unscheduled rows earn nothing here
     if(typeof isDeleted==="function"&&isDeleted(ev))return false;
     if(typeof isPushed==="function"&&isPushed(ev))return false;
     return true;
