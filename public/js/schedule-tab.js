@@ -209,24 +209,38 @@ function _canBountyRadial(ev){
 }
 function buildTaskRadialItems(ev,trig){
   const items=[
-    {icon:"📅", label:"Schedule…", onPick:()=>{if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:trig});}},
+    // Move/convert actions live one level down: this spoke chains into the
+    // "Change task" sub-fan (openRadialMenu closes the current fan first).
+    {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
     {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
     {icon:"🍅", label:"Pomodoro",  onPick:()=>{if(typeof openPomodoro==="function")openPomodoro(ev.title,dur(ev),{id:ev.id,source:"schedule",title:ev.title});}},
     {icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}},
-    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
+    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}}
+  ];
+  if(_canBountyRadial(ev))items.push({icon:"🎯", label:"Bounty", onPick:()=>{if(typeof placeBounty==="function")placeBounty(ev.id);}});
+  return items;
+}
+// Sub-fan: everything that moves or converts the task, grouped so the top
+// fan stays scannable. Back returns to the top fan on the same trigger.
+function buildTaskChangeItems(ev,trig){
+  return [
+    {icon:"←", label:"Back",       onPick:()=>openTaskRadial(ev,trig)},
+    {icon:"📅", label:"Schedule…", onPick:()=>{if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:trig});}},
     {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}},
     {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}}
   ];
-  if(_canBountyRadial(ev))items.push({icon:"🎯", label:"Bounty", onPick:()=>{if(typeof placeBounty==="function")placeBounty(ev.id);}});
-  return items;
 }
+const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
 function openTaskRadial(ev,trig){
   // 180° left-opening fan: the trigger lives at the row's right edge, so the
-  // spokes sweep bottom → left → top. Staggered label radii keep ten pills
+  // spokes sweep bottom → left → top. Staggered label radii keep the pills
   // from colliding near the vertical apexes; clampY keeps edge rows on-screen.
-  openRadialMenu(trig,buildTaskRadialItems(ev,trig),{a0:90,a1:270,r:140,labelStagger:true,clampY:true});
+  openRadialMenu(trig,buildTaskRadialItems(ev,trig),_TASK_RADIAL_OPTS);
+}
+function openTaskChangeRadial(ev,trig){
+  openRadialMenu(trig,buildTaskChangeItems(ev,trig),_TASK_RADIAL_OPTS);
 }
 
 // ── Section sorting (Unscheduled / Unfinished): A→Z or time-of-creation ──
