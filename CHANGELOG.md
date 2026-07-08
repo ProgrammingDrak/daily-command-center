@@ -4,7 +4,42 @@
 > Renamed from TODO-README 2026-07-04: this file was a per-PR QA log, not a live
 > TODO (it still described the SQLite era). Kept as history. Live conventions:
 > ARCHITECTURE.md. Manual QA: QA-CHECKLIST.md.
-## Current PR: Reschedule unification + radial task destinations + true-move hardening
+## Current PR: Budget Tank overhaul — priority wishlist wired to the slot economy
+
+### What Changed
+- **The Budget Tank is now an aquarium.** The Phase-0 localStorage what-if
+  visualizer is gone; the tab is server-backed (`budget-store.js`,
+  `routes/budget.js`, rewritten `public/js/budget.js`). Necessities are the
+  gravel bed (always covered); discretionary blocks are tinted SVG decorations
+  anchored up the back wall at their cumulative unlock heights; the waterline is
+  this period's bank build rising through them. Fish join per claimed block.
+- **Blocks are objectives, shared with the slot machine.** A tank block is a
+  `slot_rewards` row (`kind='bank_gated'`) with additive `tank_*` columns, so it
+  is simultaneously a spinnable objective and a tank block. Drag to reprioritize
+  (bottom fills first); the cumulative `tank_unlock_cents` gate is recomputed
+  server-side on every mutation. `rowToReward` gates tank rows on the waterline
+  (`tank_locked`/`tank_claimed`) so the machine and the tank agree.
+- **Claim in the tank or on the machine — same outcome.** Claiming debits
+  `value_cents` (never the cumulative gate), stamps the period, and enqueues into
+  the existing `reward_queue_items` with a period-scoped sourceId (double-claim
+  safe), then schedules onto the itinerary via `window.scheduleRewardQueueItem`.
+- **Money Changer**: points → bank at an admin-tunable `cents_per_point` (default
+  1:1¢), idempotent on the `slot_point_ledger` unique index. Conversions land in
+  `budget_conversions` (raise the waterline) but never in `getBankUsage`, so Bank
+  Builder pacing/shield stay clean.
+- **Monthly rollover + sweep**: lazy period detection → modal (carry unhit to the
+  bottom / start fresh). Leftover above the last funded block sweeps to the
+  append-only `budget_investments` ledger (idempotent per period) and drops a
+  real "Transfer $X to brokerage" task on today. An active monthly tank drives
+  the Bank Builder goal (goal_mode `manual` opts out).
+- New tables: `budget_conversions`, `budget_investments`; new `slot_rewards`
+  columns `tank_position/tank_unlock_cents/tank_category/tank_color/tank_recurring/tank_claimed_period`
+  (all additive). 28 new tests in `budget-store.test.js` (thresholds, claim
+  gating/debit-correctness, conversion idempotency + the pacing-contamination
+  regression, rollover carry/fresh/idempotency); suite 220→ green. `smoke.mjs`
+  asserts the aquarium renders and `/api/budget/state` shape.
+
+## Previous PR: Reschedule unification + radial task destinations + true-move hardening
 
 ### What Changed
 - **Reschedule fixes**: undated task-bar blocks 400ed on every true move; the

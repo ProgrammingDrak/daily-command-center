@@ -12,8 +12,9 @@ modules at the repo root: `db.js` (block CRUD — every entity is a "block" with
 type, parent, JSONB properties), `auth.js` (users/workspaces), `slot-store.js`
 (rewards/gamification), `social-store.js`, `punishment-store.js`,
 `vault-store.js` + `sync-manager.js` (git-backed memory vault),
-`evaluation/` (task scoring). `pg-schema.js` creates/patches the schema at
-boot; `pg-pool.js` is the shared connection pool.
+`budget-store.js` (Budget Tank — see below), `evaluation/` (task scoring).
+`pg-schema.js` creates/patches the schema at boot; `pg-pool.js` is the shared
+connection pool.
 
 The frontend is `index.html` plus ~55 modules under `public/js/`, loaded as
 plain script tags. `boot.js` fetches state in parallel, `state.js` normalizes
@@ -79,3 +80,36 @@ boot since the filesystem is ephemeral.
   follow the `urgency.js` single-source pattern.
 - **Boy-scout CSS tokens**: any PR touching a CSS block converts that block's
   hard-coded sizes to the tokens in `public/css/tokens.css` (once it lands).
+
+## Budget Tank (`budget-store.js`, `routes/budget.js`, `public/js/budget.js`)
+
+A priority-ordered spending wishlist wired to the slot economy, rendered as a
+fish tank. Key invariants:
+
+- **Tank blocks ARE `slot_rewards` rows** (`kind='bank_gated'`) carrying additive
+  `tank_*` columns — the same row is a slot-machine objective and a tank block,
+  so there is one economy with two claim surfaces. No parallel table.
+- **`tank_unlock_cents` ≠ `unlock_threshold_cents`.** The cumulative bottom-up
+  waterline gate lives in its own column, recomputed server-side
+  (`recomputeTankThresholds`) inside every tank mutation. `reserveCostCents()`
+  debits `max(value_cents, unlock_threshold_cents)`, so storing the cumulative
+  sum in `unlock_threshold_cents` would make a claim debit the whole stack.
+  `value_cents` stays the price a claim debits. Never conflate them.
+- **Waterline is monotonic within a period.** It is a ledger SUM (positive
+  `slot_spins` bank deltas + `budget_conversions.cents` this period), not the
+  spendable balance. Claims and punishments debit `bank_balance_cents` but never
+  lower the waterline — hence the real "unlocked but reserve short" state.
+- **Money Changer conversions live in `budget_conversions`, never `slot_spins`.**
+  They raise the tank waterline but must stay out of `getBankUsage` so Bank
+  Builder pacing/shield/head-start are never contaminated (regression-tested).
+- **Goal unification**: an active monthly tank drives the Bank Builder
+  `monthly_goal_cents` (= capacity = last period's build) via
+  `tankDrivenGoalCents`; `budget_tank.goal_mode='manual'` opts out.
+- **Rollover is lazy** (no cron): a period-key mismatch flags `rollover_due`;
+  the user picks carry (unhit one-shots sink to the bottom) or fresh. The sweep
+  invests `min(leftover, spendable)` into the append-only `budget_investments`
+  ledger (`UNIQUE(workspace, period)` = idempotent) and drops a real "Transfer
+  $X to brokerage" task on today via `blockDB.createBlock`.
+- Config (necessities, income, period, `cents_per_point`, `current_period`)
+  lives in `slot_accounts.settings.budget_tank`. Mutations broadcast
+  `slot-changed` so both the tank and the slots tab refresh.

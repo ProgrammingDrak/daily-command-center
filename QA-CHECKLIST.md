@@ -125,6 +125,19 @@ manual checks below in a few seconds.
 - [ ] **Open prep doc**: Click a local prep link on a meeting card. Full-screen overlay shows HTML content.
 - [ ] **Close**: Click X, click background, or press Escape. Overlay closes.
 
+## 13a. BUDGET TANK (aquarium)
+
+- [ ] **Renders**: Budget tab shows the aquarium (glass, water, gravel bed = necessities, decoration blocks). No error card.
+- [ ] **Add block**: Edit → + add block → category + optional item + amount + recurring toggle → saves; lands on TOP of the stack (lowest priority).
+- [ ] **Drag reprioritize**: Drag a block/row above or below another. Order persists after reload; lock states + thresholds reflow (bottom fills first).
+- [ ] **Waterline rises**: Complete a task (or convert points) → banked total rises → blocks it crosses become claimable bottom-up. Waterline never drops on a claim.
+- [ ] **Claim**: A claimable block's Claim button → block shows "claimed", reserve debits by its amount, and it appears in the rewards queue. Double-claim is a no-op.
+- [ ] **Schedule the reward**: From the toast "Schedule now" (or the rewards queue), the claimed reward places on the itinerary; completing that task redeems it.
+- [ ] **Machine agreement**: On the Slots tab, tank rewards show 🐠 below-waterline / claimed-this-month locks and only go eligible once the tank unlocks them.
+- [ ] **Money Changer**: Enter points → live preview → Convert credits bank at the rate, waterline rises, points drop. Retrying an in-flight convert never double-spends. Edit mode exposes the rate.
+- [ ] **Rollover**: On a new period, a modal offers Carry / Fresh. Carry sinks unhit one-shots to the bottom, envelopes persist, claimed one-shots leave. Leftover sweeps to Investments and a "Transfer $X to brokerage" task appears on today. Re-running doesn't double-invest.
+- [ ] **Reduced motion**: With `prefers-reduced-motion`, the water/fish/bubbles hold still (no animation).
+
 ## 14. API ENDPOINTS
 
 - [ ] `GET /api/state/day` — returns day-state.json
