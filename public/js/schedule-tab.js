@@ -188,11 +188,14 @@ function buildListView(){
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(idx+1)+'</div>'+
-      (!isDoneRow&&!isPushedRow?'<button class="btn-add-menu btn-task-add" title="Add a task before / after / inside" data-add-id="'+ev.id+'">+</button>':'')+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<div class="it-list-check-col">'+
         '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done'))+'">'+ckSvg+'</button>'+
         (!isMeeting(ev)&&!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
+        // Inside the check-col cell on purpose: .it-list-item is a fixed-column
+        // grid, and any extra top-level child shifts every cell one column
+        // right (title lands in the actions slot). See the comment above chev.
+        (!isDoneRow&&!isPushedRow?'<button class="btn-add-menu btn-task-add" title="Add a task before / after / inside" data-add-id="'+ev.id+'">+</button>':'')+
       '</div>'+
       '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
       '<div class="it-list-main">'+
