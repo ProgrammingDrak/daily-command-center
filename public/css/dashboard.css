@@ -4152,6 +4152,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .gb-pagenav{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0 16px;border-bottom:1px solid var(--border);padding-bottom:10px}
 .gb-pagebtn{appearance:none;border:1px solid var(--border);background:var(--card);color:var(--text-muted);font:inherit;font-size:13px;font-weight:700;padding:7px 14px;border-radius:8px;cursor:pointer;transition:all 0.12s}
 .gb-pagebtn:hover{border-color:var(--accent);color:var(--accent-light)}
+.gb-pagebtn .gb-count{margin-left:6px;padding:1px 7px;border-radius:9px;background:rgba(59,130,246,0.15);color:var(--accent-light);font-size:10px;font-weight:800}
 .gb-pagebtn.active{background:rgba(59,130,246,0.16);border-color:var(--accent);color:var(--accent-light)}
 .gb-page{display:flex;flex-direction:column;gap:14px}
 .gb-page-summary{color:var(--text-muted);font-size:13px;margin:0 0 4px}
