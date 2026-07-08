@@ -186,6 +186,12 @@
     if(hasPrep){timeHtml+='<span class="prep-line"></span>';}
     timeHtml+='</div>';
     var bountyMultiplier=Math.pow(2,Math.max(1,bountyCount||1));
+    // Bounty is a row-level button (not a radial spoke): visible on every
+    // eligible card until the day's bounty is placed, then it disappears and
+    // the chosen task carries the golden glow (.card-bounty).
+    var bountyControl=(!guest&&!isMeeting(ev)&&canEditBounty&&!bountyPlaced)
+      ? '<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+bountySvg+'</button>'
+      : '';
     var reactionHtml=reactionChipsHtml(ev)||"";
     var footerHtml=(guest&&opts.footerHtml)?opts.footerHtml:'';
 
@@ -237,6 +243,7 @@
           // from the radial. Row keeps only notes / radial / delete / done.
           (guest?'':(isMeeting(ev)?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+_pomoSvg+'</button>':''))+
           (guest?'':(!isMeeting(ev)?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':''))+
+          bountyControl+
           (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
           (guest?'':'<div class="dur">'+
             // Task cards: read-only badge (adjust via the radial's Duration…);

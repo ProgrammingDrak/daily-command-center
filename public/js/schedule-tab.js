@@ -199,16 +199,19 @@ function openDurPopover(ev,anchorEl){
   function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==anchorEl){closePop();}}
   setTimeout(()=>document.addEventListener("click",onOutside,true),0);
 }
-// Bounty spoke shows only while a self bounty is placeable; placeBounty itself
-// toasts the finer denials (done task, locked bounty, partner stacking).
-function _canBountyRadial(ev){
-  if(isMeeting(ev))return false;
+// The bounty button lives ON the row (not in the radial): it shows on every
+// eligible row while the day's self bounty is unplaced; placing it re-renders,
+// every button vanishes, and the chosen task glows gold. placeBounty itself
+// toasts the finer denials (locked bounty, partner stacking, done task).
+function _canPlaceBounty(ev,isDoneRow){
+  if(isMeeting(ev)||isDoneRow)return false;
   if(typeof viewMode!=="undefined"&&viewMode==="archive")return false;
   if(typeof hasSelfBounty==="function"&&hasSelfBounty())return false;
   return true;
 }
+const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
 function buildTaskRadialItems(ev,trig){
-  const items=[
+  return [
     // Move/convert actions live one level down: this spoke chains into the
     // "Change task" sub-fan (openRadialMenu closes the current fan first).
     {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
@@ -217,8 +220,6 @@ function buildTaskRadialItems(ev,trig){
     {icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}},
     {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}}
   ];
-  if(_canBountyRadial(ev))items.push({icon:"🎯", label:"Bounty", onPick:()=>{if(typeof placeBounty==="function")placeBounty(ev.id);}});
-  return items;
 }
 // Sub-fan: everything that moves or converts the task, grouped so the top
 // fan stays scannable. Back returns to the top fan on the same trigger.
@@ -348,7 +349,7 @@ function buildListView(){
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
@@ -376,9 +377,10 @@ function buildListView(){
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
-        // Row keeps done / notes / delete visible; every other task action
-        // rides the radial behind the arrow trigger.
+        // Row keeps done / notes / bounty / delete visible; every other task
+        // action rides the radial behind the arrow trigger.
         notesButton(ev)+
+        (_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
       '</div>';
@@ -396,6 +398,8 @@ function buildListView(){
     if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-task-radial");
     if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb);});
+    const bb=el.querySelector(".btn-bounty");
+    if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     const del=el.querySelector(".btn-del-task");
     if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
     const cc=el.querySelector(".wrap-collapse");
@@ -864,6 +868,7 @@ function buildSchedule(){
     if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
+    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId)});
     // PIN 1: click the timeline dot to pin this task as "active"
     const tnode=el.querySelector(".tl-node");
     if(tnode&&!isMeeting(ev)){
