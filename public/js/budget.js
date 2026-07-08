@@ -18,6 +18,7 @@
   let _convertKey = null;   // per-attempt idempotency key; reused on retry
   let _convertBusy = false;
   let _rolloverSnoozed = false;
+  const _collapsed = new Set();  // collapsed category keys
 
   function esc(s) { return window.DCC.esc(s); }
   function toast(msg, kind) { return window.DCC.toast(msg, kind); }
@@ -134,10 +135,19 @@
     const claimedCount = s.blocks.filter(b => b.claimed).length;
     const fishCount = Math.min(6, claimedCount);
 
+    // Walk in fill order; a category divider marks each group's base (column
+    // reverse puts DOM-earlier items lower, so the band sits under its group).
+    let prevCat = null;
     const zones = s.blocks.map(b => {
       const info = statusInfo(b, u.waterline_cents);
       const over = (b.tank_unlock_cents || 0) > u.capacity_cents;
-      return '<div class="bt-zone ' + info.cls + (over ? " bt--overcap" : "") + '" draggable="true" data-id="' + b.id + '"' +
+      const catName = b.category || b.title;
+      let band = "";
+      if (catName !== prevCat) {
+        prevCat = catName;
+        band = '<div class="bt-cat-band" style="color:' + esc(b.color || "#7dd3fc") + '"><span>' + esc(catName) + "</span></div>";
+      }
+      return band + '<div class="bt-zone ' + info.cls + (over ? " bt--overcap" : "") + '" draggable="true" data-id="' + b.id + '"' +
         ' style="flex-grow:' + b.value_cents + ';color:' + esc(b.color || "#f59e0b") + '">' +
         '<span class="bt-zone-sprite">' + chestSpriteFor(b) + "</span>" +
         '<div class="bt-zone-body">' +
@@ -266,13 +276,16 @@
   }
 
   // ---- breakdown / editors ---------------------------------------------------
-  function blockRow(b, u) {
+  // A single item row. `nested` = shown under a category header (indented, and
+  // the label drops the "Category: " prefix).
+  function blockRow(b, u, nested) {
     const info = statusInfo(b, u.waterline_cents);
     const confirming = _confirmDeleteId === b.id;
-    return '<div class="bt-row ' + info.cls + '" draggable="true" data-id="' + b.id + '">' +
+    const label = nested ? (b.item || b.title) : b.title;
+    return '<div class="bt-row' + (nested ? " bt-row--nested" : "") + " " + info.cls + '" draggable="true" data-id="' + b.id + '">' +
       '<span class="bt-row-grip" title="Drag to reprioritize">⋮⋮</span>' +
       '<span class="bt-row-dot" style="background:' + esc(b.color || "#f59e0b") + '"></span>' +
-      '<span class="bt-row-name">' + esc(b.title) +
+      '<span class="bt-row-name">' + esc(label) +
         (b.tank_recurring ? '<span class="bt-row-tag">monthly</span>' : "") + "</span>" +
       '<span class="bt-row-amt">' + money(b.value_cents) + "</span>" +
       '<span class="bt-row-fund">' + esc(info.label) + "</span>" +
@@ -282,6 +295,38 @@
           '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block">' + (confirming ? "Sure?" : "×") + "</button>"
         : "") +
       "</div>";
+  }
+
+  // A Monarch/Mint-style category group: a header carrying the rolled-up budget
+  // and a fill bar, with the specific purchase items nested underneath. A lone
+  // generic envelope (single item whose label is just the category) collapses
+  // into the header row so it doesn't read twice.
+  function categoryGroupMarkup(cat, u) {
+    const collapsed = _collapsed.has(cat.key);
+    const lone = cat.count === 1 && (cat.items[0].item || "").trim().toLowerCase() === cat.name.trim().toLowerCase();
+    const fillPct = Math.round((cat.fill_frac || 0) * 100);
+    const statusText = cat.status === "claimed" ? "all claimed"
+      : cat.status === "claimable" ? cat.claimable_count + " ready"
+      : cat.status === "partial" ? cat.unlocked_count + "/" + cat.count + " unlocked"
+      : "locked";
+    const head =
+      '<div class="bt-cat-head bt--" data-act="toggle-cat" data-cat="' + esc(cat.key) + '">' +
+        (lone ? '<span class="bt-cat-caret bt-cat-caret--none"></span>'
+              : '<span class="bt-cat-caret">' + (collapsed ? "▸" : "▾") + "</span>") +
+        '<span class="bt-row-dot" style="background:' + esc(cat.color || "#f59e0b") + '"></span>' +
+        '<span class="bt-cat-name">' + esc(cat.name) + "</span>" +
+        '<span class="bt-cat-status bt--' + cat.status + '">' + statusText + "</span>" +
+        '<span class="bt-cat-amt">' + money(cat.budget_cents) + "</span>" +
+        '<span class="bt-cat-bar"><i style="width:' + fillPct + '%"></i></span>' +
+        (lone && cat.items[0].claimable ? '<button class="bt-claim-btn" data-act="claim" data-id="' + cat.items[0].id + '">Claim</button>' : "") +
+      "</div>";
+    if (lone) return '<div class="bt-cat" data-cat="' + esc(cat.key) + '">' + head + "</div>";
+    const items = collapsed ? "" :
+      '<div class="bt-cat-items">' +
+        [...cat.items].reverse().map(b => blockRow(b, u, true)).join("") +
+        (_editMode ? '<button class="bt-add bt-add--sub" data-act="add-block" data-cat="' + esc(cat.name) + '">+ add to ' + esc(cat.name) + "</button>" : "") +
+      "</div>";
+    return '<div class="bt-cat" data-cat="' + esc(cat.key) + '">' + head + items + "</div>";
   }
 
   function blockFormMarkup(s) {
@@ -374,8 +419,10 @@
       (s.investments.total_cents > 0 ? chip("ok", "Invested " + money(s.investments.total_cents)) : "") +
       (s.rollover_due ? chip("warn", "New " + period + " — rollover pending") : "");
 
-    // Legend mirrors the tank: top row = top of tank (funded last).
-    const rowsTopDown = [...s.blocks].reverse().map(b => blockRow(b, u)).join("");
+    // Monarch/Mint-style: category groups (top of tank first), each rolling up
+    // its items. Reversed so the last-to-fill category sits on top, matching the
+    // tank above it.
+    const catGroups = [...s.categories].reverse().map(cat => categoryGroupMarkup(cat, u)).join("");
 
     root.innerHTML =
       '<div class="bt-wrap">' +
@@ -405,8 +452,8 @@
           '<div class="bt-breakdown">' +
             '<div class="bt-group">' +
               '<div class="bt-group-head"><span class="bt-group-title">Priority stack</span>' +
-                '<span class="bt-group-sub">top of tank first · bottom fills first</span></div>' +
-              (rowsTopDown || '<div class="bt-empty-note">Nothing in the tank yet. Drop in your first block — a dinner, a splurge, a category.</div>') +
+                '<span class="bt-group-sub">categories roll up · bottom fills first</span></div>' +
+              (catGroups || '<div class="bt-empty-note">Nothing in the tank yet. Add a category and drop in what you want to buy — a dinner, a gift, a trip.</div>') +
               (_editMode && !_form ? '<button class="bt-add" data-act="add-block">+ add block</button>' : "") +
               (_form ? blockFormMarkup(s) : "") +
             "</div>" +
@@ -427,7 +474,7 @@
   }
 
   // ---- block form helpers ----------------------------------------------------
-  function openForm(block) {
+  function openForm(block, presetCategory) {
     if (block) {
       let item = "";
       let category = block.category || "";
@@ -436,10 +483,12 @@
       else if (block.title !== category) item = block.title;
       _form = { id: block.id, category, item, amount: Math.round(block.value_cents / 100), recurring: !!block.tank_recurring, color: block.color };
     } else {
-      _form = { id: null, category: "", item: "", amount: "", recurring: false, color: null };
+      _form = { id: null, category: presetCategory || "", item: "", amount: "", recurring: false, color: null };
     }
     render();
-    const first = document.querySelector('#budget-root [data-field="category"]');
+    // Land focus on the item field when the category is already chosen.
+    const focusSel = presetCategory ? '[data-field="item"]' : '[data-field="category"]';
+    const first = document.querySelector("#budget-root " + focusSel);
     if (first) first.focus();
   }
 
@@ -606,7 +655,13 @@
         }
         return;
       }
-      if (act === "add-block") { openForm(null); return; }
+      if (act === "toggle-cat") {
+        const key = btn.dataset.cat;
+        if (_collapsed.has(key)) _collapsed.delete(key); else _collapsed.add(key);
+        render();
+        return;
+      }
+      if (act === "add-block") { openForm(null, btn.dataset.cat || ""); return; }
       if (act === "cancel-block") { _form = null; render(); return; }
       if (act === "save-block") { saveForm(); return; }
       if (act === "edit-block") {

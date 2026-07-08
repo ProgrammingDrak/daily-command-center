@@ -216,21 +216,52 @@ async function getFunding(workspaceId, account, exec = pool) {
   return { ready, pending: pending.cents || 0, total: ready + (pending.cents || 0) };
 }
 
+// ── Grouping (Monarch/Mint-style) ─────────────────────────────────────────────
+// Items belong to a category. The fill order — bottom-up — is category by
+// category: categories rank by the lowest tank_position among their items, and
+// items rank by tank_position within their category. Keeping categories
+// contiguous in the fill order is what lets a category read as one block that
+// its items roll up into, while each item still unlocks individually.
+function categoryKey(row) {
+  return String(row.tank_category || row.title || "").trim().toLowerCase() || "(uncategorized)";
+}
+
+function groupedOrder(rows) {
+  const catRank = new Map();
+  for (const r of rows) {
+    const k = categoryKey(r);
+    const p = Number(r.tank_position);
+    if (!catRank.has(k) || p < catRank.get(k)) catRank.set(k, p);
+  }
+  return [...rows].sort((a, b) => {
+    const ra = catRank.get(categoryKey(a)), rb = catRank.get(categoryKey(b));
+    if (ra !== rb) return ra - rb;
+    return (Number(a.tank_position) - Number(b.tank_position)) || (a.id - b.id);
+  });
+}
+
 // ── Thresholds ───────────────────────────────────────────────────────────────
-// Single source of truth for the bottom-up cumulative gate. Runs inside the
-// caller's transaction so order + thresholds commit atomically.
+// Single source of truth for the bottom-up cumulative gate. Walks the GROUPED
+// fill order (so display and unlock math always agree) inside the caller's
+// transaction, accumulating each item's value into tank_unlock_cents.
 async function recomputeTankThresholds(client, workspaceId) {
   const { rows } = await client.query(
-    `UPDATE slot_rewards r
-        SET tank_unlock_cents = c.cum, updated_at = NOW()
-       FROM (SELECT id, SUM(value_cents) OVER (ORDER BY tank_position ASC, id ASC)::int AS cum
-               FROM slot_rewards
-              WHERE workspace_id = $1 AND tank_position IS NOT NULL AND deleted_at IS NULL) c
-      WHERE r.id = c.id AND r.workspace_id = $1
-      RETURNING r.id`,
+    `SELECT id, value_cents, tank_category, title, tank_position
+       FROM slot_rewards
+      WHERE workspace_id = $1 AND tank_position IS NOT NULL AND deleted_at IS NULL`,
     [workspaceId]
   );
-  return rows.length;
+  const ordered = groupedOrder(rows);
+  let run = 0;
+  for (const r of ordered) {
+    run += r.value_cents || 0;
+    await client.query(
+      `UPDATE slot_rewards SET tank_unlock_cents = $3, updated_at = NOW()
+        WHERE workspace_id = $1 AND id = $2`,
+      [workspaceId, r.id, run]
+    );
+  }
+  return ordered.length;
 }
 
 // ── Blocks ───────────────────────────────────────────────────────────────────
@@ -241,7 +272,7 @@ async function getTankBlockRows(workspaceId, exec = pool) {
       ORDER BY tank_position ASC, id ASC`,
     [workspaceId]
   );
-  return rows;
+  return groupedOrder(rows);
 }
 
 function decorateBlock(row, usage, funding, waterlineCents) {
@@ -255,7 +286,12 @@ function decorateBlock(row, usage, funding, waterlineCents) {
     id: row.id,
     title: row.title,
     category: row.tank_category || null,
+    // The item label without the "Category: " prefix, for nesting under a header.
+    item: row.tank_category && String(row.title || "").indexOf(row.tank_category + ": ") === 0
+      ? String(row.title).slice(String(row.tank_category).length + 2)
+      : row.title,
     color: row.tank_color || null,
+    shape: row.tank_shape || null,
     value_cents: valueCents,
     tank_position: row.tank_position,
     tank_unlock_cents: unlockCents,
@@ -276,6 +312,45 @@ function decorateBlock(row, usage, funding, waterlineCents) {
       : claimable ? "claimable"
       : "short",
   };
+}
+
+// Roll decorated items up into Monarch/Mint-style category groups. `blocks`
+// arrives in grouped fill order, so items are already contiguous per category
+// and categories are in priority order. Each group carries a rolled-up budget
+// and how far the waterline has funded it.
+function buildCategories(blocks, waterlineCents) {
+  const cats = [];
+  const byKey = new Map();
+  for (const b of blocks) {
+    const name = (b.category || b.title || "").trim() || "Other";
+    const key = name.toLowerCase();
+    let cat = byKey.get(key);
+    if (!cat) {
+      cat = { key, name, color: b.color || null, items: [], budget_cents: 0,
+        first_unlock_cents: b.tank_unlock_cents - b.value_cents, top_unlock_cents: b.tank_unlock_cents,
+        unlocked_count: 0, claimable_count: 0, claimed_count: 0 };
+      byKey.set(key, cat);
+      cats.push(cat);
+    }
+    cat.items.push(b);
+    cat.budget_cents += b.value_cents;
+    cat.top_unlock_cents = Math.max(cat.top_unlock_cents, b.tank_unlock_cents);
+    cat.first_unlock_cents = Math.min(cat.first_unlock_cents, b.tank_unlock_cents - b.value_cents);
+    if (b.unlocked) cat.unlocked_count++;
+    if (b.claimable) cat.claimable_count++;
+    if (b.claimed) cat.claimed_count++;
+    if (!cat.color && b.color) cat.color = b.color;
+  }
+  for (const c of cats) {
+    c.count = c.items.length;
+    c.funded_cents = Math.max(0, Math.min(waterlineCents - c.first_unlock_cents, c.budget_cents));
+    c.fill_frac = c.budget_cents > 0 ? c.funded_cents / c.budget_cents : 0;
+    c.status = c.count && c.claimed_count === c.count ? "claimed"
+      : c.claimable_count > 0 ? "claimable"
+      : c.unlocked_count > 0 ? "partial"
+      : "locked";
+  }
+  return cats;
 }
 
 function normalizeBlockInput(body = {}) {
@@ -803,11 +878,13 @@ async function getBudgetState(workspaceId, userId) {
   const rows = await getTankBlockRows(workspaceId);
   const blocks = rows.map(r => decorateBlock(r, usage, funding, waterlineCents));
   const allocatedCents = blocks.reduce((sum, b) => sum + b.value_cents, 0);
+  const categories = buildCategories(blocks, waterlineCents);
   const investments = await getInvestments(workspaceId);
 
   return {
     settings,
     blocks,
+    categories,
     usage: {
       period_key: usage.periodKey,
       period_banked_cents: usage.periodBanked,

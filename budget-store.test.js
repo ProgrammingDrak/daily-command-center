@@ -62,15 +62,15 @@ function createMockPool(options = {}) {
     if (text.includes("status = 'pending'") && text.includes("bank_reserved_cents = 0")) {
       return { rows: [{ cents: state.pendingCents }] };
     }
-    if (text.includes("tank_unlock_cents = c.cum")) {
-      let run = 0;
-      const updated = [];
-      for (const r of liveTank()) {
-        run += r.value_cents || 0;
-        r.tank_unlock_cents = run;
-        updated.push({ id: r.id });
-      }
-      return { rows: updated };
+    // Grouped-threshold recompute: the store SELECTs these fields, sorts them
+    // via groupedOrder in JS, then issues one UPDATE per row.
+    if (text.includes("SELECT id, value_cents, tank_category")) {
+      return { rows: liveTank().map(r => ({ id: r.id, value_cents: r.value_cents, tank_category: r.tank_category, title: r.title, tank_position: r.tank_position })) };
+    }
+    if (text.includes("SET tank_unlock_cents = $3")) {
+      const row = state.tankRows.find(r => r.id === params[1]);
+      if (row) row.tank_unlock_cents = params[2];
+      return { rows: [] };
     }
     if (text.includes("COALESCE(MAX(tank_position)")) {
       const live = liveTank();
@@ -715,6 +715,54 @@ test("getBudgetState surfaces a rollover preview on period mismatch", async () =
   assert.equal(state.rollover_preview.closing_waterline_cents, 20000);
   assert.equal(state.rollover_preview.leftover_cents, 5000);
   assert.deepEqual(state.rollover_preview.unhit.map(u => u.id), [3]);
+});
+
+test("recomputeTankThresholds groups by category (contiguous) even when item positions interleave", async () => {
+  const mock = createMockPool({
+    tankRows: [
+      tankRow(1, 5000, 1000, { tank_category: "Restaurants" }),
+      tankRow(2, 6000, 2000, { tank_category: "Gifts" }),        // interleaved between Restaurants items
+      tankRow(3, 3000, 3000, { tank_category: "Restaurants" }),
+      tankRow(4, 4000, 4000, { tank_category: "Gifts" }),
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  await store.reorderTank(WS, [
+    { id: 1, tank_position: 1000 }, { id: 2, tank_position: 2000 },
+    { id: 3, tank_position: 3000 }, { id: 4, tank_position: 4000 },
+  ]);
+  const byId = Object.fromEntries(mock.state.tankRows.map(r => [r.id, r.tank_unlock_cents]));
+  // Restaurants (rank 1000) fills fully before Gifts (rank 2000), regardless of
+  // the interleaved raw positions.
+  assert.equal(byId[1], 5000);
+  assert.equal(byId[3], 8000);   // 5000 + 3000
+  assert.equal(byId[2], 14000);  // + 6000
+  assert.equal(byId[4], 18000);  // + 4000
+});
+
+test("getBudgetState rolls items up into Monarch-style category groups", async () => {
+  const mock = createMockPool({
+    bankBalance: 20000,
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-07", capacity_cents: 50000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 9000, prior_cents: 0 },
+    tankRows: [
+      tankRow(1, 5000, 1000, { tank_category: "Restaurants", title: "Restaurants: Dinner", tank_unlock_cents: 5000 }),
+      tankRow(2, 3000, 3000, { tank_category: "Restaurants", title: "Restaurants: Lunch", tank_unlock_cents: 8000 }),
+      tankRow(3, 6000, 2000, { tank_category: "Gifts", title: "Gifts: Fae", tank_unlock_cents: 14000 }),
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  const cats = (await store.getBudgetState(WS, 7)).categories; // waterline = 9000
+  assert.equal(cats.length, 2);
+  assert.equal(cats[0].name, "Restaurants");
+  assert.equal(cats[0].budget_cents, 8000);     // 5000 + 3000 rolled up
+  assert.equal(cats[0].count, 2);
+  assert.equal(cats[0].claimable_count, 2);      // both under the 9000 waterline
+  assert.equal(cats[0].items[0].item, "Dinner"); // category prefix stripped for nesting
+  assert.equal(cats[1].name, "Gifts");
+  assert.equal(cats[1].budget_cents, 6000);
+  assert.equal(cats[1].unlocked_count, 0);       // 14000 gate is above the waterline
+  assert.equal(cats[1].status, "locked");
 });
 
 test("conversions raise the tank waterline (they sum into periodBanked)", async () => {

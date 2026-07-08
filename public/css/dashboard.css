@@ -4686,6 +4686,11 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-zone-amt{font-size:10.5px;color:rgba(230,241,255,.75);white-space:nowrap;flex:0 0 auto}
 .bt-zone-status{font-size:10px;color:rgba(230,241,255,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-zone--open{align-items:flex-end;justify-content:center;border-top:none;cursor:default;min-height:20px}
+.bt-cat-band{min-height:0;display:flex;align-items:center;justify-content:flex-end;padding:0 10px;
+  border-top:1px solid color-mix(in srgb,currentColor 45%,transparent);z-index:3}
+.bt-cat-band span{font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  color:currentColor;opacity:.85;background:rgba(9,16,24,.4);padding:0 5px;border-radius:4px;
+  text-shadow:0 1px 2px rgba(0,0,0,.7)}
 .bt-open-label{font-size:10px;color:rgba(125,211,252,.4);padding:6px}
 
 /* zone states: dry & dim above water; vivid below */
@@ -4794,6 +4799,25 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-add{margin-top:8px;background:none;border:1px dashed var(--border);color:var(--text-muted);
   width:100%;padding:7px;border-radius:8px;font-size:12px;cursor:pointer}
 .bt-add:hover{border-color:var(--accent);color:var(--accent-light,var(--accent))}
+
+/* --- Monarch/Mint-style category groups --- */
+.bt-cat{border-top:1px solid var(--border)}
+.bt-cat:first-child{border-top:none}
+.bt-cat-head{display:flex;align-items:center;gap:8px;padding:9px 4px;cursor:pointer;font-size:12.5px}
+.bt-cat-head:hover{background:color-mix(in srgb,var(--accent) 5%,transparent)}
+.bt-cat-caret{width:12px;color:var(--text-muted);font-size:10px;flex:0 0 12px}
+.bt-cat-caret--none{visibility:hidden}
+.bt-cat-name{font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.bt-cat-status{font-size:10px;color:var(--text-muted);white-space:nowrap}
+.bt-cat-status.bt--claimable{color:#f59e0b;font-weight:700}
+.bt-cat-status.bt--claimed{color:var(--green)}
+.bt-cat-amt{font-size:12.5px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums;white-space:nowrap}
+.bt-cat-bar{width:46px;height:6px;border-radius:4px;background:var(--border);overflow:hidden;flex:0 0 46px}
+.bt-cat-bar i{display:block;height:100%;background:linear-gradient(90deg,#38bdf8,#a5e0ff);border-radius:4px}
+.bt-cat-items{padding:0 0 6px 14px;border-left:2px solid color-mix(in srgb,var(--border) 80%,transparent);margin-left:6px}
+.bt-row--nested{padding-left:6px}
+.bt-add--sub{margin:6px 0 2px;padding:5px;font-size:11px;opacity:.85}
+
 
 /* money changer (the coin slot feeding the tank) */
 .bt-changer .bt-changer-row{display:flex;align-items:center;gap:8px;margin-top:8px}
