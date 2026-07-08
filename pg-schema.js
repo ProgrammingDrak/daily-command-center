@@ -595,6 +595,56 @@ CREATE INDEX IF NOT EXISTS idx_feed_posts_owner_state
   ON feed_posts(owner_user_id, publish_state, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_posts_published
   ON feed_posts(publish_state, published_at DESC) WHERE publish_state = 'published';
+
+-- ── Budget Tank (tank blocks are slot_rewards rows; see budget-store.js) ──
+-- tank_unlock_cents is the cumulative bottom-up waterline gate, recomputed
+-- server-side on every tank mutation. It is deliberately SEPARATE from
+-- unlock_threshold_cents: reserveCostCents() debits max(value, unlock_threshold),
+-- so storing the cumulative sum there would make claiming a $50 block atop a
+-- $500 stack debit $500. value_cents stays the price a claim debits.
+ALTER TABLE slot_rewards
+  ADD COLUMN IF NOT EXISTS tank_position       DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS tank_unlock_cents   INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS tank_category       TEXT,
+  ADD COLUMN IF NOT EXISTS tank_color          TEXT,
+  ADD COLUMN IF NOT EXISTS tank_recurring      BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS tank_claimed_period TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_slot_rewards_tank
+  ON slot_rewards(workspace_id, tank_position)
+  WHERE tank_position IS NOT NULL AND deleted_at IS NULL;
+
+-- Money Changer conversions (points -> bank). A dedicated ledger, NOT slot_spins
+-- rows, so Bank Builder pacing/shield/head-start sums (getBankUsage) are never
+-- contaminated; the tank waterline sums this table alongside positive spin deltas.
+CREATE TABLE IF NOT EXISTS budget_conversions (
+  id                   SERIAL PRIMARY KEY,
+  workspace_id         TEXT NOT NULL REFERENCES workspaces(id),
+  user_id              INTEGER REFERENCES users(id),
+  points               INTEGER NOT NULL,
+  cents                INTEGER NOT NULL,
+  rate_cents_per_point INTEGER NOT NULL DEFAULT 1,
+  source_key           TEXT NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id, source_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_budget_conversions_workspace
+  ON budget_conversions(workspace_id, created_at DESC);
+
+-- Investments ledger (period-end sweeps; append-only). UNIQUE(workspace, period)
+-- makes the sweep idempotent: re-running a rollover cannot double-invest.
+CREATE TABLE IF NOT EXISTS budget_investments (
+  id            SERIAL PRIMARY KEY,
+  workspace_id  TEXT NOT NULL REFERENCES workspaces(id),
+  user_id       INTEGER REFERENCES users(id),
+  period_key    TEXT NOT NULL,
+  amount_cents  INTEGER NOT NULL,
+  task_block_id TEXT,
+  details       JSONB NOT NULL DEFAULT '{}',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id, period_key)
+);
 `;
 
 async function createSchema() {

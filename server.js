@@ -26,6 +26,7 @@ const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
 const punishmentStore = require("./punishment-store");
 const socialStore = require("./social-store");
+const budgetStore = require("./budget-store");
 const { badRequest, notFound } = require("./slot-account-common");
 const routeHelpers = require("./lib/route-helpers");
 const tokenStore = require("./token-store");
@@ -829,7 +830,7 @@ app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: fals
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
-  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
+  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
   ...routeHelpers,
   get vault() { return vault; },
@@ -843,6 +844,7 @@ require("./routes/evaluation")(app, ctx);
 require("./routes/meeting")(app, ctx);
 require("./routes/gcal")(app, ctx);
 require("./routes/slots")(app, ctx);
+require("./routes/budget")(app, ctx);
 require("./routes/punishments")(app, ctx);
 require("./routes/vault")(app, ctx);
 require("./routes/admin-tokens")(app, ctx);
