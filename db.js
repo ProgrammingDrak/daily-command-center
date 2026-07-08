@@ -146,6 +146,19 @@ async function getBlocksByDate(date, workspaceId) {
   return rows.map(parseBlock);
 }
 
+// Undated task blocks that could ride along in a reschedule subtree walk.
+// Only blocks holding a subtaskOf/wrapId link can ever join a subtree
+// (lib/reschedule.js walks those keys), so filter to them here — the broader
+// date-IS-NULL set also matches every delegated item (type='block', date null,
+// kind='delegated_item'), a standing list that would bloat every reschedule.
+async function getUndatedTaskBlocks(workspaceId) {
+  const linked = `(properties->>'subtaskOf' IS NOT NULL OR properties->>'wrapId' IS NOT NULL)`;
+  const { rows } = workspaceId
+    ? await pool.query(`SELECT * FROM blocks WHERE date IS NULL AND type = 'block' AND ${linked} AND workspace_id = $1 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`, [workspaceId])
+    : await pool.query(`SELECT * FROM blocks WHERE date IS NULL AND type = 'block' AND ${linked} AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`);
+  return rows.map(parseBlock);
+}
+
 async function getBlocksByTypes(types, workspaceId) {
   const placeholders = types.map((_, i) => `$${i + 1}`).join(",");
   const { rows } = workspaceId
@@ -373,7 +386,7 @@ async function getDccStateRange(startDate, endDate, workspaceId) {
 module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
-  getBlocksByDate, getBlocksByTypes, getChildren, getBlock,
+  getBlocksByDate, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,

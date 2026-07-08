@@ -229,7 +229,16 @@
     _replaying = true;
     console.log("[BlockStore] Replaying", entries.length, "buffered writes...");
     let succeeded = 0, failed = 0, dropped = 0;
+    // A reschedule that couldn't send within this window is stale: the user has
+    // long since retried or moved on, and replaying it now silently yanks the
+    // task to wherever the old attempt pointed (the pre-#167 "reversal" bug).
+    const RESCHEDULE_REPLAY_MAX_AGE_MS = 15 * 60 * 1000;
     for (const entry of entries) {
+      if (entry.op === "reschedule" && entry.timestamp && (Date.now() - Date.parse(entry.timestamp)) > RESCHEDULE_REPLAY_MAX_AGE_MS) {
+        walMoveToDeadLetter(entry, "stale reschedule (>15min old)");
+        dropped++;
+        continue;
+      }
       try {
         switch (entry.op) {
           case "create":
@@ -391,9 +400,11 @@
     // of subtree size, one broadcast the origin client ignores (own clientId) — so
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
-    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd } = {}) {
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate } = {}) {
       setSaving();
-      const body = { targetDate, parentStart, parentEnd };
+      // fromDate: the viewed origin day, used by the server when the block row
+      // itself is undated (task-bar pending_tasks) so the move can't 400.
+      const body = { targetDate, parentStart, parentEnd, fromDate };
       const walId = walPush({ op: "reschedule", id: blockId, data: body });
       try {
         const result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
@@ -405,7 +416,18 @@
         setSaved();
         return result;
       } catch (e) {
-        setError("Reschedule failed — buffered for retry");
+        // Same permanence rule as isPermanentReplayFailure: 400/404 are final,
+        // 401/403 (auth blips) and 5xx/network stay buffered for replay. The
+        // verdict is stamped on the error so callers don't re-derive it.
+        if (e) e.permanent = e.status === 400 || e.status === 404;
+        if (e && e.permanent) {
+          // Permanent rejection: the caller falls back to a clone move, so a
+          // buffered replay of this entry could only double-move the task.
+          walRemove(walId);
+          setError("Reschedule rejected — " + (e.message || e.status));
+        } else {
+          setError("Reschedule failed — buffered for retry");
+        }
         throw e;
       }
     },

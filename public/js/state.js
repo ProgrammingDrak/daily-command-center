@@ -969,6 +969,36 @@ async function moveTaskToToday(id){
   return rescheduleTaskToDate(id,_resolvedTodayDate());
 }
 
+// THE standard mover: every "send this task to day X" action funnels through
+// the shared placement picker (day → "After…" step with time presets, every
+// task on that day as an anchor, and Earliest free), so placement is chosen
+// the same way app-wide. Falls back to a direct auto-slot move when the picker
+// isn't available (e.g. embeds without the overlay markup).
+function moveTaskViaPlacement(id,dateStr){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||typeof openPlacementPicker!=="function")return rescheduleTaskToDate(id,dateStr);
+  openPlacementPicker({
+    title:ev.title,durMin:dur(ev)||30,verb:"Move",day:dateStr||null,
+    onPlace:async(dStr,timeStr,editedTitle)=>{
+      // The picker's title is editable: persist a rename BEFORE the move so
+      // the true move carries the new title with it.
+      if(editedTitle&&editedTitle!==ev.title)await _renameTaskForMove(ev,editedTitle);
+      rescheduleTaskToDate(id,dStr,{pinnedStart:timeStr||null});
+    }
+  });
+}
+
+// Rename a task in place: the live row plus its backing block.
+async function _renameTaskForMove(ev,newTitle){
+  ev.title=newTitle;
+  const dateStr=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  const b=_findTaskBlockForDate(ev.id,dateStr,ev);
+  if(b&&window.blockStore){
+    try{await window.blockStore.updateBlock(b.id,{...(b.properties||{}),title:newTitle})}catch(e){}
+  }
+  render();
+}
+
 function moveTaskToTomorrow(id){return rescheduleTaskToDate(id,_resolvedTomorrowDate());}
 
 async function moveTaskToNextWeek(id){
@@ -1141,7 +1171,17 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return;
   const fromDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  const pinned=(opts.pinnedStart&&/^\d{2}:\d{2}$/.test(opts.pinnedStart))?opts.pinnedStart:null;
   if(fromDate===targetDate){
+    // Same-day with a chosen time: that's a start pin, not a re-slot.
+    if(pinned){
+      if(typeof pinStartTime==="function")pinStartTime(id,pinned);
+      if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+      log("rescheduled",id,"Pinned to "+pinned+" on "+targetDate+": "+ev.title);
+      if(!opts.silent&&typeof showToast==="function")showToast("Start pinned to "+(typeof f12==="function"?f12(pinned):pinned),"success");
+      render();
+      return ev;
+    }
     const isActualToday=targetDate===_resolvedTodayDate();
     const moved=isActualToday?_placeTaskAtNextTodaySlot(id):_placeTaskAtEarliestCurrentDateSlot(id);
     if(moved){
@@ -1162,34 +1202,53 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   try{
     const srcBlock=_findTaskBlockForDate(id,fromDate,ev);
     if(srcBlock&&window.blockStore&&typeof window.blockStore.rescheduleBlock==="function"){
-      const slot=await _computeRescheduleSlot(ev,targetDate);
-      if(!slot){
-        if(!opts.silent&&typeof showToast==="function")showToast("No free slot on "+_prettyDateLabel(targetDate)+"'s schedule","error");
-        return;
-      }
-      let result;
+      // A full target day is no reason to refuse the move: with no free slot the
+      // block keeps its own times and re-slots when that day gets planned.
+      // A pinned start from the placement picker wins over the auto-slot.
+      const slot=pinned
+        ?{start:pinned,end:fmt(pt(pinned)+(dur(ev)||30)),duration:dur(ev)||30}
+        :await _computeRescheduleSlot(ev,targetDate);
+      let result=null;
       try{
-        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot.start,parentEnd:slot.end});
+        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate});
       }catch(e){
-        if(!opts.silent&&typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
-        return;
+        // blockStore stamps e.permanent using its single permanence rule
+        // (400/404 final; 401/403 auth blips and 5xx/network stay buffered).
+        const permanent=!!(e&&e.permanent);
+        if(!permanent){
+          // Transient/network failure: the blockstore WAL replays it on
+          // reconnect. Cloning now would race that replay into a duplicate.
+          if(!opts.silent&&typeof showToast==="function")showToast("Connection hiccup — move queued, will retry","info");
+          return;
+        }
+        console.warn("[reschedule] true move rejected ("+(e.message||e.status)+"), falling back to clone move");
       }
-      _removeSubtreeFromScheduled(id);
-      log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
-      if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
-      if(typeof recalcTimes==="function")recalcTimes();
-      render();
-      return result;
+      if(result){
+        _removeSubtreeFromScheduled(id);
+        log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
+        if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+        if(typeof recalcTimes==="function")recalcTimes();
+        render();
+        return result;
+      }
+      // Permanent rejection falls through to the clone path below, so the user
+      // never ends a reschedule click with a silent no-op.
     }
 
     // Fallback: no origin block to move (day-state-only task). Clone to the target
     // date + hide the source as before, and drop a tombstone for the amber list.
     const movedTask=_cloneTaskForReschedule(ev,targetDate,fromDate);
+    if(pinned){
+      movedTask.start=pinned;
+      movedTask.end=fmt(pt(pinned)+(dur(ev)||30));
+      movedTask._pinnedStart=pinned;
+    }
     let block=null;
     try{
       block=await persistAddedTask(movedTask,targetDate);
     }catch(e){
-      if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
+      // Both move strategies failed — say why instead of a bare "could not".
+      if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate)+(e&&e.message?" — "+e.message:""),"error");
       return;
     }
     // Carry the subtask subtree to the target date, re-parented onto the clone,
@@ -1448,29 +1507,17 @@ function openReschedulePopover(id,anchorEl){
   function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl)closePop()}
   function onKey(e){if(e.key==="Escape")closePop()}
 
-  // Quick buttons
+  // Quick buttons: choosing a day advances to the shared placement step
+  // (time presets / after another task / earliest free) instead of silently
+  // auto-slotting — the standard flow for every move.
   pop.querySelectorAll(".resched-btn").forEach(btn=>{
-    btn.addEventListener("click",async e=>{
+    btn.addEventListener("click",e=>{
       e.stopPropagation();
       const target=btn.dataset.target;
-      let dateStr=null;
-      if(target==="today")dateStr=today;
-      else if(target==="tomorrow")dateStr=__tomorrowDate;
+      const dateStr=target==="today"?today:target==="tomorrow"?__tomorrowDate:null;
       if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
-      pop.querySelectorAll("button").forEach(b=>{b.disabled=true;});
-      btn.textContent="Moving...";
-      try{
-        if(dateStr===currentDate&&target==="today"&&typeof moveTaskToToday==="function"){
-          // Already viewing today: re-slot the task to the next free slot now.
-          await moveTaskToToday(id);
-        }else{
-          // Cross-day moves create a target-day task; same-day planned views
-          // re-slot within that date.
-          await rescheduleTaskToDate(id,dateStr);
-        }
-      }finally{
-        closePop();
-      }
+      closePop();
+      moveTaskViaPlacement(id,dateStr);
     });
   });
   // Custom date
@@ -1484,7 +1531,7 @@ function openReschedulePopover(id,anchorEl){
     const v=dateInput.value;
     if(!v||!/^\d{4}-\d{2}-\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid date","error");return}
     closePop();
-    rescheduleTaskToDate(id,v);
+    moveTaskViaPlacement(id,v);
   });
   dateInput.addEventListener("keydown",e=>{
     if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}

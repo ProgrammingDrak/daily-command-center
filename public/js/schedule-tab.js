@@ -1023,10 +1023,13 @@ function buildSchedule(){
 // ======== MOVE-TO POPOVER ========
 function openMoveMenu(id, anchorEl){
   document.querySelectorAll(".move-menu-popup").forEach(p=>p.remove());
+  // Day moves route through the shared placement picker (moveTaskViaPlacement)
+  // so the drop time is chosen the same way everywhere.
+  const _mv=(dateStr,fallback)=>typeof moveTaskViaPlacement==="function"?moveTaskViaPlacement(id,dateStr):fallback(id);
   const items=[
-    {label:"Tomorrow",  action:()=>moveTaskToTomorrow(id)},
-    {label:"Today",     action:()=>moveTaskToToday(id)},
-    {label:"Next week", action:()=>moveTaskToNextWeek(id)},
+    {label:"Tomorrow",  action:()=>_mv(_resolvedTomorrowDate(),moveTaskToTomorrow)},
+    {label:"Today",     action:()=>_mv(_resolvedTodayDate(),moveTaskToToday)},
+    {label:"Next week", action:()=>_mv(_nextSundayDate(),moveTaskToNextWeek)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
     {label:"Backlog and Ideas",   action:()=>moveTaskToBacklog(id)},
     {label:"Priority",  action:()=>moveTaskToPriority(id)}

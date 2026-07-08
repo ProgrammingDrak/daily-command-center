@@ -752,7 +752,7 @@ function addNewTask(titleArg, durMinArg){
 function addTaskUniversal(barEl){
   const inp=barEl.querySelector(".tab-title");
   const title=inp.value.trim();
-  if(!title){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();return}
+  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return}
   const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
   inp.value="";
@@ -822,28 +822,63 @@ function _schedTimeLabel(hhmm){
 }
 
 let _schedPickerTitle="",_schedPickerDur=30,_schedPickerOptions={},_schedPickerDate="";
+let _schedPickerOnPlace=null,_schedPickerVerb="";
+function _schedSetHeader(verb){
+  const overlay=document.getElementById("sched-picker-overlay");
+  const hdr=overlay&&overlay.querySelector(".sched-picker-hdr h3");
+  if(hdr)hdr.textContent=(verb||"Schedule")+" task";
+}
 function openSchedulePicker(title,durMin,options){
   _schedPickerTitle=title;
   _schedPickerDur=durMin||30;
   _schedPickerOptions=options||{};
   _schedPickerDate="";
+  _schedPickerOnPlace=null;_schedPickerVerb="";
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay){
     // Fallback if modal markup isn't present: schedule after current.
     insertTaskNow(title,durMin);
     return;
   }
+  _schedSetHeader("Schedule");
   const titleEl=document.getElementById("sched-picker-title");
-  if(titleEl)titleEl.textContent=title;
+  if(titleEl)titleEl.value=title;
   _schedShowStep("day");
   const dateInput=document.getElementById("sched-date-input");
   if(dateInput){dateInput.style.display="none";dateInput.value="";}
+  overlay.classList.add("open");
+}
+// Placement mode: the SAME 2-step day → "After…" UI, generalized so any mover
+// (reschedule popover, move menu, drag) resolves a day + concrete start time
+// through one flow. cfg: {title, durMin, verb, day, onPlace(dateStr, timeStr)}.
+// timeStr null means "earliest free slot" (the old auto-slot behavior).
+// Passing cfg.day skips step 1 and lands on the placement step for that day;
+// Back still returns to the day step so the user can change days.
+function openPlacementPicker(cfg){
+  cfg=cfg||{};
+  const onPlace=typeof cfg.onPlace==="function"?cfg.onPlace:null;
+  const overlay=document.getElementById("sched-picker-overlay");
+  if(!overlay){if(onPlace)onPlace(cfg.day||_resolvedTodayDate(),null);return}
+  _schedPickerTitle=cfg.title||"";
+  _schedPickerDur=cfg.durMin||30;
+  _schedPickerOptions={};
+  _schedPickerDate="";
+  _schedPickerOnPlace=onPlace;
+  _schedPickerVerb=cfg.verb||"Move";
+  _schedSetHeader(_schedPickerVerb);
+  const titleEl=document.getElementById("sched-picker-title");
+  if(titleEl)titleEl.value=_schedPickerTitle;
+  const dateInput=document.getElementById("sched-date-input");
+  if(dateInput){dateInput.style.display="none";dateInput.value="";}
+  if(cfg.day)_schedPickDay(cfg.day);
+  else _schedShowStep("day");
   overlay.classList.add("open");
 }
 function closeSchedulePicker(){
   const overlay=document.getElementById("sched-picker-overlay");
   if(overlay)overlay.classList.remove("open");
   _schedPickerTitle="";_schedPickerDur=30;_schedPickerOptions={};_schedPickerDate="";
+  _schedPickerOnPlace=null;_schedPickerVerb="";
 }
 function _schedShowStep(step){
   const dayEl=document.getElementById("sched-step-day");
@@ -865,6 +900,14 @@ async function _renderSchedAfterStep(dateStr){
   const chipWrap=document.getElementById("sched-after-chips");
   if(chipWrap){
     chipWrap.innerHTML="";
+    // Placement mode gets an "Earliest free" chip: the one-tap auto-slot the
+    // old quick buttons did, for when the exact time doesn't matter.
+    if(_schedPickerOnPlace){
+      const b=document.createElement("button");
+      b.type="button";b.className="sched-chip sched-chip-earliest";b.textContent="⚡ Earliest free";
+      b.addEventListener("click",()=>_schedCommit(dateStr,null));
+      chipWrap.appendChild(b);
+    }
     loadSchedTimePresets().forEach(t=>{
       const b=document.createElement("button");
       b.type="button";b.className="sched-chip";b.textContent=_schedTimeLabel(t);
@@ -931,11 +974,16 @@ async function _schedDayTasks(dateStr){
   uniq.sort((a,b)=>pt(a.end)-pt(b.end));
   return uniq;
 }
-// Resolve the chosen day+time into an actual scheduled task, then close.
+// Resolve the chosen day+time: hand it to the placement callback (movers) or
+// create the scheduled task (the original create flow), then close.
 function _schedCommit(dateStr,timeStr){
-  const title=_schedPickerTitle,durMin=_schedPickerDur,options=_schedPickerOptions;
+  // The title is editable in the modal; whatever it says at commit time wins.
+  const title=(_schedPickerTitle||"").trim()||"Untitled task";
+  const durMin=_schedPickerDur,options=_schedPickerOptions;
+  const onPlace=_schedPickerOnPlace;
   const bar=options&&options.sourceBar;
   closeSchedulePicker();
+  if(onPlace){onPlace(dateStr,timeStr,title);return}
   commitScheduledTask(title,durMin,dateStr,timeStr,options);
   if(bar){const inp=bar.querySelector(".tab-title");if(inp){inp.value="";inp.classList.remove("tab-error");}}
 }
@@ -1030,6 +1078,10 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
 (function(){
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay)return;
+  // The title is a live input in both modes: edits flow into the commit
+  // (create) or into a rename that precedes the move (placement).
+  const titleEl=document.getElementById("sched-picker-title");
+  if(titleEl)titleEl.addEventListener("input",()=>{_schedPickerTitle=titleEl.value});
   const closeBtn=document.getElementById("sched-picker-close");
   if(closeBtn)closeBtn.addEventListener("click",closeSchedulePicker);
   overlay.addEventListener("click",e=>{if(e.target===overlay)closeSchedulePicker()});
@@ -1106,28 +1158,222 @@ function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-o
   if(saveBtn)saveBtn.addEventListener("click",closeSchedDefaults);
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeSchedDefaults()});
 })();
-// Wire up all task-add bars
-document.querySelectorAll(".task-add-bar").forEach(bar=>{
-  bar.querySelector(".tab-add").addEventListener("click",()=>addTaskUniversal(bar));
-  bar.querySelector(".tab-title").addEventListener("keydown",e=>{if(e.key==="Enter")addTaskUniversal(bar)});
-  // Choosing "Schedule" in the priority dropdown opens the day/time picker right
-  // away. The dropdown snaps back to Urgent (the picker holds the task), so the
-  // bar is reset whether or not the user follows through.
-  const dest=bar.querySelector(".tab-dest");
-  if(dest)dest.addEventListener("change",()=>{
-    if(dest.value!=="schedule")return;
-    const inp=bar.querySelector(".tab-title");
-    const title=inp?inp.value.trim():"";
-    const durEl=bar.querySelector(".tab-dur");
-    const durMin=(durEl&&parseInt(durEl.value))||30;
-    dest.value="urgent";
-    if(!title){
-      if(inp){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();}
+// ======== TASK DESTINATIONS (shared registry + radial menu) ========
+// One list drives every task-add bar, so new destinations (like Shell) show up
+// everywhere at once instead of drifting per-bar. The old <select> stays in
+// the DOM (hidden) as the value store addTaskUniversal reads; the radial menu
+// just sets it.
+const TASK_DESTINATIONS=[
+  {value:"urgent",  icon:"⚡", label:"Urgent"},
+  {value:"schedule",icon:"📅", label:"Schedule…"},
+  {value:"backlog", icon:"💡", label:"Backlog / Idea"},
+  {value:"shell",   icon:"🐚", label:"Shell"}
+];
+function _destMeta(value){return TASK_DESTINATIONS.find(d=>d.value===value)||TASK_DESTINATIONS[0]}
+// Blank title isn't a silent dead end: flash the input AND offer, via a toast
+// action, to proceed as an untitled task. onProceed resumes whatever the user
+// was doing (opening the radial, or committing an already-picked destination).
+function _flashBlankTitle(barEl,onProceed){
+  const inp=barEl.querySelector(".tab-title");
+  if(inp){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();}
+  if(typeof showToast==="function"){
+    showToast("Task title is blank","error",6000,{
+      label:"Create untitled task",
+      onClick:()=>{
+        if(inp)inp.value="Untitled task";
+        if(typeof onProceed==="function")onProceed();
+      }
+    });
+  }
+}
+function _closeDestRadial(){
+  document.querySelectorAll(".dest-radial-backdrop,.dest-radial-item,.dest-radial-label").forEach(el=>el.remove());
+  document.querySelectorAll(".dest-radial-trigger.open").forEach(el=>el.classList.remove("open"));
+}
+function initDestRadial(bar){
+  const sel=bar.querySelector(".tab-dest");
+  if(!sel)return;
+  // Every bar offers the full destination set, even where markup predates one.
+  TASK_DESTINATIONS.forEach(d=>{
+    if(!sel.querySelector('option[value="'+d.value+'"]')){
+      const o=document.createElement("option");o.value=d.value;o.textContent=d.label;sel.appendChild(o);
+    }
+  });
+  sel.style.display="none";
+  // "+ Add" is the ONE button: click fans out the destinations, and picking a
+  // destination commits the add in the same gesture (no separate submit).
+  const addBtn=bar.querySelector(".tab-add");
+  const inp=bar.querySelector(".tab-title");
+  if(!addBtn)return;
+  const openOrFlash=()=>{
+    _hideDestPreview();
+    if(document.querySelector(".dest-radial-backdrop")){_closeDestRadial();return}
+    // Armed bar (FAB flow: type was chosen FIRST): + Add commits straight to
+    // the armed destination, no second radial.
+    const armed=bar.dataset.armedDest;
+    if(armed){
+      sel.value=armed;
+      addTaskUniversal(bar);
       return;
     }
-    openSchedulePicker(title,durMin,{sourceBar:bar});
+    const title=inp?inp.value.trim():"";
+    if(!title){
+      _flashBlankTitle(bar,()=>_openDestRadial(bar,sel,addBtn));
+      return;
+    }
+    _openDestRadial(bar,sel,addBtn);
+  };
+  addBtn.addEventListener("click",e=>{e.stopPropagation();openOrFlash()});
+  if(inp)inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();openOrFlash()}});
+  // Hover teaser: a small radial "toast" previewing exactly what will fan out
+  // on click. Hovering ONTO the teaser promotes it to the full interactive
+  // radial, so both paths (click, or hover-then-hover) reach a pick.
+  // Armed bars skip the teaser — + Add commits directly there.
+  let hoverTimer=null;
+  addBtn.addEventListener("mouseenter",()=>{
+    clearTimeout(_destPreviewHideTimer);
+    if(bar.dataset.armedDest)return;
+    if(document.querySelector(".dest-radial-backdrop"))return;
+    hoverTimer=setTimeout(()=>_showDestPreview(bar,sel,addBtn),220);
   });
-});
+  addBtn.addEventListener("mouseleave",()=>{
+    clearTimeout(hoverTimer);
+    // Grace window: the pointer needs time to cross the gap from the button
+    // to a teaser dot without the preview vanishing underneath it.
+    clearTimeout(_destPreviewHideTimer);
+    _destPreviewHideTimer=setTimeout(_hideDestPreview,320);
+  });
+}
+// The mini preview: same fan geometry at ~60% scale. Dots are live — entering
+// one expands the preview into the real radial anchored on the same button.
+let _destPreviewHideTimer=null;
+function _showDestPreview(bar,sel,anchorBtn){
+  _hideDestPreview();
+  const rect=anchorBtn.getBoundingClientRect();
+  const cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
+  const R=58,n=TASK_DESTINATIONS.length;
+  const up=cy>R+60;
+  const a0=up?200:20,a1=up?340:160;
+  TASK_DESTINATIONS.forEach((d,i)=>{
+    const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
+    const x=Math.max(20,Math.min(cx+R*Math.cos(ang),window.innerWidth-20));
+    const y=cy+R*Math.sin(ang);
+    const dot=document.createElement("span");
+    dot.className="dest-radial-item dest-radial-mini";
+    dot.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
+    dot.style.left=(x-14)+"px";dot.style.top=(y-14)+"px";
+    dot.addEventListener("mouseenter",()=>{
+      clearTimeout(_destPreviewHideTimer);
+      _hideDestPreview();
+      _openDestRadial(bar,sel,anchorBtn);
+    });
+    dot.addEventListener("mouseleave",()=>{
+      clearTimeout(_destPreviewHideTimer);
+      _destPreviewHideTimer=setTimeout(_hideDestPreview,320);
+    });
+    document.body.appendChild(dot);
+    requestAnimationFrame(()=>{dot.style.transitionDelay=(i*20)+"ms";dot.classList.add("out")});
+  });
+}
+function _hideDestPreview(){
+  document.querySelectorAll(".dest-radial-mini").forEach(el=>el.remove());
+}
+function _openDestRadial(bar,sel,trig,opts){
+  opts=opts||{};
+  _closeDestRadial();
+  trig.classList.add("open");
+  const backdrop=document.createElement("div");
+  backdrop.className="dest-radial-backdrop";
+  backdrop.addEventListener("click",_closeDestRadial);
+  document.body.appendChild(backdrop);
+  const rect=trig.getBoundingClientRect();
+  const cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
+  const R=104,n=TASK_DESTINATIONS.length;
+  // Fan upward unless the trigger sits too close to the top of the viewport.
+  // Callers can override the arc (e.g. the corner FAB fans up-left).
+  const up=cy>R+80;
+  const a0=opts.a0!=null?opts.a0:(up?200:20),a1=opts.a1!=null?opts.a1:(up?340:160); // degrees, y grows down
+  TASK_DESTINATIONS.forEach((d,i)=>{
+    const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
+    let x=cx+R*Math.cos(ang);const y=cy+R*Math.sin(ang);
+    x=Math.max(30,Math.min(x,window.innerWidth-30));
+    const item=document.createElement("button");
+    item.type="button";item.className="dest-radial-item";
+    item.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
+    item.style.left=(cx-22)+"px";item.style.top=(cy-22)+"px";
+    // Label rides just past its item along the same spoke, so labels fan with
+    // the items instead of colliding at the arc's apex.
+    const lx=Math.max(64,Math.min(cx+(R+46)*Math.cos(ang),window.innerWidth-64));
+    const ly=cy+(R+46)*Math.sin(ang);
+    const lbl=document.createElement("span");
+    lbl.className="dest-radial-label";lbl.textContent=d.label;
+    lbl.style.left=lx+"px";lbl.style.top=ly+"px";
+    document.body.appendChild(item);document.body.appendChild(lbl);
+    requestAnimationFrame(()=>{
+      item.style.transitionDelay=(i*28)+"ms";
+      lbl.style.transitionDelay=(60+i*28)+"ms";
+      item.classList.add("out");lbl.classList.add("out");
+      item.style.left=(x-22)+"px";item.style.top=(y-22)+"px";
+    });
+    item.addEventListener("click",e=>{
+      e.stopPropagation();
+      _closeDestRadial();
+      // Callers may intercept the pick (e.g. the FAB arms the compose bar);
+      // default: picking a destination IS the submit — one gesture, committed.
+      if(typeof opts.onPick==="function"){opts.onPick(d);return}
+      sel.value=d.value;
+      addTaskUniversal(bar);
+    });
+  });
+  document.addEventListener("keydown",function esc(e){
+    if(e.key==="Escape"){_closeDestRadial();document.removeEventListener("keydown",esc)}
+  });
+}
+// ── Armed compose (FAB choose-type-first flow) ──
+// The launcher FAB fans out the destinations BEFORE the compose bar opens;
+// the pick "arms" the bar: a chip shows the chosen type, and + Add / Enter
+// commits straight to it. Clicking the chip re-opens the fan to switch type.
+function _setDestArm(bar,destValue){
+  bar.dataset.armedDest=destValue;
+  const sel=bar.querySelector(".tab-dest");
+  if(sel)sel.value=destValue;
+  let chip=bar.querySelector(".dest-armed-chip");
+  if(!chip){
+    chip=document.createElement("button");
+    chip.type="button";chip.className="dest-armed-chip";chip.title="Change task type";
+    const inp=bar.querySelector(".tab-title");
+    bar.insertBefore(chip,inp||bar.firstChild);
+    chip.addEventListener("click",e=>{
+      e.stopPropagation();
+      _openDestRadial(bar,sel,chip,{onPick:d=>_setDestArm(bar,d.value)});
+    });
+  }
+  const m=_destMeta(destValue);
+  chip.innerHTML='<span class="dac-icon">'+m.icon+'</span><span class="dac-label">'+m.label+'</span>';
+}
+function _clearDestArm(bar){
+  if(!bar)return;
+  delete bar.dataset.armedDest;
+  const chip=bar.querySelector(".dest-armed-chip");
+  if(chip)chip.remove();
+}
+// Called by launcher.js on a quick FAB tap: destinations fan out from the FAB
+// (up-left arc, it lives in the corner); the pick arms the bar then opens
+// the compose. Dismissing the fan opens nothing.
+function openDestRadialForLauncher(anchorBtn,onOpenCompose){
+  const bar=document.getElementById("task-add-launcher");
+  const sel=bar&&bar.querySelector(".tab-dest");
+  if(!bar||!sel){if(typeof onOpenCompose==="function")onOpenCompose();return}
+  _openDestRadial(bar,sel,anchorBtn,{a0:185,a1:268,onPick:d=>{
+    _setDestArm(bar,d.value);
+    if(typeof onOpenCompose==="function")onOpenCompose();
+  }});
+}
+window.openDestRadialForLauncher=openDestRadialForLauncher;
+window._clearDestArm=_clearDestArm;
+
+// Wire up all task-add bars ("+ Add" opens the radial; Enter in the title too)
+document.querySelectorAll(".task-add-bar").forEach(bar=>initDestRadial(bar));
 
 // ======== UNIFIED BLOCK QUERY HELPERS ========
 // All user data is type='block'. These helpers filter by property presence.
