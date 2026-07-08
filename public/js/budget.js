@@ -154,10 +154,17 @@
       '<div class="bt-zones" data-role="zones">' +
         reef + zones + spacer +
       "</div>" +
+      // Tank ceiling = the discretionary budget (the full reward reserve you can
+      // earn this period). Water reaches it when every block is unlocked.
+      '<div class="bt-cap-line"><span>Budget ceiling · ' + money(u.capacity_cents) + " to unlock</span></div>" +
       '<div class="bt-water" style="height:' + waterPct.toFixed(2) + '%">' +
-        '<div class="bt-wavecrest"><span class="bt-water-amt">' + money(u.waterline_cents) + " banked</span></div>" +
         '<div class="bt-caustics" aria-hidden="true"></div>' +
         bubbles + fish +
+      "</div>" +
+      // Surface line + Reward-Reserve label, pinned to the waterline (unclipped).
+      '<div class="bt-surface" style="bottom:' + waterPct.toFixed(2) + '%">' +
+        '<span class="bt-water-amt">Reward Reserve · ' +
+          money(u.waterline_cents) + " earned this " + esc(s.settings.period_type) + "</span>" +
       "</div>" +
       '<div class="bt-glass" aria-hidden="true"></div>' +
     "</div>";
