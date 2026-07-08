@@ -87,8 +87,32 @@ function normalizeBudgetTankSettings(raw) {
     capacity_source: capacitySource,
     fixed_capacity_cents: clampInt(src.fixed_capacity_cents ?? 0, 0, MAX_BLOCK_CENTS),
     cents_per_point: clampInt(src.cents_per_point ?? DEFAULT_CENTS_PER_POINT, 1, 1000),
+    // "tank" = the Bank Builder monthly goal follows the tank capacity, so the
+    // pacing curve paces toward filling the tank; "manual" keeps the account's
+    // own monthly_goal_cents.
+    goal_mode: src.goal_mode === "manual" ? "manual" : "tank",
     current_period: normalizeCurrentPeriod(src.current_period),
   };
+}
+
+// The Bank Builder goal the tank drives (0 = don't drive; caller falls back to
+// the account's monthly_goal_cents). Only a monthly tank drives the monthly
+// goal — a weekly tank's capacity is the wrong magnitude for the month curve.
+function tankDrivenGoalCents(accountSettings) {
+  const bt = accountSettings && accountSettings.budget_tank;
+  if (!bt || bt.goal_mode === "manual") return 0;
+  if ((bt.period_type || "month") !== "month") return 0;
+  const cap = bt.current_period && Math.round(Number(bt.current_period.capacity_cents));
+  return Number.isFinite(cap) && cap > 0 ? cap : 0;
+}
+
+// Capacity + waterline resolution shared by getBudgetState, claimTankBlock,
+// and slot-store's getState (the machine surface must gate identically).
+function resolveTankWaterline(settings, usage) {
+  const capacityCents = settings.current_period && settings.current_period.key === usage.periodKey
+    ? settings.current_period.capacity_cents
+    : resolveCapacity(settings, usage);
+  return { capacityCents, waterlineCents: Math.min(usage.periodBanked, capacityCents) };
 }
 
 function necessitiesTotalCents(settings) {
@@ -394,6 +418,77 @@ async function reorderTank(workspaceId, items) {
   return { reordered: list.length };
 }
 
+// ── Claim ────────────────────────────────────────────────────────────────────
+// Modeled on slot-store's claimBankrollGoalReward: row FOR UPDATE, sweep
+// pending bank builders so fresh deposits count, gate checks against a
+// transaction-consistent waterline, debit value_cents (NEVER the cumulative
+// tank_unlock_cents), stamp the claim period. The pending-builder sweep is
+// injected by the route (from slot-store) to keep the dependency direction
+// slot-store -> budget-store only.
+async function claimTankBlock(workspaceId, userId, id, { sweepPendingBankBuilders } = {}) {
+  const rewardId = parseInt(id, 10);
+  if (!Number.isFinite(rewardId)) throw badRequest("Invalid block id");
+  await upsertSlotAccountRow(pool, workspaceId, userId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [row] } = await client.query(
+      `SELECT * FROM slot_rewards
+        WHERE workspace_id = $1 AND id = $2 AND tank_position IS NOT NULL AND deleted_at IS NULL
+        FOR UPDATE`,
+      [workspaceId, rewardId]
+    );
+    if (!row) throw notFound("Tank block not found");
+    if (!row.active) throw badRequest("That block is inactive");
+    if (typeof sweepPendingBankBuilders === "function") {
+      await sweepPendingBankBuilders(client, workspaceId);
+    }
+    const { rows: [account] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id = $1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = normalizeBudgetTankSettings(account && account.settings && account.settings.budget_tank);
+    const usage = await getTankUsage(workspaceId, settings, client);
+    if (row.tank_claimed_period === usage.periodKey) {
+      // Already claimed this period — idempotent no-op; the route re-enqueues
+      // with the same sourceId and gets the existing queue item back.
+      await client.query("ROLLBACK");
+      return { claimed: false, duplicate: true, block: row, period_key: usage.periodKey };
+    }
+    const { waterlineCents } = resolveTankWaterline(settings, usage);
+    if (waterlineCents < (row.tank_unlock_cents || 0)) {
+      throw badRequest("The waterline hasn't reached that block yet — needs " +
+        "$" + (((row.tank_unlock_cents || 0) - waterlineCents) / 100).toFixed(2) + " more banked");
+    }
+    const priceCents = row.value_cents || 0;
+    if (((account && account.bank_balance_cents) || 0) < priceCents) {
+      throw badRequest("Not enough Reward Reserve for that block");
+    }
+    await client.query(
+      `UPDATE slot_accounts
+          SET bank_balance_cents = GREATEST(0, bank_balance_cents - $2), updated_at = NOW()
+        WHERE workspace_id = $1`,
+      [workspaceId, priceCents]
+    );
+    const { rows: [updated] } = await client.query(
+      `UPDATE slot_rewards
+          SET tank_claimed_period = $3, last_won_at = NOW(),
+              uses_remaining = CASE WHEN uses_remaining IS NULL THEN NULL ELSE GREATEST(uses_remaining - 1, 0) END,
+              updated_at = NOW()
+        WHERE workspace_id = $1 AND id = $2
+        RETURNING *`,
+      [workspaceId, rewardId, usage.periodKey]
+    );
+    await client.query("COMMIT");
+    return { claimed: true, block: updated, period_key: usage.periodKey, debited_cents: priceCents };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── Config + state ───────────────────────────────────────────────────────────
 async function updateBudgetConfig(workspaceId, userId, body = {}) {
   const account = await upsertSlotAccountRow(pool, workspaceId, userId);
@@ -406,6 +501,7 @@ async function updateBudgetConfig(workspaceId, userId, body = {}) {
     ...(body.capacity_source != null || body.capacitySource != null ? { capacity_source: body.capacity_source ?? body.capacitySource } : {}),
     ...(body.fixed_capacity_cents != null || body.fixedCapacityCents != null ? { fixed_capacity_cents: body.fixed_capacity_cents ?? body.fixedCapacityCents } : {}),
     ...(body.cents_per_point != null || body.centsPerPoint != null ? { cents_per_point: body.cents_per_point ?? body.centsPerPoint } : {}),
+    ...(body.goal_mode != null || body.goalMode != null ? { goal_mode: body.goal_mode ?? body.goalMode } : {}),
     current_period: current.current_period, // server-stamped only; never client-set
   });
   await saveBudgetTankSettings(workspaceId, next);
@@ -458,8 +554,7 @@ async function getBudgetState(workspaceId, userId) {
     rolloverDue = true;
   }
 
-  const capacityCents = settings.current_period.capacity_cents;
-  const waterlineCents = Math.min(usage.periodBanked, capacityCents);
+  const { capacityCents, waterlineCents } = resolveTankWaterline(settings, usage);
   const funding = await getFunding(workspaceId, account);
   const rows = await getTankBlockRows(workspaceId);
   const blocks = rows.map(r => decorateBlock(r, usage, funding, waterlineCents));
@@ -493,8 +588,11 @@ module.exports = {
   DEFAULT_CENTS_PER_POINT,
   normalizeBudgetTankSettings,
   necessitiesTotalCents,
+  tankDrivenGoalCents,
+  resolveTankWaterline,
   getTankUsage,
   getFunding,
+  claimTankBlock,
   recomputeTankThresholds,
   getTankBlockRows,
   addTankBlock,

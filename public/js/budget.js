@@ -107,7 +107,9 @@
         '<div class="bt-zone-body">' +
           '<div class="bt-zone-top"><span class="bt-zone-name">' + esc(b.title) + "</span>" +
           '<span class="bt-zone-amt">' + money(b.value_cents) + "</span></div>" +
-          '<div class="bt-zone-status">' + esc(info.label) + (over ? " · over budget" : "") + "</div>" +
+          '<div class="bt-zone-status">' + esc(info.label) + (over ? " · over budget" : "") +
+            (b.claimable ? ' <button class="bt-claim-btn" data-act="claim">Claim</button>' : "") +
+          "</div>" +
         "</div>" +
         "</div>";
     }).join("");
@@ -151,6 +153,7 @@
         (b.tank_recurring ? '<span class="bt-row-tag">monthly</span>' : "") + "</span>" +
       '<span class="bt-row-amt">' + money(b.value_cents) + "</span>" +
       '<span class="bt-row-fund">' + esc(info.label) + "</span>" +
+      (b.claimable ? '<button class="bt-claim-btn" data-act="claim">Claim</button>' : "") +
       (_editMode
         ? '<button class="bt-row-btn" data-act="edit-block" title="Edit">✎</button>' +
           '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block">' + (confirming ? "Sure?" : "×") + "</button>"
@@ -356,6 +359,30 @@
         _confirmDeleteId = null;
         _necDraft = _editMode ? _state.settings.necessities.map(n => ({ ...n })) : null;
         render();
+        return;
+      }
+      if (act === "claim") {
+        const el = btn.closest("[data-id]");
+        const block = _state.blocks.find(b => String(b.id) === el.dataset.id);
+        if (!block) return;
+        btn.disabled = true;
+        try {
+          const out = await api("POST", "/api/budget/blocks/" + block.id + "/claim");
+          await loadBudget();
+          if (typeof window.loadRewardsQueue === "function") window.loadRewardsQueue();
+          const title = block.title;
+          if (out.reward_queue_item && typeof window.showToast === "function") {
+            window.showToast("Claimed “" + title + "” — it's in your rewards", "success", 8000, {
+              label: "Schedule now",
+              onClick: () => window.scheduleRewardQueueItem && window.scheduleRewardQueueItem(out.reward_queue_item),
+            });
+          } else {
+            toast("Claimed “" + title + "”", "success");
+          }
+        } catch (err) {
+          toast(err.message || "Could not claim", "error");
+          btn.disabled = false;
+        }
         return;
       }
       if (act === "add-block") { openForm(null); return; }

@@ -4702,16 +4702,16 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-bubble:nth-child(odd){width:5px;height:5px;animation-duration:6.5s}
 @keyframes bt-bubble{0%{transform:translateY(0);opacity:0}8%{opacity:.9}
   96%{opacity:.6}100%{transform:translateY(-440px);opacity:0}}
-.bt-fish{position:absolute;left:-40px;width:30px;animation:bt-swim 12s linear infinite}
+.bt-fish{position:absolute;left:6%;width:30px;animation:bt-swim 12s ease-in-out infinite}
 .bt-fish-svg{width:30px;height:16px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))}
 @keyframes bt-swim{
-  0%{transform:translateX(0) scaleX(1) translateY(0)}
-  22%{transform:translateX(24vw) scaleX(1) translateY(-8px)}
-  49%{transform:translateX(46vw) scaleX(1) translateY(4px)}
-  50%{transform:translateX(46vw) scaleX(-1) translateY(4px)}
-  74%{transform:translateX(18vw) scaleX(-1) translateY(-6px)}
-  99%{transform:translateX(0vw) scaleX(-1) translateY(0)}
-  100%{transform:translateX(0) scaleX(1) translateY(0)}}
+  0%{left:6%;transform:scaleX(1) translateY(0)}
+  24%{transform:scaleX(1) translateY(-7px)}
+  49%{left:72%;transform:scaleX(1) translateY(3px)}
+  50%{left:72%;transform:scaleX(-1) translateY(3px)}
+  74%{transform:scaleX(-1) translateY(-5px)}
+  99%{left:6%;transform:scaleX(-1) translateY(0)}
+  100%{left:6%;transform:scaleX(1) translateY(0)}}
 
 /* --- breakdown --- */
 .bt-group{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
@@ -4736,6 +4736,13 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-add{margin-top:8px;background:none;border:1px dashed var(--border);color:var(--text-muted);
   width:100%;padding:7px;border-radius:8px;font-size:12px;cursor:pointer}
 .bt-add:hover{border-color:var(--accent);color:var(--accent-light,var(--accent))}
+
+/* claim button (shared by zones + rows) */
+.bt-claim-btn{background:#f59e0b;border:none;color:#1a1206;font-size:10px;font-weight:800;
+  padding:2px 9px;border-radius:999px;cursor:pointer;margin-left:6px;vertical-align:middle;
+  box-shadow:0 0 8px rgba(245,158,11,.5)}
+.bt-claim-btn:hover{background:#fbbf24}
+.bt-claim-btn:disabled{opacity:.5;cursor:default}
 
 /* drag affordances (shared by zones + rows) */
 .bt-dragging{opacity:.4}

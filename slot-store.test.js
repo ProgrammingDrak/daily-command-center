@@ -304,6 +304,9 @@ function createMockPool(options = {}) {
       return { rows: idx >= 0 ? [state.spinRows[idx]] : [] };
     }
     if (text.includes("SELECT * FROM slot_spins")) return { rows: state.spinRows };
+    // Budget Tank threshold reflow — runs after deleteReward; no-op here
+    // (tank math is covered in budget-store.test.js).
+    if (text.includes("tank_unlock_cents = c.cum")) return { rows: [] };
     throw new Error("Unexpected query: " + text.slice(0, 120));
   }
 

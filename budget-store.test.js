@@ -104,6 +104,26 @@ function createMockPool(options = {}) {
       state.insertedRewards.push(row);
       return { rows: [{ ...row }] };
     }
+    if (text.includes("SELECT * FROM slot_rewards") && text.includes("FOR UPDATE")) {
+      const row = state.tankRows.find(r => r.id === params[1] && r.tank_position != null && !r.deleted_at);
+      return { rows: row ? [{ ...row }] : [] };
+    }
+    if (text.includes("SELECT * FROM slot_accounts") && text.includes("FOR UPDATE")) {
+      return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
+    }
+    if (text.includes("bank_balance_cents = GREATEST(0, bank_balance_cents - $2")) {
+      state.debits = state.debits || [];
+      state.debits.push(params[1]);
+      state.bankBalance = Math.max(0, state.bankBalance - params[1]);
+      return { rows: [] };
+    }
+    if (text.includes("SET tank_claimed_period = $3")) {
+      const row = state.tankRows.find(r => r.id === params[1]);
+      if (!row) return { rows: [] };
+      row.tank_claimed_period = params[2];
+      if (row.uses_remaining != null) row.uses_remaining = Math.max(0, row.uses_remaining - 1);
+      return { rows: [{ ...row }] };
+    }
     if (text.includes("SELECT * FROM slot_rewards") && text.includes("tank_position IS NOT NULL")) {
       return { rows: liveTank().map(r => ({ ...r })) };
     }
@@ -371,6 +391,101 @@ test("updateBudgetConfig merges fields, clamps the rate, and never takes current
   assert.equal(next.cents_per_point, 5);
   assert.equal(next.current_period.key, "2026-07");
   assert.equal(mock.state.savedSettings.budget_tank.current_period.key, "2026-07");
+});
+
+test("claimTankBlock debits value_cents (never the cumulative threshold) and stamps the period", async () => {
+  const mock = createMockPool({
+    bankBalance: 20000,
+    settings: { budget_tank: { current_period: { key: "2026-07", capacity_cents: 50000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 40000, prior_cents: 0 },
+    // $50 block at the TOP of a $400 stack: cumulative gate 40000, price 5000.
+    tankRows: [tankRow(1, 35000, 1000, { tank_unlock_cents: 35000 }), tankRow(2, 5000, 2000, { tank_unlock_cents: 40000 })],
+  });
+  const store = loadStoreWithMock(mock);
+  let swept = false;
+  const result = await store.claimTankBlock(WS, 7, 2, { sweepPendingBankBuilders: async () => { swept = true; } });
+  assert.equal(result.claimed, true);
+  assert.equal(result.debited_cents, 5000);          // price, NOT the 40000 gate
+  assert.deepEqual(mock.state.debits, [5000]);
+  assert.equal(swept, true);
+  assert.equal(mock.state.tankRows.find(r => r.id === 2).tank_claimed_period, "2026-07");
+  assert.equal(mock.state.tankRows.find(r => r.id === 2).uses_remaining, 0); // one-shot burned
+});
+
+test("claimTankBlock gates: below waterline and reserve-short both 400; double claim is a no-op duplicate", async () => {
+  const base = {
+    settings: { budget_tank: { current_period: { key: "2026-07", capacity_cents: 50000 } } },
+    tankRows: [tankRow(1, 5000, 1000, { tank_unlock_cents: 5000 })],
+  };
+  // Below waterline.
+  let mock = createMockPool({ ...base, bankBalance: 9999, spinsUsage: { period_key: "2026-07", cur_cents: 1000, prior_cents: 0 } });
+  let store = loadStoreWithMock(mock);
+  await assert.rejects(() => store.claimTankBlock(WS, 7, 1, {}), e => e.statusCode === 400 && /waterline/.test(e.message));
+  assert.equal(mock.state.debits, undefined);
+
+  // Unlocked but reserve short.
+  mock = createMockPool({ ...base, bankBalance: 100, spinsUsage: { period_key: "2026-07", cur_cents: 6000, prior_cents: 0 } });
+  store = loadStoreWithMock(mock);
+  await assert.rejects(() => store.claimTankBlock(WS, 7, 1, {}), e => e.statusCode === 400 && /Reserve/.test(e.message));
+
+  // Claim, then claim again: duplicate, single debit.
+  mock = createMockPool({ ...base, bankBalance: 9000, spinsUsage: { period_key: "2026-07", cur_cents: 6000, prior_cents: 0 } });
+  store = loadStoreWithMock(mock);
+  const first = await store.claimTankBlock(WS, 7, 1, {});
+  assert.equal(first.claimed, true);
+  const second = await store.claimTankBlock(WS, 7, 1, {});
+  assert.equal(second.claimed, false);
+  assert.equal(second.duplicate, true);
+  assert.deepEqual(mock.state.debits, [5000]);
+
+  // Missing block.
+  await assert.rejects(() => store.claimTankBlock(WS, 7, 99, {}), e => e.statusCode === 404);
+});
+
+test("tankDrivenGoalCents drives the Bank Builder goal only for an active monthly tank", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const cp = { current_period: { key: "2026-07", capacity_cents: 20446 } };
+  assert.equal(store.tankDrivenGoalCents({ budget_tank: { period_type: "month", ...cp } }), 20446);
+  assert.equal(store.tankDrivenGoalCents({ budget_tank: { period_type: "month", goal_mode: "manual", ...cp } }), 0);
+  assert.equal(store.tankDrivenGoalCents({ budget_tank: { period_type: "week", ...cp } }), 0);
+  assert.equal(store.tankDrivenGoalCents({ budget_tank: { period_type: "month" } }), 0);
+  assert.equal(store.tankDrivenGoalCents({}), 0);
+  assert.equal(store.tankDrivenGoalCents(null), 0);
+});
+
+test("slot-store rowToReward: tank rows gate on the waterline, afford on value_cents, and lock after a period claim", () => {
+  loadStoreWithMock(createMockPool()); // ensure pg-pool mock is in the require cache
+  const slotPath = require.resolve("./slot-store");
+  delete require.cache[slotPath];
+  const slotStore = require("./slot-store");
+  const rowToReward = slotStore._test.rowToReward;
+  const account = { bank_balance_cents: 6000, settings: {} };
+  const row = {
+    id: 2, title: "Restaurants: Anniversary dinner", kind: "bank_gated", active: true,
+    weight: 1, chance_shares: 1, payment_source: "self", tier_id: "tier_i",
+    value_cents: 5000, unlock_threshold_cents: 0,
+    tank_position: 2000, tank_unlock_cents: 40000, tank_claimed_period: null,
+  };
+  // Waterline below the gate: tank_locked even though value is affordable.
+  let r = rowToReward(row, account, {}, 6000, { periodKey: "2026-07", waterlineCents: 30000 });
+  assert.equal(r.eligible, false);
+  assert.equal(r.locked_reason, "tank_locked");
+  assert.equal(r.tank_needs_cents, 10000);
+  assert.equal(r.reserve_cost_cents, 5000); // debit price = value, never the gate
+
+  // Waterline past the gate: eligible.
+  r = rowToReward(row, account, {}, 6000, { periodKey: "2026-07", waterlineCents: 45000 });
+  assert.equal(r.eligible, true);
+  assert.equal(r.locked_reason, null);
+
+  // Claimed this period: locked as tank_claimed.
+  r = rowToReward({ ...row, tank_claimed_period: "2026-07" }, account, {}, 6000, { periodKey: "2026-07", waterlineCents: 45000 });
+  assert.equal(r.eligible, false);
+  assert.equal(r.locked_reason, "tank_claimed");
+
+  // Non-tank rows are untouched by tank usage.
+  r = rowToReward({ ...row, tank_position: null, tank_unlock_cents: 0 }, account, {}, 6000, { periodKey: "2026-07", waterlineCents: 0 });
+  assert.equal(r.eligible, true);
 });
 
 test("conversions raise the tank waterline (they sum into periodBanked)", async () => {
