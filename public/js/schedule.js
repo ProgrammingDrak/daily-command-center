@@ -21,6 +21,10 @@ function saveAddedTasks(tasks){
   localStorage.setItem(ADDED_KEY,JSON.stringify(tasks)); scheduleIDBSave();
 }
 function persistAddedTask(item,targetDate){
+  // dur() is end-start, which is meaningless on an untimed item (no start yet,
+  // e.g. a future-day create from the schedule popover) — fall back to durMin.
+  const _computedDur=dur(item);
+  const _itemDur=(Number.isFinite(_computedDur)&&_computedDur>0)?_computedDur:(item.durMin||30);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
     // Write to blockstore — will be reloaded via property-based query on refresh
     const date=targetDate||((typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null));
@@ -29,7 +33,7 @@ function persistAddedTask(item,targetDate){
       local_id:item.id,
       type:item.type||"task",
       title:item.title,
-      duration:dur(item),
+      duration:_itemDur,
       start:item.start,
       end:item.end,
       priority:item.priority||"High",
@@ -70,7 +74,7 @@ function persistAddedTask(item,targetDate){
   try{added=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){added=[]}
   if(!added.find(t=>t.id===item.id)){
     added.push({
-      id:item.id,title:item.title,type:item.type||"task",durMin:dur(item),
+      id:item.id,title:item.title,type:item.type||"task",durMin:_itemDur,
       priority:item.priority||"High",source:item.source||"manual",
       meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",
       calUrl:item.calUrl||"",tags:item.tags||[],
@@ -755,15 +759,25 @@ function addTaskUniversal(barEl){
   if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return}
   const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
-  inp.value="";
+  // "Schedule…" defers the clear to commit time so dismissing the popover
+  // doesn't eat the typed title; every other destination commits right here.
+  if(dest!=="schedule")inp.value="";
   // Snap the type back to Urgent so successive adds always default to Urgent
   // rather than sticking on whatever the user last picked.
   const destSel=barEl.querySelector(".tab-dest");
   if(destSel)destSel.value="urgent";
   switch(dest){
-    case"schedule":openSchedulePicker(title,durMin,{sourceBar:barEl});break;
+    case"schedule":
+      openSchedulePopover({mode:"create",title,durMin,
+        anchorEl:barEl.querySelector(".tab-add")||barEl,
+        options:{sourceBar:barEl},
+        onCommitted:()=>{const i=barEl.querySelector(".tab-title");if(i&&i.value.trim()===title)i.value="";}});
+      break;
     case"backlog":addNewTask(title,durMin);break;
     case"urgent":insertTaskNow(title,durMin);break;
+    // Retro-logging: the task already happened — create it and check it off in
+    // one gesture so points/streaks/persistence flow through the normal path.
+    case"done":insertTaskNow(title,durMin,{onScheduled:r=>{if(r&&r.localId&&typeof toggleDone==="function")toggleDone(r.localId);}});break;
     case"shell":insertTaskNow(title,durMin,{type:"shell"});break;
     case"side_project":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
@@ -1165,6 +1179,7 @@ function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-o
 // just sets it.
 const TASK_DESTINATIONS=[
   {value:"urgent",  icon:"⚡", label:"Urgent"},
+  {value:"done",    icon:"✅", label:"Completed"},
   {value:"schedule",icon:"📅", label:"Schedule…"},
   {value:"backlog", icon:"💡", label:"Backlog / Idea"},
   {value:"shell",   icon:"🐚", label:"Shell"}
@@ -1186,10 +1201,18 @@ function _flashBlankTitle(barEl,onProceed){
     });
   }
 }
-function _closeDestRadial(){
-  document.querySelectorAll(".dest-radial-backdrop,.dest-radial-item,.dest-radial-label").forEach(el=>el.remove());
-  document.querySelectorAll(".dest-radial-trigger.open").forEach(el=>el.classList.remove("open"));
+// The fan itself lives in radial-menu.js (generic engine); these wrappers keep
+// the destination semantics — map TASK_DESTINATIONS to items whose default
+// pick commits the add through the hidden select + addTaskUniversal.
+function _destItems(bar,sel,opts){
+  return TASK_DESTINATIONS.map(d=>({icon:d.icon,label:d.label,
+    onPick:()=>{
+      if(opts&&typeof opts.onPick==="function"){opts.onPick(d);return}
+      sel.value=d.value;
+      addTaskUniversal(bar);
+    }}));
 }
+function _closeDestRadial(){closeRadialMenu()}
 function initDestRadial(bar){
   const sel=bar.querySelector(".tab-dest");
   if(!sel)return;
@@ -1244,90 +1267,22 @@ function initDestRadial(bar){
     _destPreviewHideTimer=setTimeout(_hideDestPreview,320);
   });
 }
-// The mini preview: same fan geometry at ~60% scale. Dots are live — entering
-// one expands the preview into the real radial anchored on the same button.
+// The mini preview: engine-rendered dots; entering one expands to the real
+// radial anchored on the same button. The grace timer lives here (shared with
+// the initDestRadial mouseleave handlers).
 let _destPreviewHideTimer=null;
 function _showDestPreview(bar,sel,anchorBtn){
-  _hideDestPreview();
-  const rect=anchorBtn.getBoundingClientRect();
-  const cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
-  const R=58,n=TASK_DESTINATIONS.length;
-  const up=cy>R+60;
-  const a0=up?200:20,a1=up?340:160;
-  TASK_DESTINATIONS.forEach((d,i)=>{
-    const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
-    const x=Math.max(20,Math.min(cx+R*Math.cos(ang),window.innerWidth-20));
-    const y=cy+R*Math.sin(ang);
-    const dot=document.createElement("span");
-    dot.className="dest-radial-item dest-radial-mini";
-    dot.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
-    dot.style.left=(x-14)+"px";dot.style.top=(y-14)+"px";
-    dot.addEventListener("mouseenter",()=>{
-      clearTimeout(_destPreviewHideTimer);
-      _hideDestPreview();
-      _openDestRadial(bar,sel,anchorBtn);
-    });
-    dot.addEventListener("mouseleave",()=>{
-      clearTimeout(_destPreviewHideTimer);
-      _destPreviewHideTimer=setTimeout(_hideDestPreview,320);
-    });
-    document.body.appendChild(dot);
-    requestAnimationFrame(()=>{dot.style.transitionDelay=(i*20)+"ms";dot.classList.add("out")});
+  showRadialMenuPreview(anchorBtn,_destItems(bar,sel),{
+    onExpand:()=>{clearTimeout(_destPreviewHideTimer);_openDestRadial(bar,sel,anchorBtn)},
+    onDotLeave:()=>{clearTimeout(_destPreviewHideTimer);_destPreviewHideTimer=setTimeout(_hideDestPreview,320)}
   });
 }
-function _hideDestPreview(){
-  document.querySelectorAll(".dest-radial-mini").forEach(el=>el.remove());
-}
+function _hideDestPreview(){hideRadialMenuPreview()}
 function _openDestRadial(bar,sel,trig,opts){
   opts=opts||{};
-  _closeDestRadial();
-  trig.classList.add("open");
-  const backdrop=document.createElement("div");
-  backdrop.className="dest-radial-backdrop";
-  backdrop.addEventListener("click",_closeDestRadial);
-  document.body.appendChild(backdrop);
-  const rect=trig.getBoundingClientRect();
-  const cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
-  const R=104,n=TASK_DESTINATIONS.length;
-  // Fan upward unless the trigger sits too close to the top of the viewport.
-  // Callers can override the arc (e.g. the corner FAB fans up-left).
-  const up=cy>R+80;
-  const a0=opts.a0!=null?opts.a0:(up?200:20),a1=opts.a1!=null?opts.a1:(up?340:160); // degrees, y grows down
-  TASK_DESTINATIONS.forEach((d,i)=>{
-    const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
-    let x=cx+R*Math.cos(ang);const y=cy+R*Math.sin(ang);
-    x=Math.max(30,Math.min(x,window.innerWidth-30));
-    const item=document.createElement("button");
-    item.type="button";item.className="dest-radial-item";
-    item.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
-    item.style.left=(cx-22)+"px";item.style.top=(cy-22)+"px";
-    // Label rides just past its item along the same spoke, so labels fan with
-    // the items instead of colliding at the arc's apex.
-    const lx=Math.max(64,Math.min(cx+(R+46)*Math.cos(ang),window.innerWidth-64));
-    const ly=cy+(R+46)*Math.sin(ang);
-    const lbl=document.createElement("span");
-    lbl.className="dest-radial-label";lbl.textContent=d.label;
-    lbl.style.left=lx+"px";lbl.style.top=ly+"px";
-    document.body.appendChild(item);document.body.appendChild(lbl);
-    requestAnimationFrame(()=>{
-      item.style.transitionDelay=(i*28)+"ms";
-      lbl.style.transitionDelay=(60+i*28)+"ms";
-      item.classList.add("out");lbl.classList.add("out");
-      item.style.left=(x-22)+"px";item.style.top=(y-22)+"px";
-    });
-    item.addEventListener("click",e=>{
-      e.stopPropagation();
-      _closeDestRadial();
-      // Callers may intercept the pick (e.g. the FAB arms the compose bar);
-      // default: picking a destination IS the submit — one gesture, committed.
-      if(typeof opts.onPick==="function"){opts.onPick(d);return}
-      sel.value=d.value;
-      addTaskUniversal(bar);
-    });
-  });
-  document.addEventListener("keydown",function esc(e){
-    if(e.key==="Escape"){_closeDestRadial();document.removeEventListener("keydown",esc)}
-  });
+  // Picking a destination IS the submit — one gesture, committed — unless the
+  // caller intercepts (e.g. the FAB arms the compose bar via opts.onPick).
+  openRadialMenu(trig,_destItems(bar,sel,opts),{a0:opts.a0,a1:opts.a1});
 }
 // ── Armed compose (FAB choose-type-first flow) ──
 // The launcher FAB fans out the destinations BEFORE the compose bar opens;
