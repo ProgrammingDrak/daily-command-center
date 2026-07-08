@@ -17,6 +17,7 @@
   let _loadSeq = 0;
   let _convertKey = null;   // per-attempt idempotency key; reused on retry
   let _convertBusy = false;
+  let _rolloverSnoozed = false;
 
   function esc(s) { return window.DCC.esc(s); }
   function toast(msg, kind) { return window.DCC.toast(msg, kind); }
@@ -170,6 +171,43 @@
     "</div>";
   }
 
+  // ---- rollover modal + investments -------------------------------------------
+  function rolloverModalMarkup(s) {
+    const p = s.rollover_preview || {};
+    const estSweep = Math.min(p.leftover_cents || 0, s.funding.ready || 0);
+    const unhit = p.unhit || [];
+    return '<div class="bt-modal-backdrop"><div class="bt-modal">' +
+      '<div class="bt-modal-title">🐟 New ' + esc(s.settings.period_type) + ", new tank</div>" +
+      '<p class="bt-modal-text">' + esc(p.closing_key || "Last period") + " closed at " +
+        money(p.closing_waterline_cents || 0) + " banked. " +
+        (estSweep > 0
+          ? money(estSweep) + " above your last funded block sweeps to investments, and a transfer task lands on today."
+          : "Nothing left over to sweep this time.") +
+      "</p>" +
+      (unhit.length
+        ? '<p class="bt-modal-text">Didn\'t reach: ' + esc(unhit.map(u => u.title).join(", ")) + "</p>"
+        : "") +
+      '<div class="bt-form-actions">' +
+        '<button class="bt-btn bt-btn--primary" data-act="rollover-carry">Carry unhit to the bottom</button>' +
+        '<button class="bt-btn" data-act="rollover-fresh">Start fresh</button>' +
+        '<button class="bt-btn bt-modal-later" data-act="rollover-later">later</button>' +
+      "</div>" +
+    "</div></div>";
+  }
+
+  function investmentsMarkup(s) {
+    const inv = s.investments;
+    if (!inv || !inv.entries.length) return "";
+    const rows = inv.entries.map(e =>
+      '<div class="bt-nec-row"><span class="bt-row-name">' + esc(e.period_key) + " sweep" +
+      (e.task_block_id ? ' <span class="bt-row-tag">task created</span>' : "") + "</span>" +
+      '<span class="bt-row-amt">' + money(e.amount_cents) + "</span></div>").join("");
+    return '<div class="bt-group">' +
+      '<div class="bt-group-head"><span class="bt-group-title">📈 Investments</span>' +
+      '<span class="bt-group-sub">unspent leftovers · ' + money(inv.total_cents) + " total</span></div>" +
+      rows + "</div>";
+  }
+
   // ---- breakdown / editors ---------------------------------------------------
   function blockRow(b, u) {
     const info = statusInfo(b, u.waterline_cents);
@@ -255,6 +293,7 @@
         "Banked " + money(u.period_banked_cents) + " this " + s.settings.period_type) +
       chip("info", "Reserve " + money(s.funding.total)) +
       (u.allocated_cents > u.capacity_cents ? chip("warn", "Over budget by " + money(u.allocated_cents - u.capacity_cents)) : "") +
+      (s.investments.total_cents > 0 ? chip("ok", "Invested " + money(s.investments.total_cents)) : "") +
       (s.rollover_due ? chip("warn", "New " + s.settings.period_type + " — rollover pending") : "");
 
     // Legend mirrors the tank: top row = top of tank (funded last).
@@ -286,8 +325,10 @@
                 '<span class="bt-group-sub">the gravel bed · always covered</span></div>' +
               necessitiesMarkup(s) +
             "</div>" +
+            investmentsMarkup(s) +
           "</div>" +
         "</div>" +
+        (s.rollover_due && !_rolloverSnoozed ? rolloverModalMarkup(s) : "") +
       "</div>";
   }
 
@@ -387,6 +428,23 @@
         _confirmDeleteId = null;
         _necDraft = _editMode ? _state.settings.necessities.map(n => ({ ...n })) : null;
         render();
+        return;
+      }
+      if (act === "rollover-later") { _rolloverSnoozed = true; render(); return; }
+      if (act === "rollover-carry" || act === "rollover-fresh") {
+        btn.disabled = true;
+        try {
+          const out = await api("POST", "/api/budget/rollover", { mode: act === "rollover-carry" ? "carry" : "fresh" });
+          const bits = [];
+          if (out.swept_cents > 0) bits.push(money(out.swept_cents) + " swept to investments" + (out.task_block_id ? " (transfer task on today)" : ""));
+          bits.push("new budget " + money(out.new_capacity_cents));
+          toast("Tank rolled into " + out.new_period + " — " + bits.join(" · "), "success");
+          _rolloverSnoozed = false;
+          await loadBudget();
+        } catch (err) {
+          toast(err.message || "Rollover failed", "error");
+          btn.disabled = false;
+        }
         return;
       }
       if (act === "convert-max") {

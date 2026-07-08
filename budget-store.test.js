@@ -105,8 +105,24 @@ function createMockPool(options = {}) {
       return { rows: [{ ...row }] };
     }
     if (text.includes("SELECT * FROM slot_rewards") && text.includes("FOR UPDATE")) {
-      const row = state.tankRows.find(r => r.id === params[1] && r.tank_position != null && !r.deleted_at);
-      return { rows: row ? [{ ...row }] : [] };
+      if (text.includes("id = $2")) {
+        const row = state.tankRows.find(r => r.id === params[1] && r.tank_position != null && !r.deleted_at);
+        return { rows: row ? [{ ...row }] : [] };
+      }
+      return { rows: liveTank().map(r => ({ ...r })) }; // rollover: whole tank
+    }
+    if (text.includes("INSERT INTO budget_investments")) {
+      state.investmentsByPeriod = state.investmentsByPeriod || new Set(state.investments.map(r => r.period_key));
+      if (state.investmentsByPeriod.has(params[2])) return { rows: [] };
+      state.investmentsByPeriod.add(params[2]);
+      const row = { id: state.investments.length + 1, period_key: params[2], amount_cents: params[3], task_block_id: null };
+      state.investments.push(row);
+      return { rows: [{ ...row }] };
+    }
+    if (text.includes("UPDATE budget_investments") && text.includes("task_block_id")) {
+      const row = state.investments.find(r => r.period_key === params[1]);
+      if (row) row.task_block_id = params[2];
+      return { rows: [] };
     }
     if (text.includes("SELECT * FROM slot_accounts") && text.includes("FOR UPDATE")) {
       return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
@@ -579,6 +595,98 @@ test("REGRESSION: getBankUsage (Bank Builder pacing) never reads budget_conversi
   const usage = await slotStore._test.getBankUsage(WS, {});
   assert.equal(usage.month, 0);
   assert.ok(usage.monthlyGoal > 0);
+});
+
+test("rolloverPeriod carry: sweep leftover, claimed one-shots leave, unhit sink to the bottom, envelopes persist", async () => {
+  const mock = createMockPool({
+    bankBalance: 10000,
+    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    // June banked 20000 (prior window now); July banked 500 so far.
+    spinsUsage: { period_key: "2026-07", cur_cents: 500, prior_cents: 20000 },
+    tankRows: [
+      tankRow(1, 8000, 1000, { tank_unlock_cents: 8000, tank_claimed_period: "2026-06" }),        // claimed one-shot -> leaves
+      tankRow(2, 7000, 2000, { tank_unlock_cents: 15000, tank_recurring: true, uses_remaining: null }), // envelope -> persists
+      tankRow(3, 9000, 3000, { tank_unlock_cents: 24000 }),                                        // unhit one-shot -> carries to bottom
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  const out = await store.rolloverPeriod(WS, 7, { mode: "carry" });
+  assert.equal(out.rolled, true);
+  assert.equal(out.closing_period, "2026-06");
+  assert.equal(out.new_period, "2026-07");
+  // Closing waterline = min(20000, 30000) = 20000; last funded gate = 15000; leftover 5000 <= balance.
+  assert.equal(out.swept_cents, 5000);
+  assert.deepEqual(mock.state.debits, [5000]);
+  assert.equal(mock.state.investments[0].period_key, "2026-06");
+  assert.equal(out.new_capacity_cents, 20000); // June's build is July's budget
+  assert.equal(mock.state.savedSettings.budget_tank.current_period.key, "2026-07");
+
+  const r1 = mock.state.tankRows.find(r => r.id === 1);
+  const r2 = mock.state.tankRows.find(r => r.id === 2);
+  const r3 = mock.state.tankRows.find(r => r.id === 3);
+  assert.equal(r1.tank_position, null);            // claimed one-shot left the tank
+  assert.equal(r3.tank_position, 1000);            // unhit carried to the BOTTOM (priority 1)
+  assert.equal(r2.tank_position, 2000);            // envelope above it
+  assert.equal(r3.tank_unlock_cents, 9000);        // thresholds reflowed
+  assert.equal(r2.tank_unlock_cents, 16000);
+});
+
+test("rolloverPeriod fresh: unhit one-shots leave too; sweep is bounded by the spendable balance", async () => {
+  const mock = createMockPool({
+    bankBalance: 1200, // less than the 5000 leftover
+    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
+    tankRows: [
+      tankRow(2, 15000, 1000, { tank_unlock_cents: 15000, tank_recurring: true, uses_remaining: null }),
+      tankRow(3, 9000, 2000, { tank_unlock_cents: 24000 }),
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  const out = await store.rolloverPeriod(WS, 7, { mode: "fresh" });
+  assert.equal(out.swept_cents, 1200);             // min(leftover 5000, balance 1200)
+  assert.equal(mock.state.tankRows.find(r => r.id === 3).tank_position, null);
+  assert.equal(mock.state.tankRows.find(r => r.id === 2).tank_position, 1000);
+});
+
+test("rolloverPeriod: per-period sweep is idempotent and same-period rollover is a 400", async () => {
+  const mock = createMockPool({
+    bankBalance: 10000,
+    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
+    investments: [{ id: 9, period_key: "2026-06", amount_cents: 4444, task_block_id: null }], // already swept
+    tankRows: [tankRow(2, 15000, 1000, { tank_unlock_cents: 15000, tank_recurring: true, uses_remaining: null })],
+  });
+  const store = loadStoreWithMock(mock);
+  const out = await store.rolloverPeriod(WS, 7, { mode: "carry" });
+  assert.equal(out.swept_cents, 0);
+  assert.equal(out.already_swept, true);
+  assert.equal(mock.state.debits, undefined);      // no double debit
+
+  const mock2 = createMockPool({
+    settings: { budget_tank: { current_period: { key: "2026-07", capacity_cents: 30000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 0 },
+  });
+  const store2 = loadStoreWithMock(mock2);
+  await assert.rejects(() => store2.rolloverPeriod(WS, 7, {}), e => e.statusCode === 400 && /isn't over/.test(e.message));
+});
+
+test("getBudgetState surfaces a rollover preview on period mismatch", async () => {
+  const mock = createMockPool({
+    bankBalance: 10000,
+    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
+    tankRows: [
+      tankRow(2, 15000, 1000, { tank_unlock_cents: 15000 }),
+      tankRow(3, 9000, 2000, { tank_unlock_cents: 24000 }),
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  const state = await store.getBudgetState(WS, 7);
+  assert.equal(state.rollover_due, true);
+  assert.equal(state.rollover_preview.closing_key, "2026-06");
+  assert.equal(state.rollover_preview.closing_waterline_cents, 20000);
+  assert.equal(state.rollover_preview.leftover_cents, 5000);
+  assert.deepEqual(state.rollover_preview.unhit.map(u => u.id), [3]);
 });
 
 test("conversions raise the tank waterline (they sum into periodBanked)", async () => {

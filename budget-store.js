@@ -564,6 +564,139 @@ async function convertPointsToBank(workspaceId, userId, { points, source_key } =
   }
 }
 
+// ── Rollover + sweep ─────────────────────────────────────────────────────────
+// Lazy month boundary (getBankUsage spirit): getBudgetState flags rollover_due
+// on a period-key mismatch and nothing mutates until the user chooses fresh or
+// carry. The sweep invests the partial fill above the last fully-funded block:
+// leftover = closingWaterline - lastFundedThreshold, bounded by the spendable
+// balance (you can't invest money already spent). UNIQUE(workspace, period_key)
+// on budget_investments makes re-running the rollover a no-op debit-wise.
+function sweepPreview(settings, usage, blocks) {
+  const closing = settings.current_period || { key: null, capacity_cents: 0 };
+  const closingWaterline = Math.min(usage.priorPeriodBanked, closing.capacity_cents || 0);
+  let lastFunded = 0;
+  for (const b of blocks) {
+    if ((b.tank_unlock_cents || 0) <= closingWaterline) lastFunded = Math.max(lastFunded, b.tank_unlock_cents || 0);
+  }
+  const leftover = Math.max(0, closingWaterline - lastFunded);
+  const unhit = blocks.filter(b => !b.tank_recurring && !b.tank_claimed_period && (b.tank_unlock_cents || 0) > closingWaterline);
+  return { closing_key: closing.key, closing_capacity_cents: closing.capacity_cents || 0, closing_waterline_cents: closingWaterline, leftover_cents: leftover, unhit: unhit.map(b => ({ id: b.id, title: b.title, value_cents: b.value_cents })) };
+}
+
+async function rolloverPeriod(workspaceId, userId, { mode } = {}) {
+  const rolloverMode = mode === "fresh" ? "fresh" : "carry";
+  await upsertSlotAccountRow(pool, workspaceId, userId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [account] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id = $1 FOR UPDATE",
+      [workspaceId]
+    );
+    const settings = normalizeBudgetTankSettings(account && account.settings && account.settings.budget_tank);
+    if (!settings.current_period) throw badRequest("No tank period to roll over");
+    const usage = await getTankUsage(workspaceId, settings, client);
+    if (settings.current_period.key === usage.periodKey) {
+      throw badRequest("The current period isn't over yet");
+    }
+    const { rows: blocks } = await client.query(
+      `SELECT * FROM slot_rewards
+        WHERE workspace_id = $1 AND tank_position IS NOT NULL AND deleted_at IS NULL
+        ORDER BY tank_position ASC, id ASC
+        FOR UPDATE`,
+      [workspaceId]
+    );
+    const preview = sweepPreview(settings, usage, blocks);
+    const sweep = Math.min(preview.leftover_cents, (account && account.bank_balance_cents) || 0);
+
+    // Idempotent sweep: the unique (workspace, period) row is the arbiter.
+    let sweptCents = 0;
+    if (sweep > 0) {
+      const { rows: [inv] } = await client.query(
+        `INSERT INTO budget_investments (workspace_id, user_id, period_key, amount_cents, details)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (workspace_id, period_key) DO NOTHING
+         RETURNING *`,
+        [workspaceId, userId || null, preview.closing_key, sweep,
+         JSON.stringify({ closing_waterline_cents: preview.closing_waterline_cents, leftover_cents: preview.leftover_cents })]
+      );
+      if (inv) {
+        sweptCents = sweep;
+        await client.query(
+          `UPDATE slot_accounts SET bank_balance_cents = GREATEST(0, bank_balance_cents - $2), updated_at = NOW()
+            WHERE workspace_id = $1`,
+          [workspaceId, sweep]
+        );
+      }
+    }
+
+    // Blocks: claimed one-shots leave the tank; unhit one-shots carry to the
+    // BOTTOM (highest priority) or leave on fresh; recurring envelopes persist
+    // (a new period key means unclaimed again — no reset write needed).
+    const leaving = [];
+    const unhitOneShots = [];
+    const recurring = [];
+    for (const b of blocks) {
+      if (b.tank_recurring) recurring.push(b);
+      else if (b.tank_claimed_period) leaving.push(b);
+      else if (rolloverMode === "carry") unhitOneShots.push(b);
+      else leaving.push(b);
+    }
+    for (const b of leaving) {
+      await client.query(
+        `UPDATE slot_rewards SET tank_position = NULL, tank_unlock_cents = 0, updated_at = NOW()
+          WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId, b.id]
+      );
+    }
+    const newOrder = [...unhitOneShots, ...recurring];
+    for (let i = 0; i < newOrder.length; i++) {
+      await client.query(
+        `UPDATE slot_rewards SET tank_position = $3, updated_at = NOW()
+          WHERE workspace_id = $1 AND id = $2`,
+        [workspaceId, newOrder[i].id, (i + 1) * TANK_POSITION_STEP]
+      );
+    }
+    await recomputeTankThresholds(client, workspaceId);
+
+    const nextSettings = {
+      ...settings,
+      current_period: {
+        key: usage.periodKey,
+        capacity_cents: settings.capacity_source === "fixed" ? settings.fixed_capacity_cents : usage.priorPeriodBanked,
+        started_at: new Date().toISOString(),
+      },
+    };
+    await saveBudgetTankSettings(workspaceId, nextSettings, client);
+    await client.query("COMMIT");
+    return {
+      rolled: true,
+      mode: rolloverMode,
+      closing_period: preview.closing_key,
+      new_period: usage.periodKey,
+      swept_cents: sweptCents,
+      already_swept: sweep > 0 && sweptCents === 0,
+      new_capacity_cents: nextSettings.current_period.capacity_cents,
+      carried: unhitOneShots.map(b => b.title),
+      left_tank: leaving.map(b => b.title),
+    };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// The route stamps the created "Transfer $X to brokerage" DCC task onto the
+// investment row so the tank can deep-link to it.
+async function setInvestmentTaskBlock(workspaceId, periodKey, taskBlockId) {
+  await pool.query(
+    `UPDATE budget_investments SET task_block_id = $3 WHERE workspace_id = $1 AND period_key = $2`,
+    [workspaceId, periodKey, taskBlockId]
+  );
+}
+
 // ── Config + state ───────────────────────────────────────────────────────────
 async function updateBudgetConfig(workspaceId, userId, body = {}) {
   const account = await upsertSlotAccountRow(pool, workspaceId, userId);
@@ -653,6 +786,7 @@ async function getBudgetState(workspaceId, userId) {
     investments,
     points: account.point_balance || 0,
     rollover_due: rolloverDue,
+    rollover_preview: rolloverDue ? sweepPreview(settings, usage, rows) : null,
     constants: {
       cents_per_point: settings.cents_per_point,
     },
@@ -669,6 +803,9 @@ module.exports = {
   getFunding,
   claimTankBlock,
   convertPointsToBank,
+  rolloverPeriod,
+  setInvestmentTaskBlock,
+  sweepPreview,
   recomputeTankThresholds,
   getTankBlockRows,
   addTankBlock,

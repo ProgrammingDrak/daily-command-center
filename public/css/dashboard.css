@@ -4774,6 +4774,15 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-nec-row--edit input{background:var(--bg,#0b1020);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px 8px;font-size:12px}
 .bt-nec-row--edit .bt-nec-amt{width:84px}
 
+/* rollover modal */
+.bt-modal-backdrop{position:fixed;inset:0;background:rgba(4,8,16,.72);z-index:120;
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.bt-modal{background:var(--card);border:1px solid var(--border);border-radius:14px;
+  max-width:440px;width:calc(100% - 40px);padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.bt-modal-title{font-size:16px;font-weight:800;color:var(--text);margin-bottom:8px}
+.bt-modal-text{font-size:13px;color:var(--text-muted);line-height:1.5;margin:0 0 8px}
+.bt-modal-later{margin-left:auto;border:none;color:var(--text-muted);font-size:11px}
+
 /* --- responsive --- */
 @media (max-width:760px){
   .bt-main{flex-direction:column}
