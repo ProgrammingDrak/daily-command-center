@@ -255,6 +255,9 @@ function reloadPersistedEdits() {
       const isFoldableTask=b=>{
         const p=b.properties||{};
         if(p.kind&&/^responsibility/.test(p.kind))return false;
+        // Tombstones are markers for the amber "Rescheduled away" list, not tasks.
+        // Folding one in resurrects a lookalike row of the task that just moved.
+        if(p.kind==="reschedule_tombstone")return false;
         if(p.status==="deleted"||p.status==="archived"||p.status==="done")return false;
         // API-inserted shells carry kind or type "shell" and no local_id.
         const isShell=p.kind==="shell"||p.type==="shell";

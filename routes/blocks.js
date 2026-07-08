@@ -326,14 +326,23 @@ app.post("/api/blocks/:id/reschedule", async (req, res) => {
     const parent = await blockDB.getBlock(req.params.id);
     if (!parent) return res.status(404).json({ error: "Block not found" });
     assertBlockOwnership(parent, req.workspaceId);
-    const fromDate = parent.date;
+    // Undated blocks exist (e.g. task-bar pending_tasks live on a day only via
+    // day-state), so accept the caller's viewed day as the origin. The move
+    // stamps a real date on them, healing the anomaly.
+    const bodyFromDate = req.body && req.body.fromDate;
+    if (bodyFromDate != null && !isValidDate(bodyFromDate)) return res.status(400).json({ error: "Invalid fromDate" });
+    const fromDate = parent.date || bodyFromDate;
     if (!fromDate) return res.status(400).json({ error: "Block has no source date to move from" });
     if (fromDate === targetDate) return res.status(400).json({ error: "Already on that date" });
     const parentLocalId = (parent.properties || {}).local_id || null;
 
     // Gather the origin day's task blocks and walk the subtaskOf/wrapId tree.
-    const dayBlocks = (await blockDB.getBlocksByDate(fromDate, req.workspaceId))
-      .filter(b => b.type === "block" && (b.properties || {}).local_id);
+    // Undated task blocks ride along as walk candidates: they only move if their
+    // subtaskOf/wrapId chain links them into the parent's subtree.
+    const dayBlocks = [
+      ...(await blockDB.getBlocksByDate(fromDate, req.workspaceId)),
+      ...(await blockDB.getUndatedTaskBlocks(req.workspaceId))
+    ].filter(b => b.type === "block" && (b.properties || {}).local_id);
     const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
     const byId = new Map(dayBlocks.map(b => [b.id, b]));
     byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks

@@ -465,8 +465,11 @@
   .progress-track{height:18px;background:rgba(255,255,255,0.05);border-radius:9px;overflow:hidden;display:flex;gap:1px}
   .pseg{height:100%;border-radius:2px;position:relative;cursor:default}
   .pseg:hover{opacity:0.85}
-  .pseg .tip{display:none;position:absolute;bottom:calc(100%+5px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;white-space:nowrap;z-index:10;pointer-events:none}
-  .pseg:hover .tip{display:block}
+  .pseg .tip,.prail-seg .tip{display:none;position:absolute;bottom:calc(100%+5px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;white-space:nowrap;z-index:10;pointer-events:none}
+  .pseg:hover .tip,.prail-seg:hover .tip{display:block}
+  .progress-rails{position:relative;height:4px;margin-top:2px}
+  .prail-seg{position:absolute;top:0;height:3px;border-radius:2px;background:rgba(226,232,240,0.55)}
+  .prail-seg.done{opacity:0.35}
 
   .tabs{display:flex;gap:4px;margin-bottom:18px;border-bottom:1px solid var(--border)}
   .tab{padding:8px 18px;font-size:13px;font-weight:600;color:var(--text-muted);cursor:pointer;border:none;border-bottom:2px solid transparent;background:none;transition:all 0.15s}
@@ -1073,8 +1076,8 @@
   .del-confirm-actions .del-go{background:var(--red,#ef4444);color:white}
   .del-confirm-actions .del-go:hover{opacity:0.85}
   /* Reschedule popover */
-  .resched-popover{padding:10px;min-width:220px}
-  .resched-popover .resched-header{font-size:11px;color:var(--text-muted);margin-bottom:8px;font-weight:500;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .resched-popover{padding:10px;min-width:220px;max-width:min(320px,calc(100vw - 16px))}
+  .resched-popover .resched-header{font-size:11px;color:var(--text-muted);margin-bottom:8px;font-weight:500;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere}
   .resched-popover .resched-quick{display:flex;gap:6px;margin-bottom:8px}
   .resched-popover .resched-btn{flex:1;padding:6px 8px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,0.03);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:all 0.12s}
   .resched-popover .resched-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
@@ -1737,6 +1740,23 @@
   .task-add-bar .tab-title.tab-error{border-color:var(--red);animation:qa-shake 0.3s ease}
   @keyframes qa-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
   .task-add-bar .tab-dur,.task-add-bar .tab-dest{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 8px;color:var(--text);font-size:13px;outline:none}
+  /* Radial destination menu: "+ Add" fans the destinations out in an arc;
+     picking one commits the add. Hover shows a mini non-interactive preview. */
+  .dest-radial-backdrop{position:fixed;inset:0;z-index:20000;background:rgba(6,10,18,0.55)}
+  .dest-radial-item{position:fixed;z-index:20001;width:44px;height:44px;border-radius:50%;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.45);opacity:0;transform:scale(0.4);transition:left 0.22s cubic-bezier(0.2,0.9,0.3,1.2),top 0.22s cubic-bezier(0.2,0.9,0.3,1.2),opacity 0.18s,transform 0.22s}
+  .dest-radial-item.out{opacity:1;transform:scale(1)}
+  .dest-radial-item:hover{border-color:var(--accent);background:rgba(59,130,246,0.16)}
+  .dest-radial-label{position:fixed;z-index:20001;transform:translate(-50%,-50%);font-size:10px;font-weight:600;color:var(--text);background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2px 8px;opacity:0;transition:opacity 0.18s;pointer-events:none;white-space:nowrap}
+  .dest-radial-label.out{opacity:1}
+  .dest-radial-mini{width:28px;height:28px;font-size:12px;z-index:19999;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.35);opacity:0}
+  .dest-radial-mini.out{opacity:0.92}
+  .dest-radial-mini.out:hover{transform:scale(1.15)}
+  /* Armed compose chip: the type chosen at the FAB, click to switch */
+  .dest-armed-chip{display:inline-flex;align-items:center;gap:5px;padding:6px 9px;border:1px solid var(--accent);border-radius:6px;background:rgba(59,130,246,0.12);color:var(--accent-light);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+  .dest-armed-chip:hover{background:rgba(59,130,246,0.22)}
+  .dest-armed-chip .dac-icon{font-size:13px;line-height:1}
+  /* Placement mode: the one-tap auto-slot chip */
+  .sched-chip-earliest{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
   .task-add-bar .tab-add{background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
   .task-add-bar .tab-add:hover{opacity:0.85}
   .task-add-bar .tab-catchup{background:transparent;border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text-muted);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
@@ -1750,7 +1770,8 @@
   .sched-picker-hdr{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
   .sched-picker-hdr h3{font-size:14px;font-weight:700;margin:0;color:var(--accent-light)}
   .sched-picker-body{padding:16px;display:flex;flex-direction:column;gap:8px}
-  .sched-picker-title{font-size:13px;color:var(--text);font-weight:600;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px}
+  .sched-picker-title{font-size:13px;color:var(--text);font-weight:600;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px;width:100%;outline:none;font-family:inherit}
+  .sched-picker-title:focus{border-color:var(--accent)}
   .sched-picker-label{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-top:4px}
   .sched-picker-input{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:13px;outline:none;color-scheme:dark}
   .sched-picker-input:focus{border-color:var(--accent)}
@@ -2017,6 +2038,10 @@
     display:flex;align-items:center;gap:8px;
     animation:toast-in 0.3s ease;max-width:340px
   }
+  /* The legacy .toast rule (top of file) sets opacity:0 pending a "show" class
+     that DCC.toast never adds — every container toast was invisible after its
+     0.3s entry animation. Scope visibility to the container explicitly. */
+  .toast-container .toast{opacity:1}
   .toast--error{border-color:var(--red);border-left:3px solid var(--red)}
   .toast--success{border-color:var(--green);border-left:3px solid var(--green)}
   .toast-action{margin-left:auto;border:1px solid rgba(96,165,250,0.45);border-radius:6px;background:rgba(59,130,246,0.14);color:var(--accent-light);font:inherit;font-size:11px;font-weight:800;padding:3px 8px;cursor:pointer}

@@ -52,6 +52,8 @@
     composeOpen = false;
     compose.classList.remove("open");
     compose.setAttribute("aria-hidden", "true");
+    // Disarm the choose-type-first state so the next open starts fresh.
+    if (typeof window._clearDestArm === "function") window._clearDestArm(bar);
     maybeHideScrim();
   }
 
@@ -90,9 +92,12 @@
     try { if (btn.hasPointerCapture && btn.hasPointerCapture(activePointer)) btn.releasePointerCapture(activePointer); } catch(_){}
     activePointer = null;
     if (wasHold) return;        // hold already opened the radial; do nothing on release
-    // short tap: toggle compose (and close radial if it somehow stayed open)
+    // short tap: choose the task TYPE first (destination fan), then compose
+    // opens armed with it. Falls back to plain compose if the fan isn't loaded.
     if (radialOpen) { closeRadial(); return; }
-    if (composeOpen) closeCompose(); else openCompose();
+    if (composeOpen) { closeCompose(); return; }
+    if (typeof window.openDestRadialForLauncher === "function") window.openDestRadialForLauncher(btn, openCompose);
+    else openCompose();
   });
 
   btn.addEventListener("pointercancel", function(){
