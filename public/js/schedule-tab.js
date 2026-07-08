@@ -174,28 +174,9 @@ function openDurPopover(ev,anchorEl){
     pop.appendChild(custom);
   }
   renderPage();
-  // Position relative to the anchor using fixed coords (escapes stacking
-  // context). Append hidden first so we can measure the popover's real size,
-  // then clamp it fully on-screen.
-  pop.style.visibility="hidden";
-  document.body.appendChild(pop);
-  const rect=anchorEl.getBoundingClientRect();
-  const margin=8;
-  const popW=pop.offsetWidth||148;
-  const popH=pop.offsetHeight||0;
-  let left=rect.right-popW; // prefer right-aligned to the anchor
-  left=Math.max(margin,Math.min(left,window.innerWidth-popW-margin));
-  let top=rect.bottom+6;
-  if(top+popH>window.innerHeight-margin){
-    // No room below -- prefer flipping above the anchor.
-    const above=rect.top-popH-6;
-    if(above>=margin)top=above;
-  }
-  top=Math.max(margin,Math.min(top,window.innerHeight-popH-margin));
-  pop.style.left=left+"px";
-  pop.style.top=top+"px";
-  pop.style.right="auto";
-  pop.style.visibility="";
+  // Shared anchored-popover positioning (schedule-popover.js); minWidth 0 keeps
+  // the compact duration grid at its natural width.
+  _positionPopoverNear(anchorEl,pop,{minWidth:0});
   function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==anchorEl){closePop();}}
   setTimeout(()=>document.addEventListener("click",onOutside,true),0);
 }

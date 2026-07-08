@@ -20,8 +20,9 @@
 // (right = innerWidth - rect.right) pushed the popover -- and its left-most
 // "Today" button -- off the left edge on narrow / mobile viewports, making those
 // buttons unclickable.
-function _positionPopoverNear(anchorEl,pop){
-  pop.style.minWidth="220px";
+function _positionPopoverNear(anchorEl,pop,opts){
+  opts=opts||{};
+  pop.style.minWidth=(opts.minWidth!=null?opts.minWidth:220)+"px";
   pop.style.visibility="hidden";
   document.body.appendChild(pop);
   const rect=anchorEl.getBoundingClientRect();
@@ -43,10 +44,6 @@ function _positionPopoverNear(anchorEl,pop){
   pop.style.top=top+"px";
   pop.style.right="auto";
   pop.style.visibility="";
-}
-
-function _schedPopEsc(s){
-  return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
 }
 
 function openSchedulePopover(cfg){
@@ -72,13 +69,13 @@ function openSchedulePopover(cfg){
   let stagedDur=cfg.durMin||30;
 
   const header=
-    mode==="reschedule"?('Move "'+_schedPopEsc(ev.title)+'" to…'):
-    mode==="create"?('Schedule "'+_schedPopEsc(cfg.title)+'" for…'):
-    _schedPopEsc(cfg.header||"Schedule for…");
+    mode==="reschedule"?('Move "'+escHtml(ev.title)+'" to…'):
+    mode==="create"?('Schedule "'+escHtml(cfg.title)+'" for…'):
+    escHtml(cfg.header||"Schedule for…");
   const goLabel=
     mode==="reschedule"?"Move":
     mode==="create"?"Schedule":
-    _schedPopEsc(cfg.actionLabel||"Go");
+    escHtml(cfg.actionLabel||"Go");
 
   const pop=document.createElement("div");
   pop.className="dur-popover resched-popover";
