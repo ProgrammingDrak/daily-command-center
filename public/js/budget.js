@@ -1,293 +1,486 @@
-// ======== BUDGET TANK ========
-// A vertical "fill the tank" budget visualizer. Income pours in from the bottom
-// and rises; necessities at the base get funded first, then discretionary
-// categories above the waterline progressively "unlock" as the level climbs.
-//
-// Phase 0 (this file): purely client-side, seeded sample data, persisted to
-// localStorage. Phase 1+ (later): swap loadConfig/saveConfig for the real
-// banking-feed / BlockStore source. Keep all money in CENTS to match fmtMoney().
-(function(){
-  const KEY = "pa-budget-config";
+// ======== BUDGET TANK (aquarium) ========
+// A real fish tank: the gravel bed is the necessities (bills live under water
+// by default), budget blocks are decorations anchored up the back wall at
+// their cumulative unlock heights, and the waterline is this period's bank
+// build (positive spin deltas + Money Changer conversions). Fish join the
+// tank as blocks get claimed. Server is the source of truth
+// (/api/budget/state); blocks are slot_rewards rows shared with the machine.
+(function () {
+  "use strict";
 
-  // ---- seeded sample budget (cents) -------------------------------------
-  const DEFAULT_CONFIG = {
-    income: 310000,
-    necessities: [
-      { id:"rent",      name:"Rent / Housing",   amount:150000, color:"#22c55e" },
-      { id:"groceries", name:"Groceries",        amount:50000,  color:"#10b981" },
-      { id:"utils",     name:"Utilities & Phone",amount:30000,  color:"#14b8a6" },
-      { id:"transport", name:"Transportation",   amount:25000,  color:"#06b6d4" },
-      { id:"insurance", name:"Insurance",         amount:20000,  color:"#0ea5e9" }
-    ],
-    discretionary: [
-      { id:"savings",  name:"Emergency Savings", amount:40000, color:"#6366f1" },
-      { id:"dining",   name:"Restaurants",       amount:25000, color:"#f59e0b" },
-      { id:"fun",      name:"Entertainment",     amount:20000, color:"#a78bfa" },
-      { id:"shopping", name:"Shopping",          amount:20000, color:"#ec4899" },
-      { id:"gifts",    name:"Gifts",             amount:10000, color:"#f43f5e" }
-    ]
+  let _state = null;        // last /api/budget/state payload
+  let _editMode = false;
+  let _form = null;         // { id|null, category, item, amount, recurring, color }
+  let _necDraft = null;     // necessities editor working copy
+  let _dragId = null;
+  let _confirmDeleteId = null;
+  let _loadSeq = 0;
+
+  function esc(s) { return window.DCC.esc(s); }
+  function toast(msg, kind) { return window.DCC.toast(msg, kind); }
+  function money(c) { return fmtMoney(c); }
+
+  // ---- data ---------------------------------------------------------------
+  async function loadBudget() {
+    const seq = ++_loadSeq;
+    try {
+      const res = await fetch("/api/budget/state");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      const data = await res.json();
+      if (seq !== _loadSeq) return; // a newer load superseded this one
+      _state = data;
+    } catch (e) {
+      if (seq !== _loadSeq) return;
+      _state = { error: e.message || "Could not load the Budget Tank" };
+    }
+    render();
+  }
+
+  async function api(method, url, body) {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return res.json();
+  }
+
+  // ---- decorations (inline SVG sprites, tinted via currentColor) ----------
+  const SPRITES = {
+    chest:
+      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M4 14h32v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="currentColor"/><path d="M4 14c0-6 7-9 16-9s16 3 16 9z" fill="currentColor" opacity=".75"/><rect x="17" y="12" width="6" height="8" rx="1" fill="#0b1020" opacity=".55"/><path d="M4 14h32" stroke="#0b1020" stroke-opacity=".4" stroke-width="1.5"/></svg>',
+    chestOpen:
+      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M4 16h32v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="currentColor"/><path d="M5 14C3 7 9 2 20 2s17 5 15 12l-15-3z" fill="currentColor" opacity=".55"/><circle cx="14" cy="13" r="1.6" fill="#ffe08a"/><circle cx="21" cy="11" r="1.6" fill="#ffe08a"/><circle cx="27" cy="13" r="1.6" fill="#ffe08a"/></svg>',
+    coral:
+      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M20 30V12M20 18c-4-1-6-4-6-9M20 15c5-1 7-4 7-10M14 9c0 2 1 3 2 4M27 5c0 3-1 5-3 6" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" fill="none"/><path d="M8 30h24" stroke="currentColor" stroke-width="3" stroke-linecap="round" opacity=".4"/></svg>',
+    castle:
+      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M8 30V12l3 2 3-2 3 2V8l3 2 3-2v6l3-2 3 2 3-2v18z" fill="currentColor"/><rect x="18" y="20" width="5" height="10" rx="2" fill="#0b1020" opacity=".5"/><rect x="11" y="17" width="3" height="4" rx="1" fill="#0b1020" opacity=".4"/><rect x="27" y="17" width="3" height="4" rx="1" fill="#0b1020" opacity=".4"/></svg>',
+    plant:
+      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M20 30C20 18 14 12 12 4c6 3 9 9 10 14 1-7 4-12 9-15-2 9-7 14-9 27" fill="currentColor"/><path d="M12 30h16" stroke="currentColor" stroke-width="3" stroke-linecap="round" opacity=".4"/></svg>',
   };
 
-  let config = null;
-  let editMode = false;
-  let saveTimer = null;
-
-  // ---- persistence ------------------------------------------------------
-  function loadConfig(){
-    try{
-      const raw = JSON.parse(localStorage.getItem(KEY) || "null");
-      if(raw && Array.isArray(raw.necessities) && Array.isArray(raw.discretionary)) return raw;
-    }catch(e){}
-    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
-  }
-  function saveConfig(){
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(()=>{
-      try{ localStorage.setItem(KEY, JSON.stringify(config)); }catch(e){}
-    }, 250);
+  function spriteFor(block) {
+    if (block.claimed) return SPRITES.chestOpen;
+    if (!block.tank_recurring) return SPRITES.chest;
+    const pool = ["coral", "plant", "castle"];
+    return SPRITES[pool[Math.abs(block.id) % pool.length]];
   }
 
-  // ---- helpers ----------------------------------------------------------
-  function esc(s) { return window.DCC.esc(s); } // delegates to core.js
-  function bands(){ return config.necessities.concat(config.discretionary); }
-  function total(){ return bands().reduce((s,b)=>s + (b.amount||0), 0); }
-  function necessitiesTotal(){ return config.necessities.reduce((s,b)=>s+(b.amount||0),0); }
+  const FISH_SVG =
+    '<svg viewBox="0 0 34 18" class="bt-fish-svg"><path d="M4 9c5-6 13-8 20-4 3 1.5 5 3 7 4-2 1-4 2.5-7 4-7 4-15 2-20-4z" fill="currentColor"/><path d="M4 9L0 4v10z" fill="currentColor" opacity=".8"/><circle cx="24" cy="8" r="1.4" fill="#0b1020"/></svg>';
+  const FISH_COLORS = ["#fbbf24", "#fb7185", "#60a5fa", "#4ade80", "#c084fc", "#f97316"];
 
-  // Funded amount that lands in a band given its [start,end] position in the
-  // bottom-up fill order and the current income level.
-  function fundedIn(start, amount, income){
-    return Math.max(0, Math.min(income - start, amount));
+  // ---- status text ---------------------------------------------------------
+  function statusInfo(block, waterline) {
+    const bottom = block.tank_unlock_cents - block.value_cents;
+    if (block.claimed) return { cls: "bt--claimed", label: "claimed ✓" };
+    if (block.status === "claimable") return { cls: "bt--claimable", label: "ready to claim" };
+    if (block.status === "short") return { cls: "bt--short", label: "unlocked · reserve short " + money(block.shortfall_cents) };
+    if (waterline > bottom && waterline < block.tank_unlock_cents) {
+      const pct = Math.round(((waterline - bottom) / (block.value_cents || 1)) * 100);
+      return { cls: "bt--filling", label: "filling · " + pct + "%" };
+    }
+    return { cls: "bt--locked", label: "needs " + money(block.needs_cents) + " more banked" };
   }
 
-  // ---- markup -----------------------------------------------------------
-  function zoneMarkup(){
-    // Rendered top -> bottom, so the highest-priority necessity sits at the
-    // bottom of the tank. column-reverse in CSS flips fill order to visual order.
-    const list = bands();
-    return list.map((b, i)=>{
-      const group = i < config.necessities.length ? "nec" : "disc";
-      return '<div class="bt-zone bt-zone--'+group+'" data-id="'+esc(b.id)+'" '+
-               'style="flex-grow:'+b.amount+';--zc:'+esc(b.color)+'">'+
-               '<div class="bt-zone-bar"></div>'+
-               '<div class="bt-zone-label">'+
-                 '<span class="bt-zone-name">'+esc(b.name)+'</span>'+
-                 '<span class="bt-zone-status" data-role="status"></span>'+
-               '</div>'+
-             '</div>';
+  // ---- tank markup ----------------------------------------------------------
+  // Geometry: the gravel bed (necessities) is a FIXED-height base — bills are
+  // context, not the show — and the flex space above it belongs to the
+  // discretionary stack in cents-space. Water height = gravel + banked fraction
+  // of the space above it (necessities are always submerged).
+  const GRAVEL_PX = 72;
+
+  function tankMarkup(s) {
+    const u = s.usage;
+    const span = Math.max(u.capacity_cents, u.allocated_cents, 1);
+    const waterFrac = Math.min(1, u.waterline_cents / span);
+    const claimedCount = s.blocks.filter(b => b.claimed).length;
+    const fishCount = Math.min(6, claimedCount);
+
+    const zones = s.blocks.map(b => {
+      const info = statusInfo(b, u.waterline_cents);
+      const over = b.tank_unlock_cents > u.capacity_cents;
+      return '<div class="bt-zone ' + info.cls + (over ? " bt--overcap" : "") + '" draggable="true" data-id="' + b.id + '"' +
+        ' style="flex-grow:' + b.value_cents + ';color:' + esc(b.color || "#f59e0b") + '">' +
+        '<span class="bt-zone-sprite">' + spriteFor(b) + "</span>" +
+        '<div class="bt-zone-body">' +
+          '<div class="bt-zone-top"><span class="bt-zone-name">' + esc(b.title) + "</span>" +
+          '<span class="bt-zone-amt">' + money(b.value_cents) + "</span></div>" +
+          '<div class="bt-zone-status">' + esc(info.label) + (over ? " · over budget" : "") + "</div>" +
+        "</div>" +
+        "</div>";
     }).join("");
+
+    const spacer = u.capacity_cents > u.allocated_cents
+      ? '<div class="bt-zone bt-zone--open" style="flex-grow:' + (u.capacity_cents - u.allocated_cents) + '">' +
+        '<span class="bt-open-label">open water · ' + money(u.capacity_cents - u.allocated_cents) + " unallocated</span></div>"
+      : "";
+
+    const bubbles = Array.from({ length: 7 }, (_, i) =>
+      '<span class="bt-bubble" style="left:' + (8 + (i * 13) % 84 + "%") + ";animation-delay:" + (i * 1.4) + 's"></span>').join("");
+
+    const fish = Array.from({ length: fishCount }, (_, i) =>
+      '<span class="bt-fish" style="color:' + FISH_COLORS[i % FISH_COLORS.length] + ";bottom:" + (12 + (i * 17) % 62) + "%;animation-delay:" + (i * 2.3) + 's;animation-duration:' + (11 + (i % 4) * 3) + 's">' + FISH_SVG + "</span>").join("");
+
+    return '<div class="bt-aquarium">' +
+      '<div class="bt-zones" data-role="zones">' +
+        zones + spacer +
+      "</div>" +
+      '<div class="bt-gravel">' +
+        '<span class="bt-gravel-label">Necessities · ' + money(u.necessities_total_cents) + " · covered</span>" +
+        '<span class="bt-gravel-texture" aria-hidden="true"></span>' +
+      "</div>" +
+      '<div class="bt-water" style="height:calc(' + GRAVEL_PX + "px + (100% - " + GRAVEL_PX + "px)*" + waterFrac.toFixed(4) + ')">' +
+        '<div class="bt-wavecrest"><span class="bt-water-amt">' + money(u.waterline_cents) + " banked</span></div>" +
+        '<div class="bt-caustics" aria-hidden="true"></div>' +
+        bubbles + fish +
+      "</div>" +
+      '<div class="bt-glass" aria-hidden="true"></div>' +
+    "</div>";
   }
 
-  function legendRow(b, group){
-    return '<div class="bt-row" data-id="'+esc(b.id)+'" data-group="'+group+'">'+
-             '<span class="bt-row-dot" style="background:'+esc(b.color)+'"></span>'+
-             '<span class="bt-row-name">'+esc(b.name)+'</span>'+
-             '<span class="bt-row-amt" data-role="amt" title="Click to edit">'+fmtMoney(b.amount)+'</span>'+
-             '<span class="bt-row-fund" data-role="fund"></span>'+
-             (editMode ? '<button class="bt-row-del" data-act="del" title="Remove">&times;</button>' : '')+
-           '</div>';
+  // ---- breakdown / editors ---------------------------------------------------
+  function blockRow(b, u) {
+    const info = statusInfo(b, u.waterline_cents);
+    const confirming = _confirmDeleteId === b.id;
+    return '<div class="bt-row ' + info.cls + '" draggable="true" data-id="' + b.id + '">' +
+      '<span class="bt-row-grip" title="Drag to reprioritize">⋮⋮</span>' +
+      '<span class="bt-row-dot" style="background:' + esc(b.color || "#f59e0b") + '"></span>' +
+      '<span class="bt-row-name">' + esc(b.title) +
+        (b.tank_recurring ? '<span class="bt-row-tag">monthly</span>' : "") + "</span>" +
+      '<span class="bt-row-amt">' + money(b.value_cents) + "</span>" +
+      '<span class="bt-row-fund">' + esc(info.label) + "</span>" +
+      (_editMode
+        ? '<button class="bt-row-btn" data-act="edit-block" title="Edit">✎</button>' +
+          '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block">' + (confirming ? "Sure?" : "×") + "</button>"
+        : "") +
+      "</div>";
   }
 
-  function legendGroup(title, key, sub){
-    const rows = config[key].map(b=>legendRow(b, key)).join("");
-    return '<div class="bt-group">'+
-             '<div class="bt-group-head"><span class="bt-group-title">'+esc(title)+'</span>'+
-               '<span class="bt-group-sub">'+esc(sub)+'</span></div>'+
-             rows+
-             (editMode ? '<button class="bt-add" data-act="add" data-group="'+key+'">+ add category</button>' : '')+
-           '</div>';
+  function blockFormMarkup(s) {
+    const f = _form;
+    const catList = Array.from(new Set(s.blocks.map(b => b.category).filter(Boolean)));
+    return '<div class="bt-form" data-role="block-form">' +
+      '<div class="bt-form-title">' + (f.id ? "Edit block" : "New block") + "</div>" +
+      '<div class="bt-form-grid">' +
+        '<label>Category<input type="text" data-field="category" list="bt-cat-list" placeholder="Restaurants" value="' + esc(f.category) + '"></label>' +
+        '<datalist id="bt-cat-list">' + catList.map(c => '<option value="' + esc(c) + '">').join("") + "</datalist>" +
+        '<label>What exactly? <span class="bt-form-hint">(optional)</span><input type="text" data-field="item" placeholder="Anniversary dinner at Coral with Fae" value="' + esc(f.item) + '"></label>' +
+        '<label>Amount ($)<input type="number" data-field="amount" min="1" step="1" value="' + esc(f.amount) + '"></label>' +
+        '<label class="bt-form-check"><input type="checkbox" data-field="recurring"' + (f.recurring ? " checked" : "") + "> Refills every period (envelope)</label>" +
+      "</div>" +
+      '<div class="bt-form-actions">' +
+        '<button class="bt-btn bt-btn--primary" data-act="save-block">' + (f.id ? "Save" : "Drop it in the tank") + "</button>" +
+        '<button class="bt-btn" data-act="cancel-block">Cancel</button>' +
+      "</div>" +
+    "</div>";
   }
 
-  function render(){
+  function necessitiesMarkup(s) {
+    if (!_editMode || !_necDraft) {
+      const rows = s.settings.necessities.map(n =>
+        '<div class="bt-nec-row"><span class="bt-row-dot" style="background:' + esc(n.color) + '"></span>' +
+        '<span class="bt-row-name">' + esc(n.name) + '</span><span class="bt-row-amt">' + money(n.amount_cents) + "</span></div>").join("");
+      return rows || '<div class="bt-empty-note">No necessities configured.</div>';
+    }
+    return _necDraft.map((n, i) =>
+      '<div class="bt-nec-row bt-nec-row--edit" data-idx="' + i + '">' +
+        '<span class="bt-row-dot" style="background:' + esc(n.color) + '"></span>' +
+        '<input type="text" class="bt-nec-name" value="' + esc(n.name) + '" placeholder="Name">' +
+        '<input type="number" class="bt-nec-amt" value="' + Math.round(n.amount_cents / 100) + '" min="0" step="1">' +
+        '<button class="bt-row-btn bt-row-btn--danger" data-act="del-nec">×</button>' +
+      "</div>").join("") +
+      '<div class="bt-form-actions bt-nec-actions">' +
+        '<button class="bt-btn" data-act="add-nec">+ add bill</button>' +
+        '<button class="bt-btn bt-btn--primary" data-act="save-nec">Save necessities</button>' +
+      "</div>";
+  }
+
+  // ---- main render -------------------------------------------------------------
+  function render() {
     const root = document.getElementById("budget-root");
-    if(!root) return;
-    if(!config) config = loadConfig();
-    const t = total();
-    const maxIncome = Math.max(Math.round(t * 1.4), t + 50000);
+    if (!root) return;
+
+    if (!_state) {
+      root.innerHTML = '<div class="bt-wrap"><div class="bt-loading">Filling the tank…</div></div>';
+      return;
+    }
+    if (_state.error) {
+      root.innerHTML = '<div class="bt-wrap"><div class="bt-error">' + esc(_state.error) +
+        ' <button class="bt-btn" data-act="retry">Retry</button></div></div>';
+      return;
+    }
+
+    const s = _state;
+    const u = s.usage;
+    const capSource = s.settings.capacity_source === "fixed"
+      ? "fixed budget"
+      : "last " + (s.settings.period_type === "week" ? "week" : "month") + "'s build";
+
+    const chips =
+      chip("info", "Tank budget " + money(u.capacity_cents) + " · " + capSource) +
+      chip(u.waterline_cents >= u.capacity_cents && u.capacity_cents > 0 ? "ok" : "info",
+        "Banked " + money(u.period_banked_cents) + " this " + s.settings.period_type) +
+      chip("info", "Reserve " + money(s.funding.total)) +
+      (u.allocated_cents > u.capacity_cents ? chip("warn", "Over budget by " + money(u.allocated_cents - u.capacity_cents)) : "") +
+      (s.rollover_due ? chip("warn", "New " + s.settings.period_type + " — rollover pending") : "");
+
+    // Legend mirrors the tank: top row = top of tank (funded last).
+    const rowsTopDown = [...s.blocks].reverse().map(b => blockRow(b, u)).join("");
 
     root.innerHTML =
-      '<div class="bt-wrap">'+
-        '<div class="bt-head">'+
-          '<h2 class="bt-title">Budget Tank</h2>'+
-          '<p class="bt-sub">Money pours in from the bottom. Necessities fill first — '+
-            'discretionary categories unlock as the level rises.</p>'+
-        '</div>'+
-
-        '<div class="bt-controls">'+
-          '<div class="bt-income">'+
-            '<label class="bt-income-label">Money coming in</label>'+
-            '<div class="bt-income-val" data-role="income">'+fmtMoney(config.income)+'</div>'+
-            '<input type="range" class="bt-income-range" min="0" max="'+maxIncome+'" '+
-                   'step="1000" value="'+config.income+'">'+
-          '</div>'+
-          '<div class="bt-chips" data-role="chips"></div>'+
-          '<button class="bt-edit-btn" data-act="toggle-edit">'+(editMode?"Done":"Edit")+'</button>'+
-        '</div>'+
-
-        '<div class="bt-main">'+
-          '<div class="bt-tank-col">'+
-            '<div class="bt-tank">'+
-              '<div class="bt-zones">'+zoneMarkup()+'</div>'+
-              '<div class="bt-divider" data-role="divider"><span>essentials covered ↑ discretionary</span></div>'+
-              '<div class="bt-mask" data-role="mask"></div>'+
-              '<div class="bt-waterline" data-role="waterline"><span class="bt-water-amt" data-role="water-amt"></span></div>'+
-              '<div class="bt-surplus" data-role="surplus"></div>'+
-            '</div>'+
-          '</div>'+
-          '<div class="bt-breakdown">'+
-            legendGroup("Necessities", "necessities", "funded first, bottom up")+
-            legendGroup("Discretionary", "discretionary", "unlocks in priority order")+
-          '</div>'+
-        '</div>'+
-      '</div>';
-
-    update();
+      '<div class="bt-wrap">' +
+        '<div class="bt-head">' +
+          '<h2 class="bt-title">Budget Tank</h2>' +
+          '<p class="bt-sub">Bank builds fill the water. Blocks unlock bottom-to-top in your priority order — ' +
+            "drag them to decide what gets topped up first.</p>" +
+        "</div>" +
+        '<div class="bt-controls">' +
+          '<div class="bt-chips">' + chips + "</div>" +
+          '<button class="bt-btn bt-edit-btn" data-act="toggle-edit">' + (_editMode ? "Done" : "Edit") + "</button>" +
+        "</div>" +
+        '<div class="bt-main">' +
+          '<div class="bt-tank-col">' + tankMarkup(s) + "</div>" +
+          '<div class="bt-breakdown">' +
+            '<div class="bt-group">' +
+              '<div class="bt-group-head"><span class="bt-group-title">Priority stack</span>' +
+                '<span class="bt-group-sub">top of tank first · bottom fills first</span></div>' +
+              (rowsTopDown || '<div class="bt-empty-note">Nothing in the tank yet. Drop in your first block — a dinner, a splurge, a category.</div>') +
+              (_editMode && !_form ? '<button class="bt-add" data-act="add-block">+ add block</button>' : "") +
+              (_form ? blockFormMarkup(s) : "") +
+            "</div>" +
+            '<div class="bt-group">' +
+              '<div class="bt-group-head"><span class="bt-group-title">Necessities</span>' +
+                '<span class="bt-group-sub">the gravel bed · always covered</span></div>' +
+              necessitiesMarkup(s) +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>";
   }
 
-  // ---- dynamic update (cheap; runs on every income tick) ----------------
-  function update(){
-    const root = document.getElementById("budget-root");
-    if(!root) return;
-    const t = total() || 1;
-    const income = config.income;
-    const fillPct = Math.min(income / t, 1) * 100;
-    const necTop = necessitiesTotal();
+  function chip(kind, text) {
+    return '<span class="bt-chip bt-chip--' + kind + '">' + esc(text) + "</span>";
+  }
 
-    // waterline + mask (the rising liquid surface)
-    const mask = root.querySelector('[data-role="mask"]');
-    const water = root.querySelector('[data-role="waterline"]');
-    if(mask) mask.style.height = (100 - fillPct) + "%";
-    if(water) water.style.bottom = fillPct + "%";
-    const waterAmt = root.querySelector('[data-role="water-amt"]');
-    if(waterAmt) waterAmt.textContent = fmtMoney(income);
-
-    // divider line at the necessities/discretionary boundary
-    const divider = root.querySelector('[data-role="divider"]');
-    if(divider) divider.style.bottom = (necTop / t * 100) + "%";
-
-    // per-band status (compute in fill order)
-    let start = 0;
-    let discUnlocked = 0;
-    const allBands = bands();
-    allBands.forEach((b, i)=>{
-      const funded = fundedIn(start, b.amount, income);
-      const frac = b.amount > 0 ? funded / b.amount : 1;
-      const isDisc = i >= config.necessities.length;
-      let cls, label;
-      if(frac >= 1){ cls="bt--funded"; label="funded"; if(isDisc) discUnlocked++; }
-      else if(frac > 0){ cls="bt--filling"; label=Math.round(frac*100)+"% · "+fmtMoney(funded); if(isDisc) discUnlocked++; }
-      else { cls="bt--locked"; label="locked · needs "+fmtMoney(start - income); }
-
-      const zone = root.querySelector('.bt-zone[data-id="'+CSS.escape(b.id)+'"]');
-      if(zone){
-        zone.classList.remove("bt--funded","bt--filling","bt--locked");
-        zone.classList.add(cls);
-        const st = zone.querySelector('[data-role="status"]');
-        if(st) st.textContent = frac>=1 ? "✓" : (frac>0 ? Math.round(frac*100)+"%" : "");
-      }
-      const row = root.querySelector('.bt-row[data-id="'+CSS.escape(b.id)+'"]');
-      if(row){
-        row.classList.remove("bt--funded","bt--filling","bt--locked");
-        row.classList.add(cls);
-        const fund = row.querySelector('[data-role="fund"]');
-        if(fund) fund.textContent = label;
-      }
-      start += b.amount;
-    });
-
-    // summary chips
-    const necFunded = Math.min(income, necTop);
-    const necCovered = income >= necTop;
-    const surplus = Math.max(0, income - t);
-    const chips = root.querySelector('[data-role="chips"]');
-    if(chips){
-      chips.innerHTML =
-        chip(necCovered ? "ok" : "warn",
-             necCovered ? "Essentials covered" : "Essentials short " + fmtMoney(necTop - necFunded))+
-        chip("info", "Discretionary " + discUnlocked + " / " + config.discretionary.length + " unlocked")+
-        (surplus > 0 ? chip("ok", "Surplus " + fmtMoney(surplus)) : "");
+  // ---- block form helpers ----------------------------------------------------
+  function openForm(block) {
+    if (block) {
+      let item = "";
+      let category = block.category || "";
+      if (category && block.title.indexOf(category + ": ") === 0) item = block.title.slice(category.length + 2);
+      else if (!category) category = block.title;
+      else if (block.title !== category) item = block.title;
+      _form = { id: block.id, category, item, amount: Math.round(block.value_cents / 100), recurring: !!block.tank_recurring, color: block.color };
+    } else {
+      _form = { id: null, category: "", item: "", amount: "", recurring: false, color: null };
     }
-    const surplusEl = root.querySelector('[data-role="surplus"]');
-    if(surplusEl){
-      surplusEl.textContent = surplus > 0 ? "+" + fmtMoney(surplus) + " surplus" : "";
-      surplusEl.style.opacity = surplus > 0 ? "1" : "0";
+    render();
+    const first = document.querySelector('#budget-root [data-field="category"]');
+    if (first) first.focus();
+  }
+
+  function readForm(root) {
+    const get = f => root.querySelector('[data-field="' + f + '"]');
+    return {
+      category: get("category").value.trim(),
+      item: get("item").value.trim(),
+      amount: Number(get("amount").value),
+      recurring: get("recurring").checked,
+    };
+  }
+
+  async function saveForm() {
+    const root = document.getElementById("budget-root");
+    const f = readForm(root);
+    if (!f.category && !f.item) { toast("Give the block a category or a label", "error"); return; }
+    if (!(f.amount > 0)) { toast("Give the block a positive amount", "error"); return; }
+    const body = { category: f.category, item: f.item, amount: f.amount, recurring: f.recurring };
+    try {
+      if (_form.id) await api("PUT", "/api/budget/blocks/" + _form.id, body);
+      else await api("POST", "/api/budget/blocks", body);
+      _form = null;
+      await loadBudget();
+    } catch (e) { toast(e.message || "Could not save block", "error"); }
+  }
+
+  // ---- drag reorder ------------------------------------------------------------
+  // One rule for both surfaces (tank zones and legend rows both read top of
+  // screen = top of tank): dropping above the target's midpoint puts the block
+  // HIGHER in the tank (later in priority order), below puts it lower.
+  function orderAfterDrop(targetId, insertAfter) {
+    const order = _state.blocks.map(b => b.id).filter(id => id !== _dragId);
+    const at = order.indexOf(targetId);
+    if (at < 0) return null;
+    order.splice(insertAfter ? at + 1 : at, 0, _dragId);
+    return order;
+  }
+
+  async function commitOrder(order) {
+    const byId = Object.fromEntries(_state.blocks.map(b => [b.id, b]));
+    _state.blocks = order.map((id, i) => Object.assign(byId[id], { tank_position: (i + 1) * 1000 }));
+    // Optimistic threshold reflow so lock states read right pre-roundtrip.
+    let run = 0;
+    for (const b of _state.blocks) { run += b.value_cents; b.tank_unlock_cents = run; }
+    render();
+    try {
+      await api("POST", "/api/budget/blocks/reorder", {
+        items: order.map((id, i) => ({ id, tank_position: (i + 1) * 1000 })),
+      });
+      await loadBudget();
+    } catch (e) {
+      toast("Reorder failed: " + (e.message || e), "error");
+      await loadBudget();
     }
   }
 
-  function chip(kind, text){
-    return '<span class="bt-chip bt-chip--'+kind+'">'+esc(text)+'</span>';
+  function dragTargetEl(e) {
+    return e.target.closest(".bt-zone[data-id], .bt-row[data-id]");
   }
 
-  // ---- editing ----------------------------------------------------------
-  function findBand(id){
-    return config.necessities.find(b=>b.id===id) || config.discretionary.find(b=>b.id===id);
-  }
-  function editAmount(id, cell){
-    const b = findBand(id);
-    if(!b) return;
-    const cur = (b.amount/100).toFixed(2);
-    const next = prompt("Monthly amount for “"+b.name+"” ($):", cur);
-    if(next == null) return;
-    const cents = Math.round(parseFloat(next.replace(/[^0-9.]/g,"")) * 100);
-    if(isFinite(cents) && cents >= 0){ b.amount = cents; saveConfig(); render(); }
-  }
-  function addCategory(group){
-    const name = prompt("New "+(group==="necessities"?"necessity":"discretionary")+" category name:");
-    if(!name) return;
-    const amt = prompt("Monthly amount ($):", "100");
-    const cents = Math.round(parseFloat((amt||"0").replace(/[^0-9.]/g,"")) * 100) || 0;
-    const palette = group==="necessities"
-      ? ["#22c55e","#10b981","#14b8a6","#06b6d4","#0ea5e9","#0284c7"]
-      : ["#6366f1","#f59e0b","#a78bfa","#ec4899","#f43f5e","#fb923c"];
-    const color = palette[config[group].length % palette.length];
-    config[group].push({ id: group+"-"+Date.now().toString(36), name: name.trim(), amount: cents, color });
-    saveConfig(); render();
-  }
-  function delCategory(id){
-    ["necessities","discretionary"].forEach(k=>{
-      config[k] = config[k].filter(b=>b.id!==id);
-    });
-    saveConfig(); render();
-  }
-
-  // ---- event wiring (delegated on root, bound once) ---------------------
-  function bind(){
+  // ---- events (delegated, bound once) --------------------------------------------
+  function bind() {
     const root = document.getElementById("budget-root");
-    if(!root || root.dataset.bound) return;
+    if (!root || root.dataset.bound) return;
     root.dataset.bound = "1";
 
-    root.addEventListener("input", e=>{
-      if(e.target.classList.contains("bt-income-range")){
-        config.income = parseInt(e.target.value, 10) || 0;
-        const v = root.querySelector('[data-role="income"]');
-        if(v) v.textContent = fmtMoney(config.income);
-        update();
-        saveConfig();
+    root.addEventListener("click", async e => {
+      const btn = e.target.closest("[data-act]");
+      if (!btn) return;
+      const act = btn.dataset.act;
+      if (act === "retry") { _state = null; render(); loadBudget(); return; }
+      if (act === "toggle-edit") {
+        _editMode = !_editMode;
+        _form = null;
+        _confirmDeleteId = null;
+        _necDraft = _editMode ? _state.settings.necessities.map(n => ({ ...n })) : null;
+        render();
+        return;
+      }
+      if (act === "add-block") { openForm(null); return; }
+      if (act === "cancel-block") { _form = null; render(); return; }
+      if (act === "save-block") { saveForm(); return; }
+      if (act === "edit-block") {
+        const row = btn.closest("[data-id]");
+        const block = _state.blocks.find(b => String(b.id) === row.dataset.id);
+        if (block) openForm(block);
+        return;
+      }
+      if (act === "del-block") {
+        const row = btn.closest("[data-id]");
+        const id = Number(row.dataset.id);
+        if (_confirmDeleteId !== id) { _confirmDeleteId = id; render(); return; }
+        _confirmDeleteId = null;
+        try {
+          await api("DELETE", "/api/budget/blocks/" + id);
+          toast("Block removed", "success");
+          await loadBudget();
+        } catch (err) { toast(err.message || "Could not remove block", "error"); }
+        return;
+      }
+      if (act === "add-nec") {
+        _necDraft.push({ id: "nec-" + Date.now().toString(36), name: "", amount_cents: 0, color: "#22c55e" });
+        render();
+        return;
+      }
+      if (act === "del-nec") {
+        const idx = Number(btn.closest("[data-idx]").dataset.idx);
+        readNecDraft(root);
+        _necDraft.splice(idx, 1);
+        render();
+        return;
+      }
+      if (act === "save-nec") {
+        readNecDraft(root);
+        const cleaned = _necDraft.filter(n => n.name.trim());
+        try {
+          const out = await api("PUT", "/api/budget/config", { necessities: cleaned });
+          _state.settings = out.settings;
+          _necDraft = out.settings.necessities.map(n => ({ ...n }));
+          toast("Necessities saved", "success");
+          await loadBudget();
+        } catch (err) { toast(err.message || "Could not save necessities", "error"); }
+        return;
       }
     });
 
-    root.addEventListener("click", e=>{
-      const act = e.target.dataset.act;
-      if(act === "toggle-edit"){ editMode = !editMode; render(); return; }
-      if(act === "add"){ addCategory(e.target.dataset.group); return; }
-      if(act === "del"){
-        const row = e.target.closest(".bt-row");
-        if(row) delCategory(row.dataset.id);
-        return;
+    root.addEventListener("keydown", e => {
+      if (e.key === "Enter" && e.target.closest('[data-role="block-form"]') && e.target.tagName === "INPUT" && e.target.type !== "checkbox") {
+        e.preventDefault();
+        saveForm();
       }
-      if(e.target.dataset.role === "amt"){
-        const row = e.target.closest(".bt-row");
-        if(row) editAmount(row.dataset.id, e.target);
-      }
+    });
+
+    // Native DnD (same approach as the reward-card reorder in slots.js).
+    root.addEventListener("dragstart", e => {
+      const el = dragTargetEl(e);
+      if (!el) return;
+      _dragId = Number(el.dataset.id);
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", el.dataset.id); } catch (err) {}
+      el.classList.add("bt-dragging");
+    });
+    root.addEventListener("dragend", () => {
+      _dragId = null;
+      root.querySelectorAll(".bt-dragging, .bt-drop-above, .bt-drop-below").forEach(el =>
+        el.classList.remove("bt-dragging", "bt-drop-above", "bt-drop-below"));
+    });
+    root.addEventListener("dragover", e => {
+      const el = dragTargetEl(e);
+      if (!el || _dragId == null || Number(el.dataset.id) === _dragId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const r = el.getBoundingClientRect();
+      const above = e.clientY < r.top + r.height / 2;
+      el.classList.toggle("bt-drop-above", above);
+      el.classList.toggle("bt-drop-below", !above);
+    });
+    root.addEventListener("dragleave", e => {
+      const el = dragTargetEl(e);
+      if (el) el.classList.remove("bt-drop-above", "bt-drop-below");
+    });
+    root.addEventListener("drop", e => {
+      const el = dragTargetEl(e);
+      if (!el || _dragId == null) return;
+      e.preventDefault();
+      const targetId = Number(el.dataset.id);
+      if (targetId === _dragId) return;
+      const r = el.getBoundingClientRect();
+      const above = e.clientY < r.top + r.height / 2;
+      // Above midpoint = higher in the tank = later in priority order.
+      const order = orderAfterDrop(targetId, above);
+      el.classList.remove("bt-drop-above", "bt-drop-below");
+      if (order) commitOrder(order);
+    });
+
+    // Any economy change (spin, conversion, claim, reorder from another tab)
+    // refreshes the tank — unless mid-drag or mid-form, where a rerender would
+    // eat the user's input.
+    document.addEventListener("slot-changed", () => {
+      if (_dragId != null || _form || (_editMode && _necDraft)) return;
+      if (document.getElementById("budget-root")) loadBudget();
     });
   }
 
-  // ---- public entry -----------------------------------------------------
-  function renderBudget(){
-    if(!config) config = loadConfig();
-    render();
+  function readNecDraft(root) {
+    root.querySelectorAll(".bt-nec-row--edit").forEach(row => {
+      const idx = Number(row.dataset.idx);
+      if (!_necDraft[idx]) return;
+      _necDraft[idx].name = row.querySelector(".bt-nec-name").value;
+      _necDraft[idx].amount_cents = Math.max(0, Math.round(Number(row.querySelector(".bt-nec-amt").value) * 100) || 0);
+    });
+  }
+
+  // ---- public entry -------------------------------------------------------------
+  function renderBudget() {
+    render();  // paint cached state immediately on tab switch
     bind();
+    loadBudget();
+    // Phase 0's localStorage config is dead — server owns the tank now.
+    try { localStorage.removeItem("pa-budget-config"); } catch (e) {}
   }
 
   window.renderBudget = renderBudget;
-  window.Budget = { render: renderBudget, reset: function(){ localStorage.removeItem(KEY); config = loadConfig(); render(); } };
+  window.Budget = { render: renderBudget, reload: loadBudget };
 })();
