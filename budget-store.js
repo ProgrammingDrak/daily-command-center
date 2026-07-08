@@ -489,6 +489,81 @@ async function claimTankBlock(workspaceId, userId, id, { sweepPendingBankBuilder
   }
 }
 
+// ── Money Changer ────────────────────────────────────────────────────────────
+// Points -> bank at settings.cents_per_point (default 1:1¢). The safe floor to
+// the slot machine's gamble. Idempotency arbiter is the slot_point_ledger
+// unique index (workspace, source_type, source_key) — the earnTaskCredit
+// pattern — so a retried POST can never double-debit. Conversions land in
+// budget_conversions (raising the tank waterline), NEVER in slot_spins, so
+// Bank Builder pacing/shield/head-start sums stay clean.
+async function convertPointsToBank(workspaceId, userId, { points, source_key } = {}) {
+  const pts = parseInt(points, 10);
+  if (!Number.isFinite(pts) || pts < 1) throw badRequest("points must be a positive integer");
+  if (pts > 1000000) throw badRequest("That's too many points at once");
+  const sourceKey = String(source_key || "").trim();
+  if (!sourceKey) throw badRequest("source_key is required");
+  const account = await upsertSlotAccountRow(pool, workspaceId, userId);
+  const settings = normalizeBudgetTankSettings(account.settings && account.settings.budget_tank);
+  const rate = settings.cents_per_point;
+  const cents = pts * rate;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [ledger] } = await client.query(
+      `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description, metadata)
+       VALUES ($1, $2, $3, 'bank_conversion', $4, $5, $6)
+       ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
+       RETURNING id`,
+      [workspaceId, userId || null, -pts, sourceKey,
+       "Money Changer: " + pts + " pts -> $" + (cents / 100).toFixed(2),
+       JSON.stringify({ rate_cents_per_point: rate })]
+    );
+    if (!ledger) {
+      const { rows: [existing] } = await client.query(
+        `SELECT * FROM budget_conversions WHERE workspace_id = $1 AND source_key = $2`,
+        [workspaceId, sourceKey]
+      );
+      await client.query("COMMIT");
+      return { converted: false, duplicate: true, conversion: existing || null };
+    }
+    const { rows: [fresh] } = await client.query(
+      "SELECT point_balance FROM slot_accounts WHERE workspace_id = $1 FOR UPDATE",
+      [workspaceId]
+    );
+    if (((fresh && fresh.point_balance) || 0) < pts) {
+      throw badRequest("Not enough points — you have " + ((fresh && fresh.point_balance) || 0));
+    }
+    const { rows: [updated] } = await client.query(
+      `UPDATE slot_accounts
+          SET point_balance = point_balance - $2,
+              bank_balance_cents = bank_balance_cents + $3,
+              updated_at = NOW()
+        WHERE workspace_id = $1
+        RETURNING point_balance, bank_balance_cents`,
+      [workspaceId, pts, cents]
+    );
+    const { rows: [conversion] } = await client.query(
+      `INSERT INTO budget_conversions (workspace_id, user_id, points, cents, rate_cents_per_point, source_key)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [workspaceId, userId || null, pts, cents, rate, sourceKey]
+    );
+    await client.query("COMMIT");
+    return {
+      converted: true,
+      duplicate: false,
+      conversion,
+      point_balance: updated.point_balance,
+      bank_balance_cents: updated.bank_balance_cents,
+    };
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── Config + state ───────────────────────────────────────────────────────────
 async function updateBudgetConfig(workspaceId, userId, body = {}) {
   const account = await upsertSlotAccountRow(pool, workspaceId, userId);
@@ -593,6 +668,7 @@ module.exports = {
   getTankUsage,
   getFunding,
   claimTankBlock,
+  convertPointsToBank,
   recomputeTankThresholds,
   getTankBlockRows,
   addTankBlock,

@@ -155,6 +155,33 @@ function createMockPool(options = {}) {
       if (text.includes("deleted_at = NOW()")) { row.deleted_at = "now"; row.active = false; }
       return { rows: [{ id: row.id }] };
     }
+    if (text.includes("INSERT INTO slot_point_ledger")) {
+      state.ledgerKeys = state.ledgerKeys || new Set();
+      const key = params[3];
+      if (state.ledgerKeys.has(key)) return { rows: [] };
+      state.ledgerKeys.add(key);
+      state.ledgerDeltas = state.ledgerDeltas || [];
+      state.ledgerDeltas.push(params[2]);
+      return { rows: [{ id: state.ledgerDeltas.length }] };
+    }
+    if (text.includes("SELECT point_balance FROM slot_accounts")) {
+      return { rows: [{ point_balance: state.pointBalance }] };
+    }
+    if (text.includes("SET point_balance = point_balance - $2")) {
+      state.pointBalance -= params[1];
+      state.bankBalance += params[2];
+      return { rows: [{ point_balance: state.pointBalance, bank_balance_cents: state.bankBalance }] };
+    }
+    if (text.includes("INSERT INTO budget_conversions")) {
+      state.conversions = state.conversions || [];
+      const row = { id: state.conversions.length + 1, workspace_id: params[0], points: params[2], cents: params[3], rate_cents_per_point: params[4], source_key: params[5] };
+      state.conversions.push(row);
+      return { rows: [{ ...row }] };
+    }
+    if (text.includes("FROM budget_conversions") && text.includes("source_key")) {
+      const row = (state.conversions || []).find(c => c.source_key === params[1]);
+      return { rows: row ? [{ ...row }] : [] };
+    }
     if (text.includes("FROM budget_investments") && text.includes("SUM(amount_cents)")) {
       return { rows: [{ total: state.investments.reduce((s, r) => s + r.amount_cents, 0) }] };
     }
@@ -486,6 +513,72 @@ test("slot-store rowToReward: tank rows gate on the waterline, afford on value_c
   // Non-tank rows are untouched by tank usage.
   r = rowToReward({ ...row, tank_position: null, tank_unlock_cents: 0 }, account, {}, 6000, { periodKey: "2026-07", waterlineCents: 0 });
   assert.equal(r.eligible, true);
+});
+
+test("convertPointsToBank debits points, credits bank at the configured rate, and logs both ledgers", async () => {
+  const mock = createMockPool({
+    pointBalance: 500,
+    bankBalance: 1000,
+    settings: { budget_tank: { cents_per_point: 2 } },
+  });
+  const store = loadStoreWithMock(mock);
+  const out = await store.convertPointsToBank(WS, 7, { points: 200, source_key: "k-1" });
+  assert.equal(out.converted, true);
+  assert.equal(out.point_balance, 300);
+  assert.equal(out.bank_balance_cents, 1400); // 200 pts * 2¢
+  assert.equal(out.conversion.cents, 400);
+  assert.deepEqual(mock.state.ledgerDeltas, [-200]);
+  assert.equal(mock.state.conversions.length, 1);
+});
+
+test("convertPointsToBank: duplicate source_key is a no-op returning the original conversion", async () => {
+  const mock = createMockPool({ pointBalance: 500 });
+  const store = loadStoreWithMock(mock);
+  const first = await store.convertPointsToBank(WS, 7, { points: 100, source_key: "k-dup" });
+  assert.equal(first.converted, true);
+  const second = await store.convertPointsToBank(WS, 7, { points: 100, source_key: "k-dup" });
+  assert.equal(second.converted, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.conversion.source_key, "k-dup");
+  assert.equal(mock.state.pointBalance, 400);       // debited exactly once
+  assert.equal(mock.state.conversions.length, 1);
+});
+
+test("convertPointsToBank: insufficient points rolls back the whole attempt (retry works)", async () => {
+  const mock = createMockPool({ pointBalance: 50 });
+  const store = loadStoreWithMock(mock);
+  await assert.rejects(() => store.convertPointsToBank(WS, 7, { points: 100, source_key: "k-poor" }),
+    e => e.statusCode === 400 && /Not enough points/.test(e.message));
+  assert.equal(mock.state.pointBalance, 50);
+  assert.equal(mock.state.bankBalance, 0);
+  assert.equal((mock.state.conversions || []).length, 0);
+  assert.ok(mock.state.rolledBack);
+  await assert.rejects(() => store.convertPointsToBank(WS, 7, { points: 0, source_key: "k" }), e => e.statusCode === 400);
+  await assert.rejects(() => store.convertPointsToBank(WS, 7, { points: 10 }), e => e.statusCode === 400);
+});
+
+test("REGRESSION: getBankUsage (Bank Builder pacing) never reads budget_conversions", async () => {
+  loadStoreWithMock(createMockPool());
+  const slotPath = require.resolve("./slot-store");
+  delete require.cache[slotPath];
+  // Fresh mock that serves slot_spins window sums and BLOWS UP on the
+  // conversions table — proving conversions can't contaminate pacing/shield.
+  const poolPath = require.resolve("./pg-pool");
+  const guard = {
+    async query(sql) {
+      const text = String(sql);
+      if (text.includes("budget_conversions")) throw new Error("Bank Builder read budget_conversions!");
+      if (text.includes("FROM slot_spins")) return { rows: [{ cents: 0, day_of_month: 8, days_in_month: 31 }] };
+      throw new Error("Unexpected: " + text.slice(0, 60));
+    },
+    connect: async () => ({ query: guard.query, release() {} }),
+  };
+  require.cache[poolPath] = { id: poolPath, filename: poolPath, loaded: true, exports: guard };
+  delete require.cache[slotPath];
+  const slotStore = require("./slot-store");
+  const usage = await slotStore._test.getBankUsage(WS, {});
+  assert.equal(usage.month, 0);
+  assert.ok(usage.monthlyGoal > 0);
 });
 
 test("conversions raise the tank waterline (they sum into periodBanked)", async () => {

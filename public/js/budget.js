@@ -15,6 +15,8 @@
   let _dragId = null;
   let _confirmDeleteId = null;
   let _loadSeq = 0;
+  let _convertKey = null;   // per-attempt idempotency key; reused on retry
+  let _convertBusy = false;
 
   function esc(s) { return window.DCC.esc(s); }
   function toast(msg, kind) { return window.DCC.toast(msg, kind); }
@@ -142,6 +144,32 @@
     "</div>";
   }
 
+  // ---- money changer ---------------------------------------------------------
+  // The coin slot feeding the tank: points -> bank at the configured rate, the
+  // safe 1:1 floor to gambling those points at the slot machine.
+  function moneyChangerMarkup(s) {
+    const rate = s.constants.cents_per_point;
+    const rateLabel = "1 pt = " + (rate === 100 ? "$1.00" : rate + "¢");
+    return '<div class="bt-group bt-changer">' +
+      '<div class="bt-group-head"><span class="bt-group-title">🪙 Money Changer</span>' +
+        '<span class="bt-group-sub">' + esc(rateLabel) + " · safe exchange</span></div>" +
+      '<div class="bt-changer-row">' +
+        '<span class="bt-changer-balance">' + esc(String(s.points)) + " pts</span>" +
+        '<input type="number" class="bt-changer-input" data-role="convert-amt" min="1" max="' + s.points + '" placeholder="points">' +
+        '<button class="bt-btn bt-changer-max" data-act="convert-max">max</button>' +
+      "</div>" +
+      '<div class="bt-changer-row">' +
+        '<span class="bt-changer-preview" data-role="convert-preview">→ $0.00 into the tank</span>' +
+        '<button class="bt-btn bt-btn--primary" data-act="convert"' + (s.points < 1 ? " disabled" : "") + ">Convert</button>" +
+      "</div>" +
+      (_editMode
+        ? '<div class="bt-changer-row bt-changer-admin"><label>Rate (¢ per point)' +
+          '<input type="number" class="bt-changer-input" data-role="rate-input" min="1" max="1000" value="' + rate + '"></label>' +
+          '<button class="bt-btn" data-act="save-rate">Set rate</button></div>'
+        : "") +
+    "</div>";
+  }
+
   // ---- breakdown / editors ---------------------------------------------------
   function blockRow(b, u) {
     const info = statusInfo(b, u.waterline_cents);
@@ -244,7 +272,7 @@
           '<button class="bt-btn bt-edit-btn" data-act="toggle-edit">' + (_editMode ? "Done" : "Edit") + "</button>" +
         "</div>" +
         '<div class="bt-main">' +
-          '<div class="bt-tank-col">' + tankMarkup(s) + "</div>" +
+          '<div class="bt-tank-col">' + tankMarkup(s) + moneyChangerMarkup(s) + "</div>" +
           '<div class="bt-breakdown">' +
             '<div class="bt-group">' +
               '<div class="bt-group-head"><span class="bt-group-title">Priority stack</span>' +
@@ -361,6 +389,44 @@
         render();
         return;
       }
+      if (act === "convert-max") {
+        const input = root.querySelector('[data-role="convert-amt"]');
+        if (input) { input.value = _state.points; updateConvertPreview(root); }
+        return;
+      }
+      if (act === "convert") {
+        if (_convertBusy) return;
+        const input = root.querySelector('[data-role="convert-amt"]');
+        const pts = Math.floor(Number(input && input.value));
+        if (!(pts > 0)) { toast("How many points?", "error"); return; }
+        if (pts > _state.points) { toast("You only have " + _state.points + " points", "error"); return; }
+        _convertBusy = true;
+        btn.disabled = true;
+        if (!_convertKey) _convertKey = (crypto.randomUUID ? crypto.randomUUID() : "cv-" + Date.now() + "-" + Math.random().toString(36).slice(2));
+        try {
+          const out = await api("POST", "/api/budget/convert", { points: pts, source_key: _convertKey });
+          _convertKey = null;
+          const cents = out.conversion ? out.conversion.cents : 0;
+          toast(out.duplicate ? "Already converted that batch" : "Clink — " + money(cents) + " into the tank", "success");
+          await loadBudget();
+        } catch (err) {
+          toast(err.message || "Conversion failed", "error"); // key kept: retry can't double-spend
+          btn.disabled = false;
+        }
+        _convertBusy = false;
+        return;
+      }
+      if (act === "save-rate") {
+        const input = root.querySelector('[data-role="rate-input"]');
+        const rate = Math.floor(Number(input && input.value));
+        if (!(rate >= 1)) { toast("Rate must be at least 1", "error"); return; }
+        try {
+          await api("PUT", "/api/budget/config", { cents_per_point: rate });
+          toast("Rate set: 1 pt = " + rate + "¢", "success");
+          await loadBudget();
+        } catch (err) { toast(err.message || "Could not set rate", "error"); }
+        return;
+      }
       if (act === "claim") {
         const el = btn.closest("[data-id]");
         const block = _state.blocks.find(b => String(b.id) === el.dataset.id);
@@ -432,6 +498,10 @@
       }
     });
 
+    root.addEventListener("input", e => {
+      if (e.target.dataset.role === "convert-amt") updateConvertPreview(root);
+    });
+
     root.addEventListener("keydown", e => {
       if (e.key === "Enter" && e.target.closest('[data-role="block-form"]') && e.target.tagName === "INPUT" && e.target.type !== "checkbox") {
         e.preventDefault();
@@ -488,6 +558,14 @@
       if (_dragId != null || _form || (_editMode && _necDraft)) return;
       if (document.getElementById("budget-root")) loadBudget();
     });
+  }
+
+  function updateConvertPreview(root) {
+    const input = root.querySelector('[data-role="convert-amt"]');
+    const preview = root.querySelector('[data-role="convert-preview"]');
+    if (!input || !preview || !_state) return;
+    const pts = Math.max(0, Math.floor(Number(input.value)) || 0);
+    preview.textContent = "→ " + money(pts * _state.constants.cents_per_point) + " into the tank";
   }
 
   function readNecDraft(root) {

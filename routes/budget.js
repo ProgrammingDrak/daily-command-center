@@ -91,6 +91,18 @@ module.exports = function mount(app, ctx) {
     }
   });
 
+  // Money Changer: points -> bank at the configured rate. Client sends a
+  // per-attempt source_key (reused on retry) — the ledger index dedupes.
+  app.post("/api/budget/convert", async (req, res) => {
+    try {
+      const result = await budgetStore.convertPointsToBank(req.workspaceId, req.session.userId, req.body || {});
+      broadcast("slot-changed", { action: "budget-convert" }, req.workspaceId);
+      res.json(result);
+    } catch (e) {
+      res.status(e.statusCode || 400).json({ error: e.message });
+    }
+  });
+
   app.post("/api/budget/blocks/reorder", async (req, res) => {
     try {
       const result = await budgetStore.reorderTank(req.workspaceId, (req.body || {}).items);
