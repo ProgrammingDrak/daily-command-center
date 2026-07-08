@@ -240,12 +240,20 @@ function reloadPersistedEdits() {
       // responsibility scaffolding. Startless tasks are admitted too -> they land
       // in the Unscheduled section instead of being dropped. (Previously required
       // local_id AND start, which silently dropped every API-inserted task.)
+      // Backlog copies (kind pending_task/backlog, stored dateless by
+      // savePendingTasks in sync.js) belong to the Pending UI, never the
+      // itinerary — without this exclusion they render on EVERY day.
+      // Dateless rows are only admitted for kind==="task": a local_id row
+      // without a date is legacy quick-add residue, not today's work.
       const isFoldableTask=b=>{
         const p=b.properties||{};
         if(p.kind&&/^responsibility/.test(p.kind))return false;
+        if(p.kind==="pending_task"||p.kind==="backlog")return false;
         // API-inserted shells carry kind or type "shell" and no local_id.
-        if(!p.local_id&&p.kind!=="task"&&p.kind!=="shell"&&p.type!=="shell")return false;
-        return (!b.date||b.date===currentDate);
+        const isShell=p.kind==="shell"||p.type==="shell";
+        if(!p.local_id&&p.kind!=="task"&&!isShell)return false;
+        if(b.date)return b.date===currentDate;
+        return p.kind==="task"||isShell;
       };
       const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)];
       addedBlocks.forEach(block=>{
