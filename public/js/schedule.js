@@ -105,12 +105,22 @@ function syncAddedTaskTimes(){
     if(!p.local_id&&p.kind!=="task")return false;
     return !b.date||b.date===currentDate;
   })];
+  const datedLocalIds=new Set(window.blockStore.getByType("block")
+    .filter(x=>x.date&&(x.properties||{}).local_id)
+    .map(x=>x.properties.local_id));
   addedBlocks.forEach(block=>{
     const p=block.properties||{};
     const ev=scheduled.find(e=>e.id===(p.local_id||block.id));
     if(!ev)return;
     if(ev.untimed)return; // still unscheduled: keep the block startless
-    if(p.start!==ev.start||p.end!==ev.end){
+    // A dateless row whose local_id has a dated sibling is a suppressed leftover
+    // copy; ev here is the SIBLING's task, so never stamp times onto the copy.
+    if(!block.date&&p.local_id&&datedLocalIds.has(p.local_id))return;
+    if(!block.date){
+      // Dragged out of Unscheduled: the task is now scheduled for the viewed
+      // day, so the date lands on the block along with its slot.
+      window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end},{date:currentDate});
+    } else if(p.start!==ev.start||p.end!==ev.end){
       window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end});
     }
   });
@@ -159,11 +169,10 @@ function insertTaskNow(titleArg, durMinArg, opts){
   scheduled.splice(insertAt, 0, newItem);
   recalcTimes();
   const pins=loadPinnedStarts();pins[id]=startStr;savePinnedStarts(pins);
+  // The dated block from persistAddedTask is the single record. The old extra
+  // savePendingTasks push here minted a dateless kind:"pending_task" twin with
+  // the same local_id that nothing ever deleted.
   persistAddedTask(newItem);
-  const pending=loadPendingTasks();
-  pending.push({id,title,priority:"High",source_task:"Task bar",
-    source_task_id:"taskbar",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
-  savePendingTasks(pending);
   log("scheduled",id,"Quick-added at "+startStr+": "+title);
   render();
   checkBlockWarnings(newItem);
@@ -970,12 +979,9 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     scheduled.splice(insertAt,0,newItem);
     const pins=loadPinnedStarts();pins[id]=timeStr;savePinnedStarts(pins);
     recalcTimes();
+    // Single record: persistAddedTask's dated block. (A savePendingTasks push
+    // here used to mint an orphaned dateless pending_task twin.)
     persistAddedTask(newItem);
-    const pending=loadPendingTasks();
-    pending.push({id,title,priority:"High",source_task:"Task bar",
-      source_task_id:"taskbar",created_at:new Date().toISOString(),
-      status:"scheduled",_scheduled:true});
-    savePendingTasks(pending);
     log("scheduled",id,"Scheduled at "+timeStr+": "+title);
     render();
     checkBlockWarnings(newItem);
