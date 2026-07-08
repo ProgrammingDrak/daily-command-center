@@ -50,8 +50,12 @@ function isHexColor(v) {
   return typeof v === "string" && /^#[0-9a-fA-F]{3,8}$/.test(v.trim());
 }
 
+// Shapes a necessity's reef decoration can take (front-end SPRITES keys).
+const TANK_SHAPES = ["chest", "gift", "star", "heart", "castle", "coral", "plant", "rocks", "shell"];
+const DEFAULT_NEC_SHAPES = ["castle", "coral", "plant", "rocks", "shell"];
+
 function normalizeNecessities(list) {
-  if (!Array.isArray(list)) return DEFAULT_NECESSITIES.map(n => ({ ...n }));
+  if (!Array.isArray(list)) return DEFAULT_NECESSITIES.map((n, i) => ({ ...n, shape: DEFAULT_NEC_SHAPES[i % DEFAULT_NEC_SHAPES.length] }));
   const out = [];
   for (const raw of list) {
     if (!raw || typeof raw !== "object") continue;
@@ -62,6 +66,7 @@ function normalizeNecessities(list) {
       name,
       amount_cents: clampInt(raw.amount_cents ?? raw.amountCents ?? raw.amount, 0, MAX_BLOCK_CENTS),
       color: isHexColor(raw.color) ? raw.color.trim() : BLOCK_PALETTE[out.length % BLOCK_PALETTE.length],
+      shape: TANK_SHAPES.includes(raw.shape) ? raw.shape : DEFAULT_NEC_SHAPES[out.length % DEFAULT_NEC_SHAPES.length],
     });
   }
   return out;

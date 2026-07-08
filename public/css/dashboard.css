@@ -4627,9 +4627,38 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-linkbtn{background:none;border:none;color:var(--accent-light,var(--accent));font-size:10px;
   cursor:pointer;padding:0;text-decoration:underline}
 
+/* --- tank frame + left-gutter level labels --- */
+.bt-tank-frame{position:relative;padding-left:92px}
+.bt-side{position:absolute;left:0;top:0;bottom:0;width:84px;pointer-events:none;z-index:4}
+.bt-side-label{position:absolute;right:8px;text-align:right;line-height:1.15}
+.bt-side-label::after{content:"";position:absolute;right:-8px;width:7px;
+  border-top:1px solid rgba(165,224,255,.5)}
+.bt-side-cap{top:6px}
+.bt-side-cap::after{top:3px;border-top-style:dashed}
+.bt-side-reserve{transform:translateY(50%);transition:bottom 1.2s cubic-bezier(.22,1,.36,1)}
+.bt-side-reserve::after{top:50%}
+.bt-side-t{display:block;font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.bt-side-val{display:block;font-size:15px;font-weight:800;color:#cfeaff;font-variant-numeric:tabular-nums;
+  text-shadow:0 1px 3px rgba(0,0,0,.6)}
+.bt-side-sub{display:block;font-size:8.5px;color:var(--text-muted)}
+
+/* --- shape + color pickers (necessities editor) --- */
+.bt-swatch{display:inline-flex;width:22px;height:20px;flex:0 0 22px}
+.bt-swatch svg{width:22px;height:20px}
+.bt-nec-top{display:flex;align-items:center;gap:8px;width:100%}
+.bt-nec-color{width:26px;height:26px;padding:0;border:1px solid var(--border);border-radius:6px;
+  background:none;cursor:pointer;flex:0 0 26px}
+.bt-shape-pick{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 2px 34px}
+.bt-shape-btn{width:30px;height:28px;padding:2px;border:1px solid var(--border);border-radius:7px;
+  background:var(--bg,#0b1020);cursor:pointer;color:var(--text-muted);display:inline-flex;align-items:center;justify-content:center}
+.bt-shape-btn svg{width:22px;height:20px}
+.bt-shape-btn:hover{border-color:var(--accent)}
+.bt-shape-btn.is-sel{border-color:var(--accent);color:var(--accent-light,var(--accent));
+  box-shadow:0 0 0 1px var(--accent) inset}
+
 /* --- layout --- */
 .bt-main{display:flex;gap:22px;align-items:stretch}
-.bt-tank-col{flex:0 0 300px;display:flex;flex-direction:column;gap:14px}
+.bt-tank-col{flex:0 0 330px;display:flex;flex-direction:column;gap:14px}
 .bt-breakdown{flex:1;min-width:0;display:flex;flex-direction:column;gap:16px}
 
 /* --- the aquarium --- */
@@ -4644,7 +4673,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 
 /* zones: cents-space flex stack; column-reverse puts the reef (first child) at
    the visual bottom, priority-1 block just above it. Whole stack = income. */
-.bt-zones{position:absolute;inset:0;display:flex;flex-direction:column-reverse;z-index:2}
+.bt-zones{position:absolute;top:0;left:0;right:0;bottom:88px;display:flex;flex-direction:column-reverse;z-index:2}
 .bt-zone{position:relative;display:flex;align-items:center;gap:8px;padding:4px 12px;min-height:44px;overflow:hidden;
   border-top:1px dashed rgba(125,211,252,.16);cursor:grab;transition:filter .3s,opacity .3s}
 .bt-zone:active{cursor:grabbing}
@@ -4672,22 +4701,26 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-zone.bt--overcap .bt-zone-status{color:#fb7185}
 @keyframes bt-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 
-/* reef = necessities: proportional submerged base dressed with scenery */
-.bt-reef{position:relative;min-height:92px;display:flex;align-items:flex-end;justify-content:center;
-  padding:18px 10px 8px;border-top:2px solid rgba(255,255,255,.1);
+/* reef = necessities: a modest FIXED base at the tank bottom (bills are
+   context, not the show), dressed with labeled scenery. Always submerged. */
+.bt-reef{position:absolute;left:0;right:0;bottom:0;height:88px;z-index:2;display:flex;
+  align-items:flex-end;justify-content:center;padding:6px 10px 20px;
+  border-top:2px solid rgba(255,255,255,.1);
   background:linear-gradient(180deg,#1c2740 0%,#26324b 40%,#33415d 100%)}
-.bt-reef::after{content:"";position:absolute;left:0;right:0;bottom:0;height:16px;opacity:.55;
+.bt-reef::after{content:"";position:absolute;left:0;right:0;bottom:0;height:14px;opacity:.5;
   background-image:radial-gradient(circle at 14% 92%,#5b6a8f 0 4px,transparent 5px),
     radial-gradient(circle at 38% 96%,#4c5975 0 5px,transparent 6px),
     radial-gradient(circle at 62% 90%,#63719a 0 3.5px,transparent 4.5px),
     radial-gradient(circle at 84% 95%,#4f5d80 0 5px,transparent 6px);
   background-size:110px 100%;background-repeat:repeat-x}
-.bt-reef-floor{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;justify-content:center;
-  max-height:100%;overflow:hidden;padding-bottom:4px}
-.bt-scenery{display:inline-flex;align-items:flex-end}
-.bt-scenery-svg{width:34px;height:30px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.5))}
-.bt-reef-label{position:absolute;left:10px;bottom:6px;font-size:10px;font-weight:600;
-  color:rgba(230,241,255,.7);text-shadow:0 1px 2px rgba(0,0,0,.7)}
+.bt-reef-floor{display:flex;align-items:flex-end;gap:12px;flex-wrap:nowrap;justify-content:center;
+  width:100%;overflow-x:auto;padding-bottom:2px}
+.bt-scenery{display:inline-flex;flex-direction:column;align-items:center;gap:1px;flex:0 0 auto}
+.bt-scenery-svg{width:30px;height:26px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.5))}
+.bt-scenery-name{font-size:8.5px;font-weight:600;color:rgba(230,241,255,.85);
+  text-shadow:0 1px 2px rgba(0,0,0,.8);max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-reef-label{position:absolute;left:10px;bottom:5px;font-size:9.5px;font-weight:600;
+  color:rgba(230,241,255,.6);text-shadow:0 1px 2px rgba(0,0,0,.7)}
 
 /* --- water --- */
 .bt-water{position:absolute;left:0;right:0;bottom:0;z-index:3;pointer-events:none;

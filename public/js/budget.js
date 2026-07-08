@@ -68,19 +68,35 @@
       '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M2 30c2-8 8-12 14-10 3-6 10-7 15-2 4-1 8 2 8 6 0 3-2 6-6 6z" fill="currentColor"/></svg>',
     shell:
       '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M20 30C8 30 3 16 8 8c3-5 21-5 24 0 5 8 0 22-12 22z" fill="currentColor"/><path d="M20 30V9M20 30c-4 0-8-4-10-9M20 30c4 0 8-4 10-9" stroke="#0b1020" stroke-opacity=".3" stroke-width="1.4" fill="none"/></svg>',
+    gift:
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><rect x="7" y="13" width="26" height="17" rx="2" fill="currentColor"/><rect x="5" y="9" width="30" height="6" rx="2" fill="currentColor" opacity=".8"/><rect x="18" y="9" width="4" height="21" fill="#0b1020" opacity=".4"/><path d="M20 9c-4-7-11-4-6 0M20 9c4-7 11-4 6 0" stroke="currentColor" stroke-width="2.5" fill="none"/></svg>',
+    star:
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M20 3l4.6 9.6 10.4 1.3-7.6 7.2 2 10.4L20 26.6 10.6 31.7l2-10.4L5 14.1l10.4-1.3z" fill="currentColor"/></svg>',
+    heart:
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M20 30C6 21 4 12 9 7c4-4 9-2 11 2 2-4 7-6 11-2 5 5 3 14-11 23z" fill="currentColor"/></svg>',
   };
+  // Shapes the user can pick for a tank decoration (necessity or block).
+  const SHAPES = ["chest", "gift", "star", "heart", "castle", "coral", "plant", "rocks", "shell"];
   const SCENERY = ["castle", "coral", "plant", "rocks", "shell"];
 
-  function chestSpriteFor(block) {
-    return block.claimed ? SPRITES.chestOpen : SPRITES.chest;
+  function shapeSprite(shape, claimed) {
+    if (shape === "chest") return claimed ? SPRITES.chestOpen : SPRITES.chest;
+    return SPRITES[shape] || (claimed ? SPRITES.chestOpen : SPRITES.chest);
   }
 
-  // The submerged reef of necessities: one scenery sprite per bill, cycling the
-  // set, tinted with the bill's color. Always covered — no bank-build needed.
+  // A reward block's chest (or its chosen shape). Claimed chests open.
+  function chestSpriteFor(block) {
+    return shapeSprite(block.shape || "chest", block.claimed);
+  }
+
+  // The submerged reef of necessities: each bill is a labeled scenery piece
+  // (shape + color the user picked). Always covered — no bank-build needed.
   function reefSceneryMarkup(necessities) {
     return (necessities || []).map((n, i) =>
-      '<span class="bt-scenery" style="color:' + esc(n.color || "#8aa0c0") + '" title="' +
-        esc(n.name) + " " + money(n.amount_cents) + '">' + SPRITES[SCENERY[i % SCENERY.length]] + "</span>"
+      '<span class="bt-scenery" style="color:' + esc(n.color || "#8aa0c0") + '">' +
+        SPRITES[n.shape && SPRITES[n.shape] ? n.shape : SCENERY[i % SCENERY.length]] +
+        '<span class="bt-scenery-name">' + esc(n.name) + "</span>" +
+      "</span>"
     ).join("");
   }
 
@@ -102,17 +118,19 @@
   }
 
   // ---- tank markup ----------------------------------------------------------
-  // Geometry: the whole tank height is last period's income. The bottom is the
-  // NECESSITIES reef (proportional to their dollar total, always submerged);
-  // above it, reward-block chests stack in the discretionary zone (income -
-  // necessities), each sized by its dollar value, with open water for the
-  // unallocated remainder. Water covers all of the reef plus the banked
-  // fraction of the discretionary zone. `.bt-zones` is column-reverse, so the
-  // reef (first child) sits at the visual bottom with priority-1 just above it.
+  // Geometry: the NECESSITIES reef is a modest fixed-height decorative base at
+  // the bottom (always submerged) — bills are context, not the show. Everything
+  // above it is the discretionary zone: reward-block chests stack in cents-space
+  // (column-reverse, priority-1 at the bottom) with open water for the
+  // unallocated remainder. The waterline fills the discretionary zone as the
+  // Reward Reserve is earned, so its level = reef + (waterline/budget) of the
+  // space above the reef. The level labels sit in a gutter to the LEFT.
+  const REEF_PX = 88;
+
   function tankMarkup(s) {
     const u = s.usage;
-    const income = Math.max(u.income_cents, u.necessities_total_cents + u.allocated_cents, 1);
-    const waterPct = Math.min(100, ((u.necessities_total_cents + u.waterline_cents) / income) * 100);
+    const waterFrac = u.capacity_cents > 0 ? Math.min(1, u.waterline_cents / u.capacity_cents) : 0;
+    const level = "calc(" + REEF_PX + "px + (100% - " + REEF_PX + "px) * " + waterFrac.toFixed(4) + ")";
     const claimedCount = s.blocks.filter(b => b.claimed).length;
     const fishCount = Math.min(6, claimedCount);
 
@@ -138,8 +156,8 @@
         '<span class="bt-open-label">open water · ' + money(openDisc) + " left to allocate</span></div>"
       : "";
 
-    // The reef: necessities as submerged scenery, proportional to their total.
-    const reef = '<div class="bt-reef" style="flex-grow:' + Math.max(u.necessities_total_cents, 1) + '">' +
+    // The reef: necessities as labeled submerged scenery, a modest fixed base.
+    const reef = '<div class="bt-reef">' +
       '<div class="bt-reef-floor">' + reefSceneryMarkup(s.settings.necessities) + "</div>" +
       '<span class="bt-reef-label">Necessities · ' + money(u.necessities_total_cents) + " · covered</span>" +
     "</div>";
@@ -150,23 +168,37 @@
     const fish = Array.from({ length: fishCount }, (_, i) =>
       '<span class="bt-fish" style="color:' + FISH_COLORS[i % FISH_COLORS.length] + ";bottom:" + (12 + (i * 17) % 62) + "%;animation-delay:" + (i * 2.3) + 's;animation-duration:' + (11 + (i % 4) * 3) + 's">' + FISH_SVG + "</span>").join("");
 
-    return '<div class="bt-aquarium">' +
-      '<div class="bt-zones" data-role="zones">' +
-        reef + zones + spacer +
+    // Level labels in a gutter to the LEFT, each pinned to its level: budget
+    // ceiling at the top, Reward Reserve at the waterline (same calc as water).
+    const sideLabels =
+      '<div class="bt-side" aria-hidden="false">' +
+        '<div class="bt-side-label bt-side-cap">' +
+          '<span class="bt-side-t">Budget ceiling</span>' +
+          '<span class="bt-side-val">' + money(u.capacity_cents) + "</span>" +
+          '<span class="bt-side-sub">to unlock</span>' +
+        "</div>" +
+        '<div class="bt-side-label bt-side-reserve" style="bottom:' + level + '">' +
+          '<span class="bt-side-t">Reward Reserve</span>' +
+          '<span class="bt-side-val">' + money(u.waterline_cents) + "</span>" +
+          '<span class="bt-side-sub">earned this ' + esc(s.settings.period_type) + "</span>" +
+        "</div>" +
+      "</div>";
+
+    return '<div class="bt-tank-frame">' +
+      sideLabels +
+      '<div class="bt-aquarium">' +
+        '<div class="bt-zones" data-role="zones">' +
+          zones + spacer +
+        "</div>" +
+        reef +
+        '<div class="bt-cap-line"></div>' +
+        '<div class="bt-water" style="height:' + level + '">' +
+          '<div class="bt-caustics" aria-hidden="true"></div>' +
+          bubbles + fish +
+        "</div>" +
+        '<div class="bt-surface" style="bottom:' + level + '"></div>' +
+        '<div class="bt-glass" aria-hidden="true"></div>' +
       "</div>" +
-      // Tank ceiling = the discretionary budget (the full reward reserve you can
-      // earn this period). Water reaches it when every block is unlocked.
-      '<div class="bt-cap-line"><span>Budget ceiling · ' + money(u.capacity_cents) + " to unlock</span></div>" +
-      '<div class="bt-water" style="height:' + waterPct.toFixed(2) + '%">' +
-        '<div class="bt-caustics" aria-hidden="true"></div>' +
-        bubbles + fish +
-      "</div>" +
-      // Surface line + Reward-Reserve label, pinned to the waterline (unclipped).
-      '<div class="bt-surface" style="bottom:' + waterPct.toFixed(2) + '%">' +
-        '<span class="bt-water-amt">Reward Reserve · ' +
-          money(u.waterline_cents) + " earned this " + esc(s.settings.period_type) + "</span>" +
-      "</div>" +
-      '<div class="bt-glass" aria-hidden="true"></div>' +
     "</div>";
   }
 
@@ -271,19 +303,35 @@
     "</div>";
   }
 
+  // Small sprite swatch used in pickers and read-only rows.
+  function shapeSwatch(shape, color) {
+    return '<span class="bt-swatch" style="color:' + esc(color || "#8aa0c0") + '">' +
+      (SPRITES[shape] || SPRITES.castle) + "</span>";
+  }
+
+  function shapePicker(idx, current) {
+    return '<div class="bt-shape-pick">' + SHAPES.map(sh =>
+      '<button type="button" class="bt-shape-btn' + (sh === current ? " is-sel" : "") + '" ' +
+        'data-act="nec-shape" data-idx="' + idx + '" data-shape="' + sh + '" title="' + sh + '">' +
+        (SPRITES[sh] || "") + "</button>").join("") + "</div>";
+  }
+
   function necessitiesMarkup(s) {
     if (!_editMode || !_necDraft) {
       const rows = s.settings.necessities.map(n =>
-        '<div class="bt-nec-row"><span class="bt-row-dot" style="background:' + esc(n.color) + '"></span>' +
+        '<div class="bt-nec-row">' + shapeSwatch(n.shape, n.color) +
         '<span class="bt-row-name">' + esc(n.name) + '</span><span class="bt-row-amt">' + money(n.amount_cents) + "</span></div>").join("");
       return rows || '<div class="bt-empty-note">No necessities configured.</div>';
     }
     return _necDraft.map((n, i) =>
       '<div class="bt-nec-row bt-nec-row--edit" data-idx="' + i + '">' +
-        '<span class="bt-row-dot" style="background:' + esc(n.color) + '"></span>' +
-        '<input type="text" class="bt-nec-name" value="' + esc(n.name) + '" placeholder="Name">' +
-        '<input type="number" class="bt-nec-amt" value="' + Math.round(n.amount_cents / 100) + '" min="0" step="1">' +
-        '<button class="bt-row-btn bt-row-btn--danger" data-act="del-nec">×</button>' +
+        '<div class="bt-nec-top">' +
+          '<input type="color" class="bt-nec-color" value="' + esc(n.color || "#22c55e") + '" title="Color">' +
+          '<input type="text" class="bt-nec-name" value="' + esc(n.name) + '" placeholder="Rent, Utilities…">' +
+          '<input type="number" class="bt-nec-amt" value="' + Math.round(n.amount_cents / 100) + '" min="0" step="1">' +
+          '<button class="bt-row-btn bt-row-btn--danger" data-act="del-nec">×</button>' +
+        "</div>" +
+        shapePicker(i, n.shape) +
       "</div>").join("") +
       '<div class="bt-form-actions bt-nec-actions">' +
         '<button class="bt-btn" data-act="add-nec">+ add bill</button>' +
@@ -580,7 +628,19 @@
         return;
       }
       if (act === "add-nec") {
-        _necDraft.push({ id: "nec-" + Date.now().toString(36), name: "", amount_cents: 0, color: "#22c55e" });
+        readNecDraft(root);
+        const palette = ["#22c55e", "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#6366f1"];
+        const scenery = ["castle", "coral", "plant", "rocks", "shell"];
+        const n = _necDraft.length;
+        _necDraft.push({ id: "nec-" + Date.now().toString(36), name: "", amount_cents: 0,
+          color: palette[n % palette.length], shape: scenery[n % scenery.length] });
+        render();
+        return;
+      }
+      if (act === "nec-shape") {
+        readNecDraft(root);
+        const idx = Number(btn.dataset.idx);
+        if (_necDraft[idx]) _necDraft[idx].shape = btn.dataset.shape;
         render();
         return;
       }
@@ -692,6 +752,8 @@
       if (!_necDraft[idx]) return;
       _necDraft[idx].name = row.querySelector(".bt-nec-name").value;
       _necDraft[idx].amount_cents = Math.max(0, Math.round(Number(row.querySelector(".bt-nec-amt").value) * 100) || 0);
+      const colorEl = row.querySelector(".bt-nec-color");
+      if (colorEl) _necDraft[idx].color = colorEl.value;
     });
   }
 
