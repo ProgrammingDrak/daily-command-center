@@ -227,7 +227,7 @@ test("normalizeBudgetTankSettings applies defaults and clamps", () => {
   const store = loadStoreWithMock(createMockPool());
   const s = store.normalizeBudgetTankSettings(undefined);
   assert.equal(s.period_type, "month");
-  assert.equal(s.capacity_source, "prior_period_banked");
+  assert.equal(s.capacity_source, "last_income");
   assert.equal(s.cents_per_point, 1);
   assert.equal(s.current_period, null);
   assert.ok(s.necessities.length >= 1);
@@ -245,7 +245,8 @@ test("normalizeBudgetTankSettings applies defaults and clamps", () => {
 
   const junk = store.normalizeBudgetTankSettings({ period_type: "fortnight", capacity_source: "vibes" });
   assert.equal(junk.period_type, "month");
-  assert.equal(junk.capacity_source, "prior_period_banked");
+  assert.equal(junk.capacity_source, "last_income");
+  assert.equal(store.normalizeBudgetTankSettings({ capacity_source: "prior_period_banked" }).capacity_source, "prior_period_banked");
 });
 
 test("getTankUsage sums spins + conversions and uses the month window by default", async () => {
@@ -366,6 +367,8 @@ test("getBudgetState stamps the first period from prior-period banked and derive
   const mock = createMockPool({
     pointBalance: 250,
     bankBalance: 6000,
+    // Auto-capacity from the bank build, no necessities, so capacity == gross.
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [] } },
     spinsUsage: { period_key: "2026-07", cur_cents: 7000, prior_cents: 40000 },
     convUsage: { cur_cents: 0, prior_cents: 0 },
     tankRows: [
@@ -411,13 +414,37 @@ test("getBudgetState flags rollover on period mismatch and shows unlocked-but-sh
 
 test("getBudgetState waterline is capped at capacity", async () => {
   const mock = createMockPool({
-    settings: { budget_tank: { current_period: { key: "2026-07", capacity_cents: 3000 } } },
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-07", capacity_cents: 3000 } } },
     spinsUsage: { period_key: "2026-07", cur_cents: 9000, prior_cents: 0 },
   });
   const store = loadStoreWithMock(mock);
   const state = await store.getBudgetState(WS, 7);
   assert.equal(state.usage.waterline_cents, 3000);
   assert.equal(state.usage.period_banked_cents, 9000);
+});
+
+test("last_income capacity = income minus necessities; editing income resizes the current tank live", async () => {
+  const mock = createMockPool({
+    settings: { budget_tank: {
+      capacity_source: "last_income",
+      income_cents: 200000,                                   // $2000 income last month
+      necessities: [{ name: "Rent", amount_cents: 100000 }, { name: "Groceries", amount_cents: 30000 }], // $1300
+      current_period: { key: "2026-07", capacity_cents: 999999 }, // stale stamp — ignored for last_income
+    } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 90000, prior_cents: 0 },
+  });
+  const store = loadStoreWithMock(mock);
+  const state = await store.getBudgetState(WS, 7);
+  assert.equal(state.usage.income_cents, 200000);
+  assert.equal(state.usage.necessities_total_cents, 130000);
+  assert.equal(state.usage.capacity_cents, 70000);          // $700 discretionary = income - necessities
+  assert.equal(state.usage.waterline_cents, 70000);         // banked 90000 capped at the $700 budget
+
+  // Editing income re-resolves live (no rollover needed).
+  const next = await store.updateBudgetConfig(WS, 7, { income_cents: 250000, capacity_source: "last_income" });
+  assert.equal(next.income_cents, 250000);
+  const after = await store.getBudgetState(WS, 7);
+  assert.equal(after.usage.capacity_cents, 120000);         // 250000 - 130000
 });
 
 test("updateBudgetConfig merges fields, clamps the rate, and never takes current_period from the client", async () => {
@@ -439,7 +466,7 @@ test("updateBudgetConfig merges fields, clamps the rate, and never takes current
 test("claimTankBlock debits value_cents (never the cumulative threshold) and stamps the period", async () => {
   const mock = createMockPool({
     bankBalance: 20000,
-    settings: { budget_tank: { current_period: { key: "2026-07", capacity_cents: 50000 } } },
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-07", capacity_cents: 50000 } } },
     spinsUsage: { period_key: "2026-07", cur_cents: 40000, prior_cents: 0 },
     // $50 block at the TOP of a $400 stack: cumulative gate 40000, price 5000.
     tankRows: [tankRow(1, 35000, 1000, { tank_unlock_cents: 35000 }), tankRow(2, 5000, 2000, { tank_unlock_cents: 40000 })],
@@ -600,7 +627,8 @@ test("REGRESSION: getBankUsage (Bank Builder pacing) never reads budget_conversi
 test("rolloverPeriod carry: sweep leftover, claimed one-shots leave, unhit sink to the bottom, envelopes persist", async () => {
   const mock = createMockPool({
     bankBalance: 10000,
-    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    // Auto capacity so the new period's budget = last period's build (20000).
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-06", capacity_cents: 30000 } } },
     // June banked 20000 (prior window now); July banked 500 so far.
     spinsUsage: { period_key: "2026-07", cur_cents: 500, prior_cents: 20000 },
     tankRows: [

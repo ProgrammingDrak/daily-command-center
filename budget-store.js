@@ -79,7 +79,12 @@ function normalizeCurrentPeriod(raw) {
 function normalizeBudgetTankSettings(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
   const periodType = src.period_type === "week" ? "week" : "month";
-  const capacitySource = src.capacity_source === "fixed" ? "fixed" : "prior_period_banked";
+  // "last_income" = the tank budget is the income you earned last period (a
+  // figure you state); "prior_period_banked" = auto-derive it from what your
+  // bank build actually banked last period; "fixed" = a set number.
+  const capacitySource = ["last_income", "prior_period_banked", "fixed"].includes(src.capacity_source)
+    ? src.capacity_source
+    : "last_income";
   return {
     income_cents: clampInt(src.income_cents ?? 310000, 0, MAX_BLOCK_CENTS),
     necessities: normalizeNecessities(src.necessities),
@@ -102,17 +107,43 @@ function tankDrivenGoalCents(accountSettings) {
   const bt = accountSettings && accountSettings.budget_tank;
   if (!bt || bt.goal_mode === "manual") return 0;
   if ((bt.period_type || "month") !== "month") return 0;
-  const cap = bt.current_period && Math.round(Number(bt.current_period.capacity_cents));
-  return Number.isFinite(cap) && cap > 0 ? cap : 0;
+  // The Bank Builder paces toward filling the DISCRETIONARY tank
+  // (gross - necessities), which is what the waterline caps at.
+  let gross;
+  if (bt.capacity_source === "last_income") gross = Math.round(Number(bt.income_cents));
+  else if (bt.capacity_source === "fixed") gross = Math.round(Number(bt.fixed_capacity_cents));
+  else gross = bt.current_period && Math.round(Number(bt.current_period.capacity_cents));
+  const necessities = (Array.isArray(bt.necessities) ? bt.necessities : []).reduce((s, n) => s + (Number(n && n.amount_cents) || 0), 0);
+  const cap = Math.max(0, (Number.isFinite(gross) ? gross : 0) - necessities);
+  return cap > 0 ? cap : 0;
 }
 
 // Capacity + waterline resolution shared by getBudgetState, claimTankBlock,
 // and slot-store's getState (the machine surface must gate identically).
+//
+// Two figures: GROSS = last period's income (the whole tank); DISCRETIONARY =
+// gross - necessities (the fillable budget for reward blocks). Necessities are
+// the submerged decorative base, always covered; the bank-build waterline and
+// the reward blocks live only in the discretionary zone above them. So a $2000
+// income with $1300 of necessities leaves a $700 tank to allocate.
+//
+// prior_period_banked uses the gross stamped at rollover so it can't drift
+// mid-period; stated income / fixed are stable figures resolved live, so
+// editing "Income from last month" resizes the current tank immediately.
 function resolveTankWaterline(settings, usage) {
-  const capacityCents = settings.current_period && settings.current_period.key === usage.periodKey
-    ? settings.current_period.capacity_cents
+  const grossCents = settings.capacity_source === "prior_period_banked"
+    ? (settings.current_period && settings.current_period.key === usage.periodKey
+        ? settings.current_period.capacity_cents
+        : resolveCapacity(settings, usage))
     : resolveCapacity(settings, usage);
-  return { capacityCents, waterlineCents: Math.min(usage.periodBanked, capacityCents) };
+  const necessitiesCents = necessitiesTotalCents(settings);
+  const capacityCents = Math.max(0, grossCents - necessitiesCents); // discretionary budget
+  return {
+    grossCents,
+    necessitiesCents,
+    capacityCents,
+    waterlineCents: Math.min(usage.periodBanked, capacityCents),
+  };
 }
 
 function necessitiesTotalCents(settings) {
@@ -663,7 +694,7 @@ async function rolloverPeriod(workspaceId, userId, { mode } = {}) {
       ...settings,
       current_period: {
         key: usage.periodKey,
-        capacity_cents: settings.capacity_source === "fixed" ? settings.fixed_capacity_cents : usage.priorPeriodBanked,
+        capacity_cents: resolveCapacity(settings, usage),
         started_at: new Date().toISOString(),
       },
     };
@@ -734,9 +765,9 @@ async function getInvestments(workspaceId, exec = pool) {
 }
 
 function resolveCapacity(settings, usage) {
-  return settings.capacity_source === "fixed"
-    ? settings.fixed_capacity_cents
-    : usage.priorPeriodBanked;
+  if (settings.capacity_source === "last_income") return settings.income_cents;
+  if (settings.capacity_source === "fixed") return settings.fixed_capacity_cents;
+  return usage ? usage.priorPeriodBanked : 0;
 }
 
 async function getBudgetState(workspaceId, userId) {
@@ -762,7 +793,7 @@ async function getBudgetState(workspaceId, userId) {
     rolloverDue = true;
   }
 
-  const { capacityCents, waterlineCents } = resolveTankWaterline(settings, usage);
+  const { grossCents, necessitiesCents, capacityCents, waterlineCents } = resolveTankWaterline(settings, usage);
   const funding = await getFunding(workspaceId, account);
   const rows = await getTankBlockRows(workspaceId);
   const blocks = rows.map(r => decorateBlock(r, usage, funding, waterlineCents));
@@ -776,11 +807,12 @@ async function getBudgetState(workspaceId, userId) {
       period_key: usage.periodKey,
       period_banked_cents: usage.periodBanked,
       prior_period_banked_cents: usage.priorPeriodBanked,
-      capacity_cents: capacityCents,
+      income_cents: grossCents,                 // whole tank = last period's income
+      necessities_total_cents: necessitiesCents, // submerged covered base
+      capacity_cents: capacityCents,             // discretionary budget = income - necessities
       waterline_cents: waterlineCents,
       allocated_cents: allocatedCents,
       unallocated_cents: Math.max(0, capacityCents - allocatedCents),
-      necessities_total_cents: necessitiesTotalCents(settings),
     },
     funding,
     investments,

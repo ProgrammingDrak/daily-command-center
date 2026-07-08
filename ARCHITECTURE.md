@@ -95,10 +95,20 @@ fish tank. Key invariants:
   debits `max(value_cents, unlock_threshold_cents)`, so storing the cumulative
   sum in `unlock_threshold_cents` would make a claim debit the whole stack.
   `value_cents` stays the price a claim debits. Never conflate them.
+- **Capacity model**: the whole tank = last period's income (stated in the
+  "Income from last month" field → `income_cents`, capacity_source
+  `last_income`, the default; `prior_period_banked` auto-derives it from the
+  bank build, `fixed` is a set number). Necessities are the submerged reef at
+  the bottom, proportional to their dollar total and always covered. The
+  **discretionary budget** the reward blocks fill = `income − necessities`
+  (`usage.capacity_cents`). Stated income / fixed resolve live (editing income
+  resizes the current tank immediately); prior_period_banked uses the capacity
+  stamped at rollover so it can't drift mid-period.
 - **Waterline is monotonic within a period.** It is a ledger SUM (positive
   `slot_spins` bank deltas + `budget_conversions.cents` this period), not the
-  spendable balance. Claims and punishments debit `bank_balance_cents` but never
-  lower the waterline — hence the real "unlocked but reserve short" state.
+  spendable balance, and it fills only the discretionary zone above the reef.
+  Claims and punishments debit `bank_balance_cents` but never lower the
+  waterline — hence the real "unlocked but reserve short" state.
 - **Money Changer conversions live in `budget_conversions`, never `slot_spins`.**
   They raise the tank waterline but must stay out of `getBankUsage` so Bank
   Builder pacing/shield/head-start are never contaminated (regression-tested).

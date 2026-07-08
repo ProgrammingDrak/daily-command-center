@@ -50,24 +50,38 @@
   }
 
   // ---- decorations (inline SVG sprites, tinted via currentColor) ----------
+  // Reward blocks are treasure chests (the thing you unlock and open). The
+  // necessities reef below is dressed with scenery (castle/coral/plants/rocks/
+  // shells) — the pretty stuff on the aquarium floor, already underwater.
   const SPRITES = {
     chest:
       '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M4 14h32v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="currentColor"/><path d="M4 14c0-6 7-9 16-9s16 3 16 9z" fill="currentColor" opacity=".75"/><rect x="17" y="12" width="6" height="8" rx="1" fill="#0b1020" opacity=".55"/><path d="M4 14h32" stroke="#0b1020" stroke-opacity=".4" stroke-width="1.5"/></svg>',
     chestOpen:
       '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M4 16h32v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" fill="currentColor"/><path d="M5 14C3 7 9 2 20 2s17 5 15 12l-15-3z" fill="currentColor" opacity=".55"/><circle cx="14" cy="13" r="1.6" fill="#ffe08a"/><circle cx="21" cy="11" r="1.6" fill="#ffe08a"/><circle cx="27" cy="13" r="1.6" fill="#ffe08a"/></svg>',
     coral:
-      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M20 30V12M20 18c-4-1-6-4-6-9M20 15c5-1 7-4 7-10M14 9c0 2 1 3 2 4M27 5c0 3-1 5-3 6" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" fill="none"/><path d="M8 30h24" stroke="currentColor" stroke-width="3" stroke-linecap="round" opacity=".4"/></svg>',
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M20 30V12M20 18c-4-1-6-4-6-9M20 15c5-1 7-4 7-10M14 9c0 2 1 3 2 4M27 5c0 3-1 5-3 6" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" fill="none"/></svg>',
     castle:
-      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M8 30V12l3 2 3-2 3 2V8l3 2 3-2v6l3-2 3 2 3-2v18z" fill="currentColor"/><rect x="18" y="20" width="5" height="10" rx="2" fill="#0b1020" opacity=".5"/><rect x="11" y="17" width="3" height="4" rx="1" fill="#0b1020" opacity=".4"/><rect x="27" y="17" width="3" height="4" rx="1" fill="#0b1020" opacity=".4"/></svg>',
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M8 30V12l3 2 3-2 3 2V8l3 2 3-2v6l3-2 3 2 3-2v18z" fill="currentColor"/><rect x="18" y="20" width="5" height="10" rx="2" fill="#0b1020" opacity=".5"/><rect x="11" y="17" width="3" height="4" rx="1" fill="#0b1020" opacity=".4"/><rect x="27" y="17" width="3" height="4" rx="1" fill="#0b1020" opacity=".4"/></svg>',
     plant:
-      '<svg viewBox="0 0 40 32" class="bt-sprite"><path d="M20 30C20 18 14 12 12 4c6 3 9 9 10 14 1-7 4-12 9-15-2 9-7 14-9 27" fill="currentColor"/><path d="M12 30h16" stroke="currentColor" stroke-width="3" stroke-linecap="round" opacity=".4"/></svg>',
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M20 30C20 18 14 12 12 4c6 3 9 9 10 14 1-7 4-12 9-15-2 9-7 14-9 27" fill="currentColor"/></svg>',
+    rocks:
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M2 30c2-8 8-12 14-10 3-6 10-7 15-2 4-1 8 2 8 6 0 3-2 6-6 6z" fill="currentColor"/></svg>',
+    shell:
+      '<svg viewBox="0 0 40 32" class="bt-scenery-svg"><path d="M20 30C8 30 3 16 8 8c3-5 21-5 24 0 5 8 0 22-12 22z" fill="currentColor"/><path d="M20 30V9M20 30c-4 0-8-4-10-9M20 30c4 0 8-4 10-9" stroke="#0b1020" stroke-opacity=".3" stroke-width="1.4" fill="none"/></svg>',
   };
+  const SCENERY = ["castle", "coral", "plant", "rocks", "shell"];
 
-  function spriteFor(block) {
-    if (block.claimed) return SPRITES.chestOpen;
-    if (!block.tank_recurring) return SPRITES.chest;
-    const pool = ["coral", "plant", "castle"];
-    return SPRITES[pool[Math.abs(block.id) % pool.length]];
+  function chestSpriteFor(block) {
+    return block.claimed ? SPRITES.chestOpen : SPRITES.chest;
+  }
+
+  // The submerged reef of necessities: one scenery sprite per bill, cycling the
+  // set, tinted with the bill's color. Always covered — no bank-build needed.
+  function reefSceneryMarkup(necessities) {
+    return (necessities || []).map((n, i) =>
+      '<span class="bt-scenery" style="color:' + esc(n.color || "#8aa0c0") + '" title="' +
+        esc(n.name) + " " + money(n.amount_cents) + '">' + SPRITES[SCENERY[i % SCENERY.length]] + "</span>"
+    ).join("");
   }
 
   const FISH_SVG =
@@ -88,25 +102,26 @@
   }
 
   // ---- tank markup ----------------------------------------------------------
-  // Geometry: the gravel bed (necessities) is a FIXED-height base — bills are
-  // context, not the show — and the flex space above it belongs to the
-  // discretionary stack in cents-space. Water height = gravel + banked fraction
-  // of the space above it (necessities are always submerged).
-  const GRAVEL_PX = 72;
-
+  // Geometry: the whole tank height is last period's income. The bottom is the
+  // NECESSITIES reef (proportional to their dollar total, always submerged);
+  // above it, reward-block chests stack in the discretionary zone (income -
+  // necessities), each sized by its dollar value, with open water for the
+  // unallocated remainder. Water covers all of the reef plus the banked
+  // fraction of the discretionary zone. `.bt-zones` is column-reverse, so the
+  // reef (first child) sits at the visual bottom with priority-1 just above it.
   function tankMarkup(s) {
     const u = s.usage;
-    const span = Math.max(u.capacity_cents, u.allocated_cents, 1);
-    const waterFrac = Math.min(1, u.waterline_cents / span);
+    const income = Math.max(u.income_cents, u.necessities_total_cents + u.allocated_cents, 1);
+    const waterPct = Math.min(100, ((u.necessities_total_cents + u.waterline_cents) / income) * 100);
     const claimedCount = s.blocks.filter(b => b.claimed).length;
     const fishCount = Math.min(6, claimedCount);
 
     const zones = s.blocks.map(b => {
       const info = statusInfo(b, u.waterline_cents);
-      const over = b.tank_unlock_cents > u.capacity_cents;
+      const over = (b.tank_unlock_cents || 0) > u.capacity_cents;
       return '<div class="bt-zone ' + info.cls + (over ? " bt--overcap" : "") + '" draggable="true" data-id="' + b.id + '"' +
         ' style="flex-grow:' + b.value_cents + ';color:' + esc(b.color || "#f59e0b") + '">' +
-        '<span class="bt-zone-sprite">' + spriteFor(b) + "</span>" +
+        '<span class="bt-zone-sprite">' + chestSpriteFor(b) + "</span>" +
         '<div class="bt-zone-body">' +
           '<div class="bt-zone-top"><span class="bt-zone-name">' + esc(b.title) + "</span>" +
           '<span class="bt-zone-amt">' + money(b.value_cents) + "</span></div>" +
@@ -117,10 +132,17 @@
         "</div>";
     }).join("");
 
-    const spacer = u.capacity_cents > u.allocated_cents
-      ? '<div class="bt-zone bt-zone--open" style="flex-grow:' + (u.capacity_cents - u.allocated_cents) + '">' +
-        '<span class="bt-open-label">open water · ' + money(u.capacity_cents - u.allocated_cents) + " unallocated</span></div>"
+    const openDisc = Math.max(0, u.capacity_cents - u.allocated_cents);
+    const spacer = openDisc > 0
+      ? '<div class="bt-zone bt-zone--open" style="flex-grow:' + openDisc + '">' +
+        '<span class="bt-open-label">open water · ' + money(openDisc) + " left to allocate</span></div>"
       : "";
+
+    // The reef: necessities as submerged scenery, proportional to their total.
+    const reef = '<div class="bt-reef" style="flex-grow:' + Math.max(u.necessities_total_cents, 1) + '">' +
+      '<div class="bt-reef-floor">' + reefSceneryMarkup(s.settings.necessities) + "</div>" +
+      '<span class="bt-reef-label">Necessities · ' + money(u.necessities_total_cents) + " · covered</span>" +
+    "</div>";
 
     const bubbles = Array.from({ length: 7 }, (_, i) =>
       '<span class="bt-bubble" style="left:' + (8 + (i * 13) % 84 + "%") + ";animation-delay:" + (i * 1.4) + 's"></span>').join("");
@@ -130,13 +152,9 @@
 
     return '<div class="bt-aquarium">' +
       '<div class="bt-zones" data-role="zones">' +
-        zones + spacer +
+        reef + zones + spacer +
       "</div>" +
-      '<div class="bt-gravel">' +
-        '<span class="bt-gravel-label">Necessities · ' + money(u.necessities_total_cents) + " · covered</span>" +
-        '<span class="bt-gravel-texture" aria-hidden="true"></span>' +
-      "</div>" +
-      '<div class="bt-water" style="height:calc(' + GRAVEL_PX + "px + (100% - " + GRAVEL_PX + "px)*" + waterFrac.toFixed(4) + ')">' +
+      '<div class="bt-water" style="height:' + waterPct.toFixed(2) + '%">' +
         '<div class="bt-wavecrest"><span class="bt-water-amt">' + money(u.waterline_cents) + " banked</span></div>" +
         '<div class="bt-caustics" aria-hidden="true"></div>' +
         bubbles + fish +
@@ -283,18 +301,23 @@
 
     const s = _state;
     const u = s.usage;
-    const capSource = s.settings.capacity_source === "fixed"
-      ? "fixed budget"
-      : "last " + (s.settings.period_type === "week" ? "week" : "month") + "'s build";
+    const period = s.settings.period_type === "week" ? "week" : "month";
+    const capSource = s.settings.capacity_source === "fixed" ? "fixed budget"
+      : s.settings.capacity_source === "prior_period_banked" ? "last " + period + "'s build"
+      : "your stated income";
+    const usingIncome = s.settings.capacity_source === "last_income";
 
     const chips =
-      chip("info", "Tank budget " + money(u.capacity_cents) + " · " + capSource) +
+      chip("info", "Discretionary budget " + money(u.capacity_cents)) +
+      chip("info", "Necessities " + money(u.necessities_total_cents) + " · covered") +
       chip(u.waterline_cents >= u.capacity_cents && u.capacity_cents > 0 ? "ok" : "info",
-        "Banked " + money(u.period_banked_cents) + " this " + s.settings.period_type) +
+        "Banked " + money(u.period_banked_cents) + " this " + period) +
       chip("info", "Reserve " + money(s.funding.total)) +
+      (u.income_cents > 0 && u.necessities_total_cents >= u.income_cents
+        ? chip("warn", "Necessities use the whole income") : "") +
       (u.allocated_cents > u.capacity_cents ? chip("warn", "Over budget by " + money(u.allocated_cents - u.capacity_cents)) : "") +
       (s.investments.total_cents > 0 ? chip("ok", "Invested " + money(s.investments.total_cents)) : "") +
-      (s.rollover_due ? chip("warn", "New " + s.settings.period_type + " — rollover pending") : "");
+      (s.rollover_due ? chip("warn", "New " + period + " — rollover pending") : "");
 
     // Legend mirrors the tank: top row = top of tank (funded last).
     const rowsTopDown = [...s.blocks].reverse().map(b => blockRow(b, u)).join("");
@@ -307,6 +330,18 @@
             "drag them to decide what gets topped up first.</p>" +
         "</div>" +
         '<div class="bt-controls">' +
+          '<div class="bt-income">' +
+            '<label class="bt-income-label" for="bt-income-input">Income from last ' + period + "</label>" +
+            '<div class="bt-income-field">' +
+              '<span class="bt-income-prefix">$</span>' +
+              '<input type="number" id="bt-income-input" class="bt-income-input" data-role="income-input" min="0" step="1" ' +
+                'value="' + Math.round((s.settings.income_cents || 0) / 100) + '">' +
+            "</div>" +
+            '<span class="bt-income-note">' +
+              (usingIncome ? "sets your tank budget" :
+                '<button class="bt-linkbtn" data-act="use-income">use this as the budget</button> · now: ' + esc(capSource)) +
+            "</span>" +
+          "</div>" +
           '<div class="bt-chips">' + chips + "</div>" +
           '<button class="bt-btn bt-edit-btn" data-act="toggle-edit">' + (_editMode ? "Done" : "Edit") + "</button>" +
         "</div>" +
@@ -322,7 +357,7 @@
             "</div>" +
             '<div class="bt-group">' +
               '<div class="bt-group-head"><span class="bt-group-title">Necessities</span>' +
-                '<span class="bt-group-sub">the gravel bed · always covered</span></div>' +
+                '<span class="bt-group-sub">the reef floor · always covered</span></div>' +
               necessitiesMarkup(s) +
             "</div>" +
             investmentsMarkup(s) +
@@ -428,6 +463,13 @@
         _confirmDeleteId = null;
         _necDraft = _editMode ? _state.settings.necessities.map(n => ({ ...n })) : null;
         render();
+        return;
+      }
+      if (act === "use-income") {
+        try {
+          await api("PUT", "/api/budget/config", { capacity_source: "last_income" });
+          await loadBudget();
+        } catch (err) { toast(err.message || "Could not switch", "error"); }
         return;
       }
       if (act === "rollover-later") { _rolloverSnoozed = true; render(); return; }
@@ -558,6 +600,17 @@
 
     root.addEventListener("input", e => {
       if (e.target.dataset.role === "convert-amt") updateConvertPreview(root);
+    });
+
+    // Income field commits on blur/Enter (change), not per keystroke. Stating
+    // income makes it the tank budget (capacity_source = last_income).
+    root.addEventListener("change", async e => {
+      if (e.target.dataset.role !== "income-input") return;
+      const dollars = Math.max(0, Math.round(Number(e.target.value) || 0));
+      try {
+        await api("PUT", "/api/budget/config", { income_cents: dollars * 100, capacity_source: "last_income" });
+        await loadBudget();
+      } catch (err) { toast(err.message || "Could not save income", "error"); }
     });
 
     root.addEventListener("keydown", e => {

@@ -9,10 +9,12 @@
 ### What Changed
 - **The Budget Tank is now an aquarium.** The Phase-0 localStorage what-if
   visualizer is gone; the tab is server-backed (`budget-store.js`,
-  `routes/budget.js`, rewritten `public/js/budget.js`). Necessities are the
-  gravel bed (always covered); discretionary blocks are tinted SVG decorations
-  anchored up the back wall at their cumulative unlock heights; the waterline is
-  this period's bank build rising through them. Fish join per claimed block.
+  `routes/budget.js`, rewritten `public/js/budget.js`). The whole tank is last
+  month's income (stated in an editable "Income from last month" field);
+  necessities are the submerged reef of scenery at the bottom (proportional,
+  always covered); the discretionary budget the reward-chests fill is
+  income − necessities. Chests unlock bottom-to-top as this period's bank build
+  raises the waterline; fish join per claimed block.
 - **Blocks are objectives, shared with the slot machine.** A tank block is a
   `slot_rewards` row (`kind='bank_gated'`) with additive `tank_*` columns, so it
   is simultaneously a spinnable objective and a tank block. Drag to reprioritize

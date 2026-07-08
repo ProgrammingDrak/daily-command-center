@@ -4615,13 +4615,25 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-btn:hover{border-color:var(--accent)}
 .bt-btn--primary{background:var(--accent);border-color:var(--accent);color:#fff}
 
+/* --- income field (states the tank budget) --- */
+.bt-income{display:flex;flex-direction:column;gap:2px;min-width:170px}
+.bt-income-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.bt-income-field{display:flex;align-items:center;gap:4px;background:var(--bg,#0b1020);
+  border:1px solid var(--border);border-radius:8px;padding:4px 8px}
+.bt-income-prefix{color:var(--text-muted);font-size:14px}
+.bt-income-input{border:none;background:none;color:var(--text);font-size:18px;font-weight:700;
+  width:100%;outline:none;font-variant-numeric:tabular-nums}
+.bt-income-note{font-size:10px;color:var(--text-muted)}
+.bt-linkbtn{background:none;border:none;color:var(--accent-light,var(--accent));font-size:10px;
+  cursor:pointer;padding:0;text-decoration:underline}
+
 /* --- layout --- */
 .bt-main{display:flex;gap:22px;align-items:stretch}
 .bt-tank-col{flex:0 0 300px;display:flex;flex-direction:column;gap:14px}
 .bt-breakdown{flex:1;min-width:0;display:flex;flex-direction:column;gap:16px}
 
 /* --- the aquarium --- */
-.bt-aquarium{position:relative;width:100%;min-height:460px;border-radius:18px 18px 14px 14px;overflow:hidden;
+.bt-aquarium{position:relative;width:100%;min-height:520px;border-radius:18px 18px 14px 14px;overflow:hidden;
   background:linear-gradient(180deg,#0c1526 0%,#0a1220 60%,#091018 100%);
   border:2px solid color-mix(in srgb,var(--border) 70%,#7dd3fc 30%);
   box-shadow:inset 0 0 40px rgba(3,10,24,.8),0 4px 24px rgba(0,0,0,.35)}
@@ -4630,9 +4642,9 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-glass::after{content:"";position:absolute;top:0;left:6%;width:10%;height:100%;
   background:linear-gradient(180deg,rgba(255,255,255,.09),transparent 65%);transform:skewX(-8deg)}
 
-/* zones: cents-space flex stack; column-reverse puts priority 1 at the bottom.
-   padding-bottom clears the fixed-height gravel bed. */
-.bt-zones{position:absolute;inset:0;display:flex;flex-direction:column-reverse;z-index:2;padding-bottom:72px}
+/* zones: cents-space flex stack; column-reverse puts the reef (first child) at
+   the visual bottom, priority-1 block just above it. Whole stack = income. */
+.bt-zones{position:absolute;inset:0;display:flex;flex-direction:column-reverse;z-index:2}
 .bt-zone{position:relative;display:flex;align-items:center;gap:8px;padding:4px 12px;min-height:44px;overflow:hidden;
   border-top:1px dashed rgba(125,211,252,.16);cursor:grab;transition:filter .3s,opacity .3s}
 .bt-zone:active{cursor:grabbing}
@@ -4660,20 +4672,22 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-zone.bt--overcap .bt-zone-status{color:#fb7185}
 @keyframes bt-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
 
-/* gravel bed = necessities (fixed height; bills are context, not the show) */
-.bt-gravel{position:absolute;left:0;right:0;bottom:0;height:72px;z-index:2;display:flex;align-items:flex-end;padding:8px 12px;
-  background:linear-gradient(180deg,#22314a 0%,#2b3a52 30%,#3d4a63 100%);border-top:2px solid rgba(255,255,255,.08)}
-.bt-gravel-label{position:relative;z-index:2;font-size:10.5px;font-weight:600;color:rgba(230,241,255,.8);
-  text-shadow:0 1px 2px rgba(0,0,0,.7)}
-.bt-gravel-texture{position:absolute;inset:0;opacity:.5;
-  background-image:radial-gradient(circle at 12% 78%,#556387 0 4px,transparent 5px),
-    radial-gradient(circle at 34% 88%,#48546f 0 5px,transparent 6px),
-    radial-gradient(circle at 55% 74%,#5d6a8e 0 3.5px,transparent 4.5px),
-    radial-gradient(circle at 72% 86%,#4a5878 0 5px,transparent 6px),
-    radial-gradient(circle at 90% 76%,#566385 0 4px,transparent 5px),
-    radial-gradient(circle at 22% 60%,#3f4c68 0 3px,transparent 4px),
-    radial-gradient(circle at 64% 58%,#455270 0 3px,transparent 4px);
-  background-size:120px 100%;background-repeat:repeat-x}
+/* reef = necessities: proportional submerged base dressed with scenery */
+.bt-reef{position:relative;min-height:92px;display:flex;align-items:flex-end;justify-content:center;
+  padding:18px 10px 8px;border-top:2px solid rgba(255,255,255,.1);
+  background:linear-gradient(180deg,#1c2740 0%,#26324b 40%,#33415d 100%)}
+.bt-reef::after{content:"";position:absolute;left:0;right:0;bottom:0;height:16px;opacity:.55;
+  background-image:radial-gradient(circle at 14% 92%,#5b6a8f 0 4px,transparent 5px),
+    radial-gradient(circle at 38% 96%,#4c5975 0 5px,transparent 6px),
+    radial-gradient(circle at 62% 90%,#63719a 0 3.5px,transparent 4.5px),
+    radial-gradient(circle at 84% 95%,#4f5d80 0 5px,transparent 6px);
+  background-size:110px 100%;background-repeat:repeat-x}
+.bt-reef-floor{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;justify-content:center;
+  max-height:100%;overflow:hidden;padding-bottom:4px}
+.bt-scenery{display:inline-flex;align-items:flex-end}
+.bt-scenery-svg{width:34px;height:30px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.5))}
+.bt-reef-label{position:absolute;left:10px;bottom:6px;font-size:10px;font-weight:600;
+  color:rgba(230,241,255,.7);text-shadow:0 1px 2px rgba(0,0,0,.7)}
 
 /* --- water --- */
 .bt-water{position:absolute;left:0;right:0;bottom:0;z-index:3;pointer-events:none;
