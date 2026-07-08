@@ -206,23 +206,29 @@
     // and points are separate from the parent.
     var stackedBadge=isRideAlong(ev)?'<span class="stacked-badge" title="Stacked time — independent points & schedule">Stacked</span>':'';
 
+    // Rollup container (shell): registry-driven bar color + card class, points
+    // chip replaced by the children rollup, checkbox display-only while open.
+    var tt=window.TaskTypes?window.TaskTypes.get(ev):null;
+    var shellChip=(tt&&tt.rollupMode&&typeof shellRollupChip==="function")?shellRollupChip(ev):'';
+    var chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
+
     el.innerHTML=
       timeHtml+
       '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
-        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
+        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+(tt&&tt.cardClass?' '+tt.cardClass:'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
           reactionHtml+
           (guest?'':'<div class="grip" title="Drag to reorder">'+gripSvg+'</div>')+
-          (guest?'':'<button class="chk" title="Mark done">'+ckSvg+'</button>')+
+          (guest?'':'<button class="chk'+(chkBlocked?' chk-blocked':'')+'" title="'+(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')+'">'+ckSvg+'</button>')+
           (guest?'':'<div class="chk-col">'+
-            '<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>'+
-            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or stacked task" data-add-id="'+ev.id+'">+</button>':'')+
+            (!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>':'')+
+            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add a task before / after / inside" data-add-id="'+ev.id+'">+</button>':'')+
           '</div>')+
-          '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
+          '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+'<span class="tinline">'+(ev._locked?'<span class="lock-ind" title="Locked — holds its time when tasks reflow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span></div>'+
-            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(pplan?pieBarHtml:pointsChip(ev))+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(shellChip?shellChip:(pplan?pieBarHtml:pointsChip(ev)))+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+

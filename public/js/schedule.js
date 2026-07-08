@@ -132,7 +132,9 @@ function insertTaskNow(titleArg, durMinArg, opts){
   const startMin=_freeStart(roundTo15(now()),durMin,meetings);
   const startStr=fmt(startMin);
 
-  const newItem=Object.assign({id,title,type:"task",start:startStr,end:fmt(startMin+durMin),
+  const newItem=Object.assign({id,title,type:opts.type||"task",start:startStr,end:fmt(startMin+durMin),
+    // Rollup containers are wraps from birth so drag carries their children.
+    isWrap:(window.TaskTypes&&window.TaskTypes.rule(opts.type,"dragMovesSubtree"))||undefined,
     _pinnedStart:startStr},schedulePickerFields(durMin,opts));
 
   // Calculate insertion position
@@ -271,6 +273,7 @@ async function commitDoneOnDate(id,dateStr){
     log("checked",id);saveDoneState();render();
     _finishCompletionCelebration(_cel,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_award});
+    _autoCompleteShellAncestors(id,dateStr);
     return;
   }
 
@@ -304,19 +307,71 @@ async function commitDoneOnDate(id,dateStr){
   }
   log("checked-on",id,"Marked done on "+dateStr);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_pointAwardOverride(id)});
+  _autoCompleteShellAncestors(id,dateStr);
+}
+
+// Completion bonus for a rollup container (shell): bonusPct × the estimated
+// value of its whole subtree. Each descendant that isn't a pie subtask
+// contributes its own estimate (PointPlan.estimatePool — the points-chip
+// number); a descendant that owns a pie contributes its pool instead (which
+// already covers its subtasks). Nested rollup containers contribute nothing
+// themselves (their own bonus banks when THEY complete) but their subtrees
+// count. Client-computed like the PointPlan pie bonus and sent as a
+// points_override — the server clamps and ledgers it idempotently.
+function _shellBonusPoints(id){
+  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof shellRollup!=="function"||typeof shellBonus!=="function")return undefined;
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||!window.TaskTypes.isRollup(ev))return undefined;
+  const bonus=shellBonus(shellRollup(id,scheduled).points,Number(window.TaskTypes.rule(ev,"bonusPct"))||0);
+  return bonus>0?bonus:undefined;
+}
+
+// After any completion, walk the parent chain: a rollup ancestor (shell) whose
+// children are now ALL done auto-completes and banks its bonus. Completion is
+// applied directly (not via toggleDone) so the manual-complete guard and the
+// child cascade are skipped — every child is already done. Idempotent: the
+// bonus rides the normal ledger sourceKey (<date>:<shellId>).
+function _autoCompleteShellAncestors(id,sourceDate){
+  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof parentIdOf!=="function")return;
+  const seen=new Set();
+  let cur=scheduled.find(e=>e.id===id);
+  while(cur){
+    const pid=parentIdOf(cur);
+    if(!pid||seen.has(pid))return;
+    seen.add(pid);
+    const parent=scheduled.find(e=>e.id===pid);
+    if(!parent)return;
+    if(window.TaskTypes.rule(parent,"autoCompleteWhenChildrenDone")&&!isDone(parent)){
+      if(childrenOf(parent.id,scheduled).some(c=>!isDone(c)))return; // still open work inside
+      const bonus=_shellBonusPoints(parent.id);
+      const completedAt=new Date();
+      manualDone.add(parent.id);doneAt[parent.id]=completedAt;
+      log("checked",parent.id,"Auto-completed: all nested tasks done");
+      saveDoneState();render();
+      awardSlotTaskCredit(parent,{sourceDate:sourceDate,completedAt:completedAt.toISOString(),awardPoints:bonus});
+      if(typeof showToast==="function")showToast('"'+(parent.title||"Shell")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
+    } else if(!isDone(parent)){
+      return; // an open non-rollup ancestor blocks everything above it
+    }
+    cur=parent;
+  }
 }
 
 // Points override for a completion, when the task participates in a parent's
-// point pie. Returns:
+// point pie or is itself a rollup container. Returns:
+//   - a rollup container's completion bonus (covers the manual recheck path;
+//     the normal path banks it via _autoCompleteShellAncestors);
 //   - a parent's completion award (bonus + still-open subtask slices) when the
 //     task has subtasks — MUST be read BEFORE _onParentCompleted cascades them;
 //   - a subtask's own slice when it is a subtask of a parent;
 //   - undefined for everything else (normal duration-based scoring), including
 //     "stacked" (ride-along) tasks, whose points are independent.
 function _pointAwardOverride(id){
-  if(!window.PointPlan||typeof childrenOf!=="function"||typeof relOf!=="function")return undefined;
+  if(typeof childrenOf!=="function"||typeof relOf!=="function")return undefined;
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return undefined;
+  if(window.TaskTypes&&window.TaskTypes.isRollup(ev))return _shellBonusPoints(id);
+  if(!window.PointPlan)return undefined;
   const hasSubKids=childrenOf(id,scheduled).some(c=>relOf(c)==="subtask");
   if(hasSubKids)return window.PointPlan.awardForParentCompletion(id);
   if(ev.subtaskOf)return window.PointPlan.shareFor(ev.subtaskOf,id);
@@ -331,6 +386,11 @@ function awardSlotTaskCredit(ev,opts){
   if(opts.awardPoints!=null&&Number.isFinite(Number(opts.awardPoints))&&Number(opts.awardPoints)<=0)return;
   const fallbackDate=(typeof viewDate!=="undefined"&&viewDate)||((__state&&__state.date)||new Date().toISOString().split("T")[0]);
   const normalizedOpts={...opts,sourceDate:opts.sourceDate||opts.completionDate||fallbackDate,completedAt:opts.completedAt||new Date().toISOString()};
+  // A rollup container's bonus must dedupe across calendar dates: the default
+  // ledger key is <sourceDate>:<id>, so unchecking a shell and re-completing it
+  // under a different completion date would mint a fresh key and double-award.
+  // Pin the key to the shell instance itself (ids are unique per instance).
+  if(normalizedOpts.sourceKey==null&&window.TaskTypes&&window.TaskTypes.isRollup(ev))normalizedOpts.sourceKey="shell:"+ev.id;
   if(window.PetHome&&typeof window.PetHome.awardTask==="function"){
     window.PetHome.awardTask(ev,normalizedOpts).catch(()=>{});
   }
@@ -384,7 +444,14 @@ function _onParentCompleted(id){
       completeSubs(c.id);
     });
   })(id);
-  // 2) Promote unfinished ride-alongs to standalone open tasks.
+  // 2) Promote unfinished ride-alongs to standalone open tasks. Rollup
+  // containers (shells) never eject their children — they can only complete
+  // when every child is already done, so there is nothing to promote.
+  const _parentEv=scheduled.find(e=>e.id===id);
+  if(_parentEv&&window.TaskTypes&&window.TaskTypes.isRollup(_parentEv)){
+    if(typeof recalcTimes==="function")recalcTimes();
+    return;
+  }
   let promoted=0;
   scheduled.filter(c=>c.wrapId===id&&!isDone(c)).forEach(c=>{
     c.wrapId=null;
@@ -400,6 +467,20 @@ function toggleDone(id,opts){
   if(manualDone.has(id)){
     manualDone.delete(id);delete doneAt[id];log("unchecked",id);
     saveDoneState();render();return;
+  }
+
+  // A rollup container (shell) can't be checked while children are open — its
+  // bonus depends on ALL children finishing, and it auto-completes when the
+  // last one does (that path bypasses this via opts._fromAutoComplete).
+  if(!opts._fromAutoComplete&&window.TaskTypes&&typeof childrenOf==="function"){
+    const shellEv=scheduled.find(e=>e.id===id);
+    if(shellEv&&window.TaskTypes.rule(shellEv,"blockManualCompleteWithOpenChildren")){
+      const open=childrenOf(id,scheduled).filter(c=>!isDone(c)).length;
+      if(open){
+        if(typeof showToast==="function")showToast("Finish its "+open+" remaining task"+(open>1?"s":"")+" first","info",2600);
+        return;
+      }
+    }
   }
 
   // Caller forced a specific completion date (Done-on-date confirmation flow)
@@ -429,6 +510,7 @@ function toggleDone(id,opts){
       saveDoneState();render();
       _finishCompletionCelebration(_cel,id);
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
+      _autoCompleteShellAncestors(id,currentDate);
       if(typeof showToast==="function"){
         const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
         showToast("Marked done on "+label,"success");
@@ -456,6 +538,7 @@ function toggleDone(id,opts){
   _finishCompletionCelebration(_cel,id);
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
+  _autoCompleteShellAncestors(id,currentDate);
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
@@ -672,6 +755,7 @@ function addTaskUniversal(barEl){
     case"schedule":openSchedulePicker(title,durMin,{sourceBar:barEl});break;
     case"backlog":addNewTask(title,durMin);break;
     case"urgent":insertTaskNow(title,durMin);break;
+    case"shell":insertTaskNow(title,durMin,{type:"shell"});break;
     case"side_project":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;

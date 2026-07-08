@@ -5,7 +5,14 @@
   const EFFORT = { trivial: 0.25, low: 0.75, medium: 1, high: 1.2, intense: 1.4 };
   const ATTENTION = { light: 0.9, normal: 1, focused: 1.1, intense: 1.2 };
   const IMPORTANCE = { low: 0.9, normal: 1, important: 1.15, high: 1.25, critical: 1.4 };
-  const NON_EARNING = new Set(["meeting", "break", "ooo"]);
+  // Derived from the shared TASK_TYPES registry (task-types.js, loaded before
+  // this file) so FE estimates and backend scoring agree; literal fallback for
+  // contexts that load points.js standalone (tests, share views).
+  const NON_EARNING = new Set(
+    (typeof window !== "undefined" && window.TaskTypes && window.TaskTypes.nonEarningTypes)
+      ? window.TaskTypes.nonEarningTypes()
+      : ["meeting", "break", "ooo", "shell"]
+  );
   const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
   const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
 
