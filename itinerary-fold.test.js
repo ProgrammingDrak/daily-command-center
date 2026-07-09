@@ -65,6 +65,19 @@ test("API-inserted kind:task folds dated or dateless (Slack-bookmark fix preserv
   assert.equal(fold(block("2026-07-09", { kind: "task", title: "from api" })), false);
 });
 
+test("materialized calendar meeting block folds on its own date (single render path)", () => {
+  const fold = makeFold(TODAY, new Set());
+  const meeting = { type: "meeting", kind: "meeting", source: "calendar", source_id: "evt-1", status: "open", start: "12:30", end: "13:30" };
+  // A meeting has no local_id but must still fold on its date (meetings render only
+  // as blocks now; synthesis was deleted).
+  assert.equal(fold(block(TODAY, meeting)), true);
+  assert.equal(fold(block("2026-07-07", meeting)), false); // only on its own date
+  // a completed meeting never folds
+  assert.equal(fold(block(TODAY, { ...meeting, status: "done" })), false);
+  // the oneone variant is admitted the same way
+  assert.equal(fold(block(TODAY, { type: "oneone", source: "calendar", source_id: "evt-2", status: "open" })), true);
+});
+
 test("responsibility scaffolding and kindless rows without local_id stay excluded", () => {
   const fold = makeFold(TODAY, new Set());
   assert.equal(fold(block(TODAY, { local_id: "r-1", kind: "responsibility_item" })), false);
