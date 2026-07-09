@@ -392,15 +392,9 @@ function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; i
 function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
-function meetingIdentity(meeting) {
-  return String(
-    meeting?.event_id ||
-    meeting?.source_id ||
-    meeting?.gcal_event_id ||
-    meeting?.id ||
-    ""
-  ).trim();
-}
+// Single source of truth for a meeting's stable identity (shared with the backfill
+// script). Injected into the materializer and passed into the routes ctx below.
+const meetingIdentity = require("./meeting-identity");
 function blockProps(block) {
   const props = block && block.properties;
   if (!props) return {};

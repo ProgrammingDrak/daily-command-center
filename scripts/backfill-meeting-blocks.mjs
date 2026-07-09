@@ -35,10 +35,8 @@ const blockDB = require("../db.js");
 const pool = require("../pg-pool.js");
 const { scoreTaskPoints } = require("../slot-scoring.js");
 const createMeetingMaterializer = require("../meeting-materializer.js");
-
-// Same identity precedence as server.js meetingIdentity.
-const meetingIdentity = (m) =>
-  String(m?.event_id || m?.source_id || m?.gcal_event_id || m?.id || "").trim();
+// Shared with server.js so the migration keys blocks exactly like the ingest path.
+const meetingIdentity = require("../meeting-identity.js");
 
 const APP_TIME_ZONE = process.env.DCC_TIME_ZONE || process.env.APP_TIME_ZONE || "America/New_York";
 

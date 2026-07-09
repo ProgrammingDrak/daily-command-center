@@ -137,6 +137,23 @@ test("cancellation scoping: a live block before the anchor date is never swept",
   assert.ok(!bySid(db, "old").deleted_at); // before the anchor, untouched
 });
 
+test("cancellation window is capped at +60 days: a far-future meeting still materializes but does not extend the sweep", async () => {
+  const db = makeBlockDB();
+  // A live calendar block ~68 days out (beyond the anchor+60 cap) that the feed never mentions.
+  db.store.push({
+    id: "capstale", type: "block", date: "2026-09-15", workspace_id: "ws-1", deleted_at: null,
+    properties: { type: "meeting", source: "calendar", source_id: "capstale", status: "open" },
+  });
+  // Feed: anchor-day meeting + one ~90 days out. horizonEnd would reach 2026-10-07,
+  // but the cancellation window clamps to anchor+60 (2026-09-07).
+  await M(db)(args([
+    mtg("e1", "2026-07-09T16:30:00Z", "2026-07-09T17:30:00Z"),
+    mtg("far", "2026-10-07T15:00:00Z", "2026-10-07T16:00:00Z"),
+  ]));
+  assert.equal(bySid(db, "far").date, "2026-10-07"); // far meeting still materializes on its own date
+  assert.ok(!bySid(db, "capstale").deleted_at); // beyond the +60 cap, never swept
+});
+
 test("backfill mode (hasMeetingsKey:false) materializes but never cancels", async () => {
   const db = makeBlockDB();
   await M(db)(args([
