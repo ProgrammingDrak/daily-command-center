@@ -1249,11 +1249,42 @@ function buildProgress(){
   dayItems.forEach(ev=>{
     const s=pt(ev.start),e=pt(ev.end);
     if(s>cursor)addPS(track,cursor,s,"Free","rgba(255,255,255,0.08)",false,tot);
-    addPS(track,s,e,ev.title,cfg(ev.type).color,isDone(ev),tot);cursor=e;
+    // Shells are wrappers, not work: their own slot stays near-empty in the
+    // main row; the rail underneath (buildShellRails) marks the whole span.
+    if(_isShellEv(ev))addPS(track,s,e,"⟦ "+ev.title+" ⟧","rgba(226,232,240,0.10)",isDone(ev),tot);
+    else addPS(track,s,e,ev.title,cfg(ev.type).color,isDone(ev),tot);
+    cursor=e;
   });
   if(cursor<de)addPS(track,cursor,de,"Free","rgba(255,255,255,0.08)",false,tot);
-  const dc=dayItems.filter(isDone).length;
-  document.getElementById("ppct").textContent=dc+"/"+dayItems.length+" done ("+Math.round(dc/(dayItems.length||1)*100)+"%)";
+  buildShellRails(dayItems,ds,tot);
+  // Shells are wrappers, not tasks — they don't count toward the day's done tally.
+  const counted=dayItems.filter(ev=>!_isShellEv(ev));
+  const dc=counted.filter(isDone).length;
+  document.getElementById("ppct").textContent=dc+"/"+counted.length+" done ("+Math.round(dc/(counted.length||1)*100)+"%)";
+}
+function _isShellEv(ev){
+  return (window.TaskTypes&&window.TaskTypes.isRollup(ev))||String(ev.type||"").toLowerCase()==="shell";
+}
+// Completed real tasks for the day — excludes shell wrappers so they stay out
+// of the Completed count/time and the completed popover list.
+function _dayDoneTasks(){
+  return scheduled.filter(ev=>isDone(ev)&&!_isShellEv(ev));
+}
+// One silver rail per shell under the track, spanning the shell's slot plus
+// every ride-along child (wrapId), so the wrapper reads as a grouping, not a task.
+function buildShellRails(dayItems,ds,tot){
+  const rails=document.getElementById("prails");if(!rails)return;
+  rails.innerHTML="";
+  const shells=dayItems.filter(_isShellEv);
+  rails.style.display=shells.length?"":"none";
+  shells.forEach(sh=>{
+    let s=pt(sh.start),e=pt(sh.end);
+    dayItems.filter(c=>c.wrapId===sh.id).forEach(c=>{s=Math.min(s,pt(c.start));e=Math.max(e,pt(c.end));});
+    const seg=document.createElement("div");seg.className="prail-seg"+(isDone(sh)?" done":"");
+    seg.style.cssText="left:"+(((s-ds)/tot)*100)+"%;width:"+(((e-s)/tot)*100)+"%";
+    seg.innerHTML='<div class="tip">⟦ '+sh.title+' ⟧ ('+ms(e-s)+')'+(isDone(sh)?' ✓':'')+'</div>';
+    rails.appendChild(seg);
+  });
 }
 function addPS(track,s,e,title,color,done,tot){
   const w=((e-s)/tot)*100,seg=document.createElement("div");seg.className="pseg";
@@ -1289,7 +1320,8 @@ function _currentBlockWindow(){
 }
 function _remainingForScope(scope){
   // _dateless rows (Unscheduled-everywhere) aren't part of this day's plan.
-  const rem=scheduled.filter(ev=>!isDone(ev)&&!ev._dateless);
+  // Shells are wrappers, not work — they never count as remaining tasks/time.
+  const rem=scheduled.filter(ev=>!isDone(ev)&&!ev._dateless&&!_isShellEv(ev));
   if(scope!=="block")return rem;
   const win=_currentBlockWindow();
   if(!win)return [];
@@ -1405,7 +1437,7 @@ function toggleRemainingStatScope(event){
   if(event)event.stopPropagation();
 }
 function updateStats(){
-  const done=scheduled.filter(isDone), scope=_remainingStatScope(), rem=_remainingForScope(scope);
+  const done=_dayDoneTasks(), scope=_remainingStatScope(), rem=_remainingForScope(scope);
   const remMin=rem.reduce((a,ev)=>a+dur(ev),0);
   const doneMin=done.reduce((a,ev)=>a+_actualMin(ev),0);
   document.getElementById("s-time").textContent=remMin>0?ms(remMin):"0m";
@@ -1453,7 +1485,7 @@ function showStatPopover(statId, event) {
       break;
     }
     case 's-done': {
-      const done = scheduled.filter(isDone);
+      const done = _dayDoneTasks();
       const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
       const triageDone=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
       html = '<div class="sp-title">Completed Today</div>';
