@@ -4687,11 +4687,9 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-zone-amt{font-size:10.5px;color:rgba(230,241,255,.75);white-space:nowrap;flex:0 0 auto}
 .bt-zone-status{font-size:10px;color:rgba(230,241,255,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bt-zone--open{align-items:flex-end;justify-content:center;border-top:none;cursor:default;min-height:20px}
-.bt-cat-band{min-height:0;display:flex;align-items:center;justify-content:flex-end;padding:0 10px;
-  border-top:1px solid color-mix(in srgb,currentColor 45%,transparent);z-index:3}
-.bt-cat-band span{font-size:8.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
-  color:currentColor;opacity:.85;background:rgba(9,16,24,.4);padding:0 5px;border-radius:4px;
-  text-shadow:0 1px 2px rgba(0,0,0,.7)}
+.bt-zone-cat{font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  color:currentColor;opacity:.8;line-height:1;margin-bottom:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 2px rgba(0,0,0,.7)}
 .bt-open-label{font-size:10px;color:rgba(125,211,252,.4);padding:6px}
 
 /* zone states: dry & dim above water; vivid below */

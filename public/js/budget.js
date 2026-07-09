@@ -133,22 +133,17 @@
     const claimedCount = s.blocks.filter(b => b.claimed).length;
     const fishCount = Math.min(6, claimedCount);
 
-    // Walk in fill order; a category divider marks each group's base (column
-    // reverse puts DOM-earlier items lower, so the band sits under its group).
-    let prevCat = null;
+    // Tank is the user's free priority order (any order they drag). Each chest
+    // carries its own little category line, since neighbors may differ.
     const zones = s.blocks.map(b => {
       const info = statusInfo(b, u.waterline_cents);
       const over = (b.tank_unlock_cents || 0) > u.capacity_cents;
-      const catName = b.category || b.title;
-      let band = "";
-      if (catName !== prevCat) {
-        prevCat = catName;
-        band = '<div class="bt-cat-band" style="color:' + esc(b.color || "#7dd3fc") + '"><span>' + esc(catName) + "</span></div>";
-      }
-      return band + '<div class="bt-zone ' + info.cls + (over ? " bt--overcap" : "") + '" draggable="true" data-id="' + b.id + '"' +
+      const catName = (b.category && b.category !== (b.item || b.title)) ? b.category : "";
+      return '<div class="bt-zone ' + info.cls + (over ? " bt--overcap" : "") + '" draggable="true" data-id="' + b.id + '"' +
         ' style="flex-grow:' + b.value_cents + ';color:' + esc(b.color || "#f59e0b") + '">' +
         '<span class="bt-zone-sprite">' + chestSpriteFor(b) + "</span>" +
         '<div class="bt-zone-body">' +
+          (catName ? '<div class="bt-zone-cat">' + esc(catName) + "</div>" : "") +
           '<div class="bt-zone-top"><span class="bt-zone-name">' + esc(b.item || b.title) + "</span>" +
           '<span class="bt-zone-amt">' + money(b.value_cents) + "</span></div>" +
           '<div class="bt-zone-status">' + esc(info.label) + (over ? " · over budget" : "") +
@@ -408,10 +403,9 @@
       (s.investments.total_cents > 0 ? chip("ok", "Invested " + money(s.investments.total_cents)) : "") +
       (s.rollover_due ? chip("warn", "New " + period + " — rollover pending") : "");
 
-    // Monarch/Mint-style: category groups (top of tank first), each rolling up
-    // its items. Reversed so the last-to-fill category sits on top, matching the
-    // tank above it.
-    const catGroups = [...s.categories].reverse().map(cat => categoryGroupMarkup(cat, u)).join("");
+    // Standalone budget ledger: category groups in their own stable order
+    // (divorced from the tank's priority order).
+    const catGroups = s.categories.map(cat => categoryGroupMarkup(cat, u)).join("");
 
     root.innerHTML =
       '<div class="bt-wrap">' +

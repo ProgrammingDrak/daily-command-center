@@ -62,15 +62,12 @@ function createMockPool(options = {}) {
     if (text.includes("status = 'pending'") && text.includes("bank_reserved_cents = 0")) {
       return { rows: [{ cents: state.pendingCents }] };
     }
-    // Grouped-threshold recompute: the store SELECTs these fields, sorts them
-    // via groupedOrder in JS, then issues one UPDATE per row.
-    if (text.includes("SELECT id, value_cents, tank_category")) {
-      return { rows: liveTank().map(r => ({ id: r.id, value_cents: r.value_cents, tank_category: r.tank_category, title: r.title, tank_position: r.tank_position })) };
-    }
-    if (text.includes("SET tank_unlock_cents = $3")) {
-      const row = state.tankRows.find(r => r.id === params[1]);
-      if (row) row.tank_unlock_cents = params[2];
-      return { rows: [] };
+    // Threshold recompute: cumulative sum of value_cents by tank_position.
+    if (text.includes("tank_unlock_cents = c.cum")) {
+      let run = 0;
+      const updated = [];
+      for (const r of liveTank()) { run += r.value_cents || 0; r.tank_unlock_cents = run; updated.push({ id: r.id }); }
+      return { rows: updated };
     }
     if (text.includes("COALESCE(MAX(tank_position)")) {
       const live = liveTank();
@@ -717,11 +714,11 @@ test("getBudgetState surfaces a rollover preview on period mismatch", async () =
   assert.deepEqual(state.rollover_preview.unhit.map(u => u.id), [3]);
 });
 
-test("recomputeTankThresholds groups by category (contiguous) even when item positions interleave", async () => {
+test("tank thresholds follow the drag order (tank_position), independent of category", async () => {
   const mock = createMockPool({
     tankRows: [
       tankRow(1, 5000, 1000, { tank_category: "Restaurants" }),
-      tankRow(2, 6000, 2000, { tank_category: "Gifts" }),        // interleaved between Restaurants items
+      tankRow(2, 6000, 2000, { tank_category: "Gifts" }),        // categories interleave — that's fine
       tankRow(3, 3000, 3000, { tank_category: "Restaurants" }),
       tankRow(4, 4000, 4000, { tank_category: "Gifts" }),
     ],
@@ -732,12 +729,32 @@ test("recomputeTankThresholds groups by category (contiguous) even when item pos
     { id: 3, tank_position: 3000 }, { id: 4, tank_position: 4000 },
   ]);
   const byId = Object.fromEntries(mock.state.tankRows.map(r => [r.id, r.tank_unlock_cents]));
-  // Restaurants (rank 1000) fills fully before Gifts (rank 2000), regardless of
-  // the interleaved raw positions.
+  // Strict position order, categories ignored: the tank is free.
   assert.equal(byId[1], 5000);
-  assert.equal(byId[3], 8000);   // 5000 + 3000
-  assert.equal(byId[2], 14000);  // + 6000
-  assert.equal(byId[4], 18000);  // + 4000
+  assert.equal(byId[2], 11000);
+  assert.equal(byId[3], 14000);
+  assert.equal(byId[4], 18000);
+});
+
+test("buildCategories keeps its own stable order (by creation), divorced from tank order", async () => {
+  const mock = createMockPool({
+    bankBalance: 50000,
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-07", capacity_cents: 100000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 0 },
+    tankRows: [
+      // Gifts (id 2) is dragged to the BOTTOM of the tank (position 500), but the
+      // budget list must still lead with Restaurants (created first, id 1).
+      tankRow(1, 5000, 1000, { tank_category: "Restaurants", title: "Restaurants: Dinner", tank_unlock_cents: 5500 }),
+      tankRow(2, 500, 500, { tank_category: "Gifts", title: "Gifts: Card", tank_unlock_cents: 500 }),
+      tankRow(3, 3000, 2000, { tank_category: "Restaurants", title: "Restaurants: Lunch", tank_unlock_cents: 8500 }),
+    ],
+  });
+  const store = loadStoreWithMock(mock);
+  const cats = (await store.getBudgetState(WS, 7)).categories;
+  assert.deepEqual(cats.map(c => c.name), ["Restaurants", "Gifts"]); // creation order, not tank order
+  assert.equal(cats[0].budget_cents, 8000);   // both Restaurants items roll up
+  assert.equal(cats[0].count, 2);
+  assert.equal(cats[1].name, "Gifts");
 });
 
 test("getBudgetState rolls items up into Monarch-style category groups", async () => {
