@@ -69,11 +69,14 @@ function sourceHealth(id, status, detail, count) {
 }
 
 function normalizeTriageItem(source, raw) {
+  // Per-item source (gmail/slack/...) wins over the packet-level source; the
+  // brief's channel badge reads it.
+  const src = raw.source || source;
   const title = raw.title || raw.subject || raw.text || raw.name || "Untitled item";
   const sourceId = raw.source_id || raw.id || raw.url || title;
-  return {
-    id: raw.id || stableId(source, [sourceId, title]),
-    source,
+  const item = {
+    id: raw.id || stableId(src, [sourceId, title]),
+    source: src,
     source_id: sourceId,
     type: raw.type || source,
     title,
@@ -83,6 +86,12 @@ function normalizeTriageItem(source, raw) {
     created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
     status: raw.status || "open",
   };
+  // Draft fields ride along only when present so mergeOpenItems never
+  // overwrites an already-drafted item with blanks.
+  for (const key of ["draft_link", "draft_url", "draft_id", "draft_type", "draft_preview", "draft_status", "action_label", "recommended_action"]) {
+    if (raw[key]) item[key] = raw[key];
+  }
+  return item;
 }
 
 function normalizeTriageCheckItem(raw, index) {
@@ -261,15 +270,16 @@ function buildBrief({ state, openItems, meetings, health }) {
     source_health: health,
     triage: {
       summary: `${readySources}/${health.length} readers checked in. Review the highest-signal items before scheduling.`,
-      items: openItems.slice(0, 8).map((item) => ({
+      items: openItems.slice(0, 20).map((item) => ({
         id: item.id,
         channel: item.source || item.type || "triage",
         title: item.title,
         summary: item.summary,
         priority: item.priority,
         source_link: item.link,
-        draft_status: item.draft_link ? "drafted" : "needs_draft",
-        draft_link: item.draft_link || "",
+        draft_status: item.draft_link || item.draft_url ? "drafted" : "needs_draft",
+        draft_link: item.draft_link || item.draft_url || "",
+        draft_preview: item.draft_preview || "",
       })),
     },
     retro: deepContext.retro || (previousCurrent && previousCurrent.retro ? previousCurrent.retro : null),

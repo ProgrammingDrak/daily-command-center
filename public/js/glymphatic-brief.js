@@ -343,11 +343,14 @@
     '</section>';
   }
 
-  function gbTriageItems(current){
-    var briefItems = current.triage && Array.isArray(current.triage.items) ? current.triage.items : null;
-    if(briefItems)return briefItems;
+  function gbTriageItems(current, opts){
+    var all = !!(opts && opts.all);
     var open = (__state && __state.triage && __state.triage.open_items) || [];
-    return open.slice(0,6).map(function(item){
+    var briefItems = current.triage && Array.isArray(current.triage.items) ? current.triage.items : null;
+    // The brief payload caps triage.items; the dedicated Triage page wants the
+    // full open list when the live state has more than the brief carried.
+    if(briefItems && !(all && open.length > briefItems.length))return briefItems;
+    return (all ? open : open.slice(0,6)).map(function(item){
       return {
         id: item.id,
         channel: item.type && item.type.indexOf("email") !== -1 ? "email" : item.type && item.type.indexOf("slack") !== -1 ? "slack" : item.type || "triage",
@@ -362,9 +365,22 @@
     });
   }
 
-  function gbTriage(current){
+  function gbPriorityRank(p){
+    p = String(p || "").toLowerCase();
+    if(/high|urgent|stale/.test(p))return 0;
+    if(/med|normal/.test(p))return 1;
+    return 2;
+  }
+
+  function gbTriage(current, opts){
     var triage = current.triage || {};
-    var items = gbTriageItems(current);
+    var items = gbTriageItems(current, opts);
+    if(opts && opts.sort){
+      items = items.slice().sort(function(a, b){
+        var drafted = (b.draft_status === "drafted" ? 1 : 0) - (a.draft_status === "drafted" ? 1 : 0);
+        return drafted || gbPriorityRank(a.priority) - gbPriorityRank(b.priority);
+      });
+    }
     var summary = triage.summary || "Reader sweeps should surface conversations needing attention, then writer skills create reviewable drafts in place.";
     var counts = [
       items.length + " items",
@@ -386,8 +402,8 @@
   }
 
   function gbTriageCard(item){
-    var channel = item.channel || "triage";
-    var icon = channel === "email" ? "Email" : channel === "slack" ? "Slack" : channel === "discord" ? "Discord" : "Triage";
+    var channel = String(item.channel || "triage").toLowerCase();
+    var icon = /mail/.test(channel) ? "Email" : /slack/.test(channel) ? "Slack" : /discord/.test(channel) ? "Discord" : "Triage";
     var drafted = item.draft_status === "drafted";
     var source = item.source_link ? '<a class="gb-triage-link" href="'+gbEsc(item.source_link)+'" target="_blank" onclick="event.stopPropagation()">Source</a>' : "";
     var draft = item.draft_link ? '<a class="gb-triage-link primary" href="'+gbEsc(item.draft_link)+'" target="_blank" onclick="event.stopPropagation()">Review draft</a>' : "";
@@ -479,7 +495,16 @@
   // --- Four-page brief ------------------------------------------------------
 
   function gbPages(current){
-    return (current && Array.isArray(current.pages) && current.pages.length) ? current.pages : null;
+    if(!(current && Array.isArray(current.pages) && current.pages.length))return null;
+    var pages = current.pages.slice();
+    // Briefs authored before the Triage page existed don't list it; inject it
+    // client-side so every brief gets the tab. Drafted count rides as a pill.
+    if(!pages.some(function(p){ return p.id === "triage"; })){
+      var drafted = gbTriageItems(current, {all:true}).filter(function(i){ return i.draft_status === "drafted"; }).length;
+      var at = pages[0] && pages[0].id === "front" ? 1 : 0;
+      pages.splice(at, 0, {id:"triage", label:"Triage", count: drafted || null});
+    }
+    return pages;
   }
 
   function gbGeneratedLabel(current){
@@ -494,7 +519,8 @@
 
   function gbPageNav(pages, activeId){
     return '<nav class="gb-pagenav">'+pages.map(function(p){
-      return '<button class="gb-pagebtn'+(p.id===activeId?' active':'')+'" data-gb-page="'+gbEsc(p.id)+'">'+gbEsc(p.label||p.id)+'</button>';
+      var count = p.count ? '<span class="gb-count">'+gbEsc(p.count)+'</span>' : '';
+      return '<button class="gb-pagebtn'+(p.id===activeId?' active':'')+'" data-gb-page="'+gbEsc(p.id)+'">'+gbEsc(p.label||p.id)+count+'</button>';
     }).join("")+'</nav>';
   }
 
@@ -514,7 +540,7 @@
     return '<p class="gb-page-summary">'+gbEsc(page.summary||"")+'</p>'+
       gbMetricRow(page.metrics)+
       '<section class="gb-section"><div class="gb-section-title">Planned vs done</div>'+rowsHtml+'</section>'+
-      gbTriage(current)+
+      gbTriageTeaser(current)+
       '<section class="gb-section gb-tasks"><div class="gb-section-title">Suggested tasks</div><div class="gb-task-list">'+
         (plan.length ? plan.map(function(item, idx){ return gbTaskCard(item, idx, plan.length, ui); }).join("") : '<div class="gb-empty">No task suggestions yet.</div>')+
       '</div></section>';
@@ -715,7 +741,27 @@
       (glossaryHtml ? '<section class="gb-section"><div class="gb-section-title">How the brain works</div>'+glossaryHtml+'</section>' : '');
   }
 
+  function gbTriageTeaser(current){
+    var items = gbTriageItems(current, {all:true});
+    var drafted = items.filter(function(i){ return i.draft_status === "drafted"; }).length;
+    var label = drafted ? drafted + (drafted === 1 ? " reply drafted and waiting for review" : " replies drafted and waiting for review")
+      : items.length ? items.length + " open triage items, none drafted yet"
+      : "No open triage items";
+    return '<section class="gb-section">'+
+      '<div class="gb-section-title">Triage</div>'+
+      '<div class="gb-row"><span class="gb-row-title">'+gbEsc(label)+'</span>'+
+        '<button class="gb-pagebtn" data-gb-page="triage" style="margin-left:auto">Open Triage</button>'+
+      '</div>'+
+    '</section>';
+  }
+
+  function gbPageTriage(page, current){
+    return (page && page.summary ? '<p class="gb-page-summary">'+gbEsc(page.summary)+'</p>' : '')+
+      gbTriage(current, {all:true, sort:true});
+  }
+
   function gbRenderPage(page, current, ui){
+    if(page.id==="triage")return gbPageTriage(page, current);
     if(page.id==="canvas")return gbPageCanvas(page);
     if(page.id==="front")return gbPageFront(page, current, ui);
     if(page.id==="actual-vs-planned")return gbPageActualVsPlanned(page, current, ui);
