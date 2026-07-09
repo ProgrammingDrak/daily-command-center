@@ -123,6 +123,108 @@ function bindSubtaskActions(el,ev){
   if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
 }
 
+// ── Task-row radial: every task-level action fans out from the row's arrow ──
+// The row itself keeps only done / notes / delete visible; everything else
+// (schedule, duration, pomodoro, lock, add, subtask, delegate, repeat,
+// backlog, bounty) is a spoke here. Items are built fresh per open so dynamic
+// state — the lock flag, bounty availability — is read at fan time.
+// Duration presets: popover on desktop, bottom sheet on touch/narrow. Shared
+// by the radial's "Duration…" spoke and the meeting card's duration badge.
+function openDurPopover(ev,anchorEl){
+  if(isCoarseOrNarrowViewport()){ openDurationSheet(ev); return; }
+  document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
+  const curMin=dur(ev);
+  const pages=[[15,30,45,60,90,120],[150,180,210,240,300,360]];
+  let page=pages.findIndex(pg=>pg.includes(curMin));if(page===-1)page=0;
+  const pop=document.createElement("div");pop.className="dur-popover";
+  function closePop(){
+    pop.remove();
+    document.removeEventListener("click",onOutside,true);
+  }
+  function renderPage(){
+    pop.innerHTML="";
+    const grid=document.createElement("div");grid.className="dur-presets";
+    pages[page].forEach(m=>{
+      const btn=document.createElement("button");
+      btn.className="dur-preset"+(m===curMin?" dur-current":"");
+      btn.textContent=ms(m);
+      btn.addEventListener("click",e2=>{e2.stopPropagation();closePop();setDurAbsolute(ev.id,m);});
+      grid.appendChild(btn);
+    });
+    pop.appendChild(grid);
+    const nav=document.createElement("div");nav.className="dur-nav";
+    const prev=document.createElement("button");prev.className="dur-nav-btn";prev.innerHTML="&#8592;";prev.disabled=page===0;
+    prev.addEventListener("click",e2=>{e2.stopPropagation();if(page>0){page--;renderPage();}});
+    const dots=document.createElement("div");dots.className="dur-nav-dots";
+    pages.forEach((_,i)=>{const d=document.createElement("span");d.className="dur-nav-dot"+(i===page?" active":"");dots.appendChild(d);});
+    const next=document.createElement("button");next.className="dur-nav-btn";next.innerHTML="&#8594;";next.disabled=page===pages.length-1;
+    next.addEventListener("click",e2=>{e2.stopPropagation();if(page<pages.length-1){page++;renderPage();}});
+    nav.appendChild(prev);nav.appendChild(dots);nav.appendChild(next);
+    pop.appendChild(nav);
+    // Custom granular duration: any whole-minute value, not snapped to the 15m presets
+    const custom=document.createElement("div");custom.className="dur-custom";
+    const cInput=document.createElement("input");cInput.type="number";cInput.className="dur-custom-input";
+    cInput.min="1";cInput.step="1";cInput.value=String(curMin);cInput.setAttribute("aria-label","Custom minutes");
+    const cBtn=document.createElement("button");cBtn.className="dur-custom-btn";cBtn.textContent="Set";
+    const applyCustom=()=>{const v=Math.max(1,Math.round(parseInt(cInput.value,10)||0));if(v){closePop();setDurAbsolute(ev.id,v);}};
+    cBtn.addEventListener("click",e2=>{e2.stopPropagation();applyCustom();});
+    cInput.addEventListener("click",e2=>e2.stopPropagation());
+    cInput.addEventListener("keydown",e2=>{e2.stopPropagation();if(e2.key==="Enter"){e2.preventDefault();applyCustom();}});
+    custom.appendChild(cInput);custom.appendChild(cBtn);
+    pop.appendChild(custom);
+  }
+  renderPage();
+  // Shared anchored-popover positioning (schedule-popover.js); minWidth 0 keeps
+  // the compact duration grid at its natural width.
+  _positionPopoverNear(anchorEl,pop,{minWidth:0});
+  function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==anchorEl){closePop();}}
+  setTimeout(()=>document.addEventListener("click",onOutside,true),0);
+}
+// The bounty button lives ON the row (not in the radial): it shows on every
+// eligible row while the day's self bounty is unplaced; placing it re-renders,
+// every button vanishes, and the chosen task glows gold. placeBounty itself
+// toasts the finer denials (locked bounty, partner stacking, done task).
+function _canPlaceBounty(ev,isDoneRow){
+  if(isMeeting(ev)||isDoneRow)return false;
+  if(typeof viewMode!=="undefined"&&viewMode==="archive")return false;
+  if(typeof hasSelfBounty==="function"&&hasSelfBounty())return false;
+  return true;
+}
+const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+function buildTaskRadialItems(ev,trig){
+  return [
+    // Move/convert actions live one level down: this spoke chains into the
+    // "Change task" sub-fan (openRadialMenu closes the current fan first).
+    {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
+    {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
+    {icon:"🍅", label:"Pomodoro",  onPick:()=>{if(typeof openPomodoro==="function")openPomodoro(ev.title,dur(ev),{id:ev.id,source:"schedule",title:ev.title});}},
+    {icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}},
+    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}}
+  ];
+}
+// Sub-fan: everything that moves or converts the task, grouped so the top
+// fan stays scannable. Back returns to the top fan on the same trigger.
+function buildTaskChangeItems(ev,trig){
+  return [
+    {icon:"←", label:"Back",       onPick:()=>openTaskRadial(ev,trig)},
+    {icon:"📅", label:"Schedule…", onPick:()=>{if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:trig});}},
+    {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}},
+    {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
+    {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
+    {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}}
+  ];
+}
+const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
+function openTaskRadial(ev,trig){
+  // 180° left-opening fan: the trigger lives at the row's right edge, so the
+  // spokes sweep bottom → left → top. Staggered label radii keep the pills
+  // from colliding near the vertical apexes; clampY keeps edge rows on-screen.
+  openRadialMenu(trig,buildTaskRadialItems(ev,trig),_TASK_RADIAL_OPTS);
+}
+function openTaskChangeRadial(ev,trig){
+  openRadialMenu(trig,buildTaskChangeItems(ev,trig),_TASK_RADIAL_OPTS);
+}
+
 // ── Section sorting (Unscheduled / Unfinished): A→Z or time-of-creation ──
 function _sectionSort(key){ try{return localStorage.getItem("pa-sort-"+key)||"created"}catch(e){return "created"} }
 function _setSectionSort(key,mode){ try{localStorage.setItem("pa-sort-"+key,mode==="alpha"?"alpha":"created")}catch(e){} }
@@ -228,7 +330,7 @@ function buildListView(){
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
@@ -240,10 +342,6 @@ function buildListView(){
       '<div class="it-list-check-col">'+
         '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done'))+'">'+ckSvg+'</button>'+
         (!isMeeting(ev)&&!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
-        // Inside the check-col cell on purpose: .it-list-item is a fixed-column
-        // grid, and any extra top-level child shifts every cell one column
-        // right (title lands in the actions slot). See the comment above chev.
-        (!isDoneRow&&!isPushedRow?'<button class="btn-add-menu btn-task-add" title="Add a task before / after / inside" data-add-id="'+ev.id+'">+</button>':'')+
       '</div>'+
       '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
       '<div class="it-list-main">'+
@@ -260,15 +358,11 @@ function buildListView(){
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
-        // Duration +/- (parity with the old Blocks card)
-        (!isMeeting(ev)&&!isDoneRow?'<button class="dbtn" data-id="'+ev.id+'" data-d="-15" title="15 min shorter">&minus;</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="dbtn" data-id="'+ev.id+'" data-d="15" title="15 min longer">+</button>':'')+
-        // Lock (parity with the old Blocks card). Delegate / repeat-responsibility /
-        // make-subtask-of all live in the reschedule popover, not per-card buttons.
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
+        // Row keeps done / notes / bounty / delete visible; every other task
+        // action rides the radial behind the arrow trigger.
         notesButton(ev)+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+dur(ev)+'" title="Start pomodoro timer">'+pomoSvg+'</button>':'')+
+        (_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
+        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
       '</div>';
 
@@ -280,20 +374,15 @@ function buildListView(){
     });
     const quick=el.querySelector(".chk-quick");
     if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");toggleDone(ev.id);});
-    // Duration +/-, delegate, lock, repeat-responsibility -- parity with the Blocks card.
-    el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();if(typeof adjustDur==="function")adjustDur(b.dataset.id,parseInt(b.dataset.d));}));
-    const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId);});
     const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openStartTimePicker==="function")openStartTimePicker(ev.id,stSpan);});
     const nb=el.querySelector(".notes-btn");
     if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
-    const pb=el.querySelector(".btn-push-tmr");
-    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId);});
-    const pomo=el.querySelector(".pomo-btn");
-    if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle});});
+    const pb=el.querySelector(".btn-task-radial");
+    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb);});
+    const bb=el.querySelector(".btn-bounty");
+    if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     const del=el.querySelector(".btn-del-task");
     if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
-    const am=el.querySelector(".btn-add-menu");
-    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     return el;
@@ -748,105 +837,19 @@ function buildSchedule(){
     });
     const _q=el.querySelector(".chk-quick"); // absent on rollup containers
     if(_q)_q.addEventListener("click",e=>{e.stopPropagation();e.currentTarget.classList.add("flash");toggleDone(ev.id);});
-    // + button opens task detail modal directly (no dropdown)
-    const addBtn=el.querySelector(".btn-add-menu");
-    if(addBtn)addBtn.addEventListener("click",e=>{
-      e.stopPropagation();
-      if(typeof openSubtaskAdd==='function')openSubtaskAdd(ev.id,addBtn);
-      else if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
-    });
     const tagToggle=el.querySelector(".card-tags-toggle");
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
     const stSpan=el.querySelector(".start-time");if(stSpan&&!isMeeting(ev)){stSpan.addEventListener("click",e=>{e.stopPropagation();openStartTimePicker(ev.id,stSpan);});}
+    // Duration presets: only the meeting card keeps the interactive badge —
+    // task cards show a read-only badge and adjust duration via the radial.
     const dbadge=el.querySelector(".dbadge");
-    if(dbadge){dbadge.addEventListener("click",e=>{
-      e.stopPropagation();
-      // On touch / narrow viewports the fixed popover is fiddly to place and tap,
-      // so use a slide-up bottom sheet instead. Desktop keeps the popover.
-      if(isCoarseOrNarrowViewport()){ openDurationSheet(ev); return; }
-      document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
-      document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
-      document.body.classList.remove("dur-open");
-      const curMin=dur(ev);
-      const pages=[[15,30,45,60,90,120],[150,180,210,240,300,360]];
-      let page=pages.findIndex(pg=>pg.includes(curMin));if(page===-1)page=0;
-      const pop=document.createElement("div");pop.className="dur-popover";
-      function closePop(){
-        pop.remove();
-        document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
-        document.body.classList.remove("dur-open");
-        document.removeEventListener("click",onOutside,true);
-      }
-      function renderPage(){
-        pop.innerHTML="";
-        const grid=document.createElement("div");grid.className="dur-presets";
-        pages[page].forEach(m=>{
-          const btn=document.createElement("button");
-          btn.className="dur-preset"+(m===curMin?" dur-current":"");
-          btn.textContent=ms(m);
-          btn.addEventListener("click",e2=>{e2.stopPropagation();closePop();setDurAbsolute(ev.id,m);});
-          grid.appendChild(btn);
-        });
-        pop.appendChild(grid);
-        const nav=document.createElement("div");nav.className="dur-nav";
-        const prev=document.createElement("button");prev.className="dur-nav-btn";prev.innerHTML="&#8592;";prev.disabled=page===0;
-        prev.addEventListener("click",e2=>{e2.stopPropagation();if(page>0){page--;renderPage();}});
-        const dots=document.createElement("div");dots.className="dur-nav-dots";
-        pages.forEach((_,i)=>{const d=document.createElement("span");d.className="dur-nav-dot"+(i===page?" active":"");dots.appendChild(d);});
-        const next=document.createElement("button");next.className="dur-nav-btn";next.innerHTML="&#8594;";next.disabled=page===pages.length-1;
-        next.addEventListener("click",e2=>{e2.stopPropagation();if(page<pages.length-1){page++;renderPage();}});
-        nav.appendChild(prev);nav.appendChild(dots);nav.appendChild(next);
-        pop.appendChild(nav);
-        // Custom granular duration: any whole-minute value, not snapped to the 15m presets
-        const custom=document.createElement("div");custom.className="dur-custom";
-        const cInput=document.createElement("input");cInput.type="number";cInput.className="dur-custom-input";
-        cInput.min="1";cInput.step="1";cInput.value=String(curMin);cInput.setAttribute("aria-label","Custom minutes");
-        const cBtn=document.createElement("button");cBtn.className="dur-custom-btn";cBtn.textContent="Set";
-        const applyCustom=()=>{const v=Math.max(1,Math.round(parseInt(cInput.value,10)||0));if(v){closePop();setDurAbsolute(ev.id,v);}};
-        cBtn.addEventListener("click",e2=>{e2.stopPropagation();applyCustom();});
-        cInput.addEventListener("click",e2=>e2.stopPropagation());
-        cInput.addEventListener("keydown",e2=>{e2.stopPropagation();if(e2.key==="Enter"){e2.preventDefault();applyCustom();}});
-        custom.appendChild(cInput);custom.appendChild(cBtn);
-        pop.appendChild(custom);
-      }
-      renderPage();
-      // Position relative to the badge using fixed coords (escapes stacking
-      // context). Append hidden first so we can measure the popover's real size,
-      // then clamp it fully on-screen. A naive right-align (right = innerWidth -
-      // rect.right) pushed the popover -- and its left-most preset button -- off
-      // the left edge on narrow / mobile viewports, making it unclickable.
-      el.classList.add("has-dur-popover");
-      document.body.classList.add("dur-open");
-      pop.style.visibility="hidden";
-      document.body.appendChild(pop);
-      const rect=dbadge.getBoundingClientRect();
-      const margin=8;
-      const popW=pop.offsetWidth||148;
-      const popH=pop.offsetHeight||0;
-      let left=rect.right-popW; // prefer right-aligned to the badge
-      left=Math.max(margin,Math.min(left,window.innerWidth-popW-margin));
-      let top=rect.bottom+6;
-      if(top+popH>window.innerHeight-margin){
-        // No room below -- prefer flipping above the anchor.
-        const above=rect.top-popH-6;
-        if(above>=margin)top=above;
-      }
-      // Final clamp so the popover is always fully within the viewport, even if
-      // the badge is partially scrolled off-screen.
-      top=Math.max(margin,Math.min(top,window.innerHeight-popH-margin));
-      pop.style.left=left+"px";
-      pop.style.top=top+"px";
-      pop.style.right="auto";
-      pop.style.visibility="";
-      function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==dbadge){closePop();}}
-      setTimeout(()=>document.addEventListener("click",onOutside,true),0);
-    });}
-    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
-    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
+    if(dbadge&&isMeeting(ev))dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
+    const pomo=el.querySelector(".pomo-btn");
+    if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
-    const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});
-    const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId)});
+    const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
+    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId)});
     // PIN 1: click the timeline dot to pin this task as "active"
     const tnode=el.querySelector(".tl-node");
     if(tnode&&!isMeeting(ev)){

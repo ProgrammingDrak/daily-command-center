@@ -40,6 +40,37 @@
   gating/debit-correctness, conversion idempotency + the pacing-contamination
   regression, rollover carry/fresh/idempotency); suite 220→ green. `smoke.mjs`
   asserts the aquarium renders and `/api/budget/state` shape.
+## Previous PR: Task-row radial menu + unified schedule popover + Completed quick-add + row-level bounty
+
+### What Changed
+- **Task-row radial**: the row arrow (`.btn-task-radial`, was `.btn-push-tmr`)
+  fans a radial menu via a new generic engine (`public/js/radial-menu.js`,
+  extracted from the #197 destination fan; fixes its stale trigger-highlight
+  and Escape-listener leak). Top fan: Change task / Duration / Pomodoro /
+  Lock-Unlock / Add task; the Change task spoke opens a sub-fan (Back /
+  Schedule / Subtask / Delegate / Repeat / Backlog). Rows keep only done,
+  notes, bounty, delete; meetings keep their direct buttons; the trigger is
+  visible on mobile, giving phones full task actions for the first time.
+- **One schedule popover**: `public/js/schedule-popover.js` unifies reschedule,
+  quick-add create, and date-pick behind `openSchedulePopover({mode})`;
+  the state.js popover pair is deleted with same-signature wrappers kept.
+  Create mode stages duration/time and commits via insertTaskNow /
+  commitScheduledTask / untimed persist (target day's Unscheduled section).
+- **Completed destination**: new ✅ spoke on the add fan creates a task
+  already checked off (retro-logging) through the normal toggleDone path.
+- **Bounty on the row**: 🎯 button on every eligible row until the day's
+  self bounty is placed, then all buttons vanish and the chosen task gets a
+  golden glow (`.card-bounty` upgrade + `.it-list-item.row-bounty`; sponsor
+  purple still wins). Replaces the gated radial spoke that read as missing.
+- **Bug fix**: `persistAddedTask` persisted duration 0 for untimed items
+  (dur() is end-start and pt("") is 0); now falls back to durMin.
+
+### QA
+- `npm test` 197/197 (4 new mutation-checked persistAddedTask regression
+  tests); `npm run smoke` passed; 42-check headless E2E (both fan levels,
+  all three popover modes, Completed flow, lock toggle, full bounty cycle
+  with state restore, 375px clamping, guest page unaffected). Five-lane
+  local pre-review + adversarial verification; findings fixed in-branch.
 
 ## Previous PR: Reschedule unification + radial task destinations + true-move hardening
 

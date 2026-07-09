@@ -625,7 +625,8 @@
   /* Drag-the-now-pill: highlight the card you're about to pin onto. */
   .tl-item.pin-drop-target .card{box-shadow:inset 0 0 0 2px var(--accent),0 0 12px rgba(59,130,246,0.35)!important}
   .card-active{border-color:rgba(59,130,246,0.4)!important;background:rgba(59,130,246,0.04)!important;box-shadow:inset 3px 0 0 var(--accent)}
-  .card-bounty{border-color:rgba(251,191,36,0.5)!important;box-shadow:inset 3px 0 0 var(--amber)}
+  .card-bounty{border-color:rgba(251,191,36,0.65)!important;box-shadow:0 0 0 1px rgba(251,191,36,0.4),0 0 18px rgba(251,191,36,0.3),inset 3px 0 0 var(--amber)}
+  .it-list-item.row-bounty{border-color:rgba(251,191,36,0.55)!important;box-shadow:0 0 0 1px rgba(251,191,36,0.35),0 0 14px rgba(251,191,36,0.25)}
   /* Sponsor (visitor-placed) bounty: purple instead of the amber self-bounty. Must follow .card-bounty to win. */
   .card.card-bounty-sponsor{border-color:rgba(167,139,250,0.6)!important;box-shadow:inset 3px 0 0 var(--purple)}
   /* Shell (rollup container): silver-tinted, slightly translucent card. The
@@ -903,6 +904,7 @@
 
   .dur{display:flex;align-items:center;gap:4px;flex-shrink:0;position:relative}
   .dbadge{font-size:12px;font-weight:600;color:var(--text);background:rgba(255,255,255,0.06);padding:3px 0;border-radius:5px;width:68px;text-align:center;font-variant-numeric:tabular-nums;cursor:pointer;transition:background 0.12s,color 0.12s;box-sizing:border-box;flex-shrink:0}
+  .dbadge.dbadge-readonly{cursor:default}
   .dbadge:hover{background:rgba(59,130,246,0.15);color:var(--accent-light)}
   /* ---- Focus Banner ---- */
   .focus-banner{display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25);border-radius:8px;margin-bottom:10px}
@@ -1012,12 +1014,6 @@
   .dur-sheet-cancel{border:1px solid var(--border);background:transparent;color:var(--text-muted)}
   .dur-sheet-done{border:1px solid var(--accent);background:var(--accent);color:#fff}
   @media (prefers-reduced-motion:reduce){.dur-sheet-backdrop,.dur-sheet{transition:none}}
-  body.dur-open .tl-item:not(.has-dur-popover){pointer-events:none}
-  body.dur-open .tl-item:not(.has-dur-popover) .btn-move-menu,
-  body.dur-open .tl-item:not(.has-dur-popover) .btn-del-task,
-  body.dur-open .tl-item:not(.has-dur-popover) .btn-push-tmr,
-  body.dur-open .tl-item:not(.has-dur-popover) .pomo-btn,
-  body.dur-open .tl-item:not(.has-dur-popover) .notes-btn{opacity:0!important}
   .dbtn{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;transition:all 0.12s}
   .dbtn:hover{border-color:var(--accent);color:var(--accent);background:rgba(59,130,246,0.1)}
   .est-act{font-size:9px;color:var(--text-muted);text-align:center;margin-top:1px;white-space:nowrap}
@@ -1042,9 +1038,9 @@
   .tl-compact.pushed .tl-time{text-decoration:none}
   .pushed-divider{display:flex;align-items:center;gap:10px;margin:12px 0 6px;font-size:10px;font-weight:600;color:var(--amber,#f59e0b);text-transform:uppercase;letter-spacing:0.5px}
   .pushed-divider::before,.pushed-divider::after{content:'';flex:1;border-top:1px solid rgba(245,158,11,0.2)}
-  .btn-move-menu,.btn-del-task,.btn-triv-link,.btn-push-tmr,.btn-bounty,.btn-repeat-resp{position:relative}
-  .btn-move-menu::after,.btn-del-task::after,.btn-triv-link::after,.btn-push-tmr::after,.btn-bounty::after,.btn-repeat-resp::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
-  .btn-move-menu:hover::after,.btn-del-task:hover::after,.btn-triv-link:hover::after,.btn-push-tmr:hover::after,.btn-bounty:hover::after,.btn-repeat-resp:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
+  .btn-move-menu,.btn-del-task,.btn-triv-link,.btn-task-radial,.btn-bounty,.btn-repeat-resp{position:relative}
+  .btn-move-menu::after,.btn-del-task::after,.btn-triv-link::after,.btn-task-radial::after,.btn-bounty::after,.btn-repeat-resp::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
+  .btn-move-menu:hover::after,.btn-del-task:hover::after,.btn-triv-link:hover::after,.btn-task-radial:hover::after,.btn-bounty:hover::after,.btn-repeat-resp:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
   .btn-move-menu{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
   .tl-item:hover .btn-move-menu{opacity:0.6}
   .btn-move-menu:hover{opacity:1!important;color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
@@ -1054,13 +1050,12 @@
   .btn-del-task{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
   .tl-item:hover .btn-del-task{opacity:0.4}
   .btn-del-task:hover{opacity:1!important;color:var(--red,#ef4444);background:rgba(239,68,68,0.1)}
-  .btn-triv-link,.btn-push-tmr,.btn-bounty,.btn-repeat-resp{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:border-color 0.12s,color 0.12s,background 0.12s,opacity 0.12s;flex-shrink:0}
+  .btn-triv-link,.btn-task-radial,.btn-bounty,.btn-repeat-resp{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:border-color 0.12s,color 0.12s,background 0.12s,opacity 0.12s;flex-shrink:0}
   .btn-triv-link:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.08)}
   .btn-triv-link.triv-active{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12)}
-  .btn-push-tmr:hover{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
+  .btn-task-radial:hover{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
+  .btn-bounty:hover{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(251,191,36,0.12)}
   .btn-repeat-resp:hover{border-color:var(--purple,#a78bfa);color:var(--purple,#a78bfa);background:rgba(168,85,247,0.1)}
-  .btn-bounty:hover,.btn-bounty.locked{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(251,191,36,0.12)}
-  .btn-bounty.locked{opacity:1;font-size:9px;font-weight:800;cursor:default}
   .del-confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:center;justify-content:center}
   .del-confirm-overlay.open{display:flex}
   .del-confirm-box{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px 24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
@@ -1360,13 +1355,14 @@
   .it-list-actions{display:flex;align-items:center;gap:5px;justify-content:flex-end}
   .it-list-check-col{display:flex;flex-direction:column;align-items:center;gap:3px}
   .it-list-check-col .chk-quick{opacity:0.45;width:24px;height:20px}
-  .it-list-check-col .btn-add-menu{width:24px;padding:1px 0}
   .it-list-actions .notes-btn,
-  .it-list-actions .btn-push-tmr,
+  .it-list-actions .btn-task-radial,
+  .it-list-actions .btn-bounty,
   .it-list-actions .pomo-btn,
   .it-list-actions .btn-del-task{position:static;opacity:0.55;flex-shrink:0}
   .it-list-actions .notes-btn:hover,
-  .it-list-actions .btn-push-tmr:hover,
+  .it-list-actions .btn-task-radial:hover,
+  .it-list-actions .btn-bounty:hover,
   .it-list-actions .pomo-btn:hover,
   .it-list-actions .btn-del-task:hover{opacity:1}
   @media(max-width:760px){
@@ -2078,13 +2074,6 @@
   .add-menu-opt:hover{background:rgba(255,255,255,0.06)}
 
 
-  /* Lock button: same icon-button affordance as the trivial/push buttons. */
-  .btn-lock{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0;position:relative}
-  .tl-item:hover .btn-lock{opacity:0.6}
-  .btn-lock:hover{opacity:1!important;color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
-  .btn-lock.locked{opacity:1!important;color:var(--amber,#f59e0b);background:rgba(245,158,11,0.15)}
-  .btn-lock::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) scale(0.92);white-space:nowrap;background:rgba(15,18,28,0.97);color:#e2e8f0;font-size:10px;font-weight:500;padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.08);pointer-events:none;opacity:0;transition:opacity 0.12s,transform 0.12s;z-index:200}
-  .btn-lock:hover::after{opacity:1;transform:translateX(-50%) scale(1)}
   /* Locked timeline row: subtle amber-edge so the user can see at a glance which tasks won't move. */
   .tl-item.locked .card{border-left:2px solid var(--amber,#f59e0b)}
 
@@ -2092,7 +2081,6 @@
   .card .notes-btn,
   .card .pomo-btn,
   .card .btn-meeting-auto,
-  .card .btn-lock,
   .card .btn-move-menu,
   .card .btn-del-task{
     width:24px;
@@ -2119,19 +2107,16 @@
   .card:hover .notes-btn,
   .card:hover .pomo-btn,
   .card:hover .btn-meeting-auto,
-  .card:hover .btn-lock,
   .card:hover .btn-move-menu,
   .card:hover .btn-del-task{opacity:0.78}
   .card .notes-btn:hover,
   .card .pomo-btn:hover,
   .card .btn-meeting-auto:hover,
-  .card .btn-lock:hover,
   .card .btn-move-menu:hover,
   .card .btn-del-task:hover{opacity:1!important;transform:translateY(-1px)}
   .card .notes-btn svg,
   .card .pomo-btn svg,
   .card .btn-meeting-auto svg,
-  .card .btn-lock svg,
   .card .btn-move-menu svg,
   .card .btn-del-task svg{width:13px;height:13px;display:block}
   .card .notes-btn.has-notes{border-color:rgba(167,139,250,0.55);color:var(--purple);background:rgba(167,139,250,0.08);opacity:0.9}
@@ -2139,12 +2124,9 @@
   .card .notes-btn:hover{border-color:var(--purple);color:var(--purple);background:rgba(167,139,250,0.12)}
   .card .pomo-btn:hover{border-color:var(--red);color:var(--red);background:rgba(239,68,68,0.12)}
   .card .btn-meeting-auto:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
-  .card .btn-lock:hover,
   .card .btn-move-menu:hover{border-color:var(--amber);color:var(--amber);background:rgba(245,158,11,0.12)}
-  .card .btn-lock.locked{opacity:1!important;border-color:var(--amber);color:var(--amber);background:rgba(245,158,11,0.14)}
   .card .btn-del-task:hover{border-color:var(--red);color:var(--red);background:rgba(239,68,68,0.12)}
   .card .btn-meeting-auto::after,
-  .card .btn-lock::after,
   .card .btn-move-menu::after,
   .card .btn-del-task::after{
     content:attr(data-tooltip);
@@ -2165,12 +2147,8 @@
     z-index:1000;
   }
   .card .btn-meeting-auto:hover::after,
-  .card .btn-lock:hover::after,
   .card .btn-move-menu:hover::after,
   .card .btn-del-task:hover::after{opacity:1}
-  body.dur-open .tl-item:not(.has-dur-popover) .btn-meeting-auto,
-  body.dur-open .tl-item:not(.has-dur-popover) .btn-push-tmr,
-  body.dur-open .tl-item:not(.has-dur-popover) .btn-lock{opacity:0!important}
 
   @container (max-width:900px){
     .card{
@@ -2191,10 +2169,9 @@
     .card .btn-repeat-resp,
     .card .btn-meeting-auto{grid-column:7;grid-row:1}
     .card .pomo-btn{grid-column:8;grid-row:1}
-    .card .btn-lock{grid-column:9;grid-row:1}
-    .card .btn-push-tmr{grid-column:6;grid-row:2}
-    .card .btn-bounty{grid-column:7;grid-row:2}
-    .card .btn-move-menu{grid-column:8;grid-row:2}
+    .card .btn-task-radial{grid-column:9;grid-row:1}
+    .card .btn-bounty{grid-column:8;grid-row:2}
+    .card .btn-move-menu{grid-column:7;grid-row:2}
     .card .btn-del-task{grid-column:9;grid-row:2}
     .card .dur{grid-column:10;grid-row:1 / span 2;margin-left:0}
     .card>svg:last-child{grid-column:11;grid-row:1 / span 2}
@@ -2202,11 +2179,10 @@
     .card .notes-btn,
     .card .pomo-btn,
     .card .btn-meeting-auto,
-    .card .btn-lock,
     .card .btn-move-menu,
     .card .btn-del-task,
     .card .btn-repeat-resp,
-    .card .btn-push-tmr,
+    .card .btn-task-radial,
     .card .btn-bounty{
       width:28px;
       height:28px;
@@ -2636,7 +2612,6 @@
     .card .notes-btn,
     .card .pomo-btn,
     .card .btn-meeting-auto,
-    .card .btn-lock,
     .card .btn-move-menu,
     .card .btn-del-task{
       width:40px;
@@ -2650,13 +2625,11 @@
     .card .notes-btn svg,
     .card .pomo-btn svg,
     .card .btn-meeting-auto svg,
-    .card .btn-lock svg,
     .card .btn-move-menu svg,
     .card .btn-del-task svg{width:16px;height:16px}
     .card .notes-btn:active,
     .card .pomo-btn:active,
     .card .btn-meeting-auto:active,
-    .card .btn-lock:active,
     .card .btn-move-menu:active,
     .card .btn-del-task:active{opacity:1!important}
 
@@ -2770,9 +2743,6 @@
 .resched-popover .resched-time-input:focus{border-color:var(--accent)}
 .resched-popover .resched-time-go{padding:5px 10px;border-radius:5px;border:1px solid var(--accent);background:rgba(59,130,246,0.18);color:var(--accent-light);font-size:11px;font-weight:600;cursor:pointer}
 .resched-popover .resched-time-go:hover{background:rgba(59,130,246,0.32)}
-.resched-popover .resched-tools{display:flex;gap:6px;margin-top:8px}
-.resched-popover .resched-tool{flex:1;height:26px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.12s}
-.resched-popover .resched-tool:hover{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
 .resched-popover .resched-tool[data-tool=delegate]:hover{border-color:#f472b6;color:#f472b6;background:rgba(244,114,182,0.12)}
 /* Urgency progress meter (mirrors .repeat-resp-meter). */
 .delegated-card-meter{height:5px;border-radius:999px;background:rgba(255,255,255,0.07);overflow:hidden;margin:7px 0 4px;border:1px solid rgba(255,255,255,0.05)}
@@ -4376,8 +4346,12 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .card .chk-col{grid-column:3 !important;grid-row:1 !important;display:flex !important;flex-direction:column !important;gap:6px !important;align-items:center !important;align-self:center !important}
   .card .chk-quick{display:inline-flex !important}
   .card .notes-btn,.card .btn-repeat-resp,.card .btn-meeting-auto,.card .pomo-btn,
-  .card .btn-lock,.card .btn-push-tmr,.card .btn-bounty,.card .btn-move-menu,
+  .card .btn-move-menu,
   .card .btn-del-task,.card .dur,.card>svg:last-child{display:none !important}
+  /* The radial trigger stays (full task menu on phones); the bounty button
+     rides along until the day's bounty is placed, then disappears. */
+  .card .btn-task-radial{display:inline-flex !important;grid-column:3 !important;grid-row:2 !important;width:38px;height:38px;justify-self:center}
+  .card .btn-bounty{display:inline-flex !important;grid-column:3 !important;grid-row:3 !important;width:38px;height:38px;justify-self:center}
   /* List view rows: same clean stack — complete + title + (quick-complete / add). */
   .it-list-item:not(.subtask-row){grid-template-columns:auto minmax(0,1fr) auto !important;align-items:center !important;gap:8px !important;min-height:0 !important}
   .it-list-item:not(.subtask-row) .it-list-rank,
@@ -4388,7 +4362,9 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .it-list-item:not(.subtask-row) .it-list-check{grid-column:1 !important}
   .it-list-item:not(.subtask-row) .it-list-main{grid-column:2 !important;min-width:0}
   .it-list-item:not(.subtask-row) .it-list-actions{grid-column:3 !important;margin-top:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;justify-content:center !important}
-  .it-list-actions .notes-btn,.it-list-actions .btn-push-tmr,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task,.it-list-actions .dbtn,.it-list-actions .btn-lock,.it-list-actions .btn-repeat-resp{display:none !important}
+  .it-list-actions .notes-btn,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task,.it-list-actions .dbtn,.it-list-actions .btn-repeat-resp{display:none !important}
+  .it-list-actions .btn-task-radial{display:inline-flex !important;width:38px;height:38px}
+  .it-list-actions .btn-bounty{display:inline-flex !important;width:38px;height:38px}
   /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
   .tab-title,#qa-title,.resched-date-input{font-size:16px}
   .subtask-add-pop{padding:8px}
@@ -4403,7 +4379,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @media (hover:none){
   .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
   .it-list-item.subtask-row .sub-actions,.tl-item.tl-sub .sub-actions{opacity:1!important}
-  .st-quick-btn,.tri-quick,.btn-lock{opacity:1!important}
+  .st-quick-btn,.tri-quick{opacity:1!important}
 }
 
 @media (max-width:760px), (hover:none){
@@ -4515,14 +4491,12 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .guest-mode .tl-item .chk,
   .guest-mode .tl-item .chk-col,
   .guest-mode .tl-item .dur,
-  .guest-mode .tl-item .btn-lock,
-  .guest-mode .tl-item .btn-push-tmr,
+  .guest-mode .tl-item .btn-task-radial,
   .guest-mode .tl-item .btn-del-task,
   .guest-mode .tl-item .btn-repeat-resp,
   .guest-mode .tl-item .btn-meeting-auto,
   .guest-mode .tl-item .pomo-btn,
   .guest-mode .tl-item .notes-btn,
-  .guest-mode .tl-item .btn-bounty,
   .guest-mode .tl-item .pet-privacy-toggle{display:none!important}
 
   /* Guest-submitted tasks get a distinct accent so the owner can tell at a glance
