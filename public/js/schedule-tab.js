@@ -215,7 +215,15 @@ function buildTaskChangeItems(ev,trig){
   ];
 }
 const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
-function openTaskRadial(ev,trig){
+function openTaskRadial(ev,trig,opts){
+  // Unfinished rows aren't scheduled[] tasks, so the fan's scheduled-task spokes
+  // would no-op. The arrow opens the shared date picker directly and routes the
+  // pick through the caller's true-move handler.
+  if(opts&&opts.unfinished){
+    if(typeof openDatePickPopover==="function")
+      openDatePickPopover(trig,{header:'Move "'+escHtml(ev.title)+'" to…',actionLabel:"Move",onPick:opts.onReschedule});
+    return;
+  }
   // 180° left-opening fan: the trigger lives at the row's right edge, so the
   // spokes sweep bottom → left → top. Staggered label radii keep the pills
   // from colliding near the vertical apexes; clampY keeps edge rows on-screen.
@@ -260,6 +268,22 @@ function _unfPrettyDate(iso){
   const d=new Date(iso+"T00:00:00");
   if(isNaN(d.getTime()))return iso;
   return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+}
+// Present an Unfinished entry (a raw past-day block) as an ev so the shared
+// row() builder renders it exactly like a normal task. The override handlers
+// read the raw block back off __unf; id is the block's own scheduled id so any
+// notes on the task carry over. end := start+durMin so dur(ev) === durMin.
+function _unfToEv(r){
+  const start=r.start||"00:00";
+  return {
+    id:r.sourceLocalId||r.sourceId,
+    title:r.title,
+    type:r.type||"task",
+    start,
+    end:fmt(pt(start)+r.durMin),
+    source:r.source,
+    __unf:r
+  };
 }
 
 function buildListView(){
@@ -316,7 +340,11 @@ function buildListView(){
   function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
     const isPushedRow=mode==="pushed";
-    const movable=!isDoneRow&&!isPushedRow&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break"&&!ev._locked;
+    // Unfinished: a past-day block rendered through the shared row (see _unfToEv).
+    // Not draggable, no bounty/start-time; complete/reschedule/delete are overridden.
+    const isUnfRow=mode==="unfinished";
+    const r=isUnfRow?ev.__unf:null;
+    const movable=!isDoneRow&&!isPushedRow&&!isUnfRow&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break"&&!ev._locked;
     const c=cfg(ev.type);
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
@@ -330,27 +358,28 @@ function buildListView(){
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isUnfRow?" unfinished-row":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
-    if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
+    if(!isDoneRow&&!isPushedRow&&!isUnfRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(idx+1)+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<div class="it-list-check-col">'+
-        '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done'))+'">'+ckSvg+'</button>'+
-        (!isMeeting(ev)&&!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
+        '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isUnfRow?'Mark done on '+escHtml(_unfPrettyDate(r.sourceDate)):(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')))+'">'+ckSvg+'</button>'+
+        (!isMeeting(ev)&&!isDoneRow&&!isUnfRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
       '</div>'+
-      '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
+      '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
         '<div class="it-list-meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           '<span>'+ms(dur(ev))+'</span>'+
           (tt&&tt.rollupMode&&typeof shellRollupChip==="function"?shellRollupChip(ev):'')+
-          (ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isMeeting(ev)&&!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'))+
+          (isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isMeeting(ev)&&!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+          (isUnfRow?'<span class="it-list-unfinished">Unfinished · from '+escHtml(_unfPrettyDate(r.sourceDate))+'</span>':'')+
           (ev._locked?'<span class="it-list-lock" title="Locked — holds its time when tasks reflow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
@@ -361,13 +390,15 @@ function buildListView(){
         // Row keeps done / notes / bounty / delete visible; every other task
         // action rides the radial behind the arrow trigger.
         notesButton(ev)+
-        (_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
+        (!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isMeeting(ev)&&!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
       '</div>';
 
     el.querySelector(".it-list-check").addEventListener("click",e=>{
       e.stopPropagation();
+      // Unfinished completes on its ORIGIN day, not today — no scheduled[] task to toggle.
+      if(isUnfRow){_unfComplete(r,el);return;}
       // Blocked rollup container: skip the notes modal, let toggleDone toast why.
       if(isDoneRow||chkBlocked)toggleDone(ev.id);
       else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
@@ -378,11 +409,11 @@ function buildListView(){
     const nb=el.querySelector(".notes-btn");
     if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-task-radial");
-    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb);});
+    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb,isUnfRow?{unfinished:true,onReschedule:(d)=>_unfMoveTo(r,el,d)}:undefined);});
     const bb=el.querySelector(".btn-bounty");
     if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     const del=el.querySelector(".btn-del-task");
-    if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
+    if(del)del.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfDrop(r,el);return;}openDeleteConfirm(del.dataset.delId);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     return el;
@@ -474,7 +505,7 @@ function buildListView(){
     if(unf&&unf.rows.length){
       section("Unfinished",unf.total,"unfinished");
       _applySectionSort(unf.rows,_sectionSort("unfinished"),r=>r.title,r=>r.createdAt||r.sourceDate||"")
-        .forEach(r=>wrap.appendChild(unfinishedRow(r)));
+        .forEach((r,idx)=>wrap.appendChild(row(_unfToEv(r),idx,"unfinished")));
       if(unf.total>unf.rows.length){
         const more=document.createElement("div");
         more.className="it-list-empty";
@@ -520,89 +551,57 @@ function buildListView(){
     });
   }
 
-  // Compact row + actions for an Unfinished entry (a raw past-day block, NOT a
-  // scheduled[] task — so no drag/duration/lock; just resolve-or-move actions).
-  function unfinishedRow(r){
-    const el=document.createElement("div");
-    el.className="it-list-item unfinished-row";
-    const c=cfg(r.type||"task");
-    el.innerHTML=
-      '<span class="wrap-collapse-spacer"></span>'+
-      '<div class="it-list-rank">·</div>'+
-      '<div class="grip it-list-grip" title="Fixed item">'+gripSvg+'</div>'+
-      '<div class="it-list-check-col"><button class="chk it-list-check" title="Mark done on '+escHtml(_unfPrettyDate(r.sourceDate))+'">'+ckSvg+'</button></div>'+
-      '<div class="bar" style="background:var(--amber,#f59e0b)"></div>'+
-      '<div class="it-list-main">'+
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(r.title)+'">'+escHtml(r.title)+'</span>'+srcTag(r.source)+'</div>'+
-        '<div class="it-list-meta">'+
-          '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
-          '<span>'+ms(r.durMin)+'</span>'+
-          '<span class="it-list-unfinished">Unfinished · from '+escHtml(_unfPrettyDate(r.sourceDate))+'</span>'+
-        '</div>'+
-      '</div>'+
-      '<div class="it-list-actions unfinished-actions">'+
-        '<button class="carryover-btn unf-il-today">Today</button>'+
-        '<button class="carryover-btn unf-il-tmr">Tomorrow</button>'+
-        '<input type="date" class="resched-date-input unf-il-date"/>'+
-        '<button class="carryover-btn unf-il-move">Move</button>'+
-        '<button class="btn-del-task unf-il-drop" data-tooltip="Drop for good"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
-      '</div>';
-    const busy=()=>el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
-    async function moveTo(targetDate){
-      if(!targetDate||!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)){if(typeof showToast==="function")showToast("Pick a valid date","error");return;}
-      if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
-      busy();
-      let slot=null;
-      try{
-        if(typeof _computeRescheduleSlot==="function")
-          slot=await _computeRescheduleSlot({id:r.sourceLocalId||r.sourceId,title:r.title,start:r.start||"00:00",end:r.end||fmt(pt(r.start||"00:00")+r.durMin)},targetDate);
-      }catch(e){}
-      window.__RESCHEDULE_IN_FLIGHT__=true;
-      try{
-        await window.blockStore.rescheduleBlock(r.sourceId,targetDate,slot?{parentStart:slot.start,parentEnd:slot.end}:{});
-      }catch(e){
-        if(typeof showToast==="function")showToast("Could not move "+r.title,"error");
-        el.querySelectorAll("button,input").forEach(x=>{x.disabled=false;});
-        return;
-      }finally{
-        window.__RESCHEDULE_IN_FLIGHT__=false;
-      }
-      _unfRemoveRow(r);
-      if(typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
-      if(typeof log==="function")log("rescheduled",r.sourceId,"Unfinished moved to "+targetDate+": "+r.title);
-      if(typeof showToast==="function")showToast("Moved to "+_unfPrettyDate(targetDate)+": "+r.title,"success");
-      if(targetDate===viewDate){
-        try{await window.blockStore.loadDay(viewDate);}catch(e){}
-        if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
-        if(typeof recalcTimes==="function")recalcTimes();
-      }
-      render();
+  // Unfinished action overrides. The row markup + affordances come from the
+  // shared row() builder (mode "unfinished"); these three handlers replace its
+  // complete/reschedule/delete wiring because an Unfinished entry is a raw
+  // past-day block, not a scheduled[] task: complete lands on the ORIGIN day,
+  // reschedule is a server true-move, drop deletes the source block.
+  async function _unfComplete(r,el){
+    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
+    try{if(typeof commitDoneOnDate==="function")await commitDoneOnDate(r.sourceLocalId||r.sourceId,r.sourceDate);}catch(e2){}
+    _unfRemoveRow(r);
+    if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+    if(typeof showToast==="function")showToast("Done on "+_unfPrettyDate(r.sourceDate)+": "+r.title,"success");
+    render();
+  }
+  async function _unfMoveTo(r,el,targetDate){
+    if(!targetDate||!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)){if(typeof showToast==="function")showToast("Pick a valid date","error");return;}
+    if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
+    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
+    let slot=null;
+    try{
+      if(typeof _computeRescheduleSlot==="function")
+        slot=await _computeRescheduleSlot({id:r.sourceLocalId||r.sourceId,title:r.title,start:r.start||"00:00",end:r.end||fmt(pt(r.start||"00:00")+r.durMin)},targetDate);
+    }catch(e){}
+    window.__RESCHEDULE_IN_FLIGHT__=true;
+    try{
+      await window.blockStore.rescheduleBlock(r.sourceId,targetDate,slot?{parentStart:slot.start,parentEnd:slot.end}:{});
+    }catch(e){
+      if(typeof showToast==="function")showToast("Could not move "+r.title,"error");
+      el.querySelectorAll("button,input").forEach(x=>{x.disabled=false;});
+      return;
+    }finally{
+      window.__RESCHEDULE_IN_FLIGHT__=false;
     }
-    el.querySelector(".it-list-check").addEventListener("click",async e=>{
-      e.stopPropagation();busy();
-      try{if(typeof commitDoneOnDate==="function")await commitDoneOnDate(r.sourceLocalId||r.sourceId,r.sourceDate);}catch(e2){}
-      _unfRemoveRow(r);
-      if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
-      if(typeof showToast==="function")showToast("Done on "+_unfPrettyDate(r.sourceDate)+": "+r.title,"success");
-      render();
-    });
-    el.querySelector(".unf-il-today").addEventListener("click",e=>{e.stopPropagation();moveTo(actualToday);});
-    el.querySelector(".unf-il-tmr").addEventListener("click",e=>{
-      e.stopPropagation();
-      const tmr=(typeof __tomorrowDate!=="undefined"&&__tomorrowDate)?__tomorrowDate:new Date(Date.now()+86400000).toISOString().slice(0,10);
-      moveTo(tmr);
-    });
-    el.querySelector(".unf-il-move").addEventListener("click",e=>{e.stopPropagation();moveTo(el.querySelector(".unf-il-date").value);});
-    el.querySelector(".unf-il-drop").addEventListener("click",async e=>{
-      e.stopPropagation();busy();
-      try{await window.blockStore.deleteBlock(r.sourceId);}catch(e2){}
-      _unfRemoveRow(r);
-      if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
-      if(typeof log==="function")log("dropped",r.sourceId,"Dropped unfinished: "+r.title);
-      if(typeof showToast==="function")showToast("Dropped: "+r.title,"info");
-      render();
-    });
-    return el;
+    _unfRemoveRow(r);
+    if(typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+    if(typeof log==="function")log("rescheduled",r.sourceId,"Unfinished moved to "+targetDate+": "+r.title);
+    if(typeof showToast==="function")showToast("Moved to "+_unfPrettyDate(targetDate)+": "+r.title,"success");
+    if(targetDate===viewDate){
+      try{await window.blockStore.loadDay(viewDate);}catch(e){}
+      if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+      if(typeof recalcTimes==="function")recalcTimes();
+    }
+    render();
+  }
+  async function _unfDrop(r,el){
+    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
+    try{await window.blockStore.deleteBlock(r.sourceId);}catch(e2){}
+    _unfRemoveRow(r);
+    if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+    if(typeof log==="function")log("dropped",r.sourceId,"Dropped unfinished: "+r.title);
+    if(typeof showToast==="function")showToast("Dropped: "+r.title,"info");
+    render();
   }
 }
 
