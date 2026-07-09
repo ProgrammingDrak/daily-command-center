@@ -41,6 +41,15 @@ function fmtMoney(cents, opts){
 function dur(ev){return pt(ev.end)-pt(ev.start)}
 function origDur(id){const o=INIT_SCHED.find(e=>e.id===id);return o?dur(o):0}
 function isMeeting(ev){return ev.type==="meeting"||ev.type==="oneone"}
+// Two independent axes for a fixed-time block:
+//  - reflow-exempt (fixedTime): recalcTimes never bumps it (isFixedTimeBlock).
+//  - user-movable: the user can still drag / re-time it by hand.
+// A meeting is both (holds its slot, but you can move it manually); ooo/break
+// are fixed AND not user-movable. Registry-driven so the two never drift.
+function userMovable(ev){
+  if(ev&&window.TaskTypes&&typeof window.TaskTypes.rule==="function")return window.TaskTypes.rule(ev,"movable")!==false;
+  return !isMeeting(ev)&&(!ev||(ev.type!=="ooo"&&ev.type!=="break"));
+}
 
 // ======== WRAPS (v1) ========
 // A "wrap" is a larger container block (a long session / focus block). Tasks
@@ -93,6 +102,63 @@ function subtaskProgress(id,pool,_seen){
   let done=0,total=0;
   subs.forEach(s=>{total++;if(isDone(s))done++;const sub=subtaskProgress(s.id,pool,_seen);if(sub){total+=sub.total;done+=sub.done;}});
   return {done,total};
+}
+
+// Rollup summary for a container type (shell): estimated points of the whole
+// subtree — every descendant that isn't a pie subtask contributes its own
+// estimate (PointPlan.estimatePool); a descendant owning a pie contributes its
+// pool, which already covers its subtasks; nested rollup containers contribute
+// only their subtrees. done/total counts direct children. This walker is the
+// single source for both the card chip and _shellBonusPoints in schedule.js.
+function shellRollup(id,pool){
+  pool=pool||((typeof scheduled!=="undefined")?scheduled:[]);
+  let points=0;
+  const seen=new Set();
+  (function walk(pid){
+    if(seen.has(pid))return;
+    seen.add(pid);
+    childrenOf(pid,pool).forEach(c=>{
+      if(relOf(c)==="subtask")return; // pie slices are covered by their parent's pool
+      if(!(window.TaskTypes&&window.TaskTypes.isRollup(c))&&window.PointPlan){
+        const hasPie=childrenOf(c.id,pool).some(k=>relOf(k)==="subtask");
+        if(hasPie&&typeof window.PointPlan.compute==="function"){
+          const plan=window.PointPlan.compute(c.id);
+          points+=(plan&&plan.pool)||0;
+        } else if(typeof window.PointPlan.estimatePool==="function"){
+          points+=window.PointPlan.estimatePool(c.id)||0;
+        }
+      }
+      walk(c.id);
+    });
+  })(id);
+  const kids=childrenOf(id,pool);
+  return {points:Math.round(points),done:kids.filter(k=>isDone(k)).length,total:kids.length};
+}
+
+// Completion bonus for a rollup container: bonusPct × the subtree's estimated
+// points, clamped to the ledger's 1..500 override range. THE single formula —
+// the preview chip (shellRollupChip) and the awarded points_override
+// (_shellBonusPoints in schedule.js) must both call this so they can't drift.
+function shellBonus(points,pct){
+  return (points>0&&pct>0)?Math.max(1,Math.min(500,Math.round(points*pct))):0;
+}
+
+// True when a rollup container still has open children — its checkbox is
+// display-only until they finish (toggleDone enforces the same rule).
+function shellCompleteBlocked(ev){
+  return !!(ev&&window.TaskTypes&&window.TaskTypes.rule(ev,"blockManualCompleteWithOpenChildren")&&
+    typeof scheduled!=="undefined"&&childrenOf(ev.id,scheduled).some(c=>!isDone(c)));
+}
+
+// Meta chip for a rollup container: children's points, progress, bonus preview.
+function shellRollupChip(ev){
+  if(!(ev&&window.TaskTypes&&window.TaskTypes.isRollup(ev)))return "";
+  const r=shellRollup(ev.id);
+  if(!r.total)return "";
+  const pct=Number(window.TaskTypes.rule(ev,"bonusPct"))||0;
+  const bonus=shellBonus(r.points,pct);
+  const title=(r.points+" pts across nested tasks · "+r.done+"/"+r.total+" done"+(bonus?" · +"+bonus+" pt bonus when all finish":"")).replace(/"/g,"&quot;");
+  return '<span class="points-chip shell-chip" title="'+title+'">&Sigma; '+r.points+' pts · '+r.done+'/'+r.total+(bonus?' · +'+bonus+' bonus':'')+'</span>';
 }
 
 // Collapse state for any parent row (persisted in localStorage).
@@ -912,6 +978,36 @@ async function moveTaskToToday(id){
   return rescheduleTaskToDate(id,_resolvedTodayDate());
 }
 
+// THE standard mover: every "send this task to day X" action funnels through
+// the shared placement picker (day → "After…" step with time presets, every
+// task on that day as an anchor, and Earliest free), so placement is chosen
+// the same way app-wide. Falls back to a direct auto-slot move when the picker
+// isn't available (e.g. embeds without the overlay markup).
+function moveTaskViaPlacement(id,dateStr){
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||typeof openPlacementPicker!=="function")return rescheduleTaskToDate(id,dateStr);
+  openPlacementPicker({
+    title:ev.title,durMin:dur(ev)||30,verb:"Move",day:dateStr||null,
+    onPlace:async(dStr,timeStr,editedTitle)=>{
+      // The picker's title is editable: persist a rename BEFORE the move so
+      // the true move carries the new title with it.
+      if(editedTitle&&editedTitle!==ev.title)await _renameTaskForMove(ev,editedTitle);
+      rescheduleTaskToDate(id,dStr,{pinnedStart:timeStr||null});
+    }
+  });
+}
+
+// Rename a task in place: the live row plus its backing block.
+async function _renameTaskForMove(ev,newTitle){
+  ev.title=newTitle;
+  const dateStr=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  const b=_findTaskBlockForDate(ev.id,dateStr,ev);
+  if(b&&window.blockStore){
+    try{await window.blockStore.updateBlock(b.id,{...(b.properties||{}),title:newTitle})}catch(e){}
+  }
+  render();
+}
+
 function moveTaskToTomorrow(id){return rescheduleTaskToDate(id,_resolvedTomorrowDate());}
 
 async function moveTaskToNextWeek(id){
@@ -1084,7 +1180,17 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return;
   const fromDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  const pinned=(opts.pinnedStart&&/^\d{2}:\d{2}$/.test(opts.pinnedStart))?opts.pinnedStart:null;
   if(fromDate===targetDate){
+    // Same-day with a chosen time: that's a start pin, not a re-slot.
+    if(pinned){
+      if(typeof pinStartTime==="function")pinStartTime(id,pinned);
+      if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+      log("rescheduled",id,"Pinned to "+pinned+" on "+targetDate+": "+ev.title);
+      if(!opts.silent&&typeof showToast==="function")showToast("Start pinned to "+(typeof f12==="function"?f12(pinned):pinned),"success");
+      render();
+      return ev;
+    }
     const isActualToday=targetDate===_resolvedTodayDate();
     const moved=isActualToday?_placeTaskAtNextTodaySlot(id):_placeTaskAtEarliestCurrentDateSlot(id);
     if(moved){
@@ -1105,34 +1211,53 @@ async function rescheduleTaskToDate(id,targetDate,opts){
   try{
     const srcBlock=_findTaskBlockForDate(id,fromDate,ev);
     if(srcBlock&&window.blockStore&&typeof window.blockStore.rescheduleBlock==="function"){
-      const slot=await _computeRescheduleSlot(ev,targetDate);
-      if(!slot){
-        if(!opts.silent&&typeof showToast==="function")showToast("No free slot on "+_prettyDateLabel(targetDate)+"'s schedule","error");
-        return;
-      }
-      let result;
+      // A full target day is no reason to refuse the move: with no free slot the
+      // block keeps its own times and re-slots when that day gets planned.
+      // A pinned start from the placement picker wins over the auto-slot.
+      const slot=pinned
+        ?{start:pinned,end:fmt(pt(pinned)+(dur(ev)||30)),duration:dur(ev)||30}
+        :await _computeRescheduleSlot(ev,targetDate);
+      let result=null;
       try{
-        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot.start,parentEnd:slot.end});
+        result=await window.blockStore.rescheduleBlock(srcBlock.id,targetDate,{parentStart:slot&&slot.start,parentEnd:slot&&slot.end,fromDate});
       }catch(e){
-        if(!opts.silent&&typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
-        return;
+        // blockStore stamps e.permanent using its single permanence rule
+        // (400/404 final; 401/403 auth blips and 5xx/network stay buffered).
+        const permanent=!!(e&&e.permanent);
+        if(!permanent){
+          // Transient/network failure: the blockstore WAL replays it on
+          // reconnect. Cloning now would race that replay into a duplicate.
+          if(!opts.silent&&typeof showToast==="function")showToast("Connection hiccup — move queued, will retry","info");
+          return;
+        }
+        console.warn("[reschedule] true move rejected ("+(e.message||e.status)+"), falling back to clone move");
       }
-      _removeSubtreeFromScheduled(id);
-      log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
-      if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
-      if(typeof recalcTimes==="function")recalcTimes();
-      render();
-      return result;
+      if(result){
+        _removeSubtreeFromScheduled(id);
+        log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
+        if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+        if(typeof recalcTimes==="function")recalcTimes();
+        render();
+        return result;
+      }
+      // Permanent rejection falls through to the clone path below, so the user
+      // never ends a reschedule click with a silent no-op.
     }
 
     // Fallback: no origin block to move (day-state-only task). Clone to the target
     // date + hide the source as before, and drop a tombstone for the amber list.
     const movedTask=_cloneTaskForReschedule(ev,targetDate,fromDate);
+    if(pinned){
+      movedTask.start=pinned;
+      movedTask.end=fmt(pt(pinned)+(dur(ev)||30));
+      movedTask._pinnedStart=pinned;
+    }
     let block=null;
     try{
       block=await persistAddedTask(movedTask,targetDate);
     }catch(e){
-      if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate),"error");
+      // Both move strategies failed — say why instead of a bare "could not".
+      if(typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate)+(e&&e.message?" — "+e.message:""),"error");
       return;
     }
     // Carry the subtask subtree to the target date, re-parented onto the clone,
@@ -1309,242 +1434,9 @@ document.getElementById("del-go").addEventListener("click",confirmDeleteTask);
 document.getElementById("del-confirm-overlay").addEventListener("click",function(e){if(e.target===this)closeDeleteConfirm()});
 
 // ======== RESCHEDULE POPOVER ========
-// Shared positioning for anchor-attached fixed popovers. Append hidden first so
-// we can measure the real size, then clamp fully on-screen. A naive right-align
-// (right = innerWidth - rect.right) pushed the popover -- and its left-most
-// "Today" button -- off the left edge on narrow / mobile viewports, making those
-// buttons unclickable.
-function _positionPopoverNear(anchorEl,pop){
-  pop.style.minWidth="220px";
-  pop.style.visibility="hidden";
-  document.body.appendChild(pop);
-  const rect=anchorEl.getBoundingClientRect();
-  const margin=8;
-  const popW=pop.offsetWidth||220;
-  const popH=pop.offsetHeight||0;
-  let left=rect.right-popW; // prefer right-aligned to the button
-  left=Math.max(margin,Math.min(left,window.innerWidth-popW-margin));
-  let top=rect.bottom+6;
-  if(top+popH>window.innerHeight-margin){
-    // No room below -- prefer flipping above the anchor.
-    const above=rect.top-popH-6;
-    if(above>=margin)top=above;
-  }
-  // Final clamp so the popover is always fully within the viewport, even if the
-  // anchor is partially scrolled off-screen.
-  top=Math.max(margin,Math.min(top,window.innerHeight-popH-margin));
-  pop.style.left=left+"px";
-  pop.style.top=top+"px";
-  pop.style.right="auto";
-  pop.style.visibility="";
-}
-
-// Click the per-card "→" button to open this popover. Replaces the old
-// hard-coded push-to-tomorrow with quick options for today/tomorrow/custom.
-function openReschedulePopover(id,anchorEl){
-  const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  // Close any existing popovers
-  document.querySelectorAll(".resched-popover,.dur-popover").forEach(p=>p.remove());
-  document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
-  document.body.classList.remove("dur-open");
-
-  const today=(typeof _actualTodayStr==="function")?_actualTodayStr():null;
-  const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
-
-  const pop=document.createElement("div");
-  pop.className="dur-popover resched-popover";
-  // Both quick buttons stay enabled. When the task is already on the day you're
-  // viewing, the click handler re-slots it instead of no-opping, so the button
-  // is never a dead end. (A disabled button reads as "broken".)
-  pop.innerHTML=
-    '<div class="resched-header">Move "'+ev.title.replace(/"/g,'&quot;')+'" to…</div>'+
-    '<div class="resched-quick">'+
-      '<button class="resched-btn" data-target="today">Today</button>'+
-      '<button class="resched-btn" data-target="tomorrow">Tomorrow</button>'+
-    '</div>'+
-    '<div class="resched-custom">'+
-      '<input type="date" class="resched-date-input" />'+
-      '<button class="resched-go">Move</button>'+
-    '</div>'+
-    '<div class="resched-adjust">'+
-      '<div class="resched-dur">'+
-        '<button class="resched-dur-btn" type="button" data-d="-15" title="15 min shorter">&minus;</button>'+
-        '<span class="resched-dur-label"></span>'+
-        '<button class="resched-dur-btn" type="button" data-d="15" title="15 min longer">+</button>'+
-      '</div>'+
-      '<div class="resched-time">'+
-        '<input type="time" class="resched-time-input" />'+
-        '<button class="resched-time-go" type="button">Set time</button>'+
-      '</div>'+
-    '</div>'+
-    '<div class="resched-tools">'+
-      '<button class="resched-tool" type="button" data-tool="delegate" title="Delegated / Blocked — waiting on someone"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M16 11l2 2 4-4"/></svg></button>'+
-      '<button class="resched-tool" type="button" data-tool="repeat" title="Make repeat responsibility"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>'+
-      '<button class="resched-tool" type="button" data-tool="subtask" title="Make subtask of…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4v10a4 4 0 0 0 4 4h12M15 13l5 5-5 5"/></svg></button>'+
-    '</div>';
-
-  function closePop(){
-    pop.remove();
-    document.removeEventListener("click",onOutside,true);
-    document.removeEventListener("keydown",onKey,true);
-  }
-  function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl)closePop()}
-  function onKey(e){if(e.key==="Escape")closePop()}
-
-  // Quick buttons
-  pop.querySelectorAll(".resched-btn").forEach(btn=>{
-    btn.addEventListener("click",async e=>{
-      e.stopPropagation();
-      const target=btn.dataset.target;
-      let dateStr=null;
-      if(target==="today")dateStr=today;
-      else if(target==="tomorrow")dateStr=__tomorrowDate;
-      if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
-      pop.querySelectorAll("button").forEach(b=>{b.disabled=true;});
-      btn.textContent="Moving...";
-      try{
-        if(dateStr===currentDate&&target==="today"&&typeof moveTaskToToday==="function"){
-          // Already viewing today: re-slot the task to the next free slot now.
-          await moveTaskToToday(id);
-        }else{
-          // Cross-day moves create a target-day task; same-day planned views
-          // re-slot within that date.
-          await rescheduleTaskToDate(id,dateStr);
-        }
-      }finally{
-        closePop();
-      }
-    });
-  });
-  // Custom date
-  const dateInput=pop.querySelector(".resched-date-input");
-  // Default to two days out (or tomorrow's tomorrow) so it differs from the quick buttons
-  const seed=new Date();seed.setDate(seed.getDate()+2);
-  const pad=n=>String(n).padStart(2,"0");
-  dateInput.value=seed.getFullYear()+"-"+pad(seed.getMonth()+1)+"-"+pad(seed.getDate());
-  pop.querySelector(".resched-go").addEventListener("click",e=>{
-    e.stopPropagation();
-    const v=dateInput.value;
-    if(!v||!/^\d{4}-\d{2}-\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid date","error");return}
-    closePop();
-    rescheduleTaskToDate(id,v);
-  });
-  dateInput.addEventListener("keydown",e=>{
-    if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
-  });
-  // Duration: same ±15 stepper as the card's -/+ buttons, label updates in place.
-  const durLabel=pop.querySelector(".resched-dur-label");
-  const refreshDurLabel=()=>{
-    const cur=scheduled.find(e=>e.id===id);
-    if(durLabel&&cur)durLabel.textContent=ms(dur(cur));
-  };
-  refreshDurLabel();
-  pop.querySelectorAll(".resched-dur-btn").forEach(btn=>{
-    btn.addEventListener("click",e=>{
-      e.stopPropagation();
-      if(typeof adjustDur==="function")adjustDur(id,parseInt(btn.dataset.d,10));
-      refreshDurLabel();
-    });
-  });
-  // Time: pin the start to a chosen time on the current day (no date change).
-  const timeInput=pop.querySelector(".resched-time-input");
-  if(timeInput)timeInput.value=ev.start||"";
-  pop.querySelector(".resched-time-go").addEventListener("click",e=>{
-    e.stopPropagation();
-    const v=timeInput?timeInput.value:"";
-    if(!v||!/^\d{2}:\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid time","error");return}
-    closePop();
-    if(typeof pinStartTime==="function")pinStartTime(id,v);
-    if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
-    if(typeof showToast==="function")showToast("Start pinned to "+(typeof f12==="function"?f12(v):v),"success");
-  });
-  timeInput&&timeInput.addEventListener("keydown",e=>{
-    if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-time-go").click()}
-  });
-  // Tool row: delegate / repeat responsibility / subtask-of, as square icon buttons.
-  pop.querySelectorAll(".resched-tool").forEach(btn=>{
-    btn.addEventListener("click",e=>{
-      e.stopPropagation();
-      const tool=btn.dataset.tool;
-      closePop();
-      if(tool==="delegate"&&typeof convertTaskToDelegated==="function")convertTaskToDelegated(id);
-      else if(tool==="repeat"&&typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);
-      else if(tool==="subtask"&&typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(id,anchorEl);
-    });
-  });
-
-  _positionPopoverNear(anchorEl,pop);
-  setTimeout(()=>document.addEventListener("click",onOutside,true),0);
-  document.addEventListener("keydown",onKey,true);
-}
-
-// Generic "pick a day" popover: same look and options as the reschedule popover,
-// for callers that create a task rather than move one (e.g. delegated follow-ups).
-// opts: {header, actionLabel, onPick(dateStr)}. onPick is awaited with the
-// buttons disabled, then the popover closes.
-function openDatePickPopover(anchorEl,opts){
-  opts=opts||{};
-  document.querySelectorAll(".resched-popover,.dur-popover").forEach(p=>p.remove());
-  document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
-  document.body.classList.remove("dur-open");
-
-  const pop=document.createElement("div");
-  pop.className="dur-popover resched-popover";
-  pop.innerHTML=
-    '<div class="resched-header">'+String(opts.header||"Schedule for…").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")+'</div>'+
-    '<div class="resched-quick">'+
-      '<button class="resched-btn" data-target="today">Today</button>'+
-      '<button class="resched-btn" data-target="tomorrow">Tomorrow</button>'+
-    '</div>'+
-    '<div class="resched-custom">'+
-      '<input type="date" class="resched-date-input" />'+
-      '<button class="resched-go">'+String(opts.actionLabel||"Go").replace(/</g,"&lt;")+'</button>'+
-    '</div>';
-
-  function closePop(){
-    pop.remove();
-    document.removeEventListener("click",onOutside,true);
-    document.removeEventListener("keydown",onKey,true);
-  }
-  function onOutside(e){if(!pop.contains(e.target)&&e.target!==anchorEl)closePop()}
-  function onKey(e){if(e.key==="Escape")closePop()}
-
-  async function commit(dateStr){
-    pop.querySelectorAll("button").forEach(b=>{b.disabled=true;});
-    try{
-      if(typeof opts.onPick==="function")await opts.onPick(dateStr);
-    }finally{
-      closePop();
-    }
-  }
-
-  pop.querySelectorAll(".resched-btn").forEach(btn=>{
-    btn.addEventListener("click",e=>{
-      e.stopPropagation();
-      const dateStr=btn.dataset.target==="today"?_resolvedTodayDate():_resolvedTomorrowDate();
-      if(!dateStr){if(typeof showToast==="function")showToast("No date available","error");return}
-      btn.textContent="Scheduling...";
-      commit(dateStr);
-    });
-  });
-  const dateInput=pop.querySelector(".resched-date-input");
-  const seed=new Date();seed.setDate(seed.getDate()+2);
-  const pad=n=>String(n).padStart(2,"0");
-  dateInput.value=seed.getFullYear()+"-"+pad(seed.getMonth()+1)+"-"+pad(seed.getDate());
-  pop.querySelector(".resched-go").addEventListener("click",e=>{
-    e.stopPropagation();
-    const v=dateInput.value;
-    if(!v||!/^\d{4}-\d{2}-\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid date","error");return}
-    commit(v);
-  });
-  dateInput.addEventListener("keydown",e=>{
-    if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
-  });
-
-  _positionPopoverNear(anchorEl,pop);
-  setTimeout(()=>document.addEventListener("click",onOutside,true),0);
-  document.addEventListener("keydown",onKey,true);
-}
+// Moved to schedule-popover.js: openSchedulePopover unifies the reschedule
+// popover, the create-flow "Schedule…" destination, and the date-pick popover
+// (openReschedulePopover / openDatePickPopover wrappers live there too).
 
 // ======== COMPLETION DATE CONFIRM ========
 // Asks the user whether a completed-on-a-past-day task was actually finished today

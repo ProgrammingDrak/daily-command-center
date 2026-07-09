@@ -171,6 +171,7 @@
         <option value="schedule">Schedule</option>
         <option value="backlog">Backlog and Ideas</option>
         <option value="urgent" selected>Urgent</option>
+        <option value="shell">Shell (container)</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -197,6 +198,7 @@
   <div class="progress-box">
     <div class="progress-label"><span>Day Progress</span><span id="ppct">--</span></div>
     <div class="progress-track" id="ptrack"></div>
+    <div class="progress-rails" id="prails"></div>
   </div>
 </div>
 
@@ -700,6 +702,7 @@
         <option value="schedule">Schedule</option>
         <option value="backlog">Backlog and Ideas</option>
         <option value="urgent" selected>Urgent</option>
+        <option value="shell">Shell (container)</option>
       </select>
       <button class="tab-add">+ Add</button>
     </div>
@@ -766,7 +769,7 @@
       <button class="pvb-close" id="sched-picker-close">&times;</button>
     </div>
     <div class="sched-picker-body">
-      <div class="sched-picker-title" id="sched-picker-title"></div>
+      <input type="text" class="sched-picker-title" id="sched-picker-title" placeholder="Task title" />
 
       <!-- Step 1: which day -->
       <div class="sched-picker-step" id="sched-step-day">
@@ -1693,17 +1696,22 @@
 
 <!-- core.js MUST load first: every later script may use window.DCC at parse time -->
 <script src="/public/js/core.js?v=core-1"></script>
+<!-- task-types.js next: the per-type rules registry; points.js and the renderers read it at parse time -->
+<script src="/public/js/task-types.js?v=task-types-1"></script>
 <script src="/public/js/core-ui.js?v=core-ui-1"></script>
 <script src="/public/js/block-editor.js"></script>
 <script src="/public/js/data.js"></script>
 <script src="/public/js/persistence.js"></script>
 <script src="/public/js/state.js"></script>
+<script src="/public/js/schedule-popover.js"></script>
 <script src="/public/js/points.js"></script>
 <script src="/public/js/point-plan.js"></script>
 <script src="/public/js/celebrate.js"></script>
+<script src="/public/js/radial-menu.js"></script>
 <script src="/public/js/schedule.js"></script>
 <script src="/public/js/drag.js"></script>
 <script src="/public/js/clock.js"></script>
+<script src="/public/js/meeting-alerts.js"></script>
 <script src="/public/js/timer.js"></script>
 <script src="/public/js/prep.js"></script>
 <script src="/public/js/launcher.js"></script>

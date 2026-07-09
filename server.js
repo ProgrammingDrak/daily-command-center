@@ -26,6 +26,7 @@ const SyncManager = require("./sync-manager");
 const slotStore = require("./slot-store");
 const punishmentStore = require("./punishment-store");
 const socialStore = require("./social-store");
+const budgetStore = require("./budget-store");
 const { badRequest, notFound } = require("./slot-account-common");
 const routeHelpers = require("./lib/route-helpers");
 const tokenStore = require("./token-store");
@@ -606,11 +607,42 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
     console.error("[calendar] Could not merge DB meetings into day response:", e.message);
   }
   result.meetings = mergeMeetings(result.meetings, dbMeetings);
+
+  // Meetings materialized into real task blocks (meeting-materializer.js) render
+  // via the client-side block fold. Suppress the read-time synthesized/persisted
+  // meeting timeline item for the SAME event (matched by source_id) so it never
+  // shows twice. Query-based, not annotation-based: an intelligence merge that
+  // rewrites meetings[] can't make a ghost reappear. Archive dates have no such
+  // blocks, so their synthesis is untouched -> no regression by construction.
+  let materializedMeetingIds = new Set();
+  try {
+    const wsForBlocks = workspaceId || (userId ? `ws-${userId}` : "ws-1");
+    const dayBlocks = await blockDB.getBlocksByDate(dateStr, wsForBlocks);
+    for (const b of dayBlocks) {
+      const p = b.properties || {};
+      if (p.source === "calendar" && (p.type === "meeting" || p.type === "oneone") && p.source_id) {
+        materializedMeetingIds.add(String(p.source_id));
+      }
+    }
+  } catch (e) {
+    console.error("[calendar] Could not load meeting blocks for suppression:", e.message);
+  }
+  const isMaterialized = (item) => {
+    const sid = String(item?.source_id || item?.event_id || item?.gcal_event_id || "").trim();
+    return !!sid && materializedMeetingIds.has(sid);
+  };
+
   const fileMeetingTimeline = (result.meetings || [])
     .map((meeting, index) => meetingToTimelineItem(meeting, index, dateStr))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((item) => !isMaterialized(item));
+  // Also drop meeting items already persisted in the enrichment timeline that
+  // are now backed by a real block (the second double-emission source).
+  result.schedule.timeline = (result.schedule.timeline || []).filter(
+    (item) => !(item && item.type === "meeting" && isMaterialized(item))
+  );
   result.schedule.timeline = mergeMeetingTimeline(result.schedule.timeline, [
-    ...dbMeetingTimeline,
+    ...dbMeetingTimeline.filter((item) => !isMaterialized(item)),
     ...fileMeetingTimeline
   ]);
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
@@ -824,13 +856,19 @@ app.get("/api/health", async (req, res) => {
 
 app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 
+// Calendar meetings -> durable task blocks (see meeting-materializer.js).
+const meetingMaterializer = require("./meeting-materializer")({
+  blockDB, scoreTaskPoints, meetingIdentity, APP_TIME_ZONE,
+});
+
 // ── Route modules ──
 // Shared context handed to each route module. Plain consts are captured by
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
-  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
+  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
+  meetingMaterializer, meetingIdentity,
   ...routeHelpers,
   get vault() { return vault; },
   get syncMgr() { return syncMgr; },
@@ -843,6 +881,7 @@ require("./routes/evaluation")(app, ctx);
 require("./routes/meeting")(app, ctx);
 require("./routes/gcal")(app, ctx);
 require("./routes/slots")(app, ctx);
+require("./routes/budget")(app, ctx);
 require("./routes/punishments")(app, ctx);
 require("./routes/vault")(app, ctx);
 require("./routes/admin-tokens")(app, ctx);

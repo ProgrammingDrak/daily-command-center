@@ -297,6 +297,10 @@ app.delete("/api/blocks/:id", async (req, res) => { try { const existing = await
 app.post("/api/blocks/batch", async (req, res) => { try { const { operations, _clientId } = req.body; if (!Array.isArray(operations)) return res.status(400).json({ error: "operations must be an array" }); const opsWithUser = operations.map(op => op.op === "create" ? { ...op, user_id: req.session.userId, workspace_id: req.workspaceId } : op); const result = await blockDB.batchOp(opsWithUser); broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId); res.json(result); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.get("/api/blocks", async (req, res) => { try { if (req.query.date) { if (!isValidDate(req.query.date)) return res.status(400).json({ error: "Invalid date" }); await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId))); } else if (req.query.type) { const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t)); if (!types.length) return res.status(400).json({ error: "No valid types" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByTypes(types, req.workspaceId))); } else { res.status(400).json({ error: "Provide ?date= or ?type=" }); } } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/blocks/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); res.json(filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(start, end, req.workspaceId))); } catch (e) { res.status(500).json({ error: e.message }); } });
+// dcc_state rows keyed by date for the client range cache. db.getDccStateRange
+// existed but was never routed — loadDateRange (day-review, Catch up, the
+// Unfinished section) 404'd here and silently returned an empty cache.
+app.get("/api/dcc-state/range", async (req, res) => { try { const { start, end } = req.query; if (!start || !end || !isValidDate(start) || !isValidDate(end)) return res.status(400).json({ error: "Provide ?start=&end=" }); const rows = await blockDB.getDccStateRange(start, end, req.workspaceId); const out = {}; for (const r of rows) { const key = (r.date instanceof Date) ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10); out[key] = r.state_json; } res.json(out); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/api/blocks/:id", async (req, res) => { const block = await blockDB.getBlock(req.params.id); if (!block) return res.status(404).json({ error: "Block not found" }); try { assertBlockOwnership(block, req.workspaceId); } catch { return res.status(404).json({ error: "Block not found" }); } res.json(block); });
 app.get("/api/blocks/:id/children", async (req, res) => { try { const parent = await blockDB.getBlock(req.params.id); if (!parent) return res.status(404).json({ error: "Block not found" }); assertBlockOwnership(parent, req.workspaceId); res.json(await blockDB.getChildren(req.params.id, req.workspaceId)); } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); } });
 app.post("/api/blocks/reorder", async (req, res) => { try { const { items, _clientId } = req.body; if (!Array.isArray(items)) return res.status(400).json({ error: "items must be an array" }); for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); } await blockDB.reorderBlocks(items); broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId); res.json({ ok: true, reordered: items.length }); } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); } });
@@ -322,14 +326,23 @@ app.post("/api/blocks/:id/reschedule", async (req, res) => {
     const parent = await blockDB.getBlock(req.params.id);
     if (!parent) return res.status(404).json({ error: "Block not found" });
     assertBlockOwnership(parent, req.workspaceId);
-    const fromDate = parent.date;
+    // Undated blocks exist (e.g. task-bar pending_tasks live on a day only via
+    // day-state), so accept the caller's viewed day as the origin. The move
+    // stamps a real date on them, healing the anomaly.
+    const bodyFromDate = req.body && req.body.fromDate;
+    if (bodyFromDate != null && !isValidDate(bodyFromDate)) return res.status(400).json({ error: "Invalid fromDate" });
+    const fromDate = parent.date || bodyFromDate;
     if (!fromDate) return res.status(400).json({ error: "Block has no source date to move from" });
     if (fromDate === targetDate) return res.status(400).json({ error: "Already on that date" });
     const parentLocalId = (parent.properties || {}).local_id || null;
 
     // Gather the origin day's task blocks and walk the subtaskOf/wrapId tree.
-    const dayBlocks = (await blockDB.getBlocksByDate(fromDate, req.workspaceId))
-      .filter(b => b.type === "block" && (b.properties || {}).local_id);
+    // Undated task blocks ride along as walk candidates: they only move if their
+    // subtaskOf/wrapId chain links them into the parent's subtree.
+    const dayBlocks = [
+      ...(await blockDB.getBlocksByDate(fromDate, req.workspaceId)),
+      ...(await blockDB.getUndatedTaskBlocks(req.workspaceId))
+    ].filter(b => b.type === "block" && (b.properties || {}).local_id);
     const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
     const byId = new Map(dayBlocks.map(b => [b.id, b]));
     byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks

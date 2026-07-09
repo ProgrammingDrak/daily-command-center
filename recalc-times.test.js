@@ -104,6 +104,23 @@ test("orderWins: chain flows around a meeting", () => {
   assert.equal(find(sched, "c").start, "11:00");
 });
 
+test("orderWins: a moved meeting blocks the cascade at its NEW slot (live-sourced, not INIT_SCHED)", () => {
+  // The meeting started the day at 13:00 (INIT_SCHED) but the user moved it to
+  // 09:30. Task 'a' (60m, ordered first) would naturally sit 09:00-10:00 and
+  // collide with the meeting's NEW slot, so it must be pushed past it. This only
+  // holds if _meetingBlocks() reads the live scheduled position, not INIT_SCHED.
+  const meetingInit = t("mtg", "13:00", "13:30", { type: "meeting" });
+  const meetingNow = t("mtg", "09:30", "10:00", { type: "meeting" });
+  const sched = [
+    t("a", "09:00", "10:00"),
+    meetingNow,
+  ];
+  const { context } = makeDay(sched, { initSched: [meetingInit] });
+  context.recalcTimes({ orderWins: true });
+  assert.equal(find(sched, "mtg").start, "09:30");  // meeting held at its moved time
+  assert.equal(find(sched, "a").start, "10:00");    // bumped past the meeting's NEW slot
+});
+
 test("orderWins: locked task holds; successor starts at its end", () => {
   const sched = [
     t("a", "09:00", "09:30"),

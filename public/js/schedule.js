@@ -21,6 +21,10 @@ function saveAddedTasks(tasks){
   localStorage.setItem(ADDED_KEY,JSON.stringify(tasks)); scheduleIDBSave();
 }
 function persistAddedTask(item,targetDate){
+  // dur() is end-start, which is meaningless on an untimed item (no start yet,
+  // e.g. a future-day create from the schedule popover) — fall back to durMin.
+  const _computedDur=dur(item);
+  const _itemDur=(Number.isFinite(_computedDur)&&_computedDur>0)?_computedDur:(item.durMin||30);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
     // Write to blockstore — will be reloaded via property-based query on refresh
     const date=targetDate||((typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)?__state.date:null));
@@ -29,7 +33,7 @@ function persistAddedTask(item,targetDate){
       local_id:item.id,
       type:item.type||"task",
       title:item.title,
-      duration:dur(item),
+      duration:_itemDur,
       start:item.start,
       end:item.end,
       priority:item.priority||"High",
@@ -70,7 +74,7 @@ function persistAddedTask(item,targetDate){
   try{added=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){added=[]}
   if(!added.find(t=>t.id===item.id)){
     added.push({
-      id:item.id,title:item.title,type:item.type||"task",durMin:dur(item),
+      id:item.id,title:item.title,type:item.type||"task",durMin:_itemDur,
       priority:item.priority||"High",source:item.source||"manual",
       meta:item.meta||"",detail:item.detail||"",notionUrl:item.notionUrl||"",
       calUrl:item.calUrl||"",tags:item.tags||[],
@@ -102,15 +106,28 @@ function syncAddedTaskTimes(){
   const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>{
     const p=b.properties||{};
     if(p.kind&&/^responsibility/.test(p.kind))return false;
-    if(!p.local_id&&p.kind!=="task")return false;
+    // Meetings are API-inserted (no local_id, kind "meeting") -> admit them so a
+    // manual move (drag / start-time picker) persists to the block.
+    const isMeetingBlock=p.kind==="meeting"||p.type==="meeting"||p.type==="oneone";
+    if(!p.local_id&&p.kind!=="task"&&!isMeetingBlock)return false;
     return !b.date||b.date===currentDate;
   })];
+  const datedLocalIds=new Set(window.blockStore.getByType("block")
+    .filter(x=>x.date&&(x.properties||{}).local_id)
+    .map(x=>x.properties.local_id));
   addedBlocks.forEach(block=>{
     const p=block.properties||{};
     const ev=scheduled.find(e=>e.id===(p.local_id||block.id));
     if(!ev)return;
     if(ev.untimed)return; // still unscheduled: keep the block startless
-    if(p.start!==ev.start||p.end!==ev.end){
+    // A dateless row whose local_id has a dated sibling is a suppressed leftover
+    // copy; ev here is the SIBLING's task, so never stamp times onto the copy.
+    if(!block.date&&p.local_id&&datedLocalIds.has(p.local_id))return;
+    if(!block.date){
+      // Dragged out of Unscheduled: the task is now scheduled for the viewed
+      // day, so the date lands on the block along with its slot.
+      window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end},{date:currentDate});
+    } else if(p.start!==ev.start||p.end!==ev.end){
       window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end});
     }
   });
@@ -132,7 +149,9 @@ function insertTaskNow(titleArg, durMinArg, opts){
   const startMin=_freeStart(roundTo15(now()),durMin,meetings);
   const startStr=fmt(startMin);
 
-  const newItem=Object.assign({id,title,type:"task",start:startStr,end:fmt(startMin+durMin),
+  const newItem=Object.assign({id,title,type:opts.type||"task",start:startStr,end:fmt(startMin+durMin),
+    // Rollup containers are wraps from birth so drag carries their children.
+    isWrap:(window.TaskTypes&&window.TaskTypes.rule(opts.type,"dragMovesSubtree"))||undefined,
     _pinnedStart:startStr},schedulePickerFields(durMin,opts));
 
   // Calculate insertion position
@@ -157,11 +176,10 @@ function insertTaskNow(titleArg, durMinArg, opts){
   scheduled.splice(insertAt, 0, newItem);
   recalcTimes();
   const pins=loadPinnedStarts();pins[id]=startStr;savePinnedStarts(pins);
+  // The dated block from persistAddedTask is the single record. The old extra
+  // savePendingTasks push here minted a dateless kind:"pending_task" twin with
+  // the same local_id that nothing ever deleted.
   persistAddedTask(newItem);
-  const pending=loadPendingTasks();
-  pending.push({id,title,priority:"High",source_task:"Task bar",
-    source_task_id:"taskbar",created_at:new Date().toISOString(),status:"scheduled",_scheduled:true});
-  savePendingTasks(pending);
   log("scheduled",id,"Quick-added at "+startStr+": "+title);
   render();
   checkBlockWarnings(newItem);
@@ -271,6 +289,7 @@ async function commitDoneOnDate(id,dateStr){
     log("checked",id);saveDoneState();render();
     _finishCompletionCelebration(_cel,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_award});
+    _autoCompleteShellAncestors(id,dateStr);
     return;
   }
 
@@ -304,19 +323,71 @@ async function commitDoneOnDate(id,dateStr){
   }
   log("checked-on",id,"Marked done on "+dateStr);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_pointAwardOverride(id)});
+  _autoCompleteShellAncestors(id,dateStr);
+}
+
+// Completion bonus for a rollup container (shell): bonusPct × the estimated
+// value of its whole subtree. Each descendant that isn't a pie subtask
+// contributes its own estimate (PointPlan.estimatePool — the points-chip
+// number); a descendant that owns a pie contributes its pool instead (which
+// already covers its subtasks). Nested rollup containers contribute nothing
+// themselves (their own bonus banks when THEY complete) but their subtrees
+// count. Client-computed like the PointPlan pie bonus and sent as a
+// points_override — the server clamps and ledgers it idempotently.
+function _shellBonusPoints(id){
+  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof shellRollup!=="function"||typeof shellBonus!=="function")return undefined;
+  const ev=scheduled.find(e=>e.id===id);
+  if(!ev||!window.TaskTypes.isRollup(ev))return undefined;
+  const bonus=shellBonus(shellRollup(id,scheduled).points,Number(window.TaskTypes.rule(ev,"bonusPct"))||0);
+  return bonus>0?bonus:undefined;
+}
+
+// After any completion, walk the parent chain: a rollup ancestor (shell) whose
+// children are now ALL done auto-completes and banks its bonus. Completion is
+// applied directly (not via toggleDone) so the manual-complete guard and the
+// child cascade are skipped — every child is already done. Idempotent: the
+// bonus rides the normal ledger sourceKey (<date>:<shellId>).
+function _autoCompleteShellAncestors(id,sourceDate){
+  if(typeof scheduled==="undefined"||!window.TaskTypes||typeof parentIdOf!=="function")return;
+  const seen=new Set();
+  let cur=scheduled.find(e=>e.id===id);
+  while(cur){
+    const pid=parentIdOf(cur);
+    if(!pid||seen.has(pid))return;
+    seen.add(pid);
+    const parent=scheduled.find(e=>e.id===pid);
+    if(!parent)return;
+    if(window.TaskTypes.rule(parent,"autoCompleteWhenChildrenDone")&&!isDone(parent)){
+      if(childrenOf(parent.id,scheduled).some(c=>!isDone(c)))return; // still open work inside
+      const bonus=_shellBonusPoints(parent.id);
+      const completedAt=new Date();
+      manualDone.add(parent.id);doneAt[parent.id]=completedAt;
+      log("checked",parent.id,"Auto-completed: all nested tasks done");
+      saveDoneState();render();
+      awardSlotTaskCredit(parent,{sourceDate:sourceDate,completedAt:completedAt.toISOString(),awardPoints:bonus});
+      if(typeof showToast==="function")showToast('"'+(parent.title||"Shell")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
+    } else if(!isDone(parent)){
+      return; // an open non-rollup ancestor blocks everything above it
+    }
+    cur=parent;
+  }
 }
 
 // Points override for a completion, when the task participates in a parent's
-// point pie. Returns:
+// point pie or is itself a rollup container. Returns:
+//   - a rollup container's completion bonus (covers the manual recheck path;
+//     the normal path banks it via _autoCompleteShellAncestors);
 //   - a parent's completion award (bonus + still-open subtask slices) when the
 //     task has subtasks — MUST be read BEFORE _onParentCompleted cascades them;
 //   - a subtask's own slice when it is a subtask of a parent;
 //   - undefined for everything else (normal duration-based scoring), including
 //     "stacked" (ride-along) tasks, whose points are independent.
 function _pointAwardOverride(id){
-  if(!window.PointPlan||typeof childrenOf!=="function"||typeof relOf!=="function")return undefined;
+  if(typeof childrenOf!=="function"||typeof relOf!=="function")return undefined;
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return undefined;
+  if(window.TaskTypes&&window.TaskTypes.isRollup(ev))return _shellBonusPoints(id);
+  if(!window.PointPlan)return undefined;
   const hasSubKids=childrenOf(id,scheduled).some(c=>relOf(c)==="subtask");
   if(hasSubKids)return window.PointPlan.awardForParentCompletion(id);
   if(ev.subtaskOf)return window.PointPlan.shareFor(ev.subtaskOf,id);
@@ -331,6 +402,11 @@ function awardSlotTaskCredit(ev,opts){
   if(opts.awardPoints!=null&&Number.isFinite(Number(opts.awardPoints))&&Number(opts.awardPoints)<=0)return;
   const fallbackDate=(typeof viewDate!=="undefined"&&viewDate)||((__state&&__state.date)||new Date().toISOString().split("T")[0]);
   const normalizedOpts={...opts,sourceDate:opts.sourceDate||opts.completionDate||fallbackDate,completedAt:opts.completedAt||new Date().toISOString()};
+  // A rollup container's bonus must dedupe across calendar dates: the default
+  // ledger key is <sourceDate>:<id>, so unchecking a shell and re-completing it
+  // under a different completion date would mint a fresh key and double-award.
+  // Pin the key to the shell instance itself (ids are unique per instance).
+  if(normalizedOpts.sourceKey==null&&window.TaskTypes&&window.TaskTypes.isRollup(ev))normalizedOpts.sourceKey="shell:"+ev.id;
   if(window.PetHome&&typeof window.PetHome.awardTask==="function"){
     window.PetHome.awardTask(ev,normalizedOpts).catch(()=>{});
   }
@@ -384,7 +460,14 @@ function _onParentCompleted(id){
       completeSubs(c.id);
     });
   })(id);
-  // 2) Promote unfinished ride-alongs to standalone open tasks.
+  // 2) Promote unfinished ride-alongs to standalone open tasks. Rollup
+  // containers (shells) never eject their children — they can only complete
+  // when every child is already done, so there is nothing to promote.
+  const _parentEv=scheduled.find(e=>e.id===id);
+  if(_parentEv&&window.TaskTypes&&window.TaskTypes.isRollup(_parentEv)){
+    if(typeof recalcTimes==="function")recalcTimes();
+    return;
+  }
   let promoted=0;
   scheduled.filter(c=>c.wrapId===id&&!isDone(c)).forEach(c=>{
     c.wrapId=null;
@@ -400,6 +483,20 @@ function toggleDone(id,opts){
   if(manualDone.has(id)){
     manualDone.delete(id);delete doneAt[id];log("unchecked",id);
     saveDoneState();render();return;
+  }
+
+  // A rollup container (shell) can't be checked while children are open — its
+  // bonus depends on ALL children finishing, and it auto-completes when the
+  // last one does (that path bypasses this via opts._fromAutoComplete).
+  if(!opts._fromAutoComplete&&window.TaskTypes&&typeof childrenOf==="function"){
+    const shellEv=scheduled.find(e=>e.id===id);
+    if(shellEv&&window.TaskTypes.rule(shellEv,"blockManualCompleteWithOpenChildren")){
+      const open=childrenOf(id,scheduled).filter(c=>!isDone(c)).length;
+      if(open){
+        if(typeof showToast==="function")showToast("Finish its "+open+" remaining task"+(open>1?"s":"")+" first","info",2600);
+        return;
+      }
+    }
   }
 
   // Caller forced a specific completion date (Done-on-date confirmation flow)
@@ -429,6 +526,7 @@ function toggleDone(id,opts){
       saveDoneState();render();
       _finishCompletionCelebration(_cel,id);
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
+      _autoCompleteShellAncestors(id,currentDate);
       if(typeof showToast==="function"){
         const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
         showToast("Marked done on "+label,"success");
@@ -456,6 +554,7 @@ function toggleDone(id,opts){
   _finishCompletionCelebration(_cel,id);
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
+  _autoCompleteShellAncestors(id,currentDate);
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
@@ -499,10 +598,15 @@ function savePinnedStarts(data){
 
 function pinStartTime(id,timeStr){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  ev._pinnedStart=timeStr;
   const s=pt(timeStr),d=dur(ev);
   ev.start=timeStr;ev.end=fmt(s+d);
-  const pins=loadPinnedStarts(); pins[id]=timeStr; savePinnedStarts(pins);
+  // Meetings hold their slot via fixedTime (isFixedTimeBlock), not the pin map —
+  // recording a pin for them is meaningless and would clutter it. Every other
+  // task pins so recalcTimes() won't overwrite the chosen start.
+  if(!(typeof isFixedTimeBlock==="function"&&isFixedTimeBlock(ev))){
+    ev._pinnedStart=timeStr;
+    const pins=loadPinnedStarts(); pins[id]=timeStr; savePinnedStarts(pins);
+  }
   log("pin-start",id,"Pinned start to "+timeStr);
   recalcTimes();render();
 }
@@ -660,18 +764,32 @@ function addNewTask(titleArg, durMinArg){
 function addTaskUniversal(barEl){
   const inp=barEl.querySelector(".tab-title");
   const title=inp.value.trim();
-  if(!title){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();return}
+  if(!title){_flashBlankTitle(barEl,()=>addTaskUniversal(barEl));return}
   const durMin=parseInt(barEl.querySelector(".tab-dur").value)||30;
   const dest=barEl.querySelector(".tab-dest").value;
-  inp.value="";
+  // "Schedule…" defers the clear to commit time so dismissing the popover
+  // doesn't eat the typed title; every other destination commits right here.
+  if(dest!=="schedule")inp.value="";
   // Snap the type back to Urgent so successive adds always default to Urgent
   // rather than sticking on whatever the user last picked.
   const destSel=barEl.querySelector(".tab-dest");
   if(destSel)destSel.value="urgent";
   switch(dest){
-    case"schedule":openSchedulePicker(title,durMin,{sourceBar:barEl});break;
+    case"schedule":
+      openSchedulePopover({mode:"create",title,durMin,
+        anchorEl:barEl.querySelector(".tab-add")||barEl,
+        options:{sourceBar:barEl},
+        onCommitted:()=>{const i=barEl.querySelector(".tab-title");if(i&&i.value.trim()===title)i.value="";}});
+      break;
     case"backlog":addNewTask(title,durMin);break;
     case"urgent":insertTaskNow(title,durMin);break;
+    // Retro-logging: the task already happened — create it and check it off in
+    // one gesture so points/streaks/persistence flow through the normal path.
+    case"done":insertTaskNow(title,durMin,{onScheduled:r=>{if(r&&r.localId&&typeof toggleDone==="function")toggleDone(r.localId);}});break;
+    case"shell":insertTaskNow(title,durMin,{type:"shell"});break;
+    // Manually-added meeting: no source_id, so the calendar materializer never
+    // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
+    case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
     case"side_project":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
@@ -729,28 +847,63 @@ function _schedTimeLabel(hhmm){
 }
 
 let _schedPickerTitle="",_schedPickerDur=30,_schedPickerOptions={},_schedPickerDate="";
+let _schedPickerOnPlace=null,_schedPickerVerb="";
+function _schedSetHeader(verb){
+  const overlay=document.getElementById("sched-picker-overlay");
+  const hdr=overlay&&overlay.querySelector(".sched-picker-hdr h3");
+  if(hdr)hdr.textContent=(verb||"Schedule")+" task";
+}
 function openSchedulePicker(title,durMin,options){
   _schedPickerTitle=title;
   _schedPickerDur=durMin||30;
   _schedPickerOptions=options||{};
   _schedPickerDate="";
+  _schedPickerOnPlace=null;_schedPickerVerb="";
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay){
     // Fallback if modal markup isn't present: schedule after current.
     insertTaskNow(title,durMin);
     return;
   }
+  _schedSetHeader("Schedule");
   const titleEl=document.getElementById("sched-picker-title");
-  if(titleEl)titleEl.textContent=title;
+  if(titleEl)titleEl.value=title;
   _schedShowStep("day");
   const dateInput=document.getElementById("sched-date-input");
   if(dateInput){dateInput.style.display="none";dateInput.value="";}
+  overlay.classList.add("open");
+}
+// Placement mode: the SAME 2-step day → "After…" UI, generalized so any mover
+// (reschedule popover, move menu, drag) resolves a day + concrete start time
+// through one flow. cfg: {title, durMin, verb, day, onPlace(dateStr, timeStr)}.
+// timeStr null means "earliest free slot" (the old auto-slot behavior).
+// Passing cfg.day skips step 1 and lands on the placement step for that day;
+// Back still returns to the day step so the user can change days.
+function openPlacementPicker(cfg){
+  cfg=cfg||{};
+  const onPlace=typeof cfg.onPlace==="function"?cfg.onPlace:null;
+  const overlay=document.getElementById("sched-picker-overlay");
+  if(!overlay){if(onPlace)onPlace(cfg.day||_resolvedTodayDate(),null);return}
+  _schedPickerTitle=cfg.title||"";
+  _schedPickerDur=cfg.durMin||30;
+  _schedPickerOptions={};
+  _schedPickerDate="";
+  _schedPickerOnPlace=onPlace;
+  _schedPickerVerb=cfg.verb||"Move";
+  _schedSetHeader(_schedPickerVerb);
+  const titleEl=document.getElementById("sched-picker-title");
+  if(titleEl)titleEl.value=_schedPickerTitle;
+  const dateInput=document.getElementById("sched-date-input");
+  if(dateInput){dateInput.style.display="none";dateInput.value="";}
+  if(cfg.day)_schedPickDay(cfg.day);
+  else _schedShowStep("day");
   overlay.classList.add("open");
 }
 function closeSchedulePicker(){
   const overlay=document.getElementById("sched-picker-overlay");
   if(overlay)overlay.classList.remove("open");
   _schedPickerTitle="";_schedPickerDur=30;_schedPickerOptions={};_schedPickerDate="";
+  _schedPickerOnPlace=null;_schedPickerVerb="";
 }
 function _schedShowStep(step){
   const dayEl=document.getElementById("sched-step-day");
@@ -772,6 +925,14 @@ async function _renderSchedAfterStep(dateStr){
   const chipWrap=document.getElementById("sched-after-chips");
   if(chipWrap){
     chipWrap.innerHTML="";
+    // Placement mode gets an "Earliest free" chip: the one-tap auto-slot the
+    // old quick buttons did, for when the exact time doesn't matter.
+    if(_schedPickerOnPlace){
+      const b=document.createElement("button");
+      b.type="button";b.className="sched-chip sched-chip-earliest";b.textContent="⚡ Earliest free";
+      b.addEventListener("click",()=>_schedCommit(dateStr,null));
+      chipWrap.appendChild(b);
+    }
     loadSchedTimePresets().forEach(t=>{
       const b=document.createElement("button");
       b.type="button";b.className="sched-chip";b.textContent=_schedTimeLabel(t);
@@ -838,11 +999,16 @@ async function _schedDayTasks(dateStr){
   uniq.sort((a,b)=>pt(a.end)-pt(b.end));
   return uniq;
 }
-// Resolve the chosen day+time into an actual scheduled task, then close.
+// Resolve the chosen day+time: hand it to the placement callback (movers) or
+// create the scheduled task (the original create flow), then close.
 function _schedCommit(dateStr,timeStr){
-  const title=_schedPickerTitle,durMin=_schedPickerDur,options=_schedPickerOptions;
+  // The title is editable in the modal; whatever it says at commit time wins.
+  const title=(_schedPickerTitle||"").trim()||"Untitled task";
+  const durMin=_schedPickerDur,options=_schedPickerOptions;
+  const onPlace=_schedPickerOnPlace;
   const bar=options&&options.sourceBar;
   closeSchedulePicker();
+  if(onPlace){onPlace(dateStr,timeStr,title);return}
   commitScheduledTask(title,durMin,dateStr,timeStr,options);
   if(bar){const inp=bar.querySelector(".tab-title");if(inp){inp.value="";inp.classList.remove("tab-error");}}
 }
@@ -886,12 +1052,9 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     scheduled.splice(insertAt,0,newItem);
     const pins=loadPinnedStarts();pins[id]=timeStr;savePinnedStarts(pins);
     recalcTimes();
+    // Single record: persistAddedTask's dated block. (A savePendingTasks push
+    // here used to mint an orphaned dateless pending_task twin.)
     persistAddedTask(newItem);
-    const pending=loadPendingTasks();
-    pending.push({id,title,priority:"High",source_task:"Task bar",
-      source_task_id:"taskbar",created_at:new Date().toISOString(),
-      status:"scheduled",_scheduled:true});
-    savePendingTasks(pending);
     log("scheduled",id,"Scheduled at "+timeStr+": "+title);
     render();
     checkBlockWarnings(newItem);
@@ -940,6 +1103,10 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
 (function(){
   const overlay=document.getElementById("sched-picker-overlay");
   if(!overlay)return;
+  // The title is a live input in both modes: edits flow into the commit
+  // (create) or into a rename that precedes the move (placement).
+  const titleEl=document.getElementById("sched-picker-title");
+  if(titleEl)titleEl.addEventListener("input",()=>{_schedPickerTitle=titleEl.value});
   const closeBtn=document.getElementById("sched-picker-close");
   if(closeBtn)closeBtn.addEventListener("click",closeSchedulePicker);
   overlay.addEventListener("click",e=>{if(e.target===overlay)closeSchedulePicker()});
@@ -1016,28 +1183,164 @@ function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-o
   if(saveBtn)saveBtn.addEventListener("click",closeSchedDefaults);
   document.addEventListener("keydown",e=>{if(e.key==="Escape"&&ov.classList.contains("open"))closeSchedDefaults()});
 })();
-// Wire up all task-add bars
-document.querySelectorAll(".task-add-bar").forEach(bar=>{
-  bar.querySelector(".tab-add").addEventListener("click",()=>addTaskUniversal(bar));
-  bar.querySelector(".tab-title").addEventListener("keydown",e=>{if(e.key==="Enter")addTaskUniversal(bar)});
-  // Choosing "Schedule" in the priority dropdown opens the day/time picker right
-  // away. The dropdown snaps back to Urgent (the picker holds the task), so the
-  // bar is reset whether or not the user follows through.
-  const dest=bar.querySelector(".tab-dest");
-  if(dest)dest.addEventListener("change",()=>{
-    if(dest.value!=="schedule")return;
-    const inp=bar.querySelector(".tab-title");
-    const title=inp?inp.value.trim():"";
-    const durEl=bar.querySelector(".tab-dur");
-    const durMin=(durEl&&parseInt(durEl.value))||30;
-    dest.value="urgent";
-    if(!title){
-      if(inp){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();}
+// ======== TASK DESTINATIONS (shared registry + radial menu) ========
+// One list drives every task-add bar, so new destinations (like Shell) show up
+// everywhere at once instead of drifting per-bar. The old <select> stays in
+// the DOM (hidden) as the value store addTaskUniversal reads; the radial menu
+// just sets it.
+const TASK_DESTINATIONS=[
+  {value:"urgent",  icon:"⚡", label:"Urgent"},
+  {value:"done",    icon:"✅", label:"Completed"},
+  {value:"schedule",icon:"📅", label:"Schedule…"},
+  {value:"backlog", icon:"💡", label:"Backlog / Idea"},
+  {value:"shell",   icon:"🐚", label:"Shell"},
+  {value:"meeting", icon:"👥", label:"Meeting"}
+];
+function _destMeta(value){return TASK_DESTINATIONS.find(d=>d.value===value)||TASK_DESTINATIONS[0]}
+// Blank title isn't a silent dead end: flash the input AND offer, via a toast
+// action, to proceed as an untitled task. onProceed resumes whatever the user
+// was doing (opening the radial, or committing an already-picked destination).
+function _flashBlankTitle(barEl,onProceed){
+  const inp=barEl.querySelector(".tab-title");
+  if(inp){inp.classList.add("tab-error");setTimeout(()=>inp.classList.remove("tab-error"),400);inp.focus();}
+  if(typeof showToast==="function"){
+    showToast("Task title is blank","error",6000,{
+      label:"Create untitled task",
+      onClick:()=>{
+        if(inp)inp.value="Untitled task";
+        if(typeof onProceed==="function")onProceed();
+      }
+    });
+  }
+}
+// The fan itself lives in radial-menu.js (generic engine); these wrappers keep
+// the destination semantics — map TASK_DESTINATIONS to items whose default
+// pick commits the add through the hidden select + addTaskUniversal.
+function _destItems(bar,sel,opts){
+  return TASK_DESTINATIONS.map(d=>({icon:d.icon,label:d.label,
+    onPick:()=>{
+      if(opts&&typeof opts.onPick==="function"){opts.onPick(d);return}
+      sel.value=d.value;
+      addTaskUniversal(bar);
+    }}));
+}
+function _closeDestRadial(){closeRadialMenu()}
+function initDestRadial(bar){
+  const sel=bar.querySelector(".tab-dest");
+  if(!sel)return;
+  // Every bar offers the full destination set, even where markup predates one.
+  TASK_DESTINATIONS.forEach(d=>{
+    if(!sel.querySelector('option[value="'+d.value+'"]')){
+      const o=document.createElement("option");o.value=d.value;o.textContent=d.label;sel.appendChild(o);
+    }
+  });
+  sel.style.display="none";
+  // "+ Add" is the ONE button: click fans out the destinations, and picking a
+  // destination commits the add in the same gesture (no separate submit).
+  const addBtn=bar.querySelector(".tab-add");
+  const inp=bar.querySelector(".tab-title");
+  if(!addBtn)return;
+  const openOrFlash=()=>{
+    _hideDestPreview();
+    if(document.querySelector(".dest-radial-backdrop")){_closeDestRadial();return}
+    // Armed bar (FAB flow: type was chosen FIRST): + Add commits straight to
+    // the armed destination, no second radial.
+    const armed=bar.dataset.armedDest;
+    if(armed){
+      sel.value=armed;
+      addTaskUniversal(bar);
       return;
     }
-    openSchedulePicker(title,durMin,{sourceBar:bar});
+    const title=inp?inp.value.trim():"";
+    if(!title){
+      _flashBlankTitle(bar,()=>_openDestRadial(bar,sel,addBtn));
+      return;
+    }
+    _openDestRadial(bar,sel,addBtn);
+  };
+  addBtn.addEventListener("click",e=>{e.stopPropagation();openOrFlash()});
+  if(inp)inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();openOrFlash()}});
+  // Hover teaser: a small radial "toast" previewing exactly what will fan out
+  // on click. Hovering ONTO the teaser promotes it to the full interactive
+  // radial, so both paths (click, or hover-then-hover) reach a pick.
+  // Armed bars skip the teaser — + Add commits directly there.
+  let hoverTimer=null;
+  addBtn.addEventListener("mouseenter",()=>{
+    clearTimeout(_destPreviewHideTimer);
+    if(bar.dataset.armedDest)return;
+    if(document.querySelector(".dest-radial-backdrop"))return;
+    hoverTimer=setTimeout(()=>_showDestPreview(bar,sel,addBtn),220);
   });
-});
+  addBtn.addEventListener("mouseleave",()=>{
+    clearTimeout(hoverTimer);
+    // Grace window: the pointer needs time to cross the gap from the button
+    // to a teaser dot without the preview vanishing underneath it.
+    clearTimeout(_destPreviewHideTimer);
+    _destPreviewHideTimer=setTimeout(_hideDestPreview,320);
+  });
+}
+// The mini preview: engine-rendered dots; entering one expands to the real
+// radial anchored on the same button. The grace timer lives here (shared with
+// the initDestRadial mouseleave handlers).
+let _destPreviewHideTimer=null;
+function _showDestPreview(bar,sel,anchorBtn){
+  showRadialMenuPreview(anchorBtn,_destItems(bar,sel),{
+    onExpand:()=>{clearTimeout(_destPreviewHideTimer);_openDestRadial(bar,sel,anchorBtn)},
+    onDotLeave:()=>{clearTimeout(_destPreviewHideTimer);_destPreviewHideTimer=setTimeout(_hideDestPreview,320)}
+  });
+}
+function _hideDestPreview(){hideRadialMenuPreview()}
+function _openDestRadial(bar,sel,trig,opts){
+  opts=opts||{};
+  // Picking a destination IS the submit — one gesture, committed — unless the
+  // caller intercepts (e.g. the FAB arms the compose bar via opts.onPick).
+  openRadialMenu(trig,_destItems(bar,sel,opts),{a0:opts.a0,a1:opts.a1});
+}
+// ── Armed compose (FAB choose-type-first flow) ──
+// The launcher FAB fans out the destinations BEFORE the compose bar opens;
+// the pick "arms" the bar: a chip shows the chosen type, and + Add / Enter
+// commits straight to it. Clicking the chip re-opens the fan to switch type.
+function _setDestArm(bar,destValue){
+  bar.dataset.armedDest=destValue;
+  const sel=bar.querySelector(".tab-dest");
+  if(sel)sel.value=destValue;
+  let chip=bar.querySelector(".dest-armed-chip");
+  if(!chip){
+    chip=document.createElement("button");
+    chip.type="button";chip.className="dest-armed-chip";chip.title="Change task type";
+    const inp=bar.querySelector(".tab-title");
+    bar.insertBefore(chip,inp||bar.firstChild);
+    chip.addEventListener("click",e=>{
+      e.stopPropagation();
+      _openDestRadial(bar,sel,chip,{onPick:d=>_setDestArm(bar,d.value)});
+    });
+  }
+  const m=_destMeta(destValue);
+  chip.innerHTML='<span class="dac-icon">'+m.icon+'</span><span class="dac-label">'+m.label+'</span>';
+}
+function _clearDestArm(bar){
+  if(!bar)return;
+  delete bar.dataset.armedDest;
+  const chip=bar.querySelector(".dest-armed-chip");
+  if(chip)chip.remove();
+}
+// Called by launcher.js on a quick FAB tap: destinations fan out from the FAB
+// (up-left arc, it lives in the corner); the pick arms the bar then opens
+// the compose. Dismissing the fan opens nothing.
+function openDestRadialForLauncher(anchorBtn,onOpenCompose){
+  const bar=document.getElementById("task-add-launcher");
+  const sel=bar&&bar.querySelector(".tab-dest");
+  if(!bar||!sel){if(typeof onOpenCompose==="function")onOpenCompose();return}
+  _openDestRadial(bar,sel,anchorBtn,{a0:185,a1:268,onPick:d=>{
+    _setDestArm(bar,d.value);
+    if(typeof onOpenCompose==="function")onOpenCompose();
+  }});
+}
+window.openDestRadialForLauncher=openDestRadialForLauncher;
+window._clearDestArm=_clearDestArm;
+
+// Wire up all task-add bars ("+ Add" opens the radial; Enter in the title too)
+document.querySelectorAll(".task-add-bar").forEach(bar=>initDestRadial(bar));
 
 // ======== UNIFIED BLOCK QUERY HELPERS ========
 // All user data is type='block'. These helpers filter by property presence.

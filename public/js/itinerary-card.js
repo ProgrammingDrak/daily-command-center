@@ -138,7 +138,9 @@
       if(isMeeting(ev)&&typeof meetingAutomationPanelHtml==="function"){
         detailParts.push(meetingAutomationPanelHtml(ev));
       }
-      if(!isMeeting(ev)){
+      // Subtask / side-project counts — shown for meetings too; they can carry
+      // subtasks like any task (managed via the card-click Add Items modal).
+      {
         var subs=loadSubtasks()[ev.id]||[];
         var linkedTriv=getLinkedTrivialTasks(ev.id);
         if(subs.length||linkedTriv.length){
@@ -186,8 +188,11 @@
     if(hasPrep){timeHtml+='<span class="prep-line"></span>';}
     timeHtml+='</div>';
     var bountyMultiplier=Math.pow(2,Math.max(1,bountyCount||1));
-    var bountyControl=(!guest&&!isMeeting(ev)&&canEditBounty&&(!bountyPlaced||isBounty))
-      ? '<button class="btn-bounty'+(isBounty?' locked':'')+'" data-bounty-id="'+ev.id+'" data-tooltip="'+(isBounty?'Current bounty - '+bountyMultiplier+'x points':'Set bounty - 2x points')+'" aria-label="'+(isBounty?'Current bounty':'Set bounty')+'">'+(isBounty?bountyMultiplier+'x':bountySvg)+'</button>'
+    // Bounty is a row-level button (not a radial spoke): visible on every
+    // eligible card until the day's bounty is placed, then it disappears and
+    // the chosen task carries the golden glow (.card-bounty).
+    var bountyControl=(!guest&&!isMeeting(ev)&&canEditBounty&&!bountyPlaced)
+      ? '<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+bountySvg+'</button>'
       : '';
     var reactionHtml=reactionChipsHtml(ev)||"";
     var footerHtml=(guest&&opts.footerHtml)?opts.footerHtml:'';
@@ -206,23 +211,28 @@
     // and points are separate from the parent.
     var stackedBadge=isRideAlong(ev)?'<span class="stacked-badge" title="Stacked time — independent points & schedule">Stacked</span>':'';
 
+    // Rollup container (shell): registry-driven bar color + card class, points
+    // chip replaced by the children rollup, checkbox display-only while open.
+    var tt=window.TaskTypes?window.TaskTypes.get(ev):null;
+    var shellChip=(tt&&tt.rollupMode&&typeof shellRollupChip==="function")?shellRollupChip(ev):'';
+    var chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
+
     el.innerHTML=
       timeHtml+
       '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
       '<div class="card-wrap">'+
         prepTab+fuTab+trivialTab+
-        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
+        '<div class="card'+(active?' card-active':'')+(isBounty?' card-bounty':'')+(bountyMeta.hasSponsor?' card-bounty-sponsor':'')+(tt&&tt.cardClass?' '+tt.cardClass:'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>'+
           reactionHtml+
           (guest?'':'<div class="grip" title="Drag to reorder">'+gripSvg+'</div>')+
-          (guest?'':'<button class="chk" title="Mark done">'+ckSvg+'</button>')+
+          (guest?'':'<button class="chk'+(chkBlocked?' chk-blocked':'')+'" title="'+(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')+'">'+ckSvg+'</button>')+
           (guest?'':'<div class="chk-col">'+
-            '<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>'+
-            (!isMeeting(ev)?'<button class="btn-add-menu" title="Add subtask or stacked task" data-add-id="'+ev.id+'">+</button>':'')+
+            (!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete (no notes)">&#9889;</button>':'')+
           '</div>')+
-          '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
+          '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+'<span class="tinline">'+(ev._locked?'<span class="lock-ind" title="Locked — holds its time when tasks reflow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span></div>'+
-            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(pplan?pieBarHtml:pointsChip(ev))+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
+            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+'<span class="tinline">'+(ev._locked||isMeeting(ev)?'<span class="lock-ind" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span></div>'+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(shellChip?shellChip:(pplan?pieBarHtml:pointsChip(ev)))+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
@@ -231,15 +241,18 @@
           '</div>'+
           (guest?'':notesButton(ev))+
           (guest?'':(isMeeting(ev)?'<button class="btn-meeting-auto" data-meeting-auto-id="'+(ev.meetingBlockId||ev.id)+'" data-tooltip="Meeting prep and follow-ups"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v4"/><path d="M12 17v4"/><path d="M3 12h4"/><path d="M17 12h4"/><path d="M5.6 5.6l2.8 2.8"/><path d="M15.6 15.6l2.8 2.8"/><path d="M18.4 5.6l-2.8 2.8"/><path d="M8.4 15.6l-2.8 2.8"/></svg></button>':''))+
-          (guest?'':'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+_pomoSvg+'</button>')+
-          (guest?'':(!isMeeting(ev)?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':''))+
-          (guest?'':(!isMeeting(ev)?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':''))+
+          // Meetings keep their direct pomodoro button; task cards start one
+          // from the radial. Row keeps only notes / radial / delete / done.
+          (guest?'':(isMeeting(ev)?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+_pomoSvg+'</button>':''))+
+          (guest?'':(!isMeeting(ev)?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':''))+
           bountyControl+
           (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
           (guest?'':'<div class="dur">'+
-            '<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>'+
-            '<div><div class="dbadge">'+ms(d)+'</div>'+(changed?'<div class="est-act">was '+ms(od)+' <span class="'+(delta>0?"dover":"dunder")+'">'+( delta>0?"+":"")+delta+'m</span></div>':'')+'</div>'+
-            '<button class="dbtn" data-id="'+ev.id+'" data-d="15">+</button>'+
+            // Task cards: read-only badge (adjust via the radial's Duration…);
+            // meetings keep the ±15 stepper and the tappable badge.
+            (isMeeting(ev)?'<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>':'')+
+            '<div><div class="dbadge'+(isMeeting(ev)?'':' dbadge-readonly')+'">'+ms(d)+'</div>'+(changed?'<div class="est-act">was '+ms(od)+' <span class="'+(delta>0?"dover":"dunder")+'">'+( delta>0?"+":"")+delta+'m</span></div>':'')+'</div>'+
+            (isMeeting(ev)?'<button class="dbtn" data-id="'+ev.id+'" data-d="15">+</button>':'')+
           '</div>')+
           (hasDetail?chevron:'')+
         '</div>'+

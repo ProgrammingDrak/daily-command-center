@@ -240,23 +240,62 @@ function reloadPersistedEdits() {
       // responsibility scaffolding. Startless tasks are admitted too -> they land
       // in the Unscheduled section instead of being dropped. (Previously required
       // local_id AND start, which silently dropped every API-inserted task.)
+      // Day-scoping rules:
+      //  - dated row: folds only on its own date.
+      //  - dateless row: genuinely unscheduled work -> folds as untimed (the
+      //    Unscheduled section) on whatever day is viewed, UNLESS a dated
+      //    sibling shares its local_id. That sibling means the task IS
+      //    scheduled and the dateless row is a leftover copy (the old quick-add
+      //    dual-write minted these) — suppress it. No title fallback here:
+      //    recurring titles ("Coffee") would false-suppress real work.
+      //  - pending rows already closed in the Action Items tab stay out.
+      const datedLocalIds=new Set(window.blockStore.getByType("block")
+        .filter(x=>x.date&&(x.properties||{}).local_id)
+        .map(x=>x.properties.local_id));
       const isFoldableTask=b=>{
         const p=b.properties||{};
         if(p.kind&&/^responsibility/.test(p.kind))return false;
-        if(!p.local_id&&p.kind!=="task")return false;
-        return (!b.date||b.date===currentDate);
+        // Tombstones are markers for the amber "Rescheduled away" list, not tasks.
+        // Folding one in resurrects a lookalike row of the task that just moved.
+        if(p.kind==="reschedule_tombstone")return false;
+        if(p.status==="deleted"||p.status==="archived"||p.status==="done")return false;
+        // API-inserted shells carry kind or type "shell" and no local_id.
+        const isShell=p.kind==="shell"||p.type==="shell";
+        // Calendar-materialized meetings are API-inserted (kind/type meeting or
+        // oneone, no local_id) -> admit them so they fold like any other task.
+        const isMeetingBlock=p.kind==="meeting"||p.type==="meeting"||p.type==="oneone";
+        if(!p.local_id&&p.kind!=="task"&&!isShell&&!isMeetingBlock)return false;
+        if(b.date)return b.date===currentDate;
+        return !(p.local_id&&datedLocalIds.has(p.local_id));
       };
       const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)];
       addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
+        // Safety net: a stale cached day file can still carry the synthesized
+        // meeting ghost (id "mtg-<sourceId>") for this same event. The real
+        // block wins -> drop the ghost so it can't double-render before the next
+        // server read suppresses it by source_id.
+        if((p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")&&p.source_id){
+          const sid=String(p.source_id);
+          for(let i=scheduled.length-1;i>=0;i--){
+            const e=scheduled[i];
+            if(e&&e.id!==taskId&&(e.type==="meeting"||e.type==="oneone")&&String(e.source_id||"")===sid)scheduled.splice(i,1);
+          }
+        }
         if(!taskId||scheduled.find(e=>e.id===taskId))return;
         const d=p.duration||p.estimatedMinutes||30;
-        const hasStoredTime=p.start&&p.start!=="00:00";
-        const untimed=!p.start;              // no scheduled time -> Unscheduled section
+        // A dateless row is unscheduled by definition: any stored start on it is
+        // stale (e.g. stamped by an old reflow), so ignore it and keep the row
+        // in the Unscheduled section until a drag gives it a real slot.
+        const dateless=!block.date;
+        const hasStoredTime=!dateless&&p.start&&p.start!=="00:00";
+        const untimed=!p.start||dateless;    // no scheduled time -> Unscheduled section
         const task={
           id:taskId,title:p.title,type:p.type||"task",
           _blockId:block.id,
+          _dateless:dateless,   // day-agnostic row: Unscheduled everywhere, excluded from day stats
+          createdAt:block.created_at||p.created_at||p.createdAt||null,
           start:p.start||"00:00",
           end:p.end||fmt(d),
           meta:p.meta||("Custom task \u00b7 "+ms(d)),
@@ -265,6 +304,12 @@ function reloadPersistedEdits() {
           notionUrl:p.notionUrl||"",calUrl:p.calUrl||"",priority:p.priority||"High",
           tags:Array.isArray(p.tags)?p.tags:[],
           kind:p.kind||"",
+          // Meeting affordances (join link / location / RSVP), and the block id
+          // the meeting-automation panel keys off (itinerary-card.js).
+          location:p.location||"",
+          hangout_link:p.hangout_link||p.conferenceUrl||"",
+          rsvp_status:p.rsvp_status||"",
+          meetingBlockId:(p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")?block.id:(p.meetingBlockId||""),
           isPlaceholder:p.isPlaceholder||false,
           placeholderMenus:Array.isArray(p.placeholderMenus)?p.placeholderMenus:[],
           taskGroupId:p.taskGroupId||null,

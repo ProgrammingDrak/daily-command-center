@@ -4,7 +4,136 @@
 > Renamed from TODO-README 2026-07-04: this file was a per-PR QA log, not a live
 > TODO (it still described the SQLite era). Kept as history. Live conventions:
 > ARCHITECTURE.md. Manual QA: QA-CHECKLIST.md.
-## Current PR: Task Persistence + Overflow + UI Polish
+## Current PR: Budget Tank overhaul — priority wishlist wired to the slot economy
+
+### What Changed
+- **The Budget Tank is now an aquarium.** The Phase-0 localStorage what-if
+  visualizer is gone; the tab is server-backed (`budget-store.js`,
+  `routes/budget.js`, rewritten `public/js/budget.js`). The whole tank is last
+  month's income (stated in an editable "Income from last month" field);
+  necessities are the submerged reef of scenery at the bottom (proportional,
+  always covered); the discretionary budget the reward-chests fill is
+  income − necessities. Chests unlock bottom-to-top as this period's bank build
+  raises the waterline; fish join per claimed block.
+- **Blocks are objectives, shared with the slot machine.** A tank block is a
+  `slot_rewards` row (`kind='bank_gated'`) with additive `tank_*` columns, so it
+  is simultaneously a spinnable objective and a tank block. Drag to reprioritize
+  (bottom fills first); the cumulative `tank_unlock_cents` gate is recomputed
+  server-side on every mutation. `rowToReward` gates tank rows on the waterline
+  (`tank_locked`/`tank_claimed`) so the machine and the tank agree.
+- **Claim in the tank or on the machine — same outcome.** Claiming debits
+  `value_cents` (never the cumulative gate), stamps the period, and enqueues into
+  the existing `reward_queue_items` with a period-scoped sourceId (double-claim
+  safe), then schedules onto the itinerary via `window.scheduleRewardQueueItem`.
+- **Money Changer**: points → bank at an admin-tunable `cents_per_point` (default
+  1:1¢), idempotent on the `slot_point_ledger` unique index. Conversions land in
+  `budget_conversions` (raise the waterline) but never in `getBankUsage`, so Bank
+  Builder pacing/shield stay clean.
+- **Monthly rollover + sweep**: lazy period detection → modal (carry unhit to the
+  bottom / start fresh). Leftover above the last funded block sweeps to the
+  append-only `budget_investments` ledger (idempotent per period) and drops a
+  real "Transfer $X to brokerage" task on today. An active monthly tank drives
+  the Bank Builder goal (goal_mode `manual` opts out).
+- New tables: `budget_conversions`, `budget_investments`; new `slot_rewards`
+  columns `tank_position/tank_unlock_cents/tank_category/tank_color/tank_recurring/tank_claimed_period`
+  (all additive). 28 new tests in `budget-store.test.js` (thresholds, claim
+  gating/debit-correctness, conversion idempotency + the pacing-contamination
+  regression, rollover carry/fresh/idempotency); suite 220→ green. `smoke.mjs`
+  asserts the aquarium renders and `/api/budget/state` shape.
+## Previous PR: Task-row radial menu + unified schedule popover + Completed quick-add + row-level bounty
+
+### What Changed
+- **Task-row radial**: the row arrow (`.btn-task-radial`, was `.btn-push-tmr`)
+  fans a radial menu via a new generic engine (`public/js/radial-menu.js`,
+  extracted from the #197 destination fan; fixes its stale trigger-highlight
+  and Escape-listener leak). Top fan: Change task / Duration / Pomodoro /
+  Lock-Unlock / Add task; the Change task spoke opens a sub-fan (Back /
+  Schedule / Subtask / Delegate / Repeat / Backlog). Rows keep only done,
+  notes, bounty, delete; meetings keep their direct buttons; the trigger is
+  visible on mobile, giving phones full task actions for the first time.
+- **One schedule popover**: `public/js/schedule-popover.js` unifies reschedule,
+  quick-add create, and date-pick behind `openSchedulePopover({mode})`;
+  the state.js popover pair is deleted with same-signature wrappers kept.
+  Create mode stages duration/time and commits via insertTaskNow /
+  commitScheduledTask / untimed persist (target day's Unscheduled section).
+- **Completed destination**: new ✅ spoke on the add fan creates a task
+  already checked off (retro-logging) through the normal toggleDone path.
+- **Bounty on the row**: 🎯 button on every eligible row until the day's
+  self bounty is placed, then all buttons vanish and the chosen task gets a
+  golden glow (`.card-bounty` upgrade + `.it-list-item.row-bounty`; sponsor
+  purple still wins). Replaces the gated radial spoke that read as missing.
+- **Bug fix**: `persistAddedTask` persisted duration 0 for untimed items
+  (dur() is end-start and pt("") is 0); now falls back to durMin.
+
+### QA
+- `npm test` 197/197 (4 new mutation-checked persistAddedTask regression
+  tests); `npm run smoke` passed; 42-check headless E2E (both fan levels,
+  all three popover modes, Completed flow, lock toggle, full bounty cycle
+  with state restore, 375px clamping, guest page unaffected). Five-lane
+  local pre-review + adversarial verification; findings fixed in-branch.
+
+## Previous PR: Reschedule unification + radial task destinations + true-move hardening
+
+### What Changed
+- **Reschedule fixes**: undated task-bar blocks 400ed on every true move; the
+  client now sends the viewed day as `fromDate`, the server accepts it as the
+  origin fallback and stamps a real date (self-healing). Undated
+  subtaskOf/wrapId-linked blocks join the subtree walk (filtered so delegated
+  items stay out). Tombstones no longer fold into the day as lookalike task
+  rows. WAL hardening: 400/404 rejections drop their entry (stamped
+  `e.permanent`), buffered reschedules older than 15 min dead-letter
+  (pre-#167 reversal guard). Full target day no longer refuses a move.
+- **Placement standard**: `openPlacementPicker` generalizes the 2-step day →
+  "After…" picker; `moveTaskViaPlacement` is the canonical mover (popover day
+  buttons, custom date, move menu). `rescheduleTaskToDate` honors
+  `opts.pinnedStart`; picker titles are editable and rename before the move.
+- **Radial destinations**: `TASK_DESTINATIONS` registry (Urgent / Schedule /
+  Backlog-Idea / Shell) drives every task-add bar; + Add or Enter fans out
+  the options and picking commits in one gesture; hover shows a mini preview
+  that expands on approach. Launcher FAB quick tap picks the type FIRST,
+  then opens the compose armed with it. Blank titles raise a confirm toast.
+- **App-wide toast visibility fix**: the legacy `.toast` opacity:0 rule hid
+  every container toast after its entry animation; scoped override restores
+  them.
+
+### QA
+- `npm test` 193/193 (6 new WAL contract tests, frozen vm clock);
+  `npm run smoke` passed; every flow driven headlessly on desktop + mobile
+  viewports (move with preset / after-task anchor / earliest, amber restore,
+  radial adds to all four destinations, FAB choose-type-first, hover-promote,
+  blank-title confirm, editable titles in both picker modes).
+
+## Current PR: Shell task type + TASK_TYPES registry + universal add picker
+
+### What Changed
+- **TASK_TYPES registry** (`public/js/task-types.js`, UMD): declarative per-type
+  rules (earnsOwnPoints, rollupMode, bonusPct, childEdge, movable, …) shared by
+  the frontend and the backend scoring (`slot-scoring.js` derives
+  NON_EARNING_TYPES from it). Future types with rules are config, not
+  conditionals. Existing types are described; their historical call sites
+  (isMeeting etc.) remain the live enforcement.
+- **Shell type**: a container ("Work Day") whose points roll up from children.
+  Children are full tasks on the wrap edge (own time, own duration points).
+  Shell earns nothing itself (backend hard-zero, like ooo); when the last child
+  completes it auto-completes and banks a 10% bonus of the children's estimated
+  points via points_override (idempotent ledger sourceKey `<date>:<shellId>`).
+  Manual check is blocked while children are open. No clawback on un-check.
+  Silver bar + tinted `.card-shell` + `Σ pts · done/total · +bonus` chip.
+- **Universal "+" picker**: every row's add button (next to the rank number in
+  List view) opens Before / After / Subtask / Nested. Shells hide Subtask and
+  default to Nested (`_placeInWrapWindow` lands children at the next free slot
+  inside). The old add-subtask-only button is gone; ⚡ quick-complete shares the
+  check cluster (hidden on shells).
+
+### QA Checklist
+- [x] `npm test` (167, incl. new task-types.test.js contract tests)
+- [x] `npm run smoke http://localhost:8090` (no app-code console errors)
+- [x] Headless walkthrough: create shell → 2 nested children sequence correctly
+      → picker chips right on shell vs normal task → silver bar/tint/chip →
+      manual check blocked with toast → auto-complete + bonus toast on last
+      child → ledger shows 30/45/8(override) → uncheck/recheck = no double award
+
+---
 
 ### What Changed
 18 files, ~800 lines. Four major fix areas plus UI polish.

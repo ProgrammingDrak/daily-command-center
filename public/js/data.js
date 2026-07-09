@@ -6,8 +6,11 @@ const TC={
   meeting:{tag:"Meeting",cls:"tag-meeting",color:"#f97316"},
   oneone: {tag:"1:1",cls:"tag-oneone",color:"#f59e0b"},
   break:  {tag:"Break",cls:"tag-break",color:"#22c55e"},
-  ooo:    {tag:"OOO",cls:"tag-ooo",color:"#64748b"}
+  ooo:    {tag:"OOO",cls:"tag-ooo",color:"#64748b"},
+  shell:  {tag:"Shell",cls:"tag-shell",color:"#e2e8f0"}
 };
+// Behavior rules for types (earning, rollup, drag, completion) live in the
+// TASK_TYPES registry (task-types.js); TC stays the legacy color/label source.
 function cfg(t){return TC[t]||TC.task}
 function priCls(p){return p==="High"?"pri-hi":p==="Medium"?"pri-med":"pri-lo"}
 function colorMeta(ev){

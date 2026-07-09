@@ -304,6 +304,9 @@ function createMockPool(options = {}) {
       return { rows: idx >= 0 ? [state.spinRows[idx]] : [] };
     }
     if (text.includes("SELECT * FROM slot_spins")) return { rows: state.spinRows };
+    // Budget Tank threshold reflow — runs after deleteReward; no-op here
+    // (tank math is covered in budget-store.test.js).
+    if (text.includes("tank_unlock_cents = c.cum")) return { rows: [] };
     throw new Error("Unexpected query: " + text.slice(0, 120));
   }
 
@@ -1011,6 +1014,9 @@ test("taskPointTier uses the highest earning matched tag and keeps OOO at zero",
   assert.deepEqual(store._test.taskPointTier({ tags: ["unsorted-tag"] }, settings).multiplier, 1);
   assert.deepEqual(store._test.taskPointTier({ type: "meeting", tags: ["chores"] }, settings).multiplier, 0.5);
   assert.deepEqual(store._test.taskPointTier({ type: "ooo", tags: ["workout"] }, settings).multiplier, 0);
+  // Shell is hard-zero like ooo: even a full-tier tag must not rescue it
+  // (its award arrives only as the rollup bonus points_override).
+  assert.deepEqual(store._test.taskPointTier({ type: "shell", tags: ["workout"] }, settings).multiplier, 0);
 });
 
 test("normalizePointTagTiers folds retired lane names onto point buckets", () => {

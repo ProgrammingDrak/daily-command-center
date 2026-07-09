@@ -123,6 +123,172 @@ function bindSubtaskActions(el,ev){
   if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
 }
 
+// ── Task-row radial: every task-level action fans out from the row's arrow ──
+// The row itself keeps only done / notes / delete visible; everything else
+// (schedule, duration, pomodoro, lock, add, subtask, delegate, repeat,
+// backlog, bounty) is a spoke here. Items are built fresh per open so dynamic
+// state — the lock flag, bounty availability — is read at fan time.
+// Duration presets: popover on desktop, bottom sheet on touch/narrow. Shared
+// by the radial's "Duration…" spoke and the meeting card's duration badge.
+function openDurPopover(ev,anchorEl){
+  if(isCoarseOrNarrowViewport()){ openDurationSheet(ev); return; }
+  document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
+  const curMin=dur(ev);
+  const pages=[[15,30,45,60,90,120],[150,180,210,240,300,360]];
+  let page=pages.findIndex(pg=>pg.includes(curMin));if(page===-1)page=0;
+  const pop=document.createElement("div");pop.className="dur-popover";
+  function closePop(){
+    pop.remove();
+    document.removeEventListener("click",onOutside,true);
+  }
+  function renderPage(){
+    pop.innerHTML="";
+    const grid=document.createElement("div");grid.className="dur-presets";
+    pages[page].forEach(m=>{
+      const btn=document.createElement("button");
+      btn.className="dur-preset"+(m===curMin?" dur-current":"");
+      btn.textContent=ms(m);
+      btn.addEventListener("click",e2=>{e2.stopPropagation();closePop();setDurAbsolute(ev.id,m);});
+      grid.appendChild(btn);
+    });
+    pop.appendChild(grid);
+    const nav=document.createElement("div");nav.className="dur-nav";
+    const prev=document.createElement("button");prev.className="dur-nav-btn";prev.innerHTML="&#8592;";prev.disabled=page===0;
+    prev.addEventListener("click",e2=>{e2.stopPropagation();if(page>0){page--;renderPage();}});
+    const dots=document.createElement("div");dots.className="dur-nav-dots";
+    pages.forEach((_,i)=>{const d=document.createElement("span");d.className="dur-nav-dot"+(i===page?" active":"");dots.appendChild(d);});
+    const next=document.createElement("button");next.className="dur-nav-btn";next.innerHTML="&#8594;";next.disabled=page===pages.length-1;
+    next.addEventListener("click",e2=>{e2.stopPropagation();if(page<pages.length-1){page++;renderPage();}});
+    nav.appendChild(prev);nav.appendChild(dots);nav.appendChild(next);
+    pop.appendChild(nav);
+    // Custom granular duration: any whole-minute value, not snapped to the 15m presets
+    const custom=document.createElement("div");custom.className="dur-custom";
+    const cInput=document.createElement("input");cInput.type="number";cInput.className="dur-custom-input";
+    cInput.min="1";cInput.step="1";cInput.value=String(curMin);cInput.setAttribute("aria-label","Custom minutes");
+    const cBtn=document.createElement("button");cBtn.className="dur-custom-btn";cBtn.textContent="Set";
+    const applyCustom=()=>{const v=Math.max(1,Math.round(parseInt(cInput.value,10)||0));if(v){closePop();setDurAbsolute(ev.id,v);}};
+    cBtn.addEventListener("click",e2=>{e2.stopPropagation();applyCustom();});
+    cInput.addEventListener("click",e2=>e2.stopPropagation());
+    cInput.addEventListener("keydown",e2=>{e2.stopPropagation();if(e2.key==="Enter"){e2.preventDefault();applyCustom();}});
+    custom.appendChild(cInput);custom.appendChild(cBtn);
+    pop.appendChild(custom);
+  }
+  renderPage();
+  // Shared anchored-popover positioning (schedule-popover.js); minWidth 0 keeps
+  // the compact duration grid at its natural width.
+  _positionPopoverNear(anchorEl,pop,{minWidth:0});
+  function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==anchorEl){closePop();}}
+  setTimeout(()=>document.addEventListener("click",onOutside,true),0);
+}
+// The bounty button lives ON the row (not in the radial): it shows on every
+// eligible row while the day's self bounty is unplaced; placing it re-renders,
+// every button vanishes, and the chosen task glows gold. placeBounty itself
+// toasts the finer denials (locked bounty, partner stacking, done task).
+function _canPlaceBounty(ev,isDoneRow){
+  if(isMeeting(ev)||isDoneRow)return false;
+  if(typeof viewMode!=="undefined"&&viewMode==="archive")return false;
+  if(typeof hasSelfBounty==="function"&&hasSelfBounty())return false;
+  return true;
+}
+const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+function buildTaskRadialItems(ev,trig){
+  const items=[
+    // Move/convert actions live one level down: this spoke chains into the
+    // "Change task" sub-fan (openRadialMenu closes the current fan first).
+    {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
+    {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
+    {icon:"🍅", label:"Pomodoro",  onPick:()=>{if(typeof openPomodoro==="function")openPomodoro(ev.title,dur(ev),{id:ev.id,source:"schedule",title:ev.title});}},
+  ];
+  // Meetings are auto-locked (calendar time holds during reflow); a manual lock
+  // toggle is meaningless for them (toggleLock no-ops on meetings), so omit it.
+  if(!isMeeting(ev))items.push({icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
+  items.push({icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}});
+  return items;
+}
+// Sub-fan: everything that moves or converts the task, grouped so the top
+// fan stays scannable. Back returns to the top fan on the same trigger.
+function buildTaskChangeItems(ev,trig){
+  return [
+    {icon:"←", label:"Back",       onPick:()=>openTaskRadial(ev,trig)},
+    {icon:"📅", label:"Schedule…", onPick:()=>{if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:trig});}},
+    {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}},
+    {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
+    {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
+    {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}}
+  ];
+}
+const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
+function openTaskRadial(ev,trig,opts){
+  // Unfinished rows aren't scheduled[] tasks, so the fan's scheduled-task spokes
+  // would no-op. The arrow opens the shared date picker directly and routes the
+  // pick through the caller's true-move handler.
+  if(opts&&opts.unfinished){
+    if(typeof openDatePickPopover==="function")
+      openDatePickPopover(trig,{header:'Move "'+escHtml(ev.title)+'" to…',actionLabel:"Move",onPick:opts.onReschedule});
+    return;
+  }
+  // 180° left-opening fan: the trigger lives at the row's right edge, so the
+  // spokes sweep bottom → left → top. Staggered label radii keep the pills
+  // from colliding near the vertical apexes; clampY keeps edge rows on-screen.
+  openRadialMenu(trig,buildTaskRadialItems(ev,trig),_TASK_RADIAL_OPTS);
+}
+function openTaskChangeRadial(ev,trig){
+  openRadialMenu(trig,buildTaskChangeItems(ev,trig),_TASK_RADIAL_OPTS);
+}
+
+// ── Section sorting (Unscheduled / Unfinished): A→Z or time-of-creation ──
+function _sectionSort(key){ try{return localStorage.getItem("pa-sort-"+key)||"created"}catch(e){return "created"} }
+function _setSectionSort(key,mode){ try{localStorage.setItem("pa-sort-"+key,mode==="alpha"?"alpha":"created")}catch(e){} }
+function _applySectionSort(items,mode,getTitle,getCreated){
+  const arr=items.slice();
+  if(mode==="alpha")arr.sort((a,b)=>String(getTitle(a)||"").localeCompare(String(getTitle(b)||"")));
+  else arr.sort((a,b)=>String(getCreated(b)||"").localeCompare(String(getCreated(a)||""))); // newest first
+  return arr;
+}
+
+// ── Unfinished (past-dated, never completed) — inline section state ──
+// collectUnfinishedTasks (unfinished-tasks.js) is async; buildListView is sync.
+// Cache one collection per rendered today-date and re-render when it lands.
+let _unfinishedCache=null;      // {rows,total}
+let _unfinishedFetchedFor=null; // the today-date the cache was collected for
+let _unfinishedLoading=false;
+function invalidateUnfinishedSection(){ _unfinishedCache=null; _unfinishedFetchedFor=null; }
+function _ensureUnfinished(today){
+  if(_unfinishedFetchedFor===today||_unfinishedLoading)return;
+  if(typeof window.collectUnfinishedTasks!=="function")return;
+  _unfinishedLoading=true;
+  window.collectUnfinishedTasks()
+    .then(res=>{ _unfinishedCache=res||{rows:[],total:0}; _unfinishedFetchedFor=today; })
+    .catch(()=>{ _unfinishedCache={rows:[],total:0}; _unfinishedFetchedFor=today; })
+    .finally(()=>{ _unfinishedLoading=false; buildListView(); });
+}
+function _unfRemoveRow(r){
+  if(!_unfinishedCache)return;
+  _unfinishedCache.rows=_unfinishedCache.rows.filter(x=>x!==r);
+  _unfinishedCache.total=Math.max(0,(_unfinishedCache.total||1)-1);
+}
+function _unfPrettyDate(iso){
+  const d=new Date(iso+"T00:00:00");
+  if(isNaN(d.getTime()))return iso;
+  return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+}
+// Present an Unfinished entry (a raw past-day block) as an ev so the shared
+// row() builder renders it exactly like a normal task. The override handlers
+// read the raw block back off __unf; id is the block's own scheduled id so any
+// notes on the task carry over. end := start+durMin so dur(ev) === durMin.
+function _unfToEv(r){
+  const start=r.start||"00:00";
+  return {
+    id:r.sourceLocalId||r.sourceId,
+    title:r.title,
+    type:r.type||"task",
+    start,
+    end:fmt(pt(start)+r.durMin),
+    source:r.source,
+    __unf:r
+  };
+}
+
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
@@ -140,10 +306,21 @@ function buildListView(){
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
 
-  function section(title,count){
+  function section(title,count,sortKey){
     const el=document.createElement("div");
     el.className="it-list-section";
-    el.innerHTML='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
+    let html='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
+    if(sortKey){
+      const mode=_sectionSort(sortKey);
+      html+='<span class="it-sort-toggle">'+
+        '<button class="it-sort-btn'+(mode==="alpha"?' on':'')+'" data-mode="alpha" title="Sort A to Z">A–Z</button>'+
+        '<button class="it-sort-btn'+(mode!=="alpha"?' on':'')+'" data-mode="created" title="Sort by time of creation (newest first)">New</button>'+
+      '</span>';
+    }
+    el.innerHTML=html;
+    if(sortKey)el.querySelectorAll(".it-sort-btn").forEach(b=>b.addEventListener("click",e=>{
+      e.stopPropagation();_setSectionSort(sortKey,b.dataset.mode);buildListView();
+    }));
     wrap.appendChild(el);
   }
 
@@ -166,7 +343,13 @@ function buildListView(){
   function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
     const isPushedRow=mode==="pushed";
-    const movable=!isDoneRow&&!isPushedRow&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break"&&!ev._locked;
+    // Unfinished: a past-day block rendered through the shared row (see _unfToEv).
+    // Not draggable, no bounty/start-time; complete/reschedule/delete are overridden.
+    const isUnfRow=mode==="unfinished";
+    const r=isUnfRow?ev.__unf:null;
+    // userMovable already excludes meetings/ooo/break (registry-aware); keep the
+    // isUnfRow guard from the Unfinished-row work.
+    const movable=!isDoneRow&&!isPushedRow&&!isUnfRow&&userMovable(ev)&&!ev._locked;
     const c=cfg(ev.type);
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
@@ -178,67 +361,64 @@ function buildListView(){
     // fixed-column grid -- shoving the title right and wrapping actions to a 2nd line.
     const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>';
     const el=document.createElement("div");
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isActive(ev)?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");
+    const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
+    const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isUnfRow?" unfinished-row":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
-    if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
+    if(!isDoneRow&&!isPushedRow&&!isUnfRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(idx+1)+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<div class="it-list-check-col">'+
-        '<button class="chk it-list-check'+(isDoneRow?' on':'')+'" title="'+(isDoneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-add-menu" title="Add subtask" data-add-id="'+ev.id+'">+</button>':'')+
+        '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isUnfRow?'Mark done on '+escHtml(_unfPrettyDate(r.sourceDate)):(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')))+'">'+ckSvg+'</button>'+
+        (!isDoneRow&&!isUnfRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
       '</div>'+
-      '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
+      '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
         '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
         '<div class="it-list-meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           '<span>'+ms(dur(ev))+'</span>'+
-          (ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isMeeting(ev)&&!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>'))+
-          (ev._locked?'<span class="it-list-lock" title="Locked — holds its time when tasks reflow"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
+          (tt&&tt.rollupMode&&typeof shellRollupChip==="function"?shellRollupChip(ev):'')+
+          (isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+          (isUnfRow?'<span class="it-list-unfinished">Unfinished · from '+escHtml(_unfPrettyDate(r.sourceDate))+'</span>':'')+
+          (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
           (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
-        // Duration +/- (parity with the old Blocks card)
-        (!isMeeting(ev)&&!isDoneRow?'<button class="dbtn" data-id="'+ev.id+'" data-d="-15" title="15 min shorter">&minus;</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="dbtn" data-id="'+ev.id+'" data-d="15" title="15 min longer">+</button>':'')+
-        // Lock (parity with the old Blocks card). Delegate / repeat-responsibility /
-        // make-subtask-of all live in the reschedule popover, not per-card buttons.
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-lock'+(ev._locked?' locked':'')+'" data-lock-id="'+ev.id+'" data-tooltip="'+(ev._locked?'Unlock — allow this task to move':'Lock — keep this task at its current time')+'">'+(ev._locked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>')+'</button>':'')+
+        // Row keeps done / notes / bounty / delete visible; every other task
+        // action rides the radial behind the arrow trigger.
         notesButton(ev)+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-push-tmr" data-push-id="'+ev.id+'" data-tooltip="Reschedule…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+dur(ev)+'" title="Start pomodoro timer">'+pomoSvg+'</button>':'')+
-        (!isMeeting(ev)&&!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
+        (!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
+        (!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+        (!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
       '</div>';
 
     el.querySelector(".it-list-check").addEventListener("click",e=>{
       e.stopPropagation();
-      if(isDoneRow)toggleDone(ev.id);
+      // Unfinished completes on its ORIGIN day, not today — no scheduled[] task to toggle.
+      if(isUnfRow){_unfComplete(r,el);return;}
+      // Blocked rollup container: skip the notes modal, let toggleDone toast why.
+      if(isDoneRow||chkBlocked)toggleDone(ev.id);
       else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
     });
     const quick=el.querySelector(".chk-quick");
     if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");toggleDone(ev.id);});
-    // Duration +/-, delegate, lock, repeat-responsibility -- parity with the Blocks card.
-    el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();if(typeof adjustDur==="function")adjustDur(b.dataset.id,parseInt(b.dataset.d));}));
-    const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId);});
     const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openStartTimePicker==="function")openStartTimePicker(ev.id,stSpan);});
     const nb=el.querySelector(".notes-btn");
     if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
-    const pb=el.querySelector(".btn-push-tmr");
-    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId);});
-    const pomo=el.querySelector(".pomo-btn");
-    if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle});});
+    const pb=el.querySelector(".btn-task-radial");
+    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb,isUnfRow?{unfinished:true,onReschedule:(d)=>_unfMoveTo(r,el,d)}:undefined);});
+    const bb=el.querySelector(".btn-bounty");
+    if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     const del=el.querySelector(".btn-del-task");
-    if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
-    const am=el.querySelector(".btn-add-menu");
-    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    if(del)del.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfDrop(r,el);return;}openDeleteConfirm(del.dataset.delId);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
     return el;
@@ -248,7 +428,7 @@ function buildListView(){
   // first-class row; collapsible when it has its own subtasks.
   function subRow(ev,idx,mode,node){
     const doneRow=mode==="done"||isDone(ev);
-    const movable=!isMeeting(ev)&&!ev._locked&&!doneRow;
+    const movable=userMovable(ev)&&!ev._locked&&!doneRow;
     const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
     const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>';
     const el=document.createElement("div");
@@ -315,12 +495,118 @@ function buildListView(){
     });
   }
   if(untimedItems.length){
-    section("Unscheduled",untimedItems.length);
-    untimedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
+    section("Unscheduled",untimedItems.length,"unscheduled");
+    _applySectionSort(untimedItems,_sectionSort("unscheduled"),ev=>ev.title,ev=>ev.createdAt||"")
+      .forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
   }
+
+  // Unfinished: tasks dated in the PAST that were never completed. Shown only on
+  // the actual today view; complete lands on the origin day, reschedule is a
+  // true move (server tombstone -> the origin day shows it amber).
+  const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
+  if(viewDate===actualToday){
+    _ensureUnfinished(actualToday);
+    const unf=_unfinishedCache;
+    if(unf&&unf.rows.length){
+      section("Unfinished",unf.total,"unfinished");
+      _applySectionSort(unf.rows,_sectionSort("unfinished"),r=>r.title,r=>r.createdAt||r.sourceDate||"")
+        .forEach((r,idx)=>wrap.appendChild(row(_unfToEv(r),idx,"unfinished")));
+      if(unf.total>unf.rows.length){
+        const more=document.createElement("div");
+        more.className="it-list-empty";
+        more.textContent="+"+(unf.total-unf.rows.length)+" more unfinished — complete or reschedule some to see the rest.";
+        wrap.appendChild(more);
+      }
+    }
+  }
+
   if(pushedItems.length){
     section("Pushed",pushedItems.length);
     pushedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"pushed")));
+  }
+
+  // Rescheduled away (amber) — parity with the timeline view's bottom section.
+  const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
+    ? window.blockStore.getByType("block")
+        .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
+        .sort((a,b)=>String((a.properties||{}).title||"").localeCompare(String((b.properties||{}).title||"")))
+    : [];
+  if(rescheduledAwayItems.length){
+    section("Rescheduled away",rescheduledAwayItems.length);
+    rescheduledAwayItems.forEach(b=>{
+      const p=b.properties||{};
+      const el=document.createElement("div");
+      el.className="it-list-item resched-away-row";
+      el.innerHTML=
+        '<span class="wrap-collapse-spacer"></span>'+
+        '<div class="it-list-rank">·</div>'+
+        '<div class="grip it-list-grip" title="Fixed item">'+gripSvg+'</div>'+
+        '<div class="it-list-check-col"><button class="chk it-list-check" title="Restore to this day">'+ckSvg+'</button></div>'+
+        '<div class="bar" style="background:var(--amber,#f59e0b)"></div>'+
+        '<div class="it-list-main">'+
+          '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(p.title||"Task")+'">'+escHtml(p.title||"Task")+'</span></div>'+
+          '<div class="it-list-meta"><span class="it-list-resched-away">Rescheduled to '+escHtml(p.rescheduledTo||"another day")+'</span></div>'+
+        '</div>'+
+        '<div class="it-list-actions"></div>';
+      el.querySelector(".it-list-check").addEventListener("click",e=>{
+        e.stopPropagation();
+        if(typeof restoreRescheduledAway==="function")restoreRescheduledAway(b.id);
+      });
+      wrap.appendChild(el);
+    });
+  }
+
+  // Unfinished action overrides. The row markup + affordances come from the
+  // shared row() builder (mode "unfinished"); these three handlers replace its
+  // complete/reschedule/delete wiring because an Unfinished entry is a raw
+  // past-day block, not a scheduled[] task: complete lands on the ORIGIN day,
+  // reschedule is a server true-move, drop deletes the source block.
+  async function _unfComplete(r,el){
+    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
+    try{if(typeof commitDoneOnDate==="function")await commitDoneOnDate(r.sourceLocalId||r.sourceId,r.sourceDate);}catch(e2){}
+    _unfRemoveRow(r);
+    if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+    if(typeof showToast==="function")showToast("Done on "+_unfPrettyDate(r.sourceDate)+": "+r.title,"success");
+    render();
+  }
+  async function _unfMoveTo(r,el,targetDate){
+    if(!targetDate||!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)){if(typeof showToast==="function")showToast("Pick a valid date","error");return;}
+    if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
+    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
+    let slot=null;
+    try{
+      if(typeof _computeRescheduleSlot==="function")
+        slot=await _computeRescheduleSlot({id:r.sourceLocalId||r.sourceId,title:r.title,start:r.start||"00:00",end:r.end||fmt(pt(r.start||"00:00")+r.durMin)},targetDate);
+    }catch(e){}
+    window.__RESCHEDULE_IN_FLIGHT__=true;
+    try{
+      await window.blockStore.rescheduleBlock(r.sourceId,targetDate,slot?{parentStart:slot.start,parentEnd:slot.end}:{});
+    }catch(e){
+      if(typeof showToast==="function")showToast("Could not move "+r.title,"error");
+      el.querySelectorAll("button,input").forEach(x=>{x.disabled=false;});
+      return;
+    }finally{
+      window.__RESCHEDULE_IN_FLIGHT__=false;
+    }
+    _unfRemoveRow(r);
+    if(typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+    if(typeof log==="function")log("rescheduled",r.sourceId,"Unfinished moved to "+targetDate+": "+r.title);
+    if(typeof showToast==="function")showToast("Moved to "+_unfPrettyDate(targetDate)+": "+r.title,"success");
+    if(targetDate===viewDate){
+      try{await window.blockStore.loadDay(viewDate);}catch(e){}
+      if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+      if(typeof recalcTimes==="function")recalcTimes();
+    }
+    render();
+  }
+  async function _unfDrop(r,el){
+    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
+    try{await window.blockStore.deleteBlock(r.sourceId);}catch(e2){}
+    _unfRemoveRow(r);
+    if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
+    if(typeof log==="function")log("dropped",r.sourceId,"Dropped unfinished: "+r.title);
+    if(typeof showToast==="function")showToast("Dropped: "+r.title,"info");
+    render();
   }
 }
 
@@ -542,112 +828,34 @@ function buildSchedule(){
         if(typeof window.openPlaceholderSwap==="function")window.openPlaceholderSwap(ev);
       });
     }
-    // Meetings and locked tasks are fixed anchors -- no drag, but still valid drop targets so other tasks can be positioned around them.
-    if(!isMeeting(ev)&&!ev._locked){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
+    // Reflow-fixed but not user-movable (ooo/break) and locked tasks can't be
+    // dragged; they stay valid drop targets so tasks position around them.
+    // Meetings ARE user-movable (drag re-times them manually — see drag.js dDrop).
+    if(userMovable(ev)&&!ev._locked){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));
 
     // Event listeners
-    el.querySelector(".chk").addEventListener("click",e=>{e.stopPropagation();openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);});
-    el.querySelector(".chk-quick").addEventListener("click",e=>{e.stopPropagation();e.currentTarget.classList.add("flash");toggleDone(ev.id);});
-    // + button opens task detail modal directly (no dropdown)
-    const addBtn=el.querySelector(".btn-add-menu");
-    if(addBtn)addBtn.addEventListener("click",e=>{
+    el.querySelector(".chk").addEventListener("click",e=>{
       e.stopPropagation();
-      if(typeof openSubtaskAdd==='function')openSubtaskAdd(ev.id,addBtn);
-      else if(typeof openAddModal==='function')openAddModal(ev.id,ev.title);
+      // Blocked rollup container: skip the notes modal, let toggleDone toast why.
+      if(typeof shellCompleteBlocked==="function"&&shellCompleteBlocked(ev))toggleDone(ev.id);
+      else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
     });
+    const _q=el.querySelector(".chk-quick"); // absent on rollup containers
+    if(_q)_q.addEventListener("click",e=>{e.stopPropagation();e.currentTarget.classList.add("flash");toggleDone(ev.id);});
     const tagToggle=el.querySelector(".card-tags-toggle");
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
-    const stSpan=el.querySelector(".start-time");if(stSpan&&!isMeeting(ev)){stSpan.addEventListener("click",e=>{e.stopPropagation();openStartTimePicker(ev.id,stSpan);});}
+    const stSpan=el.querySelector(".start-time");if(stSpan){stSpan.addEventListener("click",e=>{e.stopPropagation();openStartTimePicker(ev.id,stSpan);});}
+    // Duration presets: only the meeting card keeps the interactive badge —
+    // task cards show a read-only badge and adjust duration via the radial.
     const dbadge=el.querySelector(".dbadge");
-    if(dbadge){dbadge.addEventListener("click",e=>{
-      e.stopPropagation();
-      // On touch / narrow viewports the fixed popover is fiddly to place and tap,
-      // so use a slide-up bottom sheet instead. Desktop keeps the popover.
-      if(isCoarseOrNarrowViewport()){ openDurationSheet(ev); return; }
-      document.querySelectorAll(".dur-popover").forEach(p=>p.remove());
-      document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
-      document.body.classList.remove("dur-open");
-      const curMin=dur(ev);
-      const pages=[[15,30,45,60,90,120],[150,180,210,240,300,360]];
-      let page=pages.findIndex(pg=>pg.includes(curMin));if(page===-1)page=0;
-      const pop=document.createElement("div");pop.className="dur-popover";
-      function closePop(){
-        pop.remove();
-        document.querySelectorAll(".has-dur-popover").forEach(x=>x.classList.remove("has-dur-popover"));
-        document.body.classList.remove("dur-open");
-        document.removeEventListener("click",onOutside,true);
-      }
-      function renderPage(){
-        pop.innerHTML="";
-        const grid=document.createElement("div");grid.className="dur-presets";
-        pages[page].forEach(m=>{
-          const btn=document.createElement("button");
-          btn.className="dur-preset"+(m===curMin?" dur-current":"");
-          btn.textContent=ms(m);
-          btn.addEventListener("click",e2=>{e2.stopPropagation();closePop();setDurAbsolute(ev.id,m);});
-          grid.appendChild(btn);
-        });
-        pop.appendChild(grid);
-        const nav=document.createElement("div");nav.className="dur-nav";
-        const prev=document.createElement("button");prev.className="dur-nav-btn";prev.innerHTML="&#8592;";prev.disabled=page===0;
-        prev.addEventListener("click",e2=>{e2.stopPropagation();if(page>0){page--;renderPage();}});
-        const dots=document.createElement("div");dots.className="dur-nav-dots";
-        pages.forEach((_,i)=>{const d=document.createElement("span");d.className="dur-nav-dot"+(i===page?" active":"");dots.appendChild(d);});
-        const next=document.createElement("button");next.className="dur-nav-btn";next.innerHTML="&#8594;";next.disabled=page===pages.length-1;
-        next.addEventListener("click",e2=>{e2.stopPropagation();if(page<pages.length-1){page++;renderPage();}});
-        nav.appendChild(prev);nav.appendChild(dots);nav.appendChild(next);
-        pop.appendChild(nav);
-        // Custom granular duration: any whole-minute value, not snapped to the 15m presets
-        const custom=document.createElement("div");custom.className="dur-custom";
-        const cInput=document.createElement("input");cInput.type="number";cInput.className="dur-custom-input";
-        cInput.min="1";cInput.step="1";cInput.value=String(curMin);cInput.setAttribute("aria-label","Custom minutes");
-        const cBtn=document.createElement("button");cBtn.className="dur-custom-btn";cBtn.textContent="Set";
-        const applyCustom=()=>{const v=Math.max(1,Math.round(parseInt(cInput.value,10)||0));if(v){closePop();setDurAbsolute(ev.id,v);}};
-        cBtn.addEventListener("click",e2=>{e2.stopPropagation();applyCustom();});
-        cInput.addEventListener("click",e2=>e2.stopPropagation());
-        cInput.addEventListener("keydown",e2=>{e2.stopPropagation();if(e2.key==="Enter"){e2.preventDefault();applyCustom();}});
-        custom.appendChild(cInput);custom.appendChild(cBtn);
-        pop.appendChild(custom);
-      }
-      renderPage();
-      // Position relative to the badge using fixed coords (escapes stacking
-      // context). Append hidden first so we can measure the popover's real size,
-      // then clamp it fully on-screen. A naive right-align (right = innerWidth -
-      // rect.right) pushed the popover -- and its left-most preset button -- off
-      // the left edge on narrow / mobile viewports, making it unclickable.
-      el.classList.add("has-dur-popover");
-      document.body.classList.add("dur-open");
-      pop.style.visibility="hidden";
-      document.body.appendChild(pop);
-      const rect=dbadge.getBoundingClientRect();
-      const margin=8;
-      const popW=pop.offsetWidth||148;
-      const popH=pop.offsetHeight||0;
-      let left=rect.right-popW; // prefer right-aligned to the badge
-      left=Math.max(margin,Math.min(left,window.innerWidth-popW-margin));
-      let top=rect.bottom+6;
-      if(top+popH>window.innerHeight-margin){
-        // No room below -- prefer flipping above the anchor.
-        const above=rect.top-popH-6;
-        if(above>=margin)top=above;
-      }
-      // Final clamp so the popover is always fully within the viewport, even if
-      // the badge is partially scrolled off-screen.
-      top=Math.max(margin,Math.min(top,window.innerHeight-popH-margin));
-      pop.style.left=left+"px";
-      pop.style.top=top+"px";
-      pop.style.right="auto";
-      pop.style.visibility="";
-      function onOutside(e2){if(!pop.contains(e2.target)&&e2.target!==dbadge){closePop();}}
-      setTimeout(()=>document.addEventListener("click",onOutside,true),0);
-    });}
-    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(bb.classList.contains("locked"))return;if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
-    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
+    if(dbadge&&isMeeting(ev))dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
+    const pomo=el.querySelector(".pomo-btn");
+    if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
-    const pb=el.querySelector(".btn-push-tmr");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();if(typeof openReschedulePopover==="function")openReschedulePopover(pb.dataset.pushId,pb);else pushTask(pb.dataset.pushId)});
-    const lk=el.querySelector(".btn-lock");if(lk)lk.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleLock==="function")toggleLock(lk.dataset.lockId)});
+    const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
+    const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId)});
     // PIN 1: click the timeline dot to pin this task as "active"
     const tnode=el.querySelector(".tl-node");
     if(tnode&&!isMeeting(ev)){
@@ -824,10 +1032,13 @@ function buildSchedule(){
 // ======== MOVE-TO POPOVER ========
 function openMoveMenu(id, anchorEl){
   document.querySelectorAll(".move-menu-popup").forEach(p=>p.remove());
+  // Day moves route through the shared placement picker (moveTaskViaPlacement)
+  // so the drop time is chosen the same way everywhere.
+  const _mv=(dateStr,fallback)=>typeof moveTaskViaPlacement==="function"?moveTaskViaPlacement(id,dateStr):fallback(id);
   const items=[
-    {label:"Tomorrow",  action:()=>moveTaskToTomorrow(id)},
-    {label:"Today",     action:()=>moveTaskToToday(id)},
-    {label:"Next week", action:()=>moveTaskToNextWeek(id)},
+    {label:"Tomorrow",  action:()=>_mv(_resolvedTomorrowDate(),moveTaskToTomorrow)},
+    {label:"Today",     action:()=>_mv(_resolvedTodayDate(),moveTaskToToday)},
+    {label:"Next week", action:()=>_mv(_nextSundayDate(),moveTaskToNextWeek)},
     {label:"Trivial",   action:()=>moveTaskToTrivial(id)},
     {label:"Backlog and Ideas",   action:()=>moveTaskToBacklog(id)},
     {label:"Priority",  action:()=>moveTaskToPriority(id)}
@@ -1040,14 +1251,46 @@ function _scheduleTaskHasDelegate(taskId){
 function buildProgress(){
   const track=document.getElementById("ptrack"),ds=pt("08:45"),de=pt("17:30"),tot=de-ds;
   track.innerHTML="";let cursor=ds;
-  scheduled.forEach(ev=>{
+  const dayItems=scheduled.filter(ev=>!ev._dateless); // Unscheduled-everywhere rows aren't today's plan
+  dayItems.forEach(ev=>{
     const s=pt(ev.start),e=pt(ev.end);
     if(s>cursor)addPS(track,cursor,s,"Free","rgba(255,255,255,0.08)",false,tot);
-    addPS(track,s,e,ev.title,cfg(ev.type).color,isDone(ev),tot);cursor=e;
+    // Shells are wrappers, not work: their own slot stays near-empty in the
+    // main row; the rail underneath (buildShellRails) marks the whole span.
+    if(_isShellEv(ev))addPS(track,s,e,"⟦ "+ev.title+" ⟧","rgba(226,232,240,0.10)",isDone(ev),tot);
+    else addPS(track,s,e,ev.title,cfg(ev.type).color,isDone(ev),tot);
+    cursor=e;
   });
   if(cursor<de)addPS(track,cursor,de,"Free","rgba(255,255,255,0.08)",false,tot);
-  const dc=scheduled.filter(isDone).length;
-  document.getElementById("ppct").textContent=dc+"/"+scheduled.length+" done ("+Math.round(dc/scheduled.length*100)+"%)";
+  buildShellRails(dayItems,ds,tot);
+  // Shells are wrappers, not tasks — they don't count toward the day's done tally.
+  const counted=dayItems.filter(ev=>!_isShellEv(ev));
+  const dc=counted.filter(isDone).length;
+  document.getElementById("ppct").textContent=dc+"/"+counted.length+" done ("+Math.round(dc/(counted.length||1)*100)+"%)";
+}
+function _isShellEv(ev){
+  return (window.TaskTypes&&window.TaskTypes.isRollup(ev))||String(ev.type||"").toLowerCase()==="shell";
+}
+// Completed real tasks for the day — excludes shell wrappers so they stay out
+// of the Completed count/time and the completed popover list.
+function _dayDoneTasks(){
+  return scheduled.filter(ev=>isDone(ev)&&!_isShellEv(ev));
+}
+// One silver rail per shell under the track, spanning the shell's slot plus
+// every ride-along child (wrapId), so the wrapper reads as a grouping, not a task.
+function buildShellRails(dayItems,ds,tot){
+  const rails=document.getElementById("prails");if(!rails)return;
+  rails.innerHTML="";
+  const shells=dayItems.filter(_isShellEv);
+  rails.style.display=shells.length?"":"none";
+  shells.forEach(sh=>{
+    let s=pt(sh.start),e=pt(sh.end);
+    dayItems.filter(c=>c.wrapId===sh.id).forEach(c=>{s=Math.min(s,pt(c.start));e=Math.max(e,pt(c.end));});
+    const seg=document.createElement("div");seg.className="prail-seg"+(isDone(sh)?" done":"");
+    seg.style.cssText="left:"+(((s-ds)/tot)*100)+"%;width:"+(((e-s)/tot)*100)+"%";
+    seg.innerHTML='<div class="tip">⟦ '+sh.title+' ⟧ ('+ms(e-s)+')'+(isDone(sh)?' ✓':'')+'</div>';
+    rails.appendChild(seg);
+  });
 }
 function addPS(track,s,e,title,color,done,tot){
   const w=((e-s)/tot)*100,seg=document.createElement("div");seg.className="pseg";
@@ -1082,7 +1325,9 @@ function _currentBlockWindow(){
   return null;
 }
 function _remainingForScope(scope){
-  const rem=scheduled.filter(ev=>!isDone(ev));
+  // _dateless rows (Unscheduled-everywhere) aren't part of this day's plan.
+  // Shells are wrappers, not work — they never count as remaining tasks/time.
+  const rem=scheduled.filter(ev=>!isDone(ev)&&!ev._dateless&&!_isShellEv(ev));
   if(scope!=="block")return rem;
   const win=_currentBlockWindow();
   if(!win)return [];
@@ -1171,6 +1416,7 @@ function _pointEligibleScheduleItems(){
   const trivFlags=typeof loadTrivialFlags==="function"?loadTrivialFlags():{};
   return scheduled.filter(ev=>{
     if(!ev||trivFlags[ev.id])return false;
+    if(ev._dateless)return false; // day-agnostic Unscheduled rows earn nothing here
     if(typeof isDeleted==="function"&&isDeleted(ev))return false;
     if(typeof isPushed==="function"&&isPushed(ev))return false;
     return true;
@@ -1197,7 +1443,7 @@ function toggleRemainingStatScope(event){
   if(event)event.stopPropagation();
 }
 function updateStats(){
-  const done=scheduled.filter(isDone), scope=_remainingStatScope(), rem=_remainingForScope(scope);
+  const done=_dayDoneTasks(), scope=_remainingStatScope(), rem=_remainingForScope(scope);
   const remMin=rem.reduce((a,ev)=>a+dur(ev),0);
   const doneMin=done.reduce((a,ev)=>a+_actualMin(ev),0);
   document.getElementById("s-time").textContent=remMin>0?ms(remMin):"0m";
@@ -1245,7 +1491,7 @@ function showStatPopover(statId, event) {
       break;
     }
     case 's-done': {
-      const done = scheduled.filter(isDone);
+      const done = _dayDoneTasks();
       const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
       const triageDone=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
       html = '<div class="sp-title">Completed Today</div>';
