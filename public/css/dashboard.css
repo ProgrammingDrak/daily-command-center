@@ -4648,7 +4648,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-nec-top{display:flex;align-items:center;gap:8px;width:100%}
 .bt-nec-color{width:26px;height:26px;padding:0;border:1px solid var(--border);border-radius:6px;
   background:none;cursor:pointer;flex:0 0 26px}
-.bt-shape-pick{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 2px 34px}
+.bt-nec-row--edit{display:flex;flex-direction:column;align-items:stretch;gap:0}
+.bt-shape-pick{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0 2px 34px;max-width:100%}
 .bt-shape-btn{width:30px;height:28px;padding:2px;border:1px solid var(--border);border-radius:7px;
   background:var(--bg,#0b1020);cursor:pointer;color:var(--text-muted);display:inline-flex;align-items:center;justify-content:center}
 .bt-shape-btn svg{width:22px;height:20px}
@@ -4799,6 +4800,18 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .bt-add{margin-top:8px;background:none;border:1px dashed var(--border);color:var(--text-muted);
   width:100%;padding:7px;border-radius:8px;font-size:12px;cursor:pointer}
 .bt-add:hover{border-color:var(--accent);color:var(--accent-light,var(--accent))}
+
+/* --- inline-editable fields (no edit mode; look like text until hover/focus) --- */
+.bt-name-in{flex:1;min-width:0;background:none;border:1px solid transparent;border-radius:6px;
+  color:var(--text);font-size:12.5px;padding:3px 6px;font-family:inherit}
+.bt-name-in:hover{border-color:var(--border)}
+.bt-name-in:focus{outline:none;border-color:var(--accent);background:var(--bg,#0b1020)}
+.bt-cat-name-in{font-weight:700}
+.bt-amt-edit{display:inline-flex;align-items:center;gap:1px;color:var(--text-muted);font-size:12px;flex:0 0 auto}
+.bt-amt-in{width:58px;background:none;border:1px solid transparent;border-radius:6px;color:var(--text);
+  font-size:12.5px;font-weight:600;padding:3px 4px;text-align:right;font-variant-numeric:tabular-nums;font-family:inherit}
+.bt-amt-in:hover{border-color:var(--border)}
+.bt-amt-in:focus{outline:none;border-color:var(--accent);background:var(--bg,#0b1020)}
 
 /* --- Monarch/Mint-style category groups --- */
 .bt-cat{border-top:1px solid var(--border)}

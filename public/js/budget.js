@@ -9,9 +9,7 @@
   "use strict";
 
   let _state = null;        // last /api/budget/state payload
-  let _editMode = false;
-  let _form = null;         // { id|null, category, item, amount, recurring, color }
-  let _necDraft = null;     // necessities editor working copy
+  let _form = null;         // add-block form: { id|null, category, item, amount, recurring, color }
   let _dragId = null;
   let _confirmDeleteId = null;
   let _loadSeq = 0;
@@ -151,7 +149,7 @@
         ' style="flex-grow:' + b.value_cents + ';color:' + esc(b.color || "#f59e0b") + '">' +
         '<span class="bt-zone-sprite">' + chestSpriteFor(b) + "</span>" +
         '<div class="bt-zone-body">' +
-          '<div class="bt-zone-top"><span class="bt-zone-name">' + esc(b.title) + "</span>" +
+          '<div class="bt-zone-top"><span class="bt-zone-name">' + esc(b.item || b.title) + "</span>" +
           '<span class="bt-zone-amt">' + money(b.value_cents) + "</span></div>" +
           '<div class="bt-zone-status">' + esc(info.label) + (over ? " · over budget" : "") +
             (b.claimable ? ' <button class="bt-claim-btn" data-act="claim">Claim</button>' : "") +
@@ -230,11 +228,8 @@
         '<span class="bt-changer-preview" data-role="convert-preview">→ $0.00 into the tank</span>' +
         '<button class="bt-btn bt-btn--primary" data-act="convert"' + (s.points < 1 ? " disabled" : "") + ">Convert</button>" +
       "</div>" +
-      (_editMode
-        ? '<div class="bt-changer-row bt-changer-admin"><label>Rate (¢ per point)' +
-          '<input type="number" class="bt-changer-input" data-role="rate-input" min="1" max="1000" value="' + rate + '"></label>' +
-          '<button class="bt-btn" data-act="save-rate">Set rate</button></div>'
-        : "") +
+      '<div class="bt-changer-row bt-changer-admin"><label>Rate (¢ per point)' +
+        '<input type="number" class="bt-changer-input" data-role="rate-input" min="1" max="1000" value="' + rate + '"></label></div>' +
     "</div>";
   }
 
@@ -276,31 +271,33 @@
   }
 
   // ---- breakdown / editors ---------------------------------------------------
-  // A single item row. `nested` = shown under a category header (indented, and
-  // the label drops the "Category: " prefix).
-  function blockRow(b, u, nested) {
+  // Every row is editable in place — no edit mode. The name and amount are
+  // borderless inputs that save on blur/Enter; a grip drags, × deletes.
+  function amtInput(role, cents) {
+    return '<span class="bt-amt-edit">$<input type="number" class="bt-amt-in" data-role="' + role +
+      '" value="' + Math.round((cents || 0) / 100) + '" min="0" step="1"></span>';
+  }
+
+  // A specific purchase item, nested under its category header.
+  function blockRow(b, u) {
     const info = statusInfo(b, u.waterline_cents);
     const confirming = _confirmDeleteId === b.id;
-    const label = nested ? (b.item || b.title) : b.title;
-    return '<div class="bt-row' + (nested ? " bt-row--nested" : "") + " " + info.cls + '" draggable="true" data-id="' + b.id + '">' +
+    return '<div class="bt-row bt-row--nested ' + info.cls + '" draggable="true" data-id="' + b.id + '">' +
       '<span class="bt-row-grip" title="Drag to reprioritize">⋮⋮</span>' +
       '<span class="bt-row-dot" style="background:' + esc(b.color || "#f59e0b") + '"></span>' +
-      '<span class="bt-row-name">' + esc(label) +
-        (b.tank_recurring ? '<span class="bt-row-tag">monthly</span>' : "") + "</span>" +
-      '<span class="bt-row-amt">' + money(b.value_cents) + "</span>" +
+      '<input class="bt-name-in" data-role="item-name" value="' + esc(b.item || b.title) + '" placeholder="what to buy">' +
+      (b.tank_recurring ? '<span class="bt-row-tag">monthly</span>' : "") +
+      amtInput("item-amt", b.value_cents) +
       '<span class="bt-row-fund">' + esc(info.label) + "</span>" +
       (b.claimable ? '<button class="bt-claim-btn" data-act="claim">Claim</button>' : "") +
-      (_editMode
-        ? '<button class="bt-row-btn" data-act="edit-block" title="Edit">✎</button>' +
-          '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block">' + (confirming ? "Sure?" : "×") + "</button>"
-        : "") +
+      '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block">' + (confirming ? "Sure?" : "×") + "</button>" +
       "</div>";
   }
 
-  // A Monarch/Mint-style category group: a header carrying the rolled-up budget
-  // and a fill bar, with the specific purchase items nested underneath. A lone
-  // generic envelope (single item whose label is just the category) collapses
-  // into the header row so it doesn't read twice.
+  // A Monarch/Mint-style category group. The header name is editable in place
+  // (renames the whole group); its amount is the read-only rollup. A lone
+  // generic envelope (single item labeled like the category) becomes the
+  // editable header row itself, with its own amount + claim + delete.
   function categoryGroupMarkup(cat, u) {
     const collapsed = _collapsed.has(cat.key);
     const lone = cat.count === 1 && (cat.items[0].item || "").trim().toLowerCase() === cat.name.trim().toLowerCase();
@@ -309,22 +306,26 @@
       : cat.status === "claimable" ? cat.claimable_count + " ready"
       : cat.status === "partial" ? cat.unlocked_count + "/" + cat.count + " unlocked"
       : "locked";
+    const one = cat.items[0];
+    const confirmingLone = lone && _confirmDeleteId === one.id;
     const head =
-      '<div class="bt-cat-head bt--" data-act="toggle-cat" data-cat="' + esc(cat.key) + '">' +
+      '<div class="bt-cat-head" data-cat="' + esc(cat.key) + '"' + (lone ? ' data-id="' + one.id + '"' : "") + ">" +
         (lone ? '<span class="bt-cat-caret bt-cat-caret--none"></span>'
-              : '<span class="bt-cat-caret">' + (collapsed ? "▸" : "▾") + "</span>") +
+              : '<span class="bt-cat-caret" data-act="toggle-cat" data-cat="' + esc(cat.key) + '">' + (collapsed ? "▸" : "▾") + "</span>") +
         '<span class="bt-row-dot" style="background:' + esc(cat.color || "#f59e0b") + '"></span>' +
-        '<span class="bt-cat-name">' + esc(cat.name) + "</span>" +
+        '<input class="bt-name-in bt-cat-name-in" data-role="cat-name" data-cat="' + esc(cat.key) + '" value="' + esc(cat.name) + '">' +
         '<span class="bt-cat-status bt--' + cat.status + '">' + statusText + "</span>" +
-        '<span class="bt-cat-amt">' + money(cat.budget_cents) + "</span>" +
+        (lone ? amtInput("item-amt", one.value_cents)
+              : '<span class="bt-cat-amt">' + money(cat.budget_cents) + "</span>") +
         '<span class="bt-cat-bar"><i style="width:' + fillPct + '%"></i></span>' +
-        (lone && cat.items[0].claimable ? '<button class="bt-claim-btn" data-act="claim" data-id="' + cat.items[0].id + '">Claim</button>' : "") +
+        (lone && one.claimable ? '<button class="bt-claim-btn" data-act="claim" data-id="' + one.id + '">Claim</button>' : "") +
+        (lone ? '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block" data-id="' + one.id + '">' + (confirmingLone ? "Sure?" : "×") + "</button>" : "") +
       "</div>";
     if (lone) return '<div class="bt-cat" data-cat="' + esc(cat.key) + '">' + head + "</div>";
     const items = collapsed ? "" :
       '<div class="bt-cat-items">' +
-        [...cat.items].reverse().map(b => blockRow(b, u, true)).join("") +
-        (_editMode ? '<button class="bt-add bt-add--sub" data-act="add-block" data-cat="' + esc(cat.name) + '">+ add to ' + esc(cat.name) + "</button>" : "") +
+        [...cat.items].reverse().map(b => blockRow(b, u)).join("") +
+        '<button class="bt-add bt-add--sub" data-act="add-block" data-cat="' + esc(cat.name) + '">+ add to ' + esc(cat.name) + "</button>" +
       "</div>";
     return '<div class="bt-cat" data-cat="' + esc(cat.key) + '">' + head + items + "</div>";
   }
@@ -348,40 +349,28 @@
     "</div>";
   }
 
-  // Small sprite swatch used in pickers and read-only rows.
-  function shapeSwatch(shape, color) {
-    return '<span class="bt-swatch" style="color:' + esc(color || "#8aa0c0") + '">' +
-      (SPRITES[shape] || SPRITES.castle) + "</span>";
-  }
-
-  function shapePicker(idx, current) {
+  function shapePicker(current) {
     return '<div class="bt-shape-pick">' + SHAPES.map(sh =>
       '<button type="button" class="bt-shape-btn' + (sh === current ? " is-sel" : "") + '" ' +
-        'data-act="nec-shape" data-idx="' + idx + '" data-shape="' + sh + '" title="' + sh + '">' +
+        'data-act="nec-shape" data-shape="' + sh + '" title="' + sh + '">' +
         (SPRITES[sh] || "") + "</button>").join("") + "</div>";
   }
 
+  // Necessities are always editable in place (no edit mode). Each row's fields
+  // save the whole list on blur/Enter (they live in one settings blob); the
+  // shape picker saves on click. data-necid preserves stable ids.
   function necessitiesMarkup(s) {
-    if (!_editMode || !_necDraft) {
-      const rows = s.settings.necessities.map(n =>
-        '<div class="bt-nec-row">' + shapeSwatch(n.shape, n.color) +
-        '<span class="bt-row-name">' + esc(n.name) + '</span><span class="bt-row-amt">' + money(n.amount_cents) + "</span></div>").join("");
-      return rows || '<div class="bt-empty-note">No necessities configured.</div>';
-    }
-    return _necDraft.map((n, i) =>
-      '<div class="bt-nec-row bt-nec-row--edit" data-idx="' + i + '">' +
+    const rows = s.settings.necessities.map((n) =>
+      '<div class="bt-nec-row bt-nec-row--edit" data-necid="' + esc(n.id || "") + '" data-shape="' + esc(n.shape || "castle") + '">' +
         '<div class="bt-nec-top">' +
-          '<input type="color" class="bt-nec-color" value="' + esc(n.color || "#22c55e") + '" title="Color">' +
-          '<input type="text" class="bt-nec-name" value="' + esc(n.name) + '" placeholder="Rent, Utilities…">' +
-          '<input type="number" class="bt-nec-amt" value="' + Math.round(n.amount_cents / 100) + '" min="0" step="1">' +
+          '<input type="color" class="bt-nec-color" data-role="nec" value="' + esc(n.color || "#22c55e") + '" title="Color">' +
+          '<input type="text" class="bt-nec-name bt-name-in" data-role="nec" value="' + esc(n.name) + '" placeholder="Rent, Utilities…">' +
+          '<span class="bt-amt-edit">$<input type="number" class="bt-nec-amt bt-amt-in" data-role="nec" value="' + Math.round(n.amount_cents / 100) + '" min="0" step="1"></span>' +
           '<button class="bt-row-btn bt-row-btn--danger" data-act="del-nec">×</button>' +
         "</div>" +
-        shapePicker(i, n.shape) +
-      "</div>").join("") +
-      '<div class="bt-form-actions bt-nec-actions">' +
-        '<button class="bt-btn" data-act="add-nec">+ add bill</button>' +
-        '<button class="bt-btn bt-btn--primary" data-act="save-nec">Save necessities</button>' +
-      "</div>";
+        shapePicker(n.shape) +
+      "</div>").join("");
+    return rows + '<button class="bt-add" data-act="add-nec">+ add bill</button>';
   }
 
   // ---- main render -------------------------------------------------------------
@@ -445,7 +434,6 @@
             "</span>" +
           "</div>" +
           '<div class="bt-chips">' + chips + "</div>" +
-          '<button class="bt-btn bt-edit-btn" data-act="toggle-edit">' + (_editMode ? "Done" : "Edit") + "</button>" +
         "</div>" +
         '<div class="bt-main">' +
           '<div class="bt-tank-col">' + tankMarkup(s) + moneyChangerMarkup(s) + "</div>" +
@@ -454,7 +442,7 @@
               '<div class="bt-group-head"><span class="bt-group-title">Priority stack</span>' +
                 '<span class="bt-group-sub">categories roll up · bottom fills first</span></div>' +
               (catGroups || '<div class="bt-empty-note">Nothing in the tank yet. Add a category and drop in what you want to buy — a dinner, a gift, a trip.</div>') +
-              (_editMode && !_form ? '<button class="bt-add" data-act="add-block">+ add block</button>' : "") +
+              (!_form ? '<button class="bt-add" data-act="add-block">+ add category / item</button>' : "") +
               (_form ? blockFormMarkup(s) : "") +
             "</div>" +
             '<div class="bt-group">' +
@@ -561,14 +549,6 @@
       if (!btn) return;
       const act = btn.dataset.act;
       if (act === "retry") { _state = null; render(); loadBudget(); return; }
-      if (act === "toggle-edit") {
-        _editMode = !_editMode;
-        _form = null;
-        _confirmDeleteId = null;
-        _necDraft = _editMode ? _state.settings.necessities.map(n => ({ ...n })) : null;
-        render();
-        return;
-      }
       if (act === "use-income") {
         try {
           await api("PUT", "/api/budget/config", { capacity_source: "last_income" });
@@ -620,17 +600,6 @@
         _convertBusy = false;
         return;
       }
-      if (act === "save-rate") {
-        const input = root.querySelector('[data-role="rate-input"]');
-        const rate = Math.floor(Number(input && input.value));
-        if (!(rate >= 1)) { toast("Rate must be at least 1", "error"); return; }
-        try {
-          await api("PUT", "/api/budget/config", { cents_per_point: rate });
-          toast("Rate set: 1 pt = " + rate + "¢", "success");
-          await loadBudget();
-        } catch (err) { toast(err.message || "Could not set rate", "error"); }
-        return;
-      }
       if (act === "claim") {
         const el = btn.closest("[data-id]");
         const block = _state.blocks.find(b => String(b.id) === el.dataset.id);
@@ -664,12 +633,6 @@
       if (act === "add-block") { openForm(null, btn.dataset.cat || ""); return; }
       if (act === "cancel-block") { _form = null; render(); return; }
       if (act === "save-block") { saveForm(); return; }
-      if (act === "edit-block") {
-        const row = btn.closest("[data-id]");
-        const block = _state.blocks.find(b => String(b.id) === row.dataset.id);
-        if (block) openForm(block);
-        return;
-      }
       if (act === "del-block") {
         const row = btn.closest("[data-id]");
         const id = Number(row.dataset.id);
@@ -683,39 +646,27 @@
         return;
       }
       if (act === "add-nec") {
-        readNecDraft(root);
         const palette = ["#22c55e", "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#6366f1"];
         const scenery = ["castle", "coral", "plant", "rocks", "shell"];
-        const n = _necDraft.length;
-        _necDraft.push({ id: "nec-" + Date.now().toString(36), name: "", amount_cents: 0,
+        const list = gatherNecessities(root);
+        const n = list.length;
+        list.push({ id: "nec-" + Date.now().toString(36), name: "New bill", amount_cents: 0,
           color: palette[n % palette.length], shape: scenery[n % scenery.length] });
-        render();
+        saveNecessities(list);
         return;
       }
       if (act === "nec-shape") {
-        readNecDraft(root);
-        const idx = Number(btn.dataset.idx);
-        if (_necDraft[idx]) _necDraft[idx].shape = btn.dataset.shape;
-        render();
+        const row = btn.closest(".bt-nec-row--edit");
+        if (row) row.dataset.shape = btn.dataset.shape;
+        saveNecessities(gatherNecessities(root));
         return;
       }
       if (act === "del-nec") {
-        const idx = Number(btn.closest("[data-idx]").dataset.idx);
-        readNecDraft(root);
-        _necDraft.splice(idx, 1);
-        render();
-        return;
-      }
-      if (act === "save-nec") {
-        readNecDraft(root);
-        const cleaned = _necDraft.filter(n => n.name.trim());
-        try {
-          const out = await api("PUT", "/api/budget/config", { necessities: cleaned });
-          _state.settings = out.settings;
-          _necDraft = out.settings.necessities.map(n => ({ ...n }));
-          toast("Necessities saved", "success");
-          await loadBudget();
-        } catch (err) { toast(err.message || "Could not save necessities", "error"); }
+        const rows = [...root.querySelectorAll(".bt-nec-row--edit")];
+        const idx = rows.indexOf(btn.closest(".bt-nec-row--edit"));
+        const list = gatherNecessities(root);
+        if (idx >= 0) list.splice(idx, 1);
+        saveNecessities(list);
         return;
       }
     });
@@ -724,26 +675,40 @@
       if (e.target.dataset.role === "convert-amt") updateConvertPreview(root);
     });
 
-    // Income field commits on blur/Enter (change), not per keystroke. Stating
-    // income makes it the tank budget (capacity_source = last_income).
+    // Everything editable in place commits on blur/Enter (change), never per
+    // keystroke — so a full re-render after save can't eat what you're typing.
     root.addEventListener("change", async e => {
-      if (e.target.dataset.role !== "income-input") return;
-      const dollars = Math.max(0, Math.round(Number(e.target.value) || 0));
-      try {
-        await api("PUT", "/api/budget/config", { income_cents: dollars * 100, capacity_source: "last_income" });
-        await loadBudget();
-      } catch (err) { toast(err.message || "Could not save income", "error"); }
+      const role = e.target.dataset.role;
+      if (role === "income-input") {
+        const dollars = Math.max(0, Math.round(Number(e.target.value) || 0));
+        try { await api("PUT", "/api/budget/config", { income_cents: dollars * 100, capacity_source: "last_income" }); await loadBudget(); }
+        catch (err) { toast(err.message || "Could not save income", "error"); }
+      } else if (role === "rate-input") {
+        const rate = Math.max(1, Math.floor(Number(e.target.value) || 1));
+        try { await api("PUT", "/api/budget/config", { cents_per_point: rate }); await loadBudget(); }
+        catch (err) { toast(err.message || "Could not set rate", "error"); }
+      } else if (role === "nec") {
+        saveNecessities(gatherNecessities(root));
+      } else if (role === "item-name" || role === "item-amt") {
+        saveBlockInline(e.target);
+      } else if (role === "cat-name") {
+        renameCategory(e.target.dataset.cat, e.target.value);
+      }
     });
 
     root.addEventListener("keydown", e => {
-      if (e.key === "Enter" && e.target.closest('[data-role="block-form"]') && e.target.tagName === "INPUT" && e.target.type !== "checkbox") {
-        e.preventDefault();
-        saveForm();
+      if (e.key !== "Enter") return;
+      if (e.target.closest('[data-role="block-form"]') && e.target.tagName === "INPUT" && e.target.type !== "checkbox") {
+        e.preventDefault(); saveForm();
+      } else if (e.target.classList && e.target.classList.contains("bt-name-in")) {
+        e.preventDefault(); e.target.blur();  // commit inline edit
       }
     });
 
     // Native DnD (same approach as the reward-card reorder in slots.js).
     root.addEventListener("dragstart", e => {
+      // Don't hijack drags that start inside an inline editor.
+      if (e.target.closest && e.target.closest("input,button,select,.bt-shape-pick")) { e.preventDefault(); return; }
       const el = dragTargetEl(e);
       if (!el) return;
       _dragId = Number(el.dataset.id);
@@ -785,11 +750,14 @@
     });
 
     // Any economy change (spin, conversion, claim, reorder from another tab)
-    // refreshes the tank — unless mid-drag or mid-form, where a rerender would
-    // eat the user's input.
+    // refreshes the tank — unless mid-drag, mid-add-form, or while an inline
+    // field is focused, where a rerender would eat what's being typed.
     document.addEventListener("slot-changed", () => {
-      if (_dragId != null || _form || (_editMode && _necDraft)) return;
-      if (document.getElementById("budget-root")) loadBudget();
+      if (_dragId != null || _form) return;
+      const root = document.getElementById("budget-root");
+      if (!root) return;
+      if (root.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
+      loadBudget();
     });
   }
 
@@ -801,15 +769,61 @@
     preview.textContent = "→ " + money(pts * _state.constants.cents_per_point) + " into the tank";
   }
 
-  function readNecDraft(root) {
-    root.querySelectorAll(".bt-nec-row--edit").forEach(row => {
-      const idx = Number(row.dataset.idx);
-      if (!_necDraft[idx]) return;
-      _necDraft[idx].name = row.querySelector(".bt-nec-name").value;
-      _necDraft[idx].amount_cents = Math.max(0, Math.round(Number(row.querySelector(".bt-nec-amt").value) * 100) || 0);
-      const colorEl = row.querySelector(".bt-nec-color");
-      if (colorEl) _necDraft[idx].color = colorEl.value;
-    });
+  // ---- inline save helpers ----------------------------------------------------
+  function gatherNecessities(root) {
+    return [...root.querySelectorAll(".bt-nec-row--edit")].map(row => ({
+      id: row.dataset.necid || undefined,
+      name: row.querySelector(".bt-nec-name").value,
+      amount_cents: Math.max(0, Math.round(Number(row.querySelector(".bt-nec-amt").value) * 100) || 0),
+      color: row.querySelector(".bt-nec-color").value,
+      shape: row.dataset.shape || "castle",
+    }));
+  }
+
+  async function saveNecessities(list) {
+    try {
+      await api("PUT", "/api/budget/config", { necessities: list.filter(n => (n.name || "").trim()) });
+      await loadBudget();
+    } catch (err) { toast(err.message || "Could not save necessities", "error"); }
+  }
+
+  // Save an item's inline name/amount edit. Sends the whole block so the server
+  // rebuilds "Category: item" and keeps the amount/recurring in sync.
+  async function saveBlockInline(input) {
+    const rowEl = input.closest("[data-id]");
+    if (!rowEl) return;
+    const block = _state.blocks.find(b => String(b.id) === rowEl.dataset.id);
+    if (!block) return;
+    const nameEl = rowEl.querySelector('[data-role="item-name"]');
+    const amtEl = rowEl.querySelector('[data-role="item-amt"]');
+    const category = block.category || "";
+    const curItem = block.item && block.item !== block.category ? block.item : "";
+    const name = nameEl ? nameEl.value.trim() : curItem;
+    const amount = amtEl ? Math.max(0, Math.round(Number(amtEl.value) || 0)) : Math.round(block.value_cents / 100);
+    // A lone envelope (name == category) keeps category==title; a real item
+    // nests under its category.
+    const body = curItem || category
+      ? { category, item: (name === category ? "" : name), amount, recurring: block.tank_recurring }
+      : { title: name, amount, recurring: block.tank_recurring };
+    try { await api("PUT", "/api/budget/blocks/" + block.id, body); await loadBudget(); }
+    catch (err) { toast(err.message || "Could not save", "error"); }
+  }
+
+  // Rename a whole category in place — recategorize every item under it.
+  async function renameCategory(key, newName) {
+    const name = (newName || "").trim();
+    if (!name) { loadBudget(); return; }
+    const cat = (_state.categories || []).find(c => c.key === key);
+    if (!cat || name.toLowerCase() === cat.name.toLowerCase()) return;
+    try {
+      for (const it of cat.items) {
+        const curItem = it.item && it.item !== it.category ? it.item : "";
+        await api("PUT", "/api/budget/blocks/" + it.id, {
+          category: name, item: curItem, amount: Math.round(it.value_cents / 100), recurring: it.tank_recurring,
+        });
+      }
+      await loadBudget();
+    } catch (err) { toast(err.message || "Could not rename category", "error"); }
   }
 
   // ---- public entry -------------------------------------------------------------
