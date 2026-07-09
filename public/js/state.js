@@ -41,6 +41,15 @@ function fmtMoney(cents, opts){
 function dur(ev){return pt(ev.end)-pt(ev.start)}
 function origDur(id){const o=INIT_SCHED.find(e=>e.id===id);return o?dur(o):0}
 function isMeeting(ev){return ev.type==="meeting"||ev.type==="oneone"}
+// Two independent axes for a fixed-time block:
+//  - reflow-exempt (fixedTime): recalcTimes never bumps it (isFixedTimeBlock).
+//  - user-movable: the user can still drag / re-time it by hand.
+// A meeting is both (holds its slot, but you can move it manually); ooo/break
+// are fixed AND not user-movable. Registry-driven so the two never drift.
+function userMovable(ev){
+  if(ev&&window.TaskTypes&&typeof window.TaskTypes.rule==="function")return window.TaskTypes.rule(ev,"movable")!==false;
+  return !isMeeting(ev)&&(!ev||(ev.type!=="ooo"&&ev.type!=="break"));
+}
 
 // ======== WRAPS (v1) ========
 // A "wrap" is a larger container block (a long session / focus block). Tasks

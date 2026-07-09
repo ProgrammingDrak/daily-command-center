@@ -43,6 +43,22 @@ test("registry: non-earning set is exactly the historical set plus shell", () =>
   assert.equal(set.has("oneone"), false);
 });
 
+test("registry: meeting/oneone are fixed-time but user-movable, break/ooo are not", () => {
+  // fixedTime keeps them out of the reflow cascade; movable lets the user still
+  // drag/re-time them by hand. This split is the contract meeting moves rely on.
+  for (const t of ["meeting", "oneone"]) {
+    assert.equal(TaskTypes.rule(t, "fixedTime"), true, t + " fixedTime");
+    assert.equal(TaskTypes.rule(t, "movable"), true, t + " movable");
+  }
+  assert.equal(TaskTypes.rule("meeting", "barColor"), "#f97316"); // orange
+  assert.equal(TaskTypes.rule("oneone", "barColor"), "#f59e0b");  // amber
+  // ooo/break are fixed AND not user-movable (kept the way they were).
+  assert.equal(TaskTypes.rule("ooo", "movable"), false);
+  assert.equal(TaskTypes.rule("break", "movable"), false);
+  // Plain tasks stay movable by default.
+  assert.equal(TaskTypes.rule("task", "movable"), true);
+});
+
 test("registry: hard-zero tier is exactly ooo + shell (meeting/break stay rescuable)", () => {
   assert.deepEqual([...new Set(TaskTypes.hardZeroTypes())].sort(), ["ooo", "shell"]);
   assert.deepEqual([...scoring.HARD_ZERO_TYPES].sort(), ["ooo", "shell"]);

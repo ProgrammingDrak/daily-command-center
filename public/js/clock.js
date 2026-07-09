@@ -29,6 +29,8 @@ function updateClock(){
   // Only update the live time indicator on today's page — not on historical pages
   const _isToday=window.__state&&window.__state.date===new Date().toISOString().split("T")[0];
   const nowEl=document.querySelector(".tl-now-time");if(nowEl&&_isToday)nowEl.textContent=timeStr;
+  // Pre-meeting nudges: soft pulse at T-5, one-time toast at T-2 (meeting-alerts.js).
+  if(typeof window.meetingAlertTick==="function")window.meetingAlertTick();
 }
 
 // ======== DATE NAVIGATION ========

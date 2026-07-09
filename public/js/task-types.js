@@ -57,11 +57,14 @@
       dragMovesSubtree: true,
     },
 
-    // NOTE: oneone is deliberately NOT non-earning — it has never been in
-    // NON_EARNING_TYPES; changing that would change live scoring.
-    meeting: { label: "Meeting", tagCls: "tag-meeting", earnsOwnPoints: false, movable: false, fixedTime: true },
-    oneone:  { label: "1:1",     tagCls: "tag-oneone",  movable: false, fixedTime: true },
-    break:   { label: "Break",   tagCls: "tag-break",   earnsOwnPoints: false, fixedTime: true },
+    // Calendar-backed blocks. fixedTime keeps them out of the reflow cascade
+    // (they hold their slot when tasks around them move); movable:true lets the
+    // user still drag/re-time them by hand. NOTE: oneone is deliberately NOT
+    // non-earning — it has never been in NON_EARNING_TYPES; changing that would
+    // change live scoring.
+    meeting: { label: "Meeting", tagCls: "tag-meeting", barColor: "#f97316", earnsOwnPoints: false, movable: true, fixedTime: true },
+    oneone:  { label: "1:1",     tagCls: "tag-oneone",  barColor: "#f59e0b", movable: true, fixedTime: true },
+    break:   { label: "Break",   tagCls: "tag-break",   earnsOwnPoints: false, movable: false, fixedTime: true },
     ooo:     { label: "OOO",     tagCls: "tag-ooo",     earnsOwnPoints: false, hardZero: true, movable: false, fixedTime: true },
   };
 

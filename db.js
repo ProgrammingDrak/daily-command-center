@@ -146,6 +146,17 @@ async function getBlocksByDate(date, workspaceId) {
   return rows.map(parseBlock);
 }
 
+// Like getBlocksByDate but keeps soft-deleted rows. The meeting materializer
+// needs these: a meeting the user deleted must NOT be resurrected when the next
+// calendar sweep re-ingests the same event, so we look it up by source_id even
+// once it's soft-deleted. parseBlock preserves deleted_at for the caller.
+async function getBlocksByDateIncludingDeleted(date, workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(`SELECT * FROM blocks WHERE date = $1 AND workspace_id = $2 ORDER BY sort_order ASC, created_at ASC`, [date, workspaceId])
+    : await pool.query(`SELECT * FROM blocks WHERE date = $1 ORDER BY sort_order ASC, created_at ASC`, [date]);
+  return rows.map(parseBlock);
+}
+
 // Undated task blocks that could ride along in a reschedule subtree walk.
 // Only blocks holding a subtaskOf/wrapId link can ever join a subtree
 // (lib/reschedule.js walks those keys), so filter to them here — the broader
@@ -386,7 +397,7 @@ async function getDccStateRange(startDate, endDate, workspaceId) {
 module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
-  getBlocksByDate, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
+  getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,

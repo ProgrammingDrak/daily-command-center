@@ -636,6 +636,14 @@
   .card.card-shell:hover{background:rgba(226,232,240,0.09)}
   .it-list-item.card-shell{border-color:rgba(226,232,240,0.28);background:rgba(226,232,240,0.05)}
   .it-list-item.card-shell:hover{background:rgba(226,232,240,0.09)}
+  /* ── BEGIN meeting-task feature (pre-start pulse) ─────────────────────────
+     meeting-alerts.js adds .meeting-soon to a meeting's card at T-5 minutes.
+     Soft orange breathing glow (modeled on fb-pulse), NOT the urgent red
+     aging-flash. prefers-reduced-motion collapses it to a static orange ring. */
+  @keyframes meeting-soon-pulse{0%,100%{box-shadow:0 0 0 0 rgba(249,115,22,0.0)}50%{box-shadow:0 0 0 4px rgba(249,115,22,0.30)}}
+  .card.meeting-soon,.it-list-item.meeting-soon{animation:meeting-soon-pulse 2.4s ease-in-out infinite;border-color:rgba(249,115,22,0.55)!important}
+  @media (prefers-reduced-motion:reduce){.card.meeting-soon,.it-list-item.meeting-soon{animation:none;box-shadow:0 0 0 3px rgba(249,115,22,0.25);border-color:rgba(249,115,22,0.6)!important}}
+  /* ── END meeting-task feature ──────────────────────────────────────────── */
   /* Rollup checkbox while children are open: display-only affordance. */
   .chk.chk-blocked{opacity:0.35;cursor:not-allowed}
   .chk.chk-blocked:hover{border-color:var(--border);background:transparent}

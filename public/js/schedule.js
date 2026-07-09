@@ -106,7 +106,10 @@ function syncAddedTaskTimes(){
   const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>{
     const p=b.properties||{};
     if(p.kind&&/^responsibility/.test(p.kind))return false;
-    if(!p.local_id&&p.kind!=="task")return false;
+    // Meetings are API-inserted (no local_id, kind "meeting") -> admit them so a
+    // manual move (drag / start-time picker) persists to the block.
+    const isMeetingBlock=p.kind==="meeting"||p.type==="meeting"||p.type==="oneone";
+    if(!p.local_id&&p.kind!=="task"&&!isMeetingBlock)return false;
     return !b.date||b.date===currentDate;
   })];
   const datedLocalIds=new Set(window.blockStore.getByType("block")
@@ -595,10 +598,15 @@ function savePinnedStarts(data){
 
 function pinStartTime(id,timeStr){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;
-  ev._pinnedStart=timeStr;
   const s=pt(timeStr),d=dur(ev);
   ev.start=timeStr;ev.end=fmt(s+d);
-  const pins=loadPinnedStarts(); pins[id]=timeStr; savePinnedStarts(pins);
+  // Meetings hold their slot via fixedTime (isFixedTimeBlock), not the pin map —
+  // recording a pin for them is meaningless and would clutter it. Every other
+  // task pins so recalcTimes() won't overwrite the chosen start.
+  if(!(typeof isFixedTimeBlock==="function"&&isFixedTimeBlock(ev))){
+    ev._pinnedStart=timeStr;
+    const pins=loadPinnedStarts(); pins[id]=timeStr; savePinnedStarts(pins);
+  }
   log("pin-start",id,"Pinned start to "+timeStr);
   recalcTimes();render();
 }
@@ -779,6 +787,9 @@ function addTaskUniversal(barEl){
     // one gesture so points/streaks/persistence flow through the normal path.
     case"done":insertTaskNow(title,durMin,{onScheduled:r=>{if(r&&r.localId&&typeof toggleDone==="function")toggleDone(r.localId);}});break;
     case"shell":insertTaskNow(title,durMin,{type:"shell"});break;
+    // Manually-added meeting: no source_id, so the calendar materializer never
+    // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
+    case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
     case"side_project":{
       if(typeof addSideProjectTask==="function")addSideProjectTask(title,durMin);
       break;
@@ -1182,7 +1193,8 @@ const TASK_DESTINATIONS=[
   {value:"done",    icon:"✅", label:"Completed"},
   {value:"schedule",icon:"📅", label:"Schedule…"},
   {value:"backlog", icon:"💡", label:"Backlog / Idea"},
-  {value:"shell",   icon:"🐚", label:"Shell"}
+  {value:"shell",   icon:"🐚", label:"Shell"},
+  {value:"meeting", icon:"👥", label:"Meeting"}
 ];
 function _destMeta(value){return TASK_DESTINATIONS.find(d=>d.value===value)||TASK_DESTINATIONS[0]}
 // Blank title isn't a silent dead end: flash the input AND offer, via a toast
