@@ -1828,7 +1828,9 @@
       source_disabled: "source off",
       bankroll_goal: "goal mode",
       bank_too_small: "bank locked",
-      bank_cap: "bucket full"
+      bank_cap: "bucket full",
+      tank_locked: "🐠 below waterline",
+      tank_claimed: "🐠 claimed this month"
     })[reason] || "locked";
   }
 

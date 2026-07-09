@@ -82,6 +82,16 @@ for (const tab of TABS) {
   check(`tab ${tab} no h-overflow @375`, overflow === "false", overflow);
 }
 
+// budget tank renders from the live API (not just an error card): aquarium
+// present and /api/budget/state answers with a usage block
+js(`(document.querySelector('[data-tab="budget"]')||{}).click?.();'x'`);
+await new Promise((r) => setTimeout(r, 1200));
+check("budget aquarium renders", js("!!document.querySelector('.bt-aquarium')") === "true");
+const budgetState = js(
+  "fetch('/api/budget/state').then(r=>r.json()).then(j=>String(!!(j.usage && j.settings && Array.isArray(j.blocks))))"
+);
+check("GET /api/budget/state shape", budgetState === "true", budgetState);
+
 // overlay primitives open + close
 js("window.__smk=DCC.modal({title:'smoke',body:'x',actions:[{label:'ok',kind:'primary'}]});'x'");
 check("modal opens", js("!!document.querySelector('.dcc-modal')") === "true");

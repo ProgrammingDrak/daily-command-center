@@ -18,6 +18,11 @@ const {
   MONTHLY_MAX,
   upsertSlotAccountRow,
 } = require("./slot-account-common");
+// Budget Tank engine. Dependency direction is slot-store -> budget-store only
+// (budget-store depends on nothing but pg-pool + slot-account-common), so this
+// require can never cycle. Tank blocks are slot_rewards rows gated by the tank
+// waterline; see rowToReward and getBankUsage's tank-driven goal.
+const budgetStore = require("./budget-store");
 
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
 const DEFAULT_TARGET_DAILY_SPINS = 12;
@@ -1154,10 +1159,17 @@ function jackpotType(row) {
   return "self";
 }
 
-function rowToReward(row, account, bankUsage, fundingAvailableCents) {
+function rowToReward(row, account, bankUsage, fundingAvailableCents, tankUsage) {
   const bankBalance = Number.isFinite(fundingAvailableCents) ? fundingAvailableCents : (account ? account.bank_balance_cents : 0);
   const threshold = reserveCostCents(row);
   const reserveAffordable = threshold <= bankBalance;
+  // Budget Tank rows gate on the tank waterline (cumulative bottom-up unlock),
+  // not on unlock_threshold_cents. Affordability stays value_cents-based —
+  // reserveCostCents already resolves to value_cents because tank blocks never
+  // set unlock_threshold_cents. One economy, two claim surfaces.
+  const inTank = row.tank_position != null;
+  const tankLocked = inTank && !!tankUsage && tankUsage.waterlineCents < (row.tank_unlock_cents || 0);
+  const tankClaimed = inTank && !!tankUsage && !!row.tank_claimed_period && row.tank_claimed_period === tankUsage.periodKey;
   // Bank building no longer hard-stops at the monthly goal: once the goal is reached
   // it overflows into the shield (see calculateScreenBankPayout) which seeds next
   // month's head start. So bank builders stay eligible past the goal — they just pay
@@ -1189,18 +1201,22 @@ function rowToReward(row, account, bankUsage, fundingAvailableCents) {
     expires_at: row.expires_at || null,
     uses_remaining: row.uses_remaining != null ? Number(row.uses_remaining) : null,
     lifespan_exhausted: lifespanExhausted,
-    eligible: !!row.active && chanceShares > 0 && tierActive && sourceEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted,
+    eligible: !!row.active && chanceShares > 0 && tierActive && sourceEnabled && !bankCapLocked && !reserveLocked && !bankrollGoalExcluded && !lifespanExhausted && !tankLocked && !tankClaimed,
     jackpot_type: jackpotType(row),
     bankroll_goal_excluded: bankrollGoalExcluded,
     reserve_cost_cents: threshold,
     reserve_affordable: reserveAffordable,
     reserve_shortfall_cents: Math.max(0, threshold - bankBalance),
+    in_tank: inTank,
+    tank_needs_cents: tankLocked ? (row.tank_unlock_cents || 0) - tankUsage.waterlineCents : 0,
     locked_reason: !row.active ? "inactive" :
       chanceShares <= 0 ? "zero_weight" :
       lifespanExhausted ? "expired" :
       !tierActive ? "tier_inactive" :
       !sourceEnabled ? "source_disabled" :
       bankrollGoalExcluded ? "bankroll_goal" :
+      tankLocked ? "tank_locked" :
+      tankClaimed ? "tank_claimed" :
       reserveLocked ? "bank_too_small" :
       bankCapLocked ? "bank_cap" :
       null,
@@ -1249,7 +1265,11 @@ async function getBankUsage(workspaceId, settings = {}, exec = pool) {
        AND created_at <  date_trunc('month', NOW())`,
     [workspaceId]
   );
-  const monthlyGoal = clampInt(settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, MONTHLY_MIN, MONTHLY_MAX);
+  // Goal unification: an active monthly Budget Tank drives the Bank Builder
+  // goal (capacity = last period's build), so the pacing curve paces toward
+  // filling the tank. goal_mode "manual" in budget_tank settings opts out.
+  const tankGoal = budgetStore.tankDrivenGoalCents(settings);
+  const monthlyGoal = clampInt(tankGoal || settings.monthly_goal_cents || DEFAULT_MONTHLY_GOAL_CENTS, MONTHLY_MIN, MONTHLY_MAX);
   // Head start = last month's overflow above goal (the shield), capped at the goal so
   // a runaway month can't pre-fill more than the whole bar.
   const rawMonth = month.cents;
@@ -1366,7 +1386,7 @@ async function getPendingBankDeposit(workspaceId) {
   return { cents: pending.cents, count: pending.count, oldest_at: pending.oldest_at };
 }
 
-function buildBankrollGoalState(account, rewardRows, bankUsage, funding) {
+function buildBankrollGoalState(account, rewardRows, bankUsage, funding, tankUsage) {
   const settings = normalizeSlotSettings(account && account.settings);
   const goal = settings.bankroll_goal;
   const baseFunding = funding || {};
@@ -1407,7 +1427,7 @@ function buildBankrollGoalState(account, rewardRows, bankUsage, funding) {
   };
   return {
     enabled: true,
-    reward: row ? rowToReward(row, displayAccount, bankUsage, total) : null,
+    reward: row ? rowToReward(row, displayAccount, bankUsage, total, tankUsage) : null,
     reward_id: goal.reward_id,
     target_cents: target,
     icon_id: goal.icon_id || "gift",
@@ -1442,10 +1462,18 @@ async function getState(workspaceId, userId, options = {}) {
     "SELECT * FROM slot_rewards WHERE workspace_id = $1 AND kind <> $2 AND deleted_at IS NULL ORDER BY active DESC, sort_order ASC, id ASC",
     [workspaceId, LEGACY_BANK_BUILDER_KIND]
   );
-  const bankrollGoal = buildBankrollGoalState(account, rewardRows, bankUsage, funding);
+  // Tank gating: compute the tank waterline once when any reward is a tank
+  // block, so machine cards and tank zones agree on locked/claimable.
+  let tankUsage = null;
+  if (rewardRows.some(r => r.tank_position != null)) {
+    const btSettings = budgetStore.normalizeBudgetTankSettings(account.settings && account.settings.budget_tank);
+    const rawTank = await budgetStore.getTankUsage(workspaceId, btSettings);
+    tankUsage = { ...rawTank, ...budgetStore.resolveTankWaterline(btSettings, rawTank) };
+  }
+  const bankrollGoal = buildBankrollGoalState(account, rewardRows, bankUsage, funding, tankUsage);
   const rewards = rewardRows
     .filter(r => r.kind !== LEGACY_BANK_BUILDER_KIND)
-    .map(r => rowToReward(r, account, bankUsage, funding.total));
+    .map(r => rowToReward(r, account, bankUsage, funding.total, tankUsage));
   const { rows: spins } = await pool.query(
     "SELECT * FROM slot_spins WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 25",
     [workspaceId]
@@ -2132,11 +2160,16 @@ async function deleteReward(workspaceId, id) {
      SET active=FALSE,
          weight=0,
          deleted_at=NOW(),
-         updated_at=NOW()
+         updated_at=NOW(),
+         tank_position=NULL,
+         tank_unlock_cents=0
      WHERE workspace_id=$1 AND id=$2 AND deleted_at IS NULL`,
     [workspaceId, id]
   );
   if (!rowCount) throw notFound("Reward not found");
+  // A catalog delete of a tank block must not leave a ghost gap in the tank:
+  // reflow the cumulative unlock thresholds of the remaining blocks.
+  await budgetStore.recomputeTankThresholds(pool, workspaceId);
   await pool.query(
     `UPDATE slot_accounts
      SET settings = COALESCE(settings, '{}'::jsonb) || $2::jsonb,
@@ -3985,12 +4018,14 @@ module.exports = {
   confirmPendingBankBuilders,
   celebrationSpinForBankrollGoal,
   claimBankrollGoalReward,
+  sweepPendingBankBuildersInTx,
   chooseWeighted,
   _test: {
     buildSpinScreen,
     calculateScreenBankPayout,
     emptyScreenBankPayout,
     getBankUsage,
+    rowToReward,
     normalizeTileBoard,
     normalizeNextSpinTileOverride,
     applyTileOverrideToScreen,
