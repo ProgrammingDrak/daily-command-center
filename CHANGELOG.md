@@ -4,7 +4,45 @@
 > Renamed from TODO-README 2026-07-04: this file was a per-PR QA log, not a live
 > TODO (it still described the SQLite era). Kept as history. Live conventions:
 > ARCHITECTURE.md. Manual QA: QA-CHECKLIST.md.
-## Current PR: Budget Tank overhaul — priority wishlist wired to the slot economy
+## Current PR: Collapse meeting rendering to a single materialization path (#208)
+
+### What Changed
+- **Meetings render one way on every date.** Calendar meetings used to reach the
+  itinerary two ways: materialized task blocks at ingest, and read-time
+  synthesized "ghost" timeline items as a fallback for un-ingested dates. This
+  makes materialization own meetings on every date and deletes the synthesis
+  path plus its suppression query.
+- **Multi-day, ET-correct materialization** (`meeting-materializer.js`):
+  `materializeMeetings` groups the ingest payload by ET-local date (new
+  `isoToDate` helper) and materializes every date present, not just the ingested
+  one. Fixes evening-ET meetings rolling onto the next UTC day. Cancellation is
+  scoped to the feed window `[anchor .. furthest meeting]`, capped at +60 days,
+  and stays conservative so it never over-deletes a block that no-resurrect would
+  keep dead. Split into a per-date `materializeDate`.
+- **Synthesis deleted** (`server.js`): removed `meetingToTimelineItem`,
+  `mergeMeetingTimeline`, `timelineMeetingKey`, the legacy `getMeetingsFromDB`,
+  the `materializedMeetingIds` suppression query, and `getETOffset`.
+  `buildDayResponse` shrank ~120 lines and dropped two per-read DB round-trips.
+  `meetings[]` stays in state as the ingest payload; stale meeting timeline items
+  are stripped so they cannot double-render against the block.
+- **Backfill migration** (`scripts/backfill-meeting-blocks.mjs`, new): materializes
+  the `meetings[]` in every historical day file (days, recent, archive) so past
+  dates render from blocks. Idempotent, never cancels or resurrects, with
+  `--dry-run` and `--workspace-id`/`--user-id` overrides.
+- **Cross-date slot helpers** (`public/js/state.js`): meetings still block
+  scheduling via the existing `/api/blocks` fetch; cleaned the now-dead timeline
+  meeting filters.
+- **Shared identity** (`meeting-identity.js`, new): one definition of a meeting's
+  identity, required by both the server and the backfill.
+- Dropped the Notion prep link in `public/js/data.js` (no longer a source of truth).
+- Tests: +8 (multi-day horizon, ET date-derivation, cancellation-window scoping,
+  +60-day cap, backfill idempotency and no-resurrect, fold admission). Full suite 261 green.
+
+### Deploy note
+- Run `scripts/backfill-meeting-blocks.mjs` against production (dry-run first) so
+  historical dates keep their meetings. The read-time synthesis fallback is gone.
+
+## Previous PR: Budget Tank overhaul — priority wishlist wired to the slot economy
 
 ### What Changed
 - **The Budget Tank is now an aquarium.** The Phase-0 localStorage what-if
