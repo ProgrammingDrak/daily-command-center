@@ -42,10 +42,14 @@ function isFixedTimeBlock(ev){
   return isMeeting(ev)||ev.type==="ooo"||ev.type==="break";
 }
 
-// Build fixed blocker array from INIT_SCHED (used by both cascade variants)
+// Build fixed blocker array (used by both cascade variants). Sourced from the
+// LIVE scheduled array, not INIT_SCHED: meetings are now user-movable, so a
+// meeting dragged/picked to a new slot must block tasks at its NEW position, not
+// the one it started the day at. Falls back to INIT_SCHED before first render.
 function _meetingBlocks(){
-  return INIT_SCHED
-    .filter(isFixedTimeBlock)
+  const src=(typeof scheduled!=="undefined"&&Array.isArray(scheduled)&&scheduled.length)?scheduled:INIT_SCHED;
+  return src
+    .filter(ev=>isFixedTimeBlock(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
     .map(ev=>({s:pt(ev.start),e:pt(ev.end)}))
     .sort((a,b)=>a.s-b.s);
 }
@@ -402,6 +406,25 @@ function dDrop(e,tid){
   const target=scheduled.find(x=>x.id===tid);
   if(!moved||!target){dragId=null;clearCls();return;}
   const old=JSON.stringify(scheduled);
+
+  // ---- Manual meeting move ----
+  // A meeting is fixed-time (reflow never bumps it) but user-movable. A plain
+  // reorder therefore wouldn't change its clock time — recalcTimes would just
+  // hold it. Instead re-time it to the drop position and let the other tasks
+  // flow around its NEW slot. The calendar still wins on the next sweep
+  // (synced_gcal_start is untouched), so this is a hold-until-next-sync move.
+  if(isFixedTimeBlock(moved)&&typeof userMovable==="function"&&userMovable(moved)){
+    const r0=e.currentTarget.getBoundingClientRect();
+    const after0=(e.clientY-r0.top)>=r0.height/2;
+    const d=dur(moved)||30;
+    let ns=after0?pt(target.end):Math.max(0,pt(target.start)-d);
+    if(!(ns>=0))ns=pt(moved.start);
+    moved.start=fmt(ns);moved.end=fmt(ns+d);
+    delete moved._pinnedStart;            // meetings hold via fixedTime, not pins
+    _reorderActive(moved.id,target.id,after0); // keep list order coherent w/ new time
+    recalcTimes({orderWins:true});
+    _finishDrag(old);return;
+  }
 
   // Dragging a row out of the Unscheduled section onto a timed row schedules it:
   // once untimed is cleared it joins the normal cascade (recalcTimes skips

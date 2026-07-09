@@ -261,7 +261,10 @@ function reloadPersistedEdits() {
         if(p.status==="deleted"||p.status==="archived"||p.status==="done")return false;
         // API-inserted shells carry kind or type "shell" and no local_id.
         const isShell=p.kind==="shell"||p.type==="shell";
-        if(!p.local_id&&p.kind!=="task"&&!isShell)return false;
+        // Calendar-materialized meetings are API-inserted (kind/type meeting or
+        // oneone, no local_id) -> admit them so they fold like any other task.
+        const isMeetingBlock=p.kind==="meeting"||p.type==="meeting"||p.type==="oneone";
+        if(!p.local_id&&p.kind!=="task"&&!isShell&&!isMeetingBlock)return false;
         if(b.date)return b.date===currentDate;
         return !(p.local_id&&datedLocalIds.has(p.local_id));
       };
@@ -269,6 +272,17 @@ function reloadPersistedEdits() {
       addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
+        // Safety net: a stale cached day file can still carry the synthesized
+        // meeting ghost (id "mtg-<sourceId>") for this same event. The real
+        // block wins -> drop the ghost so it can't double-render before the next
+        // server read suppresses it by source_id.
+        if((p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")&&p.source_id){
+          const sid=String(p.source_id);
+          for(let i=scheduled.length-1;i>=0;i--){
+            const e=scheduled[i];
+            if(e&&e.id!==taskId&&(e.type==="meeting"||e.type==="oneone")&&String(e.source_id||"")===sid)scheduled.splice(i,1);
+          }
+        }
         if(!taskId||scheduled.find(e=>e.id===taskId))return;
         const d=p.duration||p.estimatedMinutes||30;
         // A dateless row is unscheduled by definition: any stored start on it is
@@ -290,6 +304,12 @@ function reloadPersistedEdits() {
           notionUrl:p.notionUrl||"",calUrl:p.calUrl||"",priority:p.priority||"High",
           tags:Array.isArray(p.tags)?p.tags:[],
           kind:p.kind||"",
+          // Meeting affordances (join link / location / RSVP), and the block id
+          // the meeting-automation panel keys off (itinerary-card.js).
+          location:p.location||"",
+          hangout_link:p.hangout_link||p.conferenceUrl||"",
+          rsvp_status:p.rsvp_status||"",
+          meetingBlockId:(p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")?block.id:(p.meetingBlockId||""),
           isPlaceholder:p.isPlaceholder||false,
           placeholderMenus:Array.isArray(p.placeholderMenus)?p.placeholderMenus:[],
           taskGroupId:p.taskGroupId||null,

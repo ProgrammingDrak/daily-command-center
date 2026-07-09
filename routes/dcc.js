@@ -4,7 +4,7 @@
 module.exports = function mount(app, ctx) {
   const {
     DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
-    dccIntelligence, getDayFilePath, getTodayStr, isValidDate, previousDateStr,
+    dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingMaterializer, previousDateStr,
     pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, scoreTaskPoints, writeJSON,
   } = ctx;
 
@@ -19,6 +19,24 @@ module.exports = function mount(app, ctx) {
     merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
     delete merged.meetings_tomorrow;
     const { userId: ingestUserId, workspaceId: ingestWorkspaceId } = resolveOwnerLenient(req);
+    // Materialize calendar meetings into durable task blocks BEFORE persisting
+    // state, so the very next day read finds the real blocks and suppresses the
+    // synthesized ghost. Best-effort: a materialization hiccup must never fail
+    // the whole ingest (state save below is the load-bearing write).
+    try {
+      const mres = await meetingMaterializer.materializeMeetings({
+        date: incoming.date,
+        meetings: merged.meetings,
+        userId: ingestUserId,
+        workspaceId: ingestWorkspaceId,
+        hasMeetingsKey: ("meetings" in incoming),
+      });
+      if (mres && (mres.created || mres.updated || mres.cancelled)) {
+        broadcast("blocks-changed", { action: "meeting-materialize", blockIds: mres.blockIds || [], date: incoming.date }, ingestWorkspaceId);
+      }
+    } catch (e) {
+      console.error("[dcc-state ingest] meeting materialize failed (non-fatal):", e.message);
+    }
     // Postgres is the durable store (Railway's filesystem is ephemeral) -- its
     // write must succeed or the caller must hear about it. The old shape wrote
     // the JSON unguarded and swallowed a DB failure into console.error while
