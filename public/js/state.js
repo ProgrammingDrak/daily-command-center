@@ -786,9 +786,12 @@ async function schedulePushedOnDate(ev,targetDate,opts){
     try{const r=await fetch("/api/state/day?date="+encodeURIComponent(targetDate));targetState=await r.json()}catch(e){}
   }
 
+  // Meetings are materialized task blocks now, so they come through the /api/blocks
+  // fetch below (existingBlockers). The timeline still carries ooo/break, which are
+  // pseudo-blocks with no DB row, so pull those from it.
   const tTimeline=(targetState&&targetState.schedule&&targetState.schedule.timeline)||[];
   const tMeetings=tTimeline
-    .filter(e=>e.type==="meeting"||e.type==="oneone"||e.type==="ooo"||e.type==="break")
+    .filter(e=>e.type==="ooo"||e.type==="break")
     .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
     .sort((a,b)=>a.s-b.s);
 
@@ -906,14 +909,10 @@ async function _removeTaskBlockFromDate(id,dateStr,ev){
 // Returns the start time string on success, null on failure (no slot, dedupe, or no blockstore).
 async function _scheduleTaskOnDate(ev, dateStr, dayContext){
   if(!window.blockStore||!dateStr)return null;
-  let tMeetings=[];
   let dayStart=8*60, dayEnd=17*60+30;
   if(dayContext){
-    const tTimeline=(dayContext.schedule&&dayContext.schedule.timeline)||[];
-    tMeetings=tTimeline
-      .filter(e=>e.type==="meeting"||e.type==="oneone")
-      .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
-      .sort((a,b)=>a.s-b.s);
+    // Meetings are materialized task blocks now and come through the /api/blocks
+    // fetch below (existingBlockers), not the timeline.
     const tBlocks=(dayContext.schedule&&dayContext.schedule.blocks)||[];
     if(tBlocks.length){dayStart=pt(tBlocks[0].start);dayEnd=pt(tBlocks[tBlocks.length-1].end);}
   }
@@ -929,7 +928,7 @@ async function _scheduleTaskOnDate(ev, dateStr, dayContext){
       .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
       .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
   }catch(e){}
-  const allBlockers=[...tMeetings,...existingBlockers].sort((a,b)=>a.s-b.s);
+  const allBlockers=[...existingBlockers].sort((a,b)=>a.s-b.s);
   const d=dur(ev)||30;
   const slot=_freeStart(dayStart,d,allBlockers);
   if(slot+d>dayEnd+60){
@@ -1106,9 +1105,11 @@ async function _computeRescheduleSlot(ev,targetDate){
   if(targetDate===__todayDate&&window.__DCC_STATE__)targetState=window.__DCC_STATE__;
   else if(targetDate===__tomorrowDate&&window.__DCC_TOMORROW__)targetState=window.__DCC_TOMORROW__;
   if(!targetState){try{targetState=await fetch("/api/state/day?date="+encodeURIComponent(targetDate)).then(r=>r.json())}catch(e){}}
+  // Meetings are materialized task blocks now, so they come through the /api/blocks
+  // fetch below (existingBlockers). The timeline still carries ooo/break pseudo-blocks.
   const tTimeline=(targetState&&targetState.schedule&&targetState.schedule.timeline)||[];
   const tMeetings=tTimeline
-    .filter(e=>e.type==="meeting"||e.type==="oneone"||e.type==="ooo"||e.type==="break")
+    .filter(e=>e.type==="ooo"||e.type==="break")
     .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))})).sort((a,b)=>a.s-b.s);
   const tBlocks=(targetState&&targetState.schedule&&targetState.schedule.blocks)||[];
   const dayStart=tBlocks.length?pt(tBlocks[0].start):7*60;

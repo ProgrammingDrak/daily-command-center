@@ -392,27 +392,9 @@ function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; i
 function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
-function getETOffset(dateStr) {
-  const date = new Date(`${dateStr}T12:00:00Z`);
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: APP_TIME_ZONE,
-    timeZoneName: "longOffset",
-    hour: "2-digit"
-  }).formatToParts(date);
-  const tzName = parts.find(p => p.type === "timeZoneName")?.value || "";
-  const match = tzName.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
-  if (!match) return "-05:00";
-  return `${match[1]}${String(match[2]).padStart(2, "0")}:${match[3] || "00"}`;
-}
-function meetingIdentity(meeting) {
-  return String(
-    meeting?.event_id ||
-    meeting?.source_id ||
-    meeting?.gcal_event_id ||
-    meeting?.id ||
-    ""
-  ).trim();
-}
+// Single source of truth for a meeting's stable identity (shared with the backfill
+// script). Injected into the materializer and passed into the routes ctx below.
+const meetingIdentity = require("./meeting-identity");
 function blockProps(block) {
   const props = block && block.properties;
   if (!props) return {};
@@ -427,12 +409,12 @@ function isLegacyGcalBlock(block) {
   const source = String(props.source || "").toLowerCase();
   return source === "gcal" || !!props.gcal_event_id || !!props.gcal_calendar_id || !!props.gcal_account_key;
 }
-// Only suppress legacy gcal blocks on live (today/future) days, where the
-// realtime meeting merge would otherwise duplicate them. On past/archive dates
-// these denormalized calendar copies are the ONLY record of that day's schedule
-// (getMeetingsFromDB does not run for history), so keep them -- otherwise
-// reviewing a past day shows a blank schedule. Dateless blocks (?type= globals)
-// are treated as live, preserving prior behavior.
+// Only suppress legacy `source:"gcal"` blocks on live (today/future) days. These
+// predate the calendar-meeting materializer (which writes `source:"calendar"`) and
+// are a separate, older population. On past/archive dates a legacy gcal copy may be
+// the only record of that day's schedule, so keep it there; otherwise reviewing a
+// past day could show a blank schedule. Dateless blocks (?type= globals) are treated
+// as live, preserving prior behavior.
 function isLiveBlockDate(dateStr) {
   return !dateStr || dateStr >= getTodayStr();
 }
@@ -440,59 +422,6 @@ function filterLegacyGcalBlocks(blocks) {
   return Array.isArray(blocks)
     ? blocks.filter(block => !(isLiveBlockDate(block && block.date) && isLegacyGcalBlock(block)))
     : blocks;
-}
-function timelineMeetingKey(item) {
-  const sourceId = String(item?.source_id || item?.event_id || item?.gcal_event_id || "").trim();
-  if (sourceId) return `id:${sourceId}`;
-  return `time:${item?.label || item?.title || ""}|${item?.start || ""}`;
-}
-function meetingToTimelineItem(meeting, index, dateStr) {
-  if (!meeting || meeting.all_day || !meeting.start || !meeting.end) return null;
-  const start = new Date(meeting.start);
-  const end = new Date(meeting.end);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
-  if (String(meeting.start).slice(0, 10) !== dateStr) return null;
-  const sourceId = meetingIdentity(meeting);
-  return {
-    id: meeting.block_id ? `mtg-${meeting.block_id}` : `mtg-${sourceId || index}`,
-    block_id: meeting.block_id || meeting.blockId || "",
-    type: "meeting",
-    label: meeting.title || "(No title)",
-    start: meeting.start,
-    end: meeting.end,
-    source: "calendar",
-    source_id: sourceId,
-    category: "Meetings",
-    completed: false,
-    location: meeting.location || "",
-    rsvp_status: meeting.myResponseStatus || meeting.rsvp_status || "",
-    attendee_count: Array.isArray(meeting.attendees) ? meeting.attendees.length : Number(meeting.attendee_count || 0),
-    hangout_link: meeting.hangout_link || meeting.conferenceUrl || ""
-  };
-}
-function mergeMeetings(existing, incoming) {
-  const merged = Array.isArray(existing) ? existing.slice() : [];
-  const seen = new Set(merged.map(meetingIdentity).filter(Boolean));
-  for (const meeting of Array.isArray(incoming) ? incoming : []) {
-    const id = meetingIdentity(meeting);
-    if (id && seen.has(id)) continue;
-    merged.push(meeting);
-    if (id) seen.add(id);
-  }
-  return merged;
-}
-function mergeMeetingTimeline(existingTimeline, meetingTimeline) {
-  const timeline = Array.isArray(existingTimeline) ? existingTimeline.slice() : [];
-  const seen = new Set(timeline.filter(item => item && item.type === "meeting").map(timelineMeetingKey));
-  for (const item of meetingTimeline) {
-    if (!item) continue;
-    const key = timelineMeetingKey(item);
-    if (seen.has(key)) continue;
-    timeline.push(item);
-    seen.add(key);
-  }
-  timeline.sort((a, b) => String(a.start || "").localeCompare(String(b.start || "")));
-  return timeline;
 }
 async function ensureFeedbackTable() {
   await pool.query(`
@@ -546,38 +475,6 @@ async function recordLoginEvent(req, { userId, username, workspaceId, eventType 
   }
 }
 
-async function getMeetingsFromDB(dateStr, userId, workspaceId) {
-  if (!REALTIME_GCAL_SYNC_ENABLED) return { meetings: [], meetingTimeline: [] };
-  const offset = getETOffset(dateStr);
-  let rows = [];
-  const joinedSql = workspaceId
-    ? `SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`
-    : `SELECT b.id, b.properties, g.attendees_json, g.gcal_event_id, g.html_link FROM blocks b LEFT JOIN gcal_events g ON g.block_id = b.id WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`;
-  const fallbackSql = workspaceId
-    ? `SELECT b.id, b.properties, NULL::jsonb AS attendees_json, NULL::text AS gcal_event_id, NULL::text AS html_link FROM blocks b WHERE b.date = $1 AND b.workspace_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`
-    : `SELECT b.id, b.properties, NULL::jsonb AS attendees_json, NULL::text AS gcal_event_id, NULL::text AS html_link FROM blocks b WHERE b.date = $1 AND b.user_id = $2 AND b.type IN ('schedule_item','block') AND b.deleted_at IS NULL ORDER BY b.sort_order ASC`;
-  try {
-    ({ rows } = await pool.query(joinedSql, [dateStr, workspaceId || userId]));
-  } catch (e) {
-    if (!String(e.message || "").includes("gcal_events")) throw e;
-    ({ rows } = await pool.query(fallbackSql, [dateStr, workspaceId || userId]));
-  }
-  const meetings = [], meetingTimeline = [];
-  for (const row of rows) {
-    const props = typeof row.properties === "string" ? JSON.parse(row.properties) : row.properties;
-    if (!props || props.source !== "gcal" || props.all_day || !props.start || !props.end) continue;
-    let attendees = [];
-    if (row.attendees_json) { const parsed = Array.isArray(row.attendees_json) ? row.attendees_json : []; attendees = parsed.filter(a => !a.self && !a.resource).map(a => a.email); }
-    const startISO = `${dateStr}T${props.start}:00${offset}`, endISO = `${dateStr}T${props.end}:00${offset}`;
-    const eventId = row.gcal_event_id || props.source_id || row.id;
-    meetings.push({ id: eventId, title: props.title || "(No title)", start: startISO, end: endISO, attendees, calUrl: props.calUrl || row.html_link || null, linkedDocUrl: null, linkedDocTitle: null, myResponseStatus: props.rsvp_status || null });
-    meetingTimeline.push({ id: "mtg-" + row.id, block_id: row.id, type: "meeting", label: props.title || "(No title)", start: startISO, end: endISO, source: "calendar", source_id: eventId, category: "Meetings", completed: false });
-  }
-  const seen = new Map(), dedupedMeetings = [], dedupedTimeline = [];
-  for (let i = 0; i < meetings.length; i++) { const key = meetings[i].title + "|" + meetings[i].start; const existing = seen.get(key); if (existing !== undefined) { if (meetings[i].myResponseStatus === "accepted" && meetings[existing].myResponseStatus !== "accepted") { dedupedMeetings[existing] = meetings[i]; dedupedTimeline[existing] = meetingTimeline[i]; } } else { seen.set(key, dedupedMeetings.length); dedupedMeetings.push(meetings[i]); dedupedTimeline.push(meetingTimeline[i]); } }
-  return { meetings: dedupedMeetings, meetingTimeline: dedupedTimeline };
-}
-
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, sweep: { source_health: [], readers: [], open_item_count: 0, meetings_count: 0 }, glymphatic_brief: { history: [], current: null }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
 async function buildDayResponse(dateStr, userId, workspaceId) {
@@ -597,54 +494,15 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   const result = { ...enrichment, date: dateStr };
   if (!result.schedule) result.schedule = { timeline: [] };
   if (!Array.isArray(result.schedule.timeline)) result.schedule.timeline = [];
-  let dbMeetings = [];
-  let dbMeetingTimeline = [];
-  try {
-    const fromDb = await getMeetingsFromDB(dateStr, userId, workspaceId);
-    dbMeetings = fromDb.meetings || [];
-    dbMeetingTimeline = fromDb.meetingTimeline || [];
-  } catch (e) {
-    console.error("[calendar] Could not merge DB meetings into day response:", e.message);
-  }
-  result.meetings = mergeMeetings(result.meetings, dbMeetings);
-
-  // Meetings materialized into real task blocks (meeting-materializer.js) render
-  // via the client-side block fold. Suppress the read-time synthesized/persisted
-  // meeting timeline item for the SAME event (matched by source_id) so it never
-  // shows twice. Query-based, not annotation-based: an intelligence merge that
-  // rewrites meetings[] can't make a ghost reappear. Archive dates have no such
-  // blocks, so their synthesis is untouched -> no regression by construction.
-  let materializedMeetingIds = new Set();
-  try {
-    const wsForBlocks = workspaceId || (userId ? `ws-${userId}` : "ws-1");
-    const dayBlocks = await blockDB.getBlocksByDate(dateStr, wsForBlocks);
-    for (const b of dayBlocks) {
-      const p = b.properties || {};
-      if (p.source === "calendar" && (p.type === "meeting" || p.type === "oneone") && p.source_id) {
-        materializedMeetingIds.add(String(p.source_id));
-      }
-    }
-  } catch (e) {
-    console.error("[calendar] Could not load meeting blocks for suppression:", e.message);
-  }
-  const isMaterialized = (item) => {
-    const sid = String(item?.source_id || item?.event_id || item?.gcal_event_id || "").trim();
-    return !!sid && materializedMeetingIds.has(sid);
-  };
-
-  const fileMeetingTimeline = (result.meetings || [])
-    .map((meeting, index) => meetingToTimelineItem(meeting, index, dateStr))
-    .filter(Boolean)
-    .filter((item) => !isMaterialized(item));
-  // Also drop meeting items already persisted in the enrichment timeline that
-  // are now backed by a real block (the second double-emission source).
+  // Meetings are materialized into real task blocks at ingest (meeting-materializer.js)
+  // and render on every date through the client-side block fold; historical dates were
+  // backfilled by scripts/backfill-meeting-blocks.mjs. meetings[] stays in state as the
+  // ingest payload (data.js reads it for meeting-prep), but is no longer synthesized
+  // into read-time timeline ghosts. Strip any stale type:"meeting"/"oneone" item a saved
+  // day file still carries in its timeline so it can't double-render against the block.
   result.schedule.timeline = (result.schedule.timeline || []).filter(
-    (item) => !(item && item.type === "meeting" && isMaterialized(item))
+    (item) => !(item && (item.type === "meeting" || item.type === "oneone"))
   );
-  result.schedule.timeline = mergeMeetingTimeline(result.schedule.timeline, [
-    ...dbMeetingTimeline.filter((item) => !isMaterialized(item)),
-    ...fileMeetingTimeline
-  ]);
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
   return result;
 }

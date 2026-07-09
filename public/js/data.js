@@ -141,15 +141,14 @@ function transformState(state) {
       const matchedMeeting = eventId ?
         meetings.find(m => m.event_id === eventId || m.id === eventId) : null;
 
-      // Build prep array from matched meeting data
+      // Build prep array from matched meeting data. Vestigial for meetings: they now
+      // render as materialized blocks (via the fold), not timeline items, so this join
+      // no longer fires for them. Notion prep is dropped (no longer a source of truth);
+      // the replacement is a DB-stored prep doc surfaced via a deeplink chip (scoped
+      // separately). Kept for any non-meeting attachments below.
       const prep = [];
-      if (matchedMeeting) {
-        if (matchedMeeting.briefing_path) {
-          prep.push({type:"doc", title:"Meeting Prep Briefing", href: matchedMeeting.briefing_path, status:"ready"});
-        }
-        if (matchedMeeting.prep_task_url) {
-          prep.push({type:"task", title:"Prep Task (Notion)", href: matchedMeeting.prep_task_url, status:""});
-        }
+      if (matchedMeeting && matchedMeeting.briefing_path) {
+        prep.push({type:"doc", title:"Meeting Prep Briefing", href: matchedMeeting.briefing_path, status:"ready"});
       }
 
       if (item.attachments && item.attachments.length) {
