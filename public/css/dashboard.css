@@ -4881,6 +4881,11 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .bt-main{flex-direction:column}
   .bt-tank-col{flex:1 1 auto}
   .bt-aquarium{min-height:400px}
+  /* Narrow: let editable rows wrap so the claim/× buttons drop to a second
+     line instead of overflowing, and let the status text shrink. */
+  .bt-row,.bt-cat-head{flex-wrap:wrap;row-gap:3px}
+  .bt-row-fund{min-width:0;flex:1 1 auto}
+  .bt-cat-bar{display:none}
 }
 
 /* --- calm water for reduced motion --- */
