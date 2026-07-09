@@ -43,8 +43,16 @@ function createMockPool(options = {}) {
   async function query(sql, params = []) {
     calls.push({ sql, params });
     const text = String(sql);
-    if (["BEGIN", "COMMIT"].includes(text)) return { rows: [] };
-    if (text === "ROLLBACK") { state.rolledBack = true; return { rows: [] }; }
+    if (text === "BEGIN") { state.txnLedgerKeys = []; return { rows: [] }; }
+    if (text === "COMMIT") { state.txnLedgerKeys = []; return { rows: [] }; }
+    if (text === "ROLLBACK") {
+      state.rolledBack = true;
+      // Model Postgres: ROLLBACK undoes this txn's slot_point_ledger inserts, so
+      // a same-key retry after a rolled-back failure re-attempts (not a duplicate).
+      for (const k of (state.txnLedgerKeys || [])) state.ledgerKeys.delete(k);
+      state.txnLedgerKeys = [];
+      return { rows: [] };
+    }
     if (text.includes("INSERT INTO slot_accounts")) {
       return { rows: [{ workspace_id: params[0], user_id: params[1], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
     }
@@ -171,8 +179,9 @@ function createMockPool(options = {}) {
     if (text.includes("INSERT INTO slot_point_ledger")) {
       state.ledgerKeys = state.ledgerKeys || new Set();
       const key = params[3];
-      if (state.ledgerKeys.has(key)) return { rows: [] };
+      if (state.ledgerKeys.has(key)) return { rows: [] }; // ON CONFLICT DO NOTHING
       state.ledgerKeys.add(key);
+      (state.txnLedgerKeys = state.txnLedgerKeys || []).push(key); // undone on ROLLBACK
       state.ledgerDeltas = state.ledgerDeltas || [];
       state.ledgerDeltas.push(params[2]);
       return { rows: [{ id: state.ledgerDeltas.length }] };
@@ -584,17 +593,46 @@ test("convertPointsToBank: duplicate source_key is a no-op returning the origina
   assert.equal(mock.state.conversions.length, 1);
 });
 
-test("convertPointsToBank: insufficient points rolls back the whole attempt (retry works)", async () => {
+test("convertPointsToBank: insufficient points rolls back, and a same-key retry after topping up succeeds (not a duplicate)", async () => {
   const mock = createMockPool({ pointBalance: 50 });
   const store = loadStoreWithMock(mock);
+  // Not enough points: rejects and rolls back the whole attempt.
   await assert.rejects(() => store.convertPointsToBank(WS, 7, { points: 100, source_key: "k-poor" }),
     e => e.statusCode === 400 && /Not enough points/.test(e.message));
   assert.equal(mock.state.pointBalance, 50);
   assert.equal(mock.state.bankBalance, 0);
   assert.equal((mock.state.conversions || []).length, 0);
   assert.ok(mock.state.rolledBack);
+  // The ROLLBACK undid the ledger insert, so retrying the SAME source_key after
+  // topping up re-attempts and converts — it does NOT read back as a duplicate.
+  mock.state.pointBalance = 200;
+  const retry = await store.convertPointsToBank(WS, 7, { points: 100, source_key: "k-poor" });
+  assert.equal(retry.converted, true);
+  assert.equal(retry.duplicate, false);
+  assert.equal(mock.state.pointBalance, 100);
+  assert.equal(mock.state.conversions.length, 1);
+  // Validation guards.
   await assert.rejects(() => store.convertPointsToBank(WS, 7, { points: 0, source_key: "k" }), e => e.statusCode === 400);
   await assert.rejects(() => store.convertPointsToBank(WS, 7, { points: 10 }), e => e.statusCode === 400);
+});
+
+test("claimTankBlock: the injected sweep credits pending bank builders before the reserve gate", async () => {
+  // Block is affordable only AFTER the pending Bank Builder deposit is swept
+  // into bank_balance_cents: reserve starts at 2000, block costs 5000, and a
+  // 4000 pending sweep bridges the gap. Proves the injected-sweep contract.
+  const mock = createMockPool({
+    bankBalance: 2000,
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-07", capacity_cents: 50000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 40000, prior_cents: 0 },
+    tankRows: [tankRow(1, 5000, 1000, { tank_unlock_cents: 5000 })],
+  });
+  const store = loadStoreWithMock(mock);
+  const sweep = async () => { mock.state.bankBalance += 4000; }; // pending -> balance
+  // Without the sweep this would 400 (2000 < 5000); with it, balance becomes 6000.
+  const result = await store.claimTankBlock(WS, 7, 1, { sweepPendingBankBuilders: sweep });
+  assert.equal(result.claimed, true);
+  assert.equal(result.debited_cents, 5000);
+  assert.equal(mock.state.bankBalance, 1000); // 2000 + 4000 swept - 5000 debited
 });
 
 test("REGRESSION: getBankUsage (Bank Builder pacing) never reads budget_conversions", async () => {
@@ -659,7 +697,7 @@ test("rolloverPeriod carry: sweep leftover, claimed one-shots leave, unhit sink 
 test("rolloverPeriod fresh: unhit one-shots leave too; sweep is bounded by the spendable balance", async () => {
   const mock = createMockPool({
     bankBalance: 1200, // less than the 5000 leftover
-    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-06", capacity_cents: 30000 } } },
     spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
     tankRows: [
       tankRow(2, 15000, 1000, { tank_unlock_cents: 15000, tank_recurring: true, uses_remaining: null }),
@@ -676,7 +714,7 @@ test("rolloverPeriod fresh: unhit one-shots leave too; sweep is bounded by the s
 test("rolloverPeriod: per-period sweep is idempotent and same-period rollover is a 400", async () => {
   const mock = createMockPool({
     bankBalance: 10000,
-    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-06", capacity_cents: 30000 } } },
     spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
     investments: [{ id: 9, period_key: "2026-06", amount_cents: 4444, task_block_id: null }], // already swept
     tankRows: [tankRow(2, 15000, 1000, { tank_unlock_cents: 15000, tank_recurring: true, uses_remaining: null })],
@@ -695,10 +733,28 @@ test("rolloverPeriod: per-period sweep is idempotent and same-period rollover is
   await assert.rejects(() => store2.rolloverPeriod(WS, 7, {}), e => e.statusCode === 400 && /isn't over/.test(e.message));
 });
 
+test("rolloverPeriod sweep caps at discretionary (income - necessities), never gross — no phantom sweep", async () => {
+  // Gross capacity stamped 30000; necessities 12000 -> discretionary 18000.
+  // Prior banked 25000 EXCEEDS discretionary. One block funded at threshold 10000.
+  // Correct leftover = min(25000, 18000) - 10000 = 8000, NOT the gross-based
+  // 25000 - 10000 = 15000 that would over-invest ~necessities-worth of reserve.
+  const mock = createMockPool({
+    bankBalance: 100000,
+    settings: { budget_tank: { capacity_source: "prior_period_banked",
+      necessities: [{ id: "rent", name: "Rent", amount_cents: 12000, color: "#22c55e" }],
+      current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 25000 },
+    tankRows: [tankRow(1, 10000, 1000, { tank_unlock_cents: 10000 })],
+  });
+  const store = loadStoreWithMock(mock);
+  const out = await store.rolloverPeriod(WS, 7, { mode: "fresh" });
+  assert.equal(out.swept_cents, 8000);
+});
+
 test("getBudgetState surfaces a rollover preview on period mismatch", async () => {
   const mock = createMockPool({
     bankBalance: 10000,
-    settings: { budget_tank: { current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-06", capacity_cents: 30000 } } },
     spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
     tankRows: [
       tankRow(2, 15000, 1000, { tank_unlock_cents: 15000 }),

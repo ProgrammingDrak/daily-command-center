@@ -659,14 +659,19 @@ async function convertPointsToBank(workspaceId, userId, { points, source_key } =
 // on budget_investments makes re-running the rollover a no-op debit-wise.
 function sweepPreview(settings, usage, blocks) {
   const closing = settings.current_period || { key: null, capacity_cents: 0 };
-  const closingWaterline = Math.min(usage.priorPeriodBanked, closing.capacity_cents || 0);
+  // The stamped capacity is GROSS income; the fillable tank the waterline
+  // actually reaches is discretionary (gross - necessities). Cap the closing
+  // waterline at discretionary so the sweep matches the live waterline and can't
+  // invest phantom money above the last funded block (matches resolveTankWaterline).
+  const closingCapacity = Math.max(0, (closing.capacity_cents || 0) - necessitiesTotalCents(settings));
+  const closingWaterline = Math.min(usage.priorPeriodBanked, closingCapacity);
   let lastFunded = 0;
   for (const b of blocks) {
     if ((b.tank_unlock_cents || 0) <= closingWaterline) lastFunded = Math.max(lastFunded, b.tank_unlock_cents || 0);
   }
   const leftover = Math.max(0, closingWaterline - lastFunded);
   const unhit = blocks.filter(b => !b.tank_recurring && !b.tank_claimed_period && (b.tank_unlock_cents || 0) > closingWaterline);
-  return { closing_key: closing.key, closing_capacity_cents: closing.capacity_cents || 0, closing_waterline_cents: closingWaterline, leftover_cents: leftover, unhit: unhit.map(b => ({ id: b.id, title: b.title, value_cents: b.value_cents })) };
+  return { closing_key: closing.key, closing_capacity_cents: closingCapacity, closing_waterline_cents: closingWaterline, leftover_cents: leftover, unhit: unhit.map(b => ({ id: b.id, title: b.title, value_cents: b.value_cents })) };
 }
 
 async function rolloverPeriod(workspaceId, userId, { mode } = {}) {
