@@ -1014,23 +1014,16 @@ function _schedCommit(dateStr,timeStr){
 }
 function schedulePickerFields(durMin,options){
   options=options||{};
-  return {
-    meta:options.meta||("Custom task · "+ms(durMin)),
-    detail:options.detail||"",
-    source:options.source||"manual",
-    notionUrl:options.notionUrl||"",
-    priority:options.priority||"High",
-    tags:Array.isArray(options.tags)?options.tags:[],
-    delegatedItemId:options.delegatedItemId||null,
-    linkedBlockId:options.linkedBlockId||null,
-    linkedTagId:options.linkedTagId||null,
-    responsibilityId:options.responsibilityId||null,
-    responsibilityTitle:options.responsibilityTitle||null,
-    capacityBucket:options.capacityBucket||null,
-    commuteMinutes:options.commuteMinutes||options.commute_minutes||null,
-    commuteToMinutes:options.commuteToMinutes||options.commute_to_minutes||options.commuteMinutes||options.commute_minutes||null,
-    commuteBackMinutes:options.commuteBackMinutes||options.commute_back_minutes||options.commuteReturnMinutes||options.commute_return_minutes||null
-  };
+  // Shared value fields come from the one serializer (meta keeps its picker
+  // default); responsibility metadata is picker-specific and layered on top.
+  return Object.assign(
+    window.DCC.taskCommonProps(options,{meta:options.meta||("Custom task · "+ms(durMin))}),
+    {
+      responsibilityId:options.responsibilityId||null,
+      responsibilityTitle:options.responsibilityTitle||null,
+      capacityBucket:options.capacityBucket||null
+    }
+  );
 }
 // Resolve a chosen day (dateStr) + time (HH:MM) into a real task. If that day is
 // the one currently being viewed, insert it live with a pinned start; otherwise
@@ -1067,29 +1060,21 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     const newItem=Object.assign({id,title,type:"task",start:timeStr,end:fmt(pt(timeStr)+durMin)},
       schedulePickerFields(durMin,options));
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
-      window.blockStore.createBlock("block",{
-        local_id:id,title,duration:durMin,start:timeStr,end:newItem.end,
-        priority:newItem.priority||"High",meta:newItem.meta,detail:newItem.detail||"",notionUrl:newItem.notionUrl||"",
-        source:newItem.source||"manual",tags:newItem.tags||[],_pinnedStart:timeStr,
-        delegatedItemId:newItem.delegatedItemId||null,
-        linkedBlockId:newItem.linkedBlockId||null,
-        linkedTagId:newItem.linkedTagId||null,
-        commuteMinutes:newItem.commuteMinutes||null,
-        commuteToMinutes:newItem.commuteToMinutes||newItem.commuteMinutes||null,
-        commuteBackMinutes:newItem.commuteBackMinutes||newItem.commuteReturnMinutes||null,
-        added_at:new Date().toISOString()
-      },{date:dateStr});
+      const bprops=Object.assign(
+        window.DCC.taskBlockProps(newItem,{local_id:id,duration:durMin,start:timeStr,end:newItem.end}),
+        {_pinnedStart:timeStr,added_at:new Date().toISOString()}
+      );
+      window.blockStore.createBlock("block",bprops,{date:dateStr});
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
       render();
     } else {
       // Fallback: store in a per-date localStorage bucket so it's not lost
       const key="pa-added-tasks-"+dateStr;
       let arr=[];try{arr=JSON.parse(localStorage.getItem(key)||"[]")}catch(e){arr=[]}
-      arr.push({id,title,durMin,priority:newItem.priority||"High",source:newItem.source||"manual",meta:newItem.meta,
-        detail:newItem.detail||"",notionUrl:newItem.notionUrl||"",start:timeStr,end:newItem.end,
-        tags:newItem.tags||[],delegatedItemId:newItem.delegatedItemId||null,
-        linkedBlockId:newItem.linkedBlockId||null,linkedTagId:newItem.linkedTagId||null,
-        _pinnedStart:timeStr,commuteMinutes:newItem.commuteMinutes||null,commuteToMinutes:newItem.commuteToMinutes||newItem.commuteMinutes||null,commuteBackMinutes:newItem.commuteBackMinutes||newItem.commuteReturnMinutes||null,addedAt:new Date().toISOString()});
+      arr.push(Object.assign(
+        window.DCC.taskCommonProps(newItem),
+        {id,durMin,start:timeStr,end:newItem.end,_pinnedStart:timeStr,addedAt:new Date().toISOString()}
+      ));
       localStorage.setItem(key,JSON.stringify(arr));
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
     }

@@ -6,7 +6,7 @@ module.exports = function mount(app, ctx) {
     DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
     dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity,
     meetingMaterializer, previousDateStr,
-    pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, scoreTaskPoints, writeJSON,
+    pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, writeJSON,
   } = ctx;
 
   app.post("/api/ingest/day-state", async (req, res) => {
@@ -72,10 +72,15 @@ module.exports = function mount(app, ctx) {
       const date = isValidDate(body.date) ? body.date : getTodayStr();
       const { userId, workspaceId } = await resolveOwnerStrict(req);
 
+      // Idempotency check via a targeted lookup, not a whole-day load: match the
+      // one key directly in Postgres (and skip the query entirely when there's
+      // no key to check).
       const idemKey = body.idempotency_key || body.idempotencyKey || null;
-      const existingBlocks = await blockDB.getBlocksByDate(date, workspaceId);
       if (idemKey) {
-        const dup = existingBlocks.find((b) => ((b.properties || {}).idempotency_key) === idemKey);
+        const dupQ = workspaceId
+          ? await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND workspace_id = $2 AND properties->>'idempotency_key' = $3 AND deleted_at IS NULL LIMIT 1`, [date, workspaceId, idemKey])
+          : await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND properties->>'idempotency_key' = $2 AND deleted_at IS NULL LIMIT 1`, [date, idemKey]);
+        const dup = dupQ.rows[0];
         if (dup) return res.json({ ok: true, date, status: "skipped_duplicate", block: { id: dup.id, title: (dup.properties || {}).title || title } });
       }
 
@@ -98,15 +103,7 @@ module.exports = function mount(app, ctx) {
       if (body.type) props.type = body.type;
       if (body.point_tier) props.point_tier = body.point_tier;
       if (body.point_multiplier != null) props.point_multiplier = body.point_multiplier;
-      try {
-        const scored = scoreTaskPoints({ ...props, durationMinutes: minutes });
-        props.points = scored.awardPoints;
-        props.pointsBreakdown = scored;
-      } catch (scoreErr) { console.error("[quick-task] scoring failed (non-fatal):", scoreErr.message); }
-
-      await blockDB.ensureDayRoot(date, userId, workspaceId);
-      const sortOrder = start ? Number(start.slice(0, 2)) * 60 + Number(start.slice(3, 5)) : 0;
-      const created = await blockDB.createBlock({ type: "block", date, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId });
+      const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
       broadcast("blocks-changed", { action: "quick-task-create", blockIds: [created.id], date }, workspaceId);
       res.json({ ok: true, date, status: "created", block: { id: created.id, title, start: props.start || null, end: props.end || null, priority: props.priority } });
     } catch (e) {
@@ -280,11 +277,21 @@ module.exports = function mount(app, ctx) {
       const plan = dccIntelligence.materializeBriefPlan({ sourceState, targetDate, existingBlocks });
       const created = [];
       if (!dryRun) {
+        // Ensure the root once, then create every planned block in a single
+        // transaction so a mid-batch failure leaves no half-materialized day.
         await blockDB.ensureDayRoot(targetDate, userId, workspaceId);
-        for (const item of plan.items) {
-          const props = item.properties;
-          const sortOrder = props.start ? Number(props.start.slice(0, 2)) * 60 + Number(props.start.slice(3, 5)) : 0;
-          created.push(await blockDB.createBlock({ type: "block", date: targetDate, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId }));
+        const client = await blockDB.pool.connect();
+        try {
+          await client.query("BEGIN");
+          for (const item of plan.items) {
+            created.push(await blockDB.createItineraryTask({ date: targetDate, properties: item.properties, userId, workspaceId, ensureRoot: false, client }));
+          }
+          await client.query("COMMIT");
+        } catch (txErr) {
+          await client.query("ROLLBACK");
+          throw txErr;
+        } finally {
+          client.release();
         }
         if (created.length) broadcast("blocks-changed", { action: "brief-materialize", blockIds: created.map((b) => b.id), date: targetDate }, workspaceId);
       }

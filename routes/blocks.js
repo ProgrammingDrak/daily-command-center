@@ -200,28 +200,42 @@ function firstFreeSlot(start, duration, blockers, dayEnd) {
   return cursor + duration <= dayEnd + 60 ? cursor : null;
 }
 
-async function scheduleResponsibilityTask({ responsibility, date, userId, workspaceId, sourceProps = {}, force = false }) {
-  const props = responsibility.properties || {};
-  const dateStr = date && isValidDate(date) ? date : getTodayStr();
-  const duration = taskDuration({ ...props, ...sourceProps });
+// Load a day's existing blocks and work-hour bounds once, plus the blockers
+// array the free-slot finder consumes. Shared by the responsibility scheduler
+// and the task-group scheduler so a batch pays for the day-load a single time
+// instead of once per item (the auto-schedule N+1). Callers grow `blockers`
+// as they place tasks so sequential items land in sequential free slots.
+async function loadDaySlottingContext(dateStr, userId, workspaceId) {
   const blocks = await blockDB.getBlocksByDate(dateStr, workspaceId);
-  const existing = blocks.find(b => {
-    const p = b.properties || {};
-    return p.responsibilityId === responsibility.id && p.kind === "responsibility_task" && !p.completedAt;
-  });
-  if (existing && !force) return { block: existing, created: false, duplicate: true };
   const dayBlocks = await getScheduleBlocks(userId, workspaceId);
   const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
   const dayStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
   const dayEnd = workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60;
-  const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
   const blockers = blocks
     .filter(b => (b.properties || {}).start && (b.properties || {}).end)
     .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
-  const slot = firstFreeSlot(Math.max(dayStart, nowMin), duration, blockers, dayEnd) || Math.max(dayStart, nowMin);
+  return { blocks, dayStart, dayEnd, blockers };
+}
+
+async function scheduleResponsibilityTask({ responsibility, date, userId, workspaceId, sourceProps = {}, force = false, dayCtx = null }) {
+  const props = responsibility.properties || {};
+  const dateStr = date && isValidDate(date) ? date : getTodayStr();
+  const duration = taskDuration({ ...props, ...sourceProps });
+  // Reuse a batch-provided day context when auto-scheduling many at once;
+  // otherwise load this day once for the single-task path.
+  const ctx = dayCtx || await loadDaySlottingContext(dateStr, userId, workspaceId);
+  const existing = ctx.blocks.find(b => {
+    const p = b.properties || {};
+    return p.responsibilityId === responsibility.id && p.kind === "responsibility_task" && !p.completedAt;
+  });
+  if (existing && !force) return { block: existing, created: false, duplicate: true };
+  const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : ctx.dayStart;
+  const slot = firstFreeSlot(Math.max(ctx.dayStart, nowMin), duration, ctx.blockers, ctx.dayEnd) || Math.max(ctx.dayStart, nowMin);
+  ctx.blockers.push({ s: slot, e: slot + duration });
   const localId = "resp-task-" + crypto.randomUUID().slice(0, 12);
   const taskProps = buildResponsibilityTaskProps(responsibility, { duration, slot, localId, sourceProps });
-  const block = await blockDB.createBlock({ type: "block", date: dateStr, properties: taskProps, sort_order: slot, user_id: userId || null, workspace_id: workspaceId || null });
+  // ensureRoot:false — attachDefaultSubtasks below ensures the day root, as before.
+  const block = await blockDB.createItineraryTask({ date: dateStr, properties: taskProps, userId: userId || null, workspaceId: workspaceId || null, sortOrder: slot, ensureRoot: false });
   await attachDefaultSubtasks(localId, props, sourceProps, dateStr, userId, workspaceId);
   return { block, created: true };
 }
@@ -489,13 +503,20 @@ app.post("/api/responsibilities/auto-schedule", async (req, res) => {
       .filter(b => responsibilityScore(b.properties) >= threshold)
       .sort((a, b) => responsibilityScore(b.properties) - responsibilityScore(a.properties))
       .slice(0, limit);
+    // Load the day once and thread its growing blockers array through every
+    // placement, so N responsibilities cost one day-load instead of N (the old
+    // per-item getBlocksByDate + getScheduleBlocks N+1).
+    const date = (req.body && req.body.date) || getTodayStr();
+    const dateStr = isValidDate(date) ? date : getTodayStr();
+    const dayCtx = await loadDaySlottingContext(dateStr, req.session.userId, req.workspaceId);
     const scheduled = [];
     for (const item of items) {
       const result = await scheduleResponsibilityTask({
         responsibility: item,
-        date: (req.body && req.body.date) || getTodayStr(),
+        date,
         userId: req.session.userId,
-        workspaceId: req.workspaceId
+        workspaceId: req.workspaceId,
+        dayCtx
       });
       scheduled.push(result);
     }
@@ -734,13 +755,8 @@ app.post("/api/task-groups/:id/schedule", async (req, res) => {
     const userId = req.session.userId, workspaceId = req.workspaceId;
     const dateStr = (req.body && req.body.date && isValidDate(req.body.date)) ? req.body.date : getTodayStr();
     const items = Array.isArray(group.properties.items) ? group.properties.items : [];
-    const blocks = await blockDB.getBlocksByDate(dateStr, workspaceId);
-    const dayBlocks = await getScheduleBlocks(userId, workspaceId);
-    const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
-    const dayStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
-    const dayEnd = workBlocks.length ? hhmmToMinutes(workBlocks[workBlocks.length - 1].end) : 17 * 60;
+    const { dayStart, dayEnd, blockers } = await loadDaySlottingContext(dateStr, userId, workspaceId);
     const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
-    const blockers = blocks.filter(b => (b.properties || {}).start && (b.properties || {}).end).map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
     const created = [];
     for (const item of items) {
       const duration = Math.max(1, Math.round(Number(item.duration || 30)));
@@ -763,7 +779,7 @@ app.post("/api/task-groups/:id/schedule", async (req, res) => {
       } else {
         props = { ...common, title: item.title, detail: item.detail || "", meta: "Preset · " + (group.properties.title || "group") + " · " + duration + "m", tags: ["task-group"] };
       }
-      const block = await blockDB.createBlock({ type: "block", date: dateStr, properties: props, sort_order: slot, user_id: userId || null, workspace_id: workspaceId || null });
+      const block = await blockDB.createItineraryTask({ date: dateStr, properties: props, userId: userId || null, workspaceId: workspaceId || null, sortOrder: slot, ensureRoot: false });
       created.push(block);
     }
     broadcast("blocks-changed", { action: "task-group-schedule", blockIds: created.map(b => b.id) }, workspaceId);

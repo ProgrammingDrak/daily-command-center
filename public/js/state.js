@@ -743,22 +743,22 @@ async function _rescheduleSubtaskSubtree(oldParentId,newParentId,targetDate,from
   for(const kid of kids){
     const newId=_rescheduledTaskId(kid,targetDate);
     const d=dur(kid)||0;
-    const clone={
-      id:newId,
-      title:kid.title,
-      type:kid.type||"task",
-      start:"00:00",
-      end:fmt(d),
-      priority:kid.priority||"Medium",
-      meta:kid.meta||"",
-      detail:kid.detail||"",
-      notionUrl:kid.notionUrl||"",
-      source:"rescheduled",
-      tags:Array.isArray(kid.tags)?kid.tags.filter(t=>t!=="wrap"):[],
-      subtaskOf:newParentId,
-      rescheduledFrom:{date:fromDate||"unknown",taskId:kid.id},
-      sourceTaskId:kid.sourceTaskId||kid.id
-    };
+    const clone=Object.assign(
+      window.DCC.taskCommonProps(kid,{
+        source:"rescheduled",
+        priority:kid.priority||"Medium",
+        tags:(Array.isArray(kid.tags)?kid.tags:[]).filter(t=>t!=="wrap")
+      }),
+      {
+        id:newId,
+        type:kid.type||"task",
+        start:"00:00",
+        end:fmt(d),
+        subtaskOf:newParentId,
+        rescheduledFrom:{date:fromDate||"unknown",taskId:kid.id},
+        sourceTaskId:kid.sourceTaskId||kid.id
+      }
+    );
     try{await persistAddedTask(clone,targetDate);}catch(e){}
     // Carry over completion so partial progress survives the move.
     if(typeof manualDone!=="undefined"&&typeof isDone==="function"&&isDone(kid)){
@@ -832,27 +832,10 @@ async function schedulePushedOnDate(ev,targetDate,opts){
   const startTime=fmt(slot);
   const endTime=fmt(slot+d);
 
-  const block=await window.blockStore.createBlock("block",{
-    local_id:ev.id,
-    title:ev.title,
-    duration:d,
-    start:startTime,
-    end:endTime,
-    priority:ev.priority||"High",
-    meta:ev.meta||"",
-    detail:ev.detail||"",
-    notionUrl:ev.notionUrl||"",
-    source:ev.source||"pushed",
-    tags:ev.tags||[],
-    delegatedItemId:ev.delegatedItemId||null,
-    linkedBlockId:ev.linkedBlockId||null,
-    linkedTagId:ev.linkedTagId||null,
-    commuteMinutes:ev.commuteMinutes||null,
-    commuteToMinutes:ev.commuteToMinutes||ev.commuteMinutes||null,
-    commuteBackMinutes:ev.commuteBackMinutes||ev.commuteReturnMinutes||null,
-    added_at:new Date().toISOString(),
-    pushed_from:(__state&&__state.date)||"unknown"
-  },{date:targetDate});
+  const block=await window.blockStore.createBlock("block",Object.assign(
+    window.DCC.taskBlockProps(ev,{local_id:ev.id,duration:d,start:startTime,end:endTime,source:ev.source||"pushed"}),
+    {added_at:new Date().toISOString(),pushed_from:(__state&&__state.date)||"unknown"}
+  ),{date:targetDate});
 
   if(!opts.silent&&typeof showToast==="function")showToast("Scheduled "+_prettyDateLabel(targetDate)+" at "+f12(startTime),"success");
   return block;
@@ -936,24 +919,10 @@ async function _scheduleTaskOnDate(ev, dateStr, dayContext){
     return null;
   }
   const startTime=fmt(slot);
-  await window.blockStore.createBlock("block",{
-    local_id:ev.id,
-    title:ev.title,
-    duration:d,
-    start:startTime,
-    end:fmt(slot+d),
-    priority:ev.priority||"Medium",
-    meta:ev.meta||"",
-    detail:ev.detail||"",
-    notionUrl:ev.notionUrl||"",
-    source:ev.source||"moved",
-    tags:ev.tags||[],
-    commuteMinutes:ev.commuteMinutes||null,
-    commuteToMinutes:ev.commuteToMinutes||ev.commuteMinutes||null,
-    commuteBackMinutes:ev.commuteBackMinutes||ev.commuteReturnMinutes||null,
-    added_at:new Date().toISOString(),
-    moved_from:(__state&&__state.date)||"unknown"
-  },{date:dateStr});
+  await window.blockStore.createBlock("block",Object.assign(
+    window.DCC.taskBlockProps(ev,{local_id:ev.id,duration:d,start:startTime,end:fmt(slot+d),source:ev.source||"moved",priority:ev.priority||"Medium"}),
+    {added_at:new Date().toISOString(),moved_from:(__state&&__state.date)||"unknown"}
+  ),{date:dateStr});
   return startTime;
 }
 
@@ -1044,18 +1013,14 @@ function moveScheduledTaskToSideProject(id){
 function _moveTaskToBacklogStage(id,stage,toastMsg){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return;
-  const entry={
-    id:"bl-"+Date.now(),
-    title:ev.title,
-    type:ev.type||"task",
-    durMin:dur(ev),
-    meta:ms(dur(ev))+" · from schedule",
-    detail:ev.detail||"",
-    source:ev.source||"manual",
-    notionUrl:ev.notionUrl||"",
-    priority:ev.priority||(stage==="Priority"?"High":"Low"),
-    stage:stage
-  };
+  const entry=Object.assign(
+    window.DCC.taskCommonProps(ev,{
+      meta:ms(dur(ev))+" · from schedule",
+      priority:ev.priority||(stage==="Priority"?"High":"Low"),
+      source:ev.source||"manual"
+    }),
+    {id:"bl-"+Date.now(),type:ev.type||"task",durMin:dur(ev),stage:stage}
+  );
   backlog.push(entry);
   if(typeof persistBacklogItem==="function")persistBacklogItem(entry);
   deletedSet.add(id);saveDeletedState();
