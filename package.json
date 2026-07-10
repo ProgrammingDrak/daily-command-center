@@ -1,11 +1,12 @@
 {
   "name": "daily-command-center",
   "version": "1.0.0",
-  "description": "Drake's Daily Command Center \u2014 standalone Express dashboard",
+  "description": "Drake's Daily Command Center — standalone Express dashboard",
   "main": "server.js",
   "scripts": {
     "check:db": "node scripts/check-db.js",
-    "db:refresh-local": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1",
+    "db:refresh-local": "node scripts/refresh-local-db.js",
+    "db:refresh-local:mac": "bash scripts/refresh-local-db.sh",
     "db:schedule-local-refresh": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1 -InstallDailyTask",
     "brief:materialize": "node scripts/morning-brief-materializer.js",
     "triage:ingest": "node scripts/triage-check-ingest.js",
@@ -20,6 +21,7 @@
     "schema": "node pg-schema.js",
     "backup": "bash scripts/db-backup.sh",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:ci": "node scripts/smoke-ci.mjs",
     "start:render": "npm run check:db && node pg-schema.js && node server.js"
   },
   "engines": {
@@ -43,6 +45,7 @@
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "eslint": "^9.0.0",
+    "playwright-core": "^1.61.1",
     "prettier": "^3.3.0"
   }
 }
