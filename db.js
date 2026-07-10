@@ -10,6 +10,9 @@
 
 const crypto = require("crypto");
 const pool = require("./pg-pool");
+// slot-scoring is standalone (it only pulls in public/js/task-types), so this
+// stays acyclic; createItineraryTask uses it to stamp points at write time.
+const { scoreTaskPoints } = require("./slot-scoring");
 
 // ── Workspace Bootstrap ──
 
@@ -322,6 +325,69 @@ async function ensureDayRoot(date, userId, workspaceId) {
   return newId;
 }
 
+// One place that turns a task's properties into a persisted itinerary block:
+// ensure the day root exists, optionally score it, derive sort_order from the
+// start time (unless an explicit slot is passed), then insert. The four route
+// copies that used to hand-roll this sequence — quick-task, brief/materialize,
+// task-group schedule, responsibility auto-schedule — funnel through here.
+// Options keep each caller's existing behavior:
+//   score      run scoreTaskPoints and stamp points/pointsBreakdown (quick-task)
+//   ensureRoot ensure the day_root row first; pass false inside a batch that
+//              already ensured it once, so we don't re-SELECT per item
+//   sortOrder  explicit slot in minutes; defaults to start-derived minutes
+//   client     a pg client to run inside a caller's transaction
+async function createItineraryTask({ date, properties, userId = null, workspaceId = null, sortOrder, score = false, ensureRoot = true, client } = {}) {
+  if (ensureRoot) await ensureDayRoot(date, userId, workspaceId);
+  const props = { ...(properties || {}) };
+  if (score) {
+    try {
+      const durationMinutes = props.durationMinutes != null ? props.durationMinutes
+        : (props.estimatedMinutes != null ? props.estimatedMinutes : props.duration);
+      const scored = scoreTaskPoints({ ...props, durationMinutes });
+      props.points = scored.awardPoints;
+      props.pointsBreakdown = scored;
+    } catch (scoreErr) {
+      console.error("[createItineraryTask] scoring failed (non-fatal):", scoreErr.message);
+    }
+  }
+  const start = props.start;
+  const derivedSort = (typeof start === "string" && /^\d{2}:\d{2}/.test(start))
+    ? Number(start.slice(0, 2)) * 60 + Number(start.slice(3, 5)) : 0;
+  const sort_order = sortOrder != null ? sortOrder : derivedSort;
+  return createBlock({ type: "block", date, properties: props, sort_order, user_id: userId, workspace_id: workspaceId }, client);
+}
+
+// Batch-create itinerary tasks atomically. The store owns the transaction (per
+// the repo's store-owns-transactions idiom, like rescheduleBlocks/batchOp), so
+// callers hand over a list of items instead of driving pool clients themselves.
+// Each distinct day root is ensured once up front (idempotent), then every item
+// is inserted on one pooled client inside a single BEGIN/COMMIT.
+// items: [{ date, properties, sortOrder?, score? }]; opts apply to every item.
+async function createItineraryTasks(items, { userId = null, workspaceId = null, score = false } = {}) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const dates = [...new Set(items.map((it) => it.date).filter(Boolean))];
+  for (const d of dates) await ensureDayRoot(d, userId, workspaceId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const created = [];
+    for (const it of items) {
+      created.push(await createItineraryTask({
+        date: it.date, properties: it.properties, userId, workspaceId,
+        sortOrder: it.sortOrder, score: it.score != null ? it.score : score,
+        ensureRoot: false, client,
+      }));
+    }
+    await client.query("COMMIT");
+    return created;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── DCC State ──
 
 async function ensureDccStateTable() {
@@ -399,7 +465,7 @@ module.exports = {
   createBlock, updateBlock, deleteBlock,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
-  batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot,
+  batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers
 };

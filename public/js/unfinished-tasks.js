@@ -129,14 +129,14 @@
     const id = (typeof qaId === "function") ? qaId() : ("unf-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7));
     const start = row.start;
     const end = row.end || ((typeof fmt === "function" && typeof pt === "function") ? fmt(pt(start) + row.durMin) : start);
-    return {
-      id, title: row.title, type: row.type || "task",
-      start, end, priority: row.priority || "High",
-      meta: "Caught up · " + fmtDur(row.durMin),
-      detail: row.detail || "", source: row.source || "manual",
-      tags: row.tags || [], notionUrl: row.notionUrl || "",
-      rescheduledFrom: row.sourceDate
-    };
+    return Object.assign(
+      window.DCC.taskCommonProps(row, {
+        priority: row.priority || "High",
+        meta: "Caught up · " + fmtDur(row.durMin),
+        source: row.source || "manual"
+      }),
+      { id, type: row.type || "task", start, end, rescheduledFrom: row.sourceDate }
+    );
   }
 
   async function actToday(row) {
