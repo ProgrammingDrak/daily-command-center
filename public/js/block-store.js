@@ -285,6 +285,10 @@
 
     CLIENT_ID,
 
+    // NOTE: day-context.js wraps these mutators at runtime (createBlock,
+    // updateBlock, deleteBlock, rescheduleBlock, batchOp) to invalidate its
+    // per-day slot cache after each write. If you add a new server-mutating
+    // method here, add it to that wrap list too or its day can go stale.
     // Create a new block
     async createBlock(type, properties, { parentId, date, sortOrder } = {}) {
       setSaving();

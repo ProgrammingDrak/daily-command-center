@@ -974,20 +974,16 @@ async function _schedDayTasks(dateStr){
   if(dateStr===viewing&&typeof scheduled!=="undefined"&&Array.isArray(scheduled)){
     scheduled.forEach(ev=>{if(ev&&ev.title&&ev.end)out.push({title:ev.title,end:toHHMM(ev.end)})});
   }else{
-    let state=null;
-    if(dateStr===__todayDate&&window.__DCC_STATE__)state=window.__DCC_STATE__;
-    else if(dateStr===__tomorrowDate&&window.__DCC_TOMORROW__)state=window.__DCC_TOMORROW__;
-    if(!state){try{state=await fetch("/api/state/day?date="+encodeURIComponent(dateStr)).then(r=>r.json())}catch(e){}}
-    const timeline=(state&&state.schedule&&state.schedule.timeline)||[];
+    // One shared day fetch: the same {state,blocks} the earliest-free slot math
+    // reads, so the "After…" anchors and the landed slot can't diverge.
+    const ctx=await window.DCC.getDayContext(dateStr);
+    const timeline=(ctx&&ctx.state&&ctx.state.schedule&&ctx.state.schedule.timeline)||[];
     timeline.forEach(e=>{if(e&&e.title&&e.end&&e.type!=="break"&&e.type!=="ooo")out.push({title:e.title,end:toHHMM(e.end)})});
     // Tasks persisted directly to that date (added/scheduled blocks)
-    try{
-      const blks=await fetch("/api/blocks?date="+encodeURIComponent(dateStr)).then(r=>r.json());
-      (blks||[]).forEach(b=>{
-        const p=(b&&(b.properties||b.props))||{};
-        if(b&&!b.deleted_at&&p.title&&p.end)out.push({title:p.title,end:toHHMM(p.end)});
-      });
-    }catch(e){}
+    ((ctx&&ctx.blocks)||[]).forEach(b=>{
+      const p=(b&&(b.properties||b.props))||{};
+      if(b&&!b.deleted_at&&p.title&&p.end)out.push({title:p.title,end:toHHMM(p.end)});
+    });
   }
   // Dedup by title+end, drop entries with an unparseable end, sort by end time.
   const seen=new Set();const uniq=[];

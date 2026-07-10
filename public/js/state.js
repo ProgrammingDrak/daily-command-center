@@ -778,66 +778,31 @@ async function schedulePushedOnDate(ev,targetDate,opts){
   opts=opts||{};
   if(!window.blockStore||!targetDate)return null;
 
-  // Resolve target state (for meeting times + work-hour bounds)
-  let targetState=null;
-  if(targetDate===__todayDate&&window.__DCC_STATE__)targetState=window.__DCC_STATE__;
-  else if(targetDate===__tomorrowDate&&window.__DCC_TOMORROW__)targetState=window.__DCC_TOMORROW__;
-  if(!targetState){
-    try{const r=await fetch("/api/state/day?date="+encodeURIComponent(targetDate));targetState=await r.json()}catch(e){}
+  // Day context (state + blocks) and the free slot both come from the shared
+  // engine now, so this create path can never disagree with the picker preview
+  // or the reschedule compute. See day-context.js for the canonical rule set.
+  const ctx=await window.DCC.getDayContext(targetDate);
+  if(!ctx)return null;
+
+  // Dedupe: if this task already has a block on the target day, don't double-book.
+  const existing=(ctx.blocks||[]).find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id);
+  if(existing){
+    if(opts.useExisting)return existing;
+    return null;
   }
 
-  // Meetings are materialized task blocks now, so they come through the /api/blocks
-  // fetch below (existingBlockers). The timeline still carries ooo/break, which are
-  // pseudo-blocks with no DB row, so pull those from it.
-  const tTimeline=(targetState&&targetState.schedule&&targetState.schedule.timeline)||[];
-  const tMeetings=tTimeline
-    .filter(e=>e.type==="ooo"||e.type==="break")
-    .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))}))
-    .sort((a,b)=>a.s-b.s);
-
-  const tBlocks=(targetState&&targetState.schedule&&targetState.schedule.blocks)||[];
-  const dayStart=tBlocks.length?pt(tBlocks[0].start):7*60;
-  const dayEnd=tBlocks.length?pt(tBlocks[tBlocks.length-1].end):17*60+30;
-
-  // Fetch existing blocks on the target date so we don't double-book
-  let existingBlockers=[];
-  try{
-    const tBlks=await fetch("/api/blocks?date="+targetDate).then(r=>r.json());
-    const existing=tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id);
-    if(existing){
-      if(opts.useExisting)return existing;
-      return null;
-    }
-    existingBlockers=tBlks
-      .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
-      .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
-  }catch(e){}
-
-  const allBlockers=[...tMeetings,...existingBlockers].sort((a,b)=>a.s-b.s);
-  const d=dur(ev)||30;
-
-  // When dropping onto today, anchor to "now" so we don't slot into the morning past.
-  let cursor=dayStart;
-  if(targetDate===_actualTodayStr()){
-    const round15=m=>Math.ceil(m/15)*15;
-    cursor=Math.max(dayStart,round15(now()));
-  }
-  const slot=_freeStart(cursor,d,allBlockers);
-
-  if(slot+d>dayEnd+60){
+  const slot=window.DCC.findSlot(ev,ctx,{anchorNow:true});
+  if(!slot){
     if(!opts.silent&&typeof showToast==="function")showToast("No free slot on "+_prettyDateLabel(targetDate)+"'s schedule","error");
     return null;
   }
 
-  const startTime=fmt(slot);
-  const endTime=fmt(slot+d);
-
   const block=await window.blockStore.createBlock("block",Object.assign(
-    window.DCC.taskBlockProps(ev,{local_id:ev.id,duration:d,start:startTime,end:endTime,source:ev.source||"pushed"}),
+    window.DCC.taskBlockProps(ev,{local_id:ev.id,duration:slot.duration,start:slot.start,end:slot.end,source:ev.source||"pushed"}),
     {added_at:new Date().toISOString(),pushed_from:(__state&&__state.date)||"unknown"}
   ),{date:targetDate});
 
-  if(!opts.silent&&typeof showToast==="function")showToast("Scheduled "+_prettyDateLabel(targetDate)+" at "+f12(startTime),"success");
+  if(!opts.silent&&typeof showToast==="function")showToast("Scheduled "+_prettyDateLabel(targetDate)+" at "+f12(slot.start),"success");
   return block;
 }
 
@@ -890,40 +855,29 @@ async function _removeTaskBlockFromDate(id,dateStr,ev){
 
 // Schedule a task on an arbitrary date at the next free slot.
 // Returns the start time string on success, null on failure (no slot, dedupe, or no blockstore).
-async function _scheduleTaskOnDate(ev, dateStr, dayContext){
+// NOTE: no live call sites remain (the move flows route through the placement
+// picker + rescheduleTaskToDate); kept as a thin wrapper over the shared engine
+// so any late/dynamic caller stays correct. The legacy `dayContext` arg is now
+// ignored -- getDayContext resolves the day itself.
+async function _scheduleTaskOnDate(ev, dateStr, _legacyDayState){
   if(!window.blockStore||!dateStr)return null;
-  let dayStart=8*60, dayEnd=17*60+30;
-  if(dayContext){
-    // Meetings are materialized task blocks now and come through the /api/blocks
-    // fetch below (existingBlockers), not the timeline.
-    const tBlocks=(dayContext.schedule&&dayContext.schedule.blocks)||[];
-    if(tBlocks.length){dayStart=pt(tBlocks[0].start);dayEnd=pt(tBlocks[tBlocks.length-1].end);}
+  const ctx=await window.DCC.getDayContext(dateStr);
+  if(!ctx)return null;
+  const existing=(ctx.blocks||[]).find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id);
+  if(existing){
+    const p=existing.properties||{};
+    return p.start||null;
   }
-  let existingBlockers=[];
-  try{
-    const tBlks=await fetch("/api/blocks?date="+dateStr).then(r=>r.json());
-    const existing=tBlks.find(b=>(b.type==="added_task"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.local_id===ev.id);
-    if(existing){
-      const p=existing.properties||{};
-      return p.start||null;
-    }
-    existingBlockers=tBlks
-      .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end)
-      .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
-  }catch(e){}
-  const allBlockers=[...existingBlockers].sort((a,b)=>a.s-b.s);
-  const d=dur(ev)||30;
-  const slot=_freeStart(dayStart,d,allBlockers);
-  if(slot+d>dayEnd+60){
+  const slot=window.DCC.findSlot(ev,ctx,{anchorNow:true});
+  if(!slot){
     if(typeof showToast==="function")showToast("No free slot on "+dateStr,"error");
     return null;
   }
-  const startTime=fmt(slot);
   await window.blockStore.createBlock("block",Object.assign(
-    window.DCC.taskBlockProps(ev,{local_id:ev.id,duration:d,start:startTime,end:fmt(slot+d),source:ev.source||"moved",priority:ev.priority||"Medium"}),
+    window.DCC.taskBlockProps(ev,{local_id:ev.id,duration:slot.duration,start:slot.start,end:slot.end,source:ev.source||"moved",priority:ev.priority||"Medium"}),
     {added_at:new Date().toISOString(),moved_from:(__state&&__state.date)||"unknown"}
   ),{date:dateStr});
-  return startTime;
+  return slot.start;
 }
 
 function _nextSundayDate(){
@@ -1063,36 +1017,13 @@ async function unschedulePushedFromTomorrow(id){
 }
 
 // Find a free slot on `targetDate` for a true move WITHOUT creating a block
-// (mirrors schedulePushedOnDate's slot math; that one creates a block, we don't).
+// (schedulePushedOnDate creates one from the same engine; this one just computes).
+// Excludes ev's own block so a re-slot ignores where it currently sits.
 // Returns {start,end,duration} or null when the day has no room.
 async function _computeRescheduleSlot(ev,targetDate){
-  let targetState=null;
-  if(targetDate===__todayDate&&window.__DCC_STATE__)targetState=window.__DCC_STATE__;
-  else if(targetDate===__tomorrowDate&&window.__DCC_TOMORROW__)targetState=window.__DCC_TOMORROW__;
-  if(!targetState){try{targetState=await fetch("/api/state/day?date="+encodeURIComponent(targetDate)).then(r=>r.json())}catch(e){}}
-  // Meetings are materialized task blocks now, so they come through the /api/blocks
-  // fetch below (existingBlockers). The timeline still carries ooo/break pseudo-blocks.
-  const tTimeline=(targetState&&targetState.schedule&&targetState.schedule.timeline)||[];
-  const tMeetings=tTimeline
-    .filter(e=>e.type==="ooo"||e.type==="break")
-    .map(e=>({s:pt(_toHHMM(e.start)),e:pt(_toHHMM(e.end))})).sort((a,b)=>a.s-b.s);
-  const tBlocks=(targetState&&targetState.schedule&&targetState.schedule.blocks)||[];
-  const dayStart=tBlocks.length?pt(tBlocks[0].start):7*60;
-  const dayEnd=tBlocks.length?pt(tBlocks[tBlocks.length-1].end):17*60+30;
-  let existingBlockers=[];
-  try{
-    const tBlks=await fetch("/api/blocks?date="+targetDate).then(r=>r.json());
-    existingBlockers=tBlks
-      .filter(b=>(b.type==="added_task"||b.type==="schedule_item"||b.type==="block")&&!b.deleted_at&&b.properties&&b.properties.start&&b.properties.end&&b.properties.local_id!==ev.id)
-      .map(b=>({s:pt(b.properties.start),e:pt(b.properties.end)}));
-  }catch(e){}
-  const allBlockers=[...tMeetings,...existingBlockers].sort((a,b)=>a.s-b.s);
-  const d=dur(ev)||30;
-  let cursor=dayStart;
-  if(targetDate===_actualTodayStr()){const round15=m=>Math.ceil(m/15)*15;cursor=Math.max(dayStart,round15(now()));}
-  const slot=_freeStart(cursor,d,allBlockers);
-  if(slot+d>dayEnd+60)return null;
-  return {start:fmt(slot),end:fmt(slot+d),duration:d};
+  const ctx=await window.DCC.getDayContext(targetDate);
+  if(!ctx)return null;
+  return window.DCC.findSlot(ev,ctx,{excludeSelf:true,anchorNow:true});
 }
 
 // Optimistically drop a task and its whole nested subtree (subtaskOf/wrapId) from
