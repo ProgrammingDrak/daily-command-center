@@ -164,7 +164,17 @@ app.delete("/api/slot/rewards/:id", async (req, res) => {
 app.post("/api/slot/earn-task", async (req, res) => {
   try {
     const result = await slotStore.earnTaskCredit(req.workspaceId, req.session.userId, req.body || {});
-    if (result.awarded) broadcast("slot-changed", { action: "credit-earned" }, req.workspaceId);
+    if (result.awarded) {
+      // Tag shell all-done bonuses so the Budget Tank can play its own unique
+      // moment (bonus_kind is extensible: future task types get their own).
+      const body = req.body || {};
+      const evt = { action: "credit-earned" };
+      if (String(body.source_key || "").startsWith("shell:")) {
+        evt.bonus_kind = "shell";
+        evt.title = body.title || "";
+      }
+      broadcast("slot-changed", evt, req.workspaceId);
+    }
     res.json(result);
   } catch (e) {
     res.status(e.statusCode || 400).json({ error: e.message });
