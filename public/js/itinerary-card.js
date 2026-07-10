@@ -265,5 +265,102 @@
     return el;
   }
 
+  // ======== SHARED COMPACT ROW ========
+  // One skeleton for every ".tl-compact" one-liner in the timeline: done tasks,
+  // completed triage, completed side-projects, pushed-to-tomorrow, and
+  // rescheduled-away. They differ only in check icon/title, bar color, the middle
+  // chip cluster, the time strings, and the check handler — so callers pass just
+  // those. Converges the five hand-forked builders that used to skew apart.
+  //   o.extraClass    extra class on the wrapper ("" | "pushed")
+  //   o.dataset       {key:value} pairs set as data-* on the wrapper
+  //   o.timeStr       left rail ".tl-time" content (AM/PM already stripped by caller)
+  //   o.checkIcon     SVG inside ".c-check" (defaults to the checkmark)
+  //   o.checkTitle    ".c-check" title attribute
+  //   o.barColor      ".bar" background
+  //   o.title         ".c-title" content (caller decides escaping — matches forks)
+  //   o.chipsHtml     chip cluster between title and time (bounty/tag/src/privacy…)
+  //   o.timeRange     ".c-time" content
+  //   o.trailingHtml  extra HTML after ".c-time" (e.g. todo-share feedback)
+  //   o.onCheck       click handler for ".c-check" (omit for display-only rows)
+  //   o.afterRender   fn(el) for any extra wiring (e.g. a review badge)
+  function renderCompactRow(o){
+    o = o || {};
+    var el = document.createElement("div");
+    el.className = "tl-compact" + (o.extraClass ? " " + o.extraClass : "");
+    if(o.dataset){ for(var k in o.dataset){ if(o.dataset[k] != null) el.dataset[k] = o.dataset[k]; } }
+    el.innerHTML =
+      '<div class="tl-time">'+(o.timeStr||"")+'</div>'+
+      '<div class="tl-node"></div>'+
+      '<div class="compact-row">'+
+        '<div class="c-check" title="'+(o.checkTitle||"")+'">'+(o.checkIcon||ckSvg)+'</div>'+
+        '<div class="bar" style="background:'+(o.barColor||"")+'"></div>'+
+        '<span class="c-title">'+(o.title||"")+'</span>'+
+        (o.chipsHtml||"")+
+        '<span class="c-time">'+(o.timeRange||"")+'</span>'+
+        (o.trailingHtml||"")+
+      '</div>';
+    if(typeof o.onCheck==="function"){
+      el.querySelector(".c-check").addEventListener("click",function(e){ e.stopPropagation(); o.onCheck(e); });
+    }
+    if(typeof o.afterRender==="function") o.afterRender(el);
+    return el;
+  }
+
+  // ======== SHARED SUB ROW ========
+  // One builder for the compact subtask one-liner, in both the list view
+  // (".it-list-item subtask-row") and the timeline (".tl-item tl-sub"). Markup is
+  // shared; the two views differed only in wrapper class, the active/movable list
+  // flags, the timeline's point-pie "slice" chip, and whether the collapse chevron
+  // is wired inline (list) or via the timeline's delegated listener.
+  //   node        {depth,hasKids,collapsed} — schedule flatten node
+  //   opts.compact  true  -> timeline tl-sub (pie slice, delegated collapse)
+  //                 false -> list subtask-row (active/movable classes, inline collapse)
+  //   opts.mode     "done" forces the done state (list passes its section mode)
+  // References schedule-tab/state/drag globals (toggleDone, bindSubtaskActions,
+  // dStart…); all present on the owner render path where this is called. Never
+  // invoked on the guest todo page, so the bare refs are safe to define here.
+  function renderSubRow(ev, node, opts){
+    opts = opts || {};
+    var compact = !!opts.compact;
+    var esc = (typeof escHtml==="function") ? escHtml : defEsc;
+    var doneRow = (opts.mode==="done") || isDone(ev);
+    // List preserved its userMovable() gate; the timeline sub never had one. Keep
+    // both exactly so drag affordances don't shift between views.
+    var movable = compact ? (!ev._locked && !doneRow) : (userMovable(ev) && !ev._locked && !doneRow);
+    var sched = (typeof scheduled!=="undefined") ? scheduled : undefined;
+    var prog = (typeof subtaskProgress==="function") ? subtaskProgress(ev.id, sched) : null;
+    // Point-pie slice: timeline only (the list row never showed it).
+    var slice = (compact && ev.subtaskOf && window.PointPlan && typeof window.PointPlan.shareFor==="function")
+      ? window.PointPlan.shareFor(ev.subtaskOf, ev.id) : null;
+    node = node || {depth:0,hasKids:false,collapsed:false};
+
+    var el = document.createElement("div");
+    el.className = compact
+      ? ("tl-item tl-sub"+(doneRow?" done":""))
+      : ("it-list-item subtask-row"+(doneRow?" done":"")+(isActive(ev)?" active":"")+(movable?" movable":""));
+    if(node.depth) el.style.marginLeft = (node.depth*22)+"px";
+    el.dataset.id = ev.id;
+    if(movable){ el.draggable=true; el.addEventListener("dragstart",function(e){ dStart(e,ev.id); }); el.addEventListener("dragend",dEnd); }
+    el.addEventListener("dragover",function(e){ dOver(e,ev.id); }); el.addEventListener("dragleave",dLeave); el.addEventListener("drop",function(e){ dDrop(e,ev.id); });
+    el.innerHTML =
+      (node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>')+
+      '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
+      '<span class="sub-ttl" title="'+esc(ev.title)+'">'+ev.title+'</span>'+
+      (slice!=null?'<span class="sub-share'+(doneRow?' earned':'')+'" title="'+(doneRow?'Earned ':'Worth ')+slice+' pts of the parent’s pie">'+slice+' pts</span>':'')+
+      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
+      subtaskActionsHtml(ev);
+    el.querySelector(".sub-check").addEventListener("click",function(e){ e.stopPropagation(); toggleDone(ev.id); });
+    // List wires each collapse chevron; the timeline uses one delegated listener
+    // (tl._collapseWired) so wiring here too would double-toggle.
+    if(!compact){
+      var cc = el.querySelector(".wrap-collapse");
+      if(cc) cc.addEventListener("click",function(e){ e.stopPropagation(); if(typeof toggleCollapsed==="function"){ toggleCollapsed(ev.id); render(); } });
+    }
+    bindSubtaskActions(el, ev);
+    return el;
+  }
+
   window.renderItineraryCard = renderItineraryCard;
+  window.renderCompactRow = renderCompactRow;
+  window.renderSubRow = renderSubRow;
 })();
