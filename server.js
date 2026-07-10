@@ -1000,6 +1000,7 @@ require("./routes/meeting")(app, ctx);
 require("./routes/gcal")(app, ctx);
 require("./routes/slots")(app, ctx);
 require("./routes/punishments")(app, ctx);
+require("./routes/budget")(app, ctx);
 require("./routes/vault")(app, ctx);
 require("./routes/admin-tokens")(app, ctx);
 

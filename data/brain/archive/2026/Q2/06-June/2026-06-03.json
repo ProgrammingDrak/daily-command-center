@@ -1,0 +1,920 @@
+{
+  "date": "2026-06-03",
+  "last_updated_at": "2026-06-03T21:58:51.841Z",
+  "last_updated_by": "codex-local-task-publish",
+  "watermarks": {},
+  "triage": {
+    "open_items": [],
+    "cycle_count": 0,
+    "resolved_items": []
+  },
+  "sweep": {
+    "readers": [],
+    "source_health": [],
+    "meetings_count": 0,
+    "open_item_count": 0
+  },
+  "glymphatic_brief": {
+    "current": {
+      "id": "brief-2026-06-03",
+      "date": "2026-06-03",
+      "pages": [
+        {
+          "id": "actual-vs-planned",
+          "rows": [],
+          "label": "Actual vs Planned",
+          "metrics": [
+            {
+              "label": "Planned tasks",
+              "value": 0
+            },
+            {
+              "label": "Completed",
+              "value": 0
+            },
+            {
+              "label": "Couldn't fit",
+              "value": 0
+            },
+            {
+              "label": "Planned minutes",
+              "value": 0
+            },
+            {
+              "label": "Completion records",
+              "value": 0
+            }
+          ],
+          "summary": "No populated DCC plan for this day -- planned-vs-actual is reconstructed from chats and git."
+        },
+        {
+          "id": "step-back",
+          "note": "What's important and upcoming -- the step back from today's task list.",
+          "label": "Step Back",
+          "habits": [],
+          "projects": [
+            {
+              "name": "second-brain",
+              "status": "active",
+              "milestone": "M7: Complete -- classifier, router, energy inference, daily summary, setup script (131 tests)"
+            },
+            {
+              "name": "audit-angel-v2",
+              "status": "kickoff",
+              "milestone": "M1: UI/UX Polish"
+            },
+            {
+              "name": "sweep-suite",
+              "status": "active",
+              "milestone": "M2: Readers (Phase 2 complete, Phase 3 brief ready; scope narrowed 2026-04-18 to task mgmt only)"
+            },
+            {
+              "name": "offers-comparison",
+              "status": "active",
+              "milestone": "M2: Investor-only MVP dashboard"
+            },
+            {
+              "name": "offers-amp",
+              "status": "active",
+              "milestone": "Local repo cloned 2026-05-04 at `Repos/offers_amp`; HubSpot workflow/schema/property export packet captured; current local plan targets `matched_by` attribution and HubSpot backfill DB-session bugs."
+            },
+            {
+              "name": "dashboard-hub",
+              "status": "active",
+              "milestone": "Phase 1c (Dashboard Builder MVP) -- relocated 2026-04-30 from AI Sandbox to `~/portable-programming/Repos/dashboard-hub/`; private remote created 2026-05-01. Reference dashboard at `_reference/closings-example/index.html` from `clever-re..."
+            },
+            {
+              "name": "hold-your-hand-handbook",
+              "status": "active",
+              "milestone": "Current working files are `call-tracker.html` for the reworked tracker and `clever-offers-agent-guide.html` for the agent guide. The stale `hold-your-hand-handbook.html` copy was removed 2026-05-18."
+            },
+            {
+              "name": "communication-journey-map",
+              "status": "active",
+              "milestone": "Standalone editable HTML comms audit map saved at `projects/communication-journey-map/communication-journey-map.html`; Phase 2 brief ready to replace starter sample data with audited comms and source-of-truth links."
+            }
+          ],
+          "upcoming": [
+            {
+              "when": "",
+              "title": "Crossroads Coffee"
+            },
+            {
+              "when": "",
+              "title": "Southside Tennis"
+            },
+            {
+              "when": "",
+              "title": "Work from Furman University"
+            },
+            {
+              "when": "",
+              "title": "Drive to Furman and Setup (Claude with Extra Time)"
+            },
+            {
+              "when": "",
+              "title": "Darts at Furman"
+            },
+            {
+              "when": "",
+              "title": "Poker Night"
+            },
+            {
+              "when": "",
+              "title": "Drive to Norse Forged"
+            },
+            {
+              "when": "",
+              "title": "Norse Forged"
+            },
+            {
+              "when": "",
+              "title": "Mama Bear's birthday"
+            },
+            {
+              "when": "",
+              "title": "Payoff Credit Card(s)"
+            },
+            {
+              "when": "",
+              "title": "St. Louis Onsite"
+            },
+            {
+              "when": "",
+              "title": "Nick Cotton's birthday"
+            }
+          ]
+        },
+        {
+          "id": "personal-bible",
+          "label": "Bible",
+          "source": "personal/personal-bible.md",
+          "question": "A year from now, what would you be doing differently day to day?",
+          "sections": [
+            {
+              "body": "The honest current snapshot -- roles, strengths, the patterns I actually run. - _(the system builds this from evidence; edit any line to make it yours)_",
+              "heading": "Who I am (today)"
+            },
+            {
+              "body": "The person on the other side of the work -- a way of operating and being. - _(the system drafts this from what you say you're reaching for; edit to claim it)_",
+              "heading": "Who I want to become"
+            },
+            {
+              "body": "The handful of things I'd defend under pressure -- the tiebreakers when two good options compete. - _(the system distills these from your decisions and pushback; edit to claim them)_",
+              "heading": "What matters to me (values)"
+            },
+            {
+              "body": "The big ones -- what would make a decade feel well-spent. - _(the system collects these as you voice them; edit to claim them)_",
+              "heading": "Dreams and the long arc"
+            },
+            {
+              "body": "Auto-synced from `brain/goals-ledger.md` each run. Edit the ledger, not this block. - Increase AI autonomy: agents should make reversible decisions, front-load - Improve decision quality: evaluate choices by process, probability, expected - Reduce friction and token waste: fewer repeated chats, fewer unnecessary - Make Daily Command Center the cleanest source of truth for planned work, - Keep durable memory organized so Claude, Codex, and future assistants can find ---",
+              "heading": "Goals (the bridge from values to work)"
+            }
+          ]
+        },
+        {
+          "id": "process",
+          "label": "Process",
+          "notes": [
+            "Reference `logs/SYNC-NEEDS-REVIEW` does not resolve to a file on disk.",
+            "Reference `.claude/bootstrap.sh` does not resolve to a file on disk.",
+            "Reference `logs/SYNC-NEEDS-REVIEW` does not resolve to a file on disk.",
+            "Reference `logs/SYNC-NEEDS-REVIEW` does not resolve to a file on disk.",
+            "Reference `skills/my-new-skill/SKILL.md` does not resolve to a file on disk.",
+            "Reference `logs/SYNC-NEEDS-REVIEW` does not resolve to a file on disk.",
+            "Inbox packet is 15 days old and still Open (retention 14d).",
+            "Inbox packet is 23 days old and still Open (retention 14d).",
+            "Inbox packet is 16 days old and still Open (retention 14d)."
+          ],
+          "metrics": [
+            {
+              "label": "Link-integrity",
+              "value": "92.9%"
+            },
+            {
+              "label": "Drift",
+              "value": 6
+            },
+            {
+              "label": "Staleness",
+              "value": 3
+            },
+            {
+              "label": "Duplication",
+              "value": 0
+            },
+            {
+              "label": "Zero-data-loss",
+              "value": "PASS"
+            }
+          ],
+          "summary": "Glymphatic evidence + integrity pass for 2026-06-03.",
+          "proof_of_work": [
+            {
+              "label": "Sources read",
+              "value": "2512 Claude turns, 233 Codex turns, 13 index docs, 8 repos"
+            },
+            {
+              "label": "Integrity refs checked",
+              "value": "79/85 resolved"
+            },
+            {
+              "label": "Findings",
+              "value": "6 broken-link, 3 staleness"
+            },
+            {
+              "label": "Git activity",
+              "value": "9 commits across 2 repos today"
+            },
+            {
+              "label": "Personal pages",
+              "value": "asked: A year from now, what would you be doing differently day to day?; answer captured: no; goals synced: no; locked (yours): goals; open for agent: who-i-am, who-i-want-to-be, values, dreams, answers-ledger"
+            },
+            {
+              "label": "Tools",
+              "value": "Read-only collector (Python); personal-page blocks updated within ownership model"
+            }
+          ]
+        }
+      ],
+      "title": "Glymphatic Brief",
+      "triage": null,
+      "lessons": [],
+      "summary": "",
+      "disregarded": [],
+      "generated_at": "2026-06-03T16:35:06-04:00",
+      "suggested_tasks": []
+    },
+    "history": []
+  },
+  "meetings": [],
+  "completions": {
+    "tasks": [
+      {
+        "id": "task-agentthread",
+        "title": "Raise flagged-agent thread (Mike's DM)",
+        "label": "Raise flagged-agent thread (Mike's DM)",
+        "start": "08:57",
+        "end": "09:07",
+        "completed": true,
+        "completedAt": "2026-06-03T18:36:25.076Z",
+        "source": "manual",
+        "block_id": "5f69bdc9-4333-4ffc-8d25-71b368321224",
+        "local_id": "task-agentthread"
+      },
+      {
+        "id": "task-ramp",
+        "title": "Approve Ramp Houzeo Brokerage bill",
+        "label": "Approve Ramp Houzeo Brokerage bill",
+        "start": "12:00",
+        "end": "12:05",
+        "completed": true,
+        "completedAt": "2026-06-03T16:28:10.506Z",
+        "source": "manual",
+        "block_id": "3f0d93e5-170d-4966-b03f-116fea07d293",
+        "local_id": "task-ramp"
+      },
+      {
+        "id": "onsite-lunch",
+        "title": "Lunch: Imo's Pizza",
+        "label": "Lunch: Imo's Pizza",
+        "start": "12:00",
+        "end": "12:15",
+        "completed": true,
+        "completedAt": "2026-06-03T19:12:47.106Z",
+        "source": "manual",
+        "block_id": "73c902cb-4253-4fd4-bf76-5a871519ef88",
+        "local_id": "onsite-lunch"
+      },
+      {
+        "id": "onsite-p2",
+        "title": "Strategy: Agent Network (Part 2)",
+        "label": "Strategy: Agent Network (Part 2)",
+        "start": "13:00",
+        "end": "17:00",
+        "completed": true,
+        "completedAt": "2026-06-03T19:13:18.989Z",
+        "source": "manual",
+        "block_id": "7e1f739b-30a0-493f-a755-4f2cfb55150c",
+        "local_id": "onsite-p2"
+      }
+    ]
+  },
+  "schedule": {
+    "working_hours": {
+      "end": "17:30",
+      "start": "07:00"
+    },
+    "blocks": [
+      {
+        "end": "12:00",
+        "name": "Morning Work",
+        "start": "09:00",
+        "blockType": "work",
+        "protected": false,
+        "warnThreshold": 0,
+        "id": "c1b7e5c2-b82d-4b2b-a598-a35d07a3b55e",
+        "parent_id": null,
+        "sort_order": 0
+      },
+      {
+        "end": "13:00",
+        "name": "Lunch",
+        "start": "12:00",
+        "blockType": "personal",
+        "protected": false,
+        "warnThreshold": 0,
+        "id": "92e91ab5-0f84-467e-9b24-9a7dbd36d6d8",
+        "parent_id": null,
+        "sort_order": 1
+      },
+      {
+        "end": "17:30",
+        "name": "Afternoon Work",
+        "start": "13:00",
+        "blockType": "work",
+        "protected": false,
+        "warnThreshold": 0,
+        "id": "0e194f3e-5b9b-4fb7-a419-e75f9ab9f4f3",
+        "parent_id": null,
+        "sort_order": 2
+      },
+      {
+        "end": "21:00",
+        "name": "Personal",
+        "start": "17:30",
+        "blockType": "personal",
+        "protected": false,
+        "warnThreshold": 0,
+        "id": "2206343e-d622-4c67-8968-aeabd828b207",
+        "parent_id": null,
+        "sort_order": 3
+      }
+    ],
+    "timeline": [
+      {
+        "id": "task-agentthread",
+        "block_id": "5f69bdc9-4333-4ffc-8d25-71b368321224",
+        "local_id": "task-agentthread",
+        "type": "task",
+        "label": "Raise flagged-agent thread (Mike's DM)",
+        "title": "Raise flagged-agent thread (Mike's DM)",
+        "start": "08:57",
+        "end": "09:07",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 10,
+        "wrapId": "onsite-p1",
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T18:36:25.076Z",
+        "pushed": false,
+        "sort_order": 1
+      },
+      {
+        "id": "task-ramp",
+        "block_id": "3f0d93e5-170d-4966-b03f-116fea07d293",
+        "local_id": "task-ramp",
+        "type": "task",
+        "label": "Approve Ramp Houzeo Brokerage bill",
+        "title": "Approve Ramp Houzeo Brokerage bill",
+        "start": "12:00",
+        "end": "12:05",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 5,
+        "wrapId": "onsite-lunch",
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T16:28:10.506Z",
+        "pushed": false,
+        "sort_order": 4
+      },
+      {
+        "id": "onsite-lunch",
+        "block_id": "73c902cb-4253-4fd4-bf76-5a871519ef88",
+        "local_id": "onsite-lunch",
+        "type": "task",
+        "label": "Lunch: Imo's Pizza",
+        "title": "Lunch: Imo's Pizza",
+        "start": "12:00",
+        "end": "12:15",
+        "priority": "Medium",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "onsite"
+        ],
+        "duration": 60,
+        "wrapId": null,
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T19:12:47.106Z",
+        "pushed": false,
+        "sort_order": 2000
+      },
+      {
+        "id": "onsite-p2",
+        "block_id": "7e1f739b-30a0-493f-a755-4f2cfb55150c",
+        "local_id": "onsite-p2",
+        "type": "task",
+        "label": "Strategy: Agent Network (Part 2)",
+        "title": "Strategy: Agent Network (Part 2)",
+        "start": "13:00",
+        "end": "17:00",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "onsite"
+        ],
+        "duration": 240,
+        "wrapId": null,
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T19:13:18.989Z",
+        "pushed": false,
+        "sort_order": 4000
+      },
+      {
+        "id": "task-ben-amp",
+        "block_id": "f153811b-02c1-4326-b9ad-dcf87c5af764",
+        "local_id": "task-ben-amp",
+        "type": "task",
+        "label": "Catch Ben: AMP third-match bug",
+        "title": "Catch Ben: AMP third-match bug",
+        "start": "14:57",
+        "end": "15:07",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 10,
+        "wrapId": null,
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 1000
+      },
+      {
+        "id": "onsite-p1",
+        "block_id": "40d98e8e-a11a-4d70-8049-f4b1bc721517",
+        "local_id": "onsite-p1",
+        "type": "task",
+        "label": "Strategy: Agent Network (Part 1)",
+        "title": "Strategy: Agent Network (Part 1)",
+        "start": "15:07",
+        "end": "17:07",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "onsite"
+        ],
+        "duration": 120,
+        "wrapId": null,
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 2000
+      },
+      {
+        "id": "st-1780517296111",
+        "block_id": "e66e27eb-b51e-42fc-b315-9f5fa9b37968",
+        "local_id": "st-1780517296111",
+        "type": "task",
+        "label": "How does this look?",
+        "title": "How does this look?",
+        "start": "15:57",
+        "end": "15:57",
+        "priority": "Medium",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [],
+        "duration": 0,
+        "wrapId": null,
+        "isWrap": false,
+        "subtaskOf": "onsite-putt",
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 0
+      },
+      {
+        "id": "onsite-putt",
+        "block_id": "7cdb0dfd-687b-4b4d-b648-5c39758c649b",
+        "local_id": "onsite-putt",
+        "type": "task",
+        "label": "City Foundry + Puttshack",
+        "title": "City Foundry + Puttshack",
+        "start": "15:57",
+        "end": "18:57",
+        "priority": "Low",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "social"
+        ],
+        "duration": 180,
+        "wrapId": "dev-reschedule",
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 3000
+      },
+      {
+        "id": "task-collins",
+        "block_id": "4ea46b31-2916-4015-af2f-2f69ca834793",
+        "local_id": "task-collins",
+        "type": "task",
+        "label": "Unblock Collins: HubSpot export/segment access (focus block)",
+        "title": "Unblock Collins: HubSpot export/segment access (focus block)",
+        "start": "15:57",
+        "end": "16:42",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 45,
+        "wrapId": "onsite-p1",
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 4000
+      },
+      {
+        "id": "dev-reschedule",
+        "block_id": "cadf13cf-7bee-4137-a3b4-e45db9f76281",
+        "local_id": "dev-reschedule",
+        "type": "task",
+        "label": "DCC reschedule fix (heads-down)",
+        "title": "DCC reschedule fix (heads-down)",
+        "start": "15:57",
+        "end": "17:27",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "dev"
+        ],
+        "duration": 90,
+        "wrapId": "onsite-p1",
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 6000
+      }
+    ],
+    "tasks_scheduled": [
+      {
+        "id": "task-agentthread",
+        "block_id": "5f69bdc9-4333-4ffc-8d25-71b368321224",
+        "local_id": "task-agentthread",
+        "type": "task",
+        "label": "Raise flagged-agent thread (Mike's DM)",
+        "title": "Raise flagged-agent thread (Mike's DM)",
+        "start": "08:57",
+        "end": "09:07",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 10,
+        "wrapId": "onsite-p1",
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T18:36:25.076Z",
+        "pushed": false,
+        "sort_order": 1
+      },
+      {
+        "id": "task-ramp",
+        "block_id": "3f0d93e5-170d-4966-b03f-116fea07d293",
+        "local_id": "task-ramp",
+        "type": "task",
+        "label": "Approve Ramp Houzeo Brokerage bill",
+        "title": "Approve Ramp Houzeo Brokerage bill",
+        "start": "12:00",
+        "end": "12:05",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 5,
+        "wrapId": "onsite-lunch",
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T16:28:10.506Z",
+        "pushed": false,
+        "sort_order": 4
+      },
+      {
+        "id": "onsite-lunch",
+        "block_id": "73c902cb-4253-4fd4-bf76-5a871519ef88",
+        "local_id": "onsite-lunch",
+        "type": "task",
+        "label": "Lunch: Imo's Pizza",
+        "title": "Lunch: Imo's Pizza",
+        "start": "12:00",
+        "end": "12:15",
+        "priority": "Medium",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "onsite"
+        ],
+        "duration": 60,
+        "wrapId": null,
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T19:12:47.106Z",
+        "pushed": false,
+        "sort_order": 2000
+      },
+      {
+        "id": "onsite-p2",
+        "block_id": "7e1f739b-30a0-493f-a755-4f2cfb55150c",
+        "local_id": "onsite-p2",
+        "type": "task",
+        "label": "Strategy: Agent Network (Part 2)",
+        "title": "Strategy: Agent Network (Part 2)",
+        "start": "13:00",
+        "end": "17:00",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "onsite"
+        ],
+        "duration": 240,
+        "wrapId": null,
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": true,
+        "completedAt": "2026-06-03T19:13:18.989Z",
+        "pushed": false,
+        "sort_order": 4000
+      },
+      {
+        "id": "task-ben-amp",
+        "block_id": "f153811b-02c1-4326-b9ad-dcf87c5af764",
+        "local_id": "task-ben-amp",
+        "type": "task",
+        "label": "Catch Ben: AMP third-match bug",
+        "title": "Catch Ben: AMP third-match bug",
+        "start": "14:57",
+        "end": "15:07",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 10,
+        "wrapId": null,
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 1000
+      },
+      {
+        "id": "onsite-p1",
+        "block_id": "40d98e8e-a11a-4d70-8049-f4b1bc721517",
+        "local_id": "onsite-p1",
+        "type": "task",
+        "label": "Strategy: Agent Network (Part 1)",
+        "title": "Strategy: Agent Network (Part 1)",
+        "start": "15:07",
+        "end": "17:07",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "onsite"
+        ],
+        "duration": 120,
+        "wrapId": null,
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 2000
+      },
+      {
+        "id": "st-1780517296111",
+        "block_id": "e66e27eb-b51e-42fc-b315-9f5fa9b37968",
+        "local_id": "st-1780517296111",
+        "type": "task",
+        "label": "How does this look?",
+        "title": "How does this look?",
+        "start": "15:57",
+        "end": "15:57",
+        "priority": "Medium",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [],
+        "duration": 0,
+        "wrapId": null,
+        "isWrap": false,
+        "subtaskOf": "onsite-putt",
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 0
+      },
+      {
+        "id": "onsite-putt",
+        "block_id": "7cdb0dfd-687b-4b4d-b648-5c39758c649b",
+        "local_id": "onsite-putt",
+        "type": "task",
+        "label": "City Foundry + Puttshack",
+        "title": "City Foundry + Puttshack",
+        "start": "15:57",
+        "end": "18:57",
+        "priority": "Low",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "social"
+        ],
+        "duration": 180,
+        "wrapId": "dev-reschedule",
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 3000
+      },
+      {
+        "id": "task-collins",
+        "block_id": "4ea46b31-2916-4015-af2f-2f69ca834793",
+        "local_id": "task-collins",
+        "type": "task",
+        "label": "Unblock Collins: HubSpot export/segment access (focus block)",
+        "title": "Unblock Collins: HubSpot export/segment access (focus block)",
+        "start": "15:57",
+        "end": "16:42",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "task"
+        ],
+        "duration": 45,
+        "wrapId": "onsite-p1",
+        "isWrap": false,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 4000
+      },
+      {
+        "id": "dev-reschedule",
+        "block_id": "cadf13cf-7bee-4137-a3b4-e45db9f76281",
+        "local_id": "dev-reschedule",
+        "type": "task",
+        "label": "DCC reschedule fix (heads-down)",
+        "title": "DCC reschedule fix (heads-down)",
+        "start": "15:57",
+        "end": "17:27",
+        "priority": "High",
+        "meta": "",
+        "detail": "",
+        "source": "manual",
+        "notionUrl": "",
+        "tags": [
+          "dev"
+        ],
+        "duration": 90,
+        "wrapId": "onsite-p1",
+        "isWrap": true,
+        "subtaskOf": null,
+        "completed": false,
+        "completedAt": null,
+        "pushed": false,
+        "sort_order": 6000
+      }
+    ],
+    "tasks_couldnt_fit": [],
+    "stats": {}
+  },
+  "done": {
+    "at": {
+      "onsite-p2": "2026-06-03T19:13:18.989Z",
+      "task-ramp": "2026-06-03T16:28:10.506Z",
+      "onsite-lunch": "2026-06-03T19:12:47.106Z",
+      "task-agentthread": "2026-06-03T18:36:25.076Z"
+    },
+    "ids": [
+      "task-ramp",
+      "task-agentthread",
+      "onsite-lunch",
+      "onsite-p2"
+    ]
+  },
+  "pushed": {
+    "at": {
+      "task-griffin": "2026-06-03T20:34:37.372Z",
+      "qa-1780518727090-kegm2": "2026-06-03T20:35:11.058Z"
+    },
+    "ids": [
+      "task-griffin",
+      "qa-1780518727090-kegm2"
+    ]
+  },
+  "durChanges": {
+    "onsite-lunch": {
+      "current": 15,
+      "original": 60
+    }
+  },
+  "sessions": {
+    "onsite-p1": [
+      {
+        "start": "10:00",
+        "isPlanned": true,
+        "durationMin": 120
+      }
+    ]
+  },
+  "subtasks": {},
+  "source": "api-save",
+  "savedAt": "2026-06-23T01:26:01.868Z"
+}

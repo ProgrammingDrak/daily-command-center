@@ -709,6 +709,34 @@ async function _rescheduleSubtaskSubtree(oldParentId,newParentId,targetDate,from
   }
 }
 
+// When a parent task is pushed via pushTask (overflow modal / triage path),
+// its subtasks must also land on tomorrow so they stay under their parent.
+// Unlike rescheduleTaskToDate, push keeps original IDs — no re-parenting needed.
+// _seen guards cycles; async work fires without blocking the synchronous caller.
+async function _pushSubtaskSubtree(parentId,_seen){
+  _seen=_seen||new Set();
+  if(_seen.has(parentId))return;
+  _seen.add(parentId);
+  const kids=scheduled.filter(c=>c.subtaskOf===parentId&&!pushedSet.has(c.id));
+  for(const kid of kids){
+    pushedSet.add(kid.id);pushedAt[kid.id]=new Date().toISOString();
+    await schedulePushedOnTomorrow(kid);
+    await _pushSubtaskSubtree(kid.id,_seen);
+  }
+  if(kids.length)savePushedState();
+}
+// Mirror of _pushSubtaskSubtree: unpush subtasks when the parent is un-pushed.
+function _unpushSubtaskSubtree(parentId,_seen){
+  _seen=_seen||new Set();
+  if(_seen.has(parentId))return;
+  _seen.add(parentId);
+  scheduled.filter(c=>c.subtaskOf===parentId&&pushedSet.has(c.id)).forEach(kid=>{
+    pushedSet.delete(kid.id);delete pushedAt[kid.id];
+    unschedulePushedFromTomorrow(kid.id);
+    _unpushSubtaskSubtree(kid.id,_seen);
+  });
+}
+
 // Schedule `ev` (a task) onto an arbitrary `targetDate`. Picks a free slot from
 // the day's existing meetings + already-scheduled blocks. Used by push-to-tomorrow
 // and the generalized rescheduler.
@@ -1056,8 +1084,8 @@ function pushTask(id){
     deferred.push({...ev,deferred_from:(__state&&__state.date)||"unknown",deferred_at:new Date().toISOString()});
     saveDeferred(deferred);
   }
-  // Actually schedule the task on tomorrow
-  if(ev)schedulePushedOnTomorrow(ev);
+  // Actually schedule the task on tomorrow, then carry its subtask subtree.
+  if(ev){schedulePushedOnTomorrow(ev);_pushSubtaskSubtree(id);}
   savePushedState();log("pushed",id,"Pushed to tomorrow: "+(ev?ev.title:id));render();
 }
 function unpushTask(id){
@@ -1065,8 +1093,9 @@ function unpushTask(id){
   // Remove from deferred array too
   const deferred=loadDeferred().filter(d=>d.id!==id);
   saveDeferred(deferred);
-  // Remove from tomorrow's schedule
+  // Remove from tomorrow's schedule; also unpush any subtasks that were carried.
   unschedulePushedFromTomorrow(id);
+  _unpushSubtaskSubtree(id);
   savePushedState();render();
 }
 

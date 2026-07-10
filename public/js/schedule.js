@@ -1108,9 +1108,11 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
   const pickDateBtn=document.getElementById("sched-pick-date-btn");
   const dateInput=document.getElementById("sched-date-input");
   if(pickDateBtn&&dateInput){
+    // The shared picker (time-picker.js) auto-enhances #sched-date-input into a
+    // hidden field; this button is its external trigger and opens the calendar.
     pickDateBtn.addEventListener("click",()=>{
-      dateInput.style.display="block";
-      try{dateInput.showPicker?dateInput.showPicker():dateInput.focus()}catch(e){dateInput.focus()}
+      if(typeof dateInput.__twOpen==="function")dateInput.__twOpen(pickDateBtn);
+      else{try{dateInput.showPicker?dateInput.showPicker():dateInput.focus()}catch(e){dateInput.focus()}}
     });
     dateInput.addEventListener("change",()=>{if(dateInput.value)_schedPickDay(dateInput.value)});
   }
@@ -1158,7 +1160,7 @@ function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-o
   ov.addEventListener("click",e=>{if(e.target===ov)closeSchedDefaults()});
   const addBtn=document.getElementById("sched-defaults-add");
   const addTime=document.getElementById("sched-defaults-add-time");
-  const doAdd=()=>{if(!addTime||!addTime.value)return;const cur=loadSchedTimePresets();cur.push(addTime.value);saveSchedTimePresets(cur);addTime.value="";_renderSchedDefaultsList()};
+  const doAdd=()=>{if(!addTime||!addTime.value)return;const cur=loadSchedTimePresets();cur.push(addTime.value);saveSchedTimePresets(cur);addTime.value="";if(typeof addTime.__twRender==="function")addTime.__twRender();_renderSchedDefaultsList()};
   if(addBtn)addBtn.addEventListener("click",doAdd);
   if(addTime)addTime.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();doAdd()}});
   const resetBtn=document.getElementById("sched-defaults-reset");

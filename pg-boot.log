@@ -1,0 +1,19 @@
+2026-06-22 21:23:36.808 EDT [25720] LOG:  starting PostgreSQL 18.3 on x86_64-windows, compiled by msvc-19.44.35222, 64-bit
+2026-06-22 21:23:36.814 EDT [25720] LOG:  listening on IPv6 address "::1", port 5432
+2026-06-22 21:23:36.815 EDT [25720] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-06-22 21:23:36.926 EDT [30304] LOG:  database system was shut down at 2026-06-22 19:37:33 EDT
+2026-06-22 21:23:36.960 EDT [25720] LOG:  database system is ready to accept connections
+2026-06-22 21:25:57.189 EDT [32184] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-06-22 21:28:36.916 EDT [40512] LOG:  checkpoint starting: time
+2026-06-22 21:28:38.032 EDT [40512] LOG:  checkpoint complete: wrote 10 buffers (0.1%), wrote 2 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=1.088 s, sync=0.013 s, total=1.116 s; sync files=10, longest=0.002 s, average=0.002 s; distance=40 kB, estimate=40 kB; lsn=0/212788F0, redo lsn=0/21278898
+2026-06-22 21:33:36.038 EDT [40512] LOG:  checkpoint starting: time
+2026-06-22 21:33:40.219 EDT [40512] LOG:  checkpoint complete: wrote 39 buffers (0.2%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=4.122 s, sync=0.044 s, total=4.182 s; sync files=21, longest=0.005 s, average=0.003 s; distance=273 kB, estimate=273 kB; lsn=0/212BCE08, redo lsn=0/212BCD78
+2026-06-23 09:22:47.352 EDT [25720] LOG:  autovacuum worker (PID 43136) was terminated by exception 0xC0000142
+2026-06-23 09:22:47.352 EDT [25720] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-06-23 09:22:47.352 EDT [25720] LOG:  terminating any other active server processes
+2026-06-23 09:22:47.370 EDT [25720] LOG:  all server processes terminated; reinitializing
+2026-06-23 09:22:47.479 EDT [25720] LOG:  startup process (PID 35000) was terminated by exception 0xC0000142
+2026-06-23 09:22:47.479 EDT [25720] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-06-23 09:22:47.479 EDT [25720] LOG:  aborting startup due to startup process failure
+2026-06-23 09:22:47.480 EDT [25720] LOG:  database system is shut down

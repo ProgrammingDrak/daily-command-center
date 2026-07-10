@@ -1,0 +1,76 @@
+{
+  "date": "2026-07-08",
+  "last_updated_at": "2026-06-25T14:33:02.775Z",
+  "last_updated_by": "skeleton",
+  "watermarks": {},
+  "triage": {
+    "open_items": [],
+    "resolved_items": [],
+    "cycle_count": 0
+  },
+  "sweep": {
+    "source_health": [],
+    "readers": [],
+    "open_item_count": 0,
+    "meetings_count": 0
+  },
+  "glymphatic_brief": {
+    "history": [],
+    "current": {
+      "id": "brief-2026-07-08",
+      "date": "2026-07-08",
+      "title": "Glymphatic Brief",
+      "summary": "",
+      "triage": null,
+      "lessons": [],
+      "disregarded": [],
+      "suggested_tasks": [],
+      "pages": [
+        {
+          "id": "canvas",
+          "label": "Organism",
+          "canvas_html": "<!doctype html><html><head><meta charset=\"utf-8\"><style>\n:root{--bg:#0f1115;--card:#191d24;--ink:#e8eaf0;--dim:#9aa3b2;--acc:#5eead4;--ok:#34d399;--bad:#f87171;--line:#2a2f3a}\n*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--ink);\nfont:13px/1.5 -apple-system,system-ui,sans-serif;padding:14px}\nh1{font-size:16px}.sub{color:var(--dim);font-size:11px;margin-bottom:12px}\n.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:10px}\n.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}\n.card h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--acc);margin-bottom:8px}\n.kv{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed var(--line);font-size:12px}\n.kv:last-child{border-bottom:0}.kv .k{color:var(--dim);white-space:nowrap}.kv .d{color:var(--dim);text-align:right}\n.ok{color:var(--ok)}.bad{color:var(--bad)}ul{padding-left:16px}li{font-size:12px;color:var(--dim);margin:2px 0}\n.upd{font:11px ui-monospace,Menlo,monospace;color:var(--dim);padding:2px 0;border-bottom:1px dashed var(--line)}\n.upd:last-child{border-bottom:0}</style></head><body>\n<h1>The Organism</h1>\n<div class=\"sub\">Living system document \u00b7 rebuilt 2026-07-09 07:08 by the night heartbeat</div>\n<div class=\"grid\">\n<div class=\"card\"><h2>Personality</h2><ul><li>Reports, plans, copy examples: lean but complete -- trim filler, keep the</li><li>Copy Drake will ship to others: warm up, less terse, still tight.</li><li>When Drake says &quot;expand,&quot; &quot;go deep,&quot; or &quot;explain&quot;: drop brevity until he says</li></ul>\n  <div class=\"kv\"><span class=\"k\">Soul last changed</span><span class=\"d\">2026-07-08 \u00c2\u00b7 brain-sync: 2026-07-08 14:14 from MacBook-Air-4</span></div></div>\n<div class=\"card\"><h2>Schedule</h2>\n  <div class=\"kv\"><span class=\"k\">Night Consolidation</span><span>17:00 mac \u00b7 17:10 darrow</span></div>\n  <div class=\"kv\"><span class=\"k\">Morning Awakening</span><span>07:00 mac \u00b7 07:10 darrow</span></div>\n  <div class=\"kv\"><span class=\"k\">2026-07-08 night \u00b7 macbook-air-4</span><span>full \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-08 night \u00b7 darrow</span><span>full \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-08 morning \u00b7 darrow</span><span>light \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-07 night \u00b7 macbook-air-4</span><span>full \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-07 morning \u00b7 macbook-air-4</span><span>light \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-07 night \u00b7 darrow</span><span>full \u00b7 claimed global</span></div><div class=\"kv\"><span class=\"k\">2026-07-07 morning \u00b7 darrow</span><span>full \u00b7 claimed global</span></div></div>\n<div class=\"card\"><h2>Skills</h2><div class=\"kv\"><span class=\"k\">brain-core v0.2.20 (24)</span><span class=\"d\">brain-prune, brainupdate, daily-glymphatic-review, dcc-task, deploy-and-close, evidence-collector, feature-broadcast, feature-report, glymphatic, lessons-router, meeting-review-router, meeting-transcript-review, plan-critique, plan-dashboard, project-cleanup, project-plan, project-retrospective, register-mcp-perms, session-handoff, ship-it, stable-preview, submit-for-review, workspace-hygiene, workspace-steward</span></div><div class=\"kv\"><span class=\"k\">dcc-task-ops v0.1.6 (6)</span><span class=\"d\">add-dcc-subtasks, capture-chat-actions, complete-dcc-task, create-dcc-task, read-dcc-tasks, update-dcc-task</span></div><div class=\"kv\"><span class=\"k\">sweep-suite v0.2.7 (7)</span><span class=\"d\">draft-replies, publish-dcc-state, read-calendar, read-custom, read-gmail, read-notion, read-slack</span></div></div>\n<div class=\"card\"><h2>Now</h2>\n  <div class=\"kv\"><span class=\"k\">Sweep freshness</span><span class=\"bad\">unknown (9999.0h)</span></div>\n  <div class=\"kv\"><span class=\"k\">Git backup</span><span class=\"d\">git-backup complete: 2 ref(s) pushed, no failures</span></div>\n  <div class=\"kv\"><span class=\"k\">Flags</span><span>0 open \u00b7 0 shipped</span></div>\n  <div class=\"kv\"><span class=\"k\">Full dashboard</span><span class=\"d\">outputs/organism/organism-dashboard.html</span></div></div>\n<div class=\"card\" style=\"grid-column:1/-1\"><h2>Most recent updates (when \u00b7 what)</h2><div class=\"upd\">07-09 07:00 \u00c2\u00b7 brain-sync: 2026-07-09 07:00 from Darrow</div><div class=\"upd\">07-08 17:15 \u00c2\u00b7 brain-sync: 2026-07-08 17:15 from Darrow</div><div class=\"upd\">07-08 17:00 \u00c2\u00b7 Merge remote-tracking branch &#x27;origin/main&#x27;</div><div class=\"upd\">07-08 17:00 \u00c2\u00b7 brain-sync: 2026-07-08 17:00 from Darrow</div><div class=\"upd\">07-08 17:00 \u00c2\u00b7 brain-sync: 2026-07-08 17:00 from MacBook-Air-4</div><div class=\"upd\">07-08 16:38 \u00c2\u00b7 brain-sync: 2026-07-08 16:38 from MacBook-Air-4</div></div>\n</div></body></html>",
+          "height": 980,
+          "summary": "Quiet night: nothing new shipped; systems ran clean.",
+          "shipped": [
+            "quiet night"
+          ],
+          "open_flags": [],
+          "metrics": [
+            {
+              "label": "Sweep freshness",
+              "value": "17.3h ago"
+            },
+            {
+              "label": "Git backup",
+              "value": "git-backup complete: 2 ref(s) pushed, no failures"
+            }
+          ],
+          "heartbeats": [
+            "2026-07-08 night \u00b7 macbook-air-4: full +global",
+            "2026-07-08 night \u00b7 darrow: full +global",
+            "2026-07-08 morning \u00b7 darrow: light +global",
+            "2026-07-07 night \u00b7 macbook-air-4: full +global",
+            "2026-07-07 morning \u00b7 macbook-air-4: light +global",
+            "2026-07-07 night \u00b7 darrow: full +global"
+          ],
+          "dashboard": "outputs/organism/organism-dashboard.html"
+        }
+      ],
+      "generated_at": "2026-07-09T07:08:19-04:00"
+    }
+  },
+  "completions": {
+    "tasks": []
+  },
+  "schedule": {
+    "working_hours": {
+      "start": "07:00",
+      "end": "17:30"
+    },
+    "timeline": [],
+    "tasks_scheduled": [],
+    "tasks_couldnt_fit": [],
+    "stats": {}
+  }
+}

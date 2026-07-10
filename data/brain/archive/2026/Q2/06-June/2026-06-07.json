@@ -1,0 +1,36 @@
+{
+  "date": "2026-06-07",
+  "last_updated_at": "2026-05-25T15:48:57.004Z",
+  "last_updated_by": "skeleton",
+  "watermarks": {},
+  "triage": {
+    "open_items": [],
+    "resolved_items": [],
+    "cycle_count": 0
+  },
+  "sweep": {
+    "source_health": [],
+    "readers": [],
+    "open_item_count": 0,
+    "meetings_count": 0
+  },
+  "glymphatic_brief": {
+    "history": [],
+    "current": null
+  },
+  "completions": {
+    "tasks": []
+  },
+  "schedule": {
+    "working_hours": {
+      "start": "07:00",
+      "end": "17:30"
+    },
+    "timeline": [],
+    "tasks_scheduled": [],
+    "tasks_couldnt_fit": [],
+    "stats": {}
+  },
+  "source": "api-save",
+  "savedAt": "2026-06-23T01:26:01.882Z"
+}

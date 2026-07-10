@@ -1,5 +1,12 @@
 # Repository Instructions
 
+## Deploy & Close
+<!-- Read by the /deploy-and-close skill. One line each; edit to taste. -->
+- **Review:** none            <!-- none | ai[:reviewer] | human[:who] -->
+- **Notify:** personal        <!-- personal | slack:#channel | email:addr -->
+- **Deploy:** merge to `main` -> Railway prod (auto-deploys; verify the new commit's deployment reaches SUCCESS via the Railway GraphQL API, then curl a code marker on `/public/js/...`)
+- **Brain slug:** none        <!-- claude-brain project slug, or none -->
+
 ## Environments — local AND production are both live
 
 This app runs in two places at once. Know which you're touching before any write.

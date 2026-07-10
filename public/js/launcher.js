@@ -1,3 +1,60 @@
+// ======== REUSABLE RADIAL FAN-OUT (anchored to any button) ========
+// Same fan-out mechanic + CSS classes as the bottom-right "+" launcher HUD,
+// but anchored to an arbitrary button (e.g. a task card's "more" trigger) and
+// fed a custom set of {label, icon, action} items. Items reuse .dcc-radial /
+// .dcc-radial-item so the geometry and animation stay identical.
+window.dccOpenCardRadial = function(anchorEl, items){
+  if(!anchorEl || !Array.isArray(items) || !items.length) return;
+  const esc = (typeof window.escHtml === "function") ? window.escHtml : (s=>String(s==null?"":s));
+  // Toggle: clicking the same trigger again closes the open menu.
+  const already = document.querySelector(".dcc-card-radial-host");
+  if(already){ const sameAnchor = already.__anchor === anchorEl; already.__close && already.__close(); if(sameAnchor) return; }
+
+  const host = document.createElement("div");
+  host.className = "dcc-card-radial-host";
+  host.__anchor = anchorEl;
+  const radial = document.createElement("div");
+  radial.className = "dcc-radial";          // .open added next frame so it animates
+  radial.setAttribute("aria-hidden", "false");
+  items.forEach(function(it, i){
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dcc-radial-item";
+    b.style.setProperty("--i", i);
+    b.title = it.label || "";
+    b.setAttribute("aria-label", it.label || "");
+    b.innerHTML = (it.icon || "") + '<span class="dcc-radial-label">' + esc(it.label || "") + '</span>';
+    b.addEventListener("click", function(e){ e.stopPropagation(); close(); if(typeof it.action === "function") it.action(); });
+    radial.appendChild(b);
+  });
+  host.appendChild(radial);
+
+  const scrim = document.createElement("div");
+  scrim.className = "dcc-scrim dcc-card-radial-scrim open";
+
+  function close(){
+    radial.classList.remove("open");
+    host.remove();
+    scrim.remove();
+    document.removeEventListener("keydown", onEsc, true);
+  }
+  function onEsc(e){ if(e.key === "Escape") close(); }
+  host.__close = close;
+
+  scrim.addEventListener("click", close);
+  document.body.appendChild(scrim);
+  document.body.appendChild(host);
+
+  // Center the 48x48 host on the trigger so items fan out from its center
+  // (matches the launcher, whose radial items rest at the button and project out).
+  const r = anchorEl.getBoundingClientRect();
+  host.style.left = (r.left + r.width/2 - 24) + "px";
+  host.style.top  = (r.top  + r.height/2 - 24) + "px";
+
+  requestAnimationFrame(function(){ radial.classList.add("open"); });
+  setTimeout(function(){ document.addEventListener("keydown", onEsc, true); }, 0);
+};
+
 // ======== UNIVERSAL "+" LAUNCHER ========
 // The bottom-right "+" circle has two gestures:
 //   - quick tap        -> open the compose popover (add a task)

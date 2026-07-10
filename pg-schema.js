@@ -595,6 +595,15 @@ CREATE INDEX IF NOT EXISTS idx_feed_posts_owner_state
   ON feed_posts(owner_user_id, publish_state, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_posts_published
   ON feed_posts(publish_state, published_at DESC) WHERE publish_state = 'published';
+
+-- ── Budget Battle Pass ──
+-- budget_pass / budget_tier / budget_template are kind-discriminated blocks
+-- (type='block', properties->>'kind'), matching the responsibility_item /
+-- task_menu / task_group / delegated_item pattern above — not new VALID_TYPES
+-- entries. This index speeds up the month lookup in GET /api/budget/pass.
+CREATE INDEX IF NOT EXISTS idx_blocks_budget_pass_month
+  ON blocks(workspace_id, (properties->>'month'))
+  WHERE type = 'block' AND properties->>'kind' = 'budget_pass' AND deleted_at IS NULL;
 `;
 
 async function createSchema() {
