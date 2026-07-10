@@ -25,10 +25,12 @@
 // queries these blocks and suppresses the synthesized item by source_id), NOT
 // by annotating meetings[] — an intelligence merge can drop that array, so the
 // query is the durable source of truth.
-const { resolvePointTag } = require("./slot-scoring");
+const { resolvePointTag: defaultResolvePointTag } = require("./slot-scoring");
 
 module.exports = function createMeetingMaterializer(deps) {
-  const { blockDB, scoreTaskPoints, meetingIdentity, APP_TIME_ZONE } = deps;
+  // resolvePointTag is injectable like scoreTaskPoints (keeps the DI contract);
+  // defaults to the real resolver so existing callers/tests need no rewiring.
+  const { blockDB, scoreTaskPoints, meetingIdentity, APP_TIME_ZONE, resolvePointTag = defaultResolvePointTag } = deps;
   const TZ = APP_TIME_ZONE || "America/New_York";
 
   function isoToHHMM(iso) {
@@ -109,7 +111,11 @@ module.exports = function createMeetingMaterializer(deps) {
       const scored = scoreTaskPoints({ ...props, durationMinutes });
       props.points = scored.awardPoints;
       props.pointsBreakdown = scored;
-    } catch (_) { /* scoring is non-fatal */ }
+    } catch (e) {
+      // Scoring is non-fatal (materialization must still produce the block),
+      // but log it like the reconcile update path rather than swallowing.
+      console.error("[meeting-materializer] point scoring failed (non-fatal):", e.message);
+    }
     return props;
   }
 

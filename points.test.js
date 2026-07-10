@@ -78,6 +78,14 @@ test("frontend: a meeting tagged 'meeting' earns half out of the box, but a bare
   const ooo = TaskPoints.estimate({ type: "ooo", duration_minutes: 60, tags: ["meeting"] });
   assert.equal(ooo.eligible, false);
   assert.equal(ooo.awardPoints, 0);
+
+  // User override beats the builtin: sorting the meeting tag into full -> 1.0x.
+  TaskPoints.setPointTagTiers({ full: ["meeting"] });
+  const overridden = TaskPoints.estimate({ type: "meeting", duration_minutes: 60, tags: ["meeting"] });
+  assert.equal(overridden.pointTier, "full");
+  assert.equal(overridden.pointMultiplier, 1);
+  assert.equal(overridden.awardPoints, 60);
+  TaskPoints.setPointTagTiers(null);
 });
 
 test("commute time adds one tenth point per minute across both legs", () => {
