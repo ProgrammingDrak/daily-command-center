@@ -18,6 +18,23 @@
   let _rolloverSnoozed = false;
   const _collapsed = new Set();  // collapsed category keys
 
+  // Shell-to-tank tie-in (Phase 11): a shell's 10% all-done bonus banks POINTS
+  // (into the Money Changer balance), so we celebrate a points *increase*, not a
+  // waterline move (the waterline only rises on conversion). _lastPoints is the
+  // reconciled baseline; a positive delta queues a one-shot "bank feed" moment.
+  // Idempotent by value: an SSE echo/refresh that returns the same points can't
+  // replay it. If the tab is hidden when it lands, we badge the tab and play the
+  // animation the next time it's visible instead of dropping it on the floor.
+  //
+  // Shell-EXCLUSIVE: the moment fires only when the credit-earned SSE event is
+  // tagged bonus_kind:"shell" (routes/slots.js), so normal task credits don't
+  // splash the tank — each task type gets its own celebration over time.
+  let _lastPoints = null;
+  let _pendingBonus = 0;
+  let _pendingBonusTitle = "";   // shell title to credit in the toast
+  let _shellBonusPending = false; // armed by a shell-tagged slot-changed event
+  let _shellBonusTitle = "";
+
   function esc(s) { return window.DCC.esc(s); }
   function toast(msg, kind) { return window.DCC.toast(msg, kind); }
   function money(c) { return fmtMoney(c); }
@@ -34,6 +51,25 @@
     } catch (e) {
       if (seq !== _loadSeq) return;
       _state = { error: e.message || "Could not load the Budget Tank" };
+    }
+    // Reconcile the points baseline: a positive move means a bonus/credit just
+    // banked. Queue it; render() decides whether to play it now or badge the tab.
+    if (!_state.error && typeof _state.points === "number") {
+      // Consume the shell-bonus arming flag HERE, past the supersede guard, so
+      // only the winning load claims it — a superseded/errored load can't eat the
+      // flag and drop the celebration (shell completions fire several slot-changed
+      // events in a tight window, so loads race). The flag lingers across a losing
+      // load and the next survivor honors it against the still-stale baseline.
+      const celebrateThisLoad = _shellBonusPending;
+      const shellTitle = _shellBonusTitle;
+      _shellBonusPending = false;
+      _shellBonusTitle = "";
+      const baseline = _lastPoints == null ? _state.points : _lastPoints;
+      const delta = _state.points - baseline;
+      // Always reconcile the baseline (a non-shell credit updates it silently),
+      // but only QUEUE the celebration when this load was armed by a shell bonus.
+      if (delta > 0 && celebrateThisLoad) { _pendingBonus += delta; _pendingBonusTitle = shellTitle; }
+      _lastPoints = _state.points;
     }
     render();
   }
@@ -449,6 +485,8 @@
         "</div>" +
         (s.rollover_due && !_rolloverSnoozed ? rolloverModalMarkup(s) : "") +
       "</div>";
+
+    maybeCelebrate();
   }
 
   function chip(kind, text) {
@@ -746,11 +784,16 @@
     // Any economy change (spin, conversion, claim, reorder from another tab)
     // refreshes the tank — unless mid-drag, mid-add-form, or while an inline
     // field is focused, where a rerender would eat what's being typed.
-    document.addEventListener("slot-changed", () => {
+    document.addEventListener("slot-changed", (e) => {
       if (_dragId != null || _form) return;
       const root = document.getElementById("budget-root");
       if (!root) return;
       if (root.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
+      // Arm the bank-feed only for a shell all-done bonus (see routes/slots.js).
+      if (e && e.detail && e.detail.bonus_kind === "shell") {
+        _shellBonusPending = true;
+        _shellBonusTitle = e.detail.title || "";
+      }
       loadBudget();
     });
   }
@@ -820,8 +863,106 @@
     } catch (err) { toast(err.message || "Could not rename category", "error"); }
   }
 
+  // ---- shell-to-tank tie-in (bank feed) ---------------------------------------
+  // A silver bar drops onto the Money Changer and its points balance ticks up,
+  // reusing Celebrate's flow-into-the-counter physics (which already honors
+  // prefers-reduced-motion). Honest metaphor: the bonus is banked points, so the
+  // Money Changer — the coin slot that feeds the tank — is what visibly moves.
+  const SILVER_COLORS = ["#f1f5f9", "#e2e8f0", "#cbd5e1", "#94a3b8"]; // shell's silver language (#197)
+
+  function prefersReduced() {
+    try { return !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches); }
+    catch (e) { return false; }
+  }
+
+  function ptsFmt(n) { return n + " pts"; }
+
+  // The balance element only has layout when the Budget tab is the active one;
+  // a zero-size rect means the tab is hidden, so we badge instead of animate.
+  function balanceEl() { return document.querySelector("#budget-root .bt-changer-balance"); }
+  function isVisible(el) {
+    if (!el || el.offsetParent == null) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  function budgetTabBtn() { return document.querySelector('.tab[data-tab="budget"]'); }
+  function setTabBadge(on) { const b = budgetTabBtn(); if (b) b.classList.toggle("bt-has-bonus", !!on); }
+
+  // Inject the bank-feed CSS once (kept in-file so this phase touches only budget.js).
+  function ensureBankFeedCss() {
+    if (document.getElementById("bt-bankfeed-css")) return;
+    const css =
+      ".bt-bank-bar{position:fixed;width:52px;height:26px;border-radius:5px;z-index:99998;pointer-events:none;" +
+        "background:linear-gradient(135deg,#f8fafc,#cbd5e1 46%,#94a3b8);" +
+        "box-shadow:0 8px 18px rgba(100,116,139,.45),inset 0 1px 0 rgba(255,255,255,.85),inset 0 -2px 3px rgba(71,85,105,.35);" +
+        "animation:bt-bar-drop .52s cubic-bezier(.34,1.28,.5,1) both}" +
+      ".bt-bank-bar::after{content:'';position:absolute;top:3px;left:6px;right:6px;height:6px;border-radius:3px;" +
+        "background:linear-gradient(90deg,transparent,rgba(255,255,255,.9),transparent)}" +
+      "@keyframes bt-bar-drop{0%{transform:translateY(-130px) rotate(-6deg);opacity:0}" +
+        "18%{opacity:1}80%{transform:translateY(5px) rotate(1deg)}100%{transform:translateY(0) rotate(0)}}" +
+      ".tab.bt-has-bonus{position:relative}" +
+      ".tab.bt-has-bonus::after{content:'';position:absolute;top:5px;right:5px;width:8px;height:8px;border-radius:50%;" +
+        "background:linear-gradient(135deg,#f1f5f9,#94a3b8);box-shadow:0 0 0 2px rgba(148,163,184,.35);" +
+        "animation:bt-badge-pulse 1.8s ease-in-out infinite}" +
+      "@keyframes bt-badge-pulse{0%,100%{transform:scale(1);opacity:.9}50%{transform:scale(1.25);opacity:1}}" +
+      "@media (prefers-reduced-motion:reduce){.tab.bt-has-bonus::after{animation:none}}";
+    const style = document.createElement("style");
+    style.id = "bt-bankfeed-css";
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  function dropSilverBar(x, y, onDone) {
+    ensureBankFeedCss();
+    const bar = document.createElement("div");
+    bar.className = "bt-bank-bar";
+    bar.setAttribute("aria-hidden", "true");
+    bar.style.left = (x - 26) + "px";
+    bar.style.top = (y - 13) + "px";
+    document.body.appendChild(bar);
+    let done = false;
+    const finish = () => { if (done) return; done = true; bar.remove(); if (onDone) onDone(); };
+    bar.addEventListener("animationend", finish, { once: true });
+    setTimeout(finish, 900); // safety net if animationend never fires
+  }
+
+  // Play the one-shot moment for `delta` banked points against the currently
+  // visible balance. Returns false if the tank isn't visible (caller badges).
+  function playBankFeed(delta) {
+    const bal = balanceEl();
+    if (!isVisible(bal) || !(delta > 0) || !_state || typeof _state.points !== "number") return false;
+    const after = _state.points;
+    const before = Math.max(0, after - delta);
+    const tick = () => {
+      if (window.Celebrate && Celebrate.countNumber) Celebrate.countNumber(bal, before, after, { format: ptsFmt });
+      else bal.textContent = ptsFmt(after);
+    };
+    const r = bal.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    bal.textContent = ptsFmt(before); // start low so the tick reads as a gain
+    const credit = _pendingBonusTitle ? "“" + _pendingBonusTitle + "” bonus" : "Bonus";
+    try { toast("🥈 " + credit + " banked · +" + delta + " pts", "success"); } catch (e) {}
+    _pendingBonusTitle = "";
+    if (prefersReduced() || !window.Celebrate) { tick(); return true; }
+    dropSilverBar(cx, cy, () => {
+      Celebrate.confetti({ x: cx, y: cy - 42, flowTo: { x: cx, y: cy }, colors: SILVER_COLORS, count: 46, onArrive: tick });
+    });
+    return true;
+  }
+
+  // Called at the tail of every render(): play a queued bonus if the tank is on
+  // screen, otherwise badge the tab so the moment isn't missed. Idempotent — it
+  // clears _pendingBonus only once actually played.
+  function maybeCelebrate() {
+    if (!_state || _state.error || _pendingBonus <= 0) return;
+    if (playBankFeed(_pendingBonus)) { _pendingBonus = 0; setTabBadge(false); }
+    else setTabBadge(true);
+  }
+
   // ---- public entry -------------------------------------------------------------
   function renderBudget() {
+    ensureBankFeedCss();
     render();  // paint cached state immediately on tab switch
     bind();
     loadBudget();
