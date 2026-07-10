@@ -2,9 +2,10 @@
 // One place that decides how a task's shared fields are shaped and defaulted,
 // killing the ~half-dozen hand-built property bags that had quietly drifted
 // (commute directions handled in some copies but not others; delegated/linked
-// dropped on a couple of move paths). Plain script exposing window.DCC helpers,
-// loaded after core.js and before its consumers (state.js/schedule.js/
-// unfinished-tasks.js) — matches the radial-menu.js pattern.
+// dropped on a couple of move paths). Browser: loaded after core.js/task-types.js
+// and before its consumers (state.js/schedule.js/unfinished-tasks.js), exposing
+// window.DCC.taskCommonProps / taskBlockProps. Node: require()d by tests. UMD
+// wrapper matches task-types.js.
 //
 //   taskCommonProps(ev, overrides) -> the 13 shared value fields, canonical
 //     defaults, commute reconciled both directions. Key names are the shared
@@ -17,10 +18,18 @@
 //
 // `overrides` win over `ev` for any field before defaulting, so a caller can
 // force source:"pushed" or priority:"Medium" without the "High" fallback ever
-// firing.
-(function () {
-  const DCC = (window.DCC = window.DCC || {});
-
+// firing. NOTE: taskCommonProps emits a `title`; callers that merge it as the
+// SOURCE over a base carrying the positional title (e.g. schedulePickerFields)
+// must drop title first, or the "" default clobbers the real one.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  if (root) {
+    const DCC = (root.DCC = root.DCC || {});
+    DCC.taskCommonProps = api.taskCommonProps;
+    DCC.taskBlockProps = api.taskBlockProps;
+  }
+})(typeof self !== "undefined" ? self : this, function () {
   function taskCommonProps(ev, overrides) {
     const src = Object.assign({}, ev || {}, overrides || {});
     const commuteMinutes = src.commuteMinutes || src.commute_minutes || null;
@@ -54,6 +63,5 @@
     });
   }
 
-  DCC.taskCommonProps = taskCommonProps;
-  DCC.taskBlockProps = taskBlockProps;
-})();
+  return { taskCommonProps: taskCommonProps, taskBlockProps: taskBlockProps };
+});

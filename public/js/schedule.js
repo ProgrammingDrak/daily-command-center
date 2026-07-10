@@ -1016,14 +1016,17 @@ function schedulePickerFields(durMin,options){
   options=options||{};
   // Shared value fields come from the one serializer (meta keeps its picker
   // default); responsibility metadata is picker-specific and layered on top.
-  return Object.assign(
-    window.DCC.taskCommonProps(options,{meta:options.meta||("Custom task · "+ms(durMin))}),
-    {
-      responsibilityId:options.responsibilityId||null,
-      responsibilityTitle:options.responsibilityTitle||null,
-      capacityBucket:options.capacityBucket||null
-    }
-  );
+  // IMPORTANT: this bag is merged as the SOURCE over a base that already holds
+  // the positional title (Object.assign({id,title,...}, schedulePickerFields()))
+  // so it must NOT carry a title key, or it would clobber the real title with
+  // taskCommonProps's "" default. Drop it, matching the original behavior.
+  const common=window.DCC.taskCommonProps(options,{meta:options.meta||("Custom task · "+ms(durMin))});
+  delete common.title;
+  return Object.assign(common,{
+    responsibilityId:options.responsibilityId||null,
+    responsibilityTitle:options.responsibilityTitle||null,
+    capacityBucket:options.capacityBucket||null
+  });
 }
 // Resolve a chosen day (dateStr) + time (HH:MM) into a real task. If that day is
 // the one currently being viewed, insert it live with a pinned start; otherwise

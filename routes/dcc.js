@@ -277,22 +277,14 @@ module.exports = function mount(app, ctx) {
       const plan = dccIntelligence.materializeBriefPlan({ sourceState, targetDate, existingBlocks });
       const created = [];
       if (!dryRun) {
-        // Ensure the root once, then create every planned block in a single
-        // transaction so a mid-batch failure leaves no half-materialized day.
-        await blockDB.ensureDayRoot(targetDate, userId, workspaceId);
-        const client = await blockDB.pool.connect();
-        try {
-          await client.query("BEGIN");
-          for (const item of plan.items) {
-            created.push(await blockDB.createItineraryTask({ date: targetDate, properties: item.properties, userId, workspaceId, ensureRoot: false, client }));
-          }
-          await client.query("COMMIT");
-        } catch (txErr) {
-          await client.query("ROLLBACK");
-          throw txErr;
-        } finally {
-          client.release();
-        }
+        // Store-level batch: every planned block is created in one transaction
+        // (the day root ensured once), so a mid-batch failure leaves no
+        // half-materialized day. Transaction lifecycle lives in db.js, not here.
+        const rows = await blockDB.createItineraryTasks(
+          plan.items.map((item) => ({ date: targetDate, properties: item.properties })),
+          { userId, workspaceId }
+        );
+        created.push(...rows);
         if (created.length) broadcast("blocks-changed", { action: "brief-materialize", blockIds: created.map((b) => b.id), date: targetDate }, workspaceId);
       }
       const counts = { ...plan.counts, created: created.length, pending: dryRun ? plan.items.length : Math.max(0, plan.items.length - created.length) };

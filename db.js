@@ -357,6 +357,37 @@ async function createItineraryTask({ date, properties, userId = null, workspaceI
   return createBlock({ type: "block", date, properties: props, sort_order, user_id: userId, workspace_id: workspaceId }, client);
 }
 
+// Batch-create itinerary tasks atomically. The store owns the transaction (per
+// the repo's store-owns-transactions idiom, like rescheduleBlocks/batchOp), so
+// callers hand over a list of items instead of driving pool clients themselves.
+// Each distinct day root is ensured once up front (idempotent), then every item
+// is inserted on one pooled client inside a single BEGIN/COMMIT.
+// items: [{ date, properties, sortOrder?, score? }]; opts apply to every item.
+async function createItineraryTasks(items, { userId = null, workspaceId = null, score = false } = {}) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const dates = [...new Set(items.map((it) => it.date).filter(Boolean))];
+  for (const d of dates) await ensureDayRoot(d, userId, workspaceId);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const created = [];
+    for (const it of items) {
+      created.push(await createItineraryTask({
+        date: it.date, properties: it.properties, userId, workspaceId,
+        sortOrder: it.sortOrder, score: it.score != null ? it.score : score,
+        ensureRoot: false, client,
+      }));
+    }
+    await client.query("COMMIT");
+    return created;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── DCC State ──
 
 async function ensureDccStateTable() {
@@ -434,7 +465,7 @@ module.exports = {
   createBlock, updateBlock, deleteBlock,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
-  batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask,
+  batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers
 };
