@@ -444,6 +444,25 @@ function mergeRecapIntoNotes(existingNotes, recapMarkdown) {
   return userPart ? `${userPart}${SEP}${recap}` : `${HEADER}\n\n${recap}`;
 }
 
+// Artifact HTML is always rendered into the meeting panel via innerHTML, and
+// source URLs into <a href>. applyArtifacts takes CALLER-supplied content, so it
+// must never persist untrusted HTML or non-http(s) URLs: HTML is regenerated from
+// markdown through the escaping markdownToHtml (client `html` is ignored), and a
+// source keeps its url only when it is http(s) (drops javascript:/data: schemes).
+function isSafeHttpUrl(value) {
+  return /^https?:\/\//i.test(String(value || "").trim());
+}
+function sanitizeSources(sources) {
+  if (!Array.isArray(sources)) return [];
+  return sources.map(s => {
+    if (s && typeof s === "object" && s.url != null && !isSafeHttpUrl(s.url)) {
+      const { url, ...rest } = s;
+      return rest;
+    }
+    return s;
+  });
+}
+
 // Precomputed-artifact path. The caller (the review-meetings sweep skill) has
 // already done the real thinking with the meeting-transcript-review engine, so we
 // store its summary / prep / transcript / proposed actions VERBATIM and skip the
@@ -464,8 +483,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
         title: prep.title || `Prep: ${titleOf(meeting)}`,
         status: prep.status || "ready",
         markdown,
-        html: prep.html || markdownToHtml(markdown),
-        sources: Array.isArray(prep.sources) ? prep.sources : [],
+        html: markdownToHtml(markdown),
+        sources: sanitizeSources(prep.sources),
       },
     });
     applied.prep = true;
@@ -484,7 +503,7 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
         text: storedText,
         originalLength: text.length,
         truncated: storedText.length !== text.length,
-        sources: Array.isArray(transcript.sources) ? transcript.sources : [],
+        sources: sanitizeSources(transcript.sources),
       },
     });
     applied.transcript = true;
@@ -498,8 +517,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
         title: summary.title || `Summary: ${titleOf(meeting)}`,
         status: summary.status || "ready",
         markdown,
-        html: summary.html || markdownToHtml(markdown),
-        sources: Array.isArray(summary.sources) ? summary.sources : [],
+        html: markdownToHtml(markdown),
+        sources: sanitizeSources(summary.sources),
       },
     });
     applied.summary = true;
@@ -534,7 +553,7 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
           priority: a.priority || "Medium",
           status: "proposed",
           done: false,
-          sources: Array.isArray(a.sources) ? a.sources : [],
+          sources: sanitizeSources(a.sources),
         },
       });
       seen.add(text.toLowerCase());

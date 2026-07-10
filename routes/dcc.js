@@ -186,7 +186,7 @@ module.exports = function mount(app, ctx) {
       });
     } catch (e) {
       console.error("[meeting-artifacts] failed:", e);
-      res.status(e.status || 500).json({ error: e.message || "meeting-artifacts failed" });
+      res.status(e.status || e.statusCode || 500).json({ error: e.message || "meeting-artifacts failed" });
     }
   });
 

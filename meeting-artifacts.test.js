@@ -127,6 +127,28 @@ test("recapToNotes:false stores the summary child but does not touch notes", asy
   assert.equal((await mem.getBlock("m4")).properties.notes, "untouched");
 });
 
+test("applyArtifacts ignores client html, escapes markdown, and drops unsafe source urls", async () => {
+  seedMeeting("m5");
+  await automation.applyArtifacts("m5", {
+    workspaceId: "ws-1", userId: 1,
+    summary: {
+      markdown: "Recap with <img src=x onerror=alert(1)> tag",
+      html: "<img src=x onerror=alert(1)>", // client-supplied html must be ignored
+      sources: [
+        { type: "evil", url: "javascript:alert(1)" },
+        { type: "ok", url: "https://example.com/doc" },
+      ],
+    },
+  });
+  const s = childrenOf("m5", "meeting_summary")[0].properties;
+  assert.equal(/<img/.test(s.html), false, "raw client <img> must not survive");
+  assert.equal(s.html.includes("&lt;img"), true, "markdown angle brackets are escaped");
+  const evil = s.sources.find((x) => x.type === "evil");
+  const ok = s.sources.find((x) => x.type === "ok");
+  assert.equal("url" in evil, false, "javascript: url dropped");
+  assert.equal(ok.url, "https://example.com/doc", "http(s) url kept");
+});
+
 test("mergeRecapIntoNotes: empty base, preserve user notes, idempotent replace", () => {
   const { mergeRecapIntoNotes } = automation;
   assert.equal(mergeRecapIntoNotes("", "Body"), "_Meeting recap (auto):_\n\nBody");
@@ -203,4 +225,29 @@ test("endpoint 400s when the payload carries no meeting identity or title", asyn
   const app = mountApp([], rec);
   const { status } = await post(app, { meeting: {}, summary: { markdown: "x" } });
   assert.equal(status, 400);
+});
+
+test("endpoint maps snake_case proposed_actions + recap_to_notes into applyArtifacts opts", async () => {
+  const rec = [];
+  const app = mountApp([mtgBlock("blk-d", "evt-7", "Sync", "2026-07-09")], rec);
+  const { status } = await post(app, {
+    meeting: { event_id: "evt-7", date: "2026-07-09" },
+    proposed_actions: [{ text: "do the thing", owner: "drake" }],
+    recap_to_notes: false,
+  });
+  assert.equal(status, 200);
+  assert.equal(rec[0].opts.proposedActions.length, 1);
+  assert.equal(rec[0].opts.recapToNotes, false);
+});
+
+test("resolver spans the +/-1 day window and ignores non-meeting same-title blocks", async () => {
+  const rec = [];
+  const seed = [
+    mtgBlock("blk-real", "evt-x", "Planning", "2026-07-10"), // materialized on the neighbouring day
+    { id: "blk-task", type: "block", parent_id: null, date: "2026-07-09", properties: { title: "Planning", type: "task" }, workspace_id: "ws-1", user_id: 1, deleted_at: null },
+  ];
+  const app = mountApp(seed, rec);
+  const { status, json } = await post(app, { meeting: { title: "Planning", date: "2026-07-09" }, prep: { markdown: "p" } });
+  assert.equal(status, 200);
+  assert.equal(json.meetingBlockId, "blk-real"); // matched the meeting on date+1, not the same-title task
 });
