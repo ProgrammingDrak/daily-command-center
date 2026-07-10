@@ -4,7 +4,8 @@
 module.exports = function mount(app, ctx) {
   const {
     DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
-    dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingMaterializer, previousDateStr,
+    dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity,
+    meetingMaterializer, previousDateStr,
     pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, scoreTaskPoints, writeJSON,
   } = ctx;
 
@@ -111,6 +112,81 @@ module.exports = function mount(app, ctx) {
     } catch (e) {
       console.error("[quick-task] failed:", e);
       res.status(e.status || 500).json({ error: e.message || "quick-task failed" });
+    }
+  });
+
+  // Resolve the durable meeting block an artifact payload targets. The
+  // materializer stores properties.source_id = meetingIdentity(m), so we match on
+  // that first, then fall back to an exact same-day title match. We scan the given
+  // date and its neighbours because the sweep's ET-local day can sit one side of a
+  // UTC boundary from the block's stored date.
+  function meetingDateWindow(date) {
+    const out = [date];
+    const anchor = new Date(`${date}T12:00:00Z`);
+    if (!Number.isNaN(anchor.getTime())) {
+      out.push(new Date(anchor.getTime() - 86400000).toISOString().slice(0, 10));
+      out.push(new Date(anchor.getTime() + 86400000).toISOString().slice(0, 10));
+    }
+    return [...new Set(out)];
+  }
+  async function resolveMeetingBlock({ identity, title, date, workspaceId }) {
+    const isMeeting = (b) => { const p = b.properties || {}; return p.type === "meeting" || p.type === "oneone"; };
+    const norm = (s) => String(s || "").trim().toLowerCase();
+    const wantId = String(identity || "").trim();
+    let titleMatch = null;
+    for (const d of meetingDateWindow(date)) {
+      let blocks = [];
+      try { blocks = await blockDB.getBlocksByDate(d, workspaceId); } catch { continue; }
+      const meetings = blocks.filter(isMeeting);
+      if (wantId) {
+        const hit = meetings.find((b) => String((b.properties || {}).source_id || "") === wantId);
+        if (hit) return hit;
+      }
+      if (!titleMatch && title) titleMatch = meetings.find((b) => norm((b.properties || {}).title) === norm(title)) || null;
+    }
+    return titleMatch;
+  }
+
+  // Bearer-authorized meeting-artifact write. The review-meetings sweep skill has
+  // already produced the real summary / prep / action items (via the
+  // meeting-transcript-review engine) and POSTs them here to attach to a durable
+  // meeting block. The automation route (routes/meeting.js) is session-only, so
+  // this is how the scheduled sweep reaches a meeting without a login. Idempotent:
+  // applyArtifacts upserts docs in place and dedupes proposed actions by text.
+  app.post("/api/dcc/meeting-artifacts", async (req, res) => {
+    try {
+      const body = req.body || {};
+      const m = body.meeting || {};
+      const identity = meetingIdentity(m);
+      const title = m.title || m.summary || "";
+      if (!identity && !title) return res.status(400).json({ error: "meeting must carry source_id/event_id/gcal_event_id/id or title" });
+      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const date = isValidDate(m.date) ? m.date : getTodayStr();
+
+      const block = await resolveMeetingBlock({ identity, title, date, workspaceId });
+      if (!block) return res.status(404).json({ error: "No materialized meeting block found", identity: identity || null, title: title || null, date });
+
+      const proposedActions = Array.isArray(body.proposed_actions) ? body.proposed_actions
+        : (Array.isArray(body.proposedActions) ? body.proposedActions : []);
+      const result = await meetingAutomation.applyArtifacts(block.id, {
+        userId, workspaceId,
+        prep: body.prep || null,
+        summary: body.summary || null,
+        transcript: body.transcript || null,
+        proposedActions,
+        recapToNotes: body.recap_to_notes !== false,
+      });
+      broadcast("blocks-changed", { action: "meeting-artifacts", blockIds: [block.id], date: block.date }, workspaceId);
+      res.json({
+        ok: true,
+        meetingBlockId: block.id,
+        date: block.date,
+        applied: result.applied,
+        proposedActionCount: Array.isArray(result.proposedActions) ? result.proposedActions.length : 0,
+      });
+    } catch (e) {
+      console.error("[meeting-artifacts] failed:", e);
+      res.status(e.status || e.statusCode || 500).json({ error: e.message || "meeting-artifacts failed" });
     }
   });
 
