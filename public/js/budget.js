@@ -42,12 +42,6 @@
   // ---- data ---------------------------------------------------------------
   async function loadBudget() {
     const seq = ++_loadSeq;
-    // Consume the shell-bonus arming flag synchronously: only a load kicked off
-    // by a shell-tagged slot-changed event is allowed to celebrate this pass.
-    const celebrateThisLoad = _shellBonusPending;
-    const shellTitle = _shellBonusTitle;
-    _shellBonusPending = false;
-    _shellBonusTitle = "";
     try {
       const res = await fetch("/api/budget/state");
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -61,6 +55,15 @@
     // Reconcile the points baseline: a positive move means a bonus/credit just
     // banked. Queue it; render() decides whether to play it now or badge the tab.
     if (!_state.error && typeof _state.points === "number") {
+      // Consume the shell-bonus arming flag HERE, past the supersede guard, so
+      // only the winning load claims it — a superseded/errored load can't eat the
+      // flag and drop the celebration (shell completions fire several slot-changed
+      // events in a tight window, so loads race). The flag lingers across a losing
+      // load and the next survivor honors it against the still-stale baseline.
+      const celebrateThisLoad = _shellBonusPending;
+      const shellTitle = _shellBonusTitle;
+      _shellBonusPending = false;
+      _shellBonusTitle = "";
       const baseline = _lastPoints == null ? _state.points : _lastPoints;
       const delta = _state.points - baseline;
       // Always reconcile the baseline (a non-shell credit updates it silently),
