@@ -25,6 +25,8 @@
 // queries these blocks and suppresses the synthesized item by source_id), NOT
 // by annotating meetings[] — an intelligence merge can drop that array, so the
 // query is the durable source of truth.
+const { resolvePointTag } = require("./slot-scoring");
+
 module.exports = function createMeetingMaterializer(deps) {
   const { blockDB, scoreTaskPoints, meetingIdentity, APP_TIME_ZONE } = deps;
   const TZ = APP_TIME_ZONE || "America/New_York";
@@ -86,12 +88,38 @@ module.exports = function createMeetingMaterializer(deps) {
     return s === "done" || s === "completed" || !!props.completed;
   }
 
+  // Whether a block already carries the point-earning meeting tag. Used to heal
+  // meetings materialized before the tag existed (see reconcile below).
+  function hasMeetingTag(props) {
+    return Array.isArray(props && props.tags) && props.tags.includes("meeting");
+  }
+
+  // Stamp the `meeting` tag and its resolved points onto a meeting's props. The
+  // tag carries the multiplier via the tag-tier system (builtin meeting→half),
+  // so a meeting keeps its non-earning TYPE yet still earns reduced points.
+  // Settings aren't available here; the completion path (earnTaskCredit)
+  // re-resolves against the user's own tier config, which is authoritative.
+  function stampMeetingPoints(props, durationMinutes) {
+    const tags = Array.isArray(props.tags) ? props.tags.slice() : [];
+    if (!tags.includes("meeting")) tags.push("meeting");
+    props.tags = tags;
+    try {
+      const tag = resolvePointTag(tags, null);
+      if (tag) { props.point_tier = tag.tier; props.point_multiplier = tag.multiplier; }
+      const scored = scoreTaskPoints({ ...props, durationMinutes });
+      props.points = scored.awardPoints;
+      props.pointsBreakdown = scored;
+    } catch (_) { /* scoring is non-fatal */ }
+    return props;
+  }
+
   function buildProps({ meeting, identity, start, end, durationMinutes }) {
     const title = meeting.title || "(No title)";
     const props = {
       title,
       type: "meeting",
       kind: "meeting",
+      tags: ["meeting"],
       status: "open",
       start,
       end,
@@ -113,11 +141,7 @@ module.exports = function createMeetingMaterializer(deps) {
       synced_gcal_end: end,
       synced_gcal_title: title,
     };
-    try {
-      const scored = scoreTaskPoints({ ...props, durationMinutes });
-      props.points = scored.awardPoints;
-      props.pointsBreakdown = scored;
-    } catch (_) { /* scoring is non-fatal; meetings are non-earning anyway */ }
+    stampMeetingPoints(props, durationMinutes);
     return props;
   }
 
@@ -230,7 +254,10 @@ module.exports = function createMeetingMaterializer(deps) {
           const nextTitle = meeting.title || p.title || "(No title)";
           const changed =
             p.start !== start || p.end !== end || p.title !== nextTitle ||
-            p.synced_gcal_start !== start || p.synced_gcal_end !== end;
+            p.synced_gcal_start !== start || p.synced_gcal_end !== end ||
+            // Heal meetings materialized before the point-earning tag existed:
+            // a one-time reconcile stamps the tag + points, then stays idempotent.
+            !hasMeetingTag(p);
           if (changed) {
             const props = {
               ...p,
@@ -244,6 +271,7 @@ module.exports = function createMeetingMaterializer(deps) {
               synced_gcal_end: end,
               synced_gcal_title: nextTitle,
             };
+            stampMeetingPoints(props, durationMinutes);
             try {
               await blockDB.updateBlock(existing.id, { properties: props, sort_order: sortOrderFor(start) });
               result.updated++;

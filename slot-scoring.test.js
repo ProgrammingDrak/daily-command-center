@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { scoreTaskPoints } = require("./slot-scoring");
+const { scoreTaskPoints, resolvePointTag } = require("./slot-scoring");
 
 test("8 hours of medium normal work yields about 480 points", () => {
   const scoring = scoreTaskPoints({ duration_minutes: 480, effort_tier: "medium", attention_tier: "normal" });
@@ -61,6 +61,21 @@ test("meeting can earn when the user sorts it into an earning tier, but OOO stay
   assert.equal(meeting.awardPoints, 30);
   assert.equal(ooo.eligible, false);
   assert.equal(ooo.awardPoints, 0);
+});
+
+test("resolvePointTag: the builtin meeting->half applies with no user config, and user config overrides it", () => {
+  // Out of the box (no settings): the `meeting` tag resolves to half.
+  const builtin = resolvePointTag(["meeting"], null);
+  assert.equal(builtin.tier, "half");
+  assert.equal(builtin.multiplier, 0.5);
+
+  // A tag with no assignment matches nothing -> null (caller applies default).
+  assert.equal(resolvePointTag(["some-other-tag"], null), null);
+
+  // User sorting the meeting tag into another bucket overrides the builtin.
+  const overridden = resolvePointTag(["meeting"], { full: ["meeting"] });
+  assert.equal(overridden.tier, "full");
+  assert.equal(overridden.multiplier, 1);
 });
 
 test("trivial short tasks earn small but nonzero points when eligible", () => {

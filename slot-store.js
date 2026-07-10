@@ -8,6 +8,8 @@ const {
   POINTS_V3_BALANCE_MULTIPLIER,
   scoreTaskPoints,
   HARD_ZERO_TYPES,
+  POINT_TAG_TIER_MULTIPLIERS,
+  resolvePointTag,
 } = require("./slot-scoring");
 // Shared slot_accounts primitives (also used by punishment-store). The monthly
 // default and the account upsert are single-sourced here so the two stores can't
@@ -149,12 +151,8 @@ const DEFAULT_POINT_TAG_TIERS = {
   half: [],
   full: [],
 };
-const POINT_TAG_TIER_MULTIPLIERS = {
-  none: 0,
-  quarter: 0.25,
-  half: 0.5,
-  full: 1,
-};
+// POINT_TAG_TIER_MULTIPLIERS + the tag→bucket resolver now live in slot-scoring.js
+// (single-sourced with the FE mirror in points.js) and are imported above.
 // Tags assigned under retired lane names map onto the point buckets so existing
 // assignments survive the rename without a data migration.
 const LEGACY_POINT_TAG_TIER_ALIASES = {
@@ -2212,30 +2210,16 @@ function normalizeTaskTags(value) {
 
 function taskPointTier(body = {}, settings = {}) {
   const normalized = normalizeSlotSettings(settings);
-  const tiers = normalized.point_tag_tiers || DEFAULT_POINT_TAG_TIERS;
   const tags = normalizeTaskTags(body.tags ?? body.tag ?? body.tag_ids ?? body.tagIds);
-  const tagSet = new Set(tags);
-  let bestTier = null;
-  let bestMultiplier = -1;
-  for (const [tier, multiplier] of Object.entries(POINT_TAG_TIER_MULTIPLIERS)) {
-    const matches = (tiers[tier] || []).some(tagId => tagSet.has(String(tagId)));
-    if (matches && multiplier > bestMultiplier) {
-      bestTier = tier;
-      bestMultiplier = multiplier;
-    }
-  }
   const type = String(body.type ?? body.kind ?? "").trim().toLowerCase();
   // The registry's hard-zero tier zeroes out before tag matching: even a
   // full-tier tag must not let ooo/shell earn duration points (a shell's award
   // is the rollup bonus override).
   if (HARD_ZERO_TYPES.has(type)) return { tier: "none", multiplier: 0, matched_tags: [] };
-  if (bestTier) {
-    return {
-      tier: bestTier,
-      multiplier: POINT_TAG_TIER_MULTIPLIERS[bestTier],
-      matched_tags: (tiers[bestTier] || []).filter(tagId => tagSet.has(String(tagId))),
-    };
-  }
+  // A tag assigned to a bucket (incl. the builtin meeting→half) wins BEFORE the
+  // meeting/break non-earning rule, so a tagged meeting scores real points.
+  const matched = resolvePointTag(tags, normalized.point_tag_tiers);
+  if (matched) return matched;
   if (type === "meeting" || type === "break") return { tier: "none", multiplier: 0, matched_tags: [] };
   // Tags still sitting in the bank (unsorted) earn full points by default.
   return { tier: "full", multiplier: POINT_TAG_TIER_MULTIPLIERS.full, matched_tags: [] };

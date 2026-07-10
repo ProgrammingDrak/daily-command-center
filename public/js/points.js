@@ -13,6 +13,13 @@
       ? window.TaskTypes.nonEarningTypes()
       : ["meeting", "break", "ooo", "shell"]
   );
+  // Unconditional zero (no tag/multiplier can rescue). Meeting/break are only
+  // in NON_EARNING and a matched tier tag DOES rescue them (mirrors backend).
+  const HARD_ZERO = new Set(
+    (typeof window !== "undefined" && window.TaskTypes && window.TaskTypes.hardZeroTypes)
+      ? window.TaskTypes.hardZeroTypes()
+      : ["ooo", "shell"]
+  );
   const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
   const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
 
@@ -20,8 +27,12 @@
   // POINT_TAG_TIER_MULTIPLIERS. Kept in sync manually (same FE/BE duplication as
   // the EFFORT/ATTENTION tables above; the browser has no module system here).
   const POINT_TAG_TIER_MULTIPLIERS = { none: 0, quarter: 0.25, half: 0.5, full: 1 };
-  // Bucket config (tag-id arrays per tier). Pushed in by slots.js loadSlots();
-  // null until loaded -> multiplier defaults to 1 (no behavior change).
+  // Canonical builtin tag→bucket assignments (mirror slot-scoring.js
+  // BUILTIN_POINT_TAG_TIERS). Applied even before slots.js loads config, so a
+  // meeting scores its half multiplier out of the box.
+  const BUILTIN_POINT_TAG_TIERS = { none: [], quarter: [], half: ["meeting"], full: [] };
+  // Bucket config (tag-id arrays per tier). Pushed in by slots.js loadSlots().
+  // null until loaded -> only the builtins apply.
   let pointTagTiers = null;
 
   function tierTags(value){
@@ -31,18 +42,48 @@
     if(typeof value === "string") return value.split(/[,·|]/).map(t => t.trim()).filter(Boolean);
     return [];
   }
-  function tagPointMultiplier(input){
-    // Mirrors slot-store.js taskPointTier(): highest multiplier among matched
-    // buckets; no config or no match -> full (unsorted tags earn full points).
-    if(!pointTagTiers) return { tier: "full", multiplier: 1 };
+  function foldBuiltin(userTiers){
+    // Mirror slot-scoring.js foldBuiltinTiers: builtin ids fill in only where the
+    // user hasn't already placed them; a tag lives in at most one bucket.
+    const out = { none: [], quarter: [], half: [], full: [] };
+    const claimed = new Set();
+    for(const tier in out){
+      for(const raw of (userTiers && userTiers[tier]) || []){
+        const id = String(raw == null ? "" : raw).trim();
+        if(id && !claimed.has(id)){ claimed.add(id); out[tier].push(id); }
+      }
+    }
+    for(const tier in BUILTIN_POINT_TAG_TIERS){
+      for(const raw of BUILTIN_POINT_TAG_TIERS[tier]){
+        const id = String(raw == null ? "" : raw).trim();
+        if(id && !claimed.has(id)){ claimed.add(id); out[tier].push(id); }
+      }
+    }
+    return out;
+  }
+  function matchTagTier(input){
+    // Mirrors slot-scoring.js resolvePointTag(): highest multiplier among matched
+    // buckets (builtins folded in), or null when nothing matches.
+    const tiers = foldBuiltin(pointTagTiers);
     const tagSet = new Set(tierTags(input.tags != null ? input.tags : input.tag));
     let bestTier = null, bestMult = -1;
     for(const tier in POINT_TAG_TIER_MULTIPLIERS){
       const mult = POINT_TAG_TIER_MULTIPLIERS[tier];
-      const ids = pointTagTiers[tier] || [];
+      const ids = tiers[tier] || [];
       if(mult > bestMult && ids.some(id => tagSet.has(String(id)))){ bestTier = tier; bestMult = mult; }
     }
-    return bestTier ? { tier: bestTier, multiplier: POINT_TAG_TIER_MULTIPLIERS[bestTier] } : { tier: "full", multiplier: 1 };
+    return bestTier ? { tier: bestTier, multiplier: POINT_TAG_TIER_MULTIPLIERS[bestTier] } : null;
+  }
+  function resolveTier(input){
+    // Mirror backend taskPointTier() precedence exactly: hard-zero wins, then a
+    // matched tier tag (rescues meeting/break), then meeting/break -> zero, then
+    // unsorted default -> full.
+    const type = norm(input.type || input.kind);
+    if(HARD_ZERO.has(type)) return { tier: "none", multiplier: 0 };
+    const matched = matchTagTier(input);
+    if(matched) return matched;
+    if(NON_EARNING.has(type)) return { tier: "none", multiplier: 0 };
+    return { tier: "full", multiplier: 1 };
   }
   function setPointTagTiers(tiers){
     if(tiers && typeof tiers === "object" && !Array.isArray(tiers)){
@@ -166,7 +207,7 @@
     const attention = attentionTier(input);
     const importance = importanceTier(input);
     const bounties = bountyCount(input);
-    const tier = tagPointMultiplier(input);
+    const tier = resolveTier(input);
     const pointMultiplier = tier.multiplier;
     const multipliers = {
       effort: EFFORT[effort] || EFFORT.medium,
@@ -178,9 +219,10 @@
     };
     const basePoints = duration * pointMultiplier;
     const commutePoints = commute * COMMUTE_POINT_RATE * pointMultiplier;
-    // Non-earning task type, or a 0x ("No points") tag bucket -> not eligible
-    // (mirrors backend point_tier_zero in slot-scoring.js).
-    if(NON_EARNING.has(norm(input.type || input.kind)) || pointMultiplier <= 0){
+    // resolveTier already applied hard-zero + non-earning precedence; a positive
+    // multiplier here means a tier tag rescued the task (e.g. meeting -> half).
+    // Only a 0x resolution (hard-zero, or unrescued meeting/break) is ineligible.
+    if(pointMultiplier <= 0){
       return { formulaVersion: FORMULA_VERSION, eligible: false, durationMinutes: duration, commuteMinutes: commute, commutePointRate: COMMUTE_POINT_RATE, commutePoints, effortTier: effort, attentionTier: attention, importanceTier: importance, bountyCount: bounties, pointTier: tier.tier, pointMultiplier, multipliers, basePoints, rawPoints: 0, awardPoints: 0 };
     }
     const workPoints = basePoints * multipliers.effort * multipliers.attention * multipliers.importance * multipliers.urgency * multipliers.bounty;

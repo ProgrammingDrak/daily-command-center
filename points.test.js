@@ -57,6 +57,29 @@ test("tag bucket multiplier scales the live estimate", () => {
   assert.equal(TaskPoints.estimate(task).awardPoints, 90);
 });
 
+test("frontend: a meeting tagged 'meeting' earns half out of the box, but a bare meeting stays zero", () => {
+  const TaskPoints = loadTaskPoints();
+  TaskPoints.setPointTagTiers(null); // no user config: only the builtin applies
+
+  // Materialized meetings carry the builtin `meeting` tag -> half multiplier,
+  // rescued despite the non-earning meeting TYPE.
+  const tagged = TaskPoints.estimate({ type: "meeting", duration_minutes: 60, tags: ["meeting"] });
+  assert.equal(tagged.eligible, true);
+  assert.equal(tagged.pointTier, "half");
+  assert.equal(tagged.pointMultiplier, 0.5);
+  assert.equal(tagged.awardPoints, 30); // round(60 * 0.5)
+
+  // A meeting WITHOUT the tag has nothing to rescue it -> still zero.
+  const bare = TaskPoints.estimate({ type: "meeting", duration_minutes: 60 });
+  assert.equal(bare.eligible, false);
+  assert.equal(bare.awardPoints, 0);
+
+  // OOO is hard-zero: even the meeting tag can't rescue it.
+  const ooo = TaskPoints.estimate({ type: "ooo", duration_minutes: 60, tags: ["meeting"] });
+  assert.equal(ooo.eligible, false);
+  assert.equal(ooo.awardPoints, 0);
+});
+
 test("commute time adds one tenth point per minute across both legs", () => {
   const TaskPoints = loadTaskPoints();
   const payload = TaskPoints.buildPayload({

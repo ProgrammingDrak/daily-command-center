@@ -1017,6 +1017,11 @@ test("taskPointTier uses the highest earning matched tag and keeps OOO at zero",
   // Shell is hard-zero like ooo: even a full-tier tag must not rescue it
   // (its award arrives only as the rollup bonus points_override).
   assert.deepEqual(store._test.taskPointTier({ type: "shell", tags: ["workout"] }, settings).multiplier, 0);
+  // Builtin: the `meeting` tag earns half even when the user hasn't assigned it
+  // (calendar-materialized meetings ship with this tag), while a bare meeting
+  // with no rescuing tag stays zero.
+  assert.deepEqual(store._test.taskPointTier({ type: "meeting", tags: ["meeting"] }, settings).multiplier, 0.5);
+  assert.deepEqual(store._test.taskPointTier({ type: "meeting" }, settings).multiplier, 0);
 });
 
 test("normalizePointTagTiers folds retired lane names onto point buckets", () => {
