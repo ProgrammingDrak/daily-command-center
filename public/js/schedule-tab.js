@@ -424,32 +424,10 @@ function buildListView(){
     return el;
   }
 
-  // Compact row for a subtask (a timeless step under its parent). Smaller than a
-  // first-class row; collapsible when it has its own subtasks.
-  function subRow(ev,idx,mode,node){
-    const doneRow=mode==="done"||isDone(ev);
-    const movable=userMovable(ev)&&!ev._locked&&!doneRow;
-    const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
-    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>';
-    const el=document.createElement("div");
-    el.className="it-list-item subtask-row"+(doneRow?" done":"")+(isActive(ev)?" active":"")+(movable?" movable":"");
-    if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
-    el.dataset.id=ev.id;
-    if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
-    el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));
-    el.innerHTML=
-      chev+
-      '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
-      '<span class="sub-ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+
-      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
-      subtaskActionsHtml(ev);
-    el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
-    const cc=el.querySelector(".wrap-collapse");
-    if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
-    bindSubtaskActions(el,ev);
-    return el;
-  }
-  function emitNode(node,idx,mode){return node.rel==="subtask"?subRow(node.ev,idx,mode,node):row(node.ev,idx,mode,node);}
+  // Subtask rows use the shared renderSubRow (itinerary-card.js); the list passes
+  // compact:false for the it-list-item variant (active/movable classes, inline
+  // collapse wiring). idx is unused for subtasks (they take no rank number).
+  function emitNode(node,idx,mode){return node.rel==="subtask"?renderSubRow(node.ev,node,{compact:false,mode:mode}):row(node.ev,idx,mode,node);}
 
   // Parents with at least one child anywhere in the visible list -- these are the
   // rows the Collapse all / Expand all controls act on.
@@ -659,28 +637,11 @@ function buildSchedule(){
     }
   }
 
-  const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
-  const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
-  const bountySvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
   const petPrivacyChip=ev=>{
     if(!ev||isMeeting(ev)||ev.type==="break"||ev.type==="ooo")return "";
     const visibility=ev.publicVisibility==="private"?"private":"public";
     const label=visibility==="private"?"Private":"Public";
     return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
-  };
-  const pointsChip=ev=>{
-    const bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
-    const bounty=bountyCount>0;
-    const payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
-      ? window.TaskPoints.buildPayload(ev,{bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1})
-      : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
-    const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
-      ? window.TaskPoints.estimate(payload)
-      : {eligible:!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break",awardPoints:bounty?28:14,durationMinutes:60,effortTier:"medium",attentionTier:"normal"};
-    if(!scoring.eligible||scoring.awardPoints<=0)return "";
-    const pts=scoring.awardPoints;
-    const title="Completing this task earns about "+pts+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention"+(bounty?", bounty x"+Math.pow(2,bountyCount):"")+".";
-    return '<span class="points-chip'+(bounty||pts>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+pts+' pts</span>';
   };
 
   // Render done items as compact one-liners
@@ -695,23 +656,22 @@ function buildSchedule(){
     const needsReview = comp && comp.needs_review && !reviewedState[ev.id];
     const reviewBadgeHtml = needsReview ?
       '<span class="review-badge" data-review-id="'+ev.id+'" data-review-type="task" data-evidence="'+(comp.evidence_summary||'Auto-detected by sweep').replace(/"/g,'&quot;')+'" data-evidence-link="'+(comp.evidence_link||'').replace(/"/g,'&quot;')+'" title="Auto-completed -- click to review">Needs Review</span>' : '';
-    const el=document.createElement("div");el.className="tl-compact";el.dataset.id=ev.id;
-    el.innerHTML=
-      '<div class="tl-time">'+f12(ev.start).replace(/ (AM|PM)/,"")+'</div>'+
-      '<div class="tl-node"></div>'+
-      '<div class="compact-row">'+
-        '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
-        '<div class="bar" style="background:'+(taskTagColor(ev)||c.color)+'"></div>'+
-        '<span class="c-title">'+ev.title+'</span>'+
+    const el=renderCompactRow({
+      dataset:{id:ev.id},
+      timeStr:f12(ev.start).replace(/ (AM|PM)/,""),
+      checkTitle:"Uncheck",
+      barColor:taskTagColor(ev)||c.color,
+      title:ev.title,
+      chipsHtml:
         (bountyDoneCount?'<span class="bounty-chip done'+(bountyDoneMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyDoneMeta.hasSponsor?' title="'+("Bounty from "+(bountyDoneMeta.sponsorName||"a visitor")).replace(/"/g,'&quot;')+'"':'')+'>Bounty x'+Math.pow(2,bountyDoneCount)+'</span>':'')+
         reviewBadgeHtml+
         evSrcTag+
-        petPrivacyChip(ev)+
-        '<span class="c-time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
-        (window.todoShareCompactFeedbackHtml?window.todoShareCompactFeedbackHtml(ev):'')+
-      '</div>';
-    el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id)});
-    const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});
+        petPrivacyChip(ev),
+      timeRange:f12(ev.start)+' - '+f12(ev.end),
+      trailingHtml:(window.todoShareCompactFeedbackHtml?window.todoShareCompactFeedbackHtml(ev):''),
+      onCheck:()=>toggleDone(ev.id),
+      afterRender:el=>{const rb=el.querySelector(".review-badge");if(rb)rb.addEventListener("click",e=>{e.stopPropagation();openReviewPopover(rb)});}
+    });
     tl.appendChild(el);
   });
 
@@ -720,17 +680,15 @@ function buildSchedule(){
     const dt=new Date(ev.completedAt);
     const hhmm=!isNaN(dt)?String(dt.getHours()).padStart(2,"0")+":"+String(dt.getMinutes()).padStart(2,"0"):"";
     const timeStr=hhmm?f12(hhmm):"Done";
-    const el=document.createElement("div");el.className="tl-compact";el.dataset.triageDoneId=ev.triageId;
-    el.innerHTML=
-      '<div class="tl-time">'+timeStr.replace(/ (AM|PM)/,"")+'</div>'+
-      '<div class="tl-node"></div>'+
-      '<div class="compact-row">'+
-        '<div class="c-check" title="Completed triage">'+ckSvg+'</div>'+
-        '<div class="bar" style="background:var(--purple,#a78bfa)"></div>'+
-        '<span class="c-title">'+ev.title+'</span>'+
-        '<span class="tag tag-task" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a78bfa)">Triage</span>'+
-        '<span class="c-time">'+timeStr+'</span>'+
-      '</div>';
+    const el=renderCompactRow({
+      dataset:{triageDoneId:ev.triageId},
+      timeStr:timeStr.replace(/ (AM|PM)/,""),
+      checkTitle:"Completed triage",
+      barColor:"var(--purple,#a78bfa)",
+      title:ev.title,
+      chipsHtml:'<span class="tag tag-task" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a78bfa)">Triage</span>',
+      timeRange:timeStr
+    });
     tl.appendChild(el);
   });
 
@@ -741,18 +699,16 @@ function buildSchedule(){
     const dt=new Date(t.doneAt);
     const hhmm=String(dt.getHours()).padStart(2,"0")+":"+String(dt.getMinutes()).padStart(2,"0");
     const timeStr=f12(hhmm);
-    const el=document.createElement("div");el.className="tl-compact";el.dataset.trivId=t.id;
-    el.innerHTML=
-      '<div class="tl-time">'+timeStr.replace(/ (AM|PM)/,"")+'</div>'+
-      '<div class="tl-node"></div>'+
-      '<div class="compact-row">'+
-        '<div class="c-check" title="Uncheck">'+ckSvg+'</div>'+
-        '<div class="bar" style="background:var(--cyan,#22d3ee)"></div>'+
-        '<span class="c-title">'+t.text+'</span>'+
-        '<span class="tag tag-task" style="background:rgba(34,211,238,0.15);color:var(--cyan,#22d3ee)">Side Project</span>'+
-        '<span class="c-time">'+timeStr+'</span>'+
-      '</div>';
-    el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();toggleTrivialTask(t.id)});
+    const el=renderCompactRow({
+      dataset:{trivId:t.id},
+      timeStr:timeStr.replace(/ (AM|PM)/,""),
+      checkTitle:"Uncheck",
+      barColor:"var(--cyan,#22d3ee)",
+      title:t.text,
+      chipsHtml:'<span class="tag tag-task" style="background:rgba(34,211,238,0.15);color:var(--cyan,#22d3ee)">Side Project</span>',
+      timeRange:timeStr,
+      onCheck:()=>toggleTrivialTask(t.id)
+    });
     tl.appendChild(el);
   });
 
@@ -761,10 +717,6 @@ function buildSchedule(){
     const d=document.createElement("div");d.className="divider";d.innerHTML='<span>Up Next</span>';tl.appendChild(d);
   }
 
-  // Icon maps for edge items
-  const eiIcons={task:'<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',doc:'<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',dash:'<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',action:'<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>'};
-  const eiBadge={ready:'<span class="ei-badge eib-ready">Ready</span>',todo:'<span class="ei-badge eib-todo">To-do</span>',ref:'<span class="ei-badge eib-ref">Ref</span>',new:'<span class="ei-badge eib-new">New</span>'};
-  const chevSm='<svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6"/></svg>';
 
   // The timeline pill is a focus marker, not a clock marker. Prefer the explicit
   // pinned task, then the loaded pomodoro task, then the first open itinerary item.
@@ -778,37 +730,15 @@ function buildSchedule(){
   const _defaultFocusId = (activeItems.find(ev => !ev.subtaskOf && !isMeeting(ev) && ev.type !== "ooo" && ev.type !== "break") || activeItems[0] || {}).id;
   const _focusActiveId = _pinnedActiveExists ? String(_pinnedActiveId) : (_pomoFocusExists ? _pomoFocusId : (_defaultFocusId ? String(_defaultFocusId) : null));
 
-  // Compact timeline row for a subtask (timeless step under its parent).
-  function buildTimelineSub(node){
-    const ev=node.ev,doneRow=isDone(ev);
-    const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
-    // This subtask's slice of its parent's point pie.
-    const slice=(ev.subtaskOf&&window.PointPlan&&typeof window.PointPlan.shareFor==="function")?window.PointPlan.shareFor(ev.subtaskOf,ev.id):null;
-    const el=document.createElement("div");
-    el.className="tl-item tl-sub"+(doneRow?" done":"");
-    if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
-    el.dataset.id=ev.id;
-    const movable=!ev._locked&&!doneRow;
-    if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
-    el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));
-    el.innerHTML=
-      (node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>')+
-      '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
-      '<span class="sub-ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+
-      (slice!=null?'<span class="sub-share'+(doneRow?' earned':'')+'" title="'+(doneRow?'Earned ':'Worth ')+slice+' pts of the parent’s pie">'+slice+' pts</span>':'')+
-      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
-      subtaskActionsHtml(ev);
-    el.querySelector(".sub-check").addEventListener("click",e=>{e.stopPropagation();toggleDone(ev.id);});
-    bindSubtaskActions(el,ev);
-    return el;
-  }
+  // Subtask timeline rows now use the shared renderSubRow (itinerary-card.js) with
+  // compact:true — the pie-slice chip and delegated collapse live in there.
   // Delegated collapse toggle: one listener handles every wrap/subtask chevron.
   if(!tl._collapseWired){tl._collapseWired=true;tl.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".wrap-collapse");if(!b)return;e.stopPropagation();const item=b.closest("[data-id]");if(item&&typeof toggleCollapsed==="function"){toggleCollapsed(item.dataset.id);render();}});}
 
   // Render active/upcoming items as full cards; subtasks as compact rows (recursion + collapse).
   flattenSchedule(activeItems).forEach(node=>{
     const ev=node.ev;
-    if(node.rel==="subtask"){tl.appendChild(buildTimelineSub(node));return;}
+    if(node.rel==="subtask"){tl.appendChild(renderSubRow(node.ev,node,{compact:true}));return;}
     injectBlockHeaders(pt(ev.start));
     const isFocusActive = isToday && _focusActiveId && String(ev.id) === _focusActiveId;
     const isPinnedActive = isToday && _pinnedActiveExists && String(_pinnedActiveId) === String(ev.id);
@@ -988,18 +918,18 @@ function buildSchedule(){
     const pushArrowSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
     pushedItems.forEach(ev=>{
       const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
-      const el=document.createElement("div");el.className="tl-compact pushed";el.dataset.id=ev.id;
-      el.innerHTML=
-        '<div class="tl-time">'+f12(ev.start).replace(/ (AM|PM)/,"")+'</div>'+
-        '<div class="tl-node"></div>'+
-        '<div class="compact-row">'+
-          '<div class="c-check" title="Restore to schedule">'+pushArrowSvg+'</div>'+
-          '<div class="bar" style="background:'+c.color+'"></div>'+
-          '<span class="c-title">'+ev.title+'</span>'+
-          evSrcTag+
-          '<span class="c-time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>'+
-        '</div>';
-      el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();unpushTask(ev.id)});
+      const el=renderCompactRow({
+        extraClass:"pushed",
+        dataset:{id:ev.id},
+        timeStr:f12(ev.start).replace(/ (AM|PM)/,""),
+        checkIcon:pushArrowSvg,
+        checkTitle:"Restore to schedule",
+        barColor:c.color,
+        title:ev.title,
+        chipsHtml:evSrcTag,
+        timeRange:f12(ev.start)+' - '+f12(ev.end),
+        onCheck:()=>unpushTask(ev.id)
+      });
       tl.appendChild(el);
     });
   }
@@ -1011,17 +941,17 @@ function buildSchedule(){
     rescheduledAwayItems.forEach(b=>{
       const p=b.properties||{};
       const dest=p.rescheduledTo?_prettyDateLabel(p.rescheduledTo):"another day";
-      const el=document.createElement("div");el.className="tl-compact pushed";el.dataset.id=b.id;
-      el.innerHTML=
-        '<div class="tl-time"></div>'+
-        '<div class="tl-node"></div>'+
-        '<div class="compact-row">'+
-          '<div class="c-check" title="Restore to this day">'+restoreArrowSvg+'</div>'+
-          '<div class="bar" style="background:var(--amber,#f59e0b)"></div>'+
-          '<span class="c-title">'+(p.title||"Task")+'</span>'+
-          '<span class="c-time">→ '+dest+'</span>'+
-        '</div>';
-      el.querySelector(".c-check").addEventListener("click",e=>{e.stopPropagation();if(typeof restoreRescheduledAway==="function")restoreRescheduledAway(b.id)});
+      const el=renderCompactRow({
+        extraClass:"pushed",
+        dataset:{id:b.id},
+        timeStr:"",
+        checkIcon:restoreArrowSvg,
+        checkTitle:"Restore to this day",
+        barColor:"var(--amber,#f59e0b)",
+        title:p.title||"Task",
+        timeRange:'→ '+dest,
+        onCheck:()=>{if(typeof restoreRescheduledAway==="function")restoreRescheduledAway(b.id);}
+      });
       tl.appendChild(el);
     });
   }
