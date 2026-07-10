@@ -5,11 +5,18 @@
 // feeding rows shaped exactly like db.getDccStateRange output.
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   normalizeDate,
   pickBestByDate,
   collectFromDbRows,
+  collectFromFiles,
 } from "./scripts/backfill-meeting-blocks.mjs";
+
+const MODULE_URL = new URL("./scripts/backfill-meeting-blocks.mjs", import.meta.url).href;
 
 const mtg = (id) => ({ event_id: id, title: id, start: "2026-06-17T16:00:00Z", end: "2026-06-17T17:00:00Z" });
 
@@ -81,4 +88,56 @@ test("collectFromDbRows: maps getDccStateRange rows to candidates", () => {
 test("collectFromDbRows -> pickBestByDate: empty input yields nothing", () => {
   assert.equal(pickBestByDate(collectFromDbRows([])).size, 0);
   assert.equal(pickBestByDate(collectFromDbRows(null)).size, 0);
+});
+
+test("collectFromDbRows: missing updated_at -> ts=0; missing workspace_id -> db:? source", () => {
+  // Defensive branches: the schema makes updated_at/workspace_id non-null, but a
+  // valid-date row lacking them must degrade rather than NaN-poison the dedup.
+  const candidates = collectFromDbRows([
+    { date: "2026-06-20", state_json: { meetings: [mtg("z")] } },
+  ]);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].ts, 0);
+  assert.equal(candidates[0].source, "db:?");
+});
+
+test("collectFromFiles: dated files, basename fallback, skips undated/manifest/unreadable, newest wins", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backfill-fs-"));
+  try {
+    // Two files for the same date -> newest by last_updated_at wins.
+    fs.writeFileSync(path.join(dir, "a.json"), JSON.stringify({ date: "2026-06-17", meetings: [mtg("old")], last_updated_at: "2026-06-17T10:00:00Z" }));
+    fs.writeFileSync(path.join(dir, "b.json"), JSON.stringify({ date: "2026-06-17", meetings: [mtg("new")], last_updated_at: "2026-06-17T12:00:00Z" }));
+    // Date only in the basename (no `date` key).
+    fs.writeFileSync(path.join(dir, "2026-06-18.json"), JSON.stringify({ meetings: [mtg("base")] }));
+    // No date anywhere -> dropped.
+    fs.writeFileSync(path.join(dir, "nodate.json"), JSON.stringify({ meetings: [mtg("x")] }));
+    // manifest.json -> ignored by the walk by name.
+    fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ date: "2026-06-19", meetings: [mtg("m")] }));
+    // Unreadable -> warn + skip (not counted in filesScanned).
+    fs.writeFileSync(path.join(dir, "bad.json"), "{ not json");
+
+    const { candidates, filesScanned } = collectFromFiles([{ name: "t", dir }]);
+    assert.equal(filesScanned, 4); // a, b, 2026-06-18, nodate (manifest by-name, bad.json unparseable)
+    const best = pickBestByDate(candidates);
+    assert.deepEqual([...best.keys()].sort(), ["2026-06-17", "2026-06-18"]);
+    assert.equal(best.get("2026-06-17").meetings[0].event_id, "new");
+    assert.equal(best.get("2026-06-18").meetings[0].event_id, "base");
+    assert.equal(best.get("2026-06-17").source, "t");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("importing the module runs no main(): clean exit, no output, even without DATABASE_URL", () => {
+  // Guards the CLI entrypoint check: a regression that let main() run on import
+  // would either exit 1 (missing DATABASE_URL) or open a pool — both fail here.
+  const env = { ...process.env };
+  delete env.DATABASE_URL;
+  const res = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `await import(${JSON.stringify(MODULE_URL)})`],
+    { env, encoding: "utf8", timeout: 20000 }
+  );
+  assert.equal(res.status, 0, `nonzero exit; stderr: ${res.stderr}`);
+  assert.equal(res.stdout.trim(), "");
 });
