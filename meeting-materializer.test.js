@@ -5,6 +5,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const createMaterializer = require("./meeting-materializer.js");
+const { scoreTaskPoints: realScoreTaskPoints } = require("./slot-scoring");
 
 const meetingIdentity = (m) =>
   String(m?.event_id || m?.source_id || m?.gcal_event_id || m?.id || "").trim();
@@ -66,6 +67,23 @@ test("creates a block per timed meeting; converts ISO to ET HH:MM; never source:
   assert.equal(b.properties.source, "calendar"); // NOT "gcal" (would be hidden by isLegacyGcalBlock)
   assert.equal(b.properties.gcal_event_id, undefined);
   assert.equal(b.properties.estimatedMinutes, 60);
+  // Materialized meetings carry the builtin `meeting` tag + its half tier, so
+  // they earn reduced-but-nonzero points despite the non-earning meeting type.
+  assert.deepEqual(b.properties.tags, ["meeting"]);
+  assert.equal(b.properties.point_tier, "half");
+  assert.equal(b.properties.point_multiplier, 0.5);
+});
+
+test("a materialized meeting earns reduced-but-nonzero points via the meeting tag", async () => {
+  const db = makeBlockDB();
+  // Use the REAL scorer (not the awardPoints:0 stub) to prove the tag rescues.
+  const materialize = createMaterializer({
+    blockDB: db, scoreTaskPoints: realScoreTaskPoints, meetingIdentity, APP_TIME_ZONE: "America/New_York",
+  }).materializeMeetings;
+  await materialize(args([mtg("e1", "2026-07-09T16:30:00Z", "2026-07-09T17:30:00Z")]));
+  const b = bySid(db, "e1");
+  assert.equal(b.properties.points, 30); // 60 min * 0.5 half tier, before eff/att/imp
+  assert.equal(b.properties.pointsBreakdown.eligible, true);
 });
 
 test("skips all-day meetings; materializes a timed meeting on its own ET date", async () => {
@@ -186,6 +204,37 @@ test("idempotent: re-ingesting identical meetings makes no changes", async () =>
   assert.equal(res.created, 0);
   assert.equal(res.updated, 0);
   assert.equal(res.cancelled, 0);
+});
+
+test("heals a pre-tag meeting: an existing tagless block gets the meeting tag + points on re-ingest, then stays idempotent", async () => {
+  // A meeting materialized before the point-earning tag existed: same time as
+  // the feed, but no tags/point_multiplier.
+  const stale = {
+    id: "blk-old", type: "block", date: DATE, workspace_id: "ws-1", user_id: 1, deleted_at: null,
+    sort_order: 0,
+    properties: {
+      title: "e1", type: "meeting", kind: "meeting", status: "open",
+      start: "12:30", end: "13:30", source: "calendar", source_id: "e1",
+      synced_gcal_start: "12:30", synced_gcal_end: "13:30",
+    },
+  };
+  const db = makeBlockDB([stale]);
+  const materialize = createMaterializer({
+    blockDB: db, scoreTaskPoints: realScoreTaskPoints, meetingIdentity, APP_TIME_ZONE: "America/New_York",
+  }).materializeMeetings;
+  const feed = [mtg("e1", "2026-07-09T16:30:00Z", "2026-07-09T17:30:00Z")];
+
+  const res1 = await materialize(args(feed));
+  assert.equal(res1.created, 0);        // matched the existing block, not a new one
+  assert.equal(res1.updated, 1);        // healed
+  const b = bySid(db, "e1");
+  assert.deepEqual(b.properties.tags, ["meeting"]);
+  assert.equal(b.properties.point_multiplier, 0.5);
+  assert.equal(b.properties.points, 30);
+
+  // Already healed -> a second identical ingest changes nothing.
+  const res2 = await materialize(args(feed));
+  assert.equal(res2.updated, 0);
 });
 
 test("calendar wins: a changed gcal time overwrites the block start/end", async () => {

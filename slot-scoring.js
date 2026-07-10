@@ -46,8 +46,68 @@ const HARD_ZERO_TYPES = new Set(
 const FOCUSED_TAGS = new Set(["deep-work", "deep work", "build", "coding", "writing", "analysis"]);
 const LIGHT_TAGS = new Set(["admin", "email", "errand", "chore"]);
 
+// Tag-bucket point tiers: a tag assigned to a bucket scales a task's duration
+// points by the bucket's multiplier. Source of truth mirrored by points.js
+// (FE) and consumed by slot-store.js taskPointTier() (BE credit path).
+const POINT_TAG_TIER_MULTIPLIERS = { none: 0, quarter: 0.25, half: 0.5, full: 1 };
+// Canonical tag→bucket assignments that ship on every account so well-known
+// tags carry a multiplier out of the box, no per-user config required. User
+// settings override: an explicit assignment for the same tag id wins over the
+// builtin (see foldBuiltinTiers). `meeting` earns half so a meeting keeps its
+// non-earning TYPE (lock/fixed-time/single-path) yet still scores real points.
+const BUILTIN_POINT_TAG_TIERS = { none: [], quarter: [], half: ["meeting"], full: [] };
+
 function normalizeText(value) {
   return String(value == null ? "" : value).trim().toLowerCase();
+}
+
+// Case-PRESERVING tag id extraction (ids are server UUIDs; do not lowercase).
+// Mirrors slot-store.js normalizeTaskTags and points.js tierTags.
+function tierTagIds(value) {
+  if (Array.isArray(value)) {
+    return value.map(t => (t && typeof t === "object")
+      ? String(t.id || t.name || t.label || "").trim()
+      : String(t == null ? "" : t).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") return value.split(/[,·|]/).map(t => t.trim()).filter(Boolean);
+  return [];
+}
+
+// Fold the builtin assignments under a user's tier config: a builtin tag id is
+// added only if the user hasn't already placed it in some bucket (user wins),
+// and a tag lives in at most one bucket.
+function foldBuiltinTiers(userTiers) {
+  const out = { none: [], quarter: [], half: [], full: [] };
+  const claimed = new Set();
+  for (const tier of Object.keys(out)) {
+    for (const raw of (userTiers && userTiers[tier]) || []) {
+      const id = String(raw || "").trim();
+      if (id && !claimed.has(id)) { claimed.add(id); out[tier].push(id); }
+    }
+  }
+  for (const tier of Object.keys(BUILTIN_POINT_TAG_TIERS)) {
+    for (const raw of BUILTIN_POINT_TAG_TIERS[tier]) {
+      const id = String(raw || "").trim();
+      if (id && !claimed.has(id)) { claimed.add(id); out[tier].push(id); }
+    }
+  }
+  return out;
+}
+
+// Resolve a task's tags to their highest-value point bucket (builtins folded
+// under `userTiers`). Returns null when no bucket matches, so callers can apply
+// their own default (unsorted tags earn full; meeting/break earn zero).
+function resolvePointTag(tags, userTiers) {
+  const tiers = foldBuiltinTiers(userTiers || {});
+  const tagSet = new Set(tierTagIds(tags));
+  let bestTier = null, bestMult = -1, matched = [];
+  for (const [tier, mult] of Object.entries(POINT_TAG_TIER_MULTIPLIERS)) {
+    const ids = (tiers[tier] || []).filter(id => tagSet.has(String(id)));
+    if (ids.length && mult > bestMult) { bestTier = tier; bestMult = mult; matched = ids; }
+  }
+  return bestTier
+    ? { tier: bestTier, multiplier: POINT_TAG_TIER_MULTIPLIERS[bestTier], matched_tags: matched }
+    : null;
 }
 
 function normalizeTags(value) {
@@ -252,4 +312,8 @@ module.exports = {
   isNonEarningTaskType,
   scoreTaskPoints,
   HARD_ZERO_TYPES,
+  POINT_TAG_TIER_MULTIPLIERS,
+  BUILTIN_POINT_TAG_TIERS,
+  foldBuiltinTiers,
+  resolvePointTag,
 };

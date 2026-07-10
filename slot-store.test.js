@@ -412,6 +412,24 @@ test("earnTaskCredit applies point tag tiers from slot settings", async () => {
   assert.equal(ooo.delta, 0);
 });
 
+test("earnTaskCredit: the builtin meeting->half tag earns credit with no config, and a user override wins", async () => {
+  // No point_tag_tiers configured: the builtin meeting->half rescues the credit.
+  const bare = { points_v2_migrated_at: "x", points_v2_spin_cost_migrated_at: "x", points_v3_migrated_at: "x", points_v3_spin_cost_migrated_at: "x" };
+  const builtinStore = loadStoreWithMock(createMockPool({ pointBalance: 0, migrated: true, settings: bare }));
+  const builtin = await builtinStore.earnTaskCredit("ws-1", 1, {
+    source_key: "m1", task_id: "m1", type: "meeting", duration_minutes: 60, tags: ["meeting"],
+  });
+  assert.equal(builtin.delta, 30); // 60 * 0.5 builtin half
+
+  // User sorts the meeting tag into the full bucket: their config beats the builtin.
+  const overrideSettings = { ...bare, point_tag_tiers: { full: ["meeting"] } };
+  const overrideStore = loadStoreWithMock(createMockPool({ pointBalance: 0, migrated: true, settings: overrideSettings }));
+  const override = await overrideStore.earnTaskCredit("ws-1", 1, {
+    source_key: "m2", task_id: "m2", type: "meeting", duration_minutes: 60, tags: ["meeting"],
+  });
+  assert.equal(override.delta, 60); // 60 * 1.0 full tier, builtin overridden
+});
+
 test("earnTaskCredit adjusts old one-point duplicate ledger rows up to minute-based points", async () => {
   const mockPool = createMockPool({ pointBalance: 1, migrated: true, ledgerDelta: 1 });
   mockPool.state.ledgerInserted = true;
@@ -1017,6 +1035,11 @@ test("taskPointTier uses the highest earning matched tag and keeps OOO at zero",
   // Shell is hard-zero like ooo: even a full-tier tag must not rescue it
   // (its award arrives only as the rollup bonus points_override).
   assert.deepEqual(store._test.taskPointTier({ type: "shell", tags: ["workout"] }, settings).multiplier, 0);
+  // Builtin: the `meeting` tag earns half even when the user hasn't assigned it
+  // (calendar-materialized meetings ship with this tag), while a bare meeting
+  // with no rescuing tag stays zero.
+  assert.deepEqual(store._test.taskPointTier({ type: "meeting", tags: ["meeting"] }, settings).multiplier, 0.5);
+  assert.deepEqual(store._test.taskPointTier({ type: "meeting" }, settings).multiplier, 0);
 });
 
 test("normalizePointTagTiers folds retired lane names onto point buckets", () => {

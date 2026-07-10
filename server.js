@@ -34,7 +34,7 @@ const validate = require("./middleware/validate");
 const schemas = require("./middleware/schemas");
 const { resolveOwnerStrict, resolveOwnerLenient } = require("./middleware/resolve-owner");
 const { coerceDateString, isValidDate, addMinutesHHMM, intParam, route } = routeHelpers;
-const { scoreTaskPoints } = require("./slot-scoring");
+const { scoreTaskPoints, resolvePointTag } = require("./slot-scoring");
 const capabilities = require("./capabilities");
 const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
@@ -717,7 +717,7 @@ app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: fals
 
 // Calendar meetings -> durable task blocks (see meeting-materializer.js).
 const meetingMaterializer = require("./meeting-materializer")({
-  blockDB, scoreTaskPoints, meetingIdentity, APP_TIME_ZONE,
+  blockDB, scoreTaskPoints, resolvePointTag, meetingIdentity, APP_TIME_ZONE,
 });
 
 // ── Route modules ──
