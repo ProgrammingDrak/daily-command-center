@@ -139,8 +139,17 @@ async function discoverGmailSources(meeting, gcalRow, userId) {
 
 async function loadGcalRow(blockId) {
   const normalizedBlockId = String(blockId || "").startsWith("mtg-") ? String(blockId).slice(4) : blockId;
-  const { rows } = await pool.query("SELECT * FROM gcal_events WHERE block_id = $1 LIMIT 1", [normalizedBlockId]);
-  return rows[0] || null;
+  // gcal_events is the legacy realtime-sync cache (attendee/attachment metadata).
+  // Realtime GCal sync is disabled and the table isn't in pg-schema, so it may be
+  // absent entirely. It only enriches prep sourcing — a miss must degrade to null,
+  // never 500 the whole automation call (which ends by re-serializing via here).
+  try {
+    const { rows } = await pool.query("SELECT * FROM gcal_events WHERE block_id = $1 LIMIT 1", [normalizedBlockId]);
+    return rows[0] || null;
+  } catch (e) {
+    console.error("[meeting-automation] gcal_events lookup skipped:", e.message);
+    return null;
+  }
 }
 
 async function loadMeeting(blockId, workspaceId) {
@@ -421,9 +430,127 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
   return { ...(await getAutomation(blockId, workspaceId)), approvedCount: created.length, approvedBlocks: created };
 }
 
+// Merge an auto-generated recap into a meeting block's own notes without
+// clobbering anything the user typed. The recap lives below a stable marker, so
+// a re-post replaces only its own region (idempotent) and leaves user notes above.
+function mergeRecapIntoNotes(existingNotes, recapMarkdown) {
+  const HEADER = "_Meeting recap (auto):_";
+  const SEP = `\n\n---\n${HEADER}\n\n`;
+  const base = String(existingNotes || "");
+  const idx = base.indexOf(HEADER);
+  const userPart = (idx >= 0 ? base.slice(0, idx).replace(/\n*-*\n*\s*$/, "") : base).replace(/\s+$/, "");
+  const recap = String(recapMarkdown || "").trim();
+  if (!recap) return userPart;
+  return userPart ? `${userPart}${SEP}${recap}` : `${HEADER}\n\n${recap}`;
+}
+
+// Precomputed-artifact path. The caller (the review-meetings sweep skill) has
+// already done the real thinking with the meeting-transcript-review engine, so we
+// store its summary / prep / transcript / proposed actions VERBATIM and skip the
+// naive server-side heuristics (summarizeTranscript / extractActionCandidates).
+// This is what the bearer-authorized /api/dcc/meeting-artifacts endpoint calls,
+// so automation can attach meeting docs without an interactive session. Idempotent:
+// prep/summary/transcript upsert in place (newest-by-kind), proposed actions dedupe
+// by text, and the recap merge replaces only its own notes region.
+async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true }) {
+  const meeting = await loadMeeting(blockId, workspaceId);
+  const applied = { prep: false, summary: false, transcript: false, proposedActions: 0, recapToNotes: false };
+
+  if (prep && (prep.markdown || prep.html)) {
+    const markdown = String(prep.markdown || "");
+    await upsertArtifact({
+      meeting, workspaceId, userId, kind: "meeting_prep", sortOrder: 100,
+      properties: {
+        title: prep.title || `Prep: ${titleOf(meeting)}`,
+        status: prep.status || "ready",
+        markdown,
+        html: prep.html || markdownToHtml(markdown),
+        sources: Array.isArray(prep.sources) ? prep.sources : [],
+      },
+    });
+    applied.prep = true;
+  }
+
+  if (transcript && transcript.text) {
+    const text = String(transcript.text);
+    const storedText = text.length > 85000 ? text.slice(0, 85000) : text;
+    const transcriptHash = crypto.createHash("sha1").update(meeting.id + "|" + text).digest("hex");
+    await upsertArtifact({
+      meeting, workspaceId, userId, kind: "meeting_transcript", sortOrder: 200,
+      properties: {
+        title: `Transcript: ${titleOf(meeting)}`,
+        status: "ingested",
+        transcriptHash,
+        text: storedText,
+        originalLength: text.length,
+        truncated: storedText.length !== text.length,
+        sources: Array.isArray(transcript.sources) ? transcript.sources : [],
+      },
+    });
+    applied.transcript = true;
+  }
+
+  if (summary && (summary.markdown || summary.html)) {
+    const markdown = String(summary.markdown || "");
+    await upsertArtifact({
+      meeting, workspaceId, userId, kind: "meeting_summary", sortOrder: 210,
+      properties: {
+        title: summary.title || `Summary: ${titleOf(meeting)}`,
+        status: summary.status || "ready",
+        markdown,
+        html: summary.html || markdownToHtml(markdown),
+        sources: Array.isArray(summary.sources) ? summary.sources : [],
+      },
+    });
+    applied.summary = true;
+
+    // Feature 1: the recap is also written onto the meeting task's OWN notes, so it
+    // shows on the (already-closed) meeting card, not only in the automation panel.
+    if (recapToNotes && markdown.trim()) {
+      const mp = propsOf(meeting);
+      const nextNotes = mergeRecapIntoNotes(mp.notes, markdown);
+      if (nextNotes !== mp.notes) {
+        await blockDB.updateBlock(meeting.id, { properties: { ...mp, notes: nextNotes } });
+        applied.recapToNotes = true;
+      }
+    }
+  }
+
+  if (Array.isArray(proposedActions) && proposedActions.length) {
+    const existing = await loadArtifacts(meeting.id, workspaceId);
+    const seen = new Set(
+      existing.filter(b => propsOf(b).kind === "proposed_action_item").map(b => String(propsOf(b).text || "").toLowerCase())
+    );
+    let idx = 0;
+    for (const a of proposedActions) {
+      const text = String((a && (a.text || a.title)) || "").trim();
+      if (!text || seen.has(text.toLowerCase())) continue;
+      await upsertArtifact({
+        meeting, workspaceId, userId, kind: "proposed_action_item", sortOrder: 300 + idx,
+        properties: {
+          title: text,
+          text,
+          owner: (a.owner === "other" || a.owner === "others") ? "other" : "drake",
+          priority: a.priority || "Medium",
+          status: "proposed",
+          done: false,
+          sources: Array.isArray(a.sources) ? a.sources : [],
+        },
+      });
+      seen.add(text.toLowerCase());
+      applied.proposedActions += 1;
+      idx += 1;
+    }
+  }
+
+  return { ...(await getAutomation(meeting.id, workspaceId)), applied };
+}
+
 module.exports = {
   getAutomation,
   generatePrep,
   ingestTranscript,
   approveActions,
+  applyArtifacts,
+  mergeRecapIntoNotes,
 };
