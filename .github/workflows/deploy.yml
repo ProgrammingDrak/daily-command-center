@@ -23,7 +23,56 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm test
+
+  smoke:
+    # Frontend smoke against a freshly-seeded server: window.DCC core, every tab
+    # renders, no 375px horizontal overflow, overlay primitives, no app-code
+    # console errors. CI twin of the local gstack `npm run smoke`.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dcc
+          POSTGRES_PASSWORD: dcc
+          POSTGRES_DB: dcc_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dcc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://dcc:dcc@localhost:5432/dcc_ci
+      SEED_USERNAME: drake
+      SEED_PASSWORD: clever123
+      PORT: "3987"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Apply schema
+        run: node pg-schema.js
+      - name: Install Chromium for smoke
+        run: npx playwright-core install --with-deps --no-progress chromium
+      - name: Boot server, wait for health, run smoke
+        run: |
+          node server.js > server.log 2>&1 &
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -sf "http://localhost:${PORT}/api/health" | grep -q '"status":"ok"'; then
+              ok=1; echo "server healthy after ${i}s"; break
+            fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then echo "::error::server never became healthy"; cat server.log; exit 1; fi
+          node scripts/smoke-ci.mjs "http://localhost:${PORT}"
 
   guardrails:
     if: github.event_name != 'pull_request'
@@ -97,4 +146,33 @@ jobs:
             3. Re-trigger by adding [migration-ok] to the commit message or
                using workflow_dispatch with acknowledge_db_risk=true.
           NOTE
+          exit 1
+
+  canary:
+    # Post-deploy liveness check. On a push to main, Railway auto-deploys; poll
+    # prod /api/health until it reports ok (or fail loudly after ~3 min).
+    # Railway deploy timing is NOT synced with Actions, so poll with patience.
+    # Semantics: confirms prod is reachable and DB-connected after the push
+    # (catches a deploy that crashed on boot or lost its DB). It does not verify
+    # the *new* revision specifically — /api/health carries no version marker;
+    # add one there for a true version-match canary (see Track B handoff).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll prod /api/health
+        env:
+          PROD_URL: https://daily-command-center-production-1d04.up.railway.app
+        run: |
+          echo "Polling ${PROD_URL}/api/health (up to ~3 min)…"
+          for i in $(seq 1 18); do
+            body="$(curl -s -m 10 "${PROD_URL}/api/health" || true)"
+            if printf '%s' "$body" | grep -q '"status":"ok"'; then
+              echo "prod healthy after ~$((i * 10))s"
+              printf '%s\n' "$body" | head -c 400
+              exit 0
+            fi
+            echo "attempt ${i}/18: not healthy yet, waiting 10s…"
+            sleep 10
+          done
+          echo "::error title=Canary failed::prod /api/health did not report ok within ~3 min"
           exit 1
