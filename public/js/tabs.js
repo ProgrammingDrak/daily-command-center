@@ -480,7 +480,7 @@ function openMakeSubtaskOf(childId, anchorEl){
   const done=(typeof isDone==="function")?isDone:(()=>false);
   const candidates=scheduled.filter(e=>
     e&&e.id!==childId&&
-    !meeting(e)&&e.type!=="break"&&e.type!=="ooo"&&
+    ((typeof pointEligible==="function")?pointEligible(e):(!meeting(e)&&e.type!=="break"&&e.type!=="ooo"))&&
     !done(e)&&
     e.subtaskOf!==childId&&
     !(typeof _isAncestor==="function"&&_isAncestor(childId,e.id))&&

@@ -39,7 +39,7 @@ function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-b
 // ── Scheduling helpers ──
 
 function isFixedTimeBlock(ev){
-  return isMeeting(ev)||ev.type==="ooo"||ev.type==="break";
+  return (typeof isFixed==="function")?isFixed(ev):(isMeeting(ev)||ev.type==="ooo"||ev.type==="break");
 }
 
 // Build fixed blocker array (used by both cascade variants). Sourced from the

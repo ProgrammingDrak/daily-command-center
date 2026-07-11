@@ -85,3 +85,75 @@ test("frontend mirror: shell ineligible with and without the registry loaded", (
     assert.equal(TaskPoints.estimate({ type: "task", duration_minutes: 30 }).eligible, true);
   }
 });
+
+test("registry: wrap is a shell-shaped container that earns its OWN points", () => {
+  const wrap = TaskTypes.get("wrap");
+  // Shares shell's container/drag behavior…
+  assert.equal(wrap.childEdge, "wrap");
+  assert.equal(wrap.dragMovesSubtree, true);
+  // …but NONE of shell's rollup economics.
+  assert.equal(wrap.earnsOwnPoints, true);
+  assert.equal(wrap.hardZero, false);
+  assert.equal(wrap.rollupMode, null);
+  assert.equal(wrap.autoCompleteWhenChildrenDone, false);
+  assert.equal(wrap.blockManualCompleteWithOpenChildren, false);
+  assert.equal(TaskTypes.isRollup("wrap"), false);
+  // A movable, point-eligible work row.
+  assert.equal(wrap.movable, true);
+  assert.equal(wrap.fixedTime, false);
+});
+
+test("registry: habit earns, moves like a task, never rolls up or fixes its slot", () => {
+  const habit = TaskTypes.get("habit");
+  assert.equal(habit.earnsOwnPoints, true);
+  assert.equal(habit.movable, true);
+  assert.equal(habit.fixedTime, false);
+  assert.equal(habit.rollupMode, null);
+  assert.equal(habit.childEdge, "any");
+});
+
+test("registry: adding wrap/habit did NOT touch the non-earning or hard-zero sets", () => {
+  // wrap + habit earn, so the FE/BE lockstep sets must be unchanged.
+  assert.deepEqual([...new Set(TaskTypes.nonEarningTypes())].sort(), ["break", "meeting", "ooo", "shell"]);
+  assert.deepEqual([...new Set(TaskTypes.hardZeroTypes())].sort(), ["ooo", "shell"]);
+});
+
+test("registry: isFixed/pointEligible partition the types (replaces the inline predicate)", () => {
+  // Fixed = the old `isMeeting(ev)||ooo||break` set, exactly.
+  for (const t of ["meeting", "oneone", "ooo", "break"]) {
+    assert.equal(TaskTypes.isFixed(t), true, t + " isFixed");
+    assert.equal(TaskTypes.pointEligible(t), false, t + " !pointEligible");
+  }
+  // Normal task rows (incl. shell/wrap/habit and unknown types) are point-eligible.
+  for (const t of ["task", "triage", "focus", "shell", "wrap", "habit", "made-up"]) {
+    assert.equal(TaskTypes.isFixed(t), false, t + " !isFixed");
+    assert.equal(TaskTypes.pointEligible(t), true, t + " pointEligible");
+  }
+  // Accepts ev objects and is null-safe (matches the inline predicate's guard).
+  assert.equal(TaskTypes.isFixed({ type: "meeting" }), true);
+  assert.equal(TaskTypes.isFixed(null), false);
+  assert.equal(TaskTypes.pointEligible(null), true);
+});
+
+test("registry: cfg-shim source fields (label/tagCls/color) are present per type", () => {
+  for (const t of ["task", "focus", "shell", "wrap", "habit", "meeting", "ooo"]) {
+    const e = TaskTypes.get(t);
+    assert.ok(e.label && e.tagCls && e.color, t + " has label/tagCls/color");
+  }
+  // Unknown types fall back to the task defaults (mirrors the old cfg() fallback).
+  assert.equal(TaskTypes.get("nope").color, "#a78bfa");
+});
+
+test("backend + frontend: wrap and habit are duration-scored like a task", () => {
+  for (const t of ["wrap", "habit"]) {
+    assert.equal(scoring.isNonEarningTaskType({ type: t }), false, t + " earns (backend)");
+    const scored = scoring.scoreTaskPoints({ type: t, duration_minutes: 60 });
+    assert.equal(scored.eligible, true, t + " eligible (backend)");
+    assert.ok(scored.awardPoints > 0, t + " awards points (backend)");
+    for (const withRegistry of [true, false]) {
+      const TaskPoints = loadTaskPoints(withRegistry);
+      const est = TaskPoints.estimate({ type: t, duration_minutes: 60 });
+      assert.equal(est.eligible, true, `${t} eligible (frontend withRegistry=${withRegistry})`);
+    }
+  }
+});

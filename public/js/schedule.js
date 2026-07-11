@@ -165,7 +165,7 @@ function insertTaskNow(titleArg, durMinArg, opts){
   scheduled.splice(insertAt, 0, newItem);
   recalcTimes();
   const simulatedEnd=scheduled
-    .filter(ev=>!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev)&&!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break")
+    .filter(ev=>!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev)&&pointEligible(ev))
     .reduce((max,ev)=>Math.max(max,pt(ev.end)),0);
   scheduled.splice(scheduled.indexOf(newItem), 1);
   recalcTimes(); // restore cascade without the new item
@@ -787,6 +787,11 @@ function addTaskUniversal(barEl){
     // one gesture so points/streaks/persistence flow through the normal path.
     case"done":insertTaskNow(title,durMin,{onScheduled:r=>{if(r&&r.localId&&typeof toggleDone==="function")toggleDone(r.localId);}});break;
     case"shell":insertTaskNow(title,durMin,{type:"shell"});break;
+    // Wrap: a container that earns its own points (a long focus block); children
+    // ride along. insertTaskNow flags it isWrap from birth (dragMovesSubtree).
+    case"wrap":insertTaskNow(title,durMin,{type:"wrap"});break;
+    // Habit: recurring earn; the row grows a streak chip from prior completions.
+    case"habit":insertTaskNow(title,durMin,{type:"habit"});break;
     // Manually-added meeting: no source_id, so the calendar materializer never
     // touches it. Fixed-time (reflow-exempt) but user-movable, like a synced one.
     case"meeting":insertTaskNow(title,durMin,{type:"meeting"});break;
@@ -1178,6 +1183,8 @@ const TASK_DESTINATIONS=[
   {value:"schedule",icon:"📅", label:"Schedule…"},
   {value:"backlog", icon:"💡", label:"Backlog / Idea"},
   {value:"shell",   icon:"🐚", label:"Shell"},
+  {value:"wrap",    icon:"🎁", label:"Wrap"},
+  {value:"habit",   icon:"🔁", label:"Habit"},
   {value:"meeting", icon:"👥", label:"Meeting"}
 ];
 function _destMeta(value){return TASK_DESTINATIONS.find(d=>d.value===value)||TASK_DESTINATIONS[0]}

@@ -212,7 +212,8 @@ function openMeetingPanel(ev){
 // Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
 // the meeting has started) plus duration and add-task. The task-only spokes
 // (delegate/backlog/repeat/lock) don't apply to a calendar block, so they're left
-// off. NOTE for Phase 9: its Convert-to spoke belongs on this meeting branch too.
+// off. Convert-to lives on the TASK branch only (buildTaskChangeItems) — converting
+// a calendar block's type is out of scope.
 function buildMeetingRadialItems(ev,trig){
   const started=(typeof now==="function"&&typeof pt==="function")?now()>=pt(ev.start):false;
   return [
@@ -243,10 +244,75 @@ function buildTaskChangeItems(ev,trig){
     {icon:"←", label:"Back",       onPick:()=>openTaskRadial(ev,trig)},
     {icon:"📅", label:"Schedule…", onPick:()=>{if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:trig});}},
     {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}},
+    {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
     {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}}
   ];
+}
+// Sub-fan: convert this task to another registry type. Lists every type valid
+// for conversion (registry-driven, so new types appear here for free) — i.e. the
+// non-fixed types (excludes meeting/oneone/break/ooo, and the current type).
+function buildConvertToItems(ev,trig){
+  const items=[{icon:"←", label:"Back", onPick:()=>openTaskChangeRadial(ev,trig)}];
+  const R=window.TaskTypes;
+  if(R&&R.TYPES){
+    Object.keys(R.TYPES).forEach(t=>{
+      if(t===ev.type)return;                 // already this type
+      if(R.isFixed(t))return;                // calendar/fixed blocks aren't conversion targets
+      const meta=R.get(t);
+      items.push({icon:(meta.emoji||_convertIcon(t)), label:"→ "+meta.label,
+        onPick:()=>convertTaskType(ev.id,t)});
+    });
+  }
+  return items;
+}
+function _convertIcon(t){return {task:"📋",triage:"🗂",focus:"🎯",shell:"🐚",wrap:"🎁",habit:"🔁"}[t]||"•";}
+function openConvertToRadial(ev,trig){
+  openRadialMenu(trig,buildConvertToItems(ev,trig),_TASK_RADIAL_OPTS);
+}
+// Persist a type change (+ the wrap flag it implies) through the blockstore,
+// mirroring drag.js _persistEvWrap's synchronous-cache-update discipline.
+function _persistEvType(ev){
+  if(!window.blockStore||!ev)return;
+  let bid=ev._blockId;
+  if(!bid){const b=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===ev.id);bid=b&&b.id;}
+  if(!bid)return;
+  const blk=window.blockStore.get?window.blockStore.get(bid):null;
+  const props={...((blk&&blk.properties)||{})};
+  props.type=ev.type;
+  props.isWrap=!!ev.isWrap;
+  try{window.blockStore.updateBlock(bid,props);}catch(e){}
+}
+// Convert a scheduled task to another type: set the type, re-derive the wrap flag
+// (so shell/wrap carry their subtree on drag, per insertTaskNow), persist, and
+// re-render — points re-estimate automatically off the registry. Children are
+// deliberately KEPT attached through the conversion (never orphaned); when a
+// rollup container (shell) loses its rollup, we flag that its bonus no longer
+// applies. The shell bonus idempotency key (<date>:<shellId>) is untouched — the
+// task id never changes.
+function convertTaskType(id,newType){
+  const ev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
+  if(!ev||!newType||ev.type===newType)return;
+  const R=window.TaskTypes;
+  if(!R||R.isFixed(newType))return;          // never convert into a fixed/calendar type here
+  const kids=(typeof childrenOf==="function")?childrenOf(id,scheduled):[];
+  const wasRollup=R.isRollup(ev.type);
+  ev.type=newType;
+  ev.isWrap=(R.rule(newType,"dragMovesSubtree"))?true:undefined;
+  _persistEvType(ev);
+  // A shell's rollup pie is meaningless once it's a plain/earning type; leaving
+  // the child slices in place is harmless (ignored unless rollupMode), but tell
+  // the user the completion bonus is gone.
+  const nowRollup=R.isRollup(newType);
+  if(nowRollup&&window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(id);
+  if(typeof recalcTimes==="function")recalcTimes();
+  if(typeof render==="function")render();
+  if(typeof showToast==="function"){
+    let msg="Converted to "+R.get(newType).label;
+    if(wasRollup&&!nowRollup&&kids.length)msg+=" — "+kids.length+" item"+(kids.length>1?"s":"")+" kept, rollup bonus off";
+    showToast(msg,"success",2400);
+  }
 }
 const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
 function openTaskRadial(ev,trig,opts){
@@ -320,6 +386,78 @@ function _unfToEv(r){
   };
 }
 
+// ── Habit streaks (display-only) ───────────────────────────────────────────
+// For each habit (keyed by normalized title), how many consecutive days BEFORE
+// today it was completed. Reads the durable range cache (same source as Catch
+// up / Unfinished) — no schema change. Async-collected once per today-date; the
+// row chip renders "" until it lands, then a re-render fills it in.
+let _habitDoneByDate=null;        // Map(dateStr -> Set(habitKey))
+let _habitStreakFetchedFor=null;  // the today-date the cache was collected for
+let _habitStreakLoading=false;
+function _habitKey(evOrProps){return String((evOrProps&&(evOrProps.title||evOrProps.label))||"").trim().toLowerCase();}
+function _prevDate(iso){const d=new Date(iso+"T00:00:00");if(isNaN(d.getTime()))return null;d.setDate(d.getDate()-1);return d.toISOString().slice(0,10);}
+function invalidateHabitStreaks(){_habitDoneByDate=null;_habitStreakFetchedFor=null;}
+async function _ensureHabitStreaks(today){
+  if(_habitStreakFetchedFor===today||_habitStreakLoading)return;
+  const bs=window.blockStore;
+  if(!bs||typeof bs.loadDateRange!=="function"){_habitDoneByDate=new Map();_habitStreakFetchedFor=today;return;}
+  _habitStreakLoading=true;
+  try{
+    // Bounded lookback: 90 days covers any streak chip without loading the full archive.
+    const startD=new Date(today+"T00:00:00");startD.setDate(startD.getDate()-90);
+    const start=startD.toISOString().slice(0,10);
+    const end=_prevDate(today)||today;
+    await bs.loadDateRange(start,end<start?start:end);
+    const byDate=new Map();
+    let cur=end,guard=0;
+    while(cur&&cur>=start&&guard++<400){
+      const day=bs.getRangeCache(cur);
+      if(day&&Array.isArray(day.blocks)){
+        const doneIds=new Set();
+        const root=day.blocks.find(b=>b.type==="day_root");
+        const rd=root&&root.properties&&root.properties._done&&root.properties._done.ids;
+        if(Array.isArray(rd))rd.forEach(id=>doneIds.add(id));
+        try{const raw=localStorage.getItem("pa-done-"+cur);if(raw){const o=JSON.parse(raw);if(o&&Array.isArray(o.ids))o.ids.forEach(id=>doneIds.add(id));}}catch(e){}
+        const set=new Set();
+        for(const b of day.blocks){
+          const p=b.properties||{};
+          if(p.type!=="habit")continue;
+          if(!(p.done||doneIds.has(b.id)||(p.local_id&&doneIds.has(p.local_id))))continue;
+          const key=_habitKey(p);
+          if(key)set.add(key);
+        }
+        if(set.size)byDate.set(cur,set);
+      }
+      cur=_prevDate(cur);
+    }
+    _habitDoneByDate=byDate;_habitStreakFetchedFor=today;
+  }catch(e){_habitDoneByDate=new Map();_habitStreakFetchedFor=today;}
+  finally{_habitStreakLoading=false;if(typeof render==="function")render();}
+}
+// Pure: consecutive days BEFORE `today` (a Set per date in byDate) containing key.
+// Stops at the first calendar gap. Exposed on window for headless verification.
+function _habitStreakCount(byDate,today,key){
+  let n=0,cur=_prevDate(today),guard=0;
+  while(cur&&guard++<400){
+    const set=byDate&&typeof byDate.get==="function"?byDate.get(cur):null;
+    if(set&&set.has(key)){n++;cur=_prevDate(cur);}else break;
+  }
+  return n;
+}
+function habitStreakChip(ev){
+  if(!ev||ev.type!=="habit")return "";
+  const today=(typeof __state!=="undefined"&&__state&&__state.date)||new Date().toISOString().slice(0,10);
+  if(_habitStreakFetchedFor!==today){_ensureHabitStreaks(today);return "";}
+  const key=_habitKey(ev);
+  if(!key||!_habitDoneByDate)return "";
+  const n=_habitStreakCount(_habitDoneByDate,today,key);
+  if(n<=0)return "";
+  return '<span class="habit-streak" title="'+n+'-day streak — completed '+n+' day'+(n>1?'s':'')+' running">🔥 '+n+'</span>';
+}
+window.habitStreakChip=habitStreakChip;
+window.invalidateHabitStreaks=invalidateHabitStreaks;
+window.__habitStreakCount=_habitStreakCount;
+
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
@@ -333,7 +471,7 @@ function buildListView(){
   const doneItems=visible.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
   const openItems=visible.filter(ev=>!isDone(ev)&&!isPushed(ev));
   const pushedItems=visible.filter(ev=>!isDone(ev)&&isPushed(ev));
-  const activeIds=new Set(openItems.filter(ev=>!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break").map(ev=>ev.id));
+  const activeIds=new Set(openItems.filter(ev=>pointEligible(ev)).map(ev=>ev.id));
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
 
@@ -356,7 +494,7 @@ function buildListView(){
   }
 
   function listPrivacyChip(ev){
-    if(!ev||isMeeting(ev)||ev.type==="break"||ev.type==="ooo")return "";
+    if(!ev||isFixed(ev))return "";
     const visibility=ev.publicVisibility==="private"?"private":"public";
     const label=visibility==="private"?"Private":"Public";
     return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
@@ -671,7 +809,7 @@ function buildSchedule(){
   }
 
   const petPrivacyChip=ev=>{
-    if(!ev||isMeeting(ev)||ev.type==="break"||ev.type==="ooo")return "";
+    if(!ev||isFixed(ev))return "";
     const visibility=ev.publicVisibility==="private"?"private":"public";
     const label=visibility==="private"?"Private":"Public";
     return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
@@ -760,7 +898,7 @@ function buildSchedule(){
     ? String(pomoState.currentTaskRef.id)
     : null;
   const _pomoFocusExists = !!(_pomoFocusId && activeItems.some(ev => String(ev.id) === _pomoFocusId));
-  const _defaultFocusId = (activeItems.find(ev => !ev.subtaskOf && !isMeeting(ev) && ev.type !== "ooo" && ev.type !== "break") || activeItems[0] || {}).id;
+  const _defaultFocusId = (activeItems.find(ev => !ev.subtaskOf && pointEligible(ev)) || activeItems[0] || {}).id;
   const _focusActiveId = _pinnedActiveExists ? String(_pinnedActiveId) : (_pomoFocusExists ? _pomoFocusId : (_defaultFocusId ? String(_defaultFocusId) : null));
 
   // Subtask timeline rows now use the shared renderSubRow (itinerary-card.js) with
@@ -1373,7 +1511,7 @@ function _estimatedTaskPoints(ev){
     : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
   const scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
     ? window.TaskPoints.estimate(payload)
-    : {eligible:(typeof isMeeting!=="function"||!isMeeting(ev))&&ev.type!=="ooo"&&ev.type!=="break",awardPoints:Math.max(1,Math.round(typeof dur==="function"?dur(ev):(ev.durMin||30)))};
+    : {eligible:(typeof pointEligible==="function")?pointEligible(ev):((typeof isMeeting!=="function"||!isMeeting(ev))&&ev.type!=="ooo"&&ev.type!=="break"),awardPoints:Math.max(1,Math.round(typeof dur==="function"?dur(ev):(ev.durMin||30)))};
   return scoring&&scoring.eligible?Math.max(0,Number(scoring.awardPoints)||0):0;
 }
 function _pointEligibleScheduleItems(){

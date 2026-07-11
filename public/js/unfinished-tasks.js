@@ -11,7 +11,15 @@
 (function () {
   "use strict";
 
-  const SKIP_TYPES = new Set(["meeting", "oneone", "ooo", "break", "focus", "focus_time", "free_time", "prep"]);
+  // The fixed-time set (meeting/oneone/ooo/break) is owned by the TASK_TYPES
+  // registry now — skipType() defers to TaskTypes.isFixed so this list can't
+  // drift from it. The residual literals are raw calendar block types that never
+  // became first-class registry types.
+  const SKIP_RAW = new Set(["focus", "focus_time", "free_time", "prep"]);
+  function skipType(type){
+    if (window.TaskTypes && typeof window.TaskTypes.isFixed === "function" && window.TaskTypes.isFixed(type)) return true;
+    return SKIP_RAW.has(type);
+  }
   // Lookback is unlimited (every archived day) — an unfinished task stays
   // visible until completed, rescheduled, or dropped. MAX_ROWS only caps how
   // many render at once; `total` still reports the full count.
@@ -80,7 +88,7 @@
         if (!(b.type === "block" || b.type === "schedule_item" || b.type === "added_task")) continue;
         const p = b.properties || {};
         if (!p.start) continue;                       // not actually scheduled
-        if (SKIP_TYPES.has(p.type)) continue;          // meetings / breaks / etc.
+        if (skipType(p.type)) continue;                // meetings / breaks / etc.
         if (p.done || doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id))) continue;
         if (seen.has(b.id) || (p.local_id && seen.has(p.local_id))) continue;
         seen.add(b.id);
