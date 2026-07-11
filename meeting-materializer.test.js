@@ -293,3 +293,52 @@ test("never resurrects a user-deleted meeting on re-ingest", async () => {
   assert.equal(db.store.filter((b) => (b.properties || {}).source_id === "e1").length, 1); // no duplicate
   assert.ok(bySid(db, "e1").deleted_at); // stays dead
 });
+
+// ── Auto-prep stamping (Phase 10) ─────────────────────────────────────────────
+// Times are anchored to real now() because the 36h prep horizon is wall-clock:
+// a fixed calendar date would flip pending on/off as the calendar advances.
+const isoIn = (hoursFromNow) => new Date(Date.now() + hoursFromNow * 3600 * 1000).toISOString();
+const dayOf = (iso) => // ET calendar date of an ISO instant, matching the materializer
+  new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+
+test("auto-prep: a meeting starting within 36h is stamped prep_status pending", async () => {
+  const db = makeBlockDB();
+  const start = isoIn(12), end = isoIn(13);
+  await M(db)(args([mtg("soon", start, end)], { date: dayOf(start) }));
+  assert.equal(bySid(db, "soon").properties.prep_status, "pending");
+});
+
+test("auto-prep: a past meeting and a far-future meeting get NO prep stamp", async () => {
+  const db = makeBlockDB();
+  const past = isoIn(-3), pastEnd = isoIn(-2);
+  const far = isoIn(72), farEnd = isoIn(73);
+  await M(db)(args([mtg("past", past, pastEnd)], { date: dayOf(past) }));
+  await M(db)(args([mtg("far", far, farEnd)], { date: dayOf(far) }));
+  assert.equal(bySid(db, "past").properties.prep_status, undefined);
+  assert.equal(bySid(db, "far").properties.prep_status, undefined);
+});
+
+test("auto-prep: reconcile stamps pending when a meeting first seen far-out crosses into the 36h window", async () => {
+  const db = makeBlockDB();
+  const start = isoIn(12), end = isoIn(13), d = dayOf(start);
+  // A block created while >36h out: now in-horizon, but never got the create-time stamp.
+  db.store.push({ id: "blk-seed", type: "block", date: d,
+    properties: { type: "meeting", source: "calendar", source_id: "reco", title: "Team sync",
+      tags: ["meeting"], start: "00:00", end: "00:30", status: "open" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  await M(db)(args([mtg("reco", start, end, { title: "Team sync" })], { date: d }));
+  assert.equal(bySid(db, "reco").properties.prep_status, "pending"); // stamped as it crossed in
+});
+
+test("auto-prep is idempotent: a re-ingest never resets a sweep-filled 'ready' prep", async () => {
+  const db = makeBlockDB();
+  const start = isoIn(12), end = isoIn(13);
+  await M(db)(args([mtg("m", start, end, { title: "Old title" })], { date: dayOf(start) }));
+  // Sweep filled the brief -> block flipped to ready (mirrors markPrepReady).
+  bySid(db, "m").properties.prep_status = "ready";
+  // Re-ingest with a changed title so the calendar-wins reconcile actually fires.
+  await M(db)(args([mtg("m", start, end, { title: "New title" })], { date: dayOf(start) }));
+  const b = bySid(db, "m");
+  assert.equal(b.properties.title, "New title"); // reconcile ran
+  assert.equal(b.properties.prep_status, "ready"); // but prep survived, not reset to pending
+});

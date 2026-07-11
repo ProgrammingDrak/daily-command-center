@@ -191,7 +191,38 @@ function _canPlaceBounty(ev,isDoneRow){
   return true;
 }
 const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
+// Open the meeting-automation panel scoped to one block: expand the row's detail
+// panel (where the panel is rendered inline), scroll it into view, and refresh it.
+// Used by the Prep/Recap radial spoke.
+function openMeetingPanel(ev){
+  const blockId=ev.meetingBlockId||ev.id;
+  const sel=(window.CSS&&typeof CSS.escape==="function")?CSS.escape(blockId):String(blockId).replace(/["\\]/g,"\\$&");
+  const panel=document.querySelector('.meeting-auto-panel[data-meeting-auto-id="'+sel+'"]');
+  if(panel){
+    const dp=panel.closest(".detail-panel");
+    if(dp&&!dp.classList.contains("open")){
+      dp.classList.add("open");
+      const card=dp.closest(".card"),cv=card&&card.querySelector(":scope > svg");
+      if(cv)cv.style.transform="rotate(180deg)";
+    }
+    panel.scrollIntoView({behavior:"smooth",block:"center"});
+  }
+  if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(blockId);
+}
+// Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
+// the meeting has started) plus duration and add-task. The task-only spokes
+// (delegate/backlog/repeat/lock) don't apply to a calendar block, so they're left
+// off. NOTE for Phase 9: its Convert-to spoke belongs on this meeting branch too.
+function buildMeetingRadialItems(ev,trig){
+  const started=(typeof now==="function"&&typeof pt==="function")?now()>=pt(ev.start):false;
+  return [
+    {icon:started?"📝":"📋", label:started?"Recap":"Prep", onPick:()=>openMeetingPanel(ev)},
+    {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
+    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
+  ];
+}
 function buildTaskRadialItems(ev,trig){
+  if(typeof isMeeting==="function"&&isMeeting(ev))return buildMeetingRadialItems(ev,trig);
   const items=[
     // Move/convert actions live one level down: this spoke chains into the
     // "Change task" sub-fan (openRadialMenu closes the current fan first).
@@ -814,7 +845,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-meeting-auto")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){

@@ -56,5 +56,22 @@ app.post("/api/meetings/:blockId/actions/approve", async (req, res) => {
   }
 });
 
+// Place an approved action onto a day (detach from the meeting, make it a real
+// day task). The UI offers this right after approval; declining just skips it.
+app.post("/api/meetings/:blockId/actions/:actionId/place", async (req, res) => {
+  try {
+    const result = await meetingAutomation.placeApprovedAction(req.params.blockId, req.params.actionId, {
+      workspaceId: req.workspaceId,
+      userId: req.session.userId,
+      date: req.body?.date,
+      start: req.body?.start || null,
+    });
+    broadcast("blocks-changed", { action: "meeting-action-placed", blockIds: [req.params.blockId, req.params.actionId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
 
 };
