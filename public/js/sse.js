@@ -36,6 +36,16 @@
     if(indicator){ indicator.style.opacity = "0"; setTimeout(() => { if(indicator) indicator.remove(); indicator = null; }, 300); }
   }
 
+  // Pure predicate: is this dcc-state-changed event for a day OTHER than the one
+  // on screen? Extracted so the scoping decision is unit-testable without the
+  // fetch machinery around it. viewDate is passed in (the caller guards the
+  // module global with typeof) so a missing viewDate degrades to false = full
+  // refresh, the safe default. Only events that carry a clean date can be off-view.
+  function _dccEventOffView(evt, viewDate){
+    return !!(evt && evt.date && viewDate && evt.date !== viewDate);
+  }
+  window._dccEventOffView = _dccEventOffView;
+
   // Refresh DCC-owned state only (schedule, triage, meetings)
   // Does NOT touch user blocks — those are in SQLite and never overwritten.
   // Also reloads BlockStore cache so cross-tab edits are picked up.
@@ -52,13 +62,20 @@
     // actions" titles), so we still refresh that cheap sidecar regardless of date.
     // Only dcc-state-changed carries a clean date; file-changed/ingest/interval
     // pass none -> full refresh (the safe default).
-    const offView = evt && evt.date && typeof viewDate !== "undefined" && viewDate && evt.date !== viewDate;
+    const offView = _dccEventOffView(evt, typeof viewDate !== "undefined" ? viewDate : null);
     showIndicator("Updating...", "var(--accent)");
     try {
       if(offView){
         const upcoming = await fetch('/api/state/upcoming').then(r => r.json()).catch(() => null);
         if(upcoming) window.__DCC_UPCOMING__ = upcoming;
-        console.log("[SSE] Off-view date " + evt.date + " (viewing " + viewDate + "): refreshed upcoming, skipped day-state");
+        // The visible day's state is untouched, so skip the heavy day-state
+        // fetch+transform. But __DCC_UPCOMING__ just changed and it feeds two
+        // ALWAYS-VISIBLE surfaces — the Action Items list + its count badge
+        // (triage.js getAllActionItems/buildActionItemsTab) and the Upcoming
+        // board (tabs.js buildUpcoming). Repaint exactly those so a cross-day
+        // change doesn't leave them stale (the very thing this phase kills).
+        if(upcoming && typeof render === "function") render(["actionItems","upcoming"]);
+        console.log("[SSE] Off-view date " + evt.date + " (viewing " + viewDate + "): refreshed upcoming + its surfaces, skipped day-state");
         showIndicator("Updated!", "var(--green)");
         setTimeout(hideIndicator, 1500);
         return;
