@@ -59,6 +59,18 @@ module.exports = function mount(app, ctx) {
   // into the reward queue exactly like a slot win (same enqueue, same
   // scheduling path). The enqueue sourceId is period-scoped so double claims
   // return the existing queue item instead of a copy.
+  //
+  // ATOMICITY (P2, deliberate): the money move (bank debit + tank_claimed_period
+  // stamp) is committed atomically inside claimTankBlock's tx. The enqueue is
+  // intentionally left best-effort OUTSIDE that tx and NOT rolled in, because:
+  //   1. enqueueReward is socialStore's (a separate store/tx boundary); pulling
+  //      it into budget-store's client would couple the two stores for no gain.
+  //   2. The sourceId ("tank-<period>-<blockId>") is idempotent, and this handler
+  //      re-runs enqueueReward on the duplicate path too (claimTankBlock returns
+  //      duplicate:true but still yields result.block). So a claim whose enqueue
+  //      failed self-heals on the next claim POST — the missing queue item is
+  //      created, never double-created. Best-effort is safe here; a debit can
+  //      never be stranded, only its (recoverable) queue item can lag.
   app.post("/api/budget/blocks/:id/claim", async (req, res) => {
     try {
       const result = await budgetStore.claimTankBlock(req.workspaceId, req.session.userId, req.params.id, {
@@ -82,7 +94,8 @@ module.exports = function mount(app, ctx) {
         });
         rewardQueueItem = (enq && enq.item) || null;
       } catch (e) {
-        console.warn("[budget-claim] enqueue failed:", e.message);
+        // Debit is already committed; a re-claim will re-enqueue idempotently (see above).
+        console.warn("[budget-claim] enqueue failed (recoverable on retry):", e.message);
       }
       broadcast("slot-changed", { action: "budget-claim" }, req.workspaceId);
       res.json({ claimed: result.claimed, duplicate: !!result.duplicate, debited_cents: result.debited_cents || 0, reward_queue_item: rewardQueueItem });
@@ -97,18 +110,22 @@ module.exports = function mount(app, ctx) {
   // return to the reward catalog only).
   app.post("/api/budget/rollover", async (req, res) => {
     try {
-      const result = await budgetStore.rolloverPeriod(req.workspaceId, req.session.userId, req.body || {});
-      if (result.swept_cents > 0) {
-        try {
-          const today = getTodayStr();
-          const rootId = await blockDB.ensureDayRoot(today, req.session.userId, req.workspaceId);
+      // The transfer task is created INSIDE the store's rollover tx (onSwept),
+      // so a failure there rolls the sweep back instead of stranding swept money
+      // with no task. The route stays thin: hand over the callback, broadcast the
+      // committed result, respond.
+      const today = getTodayStr();
+      const result = await budgetStore.rolloverPeriod(req.workspaceId, req.session.userId, {
+        ...(req.body || {}),
+        onSwept: async (client, { swept_cents, closing_period }) => {
+          const rootId = await blockDB.ensureDayRoot(today, req.session.userId, req.workspaceId, client);
           const block = await blockDB.createBlock({
-            id: "budget-sweep-" + req.workspaceId + "-" + result.closing_period + "-" + crypto.randomUUID().slice(0, 8),
+            id: "budget-sweep-" + req.workspaceId + "-" + closing_period + "-" + crypto.randomUUID().slice(0, 8),
             type: "block",
             parent_id: rootId,
             date: today,
             properties: {
-              title: "Transfer $" + (result.swept_cents / 100).toFixed(2) + " to brokerage (budget sweep " + result.closing_period + ")",
+              title: "Transfer $" + (swept_cents / 100).toFixed(2) + " to brokerage (budget sweep " + closing_period + ")",
               type: "task",
               durMin: 15,
               priority: "High",
@@ -117,13 +134,14 @@ module.exports = function mount(app, ctx) {
             sort_order: Date.now(),
             user_id: req.session.userId,
             workspace_id: req.workspaceId,
-          });
-          await budgetStore.setInvestmentTaskBlock(req.workspaceId, result.closing_period, block.id);
-          result.task_block_id = block.id;
-          broadcast("blocks-changed", { action: "create", id: block.id, date: today }, req.workspaceId);
-        } catch (e) {
-          console.warn("[budget-rollover] transfer task failed:", e.message);
-        }
+          }, client);
+          await budgetStore.setInvestmentTaskBlock(req.workspaceId, closing_period, block.id, client);
+          return { id: block.id, date: today };
+        },
+      });
+      if (result.task) {
+        result.task_block_id = result.task.id;
+        broadcast("blocks-changed", { action: "create", id: result.task.id, date: result.task.date }, req.workspaceId);
       }
       broadcast("slot-changed", { action: "budget-rollover" }, req.workspaceId);
       res.json(result);

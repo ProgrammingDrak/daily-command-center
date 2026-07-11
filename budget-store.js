@@ -674,7 +674,15 @@ function sweepPreview(settings, usage, blocks) {
   return { closing_key: closing.key, closing_capacity_cents: closingCapacity, closing_waterline_cents: closingWaterline, leftover_cents: leftover, unhit: unhit.map(b => ({ id: b.id, title: b.title, value_cents: b.value_cents })) };
 }
 
-async function rolloverPeriod(workspaceId, userId, { mode } = {}) {
+// `onSwept` (optional) runs INSIDE the rollover transaction, right before
+// COMMIT, only when a leftover was actually swept. The route uses it to create
+// the "Transfer $X to brokerage" itinerary task + stamp it on the investment
+// row on the SAME client, so money is never swept without its task: if the task
+// creation throws, the whole rollover (sweep debit, ledger insert, tank reflow)
+// rolls back. Injected via the options object, mirroring claimTankBlock's
+// sweepPendingBankBuilders. onSwept(client, { swept_cents, closing_period }) ->
+// any; whatever it returns is surfaced on result.task.
+async function rolloverPeriod(workspaceId, userId, { mode, onSwept } = {}) {
   const rolloverMode = mode === "fresh" ? "fresh" : "carry";
   await upsertSlotAccountRow(pool, workspaceId, userId);
   const client = await pool.connect();
@@ -759,6 +767,14 @@ async function rolloverPeriod(workspaceId, userId, { mode } = {}) {
       },
     };
     await saveBudgetTankSettings(workspaceId, nextSettings, client);
+
+    // Atomic side effect: create the brokerage-transfer task on the same client
+    // so a mid-flight failure rolls the sweep back rather than stranding money.
+    let sweptTask = null;
+    if (sweptCents > 0 && typeof onSwept === "function") {
+      sweptTask = await onSwept(client, { swept_cents: sweptCents, closing_period: preview.closing_key });
+    }
+
     await client.query("COMMIT");
     return {
       rolled: true,
@@ -770,6 +786,7 @@ async function rolloverPeriod(workspaceId, userId, { mode } = {}) {
       new_capacity_cents: nextSettings.current_period.capacity_cents,
       carried: unhitOneShots.map(b => b.title),
       left_tank: leaving.map(b => b.title),
+      task: sweptTask,
     };
   } catch (e) {
     await client.query("ROLLBACK");
@@ -779,10 +796,11 @@ async function rolloverPeriod(workspaceId, userId, { mode } = {}) {
   }
 }
 
-// The route stamps the created "Transfer $X to brokerage" DCC task onto the
-// investment row so the tank can deep-link to it.
-async function setInvestmentTaskBlock(workspaceId, periodKey, taskBlockId) {
-  await pool.query(
+// Stamp the created "Transfer $X to brokerage" DCC task onto the investment row
+// so the tank can deep-link to it. `exec` lets rolloverPeriod's onSwept callback
+// run this on the same tx client as the sweep (atomic); defaults to the pool.
+async function setInvestmentTaskBlock(workspaceId, periodKey, taskBlockId, exec = pool) {
+  await exec.query(
     `UPDATE budget_investments SET task_block_id = $3 WHERE workspace_id = $1 AND period_key = $2`,
     [workspaceId, periodKey, taskBlockId]
   );

@@ -667,12 +667,15 @@ app.delete("/api/task-menus/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Menu not found" });
     const menuId = req.params.id;
     // Strip this menu id from every responsibility's menus[] and every group's
-    // placeholder placeholderMenus[] so no dangling references remain.
+    // placeholder placeholderMenus[], then delete the menu — ALL in one tx, so
+    // we never leave refs stripped with the menu surviving (or the menu deleted
+    // with dangling refs still pointing at it). Reads stay outside the tx.
     const touched = [];
+    const ops = [];
     for (const r of await getResponsibilityBlocks(req.workspaceId)) {
       const menus = Array.isArray(r.properties.menus) ? r.properties.menus : [];
       if (menus.includes(menuId)) {
-        await blockDB.updateBlock(r.id, { properties: { ...r.properties, menus: menus.filter(m => m !== menuId), updatedAt: new Date().toISOString() } });
+        ops.push({ op: "update", id: r.id, properties: { ...r.properties, menus: menus.filter(m => m !== menuId), updatedAt: new Date().toISOString() } });
         touched.push(r.id);
       }
     }
@@ -686,9 +689,11 @@ app.delete("/api/task-menus/:id", async (req, res) => {
         }
         return it;
       });
-      if (changed) { await blockDB.updateBlock(g.id, { properties: { ...g.properties, items: next, updatedAt: new Date().toISOString() } }); touched.push(g.id); }
+      if (changed) { ops.push({ op: "update", id: g.id, properties: { ...g.properties, items: next, updatedAt: new Date().toISOString() } }); touched.push(g.id); }
     }
-    const result = await blockDB.deleteBlock(menuId);
+    ops.push({ op: "delete", id: menuId }); // delete last so its result is last
+    const batch = await blockDB.batchOp(ops);
+    const result = batch.blocks[batch.blocks.length - 1]; // deleteBlock's { id, deleted_at }
     broadcast("blocks-changed", { action: "task-menu-delete", blockIds: [menuId, ...touched] }, req.workspaceId);
     res.json(result);
   } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
@@ -854,6 +859,12 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
     let blocksDeleted = 0;
     let skippedCount = 0;
     const skippedDates = [];
+    // Gather every mutation across all future days here, then apply them in ONE
+    // transaction (blockDB.batchOp) below. Previously each update/create/delete
+    // autocommitted on its own, so a mid-flight failure left some future days
+    // mutated and the rest untouched. The read/match phase stays outside the tx
+    // (same read-then-write TOCTOU as before); only the writes are now atomic.
+    const ops = [];
 
     for (const date of futureDates) {
       const dayBlocks = await blockDB.getBlocksByDate(date, workspaceId);
@@ -868,7 +879,7 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
         if (!target) { daySkipped++; continue; }
         if (!sameProps(target.properties || {}, u.originalValues)) { daySkipped++; continue; }
         const merged = Object.assign({}, target.properties || {}, u.newValues);
-        await blockDB.updateBlock(target.id, { properties: merged });
+        ops.push({ op: "update", id: target.id, properties: merged });
         blocksUpdated++;
         dayTouched = true;
       }
@@ -878,7 +889,8 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
         const newName = c.block && c.block.properties && c.block.properties.name;
         const existing = topBlocks.find(b => (b.properties||{}).name === newName);
         if (existing) continue; // dedupe: a same-named block is already here
-        await blockDB.createBlock({
+        ops.push({
+          op: "create",
           type: "block",
           parent_id: null,
           date: date,
@@ -896,7 +908,7 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
         const target = topBlocks.find(b => (b.properties||{}).name === d.match.name && (b.properties||{}).blockType === d.match.blockType);
         if (!target) { daySkipped++; continue; }
         if (!sameProps(target.properties || {}, d.originalValues)) { daySkipped++; continue; }
-        await blockDB.deleteBlock(target.id);
+        ops.push({ op: "delete", id: target.id });
         blocksDeleted++;
         dayTouched = true;
       }
@@ -905,6 +917,9 @@ app.post("/api/blocks/apply-forward", async (req, res) => {
       else if (daySkipped > 0) { daysSkipped++; skippedDates.push(date); }
       skippedCount += daySkipped;
     }
+
+    // Atomic: all future-day mutations commit together or none do.
+    if (ops.length) await blockDB.batchOp(ops);
 
     broadcast("blocks-changed", { action: "apply-forward", fromDate, daysUpdated }, workspaceId);
     res.json({ daysUpdated, daysSkipped, blocksUpdated, blocksCreated, blocksDeleted, skippedCount, skippedDates });

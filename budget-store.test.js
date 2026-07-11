@@ -15,6 +15,18 @@ function loadStoreWithMock(mockPool) {
   return require("./budget-store");
 }
 
+// Fields the mock reverts on ROLLBACK so a rolled-back txn leaves NO trace —
+// lets atomicity tests assert "no debit/investment persisted", not just that
+// COMMIT wasn't reached. (slot_point_ledger keys are reverted separately, via
+// the txnLedgerKeys mechanism, to preserve the documented convert-retry test.)
+const TX_REVERT_FIELDS = ["bankBalance", "pointBalance", "pendingCents", "debits", "ledgerDeltas", "conversions", "investments", "insertedRewards", "investmentsByPeriod", "savedSettings", "settings", "tankRows"];
+function txClone(v) {
+  if (Array.isArray(v)) return v.map(txClone);
+  if (v instanceof Set) return new Set([...v].map(txClone));
+  if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v)) o[k] = txClone(v[k]); return o; }
+  return v;
+}
+
 // Stateful mock: tankRows simulate the slot_rewards tank slice; queries are
 // recognized by distinctive SQL fragments (same approach as slot-store.test.js).
 function createMockPool(options = {}) {
@@ -43,14 +55,22 @@ function createMockPool(options = {}) {
   async function query(sql, params = []) {
     calls.push({ sql, params });
     const text = String(sql);
-    if (text === "BEGIN") { state.txnLedgerKeys = []; return { rows: [] }; }
-    if (text === "COMMIT") { state.txnLedgerKeys = []; return { rows: [] }; }
+    if (text === "BEGIN") {
+      state.txnLedgerKeys = [];
+      state._txSnapshot = {};
+      for (const f of TX_REVERT_FIELDS) state._txSnapshot[f] = txClone(state[f]);
+      return { rows: [] };
+    }
+    if (text === "COMMIT") { state.txnLedgerKeys = []; state._txSnapshot = null; return { rows: [] }; }
     if (text === "ROLLBACK") {
       state.rolledBack = true;
       // Model Postgres: ROLLBACK undoes this txn's slot_point_ledger inserts, so
       // a same-key retry after a rolled-back failure re-attempts (not a duplicate).
       for (const k of (state.txnLedgerKeys || [])) state.ledgerKeys.delete(k);
       state.txnLedgerKeys = [];
+      // ...and reverts the money/investment/tank writes, so a rolled-back sweep
+      // leaves no debit or investment row behind (atomicity tests assert this).
+      if (state._txSnapshot) { for (const f of TX_REVERT_FIELDS) state[f] = state._txSnapshot[f]; state._txSnapshot = null; }
       return { rows: [] };
     }
     if (text.includes("INSERT INTO slot_accounts")) {
@@ -692,6 +712,52 @@ test("rolloverPeriod carry: sweep leftover, claimed one-shots leave, unhit sink 
   assert.equal(r2.tank_position, 2000);            // envelope above it
   assert.equal(r3.tank_unlock_cents, 9000);        // thresholds reflowed
   assert.equal(r2.tank_unlock_cents, 16000);
+});
+
+// ── P2 failure injection: the sweep must never commit without its task ────────
+function carryMock() {
+  return createMockPool({
+    bankBalance: 10000,
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 500, prior_cents: 20000 },
+    tankRows: [tankRow(3, 9000, 3000, { tank_unlock_cents: 24000 })], // unhit -> leftover to sweep
+  });
+}
+
+test("rolloverPeriod: onSwept fires in-tx with the swept amount and its result surfaces on result.task", async () => {
+  const mock = carryMock();
+  const store = loadStoreWithMock(mock);
+  let seen = null;
+  const out = await store.rolloverPeriod(WS, 7, {
+    mode: "carry",
+    onSwept: async (client, info) => {
+      assert.ok(client && typeof client.query === "function", "callback gets the tx client");
+      seen = info;
+      return { id: "task-xyz", date: "2026-07-10" };
+    },
+  });
+  assert.ok(out.swept_cents > 0);
+  assert.equal(seen.swept_cents, out.swept_cents);
+  assert.equal(seen.closing_period, "2026-06");
+  assert.deepEqual(out.task, { id: "task-xyz", date: "2026-07-10" });
+  assert.ok(mock.calls.some(c => String(c.sql) === "COMMIT"), "committed");
+  assert.ok(!mock.state.rolledBack, "did not roll back");
+  assert.equal(mock.state.investments.length, 1, "sweep investment persisted on commit");
+});
+
+test("rolloverPeriod: a throw inside onSwept rolls the whole sweep back (never money without a task)", async () => {
+  const mock = carryMock();
+  const store = loadStoreWithMock(mock);
+  const boom = new Error("brokerage task creation failed");
+  await assert.rejects(
+    () => store.rolloverPeriod(WS, 7, { mode: "carry", onSwept: async () => { throw boom; } }),
+    (e) => e === boom
+  );
+  assert.ok(mock.state.rolledBack, "the tx rolled back");
+  assert.ok(!mock.calls.some(c => String(c.sql) === "COMMIT"), "never committed the sweep");
+  // The point of the phase: a rolled-back sweep leaves NO money moved.
+  assert.equal(mock.state.investments.length, 0, "no investment row persisted");
+  assert.equal(mock.state.bankBalance, 10000, "the debit was rolled back (balance intact)");
 });
 
 test("rolloverPeriod fresh: unhit one-shots leave too; sweep is bounded by the spendable balance", async () => {

@@ -110,9 +110,14 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   return { id: blockId, type, parent_id: parent_id || null, date: date || null, properties: props, sort_order: sort_order || 0, created_at: now, updated_at: now, deleted_at: null };
 }
 
-async function updateBlock(id, { properties, sort_order, parent_id, date }) {
+// `client` lets a caller run this inside its own transaction (batchOp,
+// rescheduleBlocks-style tx work); omit it and each statement autocommits on
+// the pool. Without threading the client through, a "wrapped in a tx" batch
+// would silently escape the tx on its update rows.
+async function updateBlock(id, { properties, sort_order, parent_id, date }, client) {
+  const q = client || pool;
   const now = new Date().toISOString();
-  const { rows } = await pool.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
   if (existing.deleted_at) throw new Error(`Block is deleted: ${id}`);
@@ -125,18 +130,19 @@ async function updateBlock(id, { properties, sort_order, parent_id, date }) {
   const newSortOrder = sort_order !== undefined ? sort_order : existing.sort_order;
   const newParentId = parent_id !== undefined ? parent_id : existing.parent_id;
   const newDate = date !== undefined ? date : existing.date;
-  await pool.query(`UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6`, [newProps, newSortOrder, newParentId, newDate, now, id]);
-  await pool.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, newProps, now]);
+  await q.query(`UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6`, [newProps, newSortOrder, newParentId, newDate, now, id]);
+  await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, newProps, now]);
   return { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
 }
 
-async function deleteBlock(id) {
+async function deleteBlock(id, client) {
+  const q = client || pool;
   const now = new Date().toISOString();
-  const { rows } = await pool.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
-  await pool.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, id]);
-  await pool.query(`INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'delete', $2, $3)`, [id, existing.properties, now]);
+  await q.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, id]);
+  await q.query(`INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'delete', $2, $3)`, [id, existing.properties, now]);
   return { id, deleted_at: now };
 }
 
@@ -227,9 +233,9 @@ async function batchOp(operations) {
     for (const op of operations) {
       switch (op.op) {
         case "create": results.push(await createBlock(op, client)); break;
-        case "update": results.push(await updateBlock(op.id, op)); break;
-        case "delete": results.push(await deleteBlock(op.id)); break;
-        case "reorder": await reorderBlocks(op.items); results.push({ reordered: op.items.length }); break;
+        case "update": results.push(await updateBlock(op.id, op, client)); break;
+        case "delete": results.push(await deleteBlock(op.id, client)); break;
+        case "reorder": await reorderBlocks(op.items, client); results.push({ reordered: op.items.length }); break;
         default: throw new Error(`Unknown batch operation: ${op.op}`);
       }
     }
@@ -252,8 +258,10 @@ async function batchOp(operations) {
 // [{ id, date, properties? }] (properties omitted => keep existing). `creates`
 // is [createBlock-shaped payloads] run on the same client.
 //
-// NOTE: batchOp() can't be reused here — its "update" branch calls updateBlock(),
-// which uses `pool` directly, so batched updates run OUTSIDE the transaction.
+// NOTE: not reused via batchOp() — this needs SELECT ... FOR UPDATE row locks
+// on each move and a distinct moves/creates contract + return shape that
+// batchOp doesn't model. (batchOp itself is now genuinely transactional: its
+// update/delete/reorder branches run on the tx client, not the pool.)
 async function rescheduleBlocks(moves, creates) {
   const now = new Date().toISOString();
   const client = await pool.connect();
@@ -291,20 +299,21 @@ async function rescheduleBlocks(moves, creates) {
 
 // ── Reorder with Auto-Rebalance ──
 
-async function reorderBlocks(items) {
+async function reorderBlocks(items, client) {
+  const q = client || pool;
   const now = new Date().toISOString();
   for (const item of items) {
-    await pool.query("UPDATE blocks SET sort_order = $1, updated_at = $2 WHERE id = $3", [item.sort_order, now, item.id]);
+    await q.query("UPDATE blocks SET sort_order = $1, updated_at = $2 WHERE id = $3", [item.sort_order, now, item.id]);
   }
   if (items.length > 1) {
     const sorted = [...items].sort((a, b) => a.sort_order - b.sort_order);
     let needsRebalance = false;
     for (let i = 1; i < sorted.length; i++) { if (sorted[i].sort_order - sorted[i - 1].sort_order < 0.001) { needsRebalance = true; break; } }
     if (needsRebalance) {
-      const { rows } = await pool.query("SELECT parent_id FROM blocks WHERE id = $1", [items[0].id]);
+      const { rows } = await q.query("SELECT parent_id FROM blocks WHERE id = $1", [items[0].id]);
       if (rows[0] && rows[0].parent_id) {
-        const { rows: siblings } = await pool.query(`SELECT id FROM blocks WHERE parent_id = $1 AND deleted_at IS NULL ORDER BY sort_order ASC`, [rows[0].parent_id]);
-        for (let i = 0; i < siblings.length; i++) { await pool.query("UPDATE blocks SET sort_order = $1, updated_at = $2 WHERE id = $3", [(i + 1) * 1000, now, siblings[i].id]); }
+        const { rows: siblings } = await q.query(`SELECT id FROM blocks WHERE parent_id = $1 AND deleted_at IS NULL ORDER BY sort_order ASC`, [rows[0].parent_id]);
+        for (let i = 0; i < siblings.length; i++) { await q.query("UPDATE blocks SET sort_order = $1, updated_at = $2 WHERE id = $3", [(i + 1) * 1000, now, siblings[i].id]); }
       }
     }
   }
@@ -312,16 +321,17 @@ async function reorderBlocks(items) {
 
 // ── Day Root ──
 
-async function ensureDayRoot(date, userId, workspaceId) {
+async function ensureDayRoot(date, userId, workspaceId, client) {
+  const q = client || pool;
   const newId = workspaceId ? `day-root-${workspaceId}-${date}` : `day-root-${date}`;
   const legacyId = `day-root-${date}`;
-  const { rows: newRows } = await pool.query("SELECT id FROM blocks WHERE id = $1", [newId]);
+  const { rows: newRows } = await q.query("SELECT id FROM blocks WHERE id = $1", [newId]);
   if (newRows.length > 0) return newId;
   if (workspaceId === "ws-1") {
-    const { rows: legacyRows } = await pool.query("SELECT id FROM blocks WHERE id = $1", [legacyId]);
+    const { rows: legacyRows } = await q.query("SELECT id FROM blocks WHERE id = $1", [legacyId]);
     if (legacyRows.length > 0) return legacyId;
   }
-  await createBlock({ id: newId, type: "day_root", date, properties: { date }, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null });
+  await createBlock({ id: newId, type: "day_root", date, properties: { date }, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null }, client);
   return newId;
 }
 
