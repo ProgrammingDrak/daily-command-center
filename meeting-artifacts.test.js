@@ -127,6 +127,57 @@ test("recapToNotes:false stores the summary child but does not touch notes", asy
   assert.equal((await mem.getBlock("m4")).properties.notes, "untouched");
 });
 
+// ── Auto-prep flip + action placement (Phase 10) ──────────────────────────────
+
+test("applyArtifacts with a prep flips the meeting block's own prep_status to ready", async () => {
+  seedMeeting("mp", { prep_status: "pending" });
+  const res = await automation.applyArtifacts("mp", {
+    workspaceId: "ws-1", userId: 1,
+    prep: { markdown: "### Prep\nDo the reading." },
+  });
+  assert.equal(res.applied.prep, true);
+  assert.equal((await mem.getBlock("mp")).properties.prep_status, "ready");
+});
+
+test("generatePrep (fallback template) also flips prep_status to ready", async () => {
+  seedMeeting("mg", { prep_status: "pending", start: "10:00", end: "10:30" });
+  await automation.generatePrep("mg", { workspaceId: "ws-1", userId: 1 });
+  assert.equal((await mem.getBlock("mg")).properties.prep_status, "ready");
+});
+
+test("placeApprovedAction promotes an approved action to a standalone day task", async () => {
+  seedMeeting("mplace");
+  mem.store.push({ id: "prop1", type: "block", parent_id: "mplace", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Email the deck", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const approved = await automation.approveActions("mplace", { workspaceId: "ws-1", userId: 1 });
+  const actionId = approved.approvedBlocks[0].id;
+  assert.equal((await mem.getBlock(actionId)).parent_id, "mplace"); // starts under the meeting
+
+  const placed = await automation.placeApprovedAction("mplace", actionId, { workspaceId: "ws-1", userId: 1, date: "2026-07-15" });
+  assert.equal(placed.ok, true);
+  const b = await mem.getBlock(actionId);
+  assert.equal(b.parent_id, null);         // detached from the meeting
+  assert.equal(b.date, "2026-07-15");      // moved to the picked day
+  assert.equal(b.properties.kind, "task"); // now folds as a standalone task
+});
+
+test("placeApprovedAction rejects a bad date and an action that isn't the meeting's", async () => {
+  seedMeeting("mA"); seedMeeting("mB");
+  mem.store.push({ id: "stray", type: "block", parent_id: "mB", date: "2026-07-09",
+    properties: { kind: "task", text: "not mine" }, workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  await assert.rejects(
+    () => automation.placeApprovedAction("mA", "stray", { workspaceId: "ws-1", userId: 1, date: "2026-07-15" }),
+    /does not belong/);
+  mem.store.push({ id: "p2", type: "block", parent_id: "mA", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "x", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const ap = await automation.approveActions("mA", { workspaceId: "ws-1", userId: 1 });
+  await assert.rejects(
+    () => automation.placeApprovedAction("mA", ap.approvedBlocks[0].id, { workspaceId: "ws-1", userId: 1, date: "nope" }),
+    /Invalid date/);
+});
+
 test("applyArtifacts ignores client html, escapes markdown, and drops unsafe source urls", async () => {
   seedMeeting("m5");
   await automation.applyArtifacts("m5", {

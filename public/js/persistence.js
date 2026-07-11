@@ -309,6 +309,10 @@ function reloadPersistedEdits() {
           location:p.location||"",
           hangout_link:p.hangout_link||p.conferenceUrl||"",
           rsvp_status:p.rsvp_status||"",
+          // Auto-prep chip: the materializer stamps prep_status on the meeting block
+          // ("pending" at birth, "ready" once a brief lands). Surface it so the row
+          // chip (itinerary-card.js) renders without a page-level meetings[] join.
+          prepStatus:p.prep_status||null,
           meetingBlockId:(p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")?block.id:(p.meetingBlockId||""),
           isPlaceholder:p.isPlaceholder||false,
           placeholderMenus:Array.isArray(p.placeholderMenus)?p.placeholderMenus:[],

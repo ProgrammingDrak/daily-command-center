@@ -273,6 +273,22 @@ async function upsertArtifact({ meeting, workspaceId, userId, kind, properties, 
   });
 }
 
+// Flip the meeting BLOCK's own prep_status to "ready" once a prep brief exists,
+// so the itinerary prep chip (data.js/persistence.js -> ev.prepStatus) turns from
+// pending to ready. The materializer stamps "pending" at birth; this is the other
+// half. Reloads the block first so we never clobber a concurrent notes/recap write.
+async function markPrepReady(meetingId) {
+  try {
+    const fresh = await blockDB.getBlock(meetingId);
+    if (!fresh) return;
+    const fp = propsOf(fresh);
+    if (fp.prep_status === "ready") return;
+    await blockDB.updateBlock(meetingId, { properties: { ...fp, prep_status: "ready" } });
+  } catch (e) {
+    console.error("[meeting-automation] markPrepReady failed (non-fatal):", e.message);
+  }
+}
+
 async function getAutomation(blockId, workspaceId) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const gcalRow = await loadGcalRow(blockId);
@@ -305,6 +321,8 @@ async function generatePrep(blockId, { workspaceId, userId, extraSources = [] })
       sources,
     },
   });
+  // Fallback fill: a template prep now exists, so the chip should read "ready".
+  await markPrepReady(meeting.id);
   return getAutomation(blockId, workspaceId);
 }
 
@@ -430,6 +448,41 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
   return { ...(await getAutomation(blockId, workspaceId)), approvedCount: created.length, approvedBlocks: created };
 }
 
+// Place an already-approved action onto a day. approveActions leaves each action
+// as a child of the meeting (parent_id = meeting.id, tags:["action-item"]); this
+// promotes one to a standalone day task: kind:"task" so the client fold admits it
+// (persistence.js), parent_id detached, and a real date (plus an optional pinned
+// start). Declining placement in the UI just never calls this, so the action stays
+// under the meeting exactly as before.
+async function placeApprovedAction(blockId, actionBlockId, { workspaceId, userId, date, start = null }) {
+  const meeting = await loadMeeting(blockId, workspaceId);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) {
+    const err = new Error("Invalid date (want YYYY-MM-DD)"); err.statusCode = 400; throw err;
+  }
+  const action = await blockDB.getBlock(actionBlockId);
+  if (!action || action.deleted_at) {
+    const err = new Error("Action block not found"); err.statusCode = 404; throw err;
+  }
+  if (action.workspace_id && workspaceId && action.workspace_id !== workspaceId) {
+    const err = new Error("Action block not found"); err.statusCode = 404; throw err;
+  }
+  const p = propsOf(action);
+  // Only place an action that actually belongs to this meeting (child link or the
+  // meetingAutomation provenance stamp), so a stray id can't be reparented.
+  const belongs = String(action.parent_id || "") === String(meeting.id) ||
+    ((p.meetingAutomation || {}).meetingBlockId === meeting.id);
+  if (!belongs) {
+    const err = new Error("Action does not belong to this meeting"); err.statusCode = 400; throw err;
+  }
+  const nextProps = { ...p, kind: "task" };
+  if (start && /^([01]\d|2[0-3]):[0-5]\d$/.test(start)) {
+    nextProps.start = start;
+    nextProps._pinnedStart = start;
+  }
+  await blockDB.updateBlock(action.id, { properties: nextProps, parent_id: null, date });
+  return { ok: true, actionBlockId: action.id, date, start: nextProps.start || null };
+}
+
 // Merge an auto-generated recap into a meeting block's own notes without
 // clobbering anything the user typed. The recap lives below a stable marker, so
 // a re-post replaces only its own region (idempotent) and leaves user notes above.
@@ -488,6 +541,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       },
     });
     applied.prep = true;
+    // Sweep-filled the real brief: flip the block chip pending -> ready.
+    await markPrepReady(meeting.id);
   }
 
   if (transcript && transcript.text) {
@@ -570,6 +625,7 @@ module.exports = {
   generatePrep,
   ingestTranscript,
   approveActions,
+  placeApprovedAction,
   applyArtifacts,
   mergeRecapIntoNotes,
 };

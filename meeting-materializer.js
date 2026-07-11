@@ -90,6 +90,20 @@ module.exports = function createMeetingMaterializer(deps) {
     return s === "done" || s === "completed" || !!props.completed;
   }
 
+  // Auto-prep horizon: a meeting whose start is ahead of us but inside this many
+  // hours is "prep-eligible" — a newly materialized one gets stamped prep_status
+  // "pending" so its card shows a pending chip immediately, and the sweep's prep
+  // lane (review_meetings.py, same 36h window) picks it up and posts the real
+  // brief, flipping the block to "ready". Past/far-future meetings get no stamp
+  // (no chip): recap is the past's job, and far-out prep would just go stale.
+  const PREP_HORIZON_MS = 36 * 60 * 60 * 1000;
+  function withinPrepHorizon(startIso) {
+    const t = new Date(startIso).getTime();
+    if (Number.isNaN(t)) return false;
+    const nowMs = Date.now();
+    return t > nowMs && t <= nowMs + PREP_HORIZON_MS;
+  }
+
   // Whether a block already carries the point-earning meeting tag. Used to heal
   // meetings materialized before the tag existed (see reconcile below).
   function hasMeetingTag(props) {
@@ -147,6 +161,11 @@ module.exports = function createMeetingMaterializer(deps) {
       synced_gcal_end: end,
       synced_gcal_title: title,
     };
+    // Auto-prep: stamp a next-day meeting "pending" at birth so the card carries a
+    // prep chip by morning with no button press. Only on CREATE — reconcile spreads
+    // ...p, so a later "ready" (sweep-filled) or "pending" survives untouched, which
+    // keeps re-ingest idempotent (a filled prep is never reset).
+    if (withinPrepHorizon(meeting.start)) props.prep_status = "pending";
     stampMeetingPoints(props, durationMinutes);
     return props;
   }

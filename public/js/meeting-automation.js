@@ -107,6 +107,35 @@
     return data;
   }
 
+  // After actions are approved they live under the meeting; offer to place them on
+  // a day in one batch. Picking a day promotes every approved action to a standalone
+  // task on it (server detaches the parent); closing the popover leaves them under
+  // the meeting exactly as before. Anchors to the live panel — the approve button
+  // was just re-rendered away.
+  function offerPlacement(meetingId,blocks){
+    const list=(blocks||[]).filter(b=>b&&b.id);
+    if(!list.length||typeof openSchedulePopover!=="function")return;
+    const anchor=document.querySelector('.meeting-auto-panel[data-meeting-auto-id="'+cssId(meetingId)+'"]');
+    if(!anchor)return;
+    const n=list.length;
+    openSchedulePopover({
+      mode:"pick",
+      anchorEl:anchor,
+      header:"Place "+n+" action"+(n===1?"":"s")+" on a day?",
+      actionLabel:"Place",
+      onPick:async(dateStr)=>{
+        let ok=0;
+        for(const b of list){
+          try{await postJson('/api/meetings/'+encodeURIComponent(meetingId)+'/actions/'+encodeURIComponent(b.id)+'/place',{date:dateStr});ok++;}
+          catch(e){}
+        }
+        toast(ok?("Placed "+ok+" action"+(ok===1?"":"s")+" on "+dateStr):"Could not place actions",ok?undefined:"error");
+        fetchAutomation(meetingId,true);
+        if(typeof buildActionItemsTab==="function")buildActionItemsTab();
+      }
+    });
+  }
+
   document.addEventListener("click",async e=>{
     const prep=e.target.closest(".ma-prep-btn");
     const ingest=e.target.closest(".ma-ingest-btn");
@@ -146,6 +175,7 @@
         cache.set(id,data);renderPanel(id,data);
         if(typeof buildActionItemsTab==="function")buildActionItemsTab();
         toast("Actions added");
+        offerPlacement(id,data.approvedBlocks);
       }catch(err){toast(err.message||"Approval failed","error")}
       finally{approve.disabled=false;approve.textContent="Approve selected";}
     }
