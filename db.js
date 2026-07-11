@@ -470,6 +470,91 @@ async function getDccStateRange(startDate, endDate, workspaceId) {
   return rows.map(row => ({ ...row, state_json: typeof row.state_json === "string" ? JSON.parse(row.state_json) : row.state_json }));
 }
 
+// ── Responsibility / task-group / apply-forward queries ──
+// SQL moved out of routes/blocks.js (dcc-improvements P8) so the router holds no
+// raw pool.query. These are verbatim moves — same predicates, same params, same
+// parseBlock shaping. Callers layer domain normalization on top (see
+// responsibility-store.js).
+
+// Responsibility items + their triggers, oldest first. Rows are parseBlock'd but
+// NOT score-normalized here (the store adds importanceScore).
+async function getResponsibilityBlocks(workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(
+        `SELECT * FROM blocks
+         WHERE type = 'block'
+           AND properties->>'kind' IN ('responsibility_item','responsibility_trigger')
+           AND workspace_id = $1
+           AND deleted_at IS NULL
+         ORDER BY created_at ASC`,
+        [workspaceId]
+      )
+    : await pool.query(
+        `SELECT * FROM blocks
+         WHERE type = 'block'
+           AND properties->>'kind' IN ('responsibility_item','responsibility_trigger')
+           AND deleted_at IS NULL
+         ORDER BY created_at ASC`
+      );
+  return rows.map(parseBlock);
+}
+
+async function findResponsibilityBySlug(slug, workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(
+        `SELECT * FROM blocks
+         WHERE type='block' AND properties->>'kind'='responsibility_item'
+           AND properties->>'slug'=$1 AND workspace_id=$2 AND deleted_at IS NULL
+         LIMIT 1`,
+        [slug, workspaceId]
+      )
+    : await pool.query(
+        `SELECT * FROM blocks
+         WHERE type='block' AND properties->>'kind'='responsibility_item'
+           AND properties->>'slug'=$1 AND deleted_at IS NULL
+         LIMIT 1`,
+        [slug]
+      );
+  return rows[0] ? parseBlock(rows[0]) : null;
+}
+
+// Generic "all type='block' rows of this kind", oldest first (task_menu, task_group).
+async function getBlocksByKind(kind, workspaceId) {
+  const { rows } = workspaceId
+    ? await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND workspace_id=$2 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind, workspaceId])
+    : await pool.query(`SELECT * FROM blocks WHERE type='block' AND properties->>'kind'=$1 AND deleted_at IS NULL ORDER BY created_at ASC`, [kind]);
+  return rows.map(parseBlock);
+}
+
+// /responsibilities/capture: does this workspace already have the trigger for a
+// given slug? Existence check only — returns the id row or null.
+async function findResponsibilityTriggerBySlug(slug, workspaceId) {
+  const { rows } = await pool.query(
+    `SELECT id FROM blocks WHERE type='block' AND properties->>'kind'='responsibility_trigger' AND properties->>'slug'=$1 AND ($2::text IS NULL OR workspace_id=$2) AND deleted_at IS NULL LIMIT 1`,
+    [slug, workspaceId || null]
+  );
+  return rows[0] || null;
+}
+
+// /responsibilities/capture: dedupe an alert-sourced task by its alertKey.
+async function findResponsibilityTaskByAlertKey(alertKey, workspaceId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks WHERE type='block' AND properties->>'kind'='responsibility_task' AND properties->>'alertKey'=$1 AND ($2::text IS NULL OR workspace_id=$2) AND deleted_at IS NULL LIMIT 1`,
+    [alertKey, workspaceId || null]
+  );
+  return rows[0] ? parseBlock(rows[0]) : null;
+}
+
+// apply-forward: distinct future dates (after fromDate) that still have live
+// blocks in this workspace, ascending. Returns bare YYYY-MM-DD strings.
+async function getFutureDatesWithBlocks(fromDate, workspaceId) {
+  const { rows } = await pool.query(
+    "SELECT DISTINCT date FROM blocks WHERE deleted_at IS NULL AND date > $1 AND ($2::text IS NULL OR workspace_id = $2) ORDER BY date ASC",
+    [fromDate, workspaceId || null]
+  );
+  return rows.map(r => r.date instanceof Date ? r.date.toISOString().split("T")[0] : String(r.date).split("T")[0]);
+}
+
 module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
@@ -477,5 +562,7 @@ module.exports = {
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
-  parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers
+  parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
+  getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
+  findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, getFutureDatesWithBlocks
 };
