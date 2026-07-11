@@ -1220,13 +1220,78 @@ function _anyModalOpen() {
   return overlays.length > 0;
 }
 
-// rAF-throttled render — collapses multiple rapid calls into one frame
-// Defers render while any modal is open to prevent DOM clobbering
+// ======== SURFACE REGISTRY (visibility-aware rendering) ========
+// _doRender used to rebuild ~15 surfaces on EVERY interaction regardless of what
+// was on screen. Now each surface declares how to build itself and when it's
+// visible; render() marks surfaces dirty and _doRender builds only the ones that
+// are both visible AND dirty, then clears their flags. Hidden surfaces stay dirty
+// and rebuild when their tab/view is re-activated (see _renderNow + the "schedule"
+// tab hook below). A no-scope render() marks everything dirty, preserving the old
+// full-rebuild semantics for the ~100 unscoped call sites.
+//
+// COUPLING NOTE (brief watch-out #1): the drawer builds
+// (consider/backlog/triage/scheduled/scheduleSoon/actionItems/trivial) and
+// buildGlymphaticBrief also write ALWAYS-VISIBLE count badges that
+// _updateTaskMenusBadge and the tab buttons read; no independent updater exists.
+// Gating them by drawer/tab visibility would strand those badges stale, so they
+// are force-coupled as always-visible (isVisible:()=>true) and build every render
+// in the original order, with taskMenusBadge last (it reads the counts they set).
+// Only surfaces with NO always-visible side effect — the schedule sub-views, the
+// triage banner, and the focus banner — are truly gated. That's where the heavy,
+// currently-wasted buildSchedule (a #timeline that has no 'plan' toggle anymore,
+// so it's never on screen yet rebuilt every render) lives.
+function _tabActive(name){const el=document.getElementById("tab-"+name);return !!(el&&el.classList.contains("active"));}
+
+const SURFACES = {
+  scheduleTimeline:{build:()=>{if(typeof buildSchedule==="function")buildSchedule();},        isVisible:()=>_tabActive("schedule")&&schedView==="plan"},
+  scheduleTriage:  {build:()=>{if(typeof buildScheduleTriage==="function")buildScheduleTriage();},isVisible:()=>_tabActive("schedule")&&schedView!=="actual"},
+  // buildScheduleDelegated (renderDelegatedSidebar) + refreshMeetingAutomationPanels
+  // were side effects of buildSchedule (schedule-tab.js:602,962). Since buildSchedule
+  // is now gated off, they must be their own surfaces or they'd go stale on render.
+  // Delegated writes the always-visible "Delegated / Blocked" count badge + list, so
+  // it's always-built (like the other Task Menu builds); the meeting-auto panels only
+  // live inside schedule cards, so that one is gated to the schedule tab.
+  delegated:       {build:()=>{if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();},isVisible:()=>true},
+  meetingAutoPanels:{build:()=>{if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels();},isVisible:()=>_tabActive("schedule")},
+  consider:        {build:()=>{if(typeof buildConsider==="function")buildConsider();},          isVisible:()=>true},
+  backlog:         {build:()=>{if(typeof buildBacklog==="function")buildBacklog();},            isVisible:()=>true},
+  triage:          {build:()=>{if(typeof buildTriage==="function")buildTriage();},              isVisible:()=>true},
+  actionItems:     {build:()=>{if(typeof buildActionItemsTab==="function")buildActionItemsTab();},isVisible:()=>true},
+  trivial:         {build:()=>{if(typeof buildTrivialTasks==="function")buildTrivialTasks();},  isVisible:()=>true},
+  scheduled:       {build:()=>{if(typeof buildScheduled==="function")buildScheduled();},        isVisible:()=>true},
+  scheduleSoon:    {build:()=>{if(typeof buildScheduleSoon==="function")buildScheduleSoon();},  isVisible:()=>true},
+  glymphaticBrief: {build:()=>{if(typeof buildGlymphaticBrief==="function")buildGlymphaticBrief();},isVisible:()=>true},
+  upcoming:        {build:()=>{if(typeof buildUpcoming==="function")buildUpcoming();},          isVisible:()=>!!document.getElementById("upcoming-board")},
+  progress:        {build:()=>{if(typeof buildProgress==="function")buildProgress();},          isVisible:()=>true},
+  stats:           {build:()=>{if(typeof updateStats==="function")updateStats();},              isVisible:()=>true},
+  sync:            {build:()=>{if(typeof updateSync==="function")updateSync();},                isVisible:()=>true},
+  snBadge:         {build:()=>{if(typeof updateSnBadge==="function")updateSnBadge();},          isVisible:()=>true},
+  taskMenusBadge:  {build:()=>{if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();},isVisible:()=>true},
+  listView:        {build:()=>{if(typeof buildListView==="function")buildListView();},          isVisible:()=>_tabActive("schedule")&&schedView==="list"},
+  actualView:      {build:()=>{if(typeof buildActualView==="function")buildActualView();},      isVisible:()=>_tabActive("schedule")&&schedView==="actual"},
+  pivotTasks:      {build:()=>{if(typeof paintPivotTasks==="function")paintPivotTasks();},      isVisible:()=>true},
+  focusBanner:     {build:()=>{if(typeof updateFocusBanner==="function")updateFocusBanner();},  isVisible:()=>_tabActive("schedule")},
+};
+
+// Named scopes let a hot call site mark only the surfaces it can actually change.
+const RENDER_SCOPES = { schedule:["scheduleTimeline","listView","actualView"] };
+
+const _dirty = {};
+function _markDirty(scope){
+  if(scope==null){ for(const k in SURFACES) _dirty[k]=true; return; }
+  const list = RENDER_SCOPES[scope] || (Array.isArray(scope)?scope:[scope]);
+  list.forEach(n=>{ if(n in SURFACES) _dirty[n]=true; });
+}
+
+// rAF-throttled render — collapses multiple rapid calls into one frame.
+// Defers while any modal is open to prevent DOM clobbering. render(scope) marks a
+// subset dirty; render() marks all dirty. Dirt accumulates even while deferred.
 let _renderPending = false;
 let _renderDeferred = false;
-function render() {
+function render(scope) {
+  _markDirty(scope);
   if (_anyModalOpen()) {
-    _renderDeferred = true; // will run when modal closes
+    _renderDeferred = true; // will flush when modal closes, keeping accumulated dirt
     return;
   }
   if (_renderPending) return;
@@ -1234,14 +1299,46 @@ function render() {
   requestAnimationFrame(_doRender);
 }
 
-// Call this when any modal closes to flush deferred render
+// Call this when any modal closes to flush the dirt accumulated during the modal.
+// Does NOT re-mark everything — a scoped update stays scoped across the modal.
 function _flushDeferredRender() {
-  if (_renderDeferred) {
-    _renderDeferred = false;
-    render();
+  if (!_renderDeferred) return;
+  _renderDeferred = false;
+  if (_renderPending) return;
+  _renderPending = true;
+  requestAnimationFrame(_doRender);
+}
+
+// Build every visible + dirty surface, clearing flags as we go. Per-surface
+// try/catch (and clearing the flag BEFORE building) so one surface throwing can't
+// strand the others dirty forever, and a persistently-throwing build can't loop.
+function _doRender(){
+  _renderPending=false;
+  for(const name in SURFACES){
+    if(!_dirty[name]) continue;
+    let visible=true;
+    try{ visible=SURFACES[name].isVisible(); }catch(e){ visible=true; }
+    if(!visible) continue;              // leave dirty; rebuilt on activation
+    _dirty[name]=false;
+    try{ SURFACES[name].build(); }catch(e){ console.error("[surface:"+name+"]",e); }
   }
 }
-function _doRender(){_renderPending=false;buildSchedule();buildConsider();buildBacklog();buildTriage();buildActionItemsTab();buildTrivialTasks();if(typeof buildScheduled==='function')buildScheduled();if(typeof buildScheduleSoon==='function')buildScheduleSoon();if(typeof buildGlymphaticBrief==='function')buildGlymphaticBrief();buildUpcoming();buildProgress();updateStats();updateSync();updateSnBadge();_updateTaskMenusBadge();if(schedView==="actual")buildActualView();else if(schedView==="list"&&typeof buildListView==='function')buildListView();if(typeof paintPivotTasks==='function')paintPivotTasks();updateFocusBanner();}
+
+// Synchronous, modal-safe rebuild for activation hooks (tab switch): build the
+// now-visible dirty surfaces immediately so a freshly-shown tab isn't left stale.
+function _renderNow(){
+  if(_anyModalOpen()){ _renderDeferred=true; return; }
+  _doRender();
+}
+
+// tabs.js has no "schedule" renderer of its own (schedule is default-active and
+// built by the initial render), so this additive registration rebuilds the
+// schedule surfaces when the user switches BACK to the tab after they were marked
+// dirty while hidden. Non-schedule tabs already lazy-build via their own tabs.js
+// registrations; the drawer surfaces are always-built (see coupling note).
+if(window.DCC && DCC.tabs && typeof DCC.tabs.register==="function"){
+  DCC.tabs.register("schedule", _renderNow);
+}
 function _updateTaskMenusBadge(){
   const badge=document.getElementById("tasks-count");if(!badge)return;
   // Sum up counts from sub-tab badges

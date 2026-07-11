@@ -39,14 +39,30 @@
   // Refresh DCC-owned state only (schedule, triage, meetings)
   // Does NOT touch user blocks — those are in SQLite and never overwritten.
   // Also reloads BlockStore cache so cross-tab edits are picked up.
-  async function refreshDccState(){
+  async function refreshDccState(evt){
     if(isEditing()){
       pendingDccUpdate = true;
       showIndicator("Update pending...");
       return;
     }
+    // Scope by event date: an SSE refresh only ever re-renders the day currently
+    // in view (viewDate), so a dcc-state-changed for some OTHER day can't affect
+    // what's on screen — skip the heavy day-state fetch+transform+clone+render for
+    // it. __DCC_UPCOMING__ spans several days (it feeds the triage "upcoming meeting
+    // actions" titles), so we still refresh that cheap sidecar regardless of date.
+    // Only dcc-state-changed carries a clean date; file-changed/ingest/interval
+    // pass none -> full refresh (the safe default).
+    const offView = evt && evt.date && typeof viewDate !== "undefined" && viewDate && evt.date !== viewDate;
     showIndicator("Updating...", "var(--accent)");
     try {
+      if(offView){
+        const upcoming = await fetch('/api/state/upcoming').then(r => r.json()).catch(() => null);
+        if(upcoming) window.__DCC_UPCOMING__ = upcoming;
+        console.log("[SSE] Off-view date " + evt.date + " (viewing " + viewDate + "): refreshed upcoming, skipped day-state");
+        showIndicator("Updated!", "var(--green)");
+        setTimeout(hideIndicator, 1500);
+        return;
+      }
       const [dayState, upcoming] = await Promise.all([
         fetch('/api/state/day').then(r => r.json()).catch(() => null),
         fetch('/api/state/upcoming').then(r => r.json()).catch(() => []),
@@ -145,9 +161,9 @@
             refreshDccState();
             break;
 
-          // DCC state updated via refresh/state APIs
+          // DCC state updated via refresh/state APIs. Carries msg.date -> scoped.
           case 'dcc-state-changed':
-            refreshDccState();
+            refreshDccState(msg);
             // Also notify BlockStore if it's tracking DCC state
             if(window.blockStore) {
               window.blockStore.handleDccStateChanged(msg);

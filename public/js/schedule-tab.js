@@ -49,7 +49,7 @@ function moveSubtaskSibling(id,direction){
   if(typeof saveTaskOrder==="function")saveTaskOrder();
   if(typeof saveSubtaskOrder==="function")saveSubtaskOrder(ev.subtaskOf);
   if(typeof log==="function")log("reorder",id,"Moved subtask "+(direction<0?"up":"down"));
-  if(typeof render==="function")render();
+  if(typeof render==="function")render("schedule"); // reorder only touches schedule rows
 }
 
 function startSubtaskTitleEdit(id,titleEl){
@@ -451,7 +451,7 @@ function buildListView(){
     const del=el.querySelector(".btn-del-task");
     if(del)del.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfDrop(r,el);return;}openDeleteConfirm(del.dataset.delId);});
     const cc=el.querySelector(".wrap-collapse");
-    if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render();}});
+    if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}});
     return el;
   }
 
@@ -472,7 +472,7 @@ function buildListView(){
     controls.querySelectorAll(".it-list-ctrl-btn").forEach(btn=>{
       btn.addEventListener("click",e=>{
         e.stopPropagation();
-        if(typeof setCollapsedAll==="function"){setCollapsedAll(parentIds,btn.dataset.collapseAction==="collapse");render();}
+        if(typeof setCollapsedAll==="function"){setCollapsedAll(parentIds,btn.dataset.collapseAction==="collapse");render("schedule");}
       });
     });
     wrap.appendChild(controls);
@@ -629,7 +629,9 @@ function buildSchedule(){
     tl.addEventListener("drop",e=>{ const gid=window._dragFromTaskGroup; if(!gid)return; e.preventDefault(); window._dragFromTaskGroup=null; if(typeof window.addTaskGroupToDay==="function")window.addTaskGroupToDay(gid); });
   }
   tl.innerHTML="";
-  const listView=document.getElementById("list-view");if(listView)listView.innerHTML="";
+  // (Phase 7) The list view is its own render surface now; it clears + rebuilds
+  // #list-view itself. buildSchedule no longer clears it here nor tail-calls
+  // buildListView below, so the list view builds exactly once per render.
   if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
@@ -764,7 +766,7 @@ function buildSchedule(){
   // Subtask timeline rows now use the shared renderSubRow (itinerary-card.js) with
   // compact:true — the pie-slice chip and delegated collapse live in there.
   // Delegated collapse toggle: one listener handles every wrap/subtask chevron.
-  if(!tl._collapseWired){tl._collapseWired=true;tl.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".wrap-collapse");if(!b)return;e.stopPropagation();const item=b.closest("[data-id]");if(item&&typeof toggleCollapsed==="function"){toggleCollapsed(item.dataset.id);render();}});}
+  if(!tl._collapseWired){tl._collapseWired=true;tl.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".wrap-collapse");if(!b)return;e.stopPropagation();const item=b.closest("[data-id]");if(item&&typeof toggleCollapsed==="function"){toggleCollapsed(item.dataset.id);render("schedule");}});}
 
   // Render active/upcoming items as full cards; subtasks as compact rows (recursion + collapse).
   flattenSchedule(activeItems).forEach(node=>{
@@ -986,7 +988,8 @@ function buildSchedule(){
       tl.appendChild(el);
     });
   }
-  if(schedView==="list")buildListView();
+  // (Phase 7) tail buildListView() removed — the list view is its own render
+  // surface, built once per render by the registry. Keeping it here double-built.
   if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels();
 }
 
