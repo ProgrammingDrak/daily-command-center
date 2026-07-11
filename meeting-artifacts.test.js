@@ -178,6 +178,41 @@ test("placeApprovedAction rejects a bad date and an action that isn't the meetin
     /Invalid date/);
 });
 
+test("placeApprovedAction pins a valid start and drops an invalid one", async () => {
+  seedMeeting("mstart");
+  mem.store.push({ id: "ps1", type: "block", parent_id: "mstart", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Prep the deck", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const ap1 = await automation.approveActions("mstart", { workspaceId: "ws-1", userId: 1 });
+  const aid1 = ap1.approvedBlocks[0].id;
+  await automation.placeApprovedAction("mstart", aid1, { workspaceId: "ws-1", userId: 1, date: "2026-07-15", start: "09:30" });
+  const b1 = await mem.getBlock(aid1);
+  assert.equal(b1.properties.start, "09:30");
+  assert.equal(b1.properties._pinnedStart, "09:30");
+
+  mem.store.push({ id: "ps2", type: "block", parent_id: "mstart", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Other", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const ap2 = await automation.approveActions("mstart", { workspaceId: "ws-1", userId: 1 });
+  const aid2 = ap2.approvedBlocks[0].id;
+  await automation.placeApprovedAction("mstart", aid2, { workspaceId: "ws-1", userId: 1, date: "2026-07-16", start: "25:00" });
+  const b2 = await mem.getBlock(aid2);
+  assert.equal(b2.properties.start, undefined); // junk time dropped
+  assert.equal(b2.date, "2026-07-16");          // date still applied
+});
+
+test("placeApprovedAction 404s on a missing action and a cross-workspace action", async () => {
+  seedMeeting("m404");
+  await assert.rejects(
+    () => automation.placeApprovedAction("m404", "does-not-exist", { workspaceId: "ws-1", userId: 1, date: "2026-07-15" }),
+    /not found/i);
+  mem.store.push({ id: "xws", type: "block", parent_id: "m404", date: "2026-07-09",
+    properties: { kind: "task", text: "x" }, workspace_id: "ws-OTHER", user_id: 1, deleted_at: null });
+  await assert.rejects(
+    () => automation.placeApprovedAction("m404", "xws", { workspaceId: "ws-1", userId: 1, date: "2026-07-15" }),
+    /not found/i);
+});
+
 test("applyArtifacts ignores client html, escapes markdown, and drops unsafe source urls", async () => {
   seedMeeting("m5");
   await automation.applyArtifacts("m5", {

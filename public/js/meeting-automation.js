@@ -114,13 +114,14 @@
   // was just re-rendered away.
   function offerPlacement(meetingId,blocks){
     const list=(blocks||[]).filter(b=>b&&b.id);
-    if(!list.length||typeof openSchedulePopover!=="function")return;
+    if(!list.length||typeof openDatePickPopover!=="function")return;
     const anchor=document.querySelector('.meeting-auto-panel[data-meeting-auto-id="'+cssId(meetingId)+'"]');
     if(!anchor)return;
     const n=list.length;
-    openSchedulePopover({
-      mode:"pick",
-      anchorEl:anchor,
+    // Reuse the shared pick-a-day wrapper (schedule-popover.js) rather than
+    // inlining openSchedulePopover({mode:"pick"}) — same wrapper the delegated
+    // follow-ups use, so pick-mode defaults stay single-sourced.
+    openDatePickPopover(anchor,{
       header:"Place "+n+" action"+(n===1?"":"s")+" on a day?",
       actionLabel:"Place",
       onPick:async(dateStr)=>{

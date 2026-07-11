@@ -318,6 +318,18 @@ test("auto-prep: a past meeting and a far-future meeting get NO prep stamp", asy
   assert.equal(bySid(db, "far").properties.prep_status, undefined);
 });
 
+test("auto-prep: reconcile stamps pending when a meeting first seen far-out crosses into the 36h window", async () => {
+  const db = makeBlockDB();
+  const start = isoIn(12), end = isoIn(13), d = dayOf(start);
+  // A block created while >36h out: now in-horizon, but never got the create-time stamp.
+  db.store.push({ id: "blk-seed", type: "block", date: d,
+    properties: { type: "meeting", source: "calendar", source_id: "reco", title: "Team sync",
+      tags: ["meeting"], start: "00:00", end: "00:30", status: "open" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  await M(db)(args([mtg("reco", start, end, { title: "Team sync" })], { date: d }));
+  assert.equal(bySid(db, "reco").properties.prep_status, "pending"); // stamped as it crossed in
+});
+
 test("auto-prep is idempotent: a re-ingest never resets a sweep-filled 'ready' prep", async () => {
   const db = makeBlockDB();
   const start = isoIn(12), end = isoIn(13);

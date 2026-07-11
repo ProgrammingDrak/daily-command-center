@@ -277,12 +277,18 @@ module.exports = function createMeetingMaterializer(deps) {
         const p = existing.properties || {};
         if (!isCompleted(p)) {
           const nextTitle = meeting.title || p.title || "(No title)";
+          // A meeting is first CREATED ~10 business days out (the sweep publishes a
+          // wide horizon in one payload), so most meetings are born outside the 36h
+          // window and miss the create-time pending stamp. Stamp it here as they
+          // cross INTO the window on a later sweep. Guarded by !p.prep_status so a
+          // sweep-filled "ready" is never clobbered and pending is never re-stamped.
+          const wantsPending = !p.prep_status && withinPrepHorizon(meeting.start);
           const changed =
             p.start !== start || p.end !== end || p.title !== nextTitle ||
             p.synced_gcal_start !== start || p.synced_gcal_end !== end ||
             // Heal meetings materialized before the point-earning tag existed:
             // a one-time reconcile stamps the tag + points, then stays idempotent.
-            !hasMeetingTag(p);
+            !hasMeetingTag(p) || wantsPending;
           if (changed) {
             const props = {
               ...p,
@@ -296,6 +302,7 @@ module.exports = function createMeetingMaterializer(deps) {
               synced_gcal_end: end,
               synced_gcal_title: nextTitle,
             };
+            if (wantsPending) props.prep_status = "pending";
             stampMeetingPoints(props, durationMinutes);
             try {
               await blockDB.updateBlock(existing.id, { properties: props, sort_order: sortOrderFor(start) });
