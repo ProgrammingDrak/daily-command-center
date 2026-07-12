@@ -116,7 +116,10 @@
   // its slot during reflow and isn't a normal reschedulable task row. Null-safe:
   // an empty/unknown type is not fixed.
   function isFixed(evOrType) {
-    return get(evOrType).fixedTime === true;
+    // Read the raw entry directly (not get()) — this runs in per-row render
+    // filters, so we skip the DEFAULTS Object.assign get() would allocate.
+    const entry = TYPES[normType(evOrType)];
+    return !!(entry && entry.fixedTime === true);
   }
   // Inverse of isFixed: a normal task row (task/triage/focus/shell/wrap/habit…).
   // "point-eligible" is the historical name for this set — the row that shows a

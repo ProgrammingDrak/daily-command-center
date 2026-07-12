@@ -16,9 +16,10 @@
   // drift from it. The residual literals are raw calendar block types that never
   // became first-class registry types.
   const SKIP_RAW = new Set(["focus", "focus_time", "free_time", "prep"]);
+  const SKIP_FIXED_FALLBACK = new Set(["meeting", "oneone", "ooo", "break"]);
   function skipType(type){
-    if (window.TaskTypes && typeof window.TaskTypes.isFixed === "function" && window.TaskTypes.isFixed(type)) return true;
-    return SKIP_RAW.has(type);
+    if (window.TaskTypes && typeof window.TaskTypes.isFixed === "function") return window.TaskTypes.isFixed(type) || SKIP_RAW.has(type);
+    return SKIP_FIXED_FALLBACK.has(type) || SKIP_RAW.has(type); // registry not loaded yet
   }
   // Lookback is unlimited (every archived day) — an unfinished task stays
   // visible until completed, rescheduled, or dropped. MAX_ROWS only caps how
@@ -131,6 +132,9 @@
     if (typeof bs.invalidateRangeCache === "function") bs.invalidateRangeCache(row.sourceDate);
     // Keep the inline Unfinished section (schedule-tab.js) in step with the modal.
     if (typeof invalidateUnfinishedSection === "function") invalidateUnfinishedSection();
+    // Retiring/rescheduling a past block changes prior-day state the streak chip
+    // reads from the same range cache; drop it so the count isn't stale.
+    if (typeof window.invalidateHabitStreaks === "function") window.invalidateHabitStreaks();
   }
 
   function cloneForDate(row) {

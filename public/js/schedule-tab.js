@@ -271,19 +271,6 @@ function _convertIcon(t){return {task:"📋",triage:"🗂",focus:"🎯",shell:"�
 function openConvertToRadial(ev,trig){
   openRadialMenu(trig,buildConvertToItems(ev,trig),_TASK_RADIAL_OPTS);
 }
-// Persist a type change (+ the wrap flag it implies) through the blockstore,
-// mirroring drag.js _persistEvWrap's synchronous-cache-update discipline.
-function _persistEvType(ev){
-  if(!window.blockStore||!ev)return;
-  let bid=ev._blockId;
-  if(!bid){const b=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===ev.id);bid=b&&b.id;}
-  if(!bid)return;
-  const blk=window.blockStore.get?window.blockStore.get(bid):null;
-  const props={...((blk&&blk.properties)||{})};
-  props.type=ev.type;
-  props.isWrap=!!ev.isWrap;
-  try{window.blockStore.updateBlock(bid,props);}catch(e){}
-}
 // Convert a scheduled task to another type: set the type, re-derive the wrap flag
 // (so shell/wrap carry their subtree on drag, per insertTaskNow), persist, and
 // re-render — points re-estimate automatically off the registry. Children are
@@ -300,7 +287,7 @@ function convertTaskType(id,newType){
   const wasRollup=R.isRollup(ev.type);
   ev.type=newType;
   ev.isWrap=(R.rule(newType,"dragMovesSubtree"))?true:undefined;
-  _persistEvType(ev);
+  if(typeof _persistEvProps==="function")_persistEvProps(ev,{type:ev.type,isWrap:!!ev.isWrap});
   // A shell's rollup pie is meaningless once it's a plain/earning type; leaving
   // the child slices in place is harmless (ignored unless rollupMode), but tell
   // the user the completion bonus is gone.
@@ -395,7 +382,10 @@ let _habitDoneByDate=null;        // Map(dateStr -> Set(habitKey))
 let _habitStreakFetchedFor=null;  // the today-date the cache was collected for
 let _habitStreakLoading=false;
 function _habitKey(evOrProps){return String((evOrProps&&(evOrProps.title||evOrProps.label))||"").trim().toLowerCase();}
-function _prevDate(iso){const d=new Date(iso+"T00:00:00");if(isNaN(d.getTime()))return null;d.setDate(d.getDate()-1);return d.toISOString().slice(0,10);}
+// Step back one calendar day. Stays entirely in UTC so date-only strings step by
+// exactly one day regardless of the local timezone offset (a local-midnight build
+// + UTC read-back double-steps in positive-offset zones).
+function _prevDate(iso){const d=new Date(iso+"T00:00:00Z");if(isNaN(d.getTime()))return null;d.setUTCDate(d.getUTCDate()-1);return d.toISOString().slice(0,10);}
 function invalidateHabitStreaks(){_habitDoneByDate=null;_habitStreakFetchedFor=null;}
 async function _ensureHabitStreaks(today){
   if(_habitStreakFetchedFor===today||_habitStreakLoading)return;
@@ -403,8 +393,9 @@ async function _ensureHabitStreaks(today){
   if(!bs||typeof bs.loadDateRange!=="function"){_habitDoneByDate=new Map();_habitStreakFetchedFor=today;return;}
   _habitStreakLoading=true;
   try{
-    // Bounded lookback: 90 days covers any streak chip without loading the full archive.
-    const startD=new Date(today+"T00:00:00");startD.setDate(startD.getDate()-90);
+    // Bounded lookback: 90 days covers any streak chip without loading the full
+    // archive. UTC-consistent with _prevDate so the range edge can't drift a day.
+    const startD=new Date(today+"T00:00:00Z");startD.setUTCDate(startD.getUTCDate()-90);
     const start=startD.toISOString().slice(0,10);
     const end=_prevDate(today)||today;
     await bs.loadDateRange(start,end<start?start:end);
