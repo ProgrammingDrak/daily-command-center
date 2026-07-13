@@ -40,18 +40,12 @@ const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
 const dccIntelligence = require("./dcc-intelligence");
 
-// ── Clerk (managed login widget) — optional. With no keys, social login is
-// simply hidden and the existing username/password flow is unaffected. ──
+// ── Clerk (managed login widget) via the shared drake-auth kit — optional.
+// With no keys, social login is simply hidden and the existing
+// username/password flow is unaffected. ──
+const { createClerkAuth } = require("drake-auth/server");
 const CLERK_SECRET_KEY = process.env.CLERK_SECRET_KEY || null;
 const CLERK_PUBLISHABLE_KEY = process.env.CLERK_PUBLISHABLE_KEY || null;
-let clerkClient = null;
-if (CLERK_SECRET_KEY) {
-  try {
-    clerkClient = require("@clerk/backend").createClerkClient({ secretKey: CLERK_SECRET_KEY });
-  } catch (e) {
-    console.warn("[clerk] @clerk/backend not available; social login disabled:", e.message);
-  }
-}
 
 const app = express();
 app.set("trust proxy", 1); // required for secure cookies behind hosted reverse proxies
@@ -136,7 +130,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/vendor/drake-auth/browser.js"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
@@ -310,53 +304,30 @@ app.post("/api/auth/register", validate(schemas.register), async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// Public config for the login page: tells the frontend whether the Clerk widget
-// is available and which publishable key to mount it with.
-app.get("/api/auth/config", (req, res) => {
-  res.json({ clerkPublishableKey: (clerkClient && CLERK_PUBLISHABLE_KEY) ? CLERK_PUBLISHABLE_KEY : null });
-});
-
-// Managed-widget login: the browser sends a Clerk session token, we verify it,
-// find-or-create the matching local user, and mint our own dcc_session so every
-// existing route keeps working off req.session.userId.
-app.post("/api/auth/clerk-sync", async (req, res) => {
-  if (!clerkClient) return res.status(503).json({ error: "Social login is not configured" });
-  try {
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) return res.status(401).json({ error: "Missing token" });
-
-    const { verifyToken } = require("@clerk/backend");
-    const payload = await verifyToken(token, { secretKey: CLERK_SECRET_KEY });
-    const clerkUserId = payload.sub;
-    if (!clerkUserId) return res.status(401).json({ error: "Invalid token" });
-
-    const cu = await clerkClient.users.getUser(clerkUserId);
-    const primaryEmailObj = cu.emailAddresses.find((e) => e.id === cu.primaryEmailAddressId) || cu.emailAddresses[0] || null;
-    const rawEmail = primaryEmailObj?.emailAddress || null;
-    // Only a VERIFIED email may key account identity. findOrCreateExternalUser
-    // adopts any existing local account whose email matches, so trusting an
-    // unverified address would let an attacker claim someone else's account by
-    // signing up with their email. Unverified => treated as "no email", which
-    // forces a fresh account instead of adopting an existing one.
-    const isVerified = (e) => e && e.verification && e.verification.status === "verified";
-    const email = (isVerified(primaryEmailObj) ? primaryEmailObj : cu.emailAddresses.find(isVerified) || null)?.emailAddress || null;
-    const displayName = [cu.firstName, cu.lastName].filter(Boolean).join(" ") || (rawEmail ? rawEmail.split("@")[0] : null);
-    const avatarUrl = cu.imageUrl || null;
-    const rawProvider = cu.externalAccounts?.[0]?.provider || "";
-    const provider = rawProvider.replace(/^oauth_/, "") || "external";
-
-    const { user, workspaceId } = await auth.findOrCreateExternalUser({ externalId: clerkUserId, email, displayName, avatarUrl, provider });
-    req.session.userId = user.id;
-    req.session.username = user.username;
+// Managed-widget login via drake-auth: mounts GET /api/auth/config and
+// POST /api/auth/clerk-sync (token verify + verified-email-only identity live
+// in the package). DCC supplies find-or-create over its own users table and
+// mints its own dcc_session so every existing route keeps working off
+// req.session.userId. Google vs email-code is Clerk application config.
+const clerkAuth = createClerkAuth({
+  publishableKey: CLERK_PUBLISHABLE_KEY,
+  secretKey: CLERK_SECRET_KEY,
+  findOrCreateUser: async ({ externalId, email, displayName, avatarUrl, provider }) => {
+    const { user, workspaceId } = await auth.findOrCreateExternalUser({ externalId, email, displayName, avatarUrl, provider });
+    return { userId: user.id, username: user.username, workspaceId };
+  },
+  onSession: async (req, { userId, username, workspaceId }) => {
+    req.session.userId = userId;
+    req.session.username = username;
     req.session.workspaceId = workspaceId;
-    await recordLoginEvent(req, { userId: user.id, username: user.username, workspaceId });
-    res.json({ ok: true, username: user.username, workspaceId });
-  } catch (e) {
-    console.error("[clerk] sync error:", e.message);
-    res.status(401).json({ error: "Could not verify sign-in" });
-  }
+    await recordLoginEvent(req, { userId, username, workspaceId });
+  },
 });
+app.use(clerkAuth.router);
+
+// The login page loads the shared sign-in module while unauthenticated, so
+// this path is in AUTH_PUBLIC.
+app.get("/vendor/drake-auth/browser.js", (req, res) => res.sendFile(require.resolve("drake-auth/browser")));
 
 // ── SSE ──
 const sseClients = new Map();
