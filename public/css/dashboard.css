@@ -1324,6 +1324,9 @@
   .it-list-item{position:relative;display:grid;grid-template-columns:14px 20px 18px 28px 3px minmax(0,1fr) auto;align-items:center;gap:6px;min-height:58px;padding:9px 11px;background:var(--card);border:1px solid var(--border);border-radius:8px;transition:background 0.12s,border-color 0.12s,opacity 0.2s,transform 0.12s}
   .it-list-item:hover{background:var(--card-hover);border-color:rgba(148,163,184,0.32)}
   .it-list-item.movable{cursor:grab}
+  /* Open space on a row opens the details modal; movable keeps grab, and
+     subtask/unfinished rows (no open-space handler) stay default. */
+  .it-list-item:not(.subtask-row):not(.unfinished-row):not(.movable){cursor:pointer}
   .it-list-item.dragging{opacity:0.35}
   .it-list-item.drag-over-top{border-top:2px solid var(--accent)}
   .it-list-item.drag-over-bottom{border-bottom:2px solid var(--accent)}
@@ -2078,6 +2081,8 @@
   /* Combined + button (replaces +sub) */
   .btn-add-menu{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;font-weight:700;padding:2px 4px;border-radius:4px;transition:all 0.1s;line-height:1}
   .btn-add-menu:hover{color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.1)}
+  /* Row-level quick add: lives in the title row's open space, left side */
+  .row-add-menu{margin-left:2px;flex-shrink:0;align-self:center}
   .btn-nest-sub{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:all 0.1s;line-height:1;display:inline-flex;align-items:center}
   .btn-nest-sub:hover{color:var(--teal,#14b8a6);background:rgba(20,184,166,0.12)}
 

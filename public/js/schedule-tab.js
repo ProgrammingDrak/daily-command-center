@@ -538,7 +538,7 @@ function buildListView(){
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+(isDoneRow||isPushedRow||isUnfRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
           '<span>'+ms(dur(ev))+'</span>'+
@@ -581,6 +581,15 @@ function buildListView(){
     if(del)del.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfDrop(r,el);return;}openDeleteConfirm(del.dataset.delId);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}});
+    // Row-level quick add: same universal popover the radial's ➕ spoke opens.
+    const am=el.querySelector(".row-add-menu");
+    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    // Open space on the row opens the task-details modal (same as the pen).
+    // Unfinished rows are past-day pseudo-tasks, not in scheduled[] — skip them.
+    if(!isUnfRow)el.addEventListener("click",e=>{
+      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle"))return;
+      if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
+    });
     return el;
   }
 
@@ -947,6 +956,9 @@ function buildSchedule(){
     if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
+    // Row-level quick add: same universal popover the radial's ➕ spoke opens.
+    const am=el.querySelector(".row-add-menu");
+    if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId)});
     // PIN 1: click the timeline dot to pin this task as "active"
     const tnode=el.querySelector(".tl-node");
