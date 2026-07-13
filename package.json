@@ -28,12 +28,11 @@
     "node": ">=20 <23"
   },
   "dependencies": {
-    "@clerk/backend": "^3.5.0",
-    "@clerk/express": "^2.1.23",
     "bcryptjs": "^3.0.3",
     "chokidar": "^3.6.0",
     "connect-pg-simple": "^10.0.0",
     "dotenv": "^16.4.0",
+    "drake-auth": "github:ProgrammingDrak/drake-auth#v0.1.1",
     "express": "^4.21.0",
     "express-session": "^1.19.0",
     "googleapis": "^171.4.0",
