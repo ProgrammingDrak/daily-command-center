@@ -9,9 +9,16 @@ const TC={
   ooo:    {tag:"OOO",cls:"tag-ooo",color:"#64748b"},
   shell:  {tag:"Shell",cls:"tag-shell",color:"#e2e8f0"}
 };
-// Behavior rules for types (earning, rollup, drag, completion) live in the
-// TASK_TYPES registry (task-types.js); TC stays the legacy color/label source.
-function cfg(t){return TC[t]||TC.task}
+// Type label/tag-class/color now live in the TASK_TYPES registry (task-types.js)
+// alongside behavior — one entry per type. cfg() is a thin shim over it so every
+// legacy `cfg(ev.type).{tag,cls,color}` caller keeps working while the registry
+// stays the single source. TC remains the fallback for standalone/test contexts
+// where window.TaskTypes hasn't loaded.
+function cfg(t){
+  const R=(typeof window!=="undefined")&&window.TaskTypes;
+  if(R&&typeof R.get==="function"){const e=R.get(t);return {tag:e.label,cls:e.tagCls,color:e.color};}
+  return TC[t]||TC.task;
+}
 function priCls(p){return p==="High"?"pri-hi":p==="Medium"?"pri-med":"pri-lo"}
 function colorMeta(ev){
   if(!ev.meta)return'';

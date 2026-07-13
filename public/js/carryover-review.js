@@ -4,7 +4,15 @@
 // into today's backlog, reschedule it, or drop it.
 
 (function(){
-  const SKIP_TYPES = new Set(["meeting","oneone","ooo","break","focus","focus_time","free_time","prep"]);
+  // Fixed-time types (meeting/oneone/ooo/break) come from the TASK_TYPES registry
+  // via TaskTypes.isFixed so this can't drift; the residual literals are raw
+  // calendar block types that never became first-class registry types.
+  const SKIP_RAW = new Set(["focus","focus_time","free_time","prep"]);
+  const SKIP_FIXED_FALLBACK = new Set(["meeting","oneone","ooo","break"]);
+  function skipType(type){
+    if(window.TaskTypes&&typeof window.TaskTypes.isFixed==="function")return window.TaskTypes.isFixed(type)||SKIP_RAW.has(type);
+    return SKIP_FIXED_FALLBACK.has(type)||SKIP_RAW.has(type); // registry not loaded yet
+  }
   const REVIEWED_PREFIX = "pa-carryover-reviewed-";
 
   function prettyDate(iso){
@@ -29,7 +37,7 @@
     if (!priorState || !priorState.schedule || !Array.isArray(priorState.schedule.timeline)) return [];
     const done = priorDoneSet(priorDay);
     return priorState.schedule.timeline
-      .filter(t => !SKIP_TYPES.has(t.type))
+      .filter(t => !skipType(t.type))
       .filter(t => !t.completed && !done.has(t.id))
       .map(t => {
         const start = t.start ? new Date(t.start) : null;

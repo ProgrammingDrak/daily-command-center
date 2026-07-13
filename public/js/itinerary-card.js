@@ -63,6 +63,9 @@
     var dur              = opts.dur              || W("dur")              || function(e){ return (e&&e.durationMinutes)||0; };
     var origDur          = opts.origDur          || W("origDur")          || function(){ return 0; };
     var isMeeting        = opts.isMeeting        || W("isMeeting")        || function(e){ return e&&(e.type==="meeting"||e.type==="oneone"); };
+    var isFixed          = opts.isFixed          || W("isFixed")          || function(e){ return !!e&&(isMeeting(e)||e.type==="ooo"||e.type==="break"); };
+    var pointEligible    = opts.pointEligible    || W("pointEligible")    || function(e){ return !isFixed(e); };
+    var habitStreakChip  = opts.habitStreakChip  || W("habitStreakChip")  || function(){ return ""; };
     var isWrap           = opts.isWrap           || W("isWrap")           || function(){ return false; };
     var isRideAlong      = opts.isRideAlong      || W("isRideAlong")      || function(){ return false; };
     var escHtml          = opts.escHtml          || W("escHtml")          || defEsc;
@@ -73,7 +76,7 @@
     // pointsChip / petPrivacyChip were local closures in buildSchedule; moved here
     // verbatim. Owner uses these; guest overrides via opts (points from payload).
     var petPrivacyChip = opts.petPrivacyChip || function(ev){
-      if(!ev||isMeeting(ev)||ev.type==="break"||ev.type==="ooo")return "";
+      if(!ev||isFixed(ev))return "";
       var visibility=ev.publicVisibility==="private"?"private":"public";
       var label=visibility==="private"?"Private":"Public";
       return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
@@ -86,7 +89,7 @@
         : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty:bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
       var scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
         ? window.TaskPoints.estimate(payload)
-        : {eligible:!isMeeting(ev)&&ev.type!=="ooo"&&ev.type!=="break",awardPoints:bounty?28:14,durationMinutes:60,effortTier:"medium",attentionTier:"normal"};
+        : {eligible:pointEligible(ev),awardPoints:bounty?28:14,durationMinutes:60,effortTier:"medium",attentionTier:"normal"};
       if(!scoring.eligible||scoring.awardPoints<=0)return "";
       var pts=scoring.awardPoints;
       var title="Completing this task earns about "+pts+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention"+(bounty?", bounty x"+Math.pow(2,bountyCount):"")+".";
@@ -232,7 +235,7 @@
           '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
             '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+'<span class="tinline">'+(ev._locked||isMeeting(ev)?'<span class="lock-ind" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span></div>'+
-            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(shellChip?shellChip:(pplan?pieBarHtml:pointsChip(ev)))+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(shellChip?shellChip:(pplan?pieBarHtml:pointsChip(ev)))+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+

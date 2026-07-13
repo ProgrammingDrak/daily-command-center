@@ -15,7 +15,7 @@
   }
   function currentTasks(){
     try{
-      return (scheduled||[]).filter(ev=>ev&&!isDeleted(ev)&&!isPushed(ev)&&!isMeeting(ev)&&ev.type!=="break"&&ev.type!=="ooo").slice(0,8);
+      return (scheduled||[]).filter(ev=>ev&&!isDeleted(ev)&&!isPushed(ev)&&pointEligible(ev)).slice(0,8);
     }catch(e){return[];}
   }
   function taskVisibility(ev){

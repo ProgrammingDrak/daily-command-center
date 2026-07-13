@@ -41,6 +41,18 @@ function fmtMoney(cents, opts){
 function dur(ev){return pt(ev.end)-pt(ev.start)}
 function origDur(id){const o=INIT_SCHED.find(e=>e.id===id);return o?dur(o):0}
 function isMeeting(ev){return ev.type==="meeting"||ev.type==="oneone"}
+// Registry-backed shims for the combined `isMeeting(ev)||ooo||break` predicate
+// that used to be copy-pasted at ~a dozen call sites. Bare globals so call sites
+// read like isMeeting(). Fall back to the historical inline literal only if the
+// registry hasn't loaded (task-types.js loads first, so this is belt-and-braces).
+function isFixed(ev){
+  if(window.TaskTypes&&typeof window.TaskTypes.isFixed==="function")return window.TaskTypes.isFixed(ev);
+  return !!ev&&(isMeeting(ev)||ev.type==="ooo"||ev.type==="break");
+}
+function pointEligible(ev){
+  if(window.TaskTypes&&typeof window.TaskTypes.pointEligible==="function")return window.TaskTypes.pointEligible(ev);
+  return !isFixed(ev);
+}
 // Two independent axes for a fixed-time block:
 //  - reflow-exempt (fixedTime): recalcTimes never bumps it (isFixedTimeBlock).
 //  - user-movable: the user can still drag / re-time it by hand.
@@ -56,7 +68,7 @@ function userMovable(ev){
 // nested inside it are "ride-alongs": concurrent work done within the wrap's
 // time window. Ride-alongs carry wrapId = their parent's id; they do not push
 // the cascade and render indented under their parent.
-function isWrap(ev){return !!(ev&&(ev.isWrap||(Array.isArray(ev.tags)&&ev.tags.includes("wrap"))));}
+function isWrap(ev){return !!(ev&&(ev.isWrap||ev.type==="wrap"||(Array.isArray(ev.tags)&&ev.tags.includes("wrap"))));}
 function wrapParentId(ev){return ev&&ev.wrapId?ev.wrapId:null;}
 function isRideAlong(ev){return !!wrapParentId(ev);}
 // Reorder a flat list so each wrap is immediately followed by its ride-along

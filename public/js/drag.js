@@ -39,7 +39,7 @@ function dLeave(e){e.currentTarget.classList.remove("drag-over-top","drag-over-b
 // ── Scheduling helpers ──
 
 function isFixedTimeBlock(ev){
-  return isMeeting(ev)||ev.type==="ooo"||ev.type==="break";
+  return (typeof isFixed==="function")?isFixed(ev):(isMeeting(ev)||ev.type==="ooo"||ev.type==="break");
 }
 
 // Build fixed blocker array (used by both cascade variants). Sourced from the
@@ -248,21 +248,23 @@ function recalcTimes(opts){
 }
 
 // ── WRAP/NEST DRAG HELPERS (v2) ──
-// Persist an item's parent membership (wrapId/subtaskOf) + times to the
-// blockstore. updateBlock() updates the cache synchronously, so a later
-// syncAddedTaskTimes() won't clobber the membership we just wrote.
-function _persistEvWrap(ev){
+// Read-modify-write a scheduled item's persisted block: resolve its block id,
+// clone its stored properties, apply `patch`, and update the blockstore cache
+// synchronously (so a later syncAddedTaskTimes() won't clobber the write).
+// Shared plumbing for _persistEvWrap (membership + times) and schedule-tab's
+// convertTaskType (type + wrap flag).
+function _persistEvProps(ev,patch){
   if(!window.blockStore||!ev)return;
   let bid=ev._blockId;
   if(!bid){const b=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===ev.id);bid=b&&b.id;}
   if(!bid)return;
   const blk=window.blockStore.get?window.blockStore.get(bid):null;
-  const props={...((blk&&blk.properties)||{})};
-  props.wrapId=ev.wrapId||null;
-  props.subtaskOf=ev.subtaskOf||null;
-  props.isWrap=!!ev.isWrap;
-  props.start=ev.start;props.end=ev.end;
+  const props=Object.assign({},(blk&&blk.properties)||{},patch||{});
   try{window.blockStore.updateBlock(bid,props);}catch(e){}
+}
+// Persist an item's parent membership (wrapId/subtaskOf) + times to the blockstore.
+function _persistEvWrap(ev){
+  _persistEvProps(ev,{wrapId:ev.wrapId||null,subtaskOf:ev.subtaskOf||null,isWrap:!!ev.isWrap,start:ev.start,end:ev.end});
 }
 // True if ancestorId is somewhere above nodeId in the parent chain (guards against
 // nesting a task into one of its own descendants).
