@@ -230,8 +230,8 @@ function _amBuildDetails(ev){
 
 function openAddModal(taskId, taskTitle) {
   _addModalTaskId = taskId;
-  document.getElementById('add-modal-title').textContent = taskTitle || 'Task Details';
   var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
+  _amSetupTitle(taskId, taskEntry, taskTitle);
 
   // Read-only details (priority / duration / time / source / link)
   var detEl = document.getElementById('am-details-section');
@@ -279,6 +279,51 @@ function openAddModal(taskId, taskTitle) {
 
   document.getElementById('add-modal-overlay').classList.add('open');
   setTimeout(function() { if(window._amBlockEditor) window._amBlockEditor.focus(); }, 80);
+}
+
+// Modal header title — click to rename (Enter/blur saves, Escape cancels), meetings stay read-only.
+function _amSetupTitle(taskId, taskEntry, fallbackTitle) {
+  var old = document.getElementById('add-modal-title');
+  if (!old) return;
+  // Fresh node each open so listeners from a previous task don't stack
+  var h3 = document.createElement('h3');
+  h3.id = 'add-modal-title';
+  old.replaceWith(h3);
+  var currentTitle = (taskEntry && taskEntry.title) || fallbackTitle || '';
+  h3.textContent = currentTitle || 'Task Details';
+  var editable = currentTitle && !(taskEntry && typeof isMeeting === 'function' && isMeeting(taskEntry));
+  if (!editable) return;
+  h3.classList.add('am-title-editable');
+  h3.setAttribute('title', 'Click to rename');
+  h3.addEventListener('click', function() {
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'am-title-edit';
+    inp.value = currentTitle;
+    h3.replaceWith(inp);
+    inp.focus(); inp.select();
+    var saved = false;
+    function save() {
+      if (saved) return; saved = true;
+      var newTitle = inp.value.trim();
+      if (newTitle && newTitle !== currentTitle) {
+        currentTitle = newTitle;
+        var task = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
+        if (task) task.title = newTitle;
+        if (taskEntry && taskEntry !== task) taskEntry.title = newTitle;
+        _persistTaskTitle(taskId, newTitle);
+        if (typeof isBountyTask === 'function' && isBountyTask(taskId) && typeof saveBountyState === 'function') saveBountyState();
+        if (typeof showToast === 'function') showToast('Title updated', 'success');
+        h3.textContent = newTitle;
+      }
+      inp.replaceWith(h3);
+    }
+    inp.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); save(); }
+      if (e.key === 'Escape') { saved = true; inp.replaceWith(h3); }
+    });
+    inp.addEventListener('blur', save);
+  });
 }
 
 function closeAddModal() {
