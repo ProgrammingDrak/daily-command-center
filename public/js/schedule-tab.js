@@ -320,7 +320,7 @@ function openTaskChangeRadial(ev,trig){
   openRadialMenu(trig,buildTaskChangeItems(ev,trig),_TASK_RADIAL_OPTS);
 }
 
-// ── Section sorting (Unscheduled / Unfinished): A→Z or time-of-creation ──
+// ── Section sorting (Unscheduled): A→Z or time-of-creation ──
 function _sectionSort(key){ try{return localStorage.getItem("pa-sort-"+key)||"created"}catch(e){return "created"} }
 function _setSectionSort(key,mode){ try{localStorage.setItem("pa-sort-"+key,mode==="alpha"?"alpha":"created")}catch(e){} }
 function _applySectionSort(items,mode,getTitle,getCreated){
@@ -355,6 +355,12 @@ function _unfPrettyDate(iso){
   const d=new Date(iso+"T00:00:00");
   if(isNaN(d.getTime()))return iso;
   return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+}
+// Amber-chip date: "2026-07-13" -> "07/13/2026". The iso string is already a
+// local calendar date, so a string split avoids any Date/timezone round-trip.
+function _unfSlashDate(iso){
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso||""));
+  return m?m[2]+"/"+m[3]+"/"+m[1]:String(iso||"");
 }
 // Present an Unfinished entry (a raw past-day block) as an ev so the shared
 // row() builder renders it exactly like a normal task. The override handlers
@@ -544,7 +550,7 @@ function buildListView(){
           '<span>'+ms(dur(ev))+'</span>'+
           (tt&&tt.rollupMode&&typeof shellRollupChip==="function"?shellRollupChip(ev):'')+
           (isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
-          (isUnfRow?'<span class="it-list-unfinished">Unfinished · from '+escHtml(_unfPrettyDate(r.sourceDate))+'</span>':'')+
+          (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
           (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
@@ -641,29 +647,29 @@ function buildListView(){
       wrap.appendChild(emitNode(node,displayIdx,isDone(node.ev)?"done":"open"));
     });
   }
-  if(untimedItems.length){
-    section("Unscheduled",untimedItems.length,"unscheduled");
-    _applySectionSort(untimedItems,_sectionSort("unscheduled"),ev=>ev.title,ev=>ev.createdAt||"")
-      .forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
-  }
-
-  // Unfinished: tasks dated in the PAST that were never completed. Shown only on
-  // the actual today view; complete lands on the origin day, reschedule is a
-  // true move (server tombstone -> the origin day shows it amber).
+  // Unscheduled: untimed tasks for this day, plus — on the actual today view
+  // only — unfinished tasks from past days folded into the same list. Folded
+  // rows keep the amber tag and their origin-day semantics: complete lands on
+  // the origin day, reschedule is a true move (server tombstone -> the origin
+  // day shows it amber).
   const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
+  let unf=null;
   if(viewDate===actualToday){
     _ensureUnfinished(actualToday);
-    const unf=_unfinishedCache;
-    if(unf&&unf.rows.length){
-      section("Unfinished",unf.total,"unfinished");
-      _applySectionSort(unf.rows,_sectionSort("unfinished"),r=>r.title,r=>r.createdAt||r.sourceDate||"")
-        .forEach((r,idx)=>wrap.appendChild(row(_unfToEv(r),idx,"unfinished")));
-      if(unf.total>unf.rows.length){
-        const more=document.createElement("div");
-        more.className="it-list-empty";
-        more.textContent="+"+(unf.total-unf.rows.length)+" more unfinished — complete or reschedule some to see the rest.";
-        wrap.appendChild(more);
-      }
+    unf=_unfinishedCache;
+  }
+  const unfEvs=(unf&&unf.rows.length)?unf.rows.map(_unfToEv):[];
+  if(untimedItems.length||unfEvs.length){
+    section("Unscheduled",untimedItems.length+((unf&&unf.total)||0),"unscheduled");
+    _applySectionSort(untimedItems.concat(unfEvs),_sectionSort("unscheduled"),
+        ev=>ev.title,
+        ev=>ev.__unf?(ev.__unf.createdAt||ev.__unf.sourceDate||""):(ev.createdAt||""))
+      .forEach((ev,idx)=>wrap.appendChild(row(ev,idx,ev.__unf?"unfinished":"open")));
+    if(unf&&unf.total>unf.rows.length){
+      const more=document.createElement("div");
+      more.className="it-list-empty";
+      more.textContent="+"+(unf.total-unf.rows.length)+" more unfinished — complete or reschedule some to see the rest.";
+      wrap.appendChild(more);
     }
   }
 
