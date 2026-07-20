@@ -313,6 +313,7 @@ function reloadPersistedEdits() {
           // ("pending" at birth, "ready" once a brief lands). Surface it so the row
           // chip (itinerary-card.js) renders without a page-level meetings[] join.
           prepStatus:p.prep_status||null,
+          dashboardRef:p.dashboard_ref||null,
           meetingBlockId:(p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")?block.id:(p.meetingBlockId||""),
           isPlaceholder:p.isPlaceholder||false,
           placeholderMenus:Array.isArray(p.placeholderMenus)?p.placeholderMenus:[],

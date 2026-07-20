@@ -524,9 +524,9 @@ function sanitizeSources(sources) {
 // so automation can attach meeting docs without an interactive session. Idempotent:
 // prep/summary/transcript upsert in place (newest-by-kind), proposed actions dedupe
 // by text, and the recap merge replaces only its own notes region.
-async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true }) {
+async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true, dashboardRef = null }) {
   const meeting = await loadMeeting(blockId, workspaceId);
-  const applied = { prep: false, summary: false, transcript: false, proposedActions: 0, recapToNotes: false };
+  const applied = { prep: false, summary: false, transcript: false, proposedActions: 0, recapToNotes: false, dashboardRef: false };
 
   if (prep && (prep.markdown || prep.html)) {
     const markdown = String(prep.markdown || "");
@@ -614,6 +614,19 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       seen.add(text.toLowerCase());
       applied.proposedActions += 1;
       idx += 1;
+    }
+  }
+
+  if (dashboardRef) {
+    // Store the vault slug on the meeting block itself so the itinerary chip and
+    // the /meetings/:id/dashboard proxy can find it. Reload first so we don't
+    // clobber the recap-to-notes write above.
+    const fresh = await loadMeeting(blockId, workspaceId);
+    const mp = propsOf(fresh);
+    const ref = String(dashboardRef).trim();
+    if (ref && ref !== mp.dashboard_ref) {
+      await blockDB.updateBlock(fresh.id, { properties: { ...mp, dashboard_ref: ref } });
+      applied.dashboardRef = true;
     }
   }
 
