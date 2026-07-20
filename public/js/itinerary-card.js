@@ -46,6 +46,15 @@
     return ' style="background:'+ps.bg+';border-color:'+ps.bg+';color:'+ps.fg+ring+'"';
   }
 
+  // A subtask's slice of its parent's point pie, as a chip. One definition shared
+  // by both row builders (timeline card + list row) so the markup never forks.
+  // Turns accent-green (".earned") once the subtask is done. null share -> no chip.
+  function subShareChipHtml(ev, share){
+    if(share==null) return "";
+    var done = (typeof isDone==="function") && isDone(ev);
+    return '<span class="sub-share'+(done?' earned':'')+'" title="'+(done?'Earned ':'Worth ')+share+' pts of the parent’s pie">'+share+' pts</span>';
+  }
+
   function renderItineraryCard(ev, opts){
     opts = opts || {};
     var guest = !!opts.guest;
@@ -102,6 +111,19 @@
     var nc = active ? "active" : "upcoming";
 
     var d=dur(ev),od=origDur(ev.id),changed=od&&d!==od,delta=d-od;
+    // ===== SUBTASK VARIANT =====
+    // opts.variant==="sub" is the ONLY subtask-specific branch in this builder.
+    // A subtask renders the full card skeleton (so all the timeline loop's wiring —
+    // open-space click, radial, drag, checkbox — applies for free) with three tweaks:
+    // a lighter .tl-sub-card look, its point-pie SLICE chip instead of the duration
+    // points chip, and (while timeless) no time rail / duration badge / bounty. Give
+    // it a real duration and it renders those again; promotion (drag.js) does exactly
+    // that. This replaces the old forked renderSubRow.
+    var sub = opts.variant === "sub";
+    var subTimeless = sub && d<=0;
+    var subSlice = (sub && ev.subtaskOf && window.PointPlan && typeof window.PointPlan.shareFor==="function")
+      ? window.PointPlan.shareFor(ev.subtaskOf, ev.id) : null;
+    var subSliceHtml = subShareChipHtml(ev, subSlice);
     var c=cfg(ev.type);var evSrcTag=srcTag(ev.source);
     var bountyCount=(opts.bountyCount!=null)?opts.bountyCount:(typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0));
     var isBounty=bountyCount>0;
@@ -112,7 +134,7 @@
     var _bw=opts.bw||null;
 
     var el=document.createElement("div");
-    el.className="tl-item"+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"");
+    el.className="tl-item"+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(sub?" tl-sub-card":"");
     el.dataset.id=ev.id;
     if(node.depth)el.style.marginLeft=(node.depth*22)+"px";
     if(isBounty)el.classList.add("bounty");
@@ -134,8 +156,11 @@
       if(ev.estTime)detailMeta.push('<span>Est: '+ev.estTime+'</span>');
       var commuteWin=typeof commuteLeaveWindow==="function"?commuteLeaveWindow(ev):null;
       if(commuteWin)detailMeta.push('<span>'+commuteWin.label+'</span>');
-      detailMeta.push('<span>Duration: '+ms(d)+(changed?' (was '+ms(od)+')':'')+'</span>');
-      detailMeta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
+      // Timeless subtask carries no clock: skip the 0m duration + midnight range.
+      if(!subTimeless){
+        detailMeta.push('<span>Duration: '+ms(d)+(changed?' (was '+ms(od)+')':'')+'</span>');
+        detailMeta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
+      }
       if(evSrcTag)detailMeta.push('<span class="detail-src">Source:</span>'+evSrcTag);
       if(detailMeta.length)detailParts.push('<div class="detail-meta">'+detailMeta.join('')+'</div>');
       if(isMeeting(ev)&&typeof meetingAutomationPanelHtml==="function"){
@@ -187,14 +212,20 @@
     var fuTab=hasFu?'<div class="edge-tab edge-fu" data-edge="fu">'+ev.followups.length+' Actions '+chevSm+'</div>':'';
     var trivialTab='';
 
-    var timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+f12(ev.start).replace(" ","<br>")+'<span class="et">'+f12(ev.end)+'</span>';
-    if(hasPrep){timeHtml+='<span class="prep-line"></span>';}
-    timeHtml+='</div>';
+    // Timeless subtask: empty left rail (keeps the 3-column grid aligned) — no clock.
+    var timeHtml;
+    if(subTimeless){
+      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'"></div>';
+    }else{
+      timeHtml='<div class="tl-time'+(hasPrep?' has-prep':'')+'">'+f12(ev.start).replace(" ","<br>")+'<span class="et">'+f12(ev.end)+'</span>';
+      if(hasPrep){timeHtml+='<span class="prep-line"></span>';}
+      timeHtml+='</div>';
+    }
     var bountyMultiplier=Math.pow(2,Math.max(1,bountyCount||1));
     // Bounty is a row-level button (not a radial spoke): visible on every
     // eligible card until the day's bounty is placed, then it disappears and
     // the chosen task carries the golden glow (.card-bounty).
-    var bountyControl=(!guest&&!isMeeting(ev)&&canEditBounty&&!bountyPlaced)
+    var bountyControl=(!guest&&!isMeeting(ev)&&canEditBounty&&!bountyPlaced&&!sub)
       ? '<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+bountySvg+'</button>'
       : '';
     var reactionHtml=reactionChipsHtml(ev)||"";
@@ -220,6 +251,13 @@
     var shellChip=(tt&&tt.rollupMode&&typeof shellRollupChip==="function")?shellRollupChip(ev):'';
     var chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
 
+    // Inline clock (lock indicator + start/end). Empty for a timeless subtask.
+    var tinlineHtml=subTimeless
+      ? '<span class="tinline"></span>'
+      : '<span class="tinline">'+(ev._locked||isMeeting(ev)?'<span class="lock-ind" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span>';
+    // Chip slot: shell rollup, else own pie bar, else (subtask) its pie slice, else the points chip.
+    var chipSlotHtml=shellChip?shellChip:(pplan?pieBarHtml:(sub?subSliceHtml:pointsChip(ev)));
+
     el.innerHTML=
       timeHtml+
       '<div class="tl-node '+nc+(hasPrep?' has-prep':'')+(isPinnedActive?' pinned':'')+(pinnedStyle&&pinnedStyle.pulse?' aging-pulse':'')+'"'+nodeOverdueStyle(pinnedStyle,isPinnedActive)+' data-node-id="'+ev.id+'">'+(active?'<span class="tl-now-time">'+new Date().toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ","")+'</span>':'')+'</div>'+
@@ -234,8 +272,8 @@
           '</div>')+
           '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+'<span class="tinline">'+(ev._locked||isMeeting(ev)?'<span class="lock-ind" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+'</span> - '+f12(ev.end)+(active?' · Now':'')+'</span>'+(guest||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
-            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+c.tag+'</span>'+stackedBadge+(shellChip?shellChip:(pplan?pieBarHtml:pointsChip(ev)))+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
+            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+            '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+(sub?'Subtask':c.tag)+'</span>'+stackedBadge+chipSlotHtml+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
@@ -252,7 +290,7 @@
           (guest?'':'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="'+(isMeeting(ev)?'Meeting prep and actions…':'Task actions…')+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>')+
           bountyControl+
           (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
-          (guest?'':'<div class="dur">'+
+          (guest||subTimeless?'':'<div class="dur">'+
             // Task cards: read-only badge (adjust via the radial's Duration…);
             // meetings keep the ±15 stepper and the tappable badge.
             (isMeeting(ev)?'<button class="dbtn" data-id="'+ev.id+'" data-d="-15">&minus;</button>':'')+
@@ -311,61 +349,11 @@
     return el;
   }
 
-  // ======== SHARED SUB ROW ========
-  // One builder for the compact subtask one-liner, in both the list view
-  // (".it-list-item subtask-row") and the timeline (".tl-item tl-sub"). Markup is
-  // shared; the two views differed only in wrapper class, the active/movable list
-  // flags, the timeline's point-pie "slice" chip, and whether the collapse chevron
-  // is wired inline (list) or via the timeline's delegated listener.
-  //   node        {depth,hasKids,collapsed} — schedule flatten node
-  //   opts.compact  true  -> timeline tl-sub (pie slice, delegated collapse)
-  //                 false -> list subtask-row (active/movable classes, inline collapse)
-  //   opts.mode     "done" forces the done state (list passes its section mode)
-  // References schedule-tab/state/drag globals (toggleDone, bindSubtaskActions,
-  // dStart…); all present on the owner render path where this is called. Never
-  // invoked on the guest todo page, so the bare refs are safe to define here.
-  function renderSubRow(ev, node, opts){
-    opts = opts || {};
-    var compact = !!opts.compact;
-    var esc = (typeof escHtml==="function") ? escHtml : defEsc;
-    var doneRow = (opts.mode==="done") || isDone(ev);
-    // List preserved its userMovable() gate; the timeline sub never had one. Keep
-    // both exactly so drag affordances don't shift between views.
-    var movable = compact ? (!ev._locked && !doneRow) : (userMovable(ev) && !ev._locked && !doneRow);
-    var sched = (typeof scheduled!=="undefined") ? scheduled : undefined;
-    var prog = (typeof subtaskProgress==="function") ? subtaskProgress(ev.id, sched) : null;
-    // Point-pie slice: timeline only (the list row never showed it).
-    var slice = (compact && ev.subtaskOf && window.PointPlan && typeof window.PointPlan.shareFor==="function")
-      ? window.PointPlan.shareFor(ev.subtaskOf, ev.id) : null;
-    node = node || {depth:0,hasKids:false,collapsed:false};
-
-    var el = document.createElement("div");
-    el.className = compact
-      ? ("tl-item tl-sub"+(doneRow?" done":""))
-      : ("it-list-item subtask-row"+(doneRow?" done":"")+(isActive(ev)?" active":"")+(movable?" movable":""));
-    if(node.depth) el.style.marginLeft = (node.depth*22)+"px";
-    el.dataset.id = ev.id;
-    if(movable){ el.draggable=true; el.addEventListener("dragstart",function(e){ dStart(e,ev.id); }); el.addEventListener("dragend",dEnd); }
-    el.addEventListener("dragover",function(e){ dOver(e,ev.id); }); el.addEventListener("dragleave",dLeave); el.addEventListener("drop",function(e){ dDrop(e,ev.id); });
-    el.innerHTML =
-      (node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>')+
-      '<button class="chk sub-check'+(doneRow?' on':'')+'" title="'+(doneRow?'Uncheck':'Mark done')+'">'+ckSvg+'</button>'+
-      '<span class="sub-ttl" title="'+esc(ev.title)+'">'+ev.title+'</span>'+
-      (slice!=null?'<span class="sub-share'+(doneRow?' earned':'')+'" title="'+(doneRow?'Earned ':'Worth ')+slice+' pts of the parent’s pie">'+slice+' pts</span>':'')+
-      (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+'</span>':'')+
-      subtaskActionsHtml(ev);
-    el.querySelector(".sub-check").addEventListener("click",function(e){ e.stopPropagation(); toggleDone(ev.id); });
-    // List wires each collapse chevron; the timeline uses one delegated listener
-    // (tl._collapseWired) so wiring here too would double-toggle.
-    if(!compact){
-      var cc = el.querySelector(".wrap-collapse");
-      if(cc) cc.addEventListener("click",function(e){ e.stopPropagation(); if(typeof toggleCollapsed==="function"){ toggleCollapsed(ev.id); render(); } });
-    }
-    bindSubtaskActions(el, ev);
-    return el;
-  }
+  // Subtasks are no longer a forked one-liner: they render through
+  // renderItineraryCard(ev,{variant:"sub"}) (timeline) and row() (list), so every
+  // card affordance is shared. renderSubRow and its schedule-tab helpers are gone.
 
   window.renderItineraryCard = renderItineraryCard;
   window.renderCompactRow = renderCompactRow;
-  window.renderSubRow = renderSubRow;
+  window.subShareChipHtml = subShareChipHtml;
 })();

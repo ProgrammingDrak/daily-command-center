@@ -378,13 +378,24 @@ function addSubtask(taskId, text){
   if(parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")return addStackedTask(taskId,text);
   const id="st-"+Date.now();
   const startStr=(parent&&parent.start)||"00:00";
-  const task={id:id,title:text,type:"task",subtaskOf:taskId,source:"manual",
-    start:startStr,end:startStr,priority:"Medium",tags:[],meta:""};
+  // A subtask is a FULL task, shaped by the same serializer as every other task
+  // (detail/notionUrl/commute/delegated/tags all defaulted for free), so future
+  // fields reach subtasks automatically. The only subtask-specific bits: the
+  // subtaskOf edge and start===end / duration:0 (timeless until promoted). Every
+  // other field is editable through the same details modal + radial as any task.
+  const overrides={title:text,source:"manual",priority:"Medium"};
+  const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
+    :{title:text,source:"manual",priority:"Medium",meta:"",detail:"",tags:[]};
+  const task=Object.assign({id:id,type:"task",subtaskOf:taskId,start:startStr,end:startStr,
+    publicVisibility:"public",added_at:new Date().toISOString()},common);
   if(typeof scheduled!=="undefined")scheduled.push(task);
   if(window.blockStore&&window.blockStore.createBlock){
     const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
-    window.blockStore.createBlock("block",{local_id:id,title:text,type:"task",subtaskOf:taskId,source:"manual",
-      start:startStr,end:startStr,duration:0,priority:"Medium",tags:[],added_at:new Date().toISOString()},{date:date});
+    const blockProps=(window.DCC&&window.DCC.taskBlockProps)
+      ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:0,start:startStr,end:startStr}))
+      : {local_id:id,title:text,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[]};
+    blockProps.type="task";blockProps.subtaskOf=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
+    window.blockStore.createBlock("block",blockProps,{date:date});
   }
   // Snapshot/rebalance the parent's point pie now that it has (one more) subtask.
   if(window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(taskId);
@@ -402,8 +413,15 @@ function addStackedTask(taskId, text, durMinArg){
   let startStr=(parent&&parent.start)||"00:00";
   const durMin=durMinArg||30;
   let endStr=(typeof fmt==="function")?fmt((typeof pt==="function"?pt(startStr):0)+durMin):startStr;
-  const task={id:id,title:text,type:"task",wrapId:taskId,source:"manual",
-    start:startStr,end:endStr,priority:"Medium",tags:[],meta:(typeof ms==="function"?("Stacked · "+ms(durMin)):"Stacked")};
+  // Same shared serializer as addSubtask — a ride-along is a full task too, so its
+  // fields (detail/notionUrl/commute/delegated) default consistently. Ride-along
+  // specifics: the wrapId edge, its own duration, and the "Stacked" meta marker.
+  const overrides={title:text,source:"manual",priority:"Medium",
+    meta:(typeof ms==="function"?("Stacked · "+ms(durMin)):"Stacked")};
+  const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
+    :{title:text,source:"manual",priority:"Medium",meta:overrides.meta,detail:"",tags:[]};
+  const task=Object.assign({id:id,type:"task",wrapId:taskId,start:startStr,end:endStr,
+    publicVisibility:"public",added_at:new Date().toISOString()},common);
   // Inside a rollup container (shell), land at the next free slot in the
   // parent's window instead of stacking every child at the parent's start.
   if(parent&&window.TaskTypes&&window.TaskTypes.isRollup(parent)&&typeof _placeInWrapWindow==="function"){
@@ -413,8 +431,11 @@ function addStackedTask(taskId, text, durMinArg){
   if(typeof scheduled!=="undefined")scheduled.push(task);
   if(window.blockStore&&window.blockStore.createBlock){
     const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
-    window.blockStore.createBlock("block",{local_id:id,title:text,type:"task",wrapId:taskId,source:"manual",
-      start:startStr,end:endStr,duration:durMin,priority:"Medium",tags:[],added_at:new Date().toISOString()},{date:date});
+    const blockProps=(window.DCC&&window.DCC.taskBlockProps)
+      ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:durMin,start:startStr,end:endStr}))
+      : {local_id:id,title:text,source:"manual",start:startStr,end:endStr,duration:durMin,priority:"Medium",tags:[]};
+    blockProps.type="task";blockProps.wrapId=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
+    window.blockStore.createBlock("block",blockProps,{date:date});
   }
   if(typeof recalcTimes==="function")recalcTimes();
   render();

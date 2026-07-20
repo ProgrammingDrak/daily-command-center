@@ -23,105 +23,11 @@ function buildActualView(dateStr){
   if(typeof buildDayReview==="function") buildDayReview(dateStr);
 }
 
-function subtaskMoveState(id){
-  const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(x=>x.id===id):null;
-  if(!ev||!ev.subtaskOf)return {canUp:false,canDown:false};
-  const siblings=scheduled.filter(x=>x.subtaskOf===ev.subtaskOf&&!(typeof isDeleted==="function"&&isDeleted(x)));
-  const idx=siblings.findIndex(x=>x.id===id);
-  return {canUp:idx>0,canDown:idx>=0&&idx<siblings.length-1};
-}
-
-function moveSubtaskSibling(id,direction){
-  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
-  const ev=scheduled.find(x=>x.id===id);
-  if(!ev||!ev.subtaskOf)return;
-  const siblings=scheduled.filter(x=>x.subtaskOf===ev.subtaskOf&&!(typeof isDeleted==="function"&&isDeleted(x)));
-  const idx=siblings.findIndex(x=>x.id===id);
-  const to=idx+direction;
-  if(idx<0||to<0||to>=siblings.length)return;
-  const target=siblings[to];
-  const fromIndex=scheduled.findIndex(x=>x.id===ev.id);
-  const toIndex=scheduled.findIndex(x=>x.id===target.id);
-  if(fromIndex<0||toIndex<0)return;
-  const tmp=scheduled[fromIndex];
-  scheduled[fromIndex]=scheduled[toIndex];
-  scheduled[toIndex]=tmp;
-  if(typeof saveTaskOrder==="function")saveTaskOrder();
-  if(typeof saveSubtaskOrder==="function")saveSubtaskOrder(ev.subtaskOf);
-  if(typeof log==="function")log("reorder",id,"Moved subtask "+(direction<0?"up":"down"));
-  if(typeof render==="function")render("schedule"); // reorder only touches schedule rows
-}
-
-function startSubtaskTitleEdit(id,titleEl){
-  if(!titleEl||titleEl.querySelector("input"))return;
-  const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(x=>x.id===id):null;
-  if(!ev)return;
-  const input=document.createElement("input");
-  input.type="text";
-  input.className="sub-ttl-edit";
-  input.value=ev.title||"";
-  input.setAttribute("aria-label","Subtask title");
-  input.style.width=Math.max(90,(titleEl.offsetWidth||80)+24)+"px";
-  titleEl.replaceWith(input);
-  input.focus();
-  input.select();
-  let finished=false;
-  function finish(save){
-    if(finished)return;
-    finished=true;
-    const next=input.value.trim();
-    if(save&&next&&next!==ev.title){
-      ev.title=next;
-      if(typeof _persistTaskTitle==="function")_persistTaskTitle(id,next);
-      if(typeof showToast==="function")showToast("Subtask updated","success",2200);
-    }
-    if(typeof render==="function")render();
-  }
-  input.addEventListener("click",e=>e.stopPropagation());
-  input.addEventListener("keydown",e=>{
-    e.stopPropagation();
-    if(e.key==="Enter"){e.preventDefault();finish(true);}
-    if(e.key==="Escape"){e.preventDefault();finish(false);}
-  });
-  input.addEventListener("blur",()=>finish(true));
-}
-
-function subtaskActionsHtml(ev){
-  const move=subtaskMoveState(ev.id);
-  const disabledUp=move.canUp?"":' disabled aria-disabled="true"';
-  const disabledDown=move.canDown?"":' disabled aria-disabled="true"';
-  return '<div class="sub-actions" aria-label="Subtask actions">'+
-    '<button type="button" class="sub-action-btn sub-edit" data-sub-edit-id="'+ev.id+'" title="Edit subtask" aria-label="Edit subtask">&#9998;</button>'+
-    '<button type="button" class="sub-action-btn sub-move" data-sub-move-id="'+ev.id+'" data-dir="-1" title="Move subtask up" aria-label="Move subtask up"'+disabledUp+'>&#8593;</button>'+
-    '<button type="button" class="sub-action-btn sub-move" data-sub-move-id="'+ev.id+'" data-dir="1" title="Move subtask down" aria-label="Move subtask down"'+disabledDown+'>&#8595;</button>'+
-    '<button type="button" class="btn-add-menu sub-action-btn sub-add" title="Add child subtask" aria-label="Add child subtask" data-add-id="'+ev.id+'">+</button>'+
-    '<button type="button" class="btn-del-task sub-action-btn sub-delete" data-del-id="'+ev.id+'" title="Delete subtask" aria-label="Delete subtask"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
-  '</div>';
-}
-
-function bindSubtaskActions(el,ev){
-  const title=el.querySelector(".sub-ttl");
-  if(title){
-    title.setAttribute("tabindex","0");
-    title.setAttribute("role","button");
-    title.setAttribute("aria-label","Edit subtask title");
-    title.addEventListener("click",e=>{e.stopPropagation();startSubtaskTitleEdit(ev.id,title);});
-    title.addEventListener("keydown",e=>{
-      if(e.key==="Enter"||e.key===" "){e.preventDefault();e.stopPropagation();startSubtaskTitleEdit(ev.id,title);}
-    });
-  }
-  const edit=el.querySelector(".sub-edit");
-  if(edit)edit.addEventListener("click",e=>{e.stopPropagation();startSubtaskTitleEdit(ev.id,el.querySelector(".sub-ttl"));});
-  el.querySelectorAll(".sub-move").forEach(btn=>btn.addEventListener("click",e=>{
-    e.stopPropagation();
-    if(btn.disabled)return;
-    moveSubtaskSibling(btn.dataset.subMoveId,parseInt(btn.dataset.dir,10));
-  }));
-  const add=el.querySelector(".btn-add-menu");
-  if(add)add.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,add);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
-  const del=el.querySelector(".btn-del-task");
-  if(del)del.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(del.dataset.delId);});
-}
+// Subtask row helpers (subtaskMoveState / moveSubtaskSibling / startSubtaskTitleEdit /
+// subtaskActionsHtml / bindSubtaskActions) were retired: subtasks now render as a
+// variant of the normal task row, so they inherit its affordances — rename via the
+// title/details modal, add-child via the row "+", delete via the trash button, and
+// sibling reorder via drag (drag.js _dropAtTargetLevel + saveSubtaskOrder).
 
 // ── Task-row radial: every task-level action fans out from the row's arrow ──
 // The row itself keeps only done / notes / delete visible; everything else
@@ -240,15 +146,22 @@ function buildTaskRadialItems(ev,trig){
 // Sub-fan: everything that moves or converts the task, grouped so the top
 // fan stays scannable. Back returns to the top fan on the same trigger.
 function buildTaskChangeItems(ev,trig){
-  return [
+  const items=[
     {icon:"←", label:"Back",       onPick:()=>openTaskRadial(ev,trig)},
     {icon:"📅", label:"Schedule…", onPick:()=>{if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:trig});}},
-    {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}},
+    {icon:"🪜", label:"Subtask…",  onPick:()=>{if(typeof openMakeSubtaskOf==="function")openMakeSubtaskOf(ev.id,trig);}}
+  ];
+  // Promote: pull a nested subtask/ride-along out to a standalone top-level task.
+  // Same action as dragging it out to the timeline — here for discoverability + touch.
+  if(typeof isNested==="function"&&isNested(ev))
+    items.push({icon:"⬆", label:"Promote", onPick:()=>{if(typeof promoteToTopLevel==="function")promoteToTopLevel(ev.id);}});
+  items.push(
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
     {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
     {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}}
-  ];
+  );
+  return items;
 }
 // Sub-fan: convert this task to another registry type. Lists every type valid
 // for conversion (registry-driven, so new types appear here for free) — i.e. the
@@ -521,6 +434,12 @@ function buildListView(){
     const changed=original&&dur(ev)!==original;
     const bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null;
     const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
+    // Subtask variant: same list row, lighter, with a point-pie slice chip in place
+    // of the duration/clock while timeless. Shares every affordance below.
+    const subRow=!!(node&&node.rel==="subtask");
+    const subTimeless=subRow&&dur(ev)<=0;
+    const subSlice=(subRow&&ev.subtaskOf&&window.PointPlan&&typeof window.PointPlan.shareFor==="function")?window.PointPlan.shareFor(ev.subtaskOf,ev.id):null;
+    const subSliceHtml=(typeof subShareChipHtml==="function")?subShareChipHtml(ev,subSlice):'';
     // Always emit a leading cell (button when expandable, else a spacer) so every
     // row has the same child count and lands in the same grid columns. Without the
     // spacer, expandable rows had one extra leading child that overflowed the
@@ -529,14 +448,14 @@ function buildListView(){
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isUnfRow?" unfinished-row":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     if(!isDoneRow&&!isPushedRow&&!isUnfRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     el.innerHTML=
       chev+
-      '<div class="it-list-rank">'+(idx+1)+'</div>'+
+      '<div class="it-list-rank">'+(subRow?'·':(idx+1))+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<div class="it-list-check-col">'+
         '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isUnfRow?'Mark done on '+escHtml(_unfPrettyDate(r.sourceDate)):(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')))+'">'+ckSvg+'</button>'+
@@ -546,10 +465,11 @@ function buildListView(){
       '<div class="it-list-main">'+
         '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+(isDoneRow||isPushedRow||isUnfRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
-          '<span class="tag '+c.cls+'">'+c.tag+'</span>'+
-          '<span>'+ms(dur(ev))+'</span>'+
+          '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
+          (subTimeless?'':'<span>'+ms(dur(ev))+'</span>')+
+          (subRow?subSliceHtml:'')+
           (tt&&tt.rollupMode&&typeof shellRollupChip==="function"?shellRollupChip(ev):'')+
-          (isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+          (subTimeless||isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
           (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
           (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
@@ -599,10 +519,10 @@ function buildListView(){
     return el;
   }
 
-  // Subtask rows use the shared renderSubRow (itinerary-card.js); the list passes
-  // compact:false for the it-list-item variant (active/movable classes, inline
-  // collapse wiring). idx is unused for subtasks (they take no rank number).
-  function emitNode(node,idx,mode){return node.rel==="subtask"?renderSubRow(node.ev,node,{compact:false,mode:mode}):row(node.ev,idx,mode,node);}
+  // Every node — top-level task OR nested subtask — renders through the same row()
+  // builder. row() reads node.rel to apply the lighter subtask variant. Subtasks
+  // take no rank number (row() renders "·" for them), so idx is a don't-care there.
+  function emitNode(node,idx,mode){return row(node.ev,node.rel==="subtask"?0:idx,mode,node);}
 
   // Parents with at least one child anywhere in the visible list -- these are the
   // rows the Collapse all / Expand all controls act on.
@@ -907,22 +827,26 @@ function buildSchedule(){
   const _defaultFocusId = (activeItems.find(ev => !ev.subtaskOf && pointEligible(ev)) || activeItems[0] || {}).id;
   const _focusActiveId = _pinnedActiveExists ? String(_pinnedActiveId) : (_pomoFocusExists ? _pomoFocusId : (_defaultFocusId ? String(_defaultFocusId) : null));
 
-  // Subtask timeline rows now use the shared renderSubRow (itinerary-card.js) with
-  // compact:true — the pie-slice chip and delegated collapse live in there.
+  // Subtasks render through the SAME renderItineraryCard as normal tasks, tagged
+  // variant:"sub" (lighter card, pie-slice chip, no clock while timeless). All the
+  // wiring below — open-space click, radial, drag, checkbox — therefore applies to
+  // subtasks for free, so future normal-task changes reach subtasks automatically.
   // Delegated collapse toggle: one listener handles every wrap/subtask chevron.
   if(!tl._collapseWired){tl._collapseWired=true;tl.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".wrap-collapse");if(!b)return;e.stopPropagation();const item=b.closest("[data-id]");if(item&&typeof toggleCollapsed==="function"){toggleCollapsed(item.dataset.id);render("schedule");}});}
 
-  // Render active/upcoming items as full cards; subtasks as compact rows (recursion + collapse).
+  // Render active/upcoming items as full cards; nested subtasks as a lighter card variant.
   flattenSchedule(activeItems).forEach(node=>{
     const ev=node.ev;
-    if(node.rel==="subtask"){tl.appendChild(renderSubRow(node.ev,node,{compact:true}));return;}
-    injectBlockHeaders(pt(ev.start));
+    const isSubNode = node.rel==="subtask";
+    // Nested rows sit under their parent — they must not flush a block-time header.
+    if(node.depth===0)injectBlockHeaders(pt(ev.start));
     const isFocusActive = isToday && _focusActiveId && String(ev.id) === _focusActiveId;
     const isPinnedActive = isToday && _pinnedActiveExists && String(_pinnedActiveId) === String(ev.id);
     const pinnedStyle = isPinnedActive && typeof getPinnedOverdueStyle === "function" ? getPinnedOverdueStyle(ev) : null;
     const active=!!isFocusActive;
     const el=renderItineraryCard(ev,{
       node:node,active:active,isPinnedActive:isPinnedActive,pinnedStyle:pinnedStyle,isToday:isToday,
+      variant:isSubNode?"sub":undefined,
       canEditBounty:(typeof viewMode==="undefined"||viewMode!=="archive"),
       bw:(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null
     });
@@ -966,9 +890,10 @@ function buildSchedule(){
     const am=el.querySelector(".row-add-menu");
     if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     const bb=el.querySelector(".btn-bounty");if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId)});
-    // PIN 1: click the timeline dot to pin this task as "active"
+    // PIN 1: click the timeline dot to pin this task as "active" (top-level only —
+    // pinning a nested subtask as the day's focus is meaningless).
     const tnode=el.querySelector(".tl-node");
-    if(tnode&&!isMeeting(ev)){
+    if(tnode&&!isMeeting(ev)&&!isNested(ev)){
       tnode.style.cursor="pointer";
       tnode.title="Click to pin as your active task";
       tnode.addEventListener("click",e=>{e.stopPropagation();if(typeof togglePinnedActiveId==="function")togglePinnedActiveId(ev.id);});
@@ -994,7 +919,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".wrap-collapse")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){

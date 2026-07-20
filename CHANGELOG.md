@@ -4,6 +4,41 @@
 > Renamed from TODO-README 2026-07-04: this file was a per-PR QA log, not a live
 > TODO (it still described the SQLite era). Kept as history. Live conventions:
 > ARCHITECTURE.md. Manual QA: QA-CHECKLIST.md.
+## Current PR: Unify subtasks onto the normal-task code path
+
+### What Changed
+- **Subtasks are now full tasks with full metadata.** They render through the
+  same builders as normal tasks — `renderItineraryCard(ev,{variant:"sub"})` on
+  the timeline and `row()` in the list — instead of a forked, stripped-down
+  `renderSubRow`. A subtask is a lighter card, but keeps the whole skeleton, so
+  clicking its empty space opens the same task-details modal, and it gets the
+  radial, drag, checkbox→Done-modal, and row "+" for free. Any future change to
+  normal-task rows now reaches subtasks automatically.
+- **Deleted the duplicated path.** `renderSubRow` and its schedule-tab helpers
+  (`subtaskActionsHtml`/`bindSubtaskActions`/`moveSubtaskSibling`/
+  `subtaskMoveState`/`startSubtaskTitleEdit`) are gone, along with the dead
+  `.subtask-row`/`.tl-sub`/`.sub-actions` CSS. Rename = title/modal; add-child =
+  row "+"; delete = trash; reorder = drag (the move up/down arrows were retired).
+- **Drag-out promotion is now correct.** Dropping a subtask onto a top-level
+  timeline slot (or the radial's new "Promote" spoke) clears its parent edge,
+  gives the timeless subtask a real 30m duration so it lands in a real cascade
+  slot, rebalances the old parent's point pie, and persists the duration
+  (shared `promoteToTopLevel`/`_promoteMutate` in drag.js).
+- **Bug fix — Unscheduled drop no longer nests.** Dragging a task out of the
+  Unscheduled queue onto the middle of a timed row scheduled it as a *subtask*
+  of that row; it now always schedules top-level at the drop position
+  (`wasUntimed` guard on the nest computation in `dDrop`).
+- **Creation parity.** `addSubtask` now shapes the subtask via the shared
+  `taskCommonProps`/`taskBlockProps` serializer, so it carries the same fields
+  as any task (kept timeless: `start===end`, `duration:0`).
+- **Guardrails.** New `subtask-unified-row.test.js` fails if the forked path
+  returns and pins the promotion contract; the allowed `subtaskOf` branch
+  inventory is documented at the top of state.js's unified-tree section.
+
+### Merge watch
+- `public/css/dashboard.css` also has uncommitted WIP on `feat/modal-title-edit`
+  (the modal click-to-rename). Reconcile that file at merge.
+
 ## Current PR: Collapse meeting rendering to a single materialization path (#208)
 
 ### What Changed

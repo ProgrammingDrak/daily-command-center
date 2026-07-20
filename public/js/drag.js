@@ -266,6 +266,40 @@ function _persistEvProps(ev,patch){
 function _persistEvWrap(ev){
   _persistEvProps(ev,{wrapId:ev.wrapId||null,subtaskOf:ev.subtaskOf||null,isWrap:!!ev.isWrap,start:ev.start,end:ev.end});
 }
+// Persist a promoted task: clears the parent edge AND writes the (now real) duration
+// so downstream readers don't see the timeless subtask's duration:0.
+function _persistPromoted(ev){
+  _persistEvProps(ev,{wrapId:null,subtaskOf:null,isWrap:!!ev.isWrap,start:ev.start,end:ev.end,duration:dur(ev)});
+}
+// Promote a nested task (subtask or ride-along) to a standalone top-level task:
+// clear its parent edge, give a timeless subtask a real duration (30m default so it
+// gets a real cascade slot instead of a 0-length one), and rebalance the old
+// parent's point pie. Mutates `moved` in place; the caller reflows + persists.
+// Returns the previous parent id (or null) so the caller can log/toast.
+function _promoteMutate(moved){
+  const prevParent=parentIdOf(moved);
+  const prevRel=relOf(moved);
+  moved.wrapId=null;moved.subtaskOf=null;
+  _clearPin(moved);
+  if(prevRel==="subtask"&&dur(moved)<=0)moved.end=fmt(pt(moved.start)+30);
+  if(prevRel==="subtask"&&prevParent&&window.PointPlan&&typeof window.PointPlan.reconcile==="function"){
+    try{window.PointPlan.reconcile(prevParent);}catch(e){}
+  }
+  return prevParent;
+}
+// Public promote entry point (radial "Promote" spoke, mobile-friendly): the drag
+// path uses _promoteMutate directly inside dDrop so it can position by drop target.
+function promoteToTopLevel(id){
+  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
+  const moved=scheduled.find(x=>x.id===id);
+  if(!moved||!parentIdOf(moved))return;
+  const old=JSON.stringify(scheduled);
+  _promoteMutate(moved);
+  recalcTimes({orderWins:true});
+  _persistPromoted(moved);
+  _finishDrag(old);
+  if(typeof showToast==="function")showToast("Promoted to its own task","success",2200);
+}
 // True if ancestorId is somewhere above nodeId in the parent chain (guards against
 // nesting a task into one of its own descendants).
 function _isAncestor(ancestorId,nodeId){
@@ -320,14 +354,20 @@ function _shiftWrapChildren(wrapEv,oldStart){
 function _dropAtTargetLevel(moved,target,after){
   const tParent=parentIdOf(target);
   if(!tParent||tParent===moved.id||_isAncestor(moved.id,tParent))return false;
+  const prevParent=parentIdOf(moved),prevRel=relOf(moved);
+  const _reconcilePrev=()=>{ if(prevRel==="subtask"&&prevParent&&prevParent!==tParent&&window.PointPlan&&typeof window.PointPlan.reconcile==="function"){try{window.PointPlan.reconcile(prevParent);}catch(e){}} };
   if(target.subtaskOf){
     if(typeof reparentAsSubtask==="function")reparentAsSubtask(moved.id,tParent);
     else{moved.subtaskOf=tParent;moved.wrapId=null;_clearPin(moved);_persistEvWrap(moved);}
     _reorderActive(moved.id,target.id,after);
     if(typeof saveSubtaskOrder==="function")saveSubtaskOrder(tParent);
+    _reconcilePrev();
     return true;
   }
   const wrapEv=scheduled.find(x=>x.id===tParent);
+  // A ride-along keeps its own duration, so a timeless subtask joining one needs a
+  // real duration (30m) or _chainWrapChildren falls back to a placeholder length.
+  if(prevRel==="subtask"&&dur(moved)<=0)moved.end=fmt(pt(moved.start)+30);
   moved.wrapId=tParent;moved.subtaskOf=null;
   _clearPin(moved);
   _reorderActive(moved.id,target.id,after);
@@ -337,6 +377,7 @@ function _dropAtTargetLevel(moved,target,after){
     if(typeof showToast==="function")showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
   }
   _persistEvWrap(moved);
+  _reconcilePrev();
   return wrapEv||true;
 }
 function _reorderActive(movedId,targetId,after){
@@ -435,17 +476,20 @@ function dDrop(e,tid){
   // start "00:00", and an active 00:00 would become recalcTimes' Math.min
   // anchor, cascading the whole day's unpinned tasks from midnight. A drop onto
   // another Unscheduled row is just a reorder within the section: stays untimed.
-  if(moved.untimed&&!target.untimed){
+  const wasUntimed=!!moved.untimed;
+  if(wasUntimed&&!target.untimed){
     moved.untimed=false;
     const _d=dur(moved)||30;
     const _s=pt(target.start)||(typeof now==="function"?Math.ceil(now()/15)*15:8*60);
     moved.start=fmt(_s);moved.end=fmt(_s+_d);
   }
 
-  // Drop zone from cursor position over the target row.
+  // Drop zone from cursor position over the target row. A drop OUT of the
+  // Unscheduled queue always means "schedule here" — never nest — so the
+  // mid-row band doesn't silently turn the scheduled task into a subtask.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nest=(typeof isMeeting==="function"&&!isMeeting(target)&&y>h*0.25&&y<h*0.75&&!_isAncestor(moved.id,target.id));
+  const nest=(!wasUntimed&&typeof isMeeting==="function"&&!isMeeting(target)&&y>h*0.25&&y<h*0.75&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
@@ -487,8 +531,11 @@ function dDrop(e,tid){
     recalcTimes({orderWins:true});
     if(wrapEv)_shiftWrapChildren(wrapEv,bWs);
     if(typeof showToast==="function"&&wrapEv)showToast('Wrapped inside "'+wrapEv.title+'"',"success",2200);
-  }else if((joined=_dropAtTargetLevel(moved,target,after))){
+  }else if(!wasUntimed&&(joined=_dropAtTargetLevel(moved,target,after))){
     // ---- Case C': edge drop on a NESTED row -> joined the target's level;
+    // (An Unscheduled-origin drop skips this join too — see the nest guard above:
+    // dragging out of the queue always schedules top-level, never nests, even when
+    // the drop target happens to be a nested row.)
     // reflow the top-level chain (the moved task left it or never consumed it),
     // then shift the joined wrap's nest by the wrap's own movement. ----
     const jWs=joined&&joined.id?pt(joined.start):0;
@@ -496,12 +543,14 @@ function dDrop(e,tid){
     if(joined&&joined.id)_shiftWrapChildren(joined,jWs);
   }else{
     // ---- Case C: TOP-LEVEL drop -> promote out of any parent, then sequential reorder ----
+    // _promoteMutate clears the edge, gives a timeless subtask a real 30m duration
+    // (so it lands in a real cascade slot, not a 0-length one) and rebalances the
+    // old parent's point pie.
     const wasNested=!!parentIdOf(moved);
-    moved.wrapId=null;moved.subtaskOf=null;
-    _clearPin(moved);
+    _promoteMutate(moved);
     _reorderActive(moved.id,target.id,after);
     recalcTimes({orderWins:true});
-    if(wasNested){_persistEvWrap(moved);if(typeof showToast==="function")showToast("Promoted to its own task","success",2200);}
+    if(wasNested){_persistPromoted(moved);if(typeof showToast==="function")showToast("Promoted to its own task","success",2200);}
   }
   _finishDrag(old);
 }

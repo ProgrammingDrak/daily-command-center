@@ -98,6 +98,22 @@ function wrapBandwidth(ev,pool){
 //   wrapId    -> "ride-along" (concurrent, first-class row, has its own time)
 //   subtaskOf -> "subtask"    (timeless step, smaller collapsible row)
 // Both nest arbitrarily and intermix. recalcTimes skips anything nested.
+//
+// SUBTASK PARITY CONTRACT: a subtask is a FULL task — same blocks row, same
+// creation serializer, same row builders (renderItineraryCard variant:"sub" /
+// row() with node.rel==="subtask"), same wiring (details modal, radial, drag,
+// checkbox). So the ONLY places allowed to branch on subtaskOf/isSubtask are the
+// documented, minimal set below; anything else is a regression:
+//   • these helpers + flattenSchedule tree ordering
+//   • recalcTimes isNested skips (drag.js) — nested rows take no cascade slot
+//   • hydrate no-pin for subtasks (persistence.js)
+//   • done-subtask fold filters (schedule-tab.js: fold under a visible parent)
+//   • default focus-pill skip (schedule-tab.js)
+//   • the points pipeline (point-plan.js, schedule.js award override, _onParentCompleted)
+//   • create / reparent / promote (tabs.js addSubtask + addStackedTask, both via
+//     the shared taskCommonProps/taskBlockProps serializer; drag.js _promoteMutate)
+//   • subtask sibling-order persistence (persistence.js saveSubtaskOrder)
+//   • the single variant:"sub" block inside each row builder
 function parentIdOf(ev){return (ev&&(ev.wrapId||ev.subtaskOf))||null;}
 function relOf(ev){return ev?(ev.wrapId?"ride-along":(ev.subtaskOf?"subtask":null)):null;}
 function isSubtask(ev){return !!(ev&&ev.subtaskOf);}
