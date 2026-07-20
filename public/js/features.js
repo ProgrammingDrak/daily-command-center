@@ -215,6 +215,17 @@ function _persistTaskTags(taskId, tagIds) {
   if (typeof scheduleIDBSave === 'function') scheduleIDBSave();
 }
 
+// Set a single property on a meeting's own block (e.g. recording_review). Same
+// block resolution as _persistTaskTags; used by the Recording Review toggle.
+function _persistMeetingFlag(taskId, key, val) {
+  if (window.blockStore) {
+    var schedBlocks = (window.blockStore.getByType('schedule_item')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).start||(b.properties||{}).end;}));
+    var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
+    if (sBlock) { var np = Object.assign({}, sBlock.properties); np[key] = val; window.blockStore.updateBlock(sBlock.id, np); return; }
+  }
+  if (typeof scheduleIDBSave === 'function') scheduleIDBSave();
+}
+
 // Read-only detail line for the Task Details modal (description itself seeds the
 // Notes editor via seedNoteForTask, so this shows only the meta — no duplication).
 function _amBuildDetails(ev){
@@ -249,6 +260,27 @@ function openAddModal(taskId, taskTitle) {
       if (taskEntry) taskEntry.tags = newIds;
       _persistTaskTags(taskId, newIds);
     });
+  }
+
+  // Recording Review toggle — meetings only. Flags the meeting for the
+  // recording-review bridge (transcript + dashboard after it ends).
+  var rrEl = document.getElementById('am-recording-review');
+  if (rrEl) {
+    var isMtg = taskEntry && (typeof isMeeting === 'function' ? isMeeting(taskEntry) : (taskEntry.type === 'meeting' || taskEntry.type === 'oneone'));
+    if (isMtg) {
+      rrEl.style.display = '';
+      rrEl.innerHTML = '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">'
+        + '<input type="checkbox" id="am-rr-check"' + (taskEntry.recordingReview ? ' checked' : '') + '>'
+        + '<span>&#128252; Recording Review <span style="opacity:.6;font-weight:400">— transcript + dashboard after this meeting</span></span></label>';
+      var rrChk = document.getElementById('am-rr-check');
+      if (rrChk) rrChk.addEventListener('change', function () {
+        if (taskEntry) taskEntry.recordingReview = rrChk.checked;
+        _persistMeetingFlag(taskId, 'recording_review', rrChk.checked);
+      });
+    } else {
+      rrEl.style.display = 'none';
+      rrEl.innerHTML = '';
+    }
   }
 
   var commuteToInput = document.getElementById('am-commute-to-input');

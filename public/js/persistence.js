@@ -314,6 +314,7 @@ function reloadPersistedEdits() {
           // chip (itinerary-card.js) renders without a page-level meetings[] join.
           prepStatus:p.prep_status||null,
           dashboardRef:p.dashboard_ref||null,
+          recordingReview:!!p.recording_review,
           meetingBlockId:(p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")?block.id:(p.meetingBlockId||""),
           isPlaceholder:p.isPlaceholder||false,
           placeholderMenus:Array.isArray(p.placeholderMenus)?p.placeholderMenus:[],
