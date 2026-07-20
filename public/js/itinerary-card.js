@@ -276,6 +276,7 @@
             '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+(sub?'Subtask':c.tag)+'</span>'+stackedBadge+chipSlotHtml+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
+              (ev.dashboardRef?'<a class="prep-flag rec-flag" href="/meetings/'+encodeURIComponent(ev.id)+'/dashboard" target="_blank" rel="noopener" title="Open the recording review dashboard" onclick="event.stopPropagation()" style="text-decoration:none">&#9654; Recording</a>':'')+
               (changed?'<span style="color:var(--amber);font-size:9px">Duration adjusted</span>':'')+
               taskTagChipsHtml(ev)+
             '</div>'+

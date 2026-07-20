@@ -172,6 +172,7 @@ module.exports = function mount(app, ctx) {
         transcript: body.transcript || null,
         proposedActions,
         recapToNotes: body.recap_to_notes !== false,
+        dashboardRef: body.dashboard_ref || null,
       });
       broadcast("blocks-changed", { action: "meeting-artifacts", blockIds: [block.id], date: block.date }, workspaceId);
       res.json({
