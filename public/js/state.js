@@ -163,6 +163,31 @@ function shellRollup(id,pool){
   return {points:Math.round(points),done:kids.filter(k=>isDone(k)).length,total:kids.length};
 }
 
+// Capture a shell's subtree as a reusable, nesting-aware template — the saved
+// structure a repeat responsibility drops back onto a day. Recurses via
+// childrenOf/relOf; each node carries its own duration/priority/type/edge so
+// materializeShellTemplate (schedule.js) can rebuild it exactly. Cycle- and
+// depth-guarded. The root carries NO duration — a shell derives its length from
+// its children (see _layoutShellChildren in drag.js).
+function captureShellTemplate(shellId,pool){
+  pool=pool||((typeof scheduled!=="undefined")?scheduled:[]);
+  const root=pool.find(e=>e.id===shellId);
+  if(!root)return null;
+  const seen=new Set();
+  function node(ev,depth,isRoot){
+    seen.add(ev.id);
+    const out={title:ev.title||"",type:ev.type||"task",priority:ev.priority||"Medium",detail:ev.detail||""};
+    if(!isRoot){
+      out.edge=(relOf(ev)==="subtask")?"subtask":"wrap";
+      out.durationMin=Math.max(1,dur(ev)||0)||30;
+    }
+    const kids=(depth<20)?childrenOf(ev.id,pool).filter(c=>!seen.has(c.id)&&!isDeleted(c)):[];
+    out.children=kids.map(k=>node(k,depth+1,false));
+    return out;
+  }
+  return {version:1,root:node(root,0,true)};
+}
+
 // Completion bonus for a rollup container: bonusPct × the subtree's estimated
 // points, clamped to the ledger's 1..500 override range. THE single formula —
 // the preview chip (shellRollupChip) and the awarded points_override

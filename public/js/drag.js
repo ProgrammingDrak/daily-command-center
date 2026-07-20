@@ -100,9 +100,10 @@ function recalcTimesTagAware(schedBlocks){
     if(isNested(ev)) return; // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev)) return;
     if(ev._pinnedStart || ev._locked){
-      const d = dur(ev);
       const ps = pt(ev._pinnedStart || ev.start);
-      ev.start = fmt(ps); ev.end = fmt(ps + d);
+      ev.start = fmt(ps);
+      const d = _isSeqShell(ev) ? _layoutShellChildren(ev) : dur(ev);
+      if(!_isSeqShell(ev)) ev.end = fmt(ps + d);
       blockers.push({s: ps, e: ps + d});
     }
   });
@@ -122,7 +123,7 @@ function recalcTimesTagAware(schedBlocks){
       fallbackCursor = Math.max(fallbackCursor, pt(ev.end));
       return;
     }
-    const d = dur(ev);
+    const d = _isSeqShell(ev) ? _shellSpan(ev) : dur(ev);
 
     // Find the matching block with the earliest available slot that fits
     let bestBlock = null, bestStart = Infinity;
@@ -140,13 +141,15 @@ function recalcTimesTagAware(schedBlocks){
     }
 
     if(bestBlock){
-      ev.start = fmt(bestStart); ev.end = fmt(bestStart + d);
+      ev.start = fmt(bestStart);
+      if(_isSeqShell(ev)) _layoutShellChildren(ev); else ev.end = fmt(bestStart + d);
       nextFree[bestBlock.id] = bestStart + d;
       fallbackCursor = Math.max(fallbackCursor, bestStart + d);
     } else {
       // No block matched or had room — use fallback sequential cascade
       const s = _freeStart(fallbackCursor, d, blockers);
-      ev.start = fmt(s); ev.end = fmt(s + d);
+      ev.start = fmt(s);
+      if(_isSeqShell(ev)) _layoutShellChildren(ev); else ev.end = fmt(s + d);
       fallbackCursor = s + d;
     }
   });
@@ -186,9 +189,12 @@ function recalcTimes(opts){
     if(isNested(ev))return;          // nested (ride-along/subtask): lives under its parent, never a blocker
     if(isFixedTimeBlock(ev))return;     // already represented in _meetingBlocks()
     if(ev._locked||(!opts.orderWins&&ev._pinnedStart)){
-      const d=dur(ev);
       const ps=pt(ev._pinnedStart||ev.start);
-      ev.start=fmt(ps);ev.end=fmt(ps+d);
+      ev.start=fmt(ps);
+      // A pinned/locked shell derives its span from its children, laid out from
+      // the pinned start; a normal task uses its own duration.
+      const d=_isSeqShell(ev)?_layoutShellChildren(ev):dur(ev);
+      if(!_isSeqShell(ev))ev.end=fmt(ps+d);
       blockers.push({s:ps,e:ps+d});
     }
   });
@@ -222,9 +228,13 @@ function recalcTimes(opts){
       cursor=Math.max(cursor,pt(ev.end));
       return;
     }
-    const d=dur(ev);
+    // A shell has no length of its own: its slot must fit the SUM of its
+    // children, and once placed the children chain from its start. A normal
+    // task uses its own duration.
+    const d=_isSeqShell(ev)?_shellSpan(ev):dur(ev);
     const s=_freeStart(cursor,d,blockers);
-    ev.start=fmt(s);ev.end=fmt(s+d);
+    ev.start=fmt(s);
+    if(_isSeqShell(ev))_layoutShellChildren(ev); else ev.end=fmt(s+d);
     if(opts.orderWins&&ev._pinnedStart&&ev._pinnedStart!==ev.start){
       ev._pinnedStart=ev.start;
       repinned.push(ev);
@@ -334,6 +344,60 @@ function _chainWrapChildren(wrapEv){
     cursor+=d;
     _persistEvWrap(c);
   });
+}
+// ── SEQUENTIAL SHELL LAYOUT ──
+// A shell (childLayout:"sequential" + durationFromChildren) has NO length of its
+// own: its span is the sum of its children, which stack back-to-back from the
+// shell's anchor. These helpers derive that span and lay the children out; the
+// reflow (recalcTimes) calls them so adding/removing a child grows/shrinks the
+// shell and shifts everything after it. Contrast _placeInWrapWindow (free) and
+// _chainWrapChildren (chained but clamped to a fixed wrap window).
+function _isSeqShell(ev){
+  return !!(ev&&window.TaskTypes&&window.TaskTypes.rule(ev,"childLayout")==="sequential"&&window.TaskTypes.rule(ev,"durationFromChildren"));
+}
+// Total span (minutes) a shell occupies = sum of its non-deleted children's
+// durations, recursing so a nested shell child is sized by its own children.
+// Pure read — moves nothing. Empty shell => 0. `seen` guards against a data
+// cycle (matches captureShellTemplate) so recursion can't blow the stack.
+function _shellSpan(shellEv,seen){
+  if(!shellEv)return 0;
+  seen=seen||new Set();
+  if(seen.has(shellEv.id))return 0;
+  seen.add(shellEv.id);
+  const kids=(typeof childrenOf==="function"?childrenOf(shellEv.id,scheduled):scheduled.filter(c=>c.wrapId===shellEv.id))
+    .filter(c=>!isDeleted(c));
+  let sum=0;
+  kids.forEach(c=>{ sum += _isSeqShell(c)?_shellSpan(c,seen):(dur(c)>0?dur(c):15); });
+  return sum;
+}
+// Lay a shell's children out sequentially from the shell's current start, stamp
+// the shell's derived end, persist each child's new time, and return the span.
+// Recurses into nested shells (sized before they're placed); `seen` guards cycles.
+function _layoutShellChildren(shellEv,seen){
+  if(!shellEv)return 0;
+  seen=seen||new Set();
+  if(seen.has(shellEv.id))return 0;
+  seen.add(shellEv.id);
+  const start=pt(shellEv.start||"00:00");
+  let cursor=start;
+  const kids=(typeof childrenOf==="function"?childrenOf(shellEv.id,scheduled):scheduled.filter(c=>c.wrapId===shellEv.id))
+    .filter(c=>!isDeleted(c));
+  kids.forEach(c=>{
+    let d;
+    if(_isSeqShell(c)){
+      c.start=fmt(cursor);
+      d=_layoutShellChildren(c,seen);                       // sizes from ITS children, sets c.end
+    }else{
+      d=dur(c);if(!(d>0))d=15;                              // capture duration BEFORE moving the start
+      c.start=fmt(cursor);c.end=fmt(cursor+d);
+    }
+    if(typeof _persistEvWrap==="function")_persistEvWrap(c);
+    cursor+=d;
+  });
+  const span=cursor-start;
+  shellEv.end=fmt(start+span);
+  if(typeof _persistEvWrap==="function")_persistEvWrap(shellEv);
+  return span;
 }
 // Shift a wrap's ride-alongs by the wrap's own movement during a reflow, so
 // their intra-window layout survives the wrap changing start time (Case A's

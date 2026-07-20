@@ -3,12 +3,14 @@
 // when their cadence/score or a trigger makes them actionable.
 (function(){
   let _items = [];
-  let _filter = "active";
+  // Saved shell structure staged for the create/edit modal. The modal reads/writes
+  // scalar DOM fields, so a nested template can't ride a form input — it's stashed
+  // here between openResponsibilityModal and formProps/saveResponsibility.
+  let _pendingTemplateTree = null;
   let _sidebarQuery = "";
   let _sidebarFilter = "active";
   let _sidebarSort = "urgency";
   let _sidebarExpanded = new Set();
-  let _captureEditor = null;
 
   function esc(s) { return window.DCC.esc(s); } // delegates to core.js
 
@@ -122,14 +124,78 @@
     return "Every "+esc((props&&props.cadenceDays)||7)+"d";
   }
 
-  function getResponsibilities(){
-    return _items.filter(i=>(i.properties||{}).kind==="responsibility_item");
+  // ── Due-in-triage surfacing (Part C) ──
+  // Repeat responsibilities no longer live only in a drawer sidebar: as their
+  // cadence makes them due they surface as cards in the Itinerary triage strip
+  // ("needs attention before it disappears into the day"). These are VIRTUAL —
+  // computed client-side from the responsibility rows, never written into the
+  // triage store — so there's one source of truth and nothing to reconcile.
+  function _respDayKey(){
+    if(typeof viewDate!=="undefined"&&viewDate)return viewDate;
+    if(typeof __state!=="undefined"&&__state&&__state.date)return __state.date;
+    return "";
+  }
+  function loadRespSnoozed(){
+    try{return JSON.parse(localStorage.getItem("pa-resp-snoozed-"+_respDayKey())||"{}");}catch(e){return {};}
+  }
+  function saveRespSnoozed(map){
+    try{localStorage.setItem("pa-resp-snoozed-"+_respDayKey(),JSON.stringify(map||{}));}catch(e){}
+  }
+  // Already dropped onto the viewed day? (a live itinerary task links back via responsibilityId)
+  function _respDroppedToday(id){
+    if(typeof scheduled==="undefined")return false;
+    return scheduled.some(e=>e&&e.responsibilityId===id&&!(typeof isDeleted==="function"&&isDeleted(e)));
+  }
+  // The "close enough to needing to be done" set: active, not as-needed, score
+  // past the due line (70, same threshold the old sidebar filter used) or its
+  // preferred day is today — minus anything already dropped, done, or snoozed.
+  function getDueRepeatResponsibilities(){
+    const snoozed=loadRespSnoozed();
+    return getResponsibilities().map(item=>{
+      const p=item.properties||{};
+      if((p.status||"active")!=="active")return null;
+      if(isAsNeeded(p))return null;
+      const t=responsibilityTiming(p);
+      const preferred=preferredCompletionInfo(p);
+      const score=Number(p.importanceScore||t.progress||0);
+      if(!(score>=70||preferred.due))return null;
+      if(snoozed[item.id])return null;
+      if(_respDroppedToday(item.id))return null;
+      const tree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
+      return {
+        id:item.id,
+        title:p.title||"(untitled)",
+        score:Math.round(score),
+        scoreClass:(typeof scoreClass==="function")?scoreClass(score):"",
+        dueLabel:dueLabel(p),
+        cadenceLabel:cadenceLabel(p),
+        estimatedMinutes:Number(p.estimatedMinutes)||30,
+        overdue:t.remaining!=null&&t.remaining<0,
+        isShell:!!tree,
+        childCount:tree?((tree.root.children||[]).length):0,
+        preferredDue:!!preferred.due
+      };
+    }).filter(Boolean).sort((a,b)=>b.score-a.score);
+  }
+  // Complete straight from the triage card: reset the cadence, no task added.
+  async function completeRepeatResponsibility(id){
+    try{
+      const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
+      if(!res.ok)throw new Error(res.statusText);
+      await loadResponsibilities();
+      if(typeof showToast==="function")showToast("Done — clock reset","success");
+    }catch(e){
+      if(typeof showToast==="function")showToast("Complete failed: "+(e.message||e),"error");
+    }
+  }
+  // "Not now": hide from the strip for the rest of today; returns tomorrow if still due.
+  function snoozeRepeatResponsibility(id){
+    const map=loadRespSnoozed();map[id]=1;saveRespSnoozed(map);
+    if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   }
 
-  function applyFilter(items){
-    if(_filter==="all")return items;
-    if(_filter==="due")return items.filter(i=>Number((i.properties||{}).importanceScore||0)>=70 && (i.properties||{}).status!=="archived");
-    return items.filter(i=>((i.properties||{}).status||"active")===_filter);
+  function getResponsibilities(){
+    return _items.filter(i=>(i.properties||{}).kind==="responsibility_item");
   }
 
   async function loadResponsibilities(){
@@ -138,8 +204,10 @@
       if(!res.ok)throw new Error(res.statusText);
       const data=await res.json();
       _items=data.items||[];
-      renderResponsibilities();
       renderRepeatResponsibilitiesSidebar();
+      // Due responsibilities surface in the Itinerary triage strip — repaint it
+      // now that the rows (and their scores) are known.
+      if(typeof buildScheduleTriage==="function")buildScheduleTriage();
       return _items;
     }catch(e){
       if(typeof showToast==="function")showToast("Could not load responsibilities: "+(e.message||e),"error");
@@ -173,60 +241,6 @@
     resetScheduleFromBase();
     if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
     repaintScheduleNow();
-  }
-
-  function renderResponsibilities(){
-    const mount=document.getElementById("responsibilities-list");
-    if(!mount){renderRepeatResponsibilitiesSidebar();return;}
-    const all=getResponsibilities().sort((a,b)=>Number((b.properties||{}).importanceScore||0)-Number((a.properties||{}).importanceScore||0));
-    const visible=applyFilter(all);
-    const badge=document.getElementById("responsibilities-count");
-    if(badge){
-      const due=all.filter(i=>Number((i.properties||{}).importanceScore||0)>=70 && (i.properties||{}).status!=="archived").length;
-      badge.textContent=due;
-      badge.style.display=due?"":"none";
-    }
-    if(!visible.length){
-      mount.innerHTML='<div class="delegated-empty">No responsibilities match this view.</div>';
-      return;
-    }
-    mount.innerHTML=visible.map(item=>{
-      const p=item.properties||{};
-      const score=Number(p.importanceScore||0);
-      const subtasks=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
-      const preferred=preferredCompletionSummary(p);
-      const asNeeded=isAsNeeded(p);
-      return '<div class="resp-card" data-id="'+esc(item.id)+'">'+
-        (asNeeded?'<button type="button" class="resp-score resp-score-plus" data-act="urgent-schedule" title="Add as urgent" aria-label="Add as urgent">+</button>':'<div class="resp-score '+scoreClass(score)+'">'+score+'</div>')+
-        '<div class="resp-body">'+
-          '<div class="resp-title-row">'+
-            '<div class="resp-title">'+esc(p.title||"(untitled)")+'</div>'+
-            '<span class="resp-chip domain">'+esc(p.domain||"other")+'</span>'+
-            '<span class="resp-chip">'+esc(p.status||"active")+'</span>'+
-          '</div>'+
-          '<div class="resp-meta">'+
-            '<span>'+esc(p.area||"general")+'</span>'+
-            '<span>'+esc(p.capacityBucket||"work_admin")+'</span>'+
-            '<span>'+cadenceLabel(p)+'</span>'+
-            '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
-            '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
-          '</div>'+
-          (subtasks.length?'<div class="resp-subtasks">'+esc(subtasks.slice(0,3).join(" · "))+(subtasks.length>3?" · ...":"")+'</div>':'')+
-          (preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
-        '</div>'+
-        '<div class="resp-card-actions">'+
-          '<button data-act="schedule">Schedule</button>'+
-          '<button data-act="complete">Complete</button>'+
-          '<button data-act="edit">Edit</button>'+
-          '<button class="danger" data-act="'+(p.status==="archived"?"activate":"archive")+'">'+(p.status==="archived"?"Activate":"Archive")+'</button>'+
-          '<button class="danger" data-act="remove">Remove</button>'+
-        '</div>'+
-      '</div>';
-    }).join("");
-    mount.querySelectorAll(".resp-card [data-act]").forEach(btn=>{
-      btn.addEventListener("click",()=>handleCardAction(btn.closest(".resp-card").dataset.id,btn.dataset.act));
-    });
-    renderRepeatResponsibilitiesSidebar();
   }
 
   function sidebarItems(){
@@ -263,10 +277,8 @@
     const mount=document.getElementById("repeat-responsibilities-list");
     const all=getResponsibilities();
     const due=all.filter(i=>Number((i.properties||{}).importanceScore||0)>=70 && (i.properties||{}).status!=="archived").length;
-    ["repeat-responsibilities-count","repeat-responsibilities-section-count"].forEach(id=>{
-      const badge=document.getElementById(id);
-      if(badge){badge.textContent=due;badge.style.display=due?"":"none";}
-    });
+    const badge=document.getElementById("repeat-responsibilities-section-count");
+    if(badge){badge.textContent=due;badge.style.display=due?"":"none";}
     if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
     if(!mount)return;
     const items=sidebarItems();
@@ -331,43 +343,67 @@
     });
   }
 
+  // Drop a repeat responsibility onto today via the shared time-bucket picker.
+  // A SHELL responsibility (templateTree) rebuilds the whole saved shell + its
+  // children through window.attachTemplateChildren; a flat one keeps the classic
+  // single-task + flat-default-subtasks path. Either way the created task carries
+  // responsibilityId so checking it off resets the cadence. Shared by the sidebar
+  // score button, the triage "Add to day" card, and the manage-modal row.
+  function scheduleRepeatResponsibility(id){
+    const item=_items.find(i=>i.id===id);
+    if(!item)return;
+    const p=item.properties||{};
+    const title=p.title||"(untitled)";
+    const dur=Number(p.estimatedMinutes)||30;
+    const tags=["responsibility",p.domain,p.area,p.capacityBucket].filter(Boolean);
+    const tree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
+    // SHELL responsibility: drop the whole saved shell onto TODAY through the one
+    // shared materializer (dedup + shell root + child attach in one place). It's
+    // today-scoped on purpose — the child-attach primitives write to the viewed
+    // day, so routing a shell through the day-picker would orphan its children on
+    // a different day. Flat single-task responsibilities keep the day/time picker.
+    if(tree&&typeof window.materializeShellTemplate==="function"){
+      window.materializeShellTemplate(tree,{
+        responsibilityId:id,
+        responsibilityTitle:title,
+        source:"responsibility",
+        tags:tags,
+        onScheduled:function(){ loadResponsibilities(); }
+      });
+      return;
+    }
+    if(typeof openSchedulePicker!=="function"){
+      if(typeof showToast==="function")showToast("Schedule picker unavailable","error");
+      return;
+    }
+    const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
+    openSchedulePicker(title,dur,{
+      responsibilityId:id,
+      responsibilityTitle:title,
+      capacityBucket:p.capacityBucket||null,
+      priority:"High",
+      source:"responsibility",
+      tags:tags,
+      meta:"Responsibility · "+(p.area||p.domain||"general")+" · "+dur+"m",
+      detail:p.description||"",
+      onScheduled:function(info){
+        try{
+          if(typeof addSubtask==="function"&&info&&info.localId){
+            defaults.forEach(function(t){if(t)addSubtask(info.localId,t);});
+          }
+        }catch(e){console.warn("[responsibilities] subtask attach failed",e);}
+        loadResponsibilities();
+      }
+    });
+  }
+
   async function handleCardAction(id,act){
     const item=_items.find(i=>i.id===id);
     if(!item)return;
     try{
       if(act==="schedule-pick"){
-        // Big-number (and as-needed "+") button: schedule this responsibility onto
-        // today as urgent, letting the user pick a time bucket via the shared
-        // "After 8 AM / 12 PM / 5 PM" picker. The created itinerary task stays
-        // linked to the responsibility (responsibilityId), so checking it off there
-        // resets the countdown (see markResponsibilityTaskCompleted wired into
-        // toggleDone). Default subtasks are attached client-side once scheduled.
-        if(typeof openSchedulePicker!=="function"){
-          if(typeof showToast==="function")showToast("Schedule picker unavailable","error");
-          return;
-        }
-        const p=item.properties||{};
-        const title=p.title||"(untitled)";
-        const dur=Number(p.estimatedMinutes)||30;
-        const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
-        openSchedulePicker(title,dur,{
-          responsibilityId:id,
-          responsibilityTitle:title,
-          capacityBucket:p.capacityBucket||null,
-          priority:"High",
-          source:"responsibility",
-          tags:["responsibility",p.domain,p.area,p.capacityBucket].filter(Boolean),
-          meta:"Responsibility · "+(p.area||p.domain||"general")+" · "+dur+"m",
-          detail:p.description||"",
-          onScheduled:function(info){
-            try{
-              if(typeof addSubtask==="function"&&info&&info.localId){
-                defaults.forEach(function(t){if(t)addSubtask(info.localId,t);});
-              }
-            }catch(e){console.warn("[responsibilities] subtask attach failed",e);}
-            loadResponsibilities();
-          }
-        });
+        // The score/"+" button: drop this responsibility onto today (shell or flat).
+        scheduleRepeatResponsibility(id);
       }else if(act==="complete"){
         const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
@@ -381,7 +417,7 @@
         const res=await fetch("/api/responsibilities/"+encodeURIComponent(id),{method:"DELETE"});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
         _items=_items.filter(i=>i.id!==id);
-        renderResponsibilities();
+        renderRepeatResponsibilitiesSidebar();
         if(typeof showToast==="function")showToast("Repeat responsibility removed","success");
       }else if(act==="edit"){
         openResponsibilityModal(id);
@@ -422,6 +458,12 @@
 
   function responsibilityDefaultsFromTask(task){
     const title=String((task&&(task.title||task.text))||"").trim();
+    // Saving a SHELL captures its whole subtree (the sequential container + its
+    // child tasks) as a reusable templateTree, so dropping the responsibility
+    // rebuilds the entire shell. A plain task keeps the flat single-task path.
+    const isShell=!!(task&&window.TaskTypes&&(window.TaskTypes.isRollup(task)||window.TaskTypes.rule(task,"childLayout")==="sequential"));
+    const templateTree=(isShell&&typeof captureShellTemplate==="function"&&task&&task.id&&typeof scheduled!=="undefined")
+      ?captureShellTemplate(task.id,scheduled):null;
     return {
       title,
       domain:"professional",
@@ -433,7 +475,8 @@
       capacityBucket:taskCapacityBucket(task),
       defaultSubtasks:defaultSubtasksFromTask(task),
       status:"active",
-      createdFrom:"task"
+      createdFrom:"task",
+      templateTree:templateTree||undefined
     };
   }
 
@@ -535,6 +578,9 @@
   function openResponsibilityModal(id,defaults){
     const item=id?_items.find(i=>i.id===id):null;
     const p=item?(item.properties||{}):(defaults||{});
+    // Carry any saved shell structure through the modal (editing keeps the
+    // existing tree; a shell-sourced create stashes the freshly captured one).
+    _pendingTemplateTree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
     const today=new Date();
     const todayIso=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-"+String(today.getDate()).padStart(2,"0");
     document.getElementById("resp-id").value=id||"";
@@ -573,6 +619,21 @@
     if(overlay)overlay.classList.remove("open");
   }
 
+  // The library lives in a dedicated modal now (the drawer just opens it). Same
+  // tool/list IDs as before, so renderRepeatResponsibilitiesSidebar populates it.
+  function openResponsibilityManager(){
+    const overlay=document.getElementById("responsibility-manage-overlay");
+    if(!overlay)return;
+    overlay.classList.add("open");
+    renderRepeatResponsibilitiesSidebar();
+    const search=document.getElementById("repeat-responsibilities-search");
+    if(search)setTimeout(()=>search.focus(),20);
+  }
+  function closeResponsibilityManager(){
+    const overlay=document.getElementById("responsibility-manage-overlay");
+    if(overlay)overlay.classList.remove("open");
+  }
+
   function formProps(){
     const cadence=document.getElementById("resp-cadence-preset")?.value||"custom";
     const cadenceMap={daily:1,weekly:7,biweekly:14,monthly:30};
@@ -580,6 +641,7 @@
     const cadenceDays=cadence==="as_needed"?null:(cadenceMap[cadence]||customDays);
     const preferredCadence=document.getElementById("resp-preferred-cadence")?.value||"none";
     return {
+      templateTree:(_pendingTemplateTree&&_pendingTemplateTree.root)?_pendingTemplateTree:undefined,
       title:document.getElementById("resp-title").value.trim(),
       domain:document.getElementById("resp-domain").value,
       area:document.getElementById("resp-area").value.trim()||"general",
@@ -655,40 +717,6 @@
     }
   }
 
-  async function captureResponsibility(){
-    const el=document.getElementById("resp-capture-text");
-    const editor=_captureEditor || window._respCaptureBlockEditor;
-    const text=editor?editor.toMarkdown().trim():(el&&"value" in el?el.value.trim():"");
-    if(!text){if(typeof showToast==="function")showToast("Paste something to capture first","error");return;}
-    try{
-      const res=await fetch("/api/responsibilities/capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
-      if(!res.ok)throw new Error(await responseErrorMessage(res));
-      const data=await res.json();
-      if(editor)editor.setBlocks(null);
-      else if(el&&"value" in el)el.value="";
-      await loadResponsibilities();
-      if(data.task&&data.task.properties&&data.task.properties.local_id){
-        if(typeof showToast==="function")showToast(data.duplicate?"Alert already captured":"Alert captured and scheduled","success");
-        await refreshScheduleAfterResponsibilityChange();
-      }else if(typeof showToast==="function")showToast("Responsibility captured","success");
-    }catch(e){
-      if(typeof showToast==="function")showToast("Capture failed: "+(e.message||e),"error");
-    }
-  }
-
-  async function autoScheduleDue(){
-    try{
-      const res=await fetch("/api/responsibilities/auto-schedule",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({threshold:70,limit:3})});
-      if(!res.ok)throw new Error(await responseErrorMessage(res));
-      const data=await res.json();
-      const count=(data.scheduled||[]).filter(x=>x.created).length;
-      if(typeof showToast==="function")showToast(count?("Scheduled "+count+" due responsibilities"):"No new due responsibilities to schedule",count?"success":"info");
-      if(count)await refreshScheduleAfterResponsibilityChange();
-    }catch(e){
-      if(typeof showToast==="function")showToast("Auto-schedule failed: "+(e.message||e),"error");
-    }
-  }
-
   async function markResponsibilityTaskCompleted(ev){
     if(!ev||!ev.responsibilityId)return;
     try{
@@ -701,22 +729,6 @@
   }
 
   function bindResponsibilities(){
-    const captureMount=document.getElementById("resp-capture-text");
-    if(captureMount && typeof createBlockEditor==="function"){
-      if(window._respCaptureBlockEditor)window._respCaptureBlockEditor.destroy();
-      _captureEditor=createBlockEditor(captureMount,null,{
-        placeholder:captureMount.dataset.placeholder||"Paste a responsibility, Slack alert text, or screenshot OCR here..."
-      });
-      window._respCaptureBlockEditor=_captureEditor;
-    }
-    document.querySelectorAll(".resp-filter-btn").forEach(btn=>{
-      btn.addEventListener("click",()=>{
-        document.querySelectorAll(".resp-filter-btn").forEach(b=>b.classList.remove("active"));
-        btn.classList.add("active");
-        _filter=btn.dataset.filter||"active";
-        renderResponsibilities();
-      });
-    });
     const repeatSearch=document.getElementById("repeat-responsibilities-search");
     if(repeatSearch)repeatSearch.addEventListener("input",()=>{_sidebarQuery=repeatSearch.value||"";renderRepeatResponsibilitiesSidebar();});
     const repeatFilter=document.getElementById("repeat-responsibilities-filter");
@@ -725,12 +737,16 @@
     if(repeatSort)repeatSort.addEventListener("change",()=>{_sidebarSort=repeatSort.value||"urgency";renderRepeatResponsibilitiesSidebar();});
     const repeatNew=document.getElementById("repeat-responsibilities-new");
     if(repeatNew)repeatNew.addEventListener("click",()=>openResponsibilityModal(null));
+    const manageOpen=document.getElementById("repeat-responsibilities-open");
+    if(manageOpen)manageOpen.addEventListener("click",openResponsibilityManager);
+    const manageClose=document.getElementById("responsibility-manage-close");
+    if(manageClose)manageClose.addEventListener("click",closeResponsibilityManager);
+    const manageOverlay=document.getElementById("responsibility-manage-overlay");
+    if(manageOverlay)manageOverlay.addEventListener("click",e=>{if(e.target===manageOverlay)closeResponsibilityManager();});
     const cadencePresetEl=document.getElementById("resp-cadence-preset");
     if(cadencePresetEl)cadencePresetEl.addEventListener("change",syncCadencePreset);
     const preferredCadenceEl=document.getElementById("resp-preferred-cadence");
     if(preferredCadenceEl)preferredCadenceEl.addEventListener("change",syncPreferredCompletion);
-    const newBtn=document.getElementById("resp-new-btn");
-    if(newBtn)newBtn.addEventListener("click",()=>openResponsibilityModal(null));
     const subtaskAdd=document.getElementById("resp-default-subtask-add");
     if(subtaskAdd)subtaskAdd.addEventListener("click",addDefaultSubtask);
     const subtaskInput=document.getElementById("resp-default-subtask-input");
@@ -741,19 +757,20 @@
     if(save)save.addEventListener("click",saveResponsibility);
     const overlay=document.getElementById("responsibility-modal-overlay");
     if(overlay)overlay.addEventListener("click",e=>{if(e.target===overlay)closeResponsibilityModal();});
-    const capture=document.getElementById("resp-capture-btn");
-    if(capture)capture.addEventListener("click",captureResponsibility);
-    const auto=document.getElementById("resp-auto-schedule-btn");
-    if(auto)auto.addEventListener("click",autoScheduleDue);
   }
 
   document.addEventListener("DOMContentLoaded",bindResponsibilities);
   window.loadResponsibilities=loadResponsibilities;
   window.refreshScheduleAfterResponsibilityChange=refreshScheduleAfterResponsibilityChange;
   window.openResponsibilityModalWithMenus=function(menus){ openResponsibilityModal(null,{menus:Array.isArray(menus)?menus:[]}); };
-  window.renderResponsibilities=renderResponsibilities;
   window.renderRepeatResponsibilitiesSidebar=renderRepeatResponsibilitiesSidebar;
   window.markResponsibilityTaskCompleted=markResponsibilityTaskCompleted;
+  // Triage-strip surfacing (Part C): the itinerary triage renderer reads these.
+  window.getDueRepeatResponsibilities=getDueRepeatResponsibilities;
+  window.scheduleRepeatResponsibility=scheduleRepeatResponsibility;
+  window.completeRepeatResponsibility=completeRepeatResponsibility;
+  window.snoozeRepeatResponsibility=snoozeRepeatResponsibility;
+  window.openRepeatResponsibilityManager=function(){ if(typeof openResponsibilityManager==="function")openResponsibilityManager(); };
   window.openRepeatResponsibilityFromTask=function(task){
     const defaults=responsibilityDefaultsFromTask(task||{});
     if(!defaults.title){

@@ -137,6 +137,38 @@ function firstFreeSlot(start, duration, blockers, dayEnd) {
   return cursor + duration <= dayEnd + 60 ? cursor : null;
 }
 
+// Validate + clamp a saved shell template (the reusable structure a repeat
+// responsibility drops back onto a day). Enforces a shell root, coerces per-node
+// duration/priority/edge, and caps node count + depth so a malformed tree can't
+// fan out into hundreds of blocks. Pure; returns null when the tree is unusable.
+function normalizeTemplateTree(tree, opts = {}) {
+  if (!tree || typeof tree !== "object" || !tree.root) return null;
+  const MAX_NODES = opts.maxNodes || 200;
+  const MAX_DEPTH = opts.maxDepth || 6;
+  const PRIORITIES = ["High", "Medium", "Low"];
+  let count = 0;
+  function node(n, depth, isRoot) {
+    if (!n || typeof n !== "object") return null;
+    if (++count > MAX_NODES) return null;
+    const out = {
+      title: String(n.title || "").slice(0, 300),
+      type: isRoot ? "shell" : (typeof n.type === "string" && n.type ? n.type : "task"),
+      priority: PRIORITIES.includes(n.priority) ? n.priority : "Medium",
+      detail: typeof n.detail === "string" ? n.detail.slice(0, 2000) : ""
+    };
+    if (!isRoot) {
+      out.edge = n.edge === "subtask" ? "subtask" : "wrap";
+      out.durationMin = Math.max(1, Math.min(1440, Math.round(Number(n.durationMin) || 30)));
+    }
+    const kids = (depth < MAX_DEPTH && Array.isArray(n.children)) ? n.children : [];
+    out.children = kids.map(k => node(k, depth + 1, false)).filter(Boolean);
+    return out;
+  }
+  const root = node(tree.root, 0, true);
+  if (!root || !root.title) return null;
+  return { version: 1, root };
+}
+
 // Build the `responsibility_task` properties for a given slot. Shared by the
 // schedule endpoint and the placeholder-resolve endpoint so both produce an
 // identical task shape (DRY — see also attachDefaultSubtasks).
@@ -231,6 +263,12 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
       updatedAt: nowIso,
       ...properties
     };
+    // A saved shell structure round-trips through the spread above; validate and
+    // clamp it here (or drop it if malformed) so a bad tree never persists.
+    if (properties.templateTree) {
+      const t = normalizeTemplateTree(properties.templateTree);
+      if (t) props.templateTree = t; else delete props.templateTree;
+    }
     if (existing) {
       return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...existing.properties, ...props, createdAt: existing.properties.createdAt || props.createdAt } }));
     }
@@ -433,6 +471,7 @@ Object.assign(module.exports, {
   minutesToHHMM,
   firstFreeSlot,
   buildResponsibilityTaskProps,
+  normalizeTemplateTree,
   parseOffersAmpAlert,
   RESPONSIBILITY_KINDS,
 });

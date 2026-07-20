@@ -1007,7 +1007,7 @@ function buildScheduleTriageCard(item){
   return '<div class="board-card schedule-triage-card" data-schedule-triage-id="'+item.id+'">'+
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
-      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
+      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
       '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+'<span>'+ms(triageDuration(item))+'</span>'+
         (item.link?'<a href="'+item.link+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+(item.link_label||item.action_label||"Open")+'</a>':'')+
       '</div>'+
@@ -1021,22 +1021,58 @@ function buildScheduleTriageCard(item){
     '</button>'+
   '</div>';
 }
+// Virtual card for a due repeat responsibility (see getDueRepeatResponsibilities
+// in responsibilities.js). It is NOT a real triage item — it's a live view of a
+// responsibility whose cadence is coming due. The "Recurring" chip (and the 🐚
+// shell chip) mark it apart from swept triage items.
+function buildRecurringTriageCard(r){
+  const barColor=(r.overdue||r.score>=85)?"var(--red)":(r.score>=70?"var(--amber)":"var(--accent-light)");
+  const safeTitle=DCC.esc(r.title||"Recurring");
+  // .tri-esc's pill sizing is CSS-scoped to .tri-card-header, which these cards
+  // aren't under — inline the pill shape so they match the escalation-chip look;
+  // the tri-esc-* modifier still supplies the (unscoped) background color.
+  const chipStyle='font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 7px;border-radius:100px';
+  const shellChip=r.isShell?'<span class="tri-esc tri-esc-attention" style="'+chipStyle+'" title="Drops a saved shell of '+r.childCount+' task'+(r.childCount===1?'':'s')+'">&#128026; '+r.childCount+'</span>':'';
+  return '<div class="board-card schedule-triage-card recurring-triage-card" data-resp-id="'+r.id+'">'+
+    '<div class="bar" style="background:'+barColor+'"></div>'+
+    '<div class="body">'+
+      '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(r.title||"Recurring")+'</span>'+
+        '<span class="tri-esc tri-esc-normal" style="'+chipStyle+'" title="Recurring responsibility">&#128260; Recurring</span>'+shellChip+'</div>'+
+      '<div class="meta"><span>'+r.cadenceLabel+'</span><span>'+r.dueLabel+'</span><span>'+ms(r.estimatedMinutes)+'</span></div>'+
+    '</div>'+
+    '<button class="add-btn resp-triage-add" data-resp-id="'+r.id+'">Add to day</button>'+
+    '<button class="add-btn resp-triage-done" data-resp-id="'+r.id+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
+    '<button class="tri-quick resp-triage-snooze" data-resp-id="'+r.id+'" title="Not now (hide for today)">&#128564;</button>'+
+  '</div>';
+}
 function buildScheduleTriage(){
   const el=document.getElementById("schedule-triage-section");
   if(!el)return;
   const items=activeTriageItems();
-  if(!items.length||schedView==="actual"){
+  const recurring=(typeof window.getDueRepeatResponsibilities==="function")?window.getDueRepeatResponsibilities():[];
+  if((!items.length&&!recurring.length)||schedView==="actual"){
     el.style.display="none";
     el.innerHTML="";
     return;
   }
   el.style.display="";
+  // Swept triage items first (external, genuinely time-sensitive), then the
+  // recurring responsibilities coming due — each tagged so the two don't blur.
   el.innerHTML=
     '<div class="schedule-triage-header">'+
-      '<div><span class="schedule-triage-kicker">Triage</span><span class="schedule-triage-count">'+items.length+'</span></div>'+
+      '<div><span class="schedule-triage-kicker">Triage</span><span class="schedule-triage-count">'+(items.length+recurring.length)+'</span></div>'+
       '<span class="schedule-triage-sub">Needs attention before it disappears into the day</span>'+
     '</div>'+
-    '<div class="schedule-triage-list">'+items.map(buildScheduleTriageCard).join('')+'</div>';
+    '<div class="schedule-triage-list">'+items.map(buildScheduleTriageCard).join('')+recurring.map(buildRecurringTriageCard).join('')+'</div>';
+  el.querySelectorAll(".resp-triage-add").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.scheduleRepeatResponsibility==="function")window.scheduleRepeatResponsibility(btn.dataset.respId);});
+  });
+  el.querySelectorAll(".resp-triage-done").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.completeRepeatResponsibility==="function")window.completeRepeatResponsibility(btn.dataset.respId);});
+  });
+  el.querySelectorAll(".resp-triage-snooze").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.snoozeRepeatResponsibility==="function")window.snoozeRepeatResponsibility(btn.dataset.respId);});
+  });
   el.querySelectorAll(".schedule-triage-schedule").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();scheduleTriageItem(btn.dataset.triageId);});
   });
