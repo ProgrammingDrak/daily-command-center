@@ -1326,7 +1326,7 @@
   .it-list-item.movable{cursor:grab}
   /* Open space on a row opens the details modal; movable keeps grab, and
      subtask/unfinished rows (no open-space handler) stay default. */
-  .it-list-item:not(.subtask-row):not(.unfinished-row):not(.movable){cursor:pointer}
+  .it-list-item:not(.sub):not(.unfinished-row):not(.movable){cursor:pointer}
   .it-list-item.dragging{opacity:0.35}
   .it-list-item.drag-over-top{border-top:2px solid var(--accent)}
   .it-list-item.drag-over-bottom{border-bottom:2px solid var(--accent)}
@@ -1344,17 +1344,17 @@
      intact: only meta + actions (last col) are display:none'd; grip + bar use
      visibility:hidden so their tracks hold (display:none on a middle grid child
      shifts later items into its track -- that's what collapsed the title). */
-  .it-list-item.done:not(.subtask-row){min-height:0;padding:1px 8px;opacity:0.5;font-size:11px;line-height:1.4;gap:6px}
-  .it-list-item.done:not(.subtask-row) .it-list-meta,
-  .it-list-item.done:not(.subtask-row) .it-list-actions{display:none}
-  .it-list-item.done:not(.subtask-row) .it-list-grip,
-  .it-list-item.done:not(.subtask-row)>.bar{visibility:hidden}
-  .it-list-item.done:not(.subtask-row) .it-list-rank{font-size:10px}
-  .it-list-item.done:not(.subtask-row) .it-list-check{width:14px;height:14px;min-width:14px}
+  .it-list-item.done:not(.sub){min-height:0;padding:1px 8px;opacity:0.5;font-size:11px;line-height:1.4;gap:6px}
+  .it-list-item.done:not(.sub) .it-list-meta,
+  .it-list-item.done:not(.sub) .it-list-actions{display:none}
+  .it-list-item.done:not(.sub) .it-list-grip,
+  .it-list-item.done:not(.sub)>.bar{visibility:hidden}
+  .it-list-item.done:not(.sub) .it-list-rank{font-size:10px}
+  .it-list-item.done:not(.sub) .it-list-check{width:14px;height:14px;min-width:14px}
   /* single struck-through line: drop the source/privacy/tag chips, keep .ttl */
-  .it-list-item.done:not(.subtask-row) .it-list-title-row{gap:0}
-  .it-list-item.done:not(.subtask-row) .it-list-title-row > *:not(.ttl){display:none}
-  .it-list-item.done:not(.subtask-row) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:500}
+  .it-list-item.done:not(.sub) .it-list-title-row{gap:0}
+  .it-list-item.done:not(.sub) .it-list-title-row > *:not(.ttl){display:none}
+  .it-list-item.done:not(.sub) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:500}
   .it-list-item.pushed{opacity:0.72}
   .it-list-rank{font-size:12px;font-weight:800;color:var(--text-muted);font-variant-numeric:tabular-nums;text-align:right}
   .it-list-grip{opacity:0.34}
@@ -4252,29 +4252,24 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .wrap-collapse-spacer{display:inline-block;width:14px;flex:none}
 .subtask-prog{font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:1px 5px;white-space:nowrap}
 .wrap-collapse.collapsed{opacity:.8}
-/* Subtask rows render as a tight, toolbar-like collapsible strip under the parent. */
-.it-list-item.subtask-row{display:flex;align-items:center;gap:5px;min-height:0;padding:1px 8px;font-size:11px;line-height:1.5;opacity:0.9}
-.it-list-item.subtask-row .sub-ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.it-list-item.subtask-row.done .sub-ttl{text-decoration:line-through;opacity:0.5}
-.it-list-item.subtask-row .chk{width:13px;height:13px;flex:none}
-.it-list-item.subtask-row .wrap-collapse{font-size:9px;padding:1px 3px}
-.sub-actions{margin-left:auto;display:flex;align-items:center;gap:2px;opacity:0;transition:opacity .12s}
-.it-list-item.subtask-row:hover .sub-actions,.it-list-item.subtask-row:focus-within .sub-actions,.tl-item.tl-sub:hover .sub-actions,.tl-item.tl-sub:focus-within .sub-actions{opacity:1}
-.sub-action-btn{width:22px;height:22px;min-width:22px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;font-size:12px;line-height:1}
-.sub-action-btn:hover,.sub-action-btn:focus{color:var(--text);border-color:rgba(255,255,255,0.16);background:rgba(255,255,255,0.06);outline:none}
-.sub-action-btn:disabled{opacity:0.32;cursor:default}
-.sub-action-btn:disabled:hover{color:var(--text-muted);border-color:transparent;background:transparent}
-.sub-delete:hover,.sub-delete:focus{color:var(--red);border-color:rgba(239,68,68,0.35);background:rgba(239,68,68,0.1)}
-.sub-ttl[role="button"]{cursor:text}
-.sub-ttl[role="button"]:focus{outline:1px solid var(--accent);outline-offset:2px;border-radius:3px}
-.sub-ttl-edit{background:rgba(255,255,255,0.06);border:1px solid var(--accent);border-radius:5px;color:var(--text);font:inherit;font-size:12px;line-height:1.4;padding:2px 6px;outline:none;min-width:90px;max-width:min(320px,70vw)}
-/* Timeline subtask row: compact line under the parent card. */
-.tl-item.tl-sub{display:flex;align-items:center;gap:5px;padding:1px 8px 1px 60px;font-size:11px;line-height:1.5;opacity:0.9}
-.tl-item.tl-sub .sub-ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tl-item.tl-sub.done .sub-ttl{text-decoration:line-through;opacity:0.5}
-.tl-item.tl-sub .chk{width:13px;height:13px;flex:none}
-.tl-item.tl-sub .wrap-collapse{font-size:9px;padding:1px 3px}
-.tl-item.tl-sub .sub-actions{flex:none}
+/* ======== NESTED SUBTASK CARD (shared renderItineraryCard, variant:"sub") ======== */
+/* Same card skeleton as a normal task — just lighter, so every card affordance
+   (open-space click, radial, drag, checkbox) is shared. Indent comes inline
+   (depth*22px). Give a subtask a real duration and it renders time/dur like any card. */
+.tl-item.tl-sub-card .card{padding:5px 10px;gap:8px;background:rgba(255,255,255,0.015)}
+.tl-item.tl-sub-card .bar{min-height:20px;opacity:0.55}
+.tl-item.tl-sub-card .ttl{font-size:12px;font-weight:500}
+.tl-item.tl-sub-card .chk{width:19px;height:19px;border-radius:5px}
+.tl-item.tl-sub-card .body{gap:1px}
+.tl-item.tl-sub-card .meta{font-size:10px}
+/* List view: the same lighter variant on the normal grid row. */
+.it-list-item.sub{min-height:0;padding:4px 11px}
+.it-list-item.sub .it-list-rank{font-size:11px;opacity:0.55}
+.it-list-item.sub .it-list-check{width:19px;height:19px}
+.it-list-item.sub .ttl{font-size:12px;font-weight:500}
+.it-list-item.sub .bar{opacity:0.55}
+.it-list-item.sub .it-list-meta{margin-top:2px}
+.it-list-item.sub.done .ttl,.tl-item.tl-sub-card.done .ttl{text-decoration:line-through;opacity:0.55}
 /* ======== SUBTASK POINT PIE (shared pool) ======== */
 /* A subtask's slice of its parent's points. Muted until earned, then accent. */
 .sub-share{font-size:9px;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:1px 5px;white-space:nowrap;flex:none}
@@ -4338,24 +4333,14 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .btn-add-menu{width:44px;height:44px;min-width:44px;font-size:24px;color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:11px;padding:0;display:inline-flex;align-items:center;justify-content:center}
   /* The rank-adjacent universal "+" needs the same treatment (its desktop rule is more specific). */
   .it-list-item .btn-task-add{width:38px;height:38px;min-width:38px;font-size:18px;opacity:1;background:rgba(34,211,238,0.12);border:1px solid rgba(34,211,238,0.4);border-radius:9px}
-  /* Subtask-row actions must never be hover-hidden on touch. */
-  .it-list-item.subtask-row .sub-actions,.tl-item.tl-sub .sub-actions{opacity:1!important;gap:6px}
-  .it-list-item.subtask-row .sub-actions .btn-add-menu,
-  .it-list-item.subtask-row .sub-actions .btn-del-task,
-  .tl-item.tl-sub .sub-actions .btn-add-menu,
-  .tl-item.tl-sub .sub-actions .btn-del-task,
-  .sub-action-btn{width:38px;height:38px;min-width:38px;font-size:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px}
   /* >=8px between targets; let action clusters wrap rather than cram. */
   .it-list-actions{gap:10px;flex-wrap:wrap}
   .chk-col{gap:8px}
   .it-list-meta,.card .meta{gap:10px}
-  /* Subtask checkbox: real target even in the compact strip. */
-  .it-list-item.subtask-row .chk,.tl-item.tl-sub .chk{width:30px;height:30px;min-width:30px}
   /* Collapse chevron tappable. */
   .wrap-collapse{min-width:36px;min-height:36px;font-size:13px}
   /* Task titles — readable, clamped to 2 lines (no infinite vertical wrap). */
   .ttl,.it-list-title-row .ttl{font-size:16px;line-height:1.3;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:100%}
-  .sub-ttl{font-size:15px;white-space:normal}
   /* Rebuild the dense timeline card as a clean stack: checkbox + title + the two
      key actions (quick-complete, add-subtask). The secondary toolbar is hidden so
      the title gets real width instead of collapsing to 1-2 words per line. */
@@ -4373,16 +4358,16 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
      rides along until the day's bounty is placed, then disappears. */
   .card .btn-task-radial{display:inline-flex !important;grid-column:3 !important;grid-row:2 !important;width:38px;height:38px;justify-self:center}
   .card .btn-bounty{display:inline-flex !important;grid-column:3 !important;grid-row:3 !important;width:38px;height:38px;justify-self:center}
-  /* List view rows: same clean stack — complete + title + (quick-complete / add). */
-  .it-list-item:not(.subtask-row){grid-template-columns:auto minmax(0,1fr) auto !important;align-items:center !important;gap:8px !important;min-height:0 !important}
-  .it-list-item:not(.subtask-row) .it-list-rank,
-  .it-list-item:not(.subtask-row) .it-list-grip,
-  .it-list-item:not(.subtask-row)>.wrap-collapse,
-  .it-list-item:not(.subtask-row)>.wrap-collapse-spacer,
-  .it-list-item:not(.subtask-row)>.bar{display:none !important}
-  .it-list-item:not(.subtask-row) .it-list-check{grid-column:1 !important}
-  .it-list-item:not(.subtask-row) .it-list-main{grid-column:2 !important;min-width:0}
-  .it-list-item:not(.subtask-row) .it-list-actions{grid-column:3 !important;margin-top:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;justify-content:center !important}
+  /* List view rows (incl. subtasks): same clean stack — complete + title + (quick-complete / add). */
+  .it-list-item{grid-template-columns:auto minmax(0,1fr) auto !important;align-items:center !important;gap:8px !important;min-height:0 !important}
+  .it-list-item .it-list-rank,
+  .it-list-item .it-list-grip,
+  .it-list-item>.wrap-collapse,
+  .it-list-item>.wrap-collapse-spacer,
+  .it-list-item>.bar{display:none !important}
+  .it-list-item .it-list-check{grid-column:1 !important}
+  .it-list-item .it-list-main{grid-column:2 !important;min-width:0}
+  .it-list-item .it-list-actions{grid-column:3 !important;margin-top:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;justify-content:center !important}
   .it-list-actions .notes-btn,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task,.it-list-actions .dbtn,.it-list-actions .btn-repeat-resp{display:none !important}
   .it-list-actions .btn-task-radial{display:inline-flex !important;width:38px;height:38px}
   .it-list-actions .btn-bounty{display:inline-flex !important;width:38px;height:38px}
@@ -4399,19 +4384,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
  * (::after opacity:0) are intentionally excluded -- they stay hover-only. */
 @media (hover:none){
   .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
-  .it-list-item.subtask-row .sub-actions,.tl-item.tl-sub .sub-actions{opacity:1!important}
   .st-quick-btn,.tri-quick{opacity:1!important}
-}
-
-@media (max-width:760px), (hover:none){
-  .it-list-item.subtask-row>.sub-actions,
-  .tl-item.tl-sub>.sub-actions{opacity:1!important;visibility:visible!important;gap:6px}
-  .it-list-item.subtask-row>.sub-actions>.sub-action-btn,
-  .it-list-item.subtask-row>.sub-actions>.btn-add-menu,
-  .it-list-item.subtask-row>.sub-actions>.btn-del-task,
-  .tl-item.tl-sub>.sub-actions>.sub-action-btn,
-  .tl-item.tl-sub>.sub-actions>.btn-add-menu,
-  .tl-item.tl-sub>.sub-actions>.btn-del-task{width:38px!important;height:38px!important;min-width:38px!important;font-size:18px!important;display:inline-flex!important;align-items:center;justify-content:center;border-radius:9px}
 }
 
   /* ======== DAY REVIEW (game-styled scheduled-vs-actual) ======== */

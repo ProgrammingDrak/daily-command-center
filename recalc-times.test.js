@@ -36,6 +36,7 @@ function makeDay(scheduled, opts = {}) {
     isNested: (ev) => !!(ev.wrapId || ev.subtaskOf),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
     parentIdOf: (ev) => ev.wrapId || ev.subtaskOf || null,
+    relOf: (ev) => ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null,
     isWrap: (ev) => !!ev.isWrap || (Array.isArray(ev.tags) && ev.tags.includes("wrap")),
     loadPinnedStarts: () => pins,
     savePinnedStarts: () => { pinsSaved++; },
