@@ -84,6 +84,9 @@ function normalizeTriageItem(source, raw) {
     priority: normalizePriority(raw.priority || raw.escalation_level),
     link: raw.link || raw.url || raw.source_link || "",
     created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
+    // Stable age clock for mergeOpenItems: prefer the real source time, fall
+    // back to created/now. Preserved across re-emissions by mergeOpenItems.
+    first_seen_at: raw.received_at || raw.ts || raw.firstSeen || raw.first_seen_at || raw.created_at || raw.createdAt || new Date().toISOString(),
     status: raw.status || "open",
   };
   // Draft fields ride along only when present so mergeOpenItems never
@@ -124,6 +127,8 @@ function normalizeTriageCheckItem(raw, index) {
     recommended_action: raw.recommended_action || "review_edit_send",
     deadline: raw.deadline || raw.due_at || "",
     created_at: raw.created_at || raw.createdAt || new Date().toISOString(),
+    // Stable age clock for mergeOpenItems (see normalizeTriageItem).
+    first_seen_at: raw.received_at || raw.ts || raw.firstSeen || raw.first_seen_at || raw.created_at || raw.createdAt || new Date().toISOString(),
     status: raw.status || "open",
     queue_label: raw.queue_label || "Triage Check",
     triage_check: true,
@@ -202,7 +207,44 @@ async function runReaders({ state, dataDir }) {
   };
 }
 
-function mergeOpenItems(existing, incoming) {
+// Triage retention (mirrors the Sweep Suite reader contract). An open item
+// with no handled signal ages out after RETENTION_DAYS; a drafted reply
+// awaiting a manual send gets the longer DRAFTED_GRACE_DAYS. Without this the
+// triage-check merge path only ever dropped items flagged "resolved" (which
+// nothing sets), so it accumulated forever.
+const TRIAGE_RETENTION_DAYS = 7;
+const TRIAGE_DRAFTED_GRACE_DAYS = 30;
+
+function triageItemTimestampMs(item) {
+  // first_seen_at is the stable age clock: the normalizers stamp it from the
+  // source received time (or first-observed time), and mergeOpenItems preserves
+  // it across re-emissions so a re-swept item's age never resets. received_at /
+  // ts / created_at are fallbacks for items that skipped normalization.
+  const raw = item.first_seen_at || item.received_at || item.ts || item.firstSeen || item.created_at;
+  if (raw == null) return null;
+  if (typeof raw === "number") return raw > 1e12 ? raw : raw * 1000; // ms vs unix-seconds
+  const text = String(raw).trim();
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const n = parseFloat(text);
+    return n > 1e12 ? n : n * 1000;
+  }
+  const parsed = Date.parse(text);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function triageItemIsDrafted(item) {
+  return Boolean(item && (item.draft_link || item.draft_url));
+}
+
+function triageItemAgedOut(item, now) {
+  const ts = triageItemTimestampMs(item);
+  if (ts == null) return false; // no parseable timestamp -> fail safe, keep it
+  const ageDays = (now - ts) / 86400000;
+  const limit = triageItemIsDrafted(item) ? TRIAGE_DRAFTED_GRACE_DAYS : TRIAGE_RETENTION_DAYS;
+  return ageDays > limit;
+}
+
+function mergeOpenItems(existing, incoming, now = Date.now()) {
   const byKey = new Map();
   for (const item of asArray(existing)) {
     const key = `${item.source || item.type || "unknown"}|${item.source_id || item.id || item.title}`;
@@ -210,9 +252,17 @@ function mergeOpenItems(existing, incoming) {
   }
   for (const item of incoming) {
     const key = `${item.source || item.type || "unknown"}|${item.source_id || item.id || item.title}`;
-    byKey.set(key, { ...byKey.get(key), ...item, status: "open" });
+    const prev = byKey.get(key);
+    const merged = { ...prev, ...item, status: "open" };
+    // Preserve the earliest-seen timestamp. A re-emission carries a freshly
+    // stamped first_seen_at/created_at; without this the item's age would reset
+    // to zero on every sweep and it could never age out.
+    if (prev && prev.first_seen_at) merged.first_seen_at = prev.first_seen_at;
+    byKey.set(key, merged);
   }
-  return Array.from(byKey.values()).filter((item) => item.status !== "resolved");
+  return Array.from(byKey.values()).filter(
+    (item) => item.status !== "resolved" && !triageItemAgedOut(item, now),
+  );
 }
 
 function taskFromTriage(item, index) {
@@ -623,4 +673,6 @@ module.exports = {
   buildBrief,
   materializeBriefPlan,
   frontPageTasks,
+  mergeOpenItems,
+  normalizeTriageItem,
 };
