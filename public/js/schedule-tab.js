@@ -233,14 +233,121 @@ function openTaskChangeRadial(ev,trig){
   openRadialMenu(trig,buildTaskChangeItems(ev,trig),_TASK_RADIAL_OPTS);
 }
 
-// ── Section sorting (Unscheduled): A→Z or time-of-creation ──
-function _sectionSort(key){ try{return localStorage.getItem("pa-sort-"+key)||"created"}catch(e){return "created"} }
-function _setSectionSort(key,mode){ try{localStorage.setItem("pa-sort-"+key,mode==="alpha"?"alpha":"created")}catch(e){} }
+// ── Section sorting (Unscheduled): Manual (drag), A→Z, or time-of-creation ──
+// "manual" is the default so a drag-reorder sticks; A-Z/New are explicit
+// re-sorts the user opts into. Dragging a row switches the section back to
+// manual (see handleUnscheduledDrop) so a drag always wins over a sort choice.
+function _sectionSort(key){ try{return localStorage.getItem("pa-sort-"+key)||"manual"}catch(e){return "manual"} }
+function _setSectionSort(key,mode){ try{const m=(mode==="alpha"||mode==="created")?mode:"manual";localStorage.setItem("pa-sort-"+key,m)}catch(e){} }
+function _sectionSortIsManual(mode){ return mode!=="alpha"&&mode!=="created"; }
 function _applySectionSort(items,mode,getTitle,getCreated){
   const arr=items.slice();
   if(mode==="alpha")arr.sort((a,b)=>String(getTitle(a)||"").localeCompare(String(getTitle(b)||"")));
   else arr.sort((a,b)=>String(getCreated(b)||"").localeCompare(String(getCreated(a)||""))); // newest first
   return arr;
+}
+// Order the Unscheduled section (untimed today tasks + past-day carryovers) by
+// the persisted manual (drag) order. Rows with no saved position sink to the
+// end — untimed above carryovers, each newest-created first — so a freshly
+// surfaced row lands on top until dragged. `rows` is untimedItems.concat(unfEvs).
+function _orderUnscheduled(rows){
+  const order=(typeof loadUnscheduledOrder==="function")?loadUnscheduledOrder():[];
+  const created=ev=>ev.__unf?(ev.__unf.createdAt||ev.__unf.sourceDate||""):(ev.createdAt||"");
+  if(!order.length)return rows;
+  const pos={};order.forEach((id,i)=>{pos[id]=i;});
+  return rows.slice().sort((a,b)=>{
+    const ai=pos[a.id]!==undefined?pos[a.id]:9999;
+    const bi=pos[b.id]!==undefined?pos[b.id]:9999;
+    if(ai!==bi)return ai-bi;
+    const au=a.__unf?1:0,bu=b.__unf?1:0;
+    if(au!==bu)return au-bu;
+    return String(created(b)).localeCompare(String(created(a)));
+  });
+}
+// Current Unscheduled-section row ids in DOM (display) order.
+function _unscheduledRowIds(){
+  const sec=document.querySelector('.it-list-section[data-section="unscheduled"]');
+  if(!sec)return [];
+  const ids=[];let n=sec.nextElementSibling;
+  while(n&&!n.classList.contains("it-list-section")){
+    if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
+    n=n.nextElementSibling;
+  }
+  return ids;
+}
+// Resolve a past-day carryover ("Unfinished from …") record by the id its row
+// carries (sourceLocalId||sourceId). Null when the id isn't a carryover.
+function _unfRecById(id){
+  if(!_unfinishedCache||!Array.isArray(_unfinishedCache.rows))return null;
+  return _unfinishedCache.rows.find(r=>(r.sourceLocalId||r.sourceId)===id)||null;
+}
+// Reorder within the Unscheduled section. Works across both id spaces (untimed
+// scheduled[] tasks + carryovers) off the rendered DOM order. Persists the
+// unified manual order; keeps scheduled[] coherent only when both ends are
+// untimed tasks (carryovers aren't in scheduled[], so their reorder is display-only).
+function _reorderUnscheduled(movedId,targetId,after,bothUntimed){
+  const cur=_unscheduledRowIds();
+  const fi=cur.indexOf(movedId);if(fi>=0)cur.splice(fi,1);
+  const ti=cur.indexOf(targetId);
+  const idx=ti<0?cur.length:(after?ti+1:ti);
+  cur.splice(idx,0,movedId);
+  if(typeof saveUnscheduledOrder==="function")saveUnscheduledOrder(cur);
+  if(bothUntimed&&typeof _reorderActive==="function")_reorderActive(movedId,targetId,after);
+  if(typeof _setSectionSort==="function")_setSectionSort("unscheduled","manual");
+  if(typeof saveTaskOrder==="function")saveTaskOrder();
+  if(typeof render==="function")render();
+}
+// Schedule a carryover into TODAY at the drop slot: a cross-day true-move that
+// leaves the amber "Rescheduled away" marker on the origin day. Mirrors the
+// radial reschedule (_unfMoveTo) but seeds the slot from the drop target.
+async function _unfScheduleIntoToday(rec,targetEv,after){
+  if(!rec||!targetEv||!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
+  const today=(typeof _actualTodayStr==="function")?_actualTodayStr():((__state&&__state.date)||new Date().toISOString().slice(0,10));
+  const d=rec.durMin||30;
+  let s=after?pt(targetEv.end):Math.max(0,pt(targetEv.start)-d);
+  if(!(s>=0))s=pt(targetEv.start);
+  window.__RESCHEDULE_IN_FLIGHT__=true;
+  try{
+    await window.blockStore.rescheduleBlock(rec.sourceId,today,{parentStart:fmt(s),parentEnd:fmt(s+d)});
+  }catch(e){
+    if(typeof showToast==="function")showToast("Could not schedule "+rec.title,"error");
+    window.__RESCHEDULE_IN_FLIGHT__=false;return;
+  }
+  window.__RESCHEDULE_IN_FLIGHT__=false;
+  _unfRemoveRow(rec);
+  if(typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(rec.sourceDate);
+  if(typeof log==="function")log("rescheduled",rec.sourceId,"Unfinished scheduled into today: "+rec.title);
+  if(typeof showToast==="function")showToast("Scheduled today: "+rec.title,"success");
+  try{await window.blockStore.loadDay(today);}catch(e){}
+  if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+  if(typeof recalcTimes==="function")recalcTimes();
+  if(typeof render==="function")render();
+}
+// Drop router for the Unscheduled section, called from dDrop before its
+// scheduled[]-only logic. Returns "handled" (done) or "passthrough" (not an
+// Unscheduled-row drop → let dDrop's normal path run).
+function handleUnscheduledDrop(movedId,targetId,e){
+  const movedUnf=_unfRecById(movedId);
+  const movedEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===movedId):null;
+  const movedUntimed=!!(movedEv&&movedEv.untimed);
+  if(!movedUnf&&!movedUntimed)return "passthrough";        // moved isn't an Unscheduled row
+  const targetUnf=_unfRecById(targetId);
+  const targetEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===targetId):null;
+  const targetUntimed=!!(targetEv&&targetEv.untimed);
+  const rect=e.currentTarget.getBoundingClientRect();
+  const after=(e.clientY-rect.top)>=rect.height/2;
+  // Drop on another Unscheduled row → reorder within the section.
+  if(targetUnf||targetUntimed){
+    _reorderUnscheduled(movedId,targetId,after,movedUntimed&&targetUntimed);
+    return "handled";
+  }
+  // Carryover dropped on a timed Work-list task → schedule into today at that slot.
+  if(movedUnf&&targetEv){
+    _unfScheduleIntoToday(movedUnf,targetEv,after);
+    return "handled";
+  }
+  // Untimed task dropped on a timed task → the existing "schedule it" gesture.
+  return "passthrough";
 }
 
 // ── Unfinished (past-dated, never completed) — inline section state ──
@@ -388,12 +495,14 @@ function buildListView(){
   function section(title,count,sortKey){
     const el=document.createElement("div");
     el.className="it-list-section";
+    if(sortKey)el.dataset.section=sortKey;   // drag reorder reads rows under [data-section]
     let html='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
     if(sortKey){
       const mode=_sectionSort(sortKey);
       html+='<span class="it-sort-toggle">'+
+        '<button class="it-sort-btn'+(_sectionSortIsManual(mode)?' on':'')+'" data-mode="manual" title="Manual order — drag rows to arrange">⇅ Manual</button>'+
         '<button class="it-sort-btn'+(mode==="alpha"?' on':'')+'" data-mode="alpha" title="Sort A to Z">A–Z</button>'+
-        '<button class="it-sort-btn'+(mode!=="alpha"?' on':'')+'" data-mode="created" title="Sort by time of creation (newest first)">New</button>'+
+        '<button class="it-sort-btn'+(mode==="created"?' on':'')+'" data-mode="created" title="Sort by time of creation (newest first)">New</button>'+
       '</span>';
     }
     el.innerHTML=html;
@@ -423,12 +532,14 @@ function buildListView(){
     const isDoneRow=mode==="done";
     const isPushedRow=mode==="pushed";
     // Unfinished: a past-day block rendered through the shared row (see _unfToEv).
-    // Not draggable, no bounty/start-time; complete/reschedule/delete are overridden.
+    // No bounty/start-time; complete/reschedule/delete are overridden. It IS
+    // draggable though — carryovers behave like Unscheduled tasks (reorder among
+    // them, or drag onto a timed row to schedule into today).
     const isUnfRow=mode==="unfinished";
     const r=isUnfRow?ev.__unf:null;
-    // userMovable already excludes meetings/ooo/break (registry-aware); keep the
-    // isUnfRow guard from the Unfinished-row work.
-    const movable=!isDoneRow&&!isPushedRow&&!isUnfRow&&userMovable(ev)&&!ev._locked;
+    // userMovable already excludes meetings/ooo/break (registry-aware). Carryover
+    // rows are always draggable (their drops route through handleUnscheduledDrop).
+    const movable=!isDoneRow&&!isPushedRow&&(isUnfRow||(userMovable(ev)&&!ev._locked));
     const c=cfg(ev.type);
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
@@ -452,7 +563,7 @@ function buildListView(){
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
-    if(!isDoneRow&&!isPushedRow&&!isUnfRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
+    if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(subRow?'·':(idx+1))+'</div>'+
@@ -581,10 +692,16 @@ function buildListView(){
   const unfEvs=(unf&&unf.rows.length)?unf.rows.map(_unfToEv):[];
   if(untimedItems.length||unfEvs.length){
     section("Unscheduled",untimedItems.length+((unf&&unf.total)||0),"unscheduled");
-    _applySectionSort(untimedItems.concat(unfEvs),_sectionSort("unscheduled"),
-        ev=>ev.title,
-        ev=>ev.__unf?(ev.__unf.createdAt||ev.__unf.sourceDate||""):(ev.createdAt||""))
-      .forEach((ev,idx)=>wrap.appendChild(row(ev,idx,ev.__unf?"unfinished":"open")));
+    const uMode=_sectionSort("unscheduled");
+    // Manual (default): untimed tasks + past-day carryovers ordered by the
+    // persisted drag order, all draggable (see row() / handleUnscheduledDrop).
+    // A-Z/New: sort untimed + carryovers together, as before.
+    const unsRows=_sectionSortIsManual(uMode)
+      ? _orderUnscheduled(untimedItems.concat(unfEvs))
+      : _applySectionSort(untimedItems.concat(unfEvs),uMode,
+          ev=>ev.title,
+          ev=>ev.__unf?(ev.__unf.createdAt||ev.__unf.sourceDate||""):(ev.createdAt||""));
+    unsRows.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,ev.__unf?"unfinished":"open")));
     if(unf&&unf.total>unf.rows.length){
       const more=document.createElement("div");
       more.className="it-list-empty";

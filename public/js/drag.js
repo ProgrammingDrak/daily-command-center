@@ -23,9 +23,12 @@ function dOver(e,id){
   const y=e.clientY-r.top,h=r.height;
   tgt.classList.remove("drag-over-top","drag-over-bottom","drag-over-nest","drag-over-nest-sub");
   const targetEv=(typeof scheduled!=="undefined")?scheduled.find(x=>x.id===id):null;
+  // Dragging a past-day carryover ("Unfinished") never nests — its drops are
+  // reorder-within-Unscheduled or schedule-into-today, so show only edge feedback.
+  const draggingCarryover=(typeof _unfRecById==="function")&&_unfRecById(dragId);
   // Drop on the body of a task = nest inside it; drop near the top/bottom edge = reorder to that slot.
   // Plain body-drop = ride-along (own time/points); hold Shift = subtask (shares the parent's pie).
-  const canNest=targetEv&&typeof isMeeting==="function"&&!isMeeting(targetEv)&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
+  const canNest=!draggingCarryover&&targetEv&&typeof isMeeting==="function"&&!isMeeting(targetEv)&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
   if(canNest&&y>h*0.25&&y<h*0.75){
     tgt.classList.add("drag-over-nest");
     tgt.classList.toggle("drag-over-nest-sub",!!e.shiftKey);
@@ -508,6 +511,15 @@ function dDrop(e,tid){
     clearCls();return;
   }
   if(dragId===tid){clearCls();return;}
+
+  // Unscheduled section (untimed today tasks + past-day carryovers). Carryovers
+  // aren't in scheduled[], so their reorder / schedule-into-today is owned by
+  // handleUnscheduledDrop (schedule-tab.js); it returns "passthrough" for a
+  // normal scheduled[] drop and we fall through to the logic below.
+  if(typeof handleUnscheduledDrop==="function"){
+    const ures=handleUnscheduledDrop(dragId,tid,e);
+    if(ures==="handled"){dragId=null;clearCls();return;}
+  }
 
   const moved=scheduled.find(x=>x.id===dragId);
   const target=scheduled.find(x=>x.id===tid);

@@ -1539,12 +1539,13 @@ function saveTaskOrder(){
   localStorage.setItem(ORDER_KEY,JSON.stringify(order)); scheduleIDBSave();
 }
 
-// ======== UNSCHEDULED (untimed) ORDER PERSISTENCE ========
-// The Unscheduled section is drag-reorderable, but unlike the timed Work list
-// its items hold no clock time — so their order can't ride the time cascade
-// (recalcTimes skips untimed items). Persist an explicit id-list on the day_root
-// (mirrors _subtaskOrder / _taskOrder) so a manual drag order survives reflows
-// and reloads. Rendered by _orderUnscheduled (schedule-tab.js) in manual mode.
+// ======== UNSCHEDULED ORDER PERSISTENCE ========
+// The Unscheduled section is drag-reorderable. It mixes two id spaces — untimed
+// today tasks (in scheduled[]) and past-day carryovers (not in scheduled[]) —
+// and its items hold no clock time, so their order can't ride the time cascade
+// (recalcTimes skips untimed items). Persist an explicit unified id-list on the
+// day_root (mirrors _subtaskOrder / _taskOrder) so a manual drag order survives
+// reflows and reloads. Rendered by _orderUnscheduled (schedule-tab.js) in manual mode.
 function loadUnscheduledOrder(){
   if(window.USE_BLOCKSTORE&&window.blockStore){
     const v=_bsProp("_unscheduledOrder",null);
@@ -1552,11 +1553,16 @@ function loadUnscheduledOrder(){
   }
   try{return JSON.parse(localStorage.getItem("pa-unsched-order-"+((__state&&__state.date)||"unknown"))||"[]")}catch(e){return[]}
 }
-function saveUnscheduledOrder(){
-  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
-  const order=scheduled
-    .filter(ev=>ev&&ev.untimed&&!isDone(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
-    .map(ev=>ev.id);
+// ids: explicit unified display order (untimed + carryover ids), passed by the
+// drag handler. Omitted: fall back to the untimed-only scheduled[] order.
+function saveUnscheduledOrder(ids){
+  let order=ids;
+  if(!Array.isArray(order)){
+    if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
+    order=scheduled
+      .filter(ev=>ev&&ev.untimed&&!isDone(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+      .map(ev=>ev.id);
+  }
   if(!_bsSaveProp("_unscheduledOrder",order)){
     try{localStorage.setItem("pa-unsched-order-"+((__state&&__state.date)||"unknown"),JSON.stringify(order))}catch(e){}
   }
