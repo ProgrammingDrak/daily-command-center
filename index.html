@@ -367,39 +367,16 @@
           </div>
         </details>
 
-        <details class="tm-section" id="tm-repeat-responsibilities-section">
-          <summary class="tm-section-header">
-            <span class="tm-chevron"></span>
-            Repeat Responsibilities
+        <!-- Repeat responsibilities: due ones surface in the Itinerary triage
+             strip; the full library lives in a dedicated manage modal. -->
+        <div class="tm-section" id="tm-repeat-responsibilities-section">
+          <button type="button" class="tm-section-header tm-section-link" id="repeat-responsibilities-open"
+                  style="width:100%;border:0;background:none;font:inherit;color:inherit;cursor:pointer;text-align:left;display:flex;align-items:center;gap:6px">
+            <span class="tm-chevron" style="visibility:hidden"></span>
+            Manage repeat responsibilities
             <span class="badge" id="repeat-responsibilities-section-count" style="display:none">0</span>
-          </summary>
-          <div class="tm-section-body" id="tm-repeat-responsibilities">
-            <div class="repeat-resp-tools">
-              <input type="search" id="repeat-responsibilities-search" placeholder="Search repeat responsibilities...">
-              <select id="repeat-responsibilities-filter" title="Filter repeat responsibilities">
-                <option value="active">Active</option>
-                <option value="due">Due soon</option>
-                <option value="green">Green</option>
-                <option value="blue">Blue</option>
-                <option value="yellow">Yellow</option>
-                <option value="red">Red</option>
-                <option value="all">All</option>
-                <option value="archived">Archived</option>
-              </select>
-              <select id="repeat-responsibilities-sort" title="Sort repeat responsibilities">
-                <option value="urgency">Urgency</option>
-                <option value="title">Title</option>
-                <option value="cadence">Cadence</option>
-                <option value="last-completed">Last completed</option>
-                <option value="duration">Duration</option>
-              </select>
-              <button type="button" id="repeat-responsibilities-new">+ New</button>
-            </div>
-            <div class="repeat-resp-list" id="repeat-responsibilities-list">
-              <div class="delegated-empty">No repeat responsibilities yet.</div>
-            </div>
-          </div>
-        </details>
+          </button>
+        </div>
 
         <details class="tm-section" id="tm-delegated-blocked-section">
           <summary class="tm-section-header">
@@ -1002,6 +979,43 @@
 </div>
 
 <!-- Responsibilities create/edit modal -->
+<!-- Manage repeat responsibilities: the full library (search/filter/sort/new +
+     per-row schedule/edit/archive). Due ones also surface in the itinerary
+     triage strip; this is where you curate the set. Same element IDs the drawer
+     used, so renderRepeatResponsibilitiesSidebar + bindings target them here. -->
+<div class="delegated-modal-overlay" id="responsibility-manage-overlay">
+  <div class="delegated-modal-box" style="max-width:640px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <h3 class="delegated-modal-title" style="margin:0">Manage repeat responsibilities</h3>
+      <button type="button" id="responsibility-manage-close" class="delegated-modal-cancel" aria-label="Close">Close</button>
+    </div>
+    <div class="repeat-resp-tools" style="margin-top:10px">
+      <input type="search" id="repeat-responsibilities-search" placeholder="Search repeat responsibilities...">
+      <select id="repeat-responsibilities-filter" title="Filter repeat responsibilities">
+        <option value="active">Active</option>
+        <option value="due">Due soon</option>
+        <option value="green">Green</option>
+        <option value="blue">Blue</option>
+        <option value="yellow">Yellow</option>
+        <option value="red">Red</option>
+        <option value="all">All</option>
+        <option value="archived">Archived</option>
+      </select>
+      <select id="repeat-responsibilities-sort" title="Sort repeat responsibilities">
+        <option value="urgency">Urgency</option>
+        <option value="title">Title</option>
+        <option value="cadence">Cadence</option>
+        <option value="last-completed">Last completed</option>
+        <option value="duration">Duration</option>
+      </select>
+      <button type="button" id="repeat-responsibilities-new">+ New</button>
+    </div>
+    <div class="repeat-resp-list" id="repeat-responsibilities-list">
+      <div class="delegated-empty">No repeat responsibilities yet.</div>
+    </div>
+  </div>
+</div>
+
 <div class="delegated-modal-overlay" id="responsibility-modal-overlay">
   <div class="delegated-modal-box">
     <h3 class="delegated-modal-title" id="resp-modal-title">New repeat responsibility</h3>

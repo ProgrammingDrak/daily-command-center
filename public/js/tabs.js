@@ -27,11 +27,10 @@ DCC.tabs.register("tasks", () => {
   const m = document.getElementById("tm-cal-mount");
   if (m) m.innerHTML = renderCalendarSidebar();
 });
-// These two had no top-bar button when the registry landed, so their entries
-// never fire today -- kept (harmless) rather than dropped, so re-adding a
-// button later Just Works.
+// Calendar had no top-bar button when the registry landed, so its entry never
+// fires today -- kept (harmless) rather than dropped, so re-adding a button
+// later Just Works.
 DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && buildCalendar());
-DCC.tabs.register("responsibilities", () => typeof renderResponsibilities === "function" && renderResponsibilities());
 
 document.querySelectorAll(".tab").forEach(tab=>{
   tab.addEventListener("click",()=>{
@@ -400,31 +399,42 @@ function addSubtask(taskId, text){
   // Snapshot/rebalance the parent's point pie now that it has (one more) subtask.
   if(window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(taskId);
   render();
+  return task;
 }
 // A "stacked" task ("stacked time"): independent concurrent work done in the
 // gaps / partial focus of a larger task. Reuses the ride-along edge (wrapId), so
 // it gets its OWN time window and its OWN duration-based points — unlike a
 // subtask, it does not draw from the parent's pie.
-function addStackedTask(taskId, text, durMinArg){
-  if(!text||!text.trim())return;
+function addStackedTask(taskId, text, durMinArg, opts){
+  if(!text||!text.trim())return null;
   text=text.trim();
+  opts=opts||{};
   const id="sk-"+Date.now();
   const parent=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null;
   let startStr=(parent&&parent.start)||"00:00";
   const durMin=durMinArg||30;
+  const type=opts.type||"task";
+  const priority=opts.priority||"Medium";
   let endStr=(typeof fmt==="function")?fmt((typeof pt==="function"?pt(startStr):0)+durMin):startStr;
   // Same shared serializer as addSubtask — a ride-along is a full task too, so its
   // fields (detail/notionUrl/commute/delegated) default consistently. Ride-along
-  // specifics: the wrapId edge, its own duration, and the "Stacked" meta marker.
-  const overrides={title:text,source:"manual",priority:"Medium",
+  // specifics: the wrapId edge, its own duration/type, and the "Stacked" meta.
+  // Per-child type/priority/detail/tags come from opts (used by the shell
+  // template materializer, which rebuilds a saved shell child by child).
+  const overrides={title:text,source:opts.source||"manual",priority:priority,
     meta:(typeof ms==="function"?("Stacked · "+ms(durMin)):"Stacked")};
+  if(opts.detail)overrides.detail=opts.detail;
+  if(opts.tags)overrides.tags=opts.tags;
   const common=(window.DCC&&window.DCC.taskCommonProps)?window.DCC.taskCommonProps({},overrides)
-    :{title:text,source:"manual",priority:"Medium",meta:overrides.meta,detail:"",tags:[]};
-  const task=Object.assign({id:id,type:"task",wrapId:taskId,start:startStr,end:endStr,
+    :{title:text,source:opts.source||"manual",priority:priority,meta:overrides.meta,detail:opts.detail||"",tags:opts.tags||[]};
+  const task=Object.assign({id:id,type:type,wrapId:taskId,start:startStr,end:endStr,
     publicVisibility:"public",added_at:new Date().toISOString()},common);
-  // Inside a rollup container (shell), land at the next free slot in the
-  // parent's window instead of stacking every child at the parent's start.
-  if(parent&&window.TaskTypes&&window.TaskTypes.isRollup(parent)&&typeof _placeInWrapWindow==="function"){
+  // Sequential shells lay their children out in the reflow (back-to-back from the
+  // shell's anchor via _layoutShellChildren), so we DON'T pre-place here. A
+  // free-layout rollup (wrap) still lands the child in the next open slot of the
+  // parent's window.
+  const seqShell=parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childLayout")==="sequential";
+  if(parent&&window.TaskTypes&&window.TaskTypes.isRollup(parent)&&!seqShell&&typeof _placeInWrapWindow==="function"){
     _placeInWrapWindow(task,parent);
     startStr=task.start;endStr=task.end;
   }
@@ -433,12 +443,13 @@ function addStackedTask(taskId, text, durMinArg){
     const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
     const blockProps=(window.DCC&&window.DCC.taskBlockProps)
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:durMin,start:startStr,end:endStr}))
-      : {local_id:id,title:text,source:"manual",start:startStr,end:endStr,duration:durMin,priority:"Medium",tags:[]};
-    blockProps.type="task";blockProps.wrapId=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
+      : {local_id:id,title:text,source:opts.source||"manual",start:startStr,end:endStr,duration:durMin,priority:priority,tags:opts.tags||[],detail:opts.detail||""};
+    blockProps.type=type;blockProps.wrapId=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
     window.blockStore.createBlock("block",blockProps,{date:date});
   }
   if(typeof recalcTimes==="function")recalcTimes();
   render();
+  return task;
 }
 // Re-parent an EXISTING task so it becomes a SUBTASK of another (umbrella). Unlike
 // a ride-along (wrapId) — which keeps its own time and duration-based points — a

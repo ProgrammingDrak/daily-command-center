@@ -43,6 +43,7 @@ function persistAddedTask(item,targetDate){
       calUrl:item.calUrl||"",
       source:item.source||"manual",
       tags:item.tags||[],
+      idempotency_key:item.idempotency_key||item.idempotencyKey||null,
       responsibilityId:item.responsibilityId||null,
       responsibilityTitle:item.responsibilityTitle||null,
       capacityBucket:item.capacityBucket||null,
@@ -137,7 +138,10 @@ function insertTaskNow(titleArg, durMinArg, opts){
   opts=opts||{};
   const title=titleArg||(function(){const inp=document.getElementById("qa-title");const v=inp?inp.value.trim():"";if(inp)inp.value="";return v})();
   if(!title)return;
-  const durMin=durMinArg||30;
+  // A shell has no length of its own — it starts zero-length and derives its
+  // span from the children that get added to it (durationFromChildren).
+  const durFromKids=window.TaskTypes&&window.TaskTypes.rule(opts.type,"durationFromChildren");
+  const durMin=durFromKids?0:(durMinArg||30);
   const id=qaId();
 
   // Pin start to the next free 15-minute slot from now, stepping past any
@@ -207,6 +211,73 @@ function insertTaskFromDrawer(title, durMin, opts){
   checkBlockWarnings(newItem);
   return newItem;
 }
+
+// ── SHELL TEMPLATE MATERIALIZATION ──
+// Rebuild a saved shell template (root + nested children) onto the day using the
+// SAME live primitives a hand-built shell uses — addStackedTask for ride-along
+// children, addSubtask for timeless subtasks — so every block renders normally
+// and its kind is never "responsibility_task" (which the itinerary fold in
+// persistence.js rejects). Recurses into nested children. The shell root is
+// created by materializeShellTemplate, which then calls this in its onScheduled.
+function attachTemplateChildren(parentLocalId,children){
+  if(!parentLocalId||!Array.isArray(children))return;
+  children.forEach(function(node){
+    if(!node||!node.title)return;
+    var created=null;
+    if(node.edge==="subtask"){
+      if(typeof addSubtask==="function")created=addSubtask(parentLocalId,node.title);
+    }else{
+      var d=Math.max(1,Number(node.durationMin)||30);
+      if(typeof addStackedTask==="function")created=addStackedTask(parentLocalId,node.title,d,{priority:node.priority||"Medium",type:node.type||"task",detail:node.detail||""});
+    }
+    if(created&&created.id&&Array.isArray(node.children)&&node.children.length){
+      attachTemplateChildren(created.id,node.children);
+    }
+  });
+}
+window.attachTemplateChildren=attachTemplateChildren;
+
+// Idempotency: is a shell for this responsibility already live on the viewed day?
+function _shellAlreadyOnDay(responsibilityId){
+  if(!responsibilityId||typeof scheduled==="undefined")return false;
+  return scheduled.some(function(e){
+    return e&&e.responsibilityId===responsibilityId&&!isDeleted(e)&&window.TaskTypes&&window.TaskTypes.isRollup(e);
+  });
+}
+window._shellAlreadyOnDay=_shellAlreadyOnDay;
+
+// Drop a whole shell template onto TODAY at the next free slot (no time picker).
+// Creates the zero-length shell root via insertTaskNow, then attaches the saved
+// children in the onScheduled callback so the sequential-shell reflow sizes it.
+// Returns the shell root's local id (or null if deduped / invalid).
+function materializeShellTemplate(templateTree,opts){
+  opts=opts||{};
+  if(!templateTree||!templateTree.root)return null;
+  var root=templateTree.root;
+  if(opts.responsibilityId&&_shellAlreadyOnDay(opts.responsibilityId)){
+    if(typeof showToast==="function")showToast('"'+(root.title||"Shell")+'" is already on today',"info");
+    return null;
+  }
+  var curDate=(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||"";
+  var rootId=null;
+  insertTaskNow(root.title,0,{
+    type:root.type||"shell",
+    responsibilityId:opts.responsibilityId||null,
+    responsibilityTitle:opts.responsibilityTitle||root.title,
+    priority:root.priority||"High",
+    source:opts.source||"responsibility",
+    tags:opts.tags||["responsibility"],
+    detail:root.detail||"",
+    idempotencyKey:opts.responsibilityId?("resp-shell:"+opts.responsibilityId+":"+curDate):null,
+    onScheduled:function(info){
+      rootId=info&&info.localId;
+      if(rootId)attachTemplateChildren(rootId,root.children||[]);
+      if(typeof opts.onScheduled==="function"){try{opts.onScheduled(info);}catch(e){}}
+    }
+  });
+  return rootId;
+}
+window.materializeShellTemplate=materializeShellTemplate;
 
 // ======== ACTIONS ========
 // Day points currently earned (completed, point-eligible tasks). Used to drive
@@ -1026,7 +1097,8 @@ function schedulePickerFields(durMin,options){
   return Object.assign(common,{
     responsibilityId:options.responsibilityId||null,
     responsibilityTitle:options.responsibilityTitle||null,
-    capacityBucket:options.capacityBucket||null
+    capacityBucket:options.capacityBucket||null,
+    idempotency_key:options.idempotencyKey||options.idempotency_key||null
   });
 }
 // Resolve a chosen day (dateStr) + time (HH:MM) into a real task. If that day is
@@ -1041,7 +1113,10 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     // Same day: insert into schedule and pin the start time to the chosen time
     const id=qaId();
     const s=pt(timeStr);
-    const newItem=Object.assign({id,title,type:"task",start:timeStr,end:fmt(s+durMin),
+    const _type=options.type||"task";
+    const newItem=Object.assign({id,title,type:_type,start:timeStr,end:fmt(s+durMin),
+      // Rollup containers are wraps from birth so drag carries their children.
+      isWrap:(window.TaskTypes&&window.TaskTypes.rule(_type,"dragMovesSubtree"))||undefined,
       _pinnedStart:timeStr},schedulePickerFields(durMin,options));
     // Insert in chronological order based on pinned start
     let insertAt=scheduled.findIndex(ev=>pt(ev.start)>=s);
@@ -1061,7 +1136,9 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
   } else {
     // Different day: persist to blockstore for that target date
     const id=qaId();
-    const newItem=Object.assign({id,title,type:"task",start:timeStr,end:fmt(pt(timeStr)+durMin)},
+    const _type=options.type||"task";
+    const newItem=Object.assign({id,title,type:_type,start:timeStr,end:fmt(pt(timeStr)+durMin),
+      isWrap:(window.TaskTypes&&window.TaskTypes.rule(_type,"dragMovesSubtree"))||undefined},
       schedulePickerFields(durMin,options));
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
       const bprops=Object.assign(
@@ -1460,6 +1537,29 @@ function saveTaskOrder(){
     return;
   }
   localStorage.setItem(ORDER_KEY,JSON.stringify(order)); scheduleIDBSave();
+}
+
+// ======== UNSCHEDULED (untimed) ORDER PERSISTENCE ========
+// The Unscheduled section is drag-reorderable, but unlike the timed Work list
+// its items hold no clock time — so their order can't ride the time cascade
+// (recalcTimes skips untimed items). Persist an explicit id-list on the day_root
+// (mirrors _subtaskOrder / _taskOrder) so a manual drag order survives reflows
+// and reloads. Rendered by _orderUnscheduled (schedule-tab.js) in manual mode.
+function loadUnscheduledOrder(){
+  if(window.USE_BLOCKSTORE&&window.blockStore){
+    const v=_bsProp("_unscheduledOrder",null);
+    if(Array.isArray(v))return v;
+  }
+  try{return JSON.parse(localStorage.getItem("pa-unsched-order-"+((__state&&__state.date)||"unknown"))||"[]")}catch(e){return[]}
+}
+function saveUnscheduledOrder(){
+  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
+  const order=scheduled
+    .filter(ev=>ev&&ev.untimed&&!isDone(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+    .map(ev=>ev.id);
+  if(!_bsSaveProp("_unscheduledOrder",order)){
+    try{localStorage.setItem("pa-unsched-order-"+((__state&&__state.date)||"unknown"),JSON.stringify(order))}catch(e){}
+  }
 }
 
 // ======== BLOCK BOUNDARY WARNINGS ========

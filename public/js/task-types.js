@@ -33,6 +33,8 @@
     autoCompleteWhenChildrenDone: false,
     blockManualCompleteWithOpenChildren: false,
     childEdge: "any",        // "wrap" -> children always attach as ride-alongs
+    childLayout: "free",     // "sequential" -> children stack back-to-back from the parent's anchor
+    durationFromChildren: false, // true -> parent has no own length; span = sum of children's durations
     dragMovesSubtree: false, // dragging the parent carries nested children
     movable: true,
     fixedTime: false,
@@ -59,6 +61,12 @@
       autoCompleteWhenChildrenDone: true,
       blockManualCompleteWithOpenChildren: true,
       childEdge: "wrap",
+      // A shell has no length of its own: its span is the SUM of its children,
+      // which stack sequentially back-to-back from the shell's anchor time. Add
+      // or remove a child and the shell grows/shrinks; the reflow shifts
+      // everything after it. (drag.js _layoutShellChildren / recalcTimes.)
+      childLayout: "sequential",
+      durationFromChildren: true,
       dragMovesSubtree: true,
     },
 

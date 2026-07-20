@@ -15,6 +15,7 @@ const {
   cadenceDays, responsibilityScore, preferredCompletionDue,
   firstFreeSlot, minutesToHHMM, hhmmToMinutes,
   buildResponsibilityTaskProps, parseOffersAmpAlert, normalizeResponsibility,
+  normalizeTemplateTree,
 } = require("./responsibility-store");
 
 // ── Pure: cadence ──
@@ -226,6 +227,60 @@ test("upsertResponsibility: new slug -> createBlock; existing slug -> updateBloc
   assert.equal(withExisting.calls.updateBlock.length, 1);
   assert.equal(withExisting.calls.createBlock.length, 0);
   assert.equal(withExisting.calls.updateBlock[0].fields.properties.createdAt, "2020-01-01T00:00:00Z");
+});
+
+test("upsertResponsibility: a valid shell templateTree round-trips (normalized) into the saved props", async () => {
+  const fresh = makeFakeBlockDB();
+  const store = makeStore(fresh);
+  await store.upsertResponsibility({
+    properties: {
+      title: "Morning ops",
+      templateTree: { version: 1, root: {
+        title: "Morning ops", type: "shell", priority: "High",
+        children: [
+          { title: "Triage inbox", edge: "wrap", durationMin: 20, priority: "High" },
+          { title: "Standup", edge: "wrap", durationMin: "15", priority: "bogus" }, // coerced
+        ],
+      } },
+    },
+    userId: 1, workspaceId: "ws-1",
+  });
+  const saved = fresh.calls.createBlock[0].properties;
+  assert.equal(saved.templateTree.root.type, "shell");
+  assert.equal(saved.templateTree.root.children.length, 2);
+  assert.equal(saved.templateTree.root.children[0].durationMin, 20);
+  assert.equal(saved.templateTree.root.children[1].durationMin, 15); // string coerced to number
+  assert.equal(saved.templateTree.root.children[1].priority, "Medium"); // bad priority defaulted
+});
+
+// ── Pure: templateTree normalization ──
+test("normalizeTemplateTree: enforces a shell root, clamps durations, defaults edge/priority", () => {
+  const out = normalizeTemplateTree({ root: {
+    title: "Sh", type: "task", // forced to shell
+    children: [
+      { title: "a", durationMin: -5 },           // truthy but invalid -> floored to 1
+      { title: "b", durationMin: 99999, edge: "subtask", priority: "Low" },
+      { title: "c" },                            // missing duration -> default 30
+    ],
+  } });
+  assert.equal(out.version, 1);
+  assert.equal(out.root.type, "shell");
+  assert.equal(out.root.children[0].durationMin, 1);
+  assert.equal(out.root.children[0].edge, "wrap");     // default edge
+  assert.equal(out.root.children[0].priority, "Medium");
+  assert.equal(out.root.children[1].durationMin, 1440); // clamped to daily max
+  assert.equal(out.root.children[1].edge, "subtask");
+  assert.equal(out.root.children[2].durationMin, 30);   // missing -> default
+});
+
+test("normalizeTemplateTree: rejects a missing root or an empty title, and caps node count", () => {
+  assert.equal(normalizeTemplateTree(null), null);
+  assert.equal(normalizeTemplateTree({}), null);
+  assert.equal(normalizeTemplateTree({ root: { title: "" } }), null);
+  const many = { root: { title: "root", children: Array.from({ length: 500 }, (_, i) => ({ title: "c" + i, durationMin: 5 })) } };
+  const out = normalizeTemplateTree(many, { maxNodes: 10 });
+  // root consumes count 1; children 2..10 survive (9), the rest return null and drop.
+  assert.equal(out.root.children.length, 9);
 });
 
 // ── Factory: apply-forward — the P2 atomicity guarantee ──
