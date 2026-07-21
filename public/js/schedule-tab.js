@@ -112,13 +112,12 @@ function openMeetingPanel(ev){
       if(cv)cv.style.transform="rotate(180deg)";
     }
     panel.scrollIntoView({behavior:"smooth",block:"center"});
-  }else if(window.DCC&&typeof DCC.modal==="function"&&typeof meetingAutomationPanelHtml==="function"){
-    // The list view renders no inline meeting-auto-panel, so host it in a modal.
-    // The panel is generic (keyed by data-meeting-auto-id); the refresh below fills
-    // it once it's in the DOM. Same view the radial Prep/Recap spoke shows inline.
-    DCC.modal({title:"Meeting prep — "+(ev.title||"Meeting"),body:meetingAutomationPanelHtml(ev)});
+    if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(blockId);
+  }else if(typeof openPrepModal==="function"){
+    // The list view renders no inline meeting-auto-panel, so open the focused,
+    // token-styled prep reading modal instead (fetches + renders on its own).
+    openPrepModal(ev);
   }
-  if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(blockId);
 }
 // Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
 // the meeting has started) plus duration and add-task. The task-only spokes

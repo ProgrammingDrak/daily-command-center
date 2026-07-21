@@ -4933,3 +4933,35 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .tw-field.tw-empty{color:var(--text-muted);font-weight:500}
 .tw-field-time::before{content:"\1F551";font-size:12px;opacity:.7}
 .tw-field-date::before{content:"\1F4C5";font-size:12px;opacity:.7}
+
+/* Meeting prep reading modal (openPrepModal) -- a focused, typeset prep brief.
+ * The inline .ma-* automation panel is deliberately NOT reused here; this is the
+ * read view the Prep chip / radial spoke opens in the list view. */
+.dcc-modal.prep-modal{max-width:620px}
+.prep-view{font-size:var(--fs-md);color:var(--text);line-height:1.6}
+.prep-view-meta{font-size:var(--fs-xs);font-weight:800;text-transform:uppercase;letter-spacing:0.7px;color:var(--cyan);margin-bottom:var(--sp-4)}
+.prep-view-loading{color:var(--text-muted)}
+.prep-view-doc{font-size:var(--fs-md);color:var(--text-muted);line-height:1.62}
+.prep-doc>*:first-child{margin-top:0}
+.prep-doc>*:last-child{margin-bottom:0}
+.prep-doc h1,.prep-doc h2,.prep-doc h3,.prep-doc h4{color:var(--text);font-weight:800;line-height:1.25;margin:var(--sp-5) 0 var(--sp-2)}
+.prep-doc h1{font-size:var(--fs-lg)}
+.prep-doc h2{font-size:var(--fs-base)}
+.prep-doc h3,.prep-doc h4{font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:0.5px;color:var(--cyan)}
+.prep-doc p{margin:0 0 var(--sp-3)}
+.prep-doc ul,.prep-doc ol{margin:0 0 var(--sp-3);padding-left:var(--sp-5);display:flex;flex-direction:column;gap:var(--sp-1)}
+.prep-doc li{line-height:1.5}
+.prep-doc strong{color:var(--text);font-weight:700}
+.prep-doc a{color:var(--accent);text-decoration:none}
+.prep-doc a:hover{text-decoration:underline}
+.prep-view .ma-sources{margin-top:var(--sp-4);padding-top:var(--sp-3);border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:var(--sp-3);font-size:var(--fs-xs);color:var(--text-muted)}
+.prep-view .ma-sources a{color:var(--accent);text-decoration:none}
+.prep-view-empty{display:flex;align-items:center;gap:var(--sp-4);flex-wrap:wrap;color:var(--text-muted);padding:var(--sp-3) 0}
+.prep-gen-btn{border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:var(--r-md);font-size:var(--fs-sm);font-weight:800;padding:var(--sp-2) var(--sp-4);cursor:pointer}
+.prep-gen-btn:hover:not(:disabled){filter:brightness(1.08)}
+.prep-gen-btn:disabled{opacity:0.65;cursor:default}
+.prep-view-actions{margin-top:var(--sp-5);border-top:1px solid var(--border);padding-top:var(--sp-4)}
+.prep-view-kicker{font-size:var(--fs-xs);font-weight:800;text-transform:uppercase;letter-spacing:0.7px;color:var(--cyan);margin-bottom:var(--sp-2)}
+.prep-view-actions ul{margin:0;padding-left:var(--sp-5);display:flex;flex-direction:column;gap:var(--sp-2)}
+.prep-view-actions li{line-height:1.5}
+.prep-view-actions em{color:var(--text-muted);font-style:normal;font-size:var(--fs-xs);margin-left:var(--sp-2)}
