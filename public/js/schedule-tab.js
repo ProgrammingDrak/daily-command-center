@@ -97,27 +97,14 @@ function _canPlaceBounty(ev,isDoneRow){
   return true;
 }
 const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
-// Open the meeting-automation panel scoped to one block: expand the row's detail
-// panel (where the panel is rendered inline), scroll it into view, and refresh it.
-// Used by the Prep/Recap radial spoke.
+// Open the prep briefing for a meeting. Used by the Prep chip and the radial
+// Prep/Recap spoke. The only surface with an INLINE meeting-auto-panel is the
+// retired #timeline (display:none; switchToDate still builds it hidden), so a
+// stale hidden panel must never divert us onto the inline path -- always open
+// the focused, token-styled prep modal, which fetches + renders itself.
 function openMeetingPanel(ev){
-  const blockId=ev.meetingBlockId||ev.id;
-  const sel=(window.CSS&&typeof CSS.escape==="function")?CSS.escape(blockId):String(blockId).replace(/["\\]/g,"\\$&");
-  const panel=document.querySelector('.meeting-auto-panel[data-meeting-auto-id="'+sel+'"]');
-  if(panel){
-    const dp=panel.closest(".detail-panel");
-    if(dp&&!dp.classList.contains("open")){
-      dp.classList.add("open");
-      const card=dp.closest(".card"),cv=card&&card.querySelector(":scope > svg");
-      if(cv)cv.style.transform="rotate(180deg)";
-    }
-    panel.scrollIntoView({behavior:"smooth",block:"center"});
-    if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(blockId);
-  }else if(typeof openPrepModal==="function"){
-    // The list view renders no inline meeting-auto-panel, so open the focused,
-    // token-styled prep reading modal instead (fetches + renders on its own).
-    openPrepModal(ev);
-  }
+  if(typeof openPrepModal==="function"){ openPrepModal(ev); return; }
+  if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(ev.meetingBlockId||ev.id);
 }
 // Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
 // the meeting has started) plus duration and add-task. The task-only spokes
