@@ -189,7 +189,15 @@
   // token-styled prep brief instead -- used when the Prep chip / radial spoke
   // opens prep in the list view (which has no inline panel). Reuses the
   // automation cache + endpoint.
-  function fmtClock(iso){ try{ return new Date(iso).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ",""); }catch(_){ return ""; } }
+  // Format a meeting time exactly like the itinerary row does. ev.start/end are
+  // DCC's local "HH:MM" strings (parsed by f12/pt in state.js), NOT ISO -- using
+  // new Date() on them yields "Invalid Date". Prefer the shared f12; return ""
+  // on anything unparseable so the meta line never shows a garbage time.
+  function fmtClock(t){
+    if(t==null||t==="")return "";
+    if(typeof f12==="function"){ const s=f12(t); if(s&&!/NaN/.test(s))return s; }
+    const d=new Date(t); return isNaN(d.getTime())?"":d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+  }
 
   // Minimal markdown -> HTML for prep briefs (headings, bullets, bold, links,
   // paragraphs). Server-generated preps already carry .html; this covers the
@@ -237,7 +245,8 @@
   function openPrepModal(ev){
     if(!(window.DCC&&typeof DCC.modal==="function"))return;
     const id=ev.meetingBlockId||ev.id;
-    const timeStr=(ev.start&&ev.end)?fmtClock(ev.start)+" – "+fmtClock(ev.end):"";
+    const _a=fmtClock(ev.start),_b=fmtClock(ev.end);
+    const timeStr=(_a&&_b)?_a+" – "+_b:(_a||_b||"");
     const modal=DCC.modal({
       title:ev.title||"Meeting prep",
       body:'<div class="prep-view">'+
