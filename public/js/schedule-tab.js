@@ -112,8 +112,12 @@ function openMeetingPanel(ev){
       if(cv)cv.style.transform="rotate(180deg)";
     }
     panel.scrollIntoView({behavior:"smooth",block:"center"});
+    if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(blockId);
+  }else if(typeof openPrepModal==="function"){
+    // The list view renders no inline meeting-auto-panel, so open the focused,
+    // token-styled prep reading modal instead (fetches + renders on its own).
+    openPrepModal(ev);
   }
-  if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(blockId);
 }
 // Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
 // the meeting has started) plus duration and add-task. The task-only spokes
@@ -586,7 +590,7 @@ function buildListView(){
           // Prep briefing chip: same markup + CSS as the timeline card (itinerary-card.js),
           // reading prepStatus off the block fold (persistence.js). The list view is the
           // visible itinerary, so without this the chip never painted for the owner.
-          (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
+          (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
           (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+
@@ -612,6 +616,10 @@ function buildListView(){
     const quick=el.querySelector(".chk-quick");
     if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");toggleDone(ev.id);});
     const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openStartTimePicker==="function")openStartTimePicker(ev.id,stSpan);});
+    // Prep chip opens the prep briefing (radial Prep/Recap spoke), not the row's
+    // details modal. stopPropagation keeps the row click from also firing.
+    const pf=el.querySelector(".prep-flag");
+    if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev);});
     const nb=el.querySelector(".notes-btn");
     if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const pb=el.querySelector(".btn-task-radial");
@@ -628,7 +636,7 @@ function buildListView(){
     // Open space on the row opens the task-details modal (same as the pen).
     // Unfinished rows are past-day pseudo-tasks, not in scheduled[] — skip them.
     if(!isUnfRow)el.addEventListener("click",e=>{
-      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle"))return;
+      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag"))return;
       if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
     });
     return el;

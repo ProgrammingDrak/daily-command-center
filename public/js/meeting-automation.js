@@ -183,6 +183,89 @@
   },true);
 
 
+  // ── Clean prep reading view (modal) ───────────────────────────────────────
+  // The inline .ma-* panel is built to live in a card's detail area; in a bare
+  // modal it reads as an unstyled form. openPrepModal renders a focused,
+  // token-styled prep brief instead -- used when the Prep chip / radial spoke
+  // opens prep in the list view (which has no inline panel). Reuses the
+  // automation cache + endpoint.
+  function fmtClock(iso){ try{ return new Date(iso).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}).replace(" ",""); }catch(_){ return ""; } }
+
+  // Minimal markdown -> HTML for prep briefs (headings, bullets, bold, links,
+  // paragraphs). Server-generated preps already carry .html; this covers the
+  // template/manual prep (markdown only) and is escape-first for safety.
+  function mdToHtml(md){
+    if(!md) return "";
+    const inline = s => esc(s)
+      .replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    const out=[]; let inList=false;
+    const closeList=()=>{ if(inList){out.push("</ul>");inList=false;} };
+    String(md).replace(/\r\n/g,"\n").split("\n").forEach(raw=>{
+      const line=raw.trim();
+      if(!line){ closeList(); return; }
+      let m;
+      if(m=line.match(/^(#{1,6})\s+(.*)$/)){ closeList(); const lvl=Math.min(m[1].length,4); out.push("<h"+lvl+">"+inline(m[2])+"</h"+lvl+">"); }
+      else if(m=line.match(/^[-*]\s+(.*)$/)){ if(!inList){out.push("<ul>");inList=true;} out.push("<li>"+inline(m[1])+"</li>"); }
+      else { closeList(); out.push("<p>"+inline(line)+"</p>"); }
+    });
+    closeList();
+    return out.join("");
+  }
+
+  function prepDocHtml(data){
+    const prep=data&&data.prep;
+    const actions=((data&&data.proposedActions)||[]).filter(a=>a.status!=="approved");
+    let html="";
+    if(prep&&(prep.html||prep.markdown)){
+      // Prefer rendering the raw markdown with our own converter: the server's
+      // markdownToHtml is lossy (wraps blocks in <h4>, drops bullets/bold), so
+      // prep.html reads flat. Fall back to it only when markdown is absent.
+      html+='<div class="prep-doc">'+(prep.markdown?mdToHtml(prep.markdown):(prep.html||""))+'</div>';
+      if(prep.sources&&prep.sources.length)html+=artifactSources(prep.sources);
+    }else{
+      html+='<div class="prep-view-empty"><span>No prep has been generated for this meeting yet.</span>'+
+        '<button class="prep-gen-btn" type="button">Generate prep</button></div>';
+    }
+    if(actions.length){
+      html+='<div class="prep-view-actions"><div class="prep-view-kicker">Proposed actions</div><ul>'+
+        actions.map(a=>'<li>'+esc(a.text||a.title||"")+(a.priority?'<em>'+esc(a.priority)+'</em>':'')+'</li>').join('')+'</ul></div>';
+    }
+    return html;
+  }
+
+  function openPrepModal(ev){
+    if(!(window.DCC&&typeof DCC.modal==="function"))return;
+    const id=ev.meetingBlockId||ev.id;
+    const timeStr=(ev.start&&ev.end)?fmtClock(ev.start)+" – "+fmtClock(ev.end):"";
+    const modal=DCC.modal({
+      title:ev.title||"Meeting prep",
+      body:'<div class="prep-view">'+
+        '<div class="prep-view-meta">Meeting prep'+(timeStr?' · '+esc(timeStr):'')+'</div>'+
+        '<div class="prep-view-doc"><div class="prep-view-loading">Loading prep…</div></div>'+
+      '</div>'
+    });
+    if(modal&&modal.el)modal.el.classList.add("prep-modal");
+    const docEl=modal.el.querySelector(".prep-view-doc");
+    async function load(force){
+      let data=(!force&&cache.get(id))||null;
+      if(!data){
+        try{ const res=await fetch('/api/meetings/'+encodeURIComponent(id)+'/automation'); data=await res.json(); if(!res.ok)throw new Error(data.error||"load failed"); cache.set(id,data); }
+        catch(e){ if(docEl)docEl.innerHTML='<div class="prep-view-empty">Could not load prep.</div>'; return; }
+      }
+      if(!docEl)return;
+      docEl.innerHTML=prepDocHtml(data);
+      const gen=docEl.querySelector(".prep-gen-btn");
+      if(gen)gen.addEventListener("click",async()=>{
+        gen.disabled=true;gen.textContent="Generating…";
+        try{ await postJson('/api/meetings/'+encodeURIComponent(id)+'/prep',{}); load(true); if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(id); }
+        catch(err){ gen.disabled=false;gen.textContent="Generate prep"; toast(err.message||"Prep failed","error"); }
+      });
+    }
+    load(false);
+  }
+
   window.meetingAutomationPanelHtml=meetingAutomationPanelHtml;
   window.refreshMeetingAutomationPanels=refreshMeetingAutomationPanels;
+  window.openPrepModal=openPrepModal;
 })();
