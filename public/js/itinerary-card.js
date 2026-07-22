@@ -283,10 +283,10 @@
               taskTagChipsHtml(ev)+
             '</div>'+
           '</div>'+
-          (guest?'':notesButton(ev))+
-          // Calendar icon sits right of notes: opens the reschedule popover
-          // directly (was a radial "Change task → Schedule…" spoke). Meetings
-          // hold their calendar time, so no schedule icon on them.
+          // Notes open by clicking the card's open space, so the row has no
+          // notes icon. The calendar icon opens the reschedule popover directly
+          // (was a radial "Change task → Schedule…" spoke). Meetings hold their
+          // calendar time, so no schedule icon on them either.
           (guest||isMeeting(ev)?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+
           // Meetings keep their direct pomodoro button; task cards start one
           // from the radial. Row keeps only notes / radial / delete / done.

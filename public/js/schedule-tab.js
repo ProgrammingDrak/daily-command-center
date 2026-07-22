@@ -584,11 +584,10 @@ function buildListView(){
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
-        // Row keeps done / notes / schedule / bounty / delete visible; every
-        // other task action rides the radial behind the arrow trigger.
-        notesButton(ev)+
-        // Schedule icon right of notes (open, non-meeting rows only): done rows
-        // can't reschedule, unfinished rows reschedule via the radial date-pick.
+        // Row keeps done / schedule / bounty / delete visible; notes open via
+        // the row's open-space click, and every other action rides the radial.
+        // Schedule icon (open, non-meeting rows only): done rows can't
+        // reschedule, unfinished rows reschedule via the radial date-pick.
         (!isDoneRow&&!isUnfRow&&!isMeeting(ev)?'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>':'')+
         (!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
         (!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
@@ -610,8 +609,6 @@ function buildListView(){
     // details modal. stopPropagation keeps the row click from also firing.
     const pf=el.querySelector(".prep-flag");
     if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev);});
-    const nb=el.querySelector(".notes-btn");
-    if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const sb=el.querySelector(".btn-schedule");
     if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb});});
     const pb=el.querySelector(".btn-task-radial");
@@ -1005,7 +1002,6 @@ function buildSchedule(){
     if(dbadge&&isMeeting(ev))dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
     const pomo=el.querySelector(".pomo-btn");
     if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
-    const nb=el.querySelector(".notes-btn");if(nb)nb.addEventListener("click",e=>{e.stopPropagation();if(typeof openAddModal==='function')openAddModal(nb.dataset.notesId,nb.dataset.notesTitle);else openNotesDrawer(nb.dataset.notesId,nb.dataset.notesTitle);});
     const sb=el.querySelector(".btn-schedule");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb});});
     const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
     // Row-level quick add: same universal popover the radial's ➕ spoke opens.
@@ -1041,7 +1037,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-schedule")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".wrap-collapse")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-schedule")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".wrap-collapse")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){
