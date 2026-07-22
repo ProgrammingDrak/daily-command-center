@@ -11,10 +11,13 @@
 //   opts: {
 //     a0, a1,        arc in degrees (y grows down). Default: fan upward
 //                    200→340 when there's room above, else downward 20→160.
-//     r,             item-circle radius (default 104)
+//     r,             minimum item-circle radius (default 104). The fan grows
+//                    past this when a tight arc would otherwise overlap icons,
+//                    capped at ~0.42x the smaller viewport side (_radialFitRadius).
 //     labelGap,      labels sit at r + labelGap along the spoke (default 46)
-//     labelStagger,  alternate label radius +22px — use when n > 6 so
-//                    neighboring pills don't collide near the arc's apexes
+//     labelStagger,  alternate label radius +22px so neighboring pills don't
+//                    collide near the arc's apexes. Auto-enabled when n > 6;
+//                    pass true to force it below that.
 //     clampY,        clamp the fan's virtual center vertically so a trigger
 //                    near the screen edge still shows the whole fan
 //     onClose
@@ -23,6 +26,24 @@
 let _radialTrigger=null;
 let _radialOnClose=null;
 let _radialEscHandler=null;
+
+// Grow the circle so neighbouring icons stay legible. n items spread across
+// (a1−a0)° sit 2R·sin(Δθ/2) apart, so when that chord drops below an icon's
+// width the icons overlap (the corner FAB's 83° arc packs 8 icons into ~21px
+// steps). Instead of shrinking spacing, we fan the SAME items out on a bigger
+// radius until the chord clears `minChord`. Never below the caller's r; capped
+// at a fraction of the viewport so the fan can't spill off-screen (the
+// placement clamps would only flatten it back into a pile if it did).
+function _radialFitRadius(baseR,n,a0,a1,minChord,maxFrac){
+  let R=baseR;
+  if(n>1){
+    const stepRad=Math.abs(a1-a0)*Math.PI/180/(n-1);
+    const needed=minChord/(2*Math.sin(stepRad/2));
+    if(needed>R)R=needed;
+  }
+  const cap=Math.max(baseR,(maxFrac||0.42)*Math.min(window.innerWidth,window.innerHeight));
+  return Math.min(R,cap);
+}
 
 function closeRadialMenu(){
   document.querySelectorAll(".dest-radial-backdrop,.dest-radial-item,.dest-radial-label").forEach(el=>el.remove());
@@ -45,12 +66,19 @@ function openRadialMenu(anchorEl,items,opts){
   const rect=anchorEl.getBoundingClientRect();
   const cx=rect.left+rect.width/2;
   let cy=rect.top+rect.height/2;
-  const R=opts.r||104,labelGap=opts.labelGap==null?46:opts.labelGap,n=items.length;
-  if(opts.clampY)cy=Math.max(R+56,Math.min(cy,window.innerHeight-R-56));
+  const baseR=opts.r||104,labelGap=opts.labelGap==null?46:opts.labelGap,n=items.length;
   // Fan upward unless the trigger sits too close to the top of the viewport.
   // Callers can override the arc (e.g. the corner FAB fans up-left).
-  const up=cy>R+80;
+  const up=cy>baseR+80;
   const a0=opts.a0!=null?opts.a0:(up?200:20),a1=opts.a1!=null?opts.a1:(up?340:160); // degrees, y grows down
+  // Size the circle to the crowd: a tight arc with many items fans out wider so
+  // the 44px icons don't overlap (clampY below uses the grown R so an edge
+  // trigger still shows the whole fan).
+  const R=_radialFitRadius(baseR,n,a0,a1,58);
+  // Above ~6 items even a roomy fan crowds the labels near the arc's apexes;
+  // stagger their radii so neighbouring pills don't collide.
+  const stagger=opts.labelStagger||n>6;
+  if(opts.clampY)cy=Math.max(R+56,Math.min(cy,window.innerHeight-R-56));
   items.forEach((d,i)=>{
     const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
     let x=cx+R*Math.cos(ang);let y=cy+R*Math.sin(ang);
@@ -63,7 +91,7 @@ function openRadialMenu(anchorEl,items,opts){
     item.style.left=(cx-22)+"px";item.style.top=(cy-22)+"px";
     // Label rides just past its item along the same spoke, so labels fan with
     // the items instead of colliding at the arc's apex.
-    const lr=R+labelGap+((opts.labelStagger&&i%2)?22:0);
+    const lr=R+labelGap+((stagger&&i%2)?22:0);
     const lx=Math.max(64,Math.min(cx+lr*Math.cos(ang),window.innerWidth-64));
     const ly=Math.max(14,Math.min(cy+lr*Math.sin(ang),window.innerHeight-14));
     const lbl=document.createElement("span");
@@ -93,9 +121,12 @@ function showRadialMenuPreview(anchorEl,items,opts){
   hideRadialMenuPreview();
   const rect=anchorEl.getBoundingClientRect();
   const cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
-  const R=58,n=items.length;
-  const up=cy>R+60;
+  const n=items.length;
+  const up=cy>58+60;
   const a0=up?200:20,a1=up?340:160;
+  // Same fit as the real fan (28px dots, so a tighter min-chord), kept a bit
+  // smaller than the full radius it promotes into.
+  const R=_radialFitRadius(58,n,a0,a1,32,0.3);
   items.forEach((d,i)=>{
     const ang=(a0+(a1-a0)*(n===1?0.5:i/(n-1)))*Math.PI/180;
     const x=Math.max(20,Math.min(cx+R*Math.cos(ang),window.innerWidth-20));
