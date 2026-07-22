@@ -89,7 +89,14 @@ const DCC_LOG_FILE = path.join(DATA_DIR, "config", "pa-activity-log.md");
 // VAULT_BRANCH: git branch (default "main").
 // VAULT_DIR: filesystem path to the working copy. Defaults to ./vault
 //            (gitignored). On Render, the container filesystem is
-//            ephemeral — clone happens on every cold boot.
+//            ephemeral — clone happens on every cold boot. Clones are shallow
+//            (--depth 1) with GIT_LFS_SKIP_SMUDGE=1 (see sync-manager.js), so
+//            git history and LFS media are not pulled on boot.
+// Meetings-dashboard proxy env (GET /meetings/:blockId/dashboard):
+//   GH_VAULT_REPO: owner/repo backing meeting dashboards (default ProgrammingDrak/meeting-vault).
+//   GH_VAULT_TOKEN: PAT with contents:read on that repo.
+//   GH_VAULT_PATH_PREFIX: path prefix for dashboards (default "meetings").
+//                 Set to "work/meetings" for the unified mycelium vault (A4 cutover).
 const VAULT_DIR = process.env.VAULT_DIR || path.join(PROJECT_DIR, "vault");
 const VAULT_INDEX_FILE = path.join(DATA_DIR, ".vault-index.json");
 const SYNC_QUEUE_FILE = path.join(DATA_DIR, ".sync-queue.json");
@@ -227,8 +234,13 @@ app.get("/meetings/:blockId/dashboard", async (req, res) => {
     const token = process.env.GH_VAULT_TOKEN;
     if (!token) return res.status(503).type("text/plain").send("Meeting vault not configured (GH_VAULT_TOKEN unset).");
     const repo = process.env.GH_VAULT_REPO || "ProgrammingDrak/meeting-vault";
+    // Path prefix under which meeting dashboards live in the vault repo. Default
+    // "meetings" preserves the legacy meeting-vault layout exactly. Mycelium's
+    // unified vault nests them under work/meetings, so A4's cutover sets
+    // GH_VAULT_PATH_PREFIX=work/meetings once this deploys (the A4 enabler).
+    const prefix = (process.env.GH_VAULT_PATH_PREFIX || "meetings").replace(/^\/+|\/+$/g, "");
     const slug = String(ref).replace(/[^A-Za-z0-9._-]/g, "");
-    const url = `https://api.github.com/repos/${repo}/contents/meetings/${encodeURIComponent(slug)}/dashboard.html`;
+    const url = `https://api.github.com/repos/${repo}/contents/${prefix}/${encodeURIComponent(slug)}/dashboard.html`;
     const ghResp = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw+json", "User-Agent": "dcc-meeting-vault-proxy" } });
     if (!ghResp.ok) return res.status(502).type("text/plain").send(`Vault fetch failed (${ghResp.status}).`);
     const html = await ghResp.text();

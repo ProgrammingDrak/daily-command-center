@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
+<link rel="stylesheet" href="/public/css/vault.css?v=vault-b1-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -209,6 +210,7 @@
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
+  <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
 </div>
 
 <div class="tab-content active" id="tab-schedule">
@@ -1701,6 +1703,26 @@
   <div id="budget-root"></div>
 </div>
 
+<!-- Mycelium vault tab (Phase B1): read-only markdown viewer over the git-backed vault. -->
+<div class="tab-content" id="tab-vault">
+  <div id="vault-header">
+    <strong class="vault-brand">Mycelium</strong>
+    <span id="vault-status-pill" class="vault-pill">unknown</span>
+    <span id="vault-summary"></span>
+    <select id="vault-type-filter" class="vault-ctl">
+      <option value="">All types</option>
+    </select>
+    <button id="vault-refresh-btn" class="vault-ctl vault-btn" type="button">Refresh</button>
+    <button id="vault-flush-btn" class="vault-ctl vault-btn" type="button">Sync now</button>
+  </div>
+  <div id="vault-body">
+    <aside id="vault-tree"></aside>
+    <div id="vault-reading">
+      <div id="vault-detail" class="vault-detail"></div>
+    </div>
+  </div>
+</div>
+
 <div class="footer">
   Data from Notion and the PA itinerary &middot; Generated for Drake Shadwell &middot; <span id="gen-time">--</span>
 </div>
@@ -1743,6 +1765,10 @@
 <script src="/public/js/time-picker.js"></script>
 <script src="/public/js/triage.js"></script>
 <script src="/public/js/tabs.js"></script>
+<!-- Mycelium vault tab: vendored markdown libs (no build step) load before vault-tab.js -->
+<script src="/public/js/vendor/marked.min.js?v=marked-12.0.2"></script>
+<script src="/public/js/vendor/purify.min.js?v=purify-3.1.7"></script>
+<script src="/public/js/vault-tab.js?v=vault-b1-2"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>

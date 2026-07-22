@@ -201,9 +201,23 @@ class VaultStore extends EventEmitter {
     }
   }
 
+  // Chokidar ignore predicate. Ignore atomic-write temp files, the sync queue,
+  // and dotfiles/dirs — but evaluate the dot rule on the path RELATIVE to the
+  // vault root. A plain /(^|[\/\\])\../ regex matches the full path, so a
+  // dot-named ANCESTOR (e.g. a `.wt-*` git worktree, how DCC features are
+  // developed) would make chokidar ignore the whole tree and silently kill live
+  // sync. Relative evaluation watches the vault wherever it lives; prod (no
+  // dot-ancestor) behaves exactly as before. Extracted for unit testing.
+  _isIgnored(p) {
+    if (p.endsWith(".tmp") || p.endsWith(".sync-queue.json")) return true;
+    const rel = path.relative(this.vaultDir, p);
+    if (!rel || rel.startsWith("..")) return false; // the root itself / outside
+    return rel.split(path.sep).some((seg) => seg.startsWith("."));
+  }
+
   _startWatcher() {
     this.watcher = chokidar.watch(this.vaultDir, {
-      ignored: [/(^|[\/\\])\../, /\.tmp$/, /\.sync-queue\.json$/],
+      ignored: (p) => this._isIgnored(p),
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
@@ -278,16 +292,53 @@ class VaultStore extends EventEmitter {
     return out;
   }
 
+  // Cheap existence check (no body/backlink-context work) — used to flag
+  // dangling wikilinks at render time.
+  has(slug) { return this.nodes.has(slug); }
+
   get(slug) {
     const node = this.nodes.get(slug);
     if (!node) return null;
+    const backlinks = (this.backlinks.get(slug) || []).map((b) => ({
+      ...b,
+      context: this._backlinkContext(b.source, slug, b.type),
+    }));
     return {
       slug: node.slug,
       frontmatter: node.frontmatter,
       body: node.body,
       outlinks: this.outlinks.get(slug) || [],
-      backlinks: this.backlinks.get(slug) || [],
+      backlinks,
     };
+  }
+
+  // Context snippet for one backlink: the text around where `source` links to
+  // `targetSlug`. Core Zettelkasten navigation — you see WHY something links
+  // here without opening it. Body links get ±120 chars around the wikilink
+  // (whitespace collapsed, ellipsized); frontmatter links show that field's
+  // value. Returns { text, field } or null if the source is gone / no match.
+  _backlinkContext(source, targetSlug, type) {
+    const node = this.nodes.get(source);
+    if (!node) return null;
+    if (type !== "body") {
+      const v = node.frontmatter ? node.frontmatter[type] : undefined;
+      if (v == null) return null;
+      const s = Array.isArray(v) ? v.join(", ") : String(v);
+      return { text: s.replace(/\s+/g, " ").trim().slice(0, 280), field: type };
+    }
+    const body = node.body || "";
+    WIKILINK_RE.lastIndex = 0;
+    let m;
+    while ((m = WIKILINK_RE.exec(body)) !== null) {
+      if (m[1].trim() !== targetSlug) continue;
+      const start = Math.max(0, m.index - 120);
+      const end = Math.min(body.length, m.index + m[0].length + 120);
+      let snippet = body.slice(start, end).replace(/\s+/g, " ").trim();
+      if (start > 0) snippet = "… " + snippet;
+      if (end < body.length) snippet = snippet + " …";
+      return { text: snippet, field: null };
+    }
+    return null;
   }
 
   async write(slug, { frontmatter, body }) {
@@ -350,3 +401,6 @@ class VaultStore extends EventEmitter {
 }
 
 module.exports = VaultStore;
+// Exposed so consumers/tests can reuse the exact edge regex (must stay
+// byte-identical to .mycelium/lib/parse.js WIKILINK_RE).
+module.exports.WIKILINK_RE = WIKILINK_RE;

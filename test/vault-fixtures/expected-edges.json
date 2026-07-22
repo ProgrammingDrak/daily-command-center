@@ -1,0 +1,115 @@
+{
+  "alpha": [
+    {
+      "target": "gamma",
+      "type": "body"
+    },
+    {
+      "target": "beta",
+      "type": "body"
+    },
+    {
+      "target": "delta",
+      "type": "body"
+    },
+    {
+      "target": "beta",
+      "type": "related"
+    }
+  ],
+  "beta": [
+    {
+      "target": "Café Notes",
+      "type": "body"
+    },
+    {
+      "target": "José García",
+      "type": "people"
+    },
+    {
+      "target": "delta",
+      "type": "people"
+    }
+  ],
+  "delta": [],
+  "edge-cases": [
+    {
+      "target": "link with spaces",
+      "type": "body"
+    },
+    {
+      "target": "work/some-meeting",
+      "type": "body"
+    },
+    {
+      "target": "a",
+      "type": "body"
+    },
+    {
+      "target": "b",
+      "type": "body"
+    },
+    {
+      "target": "unclosed link that never\ncloses on this line. A heading-only link [[gamma",
+      "type": "body"
+    }
+  ],
+  "frontmatter-only": [
+    {
+      "target": "alpha",
+      "type": "related"
+    },
+    {
+      "target": "beta",
+      "type": "people"
+    },
+    {
+      "target": "gamma",
+      "type": "parent"
+    }
+  ],
+  "gamma": [
+    {
+      "target": "nonexistent-node",
+      "type": "body"
+    },
+    {
+      "target": "alpha",
+      "type": "body"
+    }
+  ],
+  "mixed": [
+    {
+      "target": "alpha",
+      "type": "body"
+    },
+    {
+      "target": "alpha",
+      "type": "source"
+    }
+  ],
+  "parse-error": [
+    {
+      "target": "in-frontmatter-region",
+      "type": "body"
+    },
+    {
+      "target": "in-body",
+      "type": "body"
+    }
+  ],
+  "unicode": [
+    {
+      "target": "project-🍄",
+      "type": "body"
+    },
+    {
+      "target": "Zürich-Straße",
+      "type": "body"
+    },
+    {
+      "target": "naïve-café-π",
+      "type": "aliases"
+    }
+  ]
+}
