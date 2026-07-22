@@ -605,13 +605,13 @@ function buildListView(){
     });
     const quick=el.querySelector(".chk-quick");
     if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");toggleDone(ev.id);});
-    const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openStartTimePicker==="function")openStartTimePicker(ev.id,stSpan);});
+    const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
     // Prep chip opens the prep briefing (radial Prep/Recap spoke), not the row's
     // details modal. stopPropagation keeps the row click from also firing.
     const pf=el.querySelector(".prep-flag");
     if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev);});
     const sb=el.querySelector(".btn-schedule");
-    if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb});});
+    if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
     const pb=el.querySelector(".btn-task-radial");
     if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb,isUnfRow?{unfinished:true,onReschedule:(d)=>_unfMoveTo(r,el,d)}:undefined);});
     const bb=el.querySelector(".btn-bounty");
@@ -996,14 +996,14 @@ function buildSchedule(){
     const tagToggle=el.querySelector(".card-tags-toggle");
     if(tagToggle)tagToggle.addEventListener("click",e=>{e.stopPropagation();toggleTagsExpanded(ev.id);if(typeof render==='function')render();});
     el.querySelectorAll(".dbtn").forEach(b=>b.addEventListener("click",e=>{e.stopPropagation();adjustDur(b.dataset.id,parseInt(b.dataset.d))}));
-    const stSpan=el.querySelector(".start-time");if(stSpan){stSpan.addEventListener("click",e=>{e.stopPropagation();openStartTimePicker(ev.id,stSpan);});}
+    const stSpan=el.querySelector(".start-time");if(stSpan){stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});}
     // Duration presets: only the meeting card keeps the interactive badge —
     // task cards show a read-only badge and adjust duration via the radial.
     const dbadge=el.querySelector(".dbadge");
     if(dbadge&&isMeeting(ev))dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
     const pomo=el.querySelector(".pomo-btn");
     if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
-    const sb=el.querySelector(".btn-schedule");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb});});
+    const sb=el.querySelector(".btn-schedule");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
     const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
     // Row-level quick add: same universal popover the radial's ➕ spoke opens.
     const am=el.querySelector(".row-add-menu");
