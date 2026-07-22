@@ -572,6 +572,9 @@ function buildListView(){
           (subRow?subSliceHtml:'')+
           (tt&&tt.rollupMode&&typeof shellRollupChip==="function"?shellRollupChip(ev):'')+
           (subTimeless||isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+          // Schedule/reschedule right where the time is labeled (and next to
+          // "Unscheduled" for untimed tasks). Reschedulable rows only.
+          (!subTimeless&&!isUnfRow&&!isDoneRow&&!isMeeting(ev)?'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>':'')+
           (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
           (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           // Prep briefing chip: same markup + CSS as the timeline card (itinerary-card.js),
@@ -584,11 +587,9 @@ function buildListView(){
         '</div>'+
       '</div>'+
       '<div class="it-list-actions">'+
-        // Row keeps done / schedule / bounty / delete visible; notes open via
-        // the row's open-space click, and every other action rides the radial.
-        // Schedule icon (open, non-meeting rows only): done rows can't
-        // reschedule, unfinished rows reschedule via the radial date-pick.
-        (!isDoneRow&&!isUnfRow&&!isMeeting(ev)?'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>':'')+
+        // Row keeps bounty / delete visible; notes open via the row's open-space
+        // click and schedule sits by the time label (see .it-list-meta). Every
+        // other action rides the radial behind the arrow trigger.
         (!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
         (!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+

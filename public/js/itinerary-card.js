@@ -273,7 +273,7 @@
           '</div>')+
           '<div class="bar" style="background:'+((tt&&tt.barColor)||taskTagColor(ev)||c.color)+'"></div>'+
           '<div class="body">'+
-            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':(guest?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>'))+'</div>'+
+            '<div class="title-row">'+(node.hasKids?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'')+'<span class="ttl" title="'+escHtml(ev.title)+'">'+ev.title+'</span>'+(isBounty?'<span class="bounty-chip'+(bountyMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bountyMeta.hasSponsor?' title="'+bountySponsorTitle+'"':'')+'>Bounty x'+bountyMultiplier+'</span>':'')+tinlineHtml+(guest||isMeeting(ev)||subTimeless||(typeof isDone==="function"&&isDone(ev))?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+(isMeeting(ev)?'<button class="btn-mtg-tags" title="Tags — mark this meeting for Recording Review" style="border:none;background:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 6px;opacity:.65" onclick="event.stopPropagation();openAddModal(\''+ev.id.replace(/'/g,"\\'")+'\',\''+ev.title.replace(/'/g,"\\'")+'\')">🏷</button>':(guest?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>'))+'</div>'+
             '<div class="meta">'+(typeof commuteLeaveChipHtml==="function"?commuteLeaveChipHtml(ev):'')+'<span class="tag '+c.cls+'">'+(sub?'Subtask':c.tag)+'</span>'+stackedBadge+chipSlotHtml+habitStreakChip(ev)+(/^Custom task/.test(ev.meta||'')?'':colorMeta(ev))+(_bw?'<span class="wrap-bw">'+_bw.count+' ride-along'+(_bw.count>1?'s':'')+' · ~'+ms(_bw.mins)+' inside</span>':'')+
               petPrivacyChip(ev)+
               (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" title="Prep briefing ready">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" title="Prep pending">&#9675; Prep</span>':'')+
@@ -283,13 +283,10 @@
               taskTagChipsHtml(ev)+
             '</div>'+
           '</div>'+
-          // Notes open by clicking the card's open space, so the row has no
-          // notes icon. The calendar icon opens the reschedule popover directly
-          // (was a radial "Change task → Schedule…" spoke). Meetings hold their
-          // calendar time, so no schedule icon on them either.
-          (guest||isMeeting(ev)?'':'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>')+
+          // Notes open by clicking the card's open space (no notes icon); the
+          // schedule calendar sits by the time in the title row above.
           // Meetings keep their direct pomodoro button; task cards start one
-          // from the radial. Row keeps only notes / radial / delete / done.
+          // from the radial. Row keeps only radial / delete / done.
           (guest?'':(isMeeting(ev)?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+_pomoSvg+'</button>':''))+
           // Radial on every row now, meetings included: it carries the Prep/Recap
           // spoke that opens the meeting-automation panel (schedule-tab.js). This

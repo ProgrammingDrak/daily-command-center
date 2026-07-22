@@ -1065,11 +1065,14 @@
   .btn-del-task{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color 0.1s,background 0.1s;opacity:0}
   .tl-item:hover .btn-del-task{opacity:0.4}
   .btn-del-task:hover{opacity:1!important;color:var(--red,#ef4444);background:rgba(239,68,68,0.1)}
-  .btn-triv-link,.btn-task-radial,.btn-bounty,.btn-schedule,.btn-repeat-resp{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:border-color 0.12s,color 0.12s,background 0.12s,opacity 0.12s;flex-shrink:0}
+  .btn-triv-link,.btn-task-radial,.btn-bounty,.btn-repeat-resp{width:22px;height:22px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center;transition:border-color 0.12s,color 0.12s,background 0.12s,opacity 0.12s;flex-shrink:0}
   .btn-triv-link:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.08)}
   .btn-triv-link.triv-active{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.12)}
   .btn-task-radial:hover{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(245,158,11,0.1)}
-  .btn-schedule:hover{border-color:var(--cyan,#22d3ee);color:var(--cyan,#22d3ee);background:rgba(34,211,238,0.1)}
+  /* Inline schedule icon: sits next to the time label, not in the action cluster */
+  .btn-schedule{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;width:18px;height:18px;margin-left:3px;padding:0;border:none;background:none;color:var(--text-muted);cursor:pointer;opacity:0.55;transition:color 0.12s,opacity 0.12s;flex-shrink:0}
+  .btn-schedule svg{width:13px;height:13px}
+  .btn-schedule:hover{color:var(--cyan,#22d3ee);opacity:1}
   .btn-bounty:hover{border-color:var(--amber,#f59e0b);color:var(--amber,#f59e0b);background:rgba(251,191,36,0.12)}
   .btn-repeat-resp:hover{border-color:var(--purple,#a78bfa);color:var(--purple,#a78bfa);background:rgba(168,85,247,0.1)}
   .del-confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:center;justify-content:center}
@@ -1373,13 +1376,11 @@
   .it-list-check-col{display:flex;flex-direction:column;align-items:center;gap:3px}
   .it-list-check-col .chk-quick{opacity:0.45;width:24px;height:20px}
   .it-list-actions .notes-btn,
-  .it-list-actions .btn-schedule,
   .it-list-actions .btn-task-radial,
   .it-list-actions .btn-bounty,
   .it-list-actions .pomo-btn,
   .it-list-actions .btn-del-task{position:static;opacity:0.55;flex-shrink:0}
   .it-list-actions .notes-btn:hover,
-  .it-list-actions .btn-schedule:hover,
   .it-list-actions .btn-task-radial:hover,
   .it-list-actions .btn-bounty:hover,
   .it-list-actions .pomo-btn:hover,
