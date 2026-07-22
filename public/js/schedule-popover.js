@@ -49,6 +49,12 @@ function _positionPopoverNear(anchorEl,pop,opts){
 function openSchedulePopover(cfg){
   cfg=cfg||{};
   const mode=cfg.mode||"reschedule";
+  // view splits the reschedule popover into two triggers: the calendar icon
+  // opens "date" (quick days + date picker), clicking the time opens "time"
+  // (duration + start-time). "both" keeps the combined popover for other callers.
+  const view=cfg.view||"both";
+  const showDate=view!=="time";
+  const showTime=view!=="date";
   const anchorEl=cfg.anchorEl;
   if(!anchorEl)return;
 
@@ -69,6 +75,7 @@ function openSchedulePopover(cfg){
   let stagedDur=cfg.durMin||30;
 
   const header=
+    view==="time"?('Set the time for "'+escHtml(ev.title)+'"'):
     mode==="reschedule"?('Move "'+escHtml(ev.title)+'" to…'):
     mode==="create"?('Schedule "'+escHtml(cfg.title)+'" for…'):
     escHtml(cfg.header||"Schedule for…");
@@ -84,6 +91,7 @@ function openSchedulePopover(cfg){
   // is never a dead end. (A disabled button reads as "broken".)
   pop.innerHTML=
     '<div class="resched-header">'+header+'</div>'+
+    (showDate?(
     '<div class="resched-quick">'+
       '<button class="resched-btn" data-target="today">Today</button>'+
       '<button class="resched-btn" data-target="tomorrow">Tomorrow</button>'+
@@ -91,8 +99,8 @@ function openSchedulePopover(cfg){
     '<div class="resched-custom">'+
       '<input type="date" class="resched-date-input" />'+
       '<button class="resched-go">'+goLabel+'</button>'+
-    '</div>'+
-    (mode==="pick"?'':(
+    '</div>'):'')+
+    ((showTime&&mode!=="pick")?(
     '<div class="resched-adjust">'+
       '<div class="resched-dur">'+
         '<button class="resched-dur-btn" type="button" data-d="-15" title="15 min shorter">&minus;</button>'+
@@ -103,7 +111,7 @@ function openSchedulePopover(cfg){
         '<input type="time" class="resched-time-input" />'+
         (mode==="reschedule"?'<button class="resched-time-go" type="button">Set time</button>':'')+
       '</div>'+
-    '</div>'));
+    '</div>'):'');
 
   function closePop(){
     pop.remove();
@@ -168,23 +176,25 @@ function openSchedulePopover(cfg){
     });
   });
 
-  // Custom date
+  // Custom date (present only when the date section is shown)
   const dateInput=pop.querySelector(".resched-date-input");
-  // Default to two days out (or tomorrow's tomorrow) so it differs from the quick buttons
-  const seed=new Date();seed.setDate(seed.getDate()+2);
-  const pad=n=>String(n).padStart(2,"0");
-  dateInput.value=seed.getFullYear()+"-"+pad(seed.getMonth()+1)+"-"+pad(seed.getDate());
-  pop.querySelector(".resched-go").addEventListener("click",e=>{
-    e.stopPropagation();
-    const v=dateInput.value;
-    if(!v||!/^\d{4}-\d{2}-\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid date","error");return}
-    pickDay(v);
-  });
-  dateInput.addEventListener("keydown",e=>{
-    if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
-  });
+  if(dateInput){
+    // Default to two days out (or tomorrow's tomorrow) so it differs from the quick buttons
+    const seed=new Date();seed.setDate(seed.getDate()+2);
+    const pad=n=>String(n).padStart(2,"0");
+    dateInput.value=seed.getFullYear()+"-"+pad(seed.getMonth()+1)+"-"+pad(seed.getDate());
+    pop.querySelector(".resched-go").addEventListener("click",e=>{
+      e.stopPropagation();
+      const v=dateInput.value;
+      if(!v||!/^\d{4}-\d{2}-\d{2}$/.test(v)){if(typeof showToast==="function")showToast("Pick a valid date","error");return}
+      pickDay(v);
+    });
+    dateInput.addEventListener("keydown",e=>{
+      if(e.key==="Enter"){e.preventDefault();pop.querySelector(".resched-go").click()}
+    });
+  }
 
-  if(mode!=="pick"){
+  if(showTime&&mode!=="pick"){
     // Duration: same ±15 stepper as the card's -/+ buttons, label updates in
     // place. Reschedule applies immediately; create stages the value.
     const durLabel=pop.querySelector(".resched-dur-label");
