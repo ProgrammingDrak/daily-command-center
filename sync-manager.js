@@ -21,6 +21,15 @@ const PULL_INTERVAL = 5 * 60_000;
 const GIT_TIMEOUT = 20_000;
 const BACKOFF_SCHEDULE = [30_000, 120_000, 600_000, 1_800_000];
 
+// Stop the LFS smudge filter from bulk-downloading pointer content on clone/
+// checkout/pull, so cold boots never pull the media band (B3 adds on-demand
+// fetch). Set on process.env so every simple-git child inherits it: passing it
+// through simple-git's .env() would trip its env-safety guard whenever the
+// ambient environment also defines GIT_EDITOR/GIT_SSH (which .env() rejects).
+// DCC's only git usage is this vault sync, and skip-smudge is a safe default.
+// Inert when git-lfs isn't installed.
+process.env.GIT_LFS_SKIP_SMUDGE = process.env.GIT_LFS_SKIP_SMUDGE || "1";
+
 class SyncManager extends EventEmitter {
   constructor({ vaultDir, queueFile, remoteUrl, branch = "main", commitDebounce, pushDebounce } = {}) {
     super();
@@ -73,8 +82,12 @@ class SyncManager extends EventEmitter {
         // --single-branch so we only fetch the vault branch's objects.
         // Matters when the vault is an orphan branch on the same repo as DCC
         // code — without this, the clone would also pull main's history.
-        await git.clone(this.remoteUrl, this.vaultDir, ["--branch", this.branch, "--single-branch"]);
-        console.log("[sync] cloned vault from remote");
+        // --depth 1 keeps cold boots fast: nothing server-side reads git
+        // history. Background pull --rebase --autostash still fast-forwards a
+        // shallow single-branch clone (verified in B1 QA). If history is ever
+        // needed server-side, switch to --filter=blob:none instead of deepening.
+        await git.clone(this.remoteUrl, this.vaultDir, ["--branch", this.branch, "--single-branch", "--depth", "1"]);
+        console.log("[sync] cloned vault from remote (shallow, LFS smudge skipped)");
       } catch (e) {
         console.warn("[sync] clone failed, initializing empty repo:", e.message);
         await this._initEmptyRepo();

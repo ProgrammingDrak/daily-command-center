@@ -1,0 +1,68 @@
+/* Mycelium vault tab (Phase B1): Obsidian-style explorer + Notion-style reading pane. */
+
+/* Header toolbar */
+#vault-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 2px 10px}
+#vault-header .vault-brand{font-size:14px;font-weight:600}
+#vault-header #vault-summary{font-size:12px;color:var(--text-muted)}
+#vault-header .vault-pill{font-size:10px;border:1px solid var(--text-muted);border-radius:10px;padding:1px 8px;color:var(--text-muted)}
+#vault-header .vault-ctl{font-size:11px;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px}
+#vault-header select.vault-ctl{margin-left:auto}
+#vault-header .vault-btn{cursor:pointer} #vault-header .vault-btn:hover{border-color:var(--text-muted)}
+
+/* Two-pane body: explorer + reading */
+#vault-body{display:flex;gap:0;border-top:1px solid var(--border)}
+#vault-tree{flex:0 0 246px;width:246px;overflow-y:auto;max-height:74vh;padding:10px 6px;border-right:1px solid var(--border);font-size:13px}
+#vault-reading{flex:1 1 auto;overflow-y:auto;max-height:74vh;padding:24px 30px 64px;min-width:0}
+
+/* Explorer (Obsidian file tree) */
+.vtree-row{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:6px;cursor:pointer;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:none}
+.vtree-row:hover{background:var(--bg-elev)}
+.vtree-file.active{background:var(--bg-elev);color:var(--text)}
+.vtree-folder{font-weight:500;color:var(--text)}
+.vtree-chevron{flex:0 0 10px;font-size:9px;color:var(--text-muted);transition:transform .12s ease;transform:rotate(90deg)}
+.vtree-chevron.collapsed{transform:rotate(0deg)}
+.vtree-emoji{flex:0 0 auto;font-size:13px;filter:saturate(.9)}
+.vtree-label{overflow:hidden;text-overflow:ellipsis}
+
+/* Reading pane (Notion document) */
+.vault-detail{max-width:720px;margin:0 auto;font-size:15px;line-height:1.7;color:var(--text);word-wrap:break-word}
+.vault-empty{color:var(--text-muted);text-align:center;padding:60px 0;font-size:14px}
+.vault-title{font-size:28px;font-weight:700;line-height:1.2;margin:0 0 4px;display:flex;gap:10px;align-items:flex-start}
+.vault-title .emoji{font-size:26px;line-height:1.25}
+.vault-path{color:var(--text-muted);font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-bottom:14px}
+.vault-tags{margin:2px 0 16px;display:flex;flex-wrap:wrap;gap:6px}
+.vault-tag{font-size:12px;line-height:1.5;padding:1px 9px;border-radius:5px}
+.vault-props{margin:0 0 22px}
+.vault-prop{display:flex;gap:12px;padding:5px 0;font-size:14px;border-bottom:1px solid color-mix(in srgb,var(--border) 45%,transparent)}
+.vault-prop:last-child{border-bottom:none}
+.vault-prop .k{flex:0 0 116px;color:var(--text-muted)}
+.vault-prop .v{color:var(--text);word-break:break-word}
+.vault-section-h{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin:26px 0 10px}
+.vault-hr{border:none;border-top:1px solid var(--border);margin:26px 0 0}
+
+/* Rendered markdown */
+.vault-body-md h1{font-size:23px;font-weight:700;margin:22px 0 8px} .vault-body-md h2{font-size:19px;font-weight:600;margin:20px 0 6px} .vault-body-md h3{font-size:16px;font-weight:600;margin:16px 0 4px}
+.vault-body-md p{margin:.6em 0} .vault-body-md ul,.vault-body-md ol{margin:.5em 0;padding-left:24px} .vault-body-md li{margin:2px 0}
+.vault-body-md code{background:var(--bg-elev);padding:1px 5px;border-radius:4px;font-size:.9em}
+.vault-body-md pre{background:var(--bg-elev);padding:12px 14px;border-radius:8px;overflow-x:auto;margin:.7em 0} .vault-body-md pre code{background:none;padding:0}
+.vault-body-md blockquote{border-left:3px solid var(--border);margin:.7em 0;padding:2px 14px;color:var(--text-muted)}
+.vault-body-md table{border-collapse:collapse;font-size:13px;margin:.6em 0} .vault-body-md th,.vault-body-md td{border:1px solid var(--border);padding:4px 9px}
+.vault-body-md hr{border:none;border-top:1px solid var(--border);margin:1.2em 0}
+.vault-body-md a{color:var(--accent);text-decoration:none} .vault-body-md a:hover{text-decoration:underline}
+.vault-detail a.wikilink{color:var(--accent);text-decoration:none;font-weight:500;cursor:pointer} .vault-detail a.wikilink:hover{text-decoration:underline}
+.vault-detail a.wikilink.dangling{color:var(--text-muted);cursor:default;opacity:.55;font-weight:400} .vault-detail a.wikilink.dangling:hover{text-decoration:none}
+
+/* Linked mentions / outgoing links */
+.vault-bl{padding:9px 13px;margin:9px 0;border-left:2px solid var(--accent);background:var(--bg-elev);border-radius:0 7px 7px 0}
+.vault-bl .src{font-size:12.5px;color:var(--accent);cursor:pointer;font-weight:500} .vault-bl .src:hover{text-decoration:underline}
+.vault-bl .ctx{font-size:12.5px;color:var(--text-muted);margin-top:4px;line-height:1.5}
+.vault-outlink{display:block;padding:3px 0;font-size:13px}
+.vault-outlink .src{color:var(--accent);cursor:pointer} .vault-outlink .src:hover{text-decoration:underline}
+.vault-outlink .dead{color:var(--text-muted);opacity:.7}
+
+@media (max-width:780px){
+  #vault-body{flex-direction:column}
+  #vault-tree{flex:none;width:auto;max-height:240px;border-right:none;border-bottom:1px solid var(--border)}
+  #vault-reading{padding:18px 14px 48px}
+  .vault-title{font-size:24px}
+}
