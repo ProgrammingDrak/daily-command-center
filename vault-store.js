@@ -22,6 +22,27 @@ const { EventEmitter } = require("events");
 
 const WIKILINK_RE = /\[\[([^\]|#]+?)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
 
+// git-crypt encrypted files begin with the bytes \0 G I T C R Y P T \0. When
+// A2's git-crypt encrypts the sensitive dirs, a clone that has NOT unlocked
+// (missing key, missing binary, or a mis-ordered boot that indexed before the
+// unlock hook ran) reads those files as ciphertext. Indexing that would poison
+// the graph with binary garbage, so _ingest skips any file still carrying this
+// header — matching what D1's MCP server already does. Prefix-only string
+// check: the leading bytes are ASCII/NUL and decode 1:1 even from a utf8 read
+// of an otherwise-binary blob.
+const GITCRYPT_MAGIC = "\u0000GITCRYPT";
+
+// Thrown by write() when an optimistic-lock precondition fails: the caller
+// loaded content at one hash and the on-disk node has since changed. The route
+// layer maps .code === "STALE_WRITE" to HTTP 409.
+class StaleWriteError extends Error {
+  constructor(currentHash) {
+    super("stale write: node changed since it was loaded");
+    this.code = "STALE_WRITE";
+    this.currentHash = currentHash;
+  }
+}
+
 class VaultStore extends EventEmitter {
   constructor({ vaultDir, indexFile }) {
     super();
@@ -132,7 +153,32 @@ class VaultStore extends EventEmitter {
     return path.join(this.vaultDir, slug + ".md");
   }
 
+  // Canonical slug normalization. write()/delete() strip `..` and leading
+  // slashes so a request can't escape the vault; callers that make a security
+  // decision on the slug (e.g. the routes' sensitive-dir gate) MUST normalize
+  // with this FIRST, or a slug like `health/the..rapy/x` dodges the gate and
+  // then normalizes to `health/therapy/x` inside the store. Kept as one method
+  // so the gate and the write can never disagree.
+  normalizeSlug(slug) {
+    return String(slug || "").replace(/\.\./g, "").replace(/^\/+/, "");
+  }
+
   _ingest(slug, file, raw, stat) {
+    // git-crypt magic-byte guard (A2/B2). A file still carrying the git-crypt
+    // header is ciphertext — the unlock hook did not run (no key/binary) or the
+    // boot mis-ordered. Refuse to index it: don't add a node, and drop any prior
+    // index entry so a node that just got re-locked disappears cleanly rather
+    // than serving stale plaintext. This makes a locked sensitive file invisible
+    // (like a 404), never binary garbage in the graph.
+    if (typeof raw === "string" && raw.startsWith(GITCRYPT_MAGIC)) {
+      if (this.nodes.has(slug)) {
+        const prevLinks = this.outlinks.get(slug) || [];
+        this._updateBacklinksForNode(slug, prevLinks, []);
+        this.nodes.delete(slug);
+        this.outlinks.delete(slug);
+      }
+      return false;
+    }
     let parsed;
     try { parsed = matter(raw); }
     catch (e) { parsed = { data: { _parseError: e.message }, content: raw }; }
@@ -150,6 +196,7 @@ class VaultStore extends EventEmitter {
       hash,
     });
     this.outlinks.set(slug, outlinks);
+    return true;
   }
 
   _extractLinks(frontmatter, body) {
@@ -307,6 +354,9 @@ class VaultStore extends EventEmitter {
       slug: node.slug,
       frontmatter: node.frontmatter,
       body: node.body,
+      // Content hash the editor round-trips as the optimistic-lock token: it
+      // sends this back on PUT so write() can 409 if the node changed meanwhile.
+      hash: node.hash,
       outlinks: this.outlinks.get(slug) || [],
       backlinks,
     };
@@ -341,9 +391,18 @@ class VaultStore extends EventEmitter {
     return null;
   }
 
-  async write(slug, { frontmatter, body }) {
+  async write(slug, { frontmatter, body, expectedHash } = {}) {
     if (!slug || typeof slug !== "string") throw new Error("slug required");
-    const safeSlug = slug.replace(/\.\./g, "").replace(/^\/+/, "");
+    const safeSlug = this.normalizeSlug(slug);
+    // Optimistic lock: when the caller passes the hash it loaded, refuse the
+    // write if the on-disk node has moved on (concurrent Obsidian/other-tab
+    // edit). null current + a non-null expected = the node was deleted under us,
+    // also a conflict. Omitting expectedHash (create, or force) skips the check.
+    if (expectedHash != null) {
+      const cur = this.nodes.get(safeSlug);
+      const curHash = cur ? cur.hash : null;
+      if (curHash !== expectedHash) throw new StaleWriteError(curHash);
+    }
     const file = this._pathFromSlug(safeSlug);
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const serialized = matter.stringify(body || "", frontmatter || {});
@@ -360,7 +419,7 @@ class VaultStore extends EventEmitter {
   }
 
   async delete(slug) {
-    const safeSlug = slug.replace(/\.\./g, "").replace(/^\/+/, "");
+    const safeSlug = this.normalizeSlug(slug);
     const file = this._pathFromSlug(safeSlug);
     if (!fs.existsSync(file)) return false;
     await fsp.unlink(file);
@@ -404,3 +463,7 @@ module.exports = VaultStore;
 // Exposed so consumers/tests can reuse the exact edge regex (must stay
 // byte-identical to .mycelium/lib/parse.js WIKILINK_RE).
 module.exports.WIKILINK_RE = WIKILINK_RE;
+// Optimistic-lock error (routes map .code === "STALE_WRITE" -> 409) and the
+// git-crypt header, exposed for the route layer and unit tests.
+module.exports.StaleWriteError = StaleWriteError;
+module.exports.GITCRYPT_MAGIC = GITCRYPT_MAGIC;

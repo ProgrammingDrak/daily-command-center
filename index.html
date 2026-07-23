@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
-<link rel="stylesheet" href="/public/css/vault.css?v=vault-b1-1">
+<link rel="stylesheet" href="/public/css/vault.css?v=vault-b2-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -1712,6 +1712,9 @@
     <select id="vault-type-filter" class="vault-ctl">
       <option value="">All types</option>
     </select>
+    <button id="vault-capture-btn" class="vault-ctl vault-btn primary" type="button" title="Quick capture (fleeting note)">+ Capture</button>
+    <button id="vault-new-btn" class="vault-ctl vault-btn" type="button" title="New note">+ New</button>
+    <button id="vault-daily-btn" class="vault-ctl vault-btn" type="button" title="Open today's journal (j)">Daily note</button>
     <button id="vault-refresh-btn" class="vault-ctl vault-btn" type="button">Refresh</button>
     <button id="vault-flush-btn" class="vault-ctl vault-btn" type="button">Sync now</button>
   </div>
@@ -1768,7 +1771,8 @@
 <!-- Mycelium vault tab: vendored markdown libs (no build step) load before vault-tab.js -->
 <script src="/public/js/vendor/marked.min.js?v=marked-12.0.2"></script>
 <script src="/public/js/vendor/purify.min.js?v=purify-3.1.7"></script>
-<script src="/public/js/vault-tab.js?v=vault-b1-2"></script>
+<script src="/public/js/vault-editor.js?v=vault-b2-1"></script>
+<script src="/public/js/vault-tab.js?v=vault-b2-1"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>

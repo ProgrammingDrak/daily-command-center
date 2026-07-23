@@ -12,6 +12,7 @@
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
+const os = require("os");
 const simpleGit = require("simple-git");
 const { EventEmitter } = require("events");
 
@@ -31,7 +32,7 @@ const BACKOFF_SCHEDULE = [30_000, 120_000, 600_000, 1_800_000];
 process.env.GIT_LFS_SKIP_SMUDGE = process.env.GIT_LFS_SKIP_SMUDGE || "1";
 
 class SyncManager extends EventEmitter {
-  constructor({ vaultDir, queueFile, remoteUrl, branch = "main", commitDebounce, pushDebounce } = {}) {
+  constructor({ vaultDir, queueFile, remoteUrl, branch = "main", commitDebounce, pushDebounce, gitcryptKeyB64 } = {}) {
     super();
     this.vaultDir = vaultDir;
     this.queueFile = queueFile;
@@ -39,6 +40,13 @@ class SyncManager extends EventEmitter {
     this.branch = branch;
     this.commitDebounce = commitDebounce || DEFAULT_COMMIT_DEBOUNCE;
     this.pushDebounce = pushDebounce || DEFAULT_PUSH_DEBOUNCE;
+    // Base64 git-crypt key (A2). When set, init() unlocks the sensitive dirs
+    // BEFORE the VaultStore indexes them (see docs/UNLOCK.md §2). gitcryptState
+    // records the outcome for the status pill: unknown | no-key | already |
+    // unlocked | failed. "failed"/"no-key" leave the dirs as ciphertext, which
+    // the VaultStore magic-byte guard then skips — the vault stays up, locked.
+    this.gitcryptKeyB64 = gitcryptKeyB64 || null;
+    this.gitcryptState = "unknown";
     this.status = "syncing";
     this.lastError = null;
     this.queue = { pendingCommits: [], pendingPush: false };
@@ -54,6 +62,15 @@ class SyncManager extends EventEmitter {
     await this._loadQueue();
     await this._ensureRepo();
     this.git = simpleGit(this.vaultDir, { timeout: { block: GIT_TIMEOUT } });
+    // Register the LFS clean/smudge filters for THIS repo so the 2-10 MB media
+    // attach band commits pointers (git-lfs is added to the image in
+    // nixpacks.toml but not globally `install`ed). Best-effort: inert if the
+    // binary is missing (attach then degrades to inline-only) or already set.
+    await this._gitLfsInstall();
+    // Decrypt the sensitive dirs BEFORE VaultStore.init() runs (the caller
+    // awaits this init() first). Order is load-bearing per docs/UNLOCK.md §2:
+    // index-before-unlock would poison the graph with ciphertext.
+    await this._gitCryptUnlock();
     if (this.remoteUrl) {
       try { await this._runGit(() => this.git.pull(["--rebase", "--autostash", "origin", this.branch])); }
       catch (e) { console.warn("[sync] initial pull failed:", e.message); }
@@ -112,6 +129,47 @@ class SyncManager extends EventEmitter {
     }
   }
 
+  // Best-effort per-repo `git lfs install`. Registers filter.lfs.* in this
+  // clone's .git/config so committing a media/lfs/** file runs the clean filter
+  // (stores an LFS pointer). Swallows everything: a missing binary just means
+  // the attach route stays on the inline band.
+  async _gitLfsInstall() {
+    try {
+      await this._runGit(() => this.git.raw(["lfs", "install", "--local", "--skip-smudge"]));
+    } catch (e) {
+      console.warn("[sync] git-lfs not available (media LFS band disabled):", e.message);
+    }
+  }
+
+  // git-crypt unlock hook (docs/UNLOCK.md §2). Decodes the base64 key to a tmp
+  // keyfile, runs `git crypt unlock <keyfile>` (which decrypts the working tree
+  // and wires the smudge/clean filters), then shreds the keyfile. Idempotent:
+  // a clone whose key is already installed is left alone. Every failure is
+  // non-fatal — the vault boots with sensitive dirs still encrypted, and the
+  // VaultStore magic-byte guard keeps them out of the graph until a good boot.
+  async _gitCryptUnlock() {
+    if (!this.gitcryptKeyB64) { this.gitcryptState = "no-key"; return; }
+    const keysFile = path.join(this.vaultDir, ".git", "git-crypt", "keys", "default");
+    if (fs.existsSync(keysFile)) { this.gitcryptState = "already"; return; }
+    const keyfile = path.join(os.tmpdir(), `mycelium-gc-${process.pid}-${process.hrtime.bigint()}.key`);
+    try {
+      const buf = Buffer.from(this.gitcryptKeyB64, "base64");
+      if (buf.length < 16) throw new Error("git-crypt key is empty or too short after base64 decode");
+      await fsp.writeFile(keyfile, buf, { mode: 0o600 });
+      await this._runGit(() => this.git.raw(["crypt", "unlock", keyfile]));
+      this.gitcryptState = "unlocked";
+      console.log("[sync] git-crypt: sensitive dirs unlocked");
+    } catch (e) {
+      this.gitcryptState = "failed";
+      // Never log key material; the message is git-crypt's own (path/type only).
+      console.warn("[sync] git-crypt unlock failed (sensitive dirs stay locked):", e.message);
+    } finally {
+      // Shred: overwrite then unlink so the plaintext key doesn't linger in tmp.
+      try { const st = await fsp.stat(keyfile); await fsp.writeFile(keyfile, Buffer.alloc(st.size, 0)); } catch {}
+      try { await fsp.unlink(keyfile); } catch {}
+    }
+  }
+
   async _loadQueue() {
     if (!this.queueFile || !fs.existsSync(this.queueFile)) return;
     try {
@@ -160,6 +218,7 @@ class SyncManager extends EventEmitter {
       lastError: this.lastError ? this.lastError.message || String(this.lastError) : null,
       pendingCommits: this.queue.pendingCommits.length,
       pendingPush: this.queue.pendingPush,
+      gitcrypt: this.gitcryptState,
     };
   }
 

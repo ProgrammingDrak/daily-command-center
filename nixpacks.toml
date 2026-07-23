@@ -1,0 +1,17 @@
+# Railway/nixpacks build config for Daily Command Center.
+#
+# The default nixpacks Node image ships neither binary the Mycelium vault needs:
+#   - git-lfs   : the 2-10 MB media attach band commits LFS pointers (B1 found
+#                 it absent on the default image); without it the vault sync's
+#                 clean filter can't convert media/lfs/** to pointers.
+#   - git-crypt : the sensitive-dir unlock hook (B2) decrypts health/therapy,
+#                 health/moments, health/medical, journal/private + private
+#                 media at boot before VaultStore indexes.
+#
+# aptPkgs APPENDS to the auto-detected setup phase (it does not replace the Node
+# nix provider). If an apt add ever fails, the app still boots and degrades:
+# SyncManager logs the missing binary, sensitive dirs stay encrypted (the
+# VaultStore magic-byte guard skips them), and the attach route falls back to
+# inline-only. See routes/vault.js + sync-manager.js.
+[phases.setup]
+aptPkgs = ["git-lfs", "git-crypt"]

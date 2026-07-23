@@ -102,6 +102,11 @@ const VAULT_INDEX_FILE = path.join(DATA_DIR, ".vault-index.json");
 const SYNC_QUEUE_FILE = path.join(DATA_DIR, ".sync-queue.json");
 const VAULT_REPO_URL = process.env.VAULT_REPO_URL || null;
 const VAULT_BRANCH = process.env.VAULT_BRANCH || "main";
+// B2: base64 git-crypt key (A2) unlocks the sensitive dirs at boot; the PIN
+// gates reading/writing them from the tab (session-scoped, 30 min). Both are
+// write-only Railway env vars — never sent to the browser.
+const VAULT_GITCRYPT_KEY_B64 = process.env.VAULT_GITCRYPT_KEY_B64 || null;
+const VAULT_SENSITIVE_PIN = process.env.VAULT_SENSITIVE_PIN || null;
 
 [RECENT_DIR, ENGRAMS_DIR, DAYS_DIR].forEach((dir) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); });
 
@@ -737,7 +742,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 const ctx = {
   APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
-  meetingMaterializer, meetingIdentity,
+  meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
   ...routeHelpers,
   get vault() { return vault; },
   get syncMgr() { return syncMgr; },
@@ -776,6 +781,9 @@ async function initVault() {
     queueFile: SYNC_QUEUE_FILE,
     remoteUrl,
     branch: VAULT_BRANCH,
+    // A2 git-crypt: unlock the sensitive dirs during syncMgr.init(), which the
+    // line below awaits BEFORE VaultStore.init() indexes — order per UNLOCK.md.
+    gitcryptKeyB64: VAULT_GITCRYPT_KEY_B64,
   });
   syncMgr.on("status", (s) => broadcast("vault-sync-status", s));
   await syncMgr.init();
