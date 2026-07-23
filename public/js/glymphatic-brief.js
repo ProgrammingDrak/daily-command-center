@@ -504,15 +504,11 @@
 
   function gbPages(current){
     if(!(current && Array.isArray(current.pages) && current.pages.length))return null;
-    var pages = current.pages.slice();
-    // Briefs authored before the Triage page existed don't list it; inject it
-    // client-side so every brief gets the tab. Drafted count rides as a pill.
-    if(!pages.some(function(p){ return p.id === "triage"; })){
-      var drafted = gbTriageItems(current, {all:true}).filter(function(i){ return i.draft_status === "drafted"; }).length;
-      var at = pages[0] && pages[0].id === "front" ? 1 : 0;
-      pages.splice(at, 0, {id:"triage", label:"Triage", count: drafted || null});
-    }
-    return pages;
+    // Triage moved to the top of the Itinerary (the schedule strip), alongside
+    // repeat responsibilities, where the reply drafts now render. Drop any triage
+    // page so the brief no longer shows a Triage tab.
+    var pages = current.pages.filter(function(p){ return p.id !== "triage"; });
+    return pages.length ? pages : null;
   }
 
   function gbGeneratedLabel(current){
