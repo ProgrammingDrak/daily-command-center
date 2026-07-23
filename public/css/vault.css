@@ -66,3 +66,89 @@
   #vault-reading{padding:18px 14px 48px}
   .vault-title{font-size:24px}
 }
+
+/* ── Phase B2: write path (capture/new/edit), unlock, attachments ── */
+
+/* Header primary button (+ Capture) */
+#vault-header .vault-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+#vault-header .vault-btn.primary:hover{filter:brightness(1.06)}
+
+/* Reading-pane edit bar */
+.vault-detail-bar{display:flex;justify-content:flex-end;margin:-6px 0 2px}
+.vault-edit-btn{font-size:12px;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;cursor:pointer}
+.vault-edit-btn:hover{border-color:var(--text-muted)}
+
+/* Sensitive unlock affordance (in the locked placeholder) */
+.vault-unlock{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:16px}
+.vault-pin-input{font-size:14px;letter-spacing:.25em;text-align:center;width:120px;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:7px 10px}
+.vault-pin-input:focus{outline:none;border-color:var(--accent)}
+.vault-unlock-note{font-size:11.5px;color:var(--text-muted);margin-top:10px}
+
+/* Editor modal */
+.vault-ed-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);display:none;align-items:flex-start;justify-content:center;z-index:1000;padding:40px 16px;overflow-y:auto}
+.vault-ed-overlay.open{display:flex}
+.vault-ed-card{width:100%;max-width:640px;background:var(--bg,#0f172a);border:1px solid var(--border);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.45);overflow:hidden}
+.vault-ed-card.drag{outline:2px dashed var(--accent);outline-offset:-6px}
+.vault-ed-inner{padding:18px 20px 16px}
+.vault-ed-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.vault-ed-title{font-size:17px;font-weight:650;color:var(--text)}
+.vault-ed-type-badge{font-size:12px;font-weight:600;color:var(--accent);background:color-mix(in srgb,var(--accent) 15%,transparent);padding:2px 8px;border-radius:6px;margin-left:4px}
+.vault-ed-x{background:none;border:none;color:var(--text-muted);font-size:24px;line-height:1;cursor:pointer;padding:0 4px}
+.vault-ed-x:hover{color:var(--text)}
+.vault-ed-hint{font-size:12.5px;color:var(--text-muted);margin:2px 0 12px}
+.vault-ed-hint code{background:var(--bg-elev);padding:1px 5px;border-radius:4px}
+.vault-ed-slug{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--text-muted);margin-bottom:10px}
+.vault-ed-row{margin:9px 0}
+.vault-ed-row.two{display:flex;gap:12px}
+.vault-ed-field{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+.vault-ed-lbl{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:5px}
+.vault-ed-input{width:100%;box-sizing:border-box;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:14px}
+.vault-ed-input:focus{outline:none;border-color:var(--accent)}
+#ed-title{font-size:18px;font-weight:600}
+.vault-ed-body{width:100%;box-sizing:border-box;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:11px 12px;font-size:14px;line-height:1.6;font-family:inherit;resize:vertical}
+.vault-ed-body:focus{outline:none;border-color:var(--accent)}
+.vault-ed-preview{border:1px solid var(--border);border-radius:8px;padding:12px 14px;min-height:120px;font-size:14px;line-height:1.6;color:var(--text)}
+
+/* Chip pickers (tags + people) */
+.vault-ed-tags{position:relative;display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:var(--bg-elev);border:1px solid var(--border);border-radius:8px;padding:6px 8px;min-height:20px}
+.vault-ed-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:2px 4px 2px 9px;border-radius:5px;background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--text)}
+.vault-ed-chip.person{background:var(--bg);border:1px solid var(--border)}
+.vault-ed-chip .chip-x{background:none;border:none;color:inherit;opacity:.6;cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
+.vault-ed-chip .chip-x:hover{opacity:1}
+.vault-ed-chipinput{flex:1;min-width:80px;background:none;border:none;color:var(--text);font-size:13px;padding:2px}
+.vault-ed-chipinput:focus{outline:none}
+
+/* Suggestion dropdowns (tag/people/wikilink) */
+.vault-ed-suggest{position:absolute;z-index:1200;background:var(--bg,#0f172a);border:1px solid var(--border);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.4);max-height:220px;overflow-y:auto;min-width:200px;margin-top:2px}
+.vault-ed-suggest.wl{left:0;right:auto}
+.vault-ed-suggest-item{padding:7px 11px;font-size:13px;cursor:pointer;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vault-ed-suggest-item:hover{background:var(--bg-elev)}
+.vault-ed-suggest-item .sl{color:var(--text-muted);font-size:11px;font-family:ui-monospace,Menlo,monospace;margin-left:6px}
+
+/* Body toolbar (write/preview/attach) */
+.vault-ed-bodybar{display:flex;align-items:center;gap:6px;margin:12px 0 6px}
+.vault-ed-tab-btn{font-size:12px;background:none;border:none;color:var(--text-muted);cursor:pointer;padding:3px 8px;border-radius:6px}
+.vault-ed-tab-btn.active{background:var(--bg-elev);color:var(--text)}
+.vault-ed-spacer{flex:1}
+.vault-ed-attach{font-size:12px;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;cursor:pointer}
+.vault-ed-attach:hover{border-color:var(--text-muted)}
+
+/* Footer */
+.vault-ed-foot{display:flex;align-items:center;gap:10px;justify-content:flex-end;margin-top:14px}
+.vault-ed-status{flex:1;font-size:12px;color:var(--text-muted)}
+.vault-ed-btn{font-size:13px;border-radius:8px;padding:8px 16px;cursor:pointer;border:1px solid var(--border);background:var(--bg-elev);color:var(--text)}
+.vault-ed-btn.ghost:hover{border-color:var(--text-muted)}
+.vault-ed-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.vault-ed-btn.primary:hover{filter:brightness(1.06)}
+.vault-ed-btn:disabled{opacity:.55;cursor:default}
+
+/* Type picker grid */
+.vault-ed-typegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-top:6px}
+.vault-ed-type{font-size:13px;text-transform:capitalize;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:9px;padding:12px 8px;cursor:pointer;text-align:center}
+.vault-ed-type:hover{border-color:var(--accent);color:var(--accent)}
+.vault-ed-type.sensitive{border-style:dashed}
+
+@media (max-width:780px){
+  .vault-ed-overlay{padding:16px 8px}
+  .vault-ed-row.two{flex-direction:column}
+}

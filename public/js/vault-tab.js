@@ -39,6 +39,7 @@
   const collapsed = new Set(); // folder paths the user has collapsed
   let tagColors = {};        // tag -> hex, from /api/vault/ontology
   let unmappedColor = "#9ca3af";
+  let unlock = { unlocked: false, pinConfigured: false }; // sensitive PIN gate (B2), from /api/vault/status
 
   const esc = (s) => window.DCC.esc(s); // delegates to core.js
   const isSensitive = (slug) => SENSITIVE_PREFIXES.some((p) => (slug + "/").startsWith(p) || slug.startsWith(p));
@@ -212,14 +213,42 @@
     if (!el) return;
     const fm = (node && node.frontmatter) || {};
     const title = fm.title || (node && node.slug ? node.slug.split("/").pop() : "Locked");
+    const unlockUI = unlock.pinConfigured
+      ? `<form class="vault-unlock" id="vault-unlock-form">
+           <input type="password" id="vault-pin" class="vault-pin-input" placeholder="PIN" inputmode="numeric" autocomplete="off">
+           <button type="submit" class="vault-ed-btn primary" id="vault-unlock-go">Unlock</button>
+         </form>
+         <div class="vault-unlock-note">Unlocks all sensitive notes for 30 minutes, this session only.</div>`
+      : `<div style="font-size:12.5px;margin-top:6px">Its contents stay locked (no PIN configured on this server).</div>`;
     el.innerHTML = `
       <div class="vault-title"><span class="emoji">🔒</span><span>${esc(title)}</span></div>
       <div class="vault-path">${esc(node.slug)}.md</div>
       <div style="padding:34px;text-align:center;border:1px dashed var(--border);border-radius:10px;color:var(--text-muted);margin-top:8px">
         <div style="font-size:30px;margin-bottom:10px">🔒</div>
         <div style="font-size:14px;color:var(--text)">This note lives in a sensitive folder.</div>
-        <div style="font-size:12.5px;margin-top:6px">Its contents stay locked. Unlock arrives in a later phase.</div>
+        ${unlockUI}
       </div>`;
+    const form = el.querySelector("#vault-unlock-form");
+    if (form) {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const pin = el.querySelector("#vault-pin").value;
+        await doUnlock(pin, node.slug);
+      });
+      setTimeout(() => { const p = el.querySelector("#vault-pin"); if (p) p.focus(); }, 20);
+    }
+  }
+
+  async function doUnlock(pin, slugToOpen) {
+    try {
+      const r = await fetch("/api/vault/unlock", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin }) });
+      if (r.status === 401) { window.DCC.toast("Incorrect PIN", "error"); return; }
+      if (!r.ok) { window.DCC.toast("Unlock unavailable", "error"); return; }
+      unlock.unlocked = true;
+      window.DCC.toast("Sensitive notes unlocked for 30 minutes");
+      loadList();
+      if (slugToOpen) loadDetail(slugToOpen);
+    } catch (e) { window.DCC.toast("Unlock failed", "error"); }
   }
 
   function renderDetail(node) {
@@ -242,6 +271,7 @@
     }
 
     el.innerHTML = `
+      <div class="vault-detail-bar"><button class="vault-edit-btn" id="vault-edit-btn" type="button" title="Edit this note">✏️ Edit</button></div>
       <div class="vault-title"><span class="emoji">${emojiFor(node)}</span><span>${esc(title)}</span></div>
       <div class="vault-path">${esc(node.slug)}.md</div>
       ${tagPills(fm.tags)}
@@ -253,6 +283,8 @@
       <div class="vault-section-h">Outgoing links (${(node.outlinks || []).length})</div>
       ${renderOutlinks(node.outlinks)}
     `;
+    const editBtn = el.querySelector("#vault-edit-btn");
+    if (editBtn && window.VaultEditor) editBtn.onclick = () => window.VaultEditor.openEdit(node);
     wireLinkClicks(el);
   }
 
@@ -274,6 +306,8 @@
       if (!r.ok) throw new Error("status " + r.status);
       const data = await r.json();
       setStatusPill((data.sync && data.sync.status) || "unknown");
+      unlock.unlocked = !!data.sensitiveUnlocked;
+      unlock.pinConfigured = !!data.pinConfigured;
       const summary = document.getElementById("vault-summary");
       if (summary) {
         const v = data.vault || {};
@@ -297,13 +331,21 @@
 
   async function loadDetail(slug) {
     if (!slug) { renderDetail(null); return; }
-    if (isSensitive(slug)) {
+    // Sensitive notes: show the locked placeholder (with the Unlock affordance)
+    // unless this session is PIN-unlocked — then fetch and render like any note.
+    if (isSensitive(slug) && !unlock.unlocked) {
       const cached = allNodes.find((n) => n.slug === slug) || { slug, frontmatter: {} };
       renderSensitivePlaceholder(cached);
       return;
     }
     try {
       const r = await fetch(`/api/vault/node/${encodeURIComponent(slug).replace(/%2F/g, "/")}`);
+      if (r.status === 403) { // unlock expired between list and fetch
+        unlock.unlocked = false;
+        const cached = allNodes.find((n) => n.slug === slug) || { slug, frontmatter: {} };
+        renderSensitivePlaceholder(cached);
+        return;
+      }
       if (r.status === 404) { renderDetail(null); return; }
       if (!r.ok) throw new Error("detail " + r.status);
       renderDetail(await r.json());
@@ -327,18 +369,66 @@
     if (selectedSlug) loadDetail(selectedSlug);
   }
 
+  // After a write (capture/new/edit/daily): refresh list+status, then select the
+  // written node. Skips the ontology reload on purpose — it's an O(all-nodes)
+  // server loop and one write rarely changes the tag palette; a brand-new tag
+  // shows in the unmapped gray until the next Refresh/tab-open (both reload it).
+  async function afterWrite(slug) {
+    await Promise.all([loadStatus(), loadList()]);
+    if (slug) { selectedSlug = slug; renderTree(); loadDetail(slug); }
+  }
+
+  async function openDaily() {
+    try {
+      const r = await fetch("/api/vault/daily", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "daily note failed");
+      await afterWrite(d.slug);
+      window.DCC.toast(d.created ? "Created today's journal" : "Opened today's journal");
+    } catch (e) { window.DCC.toast(e.message, "error"); }
+  }
+
+  const vaultTabActive = () => { const t = document.getElementById("tab-vault"); return t && t.classList.contains("active"); };
+
   if (window.DCC && DCC.tabs) DCC.tabs.register("vault", refreshAll);
 
   // ── Wiring ──
   document.addEventListener("DOMContentLoaded", function () {
+    // Hand the editor its data bridge (the tab owns the node list + tag colors).
+    if (window.VaultEditor) window.VaultEditor.init({
+      getNodes: () => allNodes,
+      getTagColors: () => tagColors,
+      getUnmapped: () => unmappedColor,
+      onSaved: (slug) => afterWrite(slug),
+    });
+
     const typeFilter = document.getElementById("vault-type-filter");
     if (typeFilter) typeFilter.addEventListener("change", () => { activeType = typeFilter.value; renderTree(); });
+
+    const captureBtn = document.getElementById("vault-capture-btn");
+    if (captureBtn) captureBtn.addEventListener("click", () => window.VaultEditor && window.VaultEditor.openCapture());
+    const newBtn = document.getElementById("vault-new-btn");
+    if (newBtn) newBtn.addEventListener("click", () => window.VaultEditor && window.VaultEditor.openNew());
+    const dailyBtn = document.getElementById("vault-daily-btn");
+    if (dailyBtn) dailyBtn.addEventListener("click", openDaily);
 
     const refreshBtn = document.getElementById("vault-refresh-btn");
     if (refreshBtn) refreshBtn.addEventListener("click", refreshAll);
 
     const flushBtn = document.getElementById("vault-flush-btn");
     if (flushBtn) flushBtn.addEventListener("click", flushNow);
+
+    // `j` opens today's journal — only inside the vault tab, not while typing or
+    // with the editor open.
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "j" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (!vaultTabActive()) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const ov = document.getElementById("vault-editor-overlay");
+      if (ov && ov.classList.contains("open")) return;
+      e.preventDefault(); openDaily();
+    });
 
     document.addEventListener("vault-changed", () => {
       loadStatus();
@@ -348,6 +438,20 @@
     document.addEventListener("vault-sync-status", (e) => {
       setStatusPill((e.detail && e.detail.status) || "unknown");
     });
+
+    // PWA share_target landed a note in inbox/ then redirected here.
+    try {
+      const p = new URLSearchParams(location.search);
+      if (p.get("vault_share") === "ok") {
+        window.DCC.toast("Shared to your vault inbox");
+        const btn = document.getElementById("vault-tab-btn");
+        if (btn) btn.click();
+        history.replaceState(null, "", location.pathname);
+      } else if (p.get("vault_share") === "err") {
+        window.DCC.toast("Share failed to save", "error");
+        history.replaceState(null, "", location.pathname);
+      }
+    } catch {}
 
     loadOntology().then(loadStatus).then(loadList);
   });
