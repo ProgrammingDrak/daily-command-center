@@ -19,7 +19,7 @@
     "source_health": { "type": "array" },
     "pages": {
       "type": "array",
-      "description": "Ordered Brief pages. Known ids: canvas, front, actual-vs-planned, step-back, personal-bible, process. The 'canvas' page (if present, usually first) is the agent-authored expressive view; its canvas_html renders inside a sandboxed iframe. Unknown ids render as raw JSON.",
+      "description": "Ordered Brief pages. Known ids: day-review, canvas, front, actual-vs-planned, step-back, personal-bible, process. The 'day-review' page (usually first on the nightly brief) is the end-of-day 'what I did today' reconstruction; its items[] carry Approve (log-done) + push-to-tomorrow controls. The 'canvas' page is the agent-authored expressive view; its canvas_html renders inside a sandboxed iframe. Unknown ids render as raw JSON.",
       "items": {
         "type": "object",
         "required": ["id", "label"],
@@ -61,12 +61,48 @@
           "sections": { "type": "array", "description": "personal-bible: {heading, body}" },
 
           "proof_of_work": { "type": "array", "description": "process: {label, value}" },
-          "notes": { "type": "array", "items": { "type": "string" } }
+          "notes": { "type": "array", "items": { "type": "string" } },
+
+          "items": {
+            "type": "array",
+            "description": "day-review page: reconstructed 'did today' items. Each renders with editable time/duration + Approve (POST /api/dcc/brief/log-done, logs a COMPLETED task and banks points) and per-follow-up Push-to-tomorrow (POST /api/dcc/brief/push-next). Idempotent on idempotency_key.",
+            "items": { "$ref": "#/$defs/did_item" }
+          }
         }
       }
     }
   },
   "$defs": {
+    "did_item": {
+      "type": "object",
+      "required": ["id", "title", "idempotency_key"],
+      "properties": {
+        "id": { "type": "string", "description": "stable within the day (drives approved/pushed UI state)" },
+        "title": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "start": { "type": "string", "description": "HH:MM ET, estimated time-of-occurrence; editable before Approve" },
+        "duration": { "type": "integer", "description": "minutes; editable before Approve" },
+        "reason": { "type": "string" },
+        "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+        "evidence": { "type": "array", "items": { "type": "object", "properties": { "type": { "type": "string" }, "label": { "type": "string" }, "ref": { "type": "string" } } } },
+        "idempotency_key": { "type": "string" },
+        "approvable": { "type": "boolean", "description": "default true; false = a follow-ups-only bucket (e.g. Loose ends), no Approve/time controls" },
+        "followups": {
+          "type": "array",
+          "description": "undone portions; each gets a Push-to-tomorrow button",
+          "items": {
+            "type": "object",
+            "required": ["id", "title"],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "duration": { "type": "integer" },
+              "idempotency_key": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "task": {
       "type": "object",
       "required": ["id", "title"],

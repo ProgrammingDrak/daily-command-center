@@ -6,8 +6,18 @@ module.exports = function mount(app, ctx) {
     DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
     dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity,
     meetingMaterializer, previousDateStr,
-    pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, writeJSON,
+    pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
   } = ctx;
+
+  // Shared idempotency lookup for the brief's Day-in-Review writes: does a block
+  // carrying this idempotency_key already live on the date? Returns the row or null.
+  async function findBriefBlock(date, workspaceId, idemKey) {
+    if (!idemKey) return null;
+    const q = workspaceId
+      ? await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND workspace_id = $2 AND properties->>'idempotency_key' = $3 AND deleted_at IS NULL LIMIT 1`, [date, workspaceId, idemKey])
+      : await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND properties->>'idempotency_key' = $2 AND deleted_at IS NULL LIMIT 1`, [date, idemKey]);
+    return q.rows[0] || null;
+  }
 
   app.post("/api/ingest/day-state", async (req, res) => {
     const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
@@ -261,6 +271,118 @@ module.exports = function mount(app, ctx) {
     } catch (e) {
       console.error("[brief decision] failed:", e);
       res.status(500).json({ error: e.message || "decision save failed" });
+    }
+  });
+
+  // Day-in-Review "Approve": Drake confirms an inferred did-item ("yeah I did
+  // that"), and it lands on the itinerary as an ALREADY-COMPLETED task that banks
+  // slot points. Session-scoped on purpose (NOT in DCC_ENDPOINTS) so it runs as
+  // the logged-in user — slot credit keys off req.session identity. Composes the
+  // three primitives the app already has (create block, mark done, credit points)
+  // the way dcc_task_ops --complete does, but server-side. Idempotent on
+  // idempotency_key (block) and on `<date>:<block_id>` (points ledger), so a
+  // re-approve or a re-published brief neither duplicates the task nor double-pays.
+  app.post("/api/dcc/brief/log-done", async (req, res) => {
+    try {
+      const body = req.body || {};
+      const title = String(body.title || "").trim();
+      if (!title) return res.status(400).json({ error: "Missing title" });
+      const date = isValidDate(body.date) ? body.date : getTodayStr();
+      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const idemKey = body.idempotency_key || body.idempotencyKey || null;
+      const minutes = Math.max(1, Math.round(Number(body.minutes || body.duration || body.durationMinutes || body.estimatedMinutes || 30)));
+      const start = (typeof body.start === "string" && /^\d{2}:\d{2}$/.test(body.start)) ? body.start : null;
+      const tags = Array.isArray(body.tags) ? body.tags : [];
+      const nowIso = new Date().toISOString();
+
+      const existing = await findBriefBlock(date, workspaceId, idemKey);
+      let blockId, duplicate = false;
+      if (existing) {
+        blockId = existing.id;
+        duplicate = true;
+      } else {
+        const props = {
+          title,
+          status: "done", done: true, completed: true,
+          kind: body.kind || "task", type: body.type || "task",
+          estimatedMinutes: minutes, durationMinutes: minutes,
+          priority: body.priority ? String(body.priority) : "Medium",
+          tags,
+          source: body.source || "day-review",
+          created_by: body.created_by || "day-review",
+          created_at: nowIso, completedAt: nowIso, doneAt: nowIso, completedBy: "day-review",
+        };
+        if (start) { props.start = start; props.end = addMinutesHHMM(start, minutes); }
+        if (idemKey) props.idempotency_key = idemKey;
+        if (body.notes) props.notes = body.notes;
+        if (Array.isArray(body.evidence)) props.evidence = body.evidence;
+        const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
+        blockId = created.id;
+      }
+
+      // Credit is idempotent on source_key; it also mirrors the key the in-app
+      // reconcile uses, so an approve here and a later reconcile dedupe.
+      let credit = null;
+      try {
+        credit = await slotStore.earnTaskCredit(workspaceId, userId, {
+          source_key: `${date}:${blockId}`,
+          task_id: blockId, title, type: body.type || "task", tags,
+          duration_minutes: minutes, completed_at: nowIso,
+        });
+      } catch (e) {
+        console.error("[brief log-done] credit failed (non-fatal):", e.message);
+      }
+
+      broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date }, workspaceId);
+      res.json({
+        ok: true, date,
+        status: duplicate ? "skipped_duplicate" : "created",
+        block: { id: blockId, title },
+        credit: credit ? { awarded: !!credit.awarded, credits: credit.credits || 0 } : null,
+      });
+    } catch (e) {
+      console.error("[brief log-done] failed:", e);
+      res.status(e.status || 500).json({ error: e.message || "log-done failed" });
+    }
+  });
+
+  // Day-in-Review "Push to tomorrow": an undone follow-up surfaced next to a
+  // did-item becomes a fresh OPEN task on a future date (default tomorrow).
+  // Session-scoped and tag-preserving (goes through the /api/blocks path, unlike
+  // quick-task which drops tags). Idempotent on idempotency_key.
+  app.post("/api/dcc/brief/push-next", async (req, res) => {
+    try {
+      const body = req.body || {};
+      const title = String(body.title || "").trim();
+      if (!title) return res.status(400).json({ error: "Missing title" });
+      // Default target is tomorrow (the "push it to the next day" case); callers
+      // normally pass an explicit date.
+      const tomorrowStr = new Date(new Date(`${getTodayStr()}T12:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
+      const date = isValidDate(body.date) ? body.date : tomorrowStr;
+      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const idemKey = body.idempotency_key || body.idempotencyKey || null;
+
+      const existing = await findBriefBlock(date, workspaceId, idemKey);
+      if (existing) return res.json({ ok: true, date, status: "skipped_duplicate", block: { id: existing.id, title } });
+
+      const minutes = Math.max(1, Math.round(Number(body.minutes || body.duration || body.durationMinutes || body.estimatedMinutes || 30)));
+      const props = {
+        title, status: "open",
+        kind: body.kind || "task", type: body.type || "task",
+        estimatedMinutes: minutes, durationMinutes: minutes,
+        priority: body.priority ? String(body.priority) : "Medium",
+        tags: Array.isArray(body.tags) ? body.tags : [],
+        source: body.source || "day-review-followup", created_by: "day-review",
+        created_at: new Date().toISOString(),
+      };
+      if (idemKey) props.idempotency_key = idemKey;
+      if (body.notes) props.notes = body.notes;
+      const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
+      broadcast("blocks-changed", { action: "brief-push-next", blockIds: [created.id], date }, workspaceId);
+      res.json({ ok: true, date, status: "created", block: { id: created.id, title } });
+    } catch (e) {
+      console.error("[brief push-next] failed:", e);
+      res.status(e.status || 500).json({ error: e.message || "push-next failed" });
     }
   });
 

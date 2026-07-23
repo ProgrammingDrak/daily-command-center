@@ -21,6 +21,14 @@
       .replace(/'/g,"&#39;");
   }
 
+  // Scheme-allowlist a URL before it becomes an href. gbEsc only HTML-escapes;
+  // it does not stop a javascript:/data: URI. Day-review evidence refs are
+  // reconstructed from comms, so restrict to safe schemes (empty -> no link).
+  function gbSafeUrl(value){
+    var u = String(value == null ? "" : value).trim();
+    return /^(https?:|mailto:)/i.test(u) ? u : "";
+  }
+
   function gbLoadUi(){
     try{
       return JSON.parse(localStorage.getItem(gbKey()) || "{}");
@@ -673,6 +681,550 @@
       '</section>';
   }
 
+  // --- Day in Review: confirm what I actually did today --------------------
+  // The night run reconstructs the day from Claude/Codex sessions, shipped code,
+  // and comms into did-items. Unlike the read-only canvas, this page WRITES on
+  // confirm: Approve logs an item as a completed task (banking points via
+  // /api/dcc/brief/log-done); a follow-up's "Push to tomorrow" mints a new open
+  // task for the next day (/api/dcc/brief/push-next). Time + duration are editable
+  // before approving, and both the local UI and the server calls are idempotent.
+
+  function gbDidItems(page, current){
+    if(page && Array.isArray(page.items))return page.items;
+    if(current && Array.isArray(current.did_today))return current.did_today;
+    return [];
+  }
+
+  function gbDidStart(item, ui){
+    var o = ui.did_starts && ui.did_starts[item.id];
+    return o || item.start || item.suggested_start || "";
+  }
+
+  function gbDidDuration(item, ui){
+    var o = ui.did_durations && ui.did_durations[item.id];
+    return parseInt(o || item.duration || item.duration_minutes || item.durMin || 30, 10) || 30;
+  }
+
+  function gbSetDidStart(id, value){
+    var ui = gbLoadUi();
+    ui.did_starts = ui.did_starts || {};
+    if(value)ui.did_starts[id] = value;
+    else delete ui.did_starts[id];
+    gbSaveUi(ui);
+    buildGlymphaticBrief();
+  }
+
+  function gbSetDidDuration(id, value){
+    var ui = gbLoadUi();
+    ui.did_durations = ui.did_durations || {};
+    ui.did_durations[id] = parseInt(value, 10) || 30;
+    gbSaveUi(ui);
+    buildGlymphaticBrief();
+  }
+
+  function gbDidApproved(item, ui){
+    return !!(ui.did_approved && ui.did_approved[item.id]);
+  }
+
+  function gbMarkDidApproved(id){
+    var ui = gbLoadUi();
+    ui.did_approved = ui.did_approved || {};
+    ui.did_approved[id] = new Date().toISOString();
+    gbSaveUi(ui);
+  }
+
+  function gbDidFollowPushed(followId, ui){
+    return !!(ui.did_pushed && ui.did_pushed[followId]);
+  }
+
+  function gbMarkDidFollowPushed(followId){
+    var ui = gbLoadUi();
+    ui.did_pushed = ui.did_pushed || {};
+    ui.did_pushed[followId] = new Date().toISOString();
+    gbSaveUi(ui);
+  }
+
+  function gbDayReviewPage(){
+    var current = gbBrief().current;
+    var pages = gbPages(current) || [];
+    return pages.filter(function(p){ return p.id === "day-review"; })[0] || null;
+  }
+
+  function gbTomorrowStr(){
+    var d = new Date(gbDate() + "T12:00:00");
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0,10);
+  }
+
+  async function gbApproveDid(id){
+    var current = gbBrief().current;
+    var items = gbDidItems(gbDayReviewPage(), current);
+    var item = items.filter(function(it){ return it.id === id; })[0];
+    if(!item)return;
+    var ui = gbLoadUi();
+    if(gbDidApproved(item, ui)){
+      if(typeof showToast === "function")showToast("Already logged","info");
+      return;
+    }
+    var start = gbDidStart(item, ui);
+    var duration = gbDidDuration(item, ui);
+    var btn = document.querySelector('[data-gb-approve="'+id+'"]');
+    if(btn){ btn.disabled = true; btn.textContent = "Logging..."; }
+    try{
+      var res = await fetch("/api/dcc/brief/log-done", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          date: gbDate(),
+          title: item.title,
+          tags: item.tags || [],
+          start: start || null,
+          duration: duration,
+          type: item.type || "task",
+          notes: item.reason || item.notes || "",
+          evidence: item.evidence || [],
+          idempotency_key: item.idempotency_key || ("day-review:" + gbDate() + ":" + id)
+        })
+      });
+      var payload = await res.json().catch(function(){ return {}; });
+      if(!res.ok)throw new Error(payload.error || "Log failed");
+      gbMarkDidApproved(id);
+      var banked = payload.credit && payload.credit.credits ? " (+" + payload.credit.credits + " pts)" : "";
+      if(typeof showToast === "function")showToast("Logged: " + item.title + banked, "success");
+      gbRefresh();
+    }catch(e){
+      if(typeof showToast === "function")showToast(e.message || "Log failed", "error");
+      console.error("[Glymphatic Brief] log-done failed:", e);
+      if(btn){ btn.disabled = false; btn.textContent = "Approve"; }
+    }
+  }
+
+  async function gbPushDidNext(followId){
+    var current = gbBrief().current;
+    var items = gbDidItems(gbDayReviewPage(), current);
+    var follow = null;
+    items.forEach(function(it){
+      (it.followups || []).forEach(function(f){ if(f.id === followId)follow = f; });
+    });
+    if(!follow)return;
+    var ui = gbLoadUi();
+    if(gbDidFollowPushed(followId, ui)){
+      if(typeof showToast === "function")showToast("Already pushed to tomorrow","info");
+      return;
+    }
+    var btn = document.querySelector('[data-gb-push-next="'+followId+'"]');
+    if(btn){ btn.disabled = true; btn.textContent = "Pushing..."; }
+    try{
+      var res = await fetch("/api/dcc/brief/push-next", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          date: gbTomorrowStr(),
+          title: follow.title,
+          tags: follow.tags || [],
+          duration: follow.duration || follow.duration_minutes || 30,
+          type: follow.type || "task",
+          notes: follow.notes || "",
+          idempotency_key: follow.idempotency_key || ("day-review-followup:" + gbDate() + ":" + followId)
+        })
+      });
+      var payload = await res.json().catch(function(){ return {}; });
+      if(!res.ok)throw new Error(payload.error || "Push failed");
+      gbMarkDidFollowPushed(followId);
+      if(typeof showToast === "function")showToast("Pushed to tomorrow: " + follow.title, "success");
+      buildGlymphaticBrief();
+    }catch(e){
+      if(typeof showToast === "function")showToast(e.message || "Push failed", "error");
+      console.error("[Glymphatic Brief] push-next failed:", e);
+      if(btn){ btn.disabled = false; btn.textContent = "Push to tomorrow"; }
+    }
+  }
+
+  function gbDidCard(item, ui){
+    var approvable = item.approvable !== false;
+    var approved = approvable && gbDidApproved(item, ui);
+    var start = gbDidStart(item, ui);
+    var duration = gbDidDuration(item, ui);
+    var tags = (item.tags || []).map(function(t){ return '<span class="gb-pill">'+gbEsc(t)+'</span>'; }).join("");
+    var confidence = item.confidence ? '<span class="gb-pill">'+gbEsc(item.confidence)+'</span>' : "";
+    var reason = item.reason ? '<div class="gb-task-reason">'+gbEsc(item.reason)+'</div>' : "";
+    var evidence = (item.evidence || []).slice(0,3).map(function(ev){
+      var ref = gbSafeUrl(ev.ref || ev.url || ev.link || "");
+      var label = ev.label || ev.type || "evidence";
+      return ref ? '<a class="gb-triage-link" href="'+gbEsc(ref)+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">'+gbEsc(label)+'</a>' : '<span class="gb-row-meta">'+gbEsc(label)+'</span>';
+    }).join("");
+    var durOpts = [5,10,15,30,45,60,90,120,180];
+    if(durOpts.indexOf(duration) === -1)durOpts.push(duration);
+    durOpts.sort(function(a,b){ return a-b; });
+    var follows = (item.followups || []).map(function(f){
+      var pushed = gbDidFollowPushed(f.id, ui);
+      return '<div class="gb-row"><span class="gb-row-title">'+gbEsc(f.title)+'</span>'+
+        '<button class="gb-icon-btn" data-gb-push-next="'+gbEsc(f.id)+'" '+(pushed?'disabled':'')+' title="Push to tomorrow">'+(pushed?'Pushed':'Push to tomorrow')+'</button>'+
+      '</div>';
+    }).join("");
+    var followsBlock = follows ? '<div class="gb-row-stack" style="margin-top:8px"><div class="gb-row-sub">Not finished &mdash; push to tomorrow:</div>'+follows+'</div>' : "";
+    return '<article class="gb-task-card'+(approved?' gb-pushed':'')+'" data-gb-did-item="'+gbEsc(item.id)+'">'+
+      '<div class="gb-task-top">'+
+        '<div class="gb-task-main">'+
+          '<div class="gb-task-title">'+gbEsc(item.title)+'</div>'+
+          '<div class="gb-task-meta">'+
+            (approvable ? '<span>'+gbEsc(start || "anytime")+' &middot; '+gbEsc(typeof ms === "function" ? ms(duration) : duration + "m")+'</span>' : "")+
+            tags+confidence+
+            (approved ? '<span class="gb-pill gb-decision-accept">Logged</span>' : "")+
+          '</div>'+
+          reason+
+          (evidence ? '<div class="gb-task-meta">'+evidence+'</div>' : "")+
+        '</div>'+
+        '<div class="gb-task-actions">'+
+          (!approvable ? ''
+            : approved
+              ? '<button class="gb-icon-btn" disabled title="Already logged">Logged</button>'
+              : '<button class="gb-add-btn" data-gb-approve="'+gbEsc(item.id)+'" title="Log as done and bank points">Approve</button>')+
+        '</div>'+
+      '</div>'+
+      (approved || !approvable ? "" :
+        '<div class="gb-controls">'+
+          '<label>Done at <input type="time" value="'+gbEsc(start)+'" data-gb-did-start="'+gbEsc(item.id)+'"></label>'+
+          '<label>Length <select data-gb-did-duration="'+gbEsc(item.id)+'">'+
+            durOpts.map(function(m){
+              return '<option value="'+m+'" '+(duration===m?'selected':'')+'>'+(typeof ms === "function" ? ms(m) : m + "m")+'</option>';
+            }).join("")+
+          '</select></label>'+
+        '</div>')+
+      followsBlock+
+    '</article>';
+  }
+
+  // Journal entry — local-only for now. FUTURE: wire gbSaveJournal to the
+  // Mycelium vault (vault_append to today's journal node). Kept per-date in the
+  // brief's localStorage (ui.journal) so it survives the 60s auto-refresh.
+  function gbSetJournal(value){
+    var ui = gbLoadUi();
+    ui.journal = value;
+    gbSaveUi(ui);
+  }
+
+  function gbSaveJournal(){
+    var el = document.querySelector("[data-gb-journal]");
+    var ui = gbLoadUi();
+    ui.journal = el ? el.value : (ui.journal || "");
+    ui.journal_saved_at = new Date().toISOString();
+    gbSaveUi(ui);
+    var status = document.querySelector("[data-gb-journal-status]");
+    if(status)status.textContent = "Saved " + new Date(ui.journal_saved_at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+    if(typeof showToast === "function")showToast("Journal saved locally (vault wiring pending)", "success");
+    // FUTURE: POST the entry to the Mycelium vault here.
+  }
+
+  // --- Daylio-style mood + activity tagging ---------------------------------
+  // One mood per entry on a 5-level scale, plus activities grouped into editable
+  // categories (multi-select). Taxonomy (moods + groups) is global across dates
+  // in its own localStorage key; the per-day selection (mood + activity ids)
+  // rides in the per-date brief ui. All local for now — same future Mycelium hook.
+
+  var GB_TAXO_KEY = "dcc-daylio-taxonomy:v1";
+
+  function gbDefaultTaxonomy(){
+    return {
+      moods: [
+        {id:"rad",   name:"rad",   level:5, emoji:"😄", color:"#43A047"},
+        {id:"good",  name:"good",  level:4, emoji:"🙂", color:"#7CB342"},
+        {id:"meh",   name:"meh",   level:3, emoji:"😐", color:"#00ACC1"},
+        {id:"bad",   name:"bad",   level:2, emoji:"😕", color:"#FB8C00"},
+        {id:"awful", name:"awful", level:1, emoji:"😢", color:"#E53935"}
+      ],
+      groups: [
+        {id:"emotions", name:"Emotions", activities:[
+          {id:"happy",name:"happy",emoji:"😊"},{id:"excited",name:"excited",emoji:"🤩"},
+          {id:"grateful",name:"grateful",emoji:"🙏"},{id:"relaxed",name:"relaxed",emoji:"😌"},
+          {id:"tired",name:"tired",emoji:"🥱"},{id:"anxious",name:"anxious",emoji:"😰"},
+          {id:"stressed",name:"stressed",emoji:"😫"},{id:"sad",name:"sad",emoji:"😢"},
+          {id:"angry",name:"angry",emoji:"😠"},{id:"bored",name:"bored",emoji:"😑"}
+        ]},
+        {id:"sleep", name:"Sleep", activities:[
+          {id:"good-sleep",name:"good sleep",emoji:"😴"},{id:"medium-sleep",name:"medium sleep",emoji:"🛌"},
+          {id:"bad-sleep",name:"bad sleep",emoji:"🥴"}
+        ]},
+        {id:"social", name:"Social", activities:[
+          {id:"family",name:"family",emoji:"👨‍👩‍👧"},{id:"friends",name:"friends",emoji:"🧑‍🤝‍🧑"},
+          {id:"date",name:"date",emoji:"❤️"},{id:"party",name:"party",emoji:"🎉"},
+          {id:"call",name:"call",emoji:"📞"}
+        ]},
+        {id:"hobbies", name:"Hobbies", activities:[
+          {id:"movies",name:"movies & tv",emoji:"🎬"},{id:"reading",name:"reading",emoji:"📖"},
+          {id:"gaming",name:"gaming",emoji:"🎮"},{id:"music",name:"music",emoji:"🎵"},
+          {id:"sport",name:"sport",emoji:"🏃"}
+        ]},
+        {id:"health", name:"Health", activities:[
+          {id:"exercise",name:"exercise",emoji:"💪"},{id:"walk",name:"walk",emoji:"🚶"},
+          {id:"water",name:"drink water",emoji:"💧"},{id:"eat-healthy",name:"eat healthy",emoji:"🥗"},
+          {id:"meditation",name:"meditation",emoji:"🧘"}
+        ]},
+        {id:"chores", name:"Chores", activities:[
+          {id:"shopping",name:"shopping",emoji:"🛒"},{id:"cleaning",name:"cleaning",emoji:"🧹"},
+          {id:"cooking",name:"cooking",emoji:"🍳"},{id:"laundry",name:"laundry",emoji:"🧺"}
+        ]},
+        {id:"work", name:"Work", activities:[
+          {id:"shipped",name:"shipped",emoji:"🚀"},{id:"meetings",name:"meetings",emoji:"👥"},
+          {id:"deep-work",name:"deep work",emoji:"🎯"},{id:"email",name:"email",emoji:"✉️"}
+        ]}
+      ]
+    };
+  }
+
+  function gbLoadTaxo(){
+    try{
+      var t = JSON.parse(localStorage.getItem(GB_TAXO_KEY) || "null");
+      if(t && Array.isArray(t.moods) && Array.isArray(t.groups))return t;
+    }catch(e){}
+    return gbDefaultTaxonomy();
+  }
+  function gbSaveTaxo(t){ try{ localStorage.setItem(GB_TAXO_KEY, JSON.stringify(t)); }catch(e){} }
+
+  function gbSlug(s){
+    return String(s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") || "item";
+  }
+  function gbNewId(name){ return gbSlug(name) + "-" + Date.now().toString(36); }
+
+  function gbFindMood(taxo, id){
+    return (taxo.moods || []).filter(function(m){ return m.id === id; })[0] || null;
+  }
+  function gbFindActivity(taxo, id){
+    for(var i=0;i<(taxo.groups||[]).length;i++){
+      var a = (taxo.groups[i].activities || []).filter(function(x){ return x.id === id; })[0];
+      if(a)return a;
+    }
+    return null;
+  }
+  function gbToggleActivity(id){
+    var ui = gbLoadUi();
+    var list = Array.isArray(ui.activities) ? ui.activities.slice() : [];
+    var i = list.indexOf(id);
+    if(i === -1)list.push(id); else list.splice(i,1);
+    ui.activities = list;
+    gbSaveUi(ui);
+  }
+  function gbSetMood(id){
+    var ui = gbLoadUi();
+    ui.mood = (ui.mood === id) ? null : id;
+    gbSaveUi(ui);
+  }
+
+  function gbEnsureDaylioStyles(){
+    if(document.getElementById("gb-daylio-style"))return;
+    var css = ''+
+      '.gb-modal-overlay{position:fixed;inset:0;background:rgba(6,10,16,.62);display:flex;align-items:flex-start;justify-content:center;z-index:9999;padding:5vh 16px;overflow:auto}'+
+      '.gb-modal{width:100%;max-width:560px;background:var(--surface,#161d29);color:var(--text,#e8edf3);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:18px 18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.5)}'+
+      '.gb-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}'+
+      '.gb-mood-row{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap}'+
+      '.gb-mood{position:relative;flex:1 1 0;min-width:62px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 6px;border:2px solid transparent;border-radius:14px;cursor:pointer;background:rgba(255,255,255,.03);transition:transform .08s,border-color .12s,background .12s}'+
+      '.gb-mood:hover{transform:translateY(-1px)}'+
+      '.gb-mood.on{background:color-mix(in srgb, var(--mc,#43A047) 20%, transparent)}'+
+      '.gb-mood-emoji{font-size:30px;line-height:1}'+
+      '.gb-mood-name{font-size:11px;text-transform:capitalize;color:var(--text-muted,#9fb0c3)}'+
+      '.gb-group{margin-top:16px}'+
+      '.gb-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted,#9fb0c3);margin-bottom:8px}'+
+      '.gb-act-grid{display:flex;flex-wrap:wrap;gap:8px}'+
+      '.gb-act{position:relative;display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid rgba(255,255,255,.12);border-radius:999px;cursor:pointer;font-size:13px;background:rgba(255,255,255,.03);transition:border-color .1s,background .1s}'+
+      '.gb-act:hover{border-color:rgba(255,255,255,.28)}'+
+      '.gb-act.on{background:rgba(90,150,255,.22);border-color:rgba(120,170,255,.7)}'+
+      '.gb-act-emoji{font-size:15px}'+
+      '.gb-mini-del{position:absolute;top:-7px;right:-7px;width:18px;height:18px;line-height:16px;text-align:center;border-radius:50%;border:none;background:#e2564d;color:#fff;font-size:12px;cursor:pointer;padding:0}'+
+      '.gb-group-title .gb-mini-del{position:static;width:18px;height:18px;line-height:16px}'+
+      '.gb-add-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}'+
+      '.gb-inp{padding:7px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:inherit;font:inherit}'+
+      '.gb-daylio-summary{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}'+
+      '.gb-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);font-size:13px}'+
+      '.gb-mood-chip{border-width:2px}'+
+      '.gb-icon-btn.on{background:rgba(90,150,255,.22);border-color:rgba(120,170,255,.7)}';
+    var el = document.createElement("style");
+    el.id = "gb-daylio-style";
+    el.textContent = css;
+    document.head.appendChild(el);
+  }
+
+  var GB_MOOD_LEVELS = {5:"Rad", 4:"Good", 3:"Meh", 2:"Bad", 1:"Awful"};
+
+  function gbMoodModalHtml(editMode){
+    var taxo = gbLoadTaxo();
+    var ui = gbLoadUi();
+    var selMood = ui.mood;
+    var selActs = ui.activities || [];
+    var moods = (taxo.moods || []).slice().sort(function(a,b){ return (b.level||0) - (a.level||0); });
+    var moodRow = moods.map(function(m){
+      var on = m.id === selMood;
+      return '<div class="gb-mood'+(on?' on':'')+'" data-gb-mood="'+gbEsc(m.id)+'"'+(on?' style="--mc:'+gbEsc(m.color)+';border-color:'+gbEsc(m.color)+'"':'')+'>'+
+        (editMode?'<button class="gb-mini-del" data-gb-del-mood="'+gbEsc(m.id)+'" title="Delete mood">&times;</button>':'')+
+        '<div class="gb-mood-emoji">'+gbEsc(m.emoji)+'</div><div class="gb-mood-name">'+gbEsc(m.name)+'</div>'+
+      '</div>';
+    }).join("");
+    var addMoodRow = editMode ?
+      '<div class="gb-add-row">'+
+        '<input class="gb-inp" data-gb-new-mood-emoji placeholder="🙂" maxlength="4" style="width:52px;text-align:center">'+
+        '<input class="gb-inp" data-gb-new-mood-name placeholder="new mood" style="flex:1;min-width:120px">'+
+        '<select class="gb-inp" data-gb-new-mood-level>'+[5,4,3,2,1].map(function(l){ return '<option value="'+l+'">'+GB_MOOD_LEVELS[l]+'</option>'; }).join("")+'</select>'+
+        '<button class="gb-add-btn" data-gb-add-mood>Add mood</button>'+
+      '</div>' : "";
+    var groupsHtml = (taxo.groups || []).map(function(g){
+      var acts = (g.activities || []).map(function(a){
+        var on = selActs.indexOf(a.id) !== -1;
+        return '<div class="gb-act'+(on?' on':'')+'" data-gb-activity="'+gbEsc(a.id)+'">'+
+          (editMode?'<button class="gb-mini-del" data-gb-del-activity="'+gbEsc(g.id)+':'+gbEsc(a.id)+'" title="Delete">&times;</button>':'')+
+          '<span class="gb-act-emoji">'+gbEsc(a.emoji)+'</span><span>'+gbEsc(a.name)+'</span>'+
+        '</div>';
+      }).join("");
+      var addAct = editMode ?
+        '<div class="gb-add-row">'+
+          '<input class="gb-inp" data-gb-new-act-emoji="'+gbEsc(g.id)+'" placeholder="🏷️" maxlength="4" style="width:52px;text-align:center">'+
+          '<input class="gb-inp" data-gb-new-act-name="'+gbEsc(g.id)+'" placeholder="new activity" style="flex:1;min-width:120px">'+
+          '<button class="gb-add-btn" data-gb-add-activity="'+gbEsc(g.id)+'">Add</button>'+
+        '</div>' : "";
+      return '<div class="gb-group"><div class="gb-group-title"><span>'+gbEsc(g.name)+'</span>'+
+        (editMode?'<button class="gb-mini-del" data-gb-del-group="'+gbEsc(g.id)+'" title="Delete category">&times;</button>':'')+'</div>'+
+        '<div class="gb-act-grid">'+(acts || '<div class="gb-empty">No activities yet.</div>')+'</div>'+addAct+'</div>';
+    }).join("");
+    var addGroup = editMode ?
+      '<div class="gb-group"><div class="gb-add-row">'+
+        '<input class="gb-inp" data-gb-new-group-name placeholder="new category" style="flex:1;min-width:140px">'+
+        '<button class="gb-add-btn" data-gb-add-group>Add category</button>'+
+      '</div></div>' : "";
+    return '<div class="gb-modal" role="dialog" aria-modal="true">'+
+      '<div class="gb-modal-head">'+
+        '<div class="gb-section-title">How was your day?</div>'+
+        '<div style="display:flex;gap:8px;align-items:center">'+
+          '<button class="gb-icon-btn'+(editMode?' on':'')+'" data-gb-modal-edit>'+(editMode?'Done editing':'Edit categories')+'</button>'+
+          '<button class="gb-icon-btn" data-gb-modal-close title="Close">Close</button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="gb-mood-row">'+moodRow+'</div>'+addMoodRow+
+      groupsHtml+addGroup+
+      '<div class="gb-task-actions" style="justify-content:flex-end;margin-top:16px"><button class="gb-add-btn" data-gb-modal-close>Done</button></div>'+
+    '</div>';
+  }
+
+  function gbCloseMoodModal(){
+    var el = document.getElementById("gb-mood-modal");
+    if(el)el.remove();
+    buildGlymphaticBrief();
+  }
+
+  function gbOpenMoodModal(){
+    gbEnsureDaylioStyles();
+    var prev = document.getElementById("gb-mood-modal");
+    if(prev)prev.remove();
+    var overlay = document.createElement("div");
+    overlay.id = "gb-mood-modal";
+    overlay.className = "gb-modal-overlay";
+    var editMode = false;
+    function rerender(){ overlay.innerHTML = gbMoodModalHtml(editMode); }
+    overlay.addEventListener("click", function(e){
+      if(e.target === overlay || e.target.closest("[data-gb-modal-close]")){ gbCloseMoodModal(); return; }
+      if(e.target.closest("[data-gb-modal-edit]")){ editMode = !editMode; rerender(); return; }
+
+      var delMood = e.target.closest("[data-gb-del-mood]");
+      if(delMood){
+        var mid = delMood.dataset.gbDelMood;
+        var t = gbLoadTaxo(); t.moods = (t.moods||[]).filter(function(m){ return m.id !== mid; }); gbSaveTaxo(t);
+        var ui = gbLoadUi(); if(ui.mood === mid){ ui.mood = null; gbSaveUi(ui); }
+        rerender(); return;
+      }
+      var moodBtn = e.target.closest("[data-gb-mood]");
+      if(moodBtn && !editMode){ gbSetMood(moodBtn.dataset.gbMood); rerender(); return; }
+
+      var delAct = e.target.closest("[data-gb-del-activity]");
+      if(delAct){
+        var parts = delAct.dataset.gbDelActivity.split(":");
+        var t2 = gbLoadTaxo();
+        (t2.groups||[]).forEach(function(g){ if(g.id === parts[0])g.activities = (g.activities||[]).filter(function(a){ return a.id !== parts[1]; }); });
+        gbSaveTaxo(t2); rerender(); return;
+      }
+      var actBtn = e.target.closest("[data-gb-activity]");
+      if(actBtn && !editMode){ gbToggleActivity(actBtn.dataset.gbActivity); rerender(); return; }
+
+      var addAct = e.target.closest("[data-gb-add-activity]");
+      if(addAct){
+        var gid = addAct.dataset.gbAddActivity;
+        var nameEl = overlay.querySelector('[data-gb-new-act-name="'+gid+'"]');
+        var emEl = overlay.querySelector('[data-gb-new-act-emoji="'+gid+'"]');
+        var name = nameEl ? nameEl.value.trim() : "";
+        if(!name)return;
+        var t3 = gbLoadTaxo();
+        (t3.groups||[]).forEach(function(g){ if(g.id === gid)g.activities = (g.activities||[]).concat([{id:gbNewId(name), name:name, emoji:(emEl && emEl.value.trim()) || "🏷️"}]); });
+        gbSaveTaxo(t3); rerender(); return;
+      }
+      var delGroup = e.target.closest("[data-gb-del-group]");
+      if(delGroup){
+        var t4 = gbLoadTaxo(); t4.groups = (t4.groups||[]).filter(function(g){ return g.id !== delGroup.dataset.gbDelGroup; }); gbSaveTaxo(t4); rerender(); return;
+      }
+      var addGroup = e.target.closest("[data-gb-add-group]");
+      if(addGroup){
+        var gEl = overlay.querySelector("[data-gb-new-group-name]");
+        var gName = gEl ? gEl.value.trim() : "";
+        if(!gName)return;
+        var t5 = gbLoadTaxo(); t5.groups = (t5.groups||[]).concat([{id:gbNewId(gName), name:gName, activities:[]}]); gbSaveTaxo(t5); rerender(); return;
+      }
+      var addMood = e.target.closest("[data-gb-add-mood]");
+      if(addMood){
+        var mnEl = overlay.querySelector("[data-gb-new-mood-name]");
+        var meEl = overlay.querySelector("[data-gb-new-mood-emoji]");
+        var mlEl = overlay.querySelector("[data-gb-new-mood-level]");
+        var mName = mnEl ? mnEl.value.trim() : "";
+        if(!mName)return;
+        var t6 = gbLoadTaxo();
+        t6.moods = (t6.moods||[]).concat([{id:gbNewId(mName), name:mName, emoji:(meEl && meEl.value.trim()) || "🙂", level:(mlEl ? parseInt(mlEl.value,10) : 3), color:"#9E9E9E"}]);
+        gbSaveTaxo(t6); rerender(); return;
+      }
+    });
+    overlay.addEventListener("keydown", function(e){ if(e.key === "Escape")gbCloseMoodModal(); });
+    document.body.appendChild(overlay);
+    rerender();
+  }
+
+  function gbDaylioSummary(ui){
+    var taxo = gbLoadTaxo();
+    var mood = gbFindMood(taxo, ui.mood);
+    var acts = (ui.activities || []).map(function(id){ return gbFindActivity(taxo, id); }).filter(Boolean);
+    var chips = (mood ? '<span class="gb-chip gb-mood-chip" style="border-color:'+gbEsc(mood.color)+'"><span>'+gbEsc(mood.emoji)+'</span> '+gbEsc(mood.name)+'</span>' : "")+
+      acts.map(function(a){ return '<span class="gb-chip"><span>'+gbEsc(a.emoji)+'</span> '+gbEsc(a.name)+'</span>'; }).join("");
+    var label = (mood || acts.length) ? "Edit mood &amp; activities" : "How was your day?";
+    return '<div class="gb-daylio-summary">'+chips+
+      '<button class="gb-add-btn" data-gb-open-mood>'+label+'</button>'+
+    '</div>';
+  }
+
+  function gbJournalSection(ui){
+    var val = (ui && typeof ui.journal === "string") ? ui.journal : "";
+    var saved = (ui && ui.journal_saved_at)
+      ? "Saved " + new Date(ui.journal_saved_at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})
+      : "";
+    return '<section class="gb-section gb-journal"><div class="gb-section-title">Journal</div>'+
+      gbDaylioSummary(ui)+
+      '<div class="gb-row-sub" style="margin-bottom:8px">A note on today. Saved locally for now; wiring to the vault comes later.</div>'+
+      '<textarea data-gb-journal placeholder="How did today actually go?" '+
+        'style="width:100%;min-height:120px;resize:vertical;padding:10px;border-radius:10px;'+
+        'border:1px solid var(--border,rgba(255,255,255,.14));background:var(--surface-2,rgba(255,255,255,.03));'+
+        'color:inherit;font:inherit;line-height:1.5;box-sizing:border-box">'+gbEsc(val)+'</textarea>'+
+      '<div class="gb-task-actions" style="margin-top:8px;justify-content:flex-end;align-items:center;gap:10px">'+
+        '<span class="gb-row-meta" data-gb-journal-status>'+gbEsc(saved)+'</span>'+
+        '<button class="gb-add-btn" data-gb-journal-save title="Save this entry">Save</button>'+
+      '</div>'+
+    '</section>';
+  }
+
+  function gbPageDayReview(page, current, ui){
+    var items = gbDidItems(page, current);
+    var pending = items.filter(function(it){ return it.approvable !== false && !gbDidApproved(it, ui); }).length;
+    var body = items.length
+      ? items.map(function(it){ return gbDidCard(it, ui); }).join("")
+      : '<div class="gb-empty">No activity reconstructed for today yet. The night run fills this in from your Claude/Codex sessions, shipped code, and comms.</div>';
+    return '<p class="gb-page-summary">'+gbEsc(page.summary || "What the day-review reconstructed you did today. Fix the time or duration, then Approve to log it as done and bank points.")+'</p>'+
+      '<section class="gb-section gb-tasks"><div class="gb-section-title">Day in Review ('+pending+' to confirm)</div>'+
+        '<div class="gb-row-sub" style="margin-bottom:8px">Each item is inferred from what you actually touched. Approve logs it as completed; unfinished parts push to tomorrow.</div>'+
+        '<div class="gb-task-list">'+body+'</div>'+
+      '</section>'+
+      gbJournalSection(ui);
+  }
+
   // Agent-authored expressive layer. The HTML is generated fresh each morning
   // and treated as untrusted: it renders ONLY inside a sandboxed iframe with no
   // same-origin access, so its scripts cannot read the session, the parent DOM,
@@ -763,6 +1315,7 @@
   function gbRenderPage(page, current, ui){
     if(page.id==="triage")return gbPageTriage(page, current);
     if(page.id==="canvas")return gbPageCanvas(page);
+    if(page.id==="day-review")return gbPageDayReview(page, current, ui);
     if(page.id==="front")return gbPageFront(page, current, ui);
     if(page.id==="actual-vs-planned")return gbPageActualVsPlanned(page, current, ui);
     if(page.id==="step-back")return gbPageStepBack(page);
@@ -775,6 +1328,7 @@
   function buildGlymphaticBrief(){
     var root = document.getElementById("glymphatic-brief-root");
     if(!root)return;
+    gbEnsureDaylioStyles();
     var briefData = gbBrief();
     var current = briefData.current;
     var ui = gbLoadUi();
@@ -881,6 +1435,14 @@
     }
     var push = e.target.closest("[data-gb-push]");
     if(push){ gbPushTask(push.dataset.gbPush); return; }
+    var approve = e.target.closest("[data-gb-approve]");
+    if(approve){ gbApproveDid(approve.dataset.gbApprove); return; }
+    var pushNext = e.target.closest("[data-gb-push-next]");
+    if(pushNext){ gbPushDidNext(pushNext.dataset.gbPushNext); return; }
+    var journalSave = e.target.closest("[data-gb-journal-save]");
+    if(journalSave){ gbSaveJournal(); return; }
+    var openMood = e.target.closest("[data-gb-open-mood]");
+    if(openMood){ gbOpenMoodModal(); return; }
     var move = e.target.closest("[data-gb-move]");
     if(move){ gbMoved(move.dataset.gbMove, parseInt(move.dataset.dir, 10)); }
   });
@@ -888,11 +1450,23 @@
   document.addEventListener("change", function(e){
     if(e.target.matches("[data-gb-start]"))gbSetStart(e.target.dataset.gbStart, e.target.value);
     if(e.target.matches("[data-gb-duration]"))gbSetDuration(e.target.dataset.gbDuration, e.target.value);
+    if(e.target.matches("[data-gb-did-start]"))gbSetDidStart(e.target.dataset.gbDidStart, e.target.value);
+    if(e.target.matches("[data-gb-did-duration]"))gbSetDidDuration(e.target.dataset.gbDidDuration, e.target.value);
+  });
+
+  // Autosave the journal on every keystroke (localStorage only, no re-render) so
+  // the 60s refresh below never eats an in-progress entry.
+  document.addEventListener("input", function(e){
+    if(e.target.matches("[data-gb-journal]"))gbSetJournal(e.target.value);
   });
 
   setInterval(function(){
     var tab = document.getElementById("tab-glymphatic");
-    if(tab && tab.classList.contains("active"))buildGlymphaticBrief();
+    if(!tab || !tab.classList.contains("active"))return;
+    // Don't clobber the journal (or lose the cursor) while Drake is typing in it.
+    var ae = document.activeElement;
+    if(ae && ae.matches && ae.matches("[data-gb-journal]"))return;
+    buildGlymphaticBrief();
   }, 60000);
 
   window.buildGlymphaticBrief = buildGlymphaticBrief;
