@@ -249,4 +249,67 @@
   #vault-body.tl-mode #vault-timeline{min-height:300px}
   .vault-tl-legend{width:132px}
   .vault-tl-hint{display:none}
+  /* Bottom-left collides with the app's mobile bottom nav / FAB; move it up top
+     (the legend is top-right, so top-left stays clear). */
+  .vault-tl-open-canvas{left:8px;top:8px;bottom:auto}
+}
+
+/* Timeline -> canvas affordances */
+.vault-tl-open-canvas{position:absolute;left:12px;bottom:12px;z-index:15;font-size:12px;font-weight:600;background:var(--accent);color:#fff;border:none;border-radius:9px;padding:8px 14px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.32)}
+.vault-tl-open-canvas:hover{filter:brightness(1.07)}
+.vault-tl-open-canvas[hidden]{display:none}
+.vault-tl-chip-open{flex:0 0 auto;color:var(--accent);font-size:12px;opacity:.85}
+.vault-tl-chip-open:hover{opacity:1}
+
+/* ── Phase B4b: focused thread canvas ── */
+#vault-canvas{display:none}
+#vault-body.canvas-mode{flex-direction:column;position:relative}
+#vault-body.canvas-mode #vault-tree,#vault-body.canvas-mode #vault-timeline{display:none}
+#vault-body.canvas-mode #vault-canvas{display:flex;flex-direction:column;flex:1 1 auto;min-height:72vh;max-height:84vh}
+
+.vault-cv-bar{display:flex;align-items:center;gap:10px;padding:8px 6px;flex-wrap:wrap}
+.vault-cv-back{font-size:12px;font-weight:600;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:5px 12px;cursor:pointer}
+.vault-cv-back:hover{border-color:var(--accent);color:var(--accent)}
+.vault-cv-label{font-size:14px;font-weight:600;color:var(--text)}
+.vault-cv-spacer{flex:1}
+.vault-cv-hint{font-size:11px;color:var(--text-muted)}
+.vault-cv-btn{font-size:11px;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;cursor:pointer}
+.vault-cv-btn:hover{border-color:var(--text-muted)}
+
+/* Pan/zoom surface with a subtle dot grid; .vault-cv-world holds the cards and takes the d3-zoom transform */
+.vault-cv-surface{position:relative;flex:1 1 auto;overflow:hidden;border-top:1px solid var(--border);background-color:var(--bg,#0f172a);background-image:radial-gradient(circle at 1px 1px, color-mix(in srgb,var(--border) 55%,transparent) 1px, transparent 0);background-size:24px 24px;cursor:grab}
+.vault-cv-surface:active{cursor:grabbing}
+.vault-cv-world{position:absolute;top:0;left:0;width:0;height:0}
+
+/* Cards — fixed footprint (width + capped height) so windowing math is exact */
+.vault-cv-card{position:absolute;width:320px;height:300px;box-sizing:border-box;display:flex;flex-direction:column;background:var(--bg,#0f172a);border:1px solid var(--border);border-radius:12px;box-shadow:0 6px 22px rgba(0,0,0,.28);overflow:hidden}
+.vault-cv-card.dragging{box-shadow:0 14px 40px rgba(0,0,0,.45);border-color:var(--accent);z-index:5}
+.vault-cv-card.locked{border-style:dashed}
+.vault-cv-card-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);background:var(--bg-elev);cursor:grab;user-select:none;touch-action:none}
+.vault-cv-card-head:active,.vault-cv-card.dragging .vault-cv-card-head{cursor:grabbing}
+.vault-cv-emoji{flex:0 0 auto;font-size:15px}
+.vault-cv-title{flex:1;font-size:13.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vault-cv-card-head:hover .vault-cv-title{color:var(--accent)}
+.vault-cv-date{flex:0 0 auto;font-size:11px;color:var(--text-muted);font-family:ui-monospace,Menlo,monospace}
+.vault-cv-card .vault-tags{margin:8px 12px 0}
+.vault-cv-body{flex:1 1 auto;overflow-y:auto;padding:10px 14px 14px;font-size:13px;line-height:1.55;color:var(--text)}
+.vault-cv-body .vault-body-md{font-size:13px}
+.vault-cv-body a.wikilink{color:var(--accent);text-decoration:none;font-weight:500;cursor:pointer}
+.vault-cv-body a.wikilink.dangling{color:var(--text-muted);opacity:.55;font-weight:400;cursor:default}
+.vault-cv-locked{display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12.5px}
+.vault-cv-note{color:var(--text-muted);font-size:12.5px;font-style:italic}
+
+/* Reading pane as a slide-in drawer over the canvas (bottom sheet on mobile) */
+#vault-reading-close{display:none}
+#vault-body.canvas-mode #vault-reading{position:absolute;top:0;right:0;bottom:0;width:min(560px,88%);max-height:none;background:var(--bg,#0f172a);border-left:1px solid var(--border);box-shadow:-14px 0 44px rgba(0,0,0,.4);transform:translateX(100%);transition:transform .22s ease;z-index:30;padding:0;overflow:hidden;display:flex;flex-direction:column}
+#vault-body.canvas-mode.reading-open #vault-reading{transform:translateX(0)}
+#vault-body.canvas-mode #vault-reading #vault-detail{flex:1 1 auto;overflow-y:auto;padding:26px 28px 60px}
+#vault-body.canvas-mode #vault-reading-close{display:block;position:absolute;top:10px;right:14px;z-index:2;width:30px;height:30px;background:var(--bg-elev);border:1px solid var(--border);border-radius:7px;color:var(--text-muted);font-size:19px;line-height:1;cursor:pointer}
+#vault-body.canvas-mode #vault-reading-close:hover{color:var(--text);border-color:var(--text-muted)}
+
+@media (max-width:780px){
+  #vault-body.canvas-mode #vault-canvas{min-height:78vh}
+  #vault-body.canvas-mode #vault-reading{width:100%;top:auto;height:82%;border-left:none;border-top:1px solid var(--border);transform:translateY(100%);box-shadow:0 -14px 44px rgba(0,0,0,.4)}
+  #vault-body.canvas-mode.reading-open #vault-reading{transform:translateY(0)}
+  .vault-cv-hint{display:none}
 }

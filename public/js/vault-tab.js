@@ -257,6 +257,31 @@
     } catch (e) { window.DCC.toast("Unlock failed", "error"); }
   }
 
+  // The ONE body renderer: node.renderedBody (server-rewritten wikilinks + media
+  // refs) -> sanitized HTML. Falls back to a <pre> when marked/DOMPurify are
+  // absent or throw. Shared by the reading pane (renderDetail) and the B4b canvas
+  // cards (via the VaultCanvas bridge) so the two render byte-identical bodies.
+  function noteBodyHtml(node) {
+    const source = node.renderedBody != null ? node.renderedBody : node.body;
+    if (!source) return '<div style="color:var(--text-muted)">(empty)</div>';
+    if (window.marked && window.DOMPurify) {
+      try {
+        return window.DOMPurify.sanitize(window.marked.parse(source), { ADD_ATTR: ["data-slug", "target", "data-media-hash", "data-media-alt"] });
+      } catch (e) { /* fall through to <pre> */ }
+    }
+    return `<pre style="white-space:pre-wrap">${esc(node.body || "")}</pre>`;
+  }
+
+  // Mount a rendered body into `root`'s .vault-body-md, then upgrade media
+  // placeholders + wire link/wikilink clicks (both scoped to `root`). The reading
+  // pane and each canvas card share this exact path.
+  function mountNoteBody(root, node) {
+    const bodyEl = root.querySelector(".vault-body-md");
+    if (bodyEl) bodyEl.innerHTML = noteBodyHtml(node);
+    upgradeMedia(root, node);
+    wireLinkClicks(root);
+  }
+
   function renderDetail(node) {
     const el = document.getElementById("vault-detail");
     if (!el) return;
@@ -264,25 +289,13 @@
     const fm = node.frontmatter || {};
     const title = fm.title || node.slug.split("/").pop();
 
-    let bodyHtml = '<div style="color:var(--text-muted)">(empty)</div>';
-    const source = node.renderedBody != null ? node.renderedBody : node.body;
-    if (source && window.marked && window.DOMPurify) {
-      try {
-        bodyHtml = window.DOMPurify.sanitize(window.marked.parse(source), { ADD_ATTR: ["data-slug", "target", "data-media-hash", "data-media-alt"] });
-      } catch (e) {
-        bodyHtml = `<pre style="white-space:pre-wrap">${esc(node.body || "")}</pre>`;
-      }
-    } else if (source) {
-      bodyHtml = `<pre style="white-space:pre-wrap">${esc(node.body || "")}</pre>`;
-    }
-
     el.innerHTML = `
       <div class="vault-detail-bar"><button class="vault-edit-btn" id="vault-edit-btn" type="button" title="Edit this note">✏️ Edit</button></div>
       <div class="vault-title"><span class="emoji">${emojiFor(node)}</span><span>${esc(title)}</span></div>
       <div class="vault-path">${esc(node.slug)}.md</div>
       ${tagPills(fm.tags)}
       ${propsBlock(fm)}
-      <div class="vault-body-md">${bodyHtml}</div>
+      <div class="vault-body-md">${noteBodyHtml(node)}</div>
       <hr class="vault-hr">
       <div class="vault-section-h">Linked mentions (${(node.backlinks || []).length})</div>
       ${renderBacklinks(node.backlinks)}
@@ -443,6 +456,32 @@
     if (viewMode === "timeline") window.VaultTimeline.render();
   }
 
+  // ── Focused thread canvas (B4b) ──
+  // Entered from the timeline (a thread's "Open as canvas" affordance), NOT from
+  // the segmented control: it's a drill-down that returns to the timeline. In
+  // canvas mode #vault-body gets .canvas-mode (CSS hides the tree + timeline and
+  // fills the area with #vault-canvas); the reading pane (#vault-detail) is reused
+  // as a slide-in drawer (.reading-open) when a card is clicked.
+  function vaultBody() { return document.getElementById("vault-body"); }
+  function openReadingDrawer() { const b = vaultBody(); if (b) b.classList.add("reading-open"); }
+  function closeReadingDrawer() { const b = vaultBody(); if (b) b.classList.remove("reading-open"); }
+  function inCanvas() { const b = vaultBody(); return !!(b && b.classList.contains("canvas-mode")); }
+
+  function enterCanvas(payload) {
+    if (!window.VaultCanvas || !payload || !payload.nodes || !payload.nodes.length) return;
+    const b = vaultBody();
+    if (b) { b.classList.add("canvas-mode"); b.classList.remove("reading-open"); }
+    window.VaultCanvas.open(payload);
+  }
+  function exitCanvas() {
+    const b = vaultBody();
+    if (b) { b.classList.remove("canvas-mode"); b.classList.remove("reading-open"); }
+    if (window.VaultCanvas) window.VaultCanvas.close();
+    // Canvas is always entered from the timeline; make sure it's showing again
+    // (the thread stays selected — the timeline keeps its own state).
+    if (viewMode === "timeline" && window.VaultTimeline) window.VaultTimeline.render();
+  }
+
   // ── Data loading ──
 
   async function loadOntology() {
@@ -486,6 +525,9 @@
 
   async function loadDetail(slug) {
     if (!slug) { renderDetail(null); return; }
+    // In canvas mode the reading pane is a drawer: any navigation to a note
+    // (card header, or a wikilink/backlink click inside a card) reveals it.
+    if (inCanvas()) openReadingDrawer();
     // Sensitive notes: show the locked placeholder (with the Unlock affordance)
     // unless this session is PIN-unlocked — then fetch and render like any note.
     if (isSensitive(slug) && !unlock.unlocked) {
@@ -559,9 +601,40 @@
       onSaved: (slug) => afterWrite(slug),
     });
 
-    // Timeline (B4a): clicking a dot loads that note into the reading pane below.
+    // Timeline (B4a): clicking a dot loads that note into the reading pane below;
+    // a selected thread can open the B4b focused canvas.
     if (window.VaultTimeline) window.VaultTimeline.init({
       onSelect: (slug) => { selectedSlug = slug; loadDetail(slug); },
+      onOpenCanvas: (payload) => enterCanvas(payload),
+    });
+
+    // Canvas (B4b): reuses the tab's body renderer + tag pills + reading pane. A
+    // card click pops the full note into the reading drawer; Back exits to the
+    // timeline.
+    if (window.VaultCanvas) window.VaultCanvas.init({
+      renderBody: (root, node) => mountNoteBody(root, node),
+      tagPills: (tags) => tagPills(tags),
+      emojiFor: (node) => emojiFor(node),
+      esc: (s) => esc(s),
+      onSelect: (slug) => { selectedSlug = slug; loadDetail(slug); openReadingDrawer(); },
+      onExit: () => exitCanvas(),
+    });
+
+    const readingClose = document.getElementById("vault-reading-close");
+    if (readingClose) readingClose.addEventListener("click", closeReadingDrawer);
+
+    // Escape in canvas mode closes the reading drawer first, then exits to the
+    // timeline. Bail when the lightbox or editor own the Escape (they close first).
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !vaultTabActive() || !inCanvas()) return;
+      const lb = document.getElementById("vault-lightbox");
+      if (lb && lb.style.display === "flex") return;
+      const ov = document.getElementById("vault-editor-overlay");
+      if (ov && ov.classList.contains("open")) return;
+      e.preventDefault();
+      const b = vaultBody();
+      if (b && b.classList.contains("reading-open")) closeReadingDrawer();
+      else exitCanvas();
     });
 
     // Explorer <-> Timeline segmented control.

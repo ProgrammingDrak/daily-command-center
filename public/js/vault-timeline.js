@@ -31,7 +31,7 @@ window.VaultTimeline = (function () {
                                 // members than this samples them down (the arc spans the
                                 // same range; you can't see the dropped control points)
 
-  let bridge = { onSelect() {} };
+  let bridge = { onSelect() {}, onOpenCanvas() {} };
   let data = null;            // { nodes, threads, counts, ... }
   let nodeById = new Map();   // id -> node (with .dt Date)
   let threadByKey = new Map();
@@ -79,6 +79,7 @@ window.VaultTimeline = (function () {
         </svg>
         <div class="vault-tl-legend" id="vault-tl-legend"></div>
         <div class="vault-tl-hovercard" id="vault-tl-hovercard" hidden></div>
+        <button class="vault-tl-open-canvas" id="vault-tl-open-canvas" type="button" hidden></button>
       </div>`;
     els = {
       count: host.querySelector("#vault-tl-count"),
@@ -90,8 +91,10 @@ window.VaultTimeline = (function () {
       gNodes: host.querySelector("#vault-tl-nodes"),
       legend: host.querySelector("#vault-tl-legend"),
       hovercard: host.querySelector("#vault-tl-hovercard"),
+      openCanvas: host.querySelector("#vault-tl-open-canvas"),
     };
     host.querySelector("#vault-tl-reset").addEventListener("click", resetZoom);
+    els.openCanvas.addEventListener("click", () => openCanvas());
 
     zoomBehavior = window.d3.zoom()
       .scaleExtent([1, 4000])
@@ -204,6 +207,7 @@ window.VaultTimeline = (function () {
     const locked = c.locked ? ` · ${c.locked} locked` : "";
     const inView = sampled ? `${visible.length} in view (showing ${drawn.length})` : `${visible.length} in view`;
     setCount(`${data.nodes.length} dated notes · ${inView}${trunc}${locked}`);
+    updateOpenCanvasBtn();
   }
 
   function drawAxis(zx) {
@@ -356,13 +360,19 @@ window.VaultTimeline = (function () {
     _legendSig = sig;
     els.legend.innerHTML = top.length
       ? `<div class="vault-tl-legend-h">Threads in view</div>` + top.map(({ t, c }) =>
-          `<button class="vault-tl-chip${selectedThread === t.key ? " sel" : ""}" data-key="${esc(t.key)}" title="${esc(t.kind)}: ${esc(t.value)}">
+          `<button class="vault-tl-chip${selectedThread === t.key ? " sel" : ""}" data-key="${esc(t.key)}" title="${esc(t.kind)}: ${esc(t.value)} — double-click to open as canvas">
              <span class="sw" style="background:${esc(t.color)}"></span>
              <span class="lb">${esc(t.label)}</span><span class="ct">${c}</span>
+             ${selectedThread === t.key ? `<span class="vault-tl-chip-open" title="Open as canvas">⤢</span>` : ""}
            </button>`).join("")
       : `<div class="vault-tl-legend-h">No threads in view</div>`;
     els.legend.querySelectorAll(".vault-tl-chip").forEach((b) => {
-      b.addEventListener("click", () => { const k = b.dataset.key; selectedThread = selectedThread === k ? null : k; draw(); });
+      b.addEventListener("click", (e) => {
+        // The ⤢ badge on the selected chip opens the canvas; the chip body toggles.
+        if (e.target.closest(".vault-tl-chip-open")) { openCanvas(b.dataset.key); return; }
+        const k = b.dataset.key; selectedThread = selectedThread === k ? null : k; draw();
+      });
+      b.addEventListener("dblclick", (e) => { e.preventDefault(); openCanvas(b.dataset.key); });
       b.addEventListener("mouseenter", () => { hoverThread = b.dataset.key; applyThreadEmphasis(); });
       b.addEventListener("mouseleave", () => { hoverThread = null; applyThreadEmphasis(); });
     });
@@ -382,6 +392,39 @@ window.VaultTimeline = (function () {
     }).join("");
     els.onthisday.querySelectorAll(".vault-tl-otd-chip[data-slug]").forEach((b) =>
       b.addEventListener("click", () => bridge.onSelect(b.dataset.slug)));
+  }
+
+  // ── Open-as-canvas (B4b) ──
+  // Build the canvas payload for a thread: its member nodes (already date-sorted
+  // by the endpoint) enriched with the fields the canvas needs for card headers +
+  // date auto-layout. Locked members never reach here (the endpoint drops them
+  // from threads on a locked session), so every member has a real slug.
+  function threadCanvasPayload(key) {
+    const t = threadByKey.get(key);
+    if (!t) return null;
+    const nodes = [];
+    for (const id of t.members) {
+      const n = nodeById.get(id);
+      if (!n || !n.slug) continue;
+      nodes.push({ slug: n.slug, date: n.date, title: n.title, type: n.type, tags: n.tags || [], color: n.color });
+    }
+    return { key: t.key, kind: t.kind, label: t.label, color: t.color, count: nodes.length, nodes };
+  }
+  function openCanvas(key) {
+    const payload = threadCanvasPayload(key || selectedThread);
+    if (payload && payload.nodes.length) bridge.onOpenCanvas(payload);
+  }
+  // Show the floating "Open N notes as canvas" button whenever a thread is
+  // selected; hide it otherwise. Called at the end of each draw (selection
+  // changes always trigger a draw).
+  function updateOpenCanvasBtn() {
+    const btn = els.openCanvas;
+    if (!btn) return;
+    const t = selectedThread && threadByKey.get(selectedThread);
+    if (!t) { btn.hidden = true; return; }
+    const n = t.members.length;
+    btn.textContent = `🎴 Open ${n} note${n === 1 ? "" : "s"} as canvas`;
+    btn.hidden = false;
   }
 
   function onNodeClick(d) {
