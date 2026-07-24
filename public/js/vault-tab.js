@@ -262,7 +262,7 @@
     const source = node.renderedBody != null ? node.renderedBody : node.body;
     if (source && window.marked && window.DOMPurify) {
       try {
-        bodyHtml = window.DOMPurify.sanitize(window.marked.parse(source), { ADD_ATTR: ["data-slug", "target"] });
+        bodyHtml = window.DOMPurify.sanitize(window.marked.parse(source), { ADD_ATTR: ["data-slug", "target", "data-media-hash", "data-media-alt"] });
       } catch (e) {
         bodyHtml = `<pre style="white-space:pre-wrap">${esc(node.body || "")}</pre>`;
       }
@@ -285,7 +285,133 @@
     `;
     const editBtn = el.querySelector("#vault-edit-btn");
     if (editBtn && window.VaultEditor) editBtn.onclick = () => window.VaultEditor.openEdit(node);
+    upgradeMedia(el, node);
     wireLinkClicks(el);
+  }
+
+  // ── Rich media (Phase B3) ──
+  // Swap the server-emitted `.vault-media` placeholders for real elements, using
+  // node.media (built server-side from the manifests). img/audio/video/iframe by
+  // kind; cloud-only tiers that aren't provisioned yet degrade to a placeholder.
+  function upgradeMedia(container, node) {
+    const media = (node && node.media) || {};
+    const bodyEl = container.querySelector(".vault-body-md");
+    const phs = Array.from(container.querySelectorAll(".vault-media[data-media-hash]"));
+    // An album node with several members flows its media as a thumbnail grid.
+    if (bodyEl && phs.length > 1 && node && node.frontmatter && node.frontmatter.type === "album") {
+      bodyEl.classList.add("vault-album");
+    }
+    phs.forEach((ph) => {
+      const hex = ph.getAttribute("data-media-hash");
+      const alt = ph.getAttribute("data-media-alt") || "";
+      ph.replaceWith(buildMediaEl(hex, alt, media[hex]));
+    });
+  }
+
+  function mediaUrl(hex, variant) {
+    return `/api/vault/media/${encodeURIComponent(hex)}${variant ? "?variant=" + variant : ""}`;
+  }
+
+  function mediaPlaceholder(icon, text) {
+    const d = document.createElement("div");
+    d.className = "vault-media-ph";
+    d.innerHTML = `<span class="ic">${icon}</span><span></span>`;
+    d.lastChild.textContent = text;
+    return d;
+  }
+
+  function wrapFigure(el, caption) {
+    const fig = document.createElement("figure");
+    fig.className = "vault-figure";
+    fig.appendChild(el);
+    if (caption) { const fc = document.createElement("figcaption"); fc.textContent = caption; fig.appendChild(fc); }
+    return fig;
+  }
+
+  function buildMediaEl(hex, alt, meta) {
+    if (!meta || meta.missing) return mediaPlaceholder("⚠️", alt || "media not found");
+    if (meta.locked) return mediaPlaceholder("🔒", "locked media");
+    if (!meta.available) {
+      const label = alt || meta.filename || "media";
+      const cloudOnly = meta.tiers && meta.tiers.cold && !meta.tiers.warm && !meta.tiers.lowres;
+      return cloudOnly
+        ? mediaPlaceholder("❄️", `${label} — in deep freeze (restore via CLI)`)
+        : mediaPlaceholder("☁️", `${label} — stored in cloud (not yet provisioned)`);
+    }
+    const caption = alt && alt !== meta.filename ? alt : "";
+    if (meta.kind === "image") {
+      const img = document.createElement("img");
+      img.className = "vault-img"; img.loading = "lazy";
+      img.alt = alt || meta.filename || ""; img.src = mediaUrl(hex, "auto");
+      img.addEventListener("click", () => openLightbox(mediaUrl(hex, "auto"), img.alt));
+      return wrapFigure(img, caption);
+    }
+    if (meta.kind === "audio") {
+      const a = document.createElement("audio");
+      a.className = "vault-audio"; a.controls = true; a.preload = "metadata"; a.src = mediaUrl(hex, "auto");
+      return wrapFigure(a, caption);
+    }
+    if (meta.kind === "video") {
+      const t = meta.tiers || {};
+      const noteEl = (text) => { const n = document.createElement("div"); n.className = "vault-media-note"; n.textContent = text; return n; };
+      // Only stream when a genuinely playable tier exists (original or the R2
+      // 720p derivative). A lowres-only video is a JPEG poster, not a source.
+      if (t.inline || t.lfs || t.warm) {
+        const v = document.createElement("video");
+        v.className = "vault-video"; v.controls = true; v.preload = "metadata"; v.src = mediaUrl(hex, "auto");
+        if (t.lowres) v.poster = mediaUrl(hex, "lowres");
+        const fig = wrapFigure(v, caption);
+        if (t.cold) fig.appendChild(noteEl("Full-res original in deep freeze; restore via CLI."));
+        return fig;
+      }
+      const label = caption || meta.filename || "video";
+      if (t.lowres) {
+        const img = document.createElement("img");
+        img.className = "vault-img"; img.loading = "lazy"; img.alt = label; img.src = mediaUrl(hex, "lowres");
+        const fig = wrapFigure(img, caption);
+        fig.appendChild(noteEl(t.cold ? "Video in deep freeze; restore via CLI to play." : "Video stored in cloud (not yet provisioned)."));
+        return fig;
+      }
+      return mediaPlaceholder(t.cold ? "❄️" : "☁️", `${label} — ${t.cold ? "in deep freeze (restore via CLI)" : "stored in cloud (not yet provisioned)"}`);
+    }
+    if (meta.kind === "pdf") {
+      const frame = document.createElement("iframe");
+      frame.className = "vault-pdf"; frame.src = mediaUrl(hex, "auto");
+      frame.setAttribute("title", alt || meta.filename || "PDF");
+      const fig = wrapFigure(frame, caption);
+      const dl = document.createElement("a");
+      dl.className = "vault-media-dl"; dl.href = mediaUrl(hex, "original");
+      dl.target = "_blank"; dl.rel = "noopener noreferrer";
+      dl.textContent = `Open ${meta.filename || "PDF"} ↗`;
+      fig.appendChild(dl);
+      return fig;
+    }
+    // Generic file -> a download link.
+    const a = document.createElement("a");
+    a.className = "vault-file"; a.href = mediaUrl(hex, "original");
+    a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.textContent = `📎 ${meta.filename || alt || "file"}`;
+    return a;
+  }
+
+  function openLightbox(src, alt) {
+    let box = document.getElementById("vault-lightbox");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "vault-lightbox"; box.className = "vault-lightbox";
+      box.addEventListener("click", closeLightbox);
+      document.body.appendChild(box);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
+    }
+    box.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = src; img.alt = alt || "";
+    box.appendChild(img);
+    box.style.display = "flex";
+  }
+  function closeLightbox() {
+    const box = document.getElementById("vault-lightbox");
+    if (box) { box.style.display = "none"; box.innerHTML = ""; }
   }
 
   // ── Data loading ──
