@@ -902,10 +902,12 @@ function triagePriorityLabel(priority){
   if(p==="low")return"Low";
   return"Medium";
 }
+// Triage responses are quick by default (a reply, a check) -- default 5 minutes,
+// floor 5, and the card carries a picker to bump it up when the case needs more.
 function triageDuration(item){
-  return Math.max(15,parseInt(item&&(
+  return Math.max(5,parseInt(item&&(
     item.estimated_minutes||item.estimatedMinutes||item.durMin||item.duration_minutes||item.durationMinutes
-  )||30,10)||30);
+  )||5,10)||5);
 }
 function triageTaskPayload(item){
   const durMin=triageDuration(item);
@@ -984,34 +986,56 @@ function scheduleTriageItem(triageId){
     buildTriage();
     return;
   }
+  // Reuse the shared task scheduler -- the same day/time + duration picker the
+  // tasks below and repeat responsibilities use. Default 5m (triageDuration); the
+  // picker's duration buttons bump it up when the case needs more.
   const durMin=triageDuration(item);
-  const newTask=insertTaskFromDrawer(item.title,durMin,{
+  const opts={
     priority:triagePriorityLabel(item.priority),
     source:"triage",
     meta:"Triage item",
     detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
     tags:["triage"],
     triageId:triageId
-  });
-  scheduledTriage[triageId]={taskId:newTask&&newTask.id,scheduled_at:new Date().toISOString(),title:item.title};
-  saveTriageScheduled(scheduledTriage);
-  if(typeof showToast==="function")showToast("Triage item scheduled","success");
-  buildScheduleTriage();
-  buildTriage();
+  };
+  const record=function(taskId){
+    const st=loadTriageScheduled();
+    st[triageId]={taskId:taskId,scheduled_at:new Date().toISOString(),title:item.title};
+    saveTriageScheduled(st);
+    if(typeof showToast==="function")showToast("Triage item scheduled","success");
+    buildScheduleTriage();
+    buildTriage();
+  };
+  if(typeof openSchedulePicker==="function"){
+    openSchedulePicker(item.title,durMin,Object.assign({},opts,{
+      onScheduled:function(info){ record(info&&(info.localId||info.blockId)); }
+    }));
+    return;
+  }
+  // Fallback if the picker markup isn't present: schedule directly.
+  const newTask=insertTaskFromDrawer(item.title,durMin,opts);
+  record(newTask&&newTask.id);
 }
 function buildScheduleTriageCard(item){
   const pri=triagePriorityLabel(item.priority);
   const priCls=pri==="High"?"pri-hi":pri==="Low"?"pri-lo":"pri-med";
   const barColor=pri==="High"?"var(--red)":pri==="Low"?"var(--text-muted)":"var(--amber)";
   const safeTitle=(item.title||"Triage item").replace(/"/g,'&quot;');
+  // Scheme-allowlist the draft/source URLs: they come from the sweep, so never
+  // let a javascript:/data: URI reach an href.
+  const safeUrl=u=>{u=String(u||"");return /^(https?:|mailto:)/i.test(u)?u:"";};
+  const draftHref=safeUrl(item.draft_link||item.draft_url);
+  const srcHref=safeUrl(item.link);
   return '<div class="board-card schedule-triage-card" data-schedule-triage-id="'+item.id+'">'+
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
       '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
       '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+'<span>'+ms(triageDuration(item))+'</span>'+
-        (item.link?'<a href="'+item.link+'" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+(item.link_label||item.action_label||"Open")+'</a>':'')+
+        (srcHref?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+(item.link_label||item.action_label||"Open")+'</a>':'')+
+        (draftHref?'<a href="'+draftHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--green);text-decoration:none;font-weight:600">Review draft</a>':(item.draft_id?'<span style="color:var(--green);font-weight:600">Draft ready</span>':''))+
       '</div>'+
       (item.summary?'<div class="schedule-triage-summary">'+item.summary+'</div>':'')+
+      (item.draft_preview?'<div class="schedule-triage-summary" style="border-left:2px solid var(--green);padding-left:8px;opacity:.9">'+DCC.esc(item.draft_preview)+'</div>':'')+
     '</div>'+
     '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
     '<button class="add-btn schedule-triage-done" data-triage-id="'+item.id+'" data-triage-title="'+safeTitle+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
@@ -1040,7 +1064,7 @@ function buildRecurringTriageCard(r){
         '<span class="tri-esc tri-esc-normal" style="'+chipStyle+'" title="Recurring responsibility">&#128260; Recurring</span>'+shellChip+'</div>'+
       '<div class="meta"><span>'+r.cadenceLabel+'</span><span>'+r.dueLabel+'</span><span>'+ms(r.estimatedMinutes)+'</span></div>'+
     '</div>'+
-    '<button class="add-btn resp-triage-add" data-resp-id="'+r.id+'">Add to day</button>'+
+    '<button class="add-btn resp-triage-add" data-resp-id="'+r.id+'">Schedule</button>'+
     '<button class="add-btn resp-triage-done" data-resp-id="'+r.id+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
     '<button class="tri-quick resp-triage-snooze" data-resp-id="'+r.id+'" title="Not now (hide for today)">&#128564;</button>'+
   '</div>';
