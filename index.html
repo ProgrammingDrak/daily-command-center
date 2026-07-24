@@ -1728,7 +1728,12 @@
          mode; in Timeline mode it sits above the reading pane (which renders a
          clicked dot's note below). -->
     <div id="vault-timeline"></div>
+    <!-- Canvas (Phase B4b): the focused thread whiteboard. Hidden unless
+         #vault-body.canvas-mode (entered from a timeline thread). -->
+    <div id="vault-canvas"></div>
     <div id="vault-reading">
+      <!-- In canvas mode #vault-reading is a slide-in drawer; this closes it. -->
+      <button id="vault-reading-close" type="button" title="Close (Esc)" aria-label="Close">×</button>
       <div id="vault-detail" class="vault-detail"></div>
     </div>
   </div>
@@ -1782,8 +1787,10 @@
 <!-- d3 v7 (vendored UMD, pinned; powers the B4a timeline's scale/zoom) -->
 <script src="/public/js/vendor/d3.v7.9.0.min.js?v=d3-7.9.0"></script>
 <script src="/public/js/vault-editor.js?v=vault-b2-1"></script>
-<script src="/public/js/vault-timeline.js?v=vault-b4a-1"></script>
-<script src="/public/js/vault-tab.js?v=vault-b4a-1"></script>
+<script src="/public/js/vault-timeline.js?v=vault-b4b-1"></script>
+<!-- Canvas (B4b): the focused thread whiteboard. Loads after the timeline (which opens it) and before vault-tab.js (which wires both). -->
+<script src="/public/js/vault-canvas.js?v=vault-b4b-1"></script>
+<script src="/public/js/vault-tab.js?v=vault-b4b-1"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>

@@ -455,12 +455,10 @@ app.get("/api/vault/node/*", async (req, res) => {
   }
   const node = ctx.vault.get(slug);
   if (!node) return res.status(404).json({ error: "not found" });
-  // Rewrite [[wikilinks]] (needs the shared parser) then media embeds (doesn't).
-  // renderedBody is always set so the client renders a single, consistent body.
-  let rendered = node.body;
-  const parse = loadParse(ctx);
-  if (parse && parse.WIKILINK_RE) rendered = renderWikilinks(rendered, parse, ctx.vault);
-  node.renderedBody = renderMediaRefs(rendered);
+  // Render the body (wikilinks + media embeds) and build the media map via the
+  // ONE shared render path — also used by POST /api/vault/nodes/bodies, so the
+  // canvas cards and the reading pane render byte-identical bodies.
+  await renderNodeForClient(node, req);
   // A sensitive source note links to this one: show the mention exists but strip
   // its context snippet while locked (it would leak a slice of the sensitive
   // body through this endpoint). Unlocked sessions keep the context.
@@ -469,10 +467,70 @@ app.get("/api/vault/node/*", async (req, res) => {
       if (b && b.source && isSensitiveSlug(b.source)) b.context = null;
     }
   }
+  res.json(node);
+});
+
+// The shared server-side render path: rewrite [[wikilinks]] (needs the shared
+// parser) then media embeds (doesn't) into `renderedBody`, and build the
+// { hex -> meta } media map. renderedBody is always set so the client renders a
+// single, consistent body. Mutates + returns `node`. Kept as the ONE place both
+// the single-node GET and the batch bodies POST render through, so a card on the
+// B4b canvas and the full reading pane never drift.
+async function renderNodeForClient(node, req) {
+  let rendered = node.body;
+  const parse = loadParse(ctx);
+  if (parse && parse.WIKILINK_RE) rendered = renderWikilinks(rendered, parse, ctx.vault);
+  node.renderedBody = renderMediaRefs(rendered);
   // Metadata for each media embed so the client renders the right element
   // (img/audio/video/iframe) and degrades cloud-only tiers gracefully.
   node.media = await nodeMedia(node, req);
-  res.json(node);
+  return node;
+}
+
+// ── Batch bodies (B4b): the thread canvas's data ──
+// One POST returns the rendered body + media map + card-header fields for a list
+// of slugs, so a 60-note thread opens as ONE request, not 60. Same per-slug
+// sensitive gate as GET /api/vault/node/*: a locked/expired session gets
+// { locked:true } with NO body for a sensitive slug — the security backstop, so
+// "contents stay locked" holds on a direct API hit regardless of how the client
+// got the slug list. Unknown slugs return { missing:true }. Slugs are normalized
+// BEFORE the gate (a `..` segment must not dodge it then resolve into a sensitive
+// dir), de-duped, and capped.
+const BODIES_MAX = 500;
+app.post("/api/vault/nodes/bodies", async (req, res) => {
+  if (!vaultReady(res)) return;
+  const raw = (req.body && req.body.slugs);
+  if (!Array.isArray(raw)) return res.status(400).json({ error: "slugs must be an array" });
+  const slugs = [];
+  const seen = new Set();
+  let truncated = false;
+  for (const s of raw) {
+    if (typeof s !== "string" || !s) continue;
+    const slug = ctx.vault.normalizeSlug(s);
+    if (seen.has(slug)) continue;
+    if (slugs.length >= BODIES_MAX) { truncated = true; break; }
+    seen.add(slug);
+    slugs.push(slug);
+  }
+  const bodies = {};
+  for (const slug of slugs) {
+    if (isSensitiveSlug(slug) && !isUnlocked(req)) { bodies[slug] = { slug, sensitive: true, locked: true }; continue; }
+    const node = ctx.vault.get(slug);
+    if (!node) { bodies[slug] = { slug, missing: true }; continue; }
+    await renderNodeForClient(node, req);
+    const fm = node.frontmatter || {};
+    const tags = Array.isArray(fm.tags) ? fm.tags : (fm.tags ? [fm.tags] : []);
+    bodies[slug] = {
+      slug,
+      title: fm.title || slug.split("/").pop(),
+      type: fm.type || "untyped",
+      tags,
+      sensitive: isSensitiveSlug(slug),
+      renderedBody: node.renderedBody,
+      media: node.media,
+    };
+  }
+  res.json({ bodies, count: slugs.length, cap: BODIES_MAX, truncated });
 });
 
 // Build the { hex -> meta } map the client uses to upgrade media placeholders.
