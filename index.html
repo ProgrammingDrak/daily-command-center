@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
-<link rel="stylesheet" href="/public/css/vault.css?v=vault-b4a-1">
+<link rel="stylesheet" href="/public/css/vault.css?v=vault-b5-2">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -1722,6 +1722,19 @@
     <button id="vault-refresh-btn" class="vault-ctl vault-btn" type="button">Refresh</button>
     <button id="vault-flush-btn" class="vault-ctl vault-btn" type="button">Sync now</button>
   </div>
+  <!-- Search + saved views + discovery (Phase B5). The search box drops a results
+       panel; ⌘K opens the same index as a quick-switcher (works from any tab). -->
+  <div id="vault-subheader">
+    <div class="vault-search-wrap">
+      <input id="vault-search-input" class="vault-search-input" type="search" autocomplete="off"
+             placeholder="Search notes + documents…   ⌘K to jump" aria-label="Search the vault">
+      <button id="vault-search-clear" class="vault-search-clear" type="button" aria-label="Clear search" title="Clear">×</button>
+      <div id="vault-search-results" class="vault-search-results" hidden></div>
+    </div>
+    <span id="vault-views" class="vault-views" aria-label="Saved views"></span>
+    <button id="vault-saveview-btn" class="vault-chip vault-chip-ghost" type="button" title="Save the current view">★ Save view</button>
+    <button id="vault-orphans-chip" class="vault-chip" type="button" title="Notes with no links in or out">Orphans</button>
+  </div>
   <div id="vault-body">
     <aside id="vault-tree"></aside>
     <!-- Timeline (Phase B4a): the signature visualization. Hidden in Explorer
@@ -1736,6 +1749,15 @@
       <button id="vault-reading-close" type="button" title="Close (Esc)" aria-label="Close">×</button>
       <div id="vault-detail" class="vault-detail"></div>
     </div>
+  </div>
+</div>
+
+<!-- Quick-switcher (Phase B5): ⌘K / Ctrl-K from ANY tab -> fuzzy title/alias jump. -->
+<div id="vault-switcher-overlay" class="vault-switcher-overlay" hidden>
+  <div class="vault-switcher" role="dialog" aria-label="Jump to a note">
+    <input id="vault-switcher-input" class="vault-switcher-input" type="text" autocomplete="off"
+           placeholder="Jump to a note by title…" aria-label="Jump to a note by title">
+    <div id="vault-switcher-results" class="vault-switcher-results"></div>
   </div>
 </div>
 
@@ -1790,7 +1812,9 @@
 <script src="/public/js/vault-timeline.js?v=vault-b4b-1"></script>
 <!-- Canvas (B4b): the focused thread whiteboard. Loads after the timeline (which opens it) and before vault-tab.js (which wires both). -->
 <script src="/public/js/vault-canvas.js?v=vault-b4b-1"></script>
-<script src="/public/js/vault-tab.js?v=vault-b4b-1"></script>
+<!-- Search + saved views + quick-switcher (B5). Loads before vault-tab.js, which wires it. -->
+<script src="/public/js/vault-search.js?v=vault-b5-2"></script>
+<script src="/public/js/vault-tab.js?v=vault-b5-2"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>

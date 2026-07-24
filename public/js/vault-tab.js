@@ -301,11 +301,63 @@
       ${renderBacklinks(node.backlinks)}
       <div class="vault-section-h">Outgoing links (${(node.outlinks || []).length})</div>
       ${renderOutlinks(node.outlinks)}
+      <div class="vault-section-h">Unlinked mentions</div>
+      <div id="vault-unlinked" class="vault-unlinked"><div class="vault-ul-empty">Scanning…</div></div>
     `;
     const editBtn = el.querySelector("#vault-edit-btn");
     if (editBtn && window.VaultEditor) editBtn.onclick = () => window.VaultEditor.openEdit(node);
     upgradeMedia(el, node);
     wireLinkClicks(el);
+    loadUnlinked(node.slug);
+  }
+
+  // Unlinked mentions (B5): notes that NAME this one (title/alias) in their body
+  // without a link. One-click "Link" appends a wikilink to the SOURCE note via the
+  // optimistic-lock PUT. Runs off the server's search index, not a re-walk.
+  async function loadUnlinked(slug) {
+    const el = document.getElementById("vault-unlinked");
+    if (!el) return;
+    try {
+      const r = await fetch(`/api/vault/unlinked?slug=${encodeURIComponent(slug).replace(/%2F/g, "/")}`);
+      if (!r.ok) { el.innerHTML = ""; return; }
+      const data = await r.json();
+      const list = data.mentions || [];
+      if (!list.length) { el.innerHTML = '<div class="vault-ul-empty">No unlinked mentions.</div>'; return; }
+      // snippet arrives HTML-escaped from the server; title via esc here.
+      el.innerHTML = list.map((m) => `
+        <div class="vault-unlinked-row">
+          <div class="vault-ul-main">
+            <span class="src" data-slug="${esc(m.slug)}">${esc(m.title)}</span>
+            <div class="ctx">${m.snippet}</div>
+          </div>
+          <button class="vault-ul-link" data-src="${esc(m.slug)}" type="button" title="Insert a [[wikilink]] to this note">Link it</button>
+        </div>`).join("");
+      el.querySelectorAll(".src[data-slug]").forEach((a) =>
+        a.addEventListener("click", () => { selectedSlug = a.dataset.slug; renderTree(); loadDetail(a.dataset.slug); }));
+      el.querySelectorAll(".vault-ul-link").forEach((b) =>
+        b.addEventListener("click", () => linkMention(b.dataset.src, slug)));
+    } catch { el.innerHTML = ""; }
+  }
+
+  async function linkMention(sourceSlug, targetSlug) {
+    try {
+      const enc = (s) => encodeURIComponent(s).replace(/%2F/g, "/");
+      const r = await fetch(`/api/vault/node/${enc(sourceSlug)}`);
+      if (!r.ok) throw new Error("load source");
+      const src = await r.json();
+      const targetTitle = titleForSlug(targetSlug);
+      const newBody = (src.body || "").replace(/\s*$/, "") + `\n\nSee also [[${targetSlug}|${targetTitle}]]\n`;
+      const put = await fetch(`/api/vault/node/${enc(sourceSlug)}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frontmatter: src.frontmatter, body: newBody, expectedHash: src.hash, message: `link ${sourceSlug} -> ${targetSlug}` }),
+      });
+      if (put.status === 409) { window.DCC.toast("That note changed — reopen and retry", "error"); return; }
+      if (!put.ok) throw new Error("put " + put.status);
+      window.DCC.toast("Linked");
+      await Promise.all([loadStatus(), loadList()]);
+      loadDetail(selectedSlug);
+      refreshTimeline();
+    } catch (e) { window.DCC.toast("Could not link", "error"); }
   }
 
   // ── Rich media (Phase B3) ──
@@ -460,6 +512,41 @@
     if (viewMode === "timeline") window.VaultTimeline.render();
   }
 
+  // ── Search / switcher / saved-view bridge (B5, consumed by VaultSearch) ──
+  // Open a note from anywhere (a search hit, a ⌘K jump, an orphan row): make the
+  // Mycelium tab active, drop out of canvas + into the explorer reading surface,
+  // then select + load. loadDetail fetches the node directly, so it works even
+  // before the tab's node list finishes reloading.
+  function openSlug(slug) {
+    const btn = document.getElementById("vault-tab-btn");
+    if (btn && !vaultTabActive()) btn.click();
+    if (inCanvas()) teardownCanvas();
+    if (viewMode !== "explorer") setView("explorer");
+    selectedSlug = slug;
+    renderTree();
+    loadDetail(slug);
+  }
+
+  // Serialize the current view surface + filter into a saved-view query.
+  function captureView() {
+    return { surface: viewMode, query: { type: activeType || "" }, sort: "" };
+  }
+
+  // Apply a saved (or built-in) view: activate the tab, set the type filter, then
+  // switch to the view's surface. setView renders the surface (explorer filters by
+  // activeType; the timeline shows the whole axis).
+  function applyView(view) {
+    if (!view) return;
+    const btn = document.getElementById("vault-tab-btn");
+    if (btn && !vaultTabActive()) btn.click();
+    if (inCanvas()) teardownCanvas();
+    const type = (view.query && view.query.type) || "";
+    activeType = type;
+    const sel = document.getElementById("vault-type-filter");
+    if (sel) sel.value = type;
+    setView(view.surface === "timeline" ? "timeline" : "explorer");
+  }
+
   // ── Focused thread canvas (B4b) ──
   // Entered from the timeline (a thread's "Open as canvas" affordance), NOT from
   // the segmented control: it's a drill-down that returns to the timeline. In
@@ -512,7 +599,15 @@
       const summary = document.getElementById("vault-summary");
       if (summary) {
         const v = data.vault || {};
-        summary.textContent = v.totalNodes != null ? `${v.totalNodes} notes · ${v.totalEdges} links` : "vault not ready";
+        let txt = v.totalNodes != null ? `${v.totalNodes} notes · ${v.totalEdges} links` : "vault not ready";
+        const sc = data.scale;
+        if (sc && sc.warn) {
+          txt += "  ⚠️ scale";
+          summary.title = "Scale sentinel: " + sc.warnReasons.join("; ") + " — see docs/vault-scale-notes.md";
+        } else if (sc) {
+          summary.title = `boot ${sc.initMs}ms · ${(sc.diskBytes / 1048576).toFixed(1)} MB · ${sc.searchDocs} indexed`;
+        }
+        summary.textContent = txt;
       }
     } catch (e) { setStatusPill("unknown"); }
   }
@@ -631,6 +726,15 @@
       onExit: () => exitCanvas(),
     });
 
+    // Search + saved views + quick-switcher (B5). VaultSearch owns those UIs; the
+    // tab hands it the bridge to open notes and capture/apply view state.
+    if (window.VaultSearch) window.VaultSearch.init({
+      esc: (s) => esc(s),
+      openSlug: (slug) => openSlug(slug),
+      captureView: () => captureView(),
+      applyView: (view) => applyView(view),
+    });
+
     const readingClose = document.getElementById("vault-reading-close");
     if (readingClose) readingClose.addEventListener("click", closeReadingDrawer);
 
@@ -685,6 +789,7 @@
       loadList();
       if (selectedSlug) loadDetail(selectedSlug);
       refreshTimeline();
+      if (window.VaultSearch) window.VaultSearch.refresh();
     });
     document.addEventListener("vault-sync-status", (e) => {
       setStatusPill((e.detail && e.detail.status) || "unknown");

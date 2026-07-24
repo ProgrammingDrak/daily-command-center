@@ -363,6 +363,9 @@ app.get("/api/vault/status", (req, res) => {
     // sensitive bodies. pinConfigured=false hides "Unlock" entirely.
     sensitiveUnlocked: isUnlocked(req),
     pinConfigured: !!ctx.VAULT_SENSITIVE_PIN,
+    // Decade-scale sentinel (B5): node count + working-tree size + boot time, and
+    // a warn flag the status pill surfaces when a threshold is crossed.
+    scale: ctx.vault && ctx.vault.ready ? ctx.vault.scaleStatus() : null,
   });
 });
 
@@ -398,7 +401,16 @@ app.post("/api/vault/lock", (req, res) => {
 app.get("/api/vault/nodes", (req, res) => {
   if (!vaultReady(res)) return;
   const { type, subtype, has, since } = req.query;
-  res.json(ctx.vault.list({ type, subtype, hasField: has, sinceDate: since }));
+  const all = ctx.vault.list({ type, subtype, hasField: has, sinceDate: since });
+  // Pagination (B5 scale guard). Back-compat: no `limit` -> the bare array the
+  // explorer tree has always consumed. With `limit`, return a paged envelope the
+  // client can infinite-scroll. offset/limit are clamped so a bad param can't
+  // slice out of range.
+  const rawLimit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(rawLimit) || rawLimit <= 0) return res.json(all);
+  const limit = Math.min(rawLimit, 1000);
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  res.json({ nodes: all.slice(offset, offset + limit), total: all.length, offset, limit });
 });
 
 // Schema for the editor: type list + each type's home dir, template, required
@@ -672,6 +684,130 @@ app.get("/api/vault/timeline", (req, res) => {
     nodes: outNodes,
     threads: outThreads,
   });
+});
+
+// ── Search + discovery + saved views (B5) ──
+
+// Full-text search over title/body/tags/aliases + media text sidecars. The
+// sensitive index is queried ONLY for a PIN-unlocked session (VaultStore.search
+// gates on includeSensitive), so a locked session can't surface sensitive
+// titles/bodies/snippets. ?mode=title powers the quick-switcher (title+alias
+// weighted). Snippets are plain text; HTML-escaped here for the client.
+app.get("/api/vault/search", (req, res) => {
+  if (!vaultReady(res)) return;
+  const q = String(req.query.q || "").trim();
+  const mode = req.query.mode === "title" ? "title" : "full";
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 30;
+  limit = Math.min(limit, 100);
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const t0 = Date.now();
+  const { results, total } = ctx.vault.search(q, { includeSensitive: isUnlocked(req), limit, offset, mode });
+  res.json({
+    q, mode, total, offset, limit, tookMs: Date.now() - t0,
+    results: results.map((r) => ({ ...r, snippet: escHtml(r.snippet || "") })),
+  });
+});
+
+// Rebuild the search index on demand (e.g., after a bulk external sync the
+// per-file watcher may have coalesced). Cheap — in-memory MiniSearch adds.
+app.post("/api/vault/reindex", async (req, res) => {
+  if (!vaultReady(res)) return;
+  const t0 = Date.now();
+  try {
+    const docs = await ctx.vault.buildSearchIndex();
+    res.json({ ok: true, docs, tookMs: Date.now() - t0 });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Unlinked mentions of a node: other notes whose body names this node (title or
+// alias) with no existing link. Runs on the search index. Sensitive sources are
+// hidden while locked, and a sensitive TARGET's mentions aren't revealed at all
+// while locked. The client's one-click "link it" appends the wikilink to the
+// SOURCE via the optimistic-lock PUT.
+app.get("/api/vault/unlinked", (req, res) => {
+  if (!vaultReady(res)) return;
+  const slug = ctx.vault.normalizeSlug(req.query.slug || "");
+  if (!slug) return res.status(400).json({ error: "slug required" });
+  if (isSensitiveSlug(slug) && !isUnlocked(req)) return res.status(403).json({ error: "locked", sensitive: true });
+  const mentions = ctx.vault.unlinked(slug, { includeSensitive: isUnlocked(req) });
+  res.json({ slug, mentions: mentions.map((m) => ({ ...m, snippet: escHtml(m.snippet || "") })) });
+});
+
+// Orphans: nodes with zero in/out edges (excluding inbox/fleeting). Sensitive
+// orphans withheld while locked.
+app.get("/api/vault/orphans", (req, res) => {
+  if (!vaultReady(res)) return;
+  res.json({ orphans: ctx.vault.orphans({ includeSensitive: isUnlocked(req) }) });
+});
+
+// Recent notes — the "Today + recent" default view's data. list() is already
+// mtime-desc, so today's edits sort to the top. Paginated (infinite scroll) and
+// sensitive-gated like search: a locked session never sees sensitive rows.
+app.get("/api/vault/recent", (req, res) => {
+  if (!vaultReady(res)) return;
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 30;
+  limit = Math.min(limit, 100);
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const unlocked = isUnlocked(req);
+  const all = ctx.vault.list().filter((n) => unlocked || !isSensitiveSlug(n.slug));
+  const results = all.slice(offset, offset + limit).map((n) => {
+    const fm = n.frontmatter || {};
+    return { slug: n.slug, title: fm.title || n.slug.split("/").pop(), type: fm.type || "untyped", sensitive: isSensitiveSlug(n.slug) };
+  });
+  res.json({ total: all.length, offset, limit, results });
+});
+
+// Saved views: {id,name,icon,surface,query,sort}[] persisted in the REPO at
+// .mycelium/views.json so they sync across every device like a node write. It is
+// NOT a .md, so VaultStore never indexes it (its walker skips dot-dirs); DATA_DIR
+// is not involved — the repo file is the single source of truth. Writes commit +
+// push through the SyncManager (same durability as any node).
+function viewsFile() { return path.join(ctx.vault.vaultDir, ".mycelium", "views.json"); }
+const VIEW_SURFACES = ["explorer", "timeline"];
+function sanitizeView(v) {
+  if (!v || typeof v !== "object") return null;
+  const name = String(v.name || "").trim().slice(0, 60);
+  if (!name) return null;
+  return {
+    // A view that already carries an id keeps it; a new (id-less) view gets a
+    // collision-free random token. NOT index/name-derived: after a delete the
+    // surviving views shift index, so `v${i}-${len}` could re-mint an id an
+    // existing view holds, and the client keys apply/rename/delete on id — a
+    // collision would drop or mis-target a saved view.
+    id: (typeof v.id === "string" && v.id) ? v.id.slice(0, 40) : `v${crypto.randomBytes(6).toString("hex")}`,
+    name,
+    icon: String(v.icon || "").slice(0, 8),
+    surface: VIEW_SURFACES.includes(v.surface) ? v.surface : "explorer",
+    query: (v.query && typeof v.query === "object" && !Array.isArray(v.query)) ? v.query : {},
+    sort: typeof v.sort === "string" ? v.sort.slice(0, 40) : "",
+  };
+}
+app.get("/api/vault/views", async (req, res) => {
+  if (!vaultReady(res)) return;
+  let views = [];
+  try { views = JSON.parse(await fsp.readFile(viewsFile(), "utf8")); } catch { views = []; }
+  if (!Array.isArray(views)) views = [];
+  res.json({ views });
+});
+app.put("/api/vault/views", async (req, res) => {
+  if (!vaultReady(res)) return;
+  const incoming = req.body && req.body.views;
+  if (!Array.isArray(incoming)) return res.status(400).json({ error: "views must be an array" });
+  if (incoming.length > 100) return res.status(400).json({ error: "too many views" });
+  const clean = incoming.map(sanitizeView).filter(Boolean);
+  const file = viewsFile();
+  try {
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    const tmp = file + ".tmp";
+    await fsp.writeFile(tmp, JSON.stringify(clean, null, 2) + "\n", "utf8");
+    await fsp.rename(tmp, file);
+    if (ctx.syncMgr) ctx.syncMgr.notifyChange({ slug: ".mycelium/views.json", message: "update saved views" });
+    res.json({ views: clean });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Create a new node. Server owns slug placement (schema home dir + slugified
