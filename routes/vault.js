@@ -50,6 +50,21 @@ function loadSchema(ctx) {
   return val;
 }
 
+// ontology.yml (the tag color wheel) via the shared parser, cached per-dir like
+// loadSchema so the timeline endpoint doesn't readFileSync + parse YAML on every
+// request. Returns null when the parser/ontology is unavailable (colors degrade).
+let _ontology = { dir: null, val: null };
+function loadOntology(ctx) {
+  const dir = ctx.vault && ctx.vault.vaultDir;
+  const parse = loadParse(ctx);
+  if (!dir || !parse || !parse.loadOntology) return null;
+  if (_ontology.dir === dir && _ontology.val) return _ontology.val;
+  let val = null;
+  try { val = parse.loadOntology(dir); } catch (e) { console.warn("[vault] ontology load failed:", e.message); }
+  _ontology = { dir, val };
+  return val;
+}
+
 function escHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -282,6 +297,37 @@ async function presignWarm(warm, r2cfg) {
   return getSignedUrl(_r2client, cmd, { expiresIn: 600 });
 }
 
+// ── Timeline colors (B4a) ──
+// A locked sensitive node shows as this neutral gray dot (no facets to color by).
+const LOCKED_COLOR = "#6b7280";
+
+// Hash a person/event key into a hue that sits BETWEEN the ontology's 8 fixed
+// category hues (0/40/80/140/200/260/300/340), so a relationship arc never reads
+// as a tag color. Fixed sat/light so the whole thread family is one visual
+// language. djb2 for a stable, dependency-free spread. Pure (tested directly).
+const GAP_HUES = [20, 60, 110, 170, 225, 282, 320, 352];
+function gapHueColor(str) {
+  let h = 5381;
+  const s = String(str);
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return `hsl(${GAP_HUES[h % GAP_HUES.length]}, 55%, 55%)`;
+}
+
+// A node's dot color = the circular-mean ontology color of its tag set (the ONE
+// color algorithm, parse.colorForTags). Degrades to the unmapped gray when the
+// shared parser/ontology is absent or the node is tagless.
+function nodeColor(tags, ontology, parse, unmapped) {
+  if (!parse || !parse.colorForTags || !ontology || !tags || !tags.length) return unmapped;
+  try { return parse.colorForTags(tags, ontology).hex || unmapped; } catch { return unmapped; }
+}
+
+// A thread's arc color: tag threads borrow the ontology tag color (shared visual
+// language with the dots); person/event threads hash into the gap hues.
+function threadColor(kind, value, ontology, parse, unmapped) {
+  if (kind === "tag") return nodeColor([value], ontology, parse, unmapped);
+  return gapHueColor(`${kind}:${value}`);
+}
+
 function mount(app, ctx) {
   const { VAULT_REPO_URL } = ctx;
 
@@ -495,6 +541,79 @@ app.get("/api/vault/ontology", (req, res) => {
   }
   const render = ontology.render || {};
   res.json({ tagColors, unmapped: render.unmapped || "#9ca3af", available: true });
+});
+
+// ── Timeline (B4a): the signature visualization's data ──
+// Dated nodes + relevance threads (a tag/person/event shared by >=2 in-range
+// nodes), colored for the client. The client fetches the FULL corpus once (no
+// from/to) and windows client-side during zoom/pan; from/to/tags/types/people
+// are optional server filters. Sensitivity mirrors GET /api/vault/node/*: a
+// locked session gets sensitive nodes as bare, date-only "locked" dots — no
+// slug/title/facets — and they never appear as thread members.
+app.get("/api/vault/timeline", (req, res) => {
+  if (!vaultReady(res)) return;
+  const q = req.query || {};
+  const csv = (v) => String(v || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v));
+  const from = isDate(q.from) ? String(q.from) : null;
+  const to = isDate(q.to) ? String(q.to) : null;
+  const types = csv(q.types);
+  const tags = csv(q.tags);
+  const people = csv(q.people);
+  let cap = parseInt(q.cap, 10);
+  if (!Number.isFinite(cap) || cap <= 0) cap = 40;   // thread-explosion guard (param to raise)
+  cap = Math.min(cap, 500);
+
+  const { nodes, threads } = ctx.vault.timeline({ from, to, types, tags, people });
+  const locked = !isUnlocked(req);
+
+  // Ontology for colors — best-effort (cached per-dir); degrades to gray/gap-hues.
+  const parse = loadParse(ctx);
+  const ontology = loadOntology(ctx);
+  let unmapped = "#9ca3af";
+  if (ontology && ontology.render && ontology.render.unmapped) unmapped = ontology.render.unmapped;
+
+  const redacted = new Set(); // sensitive slugs collapsed to locked dots this response
+  let lockedCount = 0;
+  const outNodes = nodes.map((n, i) => {
+    if (locked && isSensitiveSlug(n.slug)) {
+      redacted.add(n.slug);
+      lockedCount++;
+      return { id: `locked:${n.date}:${i}`, date: n.date, type: "locked", sensitive: true, color: LOCKED_COLOR };
+    }
+    return {
+      id: n.slug, slug: n.slug, title: n.title, type: n.type, date: n.date,
+      tags: n.tags, people: n.people, event: n.event,
+      sensitive: isSensitiveSlug(n.slug),
+      color: nodeColor(n.tags, ontology, parse, unmapped),
+    };
+  });
+
+  // Drop redacted members; a thread that falls below 2 members disappears. Every
+  // surviving member slug is guaranteed present as a slug-bearing node above.
+  let live = threads;
+  if (locked && redacted.size) {
+    live = threads
+      .map((t) => (t.members.some((s) => redacted.has(s)) ? { ...t, members: t.members.filter((s) => !redacted.has(s)) } : t))
+      .filter((t) => t.members.length >= 2);
+  }
+  live.sort((a, b) => b.members.length - a.members.length || (a.key < b.key ? -1 : 1));
+  const threadsTotal = live.length;
+  const outThreads = live.slice(0, cap).map((t) => ({
+    key: t.key, kind: t.kind, value: t.value,
+    label: t.kind === "person" ? t.value.split("/").pop() : t.value,
+    color: threadColor(t.kind, t.value, ontology, parse, unmapped),
+    members: t.members,
+  }));
+
+  res.json({
+    range: { from, to },
+    counts: { nodes: outNodes.length, locked: lockedCount, threads: threadsTotal, threadsShown: outThreads.length, cap },
+    unmapped,
+    ontologyAvailable: !!ontology,
+    nodes: outNodes,
+    threads: outThreads,
+  });
 });
 
 // Create a new node. Server owns slug placement (schema home dir + slugified
@@ -965,3 +1084,7 @@ module.exports.isLfsPointer = isLfsPointer;
 module.exports.renderMediaRefs = renderMediaRefs;
 module.exports.presignWarm = presignWarm;
 module.exports.r2ConfigFromEnv = r2ConfigFromEnv;
+// B4a timeline color helpers (vault-b4a.test.js).
+module.exports.gapHueColor = gapHueColor;
+module.exports.nodeColor = nodeColor;
+module.exports.threadColor = threadColor;

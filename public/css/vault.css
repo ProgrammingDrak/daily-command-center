@@ -176,3 +176,77 @@
 /* Lightbox (click an image to zoom) */
 .vault-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.86);display:flex;align-items:center;justify-content:center;z-index:9999;cursor:zoom-out}
 .vault-lightbox img{max-width:94vw;max-height:94vh;border-radius:6px;box-shadow:0 8px 40px rgba(0,0,0,.5)}
+
+/* ── Phase B4a: the signature timeline ── */
+
+/* Explorer/Timeline segmented control */
+.vault-viewtoggle{display:inline-flex;border:1px solid var(--border);border-radius:7px;overflow:hidden}
+.vault-vbtn{font-size:11px;background:var(--bg-elev);color:var(--text-muted);border:none;padding:4px 11px;cursor:pointer}
+.vault-vbtn+.vault-vbtn{border-left:1px solid var(--border)}
+.vault-vbtn.active{background:var(--accent);color:#fff}
+
+/* Timeline mode flips the body to a column: timeline on top, reading pane below */
+#vault-timeline{display:none}
+#vault-body.tl-mode{flex-direction:column}
+#vault-body.tl-mode #vault-tree{display:none}
+#vault-body.tl-mode #vault-timeline{display:flex;flex-direction:column;flex:1 1 auto;min-height:360px;max-height:74vh}
+#vault-body.tl-mode #vault-reading{flex:0 0 auto;max-height:38vh;border-top:1px solid var(--border);padding:16px 22px 40px}
+
+.vault-tl-msg{padding:40px;text-align:center;color:var(--text-muted)}
+.vault-tl-toolbar{display:flex;align-items:center;gap:12px;padding:8px 4px}
+.vault-tl-count{font-size:12px;color:var(--text)}
+.vault-tl-hint{font-size:11px;color:var(--text-muted)}
+.vault-tl-spacer{flex:1}
+.vault-tl-btn{font-size:11px;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;cursor:pointer}
+.vault-tl-btn:hover{border-color:var(--text-muted)}
+
+/* "On this day" strip */
+.vault-tl-onthisday{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 4px 8px}
+.vault-tl-otd-h{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+.vault-tl-otd-chip{font-size:12px;background:var(--bg-elev);border:1px solid var(--border);border-radius:20px;padding:3px 10px;color:var(--text);cursor:pointer;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.vault-tl-otd-chip:hover{border-color:var(--accent)}
+.vault-tl-otd-chip .yr{color:var(--accent);font-weight:600;margin-right:2px}
+.vault-tl-otd-chip.locked{cursor:default;color:var(--text-muted)}
+
+/* Canvas + SVG */
+.vault-tl-canvas{position:relative;flex:1 1 auto;min-height:260px;border-top:1px solid var(--border);overflow:hidden}
+.vault-tl-svg{display:block;width:100%;height:100%;cursor:grab}
+.vault-tl-svg:active{cursor:grabbing}
+.vault-tl-axisline{stroke:var(--text-muted);stroke-width:1.5;opacity:.6}
+.vault-tl-tick line{stroke:var(--border);stroke-width:1;opacity:.45}
+.vault-tl-tick text{fill:var(--text-muted);font-size:10px}
+.vault-tl-stem{stroke:var(--border);stroke-width:1;opacity:.8}
+.vault-tl-dot{stroke:var(--bg,#0f172a);stroke-width:1.5;cursor:pointer;transition:opacity .12s}
+.vault-tl-dot:hover{stroke:var(--text)}
+.vault-tl-dot.locked{fill:#6b7280 !important;cursor:default}
+.vault-tl-dot.in-thread{stroke:var(--text);stroke-width:2.5}
+.vault-tl-dot.dimmed{opacity:.28}
+.vault-tl-glyph{font-size:11px;pointer-events:none;user-select:none}
+.vault-tl-arc{fill:none;stroke-width:1.5;opacity:.16;transition:opacity .12s;cursor:pointer;pointer-events:stroke}
+.vault-tl-arc.active{opacity:.9;stroke-width:2.5}
+.vault-tl-arc.dimmed{opacity:.04}
+
+/* Legend rail (top threads in view) */
+.vault-tl-legend{position:absolute;top:8px;right:8px;width:190px;max-height:calc(100% - 16px);overflow-y:auto;background:color-mix(in srgb,var(--bg,#0f172a) 86%,transparent);border:1px solid var(--border);border-radius:10px;padding:8px;backdrop-filter:blur(3px)}
+.vault-tl-legend-h{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:600;margin:0 2px 6px}
+.vault-tl-chip{display:flex;align-items:center;gap:7px;width:100%;background:none;border:1px solid transparent;border-radius:6px;padding:3px 6px;cursor:pointer;color:var(--text);font-size:12px;text-align:left}
+.vault-tl-chip:hover{background:var(--bg-elev)}
+.vault-tl-chip.sel{border-color:var(--accent);background:var(--bg-elev)}
+.vault-tl-chip .sw{flex:0 0 10px;height:10px;border-radius:3px}
+.vault-tl-chip .lb{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vault-tl-chip .ct{color:var(--text-muted);font-size:11px}
+
+/* Hover card */
+.vault-tl-hovercard{position:absolute;z-index:20;pointer-events:none;background:var(--bg,#0f172a);border:1px solid var(--border);border-radius:9px;box-shadow:0 10px 30px rgba(0,0,0,.4);padding:9px 11px;max-width:250px;font-size:12.5px}
+.vault-tl-hovercard[hidden]{display:none}
+.vault-tl-hovercard .hc-title{font-weight:600;color:var(--text);margin-bottom:2px}
+.vault-tl-hovercard .hc-meta{color:var(--text-muted);font-size:11.5px}
+.vault-tl-hovercard .hc-people{color:var(--text-muted);font-size:11.5px;margin-top:3px}
+.vault-tl-hovercard .hc-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.vault-tl-hovercard .hc-tag{font-size:11px;background:var(--bg-elev);border-radius:4px;padding:1px 6px;color:var(--text-muted)}
+
+@media (max-width:780px){
+  #vault-body.tl-mode #vault-timeline{min-height:300px}
+  .vault-tl-legend{width:132px}
+  .vault-tl-hint{display:none}
+}
