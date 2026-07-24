@@ -2,6 +2,7 @@
 // initialized during startup after routes mount), via getters on ctx.
 
 const path = require("path");
+const fs = require("fs");
 const fsp = require("fs/promises");
 const crypto = require("crypto");
 const multer = require("multer");
@@ -167,6 +168,120 @@ function mediaPlacement({ bytes, mime, sensitive }) {
   return bytes < INLINE_MAX ? { band: "inline" } : { band: "lfs" };
 }
 
+// ── Media serving v2 (B3): resolution + render helpers ──
+// The editor embeds attachments as `![alt](media:sha256:<hex>)`. These helpers
+// turn a manifest into (a) the element kind the client should render and (b) the
+// ordered list of tiers the media route tries. All pure + exported for tests.
+
+// Which HTML element a mime maps to. `file` = a download link fallback.
+function mediaKind(mime) {
+  const m = String(mime || "").toLowerCase();
+  if (m.startsWith("image/")) return "image";
+  if (m.startsWith("audio/")) return "audio";
+  if (m.startsWith("video/")) return "video";
+  if (m === "application/pdf") return "pdf";
+  return "file";
+}
+
+// A git-LFS pointer file is a tiny text blob whose first line is the spec URL.
+// The vault clones with GIT_LFS_SKIP_SMUDGE=1, so an un-viewed lfs original is
+// still a pointer on disk; the route smudges it on first view. Check only the
+// head bytes (pointers are ~130 bytes; a real media file won't start with this).
+function isLfsPointer(head) {
+  return typeof head === "string" && /^version https:\/\/git-lfs\.github\.com\/spec\//.test(head);
+}
+
+// The ordered tiers the media route should try for a given variant, honoring the
+// frozen spec's render resolution order. Server has no local disk, so it never
+// tries `local_copies` (step 1). Sensitive media is inline-only by spec (never
+// LFS/warm/cold, which would put plaintext off-machine) — so a `sensitive`
+// manifest resolves to its inline copy alone and NEVER presigns to R2.
+//   auto     -> original (inline|lfs) -> warm (R2) -> lowres
+//   original -> the inline|lfs original only (else cold, i.e. "in deep freeze")
+//   lowres   -> lowres -> warm -> original
+// If nothing is servable but a `cold` locator exists, the single {tier:"cold"}
+// candidate is returned so the route can emit the deep-freeze note.
+function mediaCandidates(m, variant) {
+  const v = variant || "auto";
+  if (m.visibility === "sensitive") {
+    return m.inline ? [{ tier: "inline", path: m.inline }] : [];
+  }
+  const original = m.inline ? { tier: "inline", path: m.inline }
+    : (m.lfs ? { tier: "lfs", path: m.lfs } : null);
+  const warm = m.warm ? { tier: "warm", warm: m.warm } : null;
+  const lowres = (m.lowres && m.lowres.path) ? { tier: "lowres", path: m.lowres.path } : null;
+  const cold = m.cold ? { tier: "cold" } : null;
+  let out;
+  if (v === "original") out = [original];
+  else if (v === "lowres") out = [lowres, warm, original];
+  else out = [original, warm, lowres]; // auto
+  out = out.filter(Boolean);
+  if (!out.length && cold) out = [cold];
+  return out;
+}
+
+// Rewrite `![alt](media:sha256:<hex>)` embeds to a placeholder the client
+// upgrades (via node.media) into the right element. A block-level <div> (not an
+// inline <span>) is used deliberately: marked wraps loose inline HTML in a <p>,
+// which for an album would nest every figure inside ONE paragraph and break the
+// CSS grid — a block <div> stays a top-level child of .vault-body-md, so the
+// figures become real grid items. Kept separate from renderWikilinks (disjoint
+// syntax) and run after it. alt is attribute-escaped; hex is validated by the
+// regex. Plain `[text](media:...)` links are left alone (the editor only emits
+// the image-embed form).
+const MEDIA_REF_RE = /!\[([^\]]*)\]\(media:sha256:([a-fA-F0-9]{12,64})\)/g;
+function renderMediaRefs(body) {
+  if (typeof body !== "string" || !body) return body;
+  return body.replace(MEDIA_REF_RE, (full, alt, hex) =>
+    `<div class="vault-media" data-media-hash="${String(hex).toLowerCase()}" data-media-alt="${escAttr(alt || "")}"></div>`);
+}
+
+// R2 (warm tier) config from env. Null when unset -> the warm branch degrades to
+// the next candidate. Provisioning (Drake, no date) sets these; until then every
+// manifest's `warm` block is null anyway (Track C ships the cloud tiers dormant).
+// NOTE: these deliberately use the cross-tool `MYCELIUM_R2_*` namespace (matching
+// the brain secret keys `mycelium.r2_*` and the mycelium-media CLI/MCP that owns
+// the buckets), NOT this server's `VAULT_*` convention — do not "align" them.
+function r2ConfigFromEnv() {
+  const e = process.env;
+  if (!e.MYCELIUM_R2_ACCESS_KEY_ID || !e.MYCELIUM_R2_SECRET_ACCESS_KEY || !e.MYCELIUM_R2_ENDPOINT) return null;
+  return {
+    accessKeyId: e.MYCELIUM_R2_ACCESS_KEY_ID,
+    secretAccessKey: e.MYCELIUM_R2_SECRET_ACCESS_KEY,
+    endpoint: e.MYCELIUM_R2_ENDPOINT,
+    region: e.MYCELIUM_R2_REGION || "auto",
+    warmBucket: e.MYCELIUM_R2_WARM_BUCKET || "mycelium-warm",
+  };
+}
+
+// Presign a 10-minute GET against the R2 warm bucket and return the URL (the
+// browser fetches R2 directly -> zero Node egress). aws-sdk v3 is lazy-required
+// so a vault-less / cloud-less DCC boots without loading it. Presigning is a
+// local crypto op (no network). Client is cached (creds/endpoint are stable).
+// Returns null when R2 is unconfigured or the SDK is absent (caller degrades).
+let _r2client = null;
+async function presignWarm(warm, r2cfg) {
+  if (!warm || !warm.key || !r2cfg) return null;
+  let S3Client, GetObjectCommand, getSignedUrl;
+  try {
+    ({ S3Client, GetObjectCommand } = require("@aws-sdk/client-s3"));
+    ({ getSignedUrl } = require("@aws-sdk/s3-request-presigner"));
+  } catch (e) {
+    console.warn("[vault] aws-sdk not installed; warm (R2) tier unavailable:", e.message);
+    return null;
+  }
+  if (!_r2client) {
+    _r2client = new S3Client({
+      region: r2cfg.region || "auto",
+      endpoint: r2cfg.endpoint,
+      credentials: { accessKeyId: r2cfg.accessKeyId, secretAccessKey: r2cfg.secretAccessKey },
+      forcePathStyle: true,
+    });
+  }
+  const cmd = new GetObjectCommand({ Bucket: warm.bucket || r2cfg.warmBucket, Key: warm.key });
+  return getSignedUrl(_r2client, cmd, { expiresIn: 600 });
+}
+
 function mount(app, ctx) {
   const { VAULT_REPO_URL } = ctx;
 
@@ -280,7 +395,7 @@ app.get("/api/vault/template/:type", async (req, res) => {
   }
 });
 
-app.get("/api/vault/node/*", (req, res) => {
+app.get("/api/vault/node/*", async (req, res) => {
   if (!vaultReady(res)) return;
   // Normalize BEFORE the sensitive check so it matches the store's own slug
   // (a `..` inside a segment would otherwise dodge the gate then normalize into
@@ -294,10 +409,12 @@ app.get("/api/vault/node/*", (req, res) => {
   }
   const node = ctx.vault.get(slug);
   if (!node) return res.status(404).json({ error: "not found" });
+  // Rewrite [[wikilinks]] (needs the shared parser) then media embeds (doesn't).
+  // renderedBody is always set so the client renders a single, consistent body.
+  let rendered = node.body;
   const parse = loadParse(ctx);
-  if (parse && parse.WIKILINK_RE) {
-    node.renderedBody = renderWikilinks(node.body, parse, ctx.vault);
-  }
+  if (parse && parse.WIKILINK_RE) rendered = renderWikilinks(rendered, parse, ctx.vault);
+  node.renderedBody = renderMediaRefs(rendered);
   // A sensitive source note links to this one: show the mention exists but strip
   // its context snippet while locked (it would leak a slice of the sensitive
   // body through this endpoint). Unlocked sessions keep the context.
@@ -306,8 +423,53 @@ app.get("/api/vault/node/*", (req, res) => {
       if (b && b.source && isSensitiveSlug(b.source)) b.context = null;
     }
   }
+  // Metadata for each media embed so the client renders the right element
+  // (img/audio/video/iframe) and degrades cloud-only tiers gracefully.
+  node.media = await nodeMedia(node, req);
   res.json(node);
 });
+
+// Build the { hex -> meta } map the client uses to upgrade media placeholders.
+// One manifest lookup per distinct embed; sensitive media on a locked session
+// (or a public note embedding a private ref) is reported unavailable, not leaked.
+async function nodeMedia(node, req) {
+  const out = {};
+  const body = node.body || "";
+  // Warm (R2) is only actually serveable when R2 is configured on THIS server;
+  // until Drake provisions it, a warm-only manifest must read as "not yet
+  // available" so the client degrades to a placeholder instead of a broken tag.
+  const r2ok = !!r2ConfigFromEnv();
+  // Collect all embed hashes SYNCHRONOUSLY before any await. MEDIA_REF_RE is a
+  // shared /g regex; driving its stateful .exec across the awaits below would let
+  // concurrent /api/vault/node/* requests corrupt each other's lastIndex and
+  // silently drop embeds. matchAll snapshots the matches up front.
+  const hexes = [...body.matchAll(MEDIA_REF_RE)].map((mm) => mm[2].toLowerCase());
+  const seen = new Set();
+  for (const hex of hexes) {
+    if (seen.has(hex)) continue;
+    seen.add(hex);
+    const found = await findManifest(hex.slice(0, 12));
+    if (!found) { out[hex] = { hash: hex, available: false, missing: true }; continue; }
+    const m = found.manifest;
+    if (m.visibility === "sensitive" && !isUnlocked(req)) { out[hex] = { hash: hex, available: false, locked: true }; continue; }
+    const lowres = !!(m.lowres && m.lowres.path);
+    const warm = !!m.warm && r2ok;
+    out[hex] = {
+      hash: hex,
+      kind: mediaKind(m.mime),
+      mime: m.mime || null,
+      filename: m.filename || null,
+      bytes: m.bytes || null,
+      dims: m.dims || null,
+      duration_s: m.duration_s || null,
+      album: m.album || "",
+      tiers: { inline: !!m.inline, lfs: !!m.lfs, warm, lowres, cold: !!m.cold },
+      available: !!(m.inline || m.lfs || warm || lowres),
+      visibility: m.visibility || null,
+    };
+  }
+  return out;
+}
 
 // Ontology-driven tag colors. Precomputes a hex per tag currently in the vault
 // via parse.colorForTags (single source of truth for the color math) so the
@@ -507,6 +669,10 @@ async function ingestMedia(buf, filename, mime, { sensitive } = {}) {
   const manifestAbs = path.join(ctx.vault.vaultDir, manifestRel);
   await fsp.mkdir(path.dirname(manifestAbs), { recursive: true });
   await fsp.writeFile(manifestAbs, JSON.stringify(manifest, null, 2) + "\n");
+  // Keep the media index warm: a just-attached blob is renderable immediately,
+  // without waiting for a rescan (manifests aren't watched — see findManifest).
+  // cacheManifest re-reads from disk so the cached mtime matches the file.
+  await cacheManifest(hash12, manifestAbs);
 
   // Commit both files together (git add . via the sync queue). Message carries
   // the hash only — never the filename of sensitive media.
@@ -538,43 +704,209 @@ app.post("/api/vault/attach", (req, res) => {
   });
 });
 
-// Serve an INLINE media blob by hash (v1). LFS + warm/cold serving is B3; this
-// route grows there. Sensitive (private/) blobs need an unlocked session.
-async function findManifest(hash12) {
-  const roots = [
-    path.join(ctx.vault.vaultDir, "media", "manifests"),
-    path.join(ctx.vault.vaultDir, "media", "manifests", "private"),
-  ];
-  for (const root of roots) {
+// ── Media serving v2 ──
+// In-memory hash12 -> {path, mtimeMs, manifest} index, replacing B2's per-request
+// walk. Built lazily on first use (routes mount before vault init, so there's no
+// ready-event to hook here) and kept warm incrementally: attach adds its manifest
+// directly. A manifest that arrives OR is updated in place via `git pull` is NOT
+// caught by the VaultStore watcher (that only fires on .md), so findManifest
+// re-reads on an mtime change, drops + re-walks a vanished hash, and walks once
+// (caching the hit) for a hash it has never seen — the index self-heals.
+const mediaIndex = new Map();
+let _mediaIndexBuild = null;
+
+const MANIFEST_ROOTS = () => [
+  path.join(ctx.vault.vaultDir, "media", "manifests"),
+  path.join(ctx.vault.vaultDir, "media", "manifests", "private"),
+];
+const PRIVATE_MANIFEST_DIR = () => path.resolve(ctx.vault.vaultDir, "media", "manifests", "private") + path.sep;
+
+// Read + parse a manifest, cache it with its mtime, and stamp visibility=sensitive
+// when it lives under the private/ subtree. The storage LOCATION is authoritative
+// for sensitivity: a private manifest with a missing/null `visibility` field must
+// still hit the PIN gate and never presign to R2, so the security boundary can't
+// hinge on a self-declared field. Returns the cache entry, or null if unreadable.
+async function cacheManifest(hash12, absPath) {
+  let stat, manifest;
+  try {
+    stat = await fsp.stat(absPath);
+    manifest = JSON.parse(await fsp.readFile(absPath, "utf8"));
+  } catch { return null; }
+  if (path.resolve(absPath).startsWith(PRIVATE_MANIFEST_DIR())) manifest.visibility = "sensitive";
+  const entry = { path: absPath, mtimeMs: stat.mtimeMs, manifest };
+  mediaIndex.set(hash12, entry);
+  return entry;
+}
+
+// Walk each manifest year-dir once, invoking cb(dirAbs); return true from cb to
+// stop early. `media/manifests/private` is also listed under `media/manifests`,
+// so skip that pseudo-year and let it be scanned via its own root (no double
+// visit). Shared by the eager build and the targeted findManifest fallback so
+// the dir layout lives in exactly one place.
+async function eachManifestDir(cb) {
+  for (const root of MANIFEST_ROOTS()) {
     let years;
     try { years = await fsp.readdir(root, { withFileTypes: true }); } catch { continue; }
     for (const y of years) {
       if (!y.isDirectory()) continue;
-      const f = path.join(root, y.name, `${hash12}.json`);
-      try { return { path: f, manifest: JSON.parse(await fsp.readFile(f, "utf8")) }; } catch { /* keep looking */ }
+      if (root.endsWith(path.join("media", "manifests")) && y.name === "private") continue;
+      if (await cb(path.join(root, y.name))) return;
     }
   }
-  return null;
 }
 
+async function buildMediaIndex() {
+  mediaIndex.clear();
+  await eachManifestDir(async (dir) => {
+    let files;
+    try { files = await fsp.readdir(dir); } catch { return false; }
+    for (const fn of files) {
+      if (fn.endsWith(".json")) await cacheManifest(fn.replace(/\.json$/, ""), path.join(dir, fn));
+    }
+    return false;
+  });
+  return mediaIndex.size;
+}
+
+function ensureMediaIndex() {
+  if (!_mediaIndexBuild) {
+    _mediaIndexBuild = buildMediaIndex().catch((e) => {
+      console.warn("[vault] media index build failed:", e.message);
+      _mediaIndexBuild = null; // let a later request retry the build
+      return 0;
+    });
+  }
+  return _mediaIndexBuild;
+}
+
+async function findManifest(hash12) {
+  await ensureMediaIndex();
+  const hit = mediaIndex.get(hash12);
+  if (hit) {
+    // A pull could have removed OR updated the manifest in place (a warm/cold tier
+    // written at provisioning) since it was cached. Re-read on an mtime change;
+    // drop + re-walk if it's gone.
+    try {
+      const st = await fsp.stat(hit.path);
+      if (st.mtimeMs === hit.mtimeMs) return hit;
+      const fresh = await cacheManifest(hash12, hit.path);
+      if (fresh) return fresh;
+    } catch { mediaIndex.delete(hash12); }
+  }
+  let found = null;
+  await eachManifestDir(async (dir) => {
+    const entry = await cacheManifest(hash12, path.join(dir, `${hash12}.json`));
+    if (entry) { found = entry; return true; }
+    return false;
+  });
+  return found;
+}
+
+// Per-hash LFS fetch de-dupe: concurrent viewers of the same un-smudged object
+// share ONE `git lfs pull`, so a burst of <img> requests can't spawn N fetches.
+const _lfsFetches = new Map();
+function lfsFetchOnce(hash12, relPath) {
+  if (_lfsFetches.has(hash12)) return _lfsFetches.get(hash12);
+  const run = ctx.syncMgr ? ctx.syncMgr.lfsFetch(relPath) : Promise.reject(new Error("sync disabled"));
+  const p = run.finally(() => _lfsFetches.delete(hash12));
+  _lfsFetches.set(hash12, p);
+  return p;
+}
+
+// Stream a working-tree blob (inline / smudged-LFS / lowres — all small by
+// construction) with a single-range handler so <audio>/<video> can seek. R2
+// (warm) is never streamed through Node; it 302-redirects.
+async function streamFile(req, res, abs, mime) {
+  const stat = await fsp.stat(abs);
+  res.setHeader("Content-Type", mime || "application/octet-stream");
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+  res.setHeader("Accept-Ranges", "bytes");
+  const mr = req.headers.range && /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range).trim());
+  if (mr) {
+    let start, end;
+    if (mr[1] === "" && mr[2] !== "") {
+      // Suffix range `bytes=-N` = the final N bytes (RFC 7233). Media clients
+      // (e.g. QuickTime fetching an MP4's trailing moov atom) rely on this.
+      const n = parseInt(mr[2], 10);
+      end = stat.size - 1;
+      start = Number.isNaN(n) ? 0 : Math.max(0, stat.size - n);
+    } else {
+      start = mr[1] ? parseInt(mr[1], 10) : 0;
+      end = mr[2] ? parseInt(mr[2], 10) : stat.size - 1;
+    }
+    if (Number.isNaN(start)) start = 0;
+    if (Number.isNaN(end) || end >= stat.size) end = stat.size - 1;
+    if (start > end || start >= stat.size) {
+      res.status(416).setHeader("Content-Range", `bytes */${stat.size}`);
+      return res.end();
+    }
+    res.status(206);
+    res.setHeader("Content-Range", `bytes ${start}-${end}/${stat.size}`);
+    res.setHeader("Content-Length", end - start + 1);
+    const s = fs.createReadStream(abs, { start, end });
+    s.on("error", () => res.destroy());
+    return s.pipe(res);
+  }
+  res.setHeader("Content-Length", stat.size);
+  const s = fs.createReadStream(abs);
+  s.on("error", () => { if (!res.headersSent) res.status(404).json({ error: "blob missing" }); else res.destroy(); });
+  return s.pipe(res);
+}
+
+// Serve media by hash across all tiers, honoring the manifest resolution order.
+//   ?variant=auto (default) | original | lowres  — see mediaCandidates().
+// Sensitive (private/) media needs an unlocked session and never presigns to R2.
 app.get("/api/vault/media/:hash", async (req, res) => {
   if (!vaultReady(res)) return;
   const hex = String(req.params.hash).replace(/^sha256:/, "").toLowerCase();
   if (!/^[a-f0-9]{12,64}$/.test(hex)) return res.status(400).json({ error: "bad hash" });
-  const found = await findManifest(hex.slice(0, 12));
+  const variant = ["auto", "original", "lowres"].includes(String(req.query.variant)) ? String(req.query.variant) : "auto";
+  const hash12 = hex.slice(0, 12);
+  const found = await findManifest(hash12);
   if (!found) return res.status(404).json({ error: "not found" });
   const m = found.manifest;
   if (m.visibility === "sensitive" && !isUnlocked(req)) return res.status(403).json({ error: "locked", sensitive: true });
-  if (!m.inline) return res.status(415).json({ error: "not an inline blob (LFS/cold serving lands in B3)" });
-  const abs = path.join(ctx.vault.vaultDir, m.inline);
-  try {
-    const buf = await fsp.readFile(abs);
-    res.setHeader("Content-Type", m.mime || "application/octet-stream");
-    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
-    res.send(buf);
-  } catch {
-    res.status(404).json({ error: "blob missing" });
+
+  for (const c of mediaCandidates(m, variant)) {
+    if (c.tier === "warm") {
+      let url = null;
+      try { url = await presignWarm(c.warm, r2ConfigFromEnv()); } catch (e) { console.warn("[vault] presign failed:", e.message); }
+      if (url) {
+        res.setHeader("Cache-Control", "private, no-store"); // the URL itself is a 10-min bearer
+        return res.redirect(302, url);
+      }
+      continue; // R2 unconfigured / presign failed -> degrade to next candidate
+    }
+    if (c.tier === "cold") {
+      return res.status(409).json({ error: "in deep freeze; restore via the mycelium-media CLI", tier: "cold" });
+    }
+    // Repo-path tiers: inline / lfs / lowres. Defense-in-depth containment: the
+    // path comes from the manifest JSON, so reject any that resolves outside the
+    // vault dir (a `../` blob path streaming arbitrary file content) even though
+    // manifests are server-generated and vault write access is already trusted.
+    const abs = path.resolve(ctx.vault.vaultDir, c.path);
+    if (!abs.startsWith(path.resolve(ctx.vault.vaultDir) + path.sep)) continue;
+    try {
+      if (c.tier === "lfs") {
+        let head = "";
+        try {
+          const fh = await fsp.open(abs, "r");
+          try { const b = Buffer.alloc(128); const { bytesRead } = await fh.read(b, 0, 128, 0); head = b.slice(0, bytesRead).toString("utf8"); }
+          finally { await fh.close(); }
+        } catch { /* missing file handled by streamFile below */ }
+        if (isLfsPointer(head)) {
+          try { await lfsFetchOnce(hash12, c.path); }
+          catch (e) { console.warn("[vault] lfs fetch failed:", e.message); continue; } // degrade
+        }
+      }
+      const mime = c.tier === "lowres" ? "image/jpeg" : m.mime;
+      return await streamFile(req, res, abs, mime);
+    } catch { continue; } // file missing on this tier -> try the next
   }
+  return res.status(404).json({
+    error: "no servable media tier",
+    tiers: { inline: !!m.inline, lfs: !!m.lfs, warm: !!m.warm, lowres: !!(m.lowres && m.lowres.path), cold: !!m.cold },
+  });
 });
 
 // PWA share_target (manifest action=/api/vault/share, method POST, enctype
@@ -626,3 +958,10 @@ module.exports.slugify = slugify;
 module.exports.typeDirOk = typeDirOk;
 module.exports.dirRegex = dirRegex;
 module.exports.mediaPlacement = mediaPlacement;
+// B3 media-serving pure helpers (vault-b3.test.js).
+module.exports.mediaKind = mediaKind;
+module.exports.mediaCandidates = mediaCandidates;
+module.exports.isLfsPointer = isLfsPointer;
+module.exports.renderMediaRefs = renderMediaRefs;
+module.exports.presignWarm = presignWarm;
+module.exports.r2ConfigFromEnv = r2ConfigFromEnv;

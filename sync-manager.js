@@ -212,6 +212,20 @@ class SyncManager extends EventEmitter {
     await this._runPush();
   }
 
+  // On-demand LFS materialization (B3). The vault is cloned with
+  // GIT_LFS_SKIP_SMUDGE=1, so media/lfs/** files are pointers until first view.
+  // `git lfs pull --include <relPath> --exclude ""` fetches AND smudges just that
+  // one object into the working tree; everything else stays a pointer, keeping
+  // LFS bandwidth proportional to what's actually rendered. Railway's disk is
+  // ephemeral, so a cold boot drops the smudged blob and this re-fetches on the
+  // next view — on demand only, never a bulk pull. The route layer serializes
+  // concurrent fetches of the same hash (per-hash promise map); this method is
+  // the single git call. Throws on failure so the caller can degrade.
+  async lfsFetch(relPath) {
+    if (!this.git) throw new Error("sync not initialized");
+    await this._runGit(() => this.git.raw(["lfs", "pull", "--include", relPath, "--exclude", ""]));
+  }
+
   getStatus() {
     return {
       status: this.status,
@@ -327,12 +341,27 @@ class SyncManager extends EventEmitter {
   }
 
   async _runGit(fn) {
-    return await Promise.race([
-      fn(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("git timeout")), GIT_TIMEOUT + 2000)
-      ),
-    ]);
+    // Serialize every git subprocess. There is one working tree and one
+    // .git/index.lock, so concurrent invocations contend on the lock and fail
+    // intermittently. B3's on-demand LFS pulls (one `git lfs pull` per un-smudged
+    // hash) can fan out from a burst of media requests and overlap the background
+    // commit/push, so chain each call after the previous one settles. The
+    // per-call timeout still bounds each op. No method re-enters _runGit from
+    // inside an fn, so this chain cannot deadlock.
+    const prev = this._gitChain || Promise.resolve();
+    let release;
+    this._gitChain = new Promise((r) => { release = r; });
+    await prev.catch(() => {});
+    try {
+      return await Promise.race([
+        fn(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("git timeout")), GIT_TIMEOUT + 2000)
+        ),
+      ]);
+    } finally {
+      release();
+    }
   }
 }
 
