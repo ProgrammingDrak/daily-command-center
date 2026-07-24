@@ -29,7 +29,14 @@ window.VaultCanvas = (function () {
   const WINDOW_PAD = 420;      // mount cards a little past the viewport (world px)
   const DRAG_THRESH = 4;       // px of movement before a header press counts as a drag, not a click
 
-  let bridge = {};
+  // Default no-op / identity stubs, merged with the tab's real bridge in init()
+  // — same idiom as vault-timeline.js, so call sites stay unguarded.
+  let bridge = {
+    onSelect() {}, onExit() {},
+    bodyHtml() { return ""; }, wireBody() {},
+    tagPills() { return ""; }, emojiFor() { return "📄"; },
+    esc(s) { return String(s == null ? "" : s); },
+  };
   let thread = null;           // { key, kind, label, color, count, nodes:[...] }
   let cards = [];              // [{ slug, title, type, tags, date, locked, x, y, el, dragging }]
   let bodies = {};             // slug -> batch payload { renderedBody, media, ... } | { locked } | { missing }
@@ -43,9 +50,9 @@ window.VaultCanvas = (function () {
   let built = false;
 
   const d3ok = () => !!window.d3;
-  const esc = (s) => (bridge.esc ? bridge.esc(s) : String(s == null ? "" : s));
+  const esc = (s) => bridge.esc(s);
 
-  function init(b) { bridge = Object.assign({}, b || {}); }
+  function init(b) { bridge = Object.assign(bridge, b || {}); }
 
   // ── Shell (built once) ──
   function ensureShell() {
@@ -65,7 +72,7 @@ window.VaultCanvas = (function () {
     surface = host.querySelector("#vault-cv-surface");
     world = host.querySelector("#vault-cv-world");
     barLabel = host.querySelector("#vault-cv-label");
-    host.querySelector("#vault-cv-back").addEventListener("click", () => bridge.onExit && bridge.onExit());
+    host.querySelector("#vault-cv-back").addEventListener("click", () => bridge.onExit());
     host.querySelector("#vault-cv-arrange").addEventListener("click", autoArrange);
     host.querySelector("#vault-cv-fit").addEventListener("click", () => fitView(true));
 
@@ -225,7 +232,7 @@ window.VaultCanvas = (function () {
     el.style.left = c.x + "px";
     el.style.top = c.y + "px";
     el.dataset.slug = c.slug;
-    const emoji = bridge.emojiFor ? bridge.emojiFor({ slug: c.slug, frontmatter: { type: c.type } }) : "📄";
+    const emoji = bridge.emojiFor({ slug: c.slug, frontmatter: { type: c.type } });
     const head = `
       <div class="vault-cv-card-head" title="${c.locked ? "Sensitive note" : "Open note · drag to move"}">
         <span class="vault-cv-emoji">${c.locked ? "🔒" : emoji}</span>
@@ -238,15 +245,23 @@ window.VaultCanvas = (function () {
         `<div class="vault-cv-body vault-cv-locked">🔒 Unlock a sensitive note from the reading pane to view it here.</div>`;
     } else {
       const b = bodies[c.slug];
-      const tags = bridge.tagPills ? bridge.tagPills(c.tags) : "";
+      const tags = bridge.tagPills(c.tags);
       el.innerHTML = head + tags + `<div class="vault-cv-body"><div class="vault-body-md"></div></div>`;
+      const bodyEl = el.querySelector(".vault-body-md");
       if (b && b.missing) {
-        el.querySelector(".vault-body-md").innerHTML = '<div class="vault-cv-note">(note not found)</div>';
+        bodyEl.innerHTML = '<div class="vault-cv-note">(note not found)</div>';
       } else if (b) {
         const node = { slug: c.slug, frontmatter: { type: c.type, title: c.title, tags: c.tags }, renderedBody: b.renderedBody, media: b.media };
-        if (bridge.renderBody) bridge.renderBody(el, node);
+        // Memoize the expensive marked+DOMPurify pass per card: a windowed re-mount
+        // (pan a card off-screen and back) reuses the sanitized HTML and only re-runs
+        // the cheap DOM upgrade+wire. c._html lives while the canvas is open; it's
+        // undefined on the first, pre-bodies "Loading…" mount so it recomputes once
+        // the real body arrives.
+        if (c._html == null) c._html = bridge.bodyHtml(node);
+        bodyEl.innerHTML = c._html;
+        bridge.wireBody(el, node);
       } else {
-        el.querySelector(".vault-body-md").innerHTML = bodiesError
+        bodyEl.innerHTML = bodiesError
           ? `<div class="vault-cv-note">Couldn't load: ${esc(bodiesError)}</div>`
           : '<div class="vault-cv-note">Loading…</div>';
       }
@@ -279,7 +294,7 @@ window.VaultCanvas = (function () {
       head.removeEventListener("pointerup", onUp);
       head.removeEventListener("pointercancel", onUp);
       if (moved) persistPositions();
-      else if (!c.locked && bridge.onSelect) bridge.onSelect(c.slug);
+      else if (!c.locked) bridge.onSelect(c.slug);
     };
     head.addEventListener("pointerdown", (e) => {
       if (e.button) return;

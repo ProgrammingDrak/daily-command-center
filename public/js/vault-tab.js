@@ -439,6 +439,10 @@
   // (#vault-body.tl-mode) does the layout flip; this just toggles the class,
   // updates the segmented control, and renders the active view.
   function setView(mode) {
+    // If the segmented control is used while the canvas is open, tear the canvas
+    // down first. Otherwise canvas-mode CSS masks the tl-mode/explorer switch and
+    // the control looks dead (viewMode would desync from what's on screen).
+    if (inCanvas()) teardownCanvas();
     viewMode = mode === "timeline" ? "timeline" : "explorer";
     const body = document.getElementById("vault-body");
     if (body) body.classList.toggle("tl-mode", viewMode === "timeline");
@@ -473,10 +477,13 @@
     if (b) { b.classList.add("canvas-mode"); b.classList.remove("reading-open"); }
     window.VaultCanvas.open(payload);
   }
-  function exitCanvas() {
+  function teardownCanvas() {
     const b = vaultBody();
     if (b) { b.classList.remove("canvas-mode"); b.classList.remove("reading-open"); }
     if (window.VaultCanvas) window.VaultCanvas.close();
+  }
+  function exitCanvas() {
+    teardownCanvas();
     // Canvas is always entered from the timeline; make sure it's showing again
     // (the thread stays selected — the timeline keeps its own state).
     if (viewMode === "timeline" && window.VaultTimeline) window.VaultTimeline.render();
@@ -612,7 +619,11 @@
     // card click pops the full note into the reading drawer; Back exits to the
     // timeline.
     if (window.VaultCanvas) window.VaultCanvas.init({
-      renderBody: (root, node) => mountNoteBody(root, node),
+      // Split render into (a) the expensive parse+sanitize (bodyHtml) the canvas
+      // memoizes per card, and (b) the cheap DOM upgrade+wire (wireBody) it re-runs
+      // on every mount. Both go through the same shared path as the reading pane.
+      bodyHtml: (node) => noteBodyHtml(node),
+      wireBody: (root, node) => { upgradeMedia(root, node); wireLinkClicks(root); },
       tagPills: (tags) => tagPills(tags),
       emojiFor: (node) => emojiFor(node),
       esc: (s) => esc(s),

@@ -87,10 +87,17 @@ test("bodies: one request returns card fields + rendered body for each slug", as
 });
 
 // ── Shared render path: batch === single-node GET ──
+// NB: makeVault builds a bare tmpdir with no .mycelium/lib/parse.js, so loadParse
+// returns null and renderNodeForClient's wikilink rewrite is skipped in-test (a
+// literal [[..]] would pass through unchanged). This fixture therefore exercises
+// the parser-INDEPENDENT half — the media-ref rewrite — where the two endpoints
+// could realistically diverge. Wikilink linkification is covered by vault-b1's
+// conformance test; the strictEqual below still guards that the batch route never
+// forks away from the single-node render path.
 test("bodies: renderedBody is byte-identical to GET /api/vault/node/* (one shared renderer)", async () => {
   const { dir, store } = await makeVault([
     ["notes/m.md", { type: "note", title: "M", date: "2026-01-01" },
-      "Text before.\n\n![a cover](media:sha256:abcdef012345)\n\nText after and [[notes/x]]."],
+      "Text before.\n\n![a cover](media:sha256:abcdef012345)\n\nText after."],
   ]);
   try {
     const rm = mountRoutes(store);
