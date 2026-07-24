@@ -22,6 +22,37 @@ const { EventEmitter } = require("events");
 
 const WIKILINK_RE = /\[\[([^\]|#]+?)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
 
+// A single frontmatter facet field (tags/people/event) may hold a scalar or an
+// array, and each value may be a bare string or a wikilink. Collapse wikilinks
+// to their target so "[[people/collins]]" and "people/collins" thread together;
+// de-dupe within the node. Kept case-sensitive (the ontology tag keys are), so a
+// personal vault's stable casing groups cleanly. Exported for the timeline's
+// facet math + tests.
+function facetValues(raw) {
+  const list = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
+  const seen = new Set();
+  for (const v of list) {
+    if (typeof v !== "string") continue;
+    let s = v.trim();
+    const m = /^\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]$/.exec(s);
+    if (m) s = m[1].trim();
+    if (s) seen.add(s);
+  }
+  return Array.from(seen);
+}
+
+// Canonical timeline date for a node: date -> created -> scheduled_at, as
+// YYYY-MM-DD. Handles the js-yaml Date object an UNquoted `date:` parses to
+// (D2's shared-parser note) as well as quoted ISO strings. Null when no
+// resolvable date exists — such a node simply can't be placed on the axis.
+function nodeDate(fm) {
+  const d = fm && (fm.date || fm.created || fm.scheduled_at);
+  if (!d) return null;
+  if (d instanceof Date) return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  const s = String(d).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
 // git-crypt encrypted files begin with the bytes \0 G I T C R Y P T \0. When
 // A2's git-crypt encrypts the sensitive dirs, a clone that has NOT unlocked
 // (missing key, missing binary, or a mis-ordered boot that indexed before the
@@ -51,6 +82,12 @@ class VaultStore extends EventEmitter {
     this.nodes = new Map();
     this.outlinks = new Map();
     this.backlinks = new Map();
+    // Inverted facet indexes for the timeline (B4a): facet value -> Set(slug),
+    // maintained incrementally at the same mutation sites as backlinks so thread
+    // derivation is O(matches-in-range), not O(corpus) per request.
+    this.tagIndex = new Map();
+    this.personIndex = new Map();
+    this.eventIndex = new Map();
     this.ready = false;
     this.watcher = null;
     this._debounceTimers = new Map();
@@ -125,6 +162,7 @@ class VaultStore extends EventEmitter {
       this._ingest(slug, file, raw, stat);
     }
     this._rebuildBacklinks();
+    this._rebuildFacets();
   }
 
   async _walkMarkdown(dir) {
@@ -230,6 +268,54 @@ class VaultStore extends EventEmitter {
     }
   }
 
+  // A node's timeline facets from its frontmatter (undefined-safe so the
+  // git-crypt re-lock path, which deletes the node, resolves to empty).
+  _facetsOf(fm) {
+    fm = fm || {};
+    return { tag: facetValues(fm.tags), person: facetValues(fm.people), event: facetValues(fm.event) };
+  }
+
+  // Facets of whatever node currently sits at `slug` (empty if none) — used to
+  // snapshot before/after an _ingest at the mutation sites, exactly like the
+  // outlinks snapshots that feed _updateBacklinksForNode.
+  _currentFacets(slug) {
+    const n = this.nodes.get(slug);
+    return this._facetsOf(n && n.frontmatter);
+  }
+
+  // Add/remove one slug across the three inverted facet maps by diffing its old
+  // vs new facet sets — mirrors _updateBacklinksForNode. Empty postings are
+  // dropped so a facet nobody carries anymore stops appearing in the timeline.
+  _updateFacetsForNode(slug, oldF, newF) {
+    const apply = (map, oldVals, newVals) => {
+      const newSet = new Set(newVals);
+      const oldSet = new Set(oldVals);
+      for (const v of oldVals) {
+        if (newSet.has(v)) continue;
+        const s = map.get(v);
+        if (s) { s.delete(slug); if (!s.size) map.delete(v); }
+      }
+      for (const v of newVals) {
+        if (oldSet.has(v)) continue;
+        if (!map.has(v)) map.set(v, new Set());
+        map.get(v).add(slug);
+      }
+    };
+    apply(this.tagIndex, oldF.tag, newF.tag);
+    apply(this.personIndex, oldF.person, newF.person);
+    apply(this.eventIndex, oldF.event, newF.event);
+  }
+
+  _rebuildFacets() {
+    this.tagIndex.clear();
+    this.personIndex.clear();
+    this.eventIndex.clear();
+    const empty = { tag: [], person: [], event: [] };
+    for (const node of this.nodes.values()) {
+      this._updateFacetsForNode(node.slug, empty, this._facetsOf(node.frontmatter));
+    }
+  }
+
   _updateBacklinksForNode(slug, oldLinks, newLinks) {
     const oldSet = new Set((oldLinks || []).map((l) => l.target + "\0" + l.type));
     const newSet = new Set((newLinks || []).map((l) => l.target + "\0" + l.type));
@@ -291,7 +377,9 @@ class VaultStore extends EventEmitter {
       const prev = this.nodes.get(slug);
       if (prev) {
         const prevLinks = this.outlinks.get(slug) || [];
+        const prevFacets = this._facetsOf(prev.frontmatter);
         this._updateBacklinksForNode(slug, prevLinks, []);
+        this._updateFacetsForNode(slug, prevFacets, { tag: [], person: [], event: [] });
         this.nodes.delete(slug);
         this.outlinks.delete(slug);
         this.emit("vault-changed", { action: "delete", slug });
@@ -310,9 +398,11 @@ class VaultStore extends EventEmitter {
     // from what we have in the index — that's a genuine external edit.
     if (prev && prev.hash === newHash) return;
     const prevLinks = this.outlinks.get(slug) || [];
+    const prevFacets = this._currentFacets(slug);
     this._ingest(slug, file, raw, stat);
     const newLinks = this.outlinks.get(slug) || [];
     this._updateBacklinksForNode(slug, prevLinks, newLinks);
+    this._updateFacetsForNode(slug, prevFacets, this._currentFacets(slug));
     this.emit("vault-changed", { action: prev ? "update" : "create", slug });
   }
 
@@ -337,6 +427,76 @@ class VaultStore extends EventEmitter {
     }
     out.sort((a, b) => b.mtime - a.mtime);
     return out;
+  }
+
+  // Timeline data (B4a): the dated nodes in [from,to] that pass the type/tag/
+  // person filters, plus the relevance THREADS among them — a thread being a
+  // tag/person/event shared by >= 2 in-range nodes. Pure graph/index output:
+  // NO colors and NO sensitivity gating (the route owns presentation + the
+  // security boundary). Threads come from the inverted maps intersected with the
+  // in-range set, so cost is O(matches in range), not O(corpus) — the F10 win.
+  // Thread members are slugs (the caller already holds the node list); threads
+  // are returned most-connected first so the route can density-cap by rank.
+  timeline({ from, to, types, tags, people } = {}) {
+    const typeSet = types && types.length ? new Set(types) : null;
+    const tagSet = tags && tags.length ? new Set(tags) : null;
+    const personSet = people && people.length ? new Set(people) : null;
+
+    const inRange = new Map(); // slug -> node view
+    for (const node of this.nodes.values()) {
+      const fm = node.frontmatter || {};
+      const date = nodeDate(fm);
+      if (!date) continue;
+      if (from && date < from) continue;
+      if (to && date > to) continue;
+      if (typeSet && !typeSet.has(fm.type || "untyped")) continue;
+      const f = this._facetsOf(fm);
+      if (tagSet && !f.tag.some((t) => tagSet.has(t))) continue;
+      if (personSet && !f.person.some((p) => personSet.has(p))) continue;
+      inRange.set(node.slug, {
+        slug: node.slug,
+        title: fm.title || node.slug.split("/").pop(),
+        type: fm.type || "untyped",
+        date,
+        tags: f.tag,
+        people: f.person,
+        event: f.event,
+      });
+    }
+
+    // Only the facet VALUES that actually appear on an in-range node can seed a
+    // thread — collect them from the in-range set (O(matches)), then intersect
+    // each one's posting list with the in-range set.
+    const tagVals = new Set(), personVals = new Set(), eventVals = new Set();
+    for (const n of inRange.values()) {
+      n.tags.forEach((t) => tagVals.add(t));
+      n.people.forEach((p) => personVals.add(p));
+      n.event.forEach((e) => eventVals.add(e));
+    }
+    const byDateThenSlug = (a, b) => {
+      const da = inRange.get(a).date, db = inRange.get(b).date;
+      return da < db ? -1 : da > db ? 1 : a < b ? -1 : 1;
+    };
+    const threads = [];
+    const collect = (kind, map, values) => {
+      for (const val of values) {
+        const posting = map.get(val);
+        if (!posting) continue;
+        const members = [];
+        for (const slug of posting) if (inRange.has(slug)) members.push(slug);
+        if (members.length < 2) continue;
+        members.sort(byDateThenSlug);
+        threads.push({ key: `${kind}:${val}`, kind, value: val, members });
+      }
+    };
+    collect("tag", this.tagIndex, tagVals);
+    collect("person", this.personIndex, personVals);
+    collect("event", this.eventIndex, eventVals);
+    threads.sort((a, b) => b.members.length - a.members.length || (a.key < b.key ? -1 : 1));
+
+    const nodes = Array.from(inRange.values()).sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : a.slug < b.slug ? -1 : 1);
+    return { nodes, threads };
   }
 
   // Cheap existence check (no body/backlink-context work) — used to flag
@@ -411,9 +571,11 @@ class VaultStore extends EventEmitter {
     await fsp.rename(tmp, file);
     const stat = await fsp.stat(file);
     const prevLinks = this.outlinks.get(safeSlug) || [];
+    const prevFacets = this._currentFacets(safeSlug);
     this._ingest(safeSlug, file, serialized, stat);
     const newLinks = this.outlinks.get(safeSlug) || [];
     this._updateBacklinksForNode(safeSlug, prevLinks, newLinks);
+    this._updateFacetsForNode(safeSlug, prevFacets, this._currentFacets(safeSlug));
     this.emit("vault-changed", { action: "update", slug: safeSlug, source: "local" });
     return this.get(safeSlug);
   }
@@ -424,7 +586,9 @@ class VaultStore extends EventEmitter {
     if (!fs.existsSync(file)) return false;
     await fsp.unlink(file);
     const prevLinks = this.outlinks.get(safeSlug) || [];
+    const prevFacets = this._currentFacets(safeSlug);
     this._updateBacklinksForNode(safeSlug, prevLinks, []);
+    this._updateFacetsForNode(safeSlug, prevFacets, { tag: [], person: [], event: [] });
     this.nodes.delete(safeSlug);
     this.outlinks.delete(safeSlug);
     this.emit("vault-changed", { action: "delete", slug: safeSlug, source: "local" });
@@ -467,3 +631,6 @@ module.exports.WIKILINK_RE = WIKILINK_RE;
 // git-crypt header, exposed for the route layer and unit tests.
 module.exports.StaleWriteError = StaleWriteError;
 module.exports.GITCRYPT_MAGIC = GITCRYPT_MAGIC;
+// Facet + date helpers behind the timeline (B4a), exposed for the route + tests.
+module.exports.facetValues = facetValues;
+module.exports.nodeDate = nodeDate;

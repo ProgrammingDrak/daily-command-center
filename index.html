@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
-<link rel="stylesheet" href="/public/css/vault.css?v=vault-b3-1">
+<link rel="stylesheet" href="/public/css/vault.css?v=vault-b4a-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -1709,6 +1709,10 @@
     <strong class="vault-brand">Mycelium</strong>
     <span id="vault-status-pill" class="vault-pill">unknown</span>
     <span id="vault-summary"></span>
+    <span class="vault-viewtoggle" id="vault-viewtoggle" role="tablist">
+      <button class="vault-vbtn active" data-view="explorer" type="button" role="tab">Explorer</button>
+      <button class="vault-vbtn" data-view="timeline" type="button" role="tab" title="The signature timeline">Timeline</button>
+    </span>
     <select id="vault-type-filter" class="vault-ctl">
       <option value="">All types</option>
     </select>
@@ -1720,6 +1724,10 @@
   </div>
   <div id="vault-body">
     <aside id="vault-tree"></aside>
+    <!-- Timeline (Phase B4a): the signature visualization. Hidden in Explorer
+         mode; in Timeline mode it sits above the reading pane (which renders a
+         clicked dot's note below). -->
+    <div id="vault-timeline"></div>
     <div id="vault-reading">
       <div id="vault-detail" class="vault-detail"></div>
     </div>
@@ -1771,8 +1779,11 @@
 <!-- Mycelium vault tab: vendored markdown libs (no build step) load before vault-tab.js -->
 <script src="/public/js/vendor/marked.min.js?v=marked-12.0.2"></script>
 <script src="/public/js/vendor/purify.min.js?v=purify-3.1.7"></script>
+<!-- d3 v7 (vendored UMD, pinned; powers the B4a timeline's scale/zoom) -->
+<script src="/public/js/vendor/d3.v7.9.0.min.js?v=d3-7.9.0"></script>
 <script src="/public/js/vault-editor.js?v=vault-b2-1"></script>
-<script src="/public/js/vault-tab.js?v=vault-b3-1"></script>
+<script src="/public/js/vault-timeline.js?v=vault-b4a-1"></script>
+<script src="/public/js/vault-tab.js?v=vault-b4a-1"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>

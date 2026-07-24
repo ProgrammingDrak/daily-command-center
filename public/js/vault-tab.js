@@ -20,14 +20,18 @@
   };
 
   // Notion-style per-type icon. Sensitive nodes always show the lock.
+  // The one per-type icon map. Published on window.DCC so the timeline view
+  // (vault-timeline.js) reads the SAME source and the two never drift.
   const TYPE_EMOJI = {
     person: "👤", project: "🗂️", idea: "💡", note: "📝", fleeting: "💭",
     book: "📖", reading: "📚", recipe: "🍳", trip: "✈️", workout: "🏃",
     journal: "📔", goal: "🎯", campaign: "🎲", character: "🎭", moment: "📸",
     therapy: "🫂", medical: "🩺", meeting: "🗓️", habit: "🔁", media: "🎬",
     quote: "💬", event: "📅", place: "📍", money: "💰", contact: "👤",
-    untyped: "📄",
+    album: "🖼️", worknote: "🧷", doc: "📄", piece: "✍️", world: "🌍",
+    session: "⚔️", budget: "💰", maintenance: "🔧", locked: "🔒", untyped: "📄",
   };
+  if (window.DCC) window.DCC.vaultTypeEmoji = TYPE_EMOJI;
 
   // Path authoritative — mirrors CONVENTIONS.md sensitive set. Body stays hidden
   // behind a locked placeholder until B2's PIN gate.
@@ -40,6 +44,7 @@
   let tagColors = {};        // tag -> hex, from /api/vault/ontology
   let unmappedColor = "#9ca3af";
   let unlock = { unlocked: false, pinConfigured: false }; // sensitive PIN gate (B2), from /api/vault/status
+  let viewMode = "explorer"; // "explorer" (tree + reading) | "timeline" (B4a signature)
 
   const esc = (s) => window.DCC.esc(s); // delegates to core.js
   const isSensitive = (slug) => SENSITIVE_PREFIXES.some((p) => (slug + "/").startsWith(p) || slug.startsWith(p));
@@ -247,6 +252,7 @@
       unlock.unlocked = true;
       window.DCC.toast("Sensitive notes unlocked for 30 minutes");
       loadList();
+      refreshTimeline();
       if (slugToOpen) loadDetail(slugToOpen);
     } catch (e) { window.DCC.toast("Unlock failed", "error"); }
   }
@@ -414,6 +420,29 @@
     if (box) { box.style.display = "none"; box.innerHTML = ""; }
   }
 
+  // ── View mode: Explorer (tree + reading) <-> Timeline (B4a) ──
+  // Timeline mode stacks the signature timeline above the SAME reading pane, so
+  // clicking a dot renders that note below without leaving the timeline. CSS
+  // (#vault-body.tl-mode) does the layout flip; this just toggles the class,
+  // updates the segmented control, and renders the active view.
+  function setView(mode) {
+    viewMode = mode === "timeline" ? "timeline" : "explorer";
+    const body = document.getElementById("vault-body");
+    if (body) body.classList.toggle("tl-mode", viewMode === "timeline");
+    document.querySelectorAll("#vault-viewtoggle .vault-vbtn").forEach((b) =>
+      b.classList.toggle("active", b.dataset.view === viewMode));
+    if (viewMode === "timeline") { if (window.VaultTimeline) window.VaultTimeline.render(); }
+    else renderTree();
+  }
+
+  // The timeline endpoint's payload changes on any write or unlock, so drop its
+  // cache and re-render when we're looking at it.
+  function refreshTimeline() {
+    if (!window.VaultTimeline) return;
+    window.VaultTimeline.invalidate();
+    if (viewMode === "timeline") window.VaultTimeline.render();
+  }
+
   // ── Data loading ──
 
   async function loadOntology() {
@@ -493,6 +522,7 @@
     await loadOntology();
     await Promise.all([loadStatus(), loadList()]);
     if (selectedSlug) loadDetail(selectedSlug);
+    if (viewMode === "timeline") refreshTimeline();
   }
 
   // After a write (capture/new/edit/daily): refresh list+status, then select the
@@ -502,6 +532,7 @@
   async function afterWrite(slug) {
     await Promise.all([loadStatus(), loadList()]);
     if (slug) { selectedSlug = slug; renderTree(); loadDetail(slug); }
+    refreshTimeline();
   }
 
   async function openDaily() {
@@ -527,6 +558,15 @@
       getUnmapped: () => unmappedColor,
       onSaved: (slug) => afterWrite(slug),
     });
+
+    // Timeline (B4a): clicking a dot loads that note into the reading pane below.
+    if (window.VaultTimeline) window.VaultTimeline.init({
+      onSelect: (slug) => { selectedSlug = slug; loadDetail(slug); },
+    });
+
+    // Explorer <-> Timeline segmented control.
+    document.querySelectorAll("#vault-viewtoggle .vault-vbtn").forEach((b) =>
+      b.addEventListener("click", () => setView(b.dataset.view)));
 
     const typeFilter = document.getElementById("vault-type-filter");
     if (typeFilter) typeFilter.addEventListener("change", () => { activeType = typeFilter.value; renderTree(); });
@@ -560,6 +600,7 @@
       loadStatus();
       loadList();
       if (selectedSlug) loadDetail(selectedSlug);
+      refreshTimeline();
     });
     document.addEventListener("vault-sync-status", (e) => {
       setStatusPill((e.detail && e.detail.status) || "unknown");
