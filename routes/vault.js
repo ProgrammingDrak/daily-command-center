@@ -328,6 +328,70 @@ function threadColor(kind, value, ontology, parse, unmapped) {
   return gapHueColor(`${kind}:${value}`);
 }
 
+// ── Weekly review helpers (B6), top-level + pure so they're unit-testable ──
+// ISO-8601 week label (YYYY-Www) for a YYYY-MM-DD date. The digest node is named
+// notes/reviews/<week>.md, so regenerating the same week overwrites (idempotent).
+function isoWeek(dateStr) {
+  const d = new Date(String(dateStr).slice(0, 10) + "T00:00:00Z");
+  if (Number.isNaN(d.getTime())) return "unknown";
+  const day = (d.getUTCDay() + 6) % 7;                 // Mon=0..Sun=6
+  d.setUTCDate(d.getUTCDate() - day + 3);              // nearest Thursday
+  const firstThu = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const week = 1 + Math.round(((d - firstThu) / 86400000 - 3 + ((firstThu.getUTCDay() + 6) % 7)) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+// Render a digest object as a self-contained markdown note. Uses [[wikilinks]] so
+// the saved review is ITSELF in the graph (it links to every note it surfaces).
+function renderDigestMarkdown(d) {
+  const link = (slug, title) => (title && title !== slug ? `[[${slug}|${title}]]` : `[[${slug}]]`);
+  const L = [];
+  L.push(`# Weekly review — ${d.week}`, "");
+  L.push(`_Generated ${String(d.generatedAt).slice(0, 10)}. A 10-minute loop: skim what came back, clear the inbox, follow one thread._`, "");
+
+  L.push(`## Resurfaced`, "");
+  if (d.resurfaced.length) {
+    for (const p of d.resurfaced) {
+      const why = (p.reasons || []).map((r) => r.note).join(" · ");
+      L.push(`- ${link(p.slug, p.title)}${why ? ` — ${why}` : ""}`);
+      if (p.excerpt) L.push(`  > ${p.excerpt}`);
+      if (p.neighbors && p.neighbors.length) {
+        L.push(`  - connects to ${p.neighbors.map((nb) => link(nb.slug, nb.title)).join(", ")}`);
+      }
+    }
+  } else {
+    L.push(`_Nothing to resurface yet — the vault is still young._`);
+  }
+  L.push("");
+
+  L.push(`## Orphans (${d.orphans.count})`, "");
+  if (d.orphans.top.length) {
+    L.push(`Notes with no links in or out — give the top ones a home:`, "");
+    for (const o of d.orphans.top) L.push(`- ${link(o.slug, o.title)}`);
+  } else {
+    L.push(`No orphans — every note is connected. 🎉`);
+  }
+  L.push("");
+
+  L.push(`## Unlinked mentions`, "");
+  if (d.unlinked.length) {
+    L.push(`Named without a link — one click wires them up in the Review panel:`, "");
+    for (const s of d.unlinked) {
+      L.push(`- **${link(s.target.slug, s.target.title)}** mentioned in ${link(s.source.slug, s.source.title)}${s.snippet ? `: "${s.snippet}"` : ""}`);
+    }
+  } else {
+    L.push(`No pending unlinked mentions.`);
+  }
+  L.push("");
+
+  L.push(`## Inbox`, "");
+  L.push(d.inboxBacklog
+    ? `${d.inboxBacklog} fleeting note${d.inboxBacklog === 1 ? "" : "s"} waiting to be filed — open the Review panel to promote, merge, or clear them.`
+    : `Inbox zero. Nothing waiting. 🎉`);
+  L.push("");
+  return L.join("\n");
+}
+
 function mount(app, ctx) {
   const { VAULT_REPO_URL } = ctx;
 
@@ -759,6 +823,139 @@ app.get("/api/vault/recent", (req, res) => {
     return { slug: n.slug, title: fm.title || n.slug.split("/").pop(), type: fm.type || "untyped", sensitive: isSensitiveSlug(n.slug) };
   });
   res.json({ total: all.length, offset, limit, results });
+});
+
+// ── Resurfacing + weekly review (B6): close the north-star loop ──
+// Capture → organize → RESURFACE → connect → have ideas. Nothing before B6
+// brought a forgotten note back; these endpoints do.
+
+function dayKeyOf() {
+  return ctx.getTodayStr ? ctx.getTodayStr() : new Date().toISOString().slice(0, 10);
+}
+
+// GET /api/vault/resurface?n=5 — the weighted "notes worth re-seeing" sample.
+// Deterministic per day (VaultStore seeds on the app-tz date). Sensitive notes
+// only for a PIN-unlocked session (the tab is an authed surface); the WEEKLY
+// DIGEST below never includes them regardless (it becomes a public vault node).
+app.get("/api/vault/resurface", (req, res) => {
+  if (!vaultReady(res)) return;
+  let n = parseInt(req.query.n, 10);
+  if (!Number.isFinite(n) || n <= 0) n = 5;
+  n = Math.min(n, 25);
+  const out = ctx.vault.resurface({ n, dayKey: dayKeyOf(), includeSensitive: isUnlocked(req) });
+  res.json({
+    dayKey: dayKeyOf(), pool: out.pool,
+    picks: out.picks.map((p) => ({ ...p, excerpt: escHtml(p.excerpt || "") })),
+  });
+});
+
+// GET /api/vault/inbox — the inbox review queue (fleeting notes, oldest first).
+// Inbox is never a sensitive dir, so no gate; excerpts are escaped for the client.
+app.get("/api/vault/inbox", (req, res) => {
+  if (!vaultReady(res)) return;
+  const items = ctx.vault.inbox();
+  res.json({ count: items.length, items: items.map((i) => ({ ...i, excerpt: escHtml(i.excerpt || "") })) });
+});
+
+// Escape the body-derived text (snippets/excerpts) the client injects RAW, at
+// the JSON boundary — exactly like the sibling endpoints (/resurface, /inbox,
+// /search all escHtml their snippet/excerpt). Titles/slugs are escaped
+// client-side, so they stay raw here to avoid double-escaping. renderDigest-
+// Markdown always gets the UNescaped digest (a .md must not carry HTML entities).
+function digestForClient(digest) {
+  return {
+    ...digest,
+    resurfaced: digest.resurfaced.map((p) => ({ ...p, excerpt: escHtml(p.excerpt || "") })),
+    unlinked: digest.unlinked.map((s) => ({ ...s, snippet: escHtml(s.snippet || "") })),
+  };
+}
+
+// Per-day digest memo. The digest is deterministic per (dayKey, corpus) and
+// always computed includeSensitive:false, so it is safe to cache and drop on any
+// write. VaultStore emits vault-changed on every mutation; subscribe lazily (the
+// store is null at mount, live by first call). Keyed by dayKey so a day rollover
+// recomputes without an explicit clear.
+let _digestCache = null;      // { dayKey, digest }
+let _digestSubscribed = false;
+
+// Build the weekly-review digest object (pure of persistence). ALWAYS excludes
+// sensitive content — the digest is destined for a public vault node AND the DCC
+// brief band, so it mirrors the "no sensitive content" constraint by never asking
+// for it. Resurfaced picks carry their timeline-thread neighbors (B4a maps).
+function computeDigest() {
+  const dayKey = dayKeyOf();
+  if (!_digestSubscribed && ctx.vault && ctx.vault.on) {
+    ctx.vault.on("vault-changed", () => { _digestCache = null; });
+    _digestSubscribed = true;
+  }
+  if (_digestCache && _digestCache.dayKey === dayKey) return _digestCache.digest;
+  const week = isoWeek(dayKey);
+  const res = ctx.vault.resurface({ n: 5, dayKey, includeSensitive: false });
+  const resurfaced = res.picks.map((p) => ({
+    ...p,
+    neighbors: ctx.vault.threadNeighbors(p.slug, { limit: 4, includeSensitive: false }),
+  }));
+
+  const orphansAll = ctx.vault.orphans({ includeSensitive: false });
+
+  // Unlinked-mention suggestions: scan nameable target nodes (bounded) for the
+  // first notes that name them without a link. Top 5 across the corpus.
+  const NAMEABLE = new Set(["person", "project", "note", "idea", "book", "goal", "place", "recipe", "trip"]);
+  const suggestions = [];
+  let scanned = 0;
+  for (const n of ctx.vault.list()) {
+    if (suggestions.length >= 5 || scanned >= 300) break;
+    const fm = n.frontmatter || {};
+    if (!NAMEABLE.has(fm.type) || !fm.title || isSensitiveSlug(n.slug)) continue;
+    scanned++;
+    const u = ctx.vault.unlinked(n.slug, { includeSensitive: false, limit: 1 });
+    if (u.length) {
+      suggestions.push({
+        target: { slug: n.slug, title: fm.title },
+        source: { slug: u[0].slug, title: u[0].title },
+        term: u[0].term, snippet: u[0].snippet || "",
+      });
+    }
+  }
+
+  const digest = {
+    week, generatedAt: new Date().toISOString(), dayKey,
+    resurfaced,
+    orphans: { count: orphansAll.length, top: orphansAll.slice(0, 3) },
+    unlinked: suggestions,
+    inboxBacklog: ctx.vault.inbox().length,
+    poolSize: res.pool,
+  };
+  _digestCache = { dayKey, digest };
+  return digest;
+}
+
+// GET /api/vault/digest — the live weekly digest (computed, NOT saved). The tab's
+// Review panel + a preview use this; the brief-band hook uses POST to persist.
+app.get("/api/vault/digest", (req, res) => {
+  if (!vaultReady(res)) return;
+  const digest = computeDigest();
+  const week = digest.week;
+  const savedSlug = `notes/reviews/${week}`;
+  res.json({ ...digestForClient(digest), markdown: renderDigestMarkdown(digest), saved: ctx.vault.has(savedSlug), slug: savedSlug });
+});
+
+// POST /api/vault/digest — generate + SAVE this week's review as notes/reviews/
+// <YYYY-Www>.md (idempotent: regenerating the same week overwrites). Called by the
+// weekly heartbeat hook and by the tab's "Save this week's review" button.
+app.post("/api/vault/digest", async (req, res) => {
+  if (!vaultReady(res)) return;
+  const digest = computeDigest();
+  const week = digest.week;
+  const slug = `notes/reviews/${week}`;
+  const markdown = renderDigestMarkdown(digest);
+  const fm = { type: "note", title: `Weekly review ${week}`, date: digest.dayKey, tags: ["review", "weekly"] };
+  try {
+    const node = await writeNode(slug, fm, markdown, { message: `weekly review ${week}` });
+    res.status(201).json({ ...digestForClient(digest), slug, markdown, node: { slug: node.slug, hash: node.hash } });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Saved views: {id,name,icon,surface,query,sort}[] persisted in the REPO at
@@ -1282,3 +1479,6 @@ module.exports.r2ConfigFromEnv = r2ConfigFromEnv;
 module.exports.gapHueColor = gapHueColor;
 module.exports.nodeColor = nodeColor;
 module.exports.threadColor = threadColor;
+// B6 resurfacing/digest pure helpers (vault-b6.test.js).
+module.exports.isoWeek = isoWeek;
+module.exports.renderDigestMarkdown = renderDigestMarkdown;

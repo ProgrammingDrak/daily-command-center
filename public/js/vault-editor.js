@@ -78,17 +78,25 @@
   }
 
   // ── New: type picker then form ──
-  async function openNew(type) {
+  // `prefill` (B6 promote): {title, body, fromSlug}. When present the form opens
+  // seeded with a fleeting note's content, and a successful create DELETES the
+  // source inbox note — the inbox-review "promote" action.
+  async function openNew(type, prefill) {
     const schema = await loadSchema();
-    if (!type) return pickType(schema);
+    if (!type) return pickType(schema, prefill);
     let tpl = { frontmatter: { type }, body: "" };
     try { const r = await fetch("/api/vault/template/" + encodeURIComponent(type)); if (r.ok) tpl = await r.json(); } catch {}
     const fm = Object.assign({}, tpl.frontmatter || {}, { type });
     if (!fm.date && (fm.date === "" || "date" in fm)) fm.date = todayIso();
-    buildForm({ mode: "new", type, slug: null, hash: null, frontmatter: fm, body: tpl.body || "" });
+    if (prefill && prefill.title) fm.title = prefill.title;
+    const body = prefill && prefill.body != null ? prefill.body : (tpl.body || "");
+    buildForm({ mode: "new", type, slug: null, hash: null, frontmatter: fm, body, promoteFrom: prefill && prefill.fromSlug });
   }
 
-  function pickType(schema) {
+  // Promote a fleeting inbox note: pick a real type, then the form is prefilled.
+  function openPromote(prefill) { openNew(undefined, prefill || {}); }
+
+  function pickType(schema, prefill) {
     ensureOverlay();
     // Quick-creatable types only: hide placeholder-dir (dnd sessions, meetings)
     // and external-writer types. Common types float to the top.
@@ -98,16 +106,17 @@
       const ia = TOP.indexOf(a.type), ib = TOP.indexOf(b.type);
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.type.localeCompare(b.type);
     });
+    const promoting = !!(prefill && prefill.fromSlug);
     inner().innerHTML = `
-      <div class="vault-ed-head"><span class="vault-ed-title">New note</span>
+      <div class="vault-ed-head"><span class="vault-ed-title">${promoting ? "Promote note" : "New note"}</span>
         <button class="vault-ed-x" type="button" aria-label="Close">×</button></div>
-      <div class="vault-ed-hint">Pick a type — it decides where the note lives.</div>
+      <div class="vault-ed-hint">${promoting ? "Give this thought a real type — it moves out of the inbox to where it belongs." : "Pick a type — it decides where the note lives."}</div>
       <div class="vault-ed-typegrid">${usable.map((t) =>
         `<button class="vault-ed-type${t.sensitive ? " sensitive" : ""}" data-type="${esc(t.type)}">
            ${t.sensitive ? "🔒 " : ""}${esc(t.type)}</button>`).join("")}</div>`;
     open();
     inner().querySelector(".vault-ed-x").onclick = close;
-    inner().querySelectorAll(".vault-ed-type").forEach((b) => { b.onclick = () => openNew(b.dataset.type); });
+    inner().querySelectorAll(".vault-ed-type").forEach((b) => { b.onclick = () => openNew(b.dataset.type, prefill); });
   }
 
   // ── Edit ──
@@ -380,13 +389,22 @@
         });
         data = await res.json();
         if (!res.ok) throw new Error(data.error || "create failed");
-        toast("Created " + data.slug); close(); ctx.onSaved(data.slug);
+        // Promote: the new typed note now holds the content, so remove the
+        // fleeting source from the inbox. Best-effort — the create already
+        // succeeded, so a failed cleanup just leaves the inbox note behind.
+        if (st.promoteFrom) {
+          try { await fetch("/api/vault/node/" + st.promoteFrom.split("/").map(encodeURIComponent).join("/"), { method: "DELETE" }); } catch {}
+          toast("Promoted to " + data.slug);
+        } else {
+          toast("Created " + data.slug);
+        }
+        close(); ctx.onSaved(data.slug);
       }
     } catch (e) { saveBtn.disabled = false; toast(e.message, "error"); }
   }
 
   window.VaultEditor = {
     init(c) { ctx = Object.assign(ctx, c || {}); },
-    openCapture, openNew, openEdit,
+    openCapture, openNew, openEdit, openPromote,
   };
 })();
