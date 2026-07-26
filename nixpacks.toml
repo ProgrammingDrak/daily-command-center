@@ -1,6 +1,13 @@
 # Railway/nixpacks build config for Daily Command Center.
 #
-# The default nixpacks Node image ships neither binary the Mycelium vault needs:
+# The default nixpacks Node image ships none of the binaries the Mycelium vault needs:
+#   - git       : SyncManager clones + pulls the vault repo (simple-git spawns the
+#                 `git` binary). NOT in the runtime PATH by default — a clone with
+#                 VAULT_REPO_URL set fails `spawn git ENOENT` without this (only
+#                 surfaces once VAULT_REPO_URL is configured, since local-only mode
+#                 never shells out to git). git-lfs depends on git at the apt level
+#                 but is not guaranteed to leave `git` on the runtime PATH, so pin
+#                 it explicitly.
 #   - git-lfs   : the 2-10 MB media attach band commits LFS pointers (B1 found
 #                 it absent on the default image); without it the vault sync's
 #                 clean filter can't convert media/lfs/** to pointers.
@@ -14,4 +21,4 @@
 # VaultStore magic-byte guard skips them), and the attach route falls back to
 # inline-only. See routes/vault.js + sync-manager.js.
 [phases.setup]
-aptPkgs = ["git-lfs", "git-crypt"]
+aptPkgs = ["git", "git-lfs", "git-crypt"]
