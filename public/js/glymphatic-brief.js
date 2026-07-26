@@ -266,7 +266,6 @@
       detail: task.reason || task.detail || "",
       tags: task.tags || [],
       priority: task.priority || "Medium",
-      sourceTaskId: task.id,
       onScheduled: function(info){
         gbMarkPushed(task.id);
         buildGlymphaticBrief();
