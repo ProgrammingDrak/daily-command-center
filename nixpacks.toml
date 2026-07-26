@@ -1,5 +1,12 @@
 # Railway/nixpacks build config for Daily Command Center.
 #
+# NOTE (2026-07-26): Railway's active builder is **railpack**, not nixpacks, so
+# THIS file is INERT — the runtime apt packages that actually take effect live in
+# `railpack.json` (`deploy.aptPackages`). This was invisible until VAULT_REPO_URL
+# was set on prod and the first clone failed `spawn git ENOENT` (git-lfs/git-crypt
+# from here were never installed either). Kept in sync with railpack.json in case
+# the builder is ever switched back to nixpacks.
+#
 # The default nixpacks Node image ships none of the binaries the Mycelium vault needs:
 #   - git       : SyncManager clones + pulls the vault repo (simple-git spawns the
 #                 `git` binary). NOT in the runtime PATH by default — a clone with
