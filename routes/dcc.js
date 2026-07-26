@@ -254,8 +254,8 @@ module.exports = function mount(app, ctx) {
   app.post("/api/dcc/brief/decision", async (req, res) => {
     try {
       const { date, task_id, action, time } = req.body || {};
-      const VALID = new Set(["accept", "schedule", "backlog", "drop", "reset"]);
-      if (!task_id || !VALID.has(action)) return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|reset }" });
+      const VALID = new Set(["accept", "schedule", "backlog", "drop", "dismiss", "reset"]);
+      if (!task_id || !VALID.has(action)) return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|dismiss|reset }" });
       const day = date || new Date().toISOString().slice(0, 10);
       const state = readJSON(getDayFilePath(day), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(day);
       const brief = state.glymphatic_brief || (state.glymphatic_brief = { history: [], current: null });
