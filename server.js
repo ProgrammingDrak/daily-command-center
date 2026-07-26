@@ -197,6 +197,11 @@ app.use(async (req, res, next) => {
     if (req.method === "POST" && req.path === "/api/blocks" && await hasServiceToken(req, "sweep")) { attachSweepServiceAuth(req); return next(); }
     if (isDccStateIngest(req) && ((await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/quick-task" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
+    // Weekly review digest (B6): the morning-heartbeat hook POSTs this to
+    // generate + save notes/reviews/<week>.md. Same DCC-service-token path as
+    // quick-task (no session on a headless run); the digest never contains
+    // sensitive content, and a token request is `locked` so the gate holds.
+    if (req.method === "POST" && req.path === "/api/vault/digest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-artifacts" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
     if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }

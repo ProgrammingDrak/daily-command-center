@@ -91,6 +91,51 @@ function nodeDate(fm) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
+// A short plain-text preview of a body for the review/resurface lists: drop
+// media embeds (long `![alt](media:sha256:<hex>)` refs are hash noise), collapse
+// whitespace, trim, cap. Shared by resurface() + inbox() so previews read the same.
+function plainExcerpt(body, max = 180) {
+  return String(body || "")
+    .replace(/!\[[^\]]*\]\(media:sha256:[a-fA-F0-9]{12,64}\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
+}
+
+// Resurfacing weights (B6). ONE tunable object — the whole heuristic dials from
+// here rather than scattered constants. `age` fades in over `ageHalfLifeDays`
+// (saturating); `ageStaleDays` is only the threshold for showing an "Nd untouched"
+// reason. `shortlist` caps how many top candidates get the (costlier) unlinked
+// scan so a lifelong vault can't turn one resurface into a corpus×corpus walk.
+const RESURFACE_WEIGHTS = {
+  base: 0.5,          // floor so every note keeps a small chance
+  age: 1.0,           // old + never-revisited
+  ageHalfLifeDays: 120,
+  ageStaleDays: 45,   // reason-string threshold only
+  orphan: 2.5,        // no links in or out
+  unlinked: 2.0,      // has pending unlinked mentions
+  onThisDay: 3.0,     // same month-day in a past year
+  shortlist: 50,      // unlinked scan budget (top-N by base weight)
+};
+
+// Deterministic seeded RNG (mulberry32) + a stable string→uint32 seed (FNV-1a),
+// so a day's resurface/digest is reproducible across refreshes without Math.random
+// (which would reshuffle the picks on every call and break a cached digest).
+function hashSeed(s) {
+  let h = 2166136261 >>> 0;
+  const str = String(s);
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // git-crypt encrypted files begin with the bytes \0 G I T C R Y P T \0. When
 // A2's git-crypt encrypts the sensitive dirs, a clone that has NOT unlocked
 // (missing key, missing binary, or a mis-ordered boot that indexed before the
@@ -825,13 +870,176 @@ class VaultStore extends EventEmitter {
       if (fm.type === "fleeting" || slug.startsWith("inbox/")) continue;
       if (!includeSensitive && isSensitivePath(slug)) continue;
       const outN = (this.outlinks.get(slug) || []).length;
-      const inN = (this.backlinks.get(slug) || []).length;
+      // Ignore backlinks whose SOURCE is a weekly review note: the digest auto-
+      // links every orphan it lists (so the review is itself in the graph), which
+      // would otherwise "de-orphan" a note nobody actually curated — silently
+      // shrinking next week's orphan set and killing its resurface signal.
+      const inN = (this.backlinks.get(slug) || []).filter((b) => !String(b.source).startsWith("notes/reviews/")).length;
       if (outN === 0 && inN === 0) {
         out.push({ slug, title: fm.title || slug.split("/").pop(), type: fm.type || "untyped", sensitive: isSensitivePath(slug) });
       }
     }
     out.sort((a, b) => (a.slug < b.slug ? -1 : 1));
     return out;
+  }
+
+  // ── Resurfacing (B6): make forgotten notes come back ──
+  // The whole vault ethos is "a brain for HAVING ideas" — ideas only help if they
+  // come BACK. resurface() draws a weighted sample favoring the notes most worth
+  // re-seeing: old + untouched, orphaned (no links in/out), under-connected (has
+  // unlinked mentions someone never wired up), and same-week-in-past-years ("on
+  // this day"). Fleeting/inbox scratch and the review notes themselves are excluded;
+  // sensitive notes only when includeSensitive (mirrors search/orphans). The pick
+  // is DETERMINISTIC per (dayKey, corpus) via a seeded RNG — a cached digest stays
+  // stable across a day's refreshes — instead of raw Math.random.
+  //
+  // Weights live in ONE tunable object (not scattered constants), so the heuristic
+  // can be dialed without hunting the code. Cost is O(pool) + O(shortlist unlinked
+  // scans); the unlinked signal is only computed for the top `shortlist` base-weight
+  // candidates so a lifelong vault can't turn one resurface into a full-corpus scan.
+  resurface({ n = 5, dayKey = "", now, includeSensitive = false } = {}) {
+    const W = RESURFACE_WEIGHTS;
+    // "Deterministic per day" must be exact: when the caller doesn't pin `now`,
+    // snap it to the dayKey's midnight so the age term (and thus the seeded ES
+    // keys) can't drift between a morning and an evening view. Wall-clock only
+    // as a last resort (dayKey not a date).
+    if (now == null) {
+      const t = Date.parse(String(dayKey).slice(0, 10) + "T00:00:00Z");
+      now = Number.isNaN(t) ? Date.now() : t;
+    }
+    const today = /^\d{4}-\d{2}-\d{2}/.test(String(dayKey)) ? String(dayKey).slice(0, 10) : null;
+    const todayMD = today ? today.slice(5) : null;   // MM-DD
+    const todayY = today ? today.slice(0, 4) : null;
+    const orphanSet = new Set(this.orphans({ includeSensitive }).map((o) => o.slug));
+
+    // Candidate pool: real long-term notes, in a STABLE order (slug-sorted) so the
+    // seeded draw is reproducible regardless of Map insertion order.
+    const cands = [];
+    for (const node of this.nodes.values()) {
+      const slug = node.slug;
+      const fm = node.frontmatter || {};
+      if (fm.type === "fleeting" || slug.startsWith("inbox/")) continue;
+      if (slug.startsWith("notes/reviews/")) continue;   // don't resurface the digests
+      if (!includeSensitive && isSensitivePath(slug)) continue;
+      cands.push(node);
+    }
+    cands.sort((a, b) => (a.slug < b.slug ? -1 : 1));
+
+    // Base weight per candidate (age + orphan + on-this-day + a floor).
+    const scored = cands.map((node) => {
+      const fm = node.frontmatter || {};
+      const ageD = Math.max(0, (now - (node.mtime || now)) / 86400000);
+      const ageScore = ageD / (ageD + W.ageHalfLifeDays);   // saturating 0→1, older=higher
+      const isOrphan = orphanSet.has(node.slug) ? 1 : 0;
+      const nd = nodeDate(fm);
+      const onThisDay = (todayMD && nd && nd.slice(5) === todayMD && nd.slice(0, 4) !== todayY) ? 1 : 0;
+      const reasons = [];
+      if (ageD >= W.ageStaleDays) reasons.push({ kind: "age", note: `${Math.round(ageD)}d untouched`, days: Math.round(ageD) });
+      if (isOrphan) reasons.push({ kind: "orphan", note: "no links in or out" });
+      if (onThisDay) reasons.push({ kind: "onthisday", note: `on this day, ${nd.slice(0, 4)}`, year: nd.slice(0, 4) });
+      return {
+        node, slug: node.slug, date: nd,
+        weight: W.base + W.age * ageScore + W.orphan * isOrphan + W.onThisDay * onThisDay,
+        reasons, ageD, isOrphan, onThisDay, hasUnlinked: false,
+      };
+    });
+
+    // Under-connected signal (bounded): only the top-`shortlist` base-weight
+    // candidates get an unlinked scan, so this never becomes a corpus×corpus walk.
+    const shortlist = scored.slice().sort((a, b) => b.weight - a.weight).slice(0, W.shortlist);
+    for (const s of shortlist) {
+      const u = this.unlinked(s.slug, { includeSensitive, limit: 3 });
+      if (u.length) {
+        s.hasUnlinked = true;
+        s.unlinkedCount = u.length;
+        s.weight += W.unlinked;
+        s.reasons.push({ kind: "unlinked", note: `${u.length} unlinked mention${u.length === 1 ? "" : "s"}`, count: u.length });
+      }
+    }
+
+    // Weighted sampling WITHOUT replacement (Efraimidis–Spirakis): key = r^(1/w),
+    // take the top n keys. One seeded draw per candidate in the stable order above
+    // ⇒ same (dayKey, corpus) ⇒ same picks.
+    const rng = mulberry32(hashSeed("resurface:" + (dayKey || "")));
+    for (const s of scored) {
+      const r = rng() || Number.MIN_VALUE;
+      s._key = Math.pow(r, 1 / Math.max(s.weight, 1e-6));
+    }
+    const picks = scored.sort((a, b) => b._key - a._key).slice(0, Math.max(0, n));
+    return {
+      pool: scored.length,
+      picks: picks.map((s) => {
+        const fm = s.node.frontmatter || {};
+        return {
+          slug: s.slug,
+          title: fm.title || s.slug.split("/").pop(),
+          type: fm.type || "untyped",
+          date: s.date,
+          sensitive: isSensitivePath(s.slug),
+          reasons: s.reasons,
+          excerpt: plainExcerpt(s.node.body, 180),
+        };
+      }),
+    };
+  }
+
+  // Timeline-thread neighbors of a node (B4a inverted maps): other notes that
+  // share a tag/person/event with it, so a resurfaced note comes back WITH the
+  // things it connects to. Deterministic (slug-sorted), self- and sensitive-gated,
+  // capped. Returns [{slug, title, type, via:{kind,value}}].
+  threadNeighbors(slug, { limit = 4, includeSensitive = false } = {}) {
+    const node = this.nodes.get(slug);
+    if (!node) return [];
+    const f = this._facetsOf(node.frontmatter);
+    const maps = [["tag", this.tagIndex, f.tag], ["person", this.personIndex, f.person], ["event", this.eventIndex, f.event]];
+    const seen = new Set([slug]);
+    const out = [];
+    for (const [kind, map, values] of maps) {
+      for (const value of values) {
+        const posting = map.get(value);
+        if (!posting) continue;
+        for (const other of Array.from(posting).sort()) {
+          if (seen.has(other)) continue;
+          if (!includeSensitive && isSensitivePath(other)) continue;
+          const on = this.nodes.get(other);
+          if (!on) continue;
+          seen.add(other);
+          const ofm = on.frontmatter || {};
+          out.push({ slug: other, title: ofm.title || other.split("/").pop(), type: ofm.type || "untyped", via: { kind, value } });
+          if (out.length >= limit) return out;
+        }
+      }
+    }
+    return out;
+  }
+
+  // Inbox review queue (B6): the `inbox/` fleeting notes, OLDEST first (the ones
+  // rotting longest surface first), with a short excerpt for the review list. Inbox
+  // is never a sensitive dir, so no gating is needed. `created` (frontmatter) is the
+  // sort key, falling back to mtime for a note that somehow lacks it.
+  inbox() {
+    const out = [];
+    for (const node of this.nodes.values()) {
+      if (!node.slug.startsWith("inbox/")) continue;
+      const fm = node.frontmatter || {};
+      const created = fm.created ? String(fm.created) : new Date(node.mtime || 0).toISOString();
+      // Sort on a numeric epoch, not the raw string: `created` values arrive in
+      // mixed formats (ISO from capture, but a JS Date.toString() from some
+      // hand/tool writes), so a lexical compare would mis-order them. Unparseable
+      // → fall back to mtime so a note still sorts sanely.
+      const ts = Number.isNaN(Date.parse(created)) ? (node.mtime || 0) : Date.parse(created);
+      out.push({
+        slug: node.slug,
+        title: fm.title || node.slug.split("/").pop(),
+        type: fm.type || "fleeting",
+        created,
+        mtime: node.mtime,
+        _ts: ts,
+        excerpt: plainExcerpt(node.body, 160),
+      });
+    }
+    out.sort((a, b) => a._ts - b._ts || (a.slug < b.slug ? -1 : 1));
+    return out.map(({ _ts, ...rest }) => rest);
   }
 
   // Working-tree size (bytes), excluding .git — a boot snapshot for the scale
@@ -1006,3 +1214,7 @@ module.exports.nodeDate = nodeDate;
 module.exports.isSensitivePath = isSensitivePath;
 module.exports.splitBody = splitBody;
 module.exports.SENSITIVE_PREFIXES = SENSITIVE_PREFIXES;
+// B6 resurfacing: the tunable weights + seeded-RNG helpers, exposed for tests.
+module.exports.RESURFACE_WEIGHTS = RESURFACE_WEIGHTS;
+module.exports.hashSeed = hashSeed;
+module.exports.mulberry32 = mulberry32;

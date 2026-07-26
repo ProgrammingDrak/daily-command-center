@@ -735,6 +735,14 @@
       applyView: (view) => applyView(view),
     });
 
+    // Resurfacing + weekly review (B6): the panel that closes the loop. Reuses the
+    // tab's openSlug + the B5 one-click linkMention; promote defers to the editor.
+    if (window.VaultReview) window.VaultReview.init({
+      esc: (s) => esc(s),
+      openSlug: (slug) => openSlug(slug),
+      linkMention: (src, tgt) => linkMention(src, tgt),
+    });
+
     const readingClose = document.getElementById("vault-reading-close");
     if (readingClose) readingClose.addEventListener("click", closeReadingDrawer);
 

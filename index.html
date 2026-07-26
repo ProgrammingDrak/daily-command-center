@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
-<link rel="stylesheet" href="/public/css/vault.css?v=vault-b5-2">
+<link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -1734,6 +1734,7 @@
     <span id="vault-views" class="vault-views" aria-label="Saved views"></span>
     <button id="vault-saveview-btn" class="vault-chip vault-chip-ghost" type="button" title="Save the current view">★ Save view</button>
     <button id="vault-orphans-chip" class="vault-chip" type="button" title="Notes with no links in or out">Orphans</button>
+    <button id="vault-review-btn" class="vault-chip vault-chip-review" type="button" title="Resurfaced notes, inbox review, and this week's digest">🔮 Review</button>
   </div>
   <div id="vault-body">
     <aside id="vault-tree"></aside>
@@ -1749,6 +1750,18 @@
       <button id="vault-reading-close" type="button" title="Close (Esc)" aria-label="Close">×</button>
       <div id="vault-detail" class="vault-detail"></div>
     </div>
+  </div>
+</div>
+
+<!-- Weekly review (Phase B6): resurfaced notes + inbox review + digest. -->
+<div id="vault-review-overlay" class="vault-review-overlay" hidden>
+  <div class="vault-review-card" role="dialog" aria-modal="true" aria-label="Weekly review">
+    <div class="vault-review-head">
+      <span class="vault-review-title">🔮 Weekly review</span>
+      <span class="vault-review-tagline">Skim what came back · clear the inbox · follow one thread</span>
+      <button id="vault-review-close" class="vault-review-x" type="button" aria-label="Close" title="Close (Esc)">×</button>
+    </div>
+    <div id="vault-review-body" class="vault-review-body"></div>
   </div>
 </div>
 
@@ -1808,13 +1821,15 @@
 <script src="/public/js/vendor/purify.min.js?v=purify-3.1.7"></script>
 <!-- d3 v7 (vendored UMD, pinned; powers the B4a timeline's scale/zoom) -->
 <script src="/public/js/vendor/d3.v7.9.0.min.js?v=d3-7.9.0"></script>
-<script src="/public/js/vault-editor.js?v=vault-b2-1"></script>
+<script src="/public/js/vault-editor.js?v=vault-b6-1"></script>
 <script src="/public/js/vault-timeline.js?v=vault-b4b-1"></script>
 <!-- Canvas (B4b): the focused thread whiteboard. Loads after the timeline (which opens it) and before vault-tab.js (which wires both). -->
 <script src="/public/js/vault-canvas.js?v=vault-b4b-1"></script>
 <!-- Search + saved views + quick-switcher (B5). Loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-search.js?v=vault-b5-2"></script>
-<script src="/public/js/vault-tab.js?v=vault-b5-2"></script>
+<!-- Resurfacing + weekly review (B6). Loads before vault-tab.js, which wires it. -->
+<script src="/public/js/vault-review.js?v=vault-b6-1"></script>
+<script src="/public/js/vault-tab.js?v=vault-b6-1"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
