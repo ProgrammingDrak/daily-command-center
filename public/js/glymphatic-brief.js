@@ -245,48 +245,38 @@
     });
   }
 
+  // Add a suggested task to the itinerary through the SHARED schedule modal
+  // (openSchedulePicker — the same day -> time flow triage, rewards, and the
+  // itinerary rows use), instead of the old homegrown auto-slot splice. The
+  // picker creates the block via blockStore and fires onScheduled; we mark the
+  // task pushed there so the button flips to "Added".
   function gbPushTask(taskId){
     var brief = gbBrief().current;
+    var tasks = (brief && brief.suggested_tasks) || [];
+    var task = tasks.filter(function(t){ return t.id === taskId; })[0];
+    if(!task)return;
     var ui = gbLoadUi();
-    var plan = gbPlanTasks(brief.suggested_tasks || [], ui);
-    var item = plan.find(function(p){ return p.task.id === taskId; });
-    if(!item)return;
-    var task = item.task;
     if(gbIsPushed(task, ui)){
       if(typeof showToast === "function")showToast("Already added to the itinerary","info");
       return;
     }
-    var id = "gb-" + task.id + "-" + Date.now();
-    var startMin = gbMinutes(item.start);
-    var newItem = {
-      id: id,
-      title: task.title,
-      type: "task",
-      start: item.start,
-      end: gbFmt(startMin + item.duration),
-      meta: "Glymphatic - " + (typeof ms === "function" ? ms(item.duration) : item.duration + "m"),
-      detail: task.reason || task.detail || "",
+    var durMin = gbTaskDuration(task, ui);
+    var opts = {
       source: "glymphatic",
-      priority: task.priority || "Medium",
+      detail: task.reason || task.detail || "",
       tags: task.tags || [],
-      glymphatic_task_id: task.id,
-      _pinnedStart: item.start
+      priority: task.priority || "Medium",
+      onScheduled: function(info){
+        gbMarkPushed(task.id);
+        buildGlymphaticBrief();
+        var when = info && info.start ? " at " + (typeof f12 === "function" ? f12(info.start) : info.start) : "";
+        if(typeof showToast === "function")showToast("Added to itinerary" + when + ": " + task.title, "success");
+      }
     };
-    var insertAt = scheduled.findIndex(function(ev){ return gbMinutes(ev.start) >= startMin; });
-    if(insertAt === -1)insertAt = scheduled.length;
-    scheduled.splice(insertAt, 0, newItem);
-    if(typeof loadPinnedStarts === "function" && typeof savePinnedStarts === "function"){
-      var pins = loadPinnedStarts();
-      pins[id] = item.start;
-      savePinnedStarts(pins);
-    }
-    if(typeof recalcTimes === "function")recalcTimes();
-    if(typeof persistAddedTask === "function")persistAddedTask(newItem);
-    gbMarkPushed(task.id);
-    if(typeof log === "function")log("scheduled", id, "Glymphatic: " + task.title);
-    if(typeof render === "function")render();
-    buildGlymphaticBrief();
-    if(typeof showToast === "function")showToast("Added to itinerary at " + (typeof f12 === "function" ? f12(item.start) : item.start), "success");
+    if(typeof openSchedulePicker === "function"){ openSchedulePicker(task.title, durMin, opts); return; }
+    // Fallback if the picker isn't loaded: schedule directly via the same shared path.
+    if(typeof insertTaskNow === "function"){ insertTaskNow(task.title, durMin, opts); return; }
+    if(typeof showToast === "function")showToast("Schedule picker unavailable","error");
   }
 
   function gbSection(title, items, className){
@@ -740,6 +730,36 @@
     gbSaveUi(ui);
   }
 
+  function gbDidDismissed(item, ui){
+    return !!(ui.did_dismissed && ui.did_dismissed[item.id]);
+  }
+
+  // "No, I didn't do this." Mirrors gbRecordDecision: a local flag for instant
+  // render plus a server-persisted decision (action:"dismiss") so the rejection
+  // is durable across refresh/devices, unlike the localStorage-only Approve.
+  function gbSetDidDismissed(id, dismissed){
+    var ui = gbLoadUi();
+    ui.did_dismissed = ui.did_dismissed || {};
+    if(dismissed)ui.did_dismissed[id] = new Date().toISOString();
+    else delete ui.did_dismissed[id];
+    gbSaveUi(ui);
+    fetch("/api/dcc/brief/decision", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ date: gbDate(), task_id: id, action: dismissed ? "dismiss" : "reset" })
+    }).catch(function(e){ console.error("[Glymphatic Brief] dismiss save failed:", e); });
+    buildGlymphaticBrief();
+  }
+
+  // ISO review date -> "Wed, Jul 23". Robust regardless of which day file the
+  // brief is being viewed from (the review double-publishes to rd and rd+1).
+  function gbFmtReviewDate(iso){
+    if(!iso)return "";
+    try{
+      return new Date(iso + "T12:00:00").toLocaleDateString(undefined, {weekday:"short", month:"short", day:"numeric"});
+    }catch(e){ return iso; }
+  }
+
   function gbDayReviewPage(){
     var current = gbBrief().current;
     var pages = gbPages(current) || [];
@@ -839,6 +859,15 @@
   function gbDidCard(item, ui){
     var approvable = item.approvable !== false;
     var approved = approvable && gbDidApproved(item, ui);
+    if(gbDidDismissed(item, ui)){
+      return '<article class="gb-task-card gb-pushed" data-gb-did-item="'+gbEsc(item.id)+'" style="opacity:.55">'+
+        '<div class="gb-task-top">'+
+          '<div class="gb-task-main"><div class="gb-task-title" style="text-decoration:line-through">'+gbEsc(item.title)+'</div>'+
+            '<div class="gb-task-meta"><span class="gb-pill">Didn’t do this</span></div></div>'+
+          '<div class="gb-task-actions"><button class="gb-icon-btn" data-gb-undismiss="'+gbEsc(item.id)+'" title="Undo">Undo</button></div>'+
+        '</div>'+
+      '</article>';
+    }
     var start = gbDidStart(item, ui);
     var duration = gbDidDuration(item, ui);
     var tags = (item.tags || []).map(function(t){ return '<span class="gb-pill">'+gbEsc(t)+'</span>'; }).join("");
@@ -875,7 +904,8 @@
           (!approvable ? ''
             : approved
               ? '<button class="gb-icon-btn" disabled title="Already logged">Logged</button>'
-              : '<button class="gb-add-btn" data-gb-approve="'+gbEsc(item.id)+'" title="Log as done and bank points">Approve</button>')+
+              : '<button class="gb-add-btn" data-gb-approve="'+gbEsc(item.id)+'" title="Log as done and bank points">Approve</button>'+
+                '<button class="gb-icon-btn" data-gb-dismiss="'+gbEsc(item.id)+'" title="No, I didn’t do this">Didn’t do this</button>')+
         '</div>'+
       '</div>'+
       (approved || !approvable ? "" :
@@ -1209,13 +1239,18 @@
 
   function gbPageDayReview(page, current, ui){
     var items = gbDidItems(page, current);
-    var pending = items.filter(function(it){ return it.approvable !== false && !gbDidApproved(it, ui); }).length;
+    var pending = items.filter(function(it){ return it.approvable !== false && !gbDidApproved(it, ui) && !gbDidDismissed(it, ui); }).length;
     var body = items.length
       ? items.map(function(it){ return gbDidCard(it, ui); }).join("")
-      : '<div class="gb-empty">No activity reconstructed for today yet. The night run fills this in from your Claude/Codex sessions, shipped code, and comms.</div>';
-    return '<p class="gb-page-summary">'+gbEsc(page.summary || "What the day-review reconstructed you did today. Fix the time or duration, then Approve to log it as done and bank points.")+'</p>'+
-      '<section class="gb-section gb-tasks"><div class="gb-section-title">Day in Review ('+pending+' to confirm)</div>'+
-        '<div class="gb-row-sub" style="margin-bottom:8px">Each item is inferred from what you actually touched. Approve logs it as completed; unfinished parts push to tomorrow.</div>'+
+      : '<div class="gb-empty">No activity reconstructed for this day yet. The night run fills this in from your Claude/Codex sessions, shipped code, and comms.</div>';
+    var reviewIso = (page && page.review_date) || "";
+    var dayLabel = (page && page.review_date_label) || gbFmtReviewDate(reviewIso);
+    var dateTag = dayLabel
+      ? '<span class="gb-pill" title="The calendar day this reviews'+(reviewIso && reviewIso !== gbDate() ? " (you are viewing "+gbEsc(gbDate())+")" : "")+'">'+gbEsc(dayLabel)+'</span>'
+      : "";
+    return '<p class="gb-page-summary">'+gbEsc(page.summary || "What the day-review reconstructed you did. Fix the time or duration, then Approve to log it as done and bank points.")+'</p>'+
+      '<section class="gb-section gb-tasks"><div class="gb-section-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Day in Review '+dateTag+'<span style="opacity:.7;font-weight:normal">('+pending+' to confirm)</span></div>'+
+        '<div class="gb-row-sub" style="margin-bottom:8px">Each item is inferred from what you actually touched. Approve logs it as completed; “Didn’t do this” dismisses it; unfinished parts push to tomorrow.</div>'+
         '<div class="gb-task-list">'+body+'</div>'+
       '</section>'+
       gbJournalSection(ui);
@@ -1435,6 +1470,10 @@
     if(approve){ gbApproveDid(approve.dataset.gbApprove); return; }
     var pushNext = e.target.closest("[data-gb-push-next]");
     if(pushNext){ gbPushDidNext(pushNext.dataset.gbPushNext); return; }
+    var dismiss = e.target.closest("[data-gb-dismiss]");
+    if(dismiss){ gbSetDidDismissed(dismiss.dataset.gbDismiss, true); return; }
+    var undismiss = e.target.closest("[data-gb-undismiss]");
+    if(undismiss){ gbSetDidDismissed(undismiss.dataset.gbUndismiss, false); return; }
     var journalSave = e.target.closest("[data-gb-journal-save]");
     if(journalSave){ gbSaveJournal(); return; }
     var openMood = e.target.closest("[data-gb-open-mood]");
