@@ -18,7 +18,7 @@ const vm = require("node:vm");
 // gbFmtReviewDate is 2-space-indented inside the file's IIFE, so the slice must
 // match the indented closing brace (mirrors the closure-slicing tests).
 const src = fs.readFileSync(require.resolve("./public/js/glymphatic-brief.js"), "utf8");
-const slice = src.match(/  function gbFmtReviewDate[\s\S]*?\n  \}/)[0];
+const slice = src.match(/ {2}function gbFmtReviewDate[\s\S]*?\n {2}\}/)[0];
 
 function makeCtx() {
   const context = { console };

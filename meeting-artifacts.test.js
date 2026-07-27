@@ -74,7 +74,7 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions a
       { text: "Ops to update the runbook", owner: "others" },
     ],
   });
-  assert.deepEqual(res.applied, { prep: false, summary: true, transcript: true, proposedActions: 2, recapToNotes: true });
+  assert.deepEqual(res.applied, { prep: false, summary: true, transcript: true, proposedActions: 2, recapToNotes: true, dashboardRef: false });
   assert.equal(childrenOf("m1", "meeting_summary").length, 1);
   assert.equal(childrenOf("m1", "meeting_transcript").length, 1);
   const actions = childrenOf("m1", "proposed_action_item");
