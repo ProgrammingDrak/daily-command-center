@@ -771,7 +771,7 @@ window.migrateHtmlToBlocks=function(html){
 
     if(tag==='h1') push('heading', node.innerHTML, {level:1});
     else if(tag==='h2') push('heading', node.innerHTML, {level:2});
-    else if(tag==='h3') push('heading', node.innerHTML, {level:3});
+    else if(tag==='h3'||tag==='h4'||tag==='h5'||tag==='h6') push('heading', node.innerHTML, {level:3});
     else if(tag==='li'){
       // Check if it's a checkbox
       const chk=node.querySelector('input[type="checkbox"]');

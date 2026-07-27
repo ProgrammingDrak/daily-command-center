@@ -4969,3 +4969,14 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .prep-view-actions ul{margin:0;padding-left:var(--sp-5);display:flex;flex-direction:column;gap:var(--sp-2)}
 .prep-view-actions li{line-height:1.5}
 .prep-view-actions em{color:var(--text-muted);font-style:normal;font-size:var(--fs-xs);margin-left:var(--sp-2)}
+/* Editable prep/summary sections in the prep modal — the block editor mounts here
+   and behaves exactly like the notes fields (mirrors .notes-textarea-wrap). */
+.prep-edit-genbar{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);margin-bottom:var(--sp-4)}
+.prep-edit-genbar .prep-gen-btn{border:1px solid var(--border);background:transparent;color:var(--text-muted);font-weight:700}
+.prep-edit-genbar .prep-gen-btn:hover:not(:disabled){color:var(--text);border-color:var(--accent)}
+.prep-edit-section{margin-bottom:var(--sp-5)}
+.prep-edit-label{display:flex;align-items:center;justify-content:space-between;font-size:var(--fs-xs);font-weight:800;text-transform:uppercase;letter-spacing:0.7px;color:var(--cyan);margin-bottom:var(--sp-2)}
+.prep-edit-status{font-size:var(--fs-xs);font-weight:600;letter-spacing:0.3px;text-transform:none;color:var(--text-muted);opacity:0;transition:opacity 0.2s}
+.prep-edit-status.show{opacity:1}
+.prep-edit-host .nb-editor{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 6px;min-height:120px;max-height:46vh;overflow-y:auto}
+.prep-edit-host .nb-editor:focus-within{border-color:var(--accent)}

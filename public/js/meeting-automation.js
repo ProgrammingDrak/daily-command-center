@@ -107,6 +107,13 @@
     return data;
   }
 
+  async function patchJson(url,body){
+    const res=await fetch(url,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.error||"Request failed");
+    return data;
+  }
+
   // After actions are approved they live under the meeting; offer to place them on
   // a day in one batch. Picking a day promotes every approved action to a standalone
   // task on it (server detaches the parent); closing the popover leaves them under
@@ -221,56 +228,137 @@
     return out.join("");
   }
 
-  function prepDocHtml(data){
-    const prep=data&&data.prep;
-    const actions=((data&&data.proposedActions)||[]).filter(a=>a.status!=="approved");
-    let html="";
-    if(prep&&(prep.html||prep.markdown)){
-      // Prefer rendering the raw markdown with our own converter: the server's
-      // markdownToHtml is lossy (wraps blocks in <h4>, drops bullets/bold), so
-      // prep.html reads flat. Fall back to it only when markdown is absent.
-      html+='<div class="prep-doc">'+(prep.markdown?mdToHtml(prep.markdown):(prep.html||""))+'</div>';
-      if(prep.sources&&prep.sources.length)html+=artifactSources(prep.sources);
-    }else{
-      html+='<div class="prep-view-empty"><span>No prep has been generated for this meeting yet.</span>'+
-        '<button class="prep-gen-btn" type="button">Generate prep</button></div>';
-    }
-    if(actions.length){
-      html+='<div class="prep-view-actions"><div class="prep-view-kicker">Proposed actions</div><ul>'+
-        actions.map(a=>'<li>'+esc(a.text||a.title||"")+(a.priority?'<em>'+esc(a.priority)+'</em>':'')+'</li>').join('')+'</ul></div>';
-    }
-    return html;
-  }
-
+  // The prep modal is the surface the prep chip + Prep/Recap radial open
+  // (schedule-tab.js openMeetingPanel -> openPrepModal). Prep brief and Summary
+  // are each an editable block editor -- the SAME shared createBlockEditor used by
+  // task notes / sticky notes -- so copy/paste/formatting/slash-menu behave
+  // identically. Autosave mirrors the sticky-note pattern (debounced input +
+  // capture-phase blur), persisting to PATCH /api/meetings/:id/artifact. The modal
+  // is a detached overlay, so render()/refreshMeetingAutomationPanels never touch
+  // it -- no mount-lifecycle fight. clientId echo suppresses the origin's own SSE.
   function openPrepModal(ev){
     if(!(window.DCC&&typeof DCC.modal==="function"))return;
     const id=ev.meetingBlockId||ev.id;
     const _a=fmtClock(ev.start),_b=fmtClock(ev.end);
     const timeStr=(_a&&_b)?_a+" – "+_b:(_a||_b||"");
+    const clientId=(window.blockStore&&window.blockStore.CLIENT_ID)||null;
+
+    // Per-modal editor state — no global registry needed (one modal at a time).
+    const editors={};    // kind -> block editor
+    const saveTimers={}; // kind -> debounce timer
+    const lastSig={};    // kind -> last-saved html signature (skip no-op saves)
+
     const modal=DCC.modal({
       title:ev.title||"Meeting prep",
       body:'<div class="prep-view">'+
-        '<div class="prep-view-meta">Meeting prep'+(timeStr?' · '+esc(timeStr):'')+'</div>'+
-        '<div class="prep-view-doc"><div class="prep-view-loading">Loading prep…</div></div>'+
-      '</div>'
+        '<div class="prep-view-meta">Prep &amp; summary'+(timeStr?' · '+esc(timeStr):'')+'</div>'+
+        '<div class="prep-edit-genbar">'+
+          '<span class="prep-edit-status" data-prep-status></span>'+
+          '<button class="prep-gen-btn" type="button" data-prep-gen>Generate prep</button>'+
+        '</div>'+
+        '<div class="prep-view-doc"><div class="prep-view-loading">Loading…</div></div>'+
+      '</div>',
+      onClose:()=>{ flush("meeting_prep"); flush("meeting_summary"); }
     });
     if(modal&&modal.el)modal.el.classList.add("prep-modal");
     const docEl=modal.el.querySelector(".prep-view-doc");
+    const statusEl=modal.el.querySelector("[data-prep-status]");
+    const genBtn=modal.el.querySelector("[data-prep-gen]");
+
+    // Seed order: faithful editor blocks first; else the client's (non-lossy)
+    // mdToHtml of the markdown; else stored html; else a blank paragraph.
+    function seedBlocks(art){
+      if(art&&Array.isArray(art.blocks)&&art.blocks.length)return art.blocks;
+      if(art&&art.markdown&&art.markdown.trim())return migrateHtmlToBlocks(mdToHtml(art.markdown));
+      if(art&&art.html)return migrateHtmlToBlocks(art.html);
+      return null; // createBlockEditor supplies an empty paragraph
+    }
+
+    function setStatus(txt){
+      if(!statusEl)return;
+      statusEl.textContent=txt||"";
+      statusEl.classList.toggle("show",!!txt);
+    }
+
+    async function persist(kind){
+      const ed=editors[kind];
+      if(!ed)return;
+      const html=ed.toHtml(),blocks=ed.getBlocks(),markdown=ed.toMarkdown();
+      if(lastSig[kind]===html)return; // no change
+      setStatus("Saving…");
+      try{
+        const data=await patchJson('/api/meetings/'+encodeURIComponent(id)+'/artifact',{kind,html,blocks,markdown,_clientId:clientId});
+        // Mark saved ONLY after the PATCH succeeds — otherwise a failed save would
+        // poison lastSig and the blur/close retry would no-op, silently dropping the edit.
+        lastSig[kind]=html;
+        cache.set(id,data);
+        setStatus("Saved");
+        setTimeout(()=>{ if(statusEl&&statusEl.textContent==="Saved")setStatus(""); },1400);
+      }catch(err){ setStatus("Save failed"); toast(err.message||"Save failed","error"); }
+    }
+
+    function flush(kind){
+      if(saveTimers[kind]){clearTimeout(saveTimers[kind]);delete saveTimers[kind];}
+      if(editors[kind])return persist(kind);
+    }
+
+    function mountEditor(kind,host,art){
+      if(!host)return;
+      const ed=createBlockEditor(host,seedBlocks(art));
+      editors[kind]=ed;
+      lastSig[kind]=ed.toHtml();
+      host.addEventListener('input',()=>{
+        if(saveTimers[kind])clearTimeout(saveTimers[kind]);
+        saveTimers[kind]=setTimeout(()=>{ delete saveTimers[kind]; persist(kind); },350);
+      });
+      // Capture phase: focus leaves an inner .nb-content child, so a bubbling
+      // blur on the host would miss it (same as sticky notes).
+      host.addEventListener('blur',()=>{ flush(kind); },true);
+    }
+
+    function render(data){
+      const prep=data&&data.prep, summary=data&&data.summary;
+      const actions=((data&&data.proposedActions)||[]).filter(a=>a.status!=="approved");
+      // Tear down prior editors before we wipe the doc HTML (open + each regenerate).
+      Object.keys(editors).forEach(k=>{ try{editors[k].destroy()}catch(e){} delete editors[k]; });
+      let html='';
+      html+='<div class="prep-edit-section"><div class="prep-edit-label">Prep brief</div>'+
+        '<div class="prep-edit-host" data-edit-host="meeting_prep"></div>';
+      if(prep&&prep.sources&&prep.sources.length)html+=artifactSources(prep.sources);
+      html+='</div>';
+      html+='<div class="prep-edit-section"><div class="prep-edit-label">Summary</div>'+
+        '<div class="prep-edit-host" data-edit-host="meeting_summary"></div></div>';
+      if(actions.length){
+        html+='<div class="prep-view-actions"><div class="prep-view-kicker">Proposed actions</div><ul>'+
+          actions.map(a=>'<li>'+esc(a.text||a.title||"")+(a.priority?'<em>'+esc(a.priority)+'</em>':'')+'</li>').join('')+'</ul></div>';
+      }
+      docEl.innerHTML=html;
+      mountEditor("meeting_prep",docEl.querySelector('[data-edit-host="meeting_prep"]'),prep);
+      mountEditor("meeting_summary",docEl.querySelector('[data-edit-host="meeting_summary"]'),summary);
+      if(genBtn)genBtn.textContent=(prep&&(prep.html||prep.markdown||(prep.blocks&&prep.blocks.length)))?"Refresh prep":"Generate prep";
+    }
+
     async function load(force){
       let data=(!force&&cache.get(id))||null;
       if(!data){
         try{ const res=await fetch('/api/meetings/'+encodeURIComponent(id)+'/automation'); data=await res.json(); if(!res.ok)throw new Error(data.error||"load failed"); cache.set(id,data); }
-        catch(e){ if(docEl)docEl.innerHTML='<div class="prep-view-empty">Could not load prep.</div>'; return; }
+        catch(e){ if(docEl)docEl.innerHTML='<div class="prep-view-empty">Could not load this meeting.</div>'; return; }
       }
       if(!docEl)return;
-      docEl.innerHTML=prepDocHtml(data);
-      const gen=docEl.querySelector(".prep-gen-btn");
-      if(gen)gen.addEventListener("click",async()=>{
-        gen.disabled=true;gen.textContent="Generating…";
-        try{ await postJson('/api/meetings/'+encodeURIComponent(id)+'/prep',{}); load(true); if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(id); }
-        catch(err){ gen.disabled=false;gen.textContent="Generate prep"; toast(err.message||"Prep failed","error"); }
-      });
+      render(data);
     }
+
+    if(genBtn)genBtn.addEventListener("click",async()=>{
+      genBtn.disabled=true;genBtn.textContent="Generating…";
+      try{
+        await flush("meeting_prep"); // save pending edits so the server preserves them
+        await postJson('/api/meetings/'+encodeURIComponent(id)+'/prep',{_clientId:clientId});
+        await load(true); // re-seed: fresh template + prior edits under "User Notes"
+        toast("Prep generated");
+      }catch(err){ toast(err.message||"Prep failed","error"); genBtn.disabled=false; }
+      finally{ genBtn.disabled=false; if(genBtn.textContent==="Generating…")genBtn.textContent="Refresh prep"; }
+    });
+
     load(false);
   }
 
