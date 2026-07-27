@@ -337,3 +337,77 @@ test("resolver spans the +/-1 day window and ignores non-meeting same-title bloc
   assert.equal(status, 200);
   assert.equal(json.meetingBlockId, "blk-real"); // matched the meeting on date+1, not the same-title task
 });
+
+// ── In-place editable prep/summary: preserve-on-regenerate + updateArtifactContent ──
+
+function seedArtifact(meetingId, kind, props) {
+  mem.store.push({
+    id: kind + "-" + meetingId, type: "block", parent_id: meetingId, date: "2026-07-09",
+    properties: Object.assign({ kind, meetingBlockId: meetingId }, props),
+    workspace_id: "ws-1", user_id: 1, deleted_at: null,
+  });
+}
+
+test("generatePrep preserves a hand-edited prep under exactly one User Notes section (no double-wrap across the h4->h3 round-trip)", async () => {
+  seedMeeting("mpres", { prep_status: "ready", start: "10:00", end: "10:30" });
+  // A prior manual edit: userEdited flag set, rich html, no User Notes marker yet.
+  seedArtifact("mpres", "meeting_prep", { title: "Prep: mpres", status: "draft", userEdited: true,
+    html: "<p>Keep my <strong>note</strong></p>", markdown: "Keep my note", blocks: [{ id: "b", type: "paragraph", content: "Keep my note" }] });
+
+  await automation.generatePrep("mpres", { workspaceId: "ws-1", userId: 1 });
+  const p1 = childrenOf("mpres", "meeting_prep")[0].properties;
+  assert.equal(childrenOf("mpres", "meeting_prep").length, 1, "upserts in place, no duplicate prep");
+  assert.match(p1.html, /Meeting Prep/, "fresh template regenerated");
+  assert.match(p1.html, /Keep my <strong>note<\/strong>/, "prior rich edit preserved verbatim");
+  assert.equal((p1.html.match(/User Notes/gi) || []).length, 1, "exactly one User Notes section");
+  assert.ok(p1.html.indexOf("Meeting Prep") < p1.html.indexOf("User Notes"), "fresh template sits above User Notes, not nested inside it");
+  assert.equal(p1.userEdited, false, "userEdited reset after regenerate");
+  assert.equal(p1.blocks, null, "blocks cleared so the client re-seeds from html/markdown");
+
+  // Simulate the user editing again: the block editor round-trips the injected
+  // <h4> heading as <h3>. A literal-marker match would double-wrap here.
+  const child = mem.store.find((b) => b.parent_id === "mpres" && b.properties.kind === "meeting_prep");
+  child.properties.userEdited = true;
+  child.properties.html = p1.html.replace(/<h4>/g, "<h3>").replace(/<\/h4>/g, "</h3>");
+
+  await automation.generatePrep("mpres", { workspaceId: "ws-1", userId: 1 });
+  const p2 = childrenOf("mpres", "meeting_prep")[0].properties;
+  assert.equal((p2.html.match(/User Notes/gi) || []).length, 1, "still exactly one User Notes after a second regenerate (h3 tolerated)");
+  assert.match(p2.html, /Keep my <strong>note<\/strong>/, "edit still preserved on the second regenerate");
+});
+
+test("updateArtifactContent rejects an unsupported kind", async () => {
+  seedMeeting("mkind");
+  await assert.rejects(
+    () => automation.updateArtifactContent("mkind", "meeting_transcript", { html: "x" }, { workspaceId: "ws-1", userId: 1 }),
+    (e) => e.statusCode === 400 && /Unsupported artifact kind/.test(e.message));
+});
+
+test("updateArtifactContent lazily creates a prep on first edit and lights the itinerary chip", async () => {
+  seedMeeting("mlazy", { prep_status: "pending" });
+  assert.equal(childrenOf("mlazy", "meeting_prep").length, 0);
+  await automation.updateArtifactContent("mlazy", "meeting_prep",
+    { html: "<p>hand written</p>", blocks: [{ id: "b1", type: "paragraph", content: "hand written" }], markdown: "hand written" },
+    { workspaceId: "ws-1", userId: 1 });
+  const kids = childrenOf("mlazy", "meeting_prep");
+  assert.equal(kids.length, 1, "artifact created");
+  assert.equal(kids[0].properties.userEdited, true);
+  assert.equal(kids[0].properties.blocks.length, 1, "editor blocks stored verbatim");
+  assert.equal((await mem.getBlock("mlazy")).properties.prep_status, "ready", "first prep create flips the chip pending->ready");
+});
+
+test("updateArtifactContent merges over existing props (kind/sources/title survive a content-only edit)", async () => {
+  seedMeeting("mmerge");
+  seedArtifact("mmerge", "meeting_summary", { title: "Summary: mmerge", status: "ready",
+    sources: [{ type: "gmail", url: "https://mail.example/x" }], html: "<p>old</p>", markdown: "old", userEdited: false });
+  await automation.updateArtifactContent("mmerge", "meeting_summary",
+    { html: "<p>new body</p>", blocks: [{ id: "s1", type: "paragraph", content: "new body" }], markdown: "new body" },
+    { workspaceId: "ws-1", userId: 1 });
+  const s = childrenOf("mmerge", "meeting_summary")[0].properties;
+  assert.equal(childrenOf("mmerge", "meeting_summary").length, 1, "upserts in place");
+  assert.match(s.html, /new body/, "content updated");
+  assert.equal(s.userEdited, true, "userEdited flipped true");
+  assert.equal(s.kind, "meeting_summary", "kind discriminator preserved");
+  assert.equal(s.title, "Summary: mmerge", "title preserved");
+  assert.deepEqual(s.sources, [{ type: "gmail", url: "https://mail.example/x" }], "sources preserved (not clobbered)");
+});

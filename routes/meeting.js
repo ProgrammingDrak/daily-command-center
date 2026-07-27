@@ -20,7 +20,31 @@ app.post("/api/meetings/:blockId/prep", async (req, res) => {
       userId: req.session.userId,
       extraSources: Array.isArray(req.body?.sources) ? req.body.sources : [],
     });
-    broadcast("blocks-changed", { action: "meeting-prep", blockIds: [req.params.blockId] }, req.workspaceId);
+    broadcast("blocks-changed", { action: "meeting-prep", blockIds: [req.params.blockId], clientId: req.body?._clientId }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+// In-place user edit of a prep/summary doc (the block-editor autosave path). The
+// generic PATCH /api/blocks/:id can't be used: db.updateBlock replaces properties
+// wholesale, which would drop the artifact's kind/meetingBlockId/sources. This
+// delegates to updateArtifactContent, which merges over the existing properties.
+// Echoes clientId so the origin tab's own broadcast is suppressed (sse.js) and the
+// live editor isn't stomped by its own save.
+app.patch("/api/meetings/:blockId/artifact", async (req, res) => {
+  try {
+    const kind = req.body?.kind;
+    if (kind !== "meeting_prep" && kind !== "meeting_summary") {
+      return res.status(400).json({ error: "kind must be meeting_prep or meeting_summary" });
+    }
+    const result = await meetingAutomation.updateArtifactContent(req.params.blockId, kind, {
+      html: req.body?.html,
+      blocks: req.body?.blocks,
+      markdown: req.body?.markdown,
+    }, { workspaceId: req.workspaceId, userId: req.session.userId });
+    broadcast("blocks-changed", { action: "meeting-artifact-edit", blockIds: [req.params.blockId], clientId: req.body?._clientId }, req.workspaceId);
     res.json(result);
   } catch (e) {
     res.status(e.statusCode || 500).json({ error: e.message });
@@ -35,7 +59,7 @@ app.post("/api/meetings/:blockId/transcript/ingest", async (req, res) => {
       transcriptText: req.body?.transcriptText || req.body?.text || "",
       sources: Array.isArray(req.body?.sources) ? req.body.sources : [],
     });
-    broadcast("blocks-changed", { action: "meeting-transcript", blockIds: [req.params.blockId] }, req.workspaceId);
+    broadcast("blocks-changed", { action: "meeting-transcript", blockIds: [req.params.blockId], clientId: req.body?._clientId }, req.workspaceId);
     res.json(result);
   } catch (e) {
     res.status(e.statusCode || 500).json({ error: e.message });

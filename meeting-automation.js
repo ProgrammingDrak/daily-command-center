@@ -225,6 +225,33 @@ function markdownToHtml(markdown) {
     .join("");
 }
 
+// When (re)generating a prep/summary that the user has hand-edited, don't clobber
+// their content: append it under a stable "User Notes" section beneath the fresh
+// output. indexOf on the marker means exactly ONE User Notes tail survives across
+// repeated regenerates (never nests the old template, never double-wraps). Called
+// from every generate path (generatePrep, ingestTranscript, applyArtifacts) so the
+// no-clobber guarantee holds for the button AND the nightly sweep.
+// Marker detection is tolerant to heading level: we inject the section as <h4> /
+// "### ", but the block editor round-trips headings as <h3> (it has no h4), so a
+// literal match would double-wrap after the user edits a regenerated doc. Matching
+// any <h1-6>User Notes</h*> keeps it to exactly one section across regenerates.
+const USER_NOTES_HTML_RE = /<h[1-6][^>]*>\s*User Notes\s*<\/h[1-6]>/i;
+const USER_NOTES_MD_RE = /(^|\n)#{1,6}\s+User Notes[^\n]*/i;
+function preserveUserNotes(freshHtml, freshMarkdown, existingProps) {
+  const ex = existingProps || {};
+  if (!ex.userEdited) return { html: freshHtml, markdown: freshMarkdown };
+  const priorHtml = String(ex.html || markdownToHtml(ex.markdown || ""));
+  const mH = priorHtml.match(USER_NOTES_HTML_RE);
+  const tailHtml = mH ? priorHtml.slice(mH.index) : ("<h4>User Notes</h4>" + priorHtml);
+  const priorMd = String(ex.markdown || "");
+  const mM = priorMd.match(USER_NOTES_MD_RE);
+  const tailMd = mM ? priorMd.slice(mM.index).replace(/^\n/, "") : ("### User Notes\n\n" + priorMd);
+  return {
+    html: String(freshHtml || "") + tailHtml,
+    markdown: String(freshMarkdown || "") + "\n\n" + tailMd,
+  };
+}
+
 function buildPrepMarkdown(meeting, gcalRow, sources) {
   const p = propsOf(meeting);
   const attendees = attendeeEmails(gcalRow);
@@ -307,6 +334,8 @@ async function generatePrep(blockId, { workspaceId, userId, extraSources = [] })
     ...extraSources,
   ];
   const markdown = buildPrepMarkdown(meeting, gcalRow, sources);
+  const existingPrep = newestByKind(await loadArtifacts(meeting.id, workspaceId), "meeting_prep");
+  const merged = preserveUserNotes(markdownToHtml(markdown), markdown, propsOf(existingPrep));
   await upsertArtifact({
     meeting,
     workspaceId,
@@ -316,14 +345,49 @@ async function generatePrep(blockId, { workspaceId, userId, extraSources = [] })
     properties: {
       title: `Prep: ${titleOf(meeting)}`,
       status: "draft",
-      markdown,
-      html: markdownToHtml(markdown),
+      markdown: merged.markdown,
+      html: merged.html,
       sources,
+      // Clear any stale editor blocks + userEdited so the client re-seeds from the
+      // regenerated html/markdown (with prior edits preserved under User Notes).
+      blocks: null,
+      userEdited: false,
     },
   });
   // Fallback fill: a template prep now exists, so the chip should read "ready".
   await markPrepReady(meeting.id);
   return getAutomation(blockId, workspaceId);
+}
+
+// Persist a user's in-place edit to a prep/summary doc. Stores the block-editor
+// output verbatim ({html, blocks, markdown}) — exactly like the notes fields — and
+// flags userEdited so a later (re)generate preserves it under "User Notes".
+// upsertArtifact merges over the existing properties, so kind/meetingBlockId/
+// sources/title/status all survive; a first edit lazily CREATES the artifact.
+async function updateArtifactContent(blockId, kind, { html, blocks, markdown }, { workspaceId, userId }) {
+  if (kind !== "meeting_prep" && kind !== "meeting_summary") {
+    const err = new Error("Unsupported artifact kind"); err.statusCode = 400; throw err;
+  }
+  const meeting = await loadMeeting(blockId, workspaceId);
+  const existing = newestByKind(await loadArtifacts(meeting.id, workspaceId), kind);
+  const defaults = existing ? {} : {
+    title: kind === "meeting_prep" ? `Prep: ${titleOf(meeting)}` : `Summary: ${titleOf(meeting)}`,
+    status: "draft",
+  };
+  await upsertArtifact({
+    meeting, workspaceId, userId, kind,
+    sortOrder: kind === "meeting_prep" ? 100 : 210,
+    properties: {
+      ...defaults,
+      html: String(html || ""),
+      blocks: Array.isArray(blocks) ? blocks : null,
+      markdown: String(markdown || ""),
+      userEdited: true,
+    },
+  });
+  // First-time prep create should light the itinerary chip, same as generatePrep.
+  if (kind === "meeting_prep" && !existing) await markPrepReady(meeting.id);
+  return getAutomation(meeting.id, workspaceId);
 }
 
 function summarizeTranscript(text) {
@@ -371,6 +435,9 @@ async function ingestTranscript(blockId, { workspaceId, userId, transcriptText, 
     },
   });
   const summaryText = summarizeTranscript(text);
+  const summaryMd = `### Meeting Summary\n${summaryText}`;
+  const existingSummary = newestByKind(await loadArtifacts(meeting.id, workspaceId), "meeting_summary");
+  const mergedSummary = preserveUserNotes(markdownToHtml(summaryMd), summaryMd, propsOf(existingSummary));
   await upsertArtifact({
     meeting,
     workspaceId,
@@ -380,9 +447,11 @@ async function ingestTranscript(blockId, { workspaceId, userId, transcriptText, 
     properties: {
       title: `Summary: ${titleOf(meeting)}`,
       status: "draft",
-      markdown: `### Meeting Summary\n${summaryText}`,
-      html: markdownToHtml(`### Meeting Summary\n${summaryText}`),
+      markdown: mergedSummary.markdown,
+      html: mergedSummary.html,
       sources,
+      blocks: null,
+      userEdited: false,
     },
   });
 
@@ -530,14 +599,18 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
 
   if (prep && (prep.markdown || prep.html)) {
     const markdown = String(prep.markdown || "");
+    const existingPrep = newestByKind(await loadArtifacts(meeting.id, workspaceId), "meeting_prep");
+    const merged = preserveUserNotes(markdownToHtml(markdown), markdown, propsOf(existingPrep));
     await upsertArtifact({
       meeting, workspaceId, userId, kind: "meeting_prep", sortOrder: 100,
       properties: {
         title: prep.title || `Prep: ${titleOf(meeting)}`,
         status: prep.status || "ready",
-        markdown,
-        html: markdownToHtml(markdown),
+        markdown: merged.markdown,
+        html: merged.html,
         sources: sanitizeSources(prep.sources),
+        blocks: null,
+        userEdited: false,
       },
     });
     applied.prep = true;
@@ -566,14 +639,18 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
 
   if (summary && (summary.markdown || summary.html)) {
     const markdown = String(summary.markdown || "");
+    const existingSummary = newestByKind(await loadArtifacts(meeting.id, workspaceId), "meeting_summary");
+    const merged = preserveUserNotes(markdownToHtml(markdown), markdown, propsOf(existingSummary));
     await upsertArtifact({
       meeting, workspaceId, userId, kind: "meeting_summary", sortOrder: 210,
       properties: {
         title: summary.title || `Summary: ${titleOf(meeting)}`,
         status: summary.status || "ready",
-        markdown,
-        html: markdownToHtml(markdown),
+        markdown: merged.markdown,
+        html: merged.html,
         sources: sanitizeSources(summary.sources),
+        blocks: null,
+        userEdited: false,
       },
     });
     applied.summary = true;
@@ -636,6 +713,7 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
 module.exports = {
   getAutomation,
   generatePrep,
+  updateArtifactContent,
   ingestTranscript,
   approveActions,
   placeApprovedAction,
