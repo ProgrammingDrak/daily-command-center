@@ -91,20 +91,9 @@
       var label=visibility==="private"?"Private":"Public";
       return '<button class="pet-privacy-toggle '+visibility+'" type="button" data-pet-privacy-id="'+String(ev.id).replace(/"/g,'&quot;')+'" title="Toggle Pet Home sharing">'+label+'</button>';
     };
-    var pointsChip = opts.pointsChip || function(ev){
-      var bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
-      var bounty=bountyCount>0;
-      var payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
-        ? window.TaskPoints.buildPayload(ev,{bounty:bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1})
-        : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty:bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
-      var scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
-        ? window.TaskPoints.estimate(payload)
-        : {eligible:pointEligible(ev),awardPoints:bounty?28:14,durationMinutes:60,effortTier:"medium",attentionTier:"normal"};
-      if(!scoring.eligible||scoring.awardPoints<=0)return "";
-      var pts=scoring.awardPoints;
-      var title="Completing this task earns about "+pts+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention"+(bounty?", bounty x"+Math.pow(2,bountyCount):"")+".";
-      return '<span class="points-chip'+(bounty||pts>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+pts+' pts</span>';
-    };
+    // pointsChip is now a module-level function (itineraryPointsChip) so the List
+    // row builder can emit byte-identical points markup. Guests still override.
+    var pointsChip = opts.pointsChip || itineraryPointsChip;
 
     var node = opts.node || {depth:0,hasKids:false,collapsed:false};
     var active = !!opts.active, isPinnedActive = !!opts.isPinnedActive;
@@ -357,7 +346,48 @@
   // renderItineraryCard(ev,{variant:"sub"}) (timeline) and row() (list), so every
   // card affordance is shared. renderSubRow and its schedule-tab helpers are gone.
 
+  // ── Shared points markup (extracted from renderItineraryCard) ──
+  // Owner default for the points chip; the List row builder calls this so both
+  // surfaces render the identical chip + tooltip. Function declaration → hoisted,
+  // so renderItineraryCard's `opts.pointsChip || itineraryPointsChip` resolves.
+  function itineraryPointsChip(ev){
+    var bountyCount=typeof getBountyCountForTask==="function"?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
+    var bounty=bountyCount>0;
+    var payload=window.TaskPoints&&typeof window.TaskPoints.buildPayload==="function"
+      ? window.TaskPoints.buildPayload(ev,{bounty:bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1})
+      : {type:ev.type,duration_minutes:typeof dur==="function"?dur(ev):(ev.durMin||30),priority:ev.priority,bounty:bounty,bounty_count:bountyCount,partner_bounty:bountyCount>1};
+    var scoring=window.TaskPoints&&typeof window.TaskPoints.estimate==="function"
+      ? window.TaskPoints.estimate(payload)
+      : {eligible:pointEligible(ev),awardPoints:bounty?28:14,durationMinutes:60,effortTier:"medium",attentionTier:"normal"};
+    if(!scoring.eligible||scoring.awardPoints<=0)return "";
+    var pts=scoring.awardPoints;
+    var title="Completing this task earns about "+pts+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention"+(bounty?", bounty x"+Math.pow(2,bountyCount):"")+".";
+    return '<span class="points-chip'+(bounty||pts>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+pts+' pts</span>';
+  }
+  // Chip-slot precedence shared by the card and the List row: shell rollup →
+  // own point-pie (task has subtasks) → subtask slice → plain points chip. The
+  // pie / shell markup is identical to renderItineraryCard's inline version.
+  function itineraryChipSlotHtml(ev,opts){
+    opts=opts||{};
+    var tt=window.TaskTypes?window.TaskTypes.get(ev):null;
+    var shellChip=(tt&&tt.rollupMode&&typeof shellRollupChip==="function")?shellRollupChip(ev):'';
+    if(shellChip)return shellChip;
+    var pplan=(window.PointPlan&&typeof window.PointPlan.compute==="function")?window.PointPlan.compute(ev.id):null;
+    if(pplan){
+      var piePct=pplan.pool>0?Math.max(0,Math.min(100,Math.round(pplan.earned/pplan.pool*100))):0;
+      var pieTitle=(pplan.earned+' of '+pplan.pool+' pts earned · '+pplan.doneCount+'/'+pplan.total+' subtasks done'+(pplan.bonus?' · '+pplan.bonus+' pt completion bonus':'')).replace(/"/g,'&quot;');
+      return '<span class="pie-bar" title="'+pieTitle+'"><span class="pie-bar-fill" style="width:'+piePct+'%"></span></span><span class="pie-bar-lbl">'+pplan.earned+'/'+pplan.pool+' pts</span>';
+    }
+    if(opts.sub){
+      var subSlice=(ev.subtaskOf&&window.PointPlan&&typeof window.PointPlan.shareFor==="function")?window.PointPlan.shareFor(ev.subtaskOf,ev.id):null;
+      return subShareChipHtml(ev,subSlice);
+    }
+    return itineraryPointsChip(ev);
+  }
+
   window.renderItineraryCard = renderItineraryCard;
   window.renderCompactRow = renderCompactRow;
   window.subShareChipHtml = subShareChipHtml;
+  window.itineraryPointsChip = itineraryPointsChip;
+  window.itineraryChipSlotHtml = itineraryChipSlotHtml;
 })();

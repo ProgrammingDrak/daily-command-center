@@ -137,6 +137,10 @@ function showRadialMenuPreview(anchorEl,items,opts){
     dot.style.left=(x-14)+"px";dot.style.top=(y-14)+"px";
     if(typeof opts.onExpand==="function"){
       dot.addEventListener("mouseenter",()=>{hideRadialMenuPreview();opts.onExpand()});
+      // Touch has no mouseenter, so a tap on a preview dot promotes it to the full
+      // radial. onExpand → openRadialMenu closes the preview fan first, so a hybrid
+      // device firing both mouseenter and click is idempotent.
+      dot.addEventListener("click",(e)=>{e.stopPropagation();hideRadialMenuPreview();opts.onExpand()});
     }
     if(typeof opts.onDotLeave==="function")dot.addEventListener("mouseleave",opts.onDotLeave);
     document.body.appendChild(dot);

@@ -631,3 +631,22 @@ function dDrop(e,tid){
   _finishDrag(old);
 }
 
+// ======== TOUCH-DRAG FACADE ========
+// Native HTML5 drag never fires on touch, so touch-drag.js drives the SAME
+// resolver (dOver/dDrop) via long-press pointer events. The only coupling to a
+// real DragEvent is four members; a synthetic object carries them. dragId is a
+// module-private `let`, so exposing begin()/end() here is the one hook the
+// adapter needs — the mutation/reflow logic below is reused untouched.
+function _dccSynthEvt(rowEl, clientY, shift){
+  return { currentTarget: rowEl, target: rowEl, clientY: clientY,
+           shiftKey: !!shift, preventDefault(){}, stopPropagation(){} };
+}
+window.DCC_DRAG = {
+  begin(id, rowEl){ dragId = id; if(rowEl) rowEl.classList.add("dragging"); },
+  over(rowEl, id, y, shift){ if(rowEl) dOver(_dccSynthEvt(rowEl, y, shift), id); },
+  leave(rowEl){ if(rowEl) dLeave(_dccSynthEvt(rowEl, 0, false)); },
+  drop(rowEl, tid, y, shift){ if(rowEl) dDrop(_dccSynthEvt(rowEl, y, shift), tid); },
+  end(){ dEnd(); },
+  activeId(){ return dragId; }
+};
+
