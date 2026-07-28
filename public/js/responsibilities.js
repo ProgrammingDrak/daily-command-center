@@ -177,15 +177,94 @@
       };
     }).filter(Boolean).sort((a,b)=>b.score-a.score);
   }
-  // Complete straight from the triage card: reset the cadence, no task added.
-  async function completeRepeatResponsibility(id){
+  // Complete straight from the triage card: drop the responsibility onto today's
+  // itinerary as a FINISHED task and check it off through the normal completion
+  // path (toggleDone), so it actually shows on the schedule, banks its slot
+  // points, and — because the created task carries responsibilityId — resets the
+  // cadence clock via markResponsibilityTaskCompleted. Mirrors "Add to day" then
+  // an immediate check-off; the old version only reset the clock and left the
+  // itinerary untouched (nothing showed up as done on the schedule).
+  function completeRepeatResponsibility(id){
     try{
-      const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
-      if(!res.ok)throw new Error(res.statusText);
-      await loadResponsibilities();
-      if(typeof showToast==="function")showToast("Done — clock reset","success");
+      // The triage strip isn't date-gated, so this button is reachable while the
+      // itinerary is navigated to another day. Completing there would mis-route
+      // through toggleDone's non-today branches (past = confirm modal + no
+      // completion, future = "marked done on <date>") while we still fired a
+      // "logged on today" toast. "Done from triage" means "I did it now" — only
+      // complete on today; otherwise send the user back to today.
+      const _today=(typeof _actualTodayStr==="function")?_actualTodayStr():null;
+      const _cur=(typeof viewDate!=="undefined"&&viewDate)||(window.__DCC_STATE__&&window.__DCC_STATE__.date)||null;
+      if(_today&&_cur&&_cur!==_today){
+        if(typeof showToast==="function")showToast("Switch to today to complete this","info");
+        return;
+      }
+      const item=_items.find(i=>i.id===id);
+      if(!item){if(typeof showToast==="function")showToast("Responsibility not found","error");return;}
+      const p=item.properties||{};
+      const title=p.title||"(untitled)";
+      // Already materialized on the viewed day? Check that occurrence off instead
+      // of minting a duplicate (also covers a rapid double-click).
+      if(typeof scheduled!=="undefined"){
+        const existing=scheduled.find(e=>e&&e.responsibilityId===id&&!(typeof isDeleted==="function"&&isDeleted(e)));
+        if(existing){
+          if(typeof isDone!=="function"||!isDone(existing)){
+            if(window.TaskTypes&&window.TaskTypes.isRollup&&window.TaskTypes.isRollup(existing))_completeResponsibilitySubtree(existing.id);
+            else if(typeof toggleDone==="function")toggleDone(existing.id);
+          }
+          loadResponsibilities();
+          if(typeof showToast==="function")showToast("Done — logged on today","success");
+          return;
+        }
+      }
+      const dur=Number(p.estimatedMinutes)||30;
+      const tags=["responsibility",p.domain,p.area,p.capacityBucket].filter(Boolean);
+      const tree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
+      const defaults=Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[];
+      const finish=()=>{loadResponsibilities();if(typeof showToast==="function")showToast("Done — logged on today","success");};
+      // SHELL: rebuild the whole saved shell onto today (dedup-guarded), then
+      // complete its subtree so the rollup banks its bonus and shows done.
+      if(tree&&typeof window.materializeShellTemplate==="function"){
+        window.materializeShellTemplate(tree,{
+          responsibilityId:id,responsibilityTitle:title,source:"responsibility",tags:tags,
+          onScheduled:function(info){if(info&&info.localId)_completeResponsibilitySubtree(info.localId);finish();}
+        });
+        return;
+      }
+      // FLAT: quick-add onto today (no picker), attach any default subtasks, then
+      // check it off — toggleDone banks points, resets the clock, persists, repaints.
+      if(typeof insertTaskNow!=="function"){if(typeof showToast==="function")showToast("Cannot add task","error");return;}
+      const curDate=(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||"";
+      insertTaskNow(title,dur,{
+        type:"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
+        source:"responsibility",tags:tags,detail:p.description||"",
+        idempotencyKey:"resp:"+id+":"+curDate,
+        onScheduled:function(info){
+          try{if(typeof addSubtask==="function"&&info&&info.localId){defaults.forEach(function(t){if(t)addSubtask(info.localId,t);});}}catch(e){}
+          if(info&&info.localId&&typeof toggleDone==="function")toggleDone(info.localId);
+          finish();
+        }
+      });
     }catch(e){
       if(typeof showToast==="function")showToast("Complete failed: "+(e.message||e),"error");
+    }
+  }
+  // Complete every ride-along descendant of a materialized shell root, leaf-first,
+  // so no still-open ride-along gets ejected mid-completion; the rollup ancestors
+  // then auto-complete (and bank their bonus) via _autoCompleteShellAncestors.
+  // Subtasks are skipped — they cascade automatically when their parent completes.
+  function _completeResponsibilitySubtree(rootId){
+    if(typeof scheduled==="undefined"||typeof childrenOf!=="function"||typeof toggleDone!=="function")return;
+    (function walk(pid){
+      childrenOf(pid,scheduled).forEach(function(c){
+        if(typeof relOf==="function"&&relOf(c)==="subtask")return;
+        walk(c.id);
+        if(typeof isDone==="function"&&isDone(c))return;
+        toggleDone(c.id);
+      });
+    })(rootId);
+    const root=scheduled.find(function(e){return e.id===rootId;});
+    if(root&&typeof isDone==="function"&&!isDone(root)&&!childrenOf(rootId,scheduled).some(function(c){return !isDone(c);})){
+      toggleDone(rootId);
     }
   }
   // "Not now": hide from the strip for the rest of today; returns tomorrow if still due.
