@@ -1391,6 +1391,16 @@
     .it-list-rank{padding-top:7px}
   }
 
+  /* Idle-gap marker between spaced-out timed tasks (List view). Fixed tiny
+     height so a gap-heavy day never balloons the list; .it-list-view's flex
+     gap:7px supplies the surrounding breathing room. The ::before/::after
+     rules draw a faint hairline flanking the centered duration label. */
+  .it-list-gap{display:flex;align-items:center;gap:8px;margin:-2px 4px;
+    color:var(--text-muted);font-size:10px;font-weight:700;letter-spacing:0.3px;
+    font-variant-numeric:tabular-nums;user-select:none}
+  .it-list-gap::before,.it-list-gap::after{content:"";flex:1;height:1px;
+    background:rgba(255,255,255,0.06)}
+
   .actual-timeline{padding-left:105px;position:relative}
   .actual-timeline::before{content:'';position:absolute;left:74px;top:0;bottom:0;width:2px;background:var(--border)}
   .actual-item{position:relative;margin-bottom:6px}
