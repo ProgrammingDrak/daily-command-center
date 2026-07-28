@@ -469,6 +469,25 @@ window.habitStreakChip=habitStreakChip;
 window.invalidateHabitStreaks=invalidateHabitStreaks;
 window.__habitStreakCount=_habitStreakCount;
 
+// Pure decision cores for the List-view idle-gap marker, hoisted to top level so
+// they can be sliced into a node:vm test (itinerary-gap.test.js), same pattern as
+// _isShellEv / _remainingForScope.
+//   _rowIsTimed: is this a row that sits on the clock and can anchor a gap? A
+//     done "Unscheduled" task renders inline yet carries a stored 00:00-based end
+//     (see the ev.untimed branch in row()), so untimed rows are excluded.
+//   _gapMarkerMins: minutes to show between a previous timed row ending at
+//     prevEndMin and the next starting at startMin, or null for no marker --
+//     before the first row (prevEndMin==null), back-to-back (0), overlap
+//     (negative), or under the 15-minute floor.
+function _rowIsTimed(ev){
+  return !!(ev&&!ev.untimed&&/^\d{1,2}:\d{2}/.test(ev.start||"")&&/^\d{1,2}:\d{2}/.test(ev.end||""));
+}
+function _gapMarkerMins(prevEndMin,startMin){
+  if(prevEndMin==null)return null;
+  const g=startMin-prevEndMin;
+  return g>=15?g:null;
+}
+
 function buildListView(){
   const wrap=document.getElementById("list-view");
   if(!wrap)return;
@@ -659,6 +678,14 @@ function buildListView(){
   // builder. row() reads node.rel to apply the lighter subtask variant. Subtasks
   // take no rank number (row() renders "·" for them), so idx is a don't-care there.
   function emitNode(node,idx,mode){return row(node.ev,node.rel==="subtask"?0:idx,mode,node);}
+  // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
+  // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
+  function gapEl(mins){
+    const g=document.createElement("div");
+    g.className="it-list-gap";
+    g.innerHTML='<span>'+ms(mins)+'</span>';
+    return g;
+  }
 
   // Parents with at least one child anywhere in the visible list -- these are the
   // rows the Collapse all / Expand all controls act on.
@@ -696,9 +723,20 @@ function buildListView(){
     empty.textContent=viewDate===((typeof _actualTodayStr==="function")?_actualTodayStr():viewDate)?"Nothing scheduled for today.":"Nothing scheduled on this day.";
     wrap.appendChild(empty);
   }else{
-    let rank=0;
+    // Idle-gap markers between consecutive TOP-LEVEL timed rows. Gate on
+    // node.depth===0: flattenSchedule renders roots at depth 0 and nests
+    // subtasks AND ride-alongs at depth>=1 -- both carry their own times and
+    // would otherwise clobber prevEnd or inject a stray marker inside a wrap.
+    // _rowIsTimed excludes untimed rows; _gapMarkerMins owns the null/threshold
+    // logic (see their defs above).
+    let rank=0, prevEnd=null;
     flattenSchedule(mainItems).forEach(node=>{
       const isSub=node.rel==="subtask";
+      if(!node.depth&&_rowIsTimed(node.ev)){
+        const gm=_gapMarkerMins(prevEnd,pt(node.ev.start));
+        if(gm!=null) wrap.appendChild(gapEl(gm));
+        prevEnd=pt(node.ev.end);
+      }
       const displayIdx=isSub?0:rank++;            // only non-subtasks consume a number
       wrap.appendChild(emitNode(node,displayIdx,isDone(node.ev)?"done":"open"));
     });
