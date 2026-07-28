@@ -113,7 +113,9 @@ const VAULT_SENSITIVE_PIN = process.env.VAULT_SENSITIVE_PIN || null;
 let vault = null;
 let syncMgr = null;
 
-app.use(express.json({ limit: "5mb" }));
+// verify callback stashes the raw body so the Slack Events route can HMAC it
+// (express.json otherwise consumes the stream before any route runs).
+app.use(express.json({ limit: "5mb", verify: (req, _res, buf) => { req.rawBody = buf; } }));
 
 // ── Session Setup ──
 function getSessionSecret() {
@@ -142,7 +144,7 @@ if (!LOCAL_AUTH_ENABLED) {
 app.use(session(sessionOptions));
 
 // ── Auth Middleware ──
-const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/vendor/drake-auth/browser.js"]);
+const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts"]);
 function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
@@ -764,6 +766,7 @@ require("./routes/budget")(app, ctx);
 require("./routes/punishments")(app, ctx);
 require("./routes/vault")(app, ctx);
 require("./routes/admin-tokens")(app, ctx);
+require("./routes/slack-events")(app, ctx);
 
 // ── Static + Fallback ──
 app.get("/pet/:shareSlug", (req, res) => { res.sendFile(path.join(PROJECT_DIR, "public-pet.html")); });
