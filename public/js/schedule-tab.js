@@ -150,7 +150,10 @@ function buildTaskChangeItems(ev,trig){
     {icon:"🔄", label:"Convert…",  onPick:()=>openConvertToRadial(ev,trig)},
     {icon:"🤝", label:"Delegate",  onPick:()=>{if(typeof convertTaskToDelegated==="function")convertTaskToDelegated(ev.id);}},
     {icon:"🔁", label:"Repeat",    onPick:()=>{if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);}},
-    {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}}
+    {icon:"💡", label:"Backlog",   onPick:()=>{if(typeof moveTaskToBacklog==="function")moveTaskToBacklog(ev.id);}},
+    // Delete lives on the radial so it's reachable on phones, where the row's
+    // trash button is hidden by the mobile layout (dashboard.css).
+    {icon:"🗑", label:"Delete",    onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
   );
   return items;
 }
@@ -471,6 +474,9 @@ function buildListView(){
   if(!wrap)return;
   wrap.innerHTML="";
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
+  // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
+  // today or it would light up on a past/future day whose times overlap the clock.
+  const isTodayView=viewDate===((window.DCC&&DCC.dates&&DCC.dates.todayKey)?DCC.dates.todayKey():new Date().toISOString().split("T")[0]);
   const trivFlags=loadTrivialFlags();
   const visible=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]);
   // Completed subtasks live inside their parent's detail panel (shown there as
@@ -555,6 +561,22 @@ function buildListView(){
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
+    // ── Info parity with the (retired) rich card: surface points, progress, and
+    // status the desktop card showed. Gated to open rows so done/pushed/carryover
+    // rows stay quiet. New chips are null-safe, non-interactive spans, so the row's
+    // open-space tap still falls through to open details.
+    const openRow=!isDoneRow&&!isPushedRow&&!isUnfRow;
+    const chipSlot=(openRow&&typeof window.itineraryChipSlotHtml==="function")
+      ? window.itineraryChipSlotHtml(ev,{sub:subRow})
+      : ((subRow?subSliceHtml:'')+((tt&&tt.rollupMode&&typeof shellRollupChip==="function")?shellRollupChip(ev):''));
+    const bcCount=(typeof getBountyCountForTask==="function")?getBountyCountForTask(ev.id):((typeof isBountyTask==="function"&&isBountyTask(ev.id))?1:0);
+    const bcMeta=(typeof getBountyMetaForTask==="function")?getBountyMetaForTask(ev.id):{hasSponsor:false,sponsorName:""};
+    const bountyChip=(openRow&&bcCount>0)?'<span class="bounty-chip'+(bcMeta.hasSponsor?' bounty-chip-sponsor':'')+'"'+(bcMeta.hasSponsor?' title="'+("Bounty from "+(bcMeta.sponsorName||"a visitor")).replace(/"/g,'&quot;')+'"':'')+'>Bounty x'+Math.pow(2,Math.max(1,bcCount))+'</span>':'';
+    const nowChip=(openRow&&isTodayView&&isActive(ev))?'<span class="it-list-now">&#9654; Now</span>':'';
+    const priChip=(openRow&&ev.priority==="High")?'<span class="pri-chip pri-hi">High</span>':'';
+    const recQueued=(openRow&&isMeeting(ev)&&ev.recordingReview&&!ev.dashboardRef)?'<span class="prep-flag rec-queued" title="Queued for recording review">&#128252; Review</span>':'';
+    const recFlag=(openRow&&isMeeting(ev)&&ev.dashboardRef)?'<a class="prep-flag rec-flag" href="/meetings/'+encodeURIComponent(ev.id)+'/dashboard" target="_blank" rel="noopener" title="Open the recording review dashboard" onclick="event.stopPropagation()" style="text-decoration:none">&#9654; Recording</a>':'';
+    const streakChip=openRow?habitStreakChip(ev):'';
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(subRow?'·':(idx+1))+'</div>'+
@@ -565,12 +587,12 @@ function buildListView(){
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+(isDoneRow||isPushedRow||isUnfRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow||isPushedRow||isUnfRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
+          nowChip+
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
           (subTimeless?'':'<span>'+ms(dur(ev))+'</span>')+
-          (subRow?subSliceHtml:'')+
-          (tt&&tt.rollupMode&&typeof shellRollupChip==="function"?shellRollupChip(ev):'')+
+          chipSlot+streakChip+
           (subTimeless||isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
           // Schedule/reschedule right where the time is labeled (and next to
           // "Unscheduled" for untimed tasks). Reschedulable rows only.
@@ -581,6 +603,7 @@ function buildListView(){
           // reading prepStatus off the block fold (persistence.js). The list view is the
           // visible itinerary, so without this the chip never painted for the owner.
           (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
+          recQueued+recFlag+priChip+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
           (prog?'<span class="subtask-prog">'+prog.done+'/'+prog.total+' subtasks</span>':'')+

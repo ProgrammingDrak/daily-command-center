@@ -4248,6 +4248,14 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   background:rgba(59,130,246,0.20);border:1.5px dashed #3b82f6;border-radius:8px}
 .it-list-item.drag-over-top::before,.tl-item.drag-over-top::before{top:0;transform:translateY(calc(-100% - 3px))}
 .it-list-item.drag-over-bottom::after,.tl-item.drag-over-bottom::after{bottom:0;transform:translateY(calc(100% + 3px))}
+/* ── Touch drag-to-reorder (long-press lift; see touch-drag.js). The floating
+   clone MUST stay pointer-events:none so elementFromPoint sees the row beneath. ── */
+.it-drag-ghost{position:fixed;z-index:9999;margin:0;pointer-events:none;opacity:.96;border-radius:10px;background:var(--card);border:1px solid var(--accent);box-shadow:0 10px 28px rgba(0,0,0,.45);transform:scale(1.02);will-change:transform}
+.it-list-view.it-drag-lifting{touch-action:none;-webkit-user-select:none;user-select:none}
+/* "Now" + priority chips added to the List row meta (info parity with the card). */
+.it-list-now{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;padding:1px 6px;border-radius:6px;color:var(--accent-light,#60a5fa);border:1px solid var(--accent,#3b82f6);background:rgba(59,130,246,.14);white-space:nowrap;line-height:1.4}
+.pri-chip{display:inline-flex;align-items:center;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.2px;padding:1px 6px;border-radius:6px;white-space:nowrap;line-height:1.4;border:1px solid currentColor;background:rgba(239,68,68,.10)}
+.sched-drag-hint-touch{display:none}
 
 /* ======== SUBTASKS (timeless steps; smaller, collapsible, infinitely nestable) ======== */
 /* Collapse chevron shared by wraps + subtask parents. */
@@ -4375,6 +4383,13 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .it-list-actions .notes-btn,.it-list-actions .pomo-btn,.it-list-actions .btn-del-task,.it-list-actions .dbtn,.it-list-actions .btn-repeat-resp{display:none !important}
   .it-list-actions .btn-task-radial{display:inline-flex !important;width:38px;height:38px}
   .it-list-actions .btn-bounty{display:inline-flex !important;width:38px;height:38px}
+  /* Info-parity chips: tighten the meta row so more fit per line, and shrink the
+     point-pie so it sits beside tag/time/duration without forcing an extra wrap. */
+  .it-list-meta{gap:8px;row-gap:6px}
+  .it-list-meta .pie-bar{width:56px}
+  /* Swap the reorder hint to the touch gesture. */
+  .sched-drag-hint-desktop{display:none}
+  .sched-drag-hint-touch{display:inline}
   /* Task creation — 16px inputs so iOS doesn't auto-zoom; roomier quick-add. */
   .tab-title,#qa-title,.resched-date-input{font-size:16px}
   .subtask-add-pop{padding:8px}
@@ -4389,6 +4404,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @media (hover:none){
   .chk-quick,.it-list-actions .chk-quick,.card .chk-quick{opacity:1!important}
   .st-quick-btn,.tri-quick{opacity:1!important}
+  /* Long-press lift needs the row not to start a text selection / iOS callout. */
+  .it-list-item{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 }
 
   /* ======== DAY REVIEW (game-styled scheduled-vs-actual) ======== */
