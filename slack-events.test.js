@@ -126,6 +126,8 @@ test("🔖 creates a 5-min title_pending task keyed by channel:ts", async () => 
   assert.equal(p.title_pending, true);
   assert.equal(p.source, "slack-bookmark");
   assert.equal(p.status, "open");
+  // source_id must be an http(s) URL so the DCC row renders the "Slack ↗" pill
+  assert.match(p.source_id, /^https:\/\/.*slack\.com\/archives\//);
 });
 
 test("🔖 is idempotent — a duplicate bookmark event makes no second task", async () => {

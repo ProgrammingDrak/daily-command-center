@@ -28,6 +28,7 @@ module.exports = function mount(app, ctx) {
   const OWNER_USER_ID = Number(process.env.DCC_SERVICE_USER_ID || 1);
   const OWNER_WORKSPACE_ID = process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${OWNER_USER_ID}`;
   const TZ = APP_TIME_ZONE || "America/New_York";
+  const SLACK_HOST = process.env.SLACK_WORKSPACE_HOST || "cleverrealestate.slack.com";
 
   const NO_HOURGLASS_MIN = 5;         // 🔖 → ✅ with no ⏳ ⇒ assume 5 minutes
   const R_BOOKMARK = "bookmark";
@@ -90,6 +91,10 @@ module.exports = function mount(app, ctx) {
     const idemKey = keyFor(channel, ts);
     if (await findTaskByKey(idemKey)) return;   // webhook retry, or poller already made it
     const date = getTodayStr();
+    // Best-effort permalink so the "Slack ↗" deeplink pill shows immediately (the
+    // pill renders ONLY when source_id is an http(s) URL). The poller later swaps
+    // in the exact, thread-aware permalink from search when it sets the real title.
+    const permalink = `https://${SLACK_HOST}/archives/${channel}/p${String(ts).replace(".", "")}`;
     const props = {
       title: "Slack bookmark",                  // placeholder; poller upgrades via title_pending
       status: "open", kind: "task",
@@ -99,7 +104,7 @@ module.exports = function mount(app, ctx) {
       created_at: new Date().toISOString(),
       start: "09:00", end: addMin("09:00", NO_HOURGLASS_MIN),
       idempotency_key: idemKey,
-      source_id: `slack:${channel}:${ts}`,
+      source_id: permalink,
       title_pending: true, slack_channel: channel, slack_ts: ts,
     };
     const created = await blockDB.createItineraryTask({ date, properties: props, userId: OWNER_USER_ID, workspaceId: OWNER_WORKSPACE_ID, score: true });
