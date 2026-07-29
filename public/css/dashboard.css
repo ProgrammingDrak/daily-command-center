@@ -2015,9 +2015,13 @@
   }
 
   /* ── Prep Status Flags (schedule cards) ── */
-  .prep-flag{font-size:9px;font-weight:700;letter-spacing:0.3px;padding:1px 5px;border-radius:100px;margin-left:6px}
+  /* Shared meeting-row chip pill (prep/recap use the same base; recap needs its
+     own class only so the JS can wire its click independently). */
+  .prep-flag,.recap-flag{font-size:9px;font-weight:700;letter-spacing:0.3px;padding:1px 5px;border-radius:100px;margin-left:6px}
   .prep-ready{color:var(--green);background:var(--green-bg)}
   .prep-pending{color:var(--amber);background:var(--amber-bg)}
+  /* Recap chip: green once a summary lands. Opens the modal's Recap tab. */
+  .recap-flag{color:var(--green);background:var(--green-bg)}
 
   /* ── Save Status Indicator ── */
   .save-status{
@@ -5007,3 +5011,22 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .prep-edit-status.show{opacity:1}
 .prep-edit-host .nb-editor{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 6px;min-height:120px;max-height:46vh;overflow-y:auto}
 .prep-edit-host .nb-editor:focus-within{border-color:var(--accent)}
+/* Prep/Recap tab strip inside the meeting modal (openPrepModal) */
+.prep-tabs{display:flex;gap:var(--sp-4);border-bottom:1px solid var(--border);margin-bottom:var(--sp-4)}
+.prep-tab{appearance:none;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font:inherit;font-weight:800;font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:0.7px;padding:var(--sp-2) var(--sp-1);margin-bottom:-1px;cursor:pointer}
+.prep-tab:hover{color:var(--text)}
+.prep-tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+/* Recap tab: action items rendered inline under the summary, each schedulable */
+.recap-actions .recap-action{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--sp-3);padding:var(--sp-2) 0;line-height:1.5}
+.recap-actions .recap-action + .recap-action{border-top:1px solid var(--border)}
+.recap-action-text{flex:1;min-width:0}
+.recap-action-text em{color:var(--text-muted);font-style:normal;font-size:var(--fs-xs);margin-left:var(--sp-2)}
+.recap-action-text .recap-owner{text-transform:uppercase;letter-spacing:0.4px}
+.recap-sched-btn{flex:none;border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:var(--r-md);font-size:var(--fs-xs);font-weight:800;padding:var(--sp-1) var(--sp-3);cursor:pointer}
+.recap-sched-btn:hover:not(:disabled){background:var(--accent);color:#fff}
+.recap-sched-btn:disabled{opacity:0.6;cursor:default}
+.recap-sched-done{flex:none;color:var(--green);font-size:var(--fs-xs);font-weight:800;white-space:nowrap}
+.recap-owner-note{flex:none;color:var(--text-muted);font-size:var(--fs-xs)}
+.recap-action.is-scheduled .recap-action-text{color:var(--text-muted)}
+/* Pick-mode popover with allowTime: bare time input, right-aligned, no dur stepper */
+.resched-time-only{justify-content:flex-end}

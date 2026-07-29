@@ -188,7 +188,13 @@ module.exports = function mount(app, ctx) {
         recapToNotes: body.recap_to_notes !== false,
         dashboardRef: body.dashboard_ref || null,
       });
-      broadcast("blocks-changed", { action: "meeting-artifacts", blockIds: [block.id], date: block.date }, workspaceId);
+      // recapArrived (true only on a recap's first landing) lets the client toast
+      // "Recap ready" once, so Drake knows to open it even after he's moved on.
+      broadcast("blocks-changed", {
+        action: "meeting-artifacts", blockIds: [block.id], date: block.date,
+        recapArrived: !!(result.applied && result.applied.recapReady),
+        meetingTitle: (block.properties || {}).title || "",
+      }, workspaceId);
       res.json({
         ok: true,
         meetingBlockId: block.id,

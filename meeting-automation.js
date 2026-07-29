@@ -316,6 +316,27 @@ async function markPrepReady(meetingId) {
   }
 }
 
+// Flip the meeting BLOCK's own recap_status to "ready" once a summary lands, so
+// the itinerary Recap chip (persistence.js -> ev.recapStatus) appears — even on a
+// meeting that's already been marked done. Mirror of markPrepReady; there is no
+// "pending" half (the materializer never pre-stamps recap), so this is the only
+// writer. Reloads first so we never clobber a concurrent prep/notes write.
+// Returns true only when it actually flips pending/absent -> ready, so callers can
+// fire a "recap landed" toast once and stay quiet on idempotent re-posts.
+async function markRecapReady(meetingId) {
+  try {
+    const fresh = await blockDB.getBlock(meetingId);
+    if (!fresh) return false;
+    const fp = propsOf(fresh);
+    if (fp.recap_status === "ready") return false;
+    await blockDB.updateBlock(meetingId, { properties: { ...fp, recap_status: "ready" } });
+    return true;
+  } catch (e) {
+    console.error("[meeting-automation] markRecapReady failed (non-fatal):", e.message);
+    return false;
+  }
+}
+
 async function getAutomation(blockId, workspaceId) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const gcalRow = await loadGcalRow(blockId);
@@ -482,7 +503,10 @@ async function ingestTranscript(blockId, { workspaceId, userId, transcriptText, 
 async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const artifacts = await loadArtifacts(blockId, workspaceId);
-  const proposals = artifacts.filter(b => propsOf(b).kind === "proposed_action_item" && propsOf(b).status !== "approved");
+  // Exclude both "approved" and "placed": placement is terminal, so a placed
+  // proposal must not be re-approvable (that would mint a duplicate task and wipe
+  // its placedDate/placedStart — the durable "Scheduled ✓" signal).
+  const proposals = artifacts.filter(b => propsOf(b).kind === "proposed_action_item" && propsOf(b).status !== "approved" && propsOf(b).status !== "placed");
   const selected = actionIds.length ? proposals.filter(b => actionIds.includes(b.id)) : proposals;
   const created = [];
   for (const proposal of selected) {
@@ -549,21 +573,24 @@ async function placeApprovedAction(blockId, actionBlockId, { workspaceId, userId
     nextProps._pinnedStart = start;
   }
   await blockDB.updateBlock(action.id, { properties: nextProps, parent_id: null, date });
+  // Stamp the originating proposal so the Recap tab shows "Scheduled ✓" durably
+  // (a re-fetch can't otherwise tell placed from merely approved — the placed task
+  // detaches and drops out of the meeting's children). Non-fatal if it fails.
+  const proposedActionId = (p.meetingAutomation || {}).proposedActionId;
+  if (proposedActionId) {
+    try {
+      const proposal = await blockDB.getBlock(proposedActionId);
+      if (proposal && !proposal.deleted_at) {
+        const pp = propsOf(proposal);
+        await blockDB.updateBlock(proposal.id, {
+          properties: { ...pp, status: "placed", placedDate: date, placedStart: nextProps.start || null },
+        });
+      }
+    } catch (e) {
+      console.error("[meeting-automation] placed-stamp failed (non-fatal):", e.message);
+    }
+  }
   return { ok: true, actionBlockId: action.id, date, start: nextProps.start || null };
-}
-
-// Merge an auto-generated recap into a meeting block's own notes without
-// clobbering anything the user typed. The recap lives below a stable marker, so
-// a re-post replaces only its own region (idempotent) and leaves user notes above.
-function mergeRecapIntoNotes(existingNotes, recapMarkdown) {
-  const HEADER = "_Meeting recap (auto):_";
-  const SEP = `\n\n---\n${HEADER}\n\n`;
-  const base = String(existingNotes || "");
-  const idx = base.indexOf(HEADER);
-  const userPart = (idx >= 0 ? base.slice(0, idx).replace(/\n*-*\n*\s*$/, "") : base).replace(/\s+$/, "");
-  const recap = String(recapMarkdown || "").trim();
-  if (!recap) return userPart;
-  return userPart ? `${userPart}${SEP}${recap}` : `${HEADER}\n\n${recap}`;
 }
 
 // Artifact HTML is always rendered into the meeting panel via innerHTML, and
@@ -595,7 +622,7 @@ function sanitizeSources(sources) {
 // by text, and the recap merge replaces only its own notes region.
 async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true, dashboardRef = null }) {
   const meeting = await loadMeeting(blockId, workspaceId);
-  const applied = { prep: false, summary: false, transcript: false, proposedActions: 0, recapToNotes: false, dashboardRef: false };
+  const applied = { prep: false, summary: false, transcript: false, proposedActions: 0, recapToNotes: false, recapReady: false, dashboardRef: false };
 
   if (prep && (prep.markdown || prep.html)) {
     const markdown = String(prep.markdown || "");
@@ -654,17 +681,16 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       },
     });
     applied.summary = true;
-
-    // Feature 1: the recap is also written onto the meeting task's OWN notes, so it
-    // shows on the (already-closed) meeting card, not only in the automation panel.
-    if (recapToNotes && markdown.trim()) {
-      const mp = propsOf(meeting);
-      const nextNotes = mergeRecapIntoNotes(mp.notes, markdown);
-      if (nextNotes !== mp.notes) {
-        await blockDB.updateBlock(meeting.id, { properties: { ...mp, notes: nextNotes } });
-        applied.recapToNotes = true;
-      }
-    }
+    // The recap now lives ONLY as the meeting_summary artifact, surfaced in the
+    // modal's Recap tab (openPrepModal). We no longer mirror it into the meeting's
+    // own notes — that dumped the recap as unstructured text in the notes box and
+    // it landed after the meeting was already closed. recapToNotes is retained in
+    // the signature for endpoint/payload compatibility but is now inert.
+    void recapToNotes;
+    // Light the itinerary Recap chip so the recap is findable even after the
+    // meeting has been marked done. recapReady is true only on the first landing,
+    // so the client toasts once and stays quiet on re-delivery.
+    applied.recapReady = await markRecapReady(meeting.id);
   }
 
   if (Array.isArray(proposedActions) && proposedActions.length) {
@@ -718,5 +744,4 @@ module.exports = {
   approveActions,
   placeApprovedAction,
   applyArtifacts,
-  mergeRecapIntoNotes,
 };

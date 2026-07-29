@@ -44,7 +44,7 @@
       const prep=data&&data.prep;
       const summary=data&&data.summary;
       const transcript=data&&data.transcript;
-      const proposed=(data&&data.proposedActions||[]).filter(a=>a.status!=="approved");
+      const proposed=(data&&data.proposedActions||[]).filter(a=>a.status!=="approved"&&a.status!=="placed");
       const approved=(data&&data.proposedActions||[]).filter(a=>a.status==="approved");
       let html="";
       html+='<div class="ma-section">'+
@@ -228,15 +228,81 @@
     return out.join("");
   }
 
-  // The prep modal is the surface the prep chip + Prep/Recap radial open
-  // (schedule-tab.js openMeetingPanel -> openPrepModal). Prep brief and Summary
-  // are each an editable block editor -- the SAME shared createBlockEditor used by
-  // task notes / sticky notes -- so copy/paste/formatting/slash-menu behave
-  // identically. Autosave mirrors the sticky-note pattern (debounced input +
-  // capture-phase blur), persisting to PATCH /api/meetings/:id/artifact. The modal
-  // is a detached overlay, so render()/refreshMeetingAutomationPanels never touch
-  // it -- no mount-lifecycle fight. clientId echo suppresses the origin's own SSE.
-  function openPrepModal(ev){
+  // Recap tab: render the meeting's action items INLINE under the summary, each
+  // schedulable in one click. Rendered read-model comes straight from the shared
+  // /automation bundle (data.proposedActions). owner:"other" items are shown but
+  // not scheduled onto Drake's day. `placed` is the in-modal session map so a
+  // just-scheduled item shows "Scheduled ✓" instantly; the durable signal is the
+  // proposal's own status:"placed"/placedDate (stamped by placeApprovedAction), so
+  // it survives a reopen too.
+  function recapActionsHtml(actions,placed){
+    let html='<div class="prep-view-actions recap-actions"><div class="prep-view-kicker">Action items</div>';
+    if(!actions.length){
+      return html+'<div class="prep-view-empty recap-empty"><span>No action items captured for this meeting.</span></div></div>';
+    }
+    html+=actions.map(a=>{
+      const pl=placed&&placed.get(a.id);
+      const isPlaced=!!pl||a.status==="placed"||!!a.placedDate;
+      const when=(pl&&pl.date)||a.placedDate||"";
+      const ownerOther=(a.owner==="other"||a.owner==="others");
+      const meta=(a.priority?'<em>'+esc(a.priority)+'</em>':'')+(ownerOther?'<em class="recap-owner">delegated</em>':'');
+      let ctrl;
+      if(isPlaced)ctrl='<span class="recap-sched-done">Scheduled'+(when?' '+esc(typeof _prettyDateLabel==="function"?_prettyDateLabel(when):when):'')+' &#10003;</span>';
+      else if(ownerOther)ctrl='<span class="recap-owner-note">Owner: other</span>';
+      else ctrl='<button class="recap-sched-btn" type="button" data-action-id="'+esc(a.id)+'">Schedule</button>';
+      return '<div class="recap-action'+(isPlaced?' is-scheduled':'')+'" data-row-id="'+esc(a.id)+'">'+
+        '<span class="recap-action-text">'+esc(a.text||a.title||"")+meta+'</span>'+ctrl+'</div>';
+    }).join('');
+    return html+'</div>';
+  }
+
+  // One-click schedule of a recap action. Reuses the shared pick-a-day popover
+  // (schedule-popover.js — same mechanic offerPlacement/delegated follow-ups use),
+  // then approve-if-needed + place through the meeting endpoints so the task stays
+  // linked to the meeting (provenance/dedup) instead of minting an unlinked copy.
+  // Never commitScheduledTask. Approve is implicit so the whole thing is one click.
+  function scheduleRecapAction(id,action,anchorEl,placed,reload){
+    if(typeof openDatePickPopover!=="function"){toast("Scheduler unavailable","error");return;}
+    openDatePickPopover(anchorEl,{
+      header:"Schedule this action",
+      actionLabel:"Schedule",
+      allowTime:true,
+      onPick:async(dateStr,timeStr)=>{
+        try{
+          let approvedBlockId=action.approvedBlockId||null;
+          // Approve only if it's still a bare proposal; approve returns the full
+          // bundle with the proposal now carrying approvedBlockId.
+          if(action.status!=="approved"||!approvedBlockId){
+            const ad=await postJson('/api/meetings/'+encodeURIComponent(id)+'/actions/approve',{actionIds:[action.id]});
+            cache.set(id,ad);
+            const fresh=(ad.proposedActions||[]).find(x=>x.id===action.id);
+            approvedBlockId=(fresh&&fresh.approvedBlockId)||
+              ((ad.approvedBlocks||[]).find(b=>((b.properties||{}).meetingAutomation||{}).proposedActionId===action.id)||{}).id||null;
+          }
+          if(!approvedBlockId)throw new Error("Could not resolve the task to place");
+          const body={date:dateStr}; if(timeStr)body.start=timeStr;
+          await postJson('/api/meetings/'+encodeURIComponent(id)+'/actions/'+encodeURIComponent(approvedBlockId)+'/place',body);
+          placed.set(action.id,{date:dateStr,start:timeStr||null});
+          toast("Scheduled for "+(typeof _prettyDateLabel==="function"?_prettyDateLabel(dateStr):dateStr)+(timeStr&&typeof f12==="function"?" "+f12(timeStr):""));
+          if(typeof buildActionItemsTab==="function")buildActionItemsTab();
+          await reload(true); // re-render: item flips to "Scheduled ✓"
+        }catch(err){ toast(err.message||"Could not schedule","error"); }
+      }
+    });
+  }
+
+  // The prep modal is the surface the prep/recap chips + Prep/Recap radial open
+  // (schedule-tab.js openMeetingPanel -> openPrepModal). It has two tabs: Prep (the
+  // prep brief) and Recap (the summary + inline schedulable action items). Prep brief
+  // and Summary are each an editable block editor -- the SAME shared createBlockEditor
+  // used by task notes / sticky notes -- so copy/paste/formatting/slash-menu behave
+  // identically. Both editors stay mounted; the tabs just show/hide their panels, so
+  // autosave (debounced input + capture-phase blur) and flush-on-close cover both.
+  // Persists to PATCH /api/meetings/:id/artifact. The modal is a detached overlay, so
+  // render()/refreshMeetingAutomationPanels never touch it -- no mount-lifecycle
+  // fight. clientId echo suppresses the origin's own SSE.
+  function openPrepModal(ev,opts){
+    opts=opts||{};
     if(!(window.DCC&&typeof DCC.modal==="function"))return;
     const id=ev.meetingBlockId||ev.id;
     const _a=fmtClock(ev.start),_b=fmtClock(ev.end);
@@ -247,11 +313,18 @@
     const editors={};    // kind -> block editor
     const saveTimers={}; // kind -> debounce timer
     const lastSig={};    // kind -> last-saved html signature (skip no-op saves)
+    const placed=new Map(); // proposalId -> {date,start} scheduled this session
+    let activeTab=(opts.defaultTab==="recap")?"recap":"prep";
+    let lastData=null;
 
     const modal=DCC.modal({
       title:ev.title||"Meeting prep",
       body:'<div class="prep-view">'+
-        '<div class="prep-view-meta">Prep &amp; summary'+(timeStr?' · '+esc(timeStr):'')+'</div>'+
+        '<div class="prep-view-meta">Prep &amp; recap'+(timeStr?' · '+esc(timeStr):'')+'</div>'+
+        '<div class="prep-tabs" role="tablist">'+
+          '<button class="prep-tab" role="tab" data-tab="prep" type="button">Prep</button>'+
+          '<button class="prep-tab" role="tab" data-tab="recap" type="button">Recap</button>'+
+        '</div>'+
         '<div class="prep-edit-genbar">'+
           '<span class="prep-edit-status" data-prep-status></span>'+
           '<button class="prep-gen-btn" type="button" data-prep-gen>Generate prep</button>'+
@@ -316,26 +389,42 @@
       host.addEventListener('blur',()=>{ flush(kind); },true);
     }
 
+    const prepHasContent=d=>!!(d&&d.prep&&(d.prep.html||d.prep.markdown||(d.prep.blocks&&d.prep.blocks.length)));
+    const recapHasContent=d=>!!(d&&((d.summary&&(d.summary.markdown||d.summary.html))||((d.proposedActions||[]).length)))||placed.size>0;
+
+    function applyActiveTab(){
+      // Deep-linked to Recap but nothing's landed yet? Fall back to Prep if there's
+      // a brief to show; otherwise stay on the (empty, still-editable) Recap tab.
+      if(activeTab==="recap"&&!recapHasContent(lastData)&&prepHasContent(lastData))activeTab="prep";
+      modal.el.querySelectorAll(".prep-tab").forEach(b=>{
+        const on=b.dataset.tab===activeTab; b.classList.toggle("active",on); b.setAttribute("aria-selected",on?"true":"false");
+      });
+      docEl.querySelectorAll(".prep-tab-panel").forEach(p=>{ p.style.display=(p.dataset.panel===activeTab)?"":"none"; });
+      if(genBtn)genBtn.style.display=(activeTab==="prep")?"":"none"; // Generate prep is prep-only
+    }
+
     function render(data){
+      lastData=data;
       const prep=data&&data.prep, summary=data&&data.summary;
-      const actions=((data&&data.proposedActions)||[]).filter(a=>a.status!=="approved");
+      const actions=((data&&data.proposedActions)||[]);
       // Tear down prior editors before we wipe the doc HTML (open + each regenerate).
       Object.keys(editors).forEach(k=>{ try{editors[k].destroy()}catch(e){} delete editors[k]; });
       let html='';
+      html+='<div class="prep-tab-panel" data-panel="prep">';
       html+='<div class="prep-edit-section"><div class="prep-edit-label">Prep brief</div>'+
         '<div class="prep-edit-host" data-edit-host="meeting_prep"></div>';
       if(prep&&prep.sources&&prep.sources.length)html+=artifactSources(prep.sources);
-      html+='</div>';
+      html+='</div></div>';
+      html+='<div class="prep-tab-panel" data-panel="recap">';
       html+='<div class="prep-edit-section"><div class="prep-edit-label">Summary</div>'+
         '<div class="prep-edit-host" data-edit-host="meeting_summary"></div></div>';
-      if(actions.length){
-        html+='<div class="prep-view-actions"><div class="prep-view-kicker">Proposed actions</div><ul>'+
-          actions.map(a=>'<li>'+esc(a.text||a.title||"")+(a.priority?'<em>'+esc(a.priority)+'</em>':'')+'</li>').join('')+'</ul></div>';
-      }
+      html+=recapActionsHtml(actions,placed);
+      html+='</div>';
       docEl.innerHTML=html;
       mountEditor("meeting_prep",docEl.querySelector('[data-edit-host="meeting_prep"]'),prep);
       mountEditor("meeting_summary",docEl.querySelector('[data-edit-host="meeting_summary"]'),summary);
-      if(genBtn)genBtn.textContent=(prep&&(prep.html||prep.markdown||(prep.blocks&&prep.blocks.length)))?"Refresh prep":"Generate prep";
+      if(genBtn)genBtn.textContent=prepHasContent(data)?"Refresh prep":"Generate prep";
+      applyActiveTab();
     }
 
     async function load(force){
@@ -347,6 +436,17 @@
       if(!docEl)return;
       render(data);
     }
+
+    // Tab strip + schedule buttons: both live outside prep-view-doc / survive every
+    // render (tabs) or are delegated (schedule), so wire once here.
+    modal.el.querySelectorAll(".prep-tab").forEach(b=>{
+      b.addEventListener("click",()=>{ activeTab=b.dataset.tab; applyActiveTab(); });
+    });
+    docEl.addEventListener("click",e=>{
+      const sb=e.target.closest(".recap-sched-btn"); if(!sb)return;
+      const action=((lastData&&lastData.proposedActions)||[]).find(x=>x.id===sb.dataset.actionId);
+      if(action)scheduleRecapAction(id,action,sb,placed,load);
+    });
 
     if(genBtn)genBtn.addEventListener("click",async()=>{
       genBtn.disabled=true;genBtn.textContent="Generating…";

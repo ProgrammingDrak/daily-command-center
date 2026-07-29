@@ -189,6 +189,12 @@
 
           // Block data changed (from another tab or API call)
           case 'blocks-changed':
+            // A meeting recap just landed (async sweep) — toast once so Drake knows
+            // to open it even after he marked the meeting done. Fires independently
+            // of the re-render below (which handleBlockEvent may skip mid-reschedule).
+            if(msg.recapArrived){
+              try{ if(window.DCC&&typeof window.DCC.toast==="function")window.DCC.toast('Recap ready'+(msg.meetingTitle?': '+msg.meetingTitle:''),'success'); }catch(e){}
+            }
             handleBlockEvent(msg);
             break;
 
