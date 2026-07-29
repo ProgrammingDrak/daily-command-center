@@ -258,7 +258,16 @@ function reloadPersistedEdits() {
         // Tombstones are markers for the amber "Rescheduled away" list, not tasks.
         // Folding one in resurrects a lookalike row of the task that just moved.
         if(p.kind==="reschedule_tombstone")return false;
-        if(p.status==="deleted"||p.status==="archived"||p.status==="done")return false;
+        // deleted/archived rows are closed and stay out. status==="done" used to be
+        // in this list, which meant a task completed by ANY server-side path (Day
+        // in Review's Approve, the MCP tools, the responsibility completion hook)
+        // silently VANISHED from the itinerary instead of checking off. A done task
+        // is still a task: admit it and let the fold below seed the done registry.
+        if(p.status==="deleted"||p.status==="archived")return false;
+        // A completion belongs to a DAY. A dateless row has none, so admitting a
+        // done one would fold it onto every day you look at (there are real ones:
+        // closed side-project rows) — keep those out, exactly as before.
+        if((p.status==="done"||p.done===true)&&!b.date)return false;
         // API-inserted shells carry kind or type "shell" and no local_id.
         const isShell=p.kind==="shell"||p.type==="shell";
         // Calendar-materialized meetings are API-inserted (kind/type meeting or
@@ -284,6 +293,17 @@ function reloadPersistedEdits() {
           }
         }
         if(!taskId||scheduled.find(e=>e.id===taskId))return;
+        // Seed the done registry from the ROW. A server-side completion writes
+        // status/done on the block and knows nothing about day_root._done, which is
+        // the only thing the client used to read — so the row is the second source
+        // of truth until C5 makes it the only one. manualDone/doneAt were reset at
+        // the top of reloadPersistedEdits and filled from day_root._done above, so
+        // adding here is additive and everything downstream (isDone, isPast,
+        // isActive, the List partition, day stats, the Done timestamp) just works.
+        if(p.done===true||p.status==="done"){
+          manualDone.add(taskId);
+          if(!doneAt[taskId])doneAt[taskId]=p.completedAt||p.doneAt||null;
+        }
         const d=p.duration||p.estimatedMinutes||30;
         // A dateless row is unscheduled by definition: any stored start on it is
         // stale (e.g. stamped by an old reflow), so ignore it and keep the row

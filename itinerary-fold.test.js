@@ -6,7 +6,10 @@
 //   - dated rows fold only on their own date
 //   - dateless rows fold (into the Unscheduled section) UNLESS a dated sibling
 //     shares their local_id — then they're a leftover copy and are suppressed
-//   - closed pending rows (status deleted/archived/done) never fold
+//   - deleted/archived rows never fold
+//   - a DONE row folds when it is dated (it renders as a completed row; hiding it
+//     made server-side completions vanish) but not when it is dateless (a
+//     completion belongs to one day, so a dateless one would fold onto every day)
 // Harness pattern: recalc-times.test.js (raw source sliced into a node:vm
 // context with stubbed globals).
 const test = require("node:test");
@@ -51,11 +54,29 @@ test("dateless twin WITH a dated sibling is suppressed (the duplication bug)", (
   assert.equal(fold(block(null, { local_id: "qa-other", kind: "pending_task" })), true);
 });
 
-test("closed pending rows never fold", () => {
+test("deleted and archived rows never fold", () => {
   const fold = makeFold(TODAY, new Set());
   assert.equal(fold(block(null, { local_id: "qa-4", kind: "pending_task", status: "deleted" })), false);
   assert.equal(fold(block(null, { local_id: "qa-5", kind: "pending_task", status: "archived" })), false);
-  assert.equal(fold(block(null, { local_id: "qa-6", kind: "pending_task", status: "done" })), false);
+});
+
+test("a DATED done row folds (server completions render instead of vanishing)", () => {
+  const fold = makeFold(TODAY, new Set());
+  // Day in Review's Approve, the Slack ✅ reaction and the MCP tools all write
+  // status/done onto the row and never touch day_root._done. Excluding them here
+  // is what made a completed task disappear from the itinerary altogether.
+  assert.equal(fold(block(TODAY, { local_id: "qa-6", status: "done", completedAt: "2026-07-08T14:00:00Z" })), true);
+  assert.equal(fold(block(TODAY, { kind: "task", done: true })), true);
+  // still day-scoped: yesterday's completion doesn't fold onto today
+  assert.equal(fold(block("2026-07-07", { local_id: "qa-7", status: "done" })), false);
+});
+
+test("a DATELESS done row stays out — a completion has no day to belong to", () => {
+  const fold = makeFold(TODAY, new Set());
+  assert.equal(fold(block(null, { local_id: "sp-1", kind: "side_project", status: "done" })), false);
+  assert.equal(fold(block(null, { local_id: "sp-2", done: true })), false);
+  // ...while a dateless OPEN row still folds into the Unscheduled section
+  assert.equal(fold(block(null, { local_id: "sp-3" })), true);
 });
 
 test("API-inserted kind:task folds dated or dateless (Slack-bookmark fix preserved)", () => {
@@ -72,8 +93,8 @@ test("materialized calendar meeting block folds on its own date (single render p
   // as blocks now; synthesis was deleted).
   assert.equal(fold(block(TODAY, meeting)), true);
   assert.equal(fold(block("2026-07-07", meeting)), false); // only on its own date
-  // a completed meeting never folds
-  assert.equal(fold(block(TODAY, { ...meeting, status: "done" })), false);
+  // a completed meeting folds too, and renders as a done row (it used to vanish)
+  assert.equal(fold(block(TODAY, { ...meeting, status: "done" })), true);
   // the oneone variant is admitted the same way
   assert.equal(fold(block(TODAY, { type: "oneone", source: "calendar", source_id: "evt-2", status: "open" })), true);
 });
