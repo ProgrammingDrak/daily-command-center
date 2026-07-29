@@ -1084,6 +1084,11 @@ async function _computeRescheduleSlot(ev,targetDate){
 // callers can act on a parent before the rows that point at it. An id is added at
 // most once, so a descendant claiming an ancestor as its parent terminates instead
 // of looping -- real data carries such cycles (reschedule-subtree.test.js).
+//
+// SERVER TWIN: lib/reschedule.js `collectSubtreeBlockIds` walks the same logical
+// graph over block ROWS (returning block ids) for POST /api/blocks/:id/reschedule.
+// Keep the two in step. They already differ on which edge wins when a row carries
+// both: `parentIdOf` here is wrapId-first, that one is subtaskOf-first.
 function _subtreeIdsOf(rootId){
   const ids=new Set([rootId]);
   let changed=true;
@@ -1318,7 +1323,22 @@ let _delPendingId=null;
 // correct -- the delete already reached the server, and there is nothing left to
 // undo optimistically. (B2 wires Undo to POST /api/blocks/:id/undelete so a restore
 // survives a reload and a device switch too.)
-let _deleteUndoSnapshots={};
+// A Map, not an object: only the live toast can reach a snapshot, so keeping every
+// one for the session would pin each deleted subtree's note text in memory in a tab
+// left open for days -- and Map is the only thing that gives a reliable oldest-first
+// eviction order here. Plain-object key order puts integer-like keys first in numeric
+// order, and legacy task ids are Date.now()-based, so `1753812345678` would sort
+// ahead of every prefixed id and get evicted out of turn. Re-stashing deletes first
+// so a re-deleted id moves to the back instead of keeping its old position.
+const _deleteUndoSnapshots=new Map();
+const _UNDO_SNAPSHOT_CAP=10;
+function _stashUndoSnapshot(id,snap){
+  _deleteUndoSnapshots.delete(id);
+  _deleteUndoSnapshots.set(id,snap);
+  while(_deleteUndoSnapshots.size>_UNDO_SNAPSHOT_CAP){
+    _deleteUndoSnapshots.delete(_deleteUndoSnapshots.keys().next().value);
+  }
+}
 function openDeleteConfirm(id){
   deleteTaskWithUndo(id);
 }
@@ -1337,10 +1357,18 @@ async function deleteTaskWithUndo(id){
   // separately is left out so Undo can't resurrect it.
   const ids=[..._subtreeIdsOf(id)].filter(sid=>sid===id||!deletedSet.has(sid));
   const evById=new Map(scheduled.map(e=>[e.id,e]));
-  // Resolve every backing row BEFORE anything is hidden, through the one resolver
-  // that handles _blockId / local_id / b.id and refuses a cross-date delete. A pure
-  // timeline-JSON item has no row, so it gets no op and the overlay is the only
-  // (correct) record -- nothing server-side exists to delete.
+  // Hide first. Row resolution below scans the whole block cache once per subtree
+  // node, and none of it changes what the user sees -- doing it before the render
+  // would just delay the optimistic hide this rewrite exists to make instant.
+  ids.forEach(sid=>deletedSet.add(sid));
+  saveDeletedState();
+  log("deleted",id,"Removed from schedule: "+(ev.title||id));
+  recalcTimes();
+  render();
+  // Resolve every backing row through the one resolver that handles
+  // _blockId / local_id / b.id and refuses a cross-date delete. A pure timeline-JSON
+  // item has no row, so it gets no op and the overlay is the only (correct) record --
+  // nothing server-side exists to delete.
   const rows=[];
   for(const sid of ids){
     const block=_findTaskBlockForDate(sid,dateStr,evById.get(sid));
@@ -1353,12 +1381,7 @@ async function deleteTaskWithUndo(id){
       properties:{...(block.properties||{})}
     });
   }
-  _deleteUndoSnapshots[id]={ids,rows};
-  ids.forEach(sid=>deletedSet.add(sid));
-  saveDeletedState();
-  log("deleted",id,"Removed from schedule: "+(ev.title||id));
-  recalcTimes();
-  render();
+  _stashUndoSnapshot(id,{ids,rows});
   // Offer Undo before awaiting the round-trip, so the affordance is as instant as
   // the hide. Clicking it mid-flight is safe: the restore creates NEW rows, so
   // whichever batch the server sees first, the end state is the same.
@@ -1381,8 +1404,8 @@ async function deleteTaskWithUndo(id){
 // /undelete route, which lands in B2.
 async function undoDeleteTask(id){
   if(!deletedSet.has(id))return;
-  const snap=_deleteUndoSnapshots[id]||{ids:[id],rows:[]};
-  delete _deleteUndoSnapshots[id];
+  const snap=_deleteUndoSnapshots.get(id)||{ids:[id],rows:[]};
+  _deleteUndoSnapshots.delete(id);
   snap.ids.forEach(sid=>deletedSet.delete(sid));
   saveDeletedState();
   log("delete-undone",id,"Restored to schedule");
