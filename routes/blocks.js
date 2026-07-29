@@ -24,6 +24,7 @@ const schemas = require("../middleware/schemas");
 const { collectSubtreeBlockIds } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
+const createTaskTiming = require("../lib/task-timing");
 const createResponsibilityStore = require("../responsibility-store");
 const {
   firstFreeSlot, minutesToHHMM, hhmmToMinutes, taskDuration,
@@ -33,7 +34,7 @@ const {
 } = require("../responsibility-store");
 
 module.exports = function mount(app, ctx) {
-  const { blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate } = ctx;
+  const { blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool } = ctx;
 
   // ── Local helpers ──
   function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
@@ -45,6 +46,20 @@ module.exports = function mount(app, ctx) {
   // The responsibility domain + slot engine + apply-forward engine live in
   // responsibility-store.js; instantiate it here with the server-scope deps.
   const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership });
+
+  // ── E1 (Track E: Slack Reactions) — DECLARED OVERLAP, one call site below ──
+  // A ⏳ timer started from Slack could only ever be closed by the ✅ reaction, so
+  // checking the task off anywhere else recorded no time. reconcileTiming derives
+  // the close on read: any done row still carrying a startedAt with no
+  // actualMinutes gets finalized. In-memory candidate filter first, so a day with
+  // no orphaned timer costs zero queries. See lib/task-timing.js.
+  const { reconcileTiming } = createTaskTiming({ pool, blockDB, timeZone: ctx.APP_TIME_ZONE });
+  // Never let a read fail on a reconcile: the itinerary must still render.
+  async function withReconciledTiming(blocks, req) {
+    try { await reconcileTiming(blocks, { userId: req.session && req.session.userId, workspaceId: req.workspaceId }); }
+    catch (e) { console.error("[blocks] timing reconcile failed (non-fatal):", e.message); }
+    return blocks;
+  }
 
   // ── Block API ──
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
@@ -90,7 +105,7 @@ module.exports = function mount(app, ctx) {
     if (req.query.date) {
       if (!isValidDate(req.query.date)) { res.status(400).json({ error: "Invalid date" }); return; }
       await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId);
-      return filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId));
+      return withReconciledTiming(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId)), req);
     } else if (req.query.type) {
       const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
       if (!types.length) { res.status(400).json({ error: "No valid types" }); return; }
