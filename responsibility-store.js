@@ -281,7 +281,17 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
   // instead of once per item (the auto-schedule N+1). Callers grow `blockers`
   // as they place tasks so sequential items land in sequential free slots.
   async function loadDaySlottingContext(dateStr, userId, workspaceId) {
-    const blocks = await blockDB.getBlocksByDate(dateStr, workspaceId);
+    // Load INCLUDING soft-deleted rows so we can honor a user's delete: if they
+    // removed today's instance of a responsibility, the auto-scheduler must not
+    // resurrect it today (mirrors meeting-materializer's tombstone rule). Live
+    // rows drive blockers and dedup exactly as before.
+    const allBlocks = await blockDB.getBlocksByDateIncludingDeleted(dateStr, workspaceId);
+    const blocks = allBlocks.filter(b => !b.deleted_at);
+    const deletedResponsibilityIds = new Set(
+      allBlocks
+        .filter(b => b.deleted_at && (b.properties || {}).kind === "responsibility_task" && (b.properties || {}).responsibilityId)
+        .map(b => b.properties.responsibilityId)
+    );
     const dayBlocks = await getScheduleBlocks(userId, workspaceId);
     const workBlocks = dayBlocks.filter(b => (b.blockType || b.type) === "work");
     const dayStart = workBlocks[0] ? hhmmToMinutes(workBlocks[0].start) : 9 * 60;
@@ -289,7 +299,7 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     const blockers = blocks
       .filter(b => (b.properties || {}).start && (b.properties || {}).end)
       .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
-    return { blocks, dayStart, dayEnd, blockers };
+    return { blocks, dayStart, dayEnd, blockers, deletedResponsibilityIds };
   }
 
   async function scheduleResponsibilityTask({ responsibility, date, userId, workspaceId, sourceProps = {}, force = false, dayCtx = null }) {

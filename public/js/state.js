@@ -1314,10 +1314,18 @@ function deleteTaskWithUndo(id){
     clearTimeout(_deleteUndoTimers[id].timer);
     delete _deleteUndoTimers[id];
   }
+  // Route EVERY source through the real soft-delete, not just manual. Before, a
+  // non-manual task (Slack bookmark, brief, recurring, meeting) only got added to
+  // the per-day hide-list below, so its block survived and the "delete" undid
+  // itself on the next reload / new day / re-fold. Folded tasks carry _blockId
+  // (persistence.js); fall back to the old local_id lookup for any path that
+  // didn't stamp it. A pure timeline-JSON item has no block -> blockId stays null
+  // and the overlay is the only (correct) record, since nothing server-side exists.
   let blockId=null;
-  if(ev.source==="manual"&&window.blockStore){
-    const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id);
-    blockId=block&&block.id;
+  if(window.blockStore){
+    blockId=ev._blockId
+      ||(window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id)||{}).id
+      ||null;
   }
   deletedSet.add(id);
   saveDeletedState();

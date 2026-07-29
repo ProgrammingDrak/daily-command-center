@@ -13,9 +13,12 @@ module.exports = function mount(app, ctx) {
   // carrying this idempotency_key already live on the date? Returns the row or null.
   async function findBriefBlock(date, workspaceId, idemKey) {
     if (!idemKey) return null;
+    // Include soft-deleted rows: a tombstone for this key means the user deleted
+    // the item, so the Day-in-Review callers should skip re-creating it (they
+    // already treat any hit as "already handled"). Live rows sort first.
     const q = workspaceId
-      ? await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND workspace_id = $2 AND properties->>'idempotency_key' = $3 AND deleted_at IS NULL LIMIT 1`, [date, workspaceId, idemKey])
-      : await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND properties->>'idempotency_key' = $2 AND deleted_at IS NULL LIMIT 1`, [date, idemKey]);
+      ? await pool.query(`SELECT id, properties, deleted_at FROM blocks WHERE date = $1 AND workspace_id = $2 AND properties->>'idempotency_key' = $3 ORDER BY deleted_at IS NULL DESC LIMIT 1`, [date, workspaceId, idemKey])
+      : await pool.query(`SELECT id, properties, deleted_at FROM blocks WHERE date = $1 AND properties->>'idempotency_key' = $2 ORDER BY deleted_at IS NULL DESC LIMIT 1`, [date, idemKey]);
     return q.rows[0] || null;
   }
 
@@ -87,11 +90,12 @@ module.exports = function mount(app, ctx) {
       // no key to check).
       const idemKey = body.idempotency_key || body.idempotencyKey || null;
       if (idemKey) {
-        const dupQ = workspaceId
-          ? await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND workspace_id = $2 AND properties->>'idempotency_key' = $3 AND deleted_at IS NULL LIMIT 1`, [date, workspaceId, idemKey])
-          : await pool.query(`SELECT id, properties FROM blocks WHERE date = $1 AND properties->>'idempotency_key' = $2 AND deleted_at IS NULL LIMIT 1`, [date, idemKey]);
-        const dup = dupQ.rows[0];
-        if (dup) return res.json({ ok: true, date, status: "skipped_duplicate", block: { id: dup.id, title: (dup.properties || {}).title || title } });
+        // Reuse findBriefBlock so the tombstone-inclusive dedup lives in ONE place
+        // (the two brief endpoints already use it). A live match is a dup; a
+        // soft-deleted match is a tombstone -> respect the user's delete and do not
+        // re-create (mirrors meeting-materializer: never resurrect what was removed).
+        const dup = await findBriefBlock(date, workspaceId, idemKey);
+        if (dup) return res.json({ ok: true, date, status: dup.deleted_at ? "skipped_deleted" : "skipped_duplicate", block: { id: dup.id, title: (dup.properties || {}).title || title } });
       }
 
       const minutes = Math.max(1, Math.round(Number(body.minutes || body.durationMinutes || body.estimatedMinutes || body.duration || 30)));
@@ -396,7 +400,10 @@ module.exports = function mount(app, ctx) {
       if (!isValidDate(sourceDate) || !isValidDate(targetDate)) return res.status(400).json({ error: "Expected sourceDate and targetDate as YYYY-MM-DD" });
       const { userId, workspaceId } = await resolveOwnerStrict(req);
       const sourceState = readJSON(getDayFilePath(sourceDate), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(sourceDate);
-      const existingBlocks = await blockDB.getBlocksByDate(targetDate, workspaceId);
+      // Include soft-deleted rows so a brief task the user deleted is not
+      // re-materialized: materializeBriefPlan keys dedup on glymphatic_task_id /
+      // source_id, and a tombstone still carries those (mirrors meeting-materializer).
+      const existingBlocks = await blockDB.getBlocksByDateIncludingDeleted(targetDate, workspaceId);
       const plan = dccIntelligence.materializeBriefPlan({ sourceState, targetDate, existingBlocks });
       const created = [];
       if (!dryRun) {
