@@ -99,18 +99,134 @@ function parseBlock(row) {
   };
 }
 
+// ── Canonical task model: create-time dual-write (Phase A1) ──
+//
+// Nothing reads these values yet; later phases flip the read paths one at a time.
+// Keep it that way: a read-path change belongs in a later phase, not here.
+//
+// DELIBERATELY NOT STAMPED: properties.local_id.
+// The plan called for stamping `local_id = id` on every task row as a
+// "version-skew shield" so an old client bundle keeps resolving its lookups. That
+// shield already exists and costs nothing: the client ALREADY falls back to the row
+// id when local_id is absent — `persistence.js:274` is
+// `const taskId = p.local_id || block.id;` ("API task blocks have no local_id; key
+// on the row id"), and sync.js:360/369/380 do the same. So the invariant holds
+// without writing anything.
+//
+// Worse, writing it is NOT inert. `persistence.js:262` admits a row into the
+// itinerary fold when it has a local_id:
+//   if(!p.local_id && p.kind!=="task" && !isShell && !isMeetingBlock) return false;
+// In this codebase local_id does double duty as an identifier AND as the client's
+// "this is a task, render it" flag, so stamping one onto a meeting transcript or an
+// unapproved proposal silently promotes it to a task. Measured on a prod restore:
+// the backfill made 245 non-task rows foldable, including 70 meeting-prep docs and
+// 4 dateless rows that would appear on EVERY day viewed.
+// See migrations/001_canonical_model.sql, "Step 1 (removed)".
+
+// Is this row a "task" for canonical-model purposes? JS twin of the SQL
+// dcc_is_task_row (pg-schema.js POST_SCHEMA_STATEMENTS) — the exclusion list is
+// stated in both places and MUST stay in sync, so change them together.
+// Exclusions: containers (day_root), time-tracking segments (time_entry), standing
+// lists (delegated_item), responsibility scaffolding (responsibility*), group
+// templates (task_group), move tombstones (reschedule_tombstone).
+// Shells and meetings ARE task rows.
+const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone"]);
+function isTaskRow(block) {
+  if (!block) return false;
+  const type = block.type;
+  if (type === "day_root" || type === "time_entry") return false;
+  const kind = ((block.properties || {}).kind) || "";
+  if (NON_TASK_KINDS.has(kind)) return false;
+  if (kind.startsWith("responsibility")) return false;
+  return true;
+}
+
+// A day_root id is `day-root-<workspace>-<date>` or the legacy `day-root-<date>`
+// (see ensureDayRoot), so "is my parent just my container?" is a string test — no
+// extra query on the create path.
+function isDayRootId(id) {
+  return typeof id === "string" && id.startsWith("day-root-");
+}
+
+// Resolve a subtaskOf/wrapId reference into a real parent row id, or null when it is
+// unresolvable OR ambiguous. Ambiguity is real: legacy local_ids are Date.now()-based
+// and collide. Returning null leaves the row a root — exactly today's flat behavior,
+// never worse — where guessing would silently re-parent someone's task.
+// Shares ONE definition with the migration and the audit via the SQL function.
+//
+// The SAVEPOINT is load-bearing, not defensive noise. `dcc_resolve_local_id` is
+// created by pg-schema's post-schema pass, which is non-fatal per statement by
+// design, so a missing function is a REACHABLE trigger. Inside a caller's
+// transaction a failed statement puts Postgres in the aborted state (25P02) and
+// every later statement fails until rollback, so a bare try/catch here would turn
+// "the edge could not be resolved" into "the whole batchOp died" — the exact
+// opposite of what the catch promises. The savepoint keeps the failure local.
+async function resolveParentRef(q, { ref, workspaceId, date, selfId }, inTx) {
+  if (!ref) return null;
+  if (inTx) {
+    try { await q.query("SAVEPOINT dcc_resolve_ref"); } catch { return null; }
+  }
+  try {
+    const { rows } = await q.query(
+      "SELECT dcc_resolve_local_id($1, $2, $3) AS pid",
+      [workspaceId || null, date || null, String(ref)]
+    );
+    if (inTx) await q.query("RELEASE SAVEPOINT dcc_resolve_ref");
+    const pid = rows[0] && rows[0].pid;
+    return pid && pid !== selfId ? pid : null;
+  } catch (err) {
+    // A create must never fail because the edge can't be resolved: leave parent_id
+    // alone and the row is a root, as it is today.
+    if (inTx) await q.query("ROLLBACK TO SAVEPOINT dcc_resolve_ref").catch(() => {});
+    console.error(`[createBlock] parent resolution skipped: ${err.message}`);
+    return null;
+  }
+}
+
 async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, client) {
   const blockId = id || crypto.randomUUID();
   const now = new Date().toISOString();
-  const props = typeof properties === "string" ? JSON.parse(properties) : (properties || {});
+  // Copy rather than alias: this function now WRITES into props, and callers reuse a
+  // single properties object across creates. responsibility-store.js applyForwardDiff
+  // pushes the same `c.block.properties` reference once per future date into one
+  // batchOp, so mutating in place would give N rows one row's stamped values.
+  const props = typeof properties === "string" ? JSON.parse(properties) : { ...(properties || {}) };
   validateBlock(type, props);
   const q = client || pool;
+
+  let parentId = parent_id || null;
+  if (isTaskRow({ type, properties: props })) {
+    if (props.status == null) props.status = "open";
+    const ref = props.subtaskOf != null ? props.subtaskOf : props.wrapId;
+    if (ref != null) {
+      if (props.rel == null) props.rel = props.subtaskOf != null ? "subtask" : "ride_along";
+      // Only claim parent_id when it holds nothing more specific than the row's
+      // container. An explicit non-day_root parent was chosen deliberately.
+      //
+      // Two readers of a day_root's children exist, and neither breaks: the route
+      // GET /api/blocks/:id/children has no caller anywhere, and reorderBlocks'
+      // rebalance selects siblings by parent_id (db.js reorderBlocks) — which for an
+      // itinerary task means "every task on that day". Repointing a subtask narrows
+      // that rebalance to its parent's children. Harmless today because the branch
+      // only fires when two items in one payload land within 0.001 and both
+      // producers (schedule.js saveTaskOrder, persistence.js saveSubtaskOrder) send
+      // (i+1)*1000, but it IS a second reader: do not repeat the claim that there is
+      // only one.
+      if (parentId === null || isDayRootId(parentId)) {
+        parentId = await resolveParentRef(
+          q, { ref, workspaceId: workspace_id, date, selfId: blockId }, !!client
+        ) || parentId;
+      }
+    }
+    validateBlock(type, props);
+  }
+
   await q.query(
     `INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [blockId, type, parent_id || null, date || null, props, sort_order || 0, user_id || null, workspace_id || null, now, now]
+    [blockId, type, parentId, date || null, props, sort_order || 0, user_id || null, workspace_id || null, now, now]
   );
   await q.query(`INSERT INTO operations (block_id, op_type, after_data, timestamp) VALUES ($1, 'create', $2, $3)`, [blockId, props, now]);
-  return { id: blockId, type, parent_id: parent_id || null, date: date || null, properties: props, sort_order: sort_order || 0, created_at: now, updated_at: now, deleted_at: null };
+  return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sort_order || 0, created_at: now, updated_at: now, deleted_at: null };
 }
 
 // `client` lets a caller run this inside its own transaction (batchOp,
@@ -222,6 +338,115 @@ async function deleteBlock(id, client) {
   await q.query("UPDATE blocks SET deleted_at = $1, updated_at = $2 WHERE id = $3", [now, now, id]);
   await q.query(`INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'delete', $2, $3)`, [id, existing.properties, now]);
   return { id, deleted_at: now };
+}
+
+// ── Canonical task model primitives (Phase A1) ──
+//
+// Added ALL AT ONCE, deliberately WITH NO CALLERS except the audit endpoint. That is
+// what keeps Tracks B, C and D out of db.js entirely, which is what makes the
+// parallel tracks safe. Resist deferring one until its consumer needs it.
+
+// Clear a tombstone. This is the server side of undo: because it is a real call and
+// not a client-side 8-second timer, an undo survives a reload and a device switch —
+// which is exactly what makes immediate deletion SAFER than the timer it replaces.
+// Idempotent: undeleting a live row is a no-op that returns the row.
+async function undeleteBlock(id, client) {
+  const q = client || pool;
+  const now = new Date().toISOString();
+  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  const existing = rows[0];
+  if (!existing) throw new Error(`Block not found: ${id}`);
+  if (!existing.deleted_at) return parseBlock(existing);
+  await q.query("UPDATE blocks SET deleted_at = NULL, updated_at = $1 WHERE id = $2", [now, id]);
+  await q.query(
+    `INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'update', $2, $3)`,
+    [id, existing.properties, now]
+  );
+  return parseBlock({ ...existing, deleted_at: null, updated_at: now });
+}
+
+// Fetch a row tombstone included. getBlock() happens to behave identically today,
+// but the two have DIFFERENT contracts and A2 splits them: the route-level
+// GET /api/blocks/:id starts 404-ing on a tombstone, while getBlock stays the
+// ownership pre-check for PATCH/DELETE/reschedule — where seeing the deleted row is
+// the correct behavior. Call this one when you mean "I want it even if deleted."
+async function getBlockIncludingDeleted(id) {
+  const { rows } = await pool.query("SELECT * FROM blocks WHERE id = $1", [id]);
+  return rows[0] ? parseBlock(rows[0]) : null;
+}
+
+// Look up a row by its idempotency key WITHOUT filtering tombstones. The omission is
+// the entire point: filtering `AND deleted_at IS NULL` is the resurrection bug —
+// delete a quick-task and the next agent retry, finding no live match, recreates it.
+// Callers decide what to do with a soft-deleted hit; they must not re-create it.
+//
+// A LIVE row wins over a tombstone, matching the existing routes/dcc.js findBriefBlock
+// (`ORDER BY deleted_at IS NULL DESC`) that later phases will migrate onto this
+// function. Ordering by created_at alone would hand back an older user tombstone in
+// preference to the live row — and that case is real, because this migration's step 6
+// partitions only over live rows, so a pre-existing tombstone can be older than the
+// surviving row it shares a key with.
+async function findByIdempotencyKey(workspaceId, key) {
+  if (!key) return null;
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks
+      WHERE properties->>'idempotency_key' = $1
+        AND workspace_id IS NOT DISTINCT FROM $2
+      ORDER BY (deleted_at IS NULL) DESC, created_at ASC
+      LIMIT 1`,
+    [String(key), workspaceId || null]
+  );
+  return rows[0] ? parseBlock(rows[0]) : null;
+}
+
+// Open task rows dated strictly before `beforeDate` — the carryover/catch-up lane.
+// Backed by idx_blocks_open, whose predicate this mirrors exactly: COALESCE status to
+// 'open' because most rows carry no status at all, and the non-'open' statuses in the
+// wild (scheduled/proposed/draft/ready/active/ingested/queued) all belong to
+// proposals and meeting artifacts, which must stay out of a carryover prompt.
+async function getOpenTasksBefore(workspaceId, beforeDate, limit = 50) {
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks
+      WHERE workspace_id IS NOT DISTINCT FROM $1
+        AND date IS NOT NULL AND date < $2
+        AND deleted_at IS NULL
+        AND type = 'block'
+        AND COALESCE(properties->>'status', 'open') = 'open'
+        AND dcc_is_task_row(type, properties)
+      ORDER BY date DESC, sort_order ASC, created_at ASC
+      LIMIT $3`,
+    [workspaceId || null, beforeDate, limit]
+  );
+  return rows.map(parseBlock);
+}
+
+// Every descendant of `rootIds` through parent_id, roots included, live rows only.
+// Stops at day_roots in both directions: a day_root is a container, not a task, so
+// walking through one would drag in every unrelated task on that date.
+// depth-capped because a cycle that slipped in after the migration's scrub must not
+// spin this forever.
+async function getSubtree(rootIds, workspaceId) {
+  const ids = (Array.isArray(rootIds) ? rootIds : [rootIds]).filter(Boolean);
+  if (ids.length === 0) return [];
+  const { rows } = await pool.query(
+    `WITH RECURSIVE tree AS (
+       SELECT b.*, 0 AS depth FROM blocks b
+        WHERE b.id = ANY($1::text[])
+          AND b.workspace_id IS NOT DISTINCT FROM $2
+          AND b.deleted_at IS NULL
+          AND b.type <> 'day_root'
+       UNION ALL
+       SELECT c.*, t.depth + 1 FROM blocks c
+         JOIN tree t ON c.parent_id = t.id
+        WHERE c.workspace_id IS NOT DISTINCT FROM $2
+          AND c.deleted_at IS NULL
+          AND c.type <> 'day_root'
+          AND t.depth < 32
+     )
+     SELECT DISTINCT ON (id) * FROM tree ORDER BY id, depth ASC`,
+    [ids, workspaceId || null]
+  );
+  return rows.map(parseBlock);
 }
 
 // ── Query ──
@@ -424,6 +649,8 @@ async function ensureDayRoot(date, userId, workspaceId, client) {
 //              already ensured it once, so we don't re-SELECT per item
 //   sortOrder  explicit slot in minutes; defaults to start-derived minutes
 //   client     a pg client to run inside a caller's transaction
+// The canonical dual-write (local_id, status, parent_id/rel) is NOT repeated here —
+// this funnels through createBlock, which owns it. One insertion point, not two.
 async function createItineraryTask({ date, properties, userId = null, workspaceId = null, sortOrder, score = false, ensureRoot = true, client } = {}) {
   if (ensureRoot) await ensureDayRoot(date, userId, workspaceId);
   const props = { ...(properties || {}) };
@@ -650,6 +877,9 @@ async function getFutureDatesWithBlocks(fromDate, workspaceId) {
 module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
+  // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
+  undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey,
+  getOpenTasksBefore, getSubtree, isTaskRow,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,

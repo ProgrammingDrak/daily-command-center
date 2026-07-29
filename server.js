@@ -776,6 +776,7 @@ require("./routes/budget")(app, ctx);
 require("./routes/punishments")(app, ctx);
 require("./routes/vault")(app, ctx);
 require("./routes/admin-tokens")(app, ctx);
+require("./routes/admin-model")(app, ctx);
 require("./routes/slack-events")(app, ctx);
 
 // ── Static + Fallback ──
