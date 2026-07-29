@@ -527,6 +527,16 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
     (item) => !(item && (item.type === "meeting" || item.type === "oneone"))
   );
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
+  // Surface the per-day delete overlay (day_root._deleted) so consumers like
+  // carryover-review don't re-offer a timeline task the user deleted. It lives on
+  // the day_root block, not in the state JSON, so it isn't in `enrichment`.
+  try {
+    const rootQ = workspaceId
+      ? await pool.query("SELECT properties FROM blocks WHERE type='day_root' AND date=$1 AND workspace_id=$2 AND deleted_at IS NULL LIMIT 1", [dateStr, workspaceId])
+      : await pool.query("SELECT properties FROM blocks WHERE type='day_root' AND date=$1 AND deleted_at IS NULL LIMIT 1", [dateStr]);
+    const rp = rootQ.rows[0] ? (typeof rootQ.rows[0].properties === "string" ? JSON.parse(rootQ.rows[0].properties) : rootQ.rows[0].properties) : null;
+    result._deleted = (rp && Array.isArray(rp._deleted)) ? rp._deleted : [];
+  } catch (e) { result._deleted = Array.isArray(result._deleted) ? result._deleted : []; }
   return result;
 }
 

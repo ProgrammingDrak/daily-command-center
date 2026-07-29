@@ -144,9 +144,10 @@ test("normalizeResponsibility stamps importanceScore into properties", () => {
 
 // ── Factory: fake blockDB ──
 function makeFakeBlockDB(seed = {}) {
-  const calls = { batchOp: [], createItineraryTask: [], createBlock: [], updateBlock: [], ensureDayRoot: [], getBlocksByDate: [] };
+  const calls = { batchOp: [], createItineraryTask: [], createBlock: [], updateBlock: [], ensureDayRoot: [], getBlocksByDate: [], getBlocksByDateIncludingDeleted: [] };
   const state = {
     blocksByDate: seed.blocksByDate || {},
+    deletedBlocksByDate: seed.deletedBlocksByDate || {},
     futureDates: seed.futureDates || [],
     bySlug: seed.bySlug || {},
     responsibilities: seed.responsibilities || [],
@@ -156,6 +157,8 @@ function makeFakeBlockDB(seed = {}) {
     async getResponsibilityBlocks() { return state.responsibilities; },
     async findResponsibilityBySlug(slug) { return state.bySlug[slug] || null; },
     async getBlocksByDate(date) { calls.getBlocksByDate.push(date); return state.blocksByDate[date] || []; },
+    // Mirrors db.js getBlocksByDateIncludingDeleted: live rows PLUS soft-deleted ones (which carry deleted_at).
+    async getBlocksByDateIncludingDeleted(date) { calls.getBlocksByDateIncludingDeleted.push(date); return [...(state.blocksByDate[date] || []), ...(state.deletedBlocksByDate[date] || [])]; },
     async getFutureDatesWithBlocks() { return state.futureDates; },
     async getBlock(id) {
       if (String(id).startsWith("root-")) return { id, properties: {} };
@@ -209,6 +212,16 @@ test("scheduleResponsibilityTask: existing open task + not forced -> duplicate, 
   assert.equal(out.duplicate, true);
   assert.equal(out.created, false);
   assert.equal(fake.calls.createItineraryTask.length, 0);
+});
+
+test("loadDaySlottingContext: surfaces a soft-deleted responsibility instance as deletedResponsibilityIds (don't resurrect a delete)", async () => {
+  const fake = makeFakeBlockDB({
+    deletedBlocksByDate: { "2026-07-12": [{ id: "d1", deleted_at: "2026-07-12T10:00:00Z", properties: { responsibilityId: "r1", kind: "responsibility_task" } }] },
+  });
+  const store = makeStore(fake);
+  const ctx = await store.loadDaySlottingContext("2026-07-12", 1, "ws-1");
+  assert.ok(ctx.deletedResponsibilityIds.has("r1"), "deleted instance's responsibilityId is surfaced so auto-schedule can skip it");
+  assert.equal(ctx.blocks.length, 0, "soft-deleted rows are excluded from the live blocks/blockers");
 });
 
 // ── Factory: upsert ──

@@ -36,9 +36,12 @@
   function extractUncheckedTasks(priorState, priorDay){
     if (!priorState || !priorState.schedule || !Array.isArray(priorState.schedule.timeline)) return [];
     const done = priorDoneSet(priorDay);
+    // Don't re-offer a task the user deleted that day. buildDayResponse surfaces
+    // the day_root delete overlay as priorState._deleted, keyed by timeline id.
+    const deleted = new Set(Array.isArray(priorState._deleted) ? priorState._deleted : []);
     return priorState.schedule.timeline
       .filter(t => !skipType(t.type))
-      .filter(t => !t.completed && !done.has(t.id))
+      .filter(t => !t.completed && !done.has(t.id) && !deleted.has(t.id))
       .map(t => {
         const start = t.start ? new Date(t.start) : null;
         const end = t.end ? new Date(t.end) : null;

@@ -47,4 +47,15 @@ const repeat = materializeBriefPlan({
 assert.strictEqual(repeat.items.length, 1, "existing glymphatic task is idempotently skipped");
 assert.strictEqual(repeat.counts.alreadyExisting, 1, "duplicate is reported");
 
+// A SOFT-DELETED block still suppresses re-materialization: routes/dcc.js feeds
+// include-deleted rows in on purpose, so the tombstone's glymphatic_task_id lands
+// in existingIds and a task the user deleted is not resurrected on the next run.
+const tombstoned = materializeBriefPlan({
+  sourceState,
+  targetDate: "2026-06-13",
+  existingBlocks: [{ deleted_at: "2026-06-13T00:00:00Z", properties: { glymphatic_task_id: "t-accept" } }],
+});
+assert.strictEqual(tombstoned.items.length, 1, "a soft-deleted brief block is not re-materialized");
+assert.strictEqual(tombstoned.counts.alreadyExisting, 1, "the deleted task is reported alreadyExisting");
+
 console.log("glymphatic-brief-materializer: all assertions passed");

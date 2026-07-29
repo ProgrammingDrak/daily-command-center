@@ -325,6 +325,9 @@ module.exports = function mount(app, ctx) {
     const dayCtx = await respStore.loadDaySlottingContext(dateStr, userId, workspaceId);
     const scheduled = [];
     for (const item of items) {
+      // Honor a delete: if the user removed today's instance, don't auto-resurrect
+      // it. The explicit POST /:id/schedule path is intentionally exempt.
+      if (dayCtx.deletedResponsibilityIds && dayCtx.deletedResponsibilityIds.has(item.id)) continue;
       const result = await respStore.scheduleResponsibilityTask({ responsibility: item, date, userId, workspaceId, dayCtx });
       scheduled.push(result);
     }
