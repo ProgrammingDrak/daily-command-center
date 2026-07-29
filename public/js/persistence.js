@@ -313,6 +313,9 @@ function reloadPersistedEdits() {
           // ("pending" at birth, "ready" once a brief lands). Surface it so the row
           // chip (itinerary-card.js) renders without a page-level meetings[] join.
           prepStatus:p.prep_status||null,
+          // Recap chip: set to "ready" by applyArtifacts once a summary lands, so the
+          // row shows a Recap chip (schedule-tab.js) that opens the modal's Recap tab.
+          recapStatus:p.recap_status||null,
           dashboardRef:p.dashboard_ref||null,
           recordingReview:!!p.recording_review,
           meetingBlockId:(p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")?block.id:(p.meetingBlockId||""),

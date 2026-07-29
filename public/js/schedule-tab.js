@@ -103,8 +103,8 @@ const _calSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" strok
 // retired #timeline (display:none; switchToDate still builds it hidden), so a
 // stale hidden panel must never divert us onto the inline path -- always open
 // the focused, token-styled prep modal, which fetches + renders itself.
-function openMeetingPanel(ev){
-  if(typeof openPrepModal==="function"){ openPrepModal(ev); return; }
+function openMeetingPanel(ev,opts){
+  if(typeof openPrepModal==="function"){ openPrepModal(ev,opts); return; }
   if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(ev.meetingBlockId||ev.id);
 }
 // Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
@@ -115,7 +115,7 @@ function openMeetingPanel(ev){
 function buildMeetingRadialItems(ev,trig){
   const started=(typeof now==="function"&&typeof pt==="function")?now()>=pt(ev.start):false;
   return [
-    {icon:started?"📝":"📋", label:started?"Recap":"Prep", onPick:()=>openMeetingPanel(ev)},
+    {icon:started?"📝":"📋", label:started?"Recap":"Prep", onPick:()=>openMeetingPanel(ev,{defaultTab:started?"recap":"prep"})},
     {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
     {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
   ];
@@ -622,6 +622,11 @@ function buildListView(){
           // reading prepStatus off the block fold (persistence.js). The list view is the
           // visible itinerary, so without this the chip never painted for the owner.
           (ev.prepStatus==='ready'?'<span class="prep-flag prep-ready" style="cursor:pointer" title="View prep briefing">&#9679; Prep</span>':ev.prepStatus==='pending'?'<span class="prep-flag prep-pending" style="cursor:pointer" title="Prep pending — open to view or generate">&#9675; Prep</span>':'')+
+          // Recap chip: lights green once a summary lands (recap_status ready, set by
+          // applyArtifacts). Distinct class from .prep-flag so it wires independently
+          // and opens the modal straight to the Recap tab. Renders on done rows too,
+          // so the recap is findable after the meeting is marked complete.
+          (ev.recapStatus==='ready'?'<span class="recap-flag" style="cursor:pointer" title="View recap & action items">&#9670; Recap</span>':'')+
           recQueued+recFlag+priChip+
           (changed?'<span class="it-list-changed">Duration adjusted</span>':'')+
           (bw?'<span class="wrap-bw">'+bw.count+' ride-along'+(bw.count>1?'s':'')+' · ~'+ms(bw.mins)+' inside</span>':'')+
@@ -651,7 +656,10 @@ function buildListView(){
     // Prep chip opens the prep briefing (radial Prep/Recap spoke), not the row's
     // details modal. stopPropagation keeps the row click from also firing.
     const pf=el.querySelector(".prep-flag");
-    if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev);});
+    if(pf)pf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"prep"});});
+    // Recap chip opens the same modal straight to the Recap tab.
+    const rf=el.querySelector(".recap-flag");
+    if(rf)rf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"recap"});});
     const sb=el.querySelector(".btn-schedule");
     if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
     const pb=el.querySelector(".btn-task-radial");
@@ -668,7 +676,7 @@ function buildListView(){
     // Open space on the row opens the task-details modal (same as the pen).
     // Unfinished rows are past-day pseudo-tasks, not in scheduled[] — skip them.
     if(!isUnfRow)el.addEventListener("click",e=>{
-      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag"))return;
+      if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
       if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
     });
     return el;

@@ -192,7 +192,8 @@ function transformState(state) {
         completed: item.completed || false,
         nested: false,
         prep: prep,
-        prepStatus: matchedMeeting ? (matchedMeeting.prep_status || null) : null
+        prepStatus: matchedMeeting ? (matchedMeeting.prep_status || null) : null,
+        recapStatus: matchedMeeting ? (matchedMeeting.recap_status || null) : null
       });
     });
   }

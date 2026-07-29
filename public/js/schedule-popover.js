@@ -111,6 +111,12 @@ function openSchedulePopover(cfg){
         '<input type="time" class="resched-time-input" />'+
         (mode==="reschedule"?'<button class="resched-time-go" type="button">Set time</button>':'')+
       '</div>'+
+    '</div>'):'')+
+    // Pick mode normally hides time; allowTime opts a bare time input in (no dur
+    // stepper) so callers like the recap action scheduler can pin an optional start.
+    ((mode==="pick"&&cfg.allowTime)?(
+    '<div class="resched-adjust resched-time-only">'+
+      '<div class="resched-time"><input type="time" class="resched-time-input" /></div>'+
     '</div>'):'');
 
   function closePop(){
@@ -132,9 +138,10 @@ function openSchedulePopover(cfg){
       return;
     }
     if(mode==="pick"){
+      const pickTime=(cfg.allowTime&&timeInput&&/^\d{2}:\d{2}$/.test(timeInput.value))?timeInput.value:null;
       pop.querySelectorAll("button").forEach(b=>{b.disabled=true;});
       try{
-        if(typeof cfg.onPick==="function")await cfg.onPick(dateStr);
+        if(typeof cfg.onPick==="function")await cfg.onPick(dateStr,pickTime);
       }finally{
         closePop();
       }
@@ -251,10 +258,12 @@ function openReschedulePopover(id,anchorEl){
   openSchedulePopover({mode:"reschedule",id,anchorEl});
 }
 // Generic "pick a day" popover for callers that create a task rather than move
-// one (e.g. delegated follow-ups). opts: {header, actionLabel, onPick(dateStr)}.
+// one (e.g. delegated follow-ups). opts: {header, actionLabel, allowTime,
+// onPick(dateStr, timeStr)}. With allowTime, a bare time input is shown and its
+// HH:MM (or null) is passed as the second onPick arg.
 function openDatePickPopover(anchorEl,opts){
   opts=opts||{};
-  openSchedulePopover({mode:"pick",anchorEl,header:opts.header,actionLabel:opts.actionLabel,onPick:opts.onPick});
+  openSchedulePopover({mode:"pick",anchorEl,header:opts.header,actionLabel:opts.actionLabel,allowTime:opts.allowTime,onPick:opts.onPick});
 }
 
 window.openSchedulePopover=openSchedulePopover;

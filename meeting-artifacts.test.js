@@ -1,5 +1,5 @@
 // Tests for the precomputed meeting-artifact path:
-//   - meeting-automation.applyArtifacts / mergeRecapIntoNotes (the storage layer)
+//   - meeting-automation.applyArtifacts (the storage layer)
 //   - POST /api/dcc/meeting-artifacts (block resolution by identity + title, 404/400)
 //
 // applyArtifacts hard-requires ./db and ./pg-pool, so we inject in-memory fakes
@@ -63,7 +63,7 @@ function seedMeeting(id, extra) {
 }
 const childrenOf = (id, kind) => mem.store.filter((b) => b.parent_id === id && (b.properties || {}).kind === kind);
 
-test("applyArtifacts stores summary/transcript + owner-tagged proposed actions and mirrors recap to notes", async () => {
+test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, lights the recap chip, and keeps recap OUT of notes", async () => {
   seedMeeting("m1");
   const res = await automation.applyArtifacts("m1", {
     workspaceId: "ws-1", userId: 1,
@@ -74,17 +74,20 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions a
       { text: "Ops to update the runbook", owner: "others" },
     ],
   });
-  assert.deepEqual(res.applied, { prep: false, summary: true, transcript: true, proposedActions: 2, recapToNotes: true, dashboardRef: false });
+  assert.deepEqual(res.applied, { prep: false, summary: true, transcript: true, proposedActions: 2, recapToNotes: false, recapReady: true, dashboardRef: false });
   assert.equal(childrenOf("m1", "meeting_summary").length, 1);
   assert.equal(childrenOf("m1", "meeting_transcript").length, 1);
   const actions = childrenOf("m1", "proposed_action_item");
   assert.equal(actions.length, 2);
   assert.equal(actions.every((a) => a.properties.status === "proposed" && a.properties.done === false), true);
   assert.deepEqual(actions.map((a) => a.properties.owner).sort(), ["drake", "other"]);
-  // Feature 1: recap written onto the closed meeting's own notes.
   const m1 = await mem.getBlock("m1");
-  assert.match(m1.properties.notes, /Good chat about Q3\./);
-  assert.match(m1.properties.notes, /_Meeting recap \(auto\):_/);
+  // The recap now lives ONLY in the meeting_summary artifact (surfaced in the Recap
+  // tab), never mirrored into the meeting's notes box.
+  assert.match(childrenOf("m1", "meeting_summary")[0].properties.html, /Good chat about Q3\./);
+  assert.equal(m1.properties.notes, undefined);
+  // ...and the meeting's own recap chip is lit so it's findable after it's marked done.
+  assert.equal(m1.properties.recap_status, "ready");
 });
 
 test("re-post is idempotent: dedupes proposed actions, upserts summary in place, leaves notes stable", async () => {
@@ -95,7 +98,6 @@ test("re-post is idempotent: dedupes proposed actions, upserts summary in place,
     proposedActions: [{ text: "Follow up with finance", owner: "drake" }],
   });
   assert.equal(first.applied.proposedActions, 1);
-  const notesAfterFirst = (await mem.getBlock("m2")).properties.notes;
 
   const second = await automation.applyArtifacts("m2", {
     workspaceId: "ws-1", userId: 1,
@@ -108,15 +110,23 @@ test("re-post is idempotent: dedupes proposed actions, upserts summary in place,
   assert.equal(second.applied.proposedActions, 1); // only the new one
   assert.equal(childrenOf("m2", "proposed_action_item").length, 2);
   assert.equal(childrenOf("m2", "meeting_summary").length, 1); // upserted, not duplicated
-  assert.equal((await mem.getBlock("m2")).properties.notes, notesAfterFirst); // recap region stable
+  assert.equal((await mem.getBlock("m2")).properties.notes, undefined); // recap is never written to notes
 });
 
-test("recap merge preserves the user's own notes above the auto section", async () => {
+test("a recap leaves the user's own notes untouched (recap lives only in the summary artifact)", async () => {
   seedMeeting("m3", { notes: "My own private note" });
   await automation.applyArtifacts("m3", { workspaceId: "ws-1", userId: 1, summary: { markdown: "Auto recap body" } });
-  const notes = (await mem.getBlock("m3")).properties.notes;
-  assert.match(notes, /^My own private note/);
-  assert.match(notes, /Auto recap body$/);
+  assert.equal((await mem.getBlock("m3")).properties.notes, "My own private note"); // untouched
+  assert.match(childrenOf("m3", "meeting_summary")[0].properties.html, /Auto recap body/); // recap stored as artifact
+});
+
+test("re-posting a recap is quiet: recapReady flips true only on first landing", async () => {
+  seedMeeting("m3b");
+  const first = await automation.applyArtifacts("m3b", { workspaceId: "ws-1", userId: 1, summary: { markdown: "Recap once" } });
+  assert.equal(first.applied.recapReady, true);   // first landing lights the chip + toasts
+  assert.equal((await mem.getBlock("m3b")).properties.recap_status, "ready");
+  const second = await automation.applyArtifacts("m3b", { workspaceId: "ws-1", userId: 1, summary: { markdown: "Recap again" } });
+  assert.equal(second.applied.recapReady, false);  // already ready -> no re-toast
 });
 
 test("recapToNotes:false stores the summary child but does not touch notes", async () => {
@@ -201,6 +211,20 @@ test("placeApprovedAction pins a valid start and drops an invalid one", async ()
   assert.equal(b2.date, "2026-07-16");          // date still applied
 });
 
+test("placeApprovedAction stamps the originating proposal placed + placedDate (durable Scheduled ✓)", async () => {
+  seedMeeting("mstamp");
+  mem.store.push({ id: "pstamp", type: "block", parent_id: "mstamp", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Ship the recap tab", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const ap = await automation.approveActions("mstamp", { workspaceId: "ws-1", userId: 1 });
+  const aid = ap.approvedBlocks[0].id;
+  await automation.placeApprovedAction("mstamp", aid, { workspaceId: "ws-1", userId: 1, date: "2026-07-20", start: "14:00" });
+  const proposal = await mem.getBlock("pstamp");
+  assert.equal(proposal.properties.status, "placed");   // Recap tab reads this as "Scheduled ✓"
+  assert.equal(proposal.properties.placedDate, "2026-07-20");
+  assert.equal(proposal.properties.placedStart, "14:00");
+});
+
 test("placeApprovedAction 404s on a missing action and a cross-workspace action", async () => {
   seedMeeting("m404");
   await assert.rejects(
@@ -235,33 +259,19 @@ test("applyArtifacts ignores client html, escapes markdown, and drops unsafe sou
   assert.equal(ok.url, "https://example.com/doc", "http(s) url kept");
 });
 
-test("mergeRecapIntoNotes: empty base, preserve user notes, idempotent replace", () => {
-  const { mergeRecapIntoNotes } = automation;
-  assert.equal(mergeRecapIntoNotes("", "Body"), "_Meeting recap (auto):_\n\nBody");
-  const once = mergeRecapIntoNotes("User note", "Body v1");
-  assert.match(once, /^User note/);
-  assert.match(once, /Body v1$/);
-  // Re-merging a new recap replaces only the auto region; user note survives once.
-  const twice = mergeRecapIntoNotes(once, "Body v2");
-  assert.match(twice, /^User note/);
-  assert.match(twice, /Body v2$/);
-  assert.equal((twice.match(/User note/g) || []).length, 1);
-  assert.equal(twice.includes("Body v1"), false);
-});
-
 // ── endpoint: block resolution + status codes ────────────────────────────────
-function mountApp(seedBlocks, applyRecorder) {
+function mountApp(seedBlocks, applyRecorder, extra = {}) {
   const app = express();
   app.use(express.json());
   const store = makeStore(seedBlocks);
   const ctx = {
     blockDB: store, meetingIdentity,
-    broadcast: () => {},
+    broadcast: extra.broadcastRecorder ? (type, data, ws) => extra.broadcastRecorder.push({ type, data, ws }) : () => {},
     isValidDate: (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v),
     getTodayStr: () => "2026-07-09",
     resolveOwnerStrict: async () => ({ userId: 1, workspaceId: "ws-1" }),
     meetingAutomation: {
-      applyArtifacts: async (blockId, opts) => { applyRecorder.push({ blockId, opts }); return { applied: { summary: true }, proposedActions: [] }; },
+      applyArtifacts: async (blockId, opts) => { applyRecorder.push({ blockId, opts }); return { applied: extra.applied || { summary: true }, proposedActions: [] }; },
     },
   };
   require("./routes/dcc.js")(app, ctx);
@@ -324,6 +334,24 @@ test("endpoint maps snake_case proposed_actions + recap_to_notes into applyArtif
   assert.equal(status, 200);
   assert.equal(rec[0].opts.proposedActions.length, 1);
   assert.equal(rec[0].opts.recapToNotes, false);
+});
+
+test("endpoint broadcasts recapArrived + meetingTitle only when a recap first lands", async () => {
+  const rec = [], bcast = [];
+  const app = mountApp([mtgBlock("blk-r", "evt-r", "Sync with Ben", "2026-07-09")], rec,
+    { broadcastRecorder: bcast, applied: { summary: true, recapReady: true } });
+  const { status } = await post(app, { meeting: { event_id: "evt-r", date: "2026-07-09" }, summary: { markdown: "hi" } });
+  assert.equal(status, 200);
+  const msg = bcast.find((b) => b.type === "blocks-changed");
+  assert.ok(msg, "a blocks-changed broadcast fired");
+  assert.equal(msg.data.recapArrived, true);            // first landing -> client toasts once
+  assert.equal(msg.data.meetingTitle, "Sync with Ben");
+
+  const rec2 = [], bcast2 = [];
+  const app2 = mountApp([mtgBlock("blk-r2", "evt-r2", "Sync again", "2026-07-09")], rec2,
+    { broadcastRecorder: bcast2, applied: { summary: true, recapReady: false } });
+  await post(app2, { meeting: { event_id: "evt-r2", date: "2026-07-09" }, summary: { markdown: "hi" } });
+  assert.equal(bcast2.find((b) => b.type === "blocks-changed").data.recapArrived, false); // idempotent re-post stays quiet
 });
 
 test("resolver spans the +/-1 day window and ignores non-meeting same-title blocks", async () => {
