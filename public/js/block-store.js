@@ -18,6 +18,13 @@
   // ── Partitioned Cache ──
   let _dayCache = new Map();   // id → block (cleared on date switch)
   let _globalCache = new Map(); // id → block (persistent across dates)
+  // Ids this client soft-deleted. GET /api/blocks/:id has no deleted_at filter, so a
+  // foreign SSE broadcast naming a deleted id would make this tab re-fetch the
+  // tombstone and cache it — the row reappears until reload. (A2 adds the 404 on the
+  // route side; this is the client half and both are worth having.) Session-scoped:
+  // a reload starts empty, by which point loadDay's deleted_at-filtered query is the
+  // source of truth, so this never has to be pruned.
+  const _tombstones = new Set();
   let _currentDate = null;
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
@@ -151,6 +158,9 @@
     // global and day partitions without leaving a stale duplicate behind.
     _dayCache.delete(block.id);
     _globalCache.delete(block.id);
+    // A row being written into the cache is live by definition, so it is no longer a
+    // tombstone (loadDay only ever returns deleted_at IS NULL rows).
+    _tombstones.delete(block.id);
     const props = block.properties || {};
     // Pinned blocks (sticky notes) are globally scoped even when the server
     // stored a date — otherwise loadDay() on date navigation would evict them.
@@ -367,6 +377,7 @@
     // Soft-delete a block
     async deleteBlock(id) {
       setSaving();
+      _tombstones.add(id);
       const walId = walPush({ op: "delete", id });
       try {
         await apiDelete("/api/blocks/" + id);
@@ -382,12 +393,20 @@
     // Atomic multi-block operation
     async batchOp(operations) {
       setSaving();
+      for (const op of operations) {
+        if (op && op.op === "delete" && op.id) _tombstones.add(op.id);
+      }
       const walId = walPush({ op: "batch", data: { operations } });
       try {
         const result = await apiPost("/api/blocks/batch", { operations });
         if (result.blocks) {
           for (const block of result.blocks) {
-            if (block.id) cacheSet(block);
+            if (!block || !block.id) continue;
+            // A delete op's result is a bare { id, deleted_at } stub (db.deleteBlock),
+            // not a block — cacheSet would file a typeless, propertyless row back into
+            // the day cache and resurrect the id it just deleted.
+            if (block.deleted_at) cacheDelete(block.id);
+            else cacheSet(block);
           }
         }
         walRemove(walId);
@@ -628,10 +647,15 @@
       // Re-fetch affected blocks
       if (event.blockIds && event.blockIds.length) {
         for (const id of event.blockIds) {
+          if (_tombstones.has(id)) continue; // we deleted it; don't re-fetch the tombstone
           try {
             const block = await apiGet("/api/blocks/" + id);
-            if (block) cacheSet(block);
-          } catch {} // block may have been deleted
+            // The route still serves soft-deleted rows (A2 makes it 404), and the
+            // broadcast may be another tab's delete, which no local tombstone covers.
+            // Trust deleted_at over the fact that we were told to look.
+            if (block && block.deleted_at) cacheDelete(id);
+            else if (block) cacheSet(block);
+          } catch {} // block may have been hard-deleted
         }
       }
     },

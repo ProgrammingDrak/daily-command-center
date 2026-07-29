@@ -943,10 +943,10 @@ function _nextSundayDate(){
   return next.getFullYear()+"-"+pad(next.getMonth()+1)+"-"+pad(next.getDate());
 }
 
-function _purgeManualBlock(ev){
-  if(!ev||ev.source!=="manual"||!window.blockStore)return;
-  const dateStr=(__state&&__state.date)||null;
-  _removeTaskBlockFromDate(ev.id,dateStr,ev);
+// The date the user is looking at -- the day a delete or purge must act on. Falls
+// back to the loaded day state for surfaces that render without a viewDate.
+function _viewedDateStr(){
+  return (typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
 }
 
 async function moveTaskToToday(id){
@@ -1009,7 +1009,7 @@ function moveScheduledTaskToSideProject(id){
   if(typeof addSideProjectTask==="function")addSideProjectTask(ev.title,dur(ev)||30);
   deletedSet.add(id);
   saveDeletedState();
-  _purgeManualBlock(ev);
+  _removeTaskBlockFromDate(ev.id,_viewedDateStr(),ev);
   log("side-project",id,"Moved to Side Projects: "+ev.title);
   if(typeof showToast==="function")showToast("Moved to Side Projects","success");
   recalcTimes();
@@ -1031,7 +1031,7 @@ function _moveTaskToBacklogStage(id,stage,toastMsg){
   backlog.push(entry);
   if(typeof persistBacklogItem==="function")persistBacklogItem(entry);
   deletedSet.add(id);saveDeletedState();
-  _purgeManualBlock(ev);
+  _removeTaskBlockFromDate(ev.id,_viewedDateStr(),ev);
   if(typeof showToast==="function")showToast(toastMsg,"success");
   render();
 }
@@ -1058,7 +1058,7 @@ function removeTaskForConversion(id){
   if(!ev)return;
   deletedSet.add(id);
   saveDeletedState();
-  _purgeManualBlock(ev);
+  _removeTaskBlockFromDate(ev.id,_viewedDateStr(),ev);
   if(typeof recalcTimes==="function")recalcTimes();
   render();
 }
@@ -1079,9 +1079,12 @@ async function _computeRescheduleSlot(ev,targetDate){
   return window.DCC.findSlot(ev,ctx,{excludeSelf:true,anchorNow:true});
 }
 
-// Optimistically drop a task and its whole nested subtree (subtaskOf/wrapId) from
-// the current day's `scheduled` view after a true move. Returns the removed ids.
-function _removeSubtreeFromScheduled(rootId){
+// Every ev id in the visible subtree rooted at rootId, walking the subtaskOf /
+// wrapId edges on `scheduled`. Root first, then children, then grandchildren, so
+// callers can act on a parent before the rows that point at it. An id is added at
+// most once, so a descendant claiming an ancestor as its parent terminates instead
+// of looping -- real data carries such cycles (reschedule-subtree.test.js).
+function _subtreeIdsOf(rootId){
   const ids=new Set([rootId]);
   let changed=true;
   while(changed){
@@ -1091,6 +1094,13 @@ function _removeSubtreeFromScheduled(rootId){
       if(pid&&ids.has(pid)&&!ids.has(e.id)){ids.add(e.id);changed=true;}
     }
   }
+  return ids;
+}
+
+// Optimistically drop a task and its whole nested subtree (subtaskOf/wrapId) from
+// the current day's `scheduled` view after a true move. Returns the removed ids.
+function _removeSubtreeFromScheduled(rootId){
+  const ids=_subtreeIdsOf(rootId);
   for(let i=scheduled.length-1;i>=0;i--){
     if(ids.has(scheduled[i].id)){
       const rid=scheduled[i].id;
@@ -1303,65 +1313,99 @@ function saveDeletedState(){
 function isDeleted(ev){return deletedSet.has(ev.id)}
 
 let _delPendingId=null;
-let _deleteUndoTimers = {};
+// The rows a delete removed, keyed by the ev id the user deleted, so Undo can put
+// the whole subtree back verbatim. Session-scoped: a reload drops them, which is
+// correct -- the delete already reached the server, and there is nothing left to
+// undo optimistically. (B2 wires Undo to POST /api/blocks/:id/undelete so a restore
+// survives a reload and a device switch too.)
+let _deleteUndoSnapshots={};
 function openDeleteConfirm(id){
   deleteTaskWithUndo(id);
 }
-function deleteTaskWithUndo(id){
+// THE single client entry point for "delete this task", and it fires the real
+// soft-delete IMMEDIATELY. The 8-second deferral this replaces was the resurrection
+// bug: navigate away or reload inside that window and only the per-day overlay
+// survived, so the task came back on the next fold. Going immediate loses nothing --
+// rows keep their deleted_at for 30 days server-side (purgeSoftDeleted, server.js)
+// and Undo re-creates them from the snapshot below.
+async function deleteTaskWithUndo(id){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev||deletedSet.has(id))return;
-  if(_deleteUndoTimers[id]){
-    clearTimeout(_deleteUndoTimers[id].timer);
-    delete _deleteUndoTimers[id];
+  const dateStr=_viewedDateStr();
+  // The whole visible subtree goes with the parent. A subtask left behind is what
+  // resurfaces later as a standalone unfinished task. Anything already deleted
+  // separately is left out so Undo can't resurrect it.
+  const ids=[..._subtreeIdsOf(id)].filter(sid=>sid===id||!deletedSet.has(sid));
+  const evById=new Map(scheduled.map(e=>[e.id,e]));
+  // Resolve every backing row BEFORE anything is hidden, through the one resolver
+  // that handles _blockId / local_id / b.id and refuses a cross-date delete. A pure
+  // timeline-JSON item has no row, so it gets no op and the overlay is the only
+  // (correct) record -- nothing server-side exists to delete.
+  const rows=[];
+  for(const sid of ids){
+    const block=_findTaskBlockForDate(sid,dateStr,evById.get(sid));
+    if(block)rows.push({
+      blockId:block.id,
+      type:block.type,
+      date:block.date,
+      parentId:block.parent_id||null,
+      sortOrder:block.sort_order||0,
+      properties:{...(block.properties||{})}
+    });
   }
-  // Route EVERY source through the real soft-delete, not just manual. Before, a
-  // non-manual task (Slack bookmark, brief, recurring, meeting) only got added to
-  // the per-day hide-list below, so its block survived and the "delete" undid
-  // itself on the next reload / new day / re-fold. Folded tasks carry _blockId
-  // (persistence.js); fall back to the old local_id lookup for any path that
-  // didn't stamp it. A pure timeline-JSON item has no block -> blockId stays null
-  // and the overlay is the only (correct) record, since nothing server-side exists.
-  let blockId=null;
-  if(window.blockStore){
-    blockId=ev._blockId
-      ||(window.blockStore.getByType("block").find(b=>(b.properties||{}).local_id===id)||{}).id
-      ||null;
-  }
-  deletedSet.add(id);
+  _deleteUndoSnapshots[id]={ids,rows};
+  ids.forEach(sid=>deletedSet.add(sid));
   saveDeletedState();
-  log("deleted",id,"Removed from schedule: "+(ev?ev.title:id));
+  log("deleted",id,"Removed from schedule: "+(ev.title||id));
   recalcTimes();
   render();
-  if(blockId&&window.blockStore){
-    _deleteUndoTimers[id]={
-      blockId,
-      timer:setTimeout(()=>{
-        const pending=_deleteUndoTimers[id];
-        delete _deleteUndoTimers[id];
-        if(pending&&deletedSet.has(id)){
-          window.blockStore.deleteBlock(pending.blockId).catch(()=>{});
-        }
-      },8000)
-    };
-  }
+  // Offer Undo before awaiting the round-trip, so the affordance is as instant as
+  // the hide. Clicking it mid-flight is safe: the restore creates NEW rows, so
+  // whichever batch the server sees first, the end state is the same.
   if(typeof showToast==="function"){
     showToast("Task deleted","success",8000,{
       label:"Undo",
       onClick:()=>undoDeleteTask(id)
     });
   }
-}
-function undoDeleteTask(id){
-  if(_deleteUndoTimers[id]){
-    clearTimeout(_deleteUndoTimers[id].timer);
-    delete _deleteUndoTimers[id];
+  // One transactional batch, so the subtree is deleted all-or-nothing instead of
+  // half-deleted with stranded children. Deletes are idempotent server-side
+  // (db.deleteBlock just re-stamps deleted_at), so a WAL replay is harmless.
+  if(rows.length&&window.blockStore){
+    try{await window.blockStore.batchOp(rows.map(r=>({op:"delete",id:r.blockId})));}catch(e){}
   }
+}
+// Re-create the snapshotted rows verbatim, parents before children, so notes, tags,
+// source links, prep state, privacy and the subtask/ride-along edges all come back.
+// The restored rows get NEW ids: reviving the original id needs the server-side
+// /undelete route, which lands in B2.
+async function undoDeleteTask(id){
   if(!deletedSet.has(id))return;
-  deletedSet.delete(id);
+  const snap=_deleteUndoSnapshots[id]||{ids:[id],rows:[]};
+  delete _deleteUndoSnapshots[id];
+  snap.ids.forEach(sid=>deletedSet.delete(sid));
   saveDeletedState();
   log("delete-undone",id,"Restored to schedule");
   recalcTimes();
   render();
+  if(snap.rows.length&&window.blockStore){
+    const result=await window.blockStore.batchOp(snap.rows.map(r=>({
+      op:"create",
+      type:r.type,
+      date:r.date,
+      parent_id:r.parentId,
+      sort_order:r.sortOrder,
+      properties:r.properties
+    })));
+    // Re-point the live rows at their restored blocks. A stale _blockId would aim
+    // the next delete at a tombstone instead of the row that now backs the task.
+    for(const b of (result&&result.blocks)||[]){
+      const localId=((b&&b.properties)||{}).local_id;
+      const target=localId&&scheduled.find(e=>String(e.id)===String(localId));
+      if(target)target._blockId=b.id;
+    }
+    render();
+  }
   if(typeof showToast==="function")showToast("Task restored","success",2200);
 }
 function openDeleteConfirmLegacy(id){

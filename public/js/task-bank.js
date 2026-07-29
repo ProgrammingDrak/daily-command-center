@@ -49,18 +49,6 @@
     }) || null;
   }
 
-  function getBacklogDeleteBlock(localId){
-    if(!window.blockStore) return null;
-    return window.blockStore.getByType("block").find(b => {
-      const p = b.properties || {};
-      return p.kind === "backlog_deleted" && p.local_id === localId;
-    }) || null;
-  }
-
-  function isBacklogDeleted(localId){
-    return !!getBacklogDeleteBlock(localId);
-  }
-
   function persistBacklogUpdate(localId, patch){
     const item = (typeof backlog !== "undefined" ? backlog : []).find(t => t.id === localId);
     if(item) Object.assign(item, patch, { updatedAt: new Date().toISOString() });
@@ -80,17 +68,14 @@
     }
   }
 
+  // One delete, same as everywhere else: soft-delete the backing row. The old
+  // fallback minted a tombstone block of its own kind when no backlog block was
+  // found -- a fourth way to hide a task, and dead weight besides, since
+  // hydrateBacklogFromBlocks means every backlog item is block-backed.
   function deleteBacklogTask(localId){
     if(typeof backlog !== "undefined") backlog = backlog.filter(t => t.id !== localId);
     const block = getBacklogBlock(localId);
     if(block && window.blockStore) window.blockStore.deleteBlock(block.id);
-    else if(window.blockStore && !getBacklogDeleteBlock(localId)) {
-      window.blockStore.createBlock("block",{
-        kind:"backlog_deleted",
-        local_id:localId,
-        deleted_at:new Date().toISOString()
-      },{date:null});
-    }
     if(typeof render === "function") render();
   }
 
@@ -201,7 +186,6 @@
   window.startTaskBankBacklogEdit = function(id){ editingBacklogId = id; if(typeof render === "function") render(); };
   window.deleteTaskBankBacklogTask = deleteBacklogTask;
   window.persistTaskBankBacklogUpdate = persistBacklogUpdate;
-  window.isTaskBankBacklogDeleted = isBacklogDeleted;
   window.renderTaskBankTrivialTitle = renderTrivialTitle;
   window.bindTaskBankTrivialEdit = bindTrivialEdit;
   window.startTaskBankTrivialEdit = function(id){ editingTrivialId = id; if(typeof buildTrivialTasks === "function") buildTrivialTasks(); };
