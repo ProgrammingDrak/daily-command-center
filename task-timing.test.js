@@ -18,6 +18,7 @@ function makeHarness() {
   const deleted = [];
   const counts = { query: 0, update: 0 };
   const blockDB = {
+    getBlock: async (id) => blocks.find(x => x.id === id) || null,
     updateBlock: async (id, { properties }) => {
       counts.update++;
       if (String(id).startsWith("boom")) throw new Error("write rejected " + id);
@@ -163,12 +164,54 @@ test("reconcileTiming closes a timer on a row completed through the _done overla
   const n = await timing.reconcileTiming(blocks, { userId: 1, workspaceId: "ws-1" });
   assert.equal(n, 1);
   assert.equal(task.properties.actualMinutes, 18, "real elapsed, measured to the overlay's completion time");
+  assert.equal(task.properties.actualMinutesFrom, "reconcile", "read-derived timing stays distinguishable from a real Slack measurement");
   assert.equal(timerFor(task.id).properties.durSec, 1080);
   assert.match(timerFor(task.id).properties.note, /closed on completion/);
   // The segment is minted mid-read, so it has to be folded into the array the
   // caller is about to return or Day Review shows the time one refresh late.
   assert.equal(blocks.length, before + 1);
   assert.ok(blocks.some(b => b.id === `${task.id}-slacktimer`), "timer row is in the response set");
+});
+
+test("reconcileTiming reverses its derived stamp when the task is un-checked", async () => {
+  const { timing, blocks, deleted, addTask, timerFor } = makeHarness();
+  const task = addTask({ local_id: "t-undo", title: "Reopen me", startedAt: new Date(END - 12 * MIN).toISOString() });
+  const root = dayRoot({ _done: { ids: ["t-undo"], at: { "t-undo": new Date(END).toISOString() } } });
+  blocks.push(root);
+
+  assert.equal(await timing.reconcileTiming(blocks, {}), 1);
+  assert.equal(task.properties.actualMinutes, 12);
+  assert.ok(timerFor(task.id));
+
+  root.properties._done = { ids: [], at: {} };
+  assert.equal(await timing.reconcileTiming(blocks, {}), 1);
+  assert.equal(task.properties.actualMinutes, undefined);
+  assert.equal(task.properties.actualMinutesFrom, undefined);
+  assert.equal(task.properties.notes, undefined);
+  assert.equal(timerFor(task.id), undefined);
+  assert.equal(deleted.length, 1, "the derived Day Review segment is removed too");
+});
+
+test("a real Slack measurement supersedes a derived timing guess", async () => {
+  const { timing, blocks, addTask, timerFor } = makeHarness();
+  const task = addTask({
+    local_id: "t-retime",
+    title: "Retimed",
+    notes: "keep me",
+    startedAt: new Date(END - 20 * MIN).toISOString(),
+  });
+  blocks.push(dayRoot({ _done: { ids: ["t-retime"], at: { "t-retime": new Date(END - 5 * MIN).toISOString() } } }));
+
+  assert.equal(await timing.reconcileTiming(blocks, {}), 1);
+  assert.equal(task.properties.actualMinutes, 15);
+  assert.equal(task.properties.actualMinutesFrom, "reconcile");
+
+  await timing.finalizeTiming({ block: task, endMs: END });
+  assert.equal(task.properties.actualMinutes, 20);
+  assert.equal(task.properties.actualMinutesFrom, undefined);
+  assert.equal((task.properties.notes.match(/⏱/g) || []).length, 1, "the derived note is replaced, not doubled");
+  assert.match(task.properties.notes, /^keep me/);
+  assert.equal(timerFor(task.id).properties.durSec, 1200, "the derived segment is replaced with the measured window");
 });
 
 test("reconcileTiming matches a row by its DB id too, not just local_id", async () => {
