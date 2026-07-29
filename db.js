@@ -13,6 +13,9 @@ const pool = require("./pg-pool");
 // slot-scoring is standalone (it only pulls in public/js/task-types), so this
 // stays acyclic; createItineraryTask uses it to stamp points at write time.
 const { scoreTaskPoints } = require("./slot-scoring");
+// lib/recurrence is pure (no db, no http), so requiring it here stays acyclic;
+// updateBlock's completion hook uses it to reset a responsibility's cadence.
+const recurrence = require("./lib/recurrence");
 
 // ── Workspace Bootstrap ──
 
@@ -132,7 +135,82 @@ async function updateBlock(id, { properties, sort_order, parent_id, date }, clie
   const newDate = date !== undefined ? date : existing.date;
   await q.query(`UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6`, [newProps, newSortOrder, newParentId, newDate, now, id]);
   await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, newProps, now]);
+  // D1 (Track D): if this row is an INSTANCE of a recurring responsibility and it
+  // just crossed the done line, reset its definition's cadence here rather than
+  // asking four separate UI paths to remember to. See propagateResponsibilityDone.
+  await propagateResponsibilityDone({
+    id, before: existing.properties, after: newProps, at: now, client,
+    date: normalizeDate(newDate), workspaceId: existing.workspace_id,
+  });
   return { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
+}
+
+// ── Recurrence completion propagation (dcc-canonical-task-model D1) ──
+//
+// The EAGER half of the one-open-instance invariant. When a block carrying
+// properties.responsibilityId flips to done (or back), the responsibility
+// definition's cadence clock is reset (or restored) right here, so no caller has
+// to remember. Today this fires for the row-level completion writers -- the
+// quick-task API and the Slack ✅ timer -- and once C5 makes status='done' the
+// universal completion signal it fires for everything.
+//
+// It is deliberately NOT the only guarantee. Itinerary completions currently
+// persist to day_root.properties._done rather than to the task row, so
+// responsibility-store's resolveOpenInstances() reconciles from the instance's
+// actual persisted state on every responsibilities read. That derived pass is
+// what makes the pause safe to rely on; this one just makes it instant.
+//
+// Two deliberate limits, both covered by that reconciler:
+//   - skipped when running inside a CALLER's transaction (batchOp,
+//     rescheduleBlocks). A failure there would abort the caller's whole tx and
+//     block a task write over a cadence stamp, which is the wrong trade. No
+//     tx-borne caller writes task completion today.
+//   - never throws. A responsibility row we cannot update must not stop a task
+//     from being marked done.
+//
+// TENANCY: `properties.responsibilityId` is client-supplied on PATCH
+// /api/blocks/:id, so the definition it names must be ownership-checked exactly
+// like assertBlockOwnership would. Without that check a caller could aim this at
+// another workspace's responsibility and either forge a completion (silencing
+// their reminder for a full cadence) or stamp an open instance they control onto
+// it, which the reconciler would then keep reading as "open" -- a permanent,
+// self-sustaining suppression of someone else's recurring work.
+async function propagateResponsibilityDone({ id, before, after, at, date, client, workspaceId }) {
+  if (client) return;
+  try {
+    const beforeProps = typeof before === "string" ? JSON.parse(before) : (before || {});
+    const afterProps = typeof after === "string" ? JSON.parse(after) : (after || {});
+    const respId = afterProps.responsibilityId || beforeProps.responsibilityId;
+    if (!respId) return;
+    const isDone = (p) => p.status === "done" || !!p.completedAt;
+    const wasDone = isDone(beforeProps);
+    const nowDone = isDone(afterProps);
+    if (wasDone === nowDone) return;
+
+    // getBlock rather than a bespoke SELECT: it is this file's own read primitive
+    // and already handles the properties parse.
+    const definition = await getBlock(respId);
+    if (!definition || definition.deleted_at) return;
+    if (definition.workspace_id && workspaceId && definition.workspace_id !== workspaceId) return;
+    const defProps = definition.properties || {};
+    if (defProps.kind !== "responsibility_item") return;
+
+    const next = nowDone
+      ? recurrence.applyCompletion(defProps, { completedAt: afterProps.completedAt || at, taskId: id })
+      // `date` is the block's date COLUMN, threaded in from the caller. Reading it
+      // off properties (where it does not live) left openInstanceDate null, which
+      // disabled BOTH the day-overlay lookup and the past-dated safety valve and
+      // made the restored pause unexpirable.
+      : recurrence.applyUncompletion(defProps, { blockId: id, localId: afterProps.local_id || null, date: date || null });
+
+    // Reuse updateBlock rather than hand-rolling the UPDATE + operations pair: it
+    // owns that pairing everywhere else in this file. Re-entry is bounded because
+    // a responsibility_item carries no responsibilityId of its own, so the nested
+    // call returns at the `!respId` guard above.
+    await updateBlock(respId, { properties: next });
+  } catch (e) {
+    console.warn("[db:propagateResponsibilityDone] non-fatal", e && e.message);
+  }
 }
 
 async function deleteBlock(id, client) {
@@ -545,6 +623,20 @@ async function findResponsibilityTaskByAlertKey(alertKey, workspaceId) {
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
+// Find a block by the CLIENT-minted id the browser stores in properties.local_id.
+// Same shape as findResponsibilityTaskByAlertKey above. Deliberately keeps
+// soft-deleted rows: the recurrence reconciler treats "deleted" as a signal, and a
+// row it cannot see at all is indistinguishable from one that was never created.
+// Date-independent on purpose, so an instance dragged to another day is still
+// found (nothing re-stamps the definition when a task is rescheduled).
+async function findBlockByLocalId(localId, workspaceId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks WHERE properties->>'local_id'=$1 AND ($2::text IS NULL OR workspace_id=$2) ORDER BY updated_at DESC LIMIT 1`,
+    [localId, workspaceId || null]
+  );
+  return rows[0] ? parseBlock(rows[0]) : null;
+}
+
 // apply-forward: distinct future dates (after fromDate) that still have live
 // blocks in this workspace, ascending. Returns bare YYYY-MM-DD strings.
 async function getFutureDatesWithBlocks(fromDate, workspaceId) {
@@ -564,5 +656,5 @@ module.exports = {
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
-  findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, getFutureDatesWithBlocks
+  findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, getFutureDatesWithBlocks
 };

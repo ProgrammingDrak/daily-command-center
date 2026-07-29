@@ -38,5 +38,12 @@
     return "green";
   }
 
-  window.urgency = { timing, score, scoreClass };
+  // The due line: at or above this a repeat responsibility surfaces in the
+  // triage strip and the "due" sidebar filter. Was hardcoded in four places
+  // (three in responsibilities.js, one in routes/blocks.js). The server's copy
+  // is DUE_THRESHOLD in lib/recurrence.js -- one constant per runtime, and the
+  // two must agree.
+  const DUE_THRESHOLD = 70;
+
+  window.urgency = { timing, score, scoreClass, DUE_THRESHOLD };
 })();

@@ -29,6 +29,7 @@ const {
   firstFreeSlot, minutesToHHMM, hhmmToMinutes, taskDuration,
   buildResponsibilityTaskProps, parseOffersAmpAlert,
   normalizeResponsibility, defaultSubtasksForResponsibility,
+  DUE_THRESHOLD, writableProps,
 } = require("../responsibility-store");
 
 module.exports = function mount(app, ctx) {
@@ -232,7 +233,14 @@ module.exports = function mount(app, ctx) {
   // now the single POST /api/dcc/quick-task handler.
 
   // ── Responsibilities API ──
-  app.get("/api/responsibilities", route(async (req) => ({ items: await respStore.getResponsibilityBlocks(req.workspaceId) })));
+  // `tz` is the browser's IANA zone (Intl.DateTimeFormat().resolvedOptions()).
+  // The preferred-completion-day floor is a CALENDAR-DAY test, so computing it
+  // in the Node process's zone gave the wrong answer for a 5-6 hour window
+  // every day on a UTC host with a US-Central user -- and the client trusted
+  // this server value over its own. Optional, so an older client is unaffected.
+  app.get("/api/responsibilities", route(async (req) => ({
+    items: await respStore.getResponsibilityBlocks(req.workspaceId, { tz: (req.query && req.query.tz) || null }),
+  })));
 
   // Kept an explicit try/catch (not route()) so the enriched apiErrorMessage
   // (message · detail · code) survives — these accept freeform properties JSON
@@ -257,7 +265,10 @@ module.exports = function mount(app, ctx) {
       const existing = await respStore.getResponsibilityBlock(req.params.id, req.workspaceId);
       if (!existing) return res.status(404).json({ error: "Responsibility not found" });
       const incoming = (req.body && req.body.properties) || req.body || {};
-      const merged = { ...existing.properties, ...incoming, kind: existing.properties.kind, updatedAt: new Date().toISOString() };
+      // writableProps: `existing` is normalized, so a raw merge would persist the
+      // derived importanceScore / suppressed / preferredDue into the row and its
+      // operations-log entry, freezing a stale answer for the next raw reader.
+      const merged = { ...writableProps(existing.properties), ...incoming, kind: existing.properties.kind, updatedAt: new Date().toISOString() };
       const updated = normalizeResponsibility(await blockDB.updateBlock(req.params.id, { properties: merged }));
       broadcast("blocks-changed", { action: "responsibility-update", blockIds: [updated.id] }, req.workspaceId);
       res.json(updated);
@@ -290,33 +301,104 @@ module.exports = function mount(app, ctx) {
     return result;
   }));
 
-  app.post("/api/responsibilities/:id/complete", route(async (req, res) => {
-    const responsibility = await respStore.getResponsibilityBlock(req.params.id, req.workspaceId);
-    if (!responsibility || responsibility.properties.kind !== "responsibility_item") { res.status(404).json({ error: "Responsibility not found" }); return; }
-    const at = (req.body && req.body.completedAt) || new Date().toISOString();
-    const updated = normalizeResponsibility(await blockDB.updateBlock(req.params.id, {
-      properties: {
-        ...responsibility.properties,
-        lastCompletedAt: at,
-        updatedAt: at,
-        lastCompletedTaskId: req.body && req.body.taskId || null
-      }
-    }));
-    broadcast("blocks-changed", { action: "responsibility-complete", blockIds: [updated.id] }, req.workspaceId);
+  // ── Recurrence lifecycle (D1) ──
+  // Five sibling handlers, all thin: validate the id is a responsibility_item,
+  // delegate the property transition to responsibility-store (which delegates
+  // the shape to lib/recurrence.js), broadcast, return. The old /complete body
+  // hand-rolled its own property merge; it now shares the one writer so
+  // previousCompletedAt gets recorded and the open-instance pause gets cleared.
+  // `tz` on a lifecycle POST is the caller's IANA zone, same contract as the GET:
+  // the date gates (skipUntil / pausedUntil) and the preferred-day floor are
+  // calendar-day tests, so they have to be evaluated on the USER's day.
+  const respTz = (req) => (req.body && req.body.tz) || (req.query && req.query.tz) || null;
+
+  async function respLifecycle(req, res, action, run) {
+    const tz = respTz(req);
+    const responsibility = await respStore.getResponsibilityBlock(req.params.id, req.workspaceId, { tz });
+    if (!responsibility || responsibility.properties.kind !== "responsibility_item") {
+      res.status(404).json({ error: "Responsibility not found" });
+      return null;
+    }
+    // The row is handed to the writer so it is read once per request, not twice.
+    const updated = await run(responsibility, tz);
+    if (!updated) { res.status(404).json({ error: "Responsibility not found" }); return null; }
+    broadcast("blocks-changed", { action, blockIds: [updated.id] }, req.workspaceId);
     return updated;
+  }
+
+  app.post("/api/responsibilities/:id/complete", route(async (req, res) => respLifecycle(req, res, "responsibility-complete", (existing, tz) =>
+    respStore.markResponsibilityComplete(req.params.id, req.workspaceId, {
+      completedAt: (req.body && req.body.completedAt) || new Date().toISOString(),
+      taskId: (req.body && req.body.taskId) || null,
+      existing, tz,
+    })
+  )));
+
+  // Un-checking a task puts the cadence clock back where it was. Without this
+  // an accidental check-off silently pushed the next occurrence a full cycle out
+  // with no way to undo it.
+  app.post("/api/responsibilities/:id/uncomplete", route(async (req, res) => respLifecycle(req, res, "responsibility-uncomplete", (existing, tz) =>
+    respStore.markResponsibilityIncomplete(req.params.id, req.workspaceId, {
+      blockId: (req.body && req.body.blockId) || null,
+      localId: (req.body && req.body.localId) || null,
+      date: (req.body && req.body.date) || null,
+      existing, tz,
+    })
+  )));
+
+  // Skip this cycle -- distinct from Complete on purpose, so the item can be
+  // dismissed without claiming it was done. Urgency keeps accruing underneath.
+  app.post("/api/responsibilities/:id/skip", route(async (req, res) => respLifecycle(req, res, "responsibility-skip", (existing, tz) =>
+    respStore.skipResponsibilityCycle(req.params.id, req.workspaceId, { existing, tz })
+  )));
+
+  // `until` is validated at the edge, matching every other date-taking handler in
+  // this file: an un-dated value string-compares either above every real date (a
+  // silent permanent pause) or below it (a silent no-op), and neither deserves a 200.
+  app.post("/api/responsibilities/:id/pause", route(async (req, res) => {
+    const until = (req.body && req.body.until) || null;
+    if (until && until !== "forever" && !isValidDate(until)) { res.status(400).json({ error: "until must be YYYY-MM-DD" }); return; }
+    return respLifecycle(req, res, "responsibility-pause", (existing, tz) =>
+      respStore.pauseResponsibility(req.params.id, req.workspaceId, { until: until === "forever" ? null : until, existing, tz }));
+  }));
+
+  app.post("/api/responsibilities/:id/resume", route(async (req, res) => respLifecycle(req, res, "responsibility-resume", (existing, tz) =>
+    respStore.resumeResponsibility(req.params.id, req.workspaceId, { existing, tz })
+  )));
+
+  // Register an instance the CLIENT minted. public/js/responsibilities.js
+  // schedules through insertTaskNow/materializeShellTemplate rather than
+  // POST /:id/schedule, so the server scheduler's stamp is not on that path and
+  // the browser reports the instance here instead. `blockId` is usually the
+  // browser's local_id rather than a row id; the reconciler resolves either shape.
+  app.post("/api/responsibilities/:id/instance", route(async (req, res) => {
+    const date = (req.body && req.body.date) || null;
+    if (date && !isValidDate(date)) { res.status(400).json({ error: "date must be YYYY-MM-DD" }); return; }
+    return respLifecycle(req, res, "responsibility-instance", (existing, tz) =>
+      respStore.setOpenInstance(req.params.id, req.workspaceId, {
+        blockId: (req.body && req.body.blockId) || null,
+        localId: (req.body && req.body.localId) || null,
+        date, existing, tz,
+      }));
   }));
 
   app.post("/api/responsibilities/auto-schedule", route(async (req) => {
-    const threshold = Number((req.body && req.body.threshold) || 70);
+    const threshold = Number((req.body && req.body.threshold) || DUE_THRESHOLD);
     const limit = Math.max(1, Math.min(10, Number((req.body && req.body.limit) || 3)));
     const buckets = Array.isArray(req.body && req.body.capacityBuckets) ? new Set(req.body.capacityBuckets) : null;
     const { userId, workspaceId } = await resolveOwnerStrict(req);
-    const items = (await respStore.getResponsibilityBlocks(workspaceId))
+    // Filter and sort on the score getResponsibilityBlocks ALREADY stamped with the
+    // caller's zone, instead of recomputing it zone-less. Recomputing evaluated the
+    // pause/skip date gates against the Node process's calendar day, so on a UTC
+    // host a Skip set on a US evening read as lapsed and this endpoint would
+    // re-materialize a task the user had just dismissed.
+    const score = (b) => Number((b.properties || {}).importanceScore || 0);
+    const items = (await respStore.getResponsibilityBlocks(workspaceId, { tz: respTz(req) }))
       .filter(b => (b.properties || {}).kind === "responsibility_item")
       .filter(b => (b.properties || {}).status !== "archived")
       .filter(b => !buckets || buckets.has((b.properties || {}).capacityBucket))
-      .filter(b => respStore.responsibilityScore(b.properties) >= threshold)
-      .sort((a, b) => respStore.responsibilityScore(b.properties) - respStore.responsibilityScore(a.properties))
+      .filter(b => score(b) >= threshold)
+      .sort((a, b) => score(b) - score(a))
       .slice(0, limit);
     // Load the day once and thread its growing blockers array through every
     // placement, so N responsibilities cost one day-load instead of N.
