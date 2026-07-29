@@ -208,14 +208,25 @@ function convertTaskType(id,newType){
     showToast(msg,"success",2400);
   }
 }
+// Carryover rows get their own fan, the same way meetings do. Every spoke on the
+// task fan resolves its id against today's scheduled[] (lock, convert, delegate,
+// promote, subtask-add), which a past-day row isn't in — so instead of a fan of
+// no-ops it gets the four actions that ARE real for it, all routed through the
+// shared DCC.Carryover set. `acts` supplies the row-bound handlers.
+function buildCarryoverRadialItems(ev,trig,acts){
+  const items=[
+    {icon:"📅", label:"Move…",   onPick:()=>acts.move(trig)},
+    {icon:"💡", label:"Backlog", onPick:()=>acts.backlog()},
+  ];
+  if(typeof openPomodoro==="function")
+    items.push({icon:"🍅", label:"Pomodoro", onPick:()=>openPomodoro(ev.title,dur(ev),{id:ev.id,source:"carryover",title:ev.title})});
+  items.push({icon:"🗑", label:"Drop", onPick:()=>acts.drop()});
+  return items;
+}
 const _TASK_RADIAL_OPTS={a0:90,a1:270,r:140,labelStagger:true,clampY:true};
 function openTaskRadial(ev,trig,opts){
-  // Unfinished rows aren't scheduled[] tasks, so the fan's scheduled-task spokes
-  // would no-op. The arrow opens the shared date picker directly and routes the
-  // pick through the caller's true-move handler.
-  if(opts&&opts.unfinished){
-    if(typeof openDatePickPopover==="function")
-      openDatePickPopover(trig,{header:'Move "'+escHtml(ev.title)+'" to…',actionLabel:"Move",onPick:opts.onReschedule});
+  if(opts&&opts.carryover){
+    openRadialMenu(trig,buildCarryoverRadialItems(ev,trig,opts.carryover),_TASK_RADIAL_OPTS);
     return;
   }
   // 180° left-opening fan: the trigger lives at the row's right edge, so the
@@ -243,10 +254,11 @@ function _applySectionSort(items,mode,getTitle,getCreated){
 // Order the Unscheduled section (untimed today tasks + past-day carryovers) by
 // the persisted manual (drag) order. Rows with no saved position sink to the
 // end — untimed above carryovers, each newest-created first — so a freshly
-// surfaced row lands on top until dragged. `rows` is untimedItems.concat(unfEvs).
+// surfaced row lands on top until dragged. Applied per section (untimed today /
+// carryovers) against ONE persisted order, so a drag across the two still sticks.
 function _orderUnscheduled(rows){
   const order=(typeof loadUnscheduledOrder==="function")?loadUnscheduledOrder():[];
-  const created=ev=>ev.__unf?(ev.__unf.createdAt||ev.__unf.sourceDate||""):(ev.createdAt||"");
+  const created=_unsCreated;
   if(!order.length)return rows;
   const pos={};order.forEach((id,i)=>{pos[id]=i;});
   return rows.slice().sort((a,b)=>{
@@ -258,22 +270,28 @@ function _orderUnscheduled(rows){
     return String(created(b)).localeCompare(String(created(a)));
   });
 }
-// Current Unscheduled-section row ids in DOM (display) order.
+// Current row ids of the Unscheduled drag group in DOM (display) order. The group
+// is two headers now — "Unscheduled" (untimed today) and "Unfinished" (carryovers) —
+// so walk every section tagged .uns-group and keep ONE persisted order across both.
 function _unscheduledRowIds(){
-  const sec=document.querySelector('.it-list-section[data-section="unscheduled"]');
-  if(!sec)return [];
-  const ids=[];let n=sec.nextElementSibling;
-  while(n&&!n.classList.contains("it-list-section")){
-    if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
-    n=n.nextElementSibling;
-  }
+  const ids=[];
+  document.querySelectorAll("#list-view .it-list-section.uns-group").forEach(sec=>{
+    let n=sec.nextElementSibling;
+    while(n&&!n.classList.contains("it-list-section")){
+      if(n.classList.contains("it-list-item")&&n.dataset.id)ids.push(n.dataset.id);
+      n=n.nextElementSibling;
+    }
+  });
   return ids;
 }
-// Resolve a past-day carryover ("Unfinished from …") record by the id its row
-// carries (sourceLocalId||sourceId). Null when the id isn't a carryover.
+// Creation order for the Unscheduled section. Carryovers now carry a real
+// createdAt (TaskModel.fromBlock), so the origin date is only the fallback.
+function _unsCreated(ev){return (ev&&(ev.createdAt||(ev.__unf&&ev.__unf.sourceDate)))||"";}
+// Resolve a past-day carryover ("Unfinished from …") row by its id. Null when the
+// id isn't a carryover.
 function _unfRecById(id){
   if(!_unfinishedCache||!Array.isArray(_unfinishedCache.rows))return null;
-  return _unfinishedCache.rows.find(r=>(r.sourceLocalId||r.sourceId)===id)||null;
+  return _unfinishedCache.rows.find(ev=>ev.id===id)||null;
 }
 // Reorder within the Unscheduled section. Works across both id spaces (untimed
 // scheduled[] tasks + carryovers) off the rendered DOM order. Persists the
@@ -291,30 +309,18 @@ function _reorderUnscheduled(movedId,targetId,after,bothUntimed){
   if(typeof saveTaskOrder==="function")saveTaskOrder();
   if(typeof render==="function")render();
 }
-// Schedule a carryover into TODAY at the drop slot: a cross-day true-move that
-// leaves the amber "Rescheduled away" marker on the origin day. Mirrors the
-// radial reschedule (_unfMoveTo) but seeds the slot from the drop target.
+// Schedule a carryover into TODAY at the drop slot: the shared cross-day true-move
+// (DCC.Carryover.moveTo — subtree included, amber "Rescheduled away" marker left on
+// the origin day), with the slot seeded from the drop target.
 async function _unfScheduleIntoToday(rec,targetEv,after){
-  if(!rec||!targetEv||!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
+  const CO=window.DCC&&window.DCC.Carryover;
+  if(!rec||!targetEv||!CO)return;
   const today=(typeof _actualTodayStr==="function")?_actualTodayStr():((__state&&__state.date)||new Date().toISOString().slice(0,10));
-  const d=rec.durMin||30;
+  const d=Math.max(1,dur(rec)||30);
   let s=after?pt(targetEv.end):Math.max(0,pt(targetEv.start)-d);
   if(!(s>=0))s=pt(targetEv.start);
-  window.__RESCHEDULE_IN_FLIGHT__=true;
-  try{
-    await window.blockStore.rescheduleBlock(rec.sourceId,today,{parentStart:fmt(s),parentEnd:fmt(s+d)});
-  }catch(e){
-    if(typeof showToast==="function")showToast("Could not schedule "+rec.title,"error");
-    window.__RESCHEDULE_IN_FLIGHT__=false;return;
-  }
-  window.__RESCHEDULE_IN_FLIGHT__=false;
-  _unfRemoveRow(rec);
-  if(typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(rec.sourceDate);
-  if(typeof log==="function")log("rescheduled",rec.sourceId,"Unfinished scheduled into today: "+rec.title);
-  if(typeof showToast==="function")showToast("Scheduled today: "+rec.title,"success");
-  try{await window.blockStore.loadDay(today);}catch(e){}
-  if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
-  if(typeof recalcTimes==="function")recalcTimes();
+  const res=await CO.moveTo(rec,today,{slot:{start:fmt(s),end:fmt(s+d)},pool:_unfRows()});
+  if(res)_unfDropRows(res.removed);
   if(typeof render==="function")render();
 }
 // Drop router for the Unscheduled section, called from dDrop before its
@@ -360,10 +366,36 @@ function _ensureUnfinished(today){
     .catch(()=>{ _unfinishedCache={rows:[],total:0}; _unfinishedFetchedFor=today; })
     .finally(()=>{ _unfinishedLoading=false; buildListView(); });
 }
-function _unfRemoveRow(r){
-  if(!_unfinishedCache)return;
-  _unfinishedCache.rows=_unfinishedCache.rows.filter(x=>x!==r);
-  _unfinishedCache.total=Math.max(0,(_unfinishedCache.total||1)-1);
+function _unfRows(){return (_unfinishedCache&&Array.isArray(_unfinishedCache.rows))?_unfinishedCache.rows:[];}
+// subtaskProgress with the ORIGIN-day done predicate. The shared helper reads
+// isDone(), i.e. today's manualDone set, which knows nothing about a completion
+// recorded on the carryover's own day — so a parent carried over with 2 of 5 steps
+// finished read "0/3". C6 folds the two back together when the predicate becomes a
+// row field. Recursive over subtask descendants; _seen guards data cycles.
+function _unfProgress(id,pool,_seen){
+  _seen=_seen||new Set();
+  if(_seen.has(id))return null;
+  _seen.add(id);
+  const subs=(pool||[]).filter(c=>c.subtaskOf===id);
+  if(!subs.length)return null;
+  let done=0,total=0;
+  subs.forEach(s=>{
+    total++;
+    if(s.__unf&&s.__unf.done)done++;
+    const sub=_unfProgress(s.id,pool,_seen);
+    if(sub){total+=sub.total;done+=sub.done;}
+  });
+  return {done,total};
+}
+// Drop actioned rows (a parent and everything the action carried with it) out of
+// the cached lane so the re-render doesn't show them until the next collection.
+function _unfDropRows(ids){
+  if(!_unfinishedCache||!Array.isArray(ids)||!ids.length)return;
+  const gone=new Set(ids);
+  // total counts OPEN rows, so only those decrement it (done children ride along).
+  const removedOpen=_unfinishedCache.rows.filter(ev=>gone.has(ev.id)&&!(ev.__unf&&ev.__unf.done)).length;
+  _unfinishedCache.rows=_unfinishedCache.rows.filter(ev=>!gone.has(ev.id));
+  _unfinishedCache.total=Math.max(0,(_unfinishedCache.total||0)-removedOpen);
 }
 function _unfPrettyDate(iso){
   const d=new Date(iso+"T00:00:00");
@@ -376,22 +408,10 @@ function _unfSlashDate(iso){
   const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso||""));
   return m?m[2]+"/"+m[3]+"/"+m[1]:String(iso||"");
 }
-// Present an Unfinished entry (a raw past-day block) as an ev so the shared
-// row() builder renders it exactly like a normal task. The override handlers
-// read the raw block back off __unf; id is the block's own scheduled id so any
-// notes on the task carry over. end := start+durMin so dur(ev) === durMin.
-function _unfToEv(r){
-  const start=r.start||"00:00";
-  return {
-    id:r.sourceLocalId||r.sourceId,
-    title:r.title,
-    type:r.type||"task",
-    start,
-    end:fmt(pt(start)+r.durMin),
-    source:r.source,
-    __unf:r
-  };
-}
+// (_unfToEv is gone: the collector hands out REAL evs now — TaskModel.fromBlock,
+// the same projection the work list uses — with an __unf provenance stamp. The old
+// 7-field narrowing was the second hop that stripped source_id / tags / prep /
+// privacy / the parent edge, which is why a carryover row rendered as a stub.)
 
 // ── Habit streaks (display-only) ───────────────────────────────────────────
 // For each habit (keyed by normalized title), how many consecutive days BEFORE
@@ -508,9 +528,17 @@ function buildListView(){
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
 
-  function section(title,count,sortKey){
+  // The carryover pool for this render — every unfinished past-day row, parents and
+  // children alike. row() and flattenSchedule do their tree lookups against it (a
+  // child nests under its parent instead of standing alone as its own task).
+  // Assigned below, before any "unfinished" row is built.
+  let unfPool=[];
+
+  // groupClass tags a section as part of the Unscheduled drag group so
+  // _unscheduledRowIds can span the split Unscheduled / Unfinished headers.
+  function section(title,count,sortKey,groupClass){
     const el=document.createElement("div");
-    el.className="it-list-section";
+    el.className="it-list-section"+(groupClass?" "+groupClass:"");
     if(sortKey)el.dataset.section=sortKey;   // drag reorder reads rows under [data-section]
     let html='<span>'+title+'</span>'+(count?'<b>'+count+'</b>':'');
     if(sortKey){
@@ -547,10 +575,11 @@ function buildListView(){
   function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
     const isPushedRow=mode==="pushed";
-    // Unfinished: a past-day block rendered through the shared row (see _unfToEv).
-    // No bounty/start-time; complete/reschedule/delete are overridden. It IS
-    // draggable though — carryovers behave like Unscheduled tasks (reorder among
-    // them, or drag onto a timed row to schedule into today).
+    // Unfinished: a past-day carryover ev (TaskModel.fromBlock + an __unf origin
+    // stamp) rendered through this same builder with the same affordances. Its
+    // complete/move/drop route to the origin day (see the _unf* bindings below).
+    // Draggable like an Unscheduled task: reorder among them, or drag onto a timed
+    // row to schedule into today.
     const isUnfRow=mode==="unfinished";
     const r=isUnfRow?ev.__unf:null;
     // userMovable already excludes meetings/ooo/break (registry-aware). Carryover
@@ -559,8 +588,12 @@ function buildListView(){
     const c=cfg(ev.type);
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
-    const bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,scheduled):null;
-    const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,scheduled):null;
+    // Tree lookups run against the row's OWN pool: today's plan for a work-list
+    // row, the carryover pool for a carryover. Both helpers already take a pool,
+    // so "2/5 subtasks" and the ride-along band work on the lane for free.
+    const pool=isUnfRow?unfPool:scheduled;
+    const bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,pool):null;
+    const prog=isUnfRow?_unfProgress(ev.id,pool):((typeof subtaskProgress==="function")?subtaskProgress(ev.id,pool):null);
     // Subtask variant: same list row, lighter, with a point-pie slice chip in place
     // of the duration/clock while timeless. Shares every affordance below.
     const subRow=!!(node&&node.rel==="subtask");
@@ -596,13 +629,23 @@ function buildListView(){
     const recQueued=(openRow&&isMeeting(ev)&&ev.recordingReview&&!ev.dashboardRef)?'<span class="prep-flag rec-queued" title="Queued for recording review">&#128252; Review</span>':'';
     const recFlag=(openRow&&isMeeting(ev)&&ev.dashboardRef)?'<a class="prep-flag rec-flag" href="/meetings/'+encodeURIComponent(ev.id)+'/dashboard" target="_blank" rel="noopener" title="Open the recording review dashboard" onclick="event.stopPropagation()" style="text-decoration:none">&#9654; Recording</a>':'';
     const streakChip=openRow?habitStreakChip(ev):'';
+    // Two affordances still stay OFF a carryover row, for one reason: they write
+    // into TODAY's pool relative to a parent that isn't in it, so they can only be
+    // dead buttons until a carryover is a first-class row (Track C, C4 "one home
+    // for unscheduled work"):
+    //   • the row "+" — addSubtask/addTaskAdjacent (tabs.js) resolve the anchor in
+    //     scheduled[] and bail; a subtask created against a past-day parent lands
+    //     on today as an orphan.
+    //   • the bounty — placeBounty (state.js) resolves scheduled[] and returns; the
+    //     day's bounty is a today-points mechanic and a carryover completes on its
+    //     ORIGIN day.
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(subRow?'·':(idx+1))+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
       '<div class="it-list-check-col">'+
         '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isUnfRow?'Mark done on '+escHtml(_unfPrettyDate(r.sourceDate)):(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')))+'">'+ckSvg+'</button>'+
-        (!isDoneRow&&!isUnfRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="Quick complete">&#9889;</button>':'')+
+        (!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="'+(isUnfRow?'Quick complete on '+escHtml(_unfPrettyDate(r.sourceDate)):'Quick complete')+'">&#9889;</button>':'')+
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
@@ -612,10 +655,12 @@ function buildListView(){
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
           (subTimeless?'':'<span>'+ms(dur(ev))+'</span>')+
           chipSlot+streakChip+
-          (subTimeless||isUnfRow?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
+          (subTimeless?'':(ev.untimed?'<span class="it-list-untimed">Unscheduled</span>':(!isDoneRow?'<span class="start-time'+(ev._pinnedStart?' pinned':'')+'" data-start-id="'+ev.id+'" title="Click to adjust start time">'+f12(ev.start)+' - '+f12(ev.end)+'</span>':'<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>')))+
           // Schedule/reschedule right where the time is labeled (and next to
-          // "Unscheduled" for untimed tasks). Reschedulable rows only.
-          (!subTimeless&&!isUnfRow&&!isDoneRow&&!isMeeting(ev)?'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>':'')+
+          // "Unscheduled" for untimed tasks). Reschedulable rows only — carryovers
+          // very much included: getting a task off a past day and onto a real one
+          // is the whole point of the lane.
+          (!subTimeless&&!isDoneRow&&!isMeeting(ev)?'<button class="btn-schedule" data-schedule-id="'+ev.id+'" data-tooltip="Schedule…" aria-label="Schedule">'+_calSvg+'</button>':'')+
           (isUnfRow?'<span class="it-list-unfinished">Unfinished from '+escHtml(_unfSlashDate(r.sourceDate))+'</span>':'')+
           (ev._locked||isMeeting(ev)?'<span class="it-list-lock" title="'+(isMeeting(ev)?'Calendar time — holds during reflow; drag or click the time to move it':'Locked — holds its time when tasks reflow')+'"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>':'')+
           // Prep briefing chip: same markup + CSS as the timeline card (itinerary-card.js),
@@ -644,15 +689,17 @@ function buildListView(){
 
     el.querySelector(".it-list-check").addEventListener("click",e=>{
       e.stopPropagation();
-      // Unfinished completes on its ORIGIN day, not today — no scheduled[] task to toggle.
-      if(isUnfRow){_unfComplete(r,el);return;}
+      // Unfinished completes on its ORIGIN day, not today — no scheduled[] task to
+      // toggle. _unfComplete carries the subtree (the old handler didn't, so a
+      // carryover parent's children stayed unfinished forever).
+      if(isUnfRow){_unfComplete(ev,el);return;}
       // Blocked rollup container: skip the notes modal, let toggleDone toast why.
       if(isDoneRow||chkBlocked)toggleDone(ev.id);
       else openDoneModal(ev.id,ev.title,()=>toggleDone(ev.id),ev);
     });
     const quick=el.querySelector(".chk-quick");
-    if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");toggleDone(ev.id);});
-    const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
+    if(quick)quick.addEventListener("click",e=>{e.stopPropagation();quick.classList.add("flash");if(isUnfRow){_unfComplete(ev,el);return;}toggleDone(ev.id);});
+    const stSpan=el.querySelector(".start-time");if(stSpan)stSpan.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,el,stSpan);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:stSpan,view:"time"});});
     // Prep chip opens the prep briefing (radial Prep/Recap spoke), not the row's
     // details modal. stopPropagation keeps the row click from also firing.
     const pf=el.querySelector(".prep-flag");
@@ -661,20 +708,27 @@ function buildListView(){
     const rf=el.querySelector(".recap-flag");
     if(rf)rf.addEventListener("click",e=>{e.stopPropagation();openMeetingPanel(ev,{defaultTab:"recap"});});
     const sb=el.querySelector(".btn-schedule");
-    if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
+    if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfSchedulePopover(ev,el,sb);return;}if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
     const pb=el.querySelector(".btn-task-radial");
-    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb,isUnfRow?{unfinished:true,onReschedule:(d)=>_unfMoveTo(r,el,d)}:undefined);});
+    if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb,isUnfRow?{carryover:{
+      move:(trig)=>_unfSchedulePopover(ev,el,trig),
+      backlog:()=>_unfToBacklog(ev,el),
+      drop:()=>_unfDrop(ev,el)
+    }}:undefined);});
     const bb=el.querySelector(".btn-bounty");
     if(bb)bb.addEventListener("click",e=>{e.stopPropagation();if(typeof placeBounty==="function")placeBounty(bb.dataset.bountyId);});
     const del=el.querySelector(".btn-del-task");
-    if(del)del.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfDrop(r,el);return;}openDeleteConfirm(del.dataset.delId);});
+    if(del)del.addEventListener("click",e=>{e.stopPropagation();if(isUnfRow){_unfDrop(ev,el);return;}openDeleteConfirm(del.dataset.delId);});
     const cc=el.querySelector(".wrap-collapse");
     if(cc)cc.addEventListener("click",e=>{e.stopPropagation();if(typeof toggleCollapsed==="function"){toggleCollapsed(ev.id);render("schedule");}});
     // Row-level quick add: same universal popover the radial's ➕ spoke opens.
     const am=el.querySelector(".row-add-menu");
     if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     // Open space on the row opens the task-details modal (same as the pen).
-    // Unfinished rows are past-day pseudo-tasks, not in scheduled[] — skip them.
+    // Carryovers skip it: openAddModal (features.js) resolves the task in
+    // scheduled[] and its notes/tag writes land on the VIEWED day, so on a
+    // past-day row it would render an empty shell and silently save to the wrong
+    // day. Re-enable with C4, when a carryover is a real row in the pool.
     if(!isUnfRow)el.addEventListener("click",e=>{
       if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
       if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
@@ -760,23 +814,43 @@ function buildListView(){
     _ensureUnfinished(actualToday);
     unf=_unfinishedCache;
   }
-  const unfEvs=(unf&&unf.rows.length)?unf.rows.map(_unfToEv):[];
-  if(untimedItems.length||unfEvs.length){
-    section("Unscheduled",untimedItems.length+((unf&&unf.total)||0),"unscheduled");
-    const uMode=_sectionSort("unscheduled");
-    // Manual (default): untimed tasks + past-day carryovers ordered by the
-    // persisted drag order, all draggable (see row() / handleUnscheduledDrop).
-    // A-Z/New: sort untimed + carryovers together, as before.
+  unfPool=(unf&&Array.isArray(unf.rows))?unf.rows:[];
+  const uMode=_sectionSort("unscheduled");
+  if(untimedItems.length){
+    section("Unscheduled",untimedItems.length,"unscheduled","uns-group");
     const unsRows=_sectionSortIsManual(uMode)
-      ? _orderUnscheduled(untimedItems.concat(unfEvs))
-      : _applySectionSort(untimedItems.concat(unfEvs),uMode,
-          ev=>ev.title,
-          ev=>ev.__unf?(ev.__unf.createdAt||ev.__unf.sourceDate||""):(ev.createdAt||""));
-    unsRows.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,ev.__unf?"unfinished":"open")));
-    if(unf&&unf.total>unf.rows.length){
+      ? _orderUnscheduled(untimedItems)
+      : _applySectionSort(untimedItems,uMode,ev=>ev.title,_unsCreated);
+    unsRows.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
+  }
+  // Carryovers get their OWN header and count. One badge used to mean three things
+  // (untimed-today + carryover rows shown + carryover total), so no number on the
+  // page matched anything you could point at.
+  if(unfPool.length){
+    // Only OPEN rows render. Rows already finished on their origin day ride along in
+    // unfPool purely so a parent's "2/5 subtasks" can count them (same as the work
+    // list, where a done subtask folds into its parent instead of listing).
+    const openRows=unfPool.filter(ev=>!(ev.__unf&&ev.__unf.done));
+    // Roots = rows whose parent isn't itself unfinished. A child of an unfinished
+    // parent nests under it; a genuine orphan (parent done or gone) stays top-level,
+    // which is what we want — standalone work must never disappear.
+    const roots=openRows.filter(ev=>{const p=parentIdOf(ev);return !p||!openRows.some(x=>x.id===p);});
+    const rootOrder=_sectionSortIsManual(uMode)
+      ? _orderUnscheduled(roots)
+      : _applySectionSort(roots,uMode,ev=>ev.title,_unsCreated);
+    section("Unfinished",roots.length,null,"uns-group");
+    // Roots first in display order, then the rest of the open rows so flattenSchedule
+    // can still resolve children (it walks each root's subtree via childrenOf and
+    // skips any row whose parent is in the list).
+    const rootIds=new Set(rootOrder.map(ev=>ev.id));
+    let rank=0;
+    flattenSchedule(rootOrder.concat(openRows.filter(ev=>!rootIds.has(ev.id)))).forEach(node=>{
+      wrap.appendChild(emitNode(node,node.rel==="subtask"?0:rank++,"unfinished"));
+    });
+    if(unf&&unf.total>openRows.length){
       const more=document.createElement("div");
       more.className="it-list-empty";
-      more.textContent="+"+(unf.total-unf.rows.length)+" more unfinished — complete or reschedule some to see the rest.";
+      more.textContent="+"+(unf.total-openRows.length)+" more unfinished — open Catch up to work through the rest.";
       wrap.appendChild(more);
     }
   }
@@ -817,57 +891,43 @@ function buildListView(){
     });
   }
 
-  // Unfinished action overrides. The row markup + affordances come from the
-  // shared row() builder (mode "unfinished"); these three handlers replace its
-  // complete/reschedule/delete wiring because an Unfinished entry is a raw
-  // past-day block, not a scheduled[] task: complete lands on the ORIGIN day,
-  // reschedule is a server true-move, drop deletes the source block.
-  async function _unfComplete(r,el){
-    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
-    try{if(typeof commitDoneOnDate==="function")await commitDoneOnDate(r.sourceLocalId||r.sourceId,r.sourceDate);}catch(e2){}
-    _unfRemoveRow(r);
-    if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
-    if(typeof showToast==="function")showToast("Done on "+_unfPrettyDate(r.sourceDate)+": "+r.title,"success");
+  // ── Carryover row actions ───────────────────────────────────────────────────
+  // A carryover writes to its ORIGIN day, so it can't ride toggleDone /
+  // moveTaskViaPlacement / openDeleteConfirm — each resolves its id against today's
+  // scheduled[], which a past-day row isn't in, and would silently no-op. These are
+  // thin bindings over DCC.Carryover (unfinished-tasks.js), the ONE implementation
+  // the Catch up modal and the morning prompt use too, so completion/move/drop can't
+  // drift between the three surfaces. Every one carries the subtree.
+  function _unfBusy(el,on){el.querySelectorAll("button,input").forEach(x=>{x.disabled=!!on;});}
+  function _unfSettle(el,res){
+    if(!res){_unfBusy(el,false);return;}
+    _unfDropRows(res.removed);
     render();
   }
-  async function _unfMoveTo(r,el,targetDate){
-    if(!targetDate||!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)){if(typeof showToast==="function")showToast("Pick a valid date","error");return;}
-    if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
-    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
-    let slot=null;
-    try{
-      if(typeof _computeRescheduleSlot==="function")
-        slot=await _computeRescheduleSlot({id:r.sourceLocalId||r.sourceId,title:r.title,start:r.start||"00:00",end:r.end||fmt(pt(r.start||"00:00")+r.durMin)},targetDate);
-    }catch(e){}
-    window.__RESCHEDULE_IN_FLIGHT__=true;
-    try{
-      await window.blockStore.rescheduleBlock(r.sourceId,targetDate,slot?{parentStart:slot.start,parentEnd:slot.end}:{});
-    }catch(e){
-      if(typeof showToast==="function")showToast("Could not move "+r.title,"error");
-      el.querySelectorAll("button,input").forEach(x=>{x.disabled=false;});
-      return;
-    }finally{
-      window.__RESCHEDULE_IN_FLIGHT__=false;
-    }
-    _unfRemoveRow(r);
-    if(typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
-    if(typeof log==="function")log("rescheduled",r.sourceId,"Unfinished moved to "+targetDate+": "+r.title);
-    if(typeof showToast==="function")showToast("Moved to "+_unfPrettyDate(targetDate)+": "+r.title,"success");
-    if(targetDate===viewDate){
-      try{await window.blockStore.loadDay(viewDate);}catch(e){}
-      if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
-      if(typeof recalcTimes==="function")recalcTimes();
-    }
-    render();
+  function _CO(){return window.DCC&&window.DCC.Carryover;}
+  async function _unfComplete(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.complete(ev,unfPool));}
+  async function _unfDrop(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.drop(ev,unfPool));}
+  async function _unfToBacklog(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.toBacklog(ev,unfPool));}
+  async function _unfMoveTo(ev,el,targetDate,slot){
+    const C=_CO();if(!C)return;
+    _unfBusy(el,true);
+    _unfSettle(el,await C.moveTo(ev,targetDate,{pool:unfPool,slot:slot}));
   }
-  async function _unfDrop(r,el){
-    el.querySelectorAll("button,input").forEach(x=>{x.disabled=true;});
-    try{await window.blockStore.deleteBlock(r.sourceId);}catch(e2){}
-    _unfRemoveRow(r);
-    if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function")window.blockStore.invalidateRangeCache(r.sourceDate);
-    if(typeof log==="function")log("dropped",r.sourceId,"Dropped unfinished: "+r.title);
-    if(typeof showToast==="function")showToast("Dropped: "+r.title,"info");
-    render();
+  // The carryover Schedule… / click-the-time affordance: the shared day picker with
+  // an optional start time, landing on the same true-move. Same popover the rest of
+  // the app schedules with — a carryover just can't use its reschedule mode, which
+  // requires the row to be in scheduled[].
+  function _unfSchedulePopover(ev,el,anchorEl){
+    if(typeof openDatePickPopover!=="function")return;
+    openDatePickPopover(anchorEl,{
+      header:'Move "'+escHtml(ev.title)+'" to…',
+      actionLabel:"Move",
+      allowTime:true,
+      onPick:(dateStr,timeStr)=>{
+        const d=Math.max(1,dur(ev)||30);
+        _unfMoveTo(ev,el,dateStr,timeStr?{start:timeStr,end:fmt(pt(timeStr)+d)}:null);
+      }
+    });
   }
 }
 
