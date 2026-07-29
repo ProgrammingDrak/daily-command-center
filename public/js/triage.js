@@ -1066,7 +1066,12 @@ function buildRecurringTriageCard(r){
     '</div>'+
     '<button class="add-btn resp-triage-add" data-resp-id="'+r.id+'">Schedule</button>'+
     '<button class="add-btn resp-triage-done" data-resp-id="'+r.id+'" style="background:rgba(34,197,94,0.15);color:var(--green)">Done</button>'+
-    '<button class="tri-quick resp-triage-snooze" data-resp-id="'+r.id+'" title="Not now (hide for today)">&#128564;</button>'+
+    // Skip is deliberately distinct from Done: it hides the item until its next
+    // occurrence WITHOUT claiming it was done, so Drake stops having to lie about
+    // having finished something to make a card go away. Server-side and
+    // cross-device, unlike the browser-local one-day snooze it replaces.
+    '<button class="add-btn resp-triage-skip" data-resp-id="'+r.id+'" style="background:rgba(234,179,8,0.15);color:var(--amber)" title="Skip this cycle (not done, just not now)">Skip</button>'+
+    '<button class="tri-quick resp-triage-pause" data-resp-id="'+r.id+'" title="Pause this responsibility">&#9208;</button>'+
   '</div>';
 }
 function buildScheduleTriage(){
@@ -1094,8 +1099,11 @@ function buildScheduleTriage(){
   el.querySelectorAll(".resp-triage-done").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.completeRepeatResponsibility==="function")window.completeRepeatResponsibility(btn.dataset.respId);});
   });
-  el.querySelectorAll(".resp-triage-snooze").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.snoozeRepeatResponsibility==="function")window.snoozeRepeatResponsibility(btn.dataset.respId);});
+  el.querySelectorAll(".resp-triage-skip").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.skipRepeatResponsibility==="function")window.skipRepeatResponsibility(btn.dataset.respId);});
+  });
+  el.querySelectorAll(".resp-triage-pause").forEach(btn=>{
+    btn.addEventListener("click",e=>{e.stopPropagation();if(typeof window.pauseRepeatResponsibility==="function")window.pauseRepeatResponsibility(btn.dataset.respId,null);});
   });
   el.querySelectorAll(".schedule-triage-schedule").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();scheduleTriageItem(btn.dataset.triageId);});

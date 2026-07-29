@@ -79,6 +79,39 @@ test("responsibilityScore: preferred-due floor overrides a low elapsed base", ()
   assert.equal(score, 85);
 });
 
+// RETARGETED (D1). This test used to assert only the line above and therefore
+// pinned the reappear-after-Done bug as intended behavior: the floor applied
+// even to an item completed moments earlier, so clicking Done on a triage card
+// made the identical card come back a few hundred milliseconds later and keep
+// coming back all day. The floor is the right behavior; applying it to an
+// already-satisfied occurrence was not.
+test("responsibilityScore: the preferred-due floor does NOT apply once this occurrence is already done", () => {
+  const at = new Date(2026, 6, 11, 14, 0, 0); // 2pm on the preferred day
+  const today = at.getDay();
+  // MONTHLY base on purpose: the elapsed term stays far below the floor, so every
+  // assertion below is actually about the FLOOR. With a weekly base the "next
+  // occurrence re-arms it" check passed on elapsed time alone (7.2/7 days -> 100)
+  // and would have held even with preferredFloorApplies hardwired to false.
+  const props = {
+    cadence: "monthly",
+    createdAt: new Date(2026, 6, 11).toISOString(),
+    preferredCompletionCadence: "weekly",
+    preferredDayOfWeek: today,
+  };
+  const lastCompletedAt = new Date(2026, 6, 11, 9, 0, 0).toISOString();
+  // Not yet done today -> floored at 85, surfaces in triage.
+  assert.equal(responsibilityScore(props, at), 85);
+  // Completed at 9am the same day -> the floor stands down for the rest of it and
+  // the score falls back to the tiny elapsed base.
+  assert.equal(responsibilityScore({ ...props, lastCompletedAt }, at), 1,
+    "checking it off must silence it, not re-offer it milliseconds later");
+  // Next week's occurrence is a NEW occurrence: the floor comes back, and the
+  // elapsed base alone (7/30 -> 23) could not have reached it.
+  const nextWeek = new Date(2026, 6, 18, 14, 0, 0);
+  assert.equal(responsibilityScore({ ...props, lastCompletedAt }, nextWeek), 85,
+    "next occurrence re-arms the floor (elapsed base alone would be 23)");
+});
+
 // ── Pure: time math + free-slot finder ──
 test("hhmm <-> minutes round-trips", () => {
   assert.equal(hhmmToMinutes("09:30"), 570);
@@ -196,8 +229,16 @@ test("scheduleResponsibilityTask: creates one itinerary task at the first free s
   assert.equal(props.duration, 30);
   // default subtasks (none configured -> the generic three) get attached to the root
   assert.equal(fake.calls.ensureDayRoot.length, 1);
-  assert.equal(fake.calls.updateBlock.length, 1);
+  // RETARGETED (D1). This asserted updateBlock.length === 1, which locked in the
+  // ABSENCE of a schedule-time stamp on the definition -- the primary bug. There
+  // are now two writes: the day root's _subtasks map, then the definition's
+  // open-instance stamp. That second write IS the feature.
+  assert.equal(fake.calls.updateBlock.length, 2);
   assert.ok(fake.calls.updateBlock[0].fields.properties._subtasks);
+  const stamp = fake.calls.updateBlock[1];
+  assert.equal(stamp.id, "r1", "the definition, not the task, carries the open-instance stamp");
+  assert.equal(stamp.fields.properties.openInstanceBlockId, "task-1");
+  assert.equal(stamp.fields.properties.openInstanceDate, "2026-07-12");
 });
 
 test("scheduleResponsibilityTask: existing open task + not forced -> duplicate, no create", async () => {
@@ -372,6 +413,43 @@ test("applyForwardDiff: creates (with same-name dedupe) + deletes ride the same 
   assert.equal(deletes[0].id, "del1");
   assert.equal(result.blocksCreated, 1);
   assert.equal(result.blocksDeleted, 1);
+});
+
+// The tombstone guard originally listed under Phase A2, done here because
+// applyForwardDiff is responsibility-store's. Before this, a block the user had
+// deliberately deleted on a future day was recreated by the next apply-forward:
+// the create-dedupe only saw live rows. Same no-resurrect rule
+// meeting-materializer.js established and #253 made the house style.
+test("applyForwardDiff: does NOT resurrect a block the user deleted on a future day", async () => {
+  const fake = makeFakeBlockDB({
+    futureDates: ["2026-07-12"],
+    blocksByDate: { "2026-07-12": [] },
+    deletedBlocksByDate: {
+      "2026-07-12": [{ id: "gone1", type: "block", parent_id: null, deleted_at: "2026-07-11T09:00:00Z", properties: { name: "Deep Work", blockType: "work" } }],
+    },
+  });
+  const store = makeStore(fake);
+  const result = await store.applyForwardDiff({
+    fromDate: "2026-07-11",
+    diff: { creates: [{ block: { properties: { name: "Deep Work", blockType: "work" }, sort_order: 0 } }] },
+    userId: 1, workspaceId: "ws-1",
+  });
+  assert.equal(result.blocksCreated, 0, "the tombstone means the user does not want it here");
+  assert.equal(fake.calls.batchOp.length, 0);
+  // A differently-named create on the same day is unaffected.
+  const fake2 = makeFakeBlockDB({
+    futureDates: ["2026-07-12"],
+    blocksByDate: { "2026-07-12": [] },
+    deletedBlocksByDate: {
+      "2026-07-12": [{ id: "gone1", type: "block", parent_id: null, deleted_at: "2026-07-11T09:00:00Z", properties: { name: "Deep Work", blockType: "work" } }],
+    },
+  });
+  const result2 = await makeStore(fake2).applyForwardDiff({
+    fromDate: "2026-07-11",
+    diff: { creates: [{ block: { properties: { name: "Lunch" }, sort_order: 0 } }] },
+    userId: 1, workspaceId: "ws-1",
+  });
+  assert.equal(result2.blocksCreated, 1);
 });
 
 test("applyForwardDiff: empty diff makes NO batchOp call", async () => {

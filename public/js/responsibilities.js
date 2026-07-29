@@ -130,37 +130,96 @@
   // ("needs attention before it disappears into the day"). These are VIRTUAL —
   // computed client-side from the responsibility rows, never written into the
   // triage store — so there's one source of truth and nothing to reconcile.
-  function _respDayKey(){
-    if(typeof viewDate!=="undefined"&&viewDate)return viewDate;
-    if(typeof __state!=="undefined"&&__state&&__state.date)return __state.date;
-    return "";
+  // The due line. One constant, shared with delegated items via urgency.js; the
+  // server's copy is DUE_THRESHOLD in lib/recurrence.js. Was hardcoded four
+  // times (here twice more below, plus routes/blocks.js auto-schedule).
+  const DUE_THRESHOLD=(window.urgency&&window.urgency.DUE_THRESHOLD)||70;
+
+  // Delegates to the app's one "today" helper (state.js) rather than
+  // re-implementing it, so a future clock-offset/viewDate nuance there applies here too.
+  function _todayStr(){
+    if(typeof _actualTodayStr==="function")return _actualTodayStr();
+    const d=new Date();
+    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
   }
-  function loadRespSnoozed(){
-    try{return JSON.parse(localStorage.getItem("pa-resp-snoozed-"+_respDayKey())||"{}");}catch(e){return {};}
-  }
-  function saveRespSnoozed(map){
-    try{localStorage.setItem("pa-resp-snoozed-"+_respDayKey(),JSON.stringify(map||{}));}catch(e){}
+  function _localTz(){
+    try{return Intl.DateTimeFormat().resolvedOptions().timeZone||"";}catch(e){return "";}
   }
   // Already dropped onto the viewed day? (a live itinerary task links back via responsibilityId)
   function _respDroppedToday(id){
     if(typeof scheduled==="undefined")return false;
     return scheduled.some(e=>e&&e.responsibilityId===id&&!(typeof isDeleted==="function"&&isDeleted(e)));
   }
+  // Is an instance in flight on some OTHER day? This is the visible half of the
+  // pause: instead of silently vanishing, the card says "scheduled for Thu" so
+  // the quiet is explained rather than mysterious.
+  function openInstanceInfo(p){
+    if(!p||!(p.openInstanceBlockId||p.openInstanceLocalId))return null;
+    const date=p.openInstanceDate||null;
+    const today=_todayStr();
+    let label="scheduled";
+    if(date){
+      if(date===today)label="scheduled today";
+      else{
+        const d=new Date(date+"T00:00:00");
+        label=isNaN(d.getTime())?("scheduled "+date)
+          :("scheduled "+d.toLocaleDateString(undefined,{weekday:"short"})+(date>today?"":" (past)"));
+      }
+    }
+    return {date:date,label:label};
+  }
+  // A dated pause EXPIRES on its until-date, same rule as skippedInfo below and as
+  // the server's recurrence.isPaused. Without the comparison a lapsed pause left
+  // the server scoring the item 100 while the strip kept refusing to offer it and
+  // the chip read "paused until <a date in the past>" — the item was only
+  // recoverable by noticing the stale chip and clicking Resume, which is the same
+  // class of stuck-quiet failure this phase exists to remove.
+  function pausedInfo(p){
+    if(!p)return null;
+    if((p.status||"active")==="archived")return {label:"paused",indefinite:true};
+    if(!p.pausedUntil)return null;
+    if(p.pausedUntil==="forever")return {label:"paused",indefinite:true};
+    if(String(p.pausedUntil).slice(0,10)<=_todayStr())return null;
+    return {label:"paused until "+p.pausedUntil,indefinite:false};
+  }
+  function skippedInfo(p){
+    if(!p||!p.skipUntil)return null;
+    if(String(p.skipUntil).slice(0,10)<=_todayStr())return null;
+    return {label:"skipped until "+p.skipUntil};
+  }
   // The "close enough to needing to be done" set: active, not as-needed, score
-  // past the due line (70, same threshold the old sidebar filter used) or its
-  // preferred day is today — minus anything already dropped, done, or snoozed.
+  // past the due line or its preferred day is due — minus anything already
+  // dropped, in flight on another day, paused, or skipped this cycle.
+  //
+  // THE SERVER DECIDES, THE CLIENT READS. `suppressed` and `preferredDue` are
+  // stamped by normalizeResponsibility, computed in the user's own zone (the read
+  // sends it — see loadResponsibilities). This file used to re-derive both from its
+  // own copy of the date math, and the copies drifted: the client's preferred-day
+  // predicate never got the completed-occurrence guard, so pressing Complete on a
+  // preferred day re-offered the identical card immediately even though the
+  // server-side fix was correct. preferredCompletionInfo stays, for LABELS only.
   function getDueRepeatResponsibilities(){
-    const snoozed=loadRespSnoozed();
     return getResponsibilities().map(item=>{
       const p=item.properties||{};
       if((p.status||"active")!=="active")return null;
       if(isAsNeeded(p))return null;
+      // THE PAUSE (plus pause/skip). One predicate, evaluated server-side: an
+      // instance in flight on ANY day, an unexpired pause, or a skipped cycle.
+      // Before D1 the in-flight check existed only for the day being viewed, so
+      // scheduling for tomorrow silenced nothing.
+      if(p.suppressed)return null;
+      // Fall back to the local gates only for a payload predating this field.
+      if(p.suppressed===undefined&&(openInstanceInfo(p)||pausedInfo(p)||skippedInfo(p)))return null;
+      if(_respDroppedToday(item.id))return null;
       const t=responsibilityTiming(p);
       const preferred=preferredCompletionInfo(p);
-      const score=Number(p.importanceScore||t.progress||0);
-      if(!(score>=70||preferred.due))return null;
-      if(snoozed[item.id])return null;
-      if(_respDroppedToday(item.id))return null;
+      const preferredDue=(p.preferredDue!==undefined)?!!p.preferredDue:!!preferred.due;
+      // Branch on PRESENCE, not truthiness: a server score of exactly 0 is a real
+      // answer ("this occurrence is already satisfied"), and `||` would have
+      // discarded it and fallen back to the client's own elapsed math — re-offering
+      // a card the server had just ruled done.
+      const score=(p.importanceScore!==undefined)?(Number(p.importanceScore)||0):Number(t.progress||0);
+      if(!(score>=DUE_THRESHOLD||preferredDue))return null;
       const tree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
       return {
         id:item.id,
@@ -173,7 +232,7 @@
         overdue:t.remaining!=null&&t.remaining<0,
         isShell:!!tree,
         childCount:tree?((tree.root.children||[]).length):0,
-        preferredDue:!!preferred.due
+        preferredDue:preferredDue
       };
     }).filter(Boolean).sort((a,b)=>b.score-a.score);
   }
@@ -267,10 +326,45 @@
       toggleDone(rootId);
     }
   }
-  // "Not now": hide from the strip for the rest of today; returns tomorrow if still due.
-  function snoozeRepeatResponsibility(id){
-    const map=loadRespSnoozed();map[id]=1;saveRespSnoozed(map);
-    if(typeof buildScheduleTriage==="function")buildScheduleTriage();
+  // SKIP THIS CYCLE. Replaces the old "not now" snooze, which wrote a
+  // pa-resp-snoozed-<viewDate> localStorage map: one day only, one browser only,
+  // never synced, never garbage-collected. This is server-side and cross-device,
+  // and it is deliberately NOT Complete — it hides the item until its next
+  // occurrence without claiming it was done, so urgency keeps accruing
+  // underneath and it comes back louder instead of resetting.
+  async function skipRepeatResponsibility(id){
+    try{
+      await postResponsibilityAction(id,"skip",{tz:_localTz()});
+      await loadResponsibilities();
+      if(typeof showToast==="function")showToast("Skipped this cycle","success");
+    }catch(e){
+      if(typeof showToast==="function")showToast("Skip failed: "+(e.message||e),"error");
+    }
+  }
+  async function pauseRepeatResponsibility(id,until){
+    try{
+      await postResponsibilityAction(id,"pause",until?{until:until}:{});
+      await loadResponsibilities();
+      if(typeof showToast==="function")showToast(until?("Paused until "+until):"Paused","success");
+    }catch(e){
+      if(typeof showToast==="function")showToast("Pause failed: "+(e.message||e),"error");
+    }
+  }
+  async function resumeRepeatResponsibility(id){
+    try{
+      await postResponsibilityAction(id,"resume",{});
+      await loadResponsibilities();
+      if(typeof showToast==="function")showToast("Resumed","success");
+    }catch(e){
+      if(typeof showToast==="function")showToast("Resume failed: "+(e.message||e),"error");
+    }
+  }
+  async function postResponsibilityAction(id,action,body){
+    const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/"+action,{
+      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})
+    });
+    if(!res.ok)throw new Error(await responseErrorMessage(res));
+    return res.json();
   }
 
   function getResponsibilities(){
@@ -279,7 +373,10 @@
 
   async function loadResponsibilities(){
     try{
-      const res=await fetch("/api/responsibilities");
+      // Send the browser's zone so the server evaluates the preferred-completion
+      // day on the USER's calendar day, not the Node process's.
+      const tz=_localTz();
+      const res=await fetch("/api/responsibilities"+(tz?"?tz="+encodeURIComponent(tz):""));
       if(!res.ok)throw new Error(res.statusText);
       const data=await res.json();
       _items=data.items||[];
@@ -326,7 +423,7 @@
     const q=_sidebarQuery.trim().toLowerCase();
     let items=getResponsibilities();
     if(_sidebarFilter==="active")items=items.filter(i=>((i.properties||{}).status||"active")==="active");
-    else if(_sidebarFilter==="due")items=items.filter(i=>Number((i.properties||{}).importanceScore||0)>=70 && (i.properties||{}).status!=="archived");
+    else if(_sidebarFilter==="due")items=items.filter(i=>Number((i.properties||{}).importanceScore||0)>=DUE_THRESHOLD && (i.properties||{}).status!=="archived");
     else if(_sidebarFilter==="archived")items=items.filter(i=>(i.properties||{}).status==="archived");
     else if(["green","blue","yellow","red"].includes(_sidebarFilter)){
       items=items.filter(i=>(i.properties||{}).status!=="archived" && scoreClass(Number((i.properties||{}).importanceScore||0))===_sidebarFilter);
@@ -355,7 +452,7 @@
   function renderRepeatResponsibilitiesSidebar(){
     const mount=document.getElementById("repeat-responsibilities-list");
     const all=getResponsibilities();
-    const due=all.filter(i=>Number((i.properties||{}).importanceScore||0)>=70 && (i.properties||{}).status!=="archived").length;
+    const due=all.filter(i=>Number((i.properties||{}).importanceScore||0)>=DUE_THRESHOLD && (i.properties||{}).status!=="archived").length;
     const badge=document.getElementById("repeat-responsibilities-section-count");
     if(badge){badge.textContent=due;badge.style.display=due?"":"none";}
     if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
@@ -374,11 +471,25 @@
       const preferred=preferredCompletionSummary(p);
       const asNeeded=isAsNeeded(p);
       const expanded=_sidebarExpanded.has(item.id);
-      return '<div class="repeat-resp-card '+cls+(expanded?' expanded':'')+'" data-id="'+esc(item.id)+'">'+
+      // Make the three quiet states VISIBLE. A responsibility that has gone
+      // silent because an instance is in flight, because it is paused, or
+      // because this cycle was skipped now says so on its own card instead of
+      // just not appearing.
+      const inflight=openInstanceInfo(p);
+      const paused=pausedInfo(p);
+      const skipped=skippedInfo(p);
+      // Pill shape is inlined rather than added to dashboard.css: that file is a
+      // render surface Track C owns, and the recurring triage card already sets
+      // the same precedent for inlining a chip's shape.
+      const chipCss='display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 7px;border-radius:100px;white-space:nowrap;margin-left:6px;';
+      const stateChip=inflight?'<span class="resp-state-chip inflight" style="'+chipCss+'background:rgba(59,130,246,0.18);color:var(--accent-light)">'+esc(inflight.label)+'</span>'
+        :paused?'<span class="resp-state-chip paused" style="'+chipCss+'background:rgba(148,163,184,0.2);color:var(--text-muted)">'+esc(paused.label)+'</span>'
+        :skipped?'<span class="resp-state-chip skipped" style="'+chipCss+'background:var(--amber-bg);color:var(--amber)">'+esc(skipped.label)+'</span>':'';
+      return '<div class="repeat-resp-card '+cls+(expanded?' expanded':'')+(inflight?' inflight':'')+((paused||skipped)?' resp-quiet':'')+'" data-id="'+esc(item.id)+'">'+
         (asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule for today">+</button>':'<button type="button" class="repeat-resp-score resp-score '+cls+'" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule '+esc(p.title||"repeat responsibility")+' for today">'+score+'</button>')+
         '<div class="repeat-resp-main" role="button" tabindex="0" data-act="toggle" aria-expanded="'+(expanded?'true':'false')+'">'+
           '<div class="repeat-resp-title-row">'+
-            '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+
+            '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+stateChip+
           '</div>'+
           (expanded?'<div class="repeat-resp-details">'+
             '<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>'+
@@ -392,9 +503,19 @@
             (preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
           '</div>':'')+
         '</div>'+
+        // Skip / Pause / Resume: the escapes that did not exist before D1. The
+        // archive/activate handler had been in this file for months but NO
+        // element in public/ or index.html ever carried data-act="archive" —
+        // it was unreachable dead code. These buttons reach it.
         '<div class="repeat-resp-actions">'+
           '<button type="button" data-act="complete">Complete</button>'+
-          (expanded?'<button type="button" data-act="edit">Edit</button><button type="button" class="danger" data-act="remove">Remove</button>':'')+
+          (expanded?
+            (inflight?'<button type="button" data-act="drop-instance" title="Forget the scheduled instance and resume the cadence">Un-schedule</button>':'<button type="button" data-act="skip" title="Skip this cycle without marking it done">Skip</button>')+
+            ((paused||(p.status||"active")!=="active")
+              ?'<button type="button" data-act="activate" title="Resume this responsibility">Resume</button>'
+              :'<button type="button" data-act="archive" title="Pause indefinitely">Pause</button>')+
+            '<button type="button" data-act="edit">Edit</button><button type="button" class="danger" data-act="remove">Remove</button>'
+          :'')+
         '</div>'+
       '</div>';
     }).join("");
@@ -447,7 +568,7 @@
         responsibilityTitle:title,
         source:"responsibility",
         tags:tags,
-        onScheduled:function(){ loadResponsibilities(); }
+        onScheduled:function(info){ registerOpenInstance(id,info); }
       });
       return;
     }
@@ -471,9 +592,30 @@
             defaults.forEach(function(t){if(t)addSubtask(info.localId,t);});
           }
         }catch(e){console.warn("[responsibilities] subtask attach failed",e);}
-        loadResponsibilities();
+        registerOpenInstance(id,info);
       }
     });
+  }
+
+  // THE PAUSE, client half. The scheduling paths above mint the instance in the
+  // browser (insertTaskNow / materializeShellTemplate), not through
+  // POST /:id/schedule, so the server's stamp never fires for them — tell the
+  // server which instance is now in flight. Whatever day it landed on: this is
+  // what makes "schedule it for Thursday" silence today's strip, which the old
+  // day-scoped checks structurally could not do.
+  //
+  // A failure here is not fatal. resolveOpenInstances settles the definition
+  // from the instance's actual state on the next read, so the worst case is the
+  // old behavior for one render rather than a lost pause.
+  async function registerOpenInstance(id,info){
+    try{
+      await postResponsibilityAction(id,"instance",{
+        blockId:(info&&(info.blockId||info.localId))||null,
+        localId:(info&&info.localId)||null,
+        date:(info&&(info.dateStr||info.date))||((window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null)
+      });
+    }catch(e){console.warn("[responsibilities] open-instance register failed",e);}
+    await loadResponsibilities();
   }
 
   async function handleCardAction(id,act){
@@ -487,9 +629,21 @@
         const res=await fetch("/api/responsibilities/"+encodeURIComponent(id)+"/complete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completedAt:new Date().toISOString()})});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
         await loadResponsibilities();
-      }else if(act==="archive"||act==="activate"){
-        await patchResponsibility(id,{status:act==="archive"?"archived":"active"});
+      }else if(act==="skip"){
+        await skipRepeatResponsibility(id);
+      }else if(act==="drop-instance"){
+        // The in-flight instance is not coming; clear the pause. lastCompletedAt
+        // is untouched, so the accrued urgency is all still there and the item
+        // re-offers exactly as if it had never been scheduled.
+        await postResponsibilityAction(id,"instance",{blockId:null,localId:null,date:null});
         await loadResponsibilities();
+        if(typeof showToast==="function")showToast("Un-scheduled — back in rotation","success");
+      }else if(act==="archive"){
+        // Pause, not archive: pausedUntil is the explicit state, and status
+        // stays a separate concern so Resume can restore both.
+        await pauseRepeatResponsibility(id,null);
+      }else if(act==="activate"){
+        await resumeRepeatResponsibility(id);
       }else if(act==="remove"){
         const title=(item.properties&&item.properties.title)||"this repeat responsibility";
         if(!window.confirm('Remove "'+title+'"? This cannot be undone.'))return;
@@ -714,6 +868,13 @@
   }
 
   function formProps(){
+    // Editing must not silently reactivate. This used to hardcode
+    // status:"active", so opening a paused or archived responsibility and
+    // pressing Save quietly brought it back to life. Preserve whatever state the
+    // item is already in; a new item starts active.
+    const editingId=document.getElementById("resp-id")?.value||"";
+    const editing=editingId?_items.find(i=>i.id===editingId):null;
+    const existingStatus=((editing&&editing.properties&&editing.properties.status)||"active");
     const cadence=document.getElementById("resp-cadence-preset")?.value||"custom";
     const cadenceMap={daily:1,weekly:7,biweekly:14,monthly:30};
     const customDays=Math.max(1,parseInt(document.getElementById("resp-cadence-days").value,10)||7);
@@ -738,7 +899,11 @@
       capacityBucket:document.getElementById("resp-capacity-bucket").value,
       defaultSubtasks:readDefaultSubtasks(),
       menus:readSelectedMenus(),
-      status:"active"
+      status:existingStatus,
+      // "completion" (default) | "calendar" — the Todoist every!/every split.
+      // Settable through the API; the modal has no picker for it yet because the
+      // control would live in index.html, which Track C owns (see the D1 handoff).
+      anchorMode:((editing&&editing.properties&&editing.properties.anchorMode)||"completion")
     };
   }
 
@@ -769,13 +934,9 @@
     });
   }
 
-  async function patchResponsibility(id,props){
-    const res=await fetch("/api/responsibilities/"+encodeURIComponent(id),{
-      method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({properties:props})
-    });
-    if(!res.ok)throw new Error(await responseErrorMessage(res));
-    return res.json();
-  }
+  // patchResponsibility was removed with its only caller: the archive/activate
+  // branch of handleCardAction, which now goes through the dedicated
+  // /pause and /resume endpoints. saveResponsibility PATCHes inline.
 
   async function saveResponsibility(){
     const id=document.getElementById("resp-id").value||null;
@@ -848,7 +1009,14 @@
   window.getDueRepeatResponsibilities=getDueRepeatResponsibilities;
   window.scheduleRepeatResponsibility=scheduleRepeatResponsibility;
   window.completeRepeatResponsibility=completeRepeatResponsibility;
-  window.snoozeRepeatResponsibility=snoozeRepeatResponsibility;
+  // Recurrence controls (D1). snoozeRepeatResponsibility is kept as an alias so a
+  // cached triage.js from a previous deploy does not throw; it now performs a real
+  // server-side skip instead of writing the browser-local snooze map.
+  window.skipRepeatResponsibility=skipRepeatResponsibility;
+  window.snoozeRepeatResponsibility=skipRepeatResponsibility;
+  window.pauseRepeatResponsibility=pauseRepeatResponsibility;
+  window.resumeRepeatResponsibility=resumeRepeatResponsibility;
+  window.responsibilityOpenInstanceInfo=openInstanceInfo;
   window.openRepeatResponsibilityManager=function(){ if(typeof openResponsibilityManager==="function")openResponsibilityManager(); };
   window.openRepeatResponsibilityFromTask=function(task){
     const defaults=responsibilityDefaultsFromTask(task||{});

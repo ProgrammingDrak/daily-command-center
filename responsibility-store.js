@@ -18,6 +18,10 @@
 
 const crypto = require("crypto");
 const { isValidDate } = require("./lib/route-helpers");
+// The recurrence lifecycle (pause / skip / anchor / resolve) lives in
+// lib/recurrence.js so it stays pure and testable. This module owns the reads
+// and writes; that one owns the decisions. See its header for the invariant.
+const recurrence = require("./lib/recurrence");
 
 const RESPONSIBILITY_KINDS = new Set(["responsibility_item", "responsibility_trigger"]);
 
@@ -37,62 +41,92 @@ function cadenceDays(props) {
   return m ? Math.max(1, parseInt(m[1], 10)) : 7;
 }
 
-function localDateOnly(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+// localDateOnly / daysInMonth moved to lib/recurrence.js when the cadence math
+// did. They are reachable as recurrence.localDateOnly / recurrence.daysInMonth
+// (and this module re-exports `recurrence`); keeping stale copies here would let a
+// future caller pick the wrong one and quietly re-fork the math.
+
+// Delegates to lib/recurrence.js, which evaluates the preferred day in the
+// USER's timezone when one is supplied instead of the Node process's. Signature
+// is back-compatible: no tz means host-local, exactly as before.
+function preferredCompletionDue(props, at = new Date(), tz = null) {
+  return recurrence.preferredCompletionDue(props, at, tz);
 }
 
-function daysInMonth(year, monthIndex) {
-  return new Date(year, monthIndex + 1, 0).getDate();
-}
-
-function preferredCompletionDue(props, at = new Date()) {
-  if (!props) return false;
-  const cadence = String(props.preferredCompletionCadence || props.preferredCadence || "none").toLowerCase();
-  if (!cadence || cadence === "none") return false;
-  if (!(at instanceof Date) || Number.isNaN(at.getTime())) return false;
-  if (cadence === "weekly") {
-    const day = Math.max(0, Math.min(6, Number(props.preferredDayOfWeek || 0)));
-    return at.getDay() === day;
-  }
-  if (cadence === "monthly") {
-    const target = Math.max(1, Math.min(31, Number(props.preferredDayOfMonth || 1)));
-    return at.getDate() === Math.min(target, daysInMonth(at.getFullYear(), at.getMonth()));
-  }
-  if (cadence === "yearly") {
-    const month = Math.max(1, Math.min(12, Number(props.preferredMonth || 1)));
-    const target = Math.max(1, Math.min(31, Number(props.preferredMonthDay || 1)));
-    return at.getMonth() + 1 === month && at.getDate() === Math.min(target, daysInMonth(at.getFullYear(), month - 1));
-  }
-  if (cadence === "custom") {
-    const anchorRaw = props.preferredCustomAnchor || props.preferredDate || "";
-    const every = Math.max(1, Number(props.preferredCustomDays || props.preferredEveryDays || 1));
-    const anchor = anchorRaw ? new Date(`${anchorRaw}T00:00:00`) : null;
-    if (!anchor || Number.isNaN(anchor.getTime())) return false;
-    const diff = Math.floor((localDateOnly(at) - localDateOnly(anchor)) / 86400000);
-    return diff >= 0 && diff % every === 0;
-  }
-  return false;
-}
-
-function responsibilityScore(props, at = new Date()) {
-  if (!props || props.status === "archived" || props.status === "done") return 0;
+// The 0-100 urgency of a responsibility.
+//
+// D1 changed two things here, both of them the point of the phase:
+//
+//   1. A SUPPRESSED item scores 0. Suppressed means archived/done, paused,
+//      skipped this cycle, or -- the big one -- an instance of it is already in
+//      flight. THAT is the pause: while a task for this responsibility is
+//      sitting on some day waiting to be done, the timer stops and the item is
+//      not re-offered, on any day, no matter how much time has elapsed. Before
+//      D1 the only "already scheduled" checks were scoped to the day you
+//      happened to be looking at, so scheduling for tomorrow silenced nothing.
+//
+//   2. The preferred-day floor is GUARDED by lastCompletedAt. It used to apply
+//      unconditionally, which is why clicking Done on a triage card made the
+//      identical card reappear milliseconds later and keep reappearing all day.
+function responsibilityScore(props, at = new Date(), tz = null) {
+  if (!props) return 0;
+  if (recurrence.isSuppressed(props, at, tz)) return 0;
   const days = cadenceDays(props);
   let base = 0;
   if (days) {
-    const anchor = props.lastCompletedAt || props.createdAt || props.created_at || props.added_at;
-    const start = anchor ? new Date(anchor) : at;
+    // anchorMode picks the window start: "completion" (default) measures from
+    // your last completion, "calendar" from the current calendar boundary.
+    const start = recurrence.periodStart(props, days, at, tz);
+    // Calendar mode measures from the boundary and deliberately ignores
+    // lastCompletedAt, so unlike completion mode it has to check satisfaction
+    // explicitly -- otherwise a completed occurrence keeps getting LOUDER through
+    // the rest of its period and the card returns the instant it is checked off,
+    // which is the very bug this phase exists to kill.
+    if (String(props.anchorMode || "completion") === "calendar") {
+      const done = props.lastCompletedAt ? new Date(props.lastCompletedAt) : null;
+      if (done && !Number.isNaN(done.getTime()) && done >= start) return 0;
+    }
     const elapsedDays = Math.max(0, (at - start) / 86400000);
     base = Math.round((elapsedDays / days) * 100);
   }
-  if (preferredCompletionDue(props, at)) base = Math.max(base, Number(props.preferredCompletionScore || 85));
+  if (recurrence.preferredFloorApplies(props, at, tz)) {
+    base = Math.max(base, Number(props.preferredCompletionScore || recurrence.PREFERRED_FLOOR));
+  }
   const boost = Number(props.importanceBoost || props.boost || 0);
   return Math.max(0, Math.min(100, base + boost));
 }
 
-function normalizeResponsibility(block) {
+// Stamp the DERIVED view of a responsibility for the client.
+//
+// `suppressed` and `preferredDue` are here so the browser stops re-deriving the
+// same decisions from its own copy of the date math. It had three copies and they
+// drifted: the client's preferred-day predicate never got the completed-occurrence
+// guard, so the reappear-after-Done bug survived client-side even though the
+// server-side fix was correct, and the client's pause check never expired a dated
+// pause. One decider, computed in the USER's zone, read as a flag.
+function normalizeResponsibility(block, at = new Date(), tz = null) {
   const properties = block.properties || {};
-  const importanceScore = responsibilityScore(properties);
-  return { ...block, properties: { ...properties, importanceScore } };
+  return {
+    ...block,
+    properties: {
+      ...properties,
+      importanceScore: responsibilityScore(properties, at, tz),
+      suppressed: recurrence.isSuppressed(properties, at, tz),
+      preferredDue: recurrence.preferredFloorApplies(properties, at, tz),
+    },
+  };
+}
+
+// The properties to WRITE back for a block we read through normalizeResponsibility.
+// importanceScore / suppressed / preferredDue are derived-for-display; persisting
+// them freezes a stale answer into the row (and its operations-log entry) that
+// misleads the next reader of a raw block.
+function writableProps(props) {
+  const clean = { ...(props || {}) };
+  delete clean.importanceScore;
+  delete clean.suppressed;
+  delete clean.preferredDue;
+  return clean;
 }
 
 function taskDuration(props) {
@@ -225,21 +259,231 @@ function parseOffersAmpAlert(text) {
 // Factory: the caller injects blockDB, the two server-scope helpers
 // (getScheduleBlocks, getTodayStr), and the shared assertBlockOwnership guard.
 function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership }) {
-  async function getResponsibilityBlocks(workspaceId) {
-    return (await blockDB.getResponsibilityBlocks(workspaceId)).map(normalizeResponsibility);
+  // Read the day_root row for a date WITHOUT creating one. ensureDayRoot()
+  // would insert a row as a side effect of a read, which a GET must never do,
+  // so the id derivation (and its ws-1 legacy fallback) is mirrored here as a
+  // plain primary-key lookup. Keep in sync with db.js ensureDayRoot.
+  //
+  // `cache` is a per-pass Map, NOT a store-lifetime one: several definitions
+  // usually share a day, so one read per day per pass is worth memoizing, but
+  // the store is instantiated once for the process, so a persistent cache would
+  // pin the FIRST properties it ever saw and never notice a later completion.
+  async function readDayRoot(dateStr, workspaceId, cache = null) {
+    // An unvalidated date reaches this from POST /:id/instance and gets
+    // interpolated into a primary key, so junk like "ws-3-2026-07-29" could aim
+    // the lookup at another workspace's row. Reject anything that is not a date.
+    if (!isValidDate(dateStr)) return null;
+    const cacheKey = `${workspaceId || ""}|${dateStr}`;
+    if (cache && cache.has(cacheKey)) return cache.get(cacheKey);
+    const primary = workspaceId ? `day-root-${workspaceId}-${dateStr}` : `day-root-${dateStr}`;
+    // NO try/catch: a failed read must NOT be reported as "no completions on this
+    // day". That lie is destructive here -- for a past-dated instance it resolves
+    // to "gone", clears the pointer, and permanently discards a completion that
+    // lived only in the day overlay. resolveOpenInstances' per-item catch leaves
+    // the definition paused instead, and the next read retries.
+    let root = await blockDB.getBlock(primary);
+    // The legacy un-prefixed row belongs to ws-1 only -- the SAME gate db.js
+    // ensureDayRoot applies. Falling back unconditionally let any other workspace
+    // settle its cadence from ws-1's _done / _deleted overlays.
+    if (!root && (!workspaceId || workspaceId === "ws-1")) root = await blockDB.getBlock(`day-root-${dateStr}`);
+    if (root) assertBlockOwnership(root, workspaceId);
+    if (cache) cache.set(cacheKey, root);
+    return root;
   }
 
-  async function getResponsibilityBlock(id, workspaceId) {
+  // Resolve the in-flight instance's ROW, whichever id shape the definition holds.
+  //
+  // This is the difference between the pause working and not working. The browser
+  // schedules through insertTaskNow / materializeShellTemplate, whose onScheduled
+  // callback reports ONE client-minted id as both localId and blockId -- and
+  // blockStore.createBlock posts no id, so the row's primary key is a server UUID
+  // and that client id survives only in properties.local_id. A bare getBlock()
+  // therefore missed, resolveInstanceState read "no row" as "gone", and the pause
+  // was erased by the very next read (the one registerOpenInstance itself
+  // triggers). The headline behavior -- schedule for tomorrow, today goes quiet --
+  // was working only through the server-side /schedule endpoint.
+  async function findInstanceBlock({ instanceId, localId, instanceDate, workspaceId, dayCache }) {
+    if (instanceId) {
+      const row = await blockDB.getBlock(instanceId);
+      // A row in another workspace is not our instance. Treat it as absent so a
+      // bogus stamp self-heals instead of leaking that row's state back to us.
+      if (row && !(row.workspace_id && workspaceId && row.workspace_id !== workspaceId)) return row;
+    }
+    if (!localId) return null;
+    // The stamped day first (cheap, and usually right): several definitions share a
+    // day, so one query per day per pass. Keep soft-deleted rows -- "deleted" is a
+    // signal the resolver needs, not noise.
+    if (isValidDate(instanceDate)) {
+      const cacheKey = `${workspaceId || ""}|${instanceDate}`;
+      let dayRows = dayCache && dayCache.get(cacheKey);
+      if (!dayRows) {
+        dayRows = await blockDB.getBlocksByDateIncludingDeleted(instanceDate, workspaceId);
+        if (dayCache) dayCache.set(cacheKey, dayRows);
+      }
+      const hit = dayRows.find(b => String((b.properties || {}).local_id) === String(localId));
+      if (hit) return hit;
+    }
+    // DATE-INDEPENDENT fallback. The stamped day can be stale or absent -- nothing
+    // re-stamps the definition when the task is dragged or rescheduled to another
+    // day, and a stamp can arrive with no date at all. Without this, a live
+    // instance on a different day resolves to "gone" and the pause is dropped while
+    // the task is sitting right there.
+    if (!blockDB.findBlockByLocalId) return null;
+    const found = await blockDB.findBlockByLocalId(localId, workspaceId);
+    if (found && found.workspace_id && workspaceId && found.workspace_id !== workspaceId) return null;
+    return found || null;
+  }
+
+  // THE RECONCILER -- the derived half of the one-open-instance invariant.
+  //
+  // For every definition that thinks an instance is in flight, look at what
+  // actually became of that instance and settle the definition accordingly:
+  //   done -> clear the pause and reset the cadence clock from the completion
+  //   gone -> clear the pause, leave the clock alone (urgency resumes intact)
+  //   open -> leave it paused
+  //
+  // Why a resolver instead of firing events at completion time: four separate
+  // UI paths mark a task done and only ONE of them ever told the server (see
+  // ANALYSIS.md Phase 7 -- _autoCompleteShellAncestors was the worst, meaning
+  // no shell responsibility ever reset its cadence). An event hook has to be
+  // wired into every path and stays wrong the moment a fifth appears. Reading
+  // the instance's persisted state has no paths to miss. It also self-heals
+  // rows left inconsistent by a failed write, which the old fire-and-forget
+  // POST could not: a transient 500 was console.warn'd and the reset was gone.
+  //
+  // Runs on the read every client already makes, so the itinerary and the
+  // triage strip converge without anyone scheduling a sweep.
+  async function resolveOpenInstances(items, workspaceId) {
+    const pending = items.filter(b => recurrence.hasOpenInstance(b.properties || {}));
+    if (!pending.length) return items;
+    const today = getTodayStr();
+    const settled = new Map();
+    // One read per day for THIS pass only, never store-lifetime: the store is
+    // instantiated once per process, so a persistent cache would pin the first
+    // properties it ever saw and never notice a later completion.
+    const dayRoots = new Map();
+    const dayRows = new Map();
+    for (const item of pending) {
+      const props = item.properties || {};
+      try {
+        const instanceId = props.openInstanceBlockId || null;
+        const localId = props.openInstanceLocalId || null;
+        const instanceBlock = await findInstanceBlock({ instanceId, localId, instanceDate: props.openInstanceDate, workspaceId, dayCache: dayRows });
+        // Prefer the row's own date over the client-supplied one: the past-dated
+        // safety valve must not depend on a value a caller can omit or forge.
+        const instanceDate = (instanceBlock && instanceBlock.date) || props.openInstanceDate || null;
+        const root = instanceDate ? await readDayRoot(instanceDate, workspaceId, dayRoots) : null;
+        const { state, completedAt } = recurrence.resolveInstanceState({
+          instanceBlock,
+          dayRootProps: root ? (root.properties || {}) : null,
+          keys: [localId, instanceId, instanceBlock && instanceBlock.id],
+          instanceDate,
+          todayStr: today,
+        });
+        if (state === "open") continue;
+        const base = writableProps(props);
+        const next = state === "done"
+          ? recurrence.applyCompletion(base, { completedAt, taskId: (instanceBlock && instanceBlock.id) || instanceId })
+          : recurrence.clearOpenInstance(base);
+        const updated = await blockDB.updateBlock(item.id, { properties: next });
+        settled.set(item.id, updated.properties || next);
+      } catch (e) {
+        // A definition we cannot settle stays paused rather than taking the
+        // whole responsibilities read down with it.
+        console.warn("[responsibility-store] instance resolve failed", item.id, e && e.message);
+      }
+    }
+    if (!settled.size) return items;
+    return items.map(b => (settled.has(b.id) ? { ...b, properties: settled.get(b.id) } : b));
+  }
+
+  // `tz` is the caller's IANA zone, threaded from the client so the
+  // preferred-day floor is evaluated on the USER's calendar day rather than the
+  // Node process's. Without it the server and browser disagreed for a 5-6 hour
+  // window every day and the client trusted the server's answer.
+  async function getResponsibilityBlocks(workspaceId, { tz = null } = {}) {
+    const raw = await blockDB.getResponsibilityBlocks(workspaceId);
+    const resolved = await resolveOpenInstances(raw, workspaceId);
+    const at = new Date();
+    return resolved.map(b => normalizeResponsibility(b, at, tz));
+  }
+
+  async function getResponsibilityBlock(id, workspaceId, { tz = null } = {}) {
     const block = await blockDB.getBlock(id);
     if (!block) return null;
     assertBlockOwnership(block, workspaceId);
     if (!RESPONSIBILITY_KINDS.has((block.properties || {}).kind)) return null;
-    return normalizeResponsibility(block);
+    return normalizeResponsibility(block, new Date(), tz);
   }
 
   async function findResponsibilityBySlug(slug, workspaceId) {
     const row = await blockDB.findResponsibilityBySlug(slug, workspaceId);
     return row ? normalizeResponsibility(row) : null;
+  }
+
+  // ── Lifecycle writers ──
+  // One writer per transition, all of them going through lib/recurrence.js so
+  // the property shape is decided in exactly one place. The HTTP routes and the
+  // db.js updateBlock hook both land here rather than hand-rolling merges.
+
+  // Shared shape for all six: resolve the definition (reusing the row the route
+  // already loaded rather than re-reading it), apply the pure transition to its
+  // WRITABLE props, persist, and hand back the freshly normalized row. `tz` is
+  // threaded uniformly so every response's derived score is computed on the user's
+  // calendar day, and `at` is captured once so a transition cannot straddle
+  // midnight relative to its own scoring.
+  async function applyLifecycle(id, workspaceId, { existing = null, tz = null }, transition) {
+    const current = existing || await getResponsibilityBlock(id, workspaceId, { tz });
+    if (!current) return null;
+    const at = new Date();
+    const next = transition(writableProps(current.properties), at);
+    return normalizeResponsibility(await blockDB.updateBlock(id, { properties: next }), at, tz);
+  }
+
+  async function markResponsibilityComplete(id, workspaceId, { completedAt, taskId, existing, tz } = {}) {
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props) =>
+      recurrence.applyCompletion(props, { completedAt, taskId }));
+  }
+
+  // Un-checking a task must put the cadence clock back. Before D1 it left the
+  // reset in place, so an accidental check-off permanently moved the next
+  // occurrence a full cycle out with no way to undo it.
+  async function markResponsibilityIncomplete(id, workspaceId, { blockId, localId, date, existing, tz } = {}) {
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props) =>
+      recurrence.applyUncompletion(props, { blockId, localId, date }));
+  }
+
+  // Skip / pause / resume: the escapes that did not exist. Drake's only options
+  // were Complete (lying about having done it), a browser-local one-day snooze,
+  // or an irreversible Remove.
+  async function skipResponsibilityCycle(id, workspaceId, { tz = null, existing } = {}) {
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props, at) =>
+      recurrence.applySkip(props, at, tz));
+  }
+
+  async function pauseResponsibility(id, workspaceId, { until = null, existing, tz } = {}) {
+    // A malformed `until` string-compares either above every real date (an
+    // accidental permanent pause) or below it (a silent no-op), so anything that
+    // is not a date becomes an explicit indefinite pause.
+    const safeUntil = until && isValidDate(String(until).slice(0, 10)) ? until : null;
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props) =>
+      recurrence.applyPause(props, safeUntil));
+  }
+
+  async function resumeResponsibility(id, workspaceId, { existing, tz } = {}) {
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props) =>
+      recurrence.applyResume(props));
+  }
+
+  // Stamp the in-flight instance onto the definition. Called by the server
+  // scheduler below AND by the client after it mints an instance locally
+  // (public/js/responsibilities.js does its own insert via insertTaskNow, so the
+  // server scheduler is not on that path). `blockId` may legitimately be a client
+  // local_id rather than a row id -- findInstanceBlock resolves either.
+  async function setOpenInstance(id, workspaceId, { blockId, localId, date, existing, tz } = {}) {
+    const safeDate = date && isValidDate(date) ? date : null;
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props) =>
+      recurrence.applySchedule(props, { blockId, localId, date: safeDate }));
   }
 
   async function upsertResponsibility({ properties, userId, workspaceId }) {
@@ -270,7 +514,9 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
       if (t) props.templateTree = t; else delete props.templateTree;
     }
     if (existing) {
-      return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...existing.properties, ...props, createdAt: existing.properties.createdAt || props.createdAt } }));
+      // writableProps: `existing` came back from normalizeResponsibility, so merging
+      // it raw would persist the derived importanceScore/suppressed/preferredDue.
+      return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...writableProps(existing.properties), ...props, createdAt: existing.properties.createdAt || props.createdAt } }));
     }
     return normalizeResponsibility(await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null }));
   }
@@ -322,6 +568,18 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // ensureRoot:false — attachDefaultSubtasks below ensures the day root, as before.
     const block = await blockDB.createItineraryTask({ date: dateStr, properties: taskProps, userId: userId || null, workspaceId: workspaceId || null, sortOrder: slot, ensureRoot: false });
     await attachDefaultSubtasks(localId, props, sourceProps, dateStr, userId, workspaceId);
+    // THE PAUSE. Record the in-flight instance on the definition, whatever day
+    // it landed on. This is the fix for the primary bug: the old code wrote
+    // nothing back here, so a responsibility scheduled for tomorrow was still
+    // offered on today's strip on the very next render. Non-fatal -- a task on
+    // the day beats a failed stamp, and resolveOpenInstances settles the
+    // definition on the next read either way.
+    try {
+      const next = recurrence.applySchedule(writableProps(props), { blockId: block.id, localId, date: dateStr });
+      await blockDB.updateBlock(responsibility.id, { properties: next });
+    } catch (e) {
+      console.warn("[responsibility-store] open-instance stamp failed", responsibility.id, e && e.message);
+    }
     return { block, created: true };
   }
 
@@ -386,9 +644,21 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     const ops = [];
 
     for (const date of futureDates) {
-      const dayBlocks = await blockDB.getBlocksByDate(date, workspaceId);
+      // Load INCLUDING soft-deleted rows. Live rows drive update/delete matching
+      // exactly as before, but the CREATE dedupe below has to see tombstones:
+      // otherwise a block the user deliberately deleted on a future day gets
+      // recreated by the next apply-forward. Same no-resurrect rule
+      // meeting-materializer.js established and #253 made the house style.
+      const allDayBlocks = await blockDB.getBlocksByDateIncludingDeleted(date, workspaceId);
+      const dayBlocks = allDayBlocks.filter(b => !b.deleted_at);
       // Top-level "block" type only; ignore nested children + other types
       const topBlocks = dayBlocks.filter(b => b.type === "block" && !b.parent_id);
+      const tombstonedNames = new Set(
+        allDayBlocks
+          .filter(b => b.deleted_at && b.type === "block" && !b.parent_id)
+          .map(b => (b.properties || {}).name)
+          .filter(Boolean)
+      );
       let dayTouched = false;
       let daySkipped = 0;
 
@@ -408,6 +678,7 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
         const newName = c.block && c.block.properties && c.block.properties.name;
         const existing = topBlocks.find(b => (b.properties || {}).name === newName);
         if (existing) continue; // dedupe: a same-named block is already here
+        if (newName && tombstonedNames.has(newName)) continue; // no-resurrect: the user deleted it here
         ops.push({
           op: "create",
           type: "block",
@@ -453,6 +724,16 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     attachDefaultSubtasks,
     getKindedBlock,
     applyForwardDiff,
+    // recurrence lifecycle (D1)
+    resolveOpenInstances,
+    setOpenInstance,
+    markResponsibilityComplete,
+    markResponsibilityIncomplete,
+    skipResponsibilityCycle,
+    pauseResponsibility,
+    resumeResponsibility,
+    readDayRoot,
+    findInstanceBlock,
     // pure helpers, exposed on the instance for route convenience
     buildResponsibilityTaskProps,
     taskDuration,
@@ -470,8 +751,6 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
 module.exports = createResponsibilityStore;
 Object.assign(module.exports, {
   cadenceDays,
-  localDateOnly,
-  daysInMonth,
   preferredCompletionDue,
   responsibilityScore,
   normalizeResponsibility,
@@ -483,5 +762,9 @@ Object.assign(module.exports, {
   buildResponsibilityTaskProps,
   normalizeTemplateTree,
   parseOffersAmpAlert,
+  writableProps,
   RESPONSIBILITY_KINDS,
+  // recurrence lifecycle: re-exported so callers get one import surface
+  recurrence,
+  DUE_THRESHOLD: recurrence.DUE_THRESHOLD,
 });
