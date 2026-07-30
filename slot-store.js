@@ -2318,6 +2318,60 @@ async function earnTaskCredit(workspaceId, userId, body) {
   return { awarded: awarded || adjusted, adjusted, credits: awarded || adjusted ? delta : 0, delta, account: state.account, scoring };
 }
 
+// The inverse of earnTaskCredit, which shipped without one. Delete the
+// task_complete ledger row for this source_key and back the same balance out.
+//
+// Two things break without it, and the second is the quiet one:
+//   - points stay banked for work that was un-done (Slack un-✅);
+//   - the ledger row survives, so earnTaskCredit's
+//     `ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING` eats the
+//     eventual RE-completion and awards nothing.
+// Deleting the row (rather than writing a compensating negative entry) is what
+// re-arms that conflict clause, so it is the delete that makes re-completion work.
+//
+// point_balance is the only account field earnTaskCredit moves — there is no
+// streak column in this schema — so mirroring it is the whole reversal. The
+// balance may legitimately go negative if the points were already spent; the
+// column has no CHECK and every spend path gates on `point_balance < cost`, so a
+// negative simply blocks spins until it is re-earned. Clamping would lose points.
+// The delete and the balance decrement run in ONE transaction, unlike
+// earnTaskCredit's insert-then-update pair. The asymmetry is deliberate: this
+// direction's split-failure mode is the worse one. If the DELETE lands and the
+// UPDATE does not, the ledger row is gone while the points stay banked, so the
+// eventual re-completion awards them a SECOND time and the account is permanently
+// over-credited with no audit row explaining it.
+async function revokeTaskCredit(workspaceId, userId, sourceKey) {
+  sourceKey = String(sourceKey || "").trim();
+  if (!sourceKey) throw new Error("source_key required");
+  await ensureAccount(workspaceId, userId);
+  const client = await pool.connect();
+  let credits = 0;
+  let revoked = false;
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `DELETE FROM slot_point_ledger
+        WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2
+        RETURNING delta`,
+      [workspaceId, sourceKey]
+    );
+    revoked = !!rows[0];
+    credits = rows[0] ? Number(rows[0].delta || 0) : 0;
+    if (credits !== 0) {
+      await client.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, -credits]);
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  const state = await getState(workspaceId, userId);
+  // `|| 0` normalizes the -0 that `-credits` yields on a miss.
+  return { revoked, credits, delta: -credits || 0, account: state.account };
+}
+
 function chooseWeighted(items, weightKey = "weight", rng = crypto.randomInt) {
   const pool = (items || []).filter(item => (Number(item && item[weightKey]) || 0) > 0);
   const total = pool.reduce((sum, r) => sum + (Number(r[weightKey]) || 0), 0);
@@ -3994,6 +4048,7 @@ module.exports = {
   deleteReward,
   reorderRewards,
   earnTaskCredit,
+  revokeTaskCredit,
   spin,
   spinBatch,
   normalizeWager,

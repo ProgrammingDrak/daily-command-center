@@ -128,6 +128,15 @@ function createMockPool(options = {}) {
     if (text.includes("SELECT delta FROM slot_point_ledger")) {
       return state.ledgerInserted || state.ledgerDelta != null ? { rows: [{ delta: state.ledgerDelta }] } : { rows: [] };
     }
+    // revokeTaskCredit: the row is DELETED, not zeroed, which is what re-arms the
+    // INSERT's ON CONFLICT DO NOTHING for a later re-completion.
+    if (text.includes("DELETE FROM slot_point_ledger")) {
+      const had = state.ledgerInserted;
+      const delta = state.ledgerDelta;
+      state.ledgerInserted = false;
+      state.ledgerDelta = null;
+      return { rows: had ? [{ delta }] : [] };
+    }
     if (text.includes("UPDATE slot_point_ledger")) {
       state.ledgerDelta = params[2];
       state.ledgerMetadata = JSON.parse(params[4]);
@@ -337,6 +346,93 @@ test("earnTaskCredit stores formula metadata and does not double-award duplicate
   assert.equal(mockPool.state.ledgerMetadata.formulaVersion, "task_points_v4");
   assert.equal(mockPool.state.ledgerMetadata.scoring.awardPoints, 60);
   assert.equal(mockPool.state.ledgerMetadata.inputs.duration_minutes, 60);
+});
+
+// The inverse of the test above, and the other half of one invariant: earn is
+// idempotent BECAUSE of ON CONFLICT DO NOTHING, which means an un-done task's row
+// must be removed rather than zeroed or the re-completion is silently swallowed.
+test("revokeTaskCredit backs out the points and re-arms a later re-completion", async () => {
+  const mockPool = createMockPool({ pointBalance: 100, migrated: true });
+  const store = loadStoreWithMock(mockPool);
+  const body = {
+    source_key: "2026-05-13:task-1",
+    task_id: "task-1",
+    title: "Normal task",
+    type: "task",
+    duration_minutes: 60,
+  };
+
+  await store.earnTaskCredit("ws-1", 1, body);
+  assert.equal(mockPool.state.pointBalance, 160);
+
+  const revoked = await store.revokeTaskCredit("ws-1", 1, "2026-05-13:task-1");
+  assert.equal(revoked.revoked, true);
+  assert.equal(revoked.credits, 60);
+  assert.equal(revoked.delta, -60);
+  assert.equal(mockPool.state.pointBalance, 100, "balance is back where it started");
+
+  // The load-bearing consequence: the award is available again.
+  const reAwarded = await store.earnTaskCredit("ws-1", 1, body);
+  assert.equal(reAwarded.awarded, true, "the deleted row re-arms ON CONFLICT DO NOTHING");
+  assert.equal(mockPool.state.pointBalance, 160);
+  assert.equal(mockPool.state.pointAdds, 3, "one earn, one revoke, one re-earn");
+
+  // The delete and the decrement must be ONE transaction: a split failure here
+  // leaves the ledger row gone while the points stay banked, so the eventual
+  // re-completion awards them a second time. Assert the ordering, or dropping
+  // BEGIN/COMMIT entirely would still pass everything above.
+  const stmts = mockPool.calls.map(c => String(c.sql || c.text || "").trim().replace(/\s+/g, " "));
+  const begin = stmts.indexOf("BEGIN");
+  const del = stmts.findIndex(s => s.startsWith("DELETE FROM slot_point_ledger"));
+  const commit = stmts.indexOf("COMMIT");
+  assert.ok(begin !== -1, "a transaction was opened");
+  assert.ok(begin < del, "BEGIN precedes the DELETE");
+  assert.ok(del < commit, "the DELETE is committed inside that transaction");
+  const decrement = stmts.findIndex((s, i) => i > del && s.includes("point_balance = point_balance +"));
+  assert.ok(decrement !== -1 && decrement < commit, "the balance decrement is in the same transaction");
+});
+
+test("revokeTaskCredit rolls back and releases the client when the balance write fails", async () => {
+  const mockPool = createMockPool({ pointBalance: 100, migrated: true });
+  const store = loadStoreWithMock(mockPool);
+  const body = { source_key: "2026-05-13:task-1", task_id: "task-1", title: "t", type: "task", duration_minutes: 60 };
+  await store.earnTaskCredit("ws-1", 1, body);
+
+  let released = 0;
+  const realConnect = mockPool.connect;
+  mockPool.connect = async () => {
+    const c = await realConnect();
+    const q = c.query;
+    return {
+      query: async (sql, params) => {
+        if (String(sql).includes("point_balance = point_balance +")) throw new Error("balance write failed");
+        return q(sql, params);
+      },
+      release() { released++; },
+    };
+  };
+
+  await assert.rejects(() => store.revokeTaskCredit("ws-1", 1, "2026-05-13:task-1"), /balance write failed/);
+  const stmts = mockPool.calls.map(c => String(c.sql || c.text || "").trim().replace(/\s+/g, " "));
+  assert.ok(stmts.includes("ROLLBACK"), "the transaction is rolled back");
+  assert.ok(!stmts.slice(stmts.indexOf("ROLLBACK")).includes("COMMIT"), "and never committed after the failure");
+  assert.equal(released, 1, "the client is released even on the failure path");
+});
+
+test("revokeTaskCredit on an unknown source key is a no-op, not a phantom debit", async () => {
+  const mockPool = createMockPool({ pointBalance: 100, migrated: true });
+  const store = loadStoreWithMock(mockPool);
+  const out = await store.revokeTaskCredit("ws-1", 1, "2026-05-13:never-credited");
+  assert.equal(out.revoked, false);
+  assert.equal(out.credits, 0);
+  assert.equal(out.delta, 0);
+  assert.equal(mockPool.state.pointBalance, 100);
+  assert.equal(mockPool.state.pointAdds, 0, "no balance write at all");
+});
+
+test("revokeTaskCredit requires a source key", async () => {
+  const store = loadStoreWithMock(createMockPool({ migrated: true }));
+  await assert.rejects(() => store.revokeTaskCredit("ws-1", 1, "  "), /source_key required/);
 });
 
 test("earnTaskCredit normalizes legacy duration_min payloads into minute-based points", async () => {
