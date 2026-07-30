@@ -44,16 +44,22 @@ function mountApp(extraBlocks = {}) {
   app.use((req, _res, next) => { req.workspaceId = MINE; req.session = { userId: 1 }; next(); });
 
   const blocks = { ...makeBlocks(), ...extraBlocks };
-  const calls = { undelete: [], created: [], deleted: [] };
+  const calls = { undelete: [], created: [], deleted: [], getBlock: [] };
   const broadcasts = [];
 
   const ctx = {
     blockDB: {
       getBlockIncludingDeleted: async (id) => blocks[id] || null,
-      // Deliberately live-only in the fake, unlike the real db.getBlock which does not
-      // filter deleted_at today. If a route regresses back to getBlock, the tombstone
-      // tests must FAIL rather than keep passing for the wrong reason.
-      getBlock: async (id) => (blocks[id] && !blocks[id].deleted_at ? blocks[id] : null),
+      // FAITHFUL to db.js:523 — the real getBlock is `SELECT * FROM blocks WHERE id = $1`
+      // with NO deleted_at filter, so it serves tombstones. Modelling it as live-only
+      // would be a fake stricter than reality, and it would silently defeat the read
+      // tests below: a revert of GET /:id back to `getBlock() -> if (!block) 404` would
+      // 404 in the harness (fake returned null) while serving the tombstone with a 200 in
+      // production. The call is recorded instead, so the read routes assert the contract
+      // directly. responsibility-store's getKindedBlock/getResponsibilityBlock are built
+      // from this same fake and do still call getBlock, which is the other reason it has
+      // to behave like the real one.
+      getBlock: async (id) => { calls.getBlock.push(id); return blocks[id] || null; },
       undeleteBlock: async (id) => {
         calls.undelete.push(id);
         const row = blocks[id];
@@ -115,10 +121,14 @@ async function call(app, method, path, body) {
 // ── Read contract: a tombstone is gone ──
 
 test("GET /api/blocks/:id 404s on a tombstone", async () => {
-  const { app } = mountApp();
+  const { app, calls } = mountApp();
   const { status, json } = await call(app, "GET", "/api/blocks/gone-1");
   assert.equal(status, 404);
   assert.equal(json.error, "Block not found", "asserted so an unmounted route cannot pass this test");
+  // The fake serves tombstones exactly like the real getBlock, so the 404 above can
+  // only come from the route's own deleted_at check. This pins WHICH fetch it used:
+  // a revert to getBlock would serve the row with a 200 in production.
+  assert.deepEqual(calls.getBlock, [], "read routes must use getBlockIncludingDeleted + an explicit deleted_at check");
 });
 
 test("GET /api/blocks/:id still serves a live block", async () => {
@@ -129,10 +139,11 @@ test("GET /api/blocks/:id still serves a live block", async () => {
 });
 
 test("GET /api/blocks/:id/children 404s when the PARENT is a tombstone", async () => {
-  const { app } = mountApp();
+  const { app, calls } = mountApp();
   const { status, json } = await call(app, "GET", "/api/blocks/gone-1/children");
   assert.equal(status, 404);
   assert.equal(json.error, "Block not found");
+  assert.deepEqual(calls.getBlock, [], "same read contract as GET /:id");
 });
 
 // ── Mutation contract: a tombstone is still visible, on purpose ──
@@ -150,8 +161,17 @@ test("PATCH on a tombstone reports 'Block is deleted', not 'Block not found'", a
   // Two different facts. A 404 says the id never existed; the caller needs to know the
   // row is there and dead, which is what makes /undelete the obvious next call.
   const { app } = mountApp();
-  const { json } = await call(app, "PATCH", "/api/blocks/gone-1", { properties: { title: "Resurrected" } });
+  const { status, json } = await call(app, "PATCH", "/api/blocks/gone-1", { properties: { title: "Resurrected" } });
   assert.match(String(json.error), /Block is deleted/);
+  // Pinned deliberately at the CURRENT value rather than silently implied. db.updateBlock
+  // throws a plain Error, and lib/route-helpers route() maps a status-less throw to 500.
+  // This is pre-existing (the old getBlock fetch also served the tombstone straight into
+  // updateBlock), but it has a live consequence worth someone's attention: block-store's
+  // isPermanentReplayFailure treats 400 and update/delete 404 as permanent and everything
+  // else as transient, so a WAL-queued PATCH against a row the user deleted retries
+  // forever instead of dead-lettering. Changing the code to 409/400 is replay-semantics
+  // work and belongs to Track B's B2, which owns that function. Flagged in the handoff.
+  assert.equal(status, 500, "current shape; see the comment before changing it");
 });
 
 test("deleting a row does not let it dodge the ownership check", async () => {
@@ -243,16 +263,17 @@ test("re-running the schedule route creates nothing", async () => {
   const { status, json } = await call(app, "POST", "/api/task-groups/grp-1/schedule", { date: "2026-07-30" });
   assert.equal(status, 200);
   assert.deepEqual(json.created, []);
-  assert.equal(json.skipped, true);
-  assert.equal(json.status, "skipped_duplicate");
-  assert.equal(json.existingId, "tg-live");
+  assert.equal(json.duplicate, true, "the repo's established 'already there' shape");
+  assert.equal(json.deleted, false, "a live duplicate, not a tombstone");
+  assert.equal(json.task.id, "tg-live", "the row comes back under a named key, like every sibling route");
   assert.equal(calls.created.length, 0, "and nothing reaches createItineraryTask");
 });
 
 test("a group whose tasks were DELETED does not silently come back", async () => {
   const { app, calls } = mountApp({ "tg-gone": groupTask("tg-gone", TOMB) });
   const { json } = await call(app, "POST", "/api/task-groups/grp-1/schedule", { date: "2026-07-30" });
-  assert.equal(json.status, "skipped_deleted", "the tombstone is named, not hidden as a dup");
+  assert.equal(json.duplicate, true);
+  assert.equal(json.deleted, true, "the tombstone is named, not hidden as a dup — the client needs it to offer a re-add");
   assert.equal(calls.created.length, 0);
 });
 

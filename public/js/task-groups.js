@@ -169,9 +169,40 @@
     }catch(e){ toast("Group action failed: "+(e.message||e),"error"); }
   }
 
-  async function addGroupToDay(id){
+  // The server's dedupe guard is check-then-act, so two genuinely concurrent POSTs can
+  // both read an empty day and both plant the group. A real double-click is exactly that
+  // case: nothing here disabled the button or tracked an in-flight request, so both fired
+  // before either created a row. This closes the race the server cannot see.
+  let _addingGroup=null;
+
+  async function addGroupToDay(id,opts){
+    if(_addingGroup===id)return;
+    _addingGroup=id;
+    try{
+      return await _addGroupToDay(id,opts);
+    }finally{ _addingGroup=null; }
+  }
+
+  async function _addGroupToDay(id,opts){
     const date=viewDateStr();
-    const data=await api("POST","/api/task-groups/"+encodeURIComponent(id)+"/schedule",date?{date}:{});
+    const body=date?{date}:{};
+    if(opts&&opts.force)body.force=true;
+    const data=await api("POST","/api/task-groups/"+encodeURIComponent(id)+"/schedule",body);
+    // The server refuses a second add of the same group on the same day, so a
+    // double-click no longer plants every item twice. Without this branch the guard
+    // reads as "Group had no tasks", which is both wrong and a dead end: a group whose
+    // tasks you deleted could never be re-added from the UI, because `force` is the
+    // only way past the guard and nothing here was sending it.
+    if(data&&data.duplicate){
+      await refreshSchedule();
+      // Recurse into the INNER function: addGroupToDay's in-flight guard is still
+      // held for this id, so going back through it would silently no-op the re-add.
+      if(data.deleted&&confirm("You deleted this group's tasks for this day. Add them back?")){
+        return _addGroupToDay(id,{force:true});
+      }
+      toast(data.deleted?"Group's tasks were deleted for this day":"Group is already on this day");
+      return;
+    }
     const n=(data&&data.created&&data.created.length)||0;
     await refreshSchedule();
     toast(n?("Added "+n+" task"+(n===1?"":"s")+" to your day"):"Group had no tasks");

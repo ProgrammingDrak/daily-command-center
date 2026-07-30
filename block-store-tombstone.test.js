@@ -44,6 +44,9 @@ function makeStore({ routes = {}, method } = {}) {
       fetchCalls.push({ url, method: (init && init.method) || "GET" });
       const key = Object.keys(routes).find((k) => String(url).includes(k));
       const body = key ? routes[key] : {};
+      // A route body may THROW to model a transport failure (offline), which rejects
+      // fetch itself rather than producing a response — a different branch from a
+      // non-ok response, and the one with no status on the error.
       const resolved = typeof body === "function" ? body() : body;
       // A route may answer with a status instead of a body ({ __status: 404 }), which
       // is what A2's tombstone 404 looks like on the wire.
@@ -51,7 +54,10 @@ function makeStore({ routes = {}, method } = {}) {
       return {
         ok: status >= 200 && status < 300,
         status,
-        json: async () => resolved,
+        // apiGet throws before parsing, but apiPost/apiPatch/apiDelete all read json()
+        // on their error path, where the server really sends { error }. Hand back that
+        // shape rather than leaking the sentinel to whoever routes a non-2xx next.
+        json: async () => (status >= 400 ? { error: "Block not found" } : resolved),
       };
     },
   };
@@ -182,6 +188,23 @@ test("a NON-404 failure does not evict a live row", async () => {
   broken = true;
   await store.handleBlocksChanged({ clientId: "other", blockIds: ["B10"] });
   assert.ok(store.get("B10"), "a server error is not evidence the row is gone");
+});
+
+test("a network REJECTION does not evict a live row", async () => {
+  // The branch a plausible refactor breaks: offline makes fetch reject with a TypeError
+  // that never reaches apiGet's !res.ok path, so the error carries no .status at all.
+  // `if (e.status !== 200) cacheDelete(id)` or sniffing e.message for "404" would both
+  // pass the 500 test above and blank the user's whole day the moment the wifi drops.
+  let offline = false;
+  const { store } = makeStore({
+    routes: { "/api/blocks/B11": () => { if (offline) throw new TypeError("Failed to fetch"); return liveBlock("B11"); } },
+  });
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B11"] });
+  assert.ok(store.get("B11"));
+
+  offline = true;
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B11"] });
+  assert.ok(store.get("B11"), "a statusless network error is not evidence the row is gone");
 });
 
 test("a live row from a foreign broadcast is still cached normally", async () => {

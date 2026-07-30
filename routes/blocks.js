@@ -735,30 +735,42 @@ module.exports = function mount(app, ctx) {
 
     // Adding a group to a day is not idempotent by nature — every item gets a fresh
     // local_id and a fresh free slot, so #253 left this route able to double-book the
-    // entire group on a double-click or a client retry, with no key to dedupe on.
-    // The group id stamped on each created row IS that key. Tombstone-inclusive on
-    // purpose: a group whose tasks the user deleted must not silently come back the
-    // next time the route is hit. `force: true` is the deliberate re-add (mirroring
-    // respStore.scheduleResponsibilityTask's own force flag), so the guard blocks the
-    // accident without blocking the intent.
+    // entire group on any repeat hit, with no key to dedupe on. The group id stamped on
+    // each created row IS that key. Tombstone-inclusive on purpose: a group whose tasks
+    // the user deleted must not silently come back the next time the route is hit.
+    // `force: true` is the deliberate re-add (mirroring respStore.scheduleResponsibilityTask's
+    // own force flag), so the guard blocks the accident without blocking the intent.
+    //
+    // BEST-EFFORT, and precisely so: this is check-then-act with awaits in between and
+    // no lock, transaction or uniqueness constraint on (workspace_id, date, taskGroupId).
+    // It reliably stops the SEQUENTIAL repeat — a WAL replay, or clicking again after the
+    // first add rendered — but two genuinely concurrent POSTs can both read an empty day
+    // and both plant the group. The true double-click is held off client-side by an
+    // in-flight guard in public/js/task-groups.js. Making this airtight server-side wants
+    // a partial unique index over live rows, which is pg-schema.js work (Track A / A3).
+    // ONE day load for both the guard and the slotting context. The tombstone-inclusive
+    // read cannot use an index (every blocks index is partial on deleted_at IS NULL), so
+    // it sequential-scans; loadDaySlottingContext exists precisely so a batch pays for
+    // that once, and issuing a second copy here would have undercut its whole purpose.
+    const dayCtx = await respStore.loadDaySlottingContext(dateStr, userId, workspaceId);
+
     if (!(req.body && req.body.force)) {
       const existing = await materializeGuard.findForDedupe(workspaceId, {
-        date: dateStr,
+        rows: dayCtx.allBlocks,
         match: (row) => String((row.properties || {}).taskGroupId || "") === String(group.id),
       });
+      // `duplicate: true` + the row under a named key is this repo's established shape
+      // for "already there" (see /api/responsibilities/capture just above,
+      // responsibility-store scheduleResponsibilityTask, budget-store, social-store).
+      // `deleted` distinguishes "already on this day" from "you removed these", which
+      // is what lets the client offer a re-add instead of a dead end.
       if (existing) {
-        return {
-          created: [],
-          skipped: true,
-          status: materializeGuard.dedupeStatus(existing),
-          existingId: existing.id,
-          date: dateStr,
-        };
+        return { created: [], duplicate: true, deleted: !!existing.deleted_at, task: existing, date: dateStr };
       }
     }
 
     const items = Array.isArray(group.properties.items) ? group.properties.items : [];
-    const { dayStart, dayEnd, blockers } = await respStore.loadDaySlottingContext(dateStr, userId, workspaceId);
+    const { dayStart, dayEnd, blockers } = dayCtx;
     const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
     const created = [];
     for (const item of items) {

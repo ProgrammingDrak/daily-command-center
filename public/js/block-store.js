@@ -18,10 +18,10 @@
   // ── Partitioned Cache ──
   let _dayCache = new Map();   // id → block (cleared on date switch)
   let _globalCache = new Map(); // id → block (persistent across dates)
-  // Ids this client soft-deleted. GET /api/blocks/:id has no deleted_at filter, so a
-  // foreign SSE broadcast naming a deleted id would make this tab re-fetch the
-  // tombstone and cache it — the row reappears until reload. (A2 adds the 404 on the
-  // route side; this is the client half and both are worth having.) Session-scoped:
+  // Ids this client soft-deleted, so a foreign SSE broadcast naming one does not make
+  // this tab re-fetch and re-cache the row it just removed. (A2 also made
+  // GET /api/blocks/:id 404 on a tombstone; this is the client half and both are worth
+  // having, since the skip avoids the round trip entirely.) Session-scoped:
   // a reload starts empty, by which point loadDay's deleted_at-filtered query is the
   // source of truth, so this never has to be pruned.
   const _tombstones = new Set();
@@ -647,6 +647,13 @@
     // Called by SSE when blocks change from another source (tab, scheduled task)
     async handleBlocksChanged(event) {
       if (event.clientId === CLIENT_ID) return; // ignore own changes
+      // A restore performed elsewhere has to clear our local tombstone FIRST, or the
+      // loop below skips the very id we were told to re-read and the row stays
+      // invisible in this tab until a reload. POST /api/blocks/:id/undelete carries
+      // undeletedIds for exactly this.
+      if (event.undeletedIds && event.undeletedIds.length) {
+        for (const id of event.undeletedIds) _tombstones.delete(id);
+      }
       // Re-fetch affected blocks
       if (event.blockIds && event.blockIds.length) {
         for (const id of event.blockIds) {

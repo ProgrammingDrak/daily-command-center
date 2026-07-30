@@ -9,6 +9,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const createMaterializeGuard = require("./lib/materialize-guard");
+// Pure helpers off the module, findForDedupe off the factory: the layering the module
+// shares with lib/task-timing.js and responsibility-store.js.
 const { assertNotResurrecting, dedupeStatus } = require("./lib/materialize-guard");
 
 const TOMB = "2026-07-29T10:00:00Z";
@@ -95,19 +97,35 @@ test("the idempotency-key path is DATE-BLIND, deliberately", async () => {
   assert.equal(db.calls.getBlocksByDateIncludingDeleted, 0, "and it must not cost a day scan");
 });
 
-test("findForDedupe falls back to a same-day source_id match", async () => {
+test("findForDedupe falls back to a same-day predicate match", async () => {
   // The materializer identity scheme: no caller-supplied key, so the row is found by
   // what created it. Tombstone included, same rule.
+  const bySourceId = (id) => (r) => String((r.properties || {}).source_id || "") === id;
   const rows = [
     { ...row("m1", { source_id: "evt-1" }, TOMB), date: "2026-07-30" },
     { ...row("m2", { source_id: "evt-2" }), date: "2026-07-30" },
   ];
   const guard = createMaterializeGuard({ blockDB: fakeDB(rows) });
-  const hit = await guard.findForDedupe("ws-1", { date: "2026-07-30", sourceId: "evt-1" });
+  const hit = await guard.findForDedupe("ws-1", { date: "2026-07-30", match: bySourceId("evt-1") });
   assert.equal(hit.id, "m1");
   assert.equal(assertNotResurrecting(hit).skip, true);
-  const miss = await guard.findForDedupe("ws-1", { date: "2026-07-30", sourceId: "evt-404" });
+  const miss = await guard.findForDedupe("ws-1", { date: "2026-07-30", match: bySourceId("evt-404") });
   assert.equal(miss, null);
+});
+
+test("pre-loaded rows are used instead of a second day load", async () => {
+  // The caller that already holds the day (routes/blocks.js task-group schedule, via
+  // loadDaySlottingContext) must not pay for the unindexed tombstone-inclusive scan
+  // twice. Asserting the query count is the only way that stays true.
+  const rows = [{ ...row("tg-gone", { taskGroupId: "g1" }, TOMB), date: "2026-07-30" }];
+  const db = fakeDB(rows);
+  const guard = createMaterializeGuard({ blockDB: db });
+  const hit = await guard.findForDedupe("ws-1", {
+    rows,
+    match: (r) => (r.properties || {}).taskGroupId === "g1",
+  });
+  assert.equal(hit.id, "tg-gone");
+  assert.equal(db.calls.getBlocksByDateIncludingDeleted, 0, "rows supplied means zero queries");
 });
 
 test("the same-day path takes an arbitrary predicate, and prefers a live hit", async () => {
@@ -133,7 +151,7 @@ test("findForDedupe returns null when it has nothing to match on", async () => {
   const guard = createMaterializeGuard({ blockDB: db });
   assert.equal(await guard.findForDedupe("ws-1", {}), null);
   assert.equal(await guard.findForDedupe("ws-1", { date: "2026-07-30" }), null, "date alone is not an identity");
-  assert.equal(await guard.findForDedupe("ws-1", { sourceId: "evt-1" }), null, "and neither is a dateless source_id");
+  assert.equal(await guard.findForDedupe("ws-1", { rows: [] }), null, "and neither are rows with no predicate");
   assert.equal(db.calls.findByIdempotencyKey, 0);
   assert.equal(db.calls.getBlocksByDateIncludingDeleted, 0);
 });

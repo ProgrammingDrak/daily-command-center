@@ -2,6 +2,9 @@
 // Extracted verbatim from server.js (2026-07-04). Mounted via the shared
 // module.exports(app, ctx) pattern; every dependency comes from ctx.
 const createMaterializeGuard = require("../lib/materialize-guard");
+// Pure helpers come off the module, persistence comes off the factory — the layering
+// lib/task-timing.js and responsibility-store.js both state in their headers.
+const { assertNotResurrecting, dedupeStatus } = createMaterializeGuard;
 
 module.exports = function mount(app, ctx) {
   const {
@@ -112,7 +115,7 @@ module.exports = function mount(app, ctx) {
         // soft-deleted match is a tombstone -> respect the user's delete and do not
         // re-create (mirrors meeting-materializer: never resurrect what was removed).
         const dup = await findBriefBlock(workspaceId, idemKey);
-        if (dup) return res.json({ ok: true, date, status: materializeGuard.dedupeStatus(dup), block: { id: dup.id, title: (dup.properties || {}).title || title } });
+        if (dup) return res.json({ ok: true, date, status: dedupeStatus(dup), block: { id: dup.id, title: (dup.properties || {}).title || title } });
       }
 
       const minutes = Math.max(1, Math.round(Number(body.minutes || body.durationMinutes || body.estimatedMinutes || body.duration || 30)));
@@ -328,8 +331,8 @@ module.exports = function mount(app, ctx) {
       // the dead row's id: harmless when the task was credited before it was deleted
       // (ON CONFLICT absorbs the repeat), but real points for a task the user removed
       // when it was not. Returning the row id keeps the caller idempotent either way.
-      if (materializeGuard.assertNotResurrecting(existing).skip) {
-        return res.json({ ok: true, date, status: "skipped_deleted", block: { id: existing.id, title }, credit: null });
+      if (assertNotResurrecting(existing).skip) {
+        return res.json({ ok: true, date, status: dedupeStatus(existing), block: { id: existing.id, title }, credit: null });
       }
       let blockId, duplicate = false;
       if (existing) {
@@ -400,7 +403,7 @@ module.exports = function mount(app, ctx) {
       const existing = await findBriefBlock(workspaceId, idemKey);
       // Was a flat "skipped_duplicate" for both cases; a tombstone now says so, which
       // is the difference between "you already pushed this" and "you deleted this".
-      if (existing) return res.json({ ok: true, date, status: materializeGuard.dedupeStatus(existing), block: { id: existing.id, title } });
+      if (existing) return res.json({ ok: true, date, status: dedupeStatus(existing), block: { id: existing.id, title } });
 
       const minutes = Math.max(1, Math.round(Number(body.minutes || body.duration || body.durationMinutes || body.estimatedMinutes || 30)));
       const props = {
