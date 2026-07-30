@@ -647,9 +647,191 @@ CREATE TABLE IF NOT EXISTS budget_investments (
 );
 `;
 
+// ── Post-schema statements (canonical task model, transition-era) ──
+//
+// These run AFTER SCHEMA_SQL, each as its own query wrapped in try/catch-and-log,
+// so a single failing index or constraint can never block boot. SCHEMA_SQL is one
+// monolithic query: a failure anywhere in it aborts the whole thing, which is fine
+// for CREATE TABLE IF NOT EXISTS but not for statements that can legitimately fail
+// against dirty existing data.
+//
+// The two helper functions are the SINGLE definition of two predicates that the
+// migration, the audit endpoint, and later phases all need. Duplicating either one
+// in JS-built SQL is how the two drift apart, so they live here in the schema.
+const POST_SCHEMA_STATEMENTS = [
+  // Is this row a "task" for canonical-model purposes? The JS twin is db.isTaskRow.
+  // Exclusions: containers (day_root), time-tracking segments (time_entry),
+  // standing lists (delegated_item), responsibility scaffolding (responsibility*),
+  // group templates (task_group) and move tombstones (reschedule_tombstone).
+  // Shells and meetings ARE task rows.
+  ["fn dcc_is_task_row", `
+    CREATE OR REPLACE FUNCTION dcc_is_task_row(p_type text, p_props jsonb)
+    RETURNS boolean LANGUAGE sql IMMUTABLE AS $fn$
+      SELECT p_type IS DISTINCT FROM 'day_root'
+         AND p_type IS DISTINCT FROM 'time_entry'
+         AND COALESCE(p_props->>'kind', '') NOT IN
+             ('delegated_item', 'task_group', 'reschedule_tombstone')
+         AND COALESCE(p_props->>'kind', '') NOT LIKE 'responsibility%'
+    $fn$;
+  `],
+
+  // Resolve a client-space reference (a legacy properties.local_id, or already a
+  // row id) to exactly ONE blocks.id, or NULL when it is unresolvable OR ambiguous.
+  //
+  // Ambiguity is real, not theoretical: legacy local_ids are Date.now()-based and
+  // DO collide across days. Returning NULL on a tie is the whole point — a NULL
+  // parent_id degrades a row to a root, which is exactly today's flat behavior,
+  // never worse. A wrong guess would silently re-parent someone's task.
+  //
+  // Preference tiers, best first:
+  //   1. p_ref is itself a row id      (newer data already lives in row-id space)
+  //   2. local_id match on the same date
+  //   3. local_id match on an undated row
+  // and within a tier, a live row beats a soft-deleted one.
+  ["fn dcc_resolve_local_id", `
+    CREATE OR REPLACE FUNCTION dcc_resolve_local_id(p_ws text, p_date date, p_ref text)
+    RETURNS text LANGUAGE sql STABLE AS $fn$
+      WITH m AS (
+        SELECT x.id,
+               (CASE WHEN x.id = p_ref THEN 1
+                     WHEN x.date IS NOT DISTINCT FROM p_date THEN 2
+                     ELSE 3 END) * 10
+               + (CASE WHEN x.deleted_at IS NULL THEN 0 ELSE 1 END) AS tier
+          FROM blocks x
+         WHERE x.workspace_id IS NOT DISTINCT FROM p_ws
+           AND x.type <> 'day_root'
+           AND ( x.id = p_ref
+              OR ( x.properties->>'local_id' = p_ref
+                   AND (x.date IS NOT DISTINCT FROM p_date OR x.date IS NULL) ) )
+      )
+      SELECT CASE WHEN count(*) = 1 THEN min(m.id) END
+        FROM m
+       WHERE m.tier = (SELECT min(tier) FROM m)
+    $fn$;
+  `],
+
+  // How many rows did dcc_resolve_local_id consider at its winning tier? Lets the
+  // migration and the audit tell the two failure modes apart, which matter very
+  // differently: 0 candidates means the task is simply gone (harmless), while 2+
+  // means a live Date.now() collision that a read flip could mis-link.
+  ["fn dcc_count_local_id_candidates", `
+    CREATE OR REPLACE FUNCTION dcc_count_local_id_candidates(p_ws text, p_date date, p_ref text)
+    RETURNS integer LANGUAGE sql STABLE AS $fn$
+      WITH m AS (
+        SELECT (CASE WHEN x.id = p_ref THEN 1
+                     WHEN x.date IS NOT DISTINCT FROM p_date THEN 2
+                     ELSE 3 END) * 10
+               + (CASE WHEN x.deleted_at IS NULL THEN 0 ELSE 1 END) AS tier
+          FROM blocks x
+         WHERE x.workspace_id IS NOT DISTINCT FROM p_ws
+           AND x.type <> 'day_root'
+           AND ( x.id = p_ref
+              OR ( x.properties->>'local_id' = p_ref
+                   AND (x.date IS NOT DISTINCT FROM p_date OR x.date IS NULL) ) )
+      )
+      SELECT COALESCE((SELECT count(*)::int FROM m WHERE m.tier = (SELECT min(tier) FROM m)), 0)
+    $fn$;
+  `],
+
+  // Parse a text date, yielding NULL instead of raising on anything Postgres cannot
+  // accept. A shape regex is NOT enough: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' happily admits
+  // '0000-99-99' and '2026-02-31', and casting either one raises "date/time field
+  // value out of range". That matters because slot_point_ledger.source_key is
+  // caller-supplied and unvalidated (POST /api/slot/earn-task has no validate()
+  // middleware, and earnTaskCredit only trims it), so one stored malformed prefix
+  // would permanently 500 the audit endpoint AND make migration 001 unappliable,
+  // since the runner wraps the whole file in one transaction.
+  ["fn dcc_try_date", `
+    CREATE OR REPLACE FUNCTION dcc_try_date(p_text text)
+    RETURNS date LANGUAGE plpgsql IMMUTABLE AS $fn$
+    BEGIN
+      RETURN p_text::date;
+    EXCEPTION WHEN others THEN
+      RETURN NULL;
+    END $fn$;
+  `],
+
+  // Transition-only index; Phase A4 drops it. Every legacy client lookup is by
+  // properties.local_id.
+  //
+  // NOT partial on `deleted_at IS NULL`, which is how it was first written and was
+  // wrong: dcc_resolve_local_id deliberately CONSIDERS soft-deleted rows (its tier
+  // expression ranks them below live ones), so its predicate never implies
+  // `deleted_at IS NULL` and Postgres refused the index entirely. Measured on a prod
+  // restore: seq scan, 860 buffers / 7.7ms per call versus 2 buffers / 1.1ms with the
+  // full index — and it is called once per row across the migration's CTEs, the audit
+  // endpoint, and the live createBlock path.
+  //
+  // The DROP is required: CREATE INDEX IF NOT EXISTS will NOT replace a same-named
+  // partial index left behind by an earlier boot of this code.
+  ["idx_blocks_local_id", `
+    DO $do$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_indexes
+         WHERE indexname = 'idx_blocks_local_id' AND indexdef LIKE '%WHERE%'
+      ) THEN
+        DROP INDEX idx_blocks_local_id;
+      END IF;
+    END $do$;
+    CREATE INDEX IF NOT EXISTS idx_blocks_local_id
+      ON blocks ((properties->>'local_id'));
+  `],
+
+  // Serves the open-task carryover query (db.getOpenTasksBefore). COALESCE to
+  // 'open' because most existing rows carry no status at all; the non-'open'
+  // statuses in the wild (scheduled/proposed/draft/ready/active/ingested/queued)
+  // all belong to proposals and meeting artifacts, which must stay out.
+  ["idx_blocks_open", `
+    CREATE INDEX IF NOT EXISTS idx_blocks_open
+      ON blocks (workspace_id, date DESC)
+      WHERE deleted_at IS NULL AND type = 'block'
+        AND COALESCE(properties->>'status', 'open') = 'open';
+  `],
+
+  // NOT VALID so it cannot fail on existing bad rows. The migration's cycle scrub
+  // runs VALIDATE CONSTRAINT once self-parents are gone.
+  ["blocks_no_self_parent", `
+    DO $do$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'blocks_no_self_parent'
+      ) THEN
+        ALTER TABLE blocks ADD CONSTRAINT blocks_no_self_parent
+          CHECK (parent_id IS DISTINCT FROM id) NOT VALID;
+      END IF;
+    END $do$;
+  `],
+
+  // Applied-migration ledger for scripts/migrate.js. Lives here rather than in the
+  // migration runner so a fresh boot on an empty database already has it.
+  ["schema_migrations", `
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      filename    TEXT PRIMARY KEY,
+      checksum    TEXT NOT NULL,
+      applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      notes       JSONB NOT NULL DEFAULT '{}'
+    );
+  `],
+];
+
+async function applyPostSchema() {
+  for (const [label, sql] of POST_SCHEMA_STATEMENTS) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      // Deliberately non-fatal: boot must survive a statement that can't apply to
+      // this database's current data. The audit endpoint reports what is missing.
+      console.error(`[pg-schema] post-schema "${label}" failed (non-fatal): ${err.message}`);
+    }
+  }
+}
+
 async function createSchema() {
   console.log("[pg-schema] Creating tables...");
   await pool.query(SCHEMA_SQL);
+  await applyPostSchema();
   console.log("[pg-schema] All tables and indexes created.");
 }
 
@@ -665,5 +847,5 @@ if (require.main === module) {
       process.exit(1);
     });
 } else {
-  module.exports = { createSchema };
+  module.exports = { createSchema, applyPostSchema };
 }

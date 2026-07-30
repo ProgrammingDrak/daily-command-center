@@ -48,3 +48,6 @@ data/blocks.db
 .codex-*.log
 .codex-*.patch
 tmp-*.json
+
+# fold-diff.mjs scratch snapshots (scripts/fold-diff.mjs)
+.fold-snapshots/

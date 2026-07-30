@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "check:db": "node scripts/check-db.js",
+    "migrate": "node scripts/migrate.js",
     "db:refresh-local": "node scripts/refresh-local-db.js",
     "db:refresh-local:mac": "bash scripts/refresh-local-db.sh",
     "db:schedule-local-refresh": "powershell -ExecutionPolicy Bypass -File scripts/refresh-local-db.ps1 -InstallDailyTask",
