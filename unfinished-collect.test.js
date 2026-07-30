@@ -358,3 +358,20 @@ test("the Catch up modal lists ROOTS, and every surface shares one predicate", (
   assert.ok(/_CO_\?_CO_\.rootsOf\(unfPool\)/.test(schedTabSource),
     "the lane must defer to the shared predicate too");
 });
+
+// Untimed-today and carryovers share one persisted order array but render as two
+// headers in a FIXED sequence, so an order interleaving them cannot be drawn. C1
+// split the previously-combined list into those two sections; accepting a
+// cross-group drop persisted a position the renderer then ignored, so the row
+// snapped back and the drag was a silent no-op. Reorder within a group only.
+test("cross-group drops are not accepted as reorders (the position is unrenderable)", () => {
+  const slice = /function handleUnscheduledDrop\(movedId,targetId,e\)\{[\s\S]*?\n\}/.exec(schedTabSource);
+  assert.ok(slice, "handleUnscheduledDrop must exist");
+  assert.ok(/if\(\(movedUnf&&targetUnf\)\|\|\(movedUntimed&&targetUntimed\)\)\{/.test(slice[0]),
+    "the reorder branch must require both rows to be in the SAME group");
+  assert.ok(!/if\(targetUnf\|\|targetUntimed\)\{/.test(slice[0]),
+    "the old target-only test accepted cross-group drops and persisted a dead order");
+  // the carryover-onto-timed-row gesture must survive as the meaningful cross case
+  assert.ok(/_unfScheduleIntoToday\(movedUnf,targetEv,after\)/.test(slice[0]),
+    "a carryover dropped at the work list still schedules into today");
+});

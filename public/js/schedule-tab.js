@@ -255,7 +255,11 @@ function _applySectionSort(items,mode,getTitle,getCreated){
 // the persisted manual (drag) order. Rows with no saved position sink to the
 // end — untimed above carryovers, each newest-created first — so a freshly
 // surfaced row lands on top until dragged. Applied per section (untimed today /
-// carryovers) against ONE persisted order, so a drag across the two still sticks.
+// carryovers) against ONE persisted order: the two groups share the array, but
+// each sorts only its own members and they render as two headers in a fixed
+// sequence, so a position that INTERLEAVES the groups is not representable.
+// handleUnscheduledDrop therefore reorders within a group only; a carryover
+// dragged at the work list is a schedule-into-today gesture, not a reorder.
 function _orderUnscheduled(rows){
   const order=(typeof loadUnscheduledOrder==="function")?loadUnscheduledOrder():[];
   const created=_unsCreated;
@@ -336,8 +340,13 @@ function handleUnscheduledDrop(movedId,targetId,e){
   const targetUntimed=!!(targetEv&&targetEv.untimed);
   const rect=e.currentTarget.getBoundingClientRect();
   const after=(e.clientY-rect.top)>=rect.height/2;
-  // Drop on another Unscheduled row → reorder within the section.
-  if(targetUnf||targetUntimed){
+  // Drop on another row in the SAME group → reorder within that group.
+  // Untimed-today and carryovers render as two sections in a fixed sequence
+  // ("Unscheduled" then "Unfinished"), so an order that interleaves them cannot be
+  // rendered: persisting one made the row snap straight back and the drag read as a
+  // silent no-op. Same-group only, and a cross-group drop falls through to the
+  // gesture below that actually means something.
+  if((movedUnf&&targetUnf)||(movedUntimed&&targetUntimed)){
     _reorderUnscheduled(movedId,targetId,after,movedUntimed&&targetUntimed);
     return "handled";
   }
