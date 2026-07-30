@@ -278,7 +278,20 @@ function reloadPersistedEdits() {
         return !(p.local_id&&datedLocalIds.has(p.local_id));
       };
       const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)];
-      addedBlocks.forEach(block=>{
+      // Fail LOUDLY if task-model.js did not load. This is the one cross-module call
+      // in here without a typeof guard, and it sits inside a try whose catch discards
+      // the error — so a stale cached index.html (no <script> tag) or a parse error
+      // would throw on the first block and hand the user a silently EMPTY itinerary,
+      // skipping hydrateBacklogFromBlocks/hydrateLockedTasks too, with nothing in the
+      // console. Every sibling call here (hydrateBacklogFromBlocks, commitDoneOnDate)
+      // is typeof-guarded; unfinished-tasks.js guards TaskModel the same way.
+      // Deliberately NOT an early return out of reloadPersistedEdits: the fold loop
+      // sits in its own try, and bailing from the function would also skip
+      // hydrateTaskCommuteTimes / hydrateBacklogFromBlocks / hydrateLockedTasks /
+      // recalcTimes further down. Skip only the loop that needs the module.
+      const TM=window.DCC&&window.DCC.TaskModel;
+      if(!TM||typeof TM.fromBlock!=="function")console.error("[persistence] task-model.js missing or stale — task blocks cannot fold into the itinerary");
+      else addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
         // Safety net: a stale cached day file can still carry the synthesized
@@ -300,74 +313,20 @@ function reloadPersistedEdits() {
         // the top of reloadPersistedEdits and filled from day_root._done above, so
         // adding here is additive and everything downstream (isDone, isPast,
         // isActive, the List partition, day stats, the Done timestamp) just works.
+        //
+        // This deliberately stays in the CALLER rather than moving into fromBlock:
+        // manualDone/doneAt are reloadPersistedEdits' own locals, and fromBlock is
+        // contractually pure (mutates no globals, reads nothing off the page). The
+        // carryover lane doesn't need it either — collectUnfinished admits only
+        // *unfinished* rows. C5 folds row status into the model properly.
         if(p.done===true||p.status==="done"){
           manualDone.add(taskId);
           if(!doneAt[taskId])doneAt[taskId]=p.completedAt||p.doneAt||null;
         }
-        const d=p.duration||p.estimatedMinutes||30;
-        // A dateless row is unscheduled by definition: any stored start on it is
-        // stale (e.g. stamped by an old reflow), so ignore it and keep the row
-        // in the Unscheduled section until a drag gives it a real slot.
-        const dateless=!block.date;
-        const hasStoredTime=!dateless&&p.start&&p.start!=="00:00";
-        const untimed=!p.start||dateless;    // no scheduled time -> Unscheduled section
-        const task={
-          id:taskId,title:p.title,type:p.type||"task",
-          _blockId:block.id,
-          _dateless:dateless,   // day-agnostic row: Unscheduled everywhere, excluded from day stats
-          createdAt:block.created_at||p.created_at||p.createdAt||null,
-          start:p.start||"00:00",
-          end:p.end||fmt(d),
-          meta:p.meta||("Custom task \u00b7 "+ms(d)),
-          detail:p.detail||"",source:p.source||"manual",
-          source_id:p.source_id||"",notes:p.notes||"",untimed:untimed,
-          notionUrl:p.notionUrl||"",calUrl:p.calUrl||"",priority:p.priority||"High",
-          tags:Array.isArray(p.tags)?p.tags:[],
-          kind:p.kind||"",
-          // Meeting affordances (join link / location / RSVP), and the block id
-          // the meeting-automation panel keys off (itinerary-card.js).
-          location:p.location||"",
-          hangout_link:p.hangout_link||p.conferenceUrl||"",
-          rsvp_status:p.rsvp_status||"",
-          // Auto-prep chip: the materializer stamps prep_status on the meeting block
-          // ("pending" at birth, "ready" once a brief lands). Surface it so the row
-          // chip (itinerary-card.js) renders without a page-level meetings[] join.
-          prepStatus:p.prep_status||null,
-          // Recap chip: set to "ready" by applyArtifacts once a summary lands, so the
-          // row shows a Recap chip (schedule-tab.js) that opens the modal's Recap tab.
-          recapStatus:p.recap_status||null,
-          dashboardRef:p.dashboard_ref||null,
-          recordingReview:!!p.recording_review,
-          meetingBlockId:(p.type==="meeting"||p.kind==="meeting"||p.type==="oneone")?block.id:(p.meetingBlockId||""),
-          isPlaceholder:p.isPlaceholder||false,
-          placeholderMenus:Array.isArray(p.placeholderMenus)?p.placeholderMenus:[],
-          taskGroupId:p.taskGroupId||null,
-          responsibilityId:p.responsibilityId||null,
-          responsibilityTitle:p.responsibilityTitle||"",
-          capacityBucket:p.capacityBucket||"",
-          responsibilityScore:p.responsibilityScore||null,
-          alertKey:p.alertKey||null,
-          alertType:p.alertType||null,
-          publicVisibility:p.publicVisibility||"public",
-          triageId:p.triageId||null,
-          delegatedItemId:p.delegatedItemId||null,
-          linkedBlockId:p.linkedBlockId||null,
-          linkedTagId:p.linkedTagId||null,
-          ampUrl:p.ampUrl||"",
-          hubspotUrl:p.hubspotUrl||"",
-          wrapId:p.wrapId||null,
-          isWrap:!!p.isWrap,
-          subtaskOf:p.subtaskOf||null,
-          reschedulePlacement:p.reschedulePlacement||null,
-          rescheduledFrom:p.rescheduledFrom||null,
-          sourceTaskId:p.sourceTaskId||null
-        };
-        if(p.commuteMinutes||p.commute_minutes)task.commuteMinutes=p.commuteMinutes||p.commute_minutes;
-        if(p.commuteToMinutes||p.commute_to_minutes)task.commuteToMinutes=p.commuteToMinutes||p.commute_to_minutes;
-        if(p.commuteBackMinutes||p.commute_back_minutes||p.commuteReturnMinutes||p.commute_return_minutes)task.commuteBackMinutes=p.commuteBackMinutes||p.commute_back_minutes||p.commuteReturnMinutes||p.commute_return_minutes;
-        // Pin the start time so recalcTimes() doesn't overwrite it (skip nested
-        // items: ride-alongs/subtasks live under their parent, never cascaded).
-        if(hasStoredTime&&!task.subtaskOf)task._pinnedStart=p.start;
+        // The block -> ev projection lives in task-model.js now: ONE shape shared
+        // with the carryover lane (schedule-tab.js), which used to hand-roll a
+        // narrower bag and drop half the fields the row builder reads.
+        const task=TM.fromBlock(block);
         if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task);
         else scheduled.push(task);
       });

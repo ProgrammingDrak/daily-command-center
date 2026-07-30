@@ -823,6 +823,10 @@
     const preset=document.getElementById("resp-cadence-preset");
     if(preset)preset.value=cadencePreset(p);
     document.getElementById("resp-cadence-days").value=p.cadenceDays||7;
+    const anchorEl=document.getElementById("resp-anchor-mode");
+    // Anything that is not literally "calendar" is completion-anchored, matching the
+    // server's own test (lib/recurrence.js, responsibility-store.js).
+    if(anchorEl)anchorEl.value=(p.anchorMode==="calendar")?"calendar":"completion";
     syncCadencePreset();
     document.getElementById("resp-estimated-minutes").value=p.estimatedMinutes||30;
     document.getElementById("resp-preferred-cadence").value=p.preferredCompletionCadence||p.preferredCadence||"none";
@@ -900,10 +904,13 @@
       defaultSubtasks:readDefaultSubtasks(),
       menus:readSelectedMenus(),
       status:existingStatus,
-      // "completion" (default) | "calendar" — the Todoist every!/every split.
-      // Settable through the API; the modal has no picker for it yet because the
-      // control would live in index.html, which Track C owns (see the D1 handoff).
-      anchorMode:((editing&&editing.properties&&editing.properties.anchorMode)||"completion")
+      // "completion" (default) | "calendar" — the Todoist every!/every split. The
+      // picker now lives in the modal (index.html, Track C's surface); fall back to
+      // the item's stored value, then the default, so an item saved before the
+      // control existed keeps its mode if the field is ever missing.
+      anchorMode:(document.getElementById("resp-anchor-mode")?.value
+        ||(editing&&editing.properties&&editing.properties.anchorMode)
+        ||"completion")
     };
   }
 
