@@ -1060,6 +1060,14 @@
           <input type="number" id="resp-estimated-minutes" class="delegated-modal-input" min="1" max="480" step="1" value="30" />
         </div>
       </div>
+      <!-- anchorMode: shipped in D1 with no UI control, because the control belongs
+           here in index.html (a Track C surface). "completion" is every existing
+           item's behavior, so it stays the default. -->
+      <label class="delegated-modal-label">Cadence clock <span class="dm-hint">(what the next due date counts from)</span></label>
+      <select id="resp-anchor-mode" class="delegated-modal-input">
+        <option value="completion">When I complete it</option>
+        <option value="calendar">Its calendar day, however late I tick it</option>
+      </select>
       <label class="delegated-modal-label">Preferred date to complete</label>
       <select id="resp-preferred-cadence" class="delegated-modal-input">
         <option value="none">No preferred day</option>
