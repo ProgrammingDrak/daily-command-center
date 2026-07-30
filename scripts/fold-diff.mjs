@@ -63,7 +63,7 @@ const FOLD_SQL = `
          (CASE WHEN b.date IS NULL AND EXISTS (
              SELECT 1 FROM del d
               WHERE d.workspace_id IS NOT DISTINCT FROM b.workspace_id
-                AND d.lid IN (b.id, b.properties->>'local_id'))
+                AND d.lid IN (b.id, COALESCE(b.properties->>'local_id', '')))
            THEN 'user-deleted-dateless' ELSE '' END)                AS intended
     FROM blocks b
    WHERE b.type = 'block'
@@ -79,8 +79,21 @@ const FOLD_SQL = `
      -- persistence.js: responsibility scaffolding and move tombstones never fold
      AND COALESCE(b.properties->>'kind', '') NOT LIKE 'responsibility%'
      AND COALESCE(b.properties->>'kind', '') <> 'reschedule_tombstone'
-     -- persistence.js:261 -- these three statuses drop the row out of the fold
-     AND COALESCE(b.properties->>'status', '') NOT IN ('deleted', 'archived', 'done')
+     -- persistence.js -- deleted/archived are closed and stay out. 'done' is NOT in
+     -- this list: Phase C0 (#257) removed it, so a done task now folds and checks off
+     -- instead of vanishing. Updated in lockstep with that change, per the note above.
+     AND COALESCE(b.properties->>'status', '') NOT IN ('deleted', 'archived')
+     -- ...but a completion belongs to a DAY, so a DATELESS done row stays out or it
+     -- would fold onto every day viewed. C0 added this guard alongside the removal.
+     --
+     -- COALESCE both sides. Without it, a row carrying NEITHER key yields
+     -- NULL OR NULL = NULL, then NOT (NULL AND true) = NULL, and a WHERE clause keeps
+     -- only TRUE -- so every status-less dateless row silently vanished from BOTH
+     -- snapshots and the comparison reported a false 0/0 PASS. Same three-valued-logic
+     -- trap as the audit's not_applied filter. Measured: 12 rows hidden.
+     AND NOT ( ( COALESCE(b.properties->>'status', '') = 'done'
+              OR COALESCE(b.properties->>'done', '')   = 'true' )
+               AND b.date IS NULL )
      -- persistence.js:262 -- a local_id IS the admission ticket, or kind/shell/meeting
      AND ( b.properties->>'local_id' IS NOT NULL
         OR b.properties->>'kind' = 'task'

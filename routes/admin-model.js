@@ -244,10 +244,13 @@ async function audit() {
         && integrity.dangling_parents === 0,
 
       // TRUE means completion still lives only in the day_root overlay, i.e. 002 has
-      // not run. That is the CORRECT state until Phase C0 ships: persistence.js:261
-      // drops status='done' rows out of the itinerary fold, so backfilling the status
-      // early hides 240 completed tasks. Flip this only after C0 is deployed and
-      // scripts/fold-diff.mjs reports zero vanishing rows.
+      // not run. That remains the CORRECT state even now that C0 (#257) has shipped:
+      // C0 cleared the RENDERING gate, but 002 has a second, still-open POINTS gate.
+      // slots.js reconcileCompletedTaskCredits credits every done task in the fold on
+      // each dcc:data-ready, and 12 of the rows 002 marks done have no matching ledger
+      // key, so they would be credited retroactively. See the header of
+      // migrations/002_completion_status.sql for the measurement and the three ways to
+      // clear it. Do not read this gate as "C0 shipped, go".
       migration002_completionPending:
         overlayDone.not_applied > 0 || completion.unnormalized_done > 0,
 

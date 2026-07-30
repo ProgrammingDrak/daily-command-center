@@ -1,25 +1,44 @@
 -- 002_completion_status.sql — move completion onto the task row.
 --
 -- ╔═══════════════════════════════════════════════════════════════════════════════╗
--- ║  DO NOT RUN THIS UNTIL PHASE C0 IS MERGED AND DEPLOYED.                        ║
+-- ║  TWO GATES. C0 CLEARS THE FIRST. THE SECOND IS STILL OPEN.                      ║
 -- ║                                                                                ║
--- ║  public/js/persistence.js:261 currently reads                                  ║
+-- ║  GATE 1 — rendering. CLEARED by Phase C0 (#257, squash 14b9ba2, deployed        ║
+-- ║  2026-07-30). Before C0, persistence.js read                                   ║
 -- ║    if(p.status==="deleted"||p.status==="archived"||p.status==="done")           ║
 -- ║      return false;                                                             ║
--- ║  so a row carrying status='done' is dropped from the itinerary fold ENTIRELY    ║
--- ║  and renders neither as done nor as open. That is the bug Drake reported from   ║
--- ║  Slack (a ✅'d task vanishing), and Phase C0 exists to fix that exact line.     ║
+-- ║  so status='done' dropped a row out of the itinerary fold entirely and it       ║
+-- ║  rendered neither as done nor as open. Running this before C0 reproduced that   ║
+-- ║  bug 240 times. C0 removed 'done' from the list and added a dateless-done       ║
+-- ║  guard, so the render side is now safe.                                        ║
 -- ║                                                                                ║
--- ║  Running this first reproduces the bug across the whole archive. Measured on a  ║
--- ║  restore of prod: 240 completed tasks disappear from the itinerary.             ║
+-- ║  GATE 2 — POINTS. STILL OPEN. This is the one that matters now.                 ║
+-- ║  slots.js reconcileCompletedTaskCredits runs on every `dcc:data-ready` and      ║
+-- ║  calls earnTaskCredit for EVERY done task in the fold, keyed                    ║
+-- ║  `<viewed date>:<local_id || block.id>`. C0 verified that is a no-op for        ║
+-- ║  SERVER-completed rows, because those were already credited under that same     ║
+-- ║  key. The rows THIS migration marks done are a different population: they were ║
+-- ║  completed through day_root._done, and some were never credited at all.        ║
 -- ║                                                                                ║
--- ║  Gate: C0 merged, deployed, and `isFoldableTask` admitting status==='done'.     ║
--- ║  Verify with scripts/fold-diff.mjs, which reports 0 vanishing rows once C0 is   ║
--- ║  in. The @gated directive below makes this mechanical: `npm run migrate` will    ║
--- ║  NOT apply this file, only an explicit --only will.                            ║
+-- ║  Measured on a restore of prod (001 + 002 applied, 2026-07-30): of 255 rows     ║
+-- ║  this migration newly marks done and dates, 243 already have that exact ledger  ║
+-- ║  key (no-op) and **12 DO NOT — the reconciler would credit them on the next     ║
+-- ║  page load**. Four are meetings carrying 8/30/30/30 stamped points; the rest    ║
+-- ║  are 0-stamped but earnTaskCredit RECOMPUTES via scoreTaskPoints, so the real   ║
+-- ║  award is not knowable from the stamp. Retroactive points for work finished in  ║
+-- ║  May, June and July.                                                           ║
+-- ║                                                                                ║
+-- ║  To clear gate 2, ONE of:                                                      ║
+-- ║   (a) C5 makes the credit path consult both key spaces before crediting — A1    ║
+-- ║       left the row-id form in metadata.canonical_source_key for exactly this;   ║
+-- ║   (b) pre-stamp the 12 missing ledger keys with delta 0 so ON CONFLICT fires;   ║
+-- ║   (c) Drake decides ~100+ retroactive points are acceptable and says so.        ║
+-- ║                                                                                ║
+-- ║  Re-measure before running; the number moves as tasks are completed. The query  ║
+-- ║  is in handoffs/phase-A1-complete.md.                                          ║
 -- ╚═══════════════════════════════════════════════════════════════════════════════╝
 --
--- @gated: unsafe until Phase C0 ships. persistence.js:261 drops status='done' rows out of the itinerary fold entirely, so this hides 240 completed tasks. Run scripts/fold-diff.mjs first and require 0 vanishing.
+-- @gated: GATE 1 (rendering) cleared by C0 #257. GATE 2 (points) STILL OPEN: slots.js reconcileCompletedTaskCredits credits every done task in the fold on each dcc:data-ready, and 12 of the rows this marks done have no matching ledger key, so they would be credited retroactively (4 meetings alone = 98 stamped pts, and scoring is recomputed). Clear it via C5's both-key-space check, or a delta-0 pre-stamp, or an explicit decision from Drake. Re-measure first.
 --
 -- Split out of 001 because 001's contract is zero behavior change and this step
 -- cannot honor it on its own. Everything here was written and verified as part of
