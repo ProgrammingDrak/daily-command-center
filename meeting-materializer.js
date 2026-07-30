@@ -26,6 +26,7 @@
 // by annotating meetings[] — an intelligence merge can drop that array, so the
 // query is the durable source of truth.
 const { resolvePointTag: defaultResolvePointTag } = require("./slot-scoring");
+const { assertNotResurrecting } = require("./lib/materialize-guard");
 
 module.exports = function createMeetingMaterializer(deps) {
   // resolvePointTag is injectable like scoreTaskPoints (keeps the DI contract);
@@ -270,8 +271,12 @@ module.exports = function createMeetingMaterializer(deps) {
     for (const { meeting, identity, start, end, durationMinutes } of eligible) {
       const existing = bySourceId.get(identity);
 
-      // User deleted it, so respect that and never resurrect.
-      if (existing && existing.deleted_at) { result.skipped++; continue; }
+      // User deleted it, so respect that and never resurrect. This check was the
+      // reference implementation the shared guard was lifted from; it now calls the
+      // shared one so the five materialize paths cannot drift apart. The lookup
+      // stays local: bySourceId is one day-load reused across every meeting on the
+      // date, and routing it through findForDedupe would make it one load per meeting.
+      if (assertNotResurrecting(existing).skip) { result.skipped++; continue; }
 
       if (existing) {
         const p = existing.properties || {};

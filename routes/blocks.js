@@ -25,6 +25,7 @@ const { collectSubtreeBlockIds } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
+const createMaterializeGuard = require("../lib/materialize-guard");
 const createResponsibilityStore = require("../responsibility-store");
 const {
   firstFreeSlot, minutesToHHMM, hhmmToMinutes, taskDuration,
@@ -46,6 +47,11 @@ module.exports = function mount(app, ctx) {
   // The responsibility domain + slot engine + apply-forward engine live in
   // responsibility-store.js; instantiate it here with the server-scope deps.
   const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership });
+
+  // The shared no-resurrection contract (lib/materialize-guard.js). Used here by the
+  // task-group schedule route; routes/dcc.js and meeting-materializer.js hold the
+  // other consumers.
+  const materializeGuard = createMaterializeGuard({ blockDB });
 
   // ── E1 (Track E: Slack Reactions) — DECLARED OVERLAP, two read call sites ──
   // A ⏳ timer started from Slack could only ever be closed by the ✅ reaction, so
@@ -73,8 +79,15 @@ module.exports = function mount(app, ctx) {
     return results.length === 1 ? results[0] : results;
   }));
 
+  // The mutation routes below fetch TOMBSTONE-INCLUDED on purpose, and say so by
+  // calling getBlockIncludingDeleted rather than getBlock. The two db functions behave
+  // identically today (getBlock never filtered deleted_at), so this is a statement of
+  // contract, not a behavior change: these call sites want the deleted row, because a
+  // repeat DELETE must stay idempotent and because updateBlock's own "Block is deleted"
+  // is the error the caller should see — not a 404 that reads as "never existed".
+  // Authorization must also not be skippable by deleting a row first.
   app.patch("/api/blocks/:id", route(async (req, res) => {
-    const existing = await blockDB.getBlock(req.params.id);
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     const result = await blockDB.updateBlock(req.params.id, req.body);
@@ -83,11 +96,42 @@ module.exports = function mount(app, ctx) {
   }));
 
   app.delete("/api/blocks/:id", route(async (req, res) => {
-    const existing = await blockDB.getBlock(req.params.id);
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     const result = await blockDB.deleteBlock(req.params.id);
     broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId);
+    return result;
+  }));
+
+  // Clear a tombstone: the server half of undo. B1 (#256) made deletion immediate and
+  // replaced the 8-second client timer with a server call, which is what lets an undo
+  // survive a reload or a device switch — but the call had nothing to reach until now.
+  //
+  // db.undeleteBlock takes no workspaceId and does no tenant check (matching
+  // deleteBlock/updateBlock — this repo authorizes at the route layer), so the fetch +
+  // assertBlockOwnership here is the ONLY thing standing between a caller and any row
+  // in any workspace. It must stay above the call, and it must be the tombstone-inclusive
+  // fetch: the row we are restoring is deleted by definition, so GET-style filtering
+  // would 404 every legitimate undo.
+  //
+  // Idempotent, because db.undeleteBlock is: undeleting a live row returns it unchanged.
+  app.post("/api/blocks/:id/undelete", route(async (req, res) => {
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
+    assertBlockOwnership(existing, req.workspaceId);
+    const result = await blockDB.undeleteBlock(req.params.id);
+    // `undeletedIds` is the signal Track B asked for: block-store.js keeps a local
+    // _tombstones set that makes handleBlocksChanged SKIP re-fetching an id it believes
+    // is deleted, so a restore performed in another tab would stay invisible until a
+    // reload unless the client can see which ids to un-tombstone. Carried separately
+    // from blockIds so a handler can act on it without parsing `action`.
+    broadcast("blocks-changed", {
+      action: "undelete",
+      blockIds: [req.params.id],
+      undeletedIds: [req.params.id],
+      clientId: (req.body && req.body._clientId) || undefined,
+    }, req.workspaceId);
     return result;
   }));
 
@@ -177,16 +221,25 @@ module.exports = function mount(app, ctx) {
     return out;
   }));
 
+  // A tombstone is GONE to a reader. This is the READ contract that makes the delete
+  // contract observable: until now the route happily served a soft-deleted row, so
+  // every consumer had to remember to check deleted_at itself, and any consumer that
+  // forgot silently resurrected the row into its own view. Deliberately route-level,
+  // not in db.getBlock — the mutation routes above still need to see the dead row.
+  // 404 rather than 410 so a deleted id is indistinguishable from an absent one, which
+  // is also what the ownership failure below returns.
   app.get("/api/blocks/:id", route(async (req, res) => {
-    const block = await blockDB.getBlock(req.params.id);
-    if (!block) { res.status(404).json({ error: "Block not found" }); return; }
+    const block = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!block || block.deleted_at) { res.status(404).json({ error: "Block not found" }); return; }
     try { assertBlockOwnership(block, req.workspaceId); } catch { res.status(404).json({ error: "Block not found" }); return; }
     return block;
   }));
 
   app.get("/api/blocks/:id/children", route(async (req, res) => {
-    const parent = await blockDB.getBlock(req.params.id);
-    if (!parent) { res.status(404).json({ error: "Block not found" }); return; }
+    // Same read contract: a deleted parent has no children to serve. getChildren
+    // already filters deleted_at on its own rows.
+    const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!parent || parent.deleted_at) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(parent, req.workspaceId);
     return blockDB.getChildren(req.params.id, req.workspaceId);
   }));
@@ -194,7 +247,10 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/reorder", route(async (req, res) => {
     const { items, _clientId } = req.body;
     if (!Array.isArray(items)) { res.status(400).json({ error: "items must be an array" }); return; }
-    for (const item of items) { const block = await blockDB.getBlock(item.id); if (block) assertBlockOwnership(block, req.workspaceId); }
+    // Tombstone-inclusive so a deleted row cannot dodge the ownership check, matching
+    // the authorization loop /batch runs (#260). Unknown ids stay permitted here;
+    // reorderBlocks ignores them.
+    for (const item of items) { const block = await blockDB.getBlockIncludingDeleted(item.id); if (block) assertBlockOwnership(block, req.workspaceId); }
     await blockDB.reorderBlocks(items);
     broadcast("blocks-changed", { action: "reorder", blockIds: items.map(i => i.id), clientId: _clientId }, req.workspaceId);
     return { ok: true, reordered: items.length };
@@ -222,7 +278,9 @@ module.exports = function mount(app, ctx) {
       const isHHMM = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
       if (parentStart != null && !isHHMM(parentStart)) return res.status(400).json({ error: "Invalid parentStart (want HH:MM)" });
       if (parentEnd != null && !isHHMM(parentEnd)) return res.status(400).json({ error: "Invalid parentEnd (want HH:MM)" });
-      const parent = await blockDB.getBlock(req.params.id);
+      // Tombstone-inclusive: rescheduling a deleted task must fail with the explicit
+      // "Block is deleted" the move path raises, not a 404 that reads as "never existed".
+      const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
       if (!parent) return res.status(404).json({ error: "Block not found" });
       assertBlockOwnership(parent, req.workspaceId);
       // Undated blocks exist (e.g. task-bar pending_tasks live on a day only via
@@ -674,6 +732,31 @@ module.exports = function mount(app, ctx) {
     const group = await respStore.getKindedBlock(req.params.id, "task_group", workspaceId);
     if (!group) { const err = new Error("Task group not found"); err.statusCode = 404; throw err; }
     const dateStr = (req.body && req.body.date && isValidDate(req.body.date)) ? req.body.date : getTodayStr();
+
+    // Adding a group to a day is not idempotent by nature — every item gets a fresh
+    // local_id and a fresh free slot, so #253 left this route able to double-book the
+    // entire group on a double-click or a client retry, with no key to dedupe on.
+    // The group id stamped on each created row IS that key. Tombstone-inclusive on
+    // purpose: a group whose tasks the user deleted must not silently come back the
+    // next time the route is hit. `force: true` is the deliberate re-add (mirroring
+    // respStore.scheduleResponsibilityTask's own force flag), so the guard blocks the
+    // accident without blocking the intent.
+    if (!(req.body && req.body.force)) {
+      const existing = await materializeGuard.findForDedupe(workspaceId, {
+        date: dateStr,
+        match: (row) => String((row.properties || {}).taskGroupId || "") === String(group.id),
+      });
+      if (existing) {
+        return {
+          created: [],
+          skipped: true,
+          status: materializeGuard.dedupeStatus(existing),
+          existingId: existing.id,
+          date: dateStr,
+        };
+      }
+    }
+
     const items = Array.isArray(group.properties.items) ? group.properties.items : [];
     const { dayStart, dayEnd, blockers } = await respStore.loadDaySlottingContext(dateStr, userId, workspaceId);
     const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
@@ -713,9 +796,14 @@ module.exports = function mount(app, ctx) {
     const { placeholderBlockId, responsibilityId } = req.body || {};
     if (!placeholderBlockId || !responsibilityId) { const err = new Error("placeholderBlockId and responsibilityId required"); err.statusCode = 400; throw err; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
-    const ph = await blockDB.getBlock(placeholderBlockId);
+    // Tombstone-inclusive for the ownership check, then refused: resolving a deleted
+    // placeholder would rewrite a row the user removed back into a live-looking
+    // responsibility task, which is the resurrection this phase exists to close.
+    // getBlock served the dead row silently before, so this was reachable.
+    const ph = await blockDB.getBlockIncludingDeleted(placeholderBlockId);
     if (!ph) { const err = new Error("Placeholder not found"); err.statusCode = 404; throw err; }
     assertBlockOwnership(ph, workspaceId);
+    if (ph.deleted_at) { const err = new Error("Placeholder not found"); err.statusCode = 404; throw err; }
     const phProps = ph.properties || {};
     if (!phProps.isPlaceholder && phProps.kind !== "placeholder_task") { const err = new Error("Block is not a placeholder"); err.statusCode = 400; throw err; }
     const responsibility = await respStore.getResponsibilityBlock(responsibilityId, workspaceId);
@@ -780,8 +868,11 @@ module.exports = function mount(app, ctx) {
     return created;
   }));
 
+  // Both delegated-item mutations mirror the block PATCH/DELETE contract above:
+  // tombstone-inclusive fetch, so authorization cannot be dodged and a repeat delete
+  // stays idempotent, with updateBlock raising "Block is deleted" on a dead PATCH.
   app.patch("/api/delegated-items/:id", route(async (req, res) => {
-    const existing = await blockDB.getBlock(req.params.id);
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Delegated item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     if ((existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Delegated item not found" }); return; }
@@ -794,7 +885,7 @@ module.exports = function mount(app, ctx) {
   }));
 
   app.delete("/api/delegated-items/:id", route(async (req, res) => {
-    const existing = await blockDB.getBlock(req.params.id);
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Delegated item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     if ((existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Delegated item not found" }); return; }
