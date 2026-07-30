@@ -143,7 +143,10 @@
 
   async function apiGet(url) {
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`API error ${res.status}`);
+    // Carry the status on the error: handleBlocksChanged has to tell "gone" (404)
+    // apart from "the network hiccuped", and sniffing the message string for a
+    // number is not a contract.
+    if (!res.ok) { const err = new Error(`API error ${res.status}`); err.status = res.status; throw err; }
     return res.json();
   }
 
@@ -650,12 +653,21 @@
           if (_tombstones.has(id)) continue; // we deleted it; don't re-fetch the tombstone
           try {
             const block = await apiGet("/api/blocks/" + id);
-            // The route still serves soft-deleted rows (A2 makes it 404), and the
-            // broadcast may be another tab's delete, which no local tombstone covers.
-            // Trust deleted_at over the fact that we were told to look.
+            // The broadcast may be another tab's delete, which no local tombstone
+            // covers. Trust deleted_at over the fact that we were told to look. Kept
+            // as belt and braces now that the route 404s: /api/blocks/range and the
+            // day load still hand back rows this way.
             if (block && block.deleted_at) cacheDelete(id);
             else if (block) cacheSet(block);
-          } catch {} // block may have been hard-deleted
+          } catch (e) {
+            // A 404 IS the signal, not a failure to get one. A2 made GET /api/blocks/:id
+            // 404 on a tombstone, so a foreign tab's delete now arrives here rather than
+            // as a row carrying deleted_at — and a bare `catch {}` left the deleted row
+            // sitting in this tab's cache until a reload. Measured before and after.
+            // Anything that is not a 404 (offline, 500, SSE racing a redeploy) must still
+            // be swallowed: evicting on those would blank rows that are perfectly alive.
+            if (e && e.status === 404) cacheDelete(id);
+          }
         }
       }
     },

@@ -44,10 +44,14 @@ function makeStore({ routes = {}, method } = {}) {
       fetchCalls.push({ url, method: (init && init.method) || "GET" });
       const key = Object.keys(routes).find((k) => String(url).includes(k));
       const body = key ? routes[key] : {};
+      const resolved = typeof body === "function" ? body() : body;
+      // A route may answer with a status instead of a body ({ __status: 404 }), which
+      // is what A2's tombstone 404 looks like on the wire.
+      const status = (resolved && resolved.__status) || 200;
       return {
-        ok: true,
-        status: 200,
-        json: async () => (typeof body === "function" ? body() : body),
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => resolved,
       };
     },
   };
@@ -125,6 +129,59 @@ test("a foreign tab's delete evicts on deleted_at rather than caching the tombst
   });
   await store.handleBlocksChanged({ clientId: "other", blockIds: ["B2"] });
   assert.strictEqual(store.get("B2"), null, "a soft-deleted row must never enter the cache");
+});
+
+// ── A2 (Track A): the route now 404s on a tombstone ──
+// Added from Track A with Drake's explicit go, because A2's server change is what
+// creates the case. Measured both ways against a real browser before and after: on
+// origin/main the foreign delete purged the cache, and with A2's 404 alone it did not.
+
+test("a foreign tab's delete evicts on a 404 too, now that the route hides tombstones", async () => {
+  // The A2 shape. There is no row to read deleted_at off any more, so the status IS
+  // the signal. A bare `catch {}` here leaves the deleted row rendering in this tab
+  // until a reload — delete on your phone, desktop keeps showing it.
+  const { store } = makeStore({
+    routes: { "/api/blocks/B6": liveBlock("B6"), "/api/blocks/B7": { __status: 404 } },
+  });
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B6"] });
+  assert.ok(store.get("B6"), "control: a live row still caches");
+
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B7"] });
+  assert.strictEqual(store.get("B7"), null);
+});
+
+test("a 404 evicts a row this tab already had cached", async () => {
+  // The case that actually bites: the row is in the day cache from a normal load, then
+  // another tab deletes it. Eviction has to happen, not just "we declined to add it".
+  let deleted = false;
+  const { store } = makeStore({
+    routes: {
+      "/api/blocks/B8": () => (deleted ? { __status: 404 } : liveBlock("B8")),
+      "/api/blocks": liveBlock("B8"),
+    },
+  });
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B8"] });
+  assert.ok(store.get("B8"), "cached from the first broadcast");
+
+  deleted = true;
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B8"] });
+  assert.strictEqual(store.get("B8"), null, "the 404 must evict, not merely decline");
+});
+
+test("a NON-404 failure does not evict a live row", async () => {
+  // The dangerous over-correction. Offline, a 500, or SSE racing a redeploy must stay
+  // swallowed: evicting on those blanks rows that are perfectly alive, and the user
+  // watches their day empty itself during a deploy.
+  let broken = false;
+  const { store } = makeStore({
+    routes: { "/api/blocks/B10": () => (broken ? { __status: 500 } : liveBlock("B10")) },
+  });
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B10"] });
+  assert.ok(store.get("B10"));
+
+  broken = true;
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B10"] });
+  assert.ok(store.get("B10"), "a server error is not evidence the row is gone");
 });
 
 test("a live row from a foreign broadcast is still cached normally", async () => {
