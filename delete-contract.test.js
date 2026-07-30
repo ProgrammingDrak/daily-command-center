@@ -438,13 +438,36 @@ test("brief log-done does NOT credit points against a tombstoned task", async ()
 });
 
 test("brief log-done still credits a LIVE duplicate, unchanged", async () => {
-  const rows = [{ id: "ld-live", workspace_id: MINE, deleted_at: null, properties: { idempotency_key: "k1" } }];
+  const rows = [{ id: "ld-live", workspace_id: MINE, date: "2026-07-30", deleted_at: null, properties: { idempotency_key: "k1" } }];
   const { app, created, credits } = mountDcc(rows);
   const { json } = await postDcc(app, "/api/dcc/brief/log-done", { title: "Dup", idempotency_key: "k1", date: "2026-07-30" });
   assert.equal(json.status, "skipped_duplicate");
   assert.equal(credits.length, 1, "the credit is idempotent server-side and must still fire");
   assert.equal(credits[0].source_key, "2026-07-30:ld-live");
   assert.equal(created.length, 0);
+});
+
+test("brief log-done keys the credit to the ROW's date, not the posted one", async () => {
+  // The lookup is date-blind, so a live match can sit on another day (the sibling
+  // quick-task test proves that path is reachable). Keying the ledger off the REQUEST
+  // date would mint a second credit row for a block already credited under its own
+  // date. The broadcast and the response follow the row for the same reason: naming
+  // the posted day tells every tab to reconcile a day the block is not on.
+  const rows = [{ id: "ld-live", workspace_id: MINE, date: "2026-07-28", deleted_at: null, properties: { idempotency_key: "k1" } }];
+  const { app, credits } = mountDcc(rows);
+  const { json } = await postDcc(app, "/api/dcc/brief/log-done", { title: "Dup", idempotency_key: "k1", date: "2026-07-30" });
+  assert.equal(json.status, "skipped_duplicate");
+  assert.equal(credits[0].source_key, "2026-07-28:ld-live", "the ledger key follows the row");
+  assert.equal(json.date, "2026-07-28", "and so does the date handed back to the caller");
+});
+
+test("brief log-done falls back to the posted date for an UNDATED row", async () => {
+  // An undated block must not key the ledger `null:<id>` or `undefined:<id>`.
+  const rows = [{ id: "ld-undated", workspace_id: MINE, date: null, deleted_at: null, properties: { idempotency_key: "k1" } }];
+  const { app, credits } = mountDcc(rows);
+  const { json } = await postDcc(app, "/api/dcc/brief/log-done", { title: "Dup", idempotency_key: "k1", date: "2026-07-30" });
+  assert.equal(credits[0].source_key, "2026-07-30:ld-undated");
+  assert.equal(json.date, "2026-07-30");
 });
 
 test("brief push-next distinguishes a tombstone from a duplicate", async () => {

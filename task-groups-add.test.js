@@ -55,14 +55,20 @@ function mountClient({ respond, confirmAnswer = false } = {}) {
     esc: (s) => String(s == null ? "" : s),
     toast: (msg, kind) => toasts.push({ msg, kind }),
   };
-  // refreshSchedule is a global the itinerary owns; the sidebar just calls it.
-  context.refreshSchedule = async () => {};
+  // task-groups.js declares its OWN local refreshSchedule() inside the IIFE, which
+  // shadows anything of that name on the context and delegates to this global instead.
+  // Stubbing the local name would be a stub nothing reads, and a future test asserting
+  // "the schedule refreshed before the prompt" would wire itself to it and pass
+  // vacuously. `refreshes` records the POST count at each refresh, so ordering is
+  // assertable.
+  const refreshes = [];
+  context.refreshScheduleAfterResponsibilityChange = async () => { refreshes.push(posts.length); };
   vm.createContext(context);
   vm.runInContext(source, context);
 
   return {
     add: context.window.addTaskGroupToDay,
-    posts, toasts, confirms,
+    posts, toasts, confirms, refreshes,
     hold(id) {
       let resolve;
       const promise = new Promise((r) => { resolve = r; });
@@ -129,11 +135,16 @@ test("a double-click issues ONE POST", async () => {
   const c = mountClient({ respond: { created: [{ id: "a" }] } });
   c.hold("grp-1");
   const first = c.add("grp-1");
+  // NOT awaited, for the same reason as the per-group test below: if the guard
+  // regresses, this call POSTs and then blocks on the held gate, and node:test's
+  // per-test timeout defaults to Infinity, so awaiting it would hang the suite forever
+  // instead of failing here. The harness pushes to `posts` synchronously before the
+  // gate await, so one macrotask tick is enough to observe a leaked POST.
   const second = c.add("grp-1");
-  await second;
+  await new Promise((r) => setTimeout(r, 0));
   assert.equal(c.posts.length, 1, "the second click must be swallowed while the first is in flight");
   c.release("grp-1");
-  await first;
+  await Promise.all([first, second]);
 });
 
 test("the guard is PER GROUP, so a second group is not blocked or unblocked by the first", async () => {

@@ -335,19 +335,26 @@ module.exports = function mount(app, ctx) {
         return res.json({ ok: true, date, status: dedupeStatus(existing), block: { id: existing.id, title }, credit: null });
       }
       let blockId, duplicate = false;
-      // creditDate follows the ROW, not the request. The lookup above is date-blind now,
-      // so a live match can live on a different date than the one being posted — and the
-      // ledger key below is `<date>:<blockId>`. Keying off the request date would mint a
-      // SECOND ledger row for a block already credited under its own date, which is a
-      // silent double-credit of exactly the kind this project has been unpicking. Not
-      // reachable with today's key vocabularies (`day-review:<date>:` embeds the date),
-      // and it stays a no-op while that holds, but it becomes live the moment a
-      // date-blind key vocabulary is pointed at this endpoint.
-      let creditDate = date;
+      // effectiveDate follows the ROW, not the request. The lookup above is date-blind
+      // now, so a live match can live on a different date than the one being posted, and
+      // when it does the row's own day is the authoritative one for EVERY consumer below:
+      //   - the ledger key is `<date>:<blockId>`, so the request date would mint a SECOND
+      //     credit row for a block already credited under its own date — a silent
+      //     double-credit of exactly the kind this project has spent two phases unpicking
+      //   - the broadcast tells open tabs which day to reconcile; naming the posted day
+      //     leaves the completed row invisible until someone navigates to its real day
+      //   - the response tells the caller where the item landed, which it uses to build
+      //     its next request
+      // Applying this to the ledger alone would be worse than not applying it at all: the
+      // next reader would reasonably assume the row's date won everywhere. Inert today
+      // (`day-review:<date>:` keys embed the date, and it equals `date` on the create
+      // path), and live the moment a date-blind key vocabulary is pointed here.
+      // An undated row falls back to the request date rather than keying `null:<id>`.
+      let effectiveDate = date;
       if (existing) {
         blockId = existing.id;
         duplicate = true;
-        if (existing.date) creditDate = existing.date;
+        if (existing.date) effectiveDate = existing.date;
       } else {
         const props = {
           title,
@@ -373,7 +380,7 @@ module.exports = function mount(app, ctx) {
       let credit = null;
       try {
         credit = await slotStore.earnTaskCredit(workspaceId, userId, {
-          source_key: `${creditDate}:${blockId}`,
+          source_key: `${effectiveDate}:${blockId}`,
           task_id: blockId, title, type: body.type || "task", tags,
           duration_minutes: minutes, completed_at: nowIso,
         });
@@ -381,9 +388,9 @@ module.exports = function mount(app, ctx) {
         console.error("[brief log-done] credit failed (non-fatal):", e.message);
       }
 
-      broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date }, workspaceId);
+      broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
       res.json({
-        ok: true, date,
+        ok: true, date: effectiveDate,
         status: duplicate ? "skipped_duplicate" : "created",
         block: { id: blockId, title },
         credit: credit ? { awarded: !!credit.awarded, credits: credit.credits || 0 } : null,
