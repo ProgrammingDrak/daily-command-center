@@ -192,8 +192,9 @@ module.exports = function mount(app, ctx) {
     // the same key is re-deriving something the user deliberately deleted — the exact
     // caller class lib/materialize-guard.js exists for. `req.dccServiceAuth` is the
     // discriminator, and it costs nothing to use it.
-    // (/api/blocks/batch needs no such split: server.js attaches dccServiceAuth for
-    // THIS path only, so /batch is session-only and stays live-only for undo.)
+    // (/api/blocks/batch needs no such split: no attach site in server.js routes to
+    // it — there are FIVE, not one, and none is /api/blocks/batch — so it is
+    // session-only and stays live-only for undo.)
     const agentRules = { tombstoneIsAMatch: !!req.dccServiceAuth };
     try {
       for (const item of items) {
@@ -361,11 +362,12 @@ module.exports = function mount(app, ctx) {
         // the same uncommitted nothing and loops.
         const { key, existing } = await resolveIdempotentCreate(workspaceId, op);
         if (key && firstForKey.has(key)) { echoes.set(i, firstForKey.get(key)); continue; }
-        // No assertServiceScope here, and that is safe rather than an oversight:
-        // server.js attaches req.dccServiceAuth for POST /api/blocks ONLY, so no
-        // scope-limited token can reach /batch. If that route list ever widens, this
-        // line and the echo path below both need the check POST /api/blocks has.
-        if (existing) { resolved.set(i, markDeduped(existing)); continue; }
+        // Scope-checked even though no service token can reach /batch today. That
+        // fact is a property of five separate attach sites in server.js, and this
+        // change set has now shipped three bugs whose root cause was an invariant
+        // asserted in a comment rather than enforced in code. assertServiceScope is a
+        // no-op for a session, so enforcing it here costs nothing and cannot rot.
+        if (existing) { assertServiceScope(req, existing); resolved.set(i, markDeduped(existing)); continue; }
         if (key) firstForKey.set(key, i);
         toRun.push({ i, op });
       }
@@ -374,13 +376,14 @@ module.exports = function mount(app, ctx) {
       toRun.forEach((t, n) => byIndex.set(t.i, raw.blocks[n]));
       const rowAt = (i) => {
         if (resolved.has(i)) return resolved.get(i);
-        if (echoes.has(i)) { const src = byIndex.get(echoes.get(i)); return src ? markDeduped(src) : undefined; }
+        if (echoes.has(i)) { const src = byIndex.get(echoes.get(i)); if (src) assertServiceScope(req, src); return src ? markDeduped(src) : undefined; }
         const row = byIndex.get(i);
         // db.createBlock's ON CONFLICT (id) path returns an existing row rather than
         // inserting — B2's replayed client-minted ids land here — so normalize that to
         // the same `_dedupe` verdict a key match produces. One vocabulary for "this
         // was found, not created", whichever identity resolved it.
-        return row && row._resolvedExisting ? markDeduped(row) : row;
+        if (row && row._resolvedExisting) { assertServiceScope(req, row); return markDeduped(row); }
+        return row;
       };
       const blocks = [];
       for (let i = 0; i < ops.length; i++) { const row = rowAt(i); if (row !== undefined) blocks.push(row); }

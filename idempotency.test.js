@@ -660,3 +660,19 @@ test("★ a mid-loop refusal still announces the rows already committed", async 
   assert.equal(created.length, 1, "and it was announced anyway");
   assert.deepEqual(created[0].payload.blockIds, [calls.created[0].id]);
 });
+
+test("batch: the scope guard is enforced there too, not just asserted in a comment", async () => {
+  // No service token can reach /batch today — that is a property of five separate
+  // attach sites in server.js, none of which routes here. This change set has already
+  // shipped three bugs whose root cause was an invariant asserted in a comment across
+  // two call sites instead of enforced in code, so /batch checks scope anyway. The
+  // guard is a no-op for a session; this pins that it is not a no-op for a token.
+  const seed = { "not-yours": foreignRow("batch-forbidden", "task") };
+  const { app } = mountApp({ seed, serviceAuth: true });
+  const { status, json } = await call(app, "POST", "/api/blocks/batch", {
+    operations: [{ op: "create", ...sweepItem("batch-forbidden") }],
+  });
+
+  assert.equal(status, 404);
+  assert.ok(!JSON.stringify(json).includes("salary"), "no row content leaks through the batch path either");
+});

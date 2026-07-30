@@ -407,7 +407,14 @@ module.exports = function mount(app, ctx) {
         console.error("[brief log-done] credit failed (non-fatal):", e.message);
       }
 
-      broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
+      // The THIRD dedupe-broadcast site in this file, and the one that legitimately
+      // differs from quick-task and push-next: even when no block row changed, this
+      // endpoint may have just awarded slot credit, and open tabs need to hear about
+      // that. So the condition is "something happened", not "a row was created" —
+      // announce on a real create, or when earnTaskCredit reports a fresh award.
+      if (!duplicate || (credit && credit.awarded)) {
+        broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
+      }
       res.json({
         ok: true, date: effectiveDate,
         status: duplicate ? "skipped_duplicate" : "created",

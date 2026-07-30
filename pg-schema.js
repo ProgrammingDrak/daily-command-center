@@ -825,7 +825,26 @@ const POST_SCHEMA_STATEMENTS = [
   // routes/admin-model.js's `GROUP BY workspace_id`, which fold NULLs together — and
   // the audit gate could read "enforced" over a live duplicate.
   // Requires PG 15+; prod is 17.6 and CI is postgres:16.
+  //
+  // The DROP is required, for the same reason idx_blocks_local_id above carries one:
+  // `CREATE UNIQUE INDEX IF NOT EXISTS` will NOT rebuild an index that already exists
+  // under this name. An earlier build of this phase created it WITHOUT the clause, so
+  // any database that booted that build keeps the NULLS-DISTINCT definition — and the
+  // hole — permanently, silently, because applyPostSchema swallows a no-op. Detecting
+  // that in the audit endpoint is not enough; the repair has to live here.
+  // Keyed on the SEMANTICS (pg_index.indnullsnotdistinct), not on matching the DDL text.
   ["idx_blocks_idem_unique", `
+    DO $do$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_index i
+          JOIN pg_class c ON c.oid = i.indexrelid
+         WHERE c.relname = 'idx_blocks_idem_unique'
+           AND NOT i.indnullsnotdistinct
+      ) THEN
+        DROP INDEX idx_blocks_idem_unique;
+      END IF;
+    END $do$;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_idem_unique
       ON blocks (workspace_id, (properties->>'idempotency_key'))
       NULLS NOT DISTINCT
