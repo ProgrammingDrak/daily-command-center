@@ -10,9 +10,12 @@ const SECRET = "test-signing-secret";
 const DRAKE = "U_DRAKE";
 
 // Build a fresh harness per test: fresh in-memory store + freshly-mounted handler.
-function makeHarness() {
+// opts.drakeUid overrides the actor-gate env var, which the route reads at MOUNT
+// time, so it has to be set before mount(). opts.slotStore merges into the slot
+// mock so a test can make a call fail.
+function makeHarness(opts = {}) {
   process.env.SLACK_SIGNING_SECRET = SECRET;
-  process.env.DRAKE_SLACK_USER_ID = DRAKE;
+  process.env.DRAKE_SLACK_USER_ID = opts.drakeUid !== undefined ? opts.drakeUid : DRAKE;
   process.env.DCC_SERVICE_USER_ID = "1";
   process.env.DCC_SERVICE_WORKSPACE_ID = "ws-1";
 
@@ -22,13 +25,25 @@ function makeHarness() {
   // Stand in for the day_root `_done` overlay the browser writes. Handlers that
   // ask "was this finished elsewhere?" read it through blockDB.getBlock.
   const overlay = { _done: { ids: [], at: {} } };
+  // The real createItineraryTask ensures the day root, so it always exists by the
+  // time a handler reads the overlay. Kept OUT of `blocks` and served through
+  // getBlock/updateBlock instead: the tests index `blocks[0]` as the task under
+  // test, so a day_root sitting in that array would shift every one of them.
+  const dayRootRow = { id: "day-root-ws-1-2026-07-28", date: "2026-07-28", type: "day_root", properties: overlay };
+  let dayRootWriteFails = false;
+  const failDayRootWrite = (v) => { dayRootWriteFails = v; };
 
   // reactions.add is the one outbound Slack call (re-add 🔖 after an un-✅).
+  // Headers are captured too: "this must be a USER token, not a bot token" is a
+  // load-bearing invariant (a bot's reaction never matches the poller's
+  // `hasmy::bookmark:` search), and it is invisible unless asserted.
   process.env.SLACK_USER_TOKEN = "xoxp-test";
+  let fetchImpl = async (url, init) => ({ status: 200, json: async () => ({ ok: true }) });
   global.fetch = async (url, init) => {
-    calls.reactionsAdd.push({ url, body: JSON.parse(init.body) });
-    return { status: 200, json: async () => ({ ok: true }) };
+    calls.reactionsAdd.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+    return fetchImpl(url, init);
   };
+  const setFetch = (fn) => { fetchImpl = fn; };
 
   const ctx = {
     crypto,
@@ -38,9 +53,10 @@ function makeHarness() {
     slotStore: {
       earnTaskCredit: async (_ws, _uid, body) => { calls.credit.push(body); return { awarded: true }; },
       revokeTaskCredit: async (_ws, _uid, sourceKey) => { calls.revoke.push(sourceKey); return { revoked: true }; },
+      ...(opts.slotStore || {}),
     },
     blockDB: {
-      getBlock: async (id) => blocks.find(b => b.id === id) || null,
+      getBlock: async (id) => (id === dayRootRow.id ? dayRootRow : blocks.find(b => b.id === id) || null),
       createItineraryTask: async ({ date, properties }) => {
         const b = { id: `blk-${++seq}`, date, type: "block", properties };
         blocks.push(b); return { id: b.id };
@@ -50,6 +66,10 @@ function makeHarness() {
         blocks.push(b); return { id: b.id };
       },
       updateBlock: async (id, { properties }) => {
+        if (id === dayRootRow.id) {
+          if (dayRootWriteFails) throw new Error("day_root write failed");
+          dayRootRow.properties = properties; return { id };
+        }
         const b = blocks.find(x => x.id === id);
         if (!b) throw new Error("not found " + id);
         b.properties = properties; return { id };
@@ -58,11 +78,7 @@ function makeHarness() {
         const b = blocks.find(x => x.id === id);
         if (b) b.deleted = true; return { id };
       },
-      ensureDayRoot: async (date) => {
-        const id = `day-root-${date}`;
-        if (!blocks.find(b => b.id === id)) blocks.push({ id, date, type: "day_root", properties: overlay });
-        return id;
-      },
+      ensureDayRoot: async () => dayRootRow.id,
     },
     pool: {
       query: async (sql, params) => {
@@ -74,10 +90,16 @@ function makeHarness() {
             .filter(b => b.properties && b.properties.idempotency_key === params[0] && b.type !== "time_entry")
             .sort((a, b) => (a.deleted ? 1 : 0) - (b.deleted ? 1 : 0));
           const hit = hits[0];
-          return { rows: hit ? [{ id: hit.id, date: hit.date, properties: hit.properties, deleted_at: hit.deleted ? "2026-07-28T00:00:00Z" : null }] : [] };
+          return { rows: hit ? [{ id: hit.id, date: hit.date, properties: hit.properties, deleted_at: hit.deleted ? "2026-07-28T00:00:00Z" : null, workspace_id: "ws-1" }] : [] };
         }
         if (/^\s*DELETE/i.test(sql)) {
-          const i = blocks.findIndex(b => b.id === params[0] && b.type === "time_entry");
+          // Honor the route's real predicates (type AND the workspace fence), so a
+          // regression that dropped either would show up here instead of passing.
+          assert.match(sql, /type = 'time_entry'/);
+          assert.match(sql, /workspace_id/);
+          const ws = params[1];
+          const i = blocks.findIndex(b => b.id === params[0] && b.type === "time_entry"
+            && (ws == null || b.workspace_id == null || b.workspace_id === ws));
           if (i >= 0) blocks.splice(i, 1);
           return { rows: [] };
         }
@@ -93,7 +115,7 @@ function makeHarness() {
   let handler;
   const app = { post: (path, fn) => { if (path === "/api/slack/events") handler = fn; } };
   mount(app, ctx);
-  return { handler, blocks, calls, overlay };
+  return { handler, blocks, calls, overlay, dayRootRow, setFetch, failDayRootWrite };
 }
 
 function sign(rawBody, ts) {
@@ -300,7 +322,12 @@ test("un-✅ reopens the task, drops the timer row, and reverses the credit", as
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 0, "no orphaned Day Review segment");
   assert.deepEqual(calls.revoke, [`${task.date}:${task.id}`], "credit reversed on the same key ✅ used");
   assert.equal(calls.reactionsAdd.length, 1, "🔖 goes back on the message");
-  assert.equal(calls.reactionsAdd[0].body.name, "bookmark");
+  // Assert the WHOLE outbound call. `name` alone would still pass if the token
+  // became a bot token (invisible to the poller's hasmy: query) or if the
+  // reaction landed on the wrong message.
+  assert.equal(calls.reactionsAdd[0].url, "https://slack.com/api/reactions.add");
+  assert.equal(calls.reactionsAdd[0].headers.Authorization, "Bearer xoxp-test", "user token, not a bot token");
+  assert.deepEqual(calls.reactionsAdd[0].body, { channel: "C1", timestamp: "eee.1", name: "bookmark" });
   assert.ok(calls.broadcast.some(b => b.payload.action === "slack-undone"));
 });
 
@@ -333,6 +360,89 @@ test("the 🔖 re-added after un-✅ echoes back harmlessly — no duplicate, no
   assert.equal(blocks.filter(b => b.type === "block").length, 1, "no second task");
   assert.equal(blocks[0].properties.status, "open", "still open — the echo changes nothing");
   assert.equal(calls.reactionsAdd.length, 1, "and it does not trigger another reactions.add");
+});
+
+// The row is only ONE of two completion stores. Leave the overlay set and the
+// un-✅ silently re-applies itself: the UI keeps rendering the row checked, and
+// reconcileTiming re-derives the timing that was just cleared.
+test("un-✅ also prunes the task from the day's _done overlay", async () => {
+  const { handler, blocks, dayRootRow } = makeHarness();
+  await post(handler, reaction("bookmark", "kkk.1", "kkk.9"));
+  const task = blocks[0];
+  // Simulate the browser check-off landing in the overlay first, then a Slack ✅.
+  dayRootRow.properties._done.ids.push(task.id);
+  dayRootRow.properties._done.at[task.id] = "2026-07-28T18:00:00.000Z";
+  await post(handler, reaction("white_check_mark", "kkk.1", "1720000000.000000"));
+
+  await post(handler, removal("white_check_mark", "kkk.1"));
+  assert.equal(task.properties.status, "open");
+  assert.deepEqual(dayRootRow.properties._done.ids, [], "overlay id removed");
+  assert.deepEqual(dayRootRow.properties._done.at, {}, "overlay timestamp removed");
+});
+
+// The overlay is keyed by local_id OR the row id depending on which surface wrote
+// it. Only the row-id half was covered; a prune that forgot local_id would leave
+// browser-created tasks stuck done.
+test("un-✅ prunes an overlay entry keyed by local_id, not just the row id", async () => {
+  const { handler, blocks, dayRootRow } = makeHarness();
+  await post(handler, reaction("bookmark", "nnn.1", "nnn.9"));
+  const task = blocks[0];
+  task.properties.local_id = "ui-minted-1";
+  dayRootRow.properties._done.ids.push("ui-minted-1");
+  dayRootRow.properties._done.at["ui-minted-1"] = "2026-07-28T18:00:00.000Z";
+  dayRootRow.properties._done.ids.push("someone-elses-task");   // must survive
+  await post(handler, reaction("white_check_mark", "nnn.1", "1720000000.000000"));
+
+  await post(handler, removal("white_check_mark", "nnn.1"));
+  assert.deepEqual(dayRootRow.properties._done.ids, ["someone-elses-task"], "only our key is pruned");
+  assert.deepEqual(dayRootRow.properties._done.at, {});
+  assert.equal(task.properties.status, "open");
+});
+
+test("un-✅ leaves the task done when the overlay prune fails", async () => {
+  const { handler, blocks, dayRootRow, failDayRootWrite } = makeHarness();
+  await post(handler, reaction("bookmark", "ooo.1", "ooo.9"));
+  const task = blocks[0];
+  dayRootRow.properties._done.ids.push(task.id);
+  await post(handler, reaction("white_check_mark", "ooo.1", "1720000000.000000"));
+
+  failDayRootWrite(true);
+  await post(handler, removal("white_check_mark", "ooo.1"));
+  // Both stores stay done. A half-reversal would let the overlay silently
+  // re-apply the completion while the credit stayed revoked, with no retry.
+  assert.equal(task.properties.done, true, "row stays done so re-toggling ✅ retries");
+  assert.ok(task.properties.completedAt);
+  assert.equal(task.properties.actualMinutes, 5, "timing untouched");
+  assert.deepEqual(dayRootRow.properties._done.ids, [task.id], "overlay still marks it done too");
+});
+
+test("un-✅ leaves the task done when the credit revoke fails", async () => {
+  const { handler, blocks, calls } = makeHarness({
+    slotStore: { revokeTaskCredit: async () => { throw new Error("ledger unavailable"); } },
+  });
+  await post(handler, reaction("bookmark", "lll.1", "lll.9"));
+  await post(handler, reaction("white_check_mark", "lll.1", "1720000000.000000"));
+  const task = blocks[0];
+  await post(handler, removal("white_check_mark", "lll.1"));
+  // Both stores stay "done", which is recoverable by re-toggling the reaction.
+  // A half-reversal (row open, points still banked, ledger row still blocking the
+  // re-award) would not be, and Slack never retries a reaction_removed.
+  assert.equal(task.properties.done, true, "row stays done");
+  assert.ok(task.properties.completedAt, "and stays completed");
+  assert.equal(task.properties.actualMinutes, 5, "timing is untouched");
+  assert.equal(blocks.filter(b => b.type === "time_entry").length, 1, "segment survives");
+  assert.equal(calls.reactionsAdd.length, 0, "no 🔖 re-add on a failed reversal");
+});
+
+// The gate used to be `DRAKE_UID && ev.user !== DRAKE_UID`, which processed EVERY
+// workspace member's reactions when the var was missing. handleUndone now moves a
+// real points balance and addSlackReaction writes to Slack as Drake, so an unset
+// var would hand any member a react-as-Drake primitive. Fail closed instead.
+test("reactions are ignored entirely when DRAKE_SLACK_USER_ID is unset (fail closed)", async () => {
+  const { handler, blocks } = makeHarness({ drakeUid: "" });
+  await post(handler, reaction("bookmark", "mmm.1", "mmm.9", "U_RANDOM_COWORKER"));
+  await post(handler, reaction("bookmark", "mmm.2", "mmm.9", DRAKE));
+  assert.equal(blocks.length, 0, "an unset gate processes nobody, not everybody");
 });
 
 test("un-✅ on a task that was never completed is a no-op", async () => {

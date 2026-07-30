@@ -79,7 +79,10 @@ module.exports = function mount(app, ctx) {
   // they just have to say they want a live row, via findLiveTaskByKey.
   async function findTaskByKey(idemKey) {
     const { rows } = await pool.query(
-      `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at FROM blocks
+      // workspace_id is selected so the timer row's delete fence in
+      // lib/task-timing.js has a tenant to check against rather than falling
+      // through its "unknown workspace" branch.
+      `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id FROM blocks
         WHERE properties->>'idempotency_key' = $1 AND workspace_id = $2
         ORDER BY deleted_at IS NULL DESC, created_at DESC LIMIT 1`,
       [idemKey, OWNER_WORKSPACE_ID]
@@ -104,17 +107,43 @@ module.exports = function mount(app, ctx) {
 
   // Read the day's `_done` overlay for a task's date. The browser check-off is
   // persisted THERE, not on the row (until C5), so any handler that asks "has
-  // this been finished?" has to look. ensureDayRoot is a read in practice here:
-  // the task's own creation already ensured its date's root.
+  // this been finished?" has to look.
+  //
+  // NO try/catch, deliberately, for the reason responsibility-store's readDayRoot
+  // documents: a failed read must NOT be reported as "nothing was completed on
+  // this day". The caller's response to that lie is deleteBlock. processEvent is
+  // already wrapped in a .catch at the endpoint, so a throw here is logged and
+  // the task simply survives, which is the safe direction.
+  //
+  // getBlock, not ensureDayRoot: this is a read, and ensureDayRoot would CREATE
+  // the row. Mirrors readDayRoot's legacy un-prefixed fallback, which is ws-1 only.
   async function dayRootPropsFor(date) {
-    try {
-      const rootId = await blockDB.ensureDayRoot(date, OWNER_USER_ID, OWNER_WORKSPACE_ID);
-      const root = await blockDB.getBlock(rootId);
-      return (root && root.properties) || null;
-    } catch (e) {
-      console.error("[slack-events] day-root read failed (treated as no overlay):", e.message);
-      return null;
-    }
+    let root = await blockDB.getBlock(`day-root-${OWNER_WORKSPACE_ID}-${date}`);
+    if (!root && OWNER_WORKSPACE_ID === "ws-1") root = await blockDB.getBlock(`day-root-${date}`);
+    return (root && root.properties) || null;
+  }
+
+  // Drop this task from the day's `_done` overlay. Un-completing has to clear
+  // EVERY completion store or the overlay silently re-applies the completion:
+  // the UI keeps rendering the row checked (persistence.js loads _done into
+  // manualDone), reconcileTiming re-derives the timing it just cleared, and the
+  // credit the UI awarded on that check-off can never be re-earned because there
+  // is nothing left to check off. Keyed on both identities the overlay accepts.
+  async function pruneDoneOverlay(task) {
+    const rootId = `day-root-${OWNER_WORKSPACE_ID}-${task.date}`;
+    const root = (await blockDB.getBlock(rootId))
+      || (OWNER_WORKSPACE_ID === "ws-1" ? await blockDB.getBlock(`day-root-${task.date}`) : null);
+    if (!root) return;
+    const rootProps = root.properties || {};
+    const done = rootProps._done || {};
+    const keys = new Set(createTaskTiming.blockIdentityKeys(task));
+    const ids = (done.ids || []).map(String).filter(id => !keys.has(id));
+    const at = { ...(done.at || {}) };
+    for (const k of keys) delete at[k];
+    const changed = ids.length !== (done.ids || []).length
+      || Object.keys(at).length !== Object.keys(done.at || {}).length;
+    if (!changed) return;
+    await blockDB.updateBlock(root.id, { properties: { ...rootProps, _done: { ...done, ids, at } } });
   }
 
   // Put 🔖 back on the message so an un-✅'d task returns to the active queue —
@@ -205,8 +234,10 @@ module.exports = function mount(app, ctx) {
     const task = await findLiveTaskByKey(keyFor(channel, ts));
     if (!task) return;
     const props = task.properties || {};
-    if (props.startedAt || props.everStarted || props.completedAt || props.doneAt || props.done || props.completed) return;
-    if (isBlockDone({ id: task.id, properties: props }, await dayRootPropsFor(task.date))) return;
+    // isBlockDone already covers status/done/completed/completedAt/doneAt plus the
+    // day overlay, so only the "was worked on" half is left to check here.
+    if (props.startedAt || props.everStarted) return;
+    if (isBlockDone(task, await dayRootPropsFor(task.date))) return;
     await blockDB.deleteBlock(task.id);
     broadcast("blocks-changed", { action: "slack-bookmark-cancel", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
   }
@@ -280,6 +311,34 @@ module.exports = function mount(app, ctx) {
     const props = task.properties || {};
     if (!props.completedAt) return;   // never completed by us (or a Slack retry) — idempotent
 
+    // Reverse the points FIRST, and abort the un-complete entirely if it fails.
+    // Without the revoke the balance keeps credit for work that was un-done AND,
+    // worse, the ledger row survives so earnTaskCredit's ON CONFLICT DO NOTHING
+    // silently awards zero on the eventual re-completion. Slack never retries a
+    // reaction_removed (we 200 before dispatch), so a swallowed failure here would
+    // never get reconciled. Leaving the task DONE is recoverable by re-toggling the
+    // reaction; a half-reversal is not.
+    try {
+      await slotStore.revokeTaskCredit(OWNER_WORKSPACE_ID, OWNER_USER_ID, creditKeyFor(task));
+    } catch (e) {
+      console.error("[slack-events] credit revoke failed, leaving the task done so both stores stay consistent:", e.message);
+      return;
+    }
+
+    // The overlay is the OTHER completion store, and it is cleared before the row
+    // for the same reason the revoke is: a failure has to leave both stores "done"
+    // rather than half-reversed. If this ran after clearTiming and failed, the
+    // overlay would silently re-apply the completion (reconcileTiming re-derives
+    // the timing just cleared, the UI keeps rendering the row checked) while the
+    // credit stayed revoked. Bailing here keeps completedAt on the row, so
+    // re-toggling ✅ re-enters this handler and retries.
+    try {
+      await pruneDoneOverlay(task);
+    } catch (e) {
+      console.error("[slack-events] _done prune failed, leaving the task done so both stores stay consistent:", e.message);
+      return;
+    }
+
     // Reopen + un-time in one write. clearTiming strips only the ⏱ line it wrote
     // and hard-deletes the timer segment, so Day Review loses the phantom block.
     // `startedAt` / `everStarted` deliberately survive: the work DID start, and a
@@ -290,13 +349,6 @@ module.exports = function mount(app, ctx) {
       dropProps: ["done", "completed", "completedAt", "doneAt", "completedBy"],
     });
 
-    // Reverse the points. Without this the balance keeps credit for work that was
-    // un-done AND — worse — the ledger row survives, so earnTaskCredit's
-    // ON CONFLICT DO NOTHING silently awards zero on the eventual re-completion.
-    try {
-      await slotStore.revokeTaskCredit(OWNER_WORKSPACE_ID, OWNER_USER_ID, creditKeyFor(task));
-    } catch (e) { console.error("[slack-events] credit revoke failed (non-fatal):", e.message); }
-
     // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).
     await addSlackReaction(channel, ts, R_BOOKMARK);
 
@@ -306,7 +358,15 @@ module.exports = function mount(app, ctx) {
   // ── dispatch ────────────────────────────────────────────────────────────
   async function processEvent(ev) {
     if (ev.type !== "reaction_added" && ev.type !== "reaction_removed") return;
-    if (DRAKE_UID && ev.user !== DRAKE_UID) return;                 // only Drake's reactions
+    // FAIL CLOSED on an unset actor gate, the way verifySlack fails closed on a
+    // missing signing secret. This used to be `DRAKE_UID && ...`, which processed
+    // EVERY workspace member's reactions when the var was missing. That was already
+    // wrong, and E1 widened the blast radius: handleUndone deletes ledger rows and
+    // moves a real points balance, and addSlackReaction writes to Slack with
+    // Drake's personal user token, so an unset var would hand any member a
+    // react-as-Drake primitive.
+    if (!DRAKE_UID) { console.error("[slack-events] DRAKE_SLACK_USER_ID unset — ignoring reaction events"); return; }
+    if (ev.user !== DRAKE_UID) return;                              // only Drake's reactions
     if (!ev.item || ev.item.type !== "message") return;
     const { channel, ts } = ev.item;
     const eventMs = Math.round(Number(ev.event_ts) * 1000) || Date.now();

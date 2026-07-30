@@ -47,7 +47,7 @@ module.exports = function mount(app, ctx) {
   // responsibility-store.js; instantiate it here with the server-scope deps.
   const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership });
 
-  // ── E1 (Track E: Slack Reactions) — DECLARED OVERLAP, one call site below ──
+  // ── E1 (Track E: Slack Reactions) — DECLARED OVERLAP, two read call sites ──
   // A ⏳ timer started from Slack could only ever be closed by the ✅ reaction, so
   // checking the task off anywhere else recorded no time. reconcileTiming derives
   // the close on read: any done row still carrying a startedAt with no
@@ -117,7 +117,13 @@ module.exports = function mount(app, ctx) {
   app.get("/api/blocks/range", route(async (req, res) => {
     const { start, end } = req.query;
     if (!start || !end || !isValidDate(start) || !isValidDate(end)) { res.status(400).json({ error: "Provide ?start=&end=" }); return; }
-    return filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(start, end, req.workspaceId));
+    // Reconciled here too, not just on the day read: block-store's getTimeEntries
+    // serves the CURRENT date from the day cache but every OTHER date from the
+    // range cache, so Day Review's planned-vs-actual for a past day comes through
+    // THIS path. Reconciling only the day GET would leave the exact surface this
+    // reconciler exists to feed showing nothing. reconcileTiming groups day_root
+    // overlays by date, so a multi-day array works unchanged.
+    return withReconciledTiming(filterLegacyGcalBlocks(await blockDB.getBlocksByDateRange(start, end, req.workspaceId)), req);
   }));
 
   // dcc_state rows keyed by date for the client range cache. db.getDccStateRange

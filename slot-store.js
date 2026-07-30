@@ -2334,22 +2334,42 @@ async function earnTaskCredit(workspaceId, userId, body) {
 // balance may legitimately go negative if the points were already spent; the
 // column has no CHECK and every spend path gates on `point_balance < cost`, so a
 // negative simply blocks spins until it is re-earned. Clamping would lose points.
+// The delete and the balance decrement run in ONE transaction, unlike
+// earnTaskCredit's insert-then-update pair. The asymmetry is deliberate: this
+// direction's split-failure mode is the worse one. If the DELETE lands and the
+// UPDATE does not, the ledger row is gone while the points stay banked, so the
+// eventual re-completion awards them a SECOND time and the account is permanently
+// over-credited with no audit row explaining it.
 async function revokeTaskCredit(workspaceId, userId, sourceKey) {
   sourceKey = String(sourceKey || "").trim();
   if (!sourceKey) throw new Error("source_key required");
   await ensureAccount(workspaceId, userId);
-  const { rows } = await pool.query(
-    `DELETE FROM slot_point_ledger
-      WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2
-      RETURNING delta`,
-    [workspaceId, sourceKey]
-  );
-  const credits = rows[0] ? Number(rows[0].delta || 0) : 0;
-  if (credits !== 0) {
-    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, -credits]);
+  const client = await pool.connect();
+  let credits = 0;
+  let revoked = false;
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `DELETE FROM slot_point_ledger
+        WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2
+        RETURNING delta`,
+      [workspaceId, sourceKey]
+    );
+    revoked = !!rows[0];
+    credits = rows[0] ? Number(rows[0].delta || 0) : 0;
+    if (credits !== 0) {
+      await client.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, -credits]);
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
   }
   const state = await getState(workspaceId, userId);
-  return { revoked: !!rows[0], credits, delta: -credits, account: state.account };
+  // `|| 0` normalizes the -0 that `-credits` yields on a miss.
+  return { revoked, credits, delta: -credits || 0, account: state.account };
 }
 
 function chooseWeighted(items, weightKey = "weight", rng = crypto.randomInt) {

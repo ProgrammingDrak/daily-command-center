@@ -17,19 +17,33 @@ function makeHarness() {
   const blocks = [];
   const deleted = [];
   const counts = { query: 0, update: 0 };
+  // What the DB actually holds, deep-copied. `blocks` entries are the SAME objects
+  // the caller hands in, and the module assigns `block.properties` after each
+  // write, so asserting only on those would pass even if updateBlock were never
+  // called. Read `stored` when the question is "was this really persisted?".
+  const stored = new Map();
+  const copy = (v) => JSON.parse(JSON.stringify(v));
   const blockDB = {
-    getBlock: async (id) => blocks.find(x => x.id === id) || null,
+    // Returns the PERSISTED properties, deliberately decoupled from the array
+    // object, so a test can make the DB row diverge from the caller's snapshot.
+    getBlock: async (id) => {
+      const b = blocks.find(x => x.id === id);
+      if (!b) return null;
+      return { ...b, properties: stored.has(id) ? copy(stored.get(id)) : b.properties };
+    },
     updateBlock: async (id, { properties }) => {
       counts.update++;
       if (String(id).startsWith("boom")) throw new Error("write rejected " + id);
       const b = blocks.find(x => x.id === id);
       if (!b) throw new Error("not found " + id);
+      stored.set(id, copy(properties));
       b.properties = properties;
       return { id };
     },
     createBlock: async ({ id, type, date, properties, parent_id }) => {
       const b = { id, type, date, properties, parent_id };
-      blocks.push(b); return b;       // db.js returns the whole row; callers rely on it
+      blocks.push(b); stored.set(id, copy(properties));
+      return b;                       // db.js returns the whole row; callers rely on it
     },
     ensureDayRoot: async (date) => `day-root-ws-1-${date}`,
   };
@@ -38,7 +52,7 @@ function makeHarness() {
       counts.query++;
       if (/^\s*DELETE/i.test(sql)) {
         const i = blocks.findIndex(b => b.id === params[0] && b.type === "time_entry");
-        if (i >= 0) deleted.push(blocks.splice(i, 1)[0]);
+        if (i >= 0) { deleted.push(blocks.splice(i, 1)[0]); stored.delete(params[0]); }
         return { rows: [] };
       }
       const hit = blocks.find(b => b.id === params[0]);
@@ -48,10 +62,12 @@ function makeHarness() {
   const timing = createTaskTiming({ pool, blockDB, timeZone: "America/New_York" });
   const addTask = (props, extra = {}) => {
     const b = { id: `blk-${blocks.length + 1}`, type: "block", date: "2026-07-28", properties: props, ...extra };
-    blocks.push(b); return b;
+    blocks.push(b); stored.set(b.id, copy(props)); return b;
   };
+  // Simulate ANOTHER writer committing to this row after the caller's SELECT.
+  const mutateStored = (id, props) => stored.set(id, copy(props));
   const timerFor = (id) => blocks.find(b => b.type === "time_entry" && b.id === `${id}-slacktimer`);
-  return { timing, blocks, deleted, counts, addTask, timerFor };
+  return { timing, blocks, deleted, counts, stored, addTask, mutateStored, timerFor };
 }
 
 const dayRoot = (props) => ({ id: "day-root-ws-1-2026-07-28", type: "day_root", date: "2026-07-28", properties: props });
@@ -116,16 +132,23 @@ test("finalizeTiming writes mergeProps even when there is nothing to time", asyn
   assert.equal(task.properties.actualMinutes, undefined, "still no invented minutes");
 });
 
-test("a ⏳ left running for days is capped, and says so", async () => {
-  const { timing, addTask } = makeHarness();
+test("a ⏳ left running for days is capped, and the SEGMENT is capped with it", async () => {
+  const { timing, addTask, timerFor } = makeHarness();
+  const MAX = createTaskTiming.MAX_TIMED_MINUTES;
   const task = addTask({ title: "Forgotten", startedAt: new Date(END - 3 * 24 * 60 * MIN).toISOString() });
-  const res = await timing.finalizeTiming({ block: task, endMs: END, maxMinutes: createTaskTiming.MAX_TIMED_MINUTES });
-  assert.equal(res.actualMinutes, createTaskTiming.MAX_TIMED_MINUTES);
+  const res = await timing.finalizeTiming({ block: task, endMs: END, maxMinutes: MAX });
+  assert.equal(res.actualMinutes, MAX);
   assert.match(task.properties.notes, /timer left running/);
+  // The clamp has to move the segment start too, or Day Review renders a 3-day bar
+  // under a 16h number. Asserting the note alone would not catch that.
+  assert.equal(res.startMs ?? END - MAX * 60000, END - MAX * 60000);
+  const te = timerFor(task.id);
+  assert.ok(te, "a segment is still created when clamped");
+  assert.equal(te.properties.durSec, MAX * 60, "segment duration matches the capped minutes");
 });
 
 test("clearTiming un-times a task, strips only the ⏱ line, and drops the timer row", async () => {
-  const { timing, addTask, blocks, deleted } = makeHarness();
+  const { timing, addTask, blocks, deleted, stored } = makeHarness();
   const task = addTask({ title: "Timed", notes: "call Ben back", startedAt: new Date(END - 12 * MIN).toISOString() });
   await timing.finalizeTiming({ block: task, endMs: END, mergeProps: { status: "done", done: true, completedAt: new Date(END).toISOString() } });
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 1);
@@ -143,6 +166,11 @@ test("clearTiming un-times a task, strips only the ⏱ line, and drops the timer
   assert.ok(task.properties.startedAt, "startedAt survives so a re-✅ measures from the original ⏳");
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 0);
   assert.equal(deleted.length, 1, "the timer row is hard-deleted, not tombstoned");
+  // Read the PERSISTED copy, not the caller's object, so this fails if the write
+  // never happened.
+  assert.equal(stored.get(task.id).actualMinutes, undefined);
+  assert.equal(stored.get(task.id).notes, "call Ben back");
+  assert.equal(stored.get(task.id).status, "open");
 });
 
 test("clearTiming then re-finalize records time again (the un-✅ → re-✅ round trip)", async () => {
@@ -183,6 +211,13 @@ test("reconcileTiming reverses its derived stamp when the task is un-checked", a
   assert.equal(task.properties.actualMinutes, 12);
   assert.ok(timerFor(task.id));
 
+  // Still done on a later read: leave the derived answer alone. Without this the
+  // reconciler would re-time itself every page load and double the ⏱ note.
+  const notes = task.properties.notes;
+  assert.equal(await timing.reconcileTiming(blocks, {}), 0);
+  assert.equal(task.properties.notes, notes);
+  assert.equal(blocks.filter(b => b.type === "time_entry").length, 1);
+
   root.properties._done = { ids: [], at: {} };
   assert.equal(await timing.reconcileTiming(blocks, {}), 1);
   assert.equal(task.properties.actualMinutes, undefined);
@@ -212,6 +247,92 @@ test("a real Slack measurement supersedes a derived timing guess", async () => {
   assert.equal((task.properties.notes.match(/⏱/g) || []).length, 1, "the derived note is replaced, not doubled");
   assert.match(task.properties.notes, /^keep me/);
   assert.equal(timerFor(task.id).properties.durSec, 1200, "the derived segment is replaced with the measured window");
+});
+
+// Every other reconcile case goes through the _done overlay, so the row-level
+// branch of isBlockDone / completionMsOf (the API-completion path the module was
+// written for) would regress silently without this. No day_root in the array
+// either, which pins the overlay === null path.
+test("reconcileTiming closes a timer on a row completed on the ROW itself, no overlay", async () => {
+  const { timing, blocks, addTask, timerFor } = makeHarness();
+  const task = addTask({
+    title: "API done", startedAt: new Date(END - 15 * MIN).toISOString(),
+    status: "done", completedAt: new Date(END).toISOString(),
+  });
+  assert.equal(await timing.reconcileTiming(blocks, {}), 1);
+  assert.equal(task.properties.actualMinutes, 15, "measured to props.completedAt, not to now");
+  assert.equal(timerFor(task.id).properties.durSec, 900);
+});
+
+// reconcileTiming writes from a READ path and db.js updateBlock replaces the whole
+// properties document, so persisting the snapshot it was handed would destroy
+// anything committed between the caller's SELECT and this write — a Slack ✅
+// landing mid-read, or the poller's title enrichment.
+test("reconcileTiming re-reads before writing, so a concurrent completion is not clobbered", async () => {
+  const { timing, blocks, addTask, mutateStored } = makeHarness();
+  const task = addTask({ local_id: "t-race", title: "Racing", startedAt: new Date(END - 20 * MIN).toISOString() });
+  blocks.push(dayRoot({ _done: { ids: ["t-race"], at: { "t-race": new Date(END).toISOString() } } }));
+
+  // The caller's array now holds a STALE snapshot: the webhook committed the
+  // completion (and the poller a real title) after the SELECT.
+  mutateStored(task.id, {
+    local_id: "t-race", title: "Reply to Ben about SOW", startedAt: task.properties.startedAt,
+    status: "done", done: true, completedAt: new Date(END).toISOString(),
+  });
+
+  await timing.reconcileTiming(blocks, {});
+  const p = task.properties;
+  assert.equal(p.status, "done", "the concurrent completion survives");
+  assert.equal(p.done, true);
+  assert.ok(p.completedAt);
+  assert.equal(p.title, "Reply to Ben about SOW", "and so does the poller's title");
+  assert.equal(p.actualMinutes, 20, "while the timing still gets settled");
+});
+
+test("reconcileTiming skips a row that another writer already settled", async () => {
+  const { timing, blocks, addTask, mutateStored, counts } = makeHarness();
+  const task = addTask({ local_id: "t-done", startedAt: new Date(END - 20 * MIN).toISOString() });
+  blocks.push(dayRoot({ _done: { ids: ["t-done"], at: { "t-done": new Date(END).toISOString() } } }));
+  mutateStored(task.id, { local_id: "t-done", startedAt: task.properties.startedAt, actualMinutes: 20 });
+  const updatesBefore = counts.update;
+  assert.equal(await timing.reconcileTiming(blocks, {}), 0);
+  assert.equal(counts.update, updatesBefore, "no write at all once it no longer qualifies");
+});
+
+// clearStart deletes startedAt whenever completedAt is absent, which is always
+// true of an overlay-only completion. Gating the withdraw on startedAt would make
+// a derived stamp permanently stuck.
+test("a derived stamp is still withdrawable after startedAt is gone", async () => {
+  const { timing, blocks, addTask, timerFor } = makeHarness();
+  const task = addTask({ local_id: "t-nostart", title: "Oops", startedAt: new Date(END - 12 * MIN).toISOString() });
+  const root = dayRoot({ _done: { ids: ["t-nostart"], at: { "t-nostart": new Date(END).toISOString() } } });
+  blocks.push(root);
+  assert.equal(await timing.reconcileTiming(blocks, {}), 1);
+  assert.equal(task.properties.actualMinutes, 12);
+
+  // un-⏳ in Slack clears startedAt, then the task is un-checked in the UI.
+  delete task.properties.startedAt;
+  root.properties._done = { ids: [], at: {} };
+
+  assert.equal(await timing.reconcileTiming(blocks, {}), 1, "our own stamp is reconsidered without startedAt");
+  assert.equal(task.properties.actualMinutes, undefined);
+  assert.equal(task.properties.actualMinutesFrom, undefined);
+  assert.equal(timerFor(task.id), undefined);
+});
+
+test("reconcileTiming caps rows per read and says what it deferred", async () => {
+  const { timing, blocks, addTask } = makeHarness();
+  for (let i = 0; i < 5; i++) {
+    addTask({ local_id: `bulk-${i}`, startedAt: new Date(END - 10 * MIN).toISOString() });
+  }
+  const at = {};
+  for (let i = 0; i < 5; i++) at[`bulk-${i}`] = new Date(END).toISOString();
+  blocks.push(dayRoot({ _done: { ids: Object.keys(at), at } }));
+  assert.equal(await timing.reconcileTiming(blocks, { maxRows: 2 }), 2, "only the cap is settled");
+  // The rest settle on later reads rather than in one burst.
+  assert.equal(await timing.reconcileTiming(blocks, { maxRows: 2 }), 2);
+  assert.equal(await timing.reconcileTiming(blocks, { maxRows: 2 }), 1);
+  assert.equal(await timing.reconcileTiming(blocks, { maxRows: 2 }), 0);
 });
 
 test("reconcileTiming matches a row by its DB id too, not just local_id", async () => {
