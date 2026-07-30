@@ -437,9 +437,18 @@ async function undeleteBlock(id, client) {
   try {
     await q.query("UPDATE blocks SET deleted_at = NULL, updated_at = $1 WHERE id = $2", [now, id]);
   } catch (err) {
-    if (!isIdempotencyConflict(err)) throw err;
+    // Same rule as createBlock: inside a caller's transaction the 23505 has already
+    // aborted it, so recovery belongs to whoever owns the tx and the raw error must
+    // survive. No caller passes a client today; this keeps the two functions from
+    // diverging the moment one does.
+    if (client || !isIdempotencyConflict(err)) throw err;
     const conflict = new Error("Another live block already holds this idempotency key");
     conflict.statusCode = 409;
+    // Carry the classification through. Every recovery site in this phase keys off
+    // isIdempotencyConflict(), which reads code + constraint — drop them and a wrapped
+    // undelete stops being recognisable as the conflict it is.
+    conflict.code = err.code;
+    conflict.constraint = err.constraint;
     throw conflict;
   }
   await q.query(

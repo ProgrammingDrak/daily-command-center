@@ -171,9 +171,15 @@ jobs:
           PROD_URL: https://daily-command-center-production-1d04.up.railway.app
           EXPECT_SHA: ${{ github.sha }}
         run: |
-          echo "Polling ${PROD_URL}/api/health for ${EXPECT_SHA} (up to ~3 min)…"
+          # 60 x 15s = ~15 min, NOT the old ~3. The old canary exited the moment prod
+          # said "ok", so a queued deploy cost nothing; this one waits for the sha, so
+          # the budget has to cover how slow Railway actually gets. C1's deploy sat
+          # QUEUED ~17 minutes and landed fine — under a 3-minute window that run would
+          # red main with "the deploy did not land", which is a worse failure than the
+          # one this check exists to catch, because an alarm that cries wolf gets muted.
+          echo "Polling ${PROD_URL}/api/health for ${EXPECT_SHA} (up to ~15 min)…"
           live=""
-          for i in $(seq 1 18); do
+          for i in $(seq 1 60); do
             body="$(curl -s -m 10 "${PROD_URL}/api/health" || true)"
             if printf '%s' "$body" | grep -q '"status":"ok"'; then
               live=1
@@ -184,18 +190,18 @@ jobs:
                 exit 0
               fi
               if [ "$rev" = "$EXPECT_SHA" ]; then
-                echo "prod serving ${rev} after ~$((i * 10))s"
+                echo "prod serving ${rev} after ~$((i * 15))s"
                 exit 0
               fi
-              echo "attempt ${i}/18: alive but still serving ${rev}, waiting 10s…"
+              echo "attempt ${i}/60: alive but still serving ${rev}, waiting 15s…"
             else
-              echo "attempt ${i}/18: not healthy yet, waiting 10s…"
+              echo "attempt ${i}/60: not healthy yet, waiting 15s…"
             fi
-            sleep 10
+            sleep 15
           done
           if [ -n "$live" ]; then
             echo "::error title=Canary failed::prod is alive but never started serving ${EXPECT_SHA} — the deploy did not land"
           else
-            echo "::error title=Canary failed::prod /api/health did not report ok within ~3 min"
+            echo "::error title=Canary failed::prod /api/health did not report ok within ~15 min"
           fi
           exit 1

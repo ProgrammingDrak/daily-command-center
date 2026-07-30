@@ -99,6 +99,30 @@ function makeMockPool(initialRows = []) {
         put(params[0], created);
         return { rows: /RETURNING \*/.test(text) ? [{ ...created }] : [] };
       }
+      // TWO different statements start this way and their params differ:
+      //   deleteBlock   SET deleted_at = $1, updated_at = $2 WHERE id = $3
+      //   undeleteBlock SET deleted_at = NULL, updated_at = $1 WHERE id = $2
+      // Matching only the first shape made undelete a silent no-op in this fake, which
+      // is why its 409 path looked untestable.
+      if (/^UPDATE blocks SET deleted_at = NULL/.test(text)) {
+        const id = params[1];
+        const cur = view(id);
+        if (cur) {
+          // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial
+          // predicate, so a live row already holding the key raises here.
+          const key = keyOf(cur);
+          const clash = key && [...committed.values(), ...(staged ? staged.values() : [])]
+            .find(r => r && r.id !== id && !r.deleted_at && keyOf(r) === key && (r.workspace_id ?? null) === (cur.workspace_id ?? null));
+          if (clash) {
+            const err = new Error('duplicate key value violates unique constraint "idx_blocks_idem_unique"');
+            err.code = "23505";
+            err.constraint = "idx_blocks_idem_unique";
+            throw err;
+          }
+          put(id, { ...cur, deleted_at: null, updated_at: params[0] });
+        }
+        return { rows: [] };
+      }
       if (/^UPDATE blocks SET deleted_at/.test(text)) {
         const cur = view(params[2]);
         if (cur) put(params[2], { ...cur, deleted_at: params[0], updated_at: params[1] });
@@ -329,4 +353,44 @@ test("createBlock: a conflict whose winner vanishes before the re-read rethrows 
     () => db.createBlock({ type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k4" }, workspace_id: "ws-1" }),
     (err) => { assert.equal(err.code, "23505"); return true; }
   );
+});
+
+test("createBlock: a NULL-workspace key collides too — the index is NULLS NOT DISTINCT", async () => {
+  // The clause pg-schema.js adds, and the reader half it exists to agree with. A
+  // multicolumn unique index treats NULLs as DISTINCT by default, so without
+  // NULLS NOT DISTINCT these two rows both insert and the write side disagrees with
+  // findByIdempotencyKey's `workspace_id IS NOT DISTINCT FROM $2` and admin-model's
+  // GROUP BY, either of which would then report "enforced" over a live duplicate.
+  // blocks.workspace_id is nullable and createBlock passes `workspace_id || null`, so
+  // this group is reachable.
+  const winner = { ...row("winner", "Won"), workspace_id: null, properties: { name: "Won", idempotency_key: "k-null" } };
+  const pool = makeMockPool([winner]);
+  const db = loadDbWithMock(pool);
+
+  const res = await db.createBlock({ type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k-null" } });
+  assert.equal(res.id, "winner", "two NULL workspaces are the SAME tenant to this index");
+  assert.equal(res._resolvedExisting, true);
+  assert.equal(pool._committed.size, 1);
+});
+
+test("undeleteBlock: 409, not 500, when a live row already holds the key", async () => {
+  // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial predicate.
+  // route() maps an unclassified throw to 500, so without the catch a legitimate undo
+  // failure is indistinguishable from a server fault — and B2 is about to wire this
+  // route to the undo button. The prod restore's 32 duplicate key groups are all
+  // exactly this shape (a live row plus tombstones).
+  const dead = { ...row("dead", "Removed"), workspace_id: "ws-1", deleted_at: "2026-07-28T00:00:00Z", properties: { name: "Removed", idempotency_key: "k-occupied" } };
+  const live = { ...row("live", "Here"), workspace_id: "ws-1", properties: { name: "Here", idempotency_key: "k-occupied" } };
+  const pool = makeMockPool([dead, live]);
+  const db = loadDbWithMock(pool);
+
+  await assert.rejects(
+    () => db.undeleteBlock("dead"),
+    (err) => {
+      assert.equal(err.statusCode, 409, "not an unclassified throw, which route() would map to 500");
+      assert.match(err.message, /already holds this idempotency key/);
+      return true;
+    }
+  );
+  assert.ok(pool._committed.get("dead").deleted_at, "the tombstone is still a tombstone");
 });

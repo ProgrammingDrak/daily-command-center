@@ -52,7 +52,16 @@ function mountApp({ seed = {}, onCreate = null, serviceAuth = false } = {}) {
     // exists resolves to the row on disk instead of inserting. Modelled here because
     // it is the path B2's replayed client ids take, and a fake that overwrote silently
     // would make that whole branch untestable.
-    if (item.id && blocks[item.id]) return { ...blocks[item.id], _resolvedExisting: true };
+    if (item.id && blocks[item.id]) {
+      const found = blocks[item.id];
+      // The real fallback re-reads WHERE id = $1 AND workspace_id IS NOT DISTINCT FROM $2
+      // and 404s otherwise — model the scoping, or this fake is more permissive than the
+      // code it stands in for and a route-layer regression would be invisible here.
+      if ((found.workspace_id || null) !== (item.workspace_id || MINE)) {
+        const err = new Error("Block not found"); err.statusCode = 404; throw err;
+      }
+      return { ...found, _resolvedExisting: true };
+    }
     n += 1;
     const id = item.id || `made-${n}`;
     const props = typeof item.properties === "string" ? JSON.parse(item.properties) : (item.properties || {});
@@ -579,4 +588,75 @@ test("★ batch: undo-delete restores a keyed row — the tombstone must not swa
   assert.equal(calls.created.length, 1, "the undo actually restores");
   assert.notEqual(json.blocks[0].id, "dead-1", "a live row, not the tombstone handed back");
   assert.equal(json.blocks[0]._dedupe, undefined);
+});
+
+test("service token: a row won by a RACE is scope-checked too, not just one the lookup found", async () => {
+  // assertServiceScope has TWO call sites and only the lookup one was pinned — deleting
+  // the other left the whole suite green. Same leak as the one the fix closed, reached
+  // through the index race instead of the lookup: the token posts a sweep_suite_task
+  // create with a guessed key, loses the race, and db.createBlock hands back the
+  // foreign row that won.
+  const { app } = mountApp({
+    serviceAuth: true,
+    onCreate: (op, blocks) => { blocks["not-yours"] = foreignRow("slack-bookmark:C1:9.9", "task"); return idemConflict(); },
+  });
+  const { status, json } = await call(app, "POST", "/api/blocks", sweepItem("slack-bookmark:C1:9.9"));
+
+  assert.equal(status, 404);
+  assert.ok(!JSON.stringify(json).includes("salary"), "the raced-into row must not leak either");
+});
+
+test("an id colliding with a TOMBSTONE returns the tombstone and creates nothing (handed to B2)", async () => {
+  // Pinned as a DECISION, not left as an accident. The key path was narrowed to
+  // live-only so a tombstone cannot swallow a restore; the ID path underneath is still
+  // tombstone-inclusive, so the same silent no-op is reachable from the other identity
+  // scheme — a create whose caller-minted id matches a tombstone creates nothing and
+  // reports skipped_deleted.
+  //
+  // Latent today: verified that no client path posts a create with an explicit id
+  // (public/js/state.js:1416 mints none) and db.ensureDayRoot pre-checks
+  // tombstone-inclusive so it never reaches the conflict path. It goes LIVE in B2,
+  // which is the phase that makes the client mint ids — and B2 also replaces undo with
+  // POST /:id/undelete, which is the right answer for a restore. B2 owns the call:
+  // keep this, or make it an explicit 409 pointing at /undelete.
+  const seed = { "tombstoned-id": { id: "tombstoned-id", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: TOMB, properties: { title: "Deleted" } } };
+  const { app, calls } = mountApp({ seed });
+  const { json } = await call(app, "POST", "/api/blocks", { id: "tombstoned-id", type: "block", date: "2026-07-30", properties: { title: "Recreate me" } });
+
+  assert.equal(json.id, "tombstoned-id");
+  assert.equal(json._dedupe, "skipped_deleted", "the one path on these routes that can still say this");
+  assert.equal(calls.created.length, 0);
+});
+
+test("★ service token: an AGENT still must not resurrect — the tombstone rule holds for it", async () => {
+  // The live-only narrowing was justified as "these routes are the human client's write
+  // path". True of /batch (session-only), NOT true of POST /api/blocks: server.js makes
+  // it the Sweep Suite token's one reachable write, and a sweep replaying its key is
+  // exactly the agent lib/materialize-guard.js exists to stop. Same endpoint, two
+  // callers, opposite right answers — `req.dccServiceAuth` is the discriminator.
+  const seed = { "swept-away": { id: "swept-away", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: TOMB, properties: { kind: "sweep_suite_task", title: "Deleted sweep item", idempotency_key: "slack-bookmark:C9:1.0" } } };
+  const { app, calls } = mountApp({ seed, serviceAuth: true });
+  const { status, json } = await call(app, "POST", "/api/blocks", sweepItem("slack-bookmark:C9:1.0"));
+
+  assert.equal(status, 200);
+  assert.equal(json.id, "swept-away");
+  assert.equal(json._dedupe, "skipped_deleted", "the sweep is told it was removed, not handed a fresh row");
+  assert.equal(calls.created.length, 0, "the item the user deleted does not come back");
+});
+
+test("★ a mid-loop refusal still announces the rows already committed", async () => {
+  // POST /api/blocks accepts an array and the loop is NOT a transaction — each item
+  // autocommits. When a later item's dedupe answer fails the scope check, the earlier
+  // rows are already in the database. Without the broadcast in a finally they exist but
+  // no tab ever hears about them, while the caller is told the request failed: a
+  // permanently invisible row until someone reloads.
+  const seed = { "not-yours": foreignRow("forbidden-key", "task") };
+  const { app, broadcasts, calls } = mountApp({ seed, serviceAuth: true });
+  const { status } = await call(app, "POST", "/api/blocks", [sweepItem("fine-key"), sweepItem("forbidden-key")]);
+
+  assert.equal(status, 404, "the request still fails on the row it may not read");
+  assert.equal(calls.created.length, 1, "the first item did commit");
+  const created = broadcasts.filter(b => b.payload.action === "create");
+  assert.equal(created.length, 1, "and it was announced anyway");
+  assert.deepEqual(created[0].payload.blockIds, [calls.created[0].id]);
 });

@@ -182,15 +182,25 @@ async function audit() {
   // "the code contains a CREATE INDEX" and "the index exists on this database" are
   // different facts, and A1 learned the hard way that only the second one counts.
   // Read pg_indexes, not the deploy log.
+  // Reads pg_index, not pg_indexes, to get `indnullsnotdistinct` — because PRESENT IS
+  // NOT ENOUGH for the unique one. `CREATE UNIQUE INDEX IF NOT EXISTS` will NOT rebuild
+  // an index that already exists under that name, so any database that booted an
+  // earlier build of this branch keeps the old NULLS-DISTINCT definition forever, with
+  // the NULL-workspace hole open and the gate cheerfully reading true. Asserting the
+  // semantics rather than the name is the difference between a gate and a formality.
   const a3Indexes = await rows(`
-    SELECT indexname FROM pg_indexes
-     WHERE tablename = 'blocks'
-       AND indexname IN ('idx_blocks_idem_unique','idx_blocks_idem_key','idx_blocks_workspace_date_all')`);
-  const a3IndexNames = a3Indexes.map(r => r.indexname);
+    SELECT c.relname AS indexname, i.indnullsnotdistinct
+      FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indexrelid
+      JOIN pg_class t ON t.oid = i.indrelid
+     WHERE t.relname = 'blocks'
+       AND c.relname IN ('idx_blocks_idem_unique','idx_blocks_idem_key','idx_blocks_workspace_date_all')`);
+  const byIndexName = new Map(a3Indexes.map(r => [r.indexname, r]));
+  const idemUnique = byIndexName.get("idx_blocks_idem_unique");
   const a3IndexesPresent = {
-    idx_blocks_idem_unique: a3IndexNames.includes("idx_blocks_idem_unique"),
-    idx_blocks_idem_key: a3IndexNames.includes("idx_blocks_idem_key"),
-    idx_blocks_workspace_date_all: a3IndexNames.includes("idx_blocks_workspace_date_all"),
+    idx_blocks_idem_unique: !!idemUnique && idemUnique.indnullsnotdistinct === true,
+    idx_blocks_idem_key: byIndexName.has("idx_blocks_idem_key"),
+    idx_blocks_workspace_date_all: byIndexName.has("idx_blocks_workspace_date_all"),
   };
 
   // ── Step 7: THE LEDGER GATE ──

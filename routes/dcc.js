@@ -138,7 +138,11 @@ module.exports = function mount(app, ctx) {
       if (body.point_tier) props.point_tier = body.point_tier;
       if (body.point_multiplier != null) props.point_multiplier = body.point_multiplier;
       const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
-      broadcast("blocks-changed", { action: "quick-task-create", blockIds: [created.id], date }, workspaceId);
+      // Nothing was created on the deduped path, so nothing to announce — the same
+      // rule routes/blocks.js states for its own create loop. The MCP and CLI retry
+      // loops are exactly what produce this shape, so without the guard a replay storm
+      // is a re-fetch storm in every open tab.
+      if (!created._resolvedExisting) broadcast("blocks-changed", { action: "quick-task-create", blockIds: [created.id], date }, workspaceId);
       // A3: `_resolvedExisting` means db.createBlock lost the key race and handed back the live
       // winner instead of inserting. The row is right either way, but reporting
       // "created" for it would be a lie a caller can act on — this is the retry shape
@@ -450,7 +454,7 @@ module.exports = function mount(app, ctx) {
       if (idemKey) props.idempotency_key = idemKey;
       if (body.notes) props.notes = body.notes;
       const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
-      broadcast("blocks-changed", { action: "brief-push-next", blockIds: [created.id], date }, workspaceId);
+      if (!created._resolvedExisting) broadcast("blocks-changed", { action: "brief-push-next", blockIds: [created.id], date }, workspaceId);
       // A3: same as quick-task — a lost key race is resolved in db.createBlock, and the
       // honest status is the one the lookup above would have returned.
       res.json({ ok: true, date, status: created._resolvedExisting ? dedupeStatus(created) : "created", block: { id: created.id, title } });

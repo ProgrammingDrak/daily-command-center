@@ -130,17 +130,21 @@ module.exports = function mount(app, ctx) {
   //
   // B2 replaces that undo with POST /:id/undelete, which is the real fix; this stays
   // correct either way, because a restore through /undelete never reaches a create.
-  const NO_SEEN = new Map();
-  async function resolveIdempotentCreate(workspaceId, item, seen = NO_SEEN) {
+  // `seen` defaults to null rather than a shared Map: a module-scope Map used as a
+  // default arg is one `seen.set` away from becoming a process-lifetime cache keyed by
+  // idempotency key with no workspace in the key — a cross-tenant leak with nothing to
+  // catch it. Every other seen-map in this repo is function-local; keep it that way.
+  async function resolveIdempotentCreate(workspaceId, item, seen = null, { tombstoneIsAMatch = false } = {}) {
     const key = idemKeyOf(item);
     if (!key) return { key: null, existing: null };
     // `seen` carries keys minted EARLIER IN THIS SAME REQUEST: findForDedupe reads
     // through the pool, so inside a batch's open transaction it cannot see rows this
     // very request just inserted, and two items sharing a key would both pass the
     // lookup and then collide on the index.
-    if (seen.has(key)) return { key, existing: seen.get(key) };
+    if (seen && seen.has(key)) return { key, existing: seen.get(key) };
     const hit = await materializeGuard.findForDedupe(workspaceId, { idempotencyKey: key });
-    return { key, existing: hit && !hit.deleted_at ? hit : null };
+    if (!hit) return { key, existing: null };
+    return { key, existing: (tombstoneIsAMatch || !hit.deleted_at) ? hit : null };
   }
 
   // The answer a matched key produces: the row itself, which is what an idempotent
@@ -181,24 +185,42 @@ module.exports = function mount(app, ctx) {
     const results = [];
     const createdIds = [];
     const seen = new Map();
-    for (const item of items) {
-      const { key, existing } = await resolveIdempotentCreate(workspaceId, item, seen);
-      if (existing) { assertServiceScope(req, existing); results.push(markDeduped(existing)); continue; }
-      const row = await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId });
-      if (key) seen.set(key, row);
-      // db.createBlock answers a lost race itself — the index caught a writer that
-      // committed between our lookup and our insert, and it re-read the winner. Say so
-      // in the response and keep the id out of the broadcast, exactly as for a match
-      // the lookup found: nothing was created either way. Scope-checked for the same
-      // reason: the winner is another writer's row and may be another writer's kind.
-      if (row._resolvedExisting) { assertServiceScope(req, row); results.push(markDeduped(row)); continue; }
-      results.push(row);
-      createdIds.push(row.id);
+    // A SERVICE TOKEN IS AN AGENT, so the no-resurrect rule still binds it here. This
+    // endpoint is BOTH the human client's write path (persistAddedTask) and the Sweep
+    // Suite token's ONLY reachable write, and the two want opposite answers to the same
+    // tombstone: a person re-creating a keyed row is restoring it, a sweep replaying
+    // the same key is re-deriving something the user deliberately deleted — the exact
+    // caller class lib/materialize-guard.js exists for. `req.dccServiceAuth` is the
+    // discriminator, and it costs nothing to use it.
+    // (/api/blocks/batch needs no such split: server.js attaches dccServiceAuth for
+    // THIS path only, so /batch is session-only and stays live-only for undo.)
+    const agentRules = { tombstoneIsAMatch: !!req.dccServiceAuth };
+    try {
+      for (const item of items) {
+        const { key, existing } = await resolveIdempotentCreate(workspaceId, item, seen, agentRules);
+        if (existing) { assertServiceScope(req, existing); results.push(markDeduped(existing)); continue; }
+        const row = await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId });
+        if (key) seen.set(key, row);
+        // db.createBlock answers a lost race itself — the index caught a writer that
+        // committed between our lookup and our insert, and it re-read the winner. Say so
+        // in the response and keep the id out of the broadcast, exactly as for a match
+        // the lookup found: nothing was created either way. Scope-checked for the same
+        // reason: the winner is another writer's row and may be another writer's kind.
+        if (row._resolvedExisting) { assertServiceScope(req, row); results.push(markDeduped(row)); continue; }
+        results.push(row);
+        createdIds.push(row.id);
+      }
+    } finally {
+      // IN A FINALLY, because this loop is not a transaction. Each item autocommits, so
+      // by the time a later item throws — assertServiceScope on a foreign dedupe hit,
+      // or any db error — the earlier rows ARE in the database. Announcing them on the
+      // way out is not tidiness: a create nobody broadcast is invisible to every other
+      // tab and device until a reload, while the caller was told the request failed.
+      //
+      // Only ids this request actually created. Broadcasting a "create" for a deduped
+      // row would make every other tab re-fetch a row that did not change.
+      if (createdIds.length) broadcast("blocks-changed", { action: "create", blockIds: createdIds, clientId: body._clientId }, workspaceId);
     }
-    // Only ids this request actually created. Broadcasting a "create" for a deduped
-    // row would make every other tab re-fetch it — and for a tombstoned match, that
-    // is a fetch A2 deliberately made 404.
-    if (createdIds.length) broadcast("blocks-changed", { action: "create", blockIds: createdIds, clientId: body._clientId }, workspaceId);
     return results.length === 1 ? results[0] : results;
   }));
 
@@ -324,22 +346,25 @@ module.exports = function mount(app, ctx) {
       for (let i = 0; i < ops.length; i++) {
         const op = ops[i];
         if (!op || op.op !== "create") { toRun.push({ i, op }); continue; }
-        const key = idemKeyOf(op);
-        // A key repeated WITHIN one batch cannot be answered by a lookup — the row it
-        // refers to does not exist yet. Run the first, and echo its result into the
-        // later slots once batchOp returns. Letting both run instead would put two
-        // rows with one key inside a single transaction, where the index conflict is
-        // unrecoverable: the retry re-reads the same uncommitted nothing and loops.
-        if (key && firstForKey.has(key)) { echoes.set(i, firstForKey.get(key)); continue; }
         // Through resolveIdempotentCreate, NOT findForDedupe directly — this route is
         // where the live-only rule matters MOST, and calling the guard raw here is how
         // the two endpoints silently drifted apart once already. undoDeleteTask replays
         // its restored subtree through blockStore.batchOp -> POST /api/blocks/batch, so
         // a tombstone-inclusive match on THIS path is the one that finds the tombstone
         // of the row being restored and quietly restores nothing.
-        // No `seen` map: /batch handles a key repeated inside one request through
-        // `firstForKey` above, because its earlier rows are not queryable yet.
-        const { existing } = await resolveIdempotentCreate(workspaceId, op);
+        //
+        // No `seen` map: a key repeated inside ONE batch cannot be answered by a lookup
+        // (the row it refers to is not committed yet), so `firstForKey` below handles
+        // that instead — run the first, echo its result into the later slots once
+        // batchOp returns. Letting both run would put two rows with one key inside a
+        // single transaction, where the conflict is unrecoverable: the retry re-reads
+        // the same uncommitted nothing and loops.
+        const { key, existing } = await resolveIdempotentCreate(workspaceId, op);
+        if (key && firstForKey.has(key)) { echoes.set(i, firstForKey.get(key)); continue; }
+        // No assertServiceScope here, and that is safe rather than an oversight:
+        // server.js attaches req.dccServiceAuth for POST /api/blocks ONLY, so no
+        // scope-limited token can reach /batch. If that route list ever widens, this
+        // line and the echo path below both need the check POST /api/blocks has.
         if (existing) { resolved.set(i, markDeduped(existing)); continue; }
         if (key) firstForKey.set(key, i);
         toRun.push({ i, op });
