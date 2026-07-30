@@ -789,6 +789,85 @@ const POST_SCHEMA_STATEMENTS = [
         AND COALESCE(properties->>'status', 'open') = 'open';
   `],
 
+  // ── A3: idempotency ──────────────────────────────────────────────────────
+  //
+  // THE ENFORCEMENT INDEX. Two writers holding the same key can no longer both
+  // plant a row: the second insert is refused by Postgres rather than by a
+  // check-then-act guard that a concurrent request can slip between. Route-level
+  // dedupe (routes/blocks.js, routes/dcc.js) still runs first so the common case
+  // returns a friendly "already there" instead of an error; this is the backstop
+  // underneath it, and routes map its 23505 back onto the same answer.
+  //
+  // `deleted_at IS NULL` IS LOAD-BEARING, and the narrowing is not cosmetic.
+  // Measured on a prod restore (3,106 rows / 877 tombstoned): 32 duplicate key
+  // groups exist across all states, so the tombstone-spanning version A3 was
+  // originally specified with CANNOT be created — Postgres refuses it outright.
+  // Live-only, the count is 0 and it creates. The duplicates are all live-row +
+  // tombstones, i.e. exactly the delete-and-retry history the no-resurrect
+  // contract already handles at the route layer.
+  //
+  // The consequence to keep in mind: this constrains LIVE rows only. A tombstoned
+  // row does not reserve its key, so the structural guarantee stops at
+  // "no two live rows share a key" and the "don't resurrect a deleted one" half
+  // stays lib/materialize-guard.js's job. Both halves are needed; neither
+  // subsumes the other.
+  //
+  // Scoped by workspace_id first, matching db.findByIdempotencyKey's own
+  // `workspace_id IS NOT DISTINCT FROM $2` — a key is identity WITHIN a tenant.
+  // NULL workspace ids form their own group, which is what IS NOT DISTINCT FROM
+  // means on the read side too.
+  ["idx_blocks_idem_unique", `
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_idem_unique
+      ON blocks (workspace_id, (properties->>'idempotency_key'))
+      WHERE properties->>'idempotency_key' IS NOT NULL
+        AND deleted_at IS NULL;
+  `],
+
+  // THE LOOKUP INDEX, and it is genuinely a second index rather than a duplicate
+  // of the one above. db.findByIdempotencyKey is TOMBSTONE-INCLUSIVE by design
+  // (its ORDER BY ranks live rows first rather than filtering dead ones out), so
+  // its predicate never implies `deleted_at IS NULL` and the unique index above
+  // is unusable for it. Verified rather than assumed, on the prod restore:
+  //
+  //   baseline                        seq scan, 571 buffers, 6.1ms
+  //   + idx_blocks_idem_unique only   seq scan, 548 buffers  (index NOT used)
+  //   + this index                    index scan,  3 buffers, 0.03ms
+  //
+  // That path is hot: routes/slack-events.js findTaskWithRetry runs it up to 3×
+  // per Slack reaction, and A2 added a third request-path caller of the same
+  // shape. Deferred out of E1 because it needs this file.
+  //
+  // Partial on the indexed expression's own IS NOT NULL — which `= $1` implies, so
+  // the planner still uses it (confirmed: bitmap index scan, and 32kB versus 56kB
+  // because only 199 of 3,106 rows carry a key). Do NOT confuse this predicate
+  // with the `deleted_at IS NULL` one that broke idx_blocks_local_id: that one was
+  // unusable because the QUERY never implied it. This one the query does imply.
+  ["idx_blocks_idem_key", `
+    CREATE INDEX IF NOT EXISTS idx_blocks_idem_key
+      ON blocks ((properties->>'idempotency_key'))
+      WHERE properties->>'idempotency_key' IS NOT NULL;
+  `],
+
+  // Serves db.getBlocksByDateIncludingDeleted, the tombstone-inclusive day load
+  // that every dedupe path and responsibility-store.loadDaySlottingContext runs.
+  //
+  // Handed over by Track D at close as "a partial index on `deleted_at IS NOT
+  // NULL`". That shape does NOT work, and measuring it is the only reason we know:
+  // the query carries no deleted_at predicate AT ALL (it wants the whole day, live
+  // and dead), so a partial index on either polarity of deleted_at is unusable.
+  //
+  //   baseline                         seq scan, 449 buffers
+  //   + (date) WHERE deleted_at IS NOT NULL   seq scan, 449 buffers (index NOT used)
+  //   + this index                     index scan,  56 buffers
+  //
+  // So this is the de-partialed twin of idx_blocks_workspace_date, the same
+  // correction idx_blocks_local_id already carries. The partial original is kept:
+  // it is smaller and still preferred for the many live-only day reads.
+  ["idx_blocks_workspace_date_all", `
+    CREATE INDEX IF NOT EXISTS idx_blocks_workspace_date_all
+      ON blocks (workspace_id, date);
+  `],
+
   // NOT VALID so it cannot fail on existing bad rows. The migration's cycle scrub
   // runs VALIDATE CONSTRAINT once self-parents are gone.
   ["blocks_no_self_parent", `

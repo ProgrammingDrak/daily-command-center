@@ -37,6 +37,11 @@ async function one(sql, params = []) {
   return rows[0] || {};
 }
 
+async function rows(sql, params = []) {
+  const res = await pool.query(sql, params);
+  return res.rows;
+}
+
 function nums(row) {
   const out = {};
   for (const [k, v] of Object.entries(row)) out[k] = v === null ? null : Number(v);
@@ -156,9 +161,12 @@ async function audit() {
   const overlayDeleted = nums(await one(
     overlaySql("->'_deleted'", "b.deleted_at IS NOT NULL")));
 
-  // ── Step 6: idempotency dupes. Counted BOTH ways on purpose: A3's unique index is
-  // created over ALL rows carrying a key, tombstoned included, so `anyState` — not
-  // `live` — is the number that decides whether that index can be created at all. ──
+  // ── Step 6: idempotency dupes. Counted BOTH ways on purpose. `anyState` is what
+  // decided the index's PREDICATE — 32 duplicate groups across tombstones is why the
+  // tombstone-spanning version A3 was specified with could never be created — and
+  // `live` is what the index A3 actually shipped enforces, so it is the one that must
+  // stay at 0 from here on. A non-zero `live` after A3 would mean the unique index is
+  // missing, not that data drifted; it cannot go above 0 while the index exists. ──
   const idempotency = nums(await one(`
     SELECT (SELECT count(*) FROM (
               SELECT 1 FROM blocks WHERE properties->>'idempotency_key' IS NOT NULL
@@ -168,6 +176,22 @@ async function audit() {
               SELECT 1 FROM blocks WHERE properties->>'idempotency_key' IS NOT NULL AND deleted_at IS NULL
                GROUP BY workspace_id, properties->>'idempotency_key' HAVING count(*) > 1) t)
              AS dupe_groups_live`));
+
+  // ── Step 6b: are A3's indexes actually THERE? ──
+  // applyPostSchema swallows a failed statement by design (boot must survive one), so
+  // "the code contains a CREATE INDEX" and "the index exists on this database" are
+  // different facts, and A1 learned the hard way that only the second one counts.
+  // Read pg_indexes, not the deploy log.
+  const a3Indexes = await rows(`
+    SELECT indexname FROM pg_indexes
+     WHERE tablename = 'blocks'
+       AND indexname IN ('idx_blocks_idem_unique','idx_blocks_idem_key','idx_blocks_workspace_date_all')`);
+  const a3IndexNames = a3Indexes.map(r => r.indexname);
+  const a3IndexesPresent = {
+    idx_blocks_idem_unique: a3IndexNames.includes("idx_blocks_idem_unique"),
+    idx_blocks_idem_key: a3IndexNames.includes("idx_blocks_idem_key"),
+    idx_blocks_workspace_date_all: a3IndexNames.includes("idx_blocks_workspace_date_all"),
+  };
 
   // ── Step 7: THE LEDGER GATE ──
   // One materialized pass classifies every task_complete key; the roll-up and the
@@ -261,10 +285,14 @@ async function audit() {
       // sits in the wrong id space".
       c5_ledgerNoRecreditRisk: ledger.recredit_risk_live_task === 0,
 
-      // A3 creates a UNIQUE index over EVERY row carrying an idempotency_key,
-      // tombstones included, so live-only cleanliness is not enough. False today:
-      // see decisions.a3IndexPredicate.
-      a3_idempotencyIndexCreatable: idempotency.dupe_groups_any_state === 0,
+      // A3 HAS SHIPPED, so the question changed: not "could the index be created"
+      // but "is it on THIS database". applyPostSchema logs a failure and carries on,
+      // and the deploy stays green either way, so this gate is the only honest
+      // answer — read from pg_indexes. Enforcement (the unique index) and the live
+      // dupe count have to agree; a live dupe with the index present is impossible,
+      // so the pair catches both "index missing" and "index somehow bypassed".
+      a3_idempotencyEnforced:
+        a3IndexesPresent.idx_blocks_idem_unique && idempotency.dupe_groups_live === 0,
     },
 
     // Not blockers — judgement calls that belong to a human before a read flip.
@@ -293,10 +321,16 @@ async function audit() {
         "assigned that fix to C5, 2026-07-29). These recredit-risk keys are the " +
         "remainder with no sidecar, because 2+ rows share that local_id and the " +
         "resolver refused to guess; ledgerRiskKeys carries their titles and deltas.",
+      a3IndexesPresent,
       a3IndexPredicate:
-        "A3's index as specified (`WHERE properties->>'idempotency_key' IS NOT NULL`) " +
-        "CANNOT be created: 32 duplicate groups exist among tombstoned rows. It needs " +
-        "`AND deleted_at IS NULL` in the predicate, or a dedupe that includes tombstones.",
+        "SHIPPED (A3). The index as originally specified " +
+        "(`WHERE properties->>'idempotency_key' IS NOT NULL`) could never be created — " +
+        "32 duplicate groups exist among tombstoned rows — so it carries " +
+        "`AND deleted_at IS NULL` and constrains LIVE rows only. The consequence to " +
+        "keep in mind: a tombstone does NOT reserve its key, so 'never resurrect a " +
+        "deleted row' remains lib/materialize-guard.js's job at the route layer. The " +
+        "index is the concurrency backstop, the guard is the no-resurrect rule; " +
+        "neither one subsumes the other.",
     },
 
     // `missing` is EXPECTED to be large and is not a defect. A1 deliberately does not

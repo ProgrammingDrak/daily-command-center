@@ -12,6 +12,8 @@
  */
 "use strict";
 
+const { randomUUID } = require("node:crypto");
+
 const DEFAULT_BASE = "https://daily-command-center-production-1d04.up.railway.app";
 const BASE = (process.env.DCC_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
 const TOKEN = process.env.DCC_PA_TOKEN || process.env.SECRET_PA_TOKEN || "";
@@ -107,6 +109,17 @@ async function scheduleTask(args) {
   }
   if (args.durationMinutes != null) body.durationMinutes = args.durationMinutes;
   if (Array.isArray(args.tags)) body.tags = args.tags;
+
+  // Minted ONCE, here, and deliberately not inside postWithRetry: the whole point is
+  // that all MAX_ATTEMPTS attempts carry the SAME key. The retry loop above resends on
+  // a timeout or a 5xx, and a request the server committed before the response was
+  // lost is exactly the case that produces a duplicate task today — the second attempt
+  // looks like a brand-new create. With the key, quick-task's dedupe recognises it.
+  //
+  // A fresh UUID per invocation rather than a hash of the arguments, because two
+  // deliberate "schedule a standup" calls are two tasks; only a RETRY of one call is
+  // the same task.
+  body.idempotency_key = `mcp-schedule:${randomUUID()}`;
 
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}`, "x-user-id": USER_ID };
   if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;

@@ -41,20 +41,57 @@ function makeMockPool(initialRows = []) {
       }
       if (text === "ROLLBACK") { staged.clear(); return { rows: [] }; }
 
+      const keyOf = (r) => {
+        const p = r && (typeof r.properties === "string" ? JSON.parse(r.properties) : r.properties);
+        return (p && p.idempotency_key) || null;
+      };
       const view = (id) => (staged && staged.has(id)) ? staged.get(id) : (committed.has(id) ? committed.get(id) : null);
       const put = (id, row) => { if (staged) staged.set(id, row); else if (row === null) committed.delete(id); else committed.set(id, row); };
 
       if (/^SELECT \* FROM blocks WHERE id/.test(text)) {
         const row = view(params[0]);
+        // A3's createBlock fallback scopes its re-read by workspace, so the mock has to
+        // model that predicate or a cross-workspace collision would look like a hit.
+        if (/workspace_id IS NOT DISTINCT FROM/.test(text)) {
+          const want = params[1] === undefined ? null : params[1];
+          return { rows: row && (row.workspace_id || null) === (want || null) ? [{ ...row }] : [] };
+        }
+        return { rows: row ? [{ ...row }] : [] };
+      }
+      if (/^SELECT \* FROM blocks\s+WHERE properties->>'idempotency_key'/.test(text)) {
+        const all = [...committed.values(), ...(staged ? staged.values() : [])].filter(Boolean);
+        const hits = all.filter(r => keyOf(r) === params[0] && (r.workspace_id || null) === (params[1] || null));
+        const row = hits.find(r => !r.deleted_at) || hits[0];
         return { rows: row ? [{ ...row }] : [] };
       }
       if (/^INSERT INTO blocks/.test(text)) {
-        put(params[0], {
+        // pg-schema.js idx_blocks_idem_unique, modelled: a LIVE row already holding this
+        // key raises 23505. Partial on `deleted_at IS NULL`, so a tombstone does not
+        // reserve its key — which is why a resolved conflict is always a live row.
+        const key = keyOf({ properties: params[4] });
+        if (key) {
+          const clash = [...committed.values(), ...(staged ? staged.values() : [])]
+            .find(r => r && r.id !== params[0] && !r.deleted_at && keyOf(r) === key && (r.workspace_id || null) === (params[7] || null));
+          if (clash) {
+            const err = new Error('duplicate key value violates unique constraint "idx_blocks_idem_unique"');
+            err.code = "23505";
+            err.constraint = "idx_blocks_idem_unique";
+            throw err;
+          }
+        }
+        // ON CONFLICT (id) DO NOTHING RETURNING * — modelled properly, because getting
+        // this wrong is invisible: a mock that returns no rows makes EVERY create look
+        // like a conflict, so createBlock silently takes its fallback path on every
+        // call and the suite still passes. Caught exactly that way.
+        const conflict = /ON CONFLICT \(id\) DO NOTHING/.test(text) && view(params[0]) !== null;
+        if (conflict) return { rows: [] };
+        const created = {
           id: params[0], type: params[1], parent_id: params[2], date: params[3],
           properties: params[4], sort_order: params[5], user_id: params[6],
           workspace_id: params[7], created_at: params[8], updated_at: params[9], deleted_at: null,
-        });
-        return { rows: [] };
+        };
+        put(params[0], created);
+        return { rows: /RETURNING \*/.test(text) ? [{ ...created }] : [] };
       }
       if (/^UPDATE blocks SET deleted_at/.test(text)) {
         const cur = view(params[2]);
@@ -156,4 +193,112 @@ test("batchOp: a throw mid-sequence rolls everything back — no partial state",
   const client = pool._log.filter((l) => l.tag === "client");
   assert.ok(client.some((l) => l.text === "ROLLBACK"), "rolled back");
   assert.ok(!client.some((l) => l.text === "COMMIT"), "never committed");
+});
+
+// ── A3: ON CONFLICT (id) DO NOTHING — the line B2 is waiting on ────────────────
+//
+// Until this landed, a create whose caller-minted id already existed raised 23505
+// and aborted the caller's whole transaction. B2 makes the CLIENT mint block ids, so
+// a WAL replay after a lost ack posts a create for a row the server already has —
+// which is the normal case there, not an error case.
+
+test("createBlock: replaying a create with the same id returns the existing row, no second insert", async () => {
+  const pool = makeMockPool([]);
+  const db = loadDbWithMock(pool);
+
+  const first = await db.createBlock({ id: "client-minted-1", type: "block", date: "2026-07-11", properties: { name: "once" }, workspace_id: "ws-1" });
+  const replay = await db.createBlock({ id: "client-minted-1", type: "block", date: "2026-07-11", properties: { name: "once" }, workspace_id: "ws-1" });
+
+  assert.equal(first.id, "client-minted-1");
+  assert.equal(replay.id, "client-minted-1", "the replay resolves to the SAME row, not a new uuid");
+  assert.equal(pool._committed.size, 1, "exactly one row exists");
+
+  // The op log must not claim a create that did not happen — this is what makes the
+  // replay a genuine no-op rather than a silent duplicate in the audit trail.
+  const opInserts = pool._log.filter((l) => l.text.startsWith("INSERT INTO operations"));
+  assert.equal(opInserts.length, 1, "one create op logged across both calls");
+});
+
+test("createBlock: the DO NOTHING fallback is workspace-scoped — a foreign id 404s instead of leaking the row", async () => {
+  // Raised by Track B against this exact line before it was written. DO NOTHING
+  // returns no rows, so the fallback SELECT is what answers the request; written the
+  // obvious way (WHERE id = $1) it turns the CREATE path into a cross-workspace READ,
+  // and ids are guessable — day roots are literally `day-root-<workspace>-<date>`.
+  const foreign = { ...row("day-root-ws-victim-2026-07-11", "victim's day"), workspace_id: "ws-victim" };
+  const pool = makeMockPool([foreign]);
+  const db = loadDbWithMock(pool);
+
+  await assert.rejects(
+    () => db.createBlock({ id: "day-root-ws-victim-2026-07-11", type: "block", date: "2026-07-11", properties: { name: "mine" }, workspace_id: "ws-attacker" }),
+    (err) => {
+      assert.match(String(err.message), /Block not found/, "404-shaped, matching assertBlockOwnership — a 409 would confirm the id exists");
+      assert.equal(err.statusCode, 404);
+      return true;
+    }
+  );
+  assert.equal(pool._committed.get("day-root-ws-victim-2026-07-11").properties.name, "victim's day", "the foreign row is untouched");
+});
+
+test("createBlock: a conflicting create inside a batch does NOT abort the transaction", async () => {
+  // The whole point for B2: before ON CONFLICT, one already-present id in a replayed
+  // batch raised 23505 and took every sibling op down with it.
+  const pool = makeMockPool([row("already-here", "existing")]);
+  const db = loadDbWithMock(pool);
+
+  const res = await db.batchOp([
+    { op: "create", type: "block", date: "2026-07-11", properties: { name: "dup" }, id: "already-here", workspace_id: null },
+    { op: "create", type: "block", date: "2026-07-11", properties: { name: "fresh" }, id: "brand-new", workspace_id: null },
+  ]);
+
+  assert.equal(res.blocks.length, 2);
+  assert.equal(res.blocks[0].properties.name, "existing", "the conflicting create resolved to the row on disk");
+  assert.equal(pool._committed.get("brand-new").properties.name, "fresh", "its sibling still committed");
+  const client = pool._log.filter((l) => l.tag === "client");
+  assert.ok(client.some((l) => l.text === "COMMIT"), "committed rather than rolled back");
+});
+
+// ── A3: the unique idempotency index, resolved at the primitive ────────────────
+//
+// Four routes create keyed rows and every one already looks the key up first, so the
+// only way to reach a 23505 is losing the narrow race between that lookup and the
+// insert. Resolving it in createBlock covers all four (and anything added later)
+// instead of four copies of the same catch.
+
+test("createBlock: an idempotency conflict OUTSIDE a transaction resolves to the live winner", async () => {
+  const winner = { ...row("winner", "Won the race"), workspace_id: "ws-1", properties: { name: "Won the race", idempotency_key: "k1" } };
+  const pool = makeMockPool([winner]);
+  const db = loadDbWithMock(pool);
+
+  const res = await db.createBlock({ type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k1" }, workspace_id: "ws-1" });
+
+  assert.equal(res.id, "winner", "the caller gets the row that won, not an error");
+  assert.equal(res._deduped, true, "flagged, so the caller does not broadcast a create or award points for it");
+  assert.equal(pool._committed.size, 1, "the loser planted nothing");
+});
+
+test("createBlock: the same conflict INSIDE a transaction rethrows — recovery is the caller's", async () => {
+  // The error has already aborted the tx, so no further query on that client can
+  // succeed. routes/blocks.js /batch re-resolves and re-runs the whole batch instead.
+  const winner = { ...row("winner", "Won"), workspace_id: null, properties: { name: "Won", idempotency_key: "k2" } };
+  const pool = makeMockPool([winner]);
+  const db = loadDbWithMock(pool);
+
+  await assert.rejects(
+    () => db.batchOp([{ op: "create", type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k2" }, workspace_id: null }]),
+    (err) => { assert.equal(err.code, "23505"); assert.equal(err.constraint, "idx_blocks_idem_unique"); return true; }
+  );
+  const client = pool._log.filter((l) => l.tag === "client");
+  assert.ok(client.some((l) => l.text === "ROLLBACK"), "rolled back, so the retry starts from a clean slate");
+});
+
+test("createBlock: a tombstone does NOT reserve its key — the index is live-only", async () => {
+  // The half the index deliberately does not enforce. Refusing to resurrect is the
+  // route layer's rule (lib/materialize-guard.js); at this level the insert succeeds.
+  const dead = { ...row("dead", "Removed"), workspace_id: "ws-1", deleted_at: "2026-07-10T00:00:00Z", properties: { name: "Removed", idempotency_key: "k3" } };
+  const pool = makeMockPool([dead]);
+  const db = loadDbWithMock(pool);
+
+  const res = await db.createBlock({ type: "block", date: "2026-07-11", properties: { name: "fresh", idempotency_key: "k3" }, workspace_id: "ws-1" });
+  assert.ok(!res._deduped, "a new row, not a resolved conflict");
+  assert.equal(pool._committed.size, 2);
 });

@@ -67,6 +67,52 @@ module.exports = function mount(app, ctx) {
     return blocks;
   }
 
+  // ── A3: idempotency on the generic create paths ──────────────────────────
+  //
+  // POST /api/blocks and POST /api/blocks/batch were the last create paths with no
+  // idempotency handling at all: routes/dcc.js honors a key on all three of its
+  // writers, and these two would happily mint a second row for a request the server
+  // had already committed. That is the duplicate every agent retry and every WAL
+  // replay produces today.
+  //
+  // Goes through lib/materialize-guard.js rather than db.findByIdempotencyKey
+  // directly, because A2 made that module the single home for "a soft-deleted match
+  // is STILL a match". A fourth hand-rolled copy of that rule is exactly what A2
+  // removed. Its lookup is deliberately DATE-BLIND, which agrees with A3's unique
+  // index: a key is workspace-global identity, not a per-day one.
+  //
+  // Entirely inert for a request carrying no key — which is every client create
+  // today — so this changes nothing until a caller opts in.
+  function idemKeyOf(item) {
+    if (!item) return null;
+    const props = typeof item.properties === "string" ? safeParseProps(item.properties) : (item.properties || {});
+    const key = props.idempotency_key || props.idempotencyKey || null;
+    return key ? String(key) : null;
+  }
+  function safeParseProps(raw) { try { return JSON.parse(raw) || {}; } catch { return {}; } }
+
+  // Resolve one create against the key space. `seen` carries the keys minted EARLIER
+  // IN THIS SAME REQUEST: findForDedupe reads through the pool, so within a batch's
+  // open transaction it cannot see rows this very request just inserted, and two
+  // items sharing a key would both pass the lookup and then collide on the index.
+  async function resolveIdempotentCreate(workspaceId, item, seen) {
+    const key = idemKeyOf(item);
+    if (!key) return { key: null, existing: null };
+    if (seen.has(key)) return { key, existing: seen.get(key) };
+    const existing = await materializeGuard.findForDedupe(workspaceId, { idempotencyKey: key });
+    return { key, existing: existing || null };
+  }
+
+  // The answer a matched key produces. A live match returns the row itself, which is
+  // what an idempotent create MEANS — same request, same result. A tombstone returns
+  // the tombstone: `deleted_at` is already the client's signal (A2 made GET /:id 404
+  // on one) and `_dedupe` names the verdict without inventing a status code that
+  // Track B's replay classifier would read as transient and retry forever.
+  function markDeduped(row) {
+    const { _deduped, ...rest } = row;
+    return { ...rest, _dedupe: row.deleted_at ? "deleted" : "duplicate" };
+  }
+
   // ── Block API ──
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
@@ -74,8 +120,25 @@ module.exports = function mount(app, ctx) {
     if (req.dccServiceAuth && !items.every(isAllowedSweepBlockItem)) { res.status(403).json({ error: "Sweep Suite token may only create sweep_suite_task blocks" }); return; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
     const results = [];
-    for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId }));
-    broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, workspaceId);
+    const createdIds = [];
+    const seen = new Map();
+    for (const item of items) {
+      const { key, existing } = await resolveIdempotentCreate(workspaceId, item, seen);
+      if (existing) { results.push(markDeduped(existing)); continue; }
+      const row = await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId });
+      if (key) seen.set(key, row);
+      // db.createBlock answers a lost race itself — the index caught a writer that
+      // committed between our lookup and our insert, and it re-read the winner. Say so
+      // in the response and keep the id out of the broadcast, exactly as for a match
+      // the lookup found: nothing was created either way.
+      if (row._deduped) { results.push(markDeduped(row)); continue; }
+      results.push(row);
+      createdIds.push(row.id);
+    }
+    // Only ids this request actually created. Broadcasting a "create" for a deduped
+    // row would make every other tab re-fetch it — and for a tombstoned match, that
+    // is a fetch A2 deliberately made 404.
+    if (createdIds.length) broadcast("blocks-changed", { action: "create", blockIds: createdIds, clientId: body._clientId }, workspaceId);
     return results.length === 1 ? results[0] : results;
   }));
 
@@ -179,8 +242,72 @@ module.exports = function mount(app, ctx) {
     }
 
     const opsWithUser = operations.map(op => op && op.op === "create" ? { ...op, user_id: userId, workspace_id: workspaceId } : op);
-    const result = await blockDB.batchOp(opsWithUser);
-    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId);
+
+    // A3 idempotency, resolved BEFORE batchOp opens its transaction. It has to
+    // happen out here: findForDedupe reads through the pool and could not see the
+    // transaction's own uncommitted rows, and a create dropped inside batchOp would
+    // desynchronise the results array from the operations array.
+    //
+    // This is the path that matters most. B1 made /batch the client's canonical
+    // write route, so a lost ack means the WAL replays the whole batch — and today
+    // that mints a duplicate of everything in it. With keys, the replay resolves to
+    // the rows the first attempt already committed.
+    //
+    // Deduped creates are REMOVED from the ops handed to batchOp and spliced back
+    // into the response at their original index, so `result.blocks[i]` still answers
+    // `operations[i]` for every caller that pairs them up.
+    async function runBatch(ops) {
+      const resolved = new Map();   // original index -> row already on disk
+      const echoes = new Map();     // original index -> index of the earlier op in THIS batch that mints it
+      const firstForKey = new Map();
+      const toRun = [];
+      for (let i = 0; i < ops.length; i++) {
+        const op = ops[i];
+        if (!op || op.op !== "create") { toRun.push({ i, op }); continue; }
+        const key = idemKeyOf(op);
+        // A key repeated WITHIN one batch cannot be answered by a lookup — the row it
+        // refers to does not exist yet. Run the first, and echo its result into the
+        // later slots once batchOp returns. Letting both run instead would put two
+        // rows with one key inside a single transaction, where the index conflict is
+        // unrecoverable: the retry re-reads the same uncommitted nothing and loops.
+        if (key && firstForKey.has(key)) { echoes.set(i, firstForKey.get(key)); continue; }
+        const existing = key ? await materializeGuard.findForDedupe(workspaceId, { idempotencyKey: key }) : null;
+        if (existing) { resolved.set(i, markDeduped(existing)); continue; }
+        if (key) firstForKey.set(key, i);
+        toRun.push({ i, op });
+      }
+      const raw = toRun.length ? await blockDB.batchOp(toRun.map(t => t.op)) : { batchId: null, blocks: [] };
+      const byIndex = new Map();
+      toRun.forEach((t, n) => byIndex.set(t.i, raw.blocks[n]));
+      const rowAt = (i) => {
+        if (resolved.has(i)) return resolved.get(i);
+        if (echoes.has(i)) { const src = byIndex.get(echoes.get(i)); return src ? markDeduped(src) : undefined; }
+        const row = byIndex.get(i);
+        // db.createBlock's ON CONFLICT (id) path returns an existing row rather than
+        // inserting — B2's replayed client-minted ids land here — so normalize that to
+        // the same `_dedupe` verdict a key match produces. One vocabulary for "this
+        // was found, not created", whichever identity resolved it.
+        return row && row._deduped ? markDeduped(row) : row;
+      };
+      const blocks = [];
+      for (let i = 0; i < ops.length; i++) { const row = rowAt(i); if (row !== undefined) blocks.push(row); }
+      return { batchId: raw.batchId, blocks };
+    }
+
+    let result;
+    try {
+      result = await runBatch(opsWithUser);
+    } catch (err) {
+      // A concurrent writer won the key between our lookup and the insert. batchOp is
+      // fully transactional, so the rollback left nothing behind and re-resolving is
+      // clean: the winner is committed and visible now, so the retry dedupes against
+      // it instead of colliding. Exactly ONE retry — a second conflict is no longer
+      // the narrow race this handles and should surface rather than spin.
+      if (!blockDB.isIdempotencyConflict(err)) throw err;
+      result = await runBatch(opsWithUser);
+    }
+
+    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean), clientId: _clientId }, req.workspaceId);
     return result;
   }));
 
@@ -741,13 +868,17 @@ module.exports = function mount(app, ctx) {
     // `force: true` is the deliberate re-add (mirroring respStore.scheduleResponsibilityTask's
     // own force flag), so the guard blocks the accident without blocking the intent.
     //
-    // BEST-EFFORT, and precisely so: this is check-then-act with awaits in between and
-    // no lock, transaction or uniqueness constraint on (workspace_id, date, taskGroupId).
-    // It reliably stops the SEQUENTIAL repeat — a WAL replay, or clicking again after the
-    // first add rendered — but two genuinely concurrent POSTs can both read an empty day
-    // and both plant the group. The true double-click is held off client-side by an
-    // in-flight guard in public/js/task-groups.js. Making this airtight server-side wants
-    // a partial unique index over live rows, which is pg-schema.js work (Track A / A3).
+    // The check-then-act below stops the SEQUENTIAL repeat; A3 closed the concurrent
+    // one underneath it with per-item idempotency keys (see the create loop), so two
+    // simultaneous POSTs can no longer both plant the group.
+    //
+    // A3 DECLINED the unique index this comment used to ask for, because it cannot
+    // work: taskGroupId is stamped on EVERY item a group mints, so a unique index on
+    // (workspace_id, date, taskGroupId) would make a two-item group unaddable on an
+    // empty database — the second item collides with the first. Measured on the prod
+    // restore, the three "duplicate" tuples that index would have to clear are two
+    // real double-books plus one perfectly ordinary two-item group. The key that IS
+    // unique per row is (group, date, item index), which is what gets stamped.
     // ONE day load for both the guard and the slotting context. The tombstone-inclusive
     // read cannot use an index (every blocks index is partial on deleted_at IS NULL), so
     // it sequential-scans; loadDaySlottingContext exists precisely so a batch pays for
@@ -772,8 +903,9 @@ module.exports = function mount(app, ctx) {
     const items = Array.isArray(group.properties.items) ? group.properties.items : [];
     const { dayStart, dayEnd, blockers } = dayCtx;
     const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
-    const created = [];
-    for (const item of items) {
+    const pending = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       const duration = Math.max(1, Math.round(Number(item.duration || 30)));
       const slot = firstFreeSlot(Math.max(dayStart, nowMin), duration, blockers, dayEnd) || Math.max(dayStart, nowMin);
       blockers.push({ s: slot, e: slot + duration });
@@ -787,6 +919,16 @@ module.exports = function mount(app, ctx) {
         taskGroupId: group.id,
         createdAt: new Date().toISOString()
       };
+      // A3: the per-item key that makes this add structurally single-shot. (group,
+      // date, item index) is the one tuple that is genuinely unique per row, so
+      // A3's UNIQUE index over live keys refuses the second of two concurrent adds
+      // instead of double-booking the day.
+      //
+      // NOT stamped on a `force` re-add: force means "yes, again, deliberately",
+      // and a deterministic key would refuse the exact thing the flag exists to
+      // permit. Those rows stay unkeyed, and the taskGroupId guard above still sees
+      // them, so the accidental repeat is caught either way.
+      if (!(req.body && req.body.force)) common.idempotency_key = `tg:${group.id}:${dateStr}:${i}`;
       let props;
       if (item.isPlaceholder) {
         const menus = Array.isArray(item.placeholderMenus) ? item.placeholderMenus : [];
@@ -794,8 +936,24 @@ module.exports = function mount(app, ctx) {
       } else {
         props = { ...common, title: item.title, detail: item.detail || "", meta: "Preset · " + (group.properties.title || "group") + " · " + duration + "m", tags: ["task-group"] };
       }
-      const block = await blockDB.createItineraryTask({ date: dateStr, properties: props, userId: userId || null, workspaceId: workspaceId || null, sortOrder: slot, ensureRoot: false });
-      created.push(block);
+      pending.push({ date: dateStr, properties: props, sortOrder: slot });
+    }
+
+    // ONE transaction for the whole group (db.createItineraryTasks), replacing a loop
+    // of independent creates. With keys in play that stops being a style question: a
+    // losing racer must plant NOTHING, and a per-item loop would leave whatever it had
+    // already committed before the conflicting item. Atomic, so the loser rolls back
+    // to empty and gets the same "already there" answer the guard above would have
+    // given it a moment earlier.
+    let created;
+    try {
+      created = await blockDB.createItineraryTasks(pending, { userId: userId || null, workspaceId: workspaceId || null });
+    } catch (err) {
+      if (!blockDB.isIdempotencyConflict(err)) throw err;
+      const winner = await materializeGuard.findForDedupe(workspaceId, {
+        idempotencyKey: `tg:${group.id}:${dateStr}:0`,
+      });
+      return { created: [], duplicate: true, deleted: !!(winner && winner.deleted_at), task: winner || null, date: dateStr };
     }
     broadcast("blocks-changed", { action: "task-group-schedule", blockIds: created.map(b => b.id) }, workspaceId);
     return { created };

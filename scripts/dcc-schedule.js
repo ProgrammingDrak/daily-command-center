@@ -27,10 +27,15 @@
  *   --user-id <n>        owner user id (sent as x-user-id; req'd for token auth).
  *                        Defaults to DCC_USER_ID env, else 1.
  *   --workspace-id <id>  optional workspace id (sent as x-workspace-id).
+ *   --idempotency-key <k>  reuse a key so re-running this command is a no-op rather
+ *                        than a second task. Omit and one is minted per invocation,
+ *                        which already makes the internal retry loop safe.
  *   --dry-run            print the request without sending
  *   --help               show this help
  */
 "use strict";
+
+const { randomUUID } = require("node:crypto");
 
 const DEFAULT_BASE = "https://daily-command-center-production-1d04.up.railway.app";
 
@@ -124,6 +129,17 @@ async function main() {
   if (typeof args.priority === "string") body.priority = args.priority;
   if (typeof args.detail === "string") body.detail = args.detail;
   if (typeof args.tags === "string") body.tags = args.tags.split(",").map(s => s.trim()).filter(Boolean);
+
+  // Minted ONCE, before postWithRetry, so every attempt in the retry loop carries the
+  // same key. Without it, a request the server committed whose response was lost to a
+  // timeout comes back as a second task — the exact duplicate a cron-driven caller
+  // produces on a slow cold start. --idempotency-key lets a caller go further and make
+  // the whole INVOCATION repeatable (a re-run of the same scheduled job is a no-op);
+  // the default UUID only makes the retry safe, because two deliberate runs of this
+  // command are two tasks.
+  body.idempotency_key = typeof args["idempotency-key"] === "string" && args["idempotency-key"].trim()
+    ? args["idempotency-key"].trim()
+    : `cli-schedule:${randomUUID()}`;
 
   const url = `${base}/api/dcc/quick-task`;
 
