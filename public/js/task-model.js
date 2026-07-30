@@ -61,7 +61,14 @@
     // block with start "09:00" and no end got end "00:30" -> dur(ev) negative.
     // Harmless for today's rows (recalcTimes rewrites them immediately), fatal
     // for a carryover row that never gets recalced — hence deriveEnd.
-    const end = p.end || ((opts.deriveEnd && p.start) ? _fmt(_pt(p.start) + d) : _fmt(d));
+    // Clamped to the last minute of the day. Unclamped, start "23:30" + 60min gave
+    // end "25:30", and pt() wraps the hour (((h%24)+24)%24), so pt("25:30") is 90 and
+    // dur(ev) came out -1320 -- deriveEnd reproducing the exact negative duration it
+    // exists to prevent, just at the day boundary. That fed _taskDuration -> findSlot,
+    // which emitted an end like "-22:00" and got a 400 from the server, so Today /
+    // Tomorrow / Move failed on every surface and the row was stuck. 1439 not 24*60,
+    // because pt("24:00") is 0 here.
+    const end = p.end || ((opts.deriveEnd && p.start) ? _fmt(Math.min(24 * 60 - 1, _pt(p.start) + d)) : _fmt(d));
     const task = {
       id: taskId, title: p.title, type: p.type || "task",
       _blockId: block.id,

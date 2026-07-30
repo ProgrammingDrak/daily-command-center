@@ -36,37 +36,38 @@
     if (CO && typeof CO.prettyDate === "function") return CO.prettyDate(iso);
     return iso;
   }
+  // state.js owns these two (_resolvedTodayDate / _resolvedTomorrowDate) with exactly
+  // these semantics, and every other "move it to today / tomorrow" affordance in the
+  // app resolves through them. state.js loads well before this file, so prefer the
+  // canonical pair; the inline fallbacks only exist if load order ever changes. Note
+  // the local fallback below is UTC while the canonical helper is local-time, so a
+  // copy could disagree by a day in the evening -- another reason to defer.
+  function todayStr() {
+    if (typeof _resolvedTodayDate === "function") return _resolvedTodayDate();
+    if (typeof __todayDate === "string" && __todayDate) return __todayDate;
+    return new Date().toISOString().slice(0, 10);
+  }
   function tomorrowStr() {
+    if (typeof _resolvedTomorrowDate === "function") return _resolvedTomorrowDate();
     if (typeof __tomorrowDate !== "undefined" && __tomorrowDate) return __tomorrowDate;
     const d = new Date(Date.now() + 86400000);
     return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   }
-  function todayStr() {
-    if (typeof __todayDate === "string" && __todayDate) return __todayDate;
-    return new Date().toISOString().slice(0, 10);
-  }
 
-  // Rows already finished on their origin day are progress data, not work: the
-  // collector keeps done CHILDREN in the pool so a parent's "2/5 subtasks" can
-  // count them (unfinished-tasks.js). They must not be offered as things that
-  // slipped — the itinerary lane filters them before computing roots
-  // (schedule-tab.js) and this prompt has to agree, or a subtask you finished on
-  // Tuesday shows up Wednesday morning asking to be rescheduled.
-  function openOf(pool) {
-    return pool.filter(ev => !(ev.__unf && ev.__unf.done));
-  }
-
-  // Only roots get a row: a child follows whatever happens to its parent (every
-  // DCC.Carryover action carries the subtree), so listing both would double-count.
-  // Roots are computed against the OPEN rows, so a child whose parent is finished
-  // is a genuine orphan and stays actionable.
-  function rootsOf(pool) {
-    const open = openOf(pool);
-    return open.filter(ev => {
-      const p = (ev.wrapId || ev.subtaskOf) || null;
-      return !p || !open.some(x => x.id === p);
-    });
-  }
+  // Both predicates come from DCC.Carryover, the same place the projection and the
+  // actions do. They used to be local copies here, which is how "this prompt has to
+  // agree with the lane" became a comment instead of an invariant: the lane spelled
+  // the parent edge with state.js's canonical parentIdOf and this file inlined
+  // wrapId||subtaskOf. Two spellings of one rule, disagreeing on day one.
+  //   openRows -> drop rows already finished on their origin day. The collector keeps
+  //     done CHILDREN in the pool so a parent's "2/5 subtasks" can count them, so
+  //     every surface that offers WORK has to filter them or it offers a task you
+  //     already finished.
+  //   rootsOf  -> only roots get a row; a child follows its parent through every
+  //     action, so listing both double-counts. Computed over the open rows, so a
+  //     child orphaned by a finished parent stays actionable.
+  function openOf(pool) { return window.DCC.Carryover.openRows(pool); }
+  function rootsOf(pool) { return window.DCC.Carryover.rootsOf(pool); }
 
   // ── modal (reuses the .carryover-* CSS) ──
   function ensureModal() {
@@ -170,12 +171,16 @@
       const original = allBtn.textContent;
       const queue = [...rowEls.keys()];
       let moved = 0;
+      const target = todayStr();
       for (const id of queue) {
         const ev = pool.find(x => x.id === id);
         if (!ev) continue;
         allBtn.textContent = "Moving " + (moved + 1) + " of " + queue.length + "…";
-        if (settle(await CO.moveTo(ev, todayStr(), { pool }))) moved++;
+        // deferRefold: every row here lands on the day being viewed, so the per-row
+        // refold fired N times and only the last was observable. One at the end.
+        if (settle(await CO.moveTo(ev, target, { pool, deferRefold: true }))) moved++;
       }
+      if (moved) await CO.refoldViewedDay(target);
       allBtn.textContent = original;
       allBtn.disabled = false;
       close();

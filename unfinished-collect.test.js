@@ -290,3 +290,71 @@ test("the Unscheduled badge no longer sums two different things", () => {
   assert.ok(/section\("Unscheduled",untimedItems\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
   assert.ok(/section\("Unfinished",roots\.length,null,"uns-group"\)/.test(schedTabSource));
 });
+
+// The window boundary, not just "somewhere between 4 and 39 days". The bounded
+// lookback is the fix for the clog, and the previous test probed day 3 vs day 40, so
+// changing SCAN_DAYS to 30 or flipping `d >= floor` to `d > floor` left it green while
+// the lane silently re-clogged. The collector's rule is
+// floor = today - SCAN_DAYS, kept with `d >= floor`, so day 14 is IN and day 15 is OUT.
+test("the SCAN_DAYS window includes day 14 and excludes day 15", async () => {
+  const inWin = ymd(14), outWin = ymd(15);
+  const { CO } = load({
+    [inWin]: [dayRoot(), blk("in", inWin, {})],
+    [outWin]: [dayRoot(), blk("out", outWin, {})]
+  }, [outWin, inWin]);
+  const { rows } = await CO.collect();
+  assert.deepEqual(plain(rows.map(r => r.id)), ["in"], "day 14 in, day 15 out");
+});
+
+test("{days:null} lifts the bound and reaches past day 15", async () => {
+  const inWin = ymd(14), outWin = ymd(15);
+  const { CO } = load({
+    [inWin]: [dayRoot(), blk("in", inWin, {})],
+    [outWin]: [dayRoot(), blk("out", outWin, {})]
+  }, [outWin, inWin]);
+  const { rows } = await CO.collect({ days: null });
+  assert.deepEqual(plain(rows.map(r => r.id).sort()), ["in", "out"]);
+});
+
+// _unfProgress produces the "2/5 subtasks" label on a carryover row. It is recursive,
+// accumulates nested descendants into the parent's count, cycle-guards with _seen, and
+// returns null for a childless row -- four branches that had no coverage of either
+// kind (the previous "2/5" assertion recomputed the label from the test's own data, so
+// it could not fail independently of the assertions above it).
+test("_unfProgress counts done children, nested descendants, and survives a cycle", () => {
+  const slice = /function _unfProgress\(id,pool,_seen\)\{[\s\S]*?\n\}/.exec(schedTabSource);
+  assert.ok(slice, "_unfProgress must exist");
+  const _unfProgress = new Function(`${slice[0]}; return _unfProgress;`)();
+
+  const pool = [
+    { id: "p" },
+    { id: "k1", subtaskOf: "p", __unf: { done: true } },
+    { id: "k2", subtaskOf: "p", __unf: { done: true } },
+    { id: "k3", subtaskOf: "p", __unf: { done: false } },
+    { id: "g1", subtaskOf: "k3", __unf: { done: true } }   // grandchild rolls up
+  ];
+  assert.deepEqual(plain(_unfProgress("p", pool)), { done: 3, total: 4 });
+  assert.deepEqual(plain(_unfProgress("k3", pool)), { done: 1, total: 1 });
+  assert.equal(_unfProgress("leaf", pool), null, "a childless row gets no chip");
+  // a self-referential edge must terminate rather than recurse forever
+  assert.deepEqual(plain(_unfProgress("c", [{ id: "c", subtaskOf: "c", __unf: { done: false } }])), { done: 0, total: 1 });
+});
+
+// The Catch up MODAL has to list the same thing the lane and the prompt list. It used
+// to hand renderRows every open row flat, so a child got its own Today/Tomorrow/
+// Backlog/Drop -- rescheduling the child alone stranded its parent on the origin day
+// and landed the child as an orphan, which is the standalone-subtask bug this phase
+// removes. The full pool still reaches renderRows so subtree actions carry descendants.
+test("the Catch up modal lists ROOTS, and every surface shares one predicate", () => {
+  assert.ok(/renderRows\(overlay, rootsOf\(result\.rows\), result\.total, result\.rows\)/.test(unfSource),
+    "the modal must render roots, with the full pool passed through for subtree actions");
+  assert.ok(!/renderRows\(overlay, result\.rows\.filter/.test(unfSource),
+    "the flat open-rows list must be gone");
+  // and the predicates are exported, so no surface needs its own copy
+  assert.ok(/openRows: openRows,/.test(unfSource) && /rootsOf: rootsOf,/.test(unfSource));
+  assert.ok(/window\.DCC\.Carryover\.openRows\(pool\)/.test(
+    require("node:fs").readFileSync(require.resolve("./public/js/catch-up.js"), "utf8")),
+    "catch-up.js must defer to the shared predicate rather than keep a copy");
+  assert.ok(/_CO_\?_CO_\.rootsOf\(unfPool\)/.test(schedTabSource),
+    "the lane must defer to the shared predicate too");
+});

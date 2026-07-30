@@ -114,3 +114,82 @@ test("pure: the source block is never mutated", () => {
   TaskModel.fromBlock(b, { deriveEnd: true });
   assert.equal(JSON.stringify(b), snapshot);
 });
+
+// ─────────────────── the key-set guard (the equivalence pin) ───────────────────
+// The extraction was proven byte-identical to the projection it replaced over ~2900
+// real prod rows by a one-off harness, but that harness is not part of the repo, so
+// from here on THIS is what stops a future edit silently dropping a field. The named
+// assertions above cover the fields that motivated the phase; this covers the rest,
+// including two that are load-bearing right now and would otherwise go unnoticed:
+// reschedulePlacement (persistence.js branches on it one line after the call:
+// `if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task)`)
+// and wrapId/isWrap, which drive ride-along nesting in the carryover lane.
+const BASE_KEYS = [
+  "_blockId", "_dateless", "alertKey", "alertType", "ampUrl", "calUrl", "capacityBucket",
+  "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
+  "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
+  "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus",
+  "prepStatus", "priority", "publicVisibility", "recapStatus", "recordingReview",
+  "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
+  "responsibilityTitle", "rsvp_status", "source", "sourceTaskId", "source_id", "start",
+  "subtaskOf", "tags", "taskGroupId", "title", "triageId", "type", "untimed", "wrapId"
+].sort();
+
+test("key-set guard: a bare block still projects EVERY key, so none can be dropped silently", () => {
+  const ev = TaskModel.fromBlock(block({ properties: {} }));
+  assert.deepStrictEqual(Object.keys(ev).sort(), BASE_KEYS);
+});
+
+test("every projected key round-trips its property, including the ones nothing asserts by name", () => {
+  // One maximal block; assert the full object at once so a renamed key, a changed
+  // default, or a dropped field all fail here rather than in production.
+  const ev = TaskModel.fromBlock(block({
+    id: "row-9", date: "2026-07-28", created_at: "2026-07-28T14:00:00.000Z",
+    properties: {
+      local_id: "qa-1", title: "T", type: "task", start: "09:00", end: "09:30", duration: 30,
+      meta: "M", detail: "D", source: "slack", source_id: "https://s/1", notes: "N",
+      notionUrl: "https://n", calUrl: "https://c", priority: "Low", tags: ["a"], kind: "task",
+      location: "Room", conferenceUrl: "https://meet", rsvp_status: "yes",
+      prep_status: "ready", recap_status: "ready", dashboard_ref: "dash", recording_review: 1,
+      meetingBlockId: "mb", isPlaceholder: true, placeholderMenus: ["m"], taskGroupId: "tg",
+      responsibilityId: "r", responsibilityTitle: "RT", capacityBucket: "deep",
+      responsibilityScore: 7, alertKey: "ak", alertType: "at", publicVisibility: "private",
+      triageId: "ti", delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
+      ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
+      subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
+      sourceTaskId: "st"
+    }
+  }));
+  assert.deepStrictEqual(ev, {
+    id: "qa-1", title: "T", type: "task", _blockId: "row-9", _dateless: false,
+    createdAt: "2026-07-28T14:00:00.000Z", start: "09:00", end: "09:30", meta: "M",
+    detail: "D", source: "slack", source_id: "https://s/1", notes: "N", untimed: false,
+    notionUrl: "https://n", calUrl: "https://c", priority: "Low", tags: ["a"], kind: "task",
+    location: "Room", hangout_link: "https://meet", rsvp_status: "yes",
+    prepStatus: "ready", recapStatus: "ready", dashboardRef: "dash", recordingReview: true,
+    meetingBlockId: "mb", isPlaceholder: true, placeholderMenus: ["m"], taskGroupId: "tg",
+    responsibilityId: "r", responsibilityTitle: "RT", capacityBucket: "deep",
+    responsibilityScore: 7, alertKey: "ak", alertType: "at", publicVisibility: "private",
+    triageId: "ti", delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
+    ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
+    subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
+    sourceTaskId: "st"
+    // no _pinnedStart: a subtask never pins its start, even with a stored time.
+  });
+});
+
+test("deriveEnd clamps at the end of the day instead of producing a negative duration", () => {
+  // Unclamped, start 23:30 + 60min gave "25:30"; pt() wraps the hour, so dur(ev) came
+  // out -1320 and every reschedule of that row failed with a 400 from the server.
+  const late = TaskModel.fromBlock(
+    block({ properties: { local_id: "l", start: "23:30", duration: 60 } }), { deriveEnd: true });
+  assert.equal(late.end, "23:59");
+  // exactly-midnight boundary
+  const edge = TaskModel.fromBlock(
+    block({ properties: { local_id: "l", start: "23:00", duration: 60 } }), { deriveEnd: true });
+  assert.equal(edge.end, "23:59");
+  // an ordinary row is untouched by the clamp
+  const normal = TaskModel.fromBlock(
+    block({ properties: { local_id: "l", start: "09:00", duration: 45 } }), { deriveEnd: true });
+  assert.equal(normal.end, "09:45");
+});

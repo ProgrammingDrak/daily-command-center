@@ -278,7 +278,20 @@ function reloadPersistedEdits() {
         return !(p.local_id&&datedLocalIds.has(p.local_id));
       };
       const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)];
-      addedBlocks.forEach(block=>{
+      // Fail LOUDLY if task-model.js did not load. This is the one cross-module call
+      // in here without a typeof guard, and it sits inside a try whose catch discards
+      // the error — so a stale cached index.html (no <script> tag) or a parse error
+      // would throw on the first block and hand the user a silently EMPTY itinerary,
+      // skipping hydrateBacklogFromBlocks/hydrateLockedTasks too, with nothing in the
+      // console. Every sibling call here (hydrateBacklogFromBlocks, commitDoneOnDate)
+      // is typeof-guarded; unfinished-tasks.js guards TaskModel the same way.
+      // Deliberately NOT an early return out of reloadPersistedEdits: the fold loop
+      // sits in its own try, and bailing from the function would also skip
+      // hydrateTaskCommuteTimes / hydrateBacklogFromBlocks / hydrateLockedTasks /
+      // recalcTimes further down. Skip only the loop that needs the module.
+      const TM=window.DCC&&window.DCC.TaskModel;
+      if(!TM||typeof TM.fromBlock!=="function")console.error("[persistence] task-model.js missing or stale — task blocks cannot fold into the itinerary");
+      else addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
         // Safety net: a stale cached day file can still carry the synthesized
@@ -313,7 +326,7 @@ function reloadPersistedEdits() {
         // The block -> ev projection lives in task-model.js now: ONE shape shared
         // with the carryover lane (schedule-tab.js), which used to hand-roll a
         // narrower bag and drop half the fields the row builder reads.
-        const task=window.DCC.TaskModel.fromBlock(block);
+        const task=TM.fromBlock(block);
         if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task);
         else scheduled.push(task);
       });

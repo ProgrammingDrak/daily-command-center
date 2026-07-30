@@ -76,16 +76,22 @@
     const today = todayStr();
     const archive = (typeof __archiveDates !== "undefined" && Array.isArray(__archiveDates)) ? __archiveDates : [];
     const todayD = new Date(today + "T00:00:00");
+    // Calendar-component arithmetic, not fixed-ms offsets: subtracting n*86400000
+    // from a LOCAL midnight does not land on local midnight n days earlier across a
+    // DST transition. The day after spring-forward that made `end` resolve to the
+    // day before yesterday, so loadDateRange never fetched yesterday and every one
+    // of yesterday's carryovers silently vanished from the lane for a day.
+    const _dayBefore = (n) => { const d = new Date(todayD); d.setDate(d.getDate() - n); return ymd(d); };
 
     let scanDates = archive.filter(d => d < today).sort();
     if (days) {
-      const floor = ymd(new Date(todayD.getTime() - days * 86400000));
+      const floor = _dayBefore(days);
       scanDates = scanDates.filter(d => d >= floor);
     }
     if (!scanDates.length) return { rows: [], total: 0, scanned: 0 };
 
     const start = scanDates[0];
-    const end = ymd(new Date(todayD.getTime() - 86400000)); // yesterday
+    const end = _dayBefore(1);   // yesterday, DST-safe
     await bs.loadDateRange(start, end < start ? start : end);
 
     const rows = [];
@@ -165,7 +171,7 @@
     (function walk(id, depth) {
       if (depth > 20) return;
       (pool || []).forEach(c => {
-        const pid = (c.wrapId || c.subtaskOf) || null;
+        const pid = _parentIdOf(c);
         if (pid !== id || seen.has(c.id)) return;
         seen.add(c.id);
         out.push(c);
@@ -177,6 +183,56 @@
 
   function originOf(ev) { return (ev && ev.__unf) || {}; }
   function writeId(ev) { const u = originOf(ev); return u.sourceLocalId || u.sourceId; }
+
+  // The origin row, from the cache a carryover actually lives in. _rangeCache is
+  // where loadDateRange puts it; blockStore.get (_dayCache/_globalCache) is the
+  // fallback for the rare row that is also in today's cache. Any write that
+  // REPLACES properties must go through this, never bare get().
+  // Async because it may have to REFILL the range cache. Every action below ends with
+  // invalidateRangeCache(sourceDate), and the itinerary lane's _unfSettle only drops
+  // the settled rows and re-renders -- it never calls invalidateUnfinishedSection, so
+  // _ensureUnfinished short-circuits on _unfinishedFetchedFor and nothing re-collects.
+  // Without the refill, the FIRST action on a given origin day evicted that day and
+  // every later resolution for it returned null, so Backlog on a second row from the
+  // same day refused until a page reload. Two unfinished tasks from yesterday is the
+  // common case, so this path is hit constantly.
+  async function _originBlock(id, date) {
+    const bs = window.blockStore;
+    if (!bs) return null;
+    const find = () => {
+      const day = (date && typeof bs.getRangeCache === "function") ? bs.getRangeCache(date) : null;
+      return (day && Array.isArray(day.blocks)) ? (day.blocks.find(b => b && b.id === id) || null) : null;
+    };
+    let hit = find();
+    if (!hit && date && typeof bs.loadDateRange === "function") {
+      try { await bs.loadDateRange(date, date); } catch (e) {}
+      hit = find();
+    }
+    return hit || ((typeof bs.get === "function") ? bs.get(id) : null);
+  }
+
+  // state.js owns the canonical parent-edge precedence (wrapId before subtaskOf) and
+  // documents it as a live divergence with the server twin (lib/reschedule.js
+  // collectSubtreeBlockIds is subtaskOf-first) that has to be kept in step. Prefer
+  // the global so there is ONE spelling to reconcile; the local fallback exists only
+  // so this module stays require()able under node. Same idiom as fmtDur below.
+  function _parentIdOf(ev) {
+    if (typeof parentIdOf === "function") return parentIdOf(ev);
+    return (ev && (ev.wrapId || ev.subtaskOf)) || null;
+  }
+
+  // ONE definition of "rows that are still work" and "roots of the pool", shared by
+  // every surface that reads a carryover pool: the itinerary lane (schedule-tab.js),
+  // the Catch up modal below, and the morning prompt (catch-up.js). The collector
+  // deliberately KEEPS done children in the pool so a parent's "2/5 subtasks" can
+  // count them, which means every consumer has to filter them the same way -- and
+  // three hand-rolled copies is how they end up disagreeing. They already had:
+  // the lane used parentIdOf, the prompt inlined wrapId||subtaskOf.
+  function openRows(pool) { return (pool || []).filter(ev => !(ev.__unf && ev.__unf.done)); }
+  function rootsOf(pool) {
+    const open = openRows(pool);
+    return open.filter(ev => { const p = _parentIdOf(ev); return !p || !open.some(x => x.id === p); });
+  }
 
   // Complete on the ORIGIN day, subtree included. The old handler completed only
   // the parent, so a carryover parent's children stayed unfinished forever and the
@@ -231,12 +287,14 @@
     if (typeof log === "function") log("rescheduled", u.sourceId, "Unfinished moved to " + targetDate + ": " + ev.title);
     if (typeof showToast === "function") showToast("Moved to " + prettyDate(targetDate) + ": " + ev.title, "success");
     // Landing on the day we're looking at: refold so it appears immediately.
+    // opts.deferRefold lets a BULK caller skip it per row and refold once at the end
+    // ("Move all to today" always targets the viewed day, so this fired on every
+    // iteration and only the last one was ever seen -- N-1 wasted loadDay round trips
+    // plus a full scheduled[] rebuild and recalcTimes cascade each). Safe to defer:
+    // findSlot reads the target day from the server via getDayContext, not from the
+    // local scheduled[], so skipping the local rebuild cannot change the next slot.
     const viewing = (typeof viewDate !== "undefined" && viewDate) ? viewDate : todayStr();
-    if (targetDate === viewing) {
-      try { await window.blockStore.loadDay(viewing); } catch (e) {}
-      if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
-      if (typeof recalcTimes === "function") recalcTimes();
-    }
+    if (targetDate === viewing && !opts.deferRefold) await refoldViewedDay(viewing);
     return { removed };
   }
 
@@ -266,8 +324,25 @@
   // task lived in two places and came back the next day.)
   async function toBacklog(ev, pool) {
     const u = originOf(ev);
-    const block = (window.blockStore && typeof window.blockStore.get === "function") ? window.blockStore.get(u.sourceId) : null;
-    const props = Object.assign({}, (block && block.properties) || {}, { kind: "backlog" });
+    // Resolve the origin row from the cache it ACTUALLY came from. A carryover
+    // block is loaded by loadDateRange, which fills only _rangeCache; blockStore.get
+    // reads _dayCache/_globalCache, and _dayCache is cleared on every date switch.
+    // So get() returns null for a past-day block essentially always -- and because
+    // updateBlock REPLACES properties wholesale (db.js: newProps = parsed) rather
+    // than merging, spreading a null block wrote `{kind:"backlog"}` over the row and
+    // destroyed title, local_id, duration, subtaskOf, notes, tags and source_id.
+    // The row then vanished everywhere (hydrateBacklogFromBlocks skips !p.title,
+    // isFoldableTask skips a row with no local_id) while the user got a success toast.
+    const block = await _originBlock(u.sourceId, u.sourceDate);
+    if (!block || !block.properties) {
+      // updateBlock swallows its own errors and returns, so the catch below cannot
+      // report this. Refuse BEFORE writing rather than write a wiped row.
+      if (typeof showToast === "function") showToast("Could not move " + ev.title + " to the backlog", "error");
+      return null;
+    }
+    const bp = block.properties;
+    // hydrateBacklogFromBlocks (schedule.js) reads durMin, not duration.
+    const props = Object.assign({}, bp, { kind: "backlog", durMin: bp.durMin || bp.duration || 30 });
     try {
       await window.blockStore.updateBlock(u.sourceId, props, { date: null });
     } catch (e) {
@@ -279,6 +354,14 @@
     if (typeof showToast === "function") showToast("Moved to the backlog: " + ev.title, "success");
     // Children keep their parent edge and follow it as nested backlog rows.
     return { removed: [ev.id].concat(descendants(ev, pool).map(t => t.id)) };
+  }
+
+  // Re-read a day and rebuild the in-memory plan from it. Shared so the bulk path
+  // can run it exactly once after its queue drains.
+  async function refoldViewedDay(date) {
+    try { await window.blockStore.loadDay(date); } catch (e) {}
+    if (typeof reloadPersistedEdits === "function") reloadPersistedEdits();
+    if (typeof recalcTimes === "function") recalcTimes();
   }
 
   // ── modal (reuses the .carryover-* CSS) ──
@@ -334,9 +417,14 @@
       hintEl.textContent = "Nothing to catch up on — no unfinished tasks in " + scope + ".";
       return;
     }
-    hintEl.textContent = (total > rows.length
-      ? ("Showing " + rows.length + " of " + total + " unfinished tasks")
-      : (total + " unfinished task" + (total === 1 ? "" : "s"))) + " from " + scope + " — choose what to do with each.";
+    // `rows` is roots-only now, so comparing it to `total` (every OPEN row) made the
+    // MAX_ROWS cap message fire for ordinary nesting: one parent with two open
+    // subtasks read "Showing 1 of 3". Compare against the open count, same as the
+    // morning prompt, so the message means only what it says: rows were truncated.
+    const openCount = openRows(pool).length;
+    hintEl.textContent = rows.length + " unfinished task" + (rows.length === 1 ? "" : "s") +
+      (total > openCount ? " (showing " + openCount + " of " + total + ")" : "") +
+      " from " + scope + " — choose what to do with each.";
 
     // Default custom date: two days out (distinct from Today/Tomorrow).
     const seed = new Date(); seed.setDate(seed.getDate() + 2);
@@ -346,10 +434,15 @@
       const el = document.createElement("div");
       el.className = "carryover-row";
       const d = evDur(ev);
+      // The list is roots-only, so say what rides along on each one. Without this a
+      // parent with two open subtasks looks like a single task, and its Drop appears
+      // to remove one row when it removes three. Same chip the morning prompt shows.
+      const kids = descendants(ev, pool).length;
       el.innerHTML =
         '<div class="carryover-row-info">' +
           '<div class="carryover-row-title"></div>' +
           '<div class="carryover-row-meta">' + (d > 0 ? esc(fmtDur(d)) : "step") +
+            (kids ? " · +" + kids + " nested" : "") +
             (ev.priority ? " · " + esc(ev.priority) : "") +
             ' · from ' + esc(prettyDate(originOf(ev).sourceDate)) +
           '</div>' +
@@ -400,7 +493,12 @@
     let result = { rows: [], total: 0 };
     try { result = await collectUnfinished({ days: _modalDays }); } catch (e) { result = { rows: [], total: 0 }; }
     // Done children ride along in the pool for progress counting only.
-    renderRows(overlay, result.rows.filter(ev => !ev.__unf.done), result.total, result.rows);
+    // Roots only, same rule as the lane and the prompt. Listing a child as its own
+    // row gave it its own Today/Tomorrow/Backlog/Drop, so rescheduling the child
+    // alone stranded the parent on the origin day and landed the child as an
+    // orphan -- reintroducing the standalone-subtask bug this phase removes.
+    // The FULL pool still goes to renderRows so subtree actions carry descendants.
+    renderRows(overlay, rootsOf(result.rows), result.total, result.rows);
   }
 
   // ── entry point ──
@@ -433,6 +531,9 @@
     SCAN_DAYS: SCAN_DAYS,
     collect: collectUnfinished,
     descendants: descendants,
+    openRows: openRows,
+    rootsOf: rootsOf,
+    refoldViewedDay: refoldViewedDay,
     complete: complete,
     moveTo: moveTo,
     drop: drop,

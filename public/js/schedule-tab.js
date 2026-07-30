@@ -840,11 +840,15 @@ function buildListView(){
     // Only OPEN rows render. Rows already finished on their origin day ride along in
     // unfPool purely so a parent's "2/5 subtasks" can count them (same as the work
     // list, where a done subtask folds into its parent instead of listing).
-    const openRows=unfPool.filter(ev=>!(ev.__unf&&ev.__unf.done));
     // Roots = rows whose parent isn't itself unfinished. A child of an unfinished
     // parent nests under it; a genuine orphan (parent done or gone) stays top-level,
     // which is what we want — standalone work must never disappear.
-    const roots=openRows.filter(ev=>{const p=parentIdOf(ev);return !p||!openRows.some(x=>x.id===p);});
+    // Both predicates come from DCC.Carryover so this lane, the Catch up modal and
+    // the morning prompt cannot drift apart (they already had: two spellings of the
+    // parent edge). Local fallbacks keep the lane rendering if the module is absent.
+    const _CO_=(window.DCC&&window.DCC.Carryover)||null;
+    const openRows=_CO_?_CO_.openRows(unfPool):unfPool.filter(ev=>!(ev.__unf&&ev.__unf.done));
+    const roots=_CO_?_CO_.rootsOf(unfPool):openRows.filter(ev=>{const p=parentIdOf(ev);return !p||!openRows.some(x=>x.id===p);});
     const rootOrder=_sectionSortIsManual(uMode)
       ? _orderUnscheduled(roots)
       : _applySectionSort(roots,uMode,ev=>ev.title,_unsCreated);

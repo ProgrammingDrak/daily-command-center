@@ -46,9 +46,15 @@ function FakeEl(tag) {
     addEventListener(ev, fn) { (el._on[ev] = el._on[ev] || []).push(fn); },
     fire(ev, arg) { (el._on[ev] || []).forEach(fn => fn(arg || { target: el })); },
     appendChild(c) { el.children.push(c); return c; },
-    remove() {},
+    remove() { el._removed = true; },
     querySelector(sel) { if (!el._q.has(sel)) el._q.set(sel, FakeEl("div")); return el._q.get(sel); },
-    querySelectorAll(sel) { return sel === "button" ? [] : []; }
+    // Return the stubs this element has actually handed out for button selectors, so
+    // busy()'s disable pass is observable instead of writing into the void.
+    querySelectorAll(sel) {
+      if (sel !== "button") return [];
+      return [...el._q.entries()].filter(([k]) => /^\.(cu-|catchup-)/.test(k)).map(([, v]) => v);
+    },
+    _removed: false
   };
   return el;
 }
@@ -182,4 +188,93 @@ test("an already-reviewed day never prompts twice", async () => {
   saved2._catchUpReviewed = new Date(0).toISOString();
   await ctx2.window.initCatchUp();
   assert.equal(ctx2.document.getElementById("catchup-overlay"), null);
+});
+
+// ─────────────── the action path: something has to CLICK ───────────────
+// The four row buttons and "Move all to today" were entirely unexercised: FakeEl
+// defined fire() and no test called it. For a module that exists because
+// carryover-review.js's buttons only LOOKED real ("Drop was a single log line -- it
+// deleted NOTHING"), "no test clicks anything" is the gap that matters most.
+const row0 = (ctx) => ctx.document.getElementById("catchup-overlay")
+  .querySelector("#catchup-list").children[0];
+// setTimeout(0) rather than setImmediate: the click handlers are async, so one macro
+// task is enough to let them settle, and it keeps the lint env browser-compatible.
+const settled = () => new Promise(r => setTimeout(r, 0));
+
+test("Drop routes the listed ROOT through DCC.Carryover.drop and clears its row", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [
+    dayRoot(), blk("p", d, { title: "Slipped" }), blk("k", d, { title: "Kid", subtaskOf: "p" })
+  ] }, [d]);
+  await ctx.window.initCatchUp();
+  let got = null;
+  ctx.window.DCC.Carryover.drop = async (ev, pool) => { got = { id: ev.id, pool: pool.length }; return { removed: [ev.id, "k"] }; };
+
+  const r = row0(ctx);
+  r.querySelector(".cu-drop").fire("click");
+  await settled();
+  assert.equal(got.id, "p", "the root, not the child");
+  assert.equal(got.pool, 2, "the FULL pool goes through so the subtree travels with it");
+  assert.equal(r._removed, true, "the settled row is removed from the list");
+});
+
+test("Today and Tomorrow move the root to the right date", async () => {
+  const d = ymd(1);
+  for (const [sel, expected] of [[".cu-today", TODAY], [".cu-tomorrow", "2026-07-30"]]) {
+    const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
+    await ctx.window.initCatchUp();
+    let target = null;
+    ctx.window.DCC.Carryover.moveTo = async (ev, date) => { target = date; return { removed: [ev.id] }; };
+    row0(ctx).querySelector(sel).fire("click");
+    await settled();
+    assert.equal(target, expected, `${sel} must move to ${expected}`);
+  }
+});
+
+test("Backlog routes through toBacklog, and a REFUSED action leaves the row in place", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
+  await ctx.window.initCatchUp();
+  let called = false;
+  const r = row0(ctx);
+  // toBacklog returns null when it cannot resolve the origin row. The prompt must not
+  // pretend the row is handled: settle(null) is falsy, so the row stays and the
+  // buttons are re-enabled for another try. Assert the disable IN FLIGHT as well as
+  // the re-enable after -- FakeEl defaults disabled:false, so checking only the
+  // re-enable would still pass if busy() silently became a no-op.
+  ctx.window.DCC.Carryover.toBacklog = async () => {
+    assert.equal(r.querySelector(".cu-drop").disabled, true, "buttons must disable while the action is in flight");
+    called = true;
+    return null;
+  };
+  r.querySelector(".cu-backlog").fire("click");
+  await settled();
+  assert.equal(called, true);
+  assert.equal(r._removed, false, "a refused action must not remove the row");
+  assert.equal(r.querySelector(".cu-drop").disabled, false, "and must re-enable the buttons");
+});
+
+test("Move all to today drains the queue, defers the refold, and marks the day reviewed", async () => {
+  const d = ymd(1);
+  const { ctx, saved } = load({ [d]: [
+    dayRoot(), blk("a", d, { title: "A" }), blk("b", d, { title: "B" }), blk("c", d, { title: "C" })
+  ] }, [d]);
+  await ctx.window.initCatchUp();
+  const moves = [];
+  let refolds = 0;
+  ctx.window.DCC.Carryover.moveTo = async (ev, date, opts) => {
+    moves.push({ id: ev.id, date, deferred: !!opts.deferRefold });
+    return { removed: [ev.id] };
+  };
+  ctx.window.DCC.Carryover.refoldViewedDay = async () => { refolds++; };
+
+  const overlay = ctx.document.getElementById("catchup-overlay");
+  overlay.querySelector("#catchup-all").fire("click");
+  await new Promise(r => setTimeout(r, 20));
+
+  assert.deepEqual(moves.map(m => m.id), ["a", "b", "c"], "every queued root moves, in order");
+  assert.ok(moves.every(m => m.date === TODAY && m.deferred),
+    "each move targets today and defers its refold to the batch");
+  assert.equal(refolds, 1, "exactly ONE refold for the whole batch, not one per row");
+  assert.ok(saved._catchUpReviewed, "the day is marked reviewed when the batch closes it");
 });
