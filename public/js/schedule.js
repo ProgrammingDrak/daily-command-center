@@ -549,10 +549,37 @@ function _onParentCompleted(id){
   if(typeof recalcTimes==="function")recalcTimes();
   if(promoted&&typeof showToast==="function")showToast(promoted+" stacked task"+(promoted>1?"s":"")+" moved out of the completed task","info",2600);
 }
+// Un-check the row itself, not just the day's _done overlay. A completion can be
+// written server-side (Day in Review's Approve, MCP, the responsibility hook) as
+// status:"done" on the block; the itinerary fold reads that, so un-checking has to
+// clear it or the completion comes straight back on the next load. Preserves every
+// other property — this is a targeted status clear, not a rewrite.
+function _clearRowDone(id){
+  if(!window.blockStore||typeof window.blockStore.updateBlock!=="function")return;
+  const ev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
+  const blockId=(ev&&ev._blockId)||null;
+  if(!blockId)return;
+  const block=window.blockStore.get(blockId);
+  const p=(block&&block.properties)||null;
+  if(!p)return;
+  if(!(p.done===true||p.status==="done"||p.completed||p.completedAt||p.doneAt))return;
+  const next={...p};
+  delete next.done;delete next.completed;delete next.completedAt;delete next.doneAt;
+  if(next.status==="done")next.status="open";
+  // Fire-and-forget, and swallow the rejection explicitly. updateBlock buffers its
+  // own failures to the WAL and resolves today, but a failed clear must never block
+  // the visible un-check — and it must never surface as an unhandled rejection if
+  // that contract changes underneath us.
+  Promise.resolve(window.blockStore.updateBlock(blockId,next)).catch(()=>{});
+}
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
     manualDone.delete(id);delete doneAt[id];log("unchecked",id);
+    // Clearing the day_root overlay is not enough now that the fold also reads
+    // status/done off the row (persistence.js): leave those set and the next reload
+    // re-hydrates the completion and the row snaps back to done. Clear both halves.
+    _clearRowDone(id);
     saveDoneState();render();return;
   }
 
