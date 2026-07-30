@@ -613,9 +613,22 @@ async function reorderBlocks(items, client) {
     let needsRebalance = false;
     for (let i = 1; i < sorted.length; i++) { if (sorted[i].sort_order - sorted[i - 1].sort_order < 0.001) { needsRebalance = true; break; } }
     if (needsRebalance) {
-      const { rows } = await q.query("SELECT parent_id FROM blocks WHERE id = $1", [items[0].id]);
+      // The sibling sweep is scoped to the reordered row's OWN workspace. It used to
+      // select every row sharing the parent_id, which is the one parent_id read in
+      // this file with no workspace predicate (getChildren and getSubtree both have
+      // one), so a row parented onto another workspace's container turned a rebalance
+      // into a cross-tenant write that renumbered that workspace's whole subtree.
+      // routes/blocks.js authorizes parent_id on the batch path now, but the blindness
+      // was the actual mechanism, so it is closed here too: any future caller reaching
+      // reorderBlocks with a stray parent edge cannot renumber someone else's rows.
+      // Same behavior for legitimate data, where siblings share a workspace.
+      const { rows } = await q.query("SELECT parent_id, workspace_id FROM blocks WHERE id = $1", [items[0].id]);
       if (rows[0] && rows[0].parent_id) {
-        const { rows: siblings } = await q.query(`SELECT id FROM blocks WHERE parent_id = $1 AND deleted_at IS NULL ORDER BY sort_order ASC`, [rows[0].parent_id]);
+        const { rows: siblings } = await q.query(
+          `SELECT id FROM blocks WHERE parent_id = $1 AND deleted_at IS NULL
+             AND workspace_id IS NOT DISTINCT FROM $2 ORDER BY sort_order ASC`,
+          [rows[0].parent_id, rows[0].workspace_id]
+        );
         for (let i = 0; i < siblings.length; i++) { await q.query("UPDATE blocks SET sort_order = $1, updated_at = $2 WHERE id = $3", [(i + 1) * 1000, now, siblings[i].id]); }
       }
     }
