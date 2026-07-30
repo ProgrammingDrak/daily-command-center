@@ -190,6 +190,28 @@ test("a NON-404 failure does not evict a live row", async () => {
   assert.ok(store.get("B10"), "a server error is not evidence the row is gone");
 });
 
+test("a foreign RESTORE clears our tombstone, so the row is re-fetched", async () => {
+  // The other half of the undelete contract. delete-contract.test.js proves the server
+  // BROADCASTS undeletedIds; nothing proved the client acts on it. Delete those three
+  // lines from handleBlocksChanged and every other test still passes, while the symptom
+  // is the mirror image of the 404 bug: restore on your phone, desktop keeps the row
+  // hidden until a reload.
+  //
+  // The ORDERING is the real assertion. Clearing the tombstone after the re-fetch loop
+  // instead of before it compiles, reads fine, and does nothing at all.
+  const { store, fetchCalls } = makeStore({
+    routes: { "/api/blocks": liveBlock("B12"), "/api/blocks/B12": liveBlock("B12") },
+  });
+  await store.createBlock("block", { local_id: "t-B12" }, { date: DAY });
+  await store.deleteBlock("B12");
+  assert.strictEqual(store.get("B12"), null, "tombstoned locally");
+
+  const before = getCalls(fetchCalls, "B12").length;
+  await store.handleBlocksChanged({ clientId: "other", blockIds: ["B12"], undeletedIds: ["B12"] });
+  assert.strictEqual(getCalls(fetchCalls, "B12").length, before + 1, "the tombstone must be cleared BEFORE the loop consults it");
+  assert.ok(store.get("B12"), "a restore performed elsewhere must become visible without a reload");
+});
+
 test("a network REJECTION does not evict a live row", async () => {
   // The branch a plausible refactor breaks: offline makes fetch reject with a TypeError
   // that never reaches apiGet's !res.ok path, so the error carries no .status at all.

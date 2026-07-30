@@ -44,7 +44,7 @@ function mountApp(extraBlocks = {}) {
   app.use((req, _res, next) => { req.workspaceId = MINE; req.session = { userId: 1 }; next(); });
 
   const blocks = { ...makeBlocks(), ...extraBlocks };
-  const calls = { undelete: [], created: [], deleted: [], getBlock: [] };
+  const calls = { undelete: [], created: [], deleted: [], getBlock: [], dayLoads: [] };
   const broadcasts = [];
 
   const ctx = {
@@ -79,8 +79,14 @@ function mountApp(extraBlocks = {}) {
       getChildren: async () => [],
       reorderBlocks: async () => {},
       getBlocksByDate: async () => [],
-      getBlocksByDateIncludingDeleted: async (date, workspaceId) =>
-        Object.values(blocks).filter(b => b.date === date && b.workspace_id === workspaceId),
+      getBlocksByDateIncludingDeleted: async (date, workspaceId) => {
+        // Counted: the route feeds ONE of these loads to both the dedupe guard and the
+        // slotting context. Without a counter, reverting to two separate loads passes
+        // every test, and the whole point of the shape is that the query is an
+        // unindexed sequential scan.
+        calls.dayLoads.push(date);
+        return Object.values(blocks).filter(b => b.date === date && b.workspace_id === workspaceId);
+      },
       createItineraryTask: async (b) => { calls.created.push(b); return { id: "created-" + calls.created.length, ...b }; },
       getBlocksByTypes: async () => [],
       getDelegatedItems: async () => [],
@@ -254,6 +260,7 @@ test("scheduling a task group onto an empty day still creates its items", async 
   assert.equal(status, 200);
   assert.equal(json.created.length, 2, "both items land");
   assert.equal(calls.created.length, 2);
+  assert.equal(calls.dayLoads.length, 1, "the guard and the slotting context share ONE tombstone-inclusive day load");
 });
 
 test("re-running the schedule route creates nothing", async () => {
@@ -267,6 +274,7 @@ test("re-running the schedule route creates nothing", async () => {
   assert.equal(json.deleted, false, "a live duplicate, not a tombstone");
   assert.equal(json.task.id, "tg-live", "the row comes back under a named key, like every sibling route");
   assert.equal(calls.created.length, 0, "and nothing reaches createItineraryTask");
+  assert.equal(calls.dayLoads.length, 1, "the skip path loads the day once, not twice");
 });
 
 test("a group whose tasks were DELETED does not silently come back", async () => {

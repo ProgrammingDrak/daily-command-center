@@ -173,14 +173,16 @@
   // both read an empty day and both plant the group. A real double-click is exactly that
   // case: nothing here disabled the button or tracked an in-flight request, so both fired
   // before either created a row. This closes the race the server cannot see.
-  let _addingGroup=null;
+  // A Set, not a single slot: with one variable, starting an add of group B clears the
+  // guard group A is still holding, and A's double-click gets through after all.
+  const _addingGroups=new Set();
 
   async function addGroupToDay(id,opts){
-    if(_addingGroup===id)return;
-    _addingGroup=id;
+    if(_addingGroups.has(id))return;
+    _addingGroups.add(id);
     try{
       return await _addGroupToDay(id,opts);
-    }finally{ _addingGroup=null; }
+    }finally{ _addingGroups.delete(id); }
   }
 
   async function _addGroupToDay(id,opts){
