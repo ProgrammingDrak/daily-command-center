@@ -527,16 +527,14 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
     (item) => !(item && (item.type === "meeting" || item.type === "oneone"))
   );
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
-  // Surface the per-day delete overlay (day_root._deleted) so consumers like
-  // carryover-review don't re-offer a timeline task the user deleted. It lives on
-  // the day_root block, not in the state JSON, so it isn't in `enrichment`.
-  try {
-    const rootQ = workspaceId
-      ? await pool.query("SELECT properties FROM blocks WHERE type='day_root' AND date=$1 AND workspace_id=$2 AND deleted_at IS NULL LIMIT 1", [dateStr, workspaceId])
-      : await pool.query("SELECT properties FROM blocks WHERE type='day_root' AND date=$1 AND deleted_at IS NULL LIMIT 1", [dateStr]);
-    const rp = rootQ.rows[0] ? (typeof rootQ.rows[0].properties === "string" ? JSON.parse(rootQ.rows[0].properties) : rootQ.rows[0].properties) : null;
-    result._deleted = (rp && Array.isArray(rp._deleted)) ? rp._deleted : [];
-  } catch (e) { result._deleted = Array.isArray(result._deleted) ? result._deleted : []; }
+  // The `result._deleted` surfacing query that used to sit here is GONE (A2 step 6).
+  // #253 added it for exactly one consumer, carryover-review.js, so that pass would not
+  // re-offer a timeline task the user had deleted. C1 (#261) deleted carryover-review.js
+  // and its replacement, catch-up.js, does not read the field. Verified zero readers
+  // before removing: every other `_deleted` reference in the repo (persistence.js,
+  // state.js, lib/recurrence.js, routes/social-todo.js, scripts/fold-diff.mjs) reads the
+  // overlay off the day_root BLOCK's properties, which is a different source and is
+  // untouched. This was a second per-day query on every day-response read, for nobody.
   return result;
 }
 
