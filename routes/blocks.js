@@ -95,7 +95,46 @@ module.exports = function mount(app, ctx) {
     const { operations, _clientId } = req.body;
     if (!Array.isArray(operations)) { res.status(400).json({ error: "operations must be an array" }); return; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
-    const opsWithUser = operations.map(op => op.op === "create" ? { ...op, user_id: userId, workspace_id: workspaceId } : op);
+
+    // AUTHORIZE every block id this batch REFERENCES, before batchOp opens its
+    // transaction. update / delete / reorder arrive with caller-supplied ids and were
+    // previously passed straight through, so an authenticated session could
+    // soft-delete or mutate any block in ANY workspace by posting a batch. Every
+    // sibling route (PATCH, DELETE, GET /:id, /reorder) already checks this; batch was
+    // the one gap, and it stopped being dormant when the client's canonical delete
+    // path moved onto /batch.
+    //
+    // `parent_id` counts, and on CREATE too. Stamping our own workspace_id onto a
+    // create does not make it harmless: parent_id is a reference to a row we may not
+    // own, and db.reorderBlocks' rebalance selects siblings by parent_id. So two
+    // creates parented onto another workspace's day_root plus one reorder with equal
+    // sort_orders would trip needsRebalance and renumber that whole foreign subtree.
+    // Verified end to end before this guard existed: HTTP 200, and the victim's
+    // itinerary order was rewritten. Day-root ids are `day-root-<workspace>-<date>`,
+    // so a target needs no reconnaissance. (db.reorderBlocks is also scoped now, so
+    // this is belt and braces, but the reference itself does not belong here.)
+    //
+    // Tombstone-inclusive on purpose: a repeat delete of an already-deleted row must
+    // stay idempotent rather than 404, and updateBlock's own "Block is deleted" error
+    // must remain the one the caller sees. An id that resolves to nothing is not
+    // pre-rejected (same `if (block)` shape as /reorder below); batchOp owns that
+    // case and raises its own "Block not found".
+    for (const op of operations) {
+      if (!op || typeof op !== "object") continue;
+      const ids = [];
+      if (op.op === "reorder") {
+        if (Array.isArray(op.items)) for (const item of op.items) if (item && item.id) ids.push(item.id);
+      } else if (op.op !== "create" && op.id) {
+        ids.push(op.id);
+      }
+      if (op.parent_id) ids.push(op.parent_id);
+      for (const id of ids) {
+        const block = await blockDB.getBlockIncludingDeleted(id);
+        if (block) assertBlockOwnership(block, workspaceId);
+      }
+    }
+
+    const opsWithUser = operations.map(op => op && op.op === "create" ? { ...op, user_id: userId, workspace_id: workspaceId } : op);
     const result = await blockDB.batchOp(opsWithUser);
     broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId);
     return result;
