@@ -149,30 +149,53 @@ jobs:
           exit 1
 
   canary:
-    # Post-deploy liveness check. On a push to main, Railway auto-deploys; poll
-    # prod /api/health until it reports ok (or fail loudly after ~3 min).
+    # Post-deploy check. On a push to main, Railway auto-deploys; poll prod
+    # /api/health until it reports ok AND is serving THIS commit.
     # Railway deploy timing is NOT synced with Actions, so poll with patience.
-    # Semantics: confirms prod is reachable and DB-connected after the push
-    # (catches a deploy that crashed on boot or lost its DB). It does not verify
-    # the *new* revision specifically — /api/health carries no version marker;
-    # add one there for a true version-match canary (see Track B handoff).
+    #
+    # The version match is the point. Liveness alone has produced a green canary
+    # over a deploy that never happened, twice: C1 sat QUEUED ~17 min while the old
+    # container answered "ok", and A2 merged during a Railway incident where NO
+    # deployment was created at all. /api/health now carries `revision` (server.js
+    # REVISION), so the poll can tell "deployed" from "still alive".
+    #
+    # Degrades honestly rather than blocking: if `revision` comes back null the
+    # marker is not reaching the runtime, and this warns loudly and falls back to
+    # liveness instead of reddening main over a missing env var. Tighten to a hard
+    # match once a deploy is observed reporting a real sha.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - name: Poll prod /api/health
+      - name: Poll prod /api/health for this revision
         env:
           PROD_URL: https://daily-command-center-production-1d04.up.railway.app
+          EXPECT_SHA: ${{ github.sha }}
         run: |
-          echo "Polling ${PROD_URL}/api/health (up to ~3 min)…"
+          echo "Polling ${PROD_URL}/api/health for ${EXPECT_SHA} (up to ~3 min)…"
+          live=""
           for i in $(seq 1 18); do
             body="$(curl -s -m 10 "${PROD_URL}/api/health" || true)"
             if printf '%s' "$body" | grep -q '"status":"ok"'; then
-              echo "prod healthy after ~$((i * 10))s"
-              printf '%s\n' "$body" | head -c 400
-              exit 0
+              live=1
+              rev="$(printf '%s' "$body" | sed -n 's/.*"revision":"\([^"]*\)".*/\1/p')"
+              if [ -z "$rev" ]; then
+                echo "::warning title=No revision marker::/api/health reported no revision — cannot verify the deploy landed, only that prod is alive. Set RAILWAY_GIT_COMMIT_SHA on the service."
+                printf '%s\n' "$body" | head -c 400
+                exit 0
+              fi
+              if [ "$rev" = "$EXPECT_SHA" ]; then
+                echo "prod serving ${rev} after ~$((i * 10))s"
+                exit 0
+              fi
+              echo "attempt ${i}/18: alive but still serving ${rev}, waiting 10s…"
+            else
+              echo "attempt ${i}/18: not healthy yet, waiting 10s…"
             fi
-            echo "attempt ${i}/18: not healthy yet, waiting 10s…"
             sleep 10
           done
-          echo "::error title=Canary failed::prod /api/health did not report ok within ~3 min"
+          if [ -n "$live" ]; then
+            echo "::error title=Canary failed::prod is alive but never started serving ${EXPECT_SHA} — the deploy did not land"
+          else
+            echo "::error title=Canary failed::prod /api/health did not report ok within ~3 min"
+          fi
           exit 1

@@ -70,8 +70,14 @@ function makeMockPool(initialRows = []) {
         // reserve its key — which is why a resolved conflict is always a live row.
         const key = keyOf({ properties: params[4] });
         if (key) {
+          // The index carries NULLS NOT DISTINCT, so a NULL workspace DOES collide with
+          // another NULL workspace. Modelled explicitly because the default the other
+          // way round is the trap: a plain multicolumn unique index treats NULLs as
+          // distinct, and a fake that quietly assumed either behaviour would assert a
+          // conflict Postgres may or may not raise.
+          const wsEq = (a, b) => (a ?? null) === (b ?? null);
           const clash = [...committed.values(), ...(staged ? staged.values() : [])]
-            .find(r => r && r.id !== params[0] && !r.deleted_at && keyOf(r) === key && (r.workspace_id || null) === (params[7] || null));
+            .find(r => r && r.id !== params[0] && !r.deleted_at && keyOf(r) === key && wsEq(r.workspace_id, params[7]));
           if (clash) {
             const err = new Error('duplicate key value violates unique constraint "idx_blocks_idem_unique"');
             err.code = "23505";
@@ -252,6 +258,7 @@ test("createBlock: a conflicting create inside a batch does NOT abort the transa
 
   assert.equal(res.blocks.length, 2);
   assert.equal(res.blocks[0].properties.name, "existing", "the conflicting create resolved to the row on disk");
+  assert.equal(res.blocks[0]._resolvedExisting, true, "flagged — routes/blocks.js rowAt() branches on exactly this field");
   assert.equal(pool._committed.get("brand-new").properties.name, "fresh", "its sibling still committed");
   const client = pool._log.filter((l) => l.tag === "client");
   assert.ok(client.some((l) => l.text === "COMMIT"), "committed rather than rolled back");
@@ -272,19 +279,19 @@ test("createBlock: an idempotency conflict OUTSIDE a transaction resolves to the
   const res = await db.createBlock({ type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k1" }, workspace_id: "ws-1" });
 
   assert.equal(res.id, "winner", "the caller gets the row that won, not an error");
-  assert.equal(res._deduped, true, "flagged, so the caller does not broadcast a create or award points for it");
+  assert.equal(res._resolvedExisting, true, "flagged, so the caller does not broadcast a create or award points for it");
   assert.equal(pool._committed.size, 1, "the loser planted nothing");
 });
 
 test("createBlock: the same conflict INSIDE a transaction rethrows — recovery is the caller's", async () => {
   // The error has already aborted the tx, so no further query on that client can
   // succeed. routes/blocks.js /batch re-resolves and re-runs the whole batch instead.
-  const winner = { ...row("winner", "Won"), workspace_id: null, properties: { name: "Won", idempotency_key: "k2" } };
+  const winner = { ...row("winner", "Won"), workspace_id: "ws-1", properties: { name: "Won", idempotency_key: "k2" } };
   const pool = makeMockPool([winner]);
   const db = loadDbWithMock(pool);
 
   await assert.rejects(
-    () => db.batchOp([{ op: "create", type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k2" }, workspace_id: null }]),
+    () => db.batchOp([{ op: "create", type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k2" }, workspace_id: "ws-1" }]),
     (err) => { assert.equal(err.code, "23505"); assert.equal(err.constraint, "idx_blocks_idem_unique"); return true; }
   );
   const client = pool._log.filter((l) => l.tag === "client");
@@ -299,6 +306,27 @@ test("createBlock: a tombstone does NOT reserve its key — the index is live-on
   const db = loadDbWithMock(pool);
 
   const res = await db.createBlock({ type: "block", date: "2026-07-11", properties: { name: "fresh", idempotency_key: "k3" }, workspace_id: "ws-1" });
-  assert.ok(!res._deduped, "a new row, not a resolved conflict");
+  assert.ok(!res._resolvedExisting, "a new row, not a resolved conflict");
   assert.equal(pool._committed.size, 2);
+});
+
+test("createBlock: a conflict whose winner vanishes before the re-read rethrows rather than looping", async () => {
+  // db.createBlock resolves a 23505 by re-reading the key — but the winner can be
+  // deleted between the conflict and that read. `if (!winner) throw err` is the only
+  // thing between that state and a caller retrying forever against a key that resolves
+  // to nothing.
+  const winner = { ...row("winner", "Won"), workspace_id: "ws-1", properties: { name: "Won", idempotency_key: "k4" } };
+  const pool = makeMockPool([winner]);
+  const db = loadDbWithMock(pool);
+  const realQuery = pool.query;
+  pool.query = async (sql, params) => {
+    // The conflict fires, then the winner disappears before the resolver looks.
+    if (/^SELECT \* FROM blocks\s+WHERE properties->>'idempotency_key'/.test(String(sql).trim())) return { rows: [] };
+    return realQuery(sql, params);
+  };
+
+  await assert.rejects(
+    () => db.createBlock({ type: "block", date: "2026-07-11", properties: { name: "loser", idempotency_key: "k4" }, workspace_id: "ws-1" }),
+    (err) => { assert.equal(err.code, "23505"); return true; }
+  );
 });

@@ -27,10 +27,18 @@ function idemConflict() {
   return err;
 }
 
-function mountApp({ seed = {}, onCreate = null } = {}) {
+function mountApp({ seed = {}, onCreate = null, serviceAuth = false } = {}) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.workspaceId = MINE; req.session = { userId: 1 }; next(); });
+  app.use((req, _res, next) => {
+    req.workspaceId = MINE;
+    req.session = { userId: 1 };
+    // server.js lets a `scope: "sweep"` service token reach POST /api/blocks and
+    // nothing else, stamping req.dccServiceAuth. Modelled so the scope gate can be
+    // exercised — it is the only caller class that is not a full session.
+    if (serviceAuth) req.dccServiceAuth = { userId: 1, workspaceId: MINE, source: "sweep-suite" };
+    next();
+  });
 
   const blocks = { ...seed };
   const calls = { created: [], batches: [] };
@@ -40,6 +48,11 @@ function mountApp({ seed = {}, onCreate = null } = {}) {
   const keyOf = (row) => (row.properties || {}).idempotency_key || null;
 
   function insert(item) {
+    // db.createBlock's ON CONFLICT (id) DO NOTHING: a caller-minted id that already
+    // exists resolves to the row on disk instead of inserting. Modelled here because
+    // it is the path B2's replayed client ids take, and a fake that overwrote silently
+    // would make that whole branch untestable.
+    if (item.id && blocks[item.id]) return { ...blocks[item.id], _resolvedExisting: true };
     n += 1;
     const id = item.id || `made-${n}`;
     const props = typeof item.properties === "string" ? JSON.parse(item.properties) : (item.properties || {});
@@ -67,14 +80,14 @@ function mountApp({ seed = {}, onCreate = null } = {}) {
           if (forced) {
             // FAITHFUL to db.js createBlock: OUTSIDE a transaction it resolves an
             // idempotency conflict itself and returns the live winner tagged
-            // `_deduped`. Modelling it as a bare throw would test a recovery path the
+            // `_resolvedExisting`. Modelling it as a bare throw would test a recovery path the
             // real code no longer takes.
             const props = typeof item.properties === "string" ? JSON.parse(item.properties) : (item.properties || {});
             const winner = forced.constraint === "idx_blocks_idem_unique"
               ? Object.values(blocks).find(b => keyOf(b) === props.idempotency_key && !b.deleted_at)
               : null;
             if (!winner) throw forced;
-            return { ...winner, _deduped: true };
+            return { ...winner, _resolvedExisting: true };
           }
         }
         return insert(item);
@@ -97,9 +110,21 @@ function mountApp({ seed = {}, onCreate = null } = {}) {
       getChildren: async () => [],
       reorderBlocks: async () => {},
       getBlocksByDate: async () => [],
-      getBlocksByDateIncludingDeleted: async (date, workspaceId) => Object.values(blocks).filter(b => b.date === date && b.workspace_id === workspaceId),
+      // `_appearedLate` rows are invisible to the day load but visible to the key
+      // lookup — that IS the race: the winner commits after the check-then-act guard
+      // has already read the day, so only the index can catch it.
+      getBlocksByDateIncludingDeleted: async (date, workspaceId) => Object.values(blocks).filter(b => b.date === date && b.workspace_id === workspaceId && !b._appearedLate),
       createItineraryTask: async (b) => insert(b),
-      createItineraryTasks: async (items) => items.map(insert),
+      // Atomic, and capable of raising: the real primitive runs one transaction, so a
+      // conflicting item must leave NOTHING behind — the property the task-group
+      // recovery branch depends on.
+      createItineraryTasks: async (items) => {
+        for (const it of items) {
+          const k = (it.properties || {}).idempotency_key;
+          if (k && Object.values(blocks).some(b => !b.deleted_at && keyOf(b) === k)) throw idemConflict();
+        }
+        return items.map(insert);
+      },
       getBlocksByTypes: async () => [],
       getDelegatedItems: async () => [],
       getUndatedTaskBlocks: async () => [],
@@ -112,7 +137,9 @@ function mountApp({ seed = {}, onCreate = null } = {}) {
     filterLegacyGcalBlocks: (b) => b,
     getScheduleBlocks: async () => [],
     getTodayStr: () => "2026-07-30",
-    isAllowedSweepBlockItem: () => true,
+    // VERBATIM from server.js — a stub returning true would make the scope test pass
+    // no matter what the route does.
+    isAllowedSweepBlockItem: (it) => { const p = it && it.properties; return !!(it && it.type === "block" && p && p.kind === "sweep_suite_task"); },
     isValidDate: (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")),
     pool: { query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }) },
   };
@@ -148,22 +175,29 @@ test("POST /api/blocks: a repeated key returns the SAME row and creates nothing"
   assert.equal(first.status, 200);
   assert.equal(again.status, 200);
   assert.equal(again.json.id, first.json.id, "the retry resolves to the row the first attempt committed");
-  assert.equal(again.json._dedupe, "duplicate");
+  assert.equal(again.json._dedupe, "skipped_duplicate");
   assert.equal(calls.created.length, 1, "exactly one row exists");
 });
 
-test("POST /api/blocks: a key matching a TOMBSTONE refuses rather than resurrecting", async () => {
-  // THE no-resurrect rule (lib/materialize-guard.js): a soft-deleted match is still a
-  // match. The unique index cannot enforce this half — it is partial on
-  // `deleted_at IS NULL`, so a tombstone does not reserve its key. Both halves needed.
-  const seed = { "dead-1": { id: "dead-1", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: TOMB, properties: { title: "Removed", idempotency_key: "sweep:42" } } };
+test("★ POST /api/blocks: a key matching only a TOMBSTONE still CREATES — this is undo", async () => {
+  // The regression this route must not have. public/js/state.js undoDeleteTask replays
+  // a deleted subtree as `{op:"create", ..., properties: r.properties}` — the original
+  // properties bag, idempotency_key included. If a tombstone match skipped the create,
+  // the lookup would find the tombstone OF THE VERY ROW BEING RESTORED and undo would
+  // silently restore nothing, for every task carrying a key (199 of 3,106 rows on the
+  // prod restore).
+  //
+  // The no-resurrect rule still governs the AGENT writers (routes/dcc.js, the
+  // materializers, the task-group guard) — see the tombstone tests in
+  // delete-contract.test.js. It does not govern the human client's own write path.
+  const seed = { "dead-1": { id: "dead-1", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: TOMB, properties: { title: "Removed", idempotency_key: "slack-bookmark:C1:1.0" } } };
   const { app, calls } = mountApp({ seed });
-  const { status, json } = await call(app, "POST", "/api/blocks", item("sweep:42"));
+  const { status, json } = await call(app, "POST", "/api/blocks", item("slack-bookmark:C1:1.0"));
 
-  assert.equal(status, 200, "the repo's established shape: 200 + a named verdict, not a new status code Track B's replay classifier would read as transient");
-  assert.equal(json.id, "dead-1");
-  assert.equal(json._dedupe, "deleted", "named, so a caller can tell 'already there' from 'you deleted this'");
-  assert.equal(calls.created.length, 0, "the row the user deleted does not come back");
+  assert.equal(status, 200);
+  assert.equal(calls.created.length, 1, "the restore lands");
+  assert.notEqual(json.id, "dead-1", "a new live row, not the tombstone handed back");
+  assert.equal(json._dedupe, undefined, "nothing was deduped");
 });
 
 test("POST /api/blocks: no key means no change — this is inert for every client create today", async () => {
@@ -178,14 +212,14 @@ test("POST /api/blocks: one request carrying the same key twice creates one row"
   const { json } = await call(app, "POST", "/api/blocks", [item("dup-in-payload"), item("dup-in-payload")]);
   assert.equal(json.length, 2, "the response still answers item-for-item");
   assert.equal(json[0].id, json[1].id);
-  assert.equal(json[1]._dedupe, "duplicate");
+  assert.equal(json[1]._dedupe, "skipped_duplicate");
   assert.equal(calls.created.length, 1);
 });
 
 test("POST /api/blocks: the broadcast carries only ids this request actually created", async () => {
-  // Announcing a "create" for a deduped row makes every other tab re-fetch it — and
-  // for a tombstoned match that is a fetch A2 deliberately made 404.
-  const seed = { "dead-1": { id: "dead-1", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: TOMB, properties: { title: "Removed", idempotency_key: "sweep:42" } } };
+  // Announcing a "create" for a deduped row makes every other tab re-fetch a row that
+  // did not change, and on a replay storm that is a re-fetch per attempt.
+  const seed = { "live-dup": { id: "live-dup", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: null, properties: { title: "Already here", idempotency_key: "sweep:42" } } };
   const { app, broadcasts } = mountApp({ seed });
 
   await call(app, "POST", "/api/blocks", item("sweep:42"));
@@ -214,7 +248,7 @@ test("POST /api/blocks: a concurrent writer that wins the index is answered, not
 
   assert.equal(status, 200, "not a 500 — the API has a defined answer for this");
   assert.equal(json.id, "winner-1", "we hand back the row the winner committed");
-  assert.equal(json._dedupe, "duplicate");
+  assert.equal(json._dedupe, "skipped_duplicate");
   assert.equal(calls.created.length, 0, "we planted nothing");
 });
 
@@ -236,7 +270,7 @@ test("batch: a replayed create dedupes and the results stay aligned with the ope
   assert.equal(replay.json.blocks.length, 2, "same shape as the original");
   assert.equal(replay.json.blocks[0].properties.title, "A", "index 0 still answers operations[0]");
   assert.equal(replay.json.blocks[1].properties.title, "B", "index 1 still answers operations[1]");
-  assert.equal(replay.json.blocks[0]._dedupe, "duplicate");
+  assert.equal(replay.json.blocks[0]._dedupe, "skipped_duplicate");
   assert.equal(calls.created.length, 2, "the replay minted nothing");
 });
 
@@ -252,9 +286,9 @@ test("batch: a mixed replay keeps non-create ops in position", async () => {
   const { json } = await call(app, "POST", "/api/blocks/batch", { operations: ops });
 
   assert.equal(json.blocks.length, 3);
-  assert.equal(json.blocks[0]._dedupe, "duplicate");
+  assert.equal(json.blocks[0]._dedupe, "skipped_duplicate");
   assert.ok(json.blocks[1].reordered, "the reorder is still at index 1, not shifted up by the dropped creates");
-  assert.equal(json.blocks[2]._dedupe, "duplicate");
+  assert.equal(json.blocks[2]._dedupe, "skipped_duplicate");
 });
 
 test("batch: the same key twice inside ONE batch creates one row and echoes it", async () => {
@@ -267,7 +301,7 @@ test("batch: the same key twice inside ONE batch creates one row and echoes it",
   });
   assert.equal(json.blocks.length, 2);
   assert.equal(json.blocks[0].id, json.blocks[1].id);
-  assert.equal(json.blocks[1]._dedupe, "duplicate");
+  assert.equal(json.blocks[1]._dedupe, "skipped_duplicate");
   assert.equal(calls.created.length, 1);
 });
 
@@ -279,7 +313,7 @@ test("batch: an index conflict is retried exactly once, against the now-visible 
 
   assert.equal(status, 200, "the retry resolved it — no 500 leaked out");
   assert.equal(json.blocks[0].id, "race-winner");
-  assert.equal(json.blocks[0]._dedupe, "duplicate");
+  assert.equal(json.blocks[0]._dedupe, "skipped_duplicate");
   assert.equal(calls.created.length, 0, "the losing batch rolled back to nothing, not part-way");
   assert.equal(calls.batches.length, 1, "the retry deduped at the lookup, so batchOp ran only for the first attempt");
 });
@@ -329,7 +363,7 @@ test("task groups: each item carries a (group, date, index) key, and force clear
 // #253. What they needed was to survive the constraint A3 put underneath them: a
 // concurrent writer winning the key now raises 23505 where it used to just make a
 // duplicate. db.createBlock absorbs that and hands back the live winner tagged
-// `_deduped`; these routes have to take the same branch the lookup would have.
+// `_resolvedExisting`; these routes have to take the same branch the lookup would have.
 
 function mountDcc({ rows = [], dedupeCreate = null } = {}) {
   const app = express();
@@ -353,9 +387,9 @@ function mountDcc({ rows = [], dedupeCreate = null } = {}) {
       },
       getBlocksByDateIncludingDeleted: async () => rows,
       // `dedupeCreate` stands in for db.createBlock losing the race: it returns the
-      // live winner tagged `_deduped` instead of the row it was asked to insert.
+      // live winner tagged `_resolvedExisting` instead of the row it was asked to insert.
       createItineraryTask: async (b) => {
-        if (dedupeCreate) return { ...dedupeCreate, _deduped: true };
+        if (dedupeCreate) return { ...dedupeCreate, _resolvedExisting: true };
         created.push(b);
         return { id: "created-" + created.length, ...b };
       },
@@ -415,4 +449,134 @@ test("brief/push-next: a lost key race reports skipped_duplicate", async () => {
   assert.equal(json.status, "skipped_duplicate");
   assert.equal(json.block.id, "winner-pn");
   assert.equal(created.length, 0);
+});
+
+// ── Scope: a dedupe answer is a row the caller did not supply ─────────────────
+
+const sweepItem = (key) => ({ type: "block", properties: { kind: "sweep_suite_task", title: "Sweep thing", idempotency_key: key } });
+const foreignRow = (key, kind) => ({ id: "not-yours", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: null,
+  properties: { kind, title: "Private meeting notes", notes: "salary numbers", idempotency_key: key } });
+
+test("service token: honoring a key must not read back a row outside the token's scope", async () => {
+  // POST /api/blocks is one of the few endpoints a write-only Sweep Suite token can
+  // reach, and its scope gate validates the item being CREATED. Dedupe returns a row
+  // the caller never supplied, so without a second check the token becomes an
+  // arbitrary reader: guess a key, get the row. Several vocabularies are guessable —
+  // `slack-bookmark:<channel>:<ts>` is readable off any Slack message.
+  const seed = { "not-yours": foreignRow("slack-bookmark:C0123:1753900000.001", "task") };
+  const { app } = mountApp({ seed, serviceAuth: true });
+  const { status, json } = await call(app, "POST", "/api/blocks", sweepItem("slack-bookmark:C0123:1753900000.001"));
+
+  assert.equal(status, 404, "404 not 403 — that the key exists is the fact being withheld");
+  assert.equal(json.error, "Block not found");
+  assert.ok(!JSON.stringify(json).includes("salary"), "no row content leaks in the refusal");
+});
+
+test("service token: a dedupe hit INSIDE its scope still answers normally", async () => {
+  // The guard must refuse the out-of-scope read without breaking the legitimate case
+  // the key exists for: a Sweep Suite retry landing on its own earlier row.
+  const seed = { "own-row": { ...foreignRow("sweep:own", "sweep_suite_task"), id: "own-row" } };
+  const { app } = mountApp({ seed, serviceAuth: true });
+  const { status, json } = await call(app, "POST", "/api/blocks", sweepItem("sweep:own"));
+
+  assert.equal(status, 200);
+  assert.equal(json.id, "own-row");
+  assert.equal(json._dedupe, "skipped_duplicate");
+});
+
+test("session caller: the scope guard does not apply", async () => {
+  // A real session already passes assertBlockOwnership on the workspace; the scope
+  // gate is specifically about a token that may only write one kind of row.
+  const seed = { "not-yours": foreignRow("k-any", "task") };
+  const { app } = mountApp({ seed });
+  const { status, json } = await call(app, "POST", "/api/blocks", { type: "block", properties: { title: "x", idempotency_key: "k-any" } });
+  assert.equal(status, 200);
+  assert.equal(json.id, "not-yours");
+  assert.equal(json._dedupe, "skipped_duplicate");
+});
+
+// ── Gaps the fakes previously could not reach ─────────────────────────────────
+
+test("batch: a replayed CLIENT-MINTED id normalizes to the same _dedupe verdict as a key match", async () => {
+  // B2 makes the client mint block ids, so a WAL replay posts creates for rows the
+  // server already has. db.createBlock's ON CONFLICT (id) path returns the existing row
+  // tagged `_resolvedExisting`; runBatch has to translate that into the same wire
+  // vocabulary a key match produces, or B2 gets two spellings of one outcome.
+  const { app, calls } = mountApp();
+  const op = { op: "create", id: "client-minted-1", type: "block", date: "2026-07-30", properties: { title: "minted" } };
+  await call(app, "POST", "/api/blocks/batch", { operations: [op] });
+  const { json } = await call(app, "POST", "/api/blocks/batch", { operations: [op] });
+
+  assert.equal(json.blocks[0].id, "client-minted-1");
+  assert.equal(json.blocks[0]._dedupe, "skipped_duplicate");
+  assert.equal(json.blocks[0]._resolvedExisting, undefined, "the internal flag is stripped, not forwarded to the client");
+  assert.equal(calls.created.length, 1);
+});
+
+test("batch: a conflict that persists through the retry surfaces instead of spinning", async () => {
+  // The retry is deliberately ONE attempt. Without this, turning it into a loop — or
+  // removing the bound — passes every other test in the file.
+  const { app, calls } = mountApp({ onCreate: () => idemConflict() });   // no winner is ever planted
+  const { status } = await call(app, "POST", "/api/blocks/batch", { operations: [{ op: "create", ...item("never-resolves") }] });
+
+  assert.equal(status, 500, "an unresolvable conflict surfaces");
+  assert.equal(calls.batches.length, 2, "one retry, not a loop");
+});
+
+test("a key owned by ANOTHER workspace does not dedupe", async () => {
+  // The index is (workspace_id, key) and findByIdempotencyKey scopes the same way. If
+  // either side dropped the tenant, one workspace could block another's key.
+  const seed = { "theirs": { id: "theirs", type: "block", date: "2026-07-30", workspace_id: "ws-other", deleted_at: null, properties: { title: "Theirs", idempotency_key: "shared-key" } } };
+  const { app, calls } = mountApp({ seed });
+  const { json } = await call(app, "POST", "/api/blocks", item("shared-key"));
+
+  assert.notEqual(json.id, "theirs");
+  assert.equal(json._dedupe, undefined);
+  assert.equal(calls.created.length, 1, "our create lands; their row is not our match");
+});
+
+test("task groups: a lost race rolls the whole group back and answers with the winner", async () => {
+  // The recovery branch: db.createItineraryTasks is one transaction, so the loser
+  // plants nothing and gets the established `{created: [], duplicate, deleted, task}`
+  // shape back — the same shape the check-then-act guard returns, so the client's
+  // re-add flow does not need a second case.
+  const seed = {
+    "grp-1": { id: "grp-1", type: "block", date: null, workspace_id: MINE, deleted_at: null, properties: {
+      kind: "task_group", title: "Morning routine",
+      items: [{ title: "Inbox zero", duration: 30 }, { title: "Standup prep", duration: 15 }],
+    } },
+    // The concurrent winner: item 0 of the same group, same day, already committed.
+    "winner-0": { id: "winner-0", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: null, _appearedLate: true,
+      properties: { title: "Inbox zero", taskGroupId: "grp-1", idempotency_key: "tg:grp-1:2026-07-30:0" } },
+  };
+  const { app, calls } = mountApp({ seed });
+  const { status, json } = await call(app, "POST", "/api/task-groups/grp-1/schedule", { date: "2026-07-30" });
+
+  assert.equal(status, 200, "not a 500 — the route has a defined answer");
+  assert.deepEqual(json.created, []);
+  assert.equal(json.duplicate, true);
+  assert.equal(json.deleted, false);
+  assert.equal(json.task.id, "winner-0", "the row comes back under the named key the client already reads");
+  assert.equal(calls.created.length, 0, "atomic: the loser left nothing behind");
+});
+
+test("★ batch: undo-delete restores a keyed row — the tombstone must not swallow the create", async () => {
+  // THE regression guard, on the path the client actually uses. public/js/state.js
+  // undoDeleteTask replays the deleted subtree through blockStore.batchOp ->
+  // POST /api/blocks/batch, carrying `properties` verbatim including idempotency_key.
+  // A tombstone-inclusive match here finds the tombstone OF THE ROW BEING RESTORED and
+  // restores nothing — and the client compounds it, caching the dead row and
+  // re-pointing the task's _blockId at a tombstone.
+  //
+  // /api/blocks and /batch drifted apart on exactly this once already: the live-only
+  // rule was applied to one and not the other. Both routes are pinned now.
+  const seed = { "dead-1": { id: "dead-1", type: "block", date: "2026-07-30", workspace_id: MINE, deleted_at: TOMB, properties: { title: "Deleted task", idempotency_key: "slack-bookmark:C1:1.0" } } };
+  const { app, calls } = mountApp({ seed });
+  const { json } = await call(app, "POST", "/api/blocks/batch", {
+    operations: [{ op: "create", type: "block", date: "2026-07-30", properties: { title: "Deleted task", idempotency_key: "slack-bookmark:C1:1.0" } }],
+  });
+
+  assert.equal(calls.created.length, 1, "the undo actually restores");
+  assert.notEqual(json.blocks[0].id, "dead-1", "a live row, not the tombstone handed back");
+  assert.equal(json.blocks[0]._dedupe, undefined);
 });

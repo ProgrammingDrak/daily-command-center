@@ -814,11 +814,21 @@ const POST_SCHEMA_STATEMENTS = [
   //
   // Scoped by workspace_id first, matching db.findByIdempotencyKey's own
   // `workspace_id IS NOT DISTINCT FROM $2` — a key is identity WITHIN a tenant.
-  // NULL workspace ids form their own group, which is what IS NOT DISTINCT FROM
-  // means on the read side too.
+  //
+  // NULLS NOT DISTINCT is load-bearing and was NOT in the first version of this index.
+  // A multicolumn unique index treats NULLs as DISTINCT by default, so `(NULL,'k')`
+  // and `(NULL,'k')` both insert cleanly — verified, not assumed: two such rows go in
+  // without complaint, and the same index with this clause rejects the second.
+  // `blocks.workspace_id` is nullable and db.createBlock passes `workspace_id || null`,
+  // so that group is reachable. Without the clause the write side would disagree with
+  // BOTH readers — findByIdempotencyKey's `IS NOT DISTINCT FROM` and
+  // routes/admin-model.js's `GROUP BY workspace_id`, which fold NULLs together — and
+  // the audit gate could read "enforced" over a live duplicate.
+  // Requires PG 15+; prod is 17.6 and CI is postgres:16.
   ["idx_blocks_idem_unique", `
     CREATE UNIQUE INDEX IF NOT EXISTS idx_blocks_idem_unique
       ON blocks (workspace_id, (properties->>'idempotency_key'))
+      NULLS NOT DISTINCT
       WHERE properties->>'idempotency_key' IS NOT NULL
         AND deleted_at IS NULL;
   `],

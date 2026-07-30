@@ -139,12 +139,12 @@ module.exports = function mount(app, ctx) {
       if (body.point_multiplier != null) props.point_multiplier = body.point_multiplier;
       const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
       broadcast("blocks-changed", { action: "quick-task-create", blockIds: [created.id], date }, workspaceId);
-      // A3: `_deduped` means db.createBlock lost the key race and handed back the live
+      // A3: `_resolvedExisting` means db.createBlock lost the key race and handed back the live
       // winner instead of inserting. The row is right either way, but reporting
       // "created" for it would be a lie a caller can act on — this is the retry shape
       // the MCP server and scripts/dcc-schedule.js now produce on a cold start, where
       // the retry can overlap the original request the server is still committing.
-      res.json({ ok: true, date, status: created._deduped ? dedupeStatus(created) : "created", block: { id: created.id, title, start: props.start || null, end: props.end || null, priority: props.priority } });
+      res.json({ ok: true, date, status: created._resolvedExisting ? dedupeStatus(created) : "created", block: { id: created.id, title, start: props.start || null, end: props.end || null, priority: props.priority } });
     } catch (e) {
       console.error("[quick-task] failed:", e);
       res.status(e.status || 500).json({ error: e.message || "quick-task failed" });
@@ -384,7 +384,7 @@ module.exports = function mount(app, ctx) {
         // following the winner's own date, because the paragraph above applies with
         // full force here: keying the ledger to the posted date would mint a second
         // credit row for a block already credited under its own.
-        if (created._deduped) {
+        if (created._resolvedExisting) {
           duplicate = true;
           if (created.date) effectiveDate = created.date;
         }
@@ -453,7 +453,7 @@ module.exports = function mount(app, ctx) {
       broadcast("blocks-changed", { action: "brief-push-next", blockIds: [created.id], date }, workspaceId);
       // A3: same as quick-task — a lost key race is resolved in db.createBlock, and the
       // honest status is the one the lookup above would have returned.
-      res.json({ ok: true, date, status: created._deduped ? dedupeStatus(created) : "created", block: { id: created.id, title } });
+      res.json({ ok: true, date, status: created._resolvedExisting ? dedupeStatus(created) : "created", block: { id: created.id, title } });
     } catch (e) {
       console.error("[brief push-next] failed:", e);
       res.status(e.status || 500).json({ error: e.message || "push-next failed" });

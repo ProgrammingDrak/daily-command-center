@@ -265,10 +265,17 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     // The row is always LIVE: the index is partial on `deleted_at IS NULL`, so a
     // tombstone never reserves its key and could not have raised this.
     if (client || !isIdempotencyConflict(err)) throw err;
-    const key = props.idempotency_key || props.idempotencyKey || null;
+    // snake_case ONLY, deliberately. idx_blocks_idem_unique indexes
+    // properties->>'idempotency_key' and findByIdempotencyKey queries that field, so a
+    // camelCase alias here could never name the key that raised this conflict — and at
+    // the route layer it would hand a caller route-level dedupe with no index backstop,
+    // i.e. silent best-effort idempotency for a key the database is not enforcing. The
+    // dual-spelling normalization routes/dcc.js does is on the request BODY, one layer
+    // up; by the time a key reaches the properties bag there is one spelling.
+    const key = props.idempotency_key || null;
     const winner = key ? await findByIdempotencyKey(workspace_id || null, String(key)) : null;
     if (!winner) throw err;
-    return { ...winner, _deduped: true };
+    return { ...winner, _resolvedExisting: true };
   }
   if (!inserted.rows.length) {
     const { rows: found } = await q.query(
@@ -281,10 +288,10 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     // deleted_at tells it the truth. Refusing to resurrect is the route layer's
     // rule (lib/materialize-guard.js), not this primitive's.
     //
-    // `_deduped` says "this row was found, not inserted". Callers that broadcast a
+    // `_resolvedExisting` says "this row was found, not inserted". Callers that broadcast a
     // create, log an operation, or award points need that distinction, and inferring
     // it from timestamps is exactly the guesswork that produces phantom events.
-    return { ...parseBlock(found[0]), _deduped: true };
+    return { ...parseBlock(found[0]), _resolvedExisting: true };
   }
   await q.query(`INSERT INTO operations (block_id, op_type, after_data, timestamp) VALUES ($1, 'create', $2, $3)`, [blockId, props, now]);
   return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sort_order || 0, created_at: now, updated_at: now, deleted_at: null };
@@ -418,7 +425,23 @@ async function undeleteBlock(id, client) {
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
   if (!existing.deleted_at) return parseBlock(existing);
-  await q.query("UPDATE blocks SET deleted_at = NULL, updated_at = $1 WHERE id = $2", [now, id]);
+  // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial predicate
+  // (`... AND deleted_at IS NULL`), so if a live row already holds this key the UPDATE
+  // raises 23505 — and a raw one would surface as a 500 from POST /:id/undelete. Not
+  // hypothetical: the prod restore has 32 duplicate key groups, every one of them a
+  // live row plus tombstones, which is exactly this shape.
+  //
+  // 409, not a silent success: the tombstone genuinely cannot be restored while its
+  // twin is live, and the caller has to be told rather than shown an undo that did
+  // nothing. B2 is the phase that wires this route to the client, so it lands there.
+  try {
+    await q.query("UPDATE blocks SET deleted_at = NULL, updated_at = $1 WHERE id = $2", [now, id]);
+  } catch (err) {
+    if (!isIdempotencyConflict(err)) throw err;
+    const conflict = new Error("Another live block already holds this idempotency key");
+    conflict.statusCode = 409;
+    throw conflict;
+  }
   await q.query(
     `INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'update', $2, $3)`,
     [id, existing.properties, now]
