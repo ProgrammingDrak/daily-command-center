@@ -572,6 +572,16 @@ function buildListView(){
     return '<a class="src-jump" href="'+escHtml(url)+'" target="_blank" rel="noopener" title="Open source ('+label+')" onclick="event.stopPropagation()">'+label+' ↗</a>';
   }
 
+  // A node is a SUB row when it is actually NESTED in the rendered tree, not merely
+  // when it carries a parent edge. flattenSchedule returns a subtask whose parent
+  // isn't in this pool as a ROOT (depth 0) — a genuine orphan, and deliberately
+  // still visible, because standalone work must never disappear. It has to READ
+  // like standalone work too: a rank number and its own type tag, not "·" plus a
+  // "Subtask" label with nothing above it to belong to. Common in the carryover
+  // lane, where a done parent is excluded and its open child is not.
+  // Ride-alongs are unaffected (their rel is "ride-along", never "subtask").
+  function _isSubRow(node){return !!(node&&node.rel==="subtask"&&node.depth>0);}
+
   function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
     const isPushedRow=mode==="pushed";
@@ -596,7 +606,7 @@ function buildListView(){
     const prog=isUnfRow?_unfProgress(ev.id,pool):((typeof subtaskProgress==="function")?subtaskProgress(ev.id,pool):null);
     // Subtask variant: same list row, lighter, with a point-pie slice chip in place
     // of the duration/clock while timeless. Shares every affordance below.
-    const subRow=!!(node&&node.rel==="subtask");
+    const subRow=_isSubRow(node);
     const subTimeless=subRow&&dur(ev)<=0;
     const subSlice=(subRow&&ev.subtaskOf&&window.PointPlan&&typeof window.PointPlan.shareFor==="function")?window.PointPlan.shareFor(ev.subtaskOf,ev.id):null;
     const subSliceHtml=(typeof subShareChipHtml==="function")?subShareChipHtml(ev,subSlice):'';
@@ -739,7 +749,7 @@ function buildListView(){
   // Every node — top-level task OR nested subtask — renders through the same row()
   // builder. row() reads node.rel to apply the lighter subtask variant. Subtasks
   // take no rank number (row() renders "·" for them), so idx is a don't-care there.
-  function emitNode(node,idx,mode){return row(node.ev,node.rel==="subtask"?0:idx,mode,node);}
+  function emitNode(node,idx,mode){return row(node.ev,_isSubRow(node)?0:idx,mode,node);}
   // Idle-gap marker between two spaced-out timed rows (fixed tiny height; see
   // .it-list-gap CSS). Label via ms() -> "45m" / "1h 30m".
   function gapEl(mins){
@@ -793,7 +803,7 @@ function buildListView(){
     // logic (see their defs above).
     let rank=0, prevEnd=null;
     flattenSchedule(mainItems).forEach(node=>{
-      const isSub=node.rel==="subtask";
+      const isSub=_isSubRow(node);
       if(!node.depth&&_rowIsTimed(node.ev)){
         const gm=_gapMarkerMins(prevEnd,pt(node.ev.start));
         if(gm!=null) wrap.appendChild(gapEl(gm));
@@ -845,7 +855,7 @@ function buildListView(){
     const rootIds=new Set(rootOrder.map(ev=>ev.id));
     let rank=0;
     flattenSchedule(rootOrder.concat(openRows.filter(ev=>!rootIds.has(ev.id)))).forEach(node=>{
-      wrap.appendChild(emitNode(node,node.rel==="subtask"?0:rank++,"unfinished"));
+      wrap.appendChild(emitNode(node,_isSubRow(node)?0:rank++,"unfinished"));
     });
     if(unf&&unf.total>openRows.length){
       const more=document.createElement("div");

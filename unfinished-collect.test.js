@@ -252,8 +252,36 @@ test("carryover rows render through the shared tree, with their own pool", () =>
   assert.ok(/wrapBandwidth\(ev,pool\)/.test(schedTabSource) && /subtaskProgress\(ev\.id,pool\)/.test(schedTabSource));
   assert.ok(/flattenSchedule\(rootOrder\.concat/.test(schedTabSource),
     "the lane must render through flattenSchedule so children nest");
-  assert.ok(/emitNode\(node,node\.rel==="subtask"\?0:rank\+\+,"unfinished"\)/.test(schedTabSource),
+  assert.ok(/emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,"unfinished"\)/.test(schedTabSource),
     "carryover nodes must pass the tree node to row() (subtask variant + indent)");
+});
+
+// A subtask whose parent is NOT in the pool comes back from flattenSchedule as a
+// ROOT (depth 0). It must stay visible — standalone work never disappears — but it
+// must also READ as standalone: a rank number and its own type tag, not "·" plus a
+// "Subtask" label with nothing above it to belong to. Routine in the carryover lane,
+// where a done parent is excluded and its still-open child is not.
+test("an ORPHANED subtask renders as top-level, not as a subtask", () => {
+  const slice = /function _isSubRow\(node\)\{[^}]*\}/.exec(schedTabSource);
+  assert.ok(slice, "_isSubRow must exist");
+  const _isSubRow = new Function(`${slice[0]}; return _isSubRow;`)();
+
+  // nested under a present parent -> a real sub row
+  assert.equal(_isSubRow({ rel: "subtask", depth: 1 }), true);
+  assert.equal(_isSubRow({ rel: "subtask", depth: 2 }), true);
+  // orphan: carries the edge, but flattenSchedule made it a root
+  assert.equal(_isSubRow({ rel: "subtask", depth: 0 }), false);
+  // ride-alongs are untouched by this rule (they keep their rank number today)
+  assert.equal(_isSubRow({ rel: "ride-along", depth: 1 }), false);
+  assert.equal(_isSubRow({ rel: null, depth: 0 }), false);
+  assert.equal(_isSubRow(null), false);
+
+  // and every rank counter agrees with the chrome, or an orphan would take "·" from
+  // row() while the caller withheld its number (or vice versa).
+  assert.ok(/const subRow=_isSubRow\(node\);/.test(schedTabSource), "row() must gate the subtask variant on _isSubRow");
+  assert.ok(/function emitNode\(node,idx,mode\)\{return row\(node\.ev,_isSubRow\(node\)\?0:idx,mode,node\);\}/.test(schedTabSource));
+  assert.ok(/const isSub=_isSubRow\(node\);/.test(schedTabSource), "the work list's rank counter must use the same rule");
+  assert.ok(!/rel==="subtask"\?0:/.test(schedTabSource), "no rank counter may still gate on rel alone");
 });
 
 test("the Unscheduled badge no longer sums two different things", () => {

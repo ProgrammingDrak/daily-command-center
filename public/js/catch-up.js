@@ -46,12 +46,25 @@
     return new Date().toISOString().slice(0, 10);
   }
 
+  // Rows already finished on their origin day are progress data, not work: the
+  // collector keeps done CHILDREN in the pool so a parent's "2/5 subtasks" can
+  // count them (unfinished-tasks.js). They must not be offered as things that
+  // slipped — the itinerary lane filters them before computing roots
+  // (schedule-tab.js) and this prompt has to agree, or a subtask you finished on
+  // Tuesday shows up Wednesday morning asking to be rescheduled.
+  function openOf(pool) {
+    return pool.filter(ev => !(ev.__unf && ev.__unf.done));
+  }
+
   // Only roots get a row: a child follows whatever happens to its parent (every
   // DCC.Carryover action carries the subtree), so listing both would double-count.
+  // Roots are computed against the OPEN rows, so a child whose parent is finished
+  // is a genuine orphan and stays actionable.
   function rootsOf(pool) {
-    return pool.filter(ev => {
+    const open = openOf(pool);
+    return open.filter(ev => {
       const p = (ev.wrapId || ev.subtaskOf) || null;
-      return !p || !pool.some(x => x.id === p);
+      return !p || !open.some(x => x.id === p);
     });
   }
 
@@ -102,8 +115,12 @@
     const listEl = overlay.querySelector("#catchup-list");
     const allBtn = overlay.querySelector("#catchup-all");
     overlay.querySelector("#catchup-title").textContent = "Here's what slipped";
+    // `total` is the collector's count of OPEN rows before the MAX_ROWS cap, so it
+    // has to be compared against the open rows we actually have — not the whole
+    // pool, which carries done children too and made this branch unreachable.
+    const openCount = openOf(pool).length;
     hintEl.textContent = roots.length + " unfinished task" + (roots.length === 1 ? "" : "s") +
-      " from the last two weeks" + (total > pool.length ? " (showing " + pool.length + " of " + total + ")" : "") +
+      " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "") +
       " — move what still matters, drop what doesn't. Anything you leave stays on its own day in the Unfinished lane.";
     listEl.innerHTML = "";
 
@@ -176,7 +193,9 @@
     if (!CO || reviewed()) return;
     let res = { rows: [], total: 0 };
     try { res = await CO.collect(); } catch (e) { return; }
-    if (!res.rows.length) { markReviewed(); return; }
+    // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
+    // nothing to catch up on, and prompting on it opened an empty-feeling modal.
+    if (!rootsOf(res.rows).length) { markReviewed(); return; }
     openPrompt(res.rows, res.total);
   }
 
