@@ -545,7 +545,12 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     const blockers = blocks
       .filter(b => (b.properties || {}).start && (b.properties || {}).end)
       .map(b => ({ s: hhmmToMinutes(b.properties.start), e: hhmmToMinutes(b.properties.end) }));
-    return { blocks, dayStart, dayEnd, blockers, deletedResponsibilityIds };
+    // allBlocks is exposed (tombstones included) so a caller needing a no-resurrect
+    // check on this day can reuse THIS load instead of issuing a second one. The day
+    // load cannot use an index — every index on `blocks` is partial on
+    // `deleted_at IS NULL` — so it sequential-scans, and a second copy is not free.
+    // Additive: `blocks` stays the live-only list every existing caller destructures.
+    return { allBlocks, blocks, dayStart, dayEnd, blockers, deletedResponsibilityIds };
   }
 
   async function scheduleResponsibilityTask({ responsibility, date, userId, workspaceId, sourceProps = {}, force = false, dayCtx = null }) {

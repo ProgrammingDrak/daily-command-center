@@ -1,25 +1,31 @@
 // routes/dcc.js — DCC ingest + glymphatic-brief spine.
 // Extracted verbatim from server.js (2026-07-04). Mounted via the shared
 // module.exports(app, ctx) pattern; every dependency comes from ctx.
+const createMaterializeGuard = require("../lib/materialize-guard");
+// Pure helpers come off the module, persistence comes off the factory — the layering
+// lib/task-timing.js and responsibility-store.js both state in their headers.
+const { assertNotResurrecting, dedupeStatus } = createMaterializeGuard;
+
 module.exports = function mount(app, ctx) {
   const {
     DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
     dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity,
     meetingMaterializer, previousDateStr,
-    pool, readJSON, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
+    readJSON, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
   } = ctx;
+  const materializeGuard = createMaterializeGuard({ blockDB });
 
-  // Shared idempotency lookup for the brief's Day-in-Review writes: does a block
-  // carrying this idempotency_key already live on the date? Returns the row or null.
-  async function findBriefBlock(date, workspaceId, idemKey) {
+  // Shared idempotency lookup for the brief's Day-in-Review writes and quick-task:
+  // does a block carrying this idempotency_key already exist? Returns the row (live
+  // OR tombstoned) or null; callers branch on deleted_at via dedupeStatus.
+  //
+  // Was a hand-rolled pool.query here, the third copy of a lookup db.js already owns.
+  // Folding it into the shared guard changed two things on purpose, both documented at
+  // lib/materialize-guard.js: the match is no longer scoped to a single DATE, and a
+  // null workspaceId now matches only null-workspace rows instead of every tenant.
+  function findBriefBlock(workspaceId, idemKey) {
     if (!idemKey) return null;
-    // Include soft-deleted rows: a tombstone for this key means the user deleted
-    // the item, so the Day-in-Review callers should skip re-creating it (they
-    // already treat any hit as "already handled"). Live rows sort first.
-    const q = workspaceId
-      ? await pool.query(`SELECT id, properties, deleted_at FROM blocks WHERE date = $1 AND workspace_id = $2 AND properties->>'idempotency_key' = $3 ORDER BY deleted_at IS NULL DESC LIMIT 1`, [date, workspaceId, idemKey])
-      : await pool.query(`SELECT id, properties, deleted_at FROM blocks WHERE date = $1 AND properties->>'idempotency_key' = $2 ORDER BY deleted_at IS NULL DESC LIMIT 1`, [date, idemKey]);
-    return q.rows[0] || null;
+    return materializeGuard.findForDedupe(workspaceId, { idempotencyKey: idemKey });
   }
 
   app.post("/api/ingest/day-state", async (req, res) => {
@@ -37,19 +43,33 @@ module.exports = function mount(app, ctx) {
     // state, so the very next day read finds the real blocks and suppresses the
     // synthesized ghost. Best-effort: a materialization hiccup must never fail
     // the whole ingest (state save below is the load-bearing write).
-    try {
-      const mres = await meetingMaterializer.materializeMeetings({
-        date: incoming.date,
-        meetings: merged.meetings,
-        userId: ingestUserId,
-        workspaceId: ingestWorkspaceId,
-        hasMeetingsKey: ("meetings" in incoming),
-      });
-      if (mres && (mres.created || mres.updated || mres.cancelled)) {
-        broadcast("blocks-changed", { action: "meeting-materialize", blockIds: mres.blockIds || [], date: incoming.date }, ingestWorkspaceId);
+    //
+    // GATED on the request actually carrying a meetings section. `merged.meetings`
+    // falls back to the STORED meetings when `incoming` has no such key, so an ingest
+    // about something else entirely was re-running a full create/reconcile pass over
+    // day-old calendar data. public/js/triage.js POSTs the whole client `__state`, so
+    // deleting a triage item did exactly that. The materializer already took
+    // hasMeetingsKey and used it to suppress cancellation; the create/reconcile half
+    // ran regardless. Nothing here is the calendar's source of truth — the sweep that
+    // owns meetings always sends the key — so skipping is a no-op for every caller
+    // that has real data, and the difference between "no meetings key" and "meetings:
+    // []" stays meaningful (an explicit empty list still cancels).
+    const hasMeetingsKey = Object.prototype.hasOwnProperty.call(incoming, "meetings");
+    if (hasMeetingsKey) {
+      try {
+        const mres = await meetingMaterializer.materializeMeetings({
+          date: incoming.date,
+          meetings: merged.meetings,
+          userId: ingestUserId,
+          workspaceId: ingestWorkspaceId,
+          hasMeetingsKey: true,
+        });
+        if (mres && (mres.created || mres.updated || mres.cancelled)) {
+          broadcast("blocks-changed", { action: "meeting-materialize", blockIds: mres.blockIds || [], date: incoming.date }, ingestWorkspaceId);
+        }
+      } catch (e) {
+        console.error("[dcc-state ingest] meeting materialize failed (non-fatal):", e.message);
       }
-    } catch (e) {
-      console.error("[dcc-state ingest] meeting materialize failed (non-fatal):", e.message);
     }
     // Postgres is the durable store (Railway's filesystem is ephemeral) -- its
     // write must succeed or the caller must hear about it. The old shape wrote
@@ -94,8 +114,8 @@ module.exports = function mount(app, ctx) {
         // (the two brief endpoints already use it). A live match is a dup; a
         // soft-deleted match is a tombstone -> respect the user's delete and do not
         // re-create (mirrors meeting-materializer: never resurrect what was removed).
-        const dup = await findBriefBlock(date, workspaceId, idemKey);
-        if (dup) return res.json({ ok: true, date, status: dup.deleted_at ? "skipped_deleted" : "skipped_duplicate", block: { id: dup.id, title: (dup.properties || {}).title || title } });
+        const dup = await findBriefBlock(workspaceId, idemKey);
+        if (dup) return res.json({ ok: true, date, status: dedupeStatus(dup), block: { id: dup.id, title: (dup.properties || {}).title || title } });
       }
 
       const minutes = Math.max(1, Math.round(Number(body.minutes || body.durationMinutes || body.estimatedMinutes || body.duration || 30)));
@@ -305,11 +325,36 @@ module.exports = function mount(app, ctx) {
       const tags = Array.isArray(body.tags) ? body.tags : [];
       const nowIso = new Date().toISOString();
 
-      const existing = await findBriefBlock(date, workspaceId, idemKey);
+      const existing = await findBriefBlock(workspaceId, idemKey);
+      // A tombstoned match stops here, BEFORE the credit below. Previously a deleted
+      // match fell through as a plain duplicate and still ran earnTaskCredit against
+      // the dead row's id: harmless when the task was credited before it was deleted
+      // (ON CONFLICT absorbs the repeat), but real points for a task the user removed
+      // when it was not. Returning the row id keeps the caller idempotent either way.
+      if (assertNotResurrecting(existing).skip) {
+        return res.json({ ok: true, date, status: dedupeStatus(existing), block: { id: existing.id, title }, credit: null });
+      }
       let blockId, duplicate = false;
+      // effectiveDate follows the ROW, not the request. The lookup above is date-blind
+      // now, so a live match can live on a different date than the one being posted, and
+      // when it does the row's own day is the authoritative one for EVERY consumer below:
+      //   - the ledger key is `<date>:<blockId>`, so the request date would mint a SECOND
+      //     credit row for a block already credited under its own date — a silent
+      //     double-credit of exactly the kind this project has spent two phases unpicking
+      //   - the broadcast tells open tabs which day to reconcile; naming the posted day
+      //     leaves the completed row invisible until someone navigates to its real day
+      //   - the response tells the caller where the item landed, which it uses to build
+      //     its next request
+      // Applying this to the ledger alone would be worse than not applying it at all: the
+      // next reader would reasonably assume the row's date won everywhere. Inert today
+      // (`day-review:<date>:` keys embed the date, and it equals `date` on the create
+      // path), and live the moment a date-blind key vocabulary is pointed here.
+      // An undated row falls back to the request date rather than keying `null:<id>`.
+      let effectiveDate = date;
       if (existing) {
         blockId = existing.id;
         duplicate = true;
+        if (existing.date) effectiveDate = existing.date;
       } else {
         const props = {
           title,
@@ -335,7 +380,7 @@ module.exports = function mount(app, ctx) {
       let credit = null;
       try {
         credit = await slotStore.earnTaskCredit(workspaceId, userId, {
-          source_key: `${date}:${blockId}`,
+          source_key: `${effectiveDate}:${blockId}`,
           task_id: blockId, title, type: body.type || "task", tags,
           duration_minutes: minutes, completed_at: nowIso,
         });
@@ -343,9 +388,9 @@ module.exports = function mount(app, ctx) {
         console.error("[brief log-done] credit failed (non-fatal):", e.message);
       }
 
-      broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date }, workspaceId);
+      broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
       res.json({
-        ok: true, date,
+        ok: true, date: effectiveDate,
         status: duplicate ? "skipped_duplicate" : "created",
         block: { id: blockId, title },
         credit: credit ? { awarded: !!credit.awarded, credits: credit.credits || 0 } : null,
@@ -372,8 +417,10 @@ module.exports = function mount(app, ctx) {
       const { userId, workspaceId } = await resolveOwnerStrict(req);
       const idemKey = body.idempotency_key || body.idempotencyKey || null;
 
-      const existing = await findBriefBlock(date, workspaceId, idemKey);
-      if (existing) return res.json({ ok: true, date, status: "skipped_duplicate", block: { id: existing.id, title } });
+      const existing = await findBriefBlock(workspaceId, idemKey);
+      // Was a flat "skipped_duplicate" for both cases; a tombstone now says so, which
+      // is the difference between "you already pushed this" and "you deleted this".
+      if (existing) return res.json({ ok: true, date, status: dedupeStatus(existing), block: { id: existing.id, title } });
 
       const minutes = Math.max(1, Math.round(Number(body.minutes || body.duration || body.durationMinutes || body.estimatedMinutes || 30)));
       const props = {
