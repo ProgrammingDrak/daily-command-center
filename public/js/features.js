@@ -1039,7 +1039,6 @@ function _focusBannerNextItem(){
     if(!ev||ev.nested)return false;
     if(typeof isDone==="function"&&isDone(ev))return false;
     if(typeof isDeleted==="function"&&isDeleted(ev))return false;
-    if(typeof isPushed==="function"&&isPushed(ev))return false;
     return !["break","ooo","free_time"].includes(ev.type);
   });
   if(!items.length)return null;

@@ -169,7 +169,7 @@ function insertTaskNow(titleArg, durMinArg, opts){
   scheduled.splice(insertAt, 0, newItem);
   recalcTimes();
   const simulatedEnd=scheduled
-    .filter(ev=>!isDone(ev)&&!isPushed(ev)&&!isDeleted(ev)&&pointEligible(ev))
+    .filter(ev=>!isDone(ev)&&!isDeleted(ev)&&pointEligible(ev))
     .reduce((max,ev)=>Math.max(max,pt(ev.end)),0);
   scheduled.splice(scheduled.indexOf(newItem), 1);
   recalcTimes(); // restore cascade without the new item
@@ -346,15 +346,26 @@ function _finishCompletionCelebration(ctx, id){
 
 // Mark `id` done in a different date's persistence (not the currently-viewed day).
 // Used when completing a future/past task and pinning the completion to a specific date.
-async function commitDoneOnDate(id,dateStr){
+// Mark `id` done on `dateStr`, which may not be the day being viewed.
+//
+// `opts.ev` / `opts.awardPoints` exist because the caller may have MOVED the task
+// before committing (the "was this done today?" choice → bringToToday). A true move
+// drops the row out of `scheduled` (state.js _removeSubtreeFromScheduled), so this
+// function's own lookup misses and the credit falls back to a synthetic
+// {title:"Task completed", type:"task"} — wrong title in the log, and default
+// duration scoring instead of the task's own pie/rollup award. Whoever moves the
+// row is the only one who can still see it, so they hand it over.
+async function commitDoneOnDate(id,dateStr,opts){
   if(!id||!dateStr)return;
+  opts=opts||{};
   const nowIso=new Date().toISOString();
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
-  const ev=scheduled.find(e=>e.id===id);
+  const ev=scheduled.find(e=>e.id===id)||opts.ev||null;
+  const award=()=>opts.awardPoints!==undefined?opts.awardPoints:_pointAwardOverride(id);
 
   // Same-day completion: take the in-memory fast path
   if(currentDate===dateStr){
-    const _award=_pointAwardOverride(id);
+    const _award=award();
     const _cel=_beginCompletionCelebration(id);
     manualDone.add(id);doneAt[id]=new Date();
     log("checked",id);saveDoneState();render();
@@ -393,7 +404,7 @@ async function commitDoneOnDate(id,dateStr){
     }catch(e){}
   }
   log("checked-on",id,"Marked done on "+dateStr);
-  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_pointAwardOverride(id)});
+  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:award()});
   _autoCompleteShellAncestors(id,dateStr);
 }
 
@@ -600,7 +611,14 @@ function toggleDone(id,opts){
   // Caller forced a specific completion date (Done-on-date confirmation flow)
   if(opts.markOnDate){
     if(opts.bringToToday&&typeof rescheduleTaskToDate==="function"){
-      rescheduleTaskToDate(id,opts.markOnDate,{silent:true}).then(()=>commitDoneOnDate(id,opts.markOnDate));
+      // Read the row and its point award BEFORE the move: the move re-dates the row
+      // and drops it from `scheduled`, and after that neither the task nor its pie
+      // share can be resolved by id. Hand both to the commit. (_pointAwardOverride
+      // must also be read before any subtask cascade, which this satisfies.)
+      const evBeforeMove=scheduled.find(e=>e.id===id);
+      const awardBeforeMove=_pointAwardOverride(id);
+      rescheduleTaskToDate(id,opts.markOnDate,{silent:true})
+        .then(()=>commitDoneOnDate(id,opts.markOnDate,{ev:evBeforeMove,awardPoints:awardBeforeMove}));
     } else {
       commitDoneOnDate(id,opts.markOnDate);
     }

@@ -13,7 +13,7 @@
 //     the in-memory/clone shapes (id/type/start/end added by the caller).
 //   taskBlockProps(ev, overrides) -> taskCommonProps + the persistence keys a
 //     blockStore.createBlock("block", …) call wants (local_id/duration/start/
-//     end). Context keys (_pinnedStart, added_at, pushed_from, …) stay the
+//     end). Context keys (_pinnedStart, added_at, scheduled_from, …) stay the
 //     caller's job via a follow-on Object.assign so this output stays defined.
 //
 // `overrides` win over `ev` for any field before defaulting, so a caller can

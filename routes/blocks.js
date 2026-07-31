@@ -562,6 +562,13 @@ module.exports = function mount(app, ctx) {
       const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
       if (!parent) return res.status(404).json({ error: "Block not found" });
       assertBlockOwnership(parent, req.workspaceId);
+      // A day_root is the day's container, not a task on it. Its children by parent_id
+      // are every task on that date (migration 001: 1328 such edges), so now that the
+      // subtree walk reads parent_id as well as the local-id links, moving one would
+      // re-date the entire day. Refused here AND seeded around in
+      // lib/reschedule.js — an invariant enforced at one call site and merely asserted
+      // at the other is this project's most repeated bug shape.
+      if (parent.type === "day_root") return res.status(400).json({ error: "Cannot reschedule a day container" });
       // Undated blocks exist (e.g. task-bar pending_tasks live on a day only via
       // day-state), so accept the caller's viewed day as the origin. The move
       // stamps a real date on them, healing the anomaly.
@@ -572,13 +579,12 @@ module.exports = function mount(app, ctx) {
       if (fromDate === targetDate) return res.status(400).json({ error: "Already on that date" });
       const parentLocalId = (parent.properties || {}).local_id || null;
 
-      // Gather the origin day's task blocks and walk the subtaskOf/wrapId tree.
-      // Undated task blocks ride along as walk candidates: they only move if their
-      // subtaskOf/wrapId chain links them into the parent's subtree.
-      const dayBlocks = [
-        ...(await blockDB.getBlocksByDate(fromDate, req.workspaceId)),
-        ...(await blockDB.getUndatedTaskBlocks(req.workspaceId))
-      ].filter(b => b.type === "block" && (b.properties || {}).local_id);
+      // Gather the origin day's task rows (plus undated linked strays) and walk the
+      // nesting tree. The walk reads BOTH edge spaces — the subtaskOf/wrapId local-id
+      // links and the parent_id column — because neither one is complete on real data;
+      // lib/reschedule.js carries the measurements. An undated row only moves if the
+      // walk actually links it into this parent's subtree.
+      const dayBlocks = await blockDB.getRescheduleSubtreePool(fromDate, req.workspaceId);
       const subtreeIds = collectSubtreeBlockIds(dayBlocks, parent);
       const byId = new Map(dayBlocks.map(b => [b.id, b]));
       byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks

@@ -22,6 +22,7 @@ const TaskModel = require("./public/js/task-model.js");
 const { apiStub } = require("./carryover-fixture.js");
 const unfSource = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
 const schedTabSource = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
+const stateSource = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 
 // Values that cross back out of the vm carry the vm realm's prototypes, so
 // structural asserts go through JSON rather than deepStrictEqual.
@@ -310,7 +311,11 @@ test("carryover actions route through the ONE shared implementation", () => {
 test("carryover rows render through the shared tree, with their own pool", () => {
   assert.ok(/const pool=isUnfRow\?unfPool:scheduled;/.test(schedTabSource),
     "tree lookups must use the row's own pool");
-  assert.ok(/wrapBandwidth\(ev,pool\)/.test(schedTabSource) && /subtaskProgress\(ev\.id,pool\)/.test(schedTabSource));
+  // C3 folded the lane's duplicate progress walker into the shared subtaskProgress,
+  // passing the origin-day done predicate instead of copying the whole function.
+  assert.ok(/wrapBandwidth\(ev,pool\)/.test(schedTabSource) && /subtaskProgress\(ev\.id,pool,isUnfRow\?_unfDone:null\)/.test(schedTabSource));
+  assert.equal(/function _unfProgress\b/.test(schedTabSource), false,
+    "the duplicated progress walker must stay deleted -- a fix to the walk has to land once");
   assert.ok(/flattenSchedule\(rootOrder\.concat/.test(schedTabSource),
     "the lane must render through flattenSchedule so children nest");
   assert.ok(/emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,"unfinished"\)/.test(schedTabSource),
@@ -402,15 +407,23 @@ test("{days:null} lifts the bound and reaches past day 15", async () => {
   assert.deepEqual(plain(rows.map(r => r.id).sort()), ["in", "out"]);
 });
 
-// _unfProgress produces the "2/5 subtasks" label on a carryover row. It is recursive,
-// accumulates nested descendants into the parent's count, cycle-guards with _seen, and
-// returns null for a childless row -- four branches that had no coverage of either
-// kind (the previous "2/5" assertion recomputed the label from the test's own data, so
-// it could not fail independently of the assertions above it).
-test("_unfProgress counts done children, nested descendants, and survives a cycle", () => {
-  const slice = /function _unfProgress\(id,pool,_seen\)\{[\s\S]*?\n\}/.exec(schedTabSource);
-  assert.ok(slice, "_unfProgress must exist");
-  const _unfProgress = new Function(`${slice[0]}; return _unfProgress;`)();
+// The "2/5 subtasks" label on a carryover row. Recursive, accumulates nested descendants
+// into the parent's count, cycle-guards with _seen, and returns null for a childless row
+// -- four branches that had no coverage of either kind before C1 (the original "2/5"
+// assertion recomputed the label from the test's own data, so it could not fail
+// independently of the assertions above it).
+//
+// C3 retargeted this: the lane's own copy of the walker (_unfProgress) is folded into
+// state.js subtaskProgress, which now takes the done predicate as an argument. All four
+// branches are asserted against the SHARED walk driven by the lane's real predicate, so
+// they carry over verbatim in meaning rather than being deleted with the copy.
+test("the carryover progress chip counts done children, nested descendants, and survives a cycle", () => {
+  const walk = /function subtaskProgress\(id,pool,doneFn,_seen\)\{[\s\S]*?\n\}/.exec(stateSource);
+  assert.ok(walk, "subtaskProgress must exist in state.js");
+  const pred = /function _unfDone\(s\)\{[^\n]*\}/.exec(schedTabSource);
+  assert.ok(pred, "_unfDone (the lane's origin-day done predicate) must exist in schedule-tab.js");
+  const built = new Function(`${walk[0]}\n${pred[0]}\nreturn (id,pool)=>subtaskProgress(id,pool,_unfDone);`)();
+  const laneProgress = built;
 
   const pool = [
     { id: "p" },
@@ -419,11 +432,11 @@ test("_unfProgress counts done children, nested descendants, and survives a cycl
     { id: "k3", subtaskOf: "p", __unf: { done: false } },
     { id: "g1", subtaskOf: "k3", __unf: { done: true } }   // grandchild rolls up
   ];
-  assert.deepEqual(plain(_unfProgress("p", pool)), { done: 3, total: 4 });
-  assert.deepEqual(plain(_unfProgress("k3", pool)), { done: 1, total: 1 });
-  assert.equal(_unfProgress("leaf", pool), null, "a childless row gets no chip");
+  assert.deepEqual(plain(laneProgress("p", pool)), { done: 3, total: 4 });
+  assert.deepEqual(plain(laneProgress("k3", pool)), { done: 1, total: 1 });
+  assert.equal(laneProgress("leaf", pool), null, "a childless row gets no chip");
   // a self-referential edge must terminate rather than recurse forever
-  assert.deepEqual(plain(_unfProgress("c", [{ id: "c", subtaskOf: "c", __unf: { done: false } }])), { done: 0, total: 1 });
+  assert.deepEqual(plain(laneProgress("c", [{ id: "c", subtaskOf: "c", __unf: { done: false } }])), { done: 0, total: 1 });
 });
 
 // The Catch up MODAL has to list the same thing the lane and the prompt list. It used

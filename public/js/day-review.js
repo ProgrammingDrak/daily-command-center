@@ -41,7 +41,6 @@
         // schedule view filters these; without it, rescheduling from the Actual
         // view looked like it did nothing (the card stayed put). (Ported from the
         // superseded buildActualView fix in PR #108.)
-        .filter(ev => !(typeof isPushed === "function" && isPushed(ev)))
         .filter(ev => ev && ev.start)
         .map(ev => ({
           id: ev.id, _blockId: ev._blockId || ev.id, title: ev.title || "(untitled)",

@@ -448,13 +448,13 @@ function _dropAtTargetLevel(moved,target,after){
   return wrapEv||true;
 }
 function _reorderActive(movedId,targetId,after){
-  const active=scheduled.filter(ev=>!isDone(ev)&&!isPushed(ev));
+  const active=scheduled.filter(ev=>!isDone(ev));
   const fi=active.findIndex(x=>x.id===movedId);if(fi===-1)return;
   const[m]=active.splice(fi,1);
   const ti=active.findIndex(x=>x.id===targetId);
   const idx=ti===-1?active.length:(after?ti+1:ti);
   active.splice(idx,0,m);
-  let ai=0;for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i])&&!isPushed(scheduled[i]))scheduled[i]=active[ai++];}
+  let ai=0;for(let i=0;i<scheduled.length;i++){if(!isDone(scheduled[i]))scheduled[i]=active[ai++];}
 }
 function _clearPin(ev){
   if(ev&&ev._pinnedStart){

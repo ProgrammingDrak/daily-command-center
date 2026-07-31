@@ -601,8 +601,15 @@
         // verdict is stamped on the error so callers don't re-derive it.
         if (e) e.permanent = e.status === 400 || e.status === 404;
         if (e && e.permanent) {
-          // Permanent rejection: the caller falls back to a clone move, so a
-          // buffered replay of this entry could only double-move the task.
+          // Permanent rejection: the server refused for a reason a retry cannot change
+          // ("Already on that date", "Block is deleted", "Block not found", a bad
+          // targetDate), so a buffered replay could only double-move or re-fail. Drop it
+          // and let the caller report the reason.
+          //
+          // This comment used to say "the caller falls back to a clone move". C3 deleted
+          // that fallback — state.js rescheduleTaskToDate now surfaces the server's own
+          // message and changes nothing — but dropping the WAL entry is still right, and
+          // for the same reason it always was.
           walRemove(walId);
           setError("Reschedule rejected — " + (e.message || e.status));
         } else {

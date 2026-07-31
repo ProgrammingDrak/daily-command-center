@@ -394,7 +394,7 @@
   }
 
   // Schedule a follow-up task for a blocked item. Uses the same popover UI and
-  // free-slot engine (schedulePushedOnDate) as the task reschedule feature.
+  // free-slot engine (scheduleTaskOnDate) as the task reschedule feature.
   function scheduleDelegatedItem(id, anchorEl) {
     const item = getDelegatedItemById(id);
     if (!item) return;
@@ -403,7 +403,7 @@
       toast("A linked itinerary row already exists.", "info");
       return;
     }
-    if (typeof openDatePickPopover !== "function" || typeof schedulePushedOnDate !== "function" || !window.blockStore) {
+    if (typeof openDatePickPopover !== "function" || typeof scheduleTaskOnDate !== "function" || !window.blockStore) {
       copyText(buildDelegatedMessage(item));
       toast("Message copied; scheduler is unavailable.", "info");
       return;
@@ -429,7 +429,7 @@
       header: 'Schedule "' + ev.title + '" for…',
       actionLabel: "Schedule",
       onPick: async (dateStr) => {
-        const block = await schedulePushedOnDate(ev, dateStr, { useExisting: true, silent: true });
+        const block = await scheduleTaskOnDate(ev, dateStr, { useExisting: true, silent: true });
         if (!block) {
           toast("No free slot on " + dateStr, "error");
           return;

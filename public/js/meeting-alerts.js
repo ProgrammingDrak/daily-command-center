@@ -44,7 +44,6 @@
     if (!ev || typeof isMeeting !== "function" || !isMeeting(ev)) return false;
     if (typeof isDone === "function" && isDone(ev)) return false;
     if (typeof isDeleted === "function" && isDeleted(ev)) return false;
-    if (typeof isPushed === "function" && isPushed(ev)) return false;
     if (ev.untimed) return false;
     return true;
   }

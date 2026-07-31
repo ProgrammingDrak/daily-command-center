@@ -52,7 +52,6 @@ function makeHarness(opts = {}) {
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
     isDone: (ev) => !!ev.done,
     isDeleted: (ev) => !!ev.deleted,
-    isPushed: (ev) => !!ev.pushed,
   };
   context.window.scheduled = context.scheduled;
   // module reads window.scheduled AND bare scheduled; keep them the same ref

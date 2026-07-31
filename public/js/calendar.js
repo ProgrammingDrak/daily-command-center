@@ -137,7 +137,6 @@
           meta: ev.meta,
           prep: ev.prep,
           done: typeof isDone === "function" ? isDone(ev) : false,
-          pushed: typeof isPushed === "function" ? isPushed(ev) : false,
           date: ds,
           _raw: ev,
         });
@@ -194,7 +193,6 @@
             notionUrl: p.notionUrl,
             date: ds,
             done: !!p.done,
-            pushed: !!p.pushed,
             // GCal fields
             hangout_link: p.hangout_link,
             location: p.location,
@@ -330,7 +328,7 @@
         const left = ev._col ? (ev._col / ev._totalCols * 100) : 0;
         const width = ev._totalCols ? (1 / ev._totalCols * 100) : 100;
         const typeCls = "cal-event-" + (ev.type || "task");
-        const stateCls = (ev.done ? " done" : "") + (ev.pushed ? " pushed" : "");
+        const stateCls = ev.done ? " done" : "";
         const timeStr = fmtTime12(startMins) + " \u2013 " + fmtTime12(endMins);
         const tc = typeof cfg === "function" ? cfg(ev.type) : { tag: ev.type, color: "#a78bfa" };
 
