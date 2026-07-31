@@ -61,6 +61,8 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
   let savedDeleted = [];
   const createdBlocks = [];
   let materializeCount = 0;
+  let pinMap = {};
+  const lockSet = new Set();
   const context = {
     console,
     scheduled,
@@ -80,10 +82,10 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
     saveDoneState: () => {},
     loadAddedTasks: () => addedTasks.slice(),
     saveAddedTasks: (t) => { addedTasks.length = 0; addedTasks.push(...t); },
-    loadPinnedStarts: () => ({}),
-    savePinnedStarts: () => {},
-    loadLockedSet: () => [],
-    saveLockedSet: () => {},
+    loadPinnedStarts: () => ({ ...pinMap }),
+    savePinnedStarts: (m) => { pinMap = { ...m }; },
+    loadLockedSet: () => [...lockSet],
+    saveLockedSet: (a) => { lockSet.clear(); (a||[]).forEach((x) => lockSet.add(x)); },
     parentIdOf: (e) => (e && (e.wrapId || e.subtaskOf)) || null,
     dur: (e) => 30,
     fmt: (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"),
@@ -93,7 +95,16 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
     _resolvedTodayDate: () => TODAY,
     _resolvedTomorrowDate: () => TOMORROW,
     _computeRescheduleSlot: async (evArg) => { calls.slotFor.push(evArg && { id: evArg.id, start: evArg.start, end: evArg.end }); return { start: "10:00", end: "10:30", duration: 30 }; },
-    _clearTaskPinAndLock: () => {},
+    // FAITHFUL, not a no-op: the real one deletes the ev fields AND the entries in the
+    // persisted pinned-starts / locked maps (state.js). Stubbed to nothing, a row spliced out
+    // and pushed back kept its pin for free, so the restore logic that exists to save it was
+    // untestable — a stub more benign than reality hides the fix, same as the deterministic-id
+    // stub did earlier in this file.
+    _clearTaskPinAndLock: (evArg) => {
+      if (!evArg) return;
+      if (evArg._pinnedStart) { delete evArg._pinnedStart; delete pinMap[evArg.id]; }
+      if (evArg._locked) { delete evArg._locked; lockSet.delete(evArg.id); }
+    },
     // The same-day re-slot branch. Recorded, not no-ops: a same-day "move" must take
     // this path and must never reach the cross-date mover.
     _placeTaskAtNextTodaySlot: (id) => { calls.reslot.push({ id, kind: "today" }); return scheduled.find((e) => e.id === id); },
@@ -524,4 +535,36 @@ test("a second move off the same day to a DIFFERENT date refreshes the amber des
   const p = live && live.properties;
   assert.equal(p.rescheduledTo, LATER, "the amber row must name where the task actually went");
   assert.notEqual(p.movedBlockId, tomb.item.movedBlockId, "and Restore must point at the row that now holds it");
+});
+
+test("a failed child keeps its WHOLE subtree on the origin day", async () => {
+  // Fixed for the child but not its descendants: descending after a refused create
+  // materialized the grandchild on the target date, where its subtaskOf resolves to nothing
+  // and flattenSchedule renders it at depth 0 -- a subtask promoted to a top-level task on
+  // another day. Nothing under a row that stayed may be moved.
+  const { context, calls, deletedSet } = load({
+    scheduled: [ev("notion-1"), ev("C", { subtaskOf: "notion-1" }), ev("G", { subtaskOf: "C" })],
+    rows: {},
+    failMaterializeFor: ["C"],
+  });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const left = [...vm.runInContext("scheduled.map(e=>e.id)", context)];
+  assert.ok(left.includes("C") && left.includes("G"), "the failed child AND its child stay: " + JSON.stringify(left));
+  assert.equal(deletedSet.has("G"), false, "the grandchild is not hidden either");
+  assert.equal(calls.created.some((c) => (c.item.id || c.item.local_id) === "G"), false,
+    "and it was never created on the target date under a parent that is not there");
+});
+
+test("a pinned start survives on a row that stayed behind", async () => {
+  // _removeSubtreeFromScheduled clears pin/lock on everything it splices, including the
+  // persisted maps, so a task that never moved would silently lose a start the user pinned.
+  const kid = ev("ds-kid", { subtaskOf: "notion-1" });
+  kid._pinnedStart = "11:30";
+  const { context } = load({ scheduled: [ev("notion-1"), kid], rows: {}, failMaterializeFor: ["ds-kid"] });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const back = vm.runInContext('scheduled.find(e=>e.id==="ds-kid")', context);
+  assert.ok(back, "it stayed");
+  assert.equal(back._pinnedStart, "11:30", "and kept the pin the user set");
+  assert.equal(vm.runInContext("loadPinnedStarts()", context)["ds-kid"], "11:30",
+    "including in the persisted map, which persistence.js rehydrates from on reload");
 });

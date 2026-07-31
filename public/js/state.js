@@ -757,12 +757,31 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   // it for one render and then resurrecting it as an orphaned root on the next reload, which
   // is the stranding this phase exists to delete, just deferred.
   const keepVisible=childMove.failed.map(fid=>scheduled.find(e=>e.id===fid)).filter(Boolean);
+  // Snapshot pin/lock for those rows. _removeSubtreeFromScheduled runs _clearTaskPinAndLock on
+  // everything it splices, which deletes the ev fields AND the entries in the persisted
+  // pinned-starts / locked maps — so a task that never left the day would silently lose a
+  // start the user pinned, permanently, since persistence.js rehydrates from those maps.
+  const keptPins=keepVisible.map(e=>({id:e.id,pinnedStart:e._pinnedStart,locked:e._locked}));
   // Same optimistic cleanup the true move does. Without it the children whose rows were
   // just re-dated stay in `scheduled` on this day, and because their parent is now
   // filtered out they render as top-level OPEN roots (flattenSchedule treats a row whose
   // parent is absent as a root) AND keep counting toward the day's scheduled points.
   _removeSubtreeFromScheduled(id);
   for(const back of keepVisible)if(!scheduled.find(e=>e.id===back.id))scheduled.push(back);
+  // Put back what the removal wiped off the rows that stayed.
+  if(keptPins.some(k=>k.pinnedStart||k.locked)){
+    try{
+      const pins=loadPinnedStarts();
+      const locks=new Set(loadLockedSet());
+      for(const k of keptPins){
+        const ev2=scheduled.find(e=>e.id===k.id);
+        if(k.pinnedStart){pins[k.id]=k.pinnedStart;if(ev2)ev2._pinnedStart=k.pinnedStart;}
+        if(k.locked){locks.add(k.id);if(ev2)ev2._locked=k.locked;}
+      }
+      savePinnedStarts(pins);
+      saveLockedSet([...locks]);
+    }catch(e){}
+  }
   // The optimistic removal is per-render; the overlay is what survives a reload, because
   // the day-state JSON still lists the parent. Both are needed.
   deletedSet.add(id);
@@ -834,8 +853,15 @@ async function _moveOriginDayChildrenTo(parentId,targetDate,fromDate,_seen){
       try{kidBlk=await persistAddedTask(Object.assign({},kid),targetDate);}catch(e){
         console.warn("[reschedule] subtask "+kid.id+" could not be materialized: "+(e&&e.message));
       }
-      if(!kidBlk)out.failed.push(kid.id);
-      else out.hidden.push(kid.id);
+      if(!kidBlk){
+        // The create was refused, so this child stays on the origin day — and so must its
+        // WHOLE subtree. Descending anyway would materialize its children on the target date
+        // under a parent that is not there, and `subtaskOf` pointing at nothing renders them
+        // at depth 0: a subtask silently promoted to a top-level task on another day.
+        for(const sid of _subtreeIdsOf(kid.id))out.failed.push(sid);
+        continue;
+      }
+      out.hidden.push(kid.id);
       const nested=await _moveOriginDayChildrenTo(kid.id,targetDate,fromDate,_seen);
       out.hidden.push(...nested.hidden);
       out.failed.push(...nested.failed);
@@ -845,7 +871,11 @@ async function _moveOriginDayChildrenTo(parentId,targetDate,fromDate,_seen){
       await window.blockStore.rescheduleBlock(kidBlock.id,targetDate,{fromDate});
     }catch(e){
       // Permanent means it will never land; transient stays in the WAL and still will.
-      if(e&&e.permanent)out.failed.push(kid.id);
+      // The whole subtree stays, not just this row: the server walks a subtree in ONE
+      // transaction, so a permanent rejection here means nothing under `kid` moved either.
+      // Recording only `kid` left its descendants spliced out of the view and in neither
+      // `hidden` nor `failed` — gone from the origin day until the next fold.
+      if(e&&e.permanent){for(const sid of _subtreeIdsOf(kid.id))out.failed.push(sid);}
       console.warn("[reschedule] subtask "+kid.id+" did not follow its parent: "+(e&&(e.message||e.status)));
     }
   }
