@@ -391,10 +391,22 @@ test("findByIdempotencyKey prefers a LIVE row over an older tombstone", async ()
 // 1576 rows where the lane shows 47, because itinerary completion writes the day_root
 // _done overlay rather than the row's status, and because most of what it admitted was
 // meetings. It is replaced by getCarryoverPool, pinned in open-tasks-query.test.js.
-// Left here as a marker so the removal reads as deliberate rather than lost.
-test("getOpenTasksBefore is gone, replaced by getCarryoverPool (C2)", async () => {
+// This replaces a test that kept getOpenTasksBefore and idx_blocks_open byte-identical.
+// That guard is genuinely gone rather than relocated, so rather than leave a marker
+// that can only fail if someone re-adds dead code, it now holds the invariant that
+// SURVIVED the removal: the index is orphaned and must not silently be treated as
+// live cover for the replacement query.
+test("idx_blocks_open no longer backs any query, and says so (C2)", async () => {
   const db = loadDbWithMock(makeMockPool());
   assert.equal(db.getOpenTasksBefore, undefined, "the speculative primitive must not linger as dead code");
   assert.equal(typeof db.getCarryoverPool, "function");
-  assert.equal(typeof db.getSubtree, "function", "getSubtree DID fit and is still used, unchanged");
+
+  const schema = require("node:fs").readFileSync(require.resolve("./pg-schema.js"), "utf8");
+  const idx = schema.slice(schema.indexOf("idx_blocks_open") - 700, schema.indexOf("idx_blocks_open") + 400);
+  assert.ok(!/db\.getOpenTasksBefore\)/.test(idx),
+    "the index comment must not name a function this repo no longer has");
+  assert.match(idx, /ORPHANED|A4/,
+    "an index nothing references has to be labelled, or the next reader assumes it is load-bearing");
+  // And the reason it cannot serve the replacement: that predicate has no status term.
+  assert.match(idx, /COALESCE\(properties->>'status', 'open'\) = 'open'/);
 });

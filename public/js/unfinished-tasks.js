@@ -64,11 +64,14 @@
   // (default SCAN_DAYS); pass {days:null} for the unbounded sweep.
   // C2: the multi-day archive scan is GONE. This used to loadDateRange() every
   // archived day, pull every block on each of them, and rebuild the task predicate
-  // in JS one day at a time. GET /api/tasks/open now resolves roots plus their live
-  // descendants in one indexed query and returns the day_root overlay slice with
-  // them, so the structural predicate (row types, task-kind, fixed-type skip,
-  // start-or-nested, and "a root's parent is its day_root") lives in SQL where it
-  // cannot be forgotten by a caller.
+  // in JS one day at a time. GET /api/tasks/open now returns the whole pool for the
+  // window in one indexed query, plus the day_root overlay slice, so the structural
+  // predicate (row types, task-kind, fixed-type skip, start-or-nested) lives in SQL
+  // where a caller cannot forget it.
+  //
+  // The endpoint returns the POOL, not the roots: a nested row whose parent is not in
+  // the pool still has to render, so membership must never depend on the parent.
+  // rootsOf() below is what decides rendering, and it is shared by all three surfaces.
   //
   // What deliberately did NOT move: DONE-ness. Completion still lives in the
   // day_root `_done` overlay plus the legacy localStorage mirror the server cannot
@@ -76,31 +79,46 @@
   // Measured while building this: 264 past-day rows read `status='open'` while being
   // finished in the overlay, so a server-side status filter would have resurrected
   // every one of them into this lane. One done predicate, and it is the one below.
+  // One shape for every return path -- callers destructure `truncated` without having
+  // to know which branch produced the payload.
+  const EMPTY = () => ({ rows: [], total: 0, scanned: 0, truncated: false });
   async function collectUnfinished(opts) {
     opts = opts || {};
     const days = (opts.days === null) ? null : (opts.days || SCAN_DAYS);
     const TaskModel = window.DCC && window.DCC.TaskModel;
     const api = window.DCC && window.DCC.api;
-    if (!TaskModel || typeof api !== "function") return { rows: [], total: 0, scanned: 0 };
+    if (!TaskModel || typeof api !== "function") return EMPTY();
 
     const today = todayStr();
     let payload;
     try {
+      // The unbounded sweep asks for the route's full headroom. Its LIMIT applies to
+      // the raw pool BEFORE the done filter below, and since C2 that pool is roots,
+      // children and done rows together — so the default 500 would quietly turn "every
+      // archived day" into "the newest month or so", while the modal footer still says
+      // otherwise. MAX_ROWS still caps what actually renders.
       payload = await api("/api/tasks/open?before=" + encodeURIComponent(today) +
-                          "&days=" + (days === null ? "all" : String(days)));
+                          "&days=" + (days === null ? "all" : String(days)) +
+                          (days === null ? "&limit=2000" : ""));
     } catch (e) {
       // An empty lane, never a stale one. Every consumer is built for this shape —
       // it is what the old collector returned when the store was missing.
-      return { rows: [], total: 0, scanned: 0 };
+      return EMPTY();
     }
     const blocks = Array.isArray(payload && payload.rows) ? payload.rows : [];
     const overlays = (payload && payload.overlays) || {};
 
     const rows = [];
     const seen = new Set();
-    for (const b of blocks) {
-      const p = (b && b.properties) || {};
-      const date = b.date;
+    // Per-DATE, and memoized. The old collector looped dates on the outside and that
+    // day's blocks on the inside, so this ran once per day. Flattening to a single loop
+    // over rows would otherwise do a synchronous localStorage read + JSON.parse and
+    // rebuild both Sets once per ROW, and localStorage blocks paint -- the opposite of
+    // what moving the scan server-side was for.
+    const dayCache = new Map();
+    const overlayFor = (date) => {
+      let d = dayCache.get(date);
+      if (d) return d;
       const ov = overlays[date] || {};
       // Done ids for THIS date: day_root._done marks + legacy localStorage marks.
       // Scoped per date and never flattened across the pool — the same id can exist
@@ -110,7 +128,15 @@
       // Locks live on the ORIGIN day's day_root (_lockedTasks), not on the block —
       // hydrateLockedTasks only ever stamps today's scheduled[]. The endpoint reads
       // them per date so the padlock still renders on a carryover row.
-      const lockedIds = new Set(Array.isArray(ov.locked) ? ov.locked : []);
+      d = { doneIds, lockedIds: new Set(Array.isArray(ov.locked) ? ov.locked : []) };
+      dayCache.set(date, d);
+      return d;
+    };
+
+    for (const b of blocks) {
+      const p = (b && b.properties) || {};
+      const date = b.date;
+      const { doneIds, lockedIds } = overlayFor(date);
 
       // A nested step (subtask / ride-along) legitimately carries no time — it lives
       // under its parent. The server keeps them, which is what lets the lane nest.
@@ -145,8 +171,13 @@
     const total = rows.filter(ev => !ev.__unf.done).length;
     // `scanned` is still "how many past days this pool came from", now counted by the
     // server off the dates it actually touched rather than by the client off the days
-    // it walked. The modal's footer copy reads it.
-    return { rows: rows.slice(0, MAX_ROWS), total, scanned: Number(payload.scanned) || 0 };
+    // it walked. The modal's footer copy reads it. `truncated` says the server's LIMIT
+    // clipped the raw pool, which makes `total` a floor rather than an exact count.
+    return {
+      rows: rows.slice(0, MAX_ROWS), total,
+      scanned: Number(payload.scanned) || 0,
+      truncated: !!(payload && payload.truncated)
+    };
   }
 
   // ── shared actions ──────────────────────────────────────────────────────────
@@ -400,7 +431,7 @@
     if (overlay) overlay.classList.remove("open");
   }
 
-  function renderRows(overlay, rows, total, pool) {
+  function renderRows(overlay, rows, total, pool, truncated) {
     pool = pool || rows;
     const hintEl = overlay.querySelector("#unfinished-hint");
     const listEl = overlay.querySelector("#unfinished-list");
@@ -418,8 +449,12 @@
     // subtasks read "Showing 1 of 3". Compare against the open count, same as the
     // morning prompt, so the message means only what it says: rows were truncated.
     const openCount = openRows(pool).length;
+    // `truncated` means the SERVER's limit clipped the raw pool before we ever filtered
+    // it, so `total` is a floor. Never print a bare exact count in that case: the rows
+    // dropped are the OLDEST ones, on the one surface that exists to reach old work.
+    const totalStr = truncated ? (total + "+") : String(total);
     hintEl.textContent = rows.length + " unfinished task" + (rows.length === 1 ? "" : "s") +
-      (total > openCount ? " (showing " + openCount + " of " + total + ")" : "") +
+      (total > openCount || truncated ? " (showing " + openCount + " of " + totalStr + ")" : "") +
       " from " + scope + " — choose what to do with each.";
 
     // Default custom date: two days out (distinct from Today/Tomorrow).
@@ -494,7 +529,7 @@
     // alone stranded the parent on the origin day and landed the child as an
     // orphan -- reintroducing the standalone-subtask bug this phase removes.
     // The FULL pool still goes to renderRows so subtree actions carry descendants.
-    renderRows(overlay, rootsOf(result.rows), result.total, result.rows);
+    renderRows(overlay, rootsOf(result.rows), result.total, result.rows, result.truncated);
   }
 
   // ── entry point ──

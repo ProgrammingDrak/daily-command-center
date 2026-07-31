@@ -14,8 +14,16 @@
 //     It hid 1084 of 1548 real roots.
 //   • `type='block'` alone drops schedule_item / added_task rows the lane shows.
 //   • dcc_is_task_row is not the whole filter -- 1137 meetings/breaks/focus rows
-//     passed it and would have flooded the lane.
+//     passed it and would have flooded the lane...
+//   • ...and it is not quite the RIGHT filter either: it excludes
+//     `kind LIKE 'responsibility%'`, which is correct for responsibility_item
+//     scaffolding and wrong for responsibility_task, a real dated timed row the
+//     client scan always collected (19 on the restore).
 //   • a row with no start and no parent edge was never carryover work.
+//   • and the correction review forced: this returns the POOL, not the roots. A
+//     nested row whose parent does not qualify still has to render, so membership
+//     must never depend on the parent. 158 past-day untimed parents have children,
+//     and an untimed parent is never a root.
 //
 // Harness: the mock-pool trick from canonical-migration.test.js / batchop-tx.test.js,
 // so `npm test` stays hermetic. Row-level correctness against real data is proven by
@@ -36,17 +44,15 @@ function loadDbWithMock(mockPool) {
 }
 
 // Records every statement and answers each query shape getCarryoverPool issues.
-function makeRecordingPool({ roots = [], subtree = [], kids = null, dayRoots = [] } = {}) {
+function makeRecordingPool({ rows = [], dayRoots = [] } = {}) {
   const log = [];
   return {
     log,
     async query(sql, params = []) {
       const text = String(sql).trim();
       log.push({ text, params });
-      if (/FROM blocks b\s+WHERE[\s\S]*b\.date IS NOT NULL AND b\.date < \$2/.test(text)) return { rows: roots };
-      if (/WITH RECURSIVE tree/.test(text)) return { rows: subtree };
-      if (/b\.id = ANY\(\$2::text\[\]\)/.test(text)) return { rows: kids === null ? subtree : kids };
       if (/type = 'day_root'/.test(text)) return { rows: dayRoots };
+      if (/FROM blocks b/.test(text)) return { rows };
       return { rows: [] };
     }
   };
@@ -59,17 +65,16 @@ const row = (id, over = {}) => ({
   ...over
 });
 
-// ── the skip set (moved here from task-type-growth.test.js) ──────────────────
+// ── the skip set ─────────────────────────────────────────────────────────────
 
 test("the fixed-type skip set is derived from the registry, not a second literal list", () => {
   const db = loadDbWithMock(makeRecordingPool());
   const skip = db.carryoverSkipTypes();
-  // The registry owns the fixed-time half...
   for (const t of ["meeting", "oneone", "ooo", "break"]) {
     assert.ok(skip.includes(t), t + " (fixed) must skip");
     assert.equal(TaskTypes.isFixed(t), true, t + " must still be fixed in the registry");
   }
-  // ...and these four are raw calendar types that never became registry entries.
+  // These four are raw calendar types that never became registry entries.
   for (const t of ["focus", "focus_time", "free_time", "prep"]) {
     assert.ok(skip.includes(t), t + " (raw calendar) must skip");
   }
@@ -78,33 +83,29 @@ test("the fixed-type skip set is derived from the registry, not a second literal
   }
   // Adding a fixedTime entry to the registry must extend this automatically. If this
   // ever needs a hand-edit, the drift the registry exists to prevent is back.
-  const fixedInRegistry = Object.keys(TaskTypes.TYPES).filter((t) => TaskTypes.isFixed(t));
-  for (const t of fixedInRegistry) assert.ok(skip.includes(t), "registry type " + t + " must be in the skip set");
+  for (const t of TaskTypes.fixedTypes()) {
+    assert.ok(skip.includes(t), "registry type " + t + " must be in the skip set");
+  }
 });
 
-// ── the roots query ──────────────────────────────────────────────────────────
+// ── the pool query ───────────────────────────────────────────────────────────
 
-test("the roots query carries every term of the client predicate it replaced", async () => {
+test("the pool query carries every term of the client predicate it replaced", async () => {
   const pool = makeRecordingPool();
   const db = loadDbWithMock(pool);
   await db.getCarryoverPool("ws-1", "2026-07-29", { days: 14, limit: 50 });
 
   const { text, params } = pool.log[0];
-  // roots-only, and NOT the plan's `parent_id IS NULL` -- a root's parent is its
-  // day_root, so the string form of isDayRootId is the second half of the test.
-  assert.match(text, /b\.parent_id IS NULL OR b\.parent_id LIKE 'day-root-%'/,
-    "roots-only, by the predicate that is actually true");
-  // Every mention of parent_id IS NULL must be paired with the day_root half. The
-  // plan's `AND parent_id IS NULL` on its own is the regression to guard against: it
-  // reads as "roots only" and silently hides 70% of them.
-  for (const m of text.matchAll(/parent_id IS NULL(.{0,40})/g)) {
-    assert.match(m[1], /^ OR b\.parent_id LIKE 'day-root-%'/,
-      "parent_id IS NULL must never stand alone as the root test");
-  }
   assert.match(text, /b\.type = ANY\(\$4::text\[\]\)/, "three row types, not just 'block'");
   assert.match(text, /dcc_is_task_row\(b\.type, b\.properties\)/, "one task-row predicate, not a copy");
+  assert.match(text, /COALESCE\(b\.properties->>'kind', ''\) = 'responsibility_task'/,
+    "responsibility_task is real itinerary work and must not be filtered out with the scaffolding");
   assert.match(text, /COALESCE\(b\.properties->>'type', ''\) <> ALL\(\$5::text\[\]\)/, "fixed-type skip");
   assert.match(text, /properties->>'subtaskOf' IS NOT NULL/, "start-or-nested keeps timeless subtasks");
+  assert.match(text, /properties->>'wrapId' IS NOT NULL/,
+    "the ride-along edge too: drop this and every timeless wrap step leaves the lane, " +
+    "and no other test catches it (the fixture applies no predicate, and the one " +
+    "ride-along fixture carries a start so it would survive on that term alone)");
   assert.match(text, /COALESCE\(b\.properties->>'start', ''\) <> ''/);
   assert.match(text, /b\.deleted_at IS NULL/, "tombstones are gone to this reader");
   assert.match(text, /b\.date IS NOT NULL AND b\.date < \$2/, "strictly before, never undated");
@@ -112,9 +113,46 @@ test("the roots query carries every term of the client predicate it replaced", a
   // Crucially absent: any status filter. See the header.
   assert.ok(!/status/.test(text), "a status filter here resurrects 264 finished rows");
 
+  // The binds, not just the SQL text. Asserting only that `<> ALL($5)` appears would
+  // pass with `$5` bound to [] -- and the lane would fill with 1137 meetings while
+  // every test stayed green. That is the "a source-regex test cannot guard a
+  // swallowed write" shape this repo keeps relearning.
   assert.deepEqual(params.slice(0, 3), ["ws-1", "2026-07-29", 14]);
   assert.deepEqual(params[3], ["block", "schedule_item", "added_task"]);
+  assert.deepEqual(params[4].slice().sort(), db.carryoverSkipTypes().slice().sort(),
+    "the skip list must actually be BOUND to $5, not merely named in the SQL");
   assert.equal(params[5], 50);
+});
+
+test("membership never depends on the parent: nested rows come back from the window query itself", async () => {
+  // The regression this guards is the one the review caught. Seeding from roots and
+  // walking down means a child of an untimed parent (never a root) is unreachable,
+  // and schedule-tab.js requires the opposite: "standalone work must never disappear."
+  const pool = makeRecordingPool();
+  const db = loadDbWithMock(pool);
+  await db.getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
+  const { text } = pool.log[0];
+
+  // Deliberately the STRONG form. `!/parent_id IS NULL/` would only catch the one
+  // phrasing round 1 found; a reintroduced roots filter written as
+  // `NOT EXISTS (SELECT 1 FROM blocks p WHERE p.id = b.parent_id AND ...)` or a
+  // self-join would slip straight past it. The query references no parent column and
+  // performs no join at all today, so the broad assertion costs nothing and holds.
+  assert.ok(!/parent/i.test(text),
+    "membership must not depend on the parent in ANY form: 158 past-day untimed parents " +
+    "have children, and an untimed parent is never a root, so seeding from roots loses them. " +
+    "rootsOf() on the client decides rendering.");
+  assert.ok(!/\bJOIN\b/i.test(text), "no parent lookup of any shape");
+  assert.ok(!/RECURSIVE/.test(text),
+    "no subtree walk: it could only add out-of-window rows the old day scan never saw, " +
+    "and it was also admitting undated and future-dated children");
+});
+
+test("one pool query plus one overlay read, and nothing else", async () => {
+  const pool = makeRecordingPool({ rows: [row("a"), row("b", { date: "2026-07-27" })] });
+  const db = loadDbWithMock(pool);
+  await db.getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
+  assert.equal(pool.log.length, 2, "the whole point of the phase is that this is not a per-day scan");
 });
 
 test("days:null lifts the window; a number applies the floor", async () => {
@@ -129,42 +167,45 @@ test("days:null lifts the window; a number applies the floor", async () => {
   assert.equal(bounded.log[0].params[2], 14, "the default window is 14 days");
 });
 
-// ── descendants ──────────────────────────────────────────────────────────────
-
-test("descendants are re-filtered through the SAME predicate, so a meeting child cannot ride in", async () => {
-  const pool = makeRecordingPool({
-    roots: [row("parent")],
-    subtree: [row("parent"), row("kid"), row("mtgkid", { properties: { type: "meeting", start: "10:00" } })]
-  });
-  const db = loadDbWithMock(pool);
-  await db.getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
-
-  const kidQ = pool.log.find((q) => /b\.id = ANY\(\$2::text\[\]\)/.test(q.text));
-  assert.ok(kidQ, "descendants must be re-selected, not taken raw from the walk");
-  // getSubtree deliberately returns whole subtrees unfiltered. Filtering only the
-  // roots would let a meeting-type or startless child into a lane that never showed
-  // one, which the old per-block client scan did filter.
-  assert.match(kidQ.text, /dcc_is_task_row\(b\.type, b\.properties\)/);
-  assert.match(kidQ.text, /COALESCE\(b\.properties->>'type', ''\) <> ALL\(\$4::text\[\]\)/);
-  assert.match(kidQ.text, /COALESCE\(b\.properties->>'start', ''\) <> ''/);
-  assert.deepEqual(kidQ.params[1], ["kid", "mtgkid"], "the root itself is not re-fetched as its own child");
-});
-
-test("no roots means no subtree query and no overlay query", async () => {
-  const pool = makeRecordingPool({ roots: [] });
+test("an empty pool means no overlay query at all", async () => {
+  const pool = makeRecordingPool({ rows: [] });
   const db = loadDbWithMock(pool);
   const out = await db.getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
   assert.equal(pool.log.length, 1, "one query, then stop");
-  assert.deepEqual(out, { rows: [], overlays: {}, scanned: 0 });
+  assert.deepEqual(out, { rows: [], overlays: {}, dayRoots: [], scanned: 0 });
+});
+
+// ── what actually comes back ─────────────────────────────────────────────────
+
+test("rows are returned parsed, in query order, with scanned counting the dates that yielded them", async () => {
+  const pool = makeRecordingPool({
+    rows: [
+      row("a"),
+      row("kid", { parent_id: "a", properties: { title: "kid", type: "task", subtaskOf: "a" } }),
+      row("b", { date: "2026-07-27" })
+    ]
+  });
+  const db = loadDbWithMock(pool);
+  const out = await db.getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
+
+  assert.deepEqual(out.rows.map((r) => r.id), ["a", "kid", "b"], "pool order is the query's order");
+  assert.equal(out.rows[1].properties.subtaskOf, "a", "properties come back parsed, not as a string");
+  assert.equal(out.scanned, 2, "two distinct dates yielded rows");
+});
+
+test("a JSON string properties column is parsed on the way out", async () => {
+  const raw = row("a");
+  raw.properties = JSON.stringify(raw.properties);
+  const out = await loadDbWithMock(makeRecordingPool({ rows: [raw] }))
+    .getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
+  assert.equal(out.rows[0].properties.title, "a");
 });
 
 // ── overlays ─────────────────────────────────────────────────────────────────
 
 test("overlays come back keyed by date STRING, and carry done + locked", async () => {
   const pool = makeRecordingPool({
-    roots: [row("a")],
-    subtree: [row("a")],
-    kids: [],
+    rows: [row("a")],
     // pg hands back a Date for a `date` column. Keying the map on it directly
     // stringifies to "Tue Jul 28 2026 ..." and no caller can ever look it up.
     dayRoots: [{
@@ -184,7 +225,7 @@ test("overlays come back keyed by date STRING, and carry done + locked", async (
 
 test("_lockedTasks is accepted as an object map as well as an array", async () => {
   const pool = makeRecordingPool({
-    roots: [row("a")], subtree: [row("a")], kids: [],
+    rows: [row("a")],
     dayRoots: [{ date: "2026-07-28", properties: { _lockedTasks: { a: true, b: true } } }]
   });
   const out = await loadDbWithMock(pool).getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
@@ -193,13 +234,10 @@ test("_lockedTasks is accepted as an object map as well as an array", async () =
 });
 
 test("the overlay read is workspace-scoped and one query for every date in play", async () => {
-  const pool = makeRecordingPool({
-    roots: [row("a"), row("b", { date: "2026-07-27" })],
-    subtree: [row("a"), row("b", { date: "2026-07-27" })], kids: []
-  });
+  const pool = makeRecordingPool({ rows: [row("a"), row("b", { date: "2026-07-27" })] });
   await loadDbWithMock(pool).getCarryoverPool("ws-1", "2026-07-29", { days: 14 });
   const ovQ = pool.log.filter((q) => /type = 'day_root'/.test(q.text));
   assert.equal(ovQ.length, 1, "one overlay read, not one per day like the client scan did");
   assert.match(ovQ[0].text, /workspace_id IS NOT DISTINCT FROM \$1/);
-  assert.deepEqual(ovQ[0].params[1].sort(), ["2026-07-27", "2026-07-28"]);
+  assert.deepEqual(ovQ[0].params[1].slice().sort(), ["2026-07-27", "2026-07-28"]);
 });

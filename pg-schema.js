@@ -778,10 +778,13 @@ const POST_SCHEMA_STATEMENTS = [
       ON blocks ((properties->>'local_id'));
   `],
 
-  // Serves the open-task carryover query (db.getOpenTasksBefore). COALESCE to
-  // 'open' because most existing rows carry no status at all; the non-'open'
-  // statuses in the wild (scheduled/proposed/draft/ready/active/ingested/queued)
-  // all belong to proposals and meeting artifacts, which must stay out.
+  // ORPHANED as of C2, kept only so dropping it is a deliberate act rather than a
+  // side effect. It was built for db.getOpenTasksBefore, which C2 deleted: that
+  // predicate assumed `status='open'` meant not-done, and it does not -- itinerary
+  // completion writes the day_root `_done` overlay, so 264 finished rows read open on
+  // a prod restore. Its replacement (db.getCarryoverPool) matches three row types and
+  // carries no status term at all, so this partial index cannot serve it and nothing
+  // else references it. Retiring it belongs with the rest of the scaffolding in A4.
   ["idx_blocks_open", `
     CREATE INDEX IF NOT EXISTS idx_blocks_open
       ON blocks (workspace_id, date DESC)

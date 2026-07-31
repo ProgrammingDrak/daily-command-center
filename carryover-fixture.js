@@ -45,7 +45,11 @@ function payloadFrom(daysByDate, { before, days } = {}) {
       rows.push(Object.assign({}, b, { date: b.date || date }));
     }
   }
-  return { rows, overlays, scanned: dates.length };
+  // `scanned` counts the dates that actually YIELDED rows, matching what
+  // getCarryoverPool computes (its `dates` comes from the returned pool, so a day
+  // whose only rows were filtered out contributes nothing). Counting date keys here
+  // instead would pin client tests to a number production never produces.
+  return { rows, overlays, scanned: new Set(rows.map((r) => r.date)).size };
 }
 
 // The DCC.api stub the collector calls. Parses the same query string the real

@@ -141,6 +141,13 @@
       return Object.assign({}, DEFAULTS, TYPES[k]).earnsOwnPoints === false;
     });
   }
+  // The fixed-time set as a list, for callers that need to hand it to something that
+  // cannot call isFixed per item -- a SQL `<> ALL($n)` bind, for one. Lives here beside
+  // its siblings so the next such caller finds an accessor instead of reaching into
+  // TYPES directly, which is the drift this registry exists to prevent.
+  function fixedTypes() {
+    return Object.keys(TYPES).filter(isFixed);
+  }
   // The unconditional tier: no tag tier or point_multiplier can make these earn.
   function hardZeroTypes() {
     return Object.keys(TYPES).filter(function (k) {
@@ -148,5 +155,5 @@
     });
   }
 
-  return { TYPES: TYPES, DEFAULTS: DEFAULTS, get: get, rule: rule, isRollup: isRollup, isFixed: isFixed, pointEligible: pointEligible, nonEarningTypes: nonEarningTypes, hardZeroTypes: hardZeroTypes };
+  return { TYPES: TYPES, DEFAULTS: DEFAULTS, get: get, rule: rule, isRollup: isRollup, isFixed: isFixed, pointEligible: pointEligible, nonEarningTypes: nonEarningTypes, hardZeroTypes: hardZeroTypes, fixedTypes: fixedTypes };
 });

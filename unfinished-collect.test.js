@@ -239,11 +239,37 @@ test("newest origin day first", async () => {
 
 test("no archive, or no TaskModel, degrades to an empty lane", async () => {
   const empty = await load({}, []).CO.collect();
-  assert.deepEqual(plain(empty), { rows: [], total: 0, scanned: 0 });
+  assert.deepEqual(plain(empty), { rows: [], total: 0, scanned: 0, truncated: false });
   const d = ymd(1);
   const noModel = load({ [d]: [dayRoot(), blk("t", d, {})] }, [d]);
   noModel.ctx.window.DCC.TaskModel = null;
-  assert.deepEqual(plain(await noModel.CO.collect()), { rows: [], total: 0, scanned: 0 });
+  assert.deepEqual(plain(await noModel.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false });
+});
+
+// C2 replaced "the store is missing" with "the fetch failed" as the degradation path,
+// and DCC.api throws on any non-2xx — so this is the live branch for a 500, an auth
+// redirect, or the route's own 400. The two cases above both return BEFORE the fetch,
+// so neither of them reaches it.
+test("a failed fetch degrades to an empty lane, never a stale one", async () => {
+  const d = ymd(1);
+  const boom = load({ [d]: [dayRoot(), blk("t", d, {})] }, [d]);
+  assert.equal((await boom.CO.collect()).rows.length, 1, "control: the fixture does produce a row");
+  boom.ctx.window.DCC.api = async () => { throw new Error("Request failed"); };
+  assert.deepEqual(plain(await boom.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false });
+});
+
+// `scanned` renders in the modal footer and changed source in C2 (the client counted
+// the days it walked; the server counts the dates its rows came from). Both sides now
+// count dates that YIELDED rows, so pin a nonzero case — every other assertion on it
+// is 0, which the two definitions agree on by accident.
+test("scanned counts the origin days the pool actually came from", async () => {
+  const d1 = ymd(1), d2 = ymd(2), d3 = ymd(3);
+  const { CO } = load({
+    [d1]: [dayRoot(), blk("a", d1, {})],
+    [d2]: [dayRoot()],                      // a day with no task rows contributes nothing
+    [d3]: [dayRoot(), blk("b", d3, {})]
+  }, [d1, d2, d3]);
+  assert.equal((await CO.collect()).scanned, 2);
 });
 
 // ────────────────────── the row wiring (source contracts) ──────────────────────
@@ -326,12 +352,37 @@ test("the Unscheduled badge no longer sums two different things", () => {
   assert.ok(/section\("Unfinished",roots\.length,null,"uns-group"\)/.test(schedTabSource));
 });
 
-// The window boundary, not just "somewhere between 4 and 39 days". The bounded
-// lookback is the fix for the clog, and the previous test probed day 3 vs day 40, so
-// changing SCAN_DAYS to 30 or flipping `d >= floor` to `d > floor` left it green while
-// the lane silently re-clogged. The collector's rule is
-// floor = today - SCAN_DAYS, kept with `d >= floor`, so day 14 is IN and day 15 is OUT.
-test("the SCAN_DAYS window includes day 14 and excludes day 15", async () => {
+test("the unbounded sweep asks for the route's full headroom, and carries truncation through", async () => {
+  const d = ymd(1);
+  const { CO, ctx, asked } = load({ [d]: [dayRoot(), blk("a", d, {})] }, [d]);
+
+  await CO.collect();
+  assert.ok(!/limit=/.test(asked[0]), "the default window rides the route's default limit");
+  await CO.collect({ days: null });
+  assert.match(asked[1], /[?&]limit=2000(&|$)/,
+    "the limit applies to the RAW pool before the done filter, so the default 500 would " +
+    'quietly turn "every archived day" into roughly the newest month');
+
+  // `truncated` is the server saying "your total is a floor". It has to survive the
+  // collector or the modal renders an exact count that is silently short.
+  const base = ctx.window.DCC.api;
+  ctx.window.DCC.api = async (u) => Object.assign(await base(u), { truncated: true });
+  assert.equal((await CO.collect({ days: null })).truncated, true);
+  ctx.window.DCC.api = base;
+  assert.equal((await CO.collect({ days: null })).truncated, false);
+});
+
+// C2 MOVED THIS BOUNDARY. It used to be the collector's own `floor = today - SCAN_DAYS`
+// with `d >= floor`, and these two tests were its guard. The collector now sends
+// `days=N` and the floor is SQL (`b.date >= ($2::date - ($3::int * INTERVAL '1 day'))`),
+// so what these two exercise is carryover-fixture.js's window, which is test code --
+// exactly the "both sides re-implement it and both can be wrong" trap the fixture's
+// own header refuses. They are kept because the day-14/day-15 boundary is still worth
+// stating, but the REAL guards are elsewhere and are what would actually fail:
+//   - that the client asks for the right window: the URL asserts below
+//   - that the SQL enforces it: open-tasks-query.test.js, `$3::int IS NULL OR b.date >=`
+// Do not add a third boundary case here expecting it to guard the query.
+test("the SCAN_DAYS window includes day 14 and excludes day 15 (fixture-level)", async () => {
   const inWin = ymd(14), outWin = ymd(15);
   const { CO } = load({
     [inWin]: [dayRoot(), blk("in", inWin, {})],
@@ -381,7 +432,7 @@ test("_unfProgress counts done children, nested descendants, and survives a cycl
 // and landed the child as an orphan, which is the standalone-subtask bug this phase
 // removes. The full pool still reaches renderRows so subtree actions carry descendants.
 test("the Catch up modal lists ROOTS, and every surface shares one predicate", () => {
-  assert.ok(/renderRows\(overlay, rootsOf\(result\.rows\), result\.total, result\.rows\)/.test(unfSource),
+  assert.ok(/renderRows\(overlay, rootsOf\(result\.rows\), result\.total, result\.rows, result\.truncated\)/.test(unfSource),
     "the modal must render roots, with the full pool passed through for subtree actions");
   assert.ok(!/renderRows\(overlay, result\.rows\.filter/.test(unfSource),
     "the flat open-rows list must be gone");

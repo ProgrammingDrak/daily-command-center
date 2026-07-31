@@ -454,6 +454,11 @@ module.exports = function mount(app, ctx) {
   // the caller, deliberately — see db.getCarryoverPool. `days=all` lifts the window
   // for the modal's "Show older" sweep.
   //
+  // The path is `/api/tasks/*` rather than `/api/blocks/*` because it is the first
+  // member of the canonical TASK surface this project is migrating toward, where the
+  // rest of this file is the raw BLOCK surface. Said out loud here so the next
+  // endpoint knows the namespace is deliberate and not a one-off.
+  //
   // Track C's hunk in Track A's file (Coordination log, 2026-07-31). Distinct from
   // A2's undelete / GET /:id / task-group work and A3's create paths.
   app.get("/api/tasks/open", route(async (req, res) => {
@@ -463,11 +468,36 @@ module.exports = function mount(app, ctx) {
     const days = rawDays === "all" ? null : Math.min(3650, Math.max(1, parseInt(rawDays, 10) || 14));
     const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit, 10) || 500));
     const result = await blockDB.getCarryoverPool(req.workspaceId, before, { days, limit });
-    // Same legacy-gcal filter the range read applies, because that read is the one
-    // this endpoint is replacing — without it a legacy row that never rendered in the
-    // lane would start appearing, which is a visible change on a phase that must
-    // produce none.
-    return { ...result, rows: filterLegacyGcalBlocks(result.rows) };
+    const rows = filterLegacyGcalBlocks(result.rows);
+    // BOTH wrappers the sibling reads use, not just the filter. The legacy-gcal filter
+    // keeps a legacy row that never rendered in the lane from appearing now. The timing
+    // reconcile matters for a subtler reason: the collector this replaces called
+    // loadDateRange across the whole lookback on every list build, and /api/blocks/range
+    // is wrapped in reconcileTiming, so that sweep was what settled orphaned hourglass
+    // timers on past days. Drop it and nothing settles them until Day Review is opened
+    // for each day individually. Bounded at 25 rows per read, and idempotent.
+    //
+    // The SCRATCH ARRAY is not a style choice, it is the contract. reconcileTiming
+    // rebuilds its completion map from the day_root rows inside the array it is given,
+    // and this pool has none (it selects three task types) -- hand it `rows` alone and
+    // every overlay-completed row reads as NOT done, so instead of settling timers it
+    // calls clearTiming on legitimately derived ones and deletes the time_entry Day
+    // Review reads. Strictly worse than omitting the wrapper. It also PUSHES any
+    // time_entry it mints into that array, which must not surface as a phantom lane row
+    // now that the client no longer filters by type. Both problems end at the scratch.
+    await withReconciledTiming(rows.concat(result.dayRoots || []), req);
+    // reconcileTiming mutates block.properties in place, so `rows` already carries any
+    // settlement. dayRoots is internal plumbing and never goes over the wire.
+    return {
+      rows,
+      overlays: result.overlays,
+      scanned: result.scanned,
+      // The LIMIT lands on the RAW pool, before the caller applies its done filter, and
+      // it drops the OLDEST rows. Say so rather than let the caller render an exact
+      // count it cannot trust -- "Show older" is the one surface whose whole purpose is
+      // reaching old work, so under-reporting there is the worst place to be silent.
+      truncated: result.rows.length >= limit
+    };
   }));
 
   // A tombstone is GONE to a reader. This is the READ contract that makes the delete
