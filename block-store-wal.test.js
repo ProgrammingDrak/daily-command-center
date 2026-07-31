@@ -302,11 +302,18 @@ test("cancelBufferedWrite refuses to cancel a write that already replayed", asyn
 test("a dead-lettered undelete re-tombstones the row, so the client stops showing it as back", async () => {
   // The client has already told the user "Task restored" on the strength of a retry that is
   // now being abandoned. Without this the task silently vanishes on the next load instead.
-  const { store, storage } = makeStore({ fetchStatus: 409 });
+  // 409 the undelete ONLY. A blanket status fails the follow-up GET too, which makes the
+  // absence assertion below pass no matter what the code did -- the same way the sibling
+  // test above was vacuous before it was fixed.
+  const { store, storage } = makeStore({
+    fetchStatus: (url) => (String(url).endsWith("/undelete") ? 409 : 200),
+    fetchBody: { id: "b1", type: "task", properties: {}, deleted_at: null },
+  });
   seedWal(storage, [{ op: "undelete", id: "b1", _walId: "w1", timestamp: minsAgo(1) }]);
   await store.replayWAL();
   assert.equal(dead(storage).length, 1, "the entry is abandoned");
   // Now a foreign broadcast must NOT re-cache b1 as live: the server still has it deleted.
+  // That GET WOULD succeed and cache the row if the dead-letter path had not re-tombstoned it.
   await store.handleBlocksChanged({ clientId: "someone-else", blockIds: ["b1"] });
   assert.equal(store.get("b1"), null, "the row is back under its tombstone");
 });
