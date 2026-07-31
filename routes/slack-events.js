@@ -4,7 +4,7 @@
 // lifecycle + duration tracking:
 //   🔖 :bookmark:                → create the task (exists instantly; the Mac
 //                                   poller enriches title + Slack permalink ≤5m later)
-//   ⏳ :hourglass_flowing_sand:  → stamp startedAt (the EXACT reaction time)
+//   ⌛ :hourglass:               → stamp startedAt (the EXACT reaction time)
 //   ✅ :white_check_mark:        → complete + actualMinutes + points + a time_entry
 //                                   segment so Day Review's planned-vs-actual lights up
 //
@@ -42,9 +42,9 @@ module.exports = function mount(app, ctx) {
   const TZ = APP_TIME_ZONE || "America/New_York";
   const SLACK_HOST = process.env.SLACK_WORKSPACE_HOST || "cleverrealestate.slack.com";
 
-  const NO_HOURGLASS_MIN = 5;         // 🔖 → ✅ with no ⏳ ⇒ assume 5 minutes
+  const NO_HOURGLASS_MIN = 5;         // 🔖 → ✅ with no ⌛ ⇒ assume 5 minutes
   const R_BOOKMARK = "bookmark";
-  const R_START = "hourglass_flowing_sand";
+  const R_START = "hourglass";
   const R_DONE = "white_check_mark";
 
   // Deterministic per-message key, identical to the poller's (slack-bookmark-to-dcc.py).
@@ -89,13 +89,13 @@ module.exports = function mount(app, ctx) {
     );
     return rows[0] || null;
   }
-  // Lifecycle handlers (⏳ / un-⏳ / ✅ / un-✅) act on live rows only: a
+  // Lifecycle handlers (⌛ / un-⌛ / ✅ / un-✅) act on live rows only: a
   // tombstoned task is one the user cancelled, and reactions on it are noise.
   async function findLiveTaskByKey(idemKey) {
     const t = await findTaskByKey(idemKey);
     return t && !t.deleted_at ? t : null;
   }
-  // Absorb the create-race: 🔖 and ⏳/✅ fired back-to-back can arrive out of order.
+  // Absorb the create-race: 🔖 and ⌛/✅ fired back-to-back can arrive out of order.
   async function findTaskWithRetry(idemKey, tries = 3) {
     for (let i = 0; i < tries; i++) {
       const t = await findLiveTaskByKey(idemKey);
@@ -184,7 +184,7 @@ module.exports = function mount(app, ctx) {
   const creditKeyFor = (task) => `${task.date}:${task.id}`;
 
   // actualMinutes + the ⏱ note + the Day Review time_entry live in lib/task-timing.js
-  // (extracted from handleDone, E1) so the itinerary read path can close a ⏳ timer
+  // (extracted from handleDone, E1) so the itinerary read path can close a ⌛ timer
   // that some OTHER surface completed. See that module's header.
   const { finalizeTiming, clearTiming } = createTaskTiming({ pool, blockDB, timeZone: TZ });
 
@@ -223,9 +223,9 @@ module.exports = function mount(app, ctx) {
   // ── 🔖 removed → cancel an un-started task (a clean undo for a mis-bookmark) ─
   //
   // The keep-guard is wide on purpose. It used to be `startedAt || completedAt`,
-  // but clearStart DELETES startedAt, so `🔖 → ⏳ → un-⏳ → un-🔖` slipped through
+  // but clearStart DELETES startedAt, so `🔖 → ⌛ → un-⌛ → un-🔖` slipped through
   // and soft-deleted a task that had already been worked on. `everStarted` is the
-  // sticky version of startedAt that un-⏳ never clears; the done checks cover
+  // sticky version of startedAt that un-⌛ never clears; the done checks cover
   // completion from any surface, including the browser's `_done` overlay.
   //
   // Un-🔖 keeps its meaning — a clean undo for a mis-bookmark — it just stops
@@ -242,18 +242,18 @@ module.exports = function mount(app, ctx) {
     broadcast("blocks-changed", { action: "slack-bookmark-cancel", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
   }
 
-  // ── ⏳ start ────────────────────────────────────────────────────────────
+  // ── ⌛ start ────────────────────────────────────────────────────────────
   async function handleStart(channel, ts, eventMs) {
     const task = await findTaskWithRetry(keyFor(channel, ts));
-    if (!task) { console.warn(`[slack-events] ⏳ with no task for ${channel}:${ts} — ignored`); return; }
+    if (!task) { console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`); return; }
     const props = task.properties || {};
-    if (props.startedAt || props.completedAt) return;   // first ⏳ wins; never restart a done task
+    if (props.startedAt || props.completedAt) return;   // first ⌛ wins; never restart a done task
     // everStarted is deliberately never cleared — see handleBookmarkRemoved.
     await blockDB.updateBlock(task.id, { properties: { ...props, startedAt: new Date(eventMs).toISOString(), everStarted: true } });
     broadcast("blocks-changed", { action: "slack-start", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
   }
 
-  // ── ⏳ removed → clear a not-yet-completed start ──────────────────────────
+  // ── ⌛ removed → clear a not-yet-completed start ──────────────────────────
   async function clearStart(channel, ts) {
     const task = await findLiveTaskByKey(keyFor(channel, ts));
     if (!task) return;
@@ -276,7 +276,7 @@ module.exports = function mount(app, ctx) {
 
     // One write: the completion stamps ride along with the timing fields, exactly
     // as they did before the extraction. fallbackMinutes is the Slack-only
-    // "🔖→✅ with no ⏳ ⇒ assume 5 minutes" rule; no other caller passes it.
+    // "🔖→✅ with no ⌛ ⇒ assume 5 minutes" rule; no other caller passes it.
     const timing = await finalizeTiming({
       block: task, endMs: eventMs, fallbackMinutes: NO_HOURGLASS_MIN, title,
       userId: OWNER_USER_ID, workspaceId: OWNER_WORKSPACE_ID,
@@ -342,7 +342,7 @@ module.exports = function mount(app, ctx) {
     // Reopen + un-time in one write. clearTiming strips only the ⏱ line it wrote
     // and hard-deletes the timer segment, so Day Review loses the phantom block.
     // `startedAt` / `everStarted` deliberately survive: the work DID start, and a
-    // later re-✅ should measure from the original ⏳, not from zero.
+    // later re-✅ should measure from the original ⌛, not from zero.
     await clearTiming({
       block: task,
       mergeProps: { status: "open" },
