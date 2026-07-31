@@ -204,6 +204,57 @@ test("replayWAL keeps a batch buffered on a 503, so the fix does not over-drop",
   assert.equal(dead(storage).length, 0);
 });
 
+test("undeleteBlock posts to /undelete, clears the WAL on ack, and re-caches the row", async () => {
+  const { store, storage, fetchCalls } = makeStore({ fetchBody: { id: "b1", type: "task", properties: {}, deleted_at: null } });
+  const block = await store.undeleteBlock("b1");
+  assert.match(fetchCalls[0].url, /\/api\/blocks\/b1\/undelete$/);
+  assert.equal(block.id, "b1");
+  assert.equal(store.get("b1").id, "b1", "the revived row is cached again");
+  assert.equal(wal(storage).length, 0, "acked, so nothing stays buffered");
+});
+
+test("a lost undelete ack stays buffered, so a restore is not silently lost", async () => {
+  // Without this the overlay un-hides the task optimistically while the server still has
+  // deleted_at set, and the next reload makes the task vanish again -- the same
+  // vanish-after-reload class B1 and the rest of B2 exist to close.
+  const { store, storage } = makeStore({ fetchReject: true });
+  const result = await store.undeleteBlock("b1");
+  assert.equal(result, null, "the caller is told it did not land");
+  assert.equal(wal(storage).length, 1, "and it is buffered for replay");
+  assert.equal(wal(storage)[0].op, "undelete");
+  assert.equal(wal(storage)[0].id, "b1");
+});
+
+test("replayWAL replays a buffered undelete, and dead-letters it on a 404", async () => {
+  // Replay is safe because undeleteBlock just clears deleted_at. A 404 means the row is
+  // gone for real (hard-deleted, or past the 30-day purgeSoftDeleted sweep), so there is
+  // nothing left to revive and retrying can only fail again.
+  const ok = makeStore();
+  seedWal(ok.storage, [{ op: "undelete", id: "b1", _walId: "w1", timestamp: minsAgo(1) }]);
+  await ok.store.replayWAL();
+  assert.match(ok.fetchCalls[0].url, /\/api\/blocks\/b1\/undelete$/);
+  assert.equal(wal(ok.storage).length, 0, "a successful replay clears the entry");
+
+  const gone = makeStore({ fetchStatus: 404 });
+  seedWal(gone.storage, [{ op: "undelete", id: "b1", _walId: "w1", timestamp: minsAgo(1) }]);
+  await gone.store.replayWAL();
+  assert.equal(wal(gone.storage).length, 0, "a 404 undelete must not retry forever");
+  assert.equal(dead(gone.storage).length, 1, "it dead-letters instead");
+});
+
+test("undeleteBlock clears the local tombstone, or the row stays invisible", async () => {
+  // deleteBlock adds to _tombstones and handleBlocksChanged SKIPS a tombstoned id. Without
+  // clearing it here, the tab that performed the restore keeps hiding the row until a
+  // reload -- and it sees no broadcast of its own, so A2's undeletedIds cannot help it.
+  const { store } = makeStore({ fetchBody: { id: "b1", type: "task", properties: {}, deleted_at: null } });
+  await store.deleteBlock("b1");
+  await store.undeleteBlock("b1");
+  // Prove it through the observable path rather than by reaching into the closure: a
+  // foreign broadcast naming b1 must now re-fetch and re-cache it.
+  await store.handleBlocksChanged({ clientId: "someone-else", blockIds: ["b1"] });
+  assert.equal(store.get("b1") && store.get("b1").id, "b1", "the id is no longer suppressed");
+});
+
 test("rescheduleBlock drops the WAL entry and stamps e.permanent on a 400", async () => {
   const { store, storage } = makeStore({ fetchStatus: 400 });
   await assert.rejects(

@@ -242,7 +242,10 @@
     // is always buffered. The loop below is the only consulter — and a `false` verdict
     // there means the entry is re-queued forever behind a permanent "N edits pending"
     // banner, because nothing else caps a batch's attempts.
-    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch") && err.status === 404) return true;
+    // "undelete" too: A2's route 404s when the row is gone for real (hard-deleted, or
+    // purged by the 30-day purgeSoftDeleted sweep). There is nothing left to revive, so
+    // retrying can only fail again.
+    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete") && err.status === 404) return true;
     return false;
   }
 
@@ -293,6 +296,9 @@
             break;
           case "batch":
             await apiPost("/api/blocks/batch", entry.data);
+            break;
+          case "undelete":
+            await apiPost("/api/blocks/" + entry.id + "/undelete", {});
             break;
           case "reschedule":
             await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
@@ -441,6 +447,35 @@
       } catch (e) {
         setError("Delete failed — buffered for retry");
         cacheDelete(id);
+      }
+    },
+
+    // Revive a soft-deleted row, keeping its ORIGINAL id (A2's POST /:id/undelete).
+    // This is what makes Undo durable: the old undo re-created the rows as NEW ids from
+    // a client-side snapshot, so it could not survive a reload — the snapshot lived in
+    // memory — and it left the tombstones behind.
+    //
+    // WAL-buffered like every other mutation here, and that is not ceremony: without it
+    // a lost ack leaves the task visible (the overlay un-hid it optimistically) while
+    // the server still has deleted_at set, so the next reload loses it again. That is
+    // the same resurrection-vs-vanish class B1 and the rest of B2 exist to close.
+    // Replay is safe because undeleteBlock just clears deleted_at — idempotent.
+    async undeleteBlock(id) {
+      setSaving();
+      // Clear the local tombstone up front, or handleBlocksChanged will skip the very
+      // id we are restoring. A2 broadcasts undeletedIds so OTHER tabs can do this; this
+      // is the same fix for the tab that initiated it, which sees no broadcast of its own.
+      _tombstones.delete(id);
+      const walId = walPush({ op: "undelete", id });
+      try {
+        const block = await apiPost("/api/blocks/" + id + "/undelete", {});
+        if (block && block.id) cacheSet(block);
+        walRemove(walId);
+        setSaved();
+        return block;
+      } catch (e) {
+        setError("Restore failed — buffered for retry");
+        return null;
       }
     },
 
