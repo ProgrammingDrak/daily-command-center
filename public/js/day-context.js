@@ -296,8 +296,9 @@
     });
     _wrapWrite(bs, "deleteBlock", (a) => _dateOfBlock(bs, a[0]));
     // batchOp mutates an arbitrary set of blocks/dates server-side with no cheap
-    // way to know which, so clear all. Dormant today (no callers) but wrapped so
-    // a future caller can't silently leave the cache stale.
+    // way to know which, so clear all. NOT dormant, whatever this comment used to
+    // say: state.js deleteTaskWithUndo and unfinished-tasks.js drop() both route
+    // through it, and the undeleteBlock wrap below depends on that being true.
     _wrapWrite(bs, "batchOp", () => null);
     // Clear-all rather than a resolved date, same reasoning as batchOp: the row being
     // revived is NOT in blockStore's cache to read a date off (the delete that preceded

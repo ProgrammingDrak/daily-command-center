@@ -1438,12 +1438,20 @@ async function undoDeleteTask(id){
   // MUST be cancelled -- otherwise the next replay (boot, `online`, visibilitychange, SSE
   // reconnect) deletes the row the user just restored, silently. Reachable inside the 8s
   // toast: delete while offline, reconnect, click Undo.
+  // ...and `buffered` is only a SNAPSHOT of the moment the batch failed. replayWAL fires
+  // on the `online` event with no delay, so in the up-to-8s gap before the user clicks Undo
+  // the queued delete can land after all. So trust the cancel's return value, not the flag:
+  // true means it really was still pending and is now dropped (nothing was ever deleted, so
+  // there is nothing to revive), false means it already replayed and we must undo for real.
   if(deleteResult&&deleteResult.buffered){
-    if(window.blockStore&&window.blockStore.cancelBufferedWrite){
-      window.blockStore.cancelBufferedWrite(deleteResult.walId,snap.blockIds||[]);
+    const cancelled=!!(window.blockStore&&window.blockStore.cancelBufferedWrite
+      &&window.blockStore.cancelBufferedWrite(deleteResult.walId,snap.blockIds||[]));
+    if(cancelled){
+      if(typeof showToast==="function")showToast("Task restored","success",2200);
+      return;
     }
-    if(typeof showToast==="function")showToast("Task restored","success",2200);
-    return;
+    // Fall through to the real undelete. Safe on a row that was never deleted:
+    // db.undeleteBlock just clears a deleted_at that is already NULL.
   }
   if(snap.blockIds&&snap.blockIds.length&&window.blockStore&&window.blockStore.undeleteBlock){
     // Per row, because /undelete is single-id. Sequential rather than Promise.all: these

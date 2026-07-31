@@ -70,7 +70,10 @@ function ev(id, extra = {}) {
 // blocks, entry left in the WAL -- which is the case Undo has to detect and cancel.
 // `rejectUndelete` makes /undelete refuse permanently (a live twin holds the row's
 // idempotency key, or the row is past the purge).
-function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = false, failDelete = false, rejectUndelete = false }) {
+// `bufferUndelete` is the OTHER half of undeleteBlock's {ok, permanent} split: not-yet
+// rather than never. `cancelFails` makes cancelBufferedWrite report that the queued delete
+// already replayed, which is what happens when reconnecting fires replayWAL before the click.
+function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = false, failDelete = false, rejectUndelete = false, bufferUndelete = false, cancelFails = false }) {
   const batches = [];
   const undeletes = [];
   const cancelled = [];
@@ -127,9 +130,12 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = fals
         undeleteBlock: async (id) => {
           undeletes.push(id);
           if (rejectUndelete) return { ok: false, permanent: true };
+          // Not-yet, not never: the WAL still holds it and will replay.
+          if (bufferUndelete) return { ok: false, permanent: false };
           return { ok: true, block: { id, deleted_at: null } };
         },
-        cancelBufferedWrite: (walId, ids) => { cancelled.push({ walId, ids }); }
+        // Mirrors the real signature: TRUE only when a still-pending entry was cancelled.
+        cancelBufferedWrite: (walId, ids) => { cancelled.push({ walId, ids }); return !cancelFails; }
       }
     }
   };
@@ -350,6 +356,35 @@ test("undo CANCELS a delete that never landed, instead of reviving a row that wa
   // it on prototype identity alone.
   assert.deepStrictEqual(plain(day.cancelled), [{ walId: "wal-del", ids: ["B1"] }], "the queued delete is abandoned, not left to replay");
   assert.strictEqual(day.deletedSet.size, 0, "and the task is un-hidden");
+});
+
+test("if the buffered delete already replayed, undo stops trusting the flag and undeletes for real", async () => {
+  // `buffered` is a snapshot from when the batch failed; replayWAL fires on `online` with no
+  // delay, so the delete can land in the gap before the click. cancelBufferedWrite reporting
+  // false is the only way to know, and skipping the undelete on a stale flag would leave the
+  // row deleted server-side while the UI claims it is back.
+  const day = makeDay({
+    scheduled: [ev("t1")],
+    rows: { t1: row("B1", "t1") },
+    failDelete: true,
+    cancelFails: true
+  });
+  await day.context.deleteTaskWithUndo("t1");
+  await day.context.undoDeleteTask("t1");
+  assert.deepStrictEqual(day.undeletes, ["B1"], "it falls through and revives the row for real");
+  assert.strictEqual(day.deletedSet.size, 0);
+});
+
+test("a BUFFERED undelete keeps the restore, because the WAL will replay it", async () => {
+  // Only a PERMANENT rejection may re-hide. Treating a retryable failure the same way would
+  // persist a hide through saveDeletedState while the WAL goes on to succeed, leaving the row
+  // live server-side and invisible locally across reloads -- this phase's bug, inverted.
+  const day = makeDay({ scheduled: [ev("t1")], rows: { t1: row("B1", "t1") }, bufferUndelete: true });
+  await day.context.deleteTaskWithUndo("t1");
+  await day.context.undoDeleteTask("t1");
+  assert.strictEqual(day.deletedSet.size, 0, "a retryable failure must NOT re-hide");
+  const last = day.toasts[day.toasts.length - 1];
+  assert.match(last.msg, /Task restored/, "only a permanent rejection is allowed to say otherwise");
 });
 
 test("a permanently rejected undelete re-hides the task instead of claiming it came back", async () => {

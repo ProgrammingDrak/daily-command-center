@@ -238,7 +238,7 @@
     //
     // Note the asymmetry with the first attempt, which is deliberate and is why this
     // is the only place the fix belongs: blockStore.batchOp swallows its own failure
-    // and returns { blocks: [] } without ever consulting this function, so a 404 there
+    // and returns { blocks: [], buffered: true } without ever consulting this function, so a 404 there
     // is always buffered. The loop below is the only consulter — and a `false` verdict
     // there means the entry is re-queued forever behind a permanent "N edits pending"
     // banner, because nothing else caps a batch's attempts.
@@ -316,6 +316,19 @@
       } catch (e) {
         if (isPermanentReplayFailure(entry, e)) {
           walMoveToDeadLetter(entry, `${e.status || "error"} ${e.message || ""}`.trim());
+          // `undelete` is the first op where dropping the entry leaves the CLIENT ahead of
+          // the server rather than in step with it. For every other op a permanent failure
+          // means the write never happened and the UI never claimed it did; here the UI
+          // already un-hid the task optimistically and told the user "Task restored", on the
+          // strength of a retry that has now been abandoned. Reachable: the undelete fails
+          // transiently (so undoDeleteTask keeps the optimistic restore), then the replay
+          // gets a 409 because a live row holds the key. Put the row back where the server
+          // has it, and say so, rather than letting the task silently vanish on next load.
+          if (entry.op === "undelete" && entry.id) {
+            _tombstones.add(entry.id);
+            cacheDelete(entry.id);
+            setError("A restore could not be completed — reload to see the current state");
+          }
           dropped++;
           console.warn("[BlockStore] WAL replay moved stale entry to dead-letter:", entry.op, entry.id || "", e.message);
           continue;
@@ -467,10 +480,21 @@
     //
     // Distinct from walMoveToDeadLetter: nothing FAILED permanently here, the write is
     // simply no longer wanted, so it should not show up in the dead-letter diagnostics.
+    // Returns TRUE only if the entry was still pending and is now cancelled. That return
+    // value is load-bearing, not informational: `buffered` is a snapshot taken when the
+    // write failed, and the caller may act on it seconds later. replayWAL fires on the
+    // `online` event with no delay, so the queued write can LAND in the gap between the
+    // failure and the user's click -- which is exactly the "delete offline, reconnect,
+    // click Undo" sequence. A caller that assumed the cancel worked would then skip its
+    // real undo and leave the server disagreeing with the UI, silently. False means
+    // "already gone, do it for real."
     cancelBufferedWrite(walId, ids) {
-      if (walId) walRemove(walId);
+      const pending = !!walId && walGet().some(e => e && e._walId === walId);
+      if (!pending) return false;
+      walRemove(walId);
       for (const id of ids || []) _tombstones.delete(id);
       setSaved();
+      return true;
     },
 
     // Revive a soft-deleted row, keeping its ORIGINAL id (A2's POST /:id/undelete).

@@ -48,8 +48,13 @@ function makeStore(opts = {}) {
     document: { addEventListener: () => {}, visibilityState: "visible" },
     fetch: async (url, init) => {
       fetchCalls.push({ url, init });
-      if (opts.fetchStatus && opts.fetchStatus !== 200) {
-        return { ok: false, status: opts.fetchStatus, statusText: "err", json: async () => ({ error: "nope" }) };
+      // fetchStatus may be a FUNCTION of the url, so a test can fail one endpoint while
+      // letting others answer. A blanket status makes some assertions vacuous: 409-ing
+      // everything also 409s the follow-up GET, so a "the row is not cached" assertion
+      // passes because nothing could be fetched, not because the code suppressed it.
+      const _st = typeof opts.fetchStatus === "function" ? opts.fetchStatus(url, init) : opts.fetchStatus;
+      if (_st && _st !== 200) {
+        return { ok: false, status: _st, statusText: "err", json: async () => ({ error: "nope" }) };
       }
       if (opts.fetchReject) throw new TypeError("network down");
       // fetchBodyFn lets a test answer with something DERIVED from the request — needed
@@ -253,12 +258,57 @@ test("a 409 undelete is PERMANENT: dropped, not retried, and reported as rejecte
 });
 
 test("a rejected undelete puts the tombstone BACK, so the cache stops serving the row", async () => {
-  const { store } = makeStore({ fetchStatus: 409 });
+  // 409 ONLY the undelete. With a blanket 409 the follow-up GET fails too, so `get` is null
+  // whether or not the tombstone came back and the assertion cannot fail -- it would be
+  // testing the stub's inability to answer rather than the code.
+  const { store } = makeStore({
+    fetchStatus: (url) => (String(url).endsWith("/undelete") ? 409 : 200),
+    fetchBody: { id: "b1", type: "task", properties: {}, deleted_at: null },
+  });
   await store.undeleteBlock("b1");
   // The row is still deleted server-side, so a foreign broadcast naming it must not
-  // re-cache it as live.
+  // re-cache it as live -- the GET below WOULD succeed and cache it if the id were not
+  // tombstoned again.
   await store.handleBlocksChanged({ clientId: "someone-else", blockIds: ["b1"] });
   assert.equal(store.get("b1"), null, "a refused restore must not leave the row cached");
+});
+
+test("a 409 on a non-undelete op stays buffered -- 409 is terminal for undelete only", async () => {
+  // The mirror of the 503 batch control above. The 404 widening is guarded in both
+  // directions; without this, widening the 409 rule to every op (or copying the line into
+  // the shared list) would silently dead-letter retryable writes, which is data loss with
+  // a diagnostic breadcrumb instead of a retry.
+  const { store, storage } = makeStore({ fetchStatus: 409 });
+  seedWal(storage, [{ op: "batch", data: { operations: [{ op: "delete", id: "b1" }] }, _walId: "w1", timestamp: minsAgo(1) }]);
+  await store.replayWAL();
+  assert.equal(wal(storage).length, 1, "a 409 batch is retryable; only an undelete's 409 can never resolve");
+  assert.equal(dead(storage).length, 0);
+});
+
+test("cancelBufferedWrite refuses to cancel a write that already replayed", async () => {
+  // The return value is load-bearing: `buffered` is a snapshot from failure time, and
+  // replayWAL fires on `online` with no delay, so the queued write can land before the user
+  // clicks Undo. Saying "cancelled" when the write is already gone is what would make Undo
+  // skip its real work and leave the server disagreeing with the UI.
+  const { store, storage } = makeStore({ fetchReject: true });
+  const held = await store.batchOp([{ op: "delete", id: "b1" }]);
+  assert.equal(held.buffered, true);
+  assert.equal(store.cancelBufferedWrite(held.walId, ["b1"]), true, "still pending, so it cancels");
+  assert.equal(store.cancelBufferedWrite(held.walId, ["b1"]), false, "already gone, so it reports that honestly");
+  assert.equal(store.cancelBufferedWrite(undefined, ["b1"]), false, "and a missing walId is never a successful cancel");
+  assert.equal(wal(storage).length, 0);
+});
+
+test("a dead-lettered undelete re-tombstones the row, so the client stops showing it as back", async () => {
+  // The client has already told the user "Task restored" on the strength of a retry that is
+  // now being abandoned. Without this the task silently vanishes on the next load instead.
+  const { store, storage } = makeStore({ fetchStatus: 409 });
+  seedWal(storage, [{ op: "undelete", id: "b1", _walId: "w1", timestamp: minsAgo(1) }]);
+  await store.replayWAL();
+  assert.equal(dead(storage).length, 1, "the entry is abandoned");
+  // Now a foreign broadcast must NOT re-cache b1 as live: the server still has it deleted.
+  await store.handleBlocksChanged({ clientId: "someone-else", blockIds: ["b1"] });
+  assert.equal(store.get("b1"), null, "the row is back under its tombstone");
 });
 
 test("replayWAL replays a buffered undelete, and dead-letters it on a 404", async () => {
