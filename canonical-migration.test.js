@@ -386,18 +386,27 @@ test("findByIdempotencyKey prefers a LIVE row over an older tombstone", async ()
   assert.equal(await db.findByIdempotencyKey("ws-1", null), null);
 });
 
-test("getOpenTasksBefore mirrors the idx_blocks_open predicate exactly", async () => {
-  const pool = makeMockPool();
-  const db = loadDbWithMock(pool);
-  pool.query = async (sql, params) => { pool._log.push({ text: String(sql), params }); return { rows: [] }; };
+// A1 added getOpenTasksBefore speculatively, for C2, with no callers. C2 measured it
+// against a prod restore and it did not fit: `type='block' AND status='open'` returned
+// 1576 rows where the lane shows 47, because itinerary completion writes the day_root
+// _done overlay rather than the row's status, and because most of what it admitted was
+// meetings. It is replaced by getCarryoverPool, pinned in open-tasks-query.test.js.
+// This replaces a test that kept getOpenTasksBefore and idx_blocks_open byte-identical.
+// That guard is genuinely gone rather than relocated, so rather than leave a marker
+// that can only fail if someone re-adds dead code, it now holds the invariant that
+// SURVIVED the removal: the index is orphaned and must not silently be treated as
+// live cover for the replacement query.
+test("idx_blocks_open no longer backs any query, and says so (C2)", async () => {
+  const db = loadDbWithMock(makeMockPool());
+  assert.equal(db.getOpenTasksBefore, undefined, "the speculative primitive must not linger as dead code");
+  assert.equal(typeof db.getCarryoverPool, "function");
 
-  await db.getOpenTasksBefore("ws-1", "2026-07-29", 25);
-  const { text, params } = pool._log[0];
-  // Diverging from the index predicate silently drops the index; keep them identical.
-  assert.match(text, /COALESCE\(properties->>'status', 'open'\) = 'open'/);
-  assert.match(text, /date IS NOT NULL AND date < \$2/, "strictly before, and never undated");
-  assert.match(text, /deleted_at IS NULL/);
-  assert.match(text, /type = 'block'/, "third term of the idx_blocks_open predicate");
-  assert.match(text, /dcc_is_task_row\(type, properties\)/, "one predicate, not a second copy");
-  assert.deepEqual(params, ["ws-1", "2026-07-29", 25]);
+  const schema = require("node:fs").readFileSync(require.resolve("./pg-schema.js"), "utf8");
+  const idx = schema.slice(schema.indexOf("idx_blocks_open") - 700, schema.indexOf("idx_blocks_open") + 400);
+  assert.ok(!/db\.getOpenTasksBefore\)/.test(idx),
+    "the index comment must not name a function this repo no longer has");
+  assert.match(idx, /ORPHANED|A4/,
+    "an index nothing references has to be labelled, or the next reader assumes it is load-bearing");
+  // And the reason it cannot serve the replacement: that predicate has no status term.
+  assert.match(idx, /COALESCE\(properties->>'status', 'open'\) = 'open'/);
 });

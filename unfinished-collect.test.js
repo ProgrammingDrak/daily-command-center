@@ -19,6 +19,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const TaskModel = require("./public/js/task-model.js");
+const { apiStub } = require("./carryover-fixture.js");
 const unfSource = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
 const schedTabSource = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
 
@@ -63,11 +64,20 @@ function load(daysByDate, archiveDates) {
   };
   ctx.window = ctx;
   ctx.self = ctx;
+  ctx.URLSearchParams = URLSearchParams;
   vm.createContext(ctx);
   vm.runInContext(unfSource, ctx);
+  // The blockStore stub stays: collectUnfinished no longer touches it, but
+  // _originBlock (the write paths' origin resolver) still does.
   ctx.window.blockStore = store;
   ctx.window.DCC.TaskModel = TaskModel;
-  return { ctx, store, CO: ctx.window.DCC.Carryover };
+  // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.
+  // apiStub serves the same fixture through that contract. The server-side half of
+  // the predicate is pinned in open-tasks-query.test.js, not here.
+  const asked = [];
+  const stub = apiStub(daysByDate);
+  ctx.window.DCC.api = (url) => { asked.push(String(url)); return stub(url); };
+  return { ctx, store, asked, CO: ctx.window.DCC.Carryover };
 }
 
 // ───────────────────────────── the collector ─────────────────────────────
@@ -150,32 +160,57 @@ test("descendants() walks the whole subtree and survives a parent cycle", async 
 test("lookback is bounded to SCAN_DAYS; {days:null} lifts it", async () => {
   const recent = ymd(3), old = ymd(40);
   const days = { [recent]: [dayRoot(), blk("recent", recent, {})], [old]: [dayRoot(), blk("old", old, {})] };
-  const { CO, store } = load(days, [old, recent]);
+  const { CO, asked } = load(days, [old, recent]);
   assert.equal(CO.SCAN_DAYS, 14);
 
   const bounded = await CO.collect();
   assert.deepEqual(plain(bounded.rows.map(r => r.id)), ["recent"]);
-  assert.equal(store._loaded[0][0], recent, "bounded scan must not fetch the whole archive");
 
   const all = await CO.collect({ days: null });
   assert.deepEqual(plain(all.rows.map(r => r.id).sort()), ["old", "recent"]);
-  assert.equal(store._loaded[1][0], old, "unbounded scan starts at the oldest archived day");
+
+  // C2: the bound is a query parameter now, not a date range the client computes and
+  // hands to loadDateRange. Pinning the URL is what keeps the two windows honest --
+  // the enforcement itself is SQL and is pinned in open-tasks-query.test.js.
+  assert.equal(asked.length, 2);
+  assert.match(asked[0], /[?&]before=2026-07-29(&|$)/);
+  assert.match(asked[0], /[?&]days=14(&|$)/, "the default window rides the request");
+  assert.match(asked[1], /[?&]days=all(&|$)/, "{days:null} asks for the unbounded sweep");
 });
 
-test("completed, deleted-type and fixed-type rows never surface", async () => {
+// C2 split this test in two. Done-ness is still the CLIENT's call (completion lives
+// in the day_root _done overlay plus a localStorage mirror the server cannot see), so
+// it stays here. The fixed-type skip moved into SQL and is pinned in
+// open-tasks-query.test.js -- asserting it here too would only prove the fixture
+// helper filters, which is not the thing that ships.
+test("completed rows never surface, by row id / local_id / the done property", async () => {
   const d = ymd(1);
   const { CO } = load({ [d]: [
     dayRoot({ _done: { ids: ["doneById", "doneLocal"] } }),
     blk("doneById", d, {}),                            // marked done by row id
     blk("doneLocalBlk", d, { local_id: "doneLocal" }), // marked done by local_id
     blk("propDone", d, { done: true }),
-    blk("mtg", d, { type: "meeting" }),
-    blk("brk", d, { type: "break" }),
-    blk("focus", d, { type: "focus" }),
     blk("open", d, {})
   ] }, [d]);
   const { rows } = await CO.collect();
   assert.deepEqual(plain(rows.map(r => r.id)), ["open"]);
+});
+
+// The overlay is a PER-DAY fact. Flattening done ids across the pool is a real bug
+// I wrote once while building C2 and only caught by diffing against the old
+// collector: the same id can exist on two days and being done on one must not mark
+// the other.
+test("done ids are scoped to their own day, never flattened across the pool", async () => {
+  const d1 = ymd(1), d2 = ymd(2);
+  const { CO } = load({
+    [d1]: [dayRoot({ _done: { ids: ["shared"] } }), blk("shared", d1, { local_id: null })],
+    [d2]: [dayRoot(), blk("shared", d2, { local_id: null })]
+  }, [d1, d2]);
+  const { rows } = await CO.collect();
+  // The d2 copy is still open work; dedupe keeps exactly one row and it is that one.
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].__unf.sourceDate, d2);
+  assert.equal(rows[0].__unf.done, false);
 });
 
 test("a row is collected once even when it appears on two days", async () => {
@@ -204,11 +239,37 @@ test("newest origin day first", async () => {
 
 test("no archive, or no TaskModel, degrades to an empty lane", async () => {
   const empty = await load({}, []).CO.collect();
-  assert.deepEqual(plain(empty), { rows: [], total: 0, scanned: 0 });
+  assert.deepEqual(plain(empty), { rows: [], total: 0, scanned: 0, truncated: false });
   const d = ymd(1);
   const noModel = load({ [d]: [dayRoot(), blk("t", d, {})] }, [d]);
   noModel.ctx.window.DCC.TaskModel = null;
-  assert.deepEqual(plain(await noModel.CO.collect()), { rows: [], total: 0, scanned: 0 });
+  assert.deepEqual(plain(await noModel.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false });
+});
+
+// C2 replaced "the store is missing" with "the fetch failed" as the degradation path,
+// and DCC.api throws on any non-2xx — so this is the live branch for a 500, an auth
+// redirect, or the route's own 400. The two cases above both return BEFORE the fetch,
+// so neither of them reaches it.
+test("a failed fetch degrades to an empty lane, never a stale one", async () => {
+  const d = ymd(1);
+  const boom = load({ [d]: [dayRoot(), blk("t", d, {})] }, [d]);
+  assert.equal((await boom.CO.collect()).rows.length, 1, "control: the fixture does produce a row");
+  boom.ctx.window.DCC.api = async () => { throw new Error("Request failed"); };
+  assert.deepEqual(plain(await boom.CO.collect()), { rows: [], total: 0, scanned: 0, truncated: false });
+});
+
+// `scanned` renders in the modal footer and changed source in C2 (the client counted
+// the days it walked; the server counts the dates its rows came from). Both sides now
+// count dates that YIELDED rows, so pin a nonzero case — every other assertion on it
+// is 0, which the two definitions agree on by accident.
+test("scanned counts the origin days the pool actually came from", async () => {
+  const d1 = ymd(1), d2 = ymd(2), d3 = ymd(3);
+  const { CO } = load({
+    [d1]: [dayRoot(), blk("a", d1, {})],
+    [d2]: [dayRoot()],                      // a day with no task rows contributes nothing
+    [d3]: [dayRoot(), blk("b", d3, {})]
+  }, [d1, d2, d3]);
+  assert.equal((await CO.collect()).scanned, 2);
 });
 
 // ────────────────────── the row wiring (source contracts) ──────────────────────
@@ -291,12 +352,37 @@ test("the Unscheduled badge no longer sums two different things", () => {
   assert.ok(/section\("Unfinished",roots\.length,null,"uns-group"\)/.test(schedTabSource));
 });
 
-// The window boundary, not just "somewhere between 4 and 39 days". The bounded
-// lookback is the fix for the clog, and the previous test probed day 3 vs day 40, so
-// changing SCAN_DAYS to 30 or flipping `d >= floor` to `d > floor` left it green while
-// the lane silently re-clogged. The collector's rule is
-// floor = today - SCAN_DAYS, kept with `d >= floor`, so day 14 is IN and day 15 is OUT.
-test("the SCAN_DAYS window includes day 14 and excludes day 15", async () => {
+test("the unbounded sweep asks for the route's full headroom, and carries truncation through", async () => {
+  const d = ymd(1);
+  const { CO, ctx, asked } = load({ [d]: [dayRoot(), blk("a", d, {})] }, [d]);
+
+  await CO.collect();
+  assert.ok(!/limit=/.test(asked[0]), "the default window rides the route's default limit");
+  await CO.collect({ days: null });
+  assert.match(asked[1], /[?&]limit=2000(&|$)/,
+    "the limit applies to the RAW pool before the done filter, so the default 500 would " +
+    'quietly turn "every archived day" into roughly the newest month');
+
+  // `truncated` is the server saying "your total is a floor". It has to survive the
+  // collector or the modal renders an exact count that is silently short.
+  const base = ctx.window.DCC.api;
+  ctx.window.DCC.api = async (u) => Object.assign(await base(u), { truncated: true });
+  assert.equal((await CO.collect({ days: null })).truncated, true);
+  ctx.window.DCC.api = base;
+  assert.equal((await CO.collect({ days: null })).truncated, false);
+});
+
+// C2 MOVED THIS BOUNDARY. It used to be the collector's own `floor = today - SCAN_DAYS`
+// with `d >= floor`, and these two tests were its guard. The collector now sends
+// `days=N` and the floor is SQL (`b.date >= ($2::date - ($3::int * INTERVAL '1 day'))`),
+// so what these two exercise is carryover-fixture.js's window, which is test code --
+// exactly the "both sides re-implement it and both can be wrong" trap the fixture's
+// own header refuses. They are kept because the day-14/day-15 boundary is still worth
+// stating, but the REAL guards are elsewhere and are what would actually fail:
+//   - that the client asks for the right window: the URL asserts below
+//   - that the SQL enforces it: open-tasks-query.test.js, `$3::int IS NULL OR b.date >=`
+// Do not add a third boundary case here expecting it to guard the query.
+test("the SCAN_DAYS window includes day 14 and excludes day 15 (fixture-level)", async () => {
   const inWin = ymd(14), outWin = ymd(15);
   const { CO } = load({
     [inWin]: [dayRoot(), blk("in", inWin, {})],
@@ -346,7 +432,7 @@ test("_unfProgress counts done children, nested descendants, and survives a cycl
 // and landed the child as an orphan, which is the standalone-subtask bug this phase
 // removes. The full pool still reaches renderRows so subtree actions carry descendants.
 test("the Catch up modal lists ROOTS, and every surface shares one predicate", () => {
-  assert.ok(/renderRows\(overlay, rootsOf\(result\.rows\), result\.total, result\.rows\)/.test(unfSource),
+  assert.ok(/renderRows\(overlay, rootsOf\(result\.rows\), result\.total, result\.rows, result\.truncated\)/.test(unfSource),
     "the modal must render roots, with the full pool passed through for subtree actions");
   assert.ok(!/renderRows\(overlay, result\.rows\.filter/.test(unfSource),
     "the flat open-rows list must be gone");

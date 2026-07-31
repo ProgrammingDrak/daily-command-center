@@ -16,6 +16,10 @@ const { scoreTaskPoints } = require("./slot-scoring");
 // lib/recurrence is pure (no db, no http), so requiring it here stays acyclic;
 // updateBlock's completion hook uses it to reset a responsibility's cadence.
 const recurrence = require("./lib/recurrence");
+// The shared FE/BE task-type registry, UMD-wrapped for exactly this. getCarryoverPool
+// derives its fixed-time skip set from isFixed() so the server and the carryover lane
+// cannot drift apart on which types are never carried over.
+const TaskTypes = require("./public/js/task-types");
 
 // ── Workspace Bootstrap ──
 
@@ -507,25 +511,130 @@ async function findByIdempotencyKey(workspaceId, key) {
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
-// Open task rows dated strictly before `beforeDate` — the carryover/catch-up lane.
-// Backed by idx_blocks_open, whose predicate this mirrors exactly: COALESCE status to
-// 'open' because most rows carry no status at all, and the non-'open' statuses in the
-// wild (scheduled/proposed/draft/ready/active/ingested/queued) all belong to
-// proposals and meeting artifacts, which must stay out of a carryover prompt.
-async function getOpenTasksBefore(workspaceId, beforeDate, limit = 50) {
+// ── Carryover pool ───────────────────────────────────────────────────────────
+// The structural half of the carryover/catch-up lane, moved off the client. This
+// REPLACES the zero-caller getOpenTasksBefore A1 added speculatively for this
+// phase: that predicate was `type='block' AND status='open'`, which on a prod
+// restore returned 1576 rows where the lane shows 47. Measured, C2:
+//   - 1137 of them were meetings/breaks/focus, which the client drops via skipType
+//   -  264 were finished, because itinerary completion writes day_root._done and
+//          NOT the row's status (only quick-task and slack-events set status)
+//   -  226 carried no start and were not nested
+//   -  and `parent_id IS NULL` as the root test hid 1084 of 1548 real roots,
+//          because a root task's parent IS its day_root
+// So the predicate below is the client's own, not a simplification of it.
+//
+// Deliberately NOT here: the done filter. Done-ness still lives in the day_root
+// `_done` overlay until C5 collapses completion onto `status`, and this codebase
+// already carries four done-predicates that disagree (lib/task-timing isBlockDone,
+// lib/recurrence resolveInstanceState, propagateResponsibilityDone, the poller's).
+// A fifth, in SQL, is the last thing it needs. The caller reads the overlays this
+// returns and applies ONE predicate to roots and children alike.
+const CARRYOVER_ROW_TYPES = ["block", "schedule_item", "added_task"];
+// Raw calendar block types that never became first-class registry entries. The
+// registry owns the rest via isFixed, so this cannot drift from the client's copy
+// in unfinished-tasks.js skipType() — same two halves, same source for the first.
+const SKIP_RAW_TYPES = ["focus", "focus_time", "free_time", "prep"];
+function carryoverSkipTypes() {
+  return Array.from(new Set(TaskTypes.fixedTypes().concat(SKIP_RAW_TYPES)));
+}
+
+// Every task row dated strictly before `beforeDate` and inside the lookback window,
+// plus the day_root overlay slice the caller needs to decide done-ness and locks.
+//
+// This returns the POOL, not the roots. That distinction is the whole correction the
+// review forced, and it is worth stating plainly because the plan said otherwise:
+// "roots only, enforced in SQL" sounds safer than it is. A nested row whose parent is
+// NOT in the pool has to render top-level -- schedule-tab.js says so outright
+// ("standalone work must never disappear") and C1 pinned it with a test -- so
+// membership can never depend on the parent qualifying. Seeding from roots and
+// walking down dropped exactly those rows: measured on a prod restore, 1 row was
+// already unreachable and 158 past-day untimed parents have children, and an untimed
+// parent is never a root. `rootsOf()` on the client is what decides rendering, which
+// is where that decision has always lived and where the three surfaces share it.
+//
+// So there is no getSubtree walk here either. Once nested rows are admitted directly,
+// the walk could only add descendants from OUTSIDE the window -- rows the old day scan
+// physically could not see -- and it was also returning undated and future-dated
+// children, which land in `overlays[null]`, read as permanently open, and cannot be
+// cleared by any action.
+//
+// `days` bounds the lookback and may be null for the unbounded sweep behind the
+// modal's "Show older". `limit` is a blast-radius guard applied BEFORE the caller's
+// done filter, not the lane's MAX_ROWS -- the caller still caps the filtered pool
+// exactly as it did when it scanned days itself.
+async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
+  const days = opts.days === null ? null : (opts.days || 14);
+  const limit = opts.limit || 500;
+  const ws = workspaceId || null;
+
+  // dcc_is_task_row excludes `kind LIKE 'responsibility%'`, which is right for the
+  // `responsibility_item` scaffolding and WRONG for `responsibility_task`: those are
+  // real dated, timed itinerary rows minted by createItineraryTask, and the client
+  // scan (which had no kind filter at all) always collected them. 19 exist on the prod
+  // restore. They are all finished today, so this is latent rather than live, but an
+  // unfinished recurring task is precisely what a carryover lane is for.
   const { rows } = await pool.query(
-    `SELECT * FROM blocks
-      WHERE workspace_id IS NOT DISTINCT FROM $1
-        AND date IS NOT NULL AND date < $2
-        AND deleted_at IS NULL
-        AND type = 'block'
-        AND COALESCE(properties->>'status', 'open') = 'open'
-        AND dcc_is_task_row(type, properties)
-      ORDER BY date DESC, sort_order ASC, created_at ASC
-      LIMIT $3`,
-    [workspaceId || null, beforeDate, limit]
+    `SELECT b.* FROM blocks b
+      WHERE b.workspace_id IS NOT DISTINCT FROM $1
+        AND b.deleted_at IS NULL
+        AND b.type = ANY($4::text[])
+        AND (dcc_is_task_row(b.type, b.properties)
+             OR COALESCE(b.properties->>'kind', '') = 'responsibility_task')
+        AND COALESCE(b.properties->>'type', '') <> ALL($5::text[])
+        AND (COALESCE(b.properties->>'start', '') <> ''
+             OR b.properties->>'subtaskOf' IS NOT NULL
+             OR b.properties->>'wrapId' IS NOT NULL)
+        AND b.date IS NOT NULL AND b.date < $2
+        AND ($3::int IS NULL OR b.date >= ($2::date - ($3::int * INTERVAL '1 day')))
+      ORDER BY b.date DESC, b.sort_order ASC, b.created_at ASC
+      LIMIT $6`,
+    [ws, beforeDate, days, CARRYOVER_ROW_TYPES, carryoverSkipTypes(), limit]
   );
-  return rows.map(parseBlock);
+  const pool_ = rows.map(parseBlock);
+
+  // One overlay read for every date in play, replacing the per-day day_root lookup
+  // the client did inside its scan loop. Locks live on the ORIGIN day's day_root
+  // (_lockedTasks), never on the block, which is why they have to come from here.
+  const dates = Array.from(
+    new Set(pool_.map((b) => b.date).filter(Boolean))
+  );
+  const overlays = {};
+  // The raw day_root rows ride along beside the reduced `overlays` slice, because
+  // lib/task-timing.js reconcileTiming rebuilds its completion map from day_root rows
+  // IN the array it is handed and reads `_done.at` (completionMsOf) as well as
+  // `_done.ids`. The slice carries ids only, so a caller that reconciles has to have
+  // these. They are NOT part of the lane's rows -- see the route.
+  const dayRoots = [];
+  if (dates.length) {
+    const { rows: rootBlocks } = await pool.query(
+      `SELECT * FROM blocks
+        WHERE type = 'day_root' AND deleted_at IS NULL
+          AND workspace_id IS NOT DISTINCT FROM $1 AND date = ANY($2::date[])`,
+      [ws, dates]
+    );
+    for (const r of rootBlocks) {
+      // parseBlock, not a hand-rolled parse: it is the one place in this file that
+      // turns a raw row into parsed properties AND a normalized date string. The date
+      // half is load-bearing here -- `date` is a real date column, so pg hands back a
+      // JS Date, and a Date used as an object key stringifies to "Wed Jul 30 2026 …",
+      // which no caller can look up.
+      const parsed = parseBlock(r);
+      dayRoots.push(parsed);
+      const { date, properties: p } = parsed;
+      const locked = p._lockedTasks;
+      // `_done.ids` only, deliberately. lib/task-timing.js doneIdsFromOverlay also
+      // unions `_done.at`, and it is the better long-term reader, but unioning here
+      // would mark rows done that the client scan considered open -- a behavior change
+      // on a phase whose acceptance criterion is none. C5 owns collapsing these.
+      overlays[date] = {
+        done: Array.isArray(p._done && p._done.ids) ? p._done.ids : [],
+        locked: Array.isArray(locked) ? locked : (locked ? Object.keys(locked) : [])
+      };
+    }
+  }
+
+  return { rows: pool_, overlays, dayRoots, scanned: dates.length };
 }
 
 // Every descendant of `rootIds` through parent_id, roots included, live rows only.
@@ -1000,7 +1109,7 @@ module.exports = {
   createBlock, updateBlock, deleteBlock,
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
   undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, isIdempotencyConflict,
-  getOpenTasksBefore, getSubtree, isTaskRow,
+  getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,

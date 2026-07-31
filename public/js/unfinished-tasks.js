@@ -16,16 +16,12 @@
 (function () {
   "use strict";
 
-  // The fixed-time set (meeting/oneone/ooo/break) is owned by the TASK_TYPES
-  // registry now — skipType() defers to TaskTypes.isFixed so this list can't
-  // drift from it. The residual literals are raw calendar block types that never
-  // became first-class registry types.
-  const SKIP_RAW = new Set(["focus", "focus_time", "free_time", "prep"]);
-  const SKIP_FIXED_FALLBACK = new Set(["meeting", "oneone", "ooo", "break"]);
-  function skipType(type){
-    if (window.TaskTypes && typeof window.TaskTypes.isFixed === "function") return window.TaskTypes.isFixed(type) || SKIP_RAW.has(type);
-    return SKIP_FIXED_FALLBACK.has(type) || SKIP_RAW.has(type); // registry not loaded yet
-  }
+  // The fixed-type skip (meeting/oneone/ooo/break, plus the raw calendar types
+  // focus/focus_time/free_time/prep) moved to the server in C2 — see db.js
+  // carryoverSkipTypes(), which derives the first half from the same TASK_TYPES
+  // registry this file used to read via window.TaskTypes.isFixed. It is applied to
+  // roots and descendants alike in SQL, so there is no client copy left to drift.
+  //
   // Lookback is BOUNDED. It used to be "every archived day", and /api/state/archives
   // serves 90 — so the lane grew without limit and became the clog it was meant to
   // surface. 14 days is the review window; the modal's "Show older" toggle lifts it
@@ -66,83 +62,106 @@
   // Returns { rows, total, scanned } where rows is capped at MAX_ROWS and each row
   // is a full ev carrying __unf provenance. opts.days bounds the lookback
   // (default SCAN_DAYS); pass {days:null} for the unbounded sweep.
+  // C2: the multi-day archive scan is GONE. This used to loadDateRange() every
+  // archived day, pull every block on each of them, and rebuild the task predicate
+  // in JS one day at a time. GET /api/tasks/open now returns the whole pool for the
+  // window in one indexed query, plus the day_root overlay slice, so the structural
+  // predicate (row types, task-kind, fixed-type skip, start-or-nested) lives in SQL
+  // where a caller cannot forget it.
+  //
+  // The endpoint returns the POOL, not the roots: a nested row whose parent is not in
+  // the pool still has to render, so membership must never depend on the parent.
+  // rootsOf() below is what decides rendering, and it is shared by all three surfaces.
+  //
+  // What deliberately did NOT move: DONE-ness. Completion still lives in the
+  // day_root `_done` overlay plus the legacy localStorage mirror the server cannot
+  // see, and collapsing it onto `status` is C5's job, gated on the ledger audit.
+  // Measured while building this: 264 past-day rows read `status='open'` while being
+  // finished in the overlay, so a server-side status filter would have resurrected
+  // every one of them into this lane. One done predicate, and it is the one below.
+  // One shape for every return path -- callers destructure `truncated` without having
+  // to know which branch produced the payload.
+  const EMPTY = () => ({ rows: [], total: 0, scanned: 0, truncated: false });
   async function collectUnfinished(opts) {
     opts = opts || {};
     const days = (opts.days === null) ? null : (opts.days || SCAN_DAYS);
-    const bs = window.blockStore;
     const TaskModel = window.DCC && window.DCC.TaskModel;
-    if (!bs || typeof bs.loadDateRange !== "function" || !TaskModel) return { rows: [], total: 0, scanned: 0 };
+    const api = window.DCC && window.DCC.api;
+    if (!TaskModel || typeof api !== "function") return EMPTY();
 
     const today = todayStr();
-    const archive = (typeof __archiveDates !== "undefined" && Array.isArray(__archiveDates)) ? __archiveDates : [];
-    const todayD = new Date(today + "T00:00:00");
-    // Calendar-component arithmetic, not fixed-ms offsets: subtracting n*86400000
-    // from a LOCAL midnight does not land on local midnight n days earlier across a
-    // DST transition. The day after spring-forward that made `end` resolve to the
-    // day before yesterday, so loadDateRange never fetched yesterday and every one
-    // of yesterday's carryovers silently vanished from the lane for a day.
-    const _dayBefore = (n) => { const d = new Date(todayD); d.setDate(d.getDate() - n); return ymd(d); };
-
-    let scanDates = archive.filter(d => d < today).sort();
-    if (days) {
-      const floor = _dayBefore(days);
-      scanDates = scanDates.filter(d => d >= floor);
+    let payload;
+    try {
+      // The unbounded sweep asks for the route's full headroom. Its LIMIT applies to
+      // the raw pool BEFORE the done filter below, and since C2 that pool is roots,
+      // children and done rows together — so the default 500 would quietly turn "every
+      // archived day" into "the newest month or so", while the modal footer still says
+      // otherwise. MAX_ROWS still caps what actually renders.
+      payload = await api("/api/tasks/open?before=" + encodeURIComponent(today) +
+                          "&days=" + (days === null ? "all" : String(days)) +
+                          (days === null ? "&limit=2000" : ""));
+    } catch (e) {
+      // An empty lane, never a stale one. Every consumer is built for this shape —
+      // it is what the old collector returned when the store was missing.
+      return EMPTY();
     }
-    if (!scanDates.length) return { rows: [], total: 0, scanned: 0 };
-
-    const start = scanDates[0];
-    const end = _dayBefore(1);   // yesterday, DST-safe
-    await bs.loadDateRange(start, end < start ? start : end);
+    const blocks = Array.isArray(payload && payload.rows) ? payload.rows : [];
+    const overlays = (payload && payload.overlays) || {};
 
     const rows = [];
     const seen = new Set();
-    for (const date of scanDates) {
-      const day = bs.getRangeCache(date);
-      if (!day || !Array.isArray(day.blocks)) continue;
-
-      // done ids for this date: day_root._done marks + legacy localStorage marks
-      const doneIds = new Set();
-      const root = day.blocks.find(b => b.type === "day_root");
-      const rp = (root && root.properties) || {};
-      const rd = rp._done && rp._done.ids;
-      if (Array.isArray(rd)) rd.forEach(id => doneIds.add(id));
+    // Per-DATE, and memoized. The old collector looped dates on the outside and that
+    // day's blocks on the inside, so this ran once per day. Flattening to a single loop
+    // over rows would otherwise do a synchronous localStorage read + JSON.parse and
+    // rebuild both Sets once per ROW, and localStorage blocks paint -- the opposite of
+    // what moving the scan server-side was for.
+    const dayCache = new Map();
+    const overlayFor = (date) => {
+      let d = dayCache.get(date);
+      if (d) return d;
+      const ov = overlays[date] || {};
+      // Done ids for THIS date: day_root._done marks + legacy localStorage marks.
+      // Scoped per date and never flattened across the pool — the same id can exist
+      // on two days and being done on one must not mark the other.
+      const doneIds = new Set(Array.isArray(ov.done) ? ov.done : []);
       localDoneSet(date).forEach(id => doneIds.add(id));
       // Locks live on the ORIGIN day's day_root (_lockedTasks), not on the block —
-      // hydrateLockedTasks only ever stamps today's scheduled[]. Read them here so
-      // the padlock renders on a carryover row too.
-      const lockedIds = new Set(Array.isArray(rp._lockedTasks) ? rp._lockedTasks : (rp._lockedTasks ? Object.keys(rp._lockedTasks) : []));
+      // hydrateLockedTasks only ever stamps today's scheduled[]. The endpoint reads
+      // them per date so the padlock still renders on a carryover row.
+      d = { doneIds, lockedIds: new Set(Array.isArray(ov.locked) ? ov.locked : []) };
+      dayCache.set(date, d);
+      return d;
+    };
 
-      for (const b of day.blocks) {
-        if (!(b.type === "block" || b.type === "schedule_item" || b.type === "added_task")) continue;
-        const p = b.properties || {};
-        // A nested step (subtask / ride-along) legitimately carries no time — it
-        // lives under its parent. Keeping them is what lets the lane nest instead
-        // of dropping the timeless ones and promoting the timed ones to top level.
-        const nested = !!(p.subtaskOf || p.wrapId);
-        if (!p.start && !nested) continue;              // not actually scheduled
-        if (skipType(p.type)) continue;                 // meetings / breaks / etc.
-        // A finished top-level task is simply finished. A finished CHILD still
-        // counts toward its parent's progress ("2/5 subtasks"), so it stays in the
-        // pool marked done; the lane renders only the open rows.
-        const isDone = !!(p.done || doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id)));
-        if (isDone && !nested) continue;
-        if (seen.has(b.id) || (p.local_id && seen.has(p.local_id))) continue;
-        seen.add(b.id);
-        if (p.local_id) seen.add(p.local_id);
+    for (const b of blocks) {
+      const p = (b && b.properties) || {};
+      const date = b.date;
+      const { doneIds, lockedIds } = overlayFor(date);
 
-        // deriveEnd: a carryover row never gets a recalcTimes pass, so its `end`
-        // has to be anchored to its own start (see task-model.js).
-        const ev = TaskModel.fromBlock(b, { deriveEnd: true });
-        ev.__unf = {
-          sourceId: b.id,
-          sourceLocalId: p.local_id || null,
-          sourceDate: b.date || date,
-          createdAt: b.created_at || null,
-          done: isDone
-        };
-        if (lockedIds.has(ev.id) || lockedIds.has(b.id)) ev._locked = true;
-        rows.push(ev);
-      }
+      // A nested step (subtask / ride-along) legitimately carries no time — it lives
+      // under its parent. The server keeps them, which is what lets the lane nest.
+      const nested = !!(p.subtaskOf || p.wrapId);
+      // A finished top-level task is simply finished. A finished CHILD still counts
+      // toward its parent's progress ("2/5 subtasks"), so it stays in the pool marked
+      // done; the lane renders only the open rows.
+      const isDone = !!(p.done || doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id)));
+      if (isDone && !nested) continue;
+      if (seen.has(b.id) || (p.local_id && seen.has(p.local_id))) continue;
+      seen.add(b.id);
+      if (p.local_id) seen.add(p.local_id);
+
+      // deriveEnd: a carryover row never gets a recalcTimes pass, so its `end`
+      // has to be anchored to its own start (see task-model.js).
+      const ev = TaskModel.fromBlock(b, { deriveEnd: true });
+      ev.__unf = {
+        sourceId: b.id,
+        sourceLocalId: p.local_id || null,
+        sourceDate: date || null,
+        createdAt: b.created_at || null,
+        done: isDone
+      };
+      if (lockedIds.has(ev.id) || lockedIds.has(b.id)) ev._locked = true;
+      rows.push(ev);
     }
 
     // Most recent first.
@@ -150,7 +169,15 @@
     // `total` is what the lane and the prompt count: OPEN rows. The done children
     // riding along are progress data, not work.
     const total = rows.filter(ev => !ev.__unf.done).length;
-    return { rows: rows.slice(0, MAX_ROWS), total, scanned: scanDates.length };
+    // `scanned` is still "how many past days this pool came from", now counted by the
+    // server off the dates it actually touched rather than by the client off the days
+    // it walked. The modal's footer copy reads it. `truncated` says the server's LIMIT
+    // clipped the raw pool, which makes `total` a floor rather than an exact count.
+    return {
+      rows: rows.slice(0, MAX_ROWS), total,
+      scanned: Number(payload.scanned) || 0,
+      truncated: !!(payload && payload.truncated)
+    };
   }
 
   // ── shared actions ──────────────────────────────────────────────────────────
@@ -404,7 +431,7 @@
     if (overlay) overlay.classList.remove("open");
   }
 
-  function renderRows(overlay, rows, total, pool) {
+  function renderRows(overlay, rows, total, pool, truncated) {
     pool = pool || rows;
     const hintEl = overlay.querySelector("#unfinished-hint");
     const listEl = overlay.querySelector("#unfinished-list");
@@ -422,8 +449,12 @@
     // subtasks read "Showing 1 of 3". Compare against the open count, same as the
     // morning prompt, so the message means only what it says: rows were truncated.
     const openCount = openRows(pool).length;
+    // `truncated` means the SERVER's limit clipped the raw pool before we ever filtered
+    // it, so `total` is a floor. Never print a bare exact count in that case: the rows
+    // dropped are the OLDEST ones, on the one surface that exists to reach old work.
+    const totalStr = truncated ? (total + "+") : String(total);
     hintEl.textContent = rows.length + " unfinished task" + (rows.length === 1 ? "" : "s") +
-      (total > openCount ? " (showing " + openCount + " of " + total + ")" : "") +
+      (total > openCount || truncated ? " (showing " + openCount + " of " + totalStr + ")" : "") +
       " from " + scope + " — choose what to do with each.";
 
     // Default custom date: two days out (distinct from Today/Tomorrow).
@@ -498,7 +529,7 @@
     // alone stranded the parent on the origin day and landed the child as an
     // orphan -- reintroducing the standalone-subtask bug this phase removes.
     // The FULL pool still goes to renderRows so subtree actions carry descendants.
-    renderRows(overlay, rootsOf(result.rows), result.total, result.rows);
+    renderRows(overlay, rootsOf(result.rows), result.total, result.rows, result.truncated);
   }
 
   // ── entry point ──

@@ -444,6 +444,62 @@ module.exports = function mount(app, ctx) {
     return out;
   }));
 
+  // The carryover/catch-up lane's pool, resolved server-side. This replaces the
+  // client's multi-day archive scan (unfinished-tasks.js collectUnfinished), which
+  // pulled EVERY block on every archived day through /api/blocks/range and rebuilt
+  // the task predicate in JS, one day at a time.
+  //
+  // Returns { rows, overlays, scanned }: roots plus their live descendants, and the
+  // day_root overlay slice (done ids + locked ids) per date. Done-ness is applied by
+  // the caller, deliberately — see db.getCarryoverPool. `days=all` lifts the window
+  // for the modal's "Show older" sweep.
+  //
+  // The path is `/api/tasks/*` rather than `/api/blocks/*` because it is the first
+  // member of the canonical TASK surface this project is migrating toward, where the
+  // rest of this file is the raw BLOCK surface. Said out loud here so the next
+  // endpoint knows the namespace is deliberate and not a one-off.
+  //
+  // Track C's hunk in Track A's file (Coordination log, 2026-07-31). Distinct from
+  // A2's undelete / GET /:id / task-group work and A3's create paths.
+  app.get("/api/tasks/open", route(async (req, res) => {
+    const before = req.query.before || getTodayStr();
+    if (!isValidDate(before)) { res.status(400).json({ error: "Invalid ?before= date" }); return; }
+    const rawDays = String(req.query.days == null ? "" : req.query.days);
+    const days = rawDays === "all" ? null : Math.min(3650, Math.max(1, parseInt(rawDays, 10) || 14));
+    const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit, 10) || 500));
+    const result = await blockDB.getCarryoverPool(req.workspaceId, before, { days, limit });
+    const rows = filterLegacyGcalBlocks(result.rows);
+    // BOTH wrappers the sibling reads use, not just the filter. The legacy-gcal filter
+    // keeps a legacy row that never rendered in the lane from appearing now. The timing
+    // reconcile matters for a subtler reason: the collector this replaces called
+    // loadDateRange across the whole lookback on every list build, and /api/blocks/range
+    // is wrapped in reconcileTiming, so that sweep was what settled orphaned hourglass
+    // timers on past days. Drop it and nothing settles them until Day Review is opened
+    // for each day individually. Bounded at 25 rows per read, and idempotent.
+    //
+    // The SCRATCH ARRAY is not a style choice, it is the contract. reconcileTiming
+    // rebuilds its completion map from the day_root rows inside the array it is given,
+    // and this pool has none (it selects three task types) -- hand it `rows` alone and
+    // every overlay-completed row reads as NOT done, so instead of settling timers it
+    // calls clearTiming on legitimately derived ones and deletes the time_entry Day
+    // Review reads. Strictly worse than omitting the wrapper. It also PUSHES any
+    // time_entry it mints into that array, which must not surface as a phantom lane row
+    // now that the client no longer filters by type. Both problems end at the scratch.
+    await withReconciledTiming(rows.concat(result.dayRoots || []), req);
+    // reconcileTiming mutates block.properties in place, so `rows` already carries any
+    // settlement. dayRoots is internal plumbing and never goes over the wire.
+    return {
+      rows,
+      overlays: result.overlays,
+      scanned: result.scanned,
+      // The LIMIT lands on the RAW pool, before the caller applies its done filter, and
+      // it drops the OLDEST rows. Say so rather than let the caller render an exact
+      // count it cannot trust -- "Show older" is the one surface whose whole purpose is
+      // reaching old work, so under-reporting there is the worst place to be silent.
+      truncated: result.rows.length >= limit
+    };
+  }));
+
   // A tombstone is GONE to a reader. This is the READ contract that makes the delete
   // contract observable: until now the route happily served a soft-deleted row, so
   // every consumer had to remember to check deleted_at itself, and any consumer that

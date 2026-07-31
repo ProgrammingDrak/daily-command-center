@@ -11,33 +11,16 @@ const vm = require("node:vm");
 
 const TaskTypes = require("./public/js/task-types");
 const stSrc = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
-const unfSrc = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
 // col-0 closing brace for top-level fns; single-line grab for _prevDate.
 const slice = (src, name) => src.match(new RegExp("function " + name + "[\\s\\S]*?\\n\\}"))[0];
 const sliceLine = (src, name) => src.match(new RegExp("function " + name + "[^\\n]*"))[0];
 
-// ── skipType (unfinished-tasks.js) ──────────────────────────────────────────
-function skipTypeCtx(withRegistry) {
-  const block = unfSrc.match(/const SKIP_RAW[\s\S]*?function skipType[\s\S]*?\n {2}\}/)[0];
-  const context = { window: withRegistry ? { TaskTypes } : {} };
-  vm.createContext(context);
-  vm.runInContext(block + "\nthis.skipType = skipType;", context);
-  return context.skipType;
-}
-
-test("skipType: fixed types + calendar-raw types skip; work types don't (registry loaded)", () => {
-  const skip = skipTypeCtx(true);
-  for (const t of ["meeting", "oneone", "ooo", "break"]) assert.equal(skip(t), true, t + " (fixed) skips");
-  for (const t of ["focus", "focus_time", "free_time", "prep"]) assert.equal(skip(t), true, t + " (raw) skips");
-  for (const t of ["task", "triage", "habit", "wrap", "shell"]) assert.equal(skip(t), false, t + " does NOT skip");
-});
-
-test("skipType: falls back to the literal fixed set when the registry isn't loaded", () => {
-  const skip = skipTypeCtx(false);
-  for (const t of ["meeting", "oneone", "ooo", "break", "focus", "prep"]) assert.equal(skip(t), true, t + " skips via fallback");
-  assert.equal(skip("task"), false);
-  assert.equal(skip("habit"), false);
-});
+// ── skipType MOVED (C2) ─────────────────────────────────────────────────────
+// unfinished-tasks.js skipType() is gone. The carryover lane's fixed-type skip is
+// SQL now (db.js carryoverSkipTypes, applied inside getCarryoverPool), so the two
+// tests that lived here are in open-tasks-query.test.js against the new home. The
+// registry-not-loaded fallback went with it: a server require() cannot half-load,
+// so that branch no longer exists to test.
 
 // ── _habitStreakCount (schedule-tab.js) ─────────────────────────────────────
 function streakCtx() {
