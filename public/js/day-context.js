@@ -246,9 +246,10 @@
   // invalidate() calls at each write site. The wrapped set below is the COMPLETE
   // list of blockStore write methods (a matching pointer note in block-store.js
   // reminds a maintainer to add any new mutator here too):
-  //   - createBlock/updateBlock/deleteBlock/rescheduleBlock/batchOp: every local
-  //     write (push, reschedule, restore, commit, quick-add, unschedule, drag,
-  //     clone, tombstone, batch) clears the affected date(s) after it settles.
+  //   - createBlock/updateBlock/deleteBlock/rescheduleBlock/batchOp/undeleteBlock:
+  //     every local write (push, reschedule, restore, commit, quick-add, unschedule,
+  //     drag, clone, tombstone, batch, undelete) clears the affected date(s) after it
+  //     settles.
   //   - invalidateRangeCache(date): drag + unfinished reschedules already fire
   //     it; piggyback per-date day-context invalidation.
   //   - handleBlocksChanged(event): cross-tab SSE block changes; clear all
@@ -298,6 +299,13 @@
     // way to know which, so clear all. Dormant today (no callers) but wrapped so
     // a future caller can't silently leave the cache stale.
     _wrapWrite(bs, "batchOp", () => null);
+    // Clear-all rather than a resolved date, same reasoning as batchOp: the row being
+    // revived is NOT in blockStore's cache to read a date off (the delete that preceded
+    // it evicted the row), so _dateOfBlock would return null anyway. Undo is the one
+    // direction that would otherwise leave a stale day: the delete invalidates through
+    // batchOp, so without this the memo keeps the post-delete day, with the restored
+    // task's slot still reading as free, and the next slot computation can double-book it.
+    _wrapWrite(bs, "undeleteBlock", () => null);
   }
   function _dateOfBlock(bs, id) {
     const b = typeof bs.get === "function" ? bs.get(id) : null;

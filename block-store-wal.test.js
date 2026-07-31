@@ -147,6 +147,10 @@ test("an ack-lost create replays with the SAME id, which is what stops it duplic
   await store.replayWAL();
 
   const replaySent = JSON.parse(fetchCalls[fetchCalls.length - 1].init.body);
+  // Assert the id EXISTS before asserting it matches. Pre-change the payload carried no
+  // id at all, so a bare equality here passed as undefined === undefined -- the assertion
+  // that states this phase's whole mechanism was the one assertion that could not fail.
+  assert.ok(replaySent.id, "the replay must carry an id at all");
   assert.equal(replaySent.id, firstSent.id, "the replay reuses the original id");
   assert.equal(wal(storage).length, 0, "a replay answered by the existing row is SUCCESS and clears the entry");
   assert.equal(dead(storage).length, 0, "and it is success, not a dead letter");
@@ -206,23 +210,55 @@ test("replayWAL keeps a batch buffered on a 503, so the fix does not over-drop",
 
 test("undeleteBlock posts to /undelete, clears the WAL on ack, and re-caches the row", async () => {
   const { store, storage, fetchCalls } = makeStore({ fetchBody: { id: "b1", type: "task", properties: {}, deleted_at: null } });
-  const block = await store.undeleteBlock("b1");
+  const res = await store.undeleteBlock("b1");
   assert.match(fetchCalls[0].url, /\/api\/blocks\/b1\/undelete$/);
-  assert.equal(block.id, "b1");
+  assert.equal(res.ok, true);
+  assert.equal(res.block.id, "b1");
   assert.equal(store.get("b1").id, "b1", "the revived row is cached again");
   assert.equal(wal(storage).length, 0, "acked, so nothing stays buffered");
 });
 
-test("a lost undelete ack stays buffered, so a restore is not silently lost", async () => {
-  // Without this the overlay un-hides the task optimistically while the server still has
-  // deleted_at set, and the next reload makes the task vanish again -- the same
-  // vanish-after-reload class B1 and the rest of B2 exist to close.
+test("a lost undelete ack stays buffered and is reported as not-yet, not as rejected", async () => {
+  // Without buffering, the overlay un-hides the task optimistically while the server still
+  // has deleted_at set, and the next reload makes the task vanish again -- the same
+  // vanish-after-reload class B1 and the rest of B2 exist to close. `permanent: false` is
+  // what tells the caller to keep the optimistic restore rather than undoing it.
   const { store, storage } = makeStore({ fetchReject: true });
-  const result = await store.undeleteBlock("b1");
-  assert.equal(result, null, "the caller is told it did not land");
+  const res = await store.undeleteBlock("b1");
+  assert.equal(res.ok, false, "the caller is told it did not land");
+  assert.equal(res.permanent, false, "but it is retryable, so the UI keeps the restore");
   assert.equal(wal(storage).length, 1, "and it is buffered for replay");
   assert.equal(wal(storage)[0].op, "undelete");
   assert.equal(wal(storage)[0].id, "b1");
+});
+
+test("a 409 undelete is PERMANENT: dropped, not retried, and reported as rejected", async () => {
+  // db.undeleteBlock raises 409 when clearing deleted_at would collide with a LIVE row
+  // holding the same idempotency key. The twin does not go away on retry, so retrying
+  // pins a permanent "N edits pending" banner -- the exact failure this phase fixed for
+  // "batch". db.js names B2 as the phase that must handle it, and prod has 32 duplicate
+  // key groups of this shape.
+  const { store, storage } = makeStore({ fetchStatus: 409 });
+  const res = await store.undeleteBlock("b1");
+  assert.equal(res.ok, false);
+  assert.equal(res.permanent, true, "the caller must be able to tell never from not-yet");
+  assert.equal(wal(storage).length, 0, "a conflict that cannot resolve must not stay queued");
+
+  // And the same verdict via a replayed entry, since that is the path that would loop.
+  const replayed = makeStore({ fetchStatus: 409 });
+  seedWal(replayed.storage, [{ op: "undelete", id: "b1", _walId: "w1", timestamp: minsAgo(1) }]);
+  await replayed.store.replayWAL();
+  assert.equal(wal(replayed.storage).length, 0, "the replay does not re-queue it");
+  assert.equal(dead(replayed.storage).length, 1, "it dead-letters instead");
+});
+
+test("a rejected undelete puts the tombstone BACK, so the cache stops serving the row", async () => {
+  const { store } = makeStore({ fetchStatus: 409 });
+  await store.undeleteBlock("b1");
+  // The row is still deleted server-side, so a foreign broadcast naming it must not
+  // re-cache it as live.
+  await store.handleBlocksChanged({ clientId: "someone-else", blockIds: ["b1"] });
+  assert.equal(store.get("b1"), null, "a refused restore must not leave the row cached");
 });
 
 test("replayWAL replays a buffered undelete, and dead-letters it on a 404", async () => {
@@ -243,16 +279,50 @@ test("replayWAL replays a buffered undelete, and dead-letters it on a 404", asyn
 });
 
 test("undeleteBlock clears the local tombstone, or the row stays invisible", async () => {
-  // deleteBlock adds to _tombstones and handleBlocksChanged SKIPS a tombstoned id. Without
-  // clearing it here, the tab that performed the restore keeps hiding the row until a
-  // reload -- and it sees no broadcast of its own, so A2's undeletedIds cannot help it.
-  const { store } = makeStore({ fetchBody: { id: "b1", type: "task", properties: {}, deleted_at: null } });
-  await store.deleteBlock("b1");
+  // batchOp adds to _tombstones and handleBlocksChanged SKIPS a tombstoned id. Without
+  // clearing it in undeleteBlock, the tab that performed the restore keeps hiding the row
+  // until a reload -- and it sees no broadcast of its own, so A2's undeletedIds cannot
+  // help it.
+  //
+  // The undelete's OWN ack must be non-cacheable here or this test cannot fail: cacheSet
+  // unconditionally clears the tombstone too, so a cacheable ack would clear it even with
+  // the up-front delete removed. Answer the undelete with {} and let only the later
+  // GET be cacheable, so the up-front clear is the single thing under test. Entering via
+  // batchOp rather than deleteBlock also matches the path state.js actually takes.
+  const { store } = makeStore({
+    fetchBodyFn: (url) => String(url).endsWith("/undelete")
+      ? {}
+      : { id: "b1", type: "task", properties: {}, deleted_at: null },
+  });
+  await store.batchOp([{ op: "delete", id: "b1" }]);
   await store.undeleteBlock("b1");
   // Prove it through the observable path rather than by reaching into the closure: a
   // foreign broadcast naming b1 must now re-fetch and re-cache it.
   await store.handleBlocksChanged({ clientId: "someone-else", blockIds: ["b1"] });
   assert.equal(store.get("b1") && store.get("b1").id, "b1", "the id is no longer suppressed");
+});
+
+test("batchOp reports whether the write landed, and cancelBufferedWrite abandons it", async () => {
+  // The signal undoDeleteTask needs: before this, batchOp returned the same empty-blocks
+  // shape on success-with-nothing and on total failure, so no caller could tell a write
+  // that landed from one still sitting in the WAL.
+  const ok = makeStore({ fetchBody: { blocks: [{ id: "b1", deleted_at: "2026-07-08T00:00:00.000Z" }] } });
+  const landed = await ok.store.batchOp([{ op: "delete", id: "b1" }]);
+  assert.equal(landed.buffered, false, "a write that acked is not buffered");
+  assert.equal(wal(ok.storage).length, 0);
+
+  const down = makeStore({ fetchReject: true });
+  const held = await down.store.batchOp([{ op: "delete", id: "b1" }]);
+  assert.equal(held.buffered, true, "a write that failed IS still buffered");
+  assert.ok(held.walId, "and it names its own WAL entry so a caller can abandon it");
+  assert.equal(wal(down.storage).length, 1);
+
+  down.store.cancelBufferedWrite(held.walId, ["b1"]);
+  assert.equal(wal(down.storage).length, 0, "the abandoned write is gone from the WAL");
+  assert.equal(dead(down.storage).length, 0, "and NOT dead-lettered -- it did not fail permanently, it is unwanted");
+  // The tombstone the abandoned delete had optimistically added is cleared too.
+  await down.store.handleBlocksChanged({ clientId: "someone-else", blockIds: ["b1"] });
+  assert.ok(down.fetchCalls.some((c) => String(c.url).includes("/api/blocks/b1")), "b1 is no longer suppressed");
 });
 
 test("rescheduleBlock drops the WAL entry and stamps e.permanent on a 400", async () => {

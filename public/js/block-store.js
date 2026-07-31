@@ -246,6 +246,13 @@
     // purged by the 30-day purgeSoftDeleted sweep). There is nothing left to revive, so
     // retrying can only fail again.
     if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete") && err.status === 404) return true;
+    // 409 is terminal for an undelete SPECIFICALLY, and only for an undelete.
+    // db.undeleteBlock raises it when clearing deleted_at would move the row into
+    // idx_blocks_idem_unique's predicate while a LIVE row already holds that
+    // idempotency key. The twin does not disappear on retry, so without this the entry
+    // re-queues forever behind a permanent "N edits pending" banner. db.js flags this
+    // as B2's to wire up, and prod has 32 duplicate key groups of exactly this shape.
+    if (entry.op === "undelete" && err.status === 409) return true;
     return false;
   }
 
@@ -333,9 +340,11 @@
     CLIENT_ID,
 
     // NOTE: day-context.js wraps these mutators at runtime (createBlock,
-    // updateBlock, deleteBlock, rescheduleBlock, batchOp) to invalidate its
-    // per-day slot cache after each write. If you add a new server-mutating
-    // method here, add it to that wrap list too or its day can go stale.
+    // updateBlock, deleteBlock, rescheduleBlock, batchOp, undeleteBlock) to
+    // invalidate its per-day slot cache after each write. If you add a new
+    // server-mutating method here, add it to that wrap list too or its day can go
+    // stale. cancelBufferedWrite is deliberately NOT wrapped: it abandons a write
+    // that never landed, so no day's data changed.
     // Create a new block
     async createBlock(type, properties, { parentId, date, sortOrder } = {}) {
       setSaving();
@@ -450,6 +459,20 @@
       }
     },
 
+    // Abandon a write that is still sitting in the WAL, because a LATER user action made
+    // replaying it wrong. The only caller today is Undo cancelling a delete that never
+    // reached the server: leaving that entry queued means the next replay (boot, `online`,
+    // visibilitychange, SSE reconnect) re-deletes the row the user just restored, with no
+    // error shown. `ids` un-tombstones what the abandoned batch had optimistically hidden.
+    //
+    // Distinct from walMoveToDeadLetter: nothing FAILED permanently here, the write is
+    // simply no longer wanted, so it should not show up in the dead-letter diagnostics.
+    cancelBufferedWrite(walId, ids) {
+      if (walId) walRemove(walId);
+      for (const id of ids || []) _tombstones.delete(id);
+      setSaved();
+    },
+
     // Revive a soft-deleted row, keeping its ORIGINAL id (A2's POST /:id/undelete).
     // This is what makes Undo durable: the old undo re-created the rows as NEW ids from
     // a client-side snapshot, so it could not survive a reload — the snapshot lived in
@@ -460,6 +483,10 @@
     // the server still has deleted_at set, so the next reload loses it again. That is
     // the same resurrection-vs-vanish class B1 and the rest of B2 exist to close.
     // Replay is safe because undeleteBlock just clears deleted_at — idempotent.
+    // Returns { ok, block } or { ok: false, permanent }. Deliberately NOT the bare row:
+    // the caller has to be able to tell "not yet, buffered" from "never, rejected",
+    // because those want opposite UI. Reporting a rejection as a success is how you get
+    // an itinerary that claims a task is back until the next reload disagrees.
     async undeleteBlock(id) {
       setSaving();
       // Clear the local tombstone up front, or handleBlocksChanged will skip the very
@@ -472,10 +499,21 @@
         if (block && block.id) cacheSet(block);
         walRemove(walId);
         setSaved();
-        return block;
+        return { ok: true, block };
       } catch (e) {
-        setError("Restore failed — buffered for retry");
-        return null;
+        // 409 = a live row already holds this tombstone's idempotency key; 404 = the row
+        // is gone for real. Neither can ever succeed, so drop the entry rather than
+        // retrying forever, and put the tombstone BACK: the row is still deleted, and
+        // the cache must not start serving it as live.
+        const permanent = !!e && (e.status === 409 || e.status === 404);
+        if (permanent) {
+          walRemove(walId);
+          _tombstones.add(id);
+          setError("Restore rejected — " + ((e && e.message) || (e && e.status) || "conflict"));
+        } else {
+          setError("Restore failed — buffered for retry");
+        }
+        return { ok: false, permanent };
       }
     },
 
@@ -500,10 +538,16 @@
         }
         walRemove(walId);
         setSaved();
-        return result;
+        return { ...result, walId, buffered: false };
       } catch (e) {
         setError("Batch save failed — buffered for retry");
-        return { blocks: [] };
+        // `buffered: true` says the write did NOT land and is still in the WAL. Callers
+        // could not tell before: this returned the same empty-blocks shape either way,
+        // so a caller that needed to know whether its write reached the server had to
+        // guess from an empty array. state.js undoDeleteTask genuinely needs to know --
+        // undoing a delete that never landed must cancel the queued delete, not revive a
+        // row that was never deleted and then let the batch replay over the top of it.
+        return { blocks: [], walId, buffered: true };
       }
     },
 

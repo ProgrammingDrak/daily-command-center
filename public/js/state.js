@@ -1390,9 +1390,13 @@ async function deleteTaskWithUndo(id){
   // Started here but awaited at the bottom, and the promise goes into the snapshot,
   // because Undo has to be able to wait for it. See undoDeleteTask: /undelete is NOT
   // commutative with this delete the way B1's re-create was.
-  let deletePromise=Promise.resolve();
+  let deletePromise=Promise.resolve(null);
   if(blockIds.length&&window.blockStore){
-    deletePromise=window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid}))).catch(()=>{});
+    // Resolve to a buffered-shaped result rather than undefined if this ever rejects:
+    // batchOp does not reject today, but undoDeleteTask decides what to do from this
+    // value, and "undefined" would read as "landed fine".
+    deletePromise=window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid})))
+      .catch(()=>({blocks:[],buffered:true}));
   }
   _stashUndoSnapshot(id,{ids,blockIds,deletePromise});
   // Offer Undo without waiting for the round-trip, so the affordance is as instant as
@@ -1426,15 +1430,49 @@ async function undoDeleteTask(id){
   // gone server-side while the UI shows it restored, until the next reload proves the UI
   // wrong. B1 did not have this race because a create and a delete of two different rows
   // commute; reviving the SAME row does not.
-  if(snap.deletePromise){try{await snap.deletePromise;}catch(e){}}
+  let deleteResult=null;
+  if(snap.deletePromise){try{deleteResult=await snap.deletePromise;}catch(e){}}
+  // AND awaiting is not enough on its own, because batchOp swallows its own failure: it
+  // resolves either way, so a delete that never reached the server looks identical to one
+  // that did. If it is still buffered there is nothing to undelete, and the queued batch
+  // MUST be cancelled -- otherwise the next replay (boot, `online`, visibilitychange, SSE
+  // reconnect) deletes the row the user just restored, silently. Reachable inside the 8s
+  // toast: delete while offline, reconnect, click Undo.
+  if(deleteResult&&deleteResult.buffered){
+    if(window.blockStore&&window.blockStore.cancelBufferedWrite){
+      window.blockStore.cancelBufferedWrite(deleteResult.walId,snap.blockIds||[]);
+    }
+    if(typeof showToast==="function")showToast("Task restored","success",2200);
+    return;
+  }
   if(snap.blockIds&&snap.blockIds.length&&window.blockStore&&window.blockStore.undeleteBlock){
     // Per row, because /undelete is single-id. Sequential rather than Promise.all: these
     // are parent-and-children in one subtree, and a burst of concurrent writes to the
     // same tree is how sort_order rebalances start fighting each other.
+    //
+    // ACCEPTED LIMITATION, called out because the delete side promises the opposite: this
+    // is N requests, not one transaction, so a permanent rejection partway through leaves
+    // the subtree half-revived server-side. The all-or-nothing version needs an
+    // `undelete` case in db.batchOp, which is Track A's file and out of this phase's
+    // scope; it is handed off in the Coordination log. Until then the overlay below is
+    // restored wholesale so at least the UI does not claim a partial success.
+    let rejected=false;
     for(const bid of snap.blockIds){
-      await window.blockStore.undeleteBlock(bid);
+      const r=await window.blockStore.undeleteBlock(bid);
+      if(r&&r.ok===false&&r.permanent)rejected=true;
     }
     render();
+    if(rejected){
+      // The server refused: a live row already holds this tombstone's idempotency key, or
+      // the row is past the 30-day purge. Put the hide back rather than leaving the
+      // itinerary showing a task the server still considers deleted.
+      snap.ids.forEach(sid=>deletedSet.add(sid));
+      saveDeletedState();
+      recalcTimes();
+      render();
+      if(typeof showToast==="function")showToast("Could not restore that task","error",3200);
+      return;
+    }
   }
   if(typeof showToast==="function")showToast("Task restored","success",2200);
 }
