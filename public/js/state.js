@@ -1318,18 +1318,22 @@ function saveDeletedState(){
 function isDeleted(ev){return deletedSet.has(ev.id)}
 
 let _delPendingId=null;
-// The rows a delete removed, keyed by the ev id the user deleted, so Undo can put
-// the whole subtree back verbatim. Session-scoped: a reload drops them, which is
-// correct -- the delete already reached the server, and there is nothing left to
-// undo optimistically. (B2 wires Undo to POST /api/blocks/:id/undelete so a restore
-// survives a reload and a device switch too.)
-// A Map, not an object: only the live toast can reach a snapshot, so keeping every
-// one for the session would pin each deleted subtree's note text in memory in a tab
-// left open for days -- and Map is the only thing that gives a reliable oldest-first
-// eviction order here. Plain-object key order puts integer-like keys first in numeric
-// order, and legacy task ids are Date.now()-based, so `1753812345678` would sort
-// ahead of every prefixed id and get evicted out of turn. Re-stashing deletes first
-// so a re-deleted id moves to the back instead of keeping its old position.
+// What a delete removed, keyed by the ev id the user deleted, so Undo can put the whole
+// subtree back. Two facts per entry, both captured AT DELETE TIME because neither can be
+// re-derived afterwards: which overlay ids the subtree covered, and which row ids they
+// resolved to. Plus the in-flight delete's promise, which Undo awaits (see undoDeleteTask).
+//
+// B2 note: this deliberately still exists. The brief expected /undelete to retire the Map
+// outright, but /undelete only removes the need to remember a row's CONTENTS -- the
+// subtree's membership and its resolved row ids are still client-side facts, and
+// re-deriving them after the rows are tombstoned is exactly the guesswork that produces
+// half-restored trees. What did go is every column copy: entries are now id lists.
+//
+// A Map, not an object: Map is the only thing that gives a reliable oldest-first eviction
+// order here. Plain-object key order puts integer-like keys first in numeric order, and
+// legacy task ids are Date.now()-based, so `1753812345678` would sort ahead of every
+// prefixed id and get evicted out of turn. Re-stashing deletes first so a re-deleted id
+// moves to the back instead of keeping its old position.
 const _deleteUndoSnapshots=new Map();
 const _UNDO_SNAPSHOT_CAP=10;
 function _stashUndoSnapshot(id,snap){
@@ -1347,7 +1351,7 @@ function openDeleteConfirm(id){
 // bug: navigate away or reload inside that window and only the per-day overlay
 // survived, so the task came back on the next fold. Going immediate loses nothing --
 // rows keep their deleted_at for 30 days server-side (purgeSoftDeleted, server.js)
-// and Undo re-creates them from the snapshot below.
+// and Undo revives those exact rows through /undelete.
 async function deleteTaskWithUndo(id){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev||deletedSet.has(id))return;
@@ -1369,65 +1373,114 @@ async function deleteTaskWithUndo(id){
   // _blockId / local_id / b.id and refuses a cross-date delete. A pure timeline-JSON
   // item has no row, so it gets no op and the overlay is the only (correct) record --
   // nothing server-side exists to delete.
-  const rows=[];
+  // Only the row IDS now. B1 had to capture every column here because Undo re-created
+  // the rows from scratch; /undelete revives the originals in place, so their contents
+  // are never the client's to remember. That also retires a whole bug class: a snapshot's
+  // hand-maintained field list silently drifting from the schema, which is exactly why
+  // B1 rejected persistAddedTask's ~35-field allowlist in the first place.
+  const blockIds=[];
   for(const sid of ids){
     const block=_findTaskBlockForDate(sid,dateStr,evById.get(sid));
-    if(block)rows.push({
-      blockId:block.id,
-      type:block.type,
-      date:block.date,
-      parentId:block.parent_id||null,
-      sortOrder:block.sort_order||0,
-      properties:{...(block.properties||{})}
-    });
+    if(block)blockIds.push(block.id);
   }
-  _stashUndoSnapshot(id,{ids,rows});
-  // Offer Undo before awaiting the round-trip, so the affordance is as instant as
-  // the hide. Clicking it mid-flight is safe: the restore creates NEW rows, so
-  // whichever batch the server sees first, the end state is the same.
+  // One transactional batch, so the subtree is deleted all-or-nothing instead of
+  // half-deleted with stranded children. Deletes are idempotent server-side
+  // (db.deleteBlock just re-stamps deleted_at), so a WAL replay is harmless.
+  //
+  // Started here but awaited at the bottom, and the promise goes into the snapshot,
+  // because Undo has to be able to wait for it. See undoDeleteTask: /undelete is NOT
+  // commutative with this delete the way B1's re-create was.
+  let deletePromise=Promise.resolve(null);
+  if(blockIds.length&&window.blockStore){
+    // Resolve to a buffered-shaped result rather than undefined if this ever rejects:
+    // batchOp does not reject today, but undoDeleteTask decides what to do from this
+    // value, and "undefined" would read as "landed fine".
+    deletePromise=window.blockStore.batchOp(blockIds.map(bid=>({op:"delete",id:bid})))
+      .catch(()=>({blocks:[],buffered:true}));
+  }
+  _stashUndoSnapshot(id,{ids,blockIds,deletePromise});
+  // Offer Undo without waiting for the round-trip, so the affordance is as instant as
+  // the hide.
   if(typeof showToast==="function"){
     showToast("Task deleted","success",8000,{
       label:"Undo",
       onClick:()=>undoDeleteTask(id)
     });
   }
-  // One transactional batch, so the subtree is deleted all-or-nothing instead of
-  // half-deleted with stranded children. Deletes are idempotent server-side
-  // (db.deleteBlock just re-stamps deleted_at), so a WAL replay is harmless.
-  if(rows.length&&window.blockStore){
-    try{await window.blockStore.batchOp(rows.map(r=>({op:"delete",id:r.blockId})));}catch(e){}
-  }
+  await deletePromise;
 }
-// Re-create the snapshotted rows verbatim, parents before children, so notes, tags,
-// source links, prep state, privacy and the subtask/ride-along edges all come back.
-// The restored rows get NEW ids: reviving the original id needs the server-side
-// /undelete route, which lands in B2.
+// Revive the ORIGINAL rows through A2's POST /:id/undelete, so notes, tags, source
+// links, prep state, privacy and the subtask/ride-along edges all come back because they
+// never went anywhere -- the row is the same row. B1 re-created verbatim copies under NEW
+// ids, which meant Undo could not survive a reload (the snapshot was in memory), left the
+// old rows tombstoned, and broke every id anything else still held.
 async function undoDeleteTask(id){
   if(!deletedSet.has(id))return;
-  const snap=_deleteUndoSnapshots.get(id)||{ids:[id],rows:[]};
+  const snap=_deleteUndoSnapshots.get(id)||{ids:[id],blockIds:[]};
   _deleteUndoSnapshots.delete(id);
   snap.ids.forEach(sid=>deletedSet.delete(sid));
   saveDeletedState();
   log("delete-undone",id,"Restored to schedule");
   recalcTimes();
   render();
-  if(snap.rows.length&&window.blockStore){
-    const result=await window.blockStore.batchOp(snap.rows.map(r=>({
-      op:"create",
-      type:r.type,
-      date:r.date,
-      parent_id:r.parentId,
-      sort_order:r.sortOrder,
-      properties:r.properties
-    })));
-    // Re-point the live rows at their restored blocks. A stale _blockId would aim
-    // the next delete at a tombstone instead of the row that now backs the task.
-    for(const b of (result&&result.blocks)||[]){
-      const localId=((b&&b.properties)||{}).local_id;
-      const target=localId&&scheduled.find(e=>String(e.id)===String(localId));
-      if(target)target._blockId=b.id;
+  // WAIT FOR THE DELETE TO LAND FIRST. This is the one thing /undelete does not inherit
+  // for free from B1's design: the two operations are not commutative. Undo can be
+  // clicked while the delete batch is still in flight, and if the undelete wins the race
+  // it clears a deleted_at that is not set yet -- then the delete lands, and the task is
+  // gone server-side while the UI shows it restored, until the next reload proves the UI
+  // wrong. B1 did not have this race because a create and a delete of two different rows
+  // commute; reviving the SAME row does not.
+  let deleteResult=null;
+  if(snap.deletePromise){try{deleteResult=await snap.deletePromise;}catch(e){}}
+  // AND awaiting is not enough on its own, because batchOp swallows its own failure: it
+  // resolves either way, so a delete that never reached the server looks identical to one
+  // that did. If it is still buffered there is nothing to undelete, and the queued batch
+  // MUST be cancelled -- otherwise the next replay (boot, `online`, visibilitychange, SSE
+  // reconnect) deletes the row the user just restored, silently. Reachable inside the 8s
+  // toast: delete while offline, reconnect, click Undo.
+  // ...and `buffered` is only a SNAPSHOT of the moment the batch failed. replayWAL fires
+  // on the `online` event with no delay, so in the up-to-8s gap before the user clicks Undo
+  // the queued delete can land after all. So trust the cancel's return value, not the flag:
+  // true means it really was still pending and is now dropped (nothing was ever deleted, so
+  // there is nothing to revive), false means it already replayed and we must undo for real.
+  if(deleteResult&&deleteResult.buffered){
+    const cancelled=!!(window.blockStore&&window.blockStore.cancelBufferedWrite
+      &&window.blockStore.cancelBufferedWrite(deleteResult.walId,snap.blockIds||[]));
+    if(cancelled){
+      if(typeof showToast==="function")showToast("Task restored","success",2200);
+      return;
+    }
+    // Fall through to the real undelete. Safe on a row that was never deleted:
+    // db.undeleteBlock just clears a deleted_at that is already NULL.
+  }
+  if(snap.blockIds&&snap.blockIds.length&&window.blockStore&&window.blockStore.undeleteBlock){
+    // Per row, because /undelete is single-id. Sequential rather than Promise.all: these
+    // are parent-and-children in one subtree, and a burst of concurrent writes to the
+    // same tree is how sort_order rebalances start fighting each other.
+    //
+    // ACCEPTED LIMITATION, called out because the delete side promises the opposite: this
+    // is N requests, not one transaction, so a permanent rejection partway through leaves
+    // the subtree half-revived server-side. The all-or-nothing version needs an
+    // `undelete` case in db.batchOp, which is Track A's file and out of this phase's
+    // scope; it is handed off in the Coordination log. Until then the overlay below is
+    // restored wholesale so at least the UI does not claim a partial success.
+    let rejected=false;
+    for(const bid of snap.blockIds){
+      const r=await window.blockStore.undeleteBlock(bid);
+      if(r&&r.ok===false&&r.permanent)rejected=true;
     }
     render();
+    if(rejected){
+      // The server refused: a live row already holds this tombstone's idempotency key, or
+      // the row is past the 30-day purge. Put the hide back rather than leaving the
+      // itinerary showing a task the server still considers deleted.
+      snap.ids.forEach(sid=>deletedSet.add(sid));
+      saveDeletedState();
+      recalcTimes();
+      render();
+      if(typeof showToast==="function")showToast("Could not restore that task","error",3200);
+      return;
+    }
   }
   if(typeof showToast==="function")showToast("Task restored","success",2200);
 }

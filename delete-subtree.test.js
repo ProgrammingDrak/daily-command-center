@@ -3,7 +3,8 @@
 //
 // The contract: a delete is one transactional batch of soft-deletes on the whole
 // visible subtree, fired immediately (no setTimeout), through one entry point; Undo
-// re-creates the snapshotted rows verbatim, parents before children.
+// revives those ORIGINAL rows through POST /api/blocks/:id/undelete (B2), after waiting
+// for the delete to land -- the two are not commutative the way B1's re-create was.
 //
 // Harness pattern: recalc-times.test.js / slots-frontend-contract.test.js -- raw
 // source sliced out of the browser file and run in a node:vm context with stubbed
@@ -62,9 +63,22 @@ function ev(id, extra = {}) {
 
 // Build a vm context around one day. `rows` maps ev id -> cached block row; an ev
 // with no entry is a timeline-JSON item with nothing to delete server-side.
-function makeDay({ scheduled, rows = {}, alreadyDeleted = [] }) {
+// `deferDelete` holds the delete batch open so a test can click Undo while it is still
+// in flight -- the race that matters now that Undo revives the SAME row instead of
+// creating a new one. Release it with the returned releaseDelete().
+// `failDelete` makes the delete batch fail the way the real one does -- swallowed, empty
+// blocks, entry left in the WAL -- which is the case Undo has to detect and cancel.
+// `rejectUndelete` makes /undelete refuse permanently (a live twin holds the row's
+// idempotency key, or the row is past the purge).
+// `bufferUndelete` is the OTHER half of undeleteBlock's {ok, permanent} split: not-yet
+// rather than never. `cancelFails` makes cancelBufferedWrite report that the queued delete
+// already replayed, which is what happens when reconnecting fires replayWAL before the click.
+function makeDay({ scheduled, rows = {}, alreadyDeleted = [], deferDelete = false, failDelete = false, rejectUndelete = false, bufferUndelete = false, cancelFails = false }) {
   const batches = [];
+  const undeletes = [];
+  const cancelled = [];
   const toasts = [];
+  let _releaseDelete = null;
   const deletedSet = new Set(alreadyDeleted);
   const context = {
     console,
@@ -97,20 +111,40 @@ function makeDay({ scheduled, rows = {}, alreadyDeleted = [] }) {
       blockStore: {
         batchOp: async (operations) => {
           batches.push(operations);
+          if (deferDelete) await new Promise((r) => { _releaseDelete = r; });
+          // What the real batchOp returns when it swallows a failure and leaves the entry
+          // in the WAL. Undo must notice this rather than treating it as landed.
+          if (failDelete) return { blocks: [], walId: "wal-del", buffered: true };
           return {
-            blocks: operations.map((op) =>
-              op.op === "delete"
-                ? { id: op.id, deleted_at: "2026-07-29T12:00:00.000Z" }
-                : { id: "restored-" + op.properties.local_id, ...op, deleted_at: null }
-            )
+            blocks: operations.map((op) => op.op === "delete"
+              ? { id: op.id, deleted_at: "2026-07-29T12:00:00.000Z" }
+              // A RE-CREATED row would come back under a new id, as it did pre-B2. Keep
+              // answering that way even though nothing should create any more, so that a
+              // returning re-create path actually trips the assertions below instead of
+              // being masked by a stub that cannot express it.
+              : { id: "restored-" + ((op.properties || {}).local_id), ...op, deleted_at: null }),
+            walId: "wal-del",
+            buffered: false
           };
-        }
+        },
+        undeleteBlock: async (id) => {
+          undeletes.push(id);
+          if (rejectUndelete) return { ok: false, permanent: true };
+          // Not-yet, not never: the WAL still holds it and will replay.
+          if (bufferUndelete) return { ok: false, permanent: false };
+          return { ok: true, block: { id, deleted_at: null } };
+        },
+        // Mirrors the real signature: TRUE only when a still-pending entry was cancelled.
+        cancelBufferedWrite: (walId, ids) => { cancelled.push({ walId, ids }); return !cancelFails; }
       }
     }
   };
   vm.createContext(context);
   vm.runInContext([VIEWED_DATE_SRC, SUBTREE_SRC, DELETE_SRC].join("\n"), context);
-  return { context, batches, toasts, deletedSet };
+  return {
+    context, batches, undeletes, cancelled, toasts, deletedSet,
+    releaseDelete: () => { if (_releaseDelete) _releaseDelete(); },
+  };
 }
 
 // ── _subtreeIdsOf ──
@@ -256,7 +290,10 @@ test("delete offers Undo", async () => {
 
 // ── undoDeleteTask ──
 
-test("undo re-creates every row verbatim, parents before children", async () => {
+test("undo revives the ORIGINAL rows through /undelete and re-creates nothing", async () => {
+  // B2 replaces B1's snapshot-and-recreate. The strongest statement of the new contract
+  // is not "the fields come back" but "the row was never replaced, so there is no field
+  // list that could drop one" -- so this asserts no create op reaches the server at all.
   const day = makeDay({
     scheduled: [ev("t1"), ev("t2", { subtaskOf: "t1" }), ev("t3", { subtaskOf: "t2" })],
     rows: {
@@ -276,32 +313,18 @@ test("undo re-creates every row verbatim, parents before children", async () => 
   await day.context.deleteTaskWithUndo("t1");
   await day.context.undoDeleteTask("t1");
 
-  assert.strictEqual(day.batches.length, 2);
-  const creates = plain(day.batches[1]);
-  assert.deepStrictEqual(creates.map((c) => c.op), ["create", "create", "create"]);
-  assert.deepStrictEqual(
-    creates.map((c) => c.properties.local_id),
-    ["t1", "t2", "t3"],
-    "root, then child, then grandchild -- each parent exists before the row pointing at it"
-  );
-  // Every field the block carried comes back, including the ones a
-  // persistAddedTask-shaped restore would have dropped on the floor.
-  assert.deepStrictEqual(creates[0].properties, {
-    local_id: "t1",
-    title: "Ship it",
-    source_id: "https://slack.example/archives/C1/p1",
-    prep_status: "ready",
-    publicVisibility: "private",
-    tags: ["deep"],
-    detail: "notes survive",
-    _locked: true
-  });
-  assert.strictEqual(creates[0].type, "block");
-  assert.strictEqual(creates[0].date, DAY);
+  assert.strictEqual(day.batches.length, 1, "only the delete batch -- undo posts no batch of its own");
+  const everyOp = plain(day.batches).flat();
+  assert.ok(everyOp.every((o) => o.op === "delete"), "no create op is ever issued");
+  assert.deepStrictEqual(day.undeletes, ["B1", "B2", "B3"], "each original row id is revived, root first");
   assert.strictEqual(day.deletedSet.size, 0, "the whole subtree is un-hidden");
 });
 
-test("undo re-points the live rows at their restored blocks", async () => {
+test("undo keeps every id stable, so nothing needs re-pointing", async () => {
+  // B1 had to re-point ev._blockId because the restored rows were new rows with new ids.
+  // /undelete revives the same row, so the id the ev already holds stays correct -- and
+  // that is the assertion, since a "restored-" style id appearing here would mean the
+  // re-create path came back.
   const parent = ev("t1", { _blockId: "B1" });
   const day = makeDay({
     scheduled: [parent],
@@ -309,7 +332,101 @@ test("undo re-points the live rows at their restored blocks", async () => {
   });
   await day.context.deleteTaskWithUndo("t1");
   await day.context.undoDeleteTask("t1");
-  assert.strictEqual(parent._blockId, "restored-t1", "a stale _blockId would aim the next delete at a tombstone");
+  assert.strictEqual(parent._blockId, "B1", "the row id is unchanged, so _blockId was never stale");
+  assert.deepStrictEqual(day.undeletes, ["B1"]);
+});
+
+test("undo CANCELS a delete that never landed, instead of reviving a row that was never deleted", async () => {
+  // Awaiting the delete promise is not enough on its own: batchOp swallows its failure and
+  // resolves either way, so a delete still sitting in the WAL looks exactly like one that
+  // landed. If Undo just proceeded, it would undelete a row that was never deleted and
+  // then the buffered batch would replay on the next reconnect and delete it for real --
+  // silently, with the UI showing the task restored. Reachable inside the 8s toast:
+  // delete while offline, reconnect, click Undo.
+  const day = makeDay({
+    scheduled: [ev("t1")],
+    rows: { t1: row("B1", "t1") },
+    failDelete: true
+  });
+  await day.context.deleteTaskWithUndo("t1");
+  await day.context.undoDeleteTask("t1");
+
+  assert.deepStrictEqual(day.undeletes, [], "nothing to revive -- the delete never reached the server");
+  // plain(): `ids` is an array built inside the vm realm, so deepStrictEqual would reject
+  // it on prototype identity alone.
+  assert.deepStrictEqual(plain(day.cancelled), [{ walId: "wal-del", ids: ["B1"] }], "the queued delete is abandoned, not left to replay");
+  assert.strictEqual(day.deletedSet.size, 0, "and the task is un-hidden");
+});
+
+test("if the buffered delete already replayed, undo stops trusting the flag and undeletes for real", async () => {
+  // `buffered` is a snapshot from when the batch failed; replayWAL fires on `online` with no
+  // delay, so the delete can land in the gap before the click. cancelBufferedWrite reporting
+  // false is the only way to know, and skipping the undelete on a stale flag would leave the
+  // row deleted server-side while the UI claims it is back.
+  const day = makeDay({
+    scheduled: [ev("t1")],
+    rows: { t1: row("B1", "t1") },
+    failDelete: true,
+    cancelFails: true
+  });
+  await day.context.deleteTaskWithUndo("t1");
+  await day.context.undoDeleteTask("t1");
+  assert.deepStrictEqual(day.undeletes, ["B1"], "it falls through and revives the row for real");
+  assert.strictEqual(day.deletedSet.size, 0);
+});
+
+test("a BUFFERED undelete keeps the restore, because the WAL will replay it", async () => {
+  // Only a PERMANENT rejection may re-hide. Treating a retryable failure the same way would
+  // persist a hide through saveDeletedState while the WAL goes on to succeed, leaving the row
+  // live server-side and invisible locally across reloads -- this phase's bug, inverted.
+  const day = makeDay({ scheduled: [ev("t1")], rows: { t1: row("B1", "t1") }, bufferUndelete: true });
+  await day.context.deleteTaskWithUndo("t1");
+  await day.context.undoDeleteTask("t1");
+  assert.strictEqual(day.deletedSet.size, 0, "a retryable failure must NOT re-hide");
+  const last = day.toasts[day.toasts.length - 1];
+  assert.match(last.msg, /Task restored/, "only a permanent rejection is allowed to say otherwise");
+});
+
+test("a permanently rejected undelete re-hides the task instead of claiming it came back", async () => {
+  // 409 from /undelete means a live row already holds this tombstone's idempotency key.
+  // The row stays deleted server-side, so leaving the overlay un-hidden would show a task
+  // that vanishes again on the next reload.
+  const day = makeDay({
+    scheduled: [ev("t1"), ev("t2", { subtaskOf: "t1" })],
+    rows: { t1: row("B1", "t1"), t2: row("B2", "t2") },
+    rejectUndelete: true
+  });
+  await day.context.deleteTaskWithUndo("t1");
+  await day.context.undoDeleteTask("t1");
+
+  assert.deepStrictEqual(day.undeletes, ["B1", "B2"], "it tried every row");
+  assert.deepStrictEqual([...day.deletedSet].sort(), ["t1", "t2"], "and put the hide back when the server refused");
+  const last = day.toasts[day.toasts.length - 1];
+  assert.match(last.msg, /Could not restore/, "the user is told the truth, not 'Task restored'");
+  assert.strictEqual(last.kind, "error");
+});
+
+test("undo waits for the in-flight delete before reviving, or the restore is lost", async () => {
+  // The one race /undelete introduces that B1's design did not have. Undo is clickable
+  // while the delete batch is still in flight; if the undelete reached the server first
+  // it would clear a deleted_at that is not set yet, the delete would then land, and the
+  // task would be gone server-side while the UI showed it restored.
+  const day = makeDay({
+    scheduled: [ev("t1")],
+    rows: { t1: row("B1", "t1") },
+    deferDelete: true
+  });
+  const deleting = day.context.deleteTaskWithUndo("t1");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepStrictEqual(day.batches.length, 1, "the delete is in flight");
+
+  const undoing = day.context.undoDeleteTask("t1");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepStrictEqual(day.undeletes, [], "undo must NOT have revived anything yet");
+
+  day.releaseDelete();
+  await Promise.all([deleting, undoing]);
+  assert.deepStrictEqual(day.undeletes, ["B1"], "it revives only once the delete has landed");
 });
 
 test("undo does not resurrect a subtask deleted before its parent", async () => {
