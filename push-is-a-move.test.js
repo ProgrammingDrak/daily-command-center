@@ -52,7 +52,7 @@ const TOMORROW = "2026-08-01";
 
 // `rows` maps ev id -> the cached block row backing it. An ev with no entry is a
 // day-state-only task: rendered from the day's JSON with no row to move.
-function load({ scheduled, rows = {}, rescheduleFails = null } = {}) {
+function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor = [] } = {}) {
   const calls = { reschedule: [], created: [], deleted: [], toasts: [], logs: [], reslot: [], fetched: [], slotFor: [] };
   const deletedSet = new Set();
   const addedTasks = [];
@@ -112,6 +112,7 @@ function load({ scheduled, rows = {}, rescheduleFails = null } = {}) {
     // dead guard. The counter keeps ids predictable for assertions without making them
     // stable across calls.
     persistAddedTask: async (item, date) => {
+      if (failMaterializeFor.includes(item.id)) throw new Error("create refused");
       const b = { id: "new-" + item.id + (materializeCount ? "-" + materializeCount : ""), date, properties: { local_id: item.id, title: item.title } };
       materializeCount++;
       createdBlocks.push(b); calls.created.push({ item, date, block: b }); return b;
@@ -457,15 +458,54 @@ test("Restore un-hides the row-less children too, not just the parent", async ()
   assert.equal(deletedSet.has("ds-kid"), false, "and its row-less child, or the subtask is lost for good");
 });
 
-test("a parent cycle among row-less children terminates instead of blowing the stack", async () => {
+test("a parent cycle among row-less children terminates AND mints no duplicate row", async () => {
   // `scheduled` carries real parent cycles (see _subtreeIdsOf). The recursion only fires on
   // row-less children, so this is the shape that reaches it.
-  const { context, deletedSet } = load({
+  //
+  // The row-count assertion is the load-bearing half, and asserting only that the walk
+  // terminated passed with a duplicate present. `_seen` guarded the recursion but not the
+  // CREATE: the walk comes back onto the root, whose brand-new row is on the TARGET date, so
+  // _findTaskBlockForDate refuses it (it will not return a row from another date) and a SECOND
+  // row with the same local_id was minted. The fold dedupes by ev id, so that twin renders
+  // nowhere while both rows exist -- one task, two rows, neither authoritative.
+  const { context, calls, deletedSet } = load({
     scheduled: [ev("A", { subtaskOf: "B" }), ev("B", { subtaskOf: "A" })],
     rows: {},
   });
   await vm.runInContext(`rescheduleTaskToDate("A","${TOMORROW}")`, context);
   assert.ok(deletedSet.has("B"), "the cycle's other end was reached and the walk returned");
+  const rowsForA = calls.created.filter((c) => (c.item.id || c.item.local_id) === "A" && c.item.kind !== "reschedule_tombstone");
+  assert.equal(rowsForA.length, 1, "one row per task per move, not two sharing a local_id");
+});
+
+test("a subtask that failed to materialize stays VISIBLE on the origin day", async () => {
+  // It did not move, so it must not be hidden -- and it must not be spliced out of the view
+  // either. _removeSubtreeFromScheduled walks the whole subtree, so without re-inserting it
+  // the row vanishes for one render and comes back as an orphaned root on the next reload.
+  const { context, deletedSet } = load({
+    scheduled: [ev("notion-1"), ev("ds-kid", { subtaskOf: "notion-1" }), ev("other")],
+    rows: {},
+    failMaterializeFor: ["ds-kid"],
+  });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const left = [...vm.runInContext("scheduled.map(e=>e.id)", context)];
+  assert.ok(left.includes("ds-kid"), "the child that could not move stays on this day: " + JSON.stringify(left));
+  assert.equal(deletedSet.has("ds-kid"), false, "and is NOT hidden, because it did not move");
+  assert.equal(left.includes("notion-1"), false, "while the parent, which did move, is gone");
+});
+
+test("a half-move is reported even when the caller asked for silence", async () => {
+  // The silent caller is toggleDone's done-on-date flow, which goes on to mark the task
+  // complete. "Some of this task stayed on another day" is exactly what it must not swallow.
+  const { context, calls } = load({
+    scheduled: [ev("notion-1"), ev("ds-kid", { subtaskOf: "notion-1" })],
+    rows: {},
+    failMaterializeFor: ["ds-kid"],
+  });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}",{silent:true})`, context);
+  assert.ok(calls.toasts.some((t) => /stayed behind/i.test(t.msg)),
+    "a partial move speaks up regardless of opts.silent, got: " + JSON.stringify(calls.toasts));
+  assert.equal(calls.toasts.some((t) => t.kind === "success"), false, "but the clean-move toast stays suppressed");
 });
 
 test("a second move off the same day to a DIFFERENT date refreshes the amber destination", async () => {

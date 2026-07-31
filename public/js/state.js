@@ -752,11 +752,17 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   // Children BEFORE the view cleanup: the lookups below read `scheduled`, so removing
   // rows from it first would hide the very children that need moving.
   const childMove=await _moveOriginDayChildrenTo(id,targetDate,fromDate);
+  // A child that did NOT move is still on this day, so it must stay in the view. Captured
+  // before the removal below, which walks the whole subtree and would splice it out — hiding
+  // it for one render and then resurrecting it as an orphaned root on the next reload, which
+  // is the stranding this phase exists to delete, just deferred.
+  const keepVisible=childMove.failed.map(fid=>scheduled.find(e=>e.id===fid)).filter(Boolean);
   // Same optimistic cleanup the true move does. Without it the children whose rows were
   // just re-dated stay in `scheduled` on this day, and because their parent is now
   // filtered out they render as top-level OPEN roots (flattenSchedule treats a row whose
   // parent is absent as a root) AND keep counting toward the day's scheduled points.
   _removeSubtreeFromScheduled(id);
+  for(const back of keepVisible)if(!scheduled.find(e=>e.id===back.id))scheduled.push(back);
   // The optimistic removal is per-render; the overlay is what survives a reload, because
   // the day-state JSON still lists the parent. Both are needed.
   deletedSet.add(id);
@@ -769,11 +775,14 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   }catch(e){}
   await _writeRescheduleTombstone(ev,fromDate,targetDate,block&&block.id,childMove.hidden);
   log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
-  if(!opts.silent&&typeof showToast==="function"){
-    // A half-move must not report as a clean one.
+  // A half-move must not report as a clean one — and unlike the success toast, this one is
+  // NOT suppressed by opts.silent. The silent caller is toggleDone's done-on-date flow, which
+  // goes on to mark the task complete; "some of this task stayed on another day" is exactly
+  // what that caller must not swallow.
+  if(typeof showToast==="function"){
     if(childMove.failed.length){
       showToast("Moved to "+_prettyDateLabel(targetDate)+" — "+childMove.failed.length+" subtask"+(childMove.failed.length>1?"s":"")+" stayed behind","info",4200);
-    } else {
+    } else if(!opts.silent){
       showToast("Moved to "+_prettyDateLabel(targetDate),"success");
     }
   }
@@ -810,6 +819,17 @@ async function _moveOriginDayChildrenTo(parentId,targetDate,fromDate,_seen){
       // unrecoverably, because Restore un-hides the parent's id and nothing else ever
       // removes an id from `_deleted` for a task with no visible row.
       // persistAddedTask carries subtaskOf/wrapId through, so the nesting edge survives.
+      //
+      // `_seen` gates the CREATE, not just the recursion below. A parent cycle (A->B->A, and
+      // this repo's data really carries them — see _subtreeIdsOf) walks back onto an id this
+      // same move already materialized: the row is on the TARGET date by then, so
+      // _findTaskBlockForDate refuses it (it will not return a row from another date) and
+      // this branch would mint a SECOND row with the same local_id. The fold dedupes by ev id,
+      // so the twin renders nowhere while both rows exist — one task, two rows, neither
+      // authoritative, which is the exact failure the pushed subsystem was deleted over.
+      // Skipping is safe: the recursion would have returned immediately on `_seen`, and the
+      // root is already hidden by _materializeTaskOnDate.
+      if(_seen.has(kid.id))continue;
       let kidBlk=null;
       try{kidBlk=await persistAddedTask(Object.assign({},kid),targetDate);}catch(e){
         console.warn("[reschedule] subtask "+kid.id+" could not be materialized: "+(e&&e.message));
