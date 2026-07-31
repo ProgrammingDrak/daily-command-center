@@ -230,7 +230,19 @@
     if (!entry || !err) return false;
     if (err.status === 401 || err.status === 403) return false;
     if (err.status === 400) return true;
-    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule") && err.status === 404) return true;
+    // "batch" belongs in this list as of #260/#262, and its absence was a
+    // retry-forever bug rather than a missing nicety. /api/blocks/batch now authorizes
+    // every id it references and 404s on one the caller does not own, and #262 made
+    // GET /api/blocks/:id 404 on a tombstone. B1 had already made /batch the CANONICAL
+    // client delete path, so this is the common path, not an exotic one.
+    //
+    // Note the asymmetry with the first attempt, which is deliberate and is why this
+    // is the only place the fix belongs: blockStore.batchOp swallows its own failure
+    // and returns { blocks: [] } without ever consulting this function, so a 404 there
+    // is always buffered. The loop below is the only consulter — and a `false` verdict
+    // there means the entry is re-queued forever behind a permanent "N edits pending"
+    // banner, because nothing else caps a batch's attempts.
+    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch") && err.status === 404) return true;
     return false;
   }
 
@@ -246,9 +258,25 @@
     // long since retried or moved on, and replaying it now silently yanks the
     // task to wherever the old attempt pointed (the pre-#167 "reversal" bug).
     const RESCHEDULE_REPLAY_MAX_AGE_MS = 15 * 60 * 1000;
+    // A create gets a far longer leash than a reschedule, and for a different reason —
+    // mirroring the mechanism, not the rationale. Replaying an old reschedule is
+    // ACTIVELY harmful (it yanks the task to where a long-abandoned attempt pointed),
+    // which is why 15 minutes. Replaying an old create is now HARMLESS, because the
+    // client-minted id makes it idempotent: worst case the server hands back the row it
+    // already has. So the cap here is not protecting data, it is stopping an entry that
+    // will never succeed from retrying forever and pinning a permanent "N edits
+    // pending" banner. 24h is past any offline stretch a real session survives —
+    // localStorage outlives the tab, so without a cap an entry from a dead server or a
+    // since-revoked session is immortal.
+    const CREATE_REPLAY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     for (const entry of entries) {
       if (entry.op === "reschedule" && entry.timestamp && (Date.now() - Date.parse(entry.timestamp)) > RESCHEDULE_REPLAY_MAX_AGE_MS) {
         walMoveToDeadLetter(entry, "stale reschedule (>15min old)");
+        dropped++;
+        continue;
+      }
+      if (entry.op === "create" && entry.timestamp && (Date.now() - Date.parse(entry.timestamp)) > CREATE_REPLAY_MAX_AGE_MS) {
+        walMoveToDeadLetter(entry, "stale create (>24h old)");
         dropped++;
         continue;
       }
@@ -305,7 +333,27 @@
     // Create a new block
     async createBlock(type, properties, { parentId, date, sortOrder } = {}) {
       setSaving();
+      // MINT THE ROW ID HERE. This is what makes a create idempotent, and it is the
+      // whole point of B2: db.createBlock's `ON CONFLICT (id) DO NOTHING` (A3) absorbs
+      // a replay of this same payload and hands back the row it already has, instead
+      // of inserting a second one.
+      //
+      // Before this, the server minted the id. A create the server COMMITTED but whose
+      // ack was lost stayed in the WAL (walRemove only runs on ack), replayed on the
+      // next reconnect, and the server minted a FRESH uuid for the replay — nothing
+      // linked the two rows, so one lost ack produced two tasks with the same
+      // local_id. That is the live duplicate generator behind a real share of the
+      // "clogged up" itinerary, and a caller-controlled id is what closes it.
+      // Guarded exactly as walPush guards its own id, and for the same reason: the two
+      // must not have different failure modes. crypto.randomUUID needs a secure context
+      // and we only ever run on https or localhost, but if it were ever missing, walPush
+      // would keep working while this threw. `blocks.id` is TEXT, not uuid, so the
+      // fallback is a legal primary key rather than a deferred constraint violation.
+      const id = (crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : ("c-" + Date.now() + "-" + Math.random().toString(36).slice(2));
       const payload = {
+        id,
         type,
         parent_id: parentId || null,
         date: date !== undefined ? date : _currentDate,
@@ -314,10 +362,10 @@
       };
       // Optimistic cache update BEFORE API call — so reads (e.g. loadNotes) are instant
       // and don't race with the async API response. Same pattern as updateBlock().
-      const tmpId = 'tmp-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      // The id is final from the start now, so there is no placeholder entry to swap out
+      // afterwards and no window where the cache holds an id nothing else can resolve.
       const optimistic = {
-        id: tmpId, ...payload,
-        properties,
+        ...payload,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         deleted_at: null
@@ -327,10 +375,13 @@
       const walId = walPush({ op: "create", data: payload });
       try {
         const block = await apiPost("/api/blocks", payload);
-        // Swap optimistic entry for the real server block
-        _dayCache.delete(tmpId);
-        _globalCache.delete(tmpId);
-        cacheSet(block);
+        // A tombstone can come back here: the id collided with a row this client
+        // created earlier and then deleted, and db.createBlock's fallback is
+        // tombstone-inclusive on purpose. cacheSet would file a deleted row back into
+        // the day cache and resurrect the task — the same trap B1 hit caching a delete
+        // op's { id, deleted_at } stub.
+        if (block && block.deleted_at) cacheDelete(block.id);
+        else if (block) cacheSet(block);
         walRemove(walId);
         setSaved();
         return block;
