@@ -52,9 +52,19 @@ test("the pool is the origin date plus LINKED undated strays, task rows only", a
     /b\.date = \$1 OR \(b\.date IS NULL AND \(b\.properties->>'subtaskOf' IS NOT NULL OR b\.properties->>'wrapId' IS NOT NULL\)\)/,
     "an undated row joins ONLY when it carries a link — otherwise every dateless delegated_item rides along on every reschedule"
   );
+  // COMPOSITION, which none of the fragment matches above can see. Flip `AND ${isTask}` to
+  // `OR ${isTask}` and every assertion in this test still passes verbatim — while the query
+  // now admits every meeting_prep / meeting_summary row on the day, which is exactly how a
+  // task move ends up re-dating a meeting's prep doc. The predicate is a pure conjunction, so
+  // once parenthesised groups are collapsed no top-level OR may survive.
+  const where = sql.slice(sql.indexOf("WHERE")).split("ORDER BY")[0];
+  let flat = where, prev;
+  do { prev = flat; flat = flat.replace(/\([^()]*\)/g, "@"); } while (flat !== prev);
+  assert.equal(/\bOR\b/.test(flat), false,
+    "top-level predicate must be all-AND; an OR here admits non-task rows: " + flat);
 });
 
-test("the pool admits no meeting artifact, by either half of its task test", async () => {
+test("the task filter admits tasks rather than blacklisting known artifact kinds", async () => {
   // The exclusion is structural rather than a kind blacklist: artifacts carry neither a
   // local_id nor kind 'task'. Assert the query does not try to name them, so nobody
   // "simplifies" it into a blacklist that a new artifact kind would slip past.

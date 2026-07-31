@@ -165,8 +165,8 @@ test("the modal names the task and the date it was scheduled for", () => {
 
 // ── Context for the CHAIN half: the real toggleDone + commitDoneOnDate, with the
 // mover and the ledger spied on.
-function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30" }], rescheduleRemovesRow = false } = {}) {
-  const calls = { reschedule: [], commit: [], credit: [], confirm: [], patched: [] };
+function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30" }], rescheduleRemovesRow = false, rescheduleResult = undefined } = {}) {
+  const calls = { reschedule: [], commit: [], credit: [], confirm: [], patched: [], toasts: [] };
   const manualDone = new Set();
   const context = {
     console,
@@ -193,7 +193,7 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
     _pointAwardOverride: (id) => (scheduled.find((e) => e.id === id) ? 42 : undefined),
     _prettyDateLabel: (d) => d,
     _actualTodayStr: () => TODAY,
-    showToast: () => {},
+    showToast: (msg, kind) => calls.toasts.push({ msg, kind }),
     openCompletionDateConfirm: (id, src, today) => calls.confirm.push({ id, src, today }),
     awardSlotTaskCredit: (ev, opts) => calls.credit.push({ ev: { ...ev }, opts: { ...opts } }),
     localStorage: { getItem: () => null, setItem: () => {} },
@@ -211,7 +211,10 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
         const i = scheduled.findIndex((e) => e.id === id);
         if (i >= 0) scheduled.splice(i, 1);
       }
-      return { id };
+      // FALSE is the server permanently refusing; undefined is a transient failure the WAL
+      // will replay. The two must be treated differently by the caller, so the harness has to
+      // be able to express both.
+      return rescheduleResult === undefined ? { id } : rescheduleResult;
     },
   };
   context.USE_BLOCKSTORE = context.window.USE_BLOCKSTORE;
@@ -288,4 +291,40 @@ test("Today choice credits the REAL task even though the move already removed it
   // Same handoff, other half: the pie/rollup award is only computable while the row is
   // live, so it is captured before the move and forwarded, not recomputed after.
   assert.equal(calls.credit[0].opts.awardPoints, 42, "carries the award computed before the move");
+});
+
+test("a PERMANENTLY refused move does NOT bank the completion", async () => {
+  // The consuming half of the FALSE sentinel, and the half that actually protects the ledger.
+  // push-is-a-move.test.js pins that the mover RESOLVES false; this pins that toggleDone acts
+  // on it. Without the guard, a 400 ("Block is deleted", "Block not found") still patched the
+  // target day's _done overlay, wrote pa-done-<date> and banked points — for a task sitting
+  // unchecked on the day the user was looking at.
+  const { context, calls } = makeChainCtx({ rescheduleResult: false });
+  vm.runInContext(`toggleDone("t1",{markOnDate:"${TODAY}",bringToToday:true})`, context);
+  await flush(); await flush();
+  assert.equal(calls.commit.length, 0, "no commit: the task never reached that date");
+  assert.equal(calls.credit.length, 0, "and no points banked on a day it is not on");
+  assert.equal(calls.patched.length, 0, "that day's _done overlay is untouched");
+});
+
+test("a refused move SAYS so, instead of closing the dialog in silence", async () => {
+  // The mover runs with {silent:true} so the completion toast can be the only one, which
+  // suppresses the mover's own error toast. Skipping the commit silently would leave the user
+  // with a closed dialog, an unchecked task, and no explanation.
+  const { context, calls } = makeChainCtx({ rescheduleResult: false });
+  vm.runInContext(`toggleDone("t1",{markOnDate:"${TODAY}",bringToToday:true})`, context);
+  await flush(); await flush();
+  const err = calls.toasts.find((t) => t.kind === "error");
+  assert.ok(err, "the user has to be told: " + JSON.stringify(calls.toasts));
+  assert.match(err.msg, /not marked done/i);
+});
+
+test("a TRANSIENT failure still commits, because the WAL will land the move", async () => {
+  // The asymmetry is the whole point of the sentinel: undefined means "queued, it will
+  // happen", so the completion is correct and must not be dropped with it.
+  const { context, calls } = makeChainCtx({ rescheduleResult: undefined });
+  vm.runInContext(`toggleDone("t1",{markOnDate:"${TODAY}",bringToToday:true})`, context);
+  await flush(); await flush();
+  assert.equal(calls.commit.length, 1, "a queued move still completes the task");
+  assert.equal(calls.credit.length, 1);
 });

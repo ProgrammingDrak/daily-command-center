@@ -53,7 +53,7 @@ const TOMORROW = "2026-08-01";
 // `rows` maps ev id -> the cached block row backing it. An ev with no entry is a
 // day-state-only task: rendered from the day's JSON with no row to move.
 function load({ scheduled, rows = {}, rescheduleFails = null } = {}) {
-  const calls = { reschedule: [], created: [], deleted: [], toasts: [], logs: [], reslot: [] };
+  const calls = { reschedule: [], created: [], deleted: [], toasts: [], logs: [], reslot: [], fetched: [], slotFor: [] };
   const deletedSet = new Set();
   const addedTasks = [];
   // What saveDeletedState persisted into the day_root `_deleted` overlay, i.e. what
@@ -92,7 +92,7 @@ function load({ scheduled, rows = {}, rescheduleFails = null } = {}) {
     _prettyDateLabel: (d) => d,
     _resolvedTodayDate: () => TODAY,
     _resolvedTomorrowDate: () => TOMORROW,
-    _computeRescheduleSlot: async () => ({ start: "10:00", end: "10:30", duration: 30 }),
+    _computeRescheduleSlot: async (evArg) => { calls.slotFor.push(evArg && { id: evArg.id, start: evArg.start, end: evArg.end }); return { start: "10:00", end: "10:30", duration: 30 }; },
     _clearTaskPinAndLock: () => {},
     // The same-day re-slot branch. Recorded, not no-ops: a same-day "move" must take
     // this path and must never reach the cross-date mover.
@@ -125,7 +125,16 @@ function load({ scheduled, rows = {}, rescheduleFails = null } = {}) {
       deletedSet.clear();
       persisted.forEach((sid) => deletedSet.add(sid));
     },
-    fetch: async () => ({ ok: true, json: async () => ({ id: "new-notion-1", properties: {} }) }),
+    // A DISTINCT id from the tombstone's movedBlockId, and real properties. Sharing
+    // "new-notion-1" with movedBlockId let the restore assertion pass off EITHER source, so a
+    // version that stopped using the tombstone's id still looked correct; and `properties: {}`
+    // meant restore's whole ev reconstruction fell through to defaults, pinning none of the
+    // fields it actually reads.
+    fetch: async (url) => {
+      calls.fetched.push(String(url));
+      return { ok: true, json: async () => ({ id: "not-the-moved-row",
+        properties: { local_id: "notion-1", title: "Task notion-1", start: "14:00", duration: 45 } }) };
+    },
     window: {
       blockStore: {
         // Backed by what createBlock actually recorded, so the tombstone dedupe guard is
@@ -139,6 +148,16 @@ function load({ scheduled, rows = {}, rescheduleFails = null } = {}) {
         },
         createBlock: async (type, props, opts) => { const b = { id: "created-" + (props.local_id || "x"), type, date: opts && opts.date, properties: props }; createdBlocks.push(b); calls.created.push({ item: props, date: opts && opts.date, block: b }); return b; },
         deleteBlock: async (id) => { calls.deleted.push(id); const i = createdBlocks.findIndex((b) => b.id === id); if (i >= 0) createdBlocks.splice(i, 1); },
+        // Was missing entirely, so the tombstone-refresh path threw into its own catch and
+        // silently did nothing -- the test read the stale destination and looked like a
+        // production bug. A stub that is absent is not a neutral stub.
+        updateBlock: async (id, props) => {
+          calls.updated = calls.updated || [];
+          calls.updated.push({ id, props });
+          const b = createdBlocks.find((x) => x.id === id);
+          if (b) b.properties = { ...props };
+          return b || { id, properties: props };
+        },
         loadDay: async () => {},
       },
     },
@@ -272,6 +291,10 @@ test("restoring a materialized move leaves the task VISIBLE, not hidden on both 
   // Note this became reachable only because C3 started writing movedBlockId. Before that the
   // Restore button was inert, so the fix that made it work is what exposed this.
   const { context, calls, deletedSet } = load({ scheduled: [ev("notion-1")], rows: {} });
+  // A real day's hide set is not just the moved task. Seeded so the assertion can tell
+  // "un-hid the restored task" from "un-hid everything" -- `deletedSet.clear()` would read
+  // identically without this, while resurrecting every task the user deleted on this day.
+  vm.runInContext('deletedSet.add("user-deleted-this"); saveDeletedState();', context);
   await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
   assert.ok(deletedSet.has("notion-1"), "hidden on the origin day by the move");
   const tomb = calls.created.find((c) => c.item.kind === "reschedule_tombstone");
@@ -279,6 +302,8 @@ test("restoring a materialized move leaves the task VISIBLE, not hidden on both 
   await vm.runInContext(`restoreRescheduledAway("${tomb.block.id}")`, context);
   assert.equal(deletedSet.has("notion-1"), false,
     "restore must un-hide the origin-day copy, or the task is on one day and visible on none");
+  assert.ok(deletedSet.has("user-deleted-this"),
+    "and ONLY that one -- a restore must not resurrect the day's other deletes");
   assert.deepEqual(calls.deleted, [tomb.block.id], "and the amber entry is cleared");
 });
 
@@ -366,13 +391,97 @@ test("no file in public/js still reads the deleted pushed subsystem", async () =
     "schedulePushedOnDate", "schedulePushedOnTomorrow", "unschedulePushedFromTomorrow",
     "loadDeferred", "saveDeferred", "_cloneTaskForReschedule", "_rescheduledTaskId",
     "_hideSourceTaskForReschedule", "_rescheduleSubtaskSubtree", "_unfProgress", "_scheduleTaskOnDate"];
+  // ANY reference, not `sym(`. Most of these were never functions: `pushedSet` and `pushedAt`
+  // were module state read as `pushedSet.has(id)` / `pushedAt[id]`, with no paren after the
+  // name, and read cross-file so a definition check does not help either. A `sym\s*\(` sweep
+  // also misses `isPushed?.(ev)` and `window["isPushed"](ev)`. Every one of those is a hard
+  // ReferenceError in the browser now.
+  //
+  // tabs.js has an unrelated local `const isPushed` for the meeting-doc "Push to Doc" button,
+  // so that ONE file is exempt for that ONE symbol — rather than stripping
+  // `const isPushed = ...` out of every file, which would erase a genuine reintroduction.
+  const EXEMPT = { "tabs.js": new Set(["isPushed"]) };
+  const strip = (s) => s
+    .replace(/\/\*[\s\S]*?\*\//g, "")     // block comments describe the deletion on purpose
+    .replace(/(^|\s)\/\/[^\n]*/g, "$1");  // line AND trailing comments; \s keeps http:// intact
   for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {
-    const src = fs.readFileSync(path.join(dir, f), "utf8")
-      .replace(/^\s*\/\/.*$/gm, "")              // comments describe the deletion on purpose
-      .replace(/const isPushed = [^\n]*\n/g, ""); // tabs.js "Push to Doc" local, unrelated
+    const src = strip(fs.readFileSync(path.join(dir, f), "utf8"));
     for (const sym of syms) {
-      assert.equal(new RegExp("\\b" + sym + "\\s*\\(").test(src), false, f + " still calls " + sym + "()");
-      assert.equal(new RegExp("(function|let|const|var)\\s+" + sym + "\\b").test(src), false, f + " still defines " + sym);
+      if (EXEMPT[f] && EXEMPT[f].has(sym)) continue;
+      assert.equal(new RegExp("\\b" + sym + "\\b").test(src), false, f + " still references " + sym);
     }
   }
+});
+
+test("restore reads the row movedBlockId names, and slots it with that row's real duration", async () => {
+  const { context, calls } = load({ scheduled: [ev("notion-1")], rows: {} });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const tomb = calls.created.find((c) => c.item.kind === "reschedule_tombstone");
+  const slotsBefore = calls.slotFor.length;
+  await vm.runInContext(`restoreRescheduledAway("${tomb.block.id}")`, context);
+  assert.deepEqual(calls.fetched, ["/api/blocks/" + tomb.item.movedBlockId],
+    "it fetches the row the tombstone names, not something it inferred");
+  const slotEv = calls.slotFor[slotsBefore];
+  assert.equal(slotEv.start, "14:00", "the slot is computed from the FETCHED row's start");
+  assert.equal(slotEv.end, "00:45", "and its real duration, not a 30-minute default");
+});
+
+test("a row-less child is MATERIALIZED on the target date, not just hidden", async () => {
+  // The regression round 2 caught. Hiding a day-state-only child without giving it a row on
+  // the target date removed it from every day: its only representation was the origin day's
+  // JSON, and once that id is in `_deleted` nothing renders it and nothing can un-hide it.
+  const { context, calls, deletedSet } = load({
+    scheduled: [ev("notion-1"), ev("ds-kid", { subtaskOf: "notion-1" })],
+    rows: {},
+  });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const kidCreate = calls.created.find((c) => (c.item.id || c.item.local_id) === "ds-kid");
+  assert.ok(kidCreate, "the child gets a row on the target date: " + JSON.stringify(calls.created.map((c) => c.item.id || c.item.local_id)));
+  assert.equal(kidCreate.date, TOMORROW);
+  assert.equal(kidCreate.item.subtaskOf, "notion-1", "and keeps its nesting edge");
+  assert.ok(deletedSet.has("ds-kid"), "the origin day's day-state copy is still hidden");
+});
+
+test("Restore un-hides the row-less children too, not just the parent", async () => {
+  // Un-hiding only sourceLocalId left those ids in `_deleted` forever, because nothing else
+  // removes an id from that overlay for a task with no visible row.
+  const { context, calls, deletedSet } = load({
+    scheduled: [ev("notion-1"), ev("ds-kid", { subtaskOf: "notion-1" })],
+    rows: {},
+  });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const tomb = calls.created.find((c) => c.item.kind === "reschedule_tombstone");
+  assert.deepEqual([...tomb.item.hiddenLocalIds], ["ds-kid"], "the tombstone records what the move hid");
+  await vm.runInContext(`restoreRescheduledAway("${tomb.block.id}")`, context);
+  assert.equal(deletedSet.has("notion-1"), false, "parent un-hidden");
+  assert.equal(deletedSet.has("ds-kid"), false, "and its row-less child, or the subtask is lost for good");
+});
+
+test("a parent cycle among row-less children terminates instead of blowing the stack", async () => {
+  // `scheduled` carries real parent cycles (see _subtreeIdsOf). The recursion only fires on
+  // row-less children, so this is the shape that reaches it.
+  const { context, deletedSet } = load({
+    scheduled: [ev("A", { subtaskOf: "B" }), ev("B", { subtaskOf: "A" })],
+    rows: {},
+  });
+  await vm.runInContext(`rescheduleTaskToDate("A","${TOMORROW}")`, context);
+  assert.ok(deletedSet.has("B"), "the cycle's other end was reached and the walk returned");
+});
+
+test("a second move off the same day to a DIFFERENT date refreshes the amber destination", async () => {
+  // The dedupe key (sourceLocalId) is also the key the SERVER writes, so this guard can match
+  // a tombstone left by a true move of the same task off the same day. Returning blind then
+  // leaves the amber row naming an older destination and its Restore pointing at the wrong row.
+  const LATER = "2026-08-05";
+  const { context, calls } = load({ scheduled: [ev("notion-1")], rows: {} });
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${TOMORROW}")`, context);
+  const tomb = calls.created.find((c) => c.item.kind === "reschedule_tombstone");
+  vm.runInContext('deletedSet.delete("notion-1"); scheduled.push({id:"notion-1",title:"Task notion-1",start:"09:00",end:"09:30",source:"manual"})', context);
+  await vm.runInContext(`rescheduleTaskToDate("notion-1","${LATER}")`, context);
+  const tombs = calls.created.filter((c) => c.item.kind === "reschedule_tombstone");
+  assert.equal(tombs.length, 1, "still one tombstone per (task, origin day)");
+  const live = vm.runInContext("window.blockStore.get(" + JSON.stringify(tomb.block.id) + ")", context);
+  const p = live && live.properties;
+  assert.equal(p.rescheduledTo, LATER, "the amber row must name where the task actually went");
+  assert.notEqual(p.movedBlockId, tomb.item.movedBlockId, "and Restore must point at the row that now holds it");
 });

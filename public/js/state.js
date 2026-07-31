@@ -767,7 +767,7 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
     const after=before.filter(t=>t.id!==id);
     if(after.length!==before.length)saveAddedTasks(after);
   }catch(e){}
-  await _writeRescheduleTombstone(ev,fromDate,targetDate,block&&block.id);
+  await _writeRescheduleTombstone(ev,fromDate,targetDate,block&&block.id,childMove.hidden);
   log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
   if(!opts.silent&&typeof showToast==="function"){
     // A half-move must not report as a clean one.
@@ -802,11 +802,20 @@ async function _moveOriginDayChildrenTo(parentId,targetDate,fromDate,_seen){
   for(const kid of kids){
     const kidBlock=_findTaskBlockForDate(kid.id,fromDate,kid);
     if(!kidBlock){
-      // Day-state-only child: there is no row to re-date, so the only honest thing is to
-      // hide it with its parent. Leaving it visible renders it as an orphaned root on the
-      // origin day forever, and its own block-backed children would never be reached
-      // either — no rescheduleBlock call means no server-side subtree walk for them.
-      out.hidden.push(kid.id);
+      // Day-state-only child: there is no row to re-date, so MATERIALIZE it on the target
+      // date exactly as its parent is materialized, then hide the origin day's day-state
+      // copy. Hiding without creating is what the first cut of this did, and it deleted the
+      // subtask outright: the day-state entry was its only representation, so once it was in
+      // the origin day's `_deleted` overlay the task existed on no day at all — and
+      // unrecoverably, because Restore un-hides the parent's id and nothing else ever
+      // removes an id from `_deleted` for a task with no visible row.
+      // persistAddedTask carries subtaskOf/wrapId through, so the nesting edge survives.
+      let kidBlk=null;
+      try{kidBlk=await persistAddedTask(Object.assign({},kid),targetDate);}catch(e){
+        console.warn("[reschedule] subtask "+kid.id+" could not be materialized: "+(e&&e.message));
+      }
+      if(!kidBlk)out.failed.push(kid.id);
+      else out.hidden.push(kid.id);
       const nested=await _moveOriginDayChildrenTo(kid.id,targetDate,fromDate,_seen);
       out.hidden.push(...nested.hidden);
       out.failed.push(...nested.failed);
@@ -1108,13 +1117,26 @@ function _removeSubtreeFromScheduled(rootId){
 // persistAddedTask -> createBlock. Keyed on movedBlockId this guard could never match its
 // own second run — dead code behind a comment claiming one tombstone per origin day. The
 // task's local_id is what is actually stable here.
-async function _writeRescheduleTombstone(ev,fromDate,targetDate,movedBlockId){
+async function _writeRescheduleTombstone(ev,fromDate,targetDate,movedBlockId,hiddenLocalIds){
   if(!window.blockStore||!fromDate||!movedBlockId)return;
   const already=window.blockStore.getByType("block").find(b=>{
     const p=(b&&b.properties)||{};
     return !b.deleted_at&&b.date===fromDate&&p.kind==="reschedule_tombstone"&&p.sourceLocalId===ev.id;
   });
-  if(already)return;
+  if(already){
+    // Reuse, but REFRESH the destination. `sourceLocalId` is the right stable key for a
+    // repeat materialize, and it is also the key the SERVER writes (routes/blocks.js
+    // `sourceLocalId: parentLocalId`), so this guard can match a tombstone left by a true
+    // move of the same task off the same day. Returning blind then leaves the amber row
+    // naming an older destination and its Restore pointing at the wrong row — the exact
+    // failure the movedBlockId work in this phase exists to remove.
+    const ap=already.properties||{};
+    const nextHidden=Array.from(new Set([...(Array.isArray(ap.hiddenLocalIds)?ap.hiddenLocalIds:[]),...(hiddenLocalIds||[])]));
+    if(ap.rescheduledTo!==targetDate||ap.movedBlockId!==movedBlockId||nextHidden.length!==(ap.hiddenLocalIds||[]).length){
+      try{await window.blockStore.updateBlock(already.id,{...ap,movedBlockId:movedBlockId,rescheduledTo:targetDate,hiddenLocalIds:nextHidden,at:new Date().toISOString()});}catch(e){}
+    }
+    return;
+  }
   try{
     await window.blockStore.createBlock("block",{
       local_id:"resched-tomb-"+movedBlockId,
@@ -1123,6 +1145,10 @@ async function _writeRescheduleTombstone(ev,fromDate,targetDate,movedBlockId){
       priority:ev.priority||"Medium",
       movedBlockId:movedBlockId,
       sourceLocalId:ev.id,
+      // Every id this move hid on the origin day, so Restore can reverse ALL of it. The
+      // parent is `sourceLocalId`; these are the row-less children that were materialized on
+      // the target date and hidden here. Nothing else can un-hide them.
+      hiddenLocalIds:(hiddenLocalIds||[]).slice(),
       rescheduledFrom:{date:fromDate},
       rescheduledTo:targetDate,
       at:new Date().toISOString()
@@ -1245,19 +1271,34 @@ async function restoreRescheduledAway(tombBlockId){
     log("rescheduled",tombBlockId,"Restored to "+viewDate);
     if(typeof showToast==="function")showToast("Restored to "+_prettyDateLabel(viewDate),"success");
     if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
-    // Un-hide the origin-day copy, AFTER reloadPersistedEdits (which rebuilds deletedSet
-    // from the `_deleted` overlay and would otherwise put the id straight back).
+    // Un-hide everything the move hid on this day. Without this, restoring a materialized
+    // move puts the row back here and then `isDeleted` filters it out of every view, so the
+    // task is on one day and visible on none.
     //
     // Only the MATERIALIZE path hides anything: a true move re-dates the row, so there is
-    // nothing on this day to hide, and deleting an absent id is a no-op — which is why
-    // this runs unconditionally instead of branching on how the task left. Without it,
-    // restoring a materialized move puts the row back on this day and then filters it out
-    // of every view (`isDeleted`), so the task is on one day and visible on none.
-    const restoredId=p.sourceLocalId||null;
-    if(restoredId&&typeof deletedSet!=="undefined"&&deletedSet.has(restoredId)){
-      deletedSet.delete(restoredId);
-      if(typeof saveDeletedState==="function")saveDeletedState();
+    // nothing on this day to hide and deleting an absent id is a no-op — which is why this
+    // runs unconditionally rather than branching on how the task left.
+    //
+    // `hiddenLocalIds` matters as much as `sourceLocalId`: a day-state-only child has no row
+    // of its own, so the move materializes it on the target date and hides the origin copy.
+    // Un-hiding only the parent would leave those children in `_deleted` forever — nothing
+    // else ever removes an id from that overlay for a task with no visible row.
+    //
+    // Surgical on purpose. `deletedSet.clear()` would read the same in the happy case and
+    // resurrect every task the user genuinely deleted on this day.
+    //
+    // (Ordering versus reloadPersistedEdits above is not load-bearing either way:
+    // saveDeletedState -> blockStore.updateBlock does an optimistic cacheSet BEFORE its
+    // await, so the reload sees the corrected overlay. Kept after it because reading the
+    // rebuilt set and then correcting it is the easier order to reason about.)
+    const unhide=[p.sourceLocalId,...(Array.isArray(p.hiddenLocalIds)?p.hiddenLocalIds:[])].filter(Boolean);
+    let unhid=false;
+    if(typeof deletedSet!=="undefined"){
+      for(const rid of unhide){
+        if(deletedSet.has(rid)){deletedSet.delete(rid);unhid=true;}
+      }
     }
+    if(unhid&&typeof saveDeletedState==="function")saveDeletedState();
     if(typeof recalcTimes==="function")recalcTimes();
     render();
   }finally{

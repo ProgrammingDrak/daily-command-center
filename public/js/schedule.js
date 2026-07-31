@@ -626,7 +626,14 @@ function toggleDone(id,opts){
           // undefined from a transient failure the WAL will replay) does land, so it commits.
           // Before C3 this could not happen: the clone fallback always produced a row on the
           // target date, so the move never came back as "did not happen".
-          if(moved===false)return;
+          if(moved===false){
+            // The mover ran with {silent:true} so the completion toast could be the only
+            // one, which means its own error toast was suppressed. Skipping the commit is
+            // right; skipping it SILENTLY is not — the dialog would just close with the task
+            // still unchecked and no explanation. Say it here, where the silence was created.
+            if(typeof showToast==="function")showToast("Couldn't move that task to "+_prettyDateLabel(opts.markOnDate)+" — it was not marked done","error",4200);
+            return;
+          }
           commitDoneOnDate(id,opts.markOnDate,{ev:evBeforeMove,awardPoints:awardBeforeMove});
         });
     } else {

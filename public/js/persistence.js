@@ -196,12 +196,17 @@ async function fetchExpressDate(date) {
 // identically when building a public share's hide set.
 function applyDayRootOverlays(props, { manualDone, doneAt, deletedSet }) {
   props = props || {};
+  // Normalized, not just null-guarded. These properties are user-writable JSON on a row
+  // anything can PATCH, so a type-wrong half-written overlay is reachable — and
+  // `if (done.ids) done.ids.forEach(...)` throws on `{_done:{ids:"t1"}}`, taking the whole
+  // boot-time hydration with it. A wrong-typed overlay should contribute nothing, not
+  // break the day.
+  const list = (v) => (Array.isArray(v) ? v : []);
   const done = props._done || {};
-  if (done.ids) done.ids.forEach(id => manualDone.add(id));
-  if (done.at) Object.assign(doneAt, done.at);
-  (props._deleted || []).forEach(id => deletedSet.add(id));
-  const legacyPushed = props._pushed || {};
-  if (legacyPushed.ids) legacyPushed.ids.forEach(id => deletedSet.add(id));
+  list(done.ids).forEach(id => manualDone.add(id));
+  if (done.at && typeof done.at === "object") Object.assign(doneAt, done.at);
+  list(props._deleted).forEach(id => deletedSet.add(id));
+  list((props._pushed || {}).ids).forEach(id => deletedSet.add(id));
 }
 
 function reloadPersistedEdits() {

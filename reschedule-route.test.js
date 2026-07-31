@@ -36,7 +36,9 @@ function mountApp({ parent, pool: poolRows = [], existingTomb = null } = {}) {
       getRescheduleSubtreePool: async (fromDate, ws) => { calls.poolFor.push({ fromDate, ws }); return poolRows; },
       // Its own lookup, not a scan of the pool: a tombstone is not a task row, so the
       // dedupe must not depend on the pool's task predicate admitting one.
-      getRescheduleTombstone: async (fromDate, movedBlockId, ws) => { calls.tombFor.push({ fromDate, movedBlockId, ws }); return existingTomb; },
+      // Keys on its argument, so the lookup key is load-bearing in every test that uses it
+      // rather than only in the one asserting on calls.tombFor.
+      getRescheduleTombstone: async (fromDate, movedBlockId, ws) => { calls.tombFor.push({ fromDate, movedBlockId, ws }); return (existingTomb && (existingTomb.properties||{}).movedBlockId === movedBlockId) ? existingTomb : null; },
       rescheduleBlocks: async (moves, creates) => {
         calls.reschedule.push({ moves, creates });
         return { blocks: [...moves.map((m) => ({ id: m.id })), ...creates.map((c, i) => ({ id: "tomb-" + i, ...c }))] };
@@ -136,18 +138,21 @@ test("moving off the same day twice reuses the tombstone instead of piling them 
     "asked for the origin day's tombstone by the moved row's id");
 });
 
-test("the tombstone dedupe does NOT depend on the pool admitting a tombstone", async () => {
+test("a tombstone sitting in the POOL is not the dedupe source any more", async () => {
   // The dedupe used to scan `dayBlocks`, which only worked because a tombstone carries a
-  // local_id and so slipped through the pool's task filter. A tombstone is not a task
-  // (reschedule_tombstone is in NON_TASK_KINDS), so tightening that predicate would have
-  // silently restarted the pile-up. Pool says nothing about tombstones here; the dedupe
-  // must still hold.
+  // local_id and so slipped through the pool's task filter — while reschedule_tombstone is in
+  // NON_TASK_KINDS. Tightening that predicate would have silently restarted the pile-up.
+  //
+  // So: put a matching tombstone in the POOL and none in the dedupe lookup. The route must
+  // ignore the pool copy and write a tombstone. (An exact-fixture rerun of the test above
+  // could only fail when that one already had, which is what this replaces.)
   const parent = blk("B1", "t1");
-  const tomb = { id: "tomb-old", type: "block", date: FROM, workspace_id: MINE,
+  const poolTomb = { id: "tomb-in-pool", type: "block", date: FROM, workspace_id: MINE,
     properties: { local_id: "resched-tomb-B1", kind: "reschedule_tombstone", movedBlockId: "B1" } };
-  const { app, calls } = mountApp({ parent, pool: [parent], existingTomb: tomb });
+  const { app, calls } = mountApp({ parent, pool: [parent, poolTomb], existingTomb: null });
   await post(app, "B1", { targetDate: TO });
-  assert.equal(calls.reschedule[0].creates.length, 0, "no second tombstone");
+  assert.equal(calls.reschedule[0].creates.length, 1, "the pool is not consulted for the dedupe");
+  assert.equal(calls.reschedule[0].moves.length, 1, "and a tombstone in the pool is not itself moved");
 });
 
 test("a bogus parentStart is refused rather than written into the task's times", async () => {

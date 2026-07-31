@@ -57,9 +57,15 @@ test("a day with no overlays adds nothing", () => {
   assert.deepEqual(doneAt, {});
 });
 
-test("missing / malformed overlays do not throw", () => {
-  // day_root properties are user-writable JSON; a half-written overlay must not break boot.
-  for (const props of [undefined, null, {}, { _done: {} }, { _pushed: {} }, { _deleted: [] }, { _pushed: { at: {} } }]) {
+test("missing or MALFORMED overlays contribute nothing instead of throwing", () => {
+  // day_root properties are user-writable JSON on a row anything can PATCH, so a half-written
+  // or type-wrong overlay is reachable and must not break the day.
+  // Includes TYPE-WRONG values, not just absent/empty ones. The absent/empty set is
+  // structurally incapable of throwing, so it would pass against code with no defensive
+  // handling at all — and `{_done:{ids:"t1"}}` really did throw before the normalization
+  // (`done.ids.forEach is not a function`), taking boot-time hydration with it.
+  for (const props of [undefined, null, {}, { _done: {} }, { _pushed: {} }, { _deleted: [] }, { _pushed: { at: {} } },
+                       { _done: { ids: "t1" } }, { _done: { ids: { a: 1 }, at: "nope" } }, { _deleted: "t1" }, { _pushed: { ids: 5 } }]) {
     const { apply, deletedSet, manualDone } = load();
     apply(props);
     assert.equal(deletedSet.size, 0);
