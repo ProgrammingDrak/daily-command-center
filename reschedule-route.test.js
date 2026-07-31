@@ -22,18 +22,21 @@ const blk = (id, localId, extra = {}) => ({
   properties: { local_id: localId, title: "T " + id, subtaskOf: extra.subtaskOf || null, wrapId: extra.wrapId || null, kind: extra.kind || null }
 });
 
-function mountApp({ parent, pool: poolRows = [] } = {}) {
+function mountApp({ parent, pool: poolRows = [], existingTomb = null } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { req.workspaceId = MINE; req.session = { userId: 1 }; next(); });
 
-  const calls = { poolFor: [], reschedule: [] };
+  const calls = { poolFor: [], tombFor: [], reschedule: [] };
   const ctx = {
     blockDB: {
       getBlockIncludingDeleted: async () => parent || null,
       // Recorded so the test can prove the route makes exactly ONE pool call with the
       // origin date -- it used to concatenate getBlocksByDate + getUndatedTaskBlocks.
       getRescheduleSubtreePool: async (fromDate, ws) => { calls.poolFor.push({ fromDate, ws }); return poolRows; },
+      // Its own lookup, not a scan of the pool: a tombstone is not a task row, so the
+      // dedupe must not depend on the pool's task predicate admitting one.
+      getRescheduleTombstone: async (fromDate, movedBlockId, ws) => { calls.tombFor.push({ fromDate, movedBlockId, ws }); return existingTomb; },
       rescheduleBlocks: async (moves, creates) => {
         calls.reschedule.push({ moves, creates });
         return { blocks: [...moves.map((m) => ({ id: m.id })), ...creates.map((c, i) => ({ id: "tomb-" + i, ...c }))] };
@@ -126,9 +129,25 @@ test("moving off the same day twice reuses the tombstone instead of piling them 
   const parent = blk("B1", "t1");
   const tomb = { id: "tomb-old", type: "block", date: FROM, workspace_id: MINE,
     properties: { local_id: "resched-tomb-B1", kind: "reschedule_tombstone", movedBlockId: "B1" } };
-  const { app, calls } = mountApp({ parent, pool: [parent, tomb] });
+  const { app, calls } = mountApp({ parent, pool: [parent], existingTomb: tomb });
   await post(app, "B1", { targetDate: TO });
   assert.equal(calls.reschedule[0].creates.length, 0);
+  assert.deepEqual(calls.tombFor, [{ fromDate: FROM, movedBlockId: "B1", ws: MINE }],
+    "asked for the origin day's tombstone by the moved row's id");
+});
+
+test("the tombstone dedupe does NOT depend on the pool admitting a tombstone", async () => {
+  // The dedupe used to scan `dayBlocks`, which only worked because a tombstone carries a
+  // local_id and so slipped through the pool's task filter. A tombstone is not a task
+  // (reschedule_tombstone is in NON_TASK_KINDS), so tightening that predicate would have
+  // silently restarted the pile-up. Pool says nothing about tombstones here; the dedupe
+  // must still hold.
+  const parent = blk("B1", "t1");
+  const tomb = { id: "tomb-old", type: "block", date: FROM, workspace_id: MINE,
+    properties: { local_id: "resched-tomb-B1", kind: "reschedule_tombstone", movedBlockId: "B1" } };
+  const { app, calls } = mountApp({ parent, pool: [parent], existingTomb: tomb });
+  await post(app, "B1", { targetDate: TO });
+  assert.equal(calls.reschedule[0].creates.length, 0, "no second tombstone");
 });
 
 test("a bogus parentStart is refused rather than written into the task's times", async () => {

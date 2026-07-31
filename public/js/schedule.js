@@ -618,7 +618,17 @@ function toggleDone(id,opts){
       const evBeforeMove=scheduled.find(e=>e.id===id);
       const awardBeforeMove=_pointAwardOverride(id);
       rescheduleTaskToDate(id,opts.markOnDate,{silent:true})
-        .then(()=>commitDoneOnDate(id,opts.markOnDate,{ev:evBeforeMove,awardPoints:awardBeforeMove}));
+        .then(moved=>{
+          // FALSE means the server permanently refused and the task never moved. Committing
+          // then would mark it done on a date it is not on: patch that day's _done overlay,
+          // write pa-done-<date>, and bank the points, while the row sits unchecked on the
+          // day the user was actually looking at. Anything else (a result object, or
+          // undefined from a transient failure the WAL will replay) does land, so it commits.
+          // Before C3 this could not happen: the clone fallback always produced a row on the
+          // target date, so the move never came back as "did not happen".
+          if(moved===false)return;
+          commitDoneOnDate(id,opts.markOnDate,{ev:evBeforeMove,awardPoints:awardBeforeMove});
+        });
     } else {
       commitDoneOnDate(id,opts.markOnDate);
     }

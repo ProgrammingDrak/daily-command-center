@@ -620,8 +620,8 @@ function buildListView(){
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
     if(!isDoneRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     // ── Info parity with the (retired) rich card: surface points, progress, and
-    // status the desktop card showed. Gated to open rows so done/pushed/carryover
-    // rows stay quiet. New chips are null-safe, non-interactive spans, so the row's
+    // status the desktop card showed. Gated to open rows so done and carryover rows
+    // stay quiet. New chips are null-safe, non-interactive spans, so the row's
     // open-space tap still falls through to open details.
     const openRow=!isDoneRow&&!isUnfRow;
     const chipSlot=(openRow&&typeof window.itineraryChipSlotHtml==="function")

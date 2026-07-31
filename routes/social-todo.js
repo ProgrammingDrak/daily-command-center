@@ -436,6 +436,11 @@ async function buildPublicTodoShare(share, dateStr, req) {
   ]);
   const hiddenIds = new Set([
     ...((rootProps._deleted || [])).map(String),
+    // LEGACY `_pushed` (C3): nothing writes this key any more — the pushed subsystem is
+    // deleted and a push is a real move now. Old day_roots still carry it, and a pushed row
+    // was never removed from its origin day, only hidden by this overlay, so dropping the
+    // read would resurface those rows on old shares. Same decision and the same row counts
+    // as public/js/persistence.js reloadPersistedEdits.
     ...(((rootProps._pushed && rootProps._pushed.ids) || [])).map(String)
   ]);
   for (const block of blocks) {

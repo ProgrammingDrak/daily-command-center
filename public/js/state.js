@@ -745,13 +745,22 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
     block=await persistAddedTask(item,targetDate);
   }catch(e){
     if(!opts.silent&&typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate)+(e&&e.message?" — "+e.message:""),"error");
-    return null;
+    // FALSE, not null: callers must be able to tell "the task did not move" from
+    // "queued, it will land" — toggleDone commits a completion on the strength of it.
+    return false;
   }
-  // Direct children first, then hide the parent: the lookups below read `scheduled`,
-  // which the hide does not change, but the child moves must be issued while the origin
-  // day is still the day the client thinks it is looking at.
-  await _moveOriginDayChildrenTo(id,targetDate,fromDate);
+  // Children BEFORE the view cleanup: the lookups below read `scheduled`, so removing
+  // rows from it first would hide the very children that need moving.
+  const childMove=await _moveOriginDayChildrenTo(id,targetDate,fromDate);
+  // Same optimistic cleanup the true move does. Without it the children whose rows were
+  // just re-dated stay in `scheduled` on this day, and because their parent is now
+  // filtered out they render as top-level OPEN roots (flattenSchedule treats a row whose
+  // parent is absent as a root) AND keep counting toward the day's scheduled points.
+  _removeSubtreeFromScheduled(id);
+  // The optimistic removal is per-render; the overlay is what survives a reload, because
+  // the day-state JSON still lists the parent. Both are needed.
   deletedSet.add(id);
+  for(const rowlessId of childMove.hidden)deletedSet.add(rowlessId);
   if(typeof saveDeletedState==="function")saveDeletedState();
   try{
     const before=loadAddedTasks();
@@ -760,7 +769,14 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   }catch(e){}
   await _writeRescheduleTombstone(ev,fromDate,targetDate,block&&block.id);
   log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
-  if(!opts.silent&&typeof showToast==="function")showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+  if(!opts.silent&&typeof showToast==="function"){
+    // A half-move must not report as a clean one.
+    if(childMove.failed.length){
+      showToast("Moved to "+_prettyDateLabel(targetDate)+" — "+childMove.failed.length+" subtask"+(childMove.failed.length>1?"s":"")+" stayed behind","info",4200);
+    } else {
+      showToast("Moved to "+_prettyDateLabel(targetDate),"success");
+    }
+  }
   if(typeof recalcTimes==="function")recalcTimes();
   render();
   return block||item;
@@ -770,18 +786,41 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
 // real mover. Only reachable from _materializeTaskOnDate: when the parent IS a row the
 // server walks the whole subtree itself in one transaction, and this would be a second,
 // weaker copy of that walk.
-async function _moveOriginDayChildrenTo(parentId,targetDate,fromDate){
-  if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return;
+//
+// Returns { hidden, failed }: ids with no row of their own (which can only be hidden, not
+// moved) and children whose move was permanently rejected. Both are cases where a child
+// would otherwise be left on the origin day under a parent that is gone — the stranding
+// this phase exists to delete — so neither may be swallowed.
+// `_seen` guards the recursion: `scheduled` carries real parent cycles (see _subtreeIdsOf).
+async function _moveOriginDayChildrenTo(parentId,targetDate,fromDate,_seen){
+  const out={hidden:[],failed:[]};
+  if(!window.blockStore||typeof window.blockStore.rescheduleBlock!=="function")return out;
+  _seen=_seen||new Set();
+  if(_seen.has(parentId))return out;
+  _seen.add(parentId);
   const kids=scheduled.filter(c=>parentIdOf(c)===parentId);
   for(const kid of kids){
     const kidBlock=_findTaskBlockForDate(kid.id,fromDate,kid);
-    if(!kidBlock)continue; // no row of its own: it rides the day-state copy we just hid
+    if(!kidBlock){
+      // Day-state-only child: there is no row to re-date, so the only honest thing is to
+      // hide it with its parent. Leaving it visible renders it as an orphaned root on the
+      // origin day forever, and its own block-backed children would never be reached
+      // either — no rescheduleBlock call means no server-side subtree walk for them.
+      out.hidden.push(kid.id);
+      const nested=await _moveOriginDayChildrenTo(kid.id,targetDate,fromDate,_seen);
+      out.hidden.push(...nested.hidden);
+      out.failed.push(...nested.failed);
+      continue;
+    }
     try{
       await window.blockStore.rescheduleBlock(kidBlock.id,targetDate,{fromDate});
     }catch(e){
+      // Permanent means it will never land; transient stays in the WAL and still will.
+      if(e&&e.permanent)out.failed.push(kid.id);
       console.warn("[reschedule] subtask "+kid.id+" did not follow its parent: "+(e&&(e.message||e.status)));
     }
   }
+  return out;
 }
 
 // Schedule `ev` (a task) onto an arbitrary `targetDate` at a free slot, picked from
@@ -814,9 +853,15 @@ async function scheduleTaskOnDate(ev,targetDate,opts){
     return null;
   }
 
+  // No `<verb>_from` provenance key here. The old one (`pushed_from`) had no readers, and
+  // renaming it would just add a third dead spelling beside it and `moved_from` (written by
+  // the deleted _scheduleTaskOnDate) — none of which TaskModel.fromBlock models, so none of
+  // which can ever reach an ev. The repo's real provenance key is `rescheduledFrom`, which
+  // fromBlock does model, and it means "this row was moved here", which is not what this
+  // create-on-a-target-date path does. `added_at` already records when.
   const block=await window.blockStore.createBlock("block",Object.assign(
     window.DCC.taskBlockProps(ev,{local_id:ev.id,duration:slot.duration,start:slot.start,end:slot.end,source:ev.source||"manual"}),
-    {added_at:new Date().toISOString(),scheduled_from:(__state&&__state.date)||"unknown"}
+    {added_at:new Date().toISOString()}
   ),{date:targetDate});
 
   if(!opts.silent&&typeof showToast==="function")showToast("Scheduled "+_prettyDateLabel(targetDate)+" at "+f12(slot.start),"success");
@@ -1055,14 +1100,19 @@ function _removeSubtreeFromScheduled(rootId){
 // it, and restoreRescheduledAway REQUIRES it, which is why the amber Restore button had
 // never once worked from this path. The materialized row is a real block with a real id,
 // so recording it makes Restore work here exactly as it does for a true move. Keep the
-// payload shape in step with the server's (routes/blocks.js, POST /:id/reschedule),
-// including the dedupe rule: one tombstone per (moved row, origin day), reused rather
-// than piled up when a task is moved off the same day twice.
+// payload shape in step with the server's (routes/blocks.js, POST /:id/reschedule).
+//
+// The dedupe keys on (origin day, sourceLocalId), NOT on movedBlockId the way the server's
+// does, and the difference is forced: the server moves an EXISTING row, so movedBlockId is
+// stable across repeat reschedules, while every materialize mints a fresh row through
+// persistAddedTask -> createBlock. Keyed on movedBlockId this guard could never match its
+// own second run — dead code behind a comment claiming one tombstone per origin day. The
+// task's local_id is what is actually stable here.
 async function _writeRescheduleTombstone(ev,fromDate,targetDate,movedBlockId){
   if(!window.blockStore||!fromDate||!movedBlockId)return;
   const already=window.blockStore.getByType("block").find(b=>{
     const p=(b&&b.properties)||{};
-    return !b.deleted_at&&b.date===fromDate&&p.kind==="reschedule_tombstone"&&p.movedBlockId===movedBlockId;
+    return !b.deleted_at&&b.date===fromDate&&p.kind==="reschedule_tombstone"&&p.sourceLocalId===ev.id;
   });
   if(already)return;
   try{
@@ -1144,7 +1194,11 @@ async function rescheduleTaskToDate(id,targetDate,opts){
         // Permanent: report what the server said rather than inventing a second task.
         console.warn("[reschedule] move rejected: "+(e.message||e.status));
         if(!opts.silent&&typeof showToast==="function")showToast("Could not move to "+_prettyDateLabel(targetDate)+(e.message?" — "+e.message:""),"error");
-        return;
+        // FALSE means "this task did not move and never will". Distinct from the
+        // transient `undefined` above, which means "queued, the WAL will land it".
+        // toggleDone's done-on-date flow commits a completion after this resolves, and
+        // committing on a date the task is not on credits the wrong day.
+        return false;
       }
       _removeSubtreeFromScheduled(id);
       log("rescheduled",id,"Moved to "+targetDate+": "+ev.title);
@@ -1191,6 +1245,19 @@ async function restoreRescheduledAway(tombBlockId){
     log("rescheduled",tombBlockId,"Restored to "+viewDate);
     if(typeof showToast==="function")showToast("Restored to "+_prettyDateLabel(viewDate),"success");
     if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+    // Un-hide the origin-day copy, AFTER reloadPersistedEdits (which rebuilds deletedSet
+    // from the `_deleted` overlay and would otherwise put the id straight back).
+    //
+    // Only the MATERIALIZE path hides anything: a true move re-dates the row, so there is
+    // nothing on this day to hide, and deleting an absent id is a no-op — which is why
+    // this runs unconditionally instead of branching on how the task left. Without it,
+    // restoring a materialized move puts the row back on this day and then filters it out
+    // of every view (`isDeleted`), so the task is on one day and visible on none.
+    const restoredId=p.sourceLocalId||null;
+    if(restoredId&&typeof deletedSet!=="undefined"&&deletedSet.has(restoredId)){
+      deletedSet.delete(restoredId);
+      if(typeof saveDeletedState==="function")saveDeletedState();
+    }
     if(typeof recalcTimes==="function")recalcTimes();
     render();
   }finally{

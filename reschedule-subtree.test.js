@@ -140,8 +140,10 @@ test("rescheduling a day_root moves the container alone, never the day's tasks",
 });
 
 test("the parent is still first in the returned order", () => {
-  // routes/blocks.js maps index 0 to the parent (it is the only entry that gets
-  // parentStart/parentEnd and the rescheduledFrom stamp), so order is load-bearing.
+  // The parent is added first, so `moved` reads parent-then-subtree for the client. Note
+  // routes/blocks.js matches on parent.id, NOT on index 0 — do not write `moves[0]` code on
+  // the strength of this, because a parent lacking a local_id is absent from dayBlocks and
+  // only reaches the list through the explicit add(parent).
   const parent = blk("B1", "t1");
   const day = [blk("B2", "t2", { subtaskOf: "t1" }), blk("B3", null, { kind: "task", parent_id: "B1" }), parent];
   assert.strictEqual(collectSubtreeBlockIds(day, parent)[0], "B1");

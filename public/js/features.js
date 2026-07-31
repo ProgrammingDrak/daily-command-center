@@ -1435,7 +1435,8 @@ function _updateTaskMenusBadge(){
 // Copy-for-Claude button removed 2026-07 (obsolete). btn-copy + buildClip gone.
 // btn-undo and btn-reset removed Phase 6 -- both were broken-but-wired:
 // undoLast() handled only 3 of 8 actionLog types; resetAll() wiped `scheduled`
-// without touching BlockStore / pushedSet / deletedSet, leaving inconsistent UI.
+// without touching BlockStore or deletedSet, leaving inconsistent UI. (It also
+// missed pushedSet, which C3 deleted along with the rest of the pushed subsystem.)
 // A real undo stack is a feature project, not tech debt; ship that separately.
 // Old add-task-btn, ai-tab-add-btn, new-title wiring removed — handled by universal task-add bar
 

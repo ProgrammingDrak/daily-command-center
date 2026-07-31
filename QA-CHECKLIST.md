@@ -28,8 +28,8 @@ manual checks below in a few seconds.
 - [ ] **Duration +/- buttons**: Click + or - on a task. Duration changes by 15m (min 15m). Downstream times recascade.
 - [ ] **Duration preset popover**: Click the duration badge (e.g. "30m"). Popover with presets (15m-6h, paginated). Clicking a preset sets duration.
 - [ ] **Start time pin/unpin**: Click the start time on a task. Popover appears. "Set" pins to a time (survives recalc). "Auto" removes pin.
-- [ ] **Push to tomorrow**: Click arrow button on a task. Task moves to "pushed" section. Removed from active schedule.
-- [ ] **Restore from tomorrow**: Click arrow on a pushed task. Returns to active schedule.
+- [ ] **Push to tomorrow**: Click arrow button on a task. Task LEAVES today entirely (no copy left behind) and appears on tomorrow; today shows it under the amber "Rescheduled away" section.
+- [ ] **Restore from a move**: Click the arrow on an amber "Rescheduled away" entry. Task returns to this day, with its subtasks, and the amber entry disappears.
 - [ ] **Delete from schedule**: Click X on a task. Confirmation dialog shows source context. Confirm removes it.
 - [ ] **Uncheck (restore from done)**: Click checkmark on a completed task at top. Returns to active schedule.
 - [ ] **Quick-add urgent task**: Type task name in "Add urgent task" bar, click Add or Enter. Task appears after current active task. Times recalculate.
@@ -83,7 +83,7 @@ manual checks below in a few seconds.
 - [ ] **Today/Tomorrow buttons**: Visible when on a different date. Click returns to today/tomorrow.
 - [ ] **Archive read-only**: Navigate to a past date. Schedule shows in read-only mode. Actual view is default.
 - [ ] **Tomorrow pre-plan**: Navigate to tomorrow. Shows pre-planned schedule (if evening-envision has run).
-- [ ] **Date switch preserves edits**: Make edits on today, navigate away, navigate back. Edits are preserved (done, pushed, deleted, reordered, duration changes, notes).
+- [ ] **Date switch preserves edits**: Make edits on today, navigate away, navigate back. Edits are preserved (done, deleted, reordered, duration changes, notes).
 
 ## 6. SYNC & PERSISTENCE
 

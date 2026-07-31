@@ -1359,7 +1359,6 @@
   .it-list-item.done:not(.sub) .it-list-title-row{gap:0}
   .it-list-item.done:not(.sub) .it-list-title-row > *:not(.ttl){display:none}
   .it-list-item.done:not(.sub) .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;font-weight:500}
-  .it-list-item.pushed{opacity:0.72}
   .it-list-rank{font-size:12px;font-weight:800;color:var(--text-muted);font-variant-numeric:tabular-nums;text-align:right}
   .it-list-grip{opacity:0.34}
   .it-list-item.movable:hover .it-list-grip{opacity:0.9}

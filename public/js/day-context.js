@@ -2,7 +2,10 @@
 // One place that answers "what is on day X, and where does a task fit on it?",
 // replacing the four copy-pasted free-slot pipelines that had quietly drifted
 // (schedulePushedOnDate / _scheduleTaskOnDate / _computeRescheduleSlot in
-// state.js, and _schedDayTasks in schedule.js). Those four each re-fetched
+// state.js, and _schedDayTasks in schedule.js). Two of those names are gone as of
+// C3: schedulePushedOnDate is now scheduleTaskOnDate, and _scheduleTaskOnDate was
+// deleted as a dead near-duplicate of it. They are still named in the rule notes
+// below because that is the history the rules exist to record. Those four each re-fetched
 // /api/state/day + /api/blocks and each applied their own blocker-type and
 // day-start rules, so the picker preview and the actual move could disagree and
 // a single placement fetched the same day 2-3 times.
@@ -36,9 +39,9 @@
 //   - excludeSelf: drop ev's own persisted block from the blockers (moves want
 //     to reslot around everything BUT themselves). The create paths dedupe on
 //     ev.id in their wrapper instead and never pass excludeSelf.
-// Of the three live consumers, schedulePushedOnDate and _computeRescheduleSlot
-// already matched this set, so only the (currently call-site-less)
-// _scheduleTaskOnDate changes behavior.
+// The live consumers are now TWO, scheduleTaskOnDate and _computeRescheduleSlot, and
+// both already matched this set. The third, _scheduleTaskOnDate, was the only one that
+// changed behavior here and C3 deleted it outright (it had no call sites).
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;

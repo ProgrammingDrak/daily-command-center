@@ -168,7 +168,6 @@
           notionUrl: item.notion_url,
           date: ds,
           done: !!item.completed,
-          pushed: false,
         });
       }
     }

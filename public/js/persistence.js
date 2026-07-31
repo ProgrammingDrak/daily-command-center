@@ -178,6 +178,32 @@ async function fetchExpressDate(date) {
   return null;
 }
 
+// Read a day_root's completion + hide overlays into the live registries.
+//
+// Hoisted out of reloadPersistedEdits so it can be tested: reloadPersistedEdits itself is
+// too entangled with module state to exercise, and the legacy `_pushed` branch below is a
+// real invariant about real historical data that would otherwise be guarded by nothing.
+// (itinerary-fold.test.js hoisted isFoldableTask out of this same file for the same reason.)
+//
+// LEGACY `_pushed` (C3): the pushed subsystem is deleted and nothing writes this key any
+// more, but old day_roots still carry it, and a pushed row was never REMOVED from its origin
+// day — only hidden by this overlay. Folding it into deletedSet keeps those days rendering as
+// they always have; dropping the read would resurface the origin copy alongside the duplicate
+// that push created on the next day. Measured on the prod restore before deciding: 4 day_roots
+// carry it, 10 ids total, and 9 of the 10 no longer resolve to a live row at all — so this
+// honors history for exactly one row, on 2026-04-06. A pushed row IS a row that left this day,
+// which is what `_deleted` means here, and routes/social-todo.js already treats the two keys
+// identically when building a public share's hide set.
+function applyDayRootOverlays(props, { manualDone, doneAt, deletedSet }) {
+  props = props || {};
+  const done = props._done || {};
+  if (done.ids) done.ids.forEach(id => manualDone.add(id));
+  if (done.at) Object.assign(doneAt, done.at);
+  (props._deleted || []).forEach(id => deletedSet.add(id));
+  const legacyPushed = props._pushed || {};
+  if (legacyPushed.ids) legacyPushed.ids.forEach(id => deletedSet.add(id));
+}
+
 function reloadPersistedEdits() {
   // Reset mutable UI state
   manualDone = new Set();
@@ -192,22 +218,7 @@ function reloadPersistedEdits() {
   if (window.USE_BLOCKSTORE && window.blockStore) {
     const dayRoot = window.blockStore.get(window.blockStore.getDayRootId());
     if (dayRoot && dayRoot.properties) {
-      const done = dayRoot.properties._done || {};
-      if (done.ids) done.ids.forEach(id => manualDone.add(id));
-      if (done.at) Object.assign(doneAt, done.at);
-      const deleted = dayRoot.properties._deleted || [];
-      deleted.forEach(id => deletedSet.add(id));
-      // LEGACY `_pushed` (C3): the pushed subsystem is deleted and nothing writes this
-      // key any more, but old day_roots still carry it, and a pushed row was never
-      // removed from its origin day — only hidden by this overlay. Reading it into
-      // deletedSet keeps those days rendering as they always have; dropping the read
-      // instead would resurface the origin copy alongside the duplicate that push
-      // created on the next day. Measured on the prod restore before deciding: 4
-      // day_roots carry it, 10 ids total, and 9 of the 10 no longer resolve to a live
-      // row at all — so this honors history for exactly one row, on 2026-04-06.
-      // A pushed row IS a row that left this day, which is what _deleted means here.
-      const legacyPushed = dayRoot.properties._pushed || {};
-      if (legacyPushed.ids) legacyPushed.ids.forEach(id => deletedSet.add(id));
+      applyDayRootOverlays(dayRoot.properties, { manualDone, doneAt, deletedSet });
       dailyBounty = typeof normalizeBountyState === "function" ? normalizeBountyState(dayRoot.properties._bounty) : (dayRoot.properties._bounty || null);
       Object.assign(durChanges, dayRoot.properties._durChanges || {});
       commuteTimes = { ...(dayRoot.properties._commuteTimes || {}) };

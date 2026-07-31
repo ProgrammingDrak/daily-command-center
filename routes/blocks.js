@@ -600,8 +600,13 @@ module.exports = function mount(app, ctx) {
 
       // One tombstone per (moved task, origin day) so the amber list stays clean
       // across repeated reschedules. Reuse an existing one instead of piling up.
+      //
+      // Its own query rather than a scan of `dayBlocks`: a tombstone is not a task, and it
+      // only appeared in that pool because it happens to carry a local_id. Depending on
+      // that meant any future tightening of the pool's task predicate would silently
+      // restart the pile-up.
       const creates = [];
-      const existingTomb = dayBlocks.find(b => (b.properties || {}).kind === "reschedule_tombstone" && (b.properties || {}).movedBlockId === parent.id);
+      const existingTomb = await blockDB.getRescheduleTombstone(fromDate, parent.id, req.workspaceId);
       if (!existingTomb) {
         creates.push({
           type: "block",
