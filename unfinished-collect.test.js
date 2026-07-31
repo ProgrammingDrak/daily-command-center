@@ -19,6 +19,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const TaskModel = require("./public/js/task-model.js");
+const { apiStub } = require("./carryover-fixture.js");
 const unfSource = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
 const schedTabSource = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
 
@@ -63,11 +64,20 @@ function load(daysByDate, archiveDates) {
   };
   ctx.window = ctx;
   ctx.self = ctx;
+  ctx.URLSearchParams = URLSearchParams;
   vm.createContext(ctx);
   vm.runInContext(unfSource, ctx);
+  // The blockStore stub stays: collectUnfinished no longer touches it, but
+  // _originBlock (the write paths' origin resolver) still does.
   ctx.window.blockStore = store;
   ctx.window.DCC.TaskModel = TaskModel;
-  return { ctx, store, CO: ctx.window.DCC.Carryover };
+  // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.
+  // apiStub serves the same fixture through that contract. The server-side half of
+  // the predicate is pinned in open-tasks-query.test.js, not here.
+  const asked = [];
+  const stub = apiStub(daysByDate);
+  ctx.window.DCC.api = (url) => { asked.push(String(url)); return stub(url); };
+  return { ctx, store, asked, CO: ctx.window.DCC.Carryover };
 }
 
 // ───────────────────────────── the collector ─────────────────────────────
@@ -150,32 +160,57 @@ test("descendants() walks the whole subtree and survives a parent cycle", async 
 test("lookback is bounded to SCAN_DAYS; {days:null} lifts it", async () => {
   const recent = ymd(3), old = ymd(40);
   const days = { [recent]: [dayRoot(), blk("recent", recent, {})], [old]: [dayRoot(), blk("old", old, {})] };
-  const { CO, store } = load(days, [old, recent]);
+  const { CO, asked } = load(days, [old, recent]);
   assert.equal(CO.SCAN_DAYS, 14);
 
   const bounded = await CO.collect();
   assert.deepEqual(plain(bounded.rows.map(r => r.id)), ["recent"]);
-  assert.equal(store._loaded[0][0], recent, "bounded scan must not fetch the whole archive");
 
   const all = await CO.collect({ days: null });
   assert.deepEqual(plain(all.rows.map(r => r.id).sort()), ["old", "recent"]);
-  assert.equal(store._loaded[1][0], old, "unbounded scan starts at the oldest archived day");
+
+  // C2: the bound is a query parameter now, not a date range the client computes and
+  // hands to loadDateRange. Pinning the URL is what keeps the two windows honest --
+  // the enforcement itself is SQL and is pinned in open-tasks-query.test.js.
+  assert.equal(asked.length, 2);
+  assert.match(asked[0], /[?&]before=2026-07-29(&|$)/);
+  assert.match(asked[0], /[?&]days=14(&|$)/, "the default window rides the request");
+  assert.match(asked[1], /[?&]days=all(&|$)/, "{days:null} asks for the unbounded sweep");
 });
 
-test("completed, deleted-type and fixed-type rows never surface", async () => {
+// C2 split this test in two. Done-ness is still the CLIENT's call (completion lives
+// in the day_root _done overlay plus a localStorage mirror the server cannot see), so
+// it stays here. The fixed-type skip moved into SQL and is pinned in
+// open-tasks-query.test.js -- asserting it here too would only prove the fixture
+// helper filters, which is not the thing that ships.
+test("completed rows never surface, by row id / local_id / the done property", async () => {
   const d = ymd(1);
   const { CO } = load({ [d]: [
     dayRoot({ _done: { ids: ["doneById", "doneLocal"] } }),
     blk("doneById", d, {}),                            // marked done by row id
     blk("doneLocalBlk", d, { local_id: "doneLocal" }), // marked done by local_id
     blk("propDone", d, { done: true }),
-    blk("mtg", d, { type: "meeting" }),
-    blk("brk", d, { type: "break" }),
-    blk("focus", d, { type: "focus" }),
     blk("open", d, {})
   ] }, [d]);
   const { rows } = await CO.collect();
   assert.deepEqual(plain(rows.map(r => r.id)), ["open"]);
+});
+
+// The overlay is a PER-DAY fact. Flattening done ids across the pool is a real bug
+// I wrote once while building C2 and only caught by diffing against the old
+// collector: the same id can exist on two days and being done on one must not mark
+// the other.
+test("done ids are scoped to their own day, never flattened across the pool", async () => {
+  const d1 = ymd(1), d2 = ymd(2);
+  const { CO } = load({
+    [d1]: [dayRoot({ _done: { ids: ["shared"] } }), blk("shared", d1, { local_id: null })],
+    [d2]: [dayRoot(), blk("shared", d2, { local_id: null })]
+  }, [d1, d2]);
+  const { rows } = await CO.collect();
+  // The d2 copy is still open work; dedupe keeps exactly one row and it is that one.
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].__unf.sourceDate, d2);
+  assert.equal(rows[0].__unf.done, false);
 });
 
 test("a row is collected once even when it appears on two days", async () => {

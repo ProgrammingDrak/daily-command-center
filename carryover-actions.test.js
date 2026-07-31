@@ -26,6 +26,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const TaskModel = require("./public/js/task-model.js");
+const { apiStub } = require("./carryover-fixture.js");
 const unfSource = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
@@ -76,10 +77,14 @@ function load(daysByDate, archiveDates) {
   };
   ctx.window = ctx;
   ctx.self = ctx;
+  ctx.URLSearchParams = URLSearchParams;
   vm.createContext(ctx);
   vm.runInContext(unfSource, ctx);
   ctx.window.blockStore = store;
   ctx.window.DCC.TaskModel = TaskModel;
+  // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.
+  // The blockStore stub above stays because _originBlock still resolves through it.
+  ctx.window.DCC.api = apiStub(daysByDate);
   return { ctx, store, calls, CO: ctx.window.DCC.Carryover };
 }
 

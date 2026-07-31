@@ -16,16 +16,12 @@
 (function () {
   "use strict";
 
-  // The fixed-time set (meeting/oneone/ooo/break) is owned by the TASK_TYPES
-  // registry now — skipType() defers to TaskTypes.isFixed so this list can't
-  // drift from it. The residual literals are raw calendar block types that never
-  // became first-class registry types.
-  const SKIP_RAW = new Set(["focus", "focus_time", "free_time", "prep"]);
-  const SKIP_FIXED_FALLBACK = new Set(["meeting", "oneone", "ooo", "break"]);
-  function skipType(type){
-    if (window.TaskTypes && typeof window.TaskTypes.isFixed === "function") return window.TaskTypes.isFixed(type) || SKIP_RAW.has(type);
-    return SKIP_FIXED_FALLBACK.has(type) || SKIP_RAW.has(type); // registry not loaded yet
-  }
+  // The fixed-type skip (meeting/oneone/ooo/break, plus the raw calendar types
+  // focus/focus_time/free_time/prep) moved to the server in C2 — see db.js
+  // carryoverSkipTypes(), which derives the first half from the same TASK_TYPES
+  // registry this file used to read via window.TaskTypes.isFixed. It is applied to
+  // roots and descendants alike in SQL, so there is no client copy left to drift.
+  //
   // Lookback is BOUNDED. It used to be "every archived day", and /api/state/archives
   // serves 90 — so the lane grew without limit and became the clog it was meant to
   // surface. 14 days is the review window; the modal's "Show older" toggle lifts it
@@ -66,83 +62,80 @@
   // Returns { rows, total, scanned } where rows is capped at MAX_ROWS and each row
   // is a full ev carrying __unf provenance. opts.days bounds the lookback
   // (default SCAN_DAYS); pass {days:null} for the unbounded sweep.
+  // C2: the multi-day archive scan is GONE. This used to loadDateRange() every
+  // archived day, pull every block on each of them, and rebuild the task predicate
+  // in JS one day at a time. GET /api/tasks/open now resolves roots plus their live
+  // descendants in one indexed query and returns the day_root overlay slice with
+  // them, so the structural predicate (row types, task-kind, fixed-type skip,
+  // start-or-nested, and "a root's parent is its day_root") lives in SQL where it
+  // cannot be forgotten by a caller.
+  //
+  // What deliberately did NOT move: DONE-ness. Completion still lives in the
+  // day_root `_done` overlay plus the legacy localStorage mirror the server cannot
+  // see, and collapsing it onto `status` is C5's job, gated on the ledger audit.
+  // Measured while building this: 264 past-day rows read `status='open'` while being
+  // finished in the overlay, so a server-side status filter would have resurrected
+  // every one of them into this lane. One done predicate, and it is the one below.
   async function collectUnfinished(opts) {
     opts = opts || {};
     const days = (opts.days === null) ? null : (opts.days || SCAN_DAYS);
-    const bs = window.blockStore;
     const TaskModel = window.DCC && window.DCC.TaskModel;
-    if (!bs || typeof bs.loadDateRange !== "function" || !TaskModel) return { rows: [], total: 0, scanned: 0 };
+    const api = window.DCC && window.DCC.api;
+    if (!TaskModel || typeof api !== "function") return { rows: [], total: 0, scanned: 0 };
 
     const today = todayStr();
-    const archive = (typeof __archiveDates !== "undefined" && Array.isArray(__archiveDates)) ? __archiveDates : [];
-    const todayD = new Date(today + "T00:00:00");
-    // Calendar-component arithmetic, not fixed-ms offsets: subtracting n*86400000
-    // from a LOCAL midnight does not land on local midnight n days earlier across a
-    // DST transition. The day after spring-forward that made `end` resolve to the
-    // day before yesterday, so loadDateRange never fetched yesterday and every one
-    // of yesterday's carryovers silently vanished from the lane for a day.
-    const _dayBefore = (n) => { const d = new Date(todayD); d.setDate(d.getDate() - n); return ymd(d); };
-
-    let scanDates = archive.filter(d => d < today).sort();
-    if (days) {
-      const floor = _dayBefore(days);
-      scanDates = scanDates.filter(d => d >= floor);
+    let payload;
+    try {
+      payload = await api("/api/tasks/open?before=" + encodeURIComponent(today) +
+                          "&days=" + (days === null ? "all" : String(days)));
+    } catch (e) {
+      // An empty lane, never a stale one. Every consumer is built for this shape —
+      // it is what the old collector returned when the store was missing.
+      return { rows: [], total: 0, scanned: 0 };
     }
-    if (!scanDates.length) return { rows: [], total: 0, scanned: 0 };
-
-    const start = scanDates[0];
-    const end = _dayBefore(1);   // yesterday, DST-safe
-    await bs.loadDateRange(start, end < start ? start : end);
+    const blocks = Array.isArray(payload && payload.rows) ? payload.rows : [];
+    const overlays = (payload && payload.overlays) || {};
 
     const rows = [];
     const seen = new Set();
-    for (const date of scanDates) {
-      const day = bs.getRangeCache(date);
-      if (!day || !Array.isArray(day.blocks)) continue;
-
-      // done ids for this date: day_root._done marks + legacy localStorage marks
-      const doneIds = new Set();
-      const root = day.blocks.find(b => b.type === "day_root");
-      const rp = (root && root.properties) || {};
-      const rd = rp._done && rp._done.ids;
-      if (Array.isArray(rd)) rd.forEach(id => doneIds.add(id));
+    for (const b of blocks) {
+      const p = (b && b.properties) || {};
+      const date = b.date;
+      const ov = overlays[date] || {};
+      // Done ids for THIS date: day_root._done marks + legacy localStorage marks.
+      // Scoped per date and never flattened across the pool — the same id can exist
+      // on two days and being done on one must not mark the other.
+      const doneIds = new Set(Array.isArray(ov.done) ? ov.done : []);
       localDoneSet(date).forEach(id => doneIds.add(id));
       // Locks live on the ORIGIN day's day_root (_lockedTasks), not on the block —
-      // hydrateLockedTasks only ever stamps today's scheduled[]. Read them here so
-      // the padlock renders on a carryover row too.
-      const lockedIds = new Set(Array.isArray(rp._lockedTasks) ? rp._lockedTasks : (rp._lockedTasks ? Object.keys(rp._lockedTasks) : []));
+      // hydrateLockedTasks only ever stamps today's scheduled[]. The endpoint reads
+      // them per date so the padlock still renders on a carryover row.
+      const lockedIds = new Set(Array.isArray(ov.locked) ? ov.locked : []);
 
-      for (const b of day.blocks) {
-        if (!(b.type === "block" || b.type === "schedule_item" || b.type === "added_task")) continue;
-        const p = b.properties || {};
-        // A nested step (subtask / ride-along) legitimately carries no time — it
-        // lives under its parent. Keeping them is what lets the lane nest instead
-        // of dropping the timeless ones and promoting the timed ones to top level.
-        const nested = !!(p.subtaskOf || p.wrapId);
-        if (!p.start && !nested) continue;              // not actually scheduled
-        if (skipType(p.type)) continue;                 // meetings / breaks / etc.
-        // A finished top-level task is simply finished. A finished CHILD still
-        // counts toward its parent's progress ("2/5 subtasks"), so it stays in the
-        // pool marked done; the lane renders only the open rows.
-        const isDone = !!(p.done || doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id)));
-        if (isDone && !nested) continue;
-        if (seen.has(b.id) || (p.local_id && seen.has(p.local_id))) continue;
-        seen.add(b.id);
-        if (p.local_id) seen.add(p.local_id);
+      // A nested step (subtask / ride-along) legitimately carries no time — it lives
+      // under its parent. The server keeps them, which is what lets the lane nest.
+      const nested = !!(p.subtaskOf || p.wrapId);
+      // A finished top-level task is simply finished. A finished CHILD still counts
+      // toward its parent's progress ("2/5 subtasks"), so it stays in the pool marked
+      // done; the lane renders only the open rows.
+      const isDone = !!(p.done || doneIds.has(b.id) || (p.local_id && doneIds.has(p.local_id)));
+      if (isDone && !nested) continue;
+      if (seen.has(b.id) || (p.local_id && seen.has(p.local_id))) continue;
+      seen.add(b.id);
+      if (p.local_id) seen.add(p.local_id);
 
-        // deriveEnd: a carryover row never gets a recalcTimes pass, so its `end`
-        // has to be anchored to its own start (see task-model.js).
-        const ev = TaskModel.fromBlock(b, { deriveEnd: true });
-        ev.__unf = {
-          sourceId: b.id,
-          sourceLocalId: p.local_id || null,
-          sourceDate: b.date || date,
-          createdAt: b.created_at || null,
-          done: isDone
-        };
-        if (lockedIds.has(ev.id) || lockedIds.has(b.id)) ev._locked = true;
-        rows.push(ev);
-      }
+      // deriveEnd: a carryover row never gets a recalcTimes pass, so its `end`
+      // has to be anchored to its own start (see task-model.js).
+      const ev = TaskModel.fromBlock(b, { deriveEnd: true });
+      ev.__unf = {
+        sourceId: b.id,
+        sourceLocalId: p.local_id || null,
+        sourceDate: date || null,
+        createdAt: b.created_at || null,
+        done: isDone
+      };
+      if (lockedIds.has(ev.id) || lockedIds.has(b.id)) ev._locked = true;
+      rows.push(ev);
     }
 
     // Most recent first.
@@ -150,7 +143,10 @@
     // `total` is what the lane and the prompt count: OPEN rows. The done children
     // riding along are progress data, not work.
     const total = rows.filter(ev => !ev.__unf.done).length;
-    return { rows: rows.slice(0, MAX_ROWS), total, scanned: scanDates.length };
+    // `scanned` is still "how many past days this pool came from", now counted by the
+    // server off the dates it actually touched rather than by the client off the days
+    // it walked. The modal's footer copy reads it.
+    return { rows: rows.slice(0, MAX_ROWS), total, scanned: Number(payload.scanned) || 0 };
   }
 
   // ── shared actions ──────────────────────────────────────────────────────────

@@ -386,18 +386,15 @@ test("findByIdempotencyKey prefers a LIVE row over an older tombstone", async ()
   assert.equal(await db.findByIdempotencyKey("ws-1", null), null);
 });
 
-test("getOpenTasksBefore mirrors the idx_blocks_open predicate exactly", async () => {
-  const pool = makeMockPool();
-  const db = loadDbWithMock(pool);
-  pool.query = async (sql, params) => { pool._log.push({ text: String(sql), params }); return { rows: [] }; };
-
-  await db.getOpenTasksBefore("ws-1", "2026-07-29", 25);
-  const { text, params } = pool._log[0];
-  // Diverging from the index predicate silently drops the index; keep them identical.
-  assert.match(text, /COALESCE\(properties->>'status', 'open'\) = 'open'/);
-  assert.match(text, /date IS NOT NULL AND date < \$2/, "strictly before, and never undated");
-  assert.match(text, /deleted_at IS NULL/);
-  assert.match(text, /type = 'block'/, "third term of the idx_blocks_open predicate");
-  assert.match(text, /dcc_is_task_row\(type, properties\)/, "one predicate, not a second copy");
-  assert.deepEqual(params, ["ws-1", "2026-07-29", 25]);
+// A1 added getOpenTasksBefore speculatively, for C2, with no callers. C2 measured it
+// against a prod restore and it did not fit: `type='block' AND status='open'` returned
+// 1576 rows where the lane shows 47, because itinerary completion writes the day_root
+// _done overlay rather than the row's status, and because most of what it admitted was
+// meetings. It is replaced by getCarryoverPool, pinned in open-tasks-query.test.js.
+// Left here as a marker so the removal reads as deliberate rather than lost.
+test("getOpenTasksBefore is gone, replaced by getCarryoverPool (C2)", async () => {
+  const db = loadDbWithMock(makeMockPool());
+  assert.equal(db.getOpenTasksBefore, undefined, "the speculative primitive must not linger as dead code");
+  assert.equal(typeof db.getCarryoverPool, "function");
+  assert.equal(typeof db.getSubtree, "function", "getSubtree DID fit and is still used, unchanged");
 });

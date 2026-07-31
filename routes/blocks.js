@@ -444,6 +444,32 @@ module.exports = function mount(app, ctx) {
     return out;
   }));
 
+  // The carryover/catch-up lane's pool, resolved server-side. This replaces the
+  // client's multi-day archive scan (unfinished-tasks.js collectUnfinished), which
+  // pulled EVERY block on every archived day through /api/blocks/range and rebuilt
+  // the task predicate in JS, one day at a time.
+  //
+  // Returns { rows, overlays, scanned }: roots plus their live descendants, and the
+  // day_root overlay slice (done ids + locked ids) per date. Done-ness is applied by
+  // the caller, deliberately — see db.getCarryoverPool. `days=all` lifts the window
+  // for the modal's "Show older" sweep.
+  //
+  // Track C's hunk in Track A's file (Coordination log, 2026-07-31). Distinct from
+  // A2's undelete / GET /:id / task-group work and A3's create paths.
+  app.get("/api/tasks/open", route(async (req, res) => {
+    const before = req.query.before || getTodayStr();
+    if (!isValidDate(before)) { res.status(400).json({ error: "Invalid ?before= date" }); return; }
+    const rawDays = String(req.query.days == null ? "" : req.query.days);
+    const days = rawDays === "all" ? null : Math.min(3650, Math.max(1, parseInt(rawDays, 10) || 14));
+    const limit = Math.min(2000, Math.max(1, parseInt(req.query.limit, 10) || 500));
+    const result = await blockDB.getCarryoverPool(req.workspaceId, before, { days, limit });
+    // Same legacy-gcal filter the range read applies, because that read is the one
+    // this endpoint is replacing — without it a legacy row that never rendered in the
+    // lane would start appearing, which is a visible change on a phase that must
+    // produce none.
+    return { ...result, rows: filterLegacyGcalBlocks(result.rows) };
+  }));
+
   // A tombstone is GONE to a reader. This is the READ contract that makes the delete
   // contract observable: until now the route happily served a soft-deleted row, so
   // every consumer had to remember to check deleted_at itself, and any consumer that
