@@ -26,6 +26,7 @@ const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
 const createMaterializeGuard = require("../lib/materialize-guard");
+const { dedupeStatus } = createMaterializeGuard;
 const createResponsibilityStore = require("../responsibility-store");
 const {
   firstFreeSlot, minutesToHHMM, hhmmToMinutes, taskDuration,
@@ -67,6 +68,114 @@ module.exports = function mount(app, ctx) {
     return blocks;
   }
 
+  // ── A3: idempotency on the generic create paths ──────────────────────────
+  //
+  // POST /api/blocks and POST /api/blocks/batch were the last create paths with no
+  // idempotency handling at all: routes/dcc.js honors a key on all three of its
+  // writers, and these two would happily mint a second row for a request the server
+  // had already committed. That is the duplicate every agent retry and every WAL
+  // replay produces today.
+  //
+  // Goes through lib/materialize-guard.js rather than db.findByIdempotencyKey
+  // directly, because A2 made that module the single home for "a soft-deleted match
+  // is STILL a match". A fourth hand-rolled copy of that rule is exactly what A2
+  // removed. Its lookup is deliberately DATE-BLIND, which agrees with A3's unique
+  // index: a key is workspace-global identity, not a per-day one.
+  //
+  // Inert for a request carrying no key, which is the overwhelming majority.
+  //
+  // NOT "every client create", and the difference matters: two live UI paths already
+  // send one, both predating this phase. public/js/responsibilities.js sends
+  // `resp:<id>:<date>` on a flat responsibility complete and public/js/schedule.js
+  // sends `resp-shell:<id>:<date>` on shell materialization, both through
+  // schedulePickerFields -> persistAddedTask -> blockStore.createBlock -> POST
+  // /api/blocks. So this phase flips those two from unhandled to deduped.
+  //
+  // That is what those keys MEAN — `resp:<id>:<date>` is an identity claim of one
+  // instance per responsibility per day, and D1's one-open-instance work already
+  // suppresses the second — but it IS a behavior change on a live path, not a no-op.
+  // The residual: on a genuine same-day repeat the server now answers with the first
+  // row while the client has already rendered a second item under a fresh local id,
+  // so the UI shows a ghost until reload. Fixing that means teaching the client to
+  // drop its optimistic row when the response comes back `_dedupe`, which is
+  // public/js/responsibilities.js and schedule.js — Track C's files. Handed over.
+  function idemKeyOf(item) {
+    if (!item) return null;
+    const props = typeof item.properties === "string" ? safeParseProps(item.properties) : (item.properties || {});
+    // snake_case only — see db.js createBlock. Accepting `idempotencyKey` in the
+    // properties bag would dedupe at the route with no unique index behind it.
+    const key = props.idempotency_key || null;
+    return key ? String(key) : null;
+  }
+  function safeParseProps(raw) { try { return JSON.parse(raw) || {}; } catch { return {}; } }
+
+  // ★ LIVE MATCHES ONLY, and this is the one place in the codebase where that is the
+  // right reading of a key. Everywhere else — routes/dcc.js's three writers, the
+  // meeting materializer, the task-group guard — a tombstone is still a match, because
+  // those callers are AGENTS re-deriving an item the user already removed, and
+  // re-creating it is the resurrection bug lib/materialize-guard.js exists to stop.
+  //
+  // These two routes are the human client's own write path, and there a keyed create
+  // whose only match is a tombstone means RESTORE, not resurrect. Concretely:
+  // public/js/state.js undoDeleteTask replays the deleted subtree as
+  // `{op:"create", ..., properties: r.properties}` with the original properties bag,
+  // idempotency_key included. Skipping on the tombstone would find the tombstone OF THE
+  // VERY ROW BEING RESTORED, create nothing, and hand the client back a dead id — undo
+  // silently failing on every task carrying a key (199 of 3,106 rows on the prod
+  // restore: slack-bookmark, day-review, quick-task, and now task groups).
+  //
+  // The safe direction is also the simple one: these routes deduped on NOTHING before
+  // this phase, so a live-match skip is strictly better than main and a tombstone skip
+  // would be strictly worse. Never make a route worse than the version you found.
+  //
+  // B2 replaces that undo with POST /:id/undelete, which is the real fix; this stays
+  // correct either way, because a restore through /undelete never reaches a create.
+  // `seen` defaults to null rather than a shared Map: a module-scope Map used as a
+  // default arg is one `seen.set` away from becoming a process-lifetime cache keyed by
+  // idempotency key with no workspace in the key — a cross-tenant leak with nothing to
+  // catch it. Every other seen-map in this repo is function-local; keep it that way.
+  async function resolveIdempotentCreate(workspaceId, item, seen = null, { tombstoneIsAMatch = false } = {}) {
+    const key = idemKeyOf(item);
+    if (!key) return { key: null, existing: null };
+    // `seen` carries keys minted EARLIER IN THIS SAME REQUEST: findForDedupe reads
+    // through the pool, so inside a batch's open transaction it cannot see rows this
+    // very request just inserted, and two items sharing a key would both pass the
+    // lookup and then collide on the index.
+    if (seen && seen.has(key)) return { key, existing: seen.get(key) };
+    const hit = await materializeGuard.findForDedupe(workspaceId, { idempotencyKey: key });
+    if (!hit) return { key, existing: null };
+    return { key, existing: (tombstoneIsAMatch || !hit.deleted_at) ? hit : null };
+  }
+
+  // The answer a matched key produces: the row itself, which is what an idempotent
+  // create MEANS — same request, same result. The verdict string comes from the shared
+  // dedupeStatus() rather than being re-derived here, so this endpoint cannot drift
+  // from the vocabulary routes/dcc.js already answers with. HTTP stays 200: a new
+  // status code is one Track B's replay classifier would read as transient and retry
+  // forever.
+  function markDeduped(row) {
+    const { _resolvedExisting, ...rest } = row;
+    return { ...rest, _dedupe: dedupeStatus(row) };
+  }
+
+  // A dedupe answer is a row the CALLER DID NOT SUPPLY, so a scope-limited token has
+  // to be re-authorized against it. The sweep gate on the handler below validates the
+  // item being CREATED (`isAllowedSweepBlockItem`); without this, honoring a key would
+  // hand a write-only Sweep Suite token any row in the workspace it names, just by
+  // guessing that row's key — and several key vocabularies are guessable to a
+  // semi-insider (`slack-bookmark:<channel>:<ts>` is readable off any Slack message,
+  // and `day-review:<date>:<id>` / `tg:<group>:<date>:<i>` are structured). It would
+  // also read back tombstones, which A2 deliberately made GET /:id 404 on.
+  //
+  // 404 rather than 403, matching assertBlockOwnership: the fact being withheld is
+  // that a row with this key exists at all.
+  function assertServiceScope(req, row) {
+    if (!req.dccServiceAuth || isAllowedSweepBlockItem(row)) return;
+    const err = new Error("Block not found");
+    err.statusCode = 404;
+    throw err;
+  }
+
   // ── Block API ──
   app.post("/api/blocks", validate(schemas.blockCreate), route(async (req, res) => {
     const body = req.body;
@@ -74,8 +183,45 @@ module.exports = function mount(app, ctx) {
     if (req.dccServiceAuth && !items.every(isAllowedSweepBlockItem)) { res.status(403).json({ error: "Sweep Suite token may only create sweep_suite_task blocks" }); return; }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
     const results = [];
-    for (const item of items) results.push(await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId }));
-    broadcast("blocks-changed", { action: "create", blockIds: results.map(r => r.id), clientId: body._clientId }, workspaceId);
+    const createdIds = [];
+    const seen = new Map();
+    // A SERVICE TOKEN IS AN AGENT, so the no-resurrect rule still binds it here. This
+    // endpoint is BOTH the human client's write path (persistAddedTask) and the Sweep
+    // Suite token's ONLY reachable write, and the two want opposite answers to the same
+    // tombstone: a person re-creating a keyed row is restoring it, a sweep replaying
+    // the same key is re-deriving something the user deliberately deleted — the exact
+    // caller class lib/materialize-guard.js exists for. `req.dccServiceAuth` is the
+    // discriminator, and it costs nothing to use it.
+    // (/api/blocks/batch needs no such split: no attach site in server.js routes to
+    // it — there are FIVE, not one, and none is /api/blocks/batch — so it is
+    // session-only and stays live-only for undo.)
+    const agentRules = { tombstoneIsAMatch: !!req.dccServiceAuth };
+    try {
+      for (const item of items) {
+        const { key, existing } = await resolveIdempotentCreate(workspaceId, item, seen, agentRules);
+        if (existing) { assertServiceScope(req, existing); results.push(markDeduped(existing)); continue; }
+        const row = await blockDB.createBlock({ ...item, user_id: userId, workspace_id: workspaceId });
+        if (key) seen.set(key, row);
+        // db.createBlock answers a lost race itself — the index caught a writer that
+        // committed between our lookup and our insert, and it re-read the winner. Say so
+        // in the response and keep the id out of the broadcast, exactly as for a match
+        // the lookup found: nothing was created either way. Scope-checked for the same
+        // reason: the winner is another writer's row and may be another writer's kind.
+        if (row._resolvedExisting) { assertServiceScope(req, row); results.push(markDeduped(row)); continue; }
+        results.push(row);
+        createdIds.push(row.id);
+      }
+    } finally {
+      // IN A FINALLY, because this loop is not a transaction. Each item autocommits, so
+      // by the time a later item throws — assertServiceScope on a foreign dedupe hit,
+      // or any db error — the earlier rows ARE in the database. Announcing them on the
+      // way out is not tidiness: a create nobody broadcast is invisible to every other
+      // tab and device until a reload, while the caller was told the request failed.
+      //
+      // Only ids this request actually created. Broadcasting a "create" for a deduped
+      // row would make every other tab re-fetch a row that did not change.
+      if (createdIds.length) broadcast("blocks-changed", { action: "create", blockIds: createdIds, clientId: body._clientId }, workspaceId);
+    }
     return results.length === 1 ? results[0] : results;
   }));
 
@@ -179,8 +325,85 @@ module.exports = function mount(app, ctx) {
     }
 
     const opsWithUser = operations.map(op => op && op.op === "create" ? { ...op, user_id: userId, workspace_id: workspaceId } : op);
-    const result = await blockDB.batchOp(opsWithUser);
-    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b.id || b.reordered).filter(Boolean), clientId: _clientId }, req.workspaceId);
+
+    // A3 idempotency, resolved BEFORE batchOp opens its transaction. It has to
+    // happen out here: findForDedupe reads through the pool and could not see the
+    // transaction's own uncommitted rows, and a create dropped inside batchOp would
+    // desynchronise the results array from the operations array.
+    //
+    // This is the path that matters most. B1 made /batch the client's canonical
+    // write route, so a lost ack means the WAL replays the whole batch — and today
+    // that mints a duplicate of everything in it. With keys, the replay resolves to
+    // the rows the first attempt already committed.
+    //
+    // Deduped creates are REMOVED from the ops handed to batchOp and spliced back
+    // into the response at their original index, so `result.blocks[i]` still answers
+    // `operations[i]` for every caller that pairs them up.
+    async function runBatch(ops) {
+      const resolved = new Map();   // original index -> row already on disk
+      const echoes = new Map();     // original index -> index of the earlier op in THIS batch that mints it
+      const firstForKey = new Map();
+      const toRun = [];
+      for (let i = 0; i < ops.length; i++) {
+        const op = ops[i];
+        if (!op || op.op !== "create") { toRun.push({ i, op }); continue; }
+        // Through resolveIdempotentCreate, NOT findForDedupe directly — this route is
+        // where the live-only rule matters MOST, and calling the guard raw here is how
+        // the two endpoints silently drifted apart once already. undoDeleteTask replays
+        // its restored subtree through blockStore.batchOp -> POST /api/blocks/batch, so
+        // a tombstone-inclusive match on THIS path is the one that finds the tombstone
+        // of the row being restored and quietly restores nothing.
+        //
+        // No `seen` map: a key repeated inside ONE batch cannot be answered by a lookup
+        // (the row it refers to is not committed yet), so `firstForKey` below handles
+        // that instead — run the first, echo its result into the later slots once
+        // batchOp returns. Letting both run would put two rows with one key inside a
+        // single transaction, where the conflict is unrecoverable: the retry re-reads
+        // the same uncommitted nothing and loops.
+        const { key, existing } = await resolveIdempotentCreate(workspaceId, op);
+        if (key && firstForKey.has(key)) { echoes.set(i, firstForKey.get(key)); continue; }
+        // Scope-checked even though no service token can reach /batch today. That
+        // fact is a property of five separate attach sites in server.js, and this
+        // change set has now shipped three bugs whose root cause was an invariant
+        // asserted in a comment rather than enforced in code. assertServiceScope is a
+        // no-op for a session, so enforcing it here costs nothing and cannot rot.
+        if (existing) { assertServiceScope(req, existing); resolved.set(i, markDeduped(existing)); continue; }
+        if (key) firstForKey.set(key, i);
+        toRun.push({ i, op });
+      }
+      const raw = toRun.length ? await blockDB.batchOp(toRun.map(t => t.op)) : { batchId: null, blocks: [] };
+      const byIndex = new Map();
+      toRun.forEach((t, n) => byIndex.set(t.i, raw.blocks[n]));
+      const rowAt = (i) => {
+        if (resolved.has(i)) return resolved.get(i);
+        if (echoes.has(i)) { const src = byIndex.get(echoes.get(i)); if (src) assertServiceScope(req, src); return src ? markDeduped(src) : undefined; }
+        const row = byIndex.get(i);
+        // db.createBlock's ON CONFLICT (id) path returns an existing row rather than
+        // inserting — B2's replayed client-minted ids land here — so normalize that to
+        // the same `_dedupe` verdict a key match produces. One vocabulary for "this
+        // was found, not created", whichever identity resolved it.
+        if (row && row._resolvedExisting) { assertServiceScope(req, row); return markDeduped(row); }
+        return row;
+      };
+      const blocks = [];
+      for (let i = 0; i < ops.length; i++) { const row = rowAt(i); if (row !== undefined) blocks.push(row); }
+      return { batchId: raw.batchId, blocks };
+    }
+
+    let result;
+    try {
+      result = await runBatch(opsWithUser);
+    } catch (err) {
+      // A concurrent writer won the key between our lookup and the insert. batchOp is
+      // fully transactional, so the rollback left nothing behind and re-resolving is
+      // clean: the winner is committed and visible now, so the retry dedupes against
+      // it instead of colliding. Exactly ONE retry — a second conflict is no longer
+      // the narrow race this handles and should surface rather than spin.
+      if (!blockDB.isIdempotencyConflict(err)) throw err;
+      result = await runBatch(opsWithUser);
+    }
+
+    broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean), clientId: _clientId }, req.workspaceId);
     return result;
   }));
 
@@ -741,13 +964,17 @@ module.exports = function mount(app, ctx) {
     // `force: true` is the deliberate re-add (mirroring respStore.scheduleResponsibilityTask's
     // own force flag), so the guard blocks the accident without blocking the intent.
     //
-    // BEST-EFFORT, and precisely so: this is check-then-act with awaits in between and
-    // no lock, transaction or uniqueness constraint on (workspace_id, date, taskGroupId).
-    // It reliably stops the SEQUENTIAL repeat — a WAL replay, or clicking again after the
-    // first add rendered — but two genuinely concurrent POSTs can both read an empty day
-    // and both plant the group. The true double-click is held off client-side by an
-    // in-flight guard in public/js/task-groups.js. Making this airtight server-side wants
-    // a partial unique index over live rows, which is pg-schema.js work (Track A / A3).
+    // The check-then-act below stops the SEQUENTIAL repeat; A3 closed the concurrent
+    // one underneath it with per-item idempotency keys (see the create loop), so two
+    // simultaneous POSTs can no longer both plant the group.
+    //
+    // A3 DECLINED the unique index this comment used to ask for, because it cannot
+    // work: taskGroupId is stamped on EVERY item a group mints, so a unique index on
+    // (workspace_id, date, taskGroupId) would make a two-item group unaddable on an
+    // empty database — the second item collides with the first. Measured on the prod
+    // restore, the three "duplicate" tuples that index would have to clear are two
+    // real double-books plus one perfectly ordinary two-item group. The key that IS
+    // unique per row is (group, date, item index), which is what gets stamped.
     // ONE day load for both the guard and the slotting context. The tombstone-inclusive
     // read cannot use an index (every blocks index is partial on deleted_at IS NULL), so
     // it sequential-scans; loadDaySlottingContext exists precisely so a batch pays for
@@ -770,10 +997,17 @@ module.exports = function mount(app, ctx) {
     }
 
     const items = Array.isArray(group.properties.items) ? group.properties.items : [];
+    // ONE spelling of the key format. The mint site and the conflict-recovery lookup
+    // both need it, and a drift between two copies fails silently: the lookup returns
+    // null and the handler answers `{duplicate: true, task: null}`, the dead end the
+    // `task` field exists to avoid. Same reason routes/slack-events.js keeps its
+    // `slack-bookmark:` format in one helper beside its writer.
+    const tgKey = (i) => `tg:${group.id}:${dateStr}:${i}`;
     const { dayStart, dayEnd, blockers } = dayCtx;
     const nowMin = dateStr === getTodayStr() ? (new Date().getHours() * 60 + new Date().getMinutes()) : dayStart;
-    const created = [];
-    for (const item of items) {
+    const pending = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
       const duration = Math.max(1, Math.round(Number(item.duration || 30)));
       const slot = firstFreeSlot(Math.max(dayStart, nowMin), duration, blockers, dayEnd) || Math.max(dayStart, nowMin);
       blockers.push({ s: slot, e: slot + duration });
@@ -787,6 +1021,16 @@ module.exports = function mount(app, ctx) {
         taskGroupId: group.id,
         createdAt: new Date().toISOString()
       };
+      // A3: the per-item key that makes this add structurally single-shot. (group,
+      // date, item index) is the one tuple that is genuinely unique per row, so
+      // A3's UNIQUE index over live keys refuses the second of two concurrent adds
+      // instead of double-booking the day.
+      //
+      // NOT stamped on a `force` re-add: force means "yes, again, deliberately",
+      // and a deterministic key would refuse the exact thing the flag exists to
+      // permit. Those rows stay unkeyed, and the taskGroupId guard above still sees
+      // them, so the accidental repeat is caught either way.
+      if (!(req.body && req.body.force)) common.idempotency_key = tgKey(i);
       let props;
       if (item.isPlaceholder) {
         const menus = Array.isArray(item.placeholderMenus) ? item.placeholderMenus : [];
@@ -794,8 +1038,22 @@ module.exports = function mount(app, ctx) {
       } else {
         props = { ...common, title: item.title, detail: item.detail || "", meta: "Preset · " + (group.properties.title || "group") + " · " + duration + "m", tags: ["task-group"] };
       }
-      const block = await blockDB.createItineraryTask({ date: dateStr, properties: props, userId: userId || null, workspaceId: workspaceId || null, sortOrder: slot, ensureRoot: false });
-      created.push(block);
+      pending.push({ date: dateStr, properties: props, sortOrder: slot });
+    }
+
+    // ONE transaction for the whole group (db.createItineraryTasks), replacing a loop
+    // of independent creates. With keys in play that stops being a style question: a
+    // losing racer must plant NOTHING, and a per-item loop would leave whatever it had
+    // already committed before the conflicting item. Atomic, so the loser rolls back
+    // to empty and gets the same "already there" answer the guard above would have
+    // given it a moment earlier.
+    let created;
+    try {
+      created = await blockDB.createItineraryTasks(pending, { userId: userId || null, workspaceId: workspaceId || null });
+    } catch (err) {
+      if (!blockDB.isIdempotencyConflict(err)) throw err;
+      const winner = await materializeGuard.findForDedupe(workspaceId, { idempotencyKey: tgKey(0) });
+      return { created: [], duplicate: true, deleted: !!(winner && winner.deleted_at), task: winner || null, date: dateStr };
     }
     broadcast("blocks-changed", { action: "task-group-schedule", blockIds: created.map(b => b.id) }, workspaceId);
     return { created };

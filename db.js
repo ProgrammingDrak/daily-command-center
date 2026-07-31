@@ -221,10 +221,78 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     validateBlock(type, props);
   }
 
-  await q.query(
-    `INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [blockId, type, parentId, date || null, props, sort_order || 0, user_id || null, workspace_id || null, now, now]
-  );
+  // ON CONFLICT (id) DO NOTHING makes a create with a CALLER-MINTED id idempotent:
+  // replay the same create and you get the same row back instead of a 23505 that
+  // aborts the caller's whole transaction. This is what B2 needs before the client
+  // can mint its own ids — a lost ack today produces a duplicate task, because the
+  // replay lands with a fresh server UUID and nothing links the two.
+  //
+  // DO NOTHING returns zero rows on a collision, so the SELECT below is what
+  // actually answers the request. It is workspace-scoped on purpose, and that
+  // scoping is load-bearing rather than tidy: ids here are caller-controlled and
+  // guessable (day roots are literally `day-root-<workspace>-<date>`), so the
+  // obvious `WHERE id = $1` would turn the create path into a cross-workspace READ
+  // — post a create with a foreign id, get that row's contents back. Raised by
+  // Track B against this exact line before it was written; it is the read-side twin
+  // of the batch write hole #260 closed.
+  //
+  // A collision the caller does not own therefore FAILS rather than returning
+  // anything, and fails as 404 "Block not found" to match assertBlockOwnership —
+  // a 409 would confirm that the id exists, which is the fact being withheld.
+  let inserted;
+  try {
+    inserted = await q.query(
+      `INSERT INTO blocks (id, type, parent_id, date, properties, sort_order, user_id, workspace_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING *`,
+      [blockId, type, parentId, date || null, props, sort_order || 0, user_id || null, workspace_id || null, now, now]
+    );
+  } catch (err) {
+    // A3's UNIQUE idempotency index fired: another writer committed this key in the
+    // window between the caller's dedupe lookup and this insert. Four routes create
+    // keyed rows (quick-task, the two Day-in-Review writers, Slack reactions) and
+    // every one of them already looks the key up first, so without this they would
+    // answer a double-click with a 500 where they used to answer with a duplicate.
+    // Resolving it HERE covers all four and anything added later, rather than four
+    // copies of the same catch.
+    //
+    // Only outside a caller-supplied transaction. Inside one the error has already
+    // aborted the tx, so no further query on that client can succeed and recovery is
+    // necessarily the caller's — which is what routes/blocks.js /batch does by
+    // re-resolving and re-running the whole batch.
+    //
+    // The row is always LIVE: the index is partial on `deleted_at IS NULL`, so a
+    // tombstone never reserves its key and could not have raised this.
+    if (client || !isIdempotencyConflict(err)) throw err;
+    // snake_case ONLY, deliberately. idx_blocks_idem_unique indexes
+    // properties->>'idempotency_key' and findByIdempotencyKey queries that field, so a
+    // camelCase alias here could never name the key that raised this conflict — and at
+    // the route layer it would hand a caller route-level dedupe with no index backstop,
+    // i.e. silent best-effort idempotency for a key the database is not enforcing. The
+    // dual-spelling normalization routes/dcc.js does is on the request BODY, one layer
+    // up; by the time a key reaches the properties bag there is one spelling.
+    const key = props.idempotency_key || null;
+    const winner = key ? await findByIdempotencyKey(workspace_id || null, String(key)) : null;
+    if (!winner) throw err;
+    return { ...winner, _resolvedExisting: true };
+  }
+  if (!inserted.rows.length) {
+    const { rows: found } = await q.query(
+      "SELECT * FROM blocks WHERE id = $1 AND workspace_id IS NOT DISTINCT FROM $2",
+      [blockId, workspace_id || null]
+    );
+    if (!found.length) { const err = new Error("Block not found"); err.statusCode = 404; throw err; }
+    // No operations row: nothing was created, so the op log must not claim one.
+    // Tombstone-inclusive, deliberately — the caller gets the row as it stands and
+    // deleted_at tells it the truth. Refusing to resurrect is the route layer's
+    // rule (lib/materialize-guard.js), not this primitive's.
+    //
+    // `_resolvedExisting` says "this row was found, not inserted". Callers that broadcast a
+    // create, log an operation, or award points need that distinction, and inferring
+    // it from timestamps is exactly the guesswork that produces phantom events.
+    return { ...parseBlock(found[0]), _resolvedExisting: true };
+  }
   await q.query(`INSERT INTO operations (block_id, op_type, after_data, timestamp) VALUES ($1, 'create', $2, $3)`, [blockId, props, now]);
   return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sort_order || 0, created_at: now, updated_at: now, deleted_at: null };
 }
@@ -357,7 +425,32 @@ async function undeleteBlock(id, client) {
   const existing = rows[0];
   if (!existing) throw new Error(`Block not found: ${id}`);
   if (!existing.deleted_at) return parseBlock(existing);
-  await q.query("UPDATE blocks SET deleted_at = NULL, updated_at = $1 WHERE id = $2", [now, id]);
+  // Clearing deleted_at moves the row INTO idx_blocks_idem_unique's partial predicate
+  // (`... AND deleted_at IS NULL`), so if a live row already holds this key the UPDATE
+  // raises 23505 — and a raw one would surface as a 500 from POST /:id/undelete. Not
+  // hypothetical: the prod restore has 32 duplicate key groups, every one of them a
+  // live row plus tombstones, which is exactly this shape.
+  //
+  // 409, not a silent success: the tombstone genuinely cannot be restored while its
+  // twin is live, and the caller has to be told rather than shown an undo that did
+  // nothing. B2 is the phase that wires this route to the client, so it lands there.
+  try {
+    await q.query("UPDATE blocks SET deleted_at = NULL, updated_at = $1 WHERE id = $2", [now, id]);
+  } catch (err) {
+    // Same rule as createBlock: inside a caller's transaction the 23505 has already
+    // aborted it, so recovery belongs to whoever owns the tx and the raw error must
+    // survive. No caller passes a client today; this keeps the two functions from
+    // diverging the moment one does.
+    if (client || !isIdempotencyConflict(err)) throw err;
+    const conflict = new Error("Another live block already holds this idempotency key");
+    conflict.statusCode = 409;
+    // Carry the classification through. Every recovery site in this phase keys off
+    // isIdempotencyConflict(), which reads code + constraint — drop them and a wrapped
+    // undelete stops being recognisable as the conflict it is.
+    conflict.code = err.code;
+    conflict.constraint = err.constraint;
+    throw conflict;
+  }
   await q.query(
     `INSERT INTO operations (block_id, op_type, before_data, timestamp) VALUES ($1, 'update', $2, $3)`,
     [id, existing.properties, now]
@@ -386,6 +479,21 @@ async function getBlockIncludingDeleted(id) {
 // preference to the live row — and that case is real, because this migration's step 6
 // partitions only over live rows, so a pre-existing tombstone can be older than the
 // surviving row it shares a key with.
+// Did this error come from A3's unique idempotency index (pg-schema.js
+// idx_blocks_idem_unique)? The index is the backstop UNDERNEATH the route-level
+// dedupe lookup, and it only fires in the window that lookup cannot cover: two
+// genuinely concurrent writers holding the same key. A caller that already ran the
+// lookup uses this to turn the raw 23505 back into the same "already there" answer,
+// instead of surfacing a 500 for a case the API has a defined response for.
+//
+// Matches on the constraint NAME, not the message — verified against Postgres 17.6
+// that a violation of a bare CREATE UNIQUE INDEX (no table constraint behind it)
+// still reports the index name in err.constraint.
+const IDEM_UNIQUE_INDEX = "idx_blocks_idem_unique";
+function isIdempotencyConflict(err) {
+  return !!(err && err.code === "23505" && err.constraint === IDEM_UNIQUE_INDEX);
+}
+
 async function findByIdempotencyKey(workspaceId, key) {
   if (!key) return null;
   const { rows } = await pool.query(
@@ -891,7 +999,7 @@ module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
-  undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey,
+  undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, isIdempotencyConflict,
   getOpenTasksBefore, getSubtree, isTaskRow,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,

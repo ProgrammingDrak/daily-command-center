@@ -138,8 +138,17 @@ module.exports = function mount(app, ctx) {
       if (body.point_tier) props.point_tier = body.point_tier;
       if (body.point_multiplier != null) props.point_multiplier = body.point_multiplier;
       const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
-      broadcast("blocks-changed", { action: "quick-task-create", blockIds: [created.id], date }, workspaceId);
-      res.json({ ok: true, date, status: "created", block: { id: created.id, title, start: props.start || null, end: props.end || null, priority: props.priority } });
+      // Nothing was created on the deduped path, so nothing to announce — the same
+      // rule routes/blocks.js states for its own create loop. The MCP and CLI retry
+      // loops are exactly what produce this shape, so without the guard a replay storm
+      // is a re-fetch storm in every open tab.
+      if (!created._resolvedExisting) broadcast("blocks-changed", { action: "quick-task-create", blockIds: [created.id], date }, workspaceId);
+      // A3: `_resolvedExisting` means db.createBlock lost the key race and handed back the live
+      // winner instead of inserting. The row is right either way, but reporting
+      // "created" for it would be a lie a caller can act on — this is the retry shape
+      // the MCP server and scripts/dcc-schedule.js now produce on a cold start, where
+      // the retry can overlap the original request the server is still committing.
+      res.json({ ok: true, date, status: created._resolvedExisting ? dedupeStatus(created) : "created", block: { id: created.id, title, start: props.start || null, end: props.end || null, priority: props.priority } });
     } catch (e) {
       console.error("[quick-task] failed:", e);
       res.status(e.status || 500).json({ error: e.message || "quick-task failed" });
@@ -373,6 +382,16 @@ module.exports = function mount(app, ctx) {
         if (Array.isArray(body.evidence)) props.evidence = body.evidence;
         const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
         blockId = created.id;
+        // A3: a concurrent writer can win the key between the lookup above and this
+        // insert, and db.createBlock resolves that by returning the live winner rather
+        // than raising. Take the SAME branch the lookup would have taken — including
+        // following the winner's own date, because the paragraph above applies with
+        // full force here: keying the ledger to the posted date would mint a second
+        // credit row for a block already credited under its own.
+        if (created._resolvedExisting) {
+          duplicate = true;
+          if (created.date) effectiveDate = created.date;
+        }
       }
 
       // Credit is idempotent on source_key; it also mirrors the key the in-app
@@ -388,7 +407,14 @@ module.exports = function mount(app, ctx) {
         console.error("[brief log-done] credit failed (non-fatal):", e.message);
       }
 
-      broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
+      // The THIRD dedupe-broadcast site in this file, and the one that legitimately
+      // differs from quick-task and push-next: even when no block row changed, this
+      // endpoint may have just awarded slot credit, and open tabs need to hear about
+      // that. So the condition is "something happened", not "a row was created" —
+      // announce on a real create, or when earnTaskCredit reports a fresh award.
+      if (!duplicate || (credit && credit.awarded)) {
+        broadcast("blocks-changed", { action: "brief-log-done", blockIds: [blockId], date: effectiveDate }, workspaceId);
+      }
       res.json({
         ok: true, date: effectiveDate,
         status: duplicate ? "skipped_duplicate" : "created",
@@ -435,8 +461,10 @@ module.exports = function mount(app, ctx) {
       if (idemKey) props.idempotency_key = idemKey;
       if (body.notes) props.notes = body.notes;
       const created = await blockDB.createItineraryTask({ date, properties: props, userId, workspaceId, score: true });
-      broadcast("blocks-changed", { action: "brief-push-next", blockIds: [created.id], date }, workspaceId);
-      res.json({ ok: true, date, status: "created", block: { id: created.id, title } });
+      if (!created._resolvedExisting) broadcast("blocks-changed", { action: "brief-push-next", blockIds: [created.id], date }, workspaceId);
+      // A3: same as quick-task — a lost key race is resolved in db.createBlock, and the
+      // honest status is the one the lookup above would have returned.
+      res.json({ ok: true, date, status: created._resolvedExisting ? dedupeStatus(created) : "created", block: { id: created.id, title } });
     } catch (e) {
       console.error("[brief push-next] failed:", e);
       res.status(e.status || 500).json({ error: e.message || "push-next failed" });

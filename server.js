@@ -712,6 +712,23 @@ app.post("/api/save-engram-index", (req, res) => { const body = req.body; body.s
 
 // DCC ingest + brief routes extracted to routes/dcc.js (mounted below).
 
+// WHICH COMMIT IS SERVING. Everything else here answers "is it alive", and the CI
+// canary job polls this endpoint for exactly that — which is why a green canary has
+// twice now meant nothing: A2 merged during a Railway incident where NO deployment
+// was created at all, every job went green, and the old container kept answering
+// "ok" happily. C1 hit the same trap with a 17-minute queue. With no version marker
+// there was no question the canary could ask that would tell the difference.
+//
+// Railway injects RAILWAY_GIT_COMMIT_SHA at build time. The fallbacks cover other
+// hosts (Render's SOURCE_VERSION, a generic GIT_COMMIT_SHA) and local runs report
+// null rather than lying. `curl $PROD/api/health | jq -r .revision` now answers
+// "did my merge actually deploy" for a SERVER-only change, which previously needed
+// a behavioral probe because there was no asset to grep.
+const REVISION = process.env.RAILWAY_GIT_COMMIT_SHA
+  || process.env.GIT_COMMIT_SHA
+  || process.env.SOURCE_VERSION
+  || null;
+
 app.get("/api/health", async (req, res) => {
   const dbConfig = typeof pool.getConfigStatus === "function"
     ? pool.getConfigStatus()
@@ -725,6 +742,7 @@ app.get("/api/health", async (req, res) => {
       server: "daily-command-center",
       database: "ok",
       databaseConfigured: dbConfig.configured,
+      revision: REVISION,
       port: PORT,
       sseClients: sseClients.size,
       datesStored: m.dates.length,
@@ -738,6 +756,7 @@ app.get("/api/health", async (req, res) => {
       server: "daily-command-center",
       database: "error",
       databaseConfigured: dbConfig.configured,
+      revision: REVISION,
       databaseError: typeof pool.describeError === "function" ? pool.describeError(e) : (e.code || e.name || "DatabaseError"),
     });
   }

@@ -88,6 +88,15 @@ function mountApp(extraBlocks = {}) {
         return Object.values(blocks).filter(b => b.date === date && b.workspace_id === workspaceId);
       },
       createItineraryTask: async (b) => { calls.created.push(b); return { id: "created-" + calls.created.length, ...b }; },
+      // A3 moved the task-group create loop onto the transactional batch primitive, so
+      // a losing racer rolls back to nothing instead of leaving the items it had
+      // already committed. Same per-item bookkeeping, so calls.created still counts rows.
+      createItineraryTasks: async (items) => items.map((it) => { calls.created.push(it); return { id: "created-" + calls.created.length, ...it }; }),
+      isIdempotencyConflict: (err) => !!(err && err.code === "23505" && err.constraint === "idx_blocks_idem_unique"),
+      findByIdempotencyKey: async (workspaceId, key) => {
+        const hits = Object.values(blocks).filter(b => (b.properties || {}).idempotency_key === key && b.workspace_id === workspaceId);
+        return hits.find(b => !b.deleted_at) || hits[0] || null;
+      },
       getBlocksByTypes: async () => [],
       getDelegatedItems: async () => [],
       getUndatedTaskBlocks: async () => [],
