@@ -376,6 +376,15 @@
       if (typeof showToast === "function") showToast("Could not move " + ev.title + " to the backlog", "error");
       return null;
     }
+    // NO durMin override here, deliberately, and the asymmetry with
+    // _moveTaskToBacklogStage is the point. That path passes dur(ev) because a row on
+    // TODAY has been through recalcTimes and adjustDur, which move `ev.end` and never write
+    // `properties.duration` back — so end-start is live and the stored duration is stale.
+    // A carryover ev is the other way round: it never gets a recalcTimes pass, and
+    // fromBlock DERIVES its end from `duration` when the row has no end, so the row's own
+    // duration is the authority and end-start is the derived value. Passing dur(ev) here
+    // inverted that and reported 30m for a row storing 45 (pinned in
+    // carryover-actions.test.js). Let the primitive read the row.
     const updated = await unscheduleRow(u.sourceId, { block: block });
     if (!updated) {
       if (typeof showToast === "function") showToast("Could not move " + ev.title + " to the backlog", "error");
@@ -386,6 +395,21 @@
     if (typeof showToast === "function") showToast("Moved to the backlog: " + ev.title, "success");
     // Children keep their parent edge and follow it as nested backlog rows.
     return { removed: [ev.id].concat(descendants(ev, pool).map(t => t.id)) };
+  }
+
+  // Re-collect the lane after a write ADDED a row to one of its origin days (C4).
+  //
+  // Both halves are needed and neither is sufficient: invalidateRangeCache alone leaves
+  // _unfinishedCache holding the pre-write answer, and invalidateUnfinishedSection alone
+  // leaves the range cache holding the pre-write day. The four actions above inline only
+  // the range half because they REMOVE rows and _unfDropRows handles the section locally;
+  // an add needs both. Lives here rather than in the caller so the next verb that adds to
+  // an origin day (a drag onto a carryover parent, the bounty once its scoring is settled)
+  // finds it instead of hand-rolling a fifth copy.
+  function recollect(sourceDate) {
+    const bs = window.blockStore;
+    if (bs && typeof bs.invalidateRangeCache === "function" && sourceDate) bs.invalidateRangeCache(sourceDate);
+    if (typeof invalidateUnfinishedSection === "function") invalidateUnfinishedSection();
   }
 
   // Re-read a day and rebuild the in-memory plan from it. Shared so the bulk path
@@ -569,6 +593,7 @@
     descendants: descendants,
     openRows: openRows,
     rootsOf: rootsOf,
+    recollect: recollect,
     refoldViewedDay: refoldViewedDay,
     complete: complete,
     moveTo: moveTo,

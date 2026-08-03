@@ -917,7 +917,7 @@ function hydrateBacklogFromBlocks(){
   let added=0;
   TM.selectUnscheduled(window.blockStore.getByType("block"),{includeLegacyDatedBacklog:true}).forEach(b=>{
     const p=b.properties||{};
-    const localId=p.local_id||("blk-"+b.id);
+    const localId=TM.backlogKey(b);
     // Dedupe by ev id, matching the fold (persistence.js keys on local_id||row id).
     // Two live rows CAN share one local_id — `carry-200` does on the prod restore —
     // and in that case the drawer shows one while both rows exist. That is the

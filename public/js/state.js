@@ -376,28 +376,60 @@ function _applyCommutePairToEvent(ev,pair){
   if(pair.back)ev.commuteBackMinutes=pair.back;
   else delete ev.commuteBackMinutes;
 }
-function setTaskCommuteTimes(taskId,value){
+// opts.blockId: address the row directly (C4). `_commuteBlockForTask` searches
+// _dayCache/_globalCache, which never hold a past-day carryover row, so commute minutes
+// set from the details modal on a carryover landed only in the day-scoped `commuteTimes`
+// map -- recorded against the wrong day and never on the row. Now that the modal opens on
+// carryover rows, the caller passes the row id it already has.
+function setTaskCommuteTimes(taskId,value,opts){
   if(!taskId)return;
+  opts=opts||{};
   const pair=normalizeCommutePair(value);
   if(pair.total)commuteTimes[taskId]=pair.back?{to:pair.to,back:pair.back}:pair.to;
   else delete commuteTimes[taskId];
-  const ev=scheduled.find(e=>e.id===taskId);
+  // BOTH pools, via the shared anchor. A carryover ev is not in `scheduled[]` -- it lives in
+  // the lane's cache, and taskAnchorById hands the details modal that exact object. Reaching
+  // the ROW but not the EV was a live data-loss loop, because the modal seeds its commute
+  // inputs from the ev and closeAddModal persists them on EVERY close:
+  //   1. open a carryover row, type 20, close -> the ROW gets commuteToMinutes:20
+  //   2. reopen -> commutePairForTask reads the STALE ev -> both inputs render empty
+  //   3. close -> persistAddModalCommute writes {to:0,back:0} -> _commuteProps DELETES the
+  //      keys, destroying what step 1 saved, with no toast and no reload needed.
+  // For a row in scheduled[] the anchor returns that same ev, so nothing changes there.
+  const anchor=(typeof taskAnchorById==="function")?taskAnchorById(taskId):null;
+  const ev=(anchor&&anchor.ev)||scheduled.find(e=>e.id===taskId);
   _applyCommutePairToEvent(ev,pair);
   saveCommuteTimes();
-  const block=_commuteBlockForTask(taskId);
-  if(block&&window.blockStore){
-    const props={...(block.properties||{})};
-    if(pair.to){
-      props.commuteMinutes=pair.to;
-      props.commuteToMinutes=pair.to;
-    }else{
-      delete props.commuteMinutes;
-      delete props.commuteToMinutes;
-    }
-    if(pair.back)props.commuteBackMinutes=pair.back;
-    else delete props.commuteBackMinutes;
-    window.blockStore.updateBlock(block.id,props);
+  // With a row id, go through the SHARED serialized queue. Two reasons, and the second is
+  // the one that bit: (a) blockStore.get and _commuteBlockForTask both read
+  // _dayCache/_globalCache only, and the row this path exists for -- a past-day carryover --
+  // is in _rangeCache or nowhere, so the id alone was not enough and resolving with `get()`
+  // fell through to the same no-op it was meant to remove; (b) this is a read-modify-write
+  // on the same properties bag the details modal's title/tag/flag writes touch, and
+  // closeAddModal calls persistAddModalCommute on EVERY close -- so an unserialized write
+  // here clobbers a rename made moments earlier in the same modal.
+  if(opts.blockId&&window.blockStore){
+    enqueueRowPropsWrite(opts.blockId,props=>_commuteProps(props,pair));
+    return;
   }
+  const block=_commuteBlockForTask(taskId);
+  if(block&&window.blockStore)window.blockStore.updateBlock(block.id,_commuteProps(block.properties,pair));
+}
+
+// The commute half of a properties bag, shared by both resolution paths above so they
+// cannot drift on which keys get written and which get deleted.
+function _commuteProps(properties,pair){
+  const props={...(properties||{})};
+  if(pair.to){
+    props.commuteMinutes=pair.to;
+    props.commuteToMinutes=pair.to;
+  }else{
+    delete props.commuteMinutes;
+    delete props.commuteToMinutes;
+  }
+  if(pair.back)props.commuteBackMinutes=pair.back;
+  else delete props.commuteBackMinutes;
+  return props;
 }
 function setTaskCommuteMinutes(taskId,value){
   setTaskCommuteTimes(taskId,{to:value,back:0});
@@ -992,6 +1024,8 @@ async function scheduleRowOnDay(blockId,dateStr,opts){
 // Take an existing row's date away: it becomes unscheduled, which is the Backlog.
 // opts.stage sets the Backlog/Priority drawer it lands in.
 // opts.block: the already-resolved row — see scheduleRowOnDay for why that matters.
+// opts.durMin: the row's REAL duration, from the caller that knows it. Required for
+//   correctness, not a convenience — see below.
 async function unscheduleRow(blockId,opts){
   opts=opts||{};
   if(!window.blockStore||!blockId)return null;
@@ -999,7 +1033,26 @@ async function unscheduleRow(blockId,opts){
   if(!block||!block.properties)return null;
   const props=Object.assign({},block.properties,{kind:"backlog"});
   // hydrateBacklogFromBlocks reads durMin, not duration (C1 hit this exact drift).
-  props.durMin=props.durMin||props.duration||30;
+  //
+  // opts.durMin comes FIRST because `properties.duration` is written once at create time
+  // and never updated by a duration change: adjustDur / setDurAbsolute (schedule.js) only
+  // move `ev.end` and record `durChanges` on the day_root overlay. So a task created at
+  // 30m and adjusted to 90m still has duration:30 on the row while the itinerary shows 90.
+  // Deriving from the row alone (which the first cut did) silently reset an adjusted
+  // duration on the way to the backlog, and deleting start/end below destroyed the only
+  // other record of it. The ev is the one thing that knows, so the caller passes it.
+  // Validated, not trusted. The caller passes dur(ev) = pt(end) - pt(start), which is
+  // NEGATIVE whenever an ev's end wrapped past midnight: recalcTimes writes ev.end without
+  // a day clamp, so a 23:00 task with 90m gets "24:30", and pt() wraps the hour, making
+  // dur(ev) -1350. The row's stored duration used to act as a floor; writing an unvalidated
+  // value into BOTH spellings removes that floor, and every downstream reader filters only
+  // falsy, not negative (fromBlock's `p.duration || 30`, hydrateBacklogFromBlocks'
+  // `p.durMin || 30`). That is the negative-duration -> findSlot -> "end like -22:00" -> 400
+  // chain task-model.js documents as a real incident that left rows stuck on every surface.
+  props.durMin=_positiveDuration(opts.durMin,props.durMin||props.duration);
+  // Keep the two spellings together: fromBlock reads `duration`, the backlog projection
+  // reads `durMin`, and letting them disagree is how the 30-vs-90 drift got in.
+  props.duration=props.durMin;
   if(opts.stage)props.stage=opts.stage;
   // A stored start is meaningless on a dateless row -- TaskModel.fromBlock ignores it
   // and renders the row untimed either way, so leaving it behind just means the next
@@ -1037,8 +1090,18 @@ async function _writeRowDate(blockId,block,props,dateStr){
   // throw in the refresh returned null — reporting a failure for a write that had already
   // landed, and toasting "Could not move…" over a completed move. A bookkeeping problem
   // must never change the verdict on the write.
-  try{ _syncBacklogProjection(props.local_id||blockId,dateStr); }
-  catch(e){ console.warn("[date] backlog projection refresh failed:",e); }
+  //
+  // The key comes from TaskModel.backlogKey, the SAME function the projection stores under.
+  // Deriving it here as `local_id || blockId` (which the first cut did) missed by the
+  // "blk-" prefix for every row without a local_id, so the removal silently no-opped and
+  // the task rendered on its day AND in the drawer.
+  try{
+    const TM=window.DCC&&window.DCC.TaskModel;
+    const key=(TM&&typeof TM.backlogKey==="function")
+      ? TM.backlogKey({id:blockId,properties:props})
+      : (props.local_id||blockId);
+    _syncBacklogProjection(key,dateStr);
+  }catch(e){ console.warn("[date] backlog projection refresh failed:",e); }
   return written||Object.assign({},block,{date:dateStr,properties:props});
 }
 
@@ -1082,6 +1145,54 @@ async function _rowForDateWrite(blockId){
     if(!r.ok)return null;
     return await r.json();
   }catch(e){return null;}
+}
+
+// ONE serialized read-modify-write for a row's properties, for every caller (C4).
+//
+// `db.updateBlock` REPLACES properties wholesale, so two concurrent read-modify-writes both
+// read the pre-write bag and whichever PATCH lands second drops the other's field. For a
+// row in the cache the first write's synchronous cacheSet saves you; for a row that is NOT
+// cached — a past-day carryover, which is exactly what these paths exist to reach —
+// `existing` is null, no optimistic cacheSet happens, and both reads are stale.
+//
+// This is shared rather than per-caller because the first cut serialized the details-modal
+// writes inside features.js and then added a FOURTH writer (the commute path) outside that
+// chain in the same change. Four writers on one row with the chain in one of them is the
+// "invariant enforced at one call site and merely assumed at the other" shape this project
+// has been bitten by every phase. One queue, so a new writer inherits it.
+//
+// `merge(properties) -> properties` runs AFTER the read, so each caller composes against
+// whatever the previous link actually wrote.
+let _rowPropsChain=Promise.resolve();
+function enqueueRowPropsWrite(blockId,merge){
+  if(!window.blockStore||!blockId||typeof merge!=="function")return null;
+  _rowPropsChain=_rowPropsChain
+    .then(()=>_rowForDateWrite(blockId))
+    .then(b=>{
+      // Refuse on an unresolvable row: spreading nothing over `properties` is a wipe.
+      if(b&&b.properties)return window.blockStore.updateBlock(b.id,merge(b.properties));
+    })
+    // Per-link, so one failure cannot wedge the queue for the rest of the session.
+    .catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});
+  return _rowPropsChain;
+}
+
+// A duration is a POSITIVE number of minutes. `dur(ev)` is pt(end) - pt(start), which goes
+// negative two different ways: recalcTimes writes an unclamped end past midnight (23:00 +
+// 90m -> "24:30", and pt() wraps the hour), and data.js's timeline items are built from two
+// separate Date objects, so anything crossing midnight is born with end < start.
+//
+// Shared because the first cut validated this in `unscheduleRow` and left the sibling
+// mint branch of `_moveTaskToBacklogStage` writing dur(ev) raw — and the mint branch is the
+// one that only ever runs on timeline rows, i.e. the shape where a negative value is born
+// rather than derived. Downstream readers filter falsy, not negative
+// (`p.duration || 30`, `p.durMin || 30`), so a negative reaches findSlot and produces the
+// rejected write that leaves a row stuck on every surface.
+function _positiveDuration(candidate,fallback){
+  const n=Number(candidate);
+  if(Number.isFinite(n)&&n>0)return n;
+  const f=Number(fallback);
+  return (Number.isFinite(f)&&f>0)?f:30;
 }
 
 // ======== MOVE-TO MENU HELPERS ========
@@ -1226,12 +1337,56 @@ async function _moveTaskToBacklogStage(id,stage,toastMsg){
   // still resolves to the row this ev actually came from.
   const block=_findTaskBlockForDate(ev.id,_viewedDateStr(),ev);
   if(!block){
-    // No row to re-date means nothing would persist. Refuse loudly rather than push an
-    // in-memory entry that vanishes on reload — the old path's silent-success shape.
-    if(typeof showToast==="function")showToast("Could not move "+ev.title+" to the backlog","error");
+    // No row to re-date, so there is nothing to move — MINT the dateless row instead.
+    //
+    // This branch is not a nicety: block-less scheduled rows are a live shape. data.js
+    // transformState builds INIT_SCHED from `state.schedule.timeline` with ids like
+    // `tl-<n>` and no backing block, which is exactly why deletedSet + the day-scoped hide
+    // is still the removal mechanic for moveScheduledTaskToSideProject and
+    // removeTaskForConversion. My first cut refused here on the theory that the old path
+    // "silently succeeded"; it did not — it called persistBacklogItem, which CREATED a
+    // row. Refusing turned a working action into an error toast for every Notion/PA
+    // timeline task, reachable from both the radial and the triage tab's Backlog button.
+    // A FRESH id, not ev.id. The minted row's projection key is its local_id, and this
+    // branch also has to day-hide the origin ev — so reusing ev.id would put the same id in
+    // `deletedSet` AND in `backlog[]`. buildBacklog does not filter deletedSet but
+    // buildListView does, so the task would show in the drawer and be missing from the
+    // Unscheduled section: the precise split the re-date branch below refuses to create.
+    // Worse, promoting it back out of the drawer would land it in `scheduled[]` under a
+    // still-hidden id, so it would render nowhere until that day's `_deleted` overlay was
+    // cleared by hand. There is no row identity to preserve here by definition — this is
+    // the branch where no row exists — which is why the pre-C4 code minted an id too.
+    const mintedId="bl-"+Date.now();
+    // Validated through the SAME helper the re-date branch uses. This branch only runs for
+    // block-less rows, i.e. data.js timeline items, whose start/end come from two separate
+    // Date objects -- so one crossing midnight is born with dur(ev) negative, no reflow
+    // overflow required. meta is derived from the validated value so the drawer text cannot
+    // disagree with the stored duration.
+    const mintedDur=_positiveDuration(dur(ev),null);
+    const entry=Object.assign(
+      window.DCC.taskCommonProps(ev,{
+        meta:ms(mintedDur)+" · from schedule",
+        priority:ev.priority||(stage==="Priority"?"High":"Low"),
+        source:ev.source||"manual"
+      }),
+      {id:mintedId,type:ev.type||"task",durMin:mintedDur,stage:stage}
+    );
+    if(typeof persistBacklogItem==="function")persistBacklogItem(entry);
+    // A row that never existed on this day has to be hidden the way delete does it; there
+    // is no date to clear. This is the one case where deletedSet is still correct.
+    deletedSet.add(id);saveDeletedState();
+    if(typeof hydrateBacklogFromBlocks==="function")hydrateBacklogFromBlocks();
+    if(typeof showToast==="function")showToast(toastMsg,"success");
+    if(typeof recalcTimes==="function")recalcTimes();
+    render();
     return;
   }
-  const updated=await unscheduleRow(block.id,{stage:stage,block:block});
+  // dur(ev) is the row's REAL duration; properties.duration is the stale create-time
+  // value (adjustDur never writes it back). Passed RAW on purpose: unscheduleRow validates
+  // it, and when it rejects a bad value it falls back to the row's own duration -- which is
+  // better than pre-validating here and handing it a hardcoded 30 it cannot tell from a
+  // real measurement.
+  const updated=await unscheduleRow(block.id,{stage:stage,block:block,durMin:dur(ev)});
   if(!updated){
     if(typeof showToast==="function")showToast("Could not move "+ev.title+" to the backlog","error");
     return;

@@ -57,6 +57,10 @@ const syncBacklogSource = mustSlice(
   stateSource, /^function _syncBacklogProjection\(evId,dateStr\)\{[\s\S]*?\n\}/m, "_syncBacklogProjection");
 const writeRowDateSource = mustSlice(
   stateSource, /^async function _writeRowDate\(blockId,block,props,dateStr\)\{[\s\S]*?\n\}/m, "_writeRowDate");
+// unscheduleRow validates its duration through this shared helper (a dur(ev) can be
+// negative when an ev's end wrapped past midnight), so the slice has to come along.
+const positiveDurationSource = mustSlice(
+  stateSource, /^function _positiveDuration\(candidate,fallback\)\{[\s\S]*?\n\}/m, "_positiveDuration");
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const TODAY = "2026-07-29";
@@ -114,7 +118,7 @@ function load(daysByDate, archiveDates) {
   // instead of quietly doing an HTTP round trip per carryover action.
   vm.createContext(ctx);
   vm.runInContext(unfSource, ctx);
-  vm.runInContext([unscheduleRowSource, rowForDateWriteSource, writeRowDateSource, syncBacklogSource].join("\n"), ctx);
+  vm.runInContext([unscheduleRowSource, rowForDateWriteSource, writeRowDateSource, syncBacklogSource, positiveDurationSource].join("\n"), ctx);
   ctx.window.blockStore = store;
   ctx.window.DCC.TaskModel = TaskModel;
   // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.

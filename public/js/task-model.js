@@ -15,6 +15,8 @@
 //     db.js's `dcc_is_task_row`, same exclusion list, verified against it.
 //   foldsIntoItinerary(block) -> isTaskRow AND addressable as an ev. (C4) The rule
 //     the itinerary fold and the time-sync share; they had drifted.
+//   backlogKey(block) -> the ev id the Backlog projection stores a row under. (C4)
+//     One definition, because three disagreed by a "blk-" prefix.
 //   selectUnscheduled(blocks, opts) -> the rows that ARE the Unscheduled section
 //     and the Backlog, which C4 made the same list.
 //
@@ -200,6 +202,26 @@
     return p.kind === "meeting" || p.type === "meeting" || p.type === "oneone";
   }
 
+  // ── C4: the ev id a row projects to, in ONE place ──
+  //
+  // There were three spellings of this and they disagreed: the fold keys on
+  // `local_id || block.id` (persistence.js), the backlog projection on
+  // `local_id || "blk-" + block.id` (schedule.js), and `_writeRowDate` reached for
+  // `local_id || blockId` (state.js). For any row WITHOUT a local_id the second differs
+  // from the other two by the `blk-` prefix, so `_syncBacklogProjection` looked up a key
+  // the projection had never stored and silently failed to remove the entry: the task got
+  // a date and still sat in the Backlog drawer with a stale badge, which is the two-homes
+  // disagreement this phase exists to close, reintroduced by a key spelling.
+  //
+  // `backlogKey` is the projection's spelling and the one both sides of that lookup use
+  // now. It is deliberately NOT the fold's — the fold's ids reach `scheduled[]`, where a
+  // "blk-" prefix would be a visible id change, and this phase is not renaming ev ids.
+  function backlogKey(block) {
+    block = block || {};
+    const p = block.properties || {};
+    return p.local_id || ("blk-" + block.id);
+  }
+
   // ── C4: the rows that ARE the Unscheduled section and the Backlog ──
   //
   // `date IS NULL` is the definition. One list, so one badge can mean one thing.
@@ -248,6 +270,7 @@
     fromBlock: fromBlock,
     isTaskRow: isTaskRow,
     foldsIntoItinerary: foldsIntoItinerary,
+    backlogKey: backlogKey,
     selectUnscheduled: selectUnscheduled
   };
 });
