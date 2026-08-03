@@ -65,8 +65,6 @@ let __archiveDates = window.__DCC_ARCHIVES__ ? Object.keys(window.__DCC_ARCHIVES
 
 function initKeys() {
   const d = (__state && __state.date) ? __state.date : "unknown";
-  DEFERRED_KEY = "pa-deferred-" + d;
-  PUSHED_KEY = "pa-pushed-" + d;
   DUR_KEY = "pa-dur-" + d;
   DELETED_KEY = "pa-deleted-" + d;
   NOTES_KEY = "pa-notes-" + d;
@@ -180,6 +178,37 @@ async function fetchExpressDate(date) {
   return null;
 }
 
+// Read a day_root's completion + hide overlays into the live registries.
+//
+// Hoisted out of reloadPersistedEdits so it can be tested: reloadPersistedEdits itself is
+// too entangled with module state to exercise, and the legacy `_pushed` branch below is a
+// real invariant about real historical data that would otherwise be guarded by nothing.
+// (itinerary-fold.test.js hoisted isFoldableTask out of this same file for the same reason.)
+//
+// LEGACY `_pushed` (C3): the pushed subsystem is deleted and nothing writes this key any
+// more, but old day_roots still carry it, and a pushed row was never REMOVED from its origin
+// day — only hidden by this overlay. Folding it into deletedSet keeps those days rendering as
+// they always have; dropping the read would resurface the origin copy alongside the duplicate
+// that push created on the next day. Measured on the prod restore before deciding: 4 day_roots
+// carry it, 10 ids total, and 9 of the 10 no longer resolve to a live row at all — so this
+// honors history for exactly one row, on 2026-04-06. A pushed row IS a row that left this day,
+// which is what `_deleted` means here, and routes/social-todo.js already treats the two keys
+// identically when building a public share's hide set.
+function applyDayRootOverlays(props, { manualDone, doneAt, deletedSet }) {
+  props = props || {};
+  // Normalized, not just null-guarded. These properties are user-writable JSON on a row
+  // anything can PATCH, so a type-wrong half-written overlay is reachable — and
+  // `if (done.ids) done.ids.forEach(...)` throws on `{_done:{ids:"t1"}}`, taking the whole
+  // boot-time hydration with it. A wrong-typed overlay should contribute nothing, not
+  // break the day.
+  const list = (v) => (Array.isArray(v) ? v : []);
+  const done = props._done || {};
+  list(done.ids).forEach(id => manualDone.add(id));
+  if (done.at && typeof done.at === "object") Object.assign(doneAt, done.at);
+  list(props._deleted).forEach(id => deletedSet.add(id));
+  list((props._pushed || {}).ids).forEach(id => deletedSet.add(id));
+}
+
 function reloadPersistedEdits() {
   // Reset mutable UI state
   manualDone = new Set();
@@ -187,8 +216,6 @@ function reloadPersistedEdits() {
   actionLog = [];
   durChanges = {};
   commuteTimes = {};
-  pushedSet = new Set();
-  pushedAt = {};
   deletedSet = new Set();
   dailyBounty = null;
 
@@ -196,14 +223,7 @@ function reloadPersistedEdits() {
   if (window.USE_BLOCKSTORE && window.blockStore) {
     const dayRoot = window.blockStore.get(window.blockStore.getDayRootId());
     if (dayRoot && dayRoot.properties) {
-      const done = dayRoot.properties._done || {};
-      if (done.ids) done.ids.forEach(id => manualDone.add(id));
-      if (done.at) Object.assign(doneAt, done.at);
-      const pushed = dayRoot.properties._pushed || {};
-      if (pushed.ids) pushed.ids.forEach(id => pushedSet.add(id));
-      if (pushed.at) Object.assign(pushedAt, pushed.at);
-      const deleted = dayRoot.properties._deleted || [];
-      deleted.forEach(id => deletedSet.add(id));
+      applyDayRootOverlays(dayRoot.properties, { manualDone, doneAt, deletedSet });
       dailyBounty = typeof normalizeBountyState === "function" ? normalizeBountyState(dayRoot.properties._bounty) : (dayRoot.properties._bounty || null);
       Object.assign(durChanges, dayRoot.properties._durChanges || {});
       commuteTimes = { ...(dayRoot.properties._commuteTimes || {}) };
@@ -217,12 +237,13 @@ function reloadPersistedEdits() {
       if (d.ids) d.ids.forEach(id => manualDone.add(id));
       if (d.at) Object.assign(doneAt, d.at);
     } catch(e) {}
-    try { const d = JSON.parse(localStorage.getItem(PUSHED_KEY) || "{}");
-      if (d.ids) d.ids.forEach(id => pushedSet.add(id));
-      if (d.at) Object.assign(pushedAt, d.at);
-    } catch(e) {}
     try { const d = JSON.parse(localStorage.getItem(DELETED_KEY) || "[]");
       d.forEach(id => deletedSet.add(id));
+    } catch(e) {}
+    // Same legacy read as the blockStore branch above, for a browser holding stale
+    // pa-pushed-<date> keys from before C3.
+    try { const d = JSON.parse(localStorage.getItem("pa-pushed-" + ((__state && __state.date) || "unknown")) || "{}");
+      if (d.ids) d.ids.forEach(id => deletedSet.add(id));
     } catch(e) {}
     try { dailyBounty = JSON.parse(localStorage.getItem(BOUNTY_KEY) || "null"); } catch(e) { dailyBounty = null; }
     try { commuteTimes = JSON.parse(localStorage.getItem(COMMUTE_KEY) || "{}"); } catch(e) { commuteTimes = {}; }

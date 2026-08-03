@@ -21,7 +21,6 @@ function _pomoTaskAvailable(task,source){
     if(task.nested)return false;
     if(typeof isDone==="function"&&isDone(task))return false;
     if(typeof isDeleted==="function"&&isDeleted(task))return false;
-    if(typeof isPushed==="function"&&isPushed(task))return false;
   }
   return true;
 }

@@ -41,7 +41,6 @@ function makeDay(scheduled) {
     dur: function (ev) { return this.pt(ev.end) - this.pt(ev.start); },
     isDone: (ev) => !!ev.done,
     isDeleted: (ev) => !!ev.deleted,
-    isPushed: (ev) => !!ev.pushed,
     isNested: (ev) => !!(ev.wrapId || ev.subtaskOf),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
     parentIdOf: (ev) => ev.wrapId || ev.subtaskOf || null,

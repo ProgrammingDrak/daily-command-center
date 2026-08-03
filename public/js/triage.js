@@ -1132,7 +1132,7 @@ function buildScheduled() {
   const today = __state && __state.date ? __state.date : new Date().toISOString().split("T")[0];
   const todayLabel = new Date(today + "T12:00:00").toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric"});
   const nowMins = now();
-  const activeAll = scheduled.filter(ev => !isDeleted(ev) && !isPushed(ev));
+  const activeAll = scheduled.filter(ev => !isDeleted(ev));
   const active = (typeof taskBankMatches==="function")
     ? activeAll.filter(ev=>taskBankMatches(ev,["title","detail","priority","source","meta"]))
     : activeAll;
@@ -1229,37 +1229,22 @@ function buildScheduled() {
   if (badge) { badge.textContent = needsReview.length; badge.style.display = needsReview.length ? "" : "none"; }
 }
 
+// The Priority section's badge. Its "Pushed from Schedule" card list is DELETED (C3):
+// a pushed task is now simply a task on tomorrow, so there is nothing on this day to
+// list and nothing to "Restore to schedule" (the origin day's amber Rescheduled-away
+// entry owns that). The Repeat affordance those cards carried is not lost — the row
+// radial, the details modal and the backlog all reach openRepeatResponsibilityFromTask.
+//
+// The count is `consider` alone now. It was `pushed.length + consider.length`, but that
+// line sat AFTER an early `return` taken whenever nothing was pushed — so on any normal
+// day this badge never updated at all. Counting what the section actually shows is the
+// fix, and it is why the number can differ from before.
 function buildScheduleSoon() {
-  const list=document.getElementById("soon-pushed-list");
-  if(!list)return;
-  const pushed=scheduled.filter(ev=>isPushed(ev)).filter(ev=>
-    typeof taskBankMatches==="function"?taskBankMatches(ev,["title","detail","priority","source","meta"]):true
-  );
-  if(!pushed.length){list.innerHTML='';return}
-  list.innerHTML='<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin-bottom:8px">Pushed from Schedule</div>'+
-    pushed.map(ev=>{
-      const c=cfg(ev.type);
-      return '<div class="board-card" style="margin-bottom:6px">'+
-        '<div class="bar" style="background:'+c.color+'"></div>'+
-        '<div class="body">'+
-          '<div class="title-row"><span class="ttl">'+ev.title+'</span></div>'+
-          '<div class="meta"><span class="tag '+c.cls+'">'+c.tag+'</span><span>'+ms(dur(ev))+'</span><span>pushed from schedule</span></div>'+
-        '</div>'+
-        '<button class="add-btn soon-repeat-btn" data-id="'+ev.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
-        '<button class="add-btn" onclick="unpushTask(\''+ev.id+'\');render()" title="Restore to schedule" style="background:rgba(34,197,94,0.15);color:var(--green)">Restore</button>'+
-      '</div>';
-    }).join('');
-  list.querySelectorAll(".soon-repeat-btn").forEach(btn=>{
-    btn.addEventListener("click",e=>{
-      e.stopPropagation();
-      const ev=scheduled.find(item=>item.id===btn.dataset.id);
-      if(ev&&typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(ev);
-    });
-  });
-  // Update badge
-  const soonCount=pushed.length+consider.length;
   const badge=document.getElementById("soon-count");
-  if(badge){badge.textContent=soonCount;badge.style.display=soonCount?"":"none"}
+  if(!badge)return;
+  const soonCount=(typeof consider!=="undefined"&&Array.isArray(consider))?consider.length:0;
+  badge.textContent=soonCount;
+  badge.style.display=soonCount?"":"none";
 }
 function buildTriage() {
   const dismissed = loadDismissed();

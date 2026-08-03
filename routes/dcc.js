@@ -32,6 +32,9 @@ module.exports = function mount(app, ctx) {
     const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
     const dayFile = getDayFilePath(incoming.date); const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
     const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
+    // "pushed" is LEGACY as of C3 (the pushed subsystem is deleted; a push is a real move
+    // now). Nothing writes the section any more, so it is only here to preserve what old
+    // day files already carry rather than drop it on the next ingest.
     const USER_SECTIONS = ["done", "pushed", "deleted", "durChanges", "notes", "actions", "sessions", "mood", "reviewed", "subtasks"];
     const merged = { ...existing };
     for (const key of DCC_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }

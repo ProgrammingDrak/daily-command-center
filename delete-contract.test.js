@@ -99,7 +99,7 @@ function mountApp(extraBlocks = {}) {
       },
       getBlocksByTypes: async () => [],
       getDelegatedItems: async () => [],
-      getUndatedTaskBlocks: async () => [],
+      getRescheduleSubtreePool: async () => [],
       getBlocksByDateRange: async () => [],
       getResponsibilityBlocks: async () => [],
       getBlocksByKind: async () => [],

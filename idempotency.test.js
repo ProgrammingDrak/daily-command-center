@@ -136,7 +136,7 @@ function mountApp({ seed = {}, onCreate = null, serviceAuth = false } = {}) {
       },
       getBlocksByTypes: async () => [],
       getDelegatedItems: async () => [],
-      getUndatedTaskBlocks: async () => [],
+      getRescheduleSubtreePool: async () => [],
       getBlocksByDateRange: async () => [],
       getResponsibilityBlocks: async () => [],
       getBlocksByKind: async () => [],

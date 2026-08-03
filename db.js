@@ -686,17 +686,72 @@ async function getBlocksByDateIncludingDeleted(date, workspaceId) {
   return rows.map(parseBlock);
 }
 
-// Undated task blocks that could ride along in a reschedule subtree walk.
-// Only blocks holding a subtaskOf/wrapId link can ever join a subtree
-// (lib/reschedule.js walks those keys), so filter to them here — the broader
-// date-IS-NULL set also matches every delegated item (type='block', date null,
-// kind='delegated_item'), a standing list that would bloat every reschedule.
-async function getUndatedTaskBlocks(workspaceId) {
-  const linked = `(properties->>'subtaskOf' IS NOT NULL OR properties->>'wrapId' IS NOT NULL)`;
-  const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE date IS NULL AND type = 'block' AND ${linked} AND workspace_id = $1 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`, [workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE date IS NULL AND type = 'block' AND ${linked} AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`);
+// The candidate pool for a reschedule subtree walk (lib/reschedule.js): every task row
+// on the origin date, PLUS undated rows carrying a subtaskOf/wrapId link.
+//
+// Undated rows are in scope because they exist (task-bar pending_tasks live on a day only
+// via day-state) and a move stamps a real date on them, healing the anomaly. They are
+// narrowed to LINKED rows on purpose: the broader date-IS-NULL set also matches every
+// delegated item (type='block', date null, kind='delegated_item'), a standing list that
+// would ride along on every reschedule.
+//
+// The task test is `local_id IS NOT NULL OR kind = 'task'`. It is deliberately NOT
+// `dcc_is_task_row`, and not the fold's `isFoldableTask` either, so do not "unify" it
+// without re-measuring:
+//   - `dcc_is_task_row` is LOOSER here in the one way that matters: it admits meeting
+//     artifacts (meeting_prep / meeting_summary / meeting_transcript /
+//     proposed_action_item), which are genuine parent_id children of a meeting. Now that
+//     the walk reads parent_id, admitting them would let a task move re-date a meeting's
+//     prep doc. Neither half of this OR matches them, and that exclusion is the only thing
+//     preventing it.
+//   - `isFoldableTask` (public/js/persistence.js) has four branches; this is two of them.
+//     It drops shells and materialized meetings, which is correct here: a meeting has no
+//     local_id, so nothing can be nested under it by local-id link, and its parent_id
+//     children are exactly the artifacts above. A meeting can still BE the moved row —
+//     the route passes the parent in separately, it does not come from this pool.
+// The `kind = 'task'` half is load-bearing: 6 live rows on the prod restore are kind:'task'
+// with no local_id. The fold renders them, so a walk that cannot see them strands them
+// when their parent moves.
+//
+// One query, not two: this replaces a getBlocksByDate + getUndatedTaskBlocks pair the
+// route used to concatenate (getUndatedTaskBlocks is deleted — this was its only caller).
+async function getRescheduleSubtreePool(fromDate, workspaceId) {
+  const isTask = `(b.properties->>'local_id' IS NOT NULL OR b.properties->>'kind' = 'task')`;
+  const linked = `(b.properties->>'subtaskOf' IS NOT NULL OR b.properties->>'wrapId' IS NOT NULL)`;
+  const { rows } = await pool.query(
+    `SELECT b.* FROM blocks b
+      WHERE b.workspace_id IS NOT DISTINCT FROM $2
+        AND b.deleted_at IS NULL
+        AND b.type = 'block'
+        AND ${isTask}
+        AND (b.date = $1 OR (b.date IS NULL AND ${linked}))
+      ORDER BY b.sort_order ASC, b.created_at ASC`,
+    [fromDate, workspaceId || null]
+  );
   return rows.map(parseBlock);
+}
+
+// The origin day's existing move tombstone for `movedBlockId`, if it already has one.
+//
+// Its own lookup on purpose. The route used to find this by scanning the subtree pool,
+// which worked only because a tombstone carries a `local_id` and so slipped through the
+// pool's task filter — while `reschedule_tombstone` is in NON_TASK_KINDS and is not a task
+// by any other definition in this file. That coupling meant tightening the pool's predicate
+// would silently break the one-tombstone-per-(row, day) rule and start piling up a new
+// amber entry on every repeat reschedule. Asking for the thing you want is cheaper than
+// that trap, and it reads one row instead of filtering a day.
+async function getRescheduleTombstone(fromDate, movedBlockId, workspaceId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks
+      WHERE date = $1
+        AND workspace_id IS NOT DISTINCT FROM $3
+        AND deleted_at IS NULL
+        AND properties->>'kind' = 'reschedule_tombstone'
+        AND properties->>'movedBlockId' = $2
+      LIMIT 1`,
+    [fromDate, movedBlockId, workspaceId || null]
+  );
+  return rows[0] ? parseBlock(rows[0]) : null;
 }
 
 async function getBlocksByTypes(types, workspaceId) {
@@ -1110,7 +1165,7 @@ module.exports = {
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
   undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
-  getBlocksByDate, getBlocksByDateIncludingDeleted, getUndatedTaskBlocks, getBlocksByTypes, getChildren, getBlock,
+  getBlocksByDate, getBlocksByDateIncludingDeleted, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,

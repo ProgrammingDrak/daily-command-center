@@ -144,7 +144,6 @@
     var list = (typeof scheduled !== "undefined" ? scheduled : [])
       .filter(function(ev){
         if(typeof isDeleted === "function" && isDeleted(ev))return false;
-        if(typeof isPushed === "function" && isPushed(ev))return false;
         if(typeof isDone === "function" && isDone(ev))return false;
         if(ev.source === "codex" && ev.type !== "ooo")return false;
         if(ev.source === "manual" && ev.type === "break")return false;

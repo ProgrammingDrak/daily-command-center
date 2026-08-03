@@ -163,13 +163,16 @@
     reset();
   }
 
-  // Topmost list row under the point, excluding done/pushed (not drop targets).
+  // Topmost list row under the point. Done rows and the amber "Rescheduled away" entries
+  // are not drop targets. The list view marks the latter `.resched-away-row`; `.pushed` is
+  // the TIMELINE view's class for the same treatment and never lands on an .it-list-item,
+  // so testing for it here would be testing for something that cannot occur.
   function targetUnder(x, y) {
     var el = document.elementFromPoint(x, y);
     if (!el) return null;
     var row = el.closest(".it-list-item");
     if (!row || !listView.contains(row)) return null;
-    if (row.classList.contains("done") || row.classList.contains("pushed")) return null;
+    if (row.classList.contains("done") || row.classList.contains("resched-away-row")) return null;
     return row;
   }
 

@@ -376,26 +376,15 @@ function _ensureUnfinished(today){
     .finally(()=>{ _unfinishedLoading=false; buildListView(); });
 }
 function _unfRows(){return (_unfinishedCache&&Array.isArray(_unfinishedCache.rows))?_unfinishedCache.rows:[];}
-// subtaskProgress with the ORIGIN-day done predicate. The shared helper reads
-// isDone(), i.e. today's manualDone set, which knows nothing about a completion
-// recorded on the carryover's own day — so a parent carried over with 2 of 5 steps
-// finished read "0/3". C6 folds the two back together when the predicate becomes a
-// row field. Recursive over subtask descendants; _seen guards data cycles.
-function _unfProgress(id,pool,_seen){
-  _seen=_seen||new Set();
-  if(_seen.has(id))return null;
-  _seen.add(id);
-  const subs=(pool||[]).filter(c=>c.subtaskOf===id);
-  if(!subs.length)return null;
-  let done=0,total=0;
-  subs.forEach(s=>{
-    total++;
-    if(s.__unf&&s.__unf.done)done++;
-    const sub=_unfProgress(s.id,pool,_seen);
-    if(sub){total+=sub.total;done+=sub.done;}
-  });
-  return {done,total};
-}
+// The carryover lane's done predicate: a past-day row's completion lives on its ORIGIN
+// day's overlay, stamped by the collector as `__unf.done`. isDone() reads today's
+// manualDone registry and knows nothing about it, so a parent carried over with 2 of 5
+// steps finished read "0/3".
+//
+// This used to be a whole line-for-line copy of subtaskProgress (C1 flagged it, and
+// deferred the fix because state.js was not Track C's file until C3). It is now just the
+// predicate, passed to the shared walk — so a fix to the walk lands once.
+function _unfDone(s){return !!(s&&s.__unf&&s.__unf.done);}
 // Drop actioned rows (a parent and everything the action carried with it) out of
 // the cached lane so the re-render doesn't show them until the next collection.
 function _unfDropRows(ids){
@@ -531,8 +520,7 @@ function buildListView(){
   // done), not as standalone rows in the Done section -- so long as the parent
   // is still visible to open. Orphaned done subtasks stay listed so they aren't lost.
   const doneItems=visible.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
-  const openItems=visible.filter(ev=>!isDone(ev)&&!isPushed(ev));
-  const pushedItems=visible.filter(ev=>!isDone(ev)&&isPushed(ev));
+  const openItems=visible.filter(ev=>!isDone(ev));
   const activeIds=new Set(openItems.filter(ev=>pointEligible(ev)).map(ev=>ev.id));
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
@@ -593,7 +581,6 @@ function buildListView(){
 
   function row(ev,idx,mode,node){
     const isDoneRow=mode==="done";
-    const isPushedRow=mode==="pushed";
     // Unfinished: a past-day carryover ev (TaskModel.fromBlock + an __unf origin
     // stamp) rendered through this same builder with the same affordances. Its
     // complete/move/drop route to the origin day (see the _unf* bindings below).
@@ -603,7 +590,7 @@ function buildListView(){
     const r=isUnfRow?ev.__unf:null;
     // userMovable already excludes meetings/ooo/break (registry-aware). Carryover
     // rows are always draggable (their drops route through handleUnscheduledDrop).
-    const movable=!isDoneRow&&!isPushedRow&&(isUnfRow||(userMovable(ev)&&!ev._locked));
+    const movable=!isDoneRow&&(isUnfRow||(userMovable(ev)&&!ev._locked));
     const c=cfg(ev.type);
     const original=origDur(ev.id);
     const changed=original&&dur(ev)!==original;
@@ -612,7 +599,7 @@ function buildListView(){
     // so "2/5 subtasks" and the ride-along band work on the lane for free.
     const pool=isUnfRow?unfPool:scheduled;
     const bw=(typeof wrapBandwidth==="function")?wrapBandwidth(ev,pool):null;
-    const prog=isUnfRow?_unfProgress(ev.id,pool):((typeof subtaskProgress==="function")?subtaskProgress(ev.id,pool):null);
+    const prog=(typeof subtaskProgress==="function")?subtaskProgress(ev.id,pool,isUnfRow?_unfDone:null):null;
     // Subtask variant: same list row, lighter, with a point-pie slice chip in place
     // of the duration/clock while timeless. Shares every affordance below.
     const subRow=_isSubRow(node);
@@ -627,16 +614,16 @@ function buildListView(){
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isPushedRow?" pushed":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
-    if(!isDoneRow&&!isPushedRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
+    if(!isDoneRow){el.addEventListener("dragover",e=>dOver(e,ev.id));el.addEventListener("dragleave",dLeave);el.addEventListener("drop",e=>dDrop(e,ev.id));}
     // ── Info parity with the (retired) rich card: surface points, progress, and
-    // status the desktop card showed. Gated to open rows so done/pushed/carryover
-    // rows stay quiet. New chips are null-safe, non-interactive spans, so the row's
+    // status the desktop card showed. Gated to open rows so done and carryover rows
+    // stay quiet. New chips are null-safe, non-interactive spans, so the row's
     // open-space tap still falls through to open details.
-    const openRow=!isDoneRow&&!isPushedRow&&!isUnfRow;
+    const openRow=!isDoneRow&&!isUnfRow;
     const chipSlot=(openRow&&typeof window.itineraryChipSlotHtml==="function")
       ? window.itineraryChipSlotHtml(ev,{sub:subRow})
       : ((subRow?subSliceHtml:'')+((tt&&tt.rollupMode&&typeof shellRollupChip==="function")?shellRollupChip(ev):''));
@@ -668,7 +655,7 @@ function buildListView(){
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow||isPushedRow||isUnfRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow||isUnfRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           nowChip+
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
@@ -794,9 +781,9 @@ function buildListView(){
   // Untimed tasks (no start -- e.g. API/Slack inserts with no scheduled time)
   // get their own section at the bottom instead of being dropped or forced to
   // 00:00 in the timeline.
-  const untimedItems=visible.filter(ev=>ev.untimed&&!isPushed(ev)&&!isDone(ev)&&!isSubtask(ev));
+  const untimedItems=visible.filter(ev=>ev.untimed&&!isDone(ev)&&!isSubtask(ev));
   const untimedIds=new Set(untimedItems.map(e=>e.id));
-  const mainItems=visible.filter(ev=>!isPushed(ev)&&!untimedIds.has(ev.id)&&!(isDone(ev)&&isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
+  const mainItems=visible.filter(ev=>!untimedIds.has(ev.id)&&!(isDone(ev)&&isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
   section("Work list",activeIds.size);
   if(!mainItems.length){
     const empty=document.createElement("div");
@@ -878,10 +865,10 @@ function buildListView(){
     }
   }
 
-  if(pushedItems.length){
-    section("Pushed",pushedItems.length);
-    pushedItems.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"pushed")));
-  }
+  // The "Pushed" section is DELETED (C3). A pushed task no longer sits on this day in a
+  // greyed limbo with a copy of itself on tomorrow — it moved, so it is on tomorrow and
+  // this day shows the amber "Rescheduled away" entry below, which is the same story
+  // told once instead of twice.
 
   // Rescheduled away (amber) — parity with the timeline view's bottom section.
   const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
@@ -971,7 +958,7 @@ function buildSchedule(){
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
-  // Separate done vs pushed vs active vs deleted vs side-project-marked
+  // Separate done vs active vs deleted vs side-project-marked
   const trivFlags=loadTrivialFlags();
   const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Hide side-project-marked items from the schedule
   // Completed subtasks live inside their parent's detail panel (shown there as
@@ -979,11 +966,10 @@ function buildSchedule(){
   // visible to open. Orphaned done subtasks stay listed so they aren't lost.
   const doneItems=vis.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&vis.some(p=>p.id===ev.subtaskOf)));
   const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
-  const pushedItems=vis.filter(ev=>!isDone(ev)&&isPushed(ev));
-  const activeItems=vis.filter(ev=>!isDone(ev)&&!isPushed(ev));
+  const activeItems=vis.filter(ev=>!isDone(ev));
   // Tasks originally on this day that were rescheduled AWAY to another date. The
   // move leaves a "reschedule_tombstone" block on this day carrying the
-  // destination; we render it amber at the bottom (mirror of Pushed to Tomorrow).
+  // destination; we render it amber at the bottom.
   const rescheduledAwayItems=(window.blockStore&&typeof window.blockStore.getByType==="function")
     ? window.blockStore.getByType("block")
         .filter(b=>b&&!b.deleted_at&&(b.properties||{}).kind==="reschedule_tombstone"&&(b.date===viewDate||!b.date))
@@ -1288,29 +1274,12 @@ function buildSchedule(){
   // Flush any remaining block headers after last active item
   injectBlockHeaders(24*60);
 
-  // Render pushed-to-tomorrow items at the bottom
-  if(pushedItems.length){
-    const pd=document.createElement("div");pd.className="pushed-divider";pd.innerHTML='<span>Pushed to Tomorrow</span>';tl.appendChild(pd);
-    const pushArrowSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
-    pushedItems.forEach(ev=>{
-      const c=cfg(ev.type);const evSrcTag=srcTag(ev.source);
-      const el=renderCompactRow({
-        extraClass:"pushed",
-        dataset:{id:ev.id},
-        timeStr:f12(ev.start).replace(/ (AM|PM)/,""),
-        checkIcon:pushArrowSvg,
-        checkTitle:"Restore to schedule",
-        barColor:c.color,
-        title:ev.title,
-        chipsHtml:evSrcTag,
-        timeRange:f12(ev.start)+' - '+f12(ev.end),
-        onCheck:()=>unpushTask(ev.id)
-      });
-      tl.appendChild(el);
-    });
-  }
+  // The "Pushed to Tomorrow" divider is DELETED (C3) along with the state behind it.
+  // Its replacement is the amber section immediately below: same place, same shape, but
+  // it lists tasks that actually LEFT this day rather than tasks pretending to.
 
-  // Rescheduled-away items at the bottom, in amber (reuse the pushed styling).
+  // Rescheduled-away items at the bottom, in amber (`.pushed` is now purely a CSS class
+  // name for this compact-row treatment; there is no pushed state left).
   if(rescheduledAwayItems.length){
     const rd=document.createElement("div");rd.className="pushed-divider";rd.innerHTML='<span>Rescheduled away</span>';tl.appendChild(rd);
     const restoreArrowSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>';
@@ -1725,7 +1694,6 @@ function _pointEligibleScheduleItems(){
     if(!ev||trivFlags[ev.id])return false;
     if(ev._dateless)return false; // day-agnostic Unscheduled rows earn nothing here
     if(typeof isDeleted==="function"&&isDeleted(ev))return false;
-    if(typeof isPushed==="function"&&isPushed(ev))return false;
     return true;
   });
 }
