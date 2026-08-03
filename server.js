@@ -562,10 +562,35 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   }
   // Postgres is the source of truth: its row WINS whenever there is one. The file is a
   // fallback for what the database does not have, never an override for what it does.
-  if (!enrichment) enrichment = readJSON(dayFile, null);
-  if (!enrichment) {
-    enrichment = buildSkeletonState(dateStr);
-    writeJSON(dayFile, enrichment);
+  if (enrichment) {
+    // RE-WARM THE CACHE FROM THE ROW, and gate it on an authenticated caller.
+    //
+    // Dropping this write entirely (the first pass at the review fix) was wrong in a way
+    // that only shows up after a deploy. Six handlers in routes/dcc.js read this file as
+    // their BASE state and then full-replace the Postgres row with the result
+    // (saveDccState is `DO UPDATE SET state_json = EXCLUDED.state_json`). Railway's
+    // filesystem is ephemeral and ensureSkeletonDays writes a skeleton for today..+13 at
+    // boot, so with no rehydration the file stays a skeleton forever and the next Brief
+    // refresh would persist that skeleton OVER the real day in the database.
+    //
+    // `userId` is the gate rather than a workspace check because it is exactly the
+    // anonymous-share discriminator: buildPublicTodoShare calls this as
+    // buildDayResponse(date, null, share.workspace_id). So a share visitor can no longer
+    // stamp the shared path, which was review's finding, while the authenticated read
+    // that routes/dcc.js depends on keeps the mirror current.
+    //
+    // Cross-workspace stamping on this unscoped path remains possible for an
+    // authenticated caller. That is pre-existing (the base did it unconditionally, and
+    // on every read), it is what routes/dcc.js already relies on, and the real fix is
+    // workspace-scoping getDayFilePath — a dozen call sites in other tracks' files,
+    // reported to Track A rather than done here.
+    if (userId) writeJSON(dayFile, enrichment);
+  } else {
+    enrichment = readJSON(dayFile, null);
+    if (!enrichment) {
+      enrichment = buildSkeletonState(dateStr);
+      writeJSON(dayFile, enrichment);
+    }
   }
   const result = { ...enrichment, date: dateStr };
   if (!result.schedule) result.schedule = { timeline: [] };

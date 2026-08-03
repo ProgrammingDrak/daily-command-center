@@ -30,6 +30,13 @@ module.exports = function mount(app, ctx) {
 
   app.post("/api/ingest/day-state", async (req, res) => {
     const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
+    // C5: getDayFilePath THROWS on a non-ISO date now (it used to build a junk path), and
+    // this handler is `async` with no enclosing try. Express 4 does not observe a rejected
+    // promise from a handler and this repo registers no unhandledRejection hook, so on
+    // Node >=20 that throw would EXIT THE PROCESS rather than 500. The realistic trigger is
+    // not an attacker but a publisher sending a serialized Date ("2026-08-03T04:00:00.000Z")
+    // where a date was expected. Shape-check before building the path.
+    if (!isValidDate(incoming.date)) return res.status(400).json({ error: "Invalid date" });
     const dayFile = getDayFilePath(incoming.date); const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
     const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
     // "pushed" is LEGACY as of C3 (the pushed subsystem is deleted; a push is a real move

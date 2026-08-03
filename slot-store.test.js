@@ -157,9 +157,17 @@ function createMockPool(options = {}) {
     // was asked, which models a closure that matches everything — the one failure mode
     // the real closure admits to, and the one that makes revoke delete another task's
     // row. A mock that cannot express "declines this key" cannot test the declining.
+    //
+    // cand_count is DERIVED here, never accepted from the test. Round 2 of review caught
+    // the reason: the ambiguity test hand-fed `cand_count: 2` for a row-id presentation
+    // where the real query returned 1, so the strict guard was decorative and the suite
+    // was green anyway. A test must not be able to assert the very fact the production
+    // query computes. `candCount` describes the FIXTURE (how many live rows share the
+    // matched local_id); the mock stamps it onto every closure answer.
     if (text.includes("WITH cand AS")) {
-      if (typeof state.closureRows === "function") return { rows: state.closureRows(params[1]) };
-      if (state.closureRows) return { rows: state.closureRows };
+      const stamp = (rows) => rows.map(r => ({ ...r, cand_count: state.candCount }));
+      if (typeof state.closureRows === "function") return { rows: stamp(state.closureRows(params[1])) };
+      if (state.closureRows) return { rows: stamp(state.closureRows) };
       const row = heldRowFor(params[1]);
       return { rows: row ? [row] : [] };
     }
@@ -194,9 +202,8 @@ function createMockPool(options = {}) {
       // regardless of the key cannot express "revoke asked for the wrong row and got
       // nothing" — and that is precisely the case worth testing, since acting on a
       // wrong match debits the user for work that is still done.
-      const keyMatches = state.ledgerSourceKey == null || state.ledgerSourceKey === params[1];
-      const had = (state.ledgerInserted || state.ledgerDelta != null) && keyMatches;
-      if (!had) return { rows: [] };
+      if (!heldRowFor(params[1])) return { rows: [] };
+      const had = true;
       const delta = state.ledgerDelta;
       state.ledgerInserted = false;
       state.ledgerDelta = null;
@@ -205,9 +212,10 @@ function createMockPool(options = {}) {
     if (text.includes("UPDATE slot_point_ledger")) {
       // rowCount is load-bearing now: earnTaskCredit's upgrade path refuses to move the
       // balance unless the UPDATE actually matched, so a mock that omits it would make
-      // every top-up look like a vanished row.
-      const hit = state.ledgerSourceKey == null || state.ledgerSourceKey === params[1];
-      if (!hit) return { rowCount: 0, rows: [] };
+      // every top-up look like a vanished row. Routed through heldRowFor so the mock
+      // cannot hold two contradictory views of whether the row exists — round 2 found it
+      // answering rowCount 1 over a ledger that heldRowFor reported as empty.
+      if (!heldRowFor(params[1])) return { rowCount: 0, rows: [] };
       state.ledgerDelta = params[2];
       state.ledgerMetadata = JSON.parse(params[4]);
       return { rowCount: 1, rows: [] };
@@ -544,6 +552,12 @@ test("C5: the upgrade path tops up the LEDGER's key, never the key it was handed
   // and the balance moves anyway — so assert the key the UPDATE actually carried.
   const mockPool = createMockPool({
     pointBalance: 100, migrated: true,
+    // SEEDED, not just asserted. The fixture previously declared a credit via
+    // closureRows while leaving the mock's ledger empty, and only passed because the
+    // UPDATE handler reported rowCount 1 over nothing. Once the UPDATE shared
+    // heldRowFor's view, that contradiction surfaced. A test that claims a row exists
+    // has to put one there.
+    ledgerDelta: 30, ledgerSourceKey: C5_LEGACY_KEY,
     closureRows: [{ source_key: C5_LEGACY_KEY, delta: 30, description: "Go over Metrics" }],
   });
   const store = loadStoreWithMock(mockPool);
@@ -593,7 +607,7 @@ test("C5: revoke does NOT reach a credit belonging to a DIFFERENT task", async (
   const mockPool = createMockPool({
     pointBalance: 160, migrated: true,
     ledgerDelta: 60, ledgerSourceKey: "2026-06-22:some-other-task",
-    closureRows: (k) => (k === "2026-06-22:some-other-task" ? [{ source_key: k, delta: 60, description: "Other", cand_count: 1 }] : []),
+    closureRows: (k) => (k === "2026-06-22:some-other-task" ? [{ source_key: k, delta: 60, description: "Other" }] : []),
   });
   const store = loadStoreWithMock(mockPool);
 
@@ -612,8 +626,8 @@ test("C5: revoke REFUSES an ambiguous match rather than debiting the wrong task"
   const mockPool = createMockPool({
     pointBalance: 130, migrated: true,
     ledgerDelta: 30, ledgerSourceKey: AMBIG_LEGACY,
-    candCount: 2,   // two live rows share that local_id
-    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold", cand_count: 2 }],
+    candCount: 2,   // two live rows share that local_id — the mock stamps this on
+    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold" }],
   });
   const store = loadStoreWithMock(mockPool);
 
@@ -634,7 +648,7 @@ test("C5: an EXACT ambiguous key is still revocable — strict refuses guesses, 
   const mockPool = createMockPool({
     pointBalance: 130, migrated: true,
     ledgerDelta: 30, ledgerSourceKey: AMBIG_LEGACY, candCount: 2,
-    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold", cand_count: 2 }],
+    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold" }],
   });
   const out = await loadStoreWithMock(mockPool).revokeTaskCredit("ws-1", 1, AMBIG_LEGACY);
   assert.equal(out.revoked, true);
@@ -648,7 +662,7 @@ test("C5: a lost same-key insert race re-resolves and still tops the credit up",
   let calls = 0;
   const mockPool = createMockPool({
     pointBalance: 100, migrated: true,
-    closureRows: () => (++calls <= 1 ? [] : [{ source_key: C5_ROWID_KEY, delta: 30, description: "x", cand_count: 1 }]),
+    closureRows: () => (++calls <= 1 ? [] : [{ source_key: C5_ROWID_KEY, delta: 30, description: "x" }]),
   });
   mockPool.state.ledgerInserted = true;   // the racer already committed, so our INSERT no-ops
   mockPool.state.ledgerSourceKey = C5_ROWID_KEY;
@@ -661,6 +675,48 @@ test("C5: a lost same-key insert race re-resolves and still tops the credit up",
   assert.equal(out.adjusted, true, "the racer's smaller credit is topped up, not dropped");
   assert.equal(out.delta, 45);
   assert.equal(mockPool.state.pointBalance, 145);
+});
+
+test("C5: a ledger row that vanishes before the top-up lands does NOT move the balance", async () => {
+  // earnTaskCredit's rowCount arm. The closure reports a 30pt credit under the legacy
+  // key, but by the time the UPDATE runs the row is gone (a concurrent revoke). Without
+  // the rowCount check the balance moves by 45 with no ledger row explaining it — the
+  // exact failure revokeTaskCredit's transaction exists to prevent, reintroduced on the
+  // earn side. Modelled by pointing the ledger at a DIFFERENT key so the UPDATE misses.
+  const mockPool = createMockPool({
+    pointBalance: 100, migrated: true,
+    ledgerDelta: 30, ledgerSourceKey: "2026-06-22:already-revoked-key",
+    closureRows: [{ source_key: C5_LEGACY_KEY, delta: 30, description: "Go over Metrics" }],
+  });
+  const out = await loadStoreWithMock(mockPool).earnTaskCredit("ws-1", 1, {
+    source_key: C5_ROWID_KEY, task_id: "917e70d8-7eaa-4000-ba84-ff686d7931f5",
+    title: "Go over Metrics", type: "task", duration_minutes: 60, points_override: 75,
+  });
+
+  assert.equal(out.adjusted, false, "no top-up is claimed for a row that is not there");
+  assert.equal(out.delta, 0);
+  assert.equal(mockPool.state.pointBalance, 100, "and the balance is untouched");
+});
+
+test("C5: strict refuses an ambiguous match the closure did NOT stipulate away", async () => {
+  // Round 2 found the previous ambiguity test could not fail: it handed the declining
+  // answer in as closureRows, so deleting `strict: true` outright left it green. Here
+  // the closure genuinely RETURNS a colliding credit (as the real query does — verified
+  // on the prod restore, where presenting Put Away's row id returns Fold's credit) and
+  // the only thing standing between that and a wrong debit is the strict guard.
+  const AMBIG_LEGACY = "2026-07-31:st-1785503019024";
+  const mockPool = createMockPool({
+    pointBalance: 130, migrated: true,
+    ledgerDelta: 30, ledgerSourceKey: AMBIG_LEGACY,
+    candCount: 2,
+    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold" }],
+  });
+  const out = await loadStoreWithMock(mockPool)
+    .revokeTaskCredit("ws-1", 1, "2026-07-31:fd0ffaf8-5b86-4699-9b74-539da8437edb");
+
+  assert.equal(out.revoked, false, "drop strict and this deletes Fold's credit");
+  assert.equal(mockPool.state.pointBalance, 130);
+  assert.equal(mockPool.state.ledgerDelta, 30, "Fold's ledger row survives");
 });
 
 test("C5: a genuinely uncredited task still pays, and under its own key", async () => {

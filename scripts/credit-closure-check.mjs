@@ -126,7 +126,8 @@ try {
   // opposite question: task rows carrying no credit at all must resolve to null.
   console.log(`\n── negative control (uncredited rows must NOT resolve) ──`);
   const { rows: uncredited } = await pool.query(`
-    SELECT b.workspace_id, to_char(b.date,'YYYY-MM-DD') || ':' || b.id AS presented_key
+    SELECT b.workspace_id, to_char(b.date,'YYYY-MM-DD') || ':' || b.id AS presented_key,
+           (b.properties->>'local_id') IS NOT NULL AS has_local_id
       FROM blocks b
      WHERE b.type <> 'day_root' AND b.date IS NOT NULL AND b.deleted_at IS NULL
        AND NOT EXISTS (
@@ -135,7 +136,14 @@ try {
             AND l.source_type = 'task_complete'
             AND ( l.source_key = to_char(b.date,'YYYY-MM-DD') || ':' || b.id
                OR l.source_key = to_char(b.date,'YYYY-MM-DD') || ':' || (b.properties->>'local_id')
-               OR l.metadata->>'canonical_source_key' = to_char(b.date,'YYYY-MM-DD') || ':' || b.id ))
+               -- BOTH sidecar spellings. Checking only the row-id form selected rows the
+               -- closure legitimately finds via a local_id-form sidecar, so the control
+               -- would have failed spuriously.
+               OR l.metadata->>'canonical_source_key' = to_char(b.date,'YYYY-MM-DD') || ':' || b.id
+               OR l.metadata->>'canonical_source_key' = to_char(b.date,'YYYY-MM-DD') || ':' || (b.properties->>'local_id') ))
+     -- ORDERED so a pass or a failure is reproducible. LIMIT with no ORDER BY samples a
+     -- different 300 rows every run, which makes a green run un-rerunnable evidence.
+     ORDER BY b.id
      LIMIT 300`);
   let falsePositives = 0;
   for (const r of uncredited) {
@@ -145,11 +153,39 @@ try {
       if (falsePositives <= 10) console.log(`  ✖ ${r.presented_key} has no credit, but the closure returned ${hit.sourceKey}`);
     }
   }
+  const withLocalId = uncredited.filter(r => r.has_local_id).length;
   console.log(`  uncredited rows probed           ${uncredited.length}`);
+  console.log(`  ...of which carry a local_id     ${withLocalId}   (0 would mean step 2 of the closure was never exercised)`);
   console.log(`  falsely reported as credited     ${falsePositives}`);
   if (uncredited.length === 0) fail("no uncredited rows to use as a negative control — this half proves nothing.");
   else if (falsePositives > 0) fail(`${falsePositives} uncredited task(s) the closure claims are already credited — those completions would never be paid.`);
   else console.log(`  ✔ the closure declines every uncredited row`);
+
+  // ── strict mode, against the real collisions ──
+  // The gate's simulation models the EARN direction only, so without this nothing
+  // exercises the revoke guard against prod shapes. For every key whose closure hit is
+  // NON-exact, strict must either refuse it or resolve it unambiguously; a strict answer
+  // that still points at a different key than the caller asked for, on an ambiguous
+  // candidate set, is a wrong debit waiting to happen.
+  console.log(`\n── strict mode (the revoke guard) ──`);
+  let strictWouldDebitForeign = 0;
+  let strictRefusals = 0;
+  for (const row of presented) {
+    const loose = await findEquivalentTaskCredit(pool, row.workspace_id, row.presented_key);
+    if (!loose || loose.sourceKey === row.presented_key) continue;   // exact hits are never guesses
+    const hit = await findEquivalentTaskCredit(pool, row.workspace_id, row.presented_key, { strict: true });
+    if (!hit || hit.sourceKey === row.presented_key) { strictRefusals++; continue; }
+    // Not an alarm: an honored non-exact hit means the presented row's local_id has
+    // exactly ONE live owner, so the resolved key names that same task. The common case
+    // is a live row plus a tombstoned twin of itself, which is why the ambiguity count
+    // filters on deleted_at IS NULL.
+    strictWouldDebitForeign++;
+  }
+  console.log(`  non-exact hits refused (ambiguous) ${strictRefusals}`);
+  console.log(`  non-exact hits honored (unambiguous) ${strictWouldDebitForeign}`);
+  console.log(`  the honored ones are single-owner resolutions: the presented row's own local_id,`);
+  console.log(`  shared with no other live row, so revoking through them targets that same task.`);
+  if (strictRefusals === 0) fail("strict refused NOTHING. Either this restore has no local_id collisions (check ledgerRiskKeys) or the guard is not firing — it read cand_count off the wrong axis once already.");
 
   // ── the numbers the audit gate itself will read ──
   console.log(`\n── gate ──`);

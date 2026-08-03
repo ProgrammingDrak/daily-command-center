@@ -170,7 +170,16 @@ test("the closure actually closes: the key set includes each candidate row's own
   // CTE's projection — so deleting the UNION line that actually builds the
   // `<date>:<local_id>` key left the guard green. Assert the KEY CONSTRUCTION, not
   // a substring that happens to occur twice.
-  const keySet = CLOSURE_SQL.slice(CLOSURE_SQL.indexOf("), keys AS ("), CLOSURE_SQL.indexOf("SELECT l.source_key"));
+  // Sliced to the `keys` CTE ALONE. The first slice ran to the final SELECT, and when a
+  // later fix inserted the `amb` CTE in between — which also mentions cand.local_id —
+  // the guard silently went vacuous a SECOND time: deleting the UNION line left it
+  // green. Anchor on both ends of the CTE being asserted, and fail loudly if either
+  // anchor moves, rather than quietly inspecting whatever text happens to be in range.
+  const from = CLOSURE_SQL.indexOf("), keys AS (");
+  const to = CLOSURE_SQL.indexOf("), amb AS (");
+  assert.ok(from > 0 && to > from,
+    "cannot locate the keys CTE — re-anchor this guard rather than letting it inspect the wrong span");
+  const keySet = CLOSURE_SQL.slice(from, to);
   assert.ok(/cand\.local_id/.test(keySet),
     "the key set must include <date>:<row's own local_id> — this is the whole closure");
   assert.ok(/cand\.id/.test(keySet),
