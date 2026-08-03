@@ -25,9 +25,42 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
+// C4 moved toBacklog's write into `state.js unscheduleRow`, so this harness loads the
+// REAL function rather than stubbing it. That is not a convenience: the assertion this
+// file exists for -- "the row's properties survive" -- is now enforced INSIDE
+// unscheduleRow, so a stub would make the test pass while the production write wiped the
+// row. It is the same trap as B2's four tests that could not fail and C3's three stubs
+// gentler than reality, and it would have hidden exactly the bug the header describes.
+//
+// Sliced rather than required because state.js is not a module (the repo's established
+// idiom: recalc-times.test.js, itinerary-fold.test.js). `mustSlice` asserts the match,
+// because C3 hit a slice regex that ran PAST its function into the next one and produced
+// invalid JS while still "matching".
 const TaskModel = require("./public/js/task-model.js");
 const { apiStub } = require("./carryover-fixture.js");
 const unfSource = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
+const stateSource = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
+
+function mustSlice(src, re, what) {
+  const m = src.match(re);
+  assert.ok(m, what + " not found in state.js — C4's write primitive moved or was renamed");
+  // A slice that swallowed a following function declaration matched the wrong span.
+  assert.equal((m[0].match(/^(async )?function /gm) || []).length, 1,
+    what + " slice spans more than one function — the regex ran past its closing brace");
+  return m[0];
+}
+const unscheduleRowSource = mustSlice(
+  stateSource, /^async function unscheduleRow\(blockId,opts\)\{[\s\S]*?\n\}/m, "unscheduleRow");
+const rowForDateWriteSource = mustSlice(
+  stateSource, /^async function _rowForDateWrite\(blockId\)\{[\s\S]*?\n\}/m, "_rowForDateWrite");
+const syncBacklogSource = mustSlice(
+  stateSource, /^function _syncBacklogProjection\(evId,dateStr\)\{[\s\S]*?\n\}/m, "_syncBacklogProjection");
+const writeRowDateSource = mustSlice(
+  stateSource, /^async function _writeRowDate\(blockId,block,props,dateStr\)\{[\s\S]*?\n\}/m, "_writeRowDate");
+// unscheduleRow validates its duration through this shared helper (a dur(ev) can be
+// negative when an ev's end wrapped past midnight), so the slice has to come along.
+const positiveDurationSource = mustSlice(
+  stateSource, /^function _positiveDuration\(candidate,fallback\)\{[\s\S]*?\n\}/m, "_positiveDuration");
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const TODAY = "2026-07-29";
@@ -78,8 +111,14 @@ function load(daysByDate, archiveDates) {
   ctx.window = ctx;
   ctx.self = ctx;
   ctx.URLSearchParams = URLSearchParams;
+  // No `fetch` in this context ON PURPOSE. _rowForDateWrite's fallback would need one,
+  // and its absence is what proves toBacklog resolves the row through _originBlock (the
+  // _rangeCache path) and hands it over as opts.block. If someone later drops that and
+  // lets the primitive resolve for itself, these tests fail with a ReferenceError
+  // instead of quietly doing an HTTP round trip per carryover action.
   vm.createContext(ctx);
   vm.runInContext(unfSource, ctx);
+  vm.runInContext([unscheduleRowSource, rowForDateWriteSource, writeRowDateSource, syncBacklogSource, positiveDurationSource].join("\n"), ctx);
   ctx.window.blockStore = store;
   ctx.window.DCC.TaskModel = TaskModel;
   // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.

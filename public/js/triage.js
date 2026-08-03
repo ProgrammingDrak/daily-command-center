@@ -1211,17 +1211,14 @@ function buildScheduled() {
   el.querySelectorAll(".sched-push-btn").forEach(btn => {
     btn.addEventListener("click", () => { pushTask(btn.dataset.id); });
   });
+  // C4: one backlog mechanic. This used to be its own copy of the day → backlog move,
+  // and it was the WORSE of the two: it minted a `bl-<timestamp>` row and only added the
+  // original to `deletedSet`, never removing it — so the task ended up as TWO live rows,
+  // one dateless copy in the drawer and the original still sitting on its day behind a
+  // client-side hide. moveTaskToBacklog re-dates the single real row instead.
   el.querySelectorAll(".sched-backlog-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      const id = btn.dataset.id;
-      const ev = scheduled.find(e => e.id === id);
-      if (!ev) return;
-      const entry={id:"bl-"+Date.now(),title:ev.title,type:ev.type||"task",durMin:dur(ev),
-        meta:ms(dur(ev))+" · from schedule",detail:ev.detail||"",source:ev.source||"manual",
-        notionUrl:ev.notionUrl||"",priority:ev.priority||"Low",stage:"Backlog"};
-      backlog.push(entry);
-      if(typeof persistBacklogItem==="function")persistBacklogItem(entry);
-      deletedSet.add(id);saveDeletedState();render();
+      if (typeof moveTaskToBacklog === "function") moveTaskToBacklog(btn.dataset.id);
     });
   });
 

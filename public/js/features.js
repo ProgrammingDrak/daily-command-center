@@ -183,6 +183,55 @@ function openTrivialPicker(scheduleId, anchorEl){
 
 // ======== TASK DETAIL MODAL (Notes + Subtasks + Side Projects + Action Items) ========
 let _addModalTaskId = null;
+// C4: the open row's BLOCK id, whenever the ev carries one. That is MOST rows, not just
+// carryovers -- TaskModel.fromBlock stamps `_blockId` on every block-backed ev, so
+// taskAnchorById returns it for a scheduled[] hit too. (An earlier comment here claimed
+// this was null for ordinary rows; it is not, and the write helpers below are the primary
+// path for them as a result. Stated plainly because getting it wrong is how a "carryover
+// only" branch quietly becomes the main one.)
+//
+// What it buys: a carryover row's block lives in _rangeCache ONLY, so every
+// getByType/cacheGet search below misses it and the write is silently dropped. With the
+// row id there is nothing to search for. `_amWriteRowProps` is the one helper that uses it.
+let _addModalBlockId = null;
+
+// Merge `patch` into the open row's properties, addressed by ROW id (C4).
+//
+// Returns true when it owns the write, false when the caller should fall back to its
+// legacy local_id search. Refuses on an unresolvable row rather than writing, because
+// blockStore.updateBlock REPLACES properties wholesale (db.js: newProps = parsed) and a
+// spread of nothing wipes title/local_id/notes/tags behind a success toast.
+//
+// Gated on USE_BLOCKSTORE.addedTasks like every sibling write in this file, so the
+// documented rollback lever (index.html: "flip individual flags to false to revert
+// specific features to localStorage") still reverts ALL of them and not just the legacy two.
+// SERIALIZED, and that is load-bearing rather than defensive. This is a
+// read-modify-write and updateBlock REPLACES properties, so two concurrent calls both read
+// the pre-write bag and the second PATCH drops the first one's field. Three helpers route
+// through here now, so the collision is three-way.
+//
+// The triggering gesture is ordinary, not exotic: type a new title in the modal header and
+// then click a tag chip. The click blurs the input, so `save()` fires _persistTaskTitle and
+// the same click fires the tag-picker callback, both in flight. For a row in the cache the
+// first write's synchronous cacheSet makes the second read see it; for a CARRYOVER row
+// each call issues its own GET and both resolve stale, so the rename vanishes behind the
+// "Title updated" toast — the exact failure _amWriteRowProps was added to fix.
+//
+// The queue itself lives in state.js `enqueueRowPropsWrite`, shared with the commute write
+// (setTaskCommuteTimes), which is the FOURTH writer of this same properties bag and was
+// outside an earlier per-file version of this chain. One queue for every row-properties
+// write, so the next writer inherits the serialization instead of re-deriving it.
+//
+// `id` is captured per call, so a link still in flight when closeAddModal nulls the module
+// state writes the row it was queued for and not the next modal's row.
+function _amWriteRowProps(patch) {
+  if (!_addModalBlockId) return false;
+  if (!(window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.addedTasks && window.blockStore)) return false;
+  if (typeof enqueueRowPropsWrite !== 'function') return false;
+  var id = _addModalBlockId;
+  enqueueRowPropsWrite(id, function (props) { return Object.assign({}, props, patch); });
+  return true;
+}
 
 function taskForRepeatResponsibility(taskId, fallbackTitle) {
   const scheduledTask = (typeof scheduled !== 'undefined' ? scheduled : []).find(function(ev) { return ev.id === taskId; });
@@ -195,6 +244,7 @@ function taskForRepeatResponsibility(taskId, fallbackTitle) {
 }
 
 function _persistTaskTags(taskId, tagIds) {
+  if (_amWriteRowProps({ tags: tagIds })) return;
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.addedTasks && window.blockStore) {
     // Check added_task blocks (legacy + new "block" type with scheduled_dates)
     var addedBlocks = (window.blockStore.getByType('added_task')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).scheduled_dates;}));
@@ -218,6 +268,8 @@ function _persistTaskTags(taskId, tagIds) {
 // Set a single property on a meeting's own block (e.g. recording_review). Same
 // block resolution as _persistTaskTags; used by the Recording Review toggle.
 function _persistMeetingFlag(taskId, key, val) {
+  var patch = {}; patch[key] = val;
+  if (_amWriteRowProps(patch)) return;
   if (window.blockStore) {
     var schedBlocks = (window.blockStore.getByType('schedule_item')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).start||(b.properties||{}).end;}));
     var sBlock = schedBlocks.find(function(b) { return (b.properties||{}).local_id === taskId || b.id === taskId; });
@@ -239,9 +291,21 @@ function _amBuildDetails(ev){
   return meta.join('');
 }
 
+// C4: opens on a carryover row too. `taskAnchorById` looks in BOTH pools, so the modal
+// renders the row's real priority / duration / time / tags instead of the empty shell a
+// scheduled[]-only lookup produced, and the write helpers below get the carryover's ROW
+// id so their edits land on the origin day's row rather than silently going nowhere.
+// Those two failures together are why the row's open-space click was disabled on
+// carryovers: it looked like a working affordance and saved to the wrong place.
 function openAddModal(taskId, taskTitle) {
   _addModalTaskId = taskId;
-  var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
+  var anchor = (typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null;
+  var taskEntry = anchor ? anchor.ev
+    : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null);
+  // The row id, when we have one. Every helper below searches the day/global caches by
+  // local_id, and a carryover row is in _rangeCache only — so the search misses and the
+  // update never happens. _addModalBlockId short-circuits it.
+  _addModalBlockId = (anchor && anchor.blockId) || null;
   _amSetupTitle(taskId, taskEntry, taskTitle);
 
   // Read-only details (priority / duration / time / source / link)
@@ -371,6 +435,10 @@ function closeAddModal() {
   }
   document.getElementById('add-modal-overlay').classList.remove('open');
   _addModalTaskId = null;
+  // C4: clear the row id with the task id. Leaving it set would point the NEXT modal's
+  // tag/flag writes at the previous row — a cross-task write, and the kind of stale
+  // module state that only shows up on the second open.
+  _addModalBlockId = null;
   // Flush any deferred renders now that modal is closed
   _flushDeferredRender();
   if (typeof render === 'function') render();
@@ -1012,7 +1080,7 @@ function persistAddModalCommute() {
   setTaskCommuteTimes(_addModalTaskId, {
     to: toInput ? toInput.value : 0,
     back: backInput ? backInput.value : 0
-  });
+  }, { blockId: _addModalBlockId });
 }
 
 function updateAddModalCommuteHint() {
@@ -1274,6 +1342,11 @@ function buildTaskListHtml(tasks) {
 
 // Persist a title change for a scheduled task across blockStore / localStorage.
 function _persistTaskTitle(taskId, newTitle) {
+  // C4: address the row directly when we have its id. Both searches below read
+  // _dayCache/_globalCache, which never hold a past-day carryover row, so a rename on one
+  // fell through to scheduleIDBSave() while _amSetupTitle's save() still toasted
+  // "Title updated" and repainted the header. The rename was lost on the next re-collect.
+  if (_amWriteRowProps({ title: newTitle })) return;
   if (window.USE_BLOCKSTORE && window.blockStore) {
     var allBlocks = [].concat(window.blockStore.getByType('added_task'),window.blockStore.getByType('schedule_item'),window.blockStore.getByType('block'));
     var block = allBlocks.find(function(b) { return (b.properties||{}).local_id === taskId; });

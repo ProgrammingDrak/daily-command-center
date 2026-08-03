@@ -265,40 +265,26 @@ function reloadPersistedEdits() {
       //  - dated row: folds only on its own date.
       //  - dateless row: genuinely unscheduled work -> folds as untimed (the
       //    Unscheduled section) on whatever day is viewed, UNLESS a dated
-      //    sibling shares its local_id. That sibling means the task IS
-      //    scheduled and the dateless row is a leftover copy (the old quick-add
-      //    dual-write minted these) — suppress it. No title fallback here:
-      //    recurring titles ("Coffee") would false-suppress real work.
+      //    sibling shares its local_id. C4 KEPT that suppression and stopped
+      //    calling it scaffolding: under "date IS NULL is the definition of
+      //    unscheduled", a task is either scheduled or unscheduled and never
+      //    both, so when two rows claim one local_id the DATED row wins. That
+      //    is the rule, not a workaround for the retired quick-add dual-write.
+      //    No title fallback here: recurring titles ("Coffee") would
+      //    false-suppress real work.
       //  - pending rows already closed in the Action Items tab stay out.
+      //
+      // The phase plan said to DELETE this computation. Measured before deciding, on
+      // the prod restore with 001 applied: it suppresses 0 rows in Drake's ws-1 and
+      // **2 in ws-3** — two dateless `pending_task` copies that are exactly the
+      // leftovers itinerary-fold.test.js's header documents the prod incident for.
+      // Migration 001 does NOT clean them up (its own counters read
+      // backlog_targets_deleted: 0), so the plan's premise that it would was wrong,
+      // and deleting this line would fold both onto every day a ws-3 session views.
+      // The rows want a migration; that is Track A's file and is flagged to them.
       const datedLocalIds=new Set(window.blockStore.getByType("block")
         .filter(x=>x.date&&(x.properties||{}).local_id)
         .map(x=>x.properties.local_id));
-      const isFoldableTask=b=>{
-        const p=b.properties||{};
-        if(p.kind&&/^responsibility/.test(p.kind))return false;
-        // Tombstones are markers for the amber "Rescheduled away" list, not tasks.
-        // Folding one in resurrects a lookalike row of the task that just moved.
-        if(p.kind==="reschedule_tombstone")return false;
-        // deleted/archived rows are closed and stay out. status==="done" used to be
-        // in this list, which meant a task completed by ANY server-side path (Day
-        // in Review's Approve, the MCP tools, the responsibility completion hook)
-        // silently VANISHED from the itinerary instead of checking off. A done task
-        // is still a task: admit it and let the fold below seed the done registry.
-        if(p.status==="deleted"||p.status==="archived")return false;
-        // A completion belongs to a DAY. A dateless row has none, so admitting a
-        // done one would fold it onto every day you look at (there are real ones:
-        // closed side-project rows) — keep those out, exactly as before.
-        if((p.status==="done"||p.done===true)&&!b.date)return false;
-        // API-inserted shells carry kind or type "shell" and no local_id.
-        const isShell=p.kind==="shell"||p.type==="shell";
-        // Calendar-materialized meetings are API-inserted (kind/type meeting or
-        // oneone, no local_id) -> admit them so they fold like any other task.
-        const isMeetingBlock=p.kind==="meeting"||p.type==="meeting"||p.type==="oneone";
-        if(!p.local_id&&p.kind!=="task"&&!isShell&&!isMeetingBlock)return false;
-        if(b.date)return b.date===currentDate;
-        return !(p.local_id&&datedLocalIds.has(p.local_id));
-      };
-      const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)];
       // Fail LOUDLY if task-model.js did not load. This is the one cross-module call
       // in here without a typeof guard, and it sits inside a try whose catch discards
       // the error — so a stale cached index.html (no <script> tag) or a parse error
@@ -310,9 +296,37 @@ function reloadPersistedEdits() {
       // sits in its own try, and bailing from the function would also skip
       // hydrateTaskCommuteTimes / hydrateBacklogFromBlocks / hydrateLockedTasks /
       // recalcTimes further down. Skip only the loop that needs the module.
+      //
+      // C4 hoisted this ABOVE the fold predicate, because isFoldableTask now calls
+      // TM.foldsIntoItinerary. Declared after it, the const would have been in scope
+      // but uninitialized when .filter() ran, so a missing module would throw a
+      // ReferenceError into the discarding catch instead of logging this line — the
+      // silent-empty-itinerary failure the guard exists to prevent, reintroduced by
+      // the refactor that shares the predicate.
       const TM=window.DCC&&window.DCC.TaskModel;
-      if(!TM||typeof TM.fromBlock!=="function")console.error("[persistence] task-model.js missing or stale — task blocks cannot fold into the itinerary");
-      else addedBlocks.forEach(block=>{
+      const _tmReady=!!(TM&&typeof TM.fromBlock==="function"&&typeof TM.foldsIntoItinerary==="function");
+      if(!_tmReady)console.error("[persistence] task-model.js missing or stale — task blocks cannot fold into the itinerary");
+      // C4: the kind + addressability halves are TaskModel.foldsIntoItinerary, shared
+      // with syncAddedTaskTimes (which had drifted — it lacked the shell branch). What
+      // stays here is what is genuinely per-view: the status tests and the day scoping.
+      const isFoldableTask=b=>{
+        const p=b.properties||{};
+        if(!TM.foldsIntoItinerary(b))return false;
+        // deleted/archived rows are closed and stay out. status==="done" used to be
+        // in this list, which meant a task completed by ANY server-side path (Day
+        // in Review's Approve, the MCP tools, the responsibility completion hook)
+        // silently VANISHED from the itinerary instead of checking off. A done task
+        // is still a task: admit it and let the fold below seed the done registry.
+        if(p.status==="deleted"||p.status==="archived")return false;
+        // A completion belongs to a DAY. A dateless row has none, so admitting a
+        // done one would fold it onto every day you look at (there are real ones:
+        // closed side-project rows) — keep those out, exactly as before.
+        if((p.status==="done"||p.done===true)&&!b.date)return false;
+        if(b.date)return b.date===currentDate;
+        return !(p.local_id&&datedLocalIds.has(p.local_id));
+      };
+      const addedBlocks=_tmReady?[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(isFoldableTask)]:[];
+      if(_tmReady)addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
         // Safety net: a stale cached day file can still carry the synthesized

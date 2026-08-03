@@ -21,12 +21,24 @@ const persistenceSource = fs.readFileSync(require.resolve("./public/js/persisten
 const foldSource = persistenceSource.match(/const isFoldableTask=b=>\{[\s\S]*?\n\s*\};/);
 assert.ok(foldSource, "isFoldableTask definition not found in persistence.js");
 
-// The guard closes over `currentDate` and the precomputed `datedLocalIds` set;
-// the harness supplies both.
+// C4: the guard now delegates its kind + addressability half to
+// TaskModel.foldsIntoItinerary, so the harness injects the REAL module rather than a
+// stub of it. That is deliberate and it is the whole lesson of C3's three
+// gentler-than-reality stubs: a hand-written `TM` here would let every case below pass
+// while the shared predicate was broken, and the shared predicate is now the thing most
+// worth covering — syncAddedTaskTimes depends on the same function. These cases
+// therefore test the COMPOSITION, which is what actually runs in the browser.
+const TaskModel = require("./public/js/task-model.js");
+assert.equal(typeof TaskModel.foldsIntoItinerary, "function",
+  "task-model.js must export foldsIntoItinerary — the fold delegates its kind test to it");
+
+// The guard closes over `currentDate`, the precomputed `datedLocalIds` set, and `TM`;
+// the harness supplies all three.
 function makeFold(currentDate, datedLocalIds) {
   return vm.runInNewContext(`(() => { ${foldSource[0]} return isFoldableTask; })()`, {
     currentDate,
     datedLocalIds: datedLocalIds || new Set(),
+    TM: TaskModel,
   });
 }
 

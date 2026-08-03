@@ -368,10 +368,16 @@ loadSubtasks=function(){
 // they render inline, nest infinitely, intermix with wraps, and share
 // completion/points with regular tasks. The legacy loadSubtasks/saveSubtasks
 // map is retained only for migration of pre-existing data.
+// C4: works on a carryover row too. The anchor comes from taskAnchorById, which looks in
+// BOTH pools and hands back the day the new row belongs on — the carryover's ORIGIN date,
+// not today. Without that, a subtask added to a past-day parent was created on today with
+// a subtaskOf edge pointing at a row that is not in today's plan: an orphan on both days.
+// That is why the "+" was hidden on carryover rows until now.
 function addSubtask(taskId, text){
   if(!text||!text.trim())return;
   text=text.trim();
-  const parent=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null;
+  const anchor=(typeof taskAnchorById==="function")?taskAnchorById(taskId):null;
+  const parent=anchor?anchor.ev:((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null);
   // Rollup containers (shells) only take full-fledged nested tasks, never
   // timeless pie subtasks — reroute so the parent's pie is never created.
   if(parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")return addStackedTask(taskId,text);
@@ -387,35 +393,88 @@ function addSubtask(taskId, text){
     :{title:text,source:"manual",priority:"Medium",meta:"",detail:"",tags:[]};
   const task=Object.assign({id:id,type:"task",subtaskOf:taskId,start:startStr,end:startStr,
     publicVisibility:"public",added_at:new Date().toISOString()},common);
-  if(typeof scheduled!=="undefined")scheduled.push(task);
+  // Only today's plan gets the in-memory row. A subtask of a CARRYOVER belongs to the
+  // origin day, so pushing it into scheduled[] would render it as a standalone task on
+  // today (its parent is not in this array, so the nesting walk cannot find it) while the
+  // block sits on another date. The carryover lane re-collects instead, below.
+  const onViewedDay=!anchor||!anchor.carryover;
+  if(onViewedDay&&typeof scheduled!=="undefined")scheduled.push(task);
+  let created=null;
   if(window.blockStore&&window.blockStore.createBlock){
-    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+    const date=anchor?anchor.date
+      :((typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null));
     const blockProps=(window.DCC&&window.DCC.taskBlockProps)
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:0,start:startStr,end:startStr}))
       : {local_id:id,title:text,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[]};
     blockProps.type="task";blockProps.subtaskOf=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
-    window.blockStore.createBlock("block",blockProps,{date:date});
+    created=window.blockStore.createBlock("block",blockProps,{date:date});
   }
   // Snapshot/rebalance the parent's point pie now that it has (one more) subtask.
   if(window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(taskId);
-  render();
+  // A carryover parent's new child only appears once the lane re-reads its origin day,
+  // and that read has to happen AFTER the create commits — see _recollectCarryover.
+  if(!onViewedDay)_recollectCarryover(anchor.date,created);
+  else render();
   return task;
+}
+
+// Re-read the carryover lane after a write to one of its origin days, then re-render.
+//
+// `pending` is the in-flight create, and awaiting it is load-bearing rather than tidy.
+// blockStore.createBlock is async and these callers do not await it; invalidating the
+// section nulls `_unfinishedFetchedFor`, so the render that follows immediately re-fires
+// GET /api/tasks/open. If that read is served before the POST commits, the lane renders
+// WITHOUT the new child AND caches that answer, so the row stays invisible until some
+// unrelated action invalidates the section again — precisely the dead-button feeling this
+// phase removes. The optimistic cache does not help here: the lane reads the server, not
+// the block cache. Every existing carryover action in unfinished-tasks.js awaits its write
+// before invalidating, and this now matches.
+//
+// The mechanic itself lives in DCC.Carryover (unfinished-tasks.js), which owns the lane
+// and already exports every other verb that touches it. This is the thin caller-side wrap.
+function _recollectCarryover(sourceDate,pending){
+  const run=()=>{
+    const CO=window.DCC&&window.DCC.Carryover;
+    if(CO&&typeof CO.recollect==="function")CO.recollect(sourceDate);
+    else{
+      // Fallback keeps the two halves together if unfinished-tasks.js is absent.
+      if(window.blockStore&&typeof window.blockStore.invalidateRangeCache==="function"&&sourceDate)window.blockStore.invalidateRangeCache(sourceDate);
+      if(typeof invalidateUnfinishedSection==="function")invalidateUnfinishedSection();
+    }
+    render();
+  };
+  if(pending&&typeof pending.then==="function")pending.then(run,run);
+  else run();
 }
 // A "stacked" task ("stacked time"): independent concurrent work done in the
 // gaps / partial focus of a larger task. Reuses the ride-along edge (wrapId), so
 // it gets its OWN time window and its OWN duration-based points — unlike a
 // subtask, it does not draw from the parent's pie.
+// C4: carryover-aware, for the same reason addSubtask and addTaskAdjacent are — and this
+// one is NOT optional now that the row "+" renders on carryover rows. Three live paths
+// reach it with a carryover parent: openTaskAdd's "Nested" place (the popover the row "+"
+// opens), addSubtask's reroute for wrap-edge parents (shells and wraps are not fixedTime,
+// so carryoverSkipTypes does not filter them out of the lane), and the details modal's
+// `stacked` item type (features.js), which is also newly reachable on a carryover row.
+// Left unfixed, each one created the ride-along on the VIEWED day with a wrapId pointing
+// at a past-day row: an orphan on both days, the exact outcome the "+" was hidden to avoid.
 function addStackedTask(taskId, text, durMinArg, opts){
   if(!text||!text.trim())return null;
   text=text.trim();
   opts=opts||{};
   const id="sk-"+Date.now();
-  const parent=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null;
+  const anchor=(typeof taskAnchorById==="function")?taskAnchorById(taskId):null;
+  const parent=anchor?anchor.ev:((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null);
+  const onViewedDay=!anchor||!anchor.carryover;
   let startStr=(parent&&parent.start)||"00:00";
   const durMin=durMinArg||30;
   const type=opts.type||"task";
   const priority=opts.priority||"Medium";
-  let endStr=(typeof fmt==="function")?fmt((typeof pt==="function"?pt(startStr):0)+durMin):startStr;
+  // Clamped to the last minute of the day, matching task-model.js's deriveEnd. Unclamped,
+  // a 23:45 parent + 30m gives "24:15", pt() wraps the hour, and dur(ev) is permanently
+  // negative -- and for a CARRYOVER child nothing ever repairs it, because the onViewedDay
+  // gate below (correctly) skips the recalcTimes pass that used to rewrite `end`.
+  let endStr=(typeof fmt==="function")?fmt(Math.min(24*60-1,(typeof pt==="function"?pt(startStr):0)+durMin)):startStr;
   // Same shared serializer as addSubtask — a ride-along is a full task too, so its
   // fields (detail/notionUrl/commute/delegated) default consistently. Ride-along
   // specifics: the wrapId edge, its own duration/type, and the "Stacked" meta.
@@ -433,22 +492,29 @@ function addStackedTask(taskId, text, durMinArg, opts){
   // shell's anchor via _layoutShellChildren), so we DON'T pre-place here. A
   // free-layout rollup (wrap) still lands the child in the next open slot of the
   // parent's window.
+  // _placeInWrapWindow reads and reflows against scheduled[], so it is only meaningful
+  // for a parent that is IN scheduled[]. A carryover ride-along keeps the parent's own
+  // start and gets laid out when its origin day is next planned.
   const seqShell=parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childLayout")==="sequential";
-  if(parent&&window.TaskTypes&&window.TaskTypes.isRollup(parent)&&!seqShell&&typeof _placeInWrapWindow==="function"){
+  if(onViewedDay&&parent&&window.TaskTypes&&window.TaskTypes.isRollup(parent)&&!seqShell&&typeof _placeInWrapWindow==="function"){
     _placeInWrapWindow(task,parent);
     startStr=task.start;endStr=task.end;
   }
-  if(typeof scheduled!=="undefined")scheduled.push(task);
+  if(onViewedDay&&typeof scheduled!=="undefined")scheduled.push(task);
+  let created=null;
   if(window.blockStore&&window.blockStore.createBlock){
-    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+    const date=anchor?anchor.date
+      :((typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null));
     const blockProps=(window.DCC&&window.DCC.taskBlockProps)
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:durMin,start:startStr,end:endStr}))
       : {local_id:id,title:text,source:opts.source||"manual",start:startStr,end:endStr,duration:durMin,priority:priority,tags:opts.tags||[],detail:opts.detail||""};
     blockProps.type=type;blockProps.wrapId=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
-    window.blockStore.createBlock("block",blockProps,{date:date});
+    created=window.blockStore.createBlock("block",blockProps,{date:date});
   }
-  if(typeof recalcTimes==="function")recalcTimes();
-  render();
+  if(onViewedDay){
+    if(typeof recalcTimes==="function")recalcTimes();
+    render();
+  }else _recollectCarryover(anchor.date,created);
   return task;
 }
 // Re-parent an EXISTING task so it becomes a SUBTASK of another (umbrella). Unlike
@@ -632,29 +698,43 @@ function openSubtaskAdd(parentId, anchorEl){return openTaskAdd(parentId, anchorE
 // new task becomes its sibling inside the same parent. "After" a wrap parent
 // means after its entire subtree: nested children render with their parent, so
 // the next top-level array slot IS past the subtree.
+// C4: carryover-aware, same rule as addSubtask — a row inserted next to a past-day row
+// is created on THAT day, and the lane re-collects rather than this day's plan growing a
+// row whose neighbours are somewhere else.
 function addTaskAdjacent(targetId,title,durMin,where){
   if(!title||!title.trim()||typeof scheduled==="undefined")return;
   title=title.trim();durMin=durMin||30;
-  const target=scheduled.find(e=>e.id===targetId);
+  const anchor=(typeof taskAnchorById==="function")?taskAnchorById(targetId):null;
+  const target=anchor?anchor.ev:scheduled.find(e=>e.id===targetId);
   if(!target)return;
+  const onViewedDay=!anchor||!anchor.carryover;
   const id="aj-"+Date.now();
   const baseStart=(where==="before"?target.start:target.end)||"00:00";
-  const endStr=(typeof fmt==="function"&&typeof pt==="function")?fmt(pt(baseStart)+durMin):baseStart;
+  const endStr=(typeof fmt==="function"&&typeof pt==="function")?fmt(Math.min(24*60-1,pt(baseStart)+durMin)):baseStart;
   const task={id:id,title:title,type:"task",source:"manual",priority:"Medium",tags:[],
     start:baseStart,end:endStr,meta:"Custom task · "+(typeof ms==="function"?ms(durMin):durMin+"m"),
     wrapId:target.wrapId||null};
-  scheduled.push(task);
-  if(typeof _reorderActive==="function")_reorderActive(id,targetId,where!=="before");
-  if(typeof recalcTimes==="function")recalcTimes({orderWins:true});
+  if(onViewedDay){
+    scheduled.push(task);
+    // Both of these act on scheduled[] and on this day's stored order, so they are as
+    // scoped to the viewed day as the push is. Running them for a carryover insert would
+    // reorder and reflow today's plan around a row that is not in it.
+    if(typeof _reorderActive==="function")_reorderActive(id,targetId,where!=="before");
+    if(typeof recalcTimes==="function")recalcTimes({orderWins:true});
+  }
+  let created=null;
   if(window.blockStore&&window.blockStore.createBlock){
-    const date=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
-    window.blockStore.createBlock("block",{local_id:id,title:title,type:"task",source:"manual",
+    const date=anchor?anchor.date
+      :((typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null));
+    created=window.blockStore.createBlock("block",{local_id:id,title:title,type:"task",source:"manual",
       start:task.start,end:task.end,duration:durMin,priority:"Medium",tags:[],
       wrapId:task.wrapId||null,added_at:new Date().toISOString()},{date:date});
   }
-  if(typeof saveTaskOrder==="function")saveTaskOrder();
-  if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
-  render();
+  if(onViewedDay){
+    if(typeof saveTaskOrder==="function")saveTaskOrder();
+    if(typeof syncAddedTaskTimes==="function")syncAddedTaskTimes();
+    render();
+  }else _recollectCarryover(anchor.date,created);
 }
 // One-time-per-day migration of legacy modal subtasks (the {text,done} map) into
 // real subtask tasks in the unified tree. Idempotent + guarded per day.

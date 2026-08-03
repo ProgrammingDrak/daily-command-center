@@ -297,6 +297,40 @@ function _unfRecById(id){
   if(!_unfinishedCache||!Array.isArray(_unfinishedCache.rows))return null;
   return _unfinishedCache.rows.find(ev=>ev.id===id)||null;
 }
+
+// ── C4: the anchor for any row-level action, in EITHER pool ──
+//
+// A row on screen lives in one of two arrays: `scheduled[]` (this day's plan) or the
+// carryover lane's rows (past-day unfinished work). Three affordances — the row "+",
+// the details modal, and the bounty — each resolved their target with
+// `scheduled.find(...)` alone, so on a carryover row they got null and either bailed or,
+// worse, wrote against the VIEWED day. That is why C1 gated all three off carryover rows
+// rather than shipping dead buttons.
+//
+// This is the one resolver they share now. It answers the two questions an action needs:
+// WHICH ev, and WHICH DAY does a write belong on. For a carryover that day is its ORIGIN
+// date, never today — the same rule the lane's complete/reschedule/backlog actions
+// already follow, and the reason a subtask added to a carryover parent does not become
+// an orphan on today.
+//
+// `blockId` is handed out because it matters: the carryover ev's row lives in
+// _rangeCache, so every `getByType(...)`/`blockStore.get(...)` search misses it and a
+// caller that resolves by local_id silently writes nothing. With the row id there is
+// nothing to search for.
+function taskAnchorById(id){
+  const ev=(typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(e=>e.id===id):null;
+  if(ev){
+    const day=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+    return {ev:ev,date:day,blockId:ev._blockId||null,carryover:false};
+  }
+  const unf=_unfRecById(id);
+  if(unf){
+    const u=unf.__unf||{};
+    return {ev:unf,date:u.sourceDate||null,blockId:u.sourceId||null,carryover:true};
+  }
+  return null;
+}
+window.taskAnchorById=taskAnchorById;
 // Reorder within the Unscheduled section. Works across both id spaces (untimed
 // scheduled[] tasks + carryovers) off the rendered DOM order. Persists the
 // unified manual order; keeps scheduled[] coherent only when both ends are
@@ -635,16 +669,19 @@ function buildListView(){
     const recQueued=(openRow&&isMeeting(ev)&&ev.recordingReview&&!ev.dashboardRef)?'<span class="prep-flag rec-queued" title="Queued for recording review">&#128252; Review</span>':'';
     const recFlag=(openRow&&isMeeting(ev)&&ev.dashboardRef)?'<a class="prep-flag rec-flag" href="/meetings/'+encodeURIComponent(ev.id)+'/dashboard" target="_blank" rel="noopener" title="Open the recording review dashboard" onclick="event.stopPropagation()" style="text-decoration:none">&#9654; Recording</a>':'';
     const streakChip=openRow?habitStreakChip(ev):'';
-    // Two affordances still stay OFF a carryover row, for one reason: they write
-    // into TODAY's pool relative to a parent that isn't in it, so they can only be
-    // dead buttons until a carryover is a first-class row (Track C, C4 "one home
-    // for unscheduled work"):
-    //   • the row "+" — addSubtask/addTaskAdjacent (tabs.js) resolve the anchor in
-    //     scheduled[] and bail; a subtask created against a past-day parent lands
-    //     on today as an orphan.
-    //   • the bounty — placeBounty (state.js) resolves scheduled[] and returns; the
-    //     day's bounty is a today-points mechanic and a carryover completes on its
-    //     ORIGIN day.
+    // C4 opened the row "+" and the row's open-space click on carryover rows. Both used
+    // to resolve their target with scheduled.find() alone, which a past-day row is not
+    // in; they now go through taskAnchorById, which looks in both pools and returns the
+    // ORIGIN day for a write. See addSubtask (tabs.js) and openAddModal (features.js).
+    //
+    // The BOUNTY stays off a carryover row, and this is a product question rather than
+    // the plumbing one the other two were — the plumbing is done and placeBounty could
+    // be wired in a line. A bounty doubles the points a task earns ON THE DAY it is set,
+    // and a carryover completes on its ORIGIN day, so there is no day for the multiplier
+    // to attach to. The three answers all mean something different to scoring: credit the
+    // origin day (a past day's total changes after the fact), force a move to today
+    // first (one click silently does two things), or leave it off. Drake's call,
+    // 2026-08-03: leave it off until the semantics are chosen. Not a missing feature.
     el.innerHTML=
       chev+
       '<div class="it-list-rank">'+(subRow?'·':(idx+1))+'</div>'+
@@ -655,7 +692,10 @@ function buildListView(){
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow||isUnfRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        // The "+" now renders on carryover rows too (C4). isDoneRow and meetings still
+        // skip it: a done row takes no new work, and a meeting's children are its prep
+        // artifacts, not subtasks.
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           nowChip+
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
@@ -731,11 +771,12 @@ function buildListView(){
     const am=el.querySelector(".row-add-menu");
     if(am)am.addEventListener("click",e=>{e.stopPropagation();if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,am);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
     // Open space on the row opens the task-details modal (same as the pen).
-    // Carryovers skip it: openAddModal (features.js) resolves the task in
-    // scheduled[] and its notes/tag writes land on the VIEWED day, so on a
-    // past-day row it would render an empty shell and silently save to the wrong
-    // day. Re-enable with C4, when a carryover is a real row in the pool.
-    if(!isUnfRow)el.addEventListener("click",e=>{
+    // C4: carryover rows included. openAddModal resolves through taskAnchorById now, so
+    // it renders the row's real details instead of an empty shell, and its tag/flag
+    // writes target the origin day's ROW id instead of searching a cache that never held
+    // it. Notes are keyed by ev id in localStorage, which was already stable for a
+    // carryover, so they needed nothing.
+    el.addEventListener("click",e=>{
       if(e.target.closest("button,a,input,textarea,.chk,.chk-quick,.grip,.start-time,.wrap-collapse,.pet-privacy-toggle,.prep-flag,.recap-flag"))return;
       if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
     });

@@ -349,30 +349,44 @@
   // Unschedule to the backlog: an in-place date=null UPDATE, no new id, no delete.
   // (The old "To Backlog" minted a fresh copy and left the origin behind, so the
   // task lived in two places and came back the next day.)
+  //
+  // C4: the write itself is `state.js unscheduleRow` now — this was one of THREE
+  // hand-rolled copies of "set date to null", and it was the only one that got it
+  // right, so it is the one the shared primitive was modelled on. Two things it used
+  // to do here and no longer needs to:
+  //   • re-state the durMin/duration drift (hydrateBacklogFromBlocks reads durMin, not
+  //     duration). The primitive carries it.
+  //   • decide what happens to a stale `start`. The primitive strips it.
+  // What it deliberately still does itself is RESOLVE the row, through _originBlock, and
+  // hand it to the primitive as opts.block. Letting unscheduleRow resolve it instead
+  // would have swapped a range-cache read for an HTTP GET on every carryover → backlog
+  // action, because a carryover block is loaded by loadDateRange into _rangeCache ONLY
+  // and blockStore.get() reads _dayCache/_globalCache. _originBlock also owns the
+  // one-day refill C1 added after its first fix died on the second invocation. Same
+  // mechanic for the write, the right resolver for this cache.
+  //
+  // The load-bearing guard is unchanged and now lives in one place: refuse BEFORE
+  // writing if the row cannot be resolved, because updateBlock REPLACES properties
+  // wholesale (db.js: newProps = parsed) and spreading a null block wiped title,
+  // local_id, duration, subtaskOf, notes, tags and source_id behind a success toast.
   async function toBacklog(ev, pool) {
     const u = originOf(ev);
-    // Resolve the origin row from the cache it ACTUALLY came from. A carryover
-    // block is loaded by loadDateRange, which fills only _rangeCache; blockStore.get
-    // reads _dayCache/_globalCache, and _dayCache is cleared on every date switch.
-    // So get() returns null for a past-day block essentially always -- and because
-    // updateBlock REPLACES properties wholesale (db.js: newProps = parsed) rather
-    // than merging, spreading a null block wrote `{kind:"backlog"}` over the row and
-    // destroyed title, local_id, duration, subtaskOf, notes, tags and source_id.
-    // The row then vanished everywhere (hydrateBacklogFromBlocks skips !p.title,
-    // isFoldableTask skips a row with no local_id) while the user got a success toast.
     const block = await _originBlock(u.sourceId, u.sourceDate);
-    if (!block || !block.properties) {
-      // updateBlock swallows its own errors and returns, so the catch below cannot
-      // report this. Refuse BEFORE writing rather than write a wiped row.
+    if (!block || !block.properties || typeof unscheduleRow !== "function") {
       if (typeof showToast === "function") showToast("Could not move " + ev.title + " to the backlog", "error");
       return null;
     }
-    const bp = block.properties;
-    // hydrateBacklogFromBlocks (schedule.js) reads durMin, not duration.
-    const props = Object.assign({}, bp, { kind: "backlog", durMin: bp.durMin || bp.duration || 30 });
-    try {
-      await window.blockStore.updateBlock(u.sourceId, props, { date: null });
-    } catch (e) {
+    // NO durMin override here, deliberately, and the asymmetry with
+    // _moveTaskToBacklogStage is the point. That path passes dur(ev) because a row on
+    // TODAY has been through recalcTimes and adjustDur, which move `ev.end` and never write
+    // `properties.duration` back — so end-start is live and the stored duration is stale.
+    // A carryover ev is the other way round: it never gets a recalcTimes pass, and
+    // fromBlock DERIVES its end from `duration` when the row has no end, so the row's own
+    // duration is the authority and end-start is the derived value. Passing dur(ev) here
+    // inverted that and reported 30m for a row storing 45 (pinned in
+    // carryover-actions.test.js). Let the primitive read the row.
+    const updated = await unscheduleRow(u.sourceId, { block: block });
+    if (!updated) {
       if (typeof showToast === "function") showToast("Could not move " + ev.title + " to the backlog", "error");
       return null;
     }
@@ -381,6 +395,21 @@
     if (typeof showToast === "function") showToast("Moved to the backlog: " + ev.title, "success");
     // Children keep their parent edge and follow it as nested backlog rows.
     return { removed: [ev.id].concat(descendants(ev, pool).map(t => t.id)) };
+  }
+
+  // Re-collect the lane after a write ADDED a row to one of its origin days (C4).
+  //
+  // Both halves are needed and neither is sufficient: invalidateRangeCache alone leaves
+  // _unfinishedCache holding the pre-write answer, and invalidateUnfinishedSection alone
+  // leaves the range cache holding the pre-write day. The four actions above inline only
+  // the range half because they REMOVE rows and _unfDropRows handles the section locally;
+  // an add needs both. Lives here rather than in the caller so the next verb that adds to
+  // an origin day (a drag onto a carryover parent, the bounty once its scoring is settled)
+  // finds it instead of hand-rolling a fifth copy.
+  function recollect(sourceDate) {
+    const bs = window.blockStore;
+    if (bs && typeof bs.invalidateRangeCache === "function" && sourceDate) bs.invalidateRangeCache(sourceDate);
+    if (typeof invalidateUnfinishedSection === "function") invalidateUnfinishedSection();
   }
 
   // Re-read a day and rebuild the in-memory plan from it. Shared so the bulk path
@@ -564,6 +593,7 @@
     descendants: descendants,
     openRows: openRows,
     rootsOf: rootsOf,
+    recollect: recollect,
     refoldViewedDay: refoldViewedDay,
     complete: complete,
     moveTo: moveTo,
