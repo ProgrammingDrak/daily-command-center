@@ -199,3 +199,33 @@ test("the audit gate reports the exact-match baseline beside its own result", ()
   // them, or the gate reports failures for keys the closure never claims to handle.
   assert.ok(/key_date IS NOT NULL/.test(CLOSURE_AUDIT_SQL));
 });
+
+// ── A guard for a class of bug, not a line ───────────────────────────────────
+// `badRequest` (slot-account-common.js) is `(message) => httpError(message, 400)`. It
+// BUILDS an error for a caller to THROW; it does not send a response. Written as
+// `return badRequest(res, "...")` it sends nothing and the request HANGS FOREVER — worse
+// than a 500, because nothing times out and nothing logs.
+//
+// That shipped into server.js's new date guard and no test caught it: the sibling guard
+// in routes/dcc.js was written with res.status(400).json() and worked, so the suite was
+// green while /api/state/day hung. It was found by probing the endpoint with curl.
+//
+// server.js is not importable here (it binds a port at require time), so this reads the
+// source instead. Crude, but it covers every current and future call site, which a route
+// test for the one line would not.
+test("badRequest is never used as a responder — it throws, it does not send", () => {
+  const fs = require("node:fs");
+  for (const file of ["server.js", "routes/dcc.js", "routes/blocks.js", "routes/social-todo.js", "routes/slots.js"]) {
+    let src;
+    try { src = fs.readFileSync(file, "utf8"); } catch { continue; }
+    const offenders = src
+      .split("\n")
+      .map((line, i) => ({ line, n: i + 1 }))
+      // A call taking `res` as its FIRST argument is the misuse. `throw badRequest("x")`
+      // and `badRequest("x")` are both fine. Comments are excluded so this file's own
+      // explanation, and the one in server.js, do not trip it.
+      .filter(({ line }) => /(?<!\/\/.*)\bbadRequest\s*\(\s*res\b/.test(line) && !/^\s*(\/\/|\*)/.test(line));
+    assert.deepEqual(offenders.map(o => `${file}:${o.n}`), [],
+      `badRequest(res, ...) sends nothing and hangs the request; use res.status(400).json({ error })`);
+  }
+});

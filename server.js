@@ -628,7 +628,15 @@ app.get("/api/state/day", async (req, res) => {
   const dateStr = req.query.date || getTodayStr();
   // Reject a malformed date as a 400 here, so getDayFilePath's throw cannot land in the
   // catch below and turn into a 500 (or, worse, a second traversal attempt).
-  if (!isValidDate(dateStr)) return badRequest(res, "Invalid date");
+  //
+  // res.status().json(), NOT the imported `badRequest`. That helper is
+  // `(message) => httpError(message, 400)` — it BUILDS an error for a caller to THROW
+  // (`throw badRequest("...")`, as routes/social-todo.js uses it), it does not send a
+  // response. `return badRequest(res, "Invalid date")` therefore sent nothing and the
+  // request HUNG FOREVER. Caught by probing the guard with curl rather than by a test:
+  // the ingest-route test covers routes/dcc.js's guard, which was written with
+  // res.status(400).json() and worked, so the suite stayed green while this one hung.
+  if (!isValidDate(dateStr)) return res.status(400).json({ error: "Invalid date" });
   try { res.json(await buildDayResponse(dateStr, req.session.userId, req.workspaceId)); }
   catch (e) { res.json(readJSON(getDayFilePath(dateStr), readJSON(DAY_STATE_FILE, null))); }
 });
