@@ -936,6 +936,154 @@ async function unscheduleTaskFromDate(id,dateStr){
   }catch(e){}
 }
 
+// ======== C4: THE DATE FIELD, IN PLACE ========
+// Two primitives, and they are the fourth and fifth verbs in this file that change a
+// task's date. The other three, for whoever adds a sixth:
+//   scheduleTaskOnDate(ev,date)     CREATES a new block on a date (delegated.js)
+//   unscheduleTaskFromDate(id,date) DELETES the block on a date (rewards-queue.js)
+//   rescheduleTaskToDate(id,date)   MOVES a row + its subtree, server transaction (C3)
+// These two do neither: they UPDATE `date` on a row that already exists, keeping its
+// id, its local_id, its notes, its points and its parent edges. That is the whole
+// point of C4 -- the old paths delete-and-recreate, so a round trip minted a new id
+// and orphaned everything keyed to the old one.
+//
+// They take a BLOCK id, not an ev/local id. The three verbs above take ev ids, and
+// conflating the two id spaces is this repo's most expensive recurring bug (C3's
+// subtree walk, E1's dual-identity _done overlay). The `Row` in the name is the
+// reminder. Callers holding an ev use ev._blockId, which TaskModel.fromBlock sets.
+//
+// Reuse, not a new mechanic: `blockStore.updateBlock(id, props, {date})` is the exact
+// call `syncAddedTaskTimes` (schedule.js) already used to promote a dateless row onto
+// today, and `_unfToBacklog` (unfinished-tasks.js, C1) already used with {date:null}
+// to send a carryover the other way. block-store.js documents `extra.date` for this.
+// Both of those now route through here so there is one mechanic, not three.
+
+// Give an existing row a date. opts.start/opts.end stamp a slot at the same time
+// (one write, not two). Returns the updated block, or null if it could not be found.
+//
+// opts.block: a caller that has ALREADY resolved the row passes it here, and that is
+// the preferred form. Blocks live in three different caches and no single resolver
+// reaches all of them — a backlog row is in _globalCache, today's rows in _dayCache, a
+// past-day carryover ONLY in _rangeCache — so each caller knows something this function
+// cannot. `_rowForDateWrite` is the fallback for callers holding nothing but an id, and
+// it costs an HTTP GET whenever the row is not in the two caches blockStore.get() reads.
+async function scheduleRowOnDay(blockId,dateStr,opts){
+  opts=opts||{};
+  if(!window.blockStore||!blockId||!dateStr)return null;
+  // Read the row BEFORE writing. updateBlock REPLACES properties wholesale
+  // (db.js: newProps = parsed) rather than merging, so spreading a missing block
+  // writes {start,end} over the row and destroys title/local_id/subtaskOf/notes.
+  // That is exactly the data loss pre-review found in C1's toBacklog; the guard is
+  // the same one, and it must refuse BEFORE the write because updateBlock swallows
+  // its own errors and returns.
+  const block=(opts.block&&opts.block.properties)?opts.block:await _rowForDateWrite(blockId);
+  if(!block||!block.properties)return null;
+  const props=Object.assign({},block.properties);
+  if(opts.start)props.start=opts.start;
+  if(opts.end)props.end=opts.end;
+  // A row arriving from the backlog carries kind:"backlog" (and legacy dated ones
+  // carry it too). It is scheduled work now, so the marker goes -- otherwise it
+  // renders in the Backlog drawer AND on its day, which is the double home C4 exists
+  // to close. `stage` stays: it is a real user field (Backlog / Priority), not state.
+  if(props.kind==="backlog")delete props.kind;
+  return _writeRowDate(blockId,block,props,dateStr);
+}
+
+// Take an existing row's date away: it becomes unscheduled, which is the Backlog.
+// opts.stage sets the Backlog/Priority drawer it lands in.
+// opts.block: the already-resolved row — see scheduleRowOnDay for why that matters.
+async function unscheduleRow(blockId,opts){
+  opts=opts||{};
+  if(!window.blockStore||!blockId)return null;
+  const block=(opts.block&&opts.block.properties)?opts.block:await _rowForDateWrite(blockId);
+  if(!block||!block.properties)return null;
+  const props=Object.assign({},block.properties,{kind:"backlog"});
+  // hydrateBacklogFromBlocks reads durMin, not duration (C1 hit this exact drift).
+  props.durMin=props.durMin||props.duration||30;
+  if(opts.stage)props.stage=opts.stage;
+  // A stored start is meaningless on a dateless row -- TaskModel.fromBlock ignores it
+  // and renders the row untimed either way, so leaving it behind just means the next
+  // reader has to know to ignore it. _pinnedStart would additionally survive a round
+  // trip and pin the task to a stale slot the moment it is scheduled again.
+  delete props.start;delete props.end;delete props._pinnedStart;
+  return _writeRowDate(blockId,block,props,null);
+}
+
+// The one write both primitives issue, and the one place that knows what
+// blockStore.updateBlock's return value is worth.
+//
+// A falsy return does NOT mean the write failed. updateBlock answers the server row on
+// success and `optimistic || existing` on a buffered failure — and `existing` is
+// cacheGet(id), which is NULL for any row outside _dayCache/_globalCache. A past-day
+// carryover row is precisely that, so the one caller most likely to hit a hiccup is the
+// one whose "failure" value is null. The mutation is in the WAL regardless (updateBlock
+// pre-writes it and never throws), so it WILL land on reconnect. Reporting failure there
+// would toast "Could not move…" over a move that then quietly happened — worse than
+// saying nothing, because the user re-does it.
+//
+// So: resolve to the row we know we wrote. The honest refusal is the resolve-the-row
+// guard in the callers above, which runs BEFORE anything is written.
+async function _writeRowDate(blockId,block,props,dateStr){
+  let written;
+  try{
+    written=await window.blockStore.updateBlock(blockId,props,{date:dateStr});
+  }catch(e){
+    // updateBlock does not throw today. If it ever starts, a thrown write is NOT in the
+    // WAL and really did fail, so this stays a refusal rather than a synthesized success.
+    console.warn("[date] write threw for "+blockId+":",e);
+    return null;
+  }
+  // Deliberately OUTSIDE the write's try. Keeping the projection refresh inside it meant a
+  // throw in the refresh returned null — reporting a failure for a write that had already
+  // landed, and toasting "Could not move…" over a completed move. A bookkeeping problem
+  // must never change the verdict on the write.
+  try{ _syncBacklogProjection(props.local_id||blockId,dateStr); }
+  catch(e){ console.warn("[date] backlog projection refresh failed:",e); }
+  return written||Object.assign({},block,{date:dateStr,properties:props});
+}
+
+// Keep `backlog[]` honest the instant a row's date changes, because "one list, one badge"
+// has to hold between the write and the next reload, not just after it.
+//
+// Caught in live QA rather than by a test: after a Move-to-backlog the row correctly
+// appeared in the Unscheduled section, and the Backlog badge still read the OLD count —
+// the projection only re-runs inside reloadPersistedEdits. One surface said the task was
+// unscheduled while the other did not, which is the exact disagreement this phase exists
+// to remove, just moved from "two predicates" to "two moments".
+//
+// It lives HERE, at the one point both primitives converge, rather than in each caller:
+// an invariant enforced at one call site and merely assumed at the other is this project's
+// most repeated bug shape. Scoped to the row that just changed — a full re-derive would
+// drop a backlog item added in this session whose row has not been cached yet.
+function _syncBacklogProjection(evId,dateStr){
+  if(typeof backlog==="undefined"||!Array.isArray(backlog))return;
+  if(dateStr){
+    // It has a date now: it is scheduled work, so it leaves the backlog.
+    const i=backlog.findIndex(b=>b.id===evId);
+    if(i!==-1)backlog.splice(i,1);
+  }else if(typeof hydrateBacklogFromBlocks==="function"){
+    // It is unscheduled now. The projection is additive (it skips ids already present),
+    // and blockStore.updateBlock has already written the dateless row into the cache
+    // optimistically, so this picks it up without waiting for the server.
+    hydrateBacklogFromBlocks();
+  }
+}
+
+// Resolve a block for a date write, from the cache when it is there and from the
+// server when it is not. A backlog row lives in _globalCache (loadGlobals), a
+// carryover row only in _rangeCache, and blockStore.get() reads neither of the
+// latter -- C1's second-order bug was a fix that depended on a cache the action
+// itself then invalidated. One await, and the miss path is a real fetch.
+async function _rowForDateWrite(blockId){
+  const cached=window.blockStore.get(blockId);
+  if(cached&&cached.properties)return cached;
+  try{
+    const r=await fetch("/api/blocks/"+encodeURIComponent(blockId));
+    if(!r.ok)return null;
+    return await r.json();
+  }catch(e){return null;}
+}
+
 // ======== MOVE-TO MENU HELPERS ========
 function _findTaskBlockForDate(id,dateStr,ev){
   if(!window.blockStore||!id)return null;
@@ -1058,22 +1206,52 @@ function moveScheduledTaskToSideProject(id){
   return true;
 }
 
-function _moveTaskToBacklogStage(id,stage,toastMsg){
+// Send a scheduled task to the Backlog / Priority drawer.
+//
+// C4: this is an in-place `date = null` UPDATE now. It used to mint a brand-new
+// `bl-<timestamp>` row and DELETE the original, so the task came back with a different
+// block id, a different local_id, and none of its notes, points, tags or child edges.
+// A backlog → schedule → backlog round trip produced three rows and two tombstones for
+// one piece of work. Now it produces one row that changes its `date` twice.
+//
+// The identity that survives is the point: `local_id` is what the ledger's client-side
+// credit key and every `subtaskOf` link is written against, and the block id is what
+// `parent_id` and the server-side credit key use. Minting a new id orphaned both.
+async function _moveTaskToBacklogStage(id,stage,toastMsg){
   const ev=scheduled.find(e=>e.id===id);
   if(!ev)return;
-  const entry=Object.assign(
-    window.DCC.taskCommonProps(ev,{
-      meta:ms(dur(ev))+" · from schedule",
-      priority:ev.priority||(stage==="Priority"?"High":"Low"),
-      source:ev.source||"manual"
-    }),
-    {id:"bl-"+Date.now(),type:ev.type||"task",durMin:dur(ev),stage:stage}
-  );
-  backlog.push(entry);
-  if(typeof persistBacklogItem==="function")persistBacklogItem(entry);
-  deletedSet.add(id);saveDeletedState();
-  _removeTaskBlockFromDate(ev.id,_viewedDateStr(),ev);
+  // The block id, not the ev id: unscheduleRow re-dates a ROW. _findTaskBlockForDate
+  // resolves it the same way the mover does, including its ev._blockId branch, so a
+  // task whose local_id is ambiguous (the prod restore has 28 such collision groups)
+  // still resolves to the row this ev actually came from.
+  const block=_findTaskBlockForDate(ev.id,_viewedDateStr(),ev);
+  if(!block){
+    // No row to re-date means nothing would persist. Refuse loudly rather than push an
+    // in-memory entry that vanishes on reload — the old path's silent-success shape.
+    if(typeof showToast==="function")showToast("Could not move "+ev.title+" to the backlog","error");
+    return;
+  }
+  const updated=await unscheduleRow(block.id,{stage:stage,block:block});
+  if(!updated){
+    if(typeof showToast==="function")showToast("Could not move "+ev.title+" to the backlog","error");
+    return;
+  }
+  // It stays on screen and MOVES to the Unscheduled section, because under C4 that
+  // section IS the backlog. The old path added the id to `deletedSet` — the day-scoped
+  // hide — which was right when the row was being destroyed and a copy created
+  // elsewhere, and is wrong now: the row still exists, it is simply dateless, so hiding
+  // it would leave the task in the drawer but missing from the list that is supposed to
+  // be the same list.
+  //
+  // Mirror in memory exactly what unscheduleRow wrote, rather than re-folding: a
+  // dateless row is untimed by definition (TaskModel.fromBlock ignores any stored
+  // start), and _clearTaskPinAndLock has to run or the client keeps a pinned start the
+  // row no longer has — the two would disagree until the next reload, and the pin would
+  // win the moment the task was scheduled again.
+  ev.untimed=true;ev._dateless=true;ev.stage=stage;
+  _clearTaskPinAndLock(ev);
   if(typeof showToast==="function")showToast(toastMsg,"success");
+  if(typeof recalcTimes==="function")recalcTimes();
   render();
 }
 

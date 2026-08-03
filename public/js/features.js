@@ -183,6 +183,10 @@ function openTrivialPicker(scheduleId, anchorEl){
 
 // ======== TASK DETAIL MODAL (Notes + Subtasks + Side Projects + Action Items) ========
 let _addModalTaskId = null;
+// C4: the open row's BLOCK id, when the modal was opened on a row whose block the
+// day/global caches do not hold (a past-day carryover). Null for an ordinary row on the
+// viewed day, where the existing local_id search is correct and already works.
+let _addModalBlockId = null;
 
 function taskForRepeatResponsibility(taskId, fallbackTitle) {
   const scheduledTask = (typeof scheduled !== 'undefined' ? scheduled : []).find(function(ev) { return ev.id === taskId; });
@@ -195,6 +199,16 @@ function taskForRepeatResponsibility(taskId, fallbackTitle) {
 }
 
 function _persistTaskTags(taskId, tagIds) {
+  // C4: a carryover row's block is in _rangeCache only, so every getByType search below
+  // misses it and the tag edit was silently dropped. With the row id in hand there is
+  // nothing to search for. _rowForDateWrite (state.js) resolves it — cache first, then a
+  // real GET — and refusing on a miss matters because updateBlock REPLACES properties.
+  if (_addModalBlockId && window.blockStore && typeof _rowForDateWrite === 'function') {
+    _rowForDateWrite(_addModalBlockId).then(function (b) {
+      if (b && b.properties) window.blockStore.updateBlock(b.id, Object.assign({}, b.properties, { tags: tagIds }));
+    });
+    return;
+  }
   if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.addedTasks && window.blockStore) {
     // Check added_task blocks (legacy + new "block" type with scheduled_dates)
     var addedBlocks = (window.blockStore.getByType('added_task')||[]).concat(window.blockStore.getByType('block').filter(function(b){return (b.properties||{}).scheduled_dates;}));
@@ -239,9 +253,21 @@ function _amBuildDetails(ev){
   return meta.join('');
 }
 
+// C4: opens on a carryover row too. `taskAnchorById` looks in BOTH pools, so the modal
+// renders the row's real priority / duration / time / tags instead of the empty shell a
+// scheduled[]-only lookup produced, and the write helpers below get the carryover's ROW
+// id so their edits land on the origin day's row rather than silently going nowhere.
+// Those two failures together are why the row's open-space click was disabled on
+// carryovers: it looked like a working affordance and saved to the wrong place.
 function openAddModal(taskId, taskTitle) {
   _addModalTaskId = taskId;
-  var taskEntry = (typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null;
+  var anchor = (typeof taskAnchorById === 'function') ? taskAnchorById(taskId) : null;
+  var taskEntry = anchor ? anchor.ev
+    : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === taskId; }) : null);
+  // The row id, when we have one. Every helper below searches the day/global caches by
+  // local_id, and a carryover row is in _rangeCache only — so the search misses and the
+  // update never happens. _addModalBlockId short-circuits it.
+  _addModalBlockId = (anchor && anchor.blockId) || null;
   _amSetupTitle(taskId, taskEntry, taskTitle);
 
   // Read-only details (priority / duration / time / source / link)
@@ -371,6 +397,10 @@ function closeAddModal() {
   }
   document.getElementById('add-modal-overlay').classList.remove('open');
   _addModalTaskId = null;
+  // C4: clear the row id with the task id. Leaving it set would point the NEXT modal's
+  // tag/flag writes at the previous row — a cross-task write, and the kind of stale
+  // module state that only shows up on the second open.
+  _addModalBlockId = null;
   // Flush any deferred renders now that modal is closed
   _flushDeferredRender();
   if (typeof render === 'function') render();

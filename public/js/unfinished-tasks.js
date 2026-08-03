@@ -349,30 +349,35 @@
   // Unschedule to the backlog: an in-place date=null UPDATE, no new id, no delete.
   // (The old "To Backlog" minted a fresh copy and left the origin behind, so the
   // task lived in two places and came back the next day.)
+  //
+  // C4: the write itself is `state.js unscheduleRow` now — this was one of THREE
+  // hand-rolled copies of "set date to null", and it was the only one that got it
+  // right, so it is the one the shared primitive was modelled on. Two things it used
+  // to do here and no longer needs to:
+  //   • re-state the durMin/duration drift (hydrateBacklogFromBlocks reads durMin, not
+  //     duration). The primitive carries it.
+  //   • decide what happens to a stale `start`. The primitive strips it.
+  // What it deliberately still does itself is RESOLVE the row, through _originBlock, and
+  // hand it to the primitive as opts.block. Letting unscheduleRow resolve it instead
+  // would have swapped a range-cache read for an HTTP GET on every carryover → backlog
+  // action, because a carryover block is loaded by loadDateRange into _rangeCache ONLY
+  // and blockStore.get() reads _dayCache/_globalCache. _originBlock also owns the
+  // one-day refill C1 added after its first fix died on the second invocation. Same
+  // mechanic for the write, the right resolver for this cache.
+  //
+  // The load-bearing guard is unchanged and now lives in one place: refuse BEFORE
+  // writing if the row cannot be resolved, because updateBlock REPLACES properties
+  // wholesale (db.js: newProps = parsed) and spreading a null block wiped title,
+  // local_id, duration, subtaskOf, notes, tags and source_id behind a success toast.
   async function toBacklog(ev, pool) {
     const u = originOf(ev);
-    // Resolve the origin row from the cache it ACTUALLY came from. A carryover
-    // block is loaded by loadDateRange, which fills only _rangeCache; blockStore.get
-    // reads _dayCache/_globalCache, and _dayCache is cleared on every date switch.
-    // So get() returns null for a past-day block essentially always -- and because
-    // updateBlock REPLACES properties wholesale (db.js: newProps = parsed) rather
-    // than merging, spreading a null block wrote `{kind:"backlog"}` over the row and
-    // destroyed title, local_id, duration, subtaskOf, notes, tags and source_id.
-    // The row then vanished everywhere (hydrateBacklogFromBlocks skips !p.title,
-    // isFoldableTask skips a row with no local_id) while the user got a success toast.
     const block = await _originBlock(u.sourceId, u.sourceDate);
-    if (!block || !block.properties) {
-      // updateBlock swallows its own errors and returns, so the catch below cannot
-      // report this. Refuse BEFORE writing rather than write a wiped row.
+    if (!block || !block.properties || typeof unscheduleRow !== "function") {
       if (typeof showToast === "function") showToast("Could not move " + ev.title + " to the backlog", "error");
       return null;
     }
-    const bp = block.properties;
-    // hydrateBacklogFromBlocks (schedule.js) reads durMin, not duration.
-    const props = Object.assign({}, bp, { kind: "backlog", durMin: bp.durMin || bp.duration || 30 });
-    try {
-      await window.blockStore.updateBlock(u.sourceId, props, { date: null });
-    } catch (e) {
+    const updated = await unscheduleRow(u.sourceId, { block: block });
+    if (!updated) {
       if (typeof showToast === "function") showToast("Could not move " + ev.title + " to the backlog", "error");
       return null;
     }

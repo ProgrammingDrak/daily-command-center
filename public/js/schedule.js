@@ -103,14 +103,19 @@ function syncAddedTaskTimes(){
   // rewrite start/end on blocks from other days. Startless blocks (API inserts /
   // untimed rows) are included so a drag out of the Unscheduled section persists
   // its newly assigned time; rows still sitting in that section are skipped below.
+  //
+  // C4: the row test is TaskModel.foldsIntoItinerary, shared with the fold, because
+  // this copy had drifted — it was missing the fold's `isShell` branch, so a shell
+  // block rendered in the itinerary and then never persisted its start/end and reset
+  // its times on every reload.
+  const TM=window.DCC&&window.DCC.TaskModel;
+  if(!TM||typeof TM.foldsIntoItinerary!=="function"){
+    console.error("[schedule] task-model.js missing or stale — task times cannot persist");
+    return;
+  }
   const currentDate=window.blockStore.getCurrentDate();
   const addedBlocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block").filter(b=>{
-    const p=b.properties||{};
-    if(p.kind&&/^responsibility/.test(p.kind))return false;
-    // Meetings are API-inserted (no local_id, kind "meeting") -> admit them so a
-    // manual move (drag / start-time picker) persists to the block.
-    const isMeetingBlock=p.kind==="meeting"||p.type==="meeting"||p.type==="oneone";
-    if(!p.local_id&&p.kind!=="task"&&!isMeetingBlock)return false;
+    if(!TM.foldsIntoItinerary(b))return false;
     return !b.date||b.date===currentDate;
   })];
   const datedLocalIds=new Set(window.blockStore.getByType("block")
@@ -125,9 +130,14 @@ function syncAddedTaskTimes(){
     // copy; ev here is the SIBLING's task, so never stamp times onto the copy.
     if(!block.date&&p.local_id&&datedLocalIds.has(p.local_id))return;
     if(!block.date){
-      // Dragged out of Unscheduled: the task is now scheduled for the viewed
-      // day, so the date lands on the block along with its slot.
-      window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end},{date:currentDate});
+      // Dragged out of Unscheduled: the task is now scheduled for the viewed day, so
+      // the date lands on the block along with its slot. C4 routes this through the
+      // shared primitive — this line WAS the reuse target the phase plan named, and
+      // it is now one of two callers rather than a third hand-rolled copy. It also
+      // gains the kind:"backlog" strip, which is why a dragged-out backlog row stops
+      // rendering in the drawer as well as on the day.
+      if(typeof scheduleRowOnDay==="function")scheduleRowOnDay(block.id,currentDate,{start:ev.start,end:ev.end});
+      else window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end},{date:currentDate});
     } else if(p.start!==ev.start||p.end!==ev.end){
       window.blockStore.updateBlock(block.id,{...p,start:ev.start,end:ev.end});
     }
@@ -792,6 +802,19 @@ function hydrateLockedTasks(){
 
 // opts (drag drops): {targetId, after, orderWins} — place the new task at the
 // drop position instead of the end, then chain-reflow. Button callers pass nothing.
+//
+// C4: a backlog item is now SCHEDULED IN PLACE — one `date` UPDATE on the row that
+// already exists. It used to deleteBacklogBlock() then persistAddedTask(), i.e.
+// tombstone the row and create a second one under a NEW block id, which meant the
+// backlog → today → backlog round trip returned a different row every time. Anything
+// keyed to the block id (notes, the ledger's `<date>:<row id>` credit key, `parent_id`
+// child edges, `subtaskOf` links written as a row id — C3 measured 7 live rows that
+// use the row-id form) pointed at a tombstone afterwards. Measured on the prod restore:
+// 11 tombstoned backlog rows, and Drake re-added two of them by hand under fresh
+// `bl-<timestamp>` ids, which is what the churn looks like from the outside.
+//
+// The `consider` branch still creates: those items come from INIT_CONSIDER (data.js)
+// and have no row to re-date. Only the backlog branch had one all along.
 function addToSchedule(blId,opts){
   opts=opts||{};
   let idx=consider.findIndex(b=>b.id===blId),task,fromBacklog=false;
@@ -799,12 +822,32 @@ function addToSchedule(blId,opts){
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
   const s=pt(lastEnd),e=s+task.durMin;
   const newItem={id:task.id,title:task.title,start:String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"),end:String(Math.floor(e/60)).padStart(2,"0")+":"+String(e%60).padStart(2,"0"),type:task.type,meta:task.meta,detail:task.detail||"",source:task.source||"notion",notionUrl:task.notionUrl||"",priority:task.priority,commuteMinutes:task.commuteMinutes||null,commuteToMinutes:task.commuteToMinutes||task.commuteMinutes||null,commuteBackMinutes:task.commuteBackMinutes||task.commuteReturnMinutes||null};
+  // Carry the row id across so the write below re-dates THIS row rather than
+  // resolving it again by local_id (two rows can share one — the prod restore has a
+  // live `carry-200` twin, and resolving by local_id picks whichever comes first).
+  if(fromBacklog&&task._blockId)newItem._blockId=task._blockId;
   scheduled.push(newItem);
   if(opts.targetId&&typeof _reorderActive==="function")_reorderActive(newItem.id,opts.targetId,opts.after);
-  if(fromBacklog)deleteBacklogBlock(blId);
-  // Persist as a scheduled block so the move survives reload (the backlog block is gone now).
-  if(typeof persistAddedTask==="function")persistAddedTask(newItem);
-  recalcTimes(opts.orderWins?{orderWins:true}:undefined);log("scheduled",task.id,"Added: "+task.title);render()
+  // Reflow BEFORE persisting: recalcTimes can move this row's slot (and does, when
+  // opts.orderWins), so writing first would store times the very next line changes
+  // and leave the row's stored slot one reflow behind until syncAddedTaskTimes ran.
+  recalcTimes(opts.orderWins?{orderWins:true}:undefined);
+  if(fromBacklog){
+    if(newItem._blockId&&typeof scheduleRowOnDay==="function"){
+      const day=window.blockStore?window.blockStore.getCurrentDate():null;
+      // Fire-and-forget on purpose: the in-memory plan and the render above are already
+      // correct, and blockStore buffers the write into its WAL on a transient failure.
+      // Any real rejection surfaces through the store's own pending-edits banner.
+      if(day)scheduleRowOnDay(newItem._blockId,day,{start:newItem.start,end:newItem.end});
+    }else if(typeof persistAddedTask==="function"){
+      // No row id: a backlog item that was added in this session and never round-tripped
+      // through hydrateBacklogFromBlocks. Creating one is correct here — there is
+      // nothing to re-date — and persistBacklogItem's row, if any, is dateless and gets
+      // suppressed by the fold's dated-sibling rule rather than rendering twice.
+      persistAddedTask(newItem);
+    }
+  }else if(typeof persistAddedTask==="function")persistAddedTask(newItem);
+  log("scheduled",task.id,"Added: "+task.title);render()
 }
 function addFollowupToSchedule(fu,parentId){
   let lastEnd="16:00";if(scheduled.length){lastEnd=scheduled[scheduled.length-1].end}
@@ -843,22 +886,43 @@ function persistBacklogItem(item){
     },{date:null});
   }catch(e){console.warn("[backlog] persist failed:",e)}
 }
-function deleteBacklogBlock(localId){
-  if(!window.blockStore)return;
-  try{
-    const block=window.blockStore.getByType("block").find(b=>(b.properties||{}).kind==="backlog"&&(b.properties||{}).local_id===localId);
-    if(block)window.blockStore.deleteBlock(block.id).catch(()=>{});
-  }catch(e){console.warn("[backlog] delete failed:",e)}
-}
+// deleteBacklogBlock DELETED (C4). Its only caller was addToSchedule, which now
+// re-dates the row in place instead of tombstoning it and creating a replacement.
+// Nothing else should want it: taking a task OUT of the backlog is `scheduleRowOnDay`
+// (it gets a date) and removing it entirely is the normal delete path, which keeps the
+// undo affordance B1/B2 built. A helper whose whole job was "destroy the row so we can
+// make another one" has no honest caller left.
+
+// The Backlog is a PROJECTION over the unscheduled rows, not a parallel store (C4).
+// It used to be its own filter over every cached block, which is how the Backlog drawer
+// and the itinerary's Unscheduled section came to disagree: both read the same dateless
+// rows through two different predicates, so one row rendered in two places with two
+// badges that could not be reconciled. Measured on the prod restore, viewing today:
+// backlog[] held 12 items, the fold admitted 11 rows, and 5 were the SAME rows in both.
+// On 2026-07-27 it was 11 of 17.
+//
+// `date IS NULL` is the definition and TaskModel.selectUnscheduled is the predicate.
+// The legacy dated-backlog inclusion is explained there; in short, 8 live rows carry
+// kind:"backlog" AND a date because the dcc-task-ops API stamps the request date, and
+// this drawer has always been the only place they render.
 function hydrateBacklogFromBlocks(){
   if(!window.blockStore)return;
+  const TM=window.DCC&&window.DCC.TaskModel;
+  if(!TM||typeof TM.selectUnscheduled!=="function"){
+    // Same loud-failure rule as the fold (persistence.js): a stale cached index.html
+    // would otherwise hand back an empty backlog with nothing in the console.
+    console.error("[backlog] task-model.js missing or stale — the backlog cannot be projected");
+    return 0;
+  }
   let added=0;
-  window.blockStore.getByType("block").forEach(b=>{
+  TM.selectUnscheduled(window.blockStore.getByType("block"),{includeLegacyDatedBacklog:true}).forEach(b=>{
     const p=b.properties||{};
-    if(p.kind!=="backlog")return;
-    if(p.status==="archived"||p.status==="done")return;
-    if(!p.title)return;
     const localId=p.local_id||("blk-"+b.id);
+    // Dedupe by ev id, matching the fold (persistence.js keys on local_id||row id).
+    // Two live rows CAN share one local_id — `carry-200` does on the prod restore —
+    // and in that case the drawer shows one while both rows exist. That is the
+    // pre-existing behavior, kept deliberately rather than "fixed" by rendering a
+    // twin nobody asked for; the pair is flagged to Track A for the migration.
     if(backlog.find(x=>x.id===localId))return;
     backlog.push({
       id:localId,
