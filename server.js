@@ -510,84 +510,51 @@ async function recordLoginEvent(req, { userId, username, workspaceId, eventType 
 
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, sweep: { source_health: [], readers: [], open_item_count: 0, meetings_count: 0 }, glymphatic_brief: { history: [], current: null }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
-// POSTGRES IS THE SOURCE OF TRUTH FOR A DAY'S STATE. The JSON day file is a cache,
-// and it is consulted ONLY when the database read fails (Phase C5, step 4).
+// PHASE C5 STEP 4 IS NOT IN THIS CHANGE. The precedence flip that belongs here — read
+// Postgres first, treat the JSON day file as a cache — was written, reviewed three times,
+// and PULLED. Recording why, because the next attempt should start from this and not
+// rediscover it.
 //
-// WHAT IT USED TO DO, and why it was wrong. The file was read first and won whenever
-// it carried a non-empty `schedule.timeline`; Postgres was consulted only for what the
-// code called a "skeleton". Two consequences, both live:
+// The bug is real. The file wins whenever it carries a non-empty `schedule.timeline`, and
+// `getDayFilePath` is `data/state/days/<date>.json` with NO workspace segment, so on
+// Railway's ephemeral filesystem a file written by an earlier boot — or by a different
+// workspace — shadows the correct Postgres row for everybody.
 //
-//   • `getDayFilePath` is NOT workspace-scoped — it is `data/state/days/<date>.json`,
-//     full stop. So on Railway's ephemeral filesystem a file written by an earlier boot,
-//     or by a DIFFERENT workspace, shadows the correct Postgres row for everybody.
-//   • A stale file is indistinguishable from a fresh one, so "the file has a timeline"
-//     was being read as "the file is current".
+// But this function cannot be fixed alone, and three review rounds kept finding data loss
+// in the attempts:
 //
-// The precedence flip is contained to this function on purpose. Making the PATH
-// workspace-scoped would be the complete fix, but `getDayFilePath` has a dozen callers
-// in routes/dcc.js and routes/social-todo.js — Track A's and other tracks' hunks — so
-// that is reported to them rather than done here. With Postgres winning, an
-// unscoped cache file can no longer decide what a day contains, which is the
-// load-bearing half.
+//   1. Making the DB win means deciding what a successful read with NO ROW means. It
+//      cannot mean "empty": `routes/social-todo.js appendPublicShareTriageItem` is a
+//      FILE-ONLY writer (readJSON, push a guest's submitted task, writeJSON, no
+//      saveDccState), so the file is the only copy of those items.
+//   2. Any write from this function is write amplification on a shared path reached
+//      ANONYMOUSLY (`buildPublicTodoShare` calls it as
+//      `buildDayResponse(date, null, share.workspace_id)`).
+//   3. But REMOVING the DB-to-file write breaks something worse: six handlers in
+//      routes/dcc.js read this file as their BASE state and then full-replace the
+//      Postgres row (`saveDccState` is `DO UPDATE SET state_json = EXCLUDED.state_json`).
+//      With no rehydration, the skeleton `ensureSkeletonDays` writes at boot becomes the
+//      base, and the next Brief refresh persists it over the real day.
+//   4. And swallowing a failed read into the same branch as an empty one lets an outage
+//      mint a skeleton, serve it as a real empty day, and persist it.
 //
-// `archiveDayState` is untouched: archiving a day to data/brain/archive/ is a separate,
-// real feature and not a source of truth for a read.
+// (3) is the crux: the fix has to change how routes/dcc.js READS, not just how this
+// function does. That is Track A's file and six hunks, so it belongs in one deliberate
+// change with them — Phase C5b — rather than bolted onto a ledger PR.
 //
-// TWO DELIBERATE NARROWINGS OF THE PHASE PLAN, both forced by what the file actually is.
-// The plan said "the day JSON file only when the DB read THROWS", and said to keep the
-// cache warm on every read. Both would have been destructive here:
-//
-//   • A successful read that returns NO ROW is not the same as an error, but it also
-//     cannot mean "this day is empty" — `routes/social-todo.js appendPublicShareTriageItem`
-//     is a FILE-ONLY writer (it readJSON/push/writeJSON's a guest's submitted task and
-//     never calls saveDccState). Ignoring the file on a no-row read would have made every
-//     guest-submitted item vanish on the next render. So the file is consulted whenever
-//     Postgres has nothing, not only when it throws. The shadowing bug is still fixed:
-//     what mattered was that a PRESENT row now WINS, which it does.
-//   • The write stays where it was — only when we had to synthesize a skeleton. Writing
-//     on every read was write amplification on a path reached ANONYMOUSLY
-//     (`buildPublicTodoShare` -> `buildDayResponse(date, null, share.workspace_id)`), and
-//     `getDayFilePath` is not workspace-scoped, so it would have let any share visitor
-//     stamp one workspace's day state onto the path every other workspace reads. It also
-//     would have overwritten a populated file with a skeleton whenever Postgres had no row.
+// What DID ship from step 4 is the security half, which is independent: getDayFilePath
+// now validates its date (the traversal hole predates this change), and the two callers
+// that could reach it unvalidated are guarded.
 async function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
-  const ws = workspaceId || (userId ? `ws-${userId}` : "ws-1");
-  let enrichment = null;
-  try {
-    const dccRow = await blockDB.getDccState(dateStr, ws);
-    if (dccRow && dccRow.state_json) enrichment = dccRow.state_json;
-  } catch (e) {
-    console.error(`[day] Postgres read failed for ${dateStr} (${ws}); falling back to the cache file:`, e.message);
-  }
-  // Postgres is the source of truth: its row WINS whenever there is one. The file is a
-  // fallback for what the database does not have, never an override for what it does.
-  if (enrichment) {
-    // RE-WARM THE CACHE FROM THE ROW, and gate it on an authenticated caller.
-    //
-    // Dropping this write entirely (the first pass at the review fix) was wrong in a way
-    // that only shows up after a deploy. Six handlers in routes/dcc.js read this file as
-    // their BASE state and then full-replace the Postgres row with the result
-    // (saveDccState is `DO UPDATE SET state_json = EXCLUDED.state_json`). Railway's
-    // filesystem is ephemeral and ensureSkeletonDays writes a skeleton for today..+13 at
-    // boot, so with no rehydration the file stays a skeleton forever and the next Brief
-    // refresh would persist that skeleton OVER the real day in the database.
-    //
-    // `userId` is the gate rather than a workspace check because it is exactly the
-    // anonymous-share discriminator: buildPublicTodoShare calls this as
-    // buildDayResponse(date, null, share.workspace_id). So a share visitor can no longer
-    // stamp the shared path, which was review's finding, while the authenticated read
-    // that routes/dcc.js depends on keeps the mirror current.
-    //
-    // Cross-workspace stamping on this unscoped path remains possible for an
-    // authenticated caller. That is pre-existing (the base did it unconditionally, and
-    // on every read), it is what routes/dcc.js already relies on, and the real fix is
-    // workspace-scoping getDayFilePath — a dozen call sites in other tracks' files,
-    // reported to Track A rather than done here.
-    if (userId) writeJSON(dayFile, enrichment);
-  } else {
-    enrichment = readJSON(dayFile, null);
-    if (!enrichment) {
+  let enrichment = readJSON(dayFile, null);
+  const isSkeleton = !enrichment || !enrichment.schedule || !enrichment.schedule.timeline || enrichment.schedule.timeline.length === 0;
+  if (isSkeleton) {
+    const dccRow = await blockDB.getDccState(dateStr, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
+    if (dccRow && dccRow.state_json) {
+      enrichment = dccRow.state_json;
+      writeJSON(dayFile, enrichment);
+    } else if (!enrichment) {
       enrichment = buildSkeletonState(dateStr);
       writeJSON(dayFile, enrichment);
     }
