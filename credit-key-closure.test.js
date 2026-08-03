@@ -27,6 +27,7 @@ const {
   isClosableDatePart,
   CLOSURE_SQL,
   CLOSURE_AUDIT_SQL,
+  EXACT_SQL,
 } = require("./lib/task-credit-keys");
 
 // Records every query so a test can assert WHICH statement ran, not just what came
@@ -112,6 +113,9 @@ test("a shell: key gets EXACT matching only — closing over it would be wrong",
   assert.equal(hit.sourceKey, "shell:abc");
   assert.equal(pool.calls.length, 1);
   assert.ok(!pool.calls[0].text.includes("WITH cand AS"), "shell keys must skip the closure");
+  // Bind order, same reason the closure test asserts it: swap these and the query
+  // matches nothing in production while the stub still answers happily.
+  assert.deepEqual(pool.calls[0].params, ["ws-1", "shell:abc"], "$1 is the workspace, $2 the key");
 });
 
 test("an unparsable prefix also degrades to exact matching instead of throwing", async () => {
@@ -147,7 +151,11 @@ test("an empty source key is null before any query runs", async () => {
 test("both queries fence on workspace with IS NOT DISTINCT FROM, never bare equality", () => {
   // `workspace_id = $1` evaluates to NULL for a null workspace and matches nothing
   // while still reporting success — the seven-reader hazard C3 reported to Track A.
-  for (const [name, sql] of [["CLOSURE_SQL", CLOSURE_SQL], ["CLOSURE_AUDIT_SQL", CLOSURE_AUDIT_SQL]]) {
+  // EXACT_SQL is in the list because it is the DEGRADED path — the one that runs for
+  // every shell: key and every closure failure — and it was previously an inline string
+  // this test could not reach, so a regression to bare equality there would have been
+  // invisible.
+  for (const [name, sql] of [["CLOSURE_SQL", CLOSURE_SQL], ["CLOSURE_AUDIT_SQL", CLOSURE_AUDIT_SQL], ["EXACT_SQL", EXACT_SQL]]) {
     assert.ok(!/workspace_id\s*=\s*\$/.test(sql), `${name} must not use bare workspace equality`);
     assert.ok(/workspace_id IS NOT DISTINCT FROM/.test(sql), `${name} must fence on workspace`);
   }

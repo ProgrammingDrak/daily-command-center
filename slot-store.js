@@ -2335,15 +2335,24 @@ async function earnTaskCredit(workspaceId, userId, body) {
   // up rather than inserting, and top up the row the ledger really has.
   if (!awarded && existing && existing.delta < credits) {
     delta = credits - existing.delta;
-    await pool.query(
+    // rowCount, not fire-and-forget. Insert-first used to PROVE the row existed one
+    // statement earlier (ON CONFLICT had just fired); now the only evidence is a
+    // separate earlier SELECT, and these two statements are not in a transaction. If a
+    // concurrent revokeTaskCredit deletes the row in between, the UPDATE matches zero
+    // rows without erroring and the balance would still move — points banked with no
+    // ledger row explaining them, which is the exact failure revokeTaskCredit's own
+    // header says its transaction exists to prevent.
+    const { rowCount } = await pool.query(
       `UPDATE slot_point_ledger
        SET delta=$3, description=$4, metadata=$5
        WHERE workspace_id IS NOT DISTINCT FROM $1 AND source_type='task_complete' AND source_key=$2`,
       [workspaceId, existing.sourceKey, credits, description, JSON.stringify(metadata)]
     );
-    if (delta !== 0) {
+    if (rowCount && delta !== 0) {
       adjusted = true;
       await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
+    } else {
+      delta = 0;   // the row vanished under us: report no movement rather than a phantom credit
     }
   }
   const state = await getState(workspaceId, userId);
@@ -2384,7 +2393,11 @@ async function revokeTaskCredit(workspaceId, userId, sourceKey) {
   // flagged "revokeTaskCredit must target the key space the WRITER actually used";
   // this is that, derived rather than guessed. Falls back to the incoming key when
   // no equivalent exists, so a genuine miss still reports `revoked: false`.
-  const equivalent = await findEquivalentTaskCredit(pool, workspaceId, sourceKey);
+  // STRICT, unlike the earn path. Over-matching costs nothing when the question is
+  // "should I pay again?" but deletes another task's ledger row when the question is
+  // "which credit do I remove?" — see the `strict` section in lib/task-credit-keys.js.
+  // An ambiguous un-complete degrades to today's no-op instead of debiting the wrong task.
+  const equivalent = await findEquivalentTaskCredit(pool, workspaceId, sourceKey, { strict: true });
   const targetKey = equivalent ? equivalent.sourceKey : sourceKey;
   const client = await pool.connect();
   let credits = 0;

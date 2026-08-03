@@ -202,6 +202,20 @@ test("a Date object stamp works, not just an ISO string", async () => {
   assert.equal(posts.length, 1);
 });
 
+test("a numeric epoch stamp works — the third documented shape", async () => {
+  // _completionMsOf claims Date | number | ISO string. The number arm was the one shape
+  // with no test: delete it and a numeric stamp silently becomes "unstamped" and the
+  // completion stops being reconciled, with nothing failing.
+  const { reconcile, posts, logs } = loadReconciler({
+    scheduled: [ev("t-epoch", "Epoch ms")],
+    doneAt: { "t-epoch": Date.now() - HOUR },
+    doneIds: ["t-epoch"],
+  });
+  await reconcile();
+  assert.equal(posts.length, 1);
+  assert.equal(skipReport(logs).unstamped, 0, "a number is a stamp, not a missing one");
+});
+
 test("open tasks are never credited, however recently they were touched", async () => {
   const { reconcile, posts } = loadReconciler({
     scheduled: [ev("t-open", "Still open")],

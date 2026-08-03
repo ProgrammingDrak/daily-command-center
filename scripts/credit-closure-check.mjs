@@ -85,23 +85,71 @@ try {
      WHERE k.key_date IS NOT NULL`);
 
   console.log(`\n── agreement (JS closure vs the audit's simulation) ──`);
+  // MEMBERSHIP, not existence. The first version of this loop only counted whether the
+  // JS found SOMETHING, so a closure that returned a row for every key — the exact
+  // failure mode the module admits to, and the one that makes revoke delete another
+  // task's credit — would have scored a perfect 436/436. That is the same shape as the
+  // differential harness in C2 that compared counts instead of membership and reported
+  // "identical" for three real bugs.
+  const equivalents = new Map();
+  for (const r of presented) {
+    if (!equivalents.has(r.presented_key)) equivalents.set(r.presented_key, new Set());
+    equivalents.get(r.presented_key).add(r.stored_key);
+  }
   let disagreements = 0;
+  let overMatches = 0;
   let jsFound = 0;
   for (const row of presented) {
     const hit = await findEquivalentTaskCredit(pool, row.workspace_id, row.presented_key);
-    if (hit) jsFound++;
-    else {
+    if (!hit) {
       disagreements++;
-      if (disagreements <= 10) {
-        console.log(`  ✖ JS found nothing for ${row.presented_key} (stored as ${row.stored_key})`);
-      }
+      if (disagreements <= 10) console.log(`  ✖ JS found nothing for ${row.presented_key} (stored as ${row.stored_key})`);
+      continue;
+    }
+    jsFound++;
+    if (!equivalents.get(row.presented_key).has(hit.sourceKey)) {
+      overMatches++;
+      if (overMatches <= 10) console.log(`  ✖ JS returned ${hit.sourceKey} for ${row.presented_key}, which is not equivalent to it`);
     }
   }
   console.log(`  presentations checked            ${presented.length}`);
   console.log(`  JS closure found a credit for    ${jsFound}`);
+  console.log(`  matched a NON-equivalent credit  ${overMatches}`);
   if (presented.length === 0) fail("0 presentations to cross-check — the agreement half proves nothing.");
   else if (disagreements > 0) fail(`${disagreements} presentation(s) where the JS closure and the audit SQL disagree. They must not drift.`);
-  else console.log(`  ✔ the two agree on every presentation`);
+  else if (overMatches > 0) fail(`${overMatches} presentation(s) where the JS closure matched a NON-equivalent credit.`);
+  else console.log(`  ✔ the two agree on every presentation, and every match is equivalent`);
+
+  // ── negative control ──
+  // Every check above starts from a key that IS credited, so all of them would pass
+  // against a closure that says "already credited" to everything. This asks the
+  // opposite question: task rows carrying no credit at all must resolve to null.
+  console.log(`\n── negative control (uncredited rows must NOT resolve) ──`);
+  const { rows: uncredited } = await pool.query(`
+    SELECT b.workspace_id, to_char(b.date,'YYYY-MM-DD') || ':' || b.id AS presented_key
+      FROM blocks b
+     WHERE b.type <> 'day_root' AND b.date IS NOT NULL AND b.deleted_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM slot_point_ledger l
+          WHERE l.workspace_id IS NOT DISTINCT FROM b.workspace_id
+            AND l.source_type = 'task_complete'
+            AND ( l.source_key = to_char(b.date,'YYYY-MM-DD') || ':' || b.id
+               OR l.source_key = to_char(b.date,'YYYY-MM-DD') || ':' || (b.properties->>'local_id')
+               OR l.metadata->>'canonical_source_key' = to_char(b.date,'YYYY-MM-DD') || ':' || b.id ))
+     LIMIT 300`);
+  let falsePositives = 0;
+  for (const r of uncredited) {
+    const hit = await findEquivalentTaskCredit(pool, r.workspace_id, r.presented_key);
+    if (hit) {
+      falsePositives++;
+      if (falsePositives <= 10) console.log(`  ✖ ${r.presented_key} has no credit, but the closure returned ${hit.sourceKey}`);
+    }
+  }
+  console.log(`  uncredited rows probed           ${uncredited.length}`);
+  console.log(`  falsely reported as credited     ${falsePositives}`);
+  if (uncredited.length === 0) fail("no uncredited rows to use as a negative control — this half proves nothing.");
+  else if (falsePositives > 0) fail(`${falsePositives} uncredited task(s) the closure claims are already credited — those completions would never be paid.`);
+  else console.log(`  ✔ the closure declines every uncredited row`);
 
   // ── the numbers the audit gate itself will read ──
   console.log(`\n── gate ──`);

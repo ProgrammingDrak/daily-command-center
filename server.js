@@ -414,7 +414,17 @@ function archiveDayState(date, data) { const match = date.match(/^(\d{4})-(\d{2}
 function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; if (!fs.existsSync(RECENT_DIR)) return; for (const fname of fs.readdirSync(RECENT_DIR)) { if (!fname.endsWith(".json") || fname === "manifest.json") continue; const ts = new Date(fname.replace(".json", "") + "T00:00:00").getTime(); if (ts && ts < cutoff) { fs.unlinkSync(path.join(RECENT_DIR, fname)); } } }
 function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
-function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
+// The date half is caller-supplied and reaches here unvalidated from several routes
+// (`GET /api/state/day` passes `req.query.date` straight through), and `path.join`
+// NORMALIZES `../`, so without this guard the caller chooses the file: a traversal date
+// both discloses any readable .json and, on the write paths, creates one anywhere the
+// process can write. Guarding the path builder rather than each route means a route
+// added later inherits it. Throwing (rather than coercing to today) keeps a malformed
+// date an error instead of silently serving the wrong day.
+function getDayFilePath(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) throw new Error(`invalid day date: ${dateStr}`);
+  return path.join(DAYS_DIR, dateStr + ".json");
+}
 // Single source of truth for a meeting's stable identity (shared with the backfill
 // script). Injected into the materializer and passed into the routes ctx below.
 const meetingIdentity = require("./meeting-identity");
@@ -522,26 +532,41 @@ function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: 
 //
 // `archiveDayState` is untouched: archiving a day to data/brain/archive/ is a separate,
 // real feature and not a source of truth for a read.
+//
+// TWO DELIBERATE NARROWINGS OF THE PHASE PLAN, both forced by what the file actually is.
+// The plan said "the day JSON file only when the DB read THROWS", and said to keep the
+// cache warm on every read. Both would have been destructive here:
+//
+//   • A successful read that returns NO ROW is not the same as an error, but it also
+//     cannot mean "this day is empty" — `routes/social-todo.js appendPublicShareTriageItem`
+//     is a FILE-ONLY writer (it readJSON/push/writeJSON's a guest's submitted task and
+//     never calls saveDccState). Ignoring the file on a no-row read would have made every
+//     guest-submitted item vanish on the next render. So the file is consulted whenever
+//     Postgres has nothing, not only when it throws. The shadowing bug is still fixed:
+//     what mattered was that a PRESENT row now WINS, which it does.
+//   • The write stays where it was — only when we had to synthesize a skeleton. Writing
+//     on every read was write amplification on a path reached ANONYMOUSLY
+//     (`buildPublicTodoShare` -> `buildDayResponse(date, null, share.workspace_id)`), and
+//     `getDayFilePath` is not workspace-scoped, so it would have let any share visitor
+//     stamp one workspace's day state onto the path every other workspace reads. It also
+//     would have overwritten a populated file with a skeleton whenever Postgres had no row.
 async function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
   const ws = workspaceId || (userId ? `ws-${userId}` : "ws-1");
   let enrichment = null;
-  let dbRead = false;
   try {
     const dccRow = await blockDB.getDccState(dateStr, ws);
-    dbRead = true;
     if (dccRow && dccRow.state_json) enrichment = dccRow.state_json;
   } catch (e) {
-    // ONLY a thrown read falls back to the file. A successful read that returns no row
-    // is an answer ("this day has no saved state"), not a failure, and must not be
-    // second-guessed by a cache — that conflation is what let the stale file win.
     console.error(`[day] Postgres read failed for ${dateStr} (${ws}); falling back to the cache file:`, e.message);
   }
-  if (!enrichment && !dbRead) enrichment = readJSON(dayFile, null);
-  if (!enrichment) enrichment = buildSkeletonState(dateStr);
-  // Keep the cache warm for the failure path above, but it is now written-only-to,
-  // never read-from unless Postgres is unreachable.
-  writeJSON(dayFile, enrichment);
+  // Postgres is the source of truth: its row WINS whenever there is one. The file is a
+  // fallback for what the database does not have, never an override for what it does.
+  if (!enrichment) enrichment = readJSON(dayFile, null);
+  if (!enrichment) {
+    enrichment = buildSkeletonState(dateStr);
+    writeJSON(dayFile, enrichment);
+  }
   const result = { ...enrichment, date: dateStr };
   if (!result.schedule) result.schedule = { timeline: [] };
   if (!Array.isArray(result.schedule.timeline)) result.schedule.timeline = [];
@@ -609,6 +634,9 @@ function ensureSkeletonDays() {
 // ── State Endpoints ──
 app.get("/api/state/day", async (req, res) => {
   const dateStr = req.query.date || getTodayStr();
+  // Reject a malformed date as a 400 here, so getDayFilePath's throw cannot land in the
+  // catch below and turn into a 500 (or, worse, a second traversal attempt).
+  if (!isValidDate(dateStr)) return badRequest(res, "Invalid date");
   try { res.json(await buildDayResponse(dateStr, req.session.userId, req.workspaceId)); }
   catch (e) { res.json(readJSON(getDayFilePath(dateStr), readJSON(DAY_STATE_FILE, null))); }
 });
