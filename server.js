@@ -500,20 +500,48 @@ async function recordLoginEvent(req, { userId, username, workspaceId, eventType 
 
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, sweep: { source_health: [], readers: [], open_item_count: 0, meetings_count: 0 }, glymphatic_brief: { history: [], current: null }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
+// POSTGRES IS THE SOURCE OF TRUTH FOR A DAY'S STATE. The JSON day file is a cache,
+// and it is consulted ONLY when the database read fails (Phase C5, step 4).
+//
+// WHAT IT USED TO DO, and why it was wrong. The file was read first and won whenever
+// it carried a non-empty `schedule.timeline`; Postgres was consulted only for what the
+// code called a "skeleton". Two consequences, both live:
+//
+//   • `getDayFilePath` is NOT workspace-scoped — it is `data/state/days/<date>.json`,
+//     full stop. So on Railway's ephemeral filesystem a file written by an earlier boot,
+//     or by a DIFFERENT workspace, shadows the correct Postgres row for everybody.
+//   • A stale file is indistinguishable from a fresh one, so "the file has a timeline"
+//     was being read as "the file is current".
+//
+// The precedence flip is contained to this function on purpose. Making the PATH
+// workspace-scoped would be the complete fix, but `getDayFilePath` has a dozen callers
+// in routes/dcc.js and routes/social-todo.js — Track A's and other tracks' hunks — so
+// that is reported to them rather than done here. With Postgres winning, an
+// unscoped cache file can no longer decide what a day contains, which is the
+// load-bearing half.
+//
+// `archiveDayState` is untouched: archiving a day to data/brain/archive/ is a separate,
+// real feature and not a source of truth for a read.
 async function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
-  let enrichment = readJSON(dayFile, null);
-  const isSkeleton = !enrichment || !enrichment.schedule || !enrichment.schedule.timeline || enrichment.schedule.timeline.length === 0;
-  if (isSkeleton) {
-    const dccRow = await blockDB.getDccState(dateStr, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
-    if (dccRow && dccRow.state_json) {
-      enrichment = dccRow.state_json;
-      writeJSON(dayFile, enrichment);
-    } else if (!enrichment) {
-      enrichment = buildSkeletonState(dateStr);
-      writeJSON(dayFile, enrichment);
-    }
+  const ws = workspaceId || (userId ? `ws-${userId}` : "ws-1");
+  let enrichment = null;
+  let dbRead = false;
+  try {
+    const dccRow = await blockDB.getDccState(dateStr, ws);
+    dbRead = true;
+    if (dccRow && dccRow.state_json) enrichment = dccRow.state_json;
+  } catch (e) {
+    // ONLY a thrown read falls back to the file. A successful read that returns no row
+    // is an answer ("this day has no saved state"), not a failure, and must not be
+    // second-guessed by a cache — that conflation is what let the stale file win.
+    console.error(`[day] Postgres read failed for ${dateStr} (${ws}); falling back to the cache file:`, e.message);
   }
+  if (!enrichment && !dbRead) enrichment = readJSON(dayFile, null);
+  if (!enrichment) enrichment = buildSkeletonState(dateStr);
+  // Keep the cache warm for the failure path above, but it is now written-only-to,
+  // never read-from unless Postgres is unreachable.
+  writeJSON(dayFile, enrichment);
   const result = { ...enrichment, date: dateStr };
   if (!result.schedule) result.schedule = { timeline: [] };
   if (!Array.isArray(result.schedule.timeline)) result.schedule.timeline = [];
