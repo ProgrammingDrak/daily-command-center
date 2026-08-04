@@ -494,6 +494,60 @@ test("selectCarryover is the carryover done predicate, and DCC.Carryover.openRow
     "DCC.Carryover.openRows must delegate, not carry a second copy of the predicate");
 });
 
+// ═══════════════ THE PROPERTY THE WHOLE PHASE RESTS ON: nothing disappears ═══════════════
+//
+// Every blocking bug in three review rounds was the same failure: a row that base rendered
+// stopped rendering anywhere. Each one was found by a hand-built fixture AFTER the fact, and
+// each fix was verified by another hand-built fixture. Hand-built fixtures are how the fourth
+// one gets missed -- so this asserts the property directly over random days.
+//
+// "Rendered somewhere" means: emitted by selectTree over `timed`, or over `unscheduled`, or
+// FOLDED (which has a real home -- the parent's detail panel lists subtasks). Anything else is
+// a row the user can no longer see or un-check.
+//
+// It is a seeded PRNG, not Math.random, so a failure is reproducible from the printed seed.
+test("★ no visible row is ever lost: every ev renders in some section, over 20k random days", () => {
+  let seed = 20260804;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const TRIALS = 20000;
+  let checked = 0;
+  for (let t = 0; t < TRIALS; t++) {
+    const startSeed = seed;
+    const n = 2 + Math.floor(rnd() * 5);
+    const evs = [], seenIds = [];
+    for (let i = 0; i < n; i++) {
+      const id = "e" + i;
+      const ev = T(id);
+      // 75% carry a parent edge, half of each kind -- so subtask chains, wrap nests and
+      // mixed-edge chains all occur, which is where all three blocking bugs lived.
+      if (i > 0 && rnd() < 0.75) {
+        const p = seenIds[Math.floor(rnd() * i)];
+        if (rnd() < 0.5) ev.subtaskOf = p; else ev.wrapId = p;
+      }
+      if (rnd() < 0.3) { ev.untimed = true; ev.start = "00:00"; }
+      seenIds.push(id); evs.push(ev);
+    }
+    const doneIds = evs.filter(() => rnd() < 0.5).map((e) => e.id);
+    const o = res(doneIds);
+    const day = TaskModel.selectDay(evs, "2026-08-04", o);
+
+    // the partitions must hold for every one of them, not just the curated fixtures
+    partition(day);
+
+    const shown = new Set();
+    for (const node of TaskModel.selectTree(day.timed, { pool: day.visible })) shown.add(node.ev.id);
+    for (const node of TaskModel.selectTree(day.unscheduled, { pool: day.visible })) shown.add(node.ev.id);
+    for (const ev of day.folded) shown.add(ev.id);          // lives in the parent's detail panel
+    const missing = evs.filter((e) => !shown.has(e.id)).map((e) => e.id);
+    assert.deepEqual(missing, [],
+      "rows " + JSON.stringify(missing) + " render nowhere. Reproduce with seed " + startSeed +
+      "\n  evs:  " + JSON.stringify(evs) +
+      "\n  done: " + JSON.stringify(doneIds));
+    checked++;
+  }
+  assert.equal(checked, TRIALS);
+});
+
 test("selectDay tolerates a null pool and null members without throwing", () => {
   const day = TaskModel.selectDay(null, "2026-08-04", res([]));
   assert.deepEqual(day.visible, []);

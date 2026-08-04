@@ -1048,7 +1048,12 @@ function buildSchedule(){
   // rows (parent deleted or side-project-flagged) stay listed so they aren't lost.
   const day=DCC.TaskModel.selectDay(scheduled,viewDate,{});
   const vis=day.visible;                 // Hide side-project-marked items from the schedule
-  const doneItems=day.done;
+  // day.done PLUS day.nestedDone. Unlike the list view, this surface renders two flat
+  // populations (compact Done one-liners + open cards) and never nests anything, so a done row
+  // that the list view shows nested under its parent has no home here at all -- it would
+  // render on no row. Base listed it, so it is listed. The fold (day.folded) is still excluded,
+  // because those rows genuinely do live in the parent's detail panel.
+  const doneItems=day.done.concat(day.nestedDone);
   const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
   // Every open visible row, INCLUDING untimed ones — this retired "plan" timeline has
   // always rendered them (at 00:00), unlike the list view. `day.open` would drop them,

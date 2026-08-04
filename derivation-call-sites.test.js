@@ -152,11 +152,14 @@ test("★ the Unscheduled section renders a TREE, not a flat list of roots", () 
   assert.match(schedTabCode, /section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/);
 });
 
-test("★ buildSchedule's compact Done section uses the folded list, not every done row", () => {
-  const rx = /const doneItems=day\.done;/;
-  assert.match(schedTabCode, rx,
-    "day.done applies the fold; selectDone(vis) would list a done ride-along as its own row again");
-  assert.equal(rx.test("const doneItems=DCC.TaskModel.selectDone(vis);"), false);
+test("★ buildSchedule's compact Done section lists done + nestedDone, and excludes only the fold", () => {
+  // This surface renders two FLAT populations and nests nothing, so a row the list view shows
+  // nested under its parent has no home here -- `day.done` alone would render it on no row at
+  // all. `day.folded` stays excluded, because those really do live in the parent's detail panel.
+  const rx = /const doneItems=day\.done\.concat\(day\.nestedDone\);/;
+  assert.match(schedTabCode, rx);
+  assert.equal(rx.test("const doneItems=day.done;"), false, "day.done alone drops the nested-done rows");
+  assert.equal(rx.test("const doneItems=DCC.TaskModel.selectDone(vis);"), false, "selectDone(vis) would re-list the folded ones");
   assert.equal(rx.test("const doneItems=vis.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&vis.some(p=>p.id===ev.subtaskOf)));"), false);
   // The retired hand-rolled fold must be gone from the file entirely (both copies).
   assert.equal(/isSubtask\(ev\)&&\w+\.some\(p=>p\.id===ev\.subtaskOf\)/.test(schedTabCode), false,

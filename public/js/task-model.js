@@ -532,7 +532,15 @@
       const kids = kidsOf.get(ev.id) || [];
       let ok = true;
       for (let k = 0; k < kids.length && ok; k++) {
-        if (!done(kids[k]) || !allDone(kids[k], seen, cyc)) ok = false;
+        // ★ `isSubtask` HERE, not just `done`. `kidsOf` is built from `parentIdOf`, so a done
+        // subtask's descendants can include a RIDE-ALONG -- which the fold below can never
+        // claim, because the detail panel has no rider item type. Fold the parent anyway and
+        // that rider is left in `timed` with its parent absent, which selectTree hides: the
+        // row renders on no surface and cannot be un-checked. A fuzz over 30k random days lost
+        // a row on 3.7% of them and EVERY loss was exactly this shape. So the fold requires a
+        // subtree that is itself fold-eligible, which is what makes "the subtree leaves
+        // together" true rather than merely asserted.
+        if (!isSubtask(kids[k]) || !done(kids[k]) || !allDone(kids[k], seen, cyc)) ok = false;
       }
       if (!cyc.hit) subtreeDone.set(ev.id, ok);
       return ok;
@@ -583,9 +591,9 @@
       unscheduledIds.add(unscheduledRoots[i].id);
       unscheduled.push(unscheduledRoots[i]);
     }
-    // Breadth-first, skipping folded rows. Skipping cannot orphan anything: a folded row's
-    // whole visible subtree is done, so every member of it is itself done, nested, and
-    // parented inside `visible` — i.e. also folded. The subtree leaves together.
+    // Breadth-first, skipping folded rows. Skipping cannot orphan anything, and the reason is
+    // the `isSubtask` gate inside `allDone`: a folded row's whole visible subtree is done AND
+    // fold-eligible, so every member of it folds too. The subtree leaves together.
     // `unscheduledIds` doubles as the visited set, so a parent cycle cannot loop here.
     while (queue.length) {
       const parent = queue.shift();
@@ -608,8 +616,10 @@
       if (pid && byId.has(pid)) nestedDone.push(ev); else doneItems.push(ev);
     }
 
-    const today = opts.today || null;
-    const carryover = (dateStr && today && dateStr !== today) ? [] : selectCarryover(opts.carryoverPool);
+    // FAIL CLOSED. The old form was `(dateStr && today && dateStr !== today) ? [] : collect`,
+    // which meant a caller passing a carryoverPool but no `today` got the full pool on EVERY
+    // date -- the exact opposite of the documented today-only rule.
+    const carryover = (opts.today && dateStr === opts.today) ? selectCarryover(opts.carryoverPool) : [];
 
     return {
       visible: visible,
