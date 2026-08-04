@@ -434,6 +434,44 @@ test("★★ saveSubtaskOrder splices too — one parent's steps are always a st
     "A, B and C keep their slots; only the two steps swapped");
 });
 
+test("★★ the ORDER axis is dated-only, so a dateless Backlog row never ties with a day row", () => {
+  // `sort_order` keeps the dateless rows in their OWN 1000-spaced partition (both
+  // nextSortOrderForDay and 004 scope on `date IS NOT DISTINCT FROM`). Mixing them into one derived
+  // list means the day's first row (1000) and the first dateless row (1000) TIE, and then a drag
+  // renumbers Backlog rows into whichever day happened to be on screen.
+  const c = ctx([row("day1", 1000, {}, TODAY), row("back1", 1000, {}, null), row("day2", 2000, {}, TODAY)], {});
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["day1", "day2"], "the dateless row is not in the day's order");
+  assert.deepEqual(run(c, '_spliceDayOrder(["day2","day1"])'), ["day2", "day1"], "and cannot be renumbered by a day drag");
+  vm.runInContext('_writeRowOrder(_spliceDayOrder(["day2","day1"]))', c);
+  assert.deepEqual(run(c, "reordered").map((r) => r.id), ["day2", "day1"], "the Backlog row was not written");
+  // ...but the pin/lock readers DO want the dateless rows, and still get them
+  assert.deepEqual(run(c, "_orderableRows().map(b=>b.id)").sort(), ["back1", "day1", "day2"]);
+  assert.deepEqual(run(c, "_orderableRows({datedOnly:true,date:'" + TODAY + "'}).map(b=>b.id)").sort(), ["day1", "day2"]);
+});
+
+test("★ a duplicate sort_order falls back to created_at then id, never to cache iteration order", () => {
+  // Every SQL read here already has `, created_at ASC`. Without the same tie-break client-side, a
+  // duplicate (from a lost create race, or a pre-004 day) renders differently after a boot vs a
+  // loadDay vs an SSE refresh -- the exact non-determinism this phase exists to remove.
+  const mk = (id, so, created) => ({ id, type: "block", date: TODAY, sort_order: so, deleted_at: null,
+    created_at: created, properties: { title: id, type: "task", local_id: id } });
+  const c = ctx([mk("late", 1000, "2026-08-04T10:00:00Z"), mk("early", 1000, "2026-08-04T09:00:00Z")], {});
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["early", "late"], "created_at breaks the tie");
+  const same = ctx([mk("b", 1000, "2026-08-04T09:00:00Z"), mk("a", 1000, "2026-08-04T09:00:00Z")], {});
+  assert.deepEqual(run(same, "loadTaskOrder()"), ["a", "b"], "then id, so the answer is total");
+});
+
+test("★ the subtask overlay fallback merges PER PARENT, so one derivable parent hides nothing", () => {
+  // All-or-nothing meant a parent whose children are outside the day scope became invisible while its
+  // overlay entry sat there waiting for A4 to delete it.
+  const c = ctx([row("p", 1000), row("k1", 2000, { subtaskOf: "p" }), row("k2", 3000, { subtaskOf: "p" })],
+    { _subtaskOrder: { p: ["k2", "k1"], gone: ["x", "y"] } });
+  const out = run(c, "loadSubtaskOrder()");
+  assert.deepEqual(out.p, ["k1", "k2"], "the derivable parent uses sort_order");
+  assert.deepEqual(out.gone, ["x", "y"], "and the un-derivable parent still comes from the overlay");
+  assert.deepEqual(run(c, "window.__DCC_C6B_FALLBACK"), { subtaskOrder: 1 }, "exactly one parent filled");
+});
+
 test("★★ a subtask drag cannot collide with the day's top-level rows", () => {
   // The concrete collision: dragging B's steps used to stamp k2=1000 and k1=2000, so k2 tied with A
   // and k1 tied with B, and the tie was broken by cache iteration order.
