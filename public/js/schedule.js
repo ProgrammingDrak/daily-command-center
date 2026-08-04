@@ -701,18 +701,43 @@ function _persistDone(id,done,opts){
   const ev=opts.ev||((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null);
   const block=(typeof _findTaskBlockForDate==="function")?_findTaskBlockForDate(id,dateStr,ev):null;
   const blockId=(block&&block.id)||null;
+  let write=null;
   if(blockId&&typeof enqueueRowPropsWrite==="function"){
-    enqueueRowPropsWrite(blockId,p=>done?_doneRowProps(p,opts.completedAt):_openRowProps(p));
+    write=enqueueRowPropsWrite(blockId,p=>done?_doneRowProps(p,opts.completedAt):_openRowProps(p));
   }else if(done){
     console.warn("[done] no row resolves for "+id+" — persisting to the legacy _done overlay");
-    _patchOverlayDone(id,true,opts.completedAt);
-    return;
+    return _patchOverlayDone(id,true,opts.completedAt);
   }
   if(!done)_patchOverlayDone(id,false);
+  // Returned so a caller that must run AFTER the row lands can chain on it — the
+  // responsibility-cadence refresh below is the one that needs it.
+  return write;
 }
 // Kept as the un-check spelling every caller already used. Now one line, because the
 // row write and the overlay clear are the same primitive read in the other direction.
 function _clearRowDone(id,opts){_persistDone(id,false,opts);}
+
+// D1's belt-and-suspenders client cadence POST is GONE (C5b step 7). It called
+// `POST /api/responsibilities/:id/complete`, whose handler is
+// `recurrence.applyCompletion(defProps,{completedAt,taskId})` — byte-for-byte the same
+// call `db.js propagateResponsibilityDone` makes when a row carrying a
+// `responsibilityId` flips to done. D1 kept the client copy precisely BECAUSE the
+// itinerary wrote `_done` and never the row, so the server hook could not fire for a
+// check-off; `_persistDone` writing the row is what retires it. The un-check direction is
+// a genuine gain: the client only ever had the `complete` half, so an accidental check-off
+// pushed the cadence a full cycle out and only the derived reconciler walked it back —
+// now `_openRowProps` clears `status`/`completedAt` and the same hook runs
+// `applyUncompletion`.
+//
+// What did NOT come out is the local SIDEBAR refresh, and it is chained on the write
+// rather than fired beside it. The PATCH's own SSE broadcast is self-echo-suppressed in
+// the tab that made it (sse.js handleBlockEvent returns early on a matching clientId), so
+// nothing else re-reads responsibilities here; and reading them before the row write lands
+// returns the pre-reset cadence, which is the stale value the refresh exists to replace.
+function _refreshResponsibilityAfterDone(ev,write){
+  if(!ev||!ev.responsibilityId||typeof window.loadResponsibilities!=="function")return;
+  Promise.resolve(write).then(()=>window.loadResponsibilities()).catch(()=>{});
+}
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
@@ -784,9 +809,8 @@ function toggleDone(id,opts){
       const _award=_pointAwardOverride(id); // read pie BEFORE subtasks cascade
       const _cel=_beginCompletionCelebration(id);
       manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
-      _persistDone(id,true,{ev:ev,dateStr:currentDate,completedAt:completedAt});
+      _refreshResponsibilityAfterDone(ev,_persistDone(id,true,{ev:ev,dateStr:currentDate,completedAt:completedAt}));
       _onParentCompleted(id);
-      if(ev&&ev.responsibilityId&&typeof window.markResponsibilityTaskCompleted==="function")window.markResponsibilityTaskCompleted(ev);
       render();
       _finishCompletionCelebration(_cel,id);
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
@@ -813,9 +837,8 @@ function toggleDone(id,opts){
   const _cel=_beginCompletionCelebration(id);
   manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
   const _today=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
-  _persistDone(id,true,{ev:ev,dateStr:_today,completedAt:completedAt});
+  _refreshResponsibilityAfterDone(ev,_persistDone(id,true,{ev:ev,dateStr:_today,completedAt:completedAt}));
   _onParentCompleted(id);
-  if(ev&&ev.responsibilityId&&typeof window.markResponsibilityTaskCompleted==="function")window.markResponsibilityTaskCompleted(ev);
   render();
   _finishCompletionCelebration(_cel,id);
   const currentDate=_today;

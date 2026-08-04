@@ -40,9 +40,12 @@ const COMMIT_DONE_SRC = mustMatch(SCHEDULE_SRC, /async function commitDoneOnDate
 // C5b's done-writer region, run for real rather than stubbed: `_doneRowProps` through
 // `_clearRowDone`. Stubbing `_persistDone` is what would make this whole file assert
 // nothing about where a completion actually lands.
+// Extends through `_refreshResponsibilityAfterDone` on purpose: that function IS part of
+// the completion write path now (C5b step 7 replaced D1's client cadence POST with it), so
+// stubbing it would leave the recurring-task half of a check-off untested.
 const PERSIST_DONE_SRC = mustMatch(
   SCHEDULE_SRC,
-  /function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _clearRowDone\(id,opts\)\{[^\n]*\}/,
+  /function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _refreshResponsibilityAfterDone\(ev,write\)\{[\s\S]*?\n\}/,
   "the C5b _persistDone region in public/js/schedule.js"
 );
 

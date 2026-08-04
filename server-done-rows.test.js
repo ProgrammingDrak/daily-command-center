@@ -77,7 +77,7 @@ test("day_root._done wins the timestamp — it is the user's own completion", ()
 // `enqueueRowPropsWrite` (state.js, C4's serialized row-properties queue). The queue's
 // null-merge contract is reproduced faithfully — a fake that wrote regardless would hide
 // every "this must not touch the row" case below.
-const clearSource = scheduleSource.match(/function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _clearRowDone\(id,opts\)\{[^\n]*\}/);
+const clearSource = scheduleSource.match(/function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _refreshResponsibilityAfterDone\(ev,write\)\{[\s\S]*?\n\}/);
 assert.ok(clearSource, "the C5b _persistDone region must exist in schedule.js");
 
 function makeClear(blockProps, ev, dayRootProps) {
