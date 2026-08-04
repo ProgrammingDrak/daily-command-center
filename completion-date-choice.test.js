@@ -43,6 +43,7 @@ const COMMIT_DONE_SRC = mustMatch(SCHEDULE_SRC, /async function commitDoneOnDate
 // Extends through `_refreshResponsibilityAfterDone` on purpose: that function IS part of
 // the completion write path now (C5b step 7 replaced D1's client cadence POST with it), so
 // stubbing it would leave the recurring-task half of a check-off untested.
+const ON_PARENT_SRC = mustMatch(SCHEDULE_SRC, /function _onParentCompleted\(id\)\{[\s\S]*?\n\}\n/, "_onParentCompleted");
 const PERSIST_DONE_SRC = mustMatch(
   SCHEDULE_SRC,
   /function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _refreshResponsibilityAfterDone\(ev,write\)\{[\s\S]*?\n\}/,
@@ -373,6 +374,51 @@ test("the same-day fast path marks the ROW done (not just the in-memory registry
   assert.equal(calls.patched.length, 0, "no overlay write");
 });
 
+// ★ THE SAME-DAY PATH CASCADES TOO, and this test previously encoded the gap rather than
+// catching it: the default fixture already contains `row-t1-kid` (`subtaskOf: "t1"`) and the
+// assertion above only ever looked at the parent. Every cascade assertion in this file used the
+// CROSS-day branch, so the branch the primary button takes was covered by nothing.
+//
+// `openCompletionDateConfirm(id, currentDate, today)` hands `#cdc-source`
+// `_cdcSourceDate === currentDate`, so "done on its original date" always reaches
+// `commitDoneOnDate(id, currentDate)` with `currentDate === dateStr` — the fast path. Without a
+// cascade the steps stayed `status:"open"` and `getCarryoverPool` re-offered them every morning.
+test("the same-day fast path cascades to the subtree (the 'done on its original date' button)", async () => {
+  const { context, rows } = makeChainCtx({
+    scheduled: [
+      { id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30", _blockId: "row-t1" },
+      { id: "t1-kid", title: "A step", type: "task", subtaskOf: "t1", start: "09:00", end: "09:15", _blockId: "row-t1-kid" },
+    ],
+  });
+  // The real cascade, not the no-op stub.
+  vm.runInContext("recalcTimes=()=>{};_clearPin=()=>{};_persistEvWrap=()=>{};\n" + ON_PARENT_SRC, context);
+  vm.runInContext(`commitDoneOnDate("t1","${PAST}")`, context);
+  await flush();
+  assert.equal(rows.find((r) => r.id === "row-t1").properties.status, "done");
+  assert.equal(rows.find((r) => r.id === "row-t1-kid").properties.status, "done",
+    "an open step means the carryover lane re-offers it tomorrow, forever");
+});
+
+// ...and the carryover lane, which walks the subtree ITSELF, must not get a second walk.
+test("cascade:false suppresses it, so the carryover lane's own loop is not doubled", async () => {
+  // The child MUST be in `scheduled`, or this test is vacuous: `_onParentCompleted` walks
+  // `scheduled.filter(c=>c.subtaskOf===pid)`, so with the default one-ev fixture there is
+  // nothing to cascade and the assertion passes whether the flag is honored or not. Caught by a
+  // mutation check that removed the `cascade!==false` guard and stayed green.
+  const { context, rows } = makeChainCtx({
+    scheduled: [
+      { id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30", _blockId: "row-t1" },
+      { id: "t1-kid", title: "A step", type: "task", subtaskOf: "t1", start: "09:00", end: "09:15", _blockId: "row-t1-kid" },
+    ],
+  });
+  vm.runInContext("recalcTimes=()=>{};_clearPin=()=>{};_persistEvWrap=()=>{};\n" + ON_PARENT_SRC, context);
+  vm.runInContext(`commitDoneOnDate("t1","${PAST}",{cascade:false})`, context);
+  await flush();
+  assert.equal(rows.find((r) => r.id === "row-t1").properties.status, "done", "the named node still completes");
+  assert.equal(rows.find((r) => r.id === "row-t1-kid").properties.status, "open",
+    "the caller owns the walk; a second one multiplies the queued writes");
+});
+
 test("plain toggleDone on the day being viewed marks the ROW done, and un-checking clears it", async () => {
   const todayRows = [{ id: "row-t1", date: TODAY, type: "block", properties: { local_id: "t1", title: "Ship the thing", status: "open" } }];
   const { context, rows } = makeChainCtx({ viewing: TODAY, rows: todayRows });
@@ -533,8 +579,6 @@ test("a PERMANENTLY refused move does NOT bank the completion", async () => {
 // collectUnfinished. The cross-day cascade test above does NOT cover this: that exercises
 // commitDoneOnDate's BFS over `/api/blocks?date=` rows, a different mechanism from the
 // in-memory `scheduled` walk here.
-const ON_PARENT_SRC = mustMatch(SCHEDULE_SRC, /function _onParentCompleted\(id\)\{[\s\S]*?\n\}\n/, "_onParentCompleted");
-
 test("the subtask cascade persists EACH child's row, not just the parent's", async () => {
   const rows = [
     { id: "row-t1", date: TODAY, type: "block", properties: { local_id: "t1", title: "P", status: "open" } },

@@ -306,8 +306,16 @@ module.exports = function mount(app, ctx) {
   //   - A read that SUCCEEDS with no row genuinely means no day yet, so `emptyFallback` is
   //     correct there and only there.
   //
-  async function readDccDayState(date, req, emptyFallback) {
-    const { userId, workspaceId } = resolveOwnerLenient(req);
+  //
+  // `owner` lets a caller hand in the owner IT resolved. Five callers write with
+  // `resolveOwnerLenient` and can leave it out, but `/api/dcc/brief/materialize` resolves with
+  // `resolveOwnerStrict` and creates its rows under THAT workspace — and the two resolvers
+  // disagree: for a DCC_ENDPOINTS token call (no session, no dccServiceAuth, no
+  // x-workspace-id) lenient returns the hardcoded "ws-1" while strict falls through to a
+  // `workspace_members` lookup. Re-deriving the owner here would read ws-1's brief and
+  // materialize real itinerary rows into someone else's workspace.
+  async function readDccDayState(date, req, emptyFallback, owner) {
+    const { userId, workspaceId } = owner || resolveOwnerLenient(req);
     let dbFailed = false;
     try {
       const row = await blockDB.getDccState(date, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
@@ -583,7 +591,10 @@ module.exports = function mount(app, ctx) {
       const dryRun = body.dryRun !== false && body.dry_run !== false;
       if (!isValidDate(sourceDate) || !isValidDate(targetDate)) return res.status(400).json({ error: "Expected sourceDate and targetDate as YYYY-MM-DD" });
       const { userId, workspaceId } = await resolveOwnerStrict(req);
-      const sourceState = await readDccDayState(sourceDate, req, buildSkeletonState(sourceDate));
+      // The SAME owner the blocks below are created under. `readDccDayState` defaults to
+      // `resolveOwnerLenient`, which for a token-authed call here returns "ws-1" while the
+      // strict resolution above can return a different workspace.
+      const sourceState = await readDccDayState(sourceDate, req, buildSkeletonState(sourceDate), { userId, workspaceId });
       // Include soft-deleted rows so a brief task the user deleted is not
       // re-materialized: materializeBriefPlan keys dedup on glymphatic_task_id /
       // source_id, and a tombstone still carries those (mirrors meeting-materializer).

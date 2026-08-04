@@ -34,7 +34,10 @@ function slice(src, re, what) {
 }
 
 const BUILD_DAY_SRC = slice(SERVER_SRC, /async function buildDayResponse\(dateStr, userId, workspaceId\) \{[\s\S]*?\n\}/, "buildDayResponse");
-const READ_DCC_SRC = slice(DCC_SRC, /async function readDccDayState\(date, req, emptyFallback\) \{[\s\S]*?\n {2}\}/, "readDccDayState");
+// Loose parameter list so the slice survives the next argument; the `slice` guard still fails
+// loudly if the function moves or is renamed. It gained an `owner` param so a caller that
+// resolved the owner STRICTLY can hand it in rather than having it re-derived leniently.
+const READ_DCC_SRC = slice(DCC_SRC, /async function readDccDayState\([^)]*\) \{[\s\S]*?\n {2}\}/, "readDccDayState");
 const APPEND_SRC = slice(SOCIAL_SRC, /async function appendPublicShareTriageItem\(\{ share[\s\S]*?\n\}/, "appendPublicShareTriageItem");
 // The file-mirror ladder, shared by `dayStateUnavailable` (server.js) and `readDccDayState`
 // (routes/dcc.js, via ctx). Sliced and run for REAL in both harnesses below: it carries the
@@ -407,6 +410,72 @@ test("the owner's user_id is PRESERVED, not erased", async () => {
   const noRow = runAppend({ dbRow: null });
   await noRow.call();
   assert.equal(noRow.saved[0].userId, 42, "the share's owner_id");
+});
+
+// `/api/dcc/brief/materialize` resolves its owner STRICTLY and creates itinerary rows under that
+// workspace, so it must read the brief under the same one. The two resolvers disagree: for a
+// DCC_ENDPOINTS token call (no session, no dccServiceAuth, no x-workspace-id) lenient returns the
+// hardcoded "ws-1" while strict falls through to a `workspace_members` lookup — so re-deriving
+// leniently would read ws-1's brief and materialize real rows into someone else's workspace.
+test("brief/materialize reads the day under the SAME owner it writes rows with", () => {
+  const code = DCC_SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  const h = code.slice(code.indexOf('app.post("/api/dcc/brief/materialize"'));
+  const body = h.slice(0, h.indexOf("app.post(", 10) === -1 ? h.length : h.indexOf("app.post(", 10));
+  assert.match(body, /resolveOwnerStrict\(req\)/, "it still resolves strictly");
+  // Not `[^)]*`: the call contains `buildSkeletonState(sourceDate)`, so the character class
+  // cannot cross that inner `)` and the assertion never matched its own passing code.
+  assert.match(body, /readDccDayState\([\s\S]{0,120}?\{ userId, workspaceId \}\)/,
+    "and hands that owner to the read instead of letting it re-derive leniently");
+});
+
+// EVERY anonymous handler that can observe the new throws, not just the two that were hardened
+// first. Round 2 made `buildPublicTodoShare` fail closed and `buildDayResponse` throw, and four
+// anonymous routes call into them — `/reactions` and `/comments` were still ending in
+// `res.status(400).json({error: e.message})`, so a pool timeout or schema error was echoed
+// verbatim. It is user-visible, not just on the wire: `public-todo-share.js submitComment` does
+// `alert(e.message)`, so a link holder got a browser alert full of table and constraint names.
+test("no anonymous share handler echoes a raw error message", () => {
+  const code = SOCIAL_SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  // Scoped to the ANONYMOUS routes only: each handler's body is sliced from its own
+  // declaration to the next one. The owner's `/api/todo-share/*` routes echo `e.message` too and
+  // that is fine -- Drake is the only reader. A file-wide sweep flagged six of those and said
+  // nothing about the four that matter.
+  const decls = [...code.matchAll(/app\.(?:get|post|patch|delete)\("([^"]+)"/g)];
+  const anon = [];
+  for (let i = 0; i < decls.length; i++) {
+    const route = decls[i][1];
+    if (!route.startsWith("/api/public/todo-share")) continue;
+    const start = decls[i].index;
+    const end = i + 1 < decls.length ? decls[i + 1].index : code.length;
+    anon.push({ route, body: code.slice(start, end) });
+  }
+  assert.ok(anon.length >= 4, "expected the anonymous share routes to still exist: " + anon.length);
+  for (const { route, body } of anon) {
+    assert.doesNotMatch(body, /res\.status\([^)]*\)\.json\(\{ error: e\.message \}\)/,
+      route + " returns a raw error message to an anonymous caller");
+    assert.doesNotMatch(body, /e\.statusCode \|\| 400/,
+      route + " reports a server outage as a bad request, so nothing retries");
+    if (/catch \(e\)/.test(body)) {
+      assert.match(body, /e\.statusCode \? e\.message :/,
+        route + " must only pass through a message for a status it set deliberately");
+    }
+  }
+});
+
+// An outage is a 500, not a 400. Probing with Postgres stopped showed the guest POST
+// answering 400 -- `findTodoShareByToken` throws before the writer is reached, so an outage
+// arrived as "bad request" and told the guest to re-edit a perfectly good task. Every genuine
+// validation failure in that handler is an early `return res.status(400)`, so the catch only
+// ever sees a deliberate status (503/429) or something unexpected.
+test("the anonymous POST answers 500 for an unexpected failure, and keeps its deliberate statuses", () => {
+  const handler = SOCIAL_SRC.slice(SOCIAL_SRC.indexOf('app.post("/api/public/todo-share/:token/tasks"'));
+  // 1400, not 600: the catch carries a long rationale comment and a 600-char window stopped
+  // before the res.status line, so the assertion failed on a slice that never reached the code.
+  const c = handler.slice(handler.indexOf("} catch (e) {"), handler.indexOf("} catch (e) {") + 1400);
+  assert.match(c, /res\.status\(/, "the slice must actually reach the response line");
+  assert.match(c, /e\.statusCode \|\| 500/, "an unexpected error is a server error");
+  assert.match(c, /e\.statusCode \? e\.message :/, "and only a status this code set deliberately keeps its own text");
+  assert.doesNotMatch(c, /e\.statusCode \|\| 400/);
 });
 
 // The cap is per (date, workspace) and the guest chose the date, so without a clamp it bounded

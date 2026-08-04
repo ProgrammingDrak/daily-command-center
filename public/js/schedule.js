@@ -385,7 +385,27 @@ async function commitDoneOnDate(id,dateStr,opts){
     const _award=award();
     const _cel=_beginCompletionCelebration(id);
     manualDone.add(id);doneAt[id]=new Date();
-    log("checked",id);_persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:nowIso});render();
+    log("checked",id);_persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:nowIso});
+    // ★ THE CASCADE BELONGS HERE TOO, and its absence was the bug on the primary button.
+    //
+    // The "done on its original date" choice lands in THIS branch, always:
+    // `openCompletionDateConfirm(id, currentDate, today)` hands `#cdc-source`
+    // `_cdcSourceDate === currentDate`, so `toggleDone(id,{markOnDate:src})` reaches
+    // `commitDoneOnDate(id, currentDate)` and `currentDate === dateStr`. Without a cascade the
+    // parent's row was marked done and every step stayed `status:"open"`, so
+    // `db.getCarryoverPool` (which admits any `subtaskOf`/`wrapId` row with no done marker)
+    // re-offered all of them the next morning — verbatim the failure the cross-day walk below
+    // was added to fix, on the path a user actually clicks.
+    //
+    // `_onParentCompleted` rather than the row walk, deliberately: it is the same cascade
+    // `toggleDone`'s OTHER same-day paths run, and its semantics are the same-day ones —
+    // subtasks complete, unfinished ride-alongs PROMOTE OUT to standalone tasks. The row walk
+    // would mark ride-alongs done instead, which is right cross-day (there is no `scheduled`
+    // to promote into) and wrong here.
+    //
+    // `cascade===false` means the caller owns the walk (unfinished-tasks.js complete()).
+    if(opts.cascade!==false&&typeof _onParentCompleted==="function")_onParentCompleted(id);
+    render();
     _finishCompletionCelebration(_cel,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_award});
     _autoCompleteShellAncestors(id,dateStr);

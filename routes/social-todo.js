@@ -1347,7 +1347,13 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     // constraint names. Log the detail, return it only for the statuses this code raises
     // deliberately (503 unavailable, 429 guest cap), whose messages are written for a guest.
     console.error("[public-todo] guest task create failed:", e);
-    res.status(e.statusCode || 400).json({ error: e.statusCode ? e.message : "Could not save that task right now" });
+    // 500 by default, not 400. Every genuine validation failure in this handler is an early
+    // `return res.status(400)`, so what reaches this catch is either a status this code set
+    // deliberately (503 unavailable, 429 cap) or something unexpected — and telling a guest
+    // "bad request" when Postgres is down is a lie that sends them to re-edit a fine task.
+    // Found by probing with the DB stopped: `findTodoShareByToken` throws before the writer is
+    // even reached, so an outage surfaced here as a 400.
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not save that task right now" });
   }
 });
 
@@ -1476,7 +1482,19 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
     }
     broadcast("todo-share-changed", { action: "sponsorship-create", id: sponsorship.id }, share.workspace_id);
     res.status(201).json({ ...sponsorship, reward, bounty });
-  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+  } catch (e) {
+    // ANONYMOUS endpoint, same convention as the share GET and the guest task POST. C5b is what
+    // made this reachable: `buildPublicTodoShare` now THROWS on a failed tombstone read and
+    // `buildDayResponse` throws on an unreadable day, so a pool timeout or schema error inside
+    // them was echoed verbatim here — and `public-todo-share.js` does `alert(e.message)`, so a
+    // link holder got a browser alert full of table and constraint names. Hardening the
+    // function without hardening all four of its callers is what left this open.
+    //
+    // 500, not 400: telling a guest their request was malformed when the server is down means
+    // nothing retries. Deliberate statuses (503/429) keep their own guest-written text.
+    console.error("[public-todo] sponsorship failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not record that right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/reactions", async (req, res) => {
@@ -1545,7 +1563,19 @@ app.post("/api/public/todo-share/:token/reactions", async (req, res) => {
     countRows.forEach(row => { counts[row.emoji] = row.count; });
     broadcast("todo-share-changed", { action: "reaction", taskId, taskDate, emoji, active }, share.workspace_id);
     res.json({ counts, viewerReactions: viewerRows.map(row => row.emoji), active });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    // ANONYMOUS endpoint, same convention as the share GET and the guest task POST. C5b is what
+    // made this reachable: `buildPublicTodoShare` now THROWS on a failed tombstone read and
+    // `buildDayResponse` throws on an unreadable day, so a pool timeout or schema error inside
+    // them was echoed verbatim here — and `public-todo-share.js` does `alert(e.message)`, so a
+    // link holder got a browser alert full of table and constraint names. Hardening the
+    // function without hardening all four of its callers is what left this open.
+    //
+    // 500, not 400: telling a guest their request was malformed when the server is down means
+    // nothing retries. Deliberate statuses (503/429) keep their own guest-written text.
+    console.error("[public-todo] reaction failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not save that reaction right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/comments", async (req, res) => {
@@ -1607,7 +1637,19 @@ app.post("/api/public/todo-share/:token/comments", async (req, res) => {
     }));
     broadcast("todo-share-changed", { action: "comment", taskId, taskDate }, share.workspace_id);
     res.status(201).json({ comment: comments[comments.length - 1], comments });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    // ANONYMOUS endpoint, same convention as the share GET and the guest task POST. C5b is what
+    // made this reachable: `buildPublicTodoShare` now THROWS on a failed tombstone read and
+    // `buildDayResponse` throws on an unreadable day, so a pool timeout or schema error inside
+    // them was echoed verbatim here — and `public-todo-share.js` does `alert(e.message)`, so a
+    // link holder got a browser alert full of table and constraint names. Hardening the
+    // function without hardening all four of its callers is what left this open.
+    //
+    // 500, not 400: telling a guest their request was malformed when the server is down means
+    // nothing retries. Deliberate statuses (503/429) keep their own guest-written text.
+    console.error("[public-todo] comment failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not post that comment right now" });
+  }
 });
 
 };
