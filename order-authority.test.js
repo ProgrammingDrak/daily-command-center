@@ -389,6 +389,37 @@ test("★★ _spliceDayOrder rearranges ONLY the subset's own slots, leaving eve
   assert.deepEqual(run(c, "_spliceDayOrder(null)"), ["A", "B", "k1", "k2", "C"]);
 });
 
+test("★★ saveTaskOrder splices — its subset is the OPEN rows, so a done row must not be collided with", () => {
+  // The collision the splice exists to prevent, at the real call site. saveTaskOrder passes only the
+  // OPEN rows, so on any day with a completed task its subset is a STRICT subset of the day. Writing
+  // that subset directly renumbers from 1000 and lands on top of the done row's number.
+  const c = ctx([row("done", 1000), row("A", 2000), row("B", 3000)], {});
+  c.scheduled = [{ id: "B" }, { id: "A" }];          // only the open rows reach saveTaskOrder
+  c.isDone = (ev) => ev.id === "done";
+  vm.runInContext("saveTaskOrder()", c);
+  const nums = run(c, "_orderableRows().map(b=>b.sort_order)");
+  assert.equal(new Set(nums).size, nums.length,
+    "no duplicate sort_order on the day: " + JSON.stringify(run(c, "_orderableRows().map(b=>b.id+':'+b.sort_order)")));
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["done", "B", "A"],
+    "the done row keeps its slot; only the open rows swapped");
+});
+
+test("★★ saveSubtaskOrder splices too — one parent's steps are always a strict subset", () => {
+  const c = ctx([
+    row("A", 1000), row("B", 2000), row("k1", 3000), row("k2", 4000), row("C", 5000),
+  ], {});
+  c.scheduled = [{ id: "k2", subtaskOf: "B" }, { id: "k1", subtaskOf: "B" }];
+  c.isDeleted = () => false;
+  // saveSubtaskOrder derives its order from scheduled[] then splices
+  vm.runInContext(one(persistSrc, /function saveSubtaskOrder\(parentId\)\{[\s\S]*?\n\}/, "saveSubtaskOrder"), c);
+  vm.runInContext('saveSubtaskOrder("B")', c);
+  const nums = run(c, "_orderableRows().map(b=>b.sort_order)");
+  assert.equal(new Set(nums).size, nums.length,
+    "no duplicate sort_order: " + JSON.stringify(run(c, "_orderableRows().map(b=>b.id+':'+b.sort_order)")));
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["A", "B", "k2", "k1", "C"],
+    "A, B and C keep their slots; only the two steps swapped");
+});
+
 test("★★ a subtask drag cannot collide with the day's top-level rows", () => {
   // The concrete collision: dragging B's steps used to stamp k2=1000 and k1=2000, so k2 tied with A
   // and k1 tied with B, and the tie was broken by cache iteration order.
