@@ -101,6 +101,11 @@ function ctx(rows, overlay) {
     /function loadUnscheduledOrder\(\)\{[\s\S]*?\n\}/,
   ]) vm.runInContext(one(schedSrc, re, String(re)), c);
   vm.runInContext(one(persistSrc, /function loadSubtaskOrder\(\)\{[\s\S]*?\n\}/, "loadSubtaskOrder"), c);
+  vm.runInContext(one(persistSrc, /function saveSubtaskOrder\(parentId\)\{[\s\S]*?\n\}/, "saveSubtaskOrder"), c);
+  vm.runInContext(one(schedSrc, /function saveUnscheduledOrder\(ids\)\{[\s\S]*?\n\}/, "saveUnscheduledOrder"), c);
+  vm.runInContext(one(schedSrc, /function saveTaskOrder\(\)\{[\s\S]*?\n\}/, "saveTaskOrder"), c);
+  c.localWrites = [];
+  c.localStorage.setItem = (k, v) => { c.localWrites.push({ k, v }); };
   return c;
 }
 const run = (c, expr) => JSON.parse(vm.runInContext("JSON.stringify(" + expr + ")", c));
@@ -191,6 +196,47 @@ test("_writeRowOrder skips a row whose sort_order is already correct, and unknow
   assert.equal(vm.runInContext("_writeRowOrder(null)", c), 0);
 });
 
+test("★ saveSubtaskOrder writes the children's sort_order", () => {
+  // V16: nothing exercised this path, so removing its `_writeRowOrder` call was invisible.
+  const c = ctx([
+    row("p", 1000, { local_id: "p" }),
+    row("k1", 5000, { local_id: "k1", subtaskOf: "p" }),
+    row("k2", 6000, { local_id: "k2", subtaskOf: "p" }),
+  ], {});
+  c.scheduled = [{ id: "p" }, { id: "k2", subtaskOf: "p" }, { id: "k1", subtaskOf: "p" }];
+  c.isDeleted = () => false;
+  vm.runInContext('saveSubtaskOrder("p")', c);
+  assert.deepEqual(run(c, "reordered"), [{ id: "k2", sort_order: 1000 }, { id: "k1", sort_order: 2000 }],
+    "the scheduled[] sibling order is stamped onto the child rows");
+  assert.deepEqual(run(c, "localWrites"), [], "and nothing goes to localStorage while a blockStore exists");
+});
+
+test("★ saveUnscheduledOrder writes sort_order, and a no-op does NOT resurrect localStorage", () => {
+  // V17: falling back to localStorage whenever `_writeRowOrder` returned 0 made a NO-OP reorder
+  // promote a stale local copy back into the authority position.
+  const c = ctx([row("r1", 5000, { local_id: "a" }), row("r2", 6000, { local_id: "b" })], {});
+  vm.runInContext('saveUnscheduledOrder(["b","a"])', c);
+  assert.deepEqual(run(c, "reordered"), [{ id: "r2", sort_order: 1000 }, { id: "r1", sort_order: 2000 }]);
+  assert.deepEqual(run(c, "localWrites"), []);
+  // second call changes nothing -> still no localStorage write
+  vm.runInContext('saveUnscheduledOrder(["b","a"])', c);
+  assert.deepEqual(run(c, "localWrites"), [], "a no-op must not write localStorage");
+  // with NO blockStore, localStorage IS the fallback
+  const c2 = ctx([row("r1", 1000, { local_id: "a" })], {});
+  c2.blockStore = null;
+  vm.runInContext('saveUnscheduledOrder(["a"])', c2);
+  assert.equal(run(c2, "localWrites").length, 1, "no blockStore -> localStorage is the store");
+});
+
+test("saveTaskOrder stamps sort_order from scheduled[] and writes no overlay", () => {
+  const c = ctx([row("r1", 5000, { local_id: "a" }), row("r2", 6000, { local_id: "b" })], {});
+  c.scheduled = [{ id: "b" }, { id: "a" }];
+  c.isDone = () => false;
+  vm.runInContext("saveTaskOrder()", c);
+  assert.deepEqual(run(c, "reordered"), [{ id: "r2", sort_order: 1000 }, { id: "r1", sort_order: 2000 }]);
+  assert.deepEqual(run(c, "localWrites"), []);
+});
+
 test("the retired overlay WRITES are gone from all three order paths", () => {
   for (const key of ["_taskOrder", "_unscheduledOrder", "_subtaskOrder"]) {
     const rx = new RegExp("_bsSaveProp\\(\\s*[\"']" + key + "[\"']");
@@ -278,6 +324,13 @@ test("★ locks live on the row; the overlay is a counted fallback and prod has 
   );
   assert.deepEqual(run(c, "loadLockedSet()").sort(), ["a", "b"]);
   assert.deepEqual(run(c, "window.__DCC_C6B_FALLBACK"), { lockedTasks: 1 });
+  // ★ an id in BOTH places must appear ONCE. Without the dedup the set is a list with a
+  // duplicate, and every consumer builds `new Set(loadLockedSet())` -- so the bug is invisible
+  // there and shows up only in the fallback COUNT, which is the canary this phase relies on.
+  const dup = ctx([row("r1", 1000, { local_id: "a", locked: true })], { _lockedTasks: ["a"] });
+  assert.deepEqual(run(dup, "loadLockedSet()"), ["a"], "no duplicate");
+  assert.deepEqual(run(dup, "window.__DCC_C6B_FALLBACK"), {},
+    "and it is NOT counted as a fallback -- the row already had it, so the overlay is redundant here");
   // the object-map shape db.js also accepts
   const c2 = ctx([row("r1", 1000, { local_id: "a" })], { _lockedTasks: { z: true } });
   assert.deepEqual(run(c2, "loadLockedSet()"), ["z"]);
