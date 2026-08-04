@@ -217,6 +217,29 @@ test("★★ the pin/lock sweep writes the row it INSPECTED, not whichever twin 
   const ids = run(c, "updated").map((u) => u.id).sort();
   assert.deepEqual(ids, ["dup", "dup-dateless"], "each inspected row got its own write");
   assert.deepEqual(run(c, "window.__DCC_C6B_FALLBACK"), {}, "and nothing was refused");
+
+  // The LOCK sweep has the identical shape and needed its own case: the pin test alone left
+  // `{row:b}` removable from saveLockedSet with the suite still green.
+  const dl = row("dup2", 1000, { locked: true }, TODAY);
+  const tw = { id: "dup2-dateless", type: "block", date: null, sort_order: 2000, deleted_at: null,
+               properties: { title: "twin", type: "task", local_id: "dup2", locked: true } };
+  const cl = ctx([dl, tw], {});
+  assert.equal(vm.runInContext("saveLockedSet([])", cl), 2, "both rows unlocked");
+  assert.deepEqual(run(cl, "updated").map((u) => u.id).sort(), ["dup2", "dup2-dateless"]);
+  assert.deepEqual(run(cl, "window.__DCC_C6B_FALLBACK"), {});
+});
+
+test("persistRowProp WITHOUT an explicit row still resolves by ev id, and refuses cleanly", () => {
+  // Both sweeps now always pass `{row}`, so their `else _c6bFallback("...Refused")` branches are
+  // unreachable BY CONSTRUCTION -- a mutation there is invisible, and saying so is better than
+  // pretending it is covered. What IS reachable is the id-resolving path other callers use, so
+  // that is what is asserted: it resolves, and it returns falsy rather than throwing when it
+  // cannot.
+  const c = ctx([row("a", 1000)], {});
+  assert.ok(vm.runInContext('!!persistRowProp("a","_pinnedStart","07:30",null)', c), "resolves by ev id");
+  assert.equal(run(c, "updated")[0].props._pinnedStart, "07:30");
+  assert.equal(vm.runInContext('persistRowProp("ghost","locked",true,null)', c), null, "refuses cleanly");
+  assert.equal(vm.runInContext('persistRowProp(null,"locked",true,null)', c), null, "no id, no row -> null");
 });
 
 test("★ locks live on the row; the overlay is a counted fallback and prod has ZERO of it", () => {
