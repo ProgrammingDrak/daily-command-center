@@ -98,6 +98,9 @@ function initKeys() {
   }
 }
 
+// DEFERRED TO C6c with the other two order axes -- `sort_order` is not one number space yet
+// (see schedule.js loadTaskOrder for the measurement). The overlay stays the authority; the
+// WRITE below keeps sort_order current so C6c inherits a column that is not drifting.
 function loadSubtaskOrder(){
   const fromBlocks=_bsProp("_subtaskOrder", null);
   if(fromBlocks&&typeof fromBlocks==="object")return fromBlocks;
@@ -108,17 +111,16 @@ function saveSubtaskOrder(parentId){
   if(!parentId||typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
   const order=DCC.TaskModel.selectNotDeleted(DCC.TaskModel.subtasksOf(parentId,scheduled))
     .map(ev=>ev.id);
+  // C6b fixed the WRITE: the reorder is keyed on the EV ID (`_writeRowOrder`) rather than
+  // `local_id`, which is what let a step with no local_id keep its position silently
+  // unpersisted. The overlay stays the read authority until C6c.
   const all=loadSubtaskOrder();
   all[parentId]=order;
   if(!_bsSaveProp("_subtaskOrder",all)){
     try{localStorage.setItem(SUBTASK_ORDER_KEY,JSON.stringify(all))}catch(e){}
   }
-  if(window.USE_BLOCKSTORE&&window.blockStore&&window.blockStore.reorder){
-    const orderMap={};order.forEach((id,i)=>{orderMap[id]=i});
-    const blocks=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block")]
-      .filter(b=>b.properties&&orderMap[b.properties.local_id]!==undefined)
-      .map(b=>({id:b.id,sort_order:(orderMap[b.properties.local_id]+1)*1000}));
-    if(blocks.length)window.blockStore.reorder(blocks).catch(()=>{});
+  if(window.USE_BLOCKSTORE&&window.blockStore&&window.blockStore.reorder&&typeof _writeRowOrder==="function"){
+    _writeRowOrder(order);
   }
   if(typeof scheduleIDBSave==="function")scheduleIDBSave();
 }

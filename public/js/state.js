@@ -1180,6 +1180,46 @@ function enqueueRowPropsWrite(blockId,merge,extra){
   return _rowPropsChain;
 }
 
+// ── C6b: the ONE writer for a per-row order-axis property (pin, lock) ──
+//
+// Pins and locks were `day_root` overlay maps keyed by ev id (`_pinnedStarts`, `_lockedTasks`).
+// An overlay keyed by ev id on the VIEWED day cannot describe a row that moved days, which is
+// why the carryover lane had to read locks back out of the server (`db.js`, the open-tasks
+// query) instead of off the row it was rendering. On the row, the fact travels with the task.
+//
+// Routed through `enqueueRowPropsWrite` rather than calling `updateBlock` directly, because
+// that queue is what serializes read-modify-write against the four other writers of the same
+// bag. Returning `null` from the merge is the queue's documented "skip the write", so a no-op
+// pin/unlock does not PATCH the row.
+//
+// `undefined | null | false` clears the key rather than storing a falsy value: a reader that
+// tests `p.locked` and a reader that tests `"locked" in p` must not disagree, and 001 wrote
+// nothing for locks at all, so absence is the only value that has ever meant "not locked".
+// `opts.row` hands in the row the CALLER already inspected. Without it this resolves the ev id
+// itself, and `_findTaskBlockForDate` prefers the viewed day's row then a dateless twin -- so a
+// caller sweeping rows (the pin/lock diffs below) could decide "row B must change" and have the
+// write land on row A, because both carry the same ev id. Passing the row makes the decision and
+// the write the same row, and removes the silent no-op the unresolvable case used to produce.
+function persistRowProp(id,key,value,ev,opts){
+  if(!window.blockStore)return null;
+  let row=(opts&&opts.row)||null;
+  if(!row){
+    if(!id)return null;
+    const source=ev||((typeof scheduled!=="undefined"&&Array.isArray(scheduled))?scheduled.find(e=>e&&e.id===id):null);
+    row=_findTaskBlockForDate(id,(typeof __state!=="undefined"&&__state&&__state.date)||null,source);
+  }
+  if(!row)return null;
+  const want=(value===undefined||value===null||value===false)?undefined:value;
+  return enqueueRowPropsWrite(row.id,props=>{
+    const cur=props[key];
+    if(cur===want)return null;                       // no change: skip the write entirely
+    if(cur===undefined&&want===undefined)return null;
+    const next=Object.assign({},props);
+    if(want===undefined)delete next[key];else next[key]=want;
+    return next;
+  });
+}
+
 // A duration is a POSITIVE number of minutes. `dur(ev)` is pt(end) - pt(start), which goes
 // negative two different ways: recalcTimes writes an unclamped end past midnight (23:00 +
 // 90m -> "24:30", and pt() wraps the hour), and data.js's timeline items are built from two
