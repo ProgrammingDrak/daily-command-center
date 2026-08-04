@@ -249,6 +249,41 @@ test("★ the `scheduled.filter` guard can actually fail (positive + negative co
     "a URL literal must not swallow the rest of the line");
   assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments('if(/a\\/b/.test(u)){ const a = scheduled.filter(f); }')),
     "a regex literal containing a slash must not swallow the rest of the line");
+  // ★ The regex-literal case is NOT hypothetical in this repo, and the first cut of this
+  // control was vacuous: `/a\/b/` contains no `//`, so removing the stripper's
+  // regex handling did not change the answer and the mutation went uncaught. The shape
+  // that actually bites is an ESCAPED SLASH PAIR — `schedule-tab.js:621` really does
+  // carry `!/^https?:\/\//.test(url)`, in the file with the most predicates in it. Strip
+  // naively and everything after it on that line disappears.
+  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(
+    'if(!url||!/^https?:\\/\\//.test(url)){ const a = scheduled.filter(f); }')),
+    "an escaped-slash regex (schedule-tab.js:621's real shape) must not swallow the rest of the line");
+  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(
+    'const u=x.replace(/\\/\\//g,"/"); const a = scheduled.filter(f);')),
+    "a // inside a regex literal is not a comment");
+  // And a `/*` inside a regex must not open a block comment that eats the file.
+  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(
+    'if(/x\\/*y/.test(u)){ const a = scheduled.filter(f); }')),
+    "a /* inside a regex literal must not open a block comment");
+});
+
+test("★ stripJsComments strips comments without eating code (its own edge cases)", () => {
+  const strip = (s) => stripJsComments(s).replace(/\s+/g, " ").trim();
+  assert.equal(strip("a(); // gone\nb();"), "a(); b();");
+  assert.equal(strip("a(); /* gone\nstill gone */ b();"), "a(); b();");
+  // Comment markers inside strings are DATA, not comments — all three quote styles.
+  assert.equal(strip('var u = "http://x/y"; keep();'), 'var u = "http://x/y"; keep();');
+  assert.equal(strip("var u = 'a /* b */ c'; keep();"), "var u = 'a /* b */ c'; keep();");
+  assert.equal(strip("var u = `a // b`; keep();"), "var u = `a // b`; keep();");
+  // An escaped quote must not end the string early and expose its tail as code.
+  assert.equal(strip('var u = "a\\" // not a comment"; keep();'), 'var u = "a\\" // not a comment"; keep();');
+  // Division must not be mistaken for a regex opener.
+  assert.equal(strip("var r = (a) / b; // gone\nkeep();"), "var r = (a) / b; keep();");
+  assert.equal(strip("var r = arr[0] / 2; keep();"), "var r = arr[0] / 2; keep();");
+  // An unterminated block comment consumes the tail rather than throwing.
+  assert.doesNotThrow(() => stripJsComments("a(); /* never closed"));
+  assert.equal(stripJsComments(""), "");
+  assert.equal(stripJsComments(null), "");
 });
 
 test("★ flattenSchedule stays retired — selectTree is the one tree walker", () => {

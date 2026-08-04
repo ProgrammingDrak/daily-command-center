@@ -151,6 +151,49 @@ test("★ the day's default focus row is gated on isNested, not on subtaskOf alo
   assert.equal(rx.test("activeItems.find(ev => !isSubtask(ev) && pointEligible(ev))"), false);
 });
 
+// ★ The bare globals in state.js (parentIdOf / relOf / isSubtask / isNested /
+// childrenOf) are read by ~100 call sites, so the NAMES stay there. The bodies must be
+// one-line delegates. A duplicate body is not a style problem: a mutation that restored
+// `parentIdOf` locally with `subtaskOf || wrapId` — the ROW-space order from
+// lib/reschedule.js, reversed from ev space — passed the entire suite, and it silently
+// changes which parent a row carrying both edges belongs to.
+test("★ state.js's tree helpers DELEGATE — no second body to drift from TaskModel", () => {
+  const stateCode = stripJsComments(fs.readFileSync(require.resolve("./public/js/state.js"), "utf8"));
+  const delegates = {
+    parentIdOf: /function parentIdOf\(ev\)\{return _TM\(\)\.parentIdOf\(ev\);\}/,
+    relOf: /function relOf\(ev\)\{return _TM\(\)\.relOf\(ev\);\}/,
+    isSubtask: /function isSubtask\(ev\)\{return _TM\(\)\.isSubtask\(ev\);\}/,
+    isNested: /function isNested\(ev\)\{return _TM\(\)\.isNested\(ev\);\}/,
+    childrenOf: /function childrenOf\(id,pool\)\{return _TM\(\)\.childrenOf\(id,pool\);\}/,
+  };
+  for (const [name, rx] of Object.entries(delegates)) {
+    assert.match(stateCode, rx, `state.js ${name} must be a one-line delegate to TaskModel`);
+  }
+  // Negative controls: the pre-C6a bodies, and the reversed-edge-order duplicate.
+  assert.equal(delegates.parentIdOf.test("function parentIdOf(ev){return (ev&&(ev.wrapId||ev.subtaskOf))||null;}"), false);
+  assert.equal(delegates.parentIdOf.test("function parentIdOf(ev){return (ev&&(ev.subtaskOf||ev.wrapId))||null;}"), false);
+  assert.equal(delegates.childrenOf.test("function childrenOf(id,pool){return (pool||[]).filter(c=>parentIdOf(c)===id);}"), false);
+  // And the edge order really is wrapId-first through the delegate, which is the thing
+  // the duplicate got wrong. state.js documents the deliberate divergence from
+  // lib/reschedule.js's row-space order; this pins the ev-space side of it.
+  const ctx = { console };
+  vm.createContext(ctx);
+  installTaskModel(ctx);
+  vm.runInContext("function _TM(){return DCC.TaskModel;}" + stateCode.match(/function parentIdOf\(ev\)\{[^}]*\}/)[0], ctx);
+  assert.equal(vm.runInContext('parentIdOf({wrapId:"w",subtaskOf:"s"})', ctx), "w");
+});
+
+test("the Work-list badge counts every open point-eligible row, Unscheduled included", () => {
+  // Deliberately WIDER than day.open, which is the timed section only. That is what the
+  // badge has always counted; narrowing it is a behaviour change nobody asked for, and a
+  // mutation to day.open passed the suite until this existed. (The mismatch between the
+  // badge's name and its population is real and is recorded in the phase handoff.)
+  const rx = /const activeIds=new Set\(DCC\.TaskModel\.selectOpen\(visible\)\.filter\(ev=>pointEligible\(ev\)\)\.map\(ev=>ev\.id\)\);/;
+  assert.match(schedTabCode, rx);
+  assert.equal(rx.test("const activeIds=new Set(day.open.filter(ev=>pointEligible(ev)).map(ev=>ev.id));"), false);
+  assert.equal(rx.test("const activeIds=new Set(DCC.TaskModel.selectOpen(day.timed).filter(ev=>pointEligible(ev)).map(ev=>ev.id));"), false);
+});
+
 test("★ the list view derives ONCE — one selectDay call feeding every section", () => {
   // The point of the phase is that the sections cannot disagree. Two selectDay calls in
   // one render, or a section rebuilding its own population, is the disagreement coming

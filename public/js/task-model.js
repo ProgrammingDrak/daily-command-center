@@ -508,8 +508,12 @@
 
     // ── Fold: done, nested under a visible parent, and finished all the way down ──
     // Memoised so a deep chain is walked once. `seen` breaks a data cycle by treating
-    // the revisited node as "not blocking" — a cycle cannot be proven all-done, and
-    // the enclosing `done(ev)` test still gates the fold either way.
+    // the revisited node as "not blocking", which is the right answer: every ev has one
+    // parent pointer, so a cycle is a closed ring, and a ring whose every member is done
+    // IS finished. The seen short-circuit returns BEFORE writing the memo, so a cached
+    // value was always computed by really walking children; and if any member of a ring
+    // is open, that `done(kids[k])` test fails and the false propagates all the way
+    // round. So the memo cannot hand back a stale true.
     const subtreeDone = new Map();
     function allDone(ev, seen) {
       if (subtreeDone.has(ev.id)) return subtreeDone.get(ev.id);

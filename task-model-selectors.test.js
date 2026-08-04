@@ -288,6 +288,28 @@ test("★ Unscheduled is a SUBTREE, so a step of an untimed parent cannot vanish
     ["u@0", "uKid@1:subtask", "uGrand@2:subtask"]);
 });
 
+test("a fully-done subtree folds even when its parent edges form a CYCLE", () => {
+  // `allDone` treats a revisited node as non-blocking, so a cycle can still be proven
+  // finished; the enclosing done() test is what actually gates the fold. The opposite
+  // choice (a cycle blocks) leaves a finished cyclic subtree rendering forever, and it
+  // passed the suite until this test existed.
+  // Every ev has exactly ONE parent pointer, so a cycle is necessarily a closed ring with
+  // no root above it: a -> b -> c -> a. (The first cut of this test hung a "cycle" off a
+  // root, which a single parent pointer cannot express — the fixture was wrong, not the
+  // code, and it made the second assertion assert nothing about a cycle at all.)
+  const ring = [T("a", { subtaskOf: "c" }), T("b", { subtaskOf: "a" }), T("c", { subtaskOf: "b" })];
+  const day = TaskModel.selectDay(ring, "2026-08-04", res(["a", "b", "c"]));
+  assert.deepEqual(ids(day.folded).sort(), ["a", "b", "c"], "a finished cyclic subtree still folds");
+  assert.deepEqual(ids(day.timed), [], "and none of them also renders as its own row");
+  partition(day);
+  // One open member anywhere in the ring blocks the fold for every done member, because
+  // the failing `done(child)` test propagates all the way round.
+  const day2 = TaskModel.selectDay(ring, "2026-08-04", res(["a", "b"]));
+  assert.deepEqual(ids(day2.folded), [], "an open member of the ring keeps every done row visible");
+  assert.deepEqual(ids(day2.timed).sort(), ["a", "b", "c"]);
+  partition(day2);
+});
+
 test("selectDay's unscheduled closure terminates on a parent cycle", () => {
   const pool = [untimed("u"), untimed("a", { subtaskOf: "u" }), untimed("b", { subtaskOf: "a" })];
   pool[0].subtaskOf = undefined;
