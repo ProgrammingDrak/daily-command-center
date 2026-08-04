@@ -234,10 +234,41 @@ test("★ savePinnedStarts writes the row, heals an overlay-only pin, and clears
   assert.equal("_pinnedStart" in u2[0].props, false, "the key is deleted, not set falsy");
 });
 
-test("★ a no-op savePinnedStarts writes NOTHING", () => {
-  const c = ctx([row("r1", 1000, { local_id: "a", _pinnedStart: "09:00" })], {});
-  vm.runInContext('savePinnedStarts({a:"09:00"})', c);
+test("★ a no-op savePinnedStarts writes NOTHING, and does not even enqueue", () => {
+  const c = ctx([
+    row("r1", 1000, { local_id: "a", _pinnedStart: "09:00" }),
+    row("r2", 2000, { local_id: "b", _pinnedStart: "10:00" }),
+  ], {});
+  // The RETURN VALUE is the contract: it counts rows this call decided to change. Asserting only
+  // `updated` hides a version that enqueues a no-op write per row on every save -- harmless
+  // per-row because persistRowProp skips it too, but N pointless queue links on a 40-row day,
+  // and a wrong answer from a function whose whole job is to report what moved.
+  assert.equal(vm.runInContext('savePinnedStarts({a:"09:00", b:"10:00"})', c), 0,
+    "nothing changed, so nothing was even considered written");
   assert.deepEqual(run(c, "updated"), [], "an unchanged pin must not PATCH the row");
+  assert.equal(vm.runInContext('savePinnedStarts({a:"09:00", b:"11:00"})', c), 1, "exactly one row moved");
+});
+
+test("★ persistRowProp CLEARS on every falsy value, not just undefined", () => {
+  // `false` is the one that matters: a reader testing `p.locked` and a reader testing
+  // `"locked" in p` must not disagree, and 001 wrote nothing for locks at all, so absence is the
+  // only value that has ever meant not-locked. Asserted behaviourally -- the first cut of this
+  // source-grepped the falsy list and a mutation removing it passed.
+  for (const falsy of ["undefined", "null", "false"]) {
+    const c = ctx([row("r1", 1000, { local_id: "a", locked: true, _pinnedStart: "09:00" })], {});
+    vm.runInContext(`persistRowProp("a","locked",${falsy},null)`, c);
+    const upd = run(c, "updated");
+    assert.equal(upd.length, 1, falsy + " should have cleared the key");
+    assert.equal("locked" in upd[0].props, false, falsy + " must DELETE the key, not store it");
+    assert.equal(upd[0].props._pinnedStart, "09:00", "and must not disturb the rest of the bag");
+  }
+  // A real value is stored as-is, and an unresolvable id writes nothing.
+  const c2 = ctx([row("r1", 1000, { local_id: "a" })], {});
+  vm.runInContext('persistRowProp("a","_pinnedStart","07:30",null)', c2);
+  assert.equal(run(c2, "updated")[0].props._pinnedStart, "07:30");
+  const c3 = ctx([row("r1", 1000, { local_id: "a" })], {});
+  vm.runInContext('persistRowProp("ghost","locked",true,null)', c3);
+  assert.deepEqual(run(c3, "updated"), [], "an id with no row writes nothing");
 });
 
 test("★ locks live on the row; the overlay is a counted fallback and prod has ZERO of it", () => {
@@ -369,7 +400,10 @@ test("db.js's server-side _lockedTasks read is deliberately LEFT for A4, and is 
 test("persistRowProp clears on falsy and skips a no-op, through the shared row-props queue", () => {
   // It routes through enqueueRowPropsWrite rather than calling updateBlock, because that queue
   // is what serializes read-modify-write against the four other writers of the same bag.
+  // Structural only: that it routes through the QUEUE rather than calling updateBlock. The
+  // no-op skip and the falsy clear are asserted behaviourally above, because source-grepping
+  // them let a mutation through.
   assert.match(stateCode, /return enqueueRowPropsWrite\(row\.id,props=>\{/);
-  assert.match(stateCode, /if\(cur===want\)return null;/);
-  assert.match(stateCode, /if\(want===undefined\)delete next\[key\];else next\[key\]=want;/);
+  assert.equal(/persistRowProp[\s\S]{0,400}?blockStore\.updateBlock/.test(stateCode), false,
+    "persistRowProp must not bypass the row-props queue");
 });
