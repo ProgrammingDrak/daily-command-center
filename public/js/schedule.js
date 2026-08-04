@@ -1128,7 +1128,9 @@ function savePinnedStarts(data){
       // Only count a write that was actually ENQUEUED. persistRowProp returns null when it cannot
       // resolve a row for this ev id on the viewed day, and counting that as written made the
       // return value (and the test asserting on it) unable to tell a write from a refusal.
-      if(persistRowProp(id,"_pinnedStart",want,null))wrote++;else _c6bFallback("pinRefused",1);
+      // `{row:b}` -- write the row this loop INSPECTED. Re-resolving by ev id would prefer the
+      // viewed day's row, so a decision made about a dateless twin landed on the dated one.
+      if(persistRowProp(id,"_pinnedStart",want,null,{row:b}))wrote++;else _c6bFallback("pinRefused",1);
     });
     // ★ PRUNE THE OVERLAY. Without this there is no way to express "explicitly unpinned":
     // clearing the row's key is exactly the state the fallback read treats as "the row does not
@@ -1224,7 +1226,7 @@ function saveLockedSet(ids){
       const id=_evIdOfRow(b);
       const shouldLock=want.has(String(id));
       if(!!b.properties.locked===shouldLock)return;
-      if(persistRowProp(id,"locked",shouldLock?true:undefined,null))wrote++;else _c6bFallback("lockRefused",1);
+      if(persistRowProp(id,"locked",shouldLock?true:undefined,null,{row:b}))wrote++;else _c6bFallback("lockRefused",1);
     });
     // Same resurrection hole as pins: the fallback re-supplies a lock for any row without the
     // key, and an unlock IS that state.

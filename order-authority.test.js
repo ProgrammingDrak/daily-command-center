@@ -92,7 +92,7 @@ function ctx(rows, overlay) {
       return Promise.resolve();
     }
   `, c);
-  vm.runInContext(one(read("state.js"), /function persistRowProp\(id,key,value,ev\)\{[\s\S]*?\n\}/, "persistRowProp"), c);
+  vm.runInContext(one(read("state.js"), /function persistRowProp\(id,key,value,ev,opts\)\{[\s\S]*?\n\}/, "persistRowProp"), c);
   for (const re of [
     /window\.__DCC_C6B_FALLBACK = window\.__DCC_C6B_FALLBACK \|\| \{\};/,
     /function _c6bFallback\(key,n\)\{[\s\S]*?\n\}/,
@@ -201,6 +201,22 @@ test("★ persistRowProp CLEARS on every falsy value, not just undefined", () =>
   const c3 = ctx([row("a", 1000)], {});
   vm.runInContext('persistRowProp("ghost","locked",true,null)', c3);
   assert.deepEqual(run(c3, "updated"), [], "an id with no row writes nothing");
+});
+
+test("★★ the pin/lock sweep writes the row it INSPECTED, not whichever twin the resolver prefers", () => {
+  // Two live rows CAN share one ev id (a dated row and its dateless twin -- persistence.js
+  // documents that as a supported state). The sweep iterates rows, but persistRowProp used to
+  // re-resolve by ev id and prefer the viewed day's row -- so the decision made about the
+  // dateless twin landed on the dated one, and `wrote++` counted it either way.
+  const dated = row("dup", 1000, { _pinnedStart: "09:00" }, TODAY);
+  const twin = { id: "dup-dateless", type: "block", date: null, sort_order: 2000, deleted_at: null,
+                 properties: { title: "twin", type: "task", local_id: "dup", _pinnedStart: "09:00" } };
+  const c = ctx([dated, twin], {});
+  // Clearing the pin must clear it on BOTH rows the sweep saw, not twice on the dated one.
+  assert.equal(vm.runInContext("savePinnedStarts({})", c), 2, "both rows were decided AND written");
+  const ids = run(c, "updated").map((u) => u.id).sort();
+  assert.deepEqual(ids, ["dup", "dup-dateless"], "each inspected row got its own write");
+  assert.deepEqual(run(c, "window.__DCC_C6B_FALLBACK"), {}, "and nothing was refused");
 });
 
 test("★ locks live on the row; the overlay is a counted fallback and prod has ZERO of it", () => {
