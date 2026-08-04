@@ -1,4 +1,6 @@
-// Test helper: install the REAL TaskModel into a node:vm context (C6a).
+// TEST HELPER: install the REAL TaskModel into a node:vm context (C6a).
+// Named `-fixture` to match carryover-fixture.js, the repo root's one existing test-only
+// module, so it is not mistaken for a production one.
 //
 // Most of the browser-side harnesses in this repo slice a region of state.js /
 // drag.js / schedule.js into a vm context and hand it stubbed globals. Those files

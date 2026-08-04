@@ -7,6 +7,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const src = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
 const attachSrc = src.match(/function attachTemplateChildren[\s\S]*?\n}/)[0];
@@ -21,6 +24,7 @@ test("attachTemplateChildren: routes wrap->addStackedTask, subtask->addSubtask, 
     addSubtask: (parentId, title) => { calls.push({ fn: "subtask", parentId, title }); return { id: "st-" + (++seq) }; },
   };
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(attachSrc, context);
 
   context.attachTemplateChildren("root-1", [
@@ -52,6 +56,7 @@ test("attachTemplateChildren: ignores empty/invalid nodes and non-arrays", () =>
   const calls = [];
   const context = { console, addStackedTask: (p, t) => { calls.push(t); return { id: "x" }; }, addSubtask: () => ({ id: "y" }) };
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(attachSrc, context);
   context.attachTemplateChildren("root", [null, { title: "" }, { edge: "wrap" }, { title: "Real", edge: "wrap", durationMin: 5 }]);
   assert.deepEqual(calls, ["Real"]); // only the node with a title
@@ -71,6 +76,7 @@ test("_shellAlreadyOnDay: true only when a live rollup with that responsibilityI
     { id: "t1", responsibilityId: "r2", type: "task" }, // linked but not a rollup
   ];
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(dedupeSrc, context);
 
   assert.equal(context._shellAlreadyOnDay("r1"), true);  // live shell for r1

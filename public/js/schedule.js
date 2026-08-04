@@ -178,7 +178,9 @@ function insertTaskNow(titleArg, durMinArg, opts){
   // Calculate insertion position
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt = activeIdx !== -1 ? activeIdx + 1 :
-    (()=>{const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));return fi.length?fi[0].i:scheduled.length;})();
+    (()=>{const firstOpen=DCC.TaskModel.selectOpen(scheduled)[0];
+      const fi=firstOpen?scheduled.indexOf(firstOpen):-1;
+      return fi===-1?scheduled.length:fi;})();
 
   // Simulate placement: temporarily add, cascade, read the worst end among
   // user-controllable tasks, then remove. Checking only newItem.end would miss
@@ -218,7 +220,9 @@ function insertTaskFromDrawer(title, durMin, opts){
     tags:opts.tags||[],triageId:opts.triageId||null};
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt = activeIdx !== -1 ? activeIdx + 1 :
-    (()=>{const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));return fi.length?fi[0].i:scheduled.length;})();
+    (()=>{const firstOpen=DCC.TaskModel.selectOpen(scheduled)[0];
+      const fi=firstOpen?scheduled.indexOf(firstOpen):-1;
+      return fi===-1?scheduled.length:fi;})();
   scheduled.splice(insertAt, 0, newItem);
   persistAddedTask(newItem);
   recalcTimes();
@@ -257,8 +261,8 @@ window.attachTemplateChildren=attachTemplateChildren;
 // Idempotency: is a shell for this responsibility already live on the viewed day?
 function _shellAlreadyOnDay(responsibilityId){
   if(!responsibilityId||typeof scheduled==="undefined")return false;
-  return scheduled.some(function(e){
-    return e&&e.responsibilityId===responsibilityId&&!isDeleted(e)&&window.TaskTypes&&window.TaskTypes.isRollup(e);
+  return DCC.TaskModel.selectNotDeleted(scheduled).some(function(e){
+    return e.responsibilityId===responsibilityId&&window.TaskTypes&&window.TaskTypes.isRollup(e);
   });
 }
 window._shellAlreadyOnDay=_shellAlreadyOnDay;

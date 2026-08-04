@@ -17,8 +17,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const { installTaskModel } = require("./task-model-vm.js");
-const { stripJsComments } = require("./js-comment-strip.js");
+const { installTaskModel } = require("./task-model-vm-fixture.js");
+const { stripJsComments } = require("./js-comment-strip-fixture.js");
 
 const featuresSrc = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
 const timerSrc = fs.readFileSync(require.resolve("./public/js/timer.js"), "utf8");
@@ -83,22 +83,32 @@ test("★ the pomodoro picker never offers a NESTED schedule row", () => {
   assert.equal(avail({ id: "c", subtaskOf: "p" }, "consider"), true);
 });
 
+// Any identifier-dot-`nested` read. The first cut whitelisted eight receiver names
+// (ev|s|t|task|item|node|c|p), so `row.nested` / `block.nested` walked straight past it.
+// The whitelist was never needed: requiring an identifier-and-dot prefix already excludes
+// both things it was meant to dodge -- a bare local (`const nested = await ...`) and a CSS
+// class literal ("be-card nested").
+const NESTED_READ_RX = /(?<![\w$.])[A-Za-z_$][\w$]*\s*\.\s*nested\b/;
+
 test("nothing in public/js reads the retired `ev.nested` field any more", () => {
   const dir = require("node:path").join(__dirname, "public", "js");
   const offenders = [];
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith(".js"))) {
     const code = stripJsComments(fs.readFileSync(require("node:path").join(dir, f), "utf8"));
-    // `.nested` as a property read/write on an ev. Excludes `nested` as a plain local
-    // (state.js has `const nested = await ...`) and the CSS class string in
-    // schedule-tab.js's renderBlockRow, which is a block editor card, not an ev.
-    const rx = /\b(?:ev|s|t|task|item|node|c|p)\s*\.\s*nested\b/g;
+    const rx = new RegExp(NESTED_READ_RX.source, "g");
     let m;
     while ((m = rx.exec(code))) offenders.push(f + ":" + code.slice(0, m.index).split("\n").length + " " + m[0]);
   }
   assert.deepEqual(offenders, [], "these still read the field data.js used to write as a literal false: " + offenders.join(", "));
-  // Negative control: the guard must fire on the code it retired.
-  assert.ok(/\b(?:ev|s|t|task|item|node|c|p)\s*\.\s*nested\b/.test("if(!ev||ev.nested)return false;"));
-  assert.ok(/\b(?:ev|s|t|task|item|node|c|p)\s*\.\s*nested\b/.test("scheduled.filter(s=>!s.nested)"));
+  // Negative controls, using the SAME regex the scan uses -- a control that re-types the
+  // pattern as a fresh literal keeps testing the old one after the guard is edited.
+  assert.ok(NESTED_READ_RX.test("if(!ev||ev.nested)return false;"));
+  assert.ok(NESTED_READ_RX.test("scheduled.filter(s=>!s.nested)"));
+  assert.ok(NESTED_READ_RX.test("if(row.nested)return;"), "a renamed receiver must not escape the guard");
+  assert.ok(NESTED_READ_RX.test("if(block.nested)return;"));
+  // ...and the two things it must NOT flag: a plain local, and a CSS class string.
+  assert.equal(NESTED_READ_RX.test("const nested = await _moveOriginDayChildrenTo(id);"), false);
+  assert.equal(NESTED_READ_RX.test('el.className = "be-card nested";'), false);
   // ...and data.js must no longer WRITE it.
   assert.equal(/nested:\s*false/.test(stripJsComments(fs.readFileSync(require.resolve("./public/js/data.js"), "utf8"))), false,
     "data.js still mints ev.nested");
@@ -122,13 +132,18 @@ test("★ the work list pools its tree on `visible`, not on the section it is re
 });
 
 test("★ the Unscheduled section renders a TREE, not a flat list of roots", () => {
-  const rx = /selectTree\(rootOrder\.concat\(day\.unscheduled\.filter\(ev=>!rootIds\.has\(ev\.id\)\)\),\{pool:visible\}\)\s*\.forEach\(node=>\{\s*wrap\.appendChild\(emitNode\(node,_isSubRow\(node\)\?0:uRank\+\+,"open"\)\);/;
+  const rx = /selectTree\(rootOrder\.concat\(day\.unscheduled\.filter\(ev=>!rootIds\.has\(ev\.id\)\)\),\{pool:visible\}\)[\s\S]{0,400}?wrap\.appendChild\(emitNode\(node,_isSubRow\(node\)\?0:uRank\+\+,isDone\(node\.ev\)\?"done":"open"\)\);/;
   assert.match(schedTabCode, rx,
-    "roots + their closure must go through selectTree and emitNode, or a step of an untimed " +
-    "parent renders as a standalone numbered row in the Work list");
-  // Negative control: the pre-C6a flat render must not satisfy it.
+    "roots + their closure must go through selectTree and emitNode WITH the real done/open " +
+    "mode, or a step of an untimed parent renders as a standalone numbered row in the Work " +
+    "list -- and a done-but-not-yet-foldable step renders as an unchecked 'Mark done' row " +
+    "whose click un-completes it");
+  // Negative controls: the pre-C6a flat render, and the hardcoded-"open" mode that shipped
+  // this bug into review, must both fail this assertion.
   assert.equal(rx.test('unsRows.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));'), false);
   assert.equal(rx.test('rootOrder.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));'), false);
+  assert.equal(rx.test('DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id))),{pool:visible}).forEach(node=>{wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,"open"));});'), false,
+    "the hardcoded mode must be rejected");
   // And the badge counts ROOTS, so it matches what you can point at.
   assert.match(schedTabCode, /section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/);
 });
@@ -194,6 +209,21 @@ test("the Work-list badge counts every open point-eligible row, Unscheduled incl
   assert.equal(rx.test("const activeIds=new Set(DCC.TaskModel.selectOpen(day.timed).filter(ev=>pointEligible(ev)).map(ev=>ev.id));"), false);
 });
 
+test("★ the timeline pools its tree on the section it renders, NOT on the visible day", () => {
+  // The mirror image of the work list, and the reason each needs its own pin. buildSchedule
+  // renders OPEN rows only and a done parent shows as a childless compact row in the Done
+  // section -- so here a child whose parent is done has no parent rendering anywhere and must
+  // still be promoted. Pooling on `vis` made it render NOWHERE (verified: selectTree returns
+  // [] for that shape). The list view is the surface that shows a done parent inline with its
+  // open children nested, and that one pools on `visible`.
+  const rx = /selectTree\(activeItems,\{pool:activeItems\}\)/;
+  assert.match(schedTabCode, rx);
+  assert.equal(rx.test("selectTree(activeItems,{pool:vis})"), false, "pooling on vis loses an open child of a done parent");
+  assert.equal(rx.test("selectTree(activeItems,{pool:visible})"), false);
+  // And buildSchedule derives through the layer, not by hand.
+  assert.match(schedTabCode, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{\}\)/);
+});
+
 test("★ the list view derives ONCE — one selectDay call feeding every section", () => {
   // The point of the phase is that the sections cannot disagree. Two selectDay calls in
   // one render, or a section rebuilding its own population, is the disagreement coming
@@ -212,6 +242,13 @@ test("★ the list view derives ONCE — one selectDay call feeding every sectio
   assert.equal(calls, 1, "buildListView must call selectDay exactly once, got " + calls);
   assert.match(listView, /const day=DCC\.TaskModel\.selectDay\(scheduled,viewDate,\{today:actualToday,carryoverPool:unfPool\}\)/);
   // The carryover fetch has to precede the derivation that consumes it.
-  assert.ok(listView.indexOf("_ensureUnfinished(actualToday)") < listView.indexOf("TaskModel.selectDay("),
-    "the carryover pool must be resolved before selectDay reads it");
+  // Assert PRESENCE before comparing positions. `indexOf` returns -1 when absent, and
+  // -1 < anyIndex is true -- so the exact regression this line names (the
+  // `_ensureUnfinished` hoist being deleted or moved back below selectDay, leaving unfPool
+  // empty when the derivation consumes it) made the assertion PASS.
+  const fetchAt = listView.indexOf("_ensureUnfinished(actualToday)");
+  const deriveAt = listView.indexOf("TaskModel.selectDay(");
+  assert.ok(fetchAt >= 0, "buildListView must still fetch the carryover pool via _ensureUnfinished(actualToday)");
+  assert.ok(deriveAt >= 0, "buildListView must still call selectDay");
+  assert.ok(fetchAt < deriveAt, "the carryover pool must be resolved before selectDay reads it");
 });

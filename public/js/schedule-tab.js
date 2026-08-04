@@ -897,7 +897,11 @@ function buildListView(){
     let uRank=0;
     DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id))),{pool:visible})
       .forEach(node=>{
-        wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,"open"));
+        // The real mode, not a hardcoded "open". A done row only folds once its whole
+        // subtree is finished, so a done step with unfinished steps under it legitimately
+        // renders HERE -- and hardcoding "open" gave it an unchecked box titled "Mark done"
+        // whose click un-completed it.
+        wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,isDone(node.ev)?"done":"open"));
       });
   }
   // Carryovers get their OWN header and count. One badge used to mean three things
@@ -917,7 +921,7 @@ function buildListView(){
     // already shared by all three of its surfaces.
     const _CO_=(window.DCC&&window.DCC.Carryover)||null;
     const openRows=_CO_?_CO_.openRows(unfPool):day.carryover;
-    const roots=_CO_?_CO_.rootsOf(unfPool):DCC.TaskModel.selectTopLevel(openRows);
+    const roots=_CO_?_CO_.rootsOf(unfPool):DCC.TaskModel.selectRoots(openRows);
     const rootOrder=_sectionSortIsManual(uMode)
       ? _orderUnscheduled(roots)
       : _applySectionSort(roots,uMode,ev=>ev.title,_unsCreated);
@@ -1177,7 +1181,12 @@ function buildSchedule(){
   if(!tl._collapseWired){tl._collapseWired=true;tl.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".wrap-collapse");if(!b)return;e.stopPropagation();const item=b.closest("[data-id]");if(item&&typeof toggleCollapsed==="function"){toggleCollapsed(item.dataset.id);render("schedule");}});}
 
   // Render active/upcoming items as full cards; nested subtasks as a lighter card variant.
-  DCC.TaskModel.selectTree(activeItems,{pool:vis}).forEach(node=>{
+  // pool:activeItems, NOT vis. This surface renders OPEN rows only and a done parent shows
+  // as a childless compact row in the Done section -- so a row whose parent is done has no
+  // parent rendering anywhere here and must still be promoted, or the open work renders
+  // NOWHERE. (The list view is the surface that shows a done parent inline with its open
+  // children nested beneath it, and that one pools on `visible`.)
+  DCC.TaskModel.selectTree(activeItems,{pool:activeItems}).forEach(node=>{
     const ev=node.ev;
     const isSubNode = node.rel==="subtask";
     // Nested rows sit under their parent — they must not flush a block-time header.
@@ -1626,7 +1635,7 @@ function buildProgress(){
   buildShellRails(dayItems,ds,tot);
   // Shells are wrappers, not tasks — they don't count toward the day's done tally.
   const counted=dayItems.filter(ev=>!_isShellEv(ev));
-  const dc=counted.filter(isDone).length;
+  const dc=DCC.TaskModel.selectDone(counted).length;
   document.getElementById("ppct").textContent=dc+"/"+counted.length+" done ("+Math.round(dc/(counted.length||1)*100)+"%)";
 }
 function _isShellEv(ev){
@@ -1780,8 +1789,8 @@ function _pointEligibleScheduleItems(){
 }
 function _dayPointSummary(){
   const items=_pointEligibleScheduleItems();
-  const done=items.filter(isDone);
-  const remaining=items.filter(ev=>!isDone(ev));
+  const done=DCC.TaskModel.selectDone(items);
+  const remaining=DCC.TaskModel.selectOpen(items);
   const earned=done.reduce((sum,ev)=>sum+_estimatedTaskPoints(ev),0);
   const remainingPoints=remaining.reduce((sum,ev)=>sum+_estimatedTaskPoints(ev),0);
   const scheduledPoints=earned+remainingPoints;

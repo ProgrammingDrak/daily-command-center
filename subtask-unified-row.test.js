@@ -14,7 +14,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 // C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
 // module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
-const { installTaskModel } = require("./task-model-vm.js");
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const cardSource = fs.readFileSync(require.resolve("./public/js/itinerary-card.js"), "utf8");
 const schedTabSource = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
@@ -79,9 +79,9 @@ function makeDay(scheduled) {
     dur: function (ev) { return this.pt(ev.end) - this.pt(ev.start); },
     isDone: (ev) => !!ev.done,
     isDeleted: (ev) => !!ev.deleted,
-    isNested: (ev) => !!(ev.wrapId || ev.subtaskOf),
+    isNested: (ev) => context.DCC.TaskModel.isNested(ev),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
-    parentIdOf: (ev) => (ev && (ev.wrapId || ev.subtaskOf)) || null,
+    parentIdOf: (ev) => context.DCC.TaskModel.parentIdOf(ev),
     relOf: (ev) => ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null,
     isWrap: (ev) => !!ev.isWrap,
     userMovable: (ev) => !(ev.type === "meeting" || ev.type === "oneone" || ev.type === "ooo" || ev.type === "break"),

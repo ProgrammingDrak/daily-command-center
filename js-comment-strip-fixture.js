@@ -1,4 +1,6 @@
-// Strip comments from JavaScript source for SOURCE-GREP assertions (C6a).
+// TEST HELPER. Strip comments from JavaScript source for SOURCE-GREP assertions (C6a).
+// Named `-fixture` to match carryover-fixture.js, the repo root's one existing test-only
+// module, so it is not mistaken for a production one (auth.js, db.js, slot-store.js...).
 //
 // Several of this repo's guards assert "no file still contains X". Two ways those
 // guards go wrong, both learned the hard way:

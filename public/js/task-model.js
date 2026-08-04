@@ -411,6 +411,24 @@
     return _arr(items).filter(function (ev) { return !!ev && !d(ev) && !isNested(ev); });
   }
 
+  // ── selectRoots: the rows of THIS set that nothing in the set parents ──
+  //
+  // "no parent edge, OR a parent that is not in this list." Distinct from `selectTopLevel`
+  // (`!isNested`), which excludes anything carrying an edge at all: an orphan whose parent
+  // finished on another day IS a root here and is NOT top-level. Conflating the two is how
+  // the carryover lane's fallback started undercounting its own section badge in review.
+  // `DCC.Carryover.rootsOf` is this function under its published name.
+  function selectRoots(items) {
+    const list = _arr(items);
+    const ids = new Set();
+    for (let i = 0; i < list.length; i++) if (list[i]) ids.add(list[i].id);
+    return list.filter(function (ev) {
+      if (!ev) return false;
+      const p = parentIdOf(ev);
+      return !p || !ids.has(p);
+    });
+  }
+
   // ── selectCarryover: the open rows of a carryover pool ──
   //
   // A past-day row's completion is NOT `isDone(ev)` (that reads TODAY's registry) —
@@ -480,40 +498,22 @@
       kidsOf.get(pid).push(visible[i]);
     }
 
-    // ── Unscheduled: the open untimed top-level roots, then their closure ──
-    // `!isNested` (not `!isSubtask`): a wrap/shell ride-along is not a standalone
-    // Unscheduled row, which is the leak this phase closes.
-    const unscheduledRoots = [];
-    for (let i = 0; i < visible.length; i++) {
-      const ev = visible[i];
-      if (ev.untimed && !done(ev) && !isNested(ev)) unscheduledRoots.push(ev);
-    }
-    const unscheduledIds = new Set();
-    const unscheduled = [];
-    const queue = unscheduledRoots.slice();
-    for (let i = 0; i < unscheduledRoots.length; i++) {
-      unscheduledIds.add(unscheduledRoots[i].id);
-      unscheduled.push(unscheduledRoots[i]);
-    }
-    // Breadth-first. `unscheduledIds` doubles as the visited set, so a parent cycle
-    // in the data cannot loop here.
-    while (queue.length) {
-      const parent = queue.shift();
-      const kids = kidsOf.get(parent.id) || [];
-      for (let k = 0; k < kids.length; k++) {
-        if (unscheduledIds.has(kids[k].id)) continue;
-        unscheduledIds.add(kids[k].id); unscheduled.push(kids[k]); queue.push(kids[k]);
-      }
-    }
-
-    // ── Fold: done, nested under a visible parent, and finished all the way down ──
-    // Memoised so a deep chain is walked once. `seen` breaks a data cycle by treating
-    // the revisited node as "not blocking", which is the right answer: every ev has one
-    // parent pointer, so a cycle is a closed ring, and a ring whose every member is done
-    // IS finished. The seen short-circuit returns BEFORE writing the memo, so a cached
-    // value was always computed by really walking children; and if any member of a ring
-    // is open, that `done(kids[k])` test fails and the false propagates all the way
-    // round. So the memo cannot hand back a stale true.
+    // ── Fold FIRST: done, nested under a visible parent, finished all the way down ──
+    //
+    // ★ ORDER MATTERS, and getting it wrong shipped a real bug in review. The fold used
+    // to be computed AFTER the unscheduled closure and skipped anything the closure had
+    // claimed — so a finished step under an untimed parent could never fold, joined the
+    // Unscheduled subtree instead, and rendered as an unchecked row titled "Mark done"
+    // whose checkbox UN-COMPLETED it. Folding first makes the rule uniform: a finished
+    // subtree folds wherever it hangs, timed or untimed.
+    //
+    // Memoised so a deep chain is walked once. `seen` breaks a data cycle by treating the
+    // revisited node as "not blocking", which is the right answer: every ev has one parent
+    // pointer, so a cycle is a closed ring, and a ring whose every member is done IS
+    // finished. The seen short-circuit returns BEFORE writing the memo, so a cached value
+    // was always computed by really walking children; and if any member of a ring is open,
+    // that `done(kids[k])` test fails and the false propagates all the way round. So the
+    // memo cannot hand back a stale true.
     const subtreeDone = new Map();
     function allDone(ev, seen) {
       if (subtreeDone.has(ev.id)) return subtreeDone.get(ev.id);
@@ -531,7 +531,7 @@
     const folded = [];
     for (let i = 0; i < visible.length; i++) {
       const ev = visible[i];
-      if (unscheduledIds.has(ev.id) || !done(ev)) continue;
+      if (!done(ev)) continue;
       // `parentIdOf`, not `subtaskOf`: a done RIDE-ALONG folds under its parent too.
       // The two predicates this replaces tested `subtaskOf` only, so a done
       // ride-along was listed as its own standalone Done row forever.
@@ -539,6 +539,34 @@
       if (!pid || !byId.has(pid)) continue;
       if (!allDone(ev, new Set())) continue;
       foldedIds.add(ev.id); folded.push(ev);
+    }
+
+    // ── Unscheduled: the open untimed top-level roots, then their closure ──
+    // `!isNested` (not `!isSubtask`): a wrap/shell ride-along is not a standalone
+    // Unscheduled row, which is the leak this phase closes.
+    const unscheduledRoots = [];
+    for (let i = 0; i < visible.length; i++) {
+      const ev = visible[i];
+      if (ev.untimed && !done(ev) && !isNested(ev)) unscheduledRoots.push(ev);
+    }
+    const unscheduledIds = new Set();
+    const unscheduled = [];
+    const queue = unscheduledRoots.slice();
+    for (let i = 0; i < unscheduledRoots.length; i++) {
+      unscheduledIds.add(unscheduledRoots[i].id);
+      unscheduled.push(unscheduledRoots[i]);
+    }
+    // Breadth-first, skipping folded rows. Skipping cannot orphan anything: a folded row's
+    // whole visible subtree is done, so every member of it is itself done, nested, and
+    // parented inside `visible` — i.e. also folded. The subtree leaves together.
+    // `unscheduledIds` doubles as the visited set, so a parent cycle cannot loop here.
+    while (queue.length) {
+      const parent = queue.shift();
+      const kids = kidsOf.get(parent.id) || [];
+      for (let k = 0; k < kids.length; k++) {
+        if (unscheduledIds.has(kids[k].id) || foldedIds.has(kids[k].id)) continue;
+        unscheduledIds.add(kids[k].id); unscheduled.push(kids[k]); queue.push(kids[k]);
+      }
     }
 
     const timed = [], openItems = [], doneItems = [];
@@ -588,7 +616,11 @@
   function selectTree(items, opts) {
     opts = opts || {};
     const list = _arr(items);
-    const pool = _arr(opts.pool && opts.pool.length ? opts.pool : list);
+    // Gate on PRESENCE, not truthiness+length. `{pool:[]}` is a legitimate thing for a
+    // filtered caller to compute and it means "the pool is empty, promote everything" --
+    // the old `&& opts.pool.length` silently turned it into `pool = list`, i.e. back into
+    // the orphan-promoting default that naming a pool is supposed to opt out of.
+    const pool = Array.isArray(opts.pool) ? opts.pool : list;
     const collapsedFn = _collapsedFn(opts);
     const poolIds = new Set();
     for (let i = 0; i < pool.length; i++) if (pool[i]) poolIds.add(pool[i].id);
@@ -649,6 +681,7 @@
     selectTopLevel: selectTopLevel,
     selectOpenTopLevel: selectOpenTopLevel,
     selectCarryover: selectCarryover,
+    selectRoots: selectRoots,
     selectDay: selectDay,
     selectTree: selectTree
   };

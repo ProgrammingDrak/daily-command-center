@@ -70,7 +70,7 @@ function userMovable(ev){
 // the cascade and render indented under their parent.
 function isWrap(ev){return !!(ev&&(ev.isWrap||ev.type==="wrap"||(Array.isArray(ev.tags)&&ev.tags.includes("wrap"))));}
 function wrapParentId(ev){return ev&&ev.wrapId?ev.wrapId:null;}
-function isRideAlong(ev){return !!wrapParentId(ev);}
+function isRideAlong(ev){return _TM().isRideAlong(ev);}
 // Reorder a flat list so each wrap is immediately followed by its ride-along
 // children. Children whose parent isn't in the list keep their place.
 function groupRideAlongs(items){
@@ -88,7 +88,7 @@ function groupRideAlongs(items){
 }
 function wrapBandwidth(ev,pool){
   if(!isWrap(ev))return null;
-  const kids=(pool||[]).filter(k=>wrapParentId(k)===ev.id&&relOf(k)==="ride-along");
+  const kids=_TM().ridersOf(ev.id,pool);
   if(!kids.length)return null;
   return {count:kids.length,mins:kids.reduce((s,k)=>s+(dur(k)||0),0)};
 }
@@ -701,8 +701,9 @@ function _placeTaskAtNextTodaySlot(id){
 
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt=activeIdx!==-1?activeIdx+1:(()=>{
-    const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));
-    return fi.length?fi[0].i:scheduled.length;
+    const firstOpen=_TM().selectOpen(scheduled)[0];
+    const fi=firstOpen?scheduled.indexOf(firstOpen):-1;
+    return fi===-1?scheduled.length:fi;
   })();
   scheduled.splice(insertAt,0,moved);
   if(typeof recalcTimes==="function")recalcTimes();

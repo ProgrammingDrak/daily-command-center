@@ -25,7 +25,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 // C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
 // module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
-const { installTaskModel } = require("./task-model-vm.js");
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const STATE_SRC = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 
@@ -89,7 +89,7 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
     savePinnedStarts: (m) => { pinMap = { ...m }; },
     loadLockedSet: () => [...lockSet],
     saveLockedSet: (a) => { lockSet.clear(); (a||[]).forEach((x) => lockSet.add(x)); },
-    parentIdOf: (e) => (e && (e.wrapId || e.subtaskOf)) || null,
+    parentIdOf: (e) => context.DCC.TaskModel.parentIdOf(e),
     // C6a: `childrenOf` was NOT stubbed here and the sliced mover now calls it. Wired
     // to the real TaskModel rather than hand-rolled: this harness's `parentIdOf` fake
     // already predates the unified-edge order, and a second narrower copy is how a

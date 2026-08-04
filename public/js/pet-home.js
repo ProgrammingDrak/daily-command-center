@@ -15,7 +15,7 @@
   }
   function currentTasks(){
     try{
-      return (scheduled||[]).filter(ev=>ev&&!isDeleted(ev)&&pointEligible(ev)).slice(0,8);
+      return DCC.TaskModel.selectNotDeleted(scheduled).filter(pointEligible).slice(0,8);
     }catch(e){return[];}
   }
   function taskVisibility(ev){

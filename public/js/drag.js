@@ -89,7 +89,7 @@ function recalcTimesTagAware(schedBlocks){
   const active = DCC.TaskModel.selectActive(scheduled);
   if(!active.length) return;
 
-  const firstOrig = INIT_SCHED.find(ev => !isDone(ev) && !isDeleted(ev));
+  const firstOrig = DCC.TaskModel.selectActive(INIT_SCHED)[0];
   const tagAnchorCandidates = active.map(ev => pt(ev.start));
   if(firstOrig) tagAnchorCandidates.push(pt(firstOrig.start));
   let fallbackCursor = Math.min.apply(null, tagAnchorCandidates);

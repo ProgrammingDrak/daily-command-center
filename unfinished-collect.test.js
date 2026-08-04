@@ -355,8 +355,18 @@ test("an ORPHANED subtask renders as top-level, not as a subtask", () => {
 });
 
 test("the Unscheduled badge no longer sums two different things", () => {
-  assert.ok(!/section\("Unscheduled",[^)]*\+/.test(schedTabSource),
-    "the Unscheduled count must not add the carryover total");
+  // `[^)]*` cannot cross an inner `)`, which is this repo's known-bad control shape: a
+  // regressed badge whose first term is a CALL -- section("Unscheduled",
+  // _CO_.rootsOf(unfPool).length+day.unscheduledRoots.length, ...) -- stops the class at
+  // rootsOf('s paren before reaching the `+`, so the negated assertion passes. The
+  // production line ends in `;`, so bound the class to the statement instead. And this is a
+  // NEGATED source assertion, so it needs controls: nobody had watched it fire.
+  const sumRx = /section\("Unscheduled",[^;\n]*\+/;
+  assert.equal(sumRx.test(schedTabSource), false, "the Unscheduled count must not add the carryover total");
+  assert.ok(sumRx.test('section("Unscheduled",untimedItems.length+unfRows.length,"unscheduled","uns-group");'),
+    "the guard must fire on the pre-C6a summed badge");
+  assert.ok(sumRx.test('section("Unscheduled",_CO_.rootsOf(unfPool).length+day.unscheduledRoots.length,"unscheduled","uns-group");'),
+    "...and on a summed badge whose first term is a call, which [^)]* could not reach");
   // C6a: the section renders a SUBTREE now, so the badge counts ROOTS explicitly.
   assert.ok(/section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
   assert.ok(/section\("Unfinished",roots\.length,null,"uns-group"\)/.test(schedTabSource));

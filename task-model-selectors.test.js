@@ -25,7 +25,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+const vm = require("node:vm");
 const TaskModel = require("./public/js/task-model.js");
+// For the ONE path that reads a page global rather than an injected resolver.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 // Status lives in registries outside the ev (C5b), so the harness models them the same
 // way the page does: an id Set per registry, read through a resolver.
@@ -116,6 +119,34 @@ test("selectVisible hides deleted AND side-project-flagged rows", () => {
   assert.deepEqual(ids(TaskModel.selectVisible(pool, res([], ["del"], ["triv"]))), ["a"]);
 });
 
+test("selectDayScoped drops day-agnostic rows, and the exported status wrappers agree", () => {
+  // Same gap that let a selectTopLevel pass-through through: the PREDICATE was covered, the
+  // SET was not, and the set is what the call sites use. selectDayScoped feeds three
+  // user-visible numbers -- buildProgress's day bar, _remainingForScope, and
+  // _pointEligibleScheduleItems (the day's point totals).
+  const pool = [T("a"), T("d", { _dateless: true }), untimed("u")];
+  assert.deepEqual(ids(TaskModel.selectDayScoped(pool)), ["a", "u"], "_dateless rows are not this day's plan");
+  assert.deepEqual(TaskModel.selectDayScoped(null), []);
+  assert.deepEqual(ids(TaskModel.selectDayScoped([null, T("x")])), ["x"]);
+  const o = res(["done"], ["del"]);
+  assert.equal(TaskModel.isDone(T("done"), o), true);
+  assert.equal(TaskModel.isDone(T("a"), o), false);
+  assert.equal(TaskModel.isOpen(T("done"), o), false);
+  assert.equal(TaskModel.isOpen(T("a"), o), true);
+  assert.equal(TaskModel.isOpen(null, o), false, "a null ev is not open");
+  assert.equal(TaskModel.isDeleted(T("del"), o), true);
+  assert.equal(TaskModel.isDeleted(T("a"), o), false);
+});
+
+test("selectRoots is 'nothing here parents you', which is NOT selectTopLevel", () => {
+  // The carryover lane's fallback conflated these in review: rootsOf promotes an orphan whose
+  // parent finished on another day, selectTopLevel excludes anything carrying an edge at all.
+  const pool = [T("p"), T("kid", { subtaskOf: "p" }), T("orphan", { subtaskOf: "gone" }), T("solo")];
+  assert.deepEqual(ids(TaskModel.selectRoots(pool)), ["p", "orphan", "solo"], "the orphan IS a root here");
+  assert.deepEqual(ids(TaskModel.selectTopLevel(pool)), ["p", "solo"], "but it is NOT top-level");
+  assert.deepEqual(TaskModel.selectRoots(null), []);
+});
+
 test("selectTopLevel / selectOpenTopLevel drop nested rows of BOTH edge types", () => {
   // The set behind the two dead nesting guards. A mutation making selectTopLevel a
   // pass-through went uncaught until this existed — `isNested` was covered as a
@@ -175,12 +206,35 @@ test("selectTree omits descendants of a collapsed node, and reports collapsed/ha
   assert.equal(leaf[0].collapsed, false);
 });
 
+test("selectTree reads the page's global isCollapsed when opts does not name one", () => {
+  // No production call site passes opts.isCollapsed -- all four pass only {pool}. So the
+  // browser only ever takes _collapsedFn's GLOBAL branch, and unlike the status resolvers
+  // that one does NOT throw: it falls through to nothing-collapsed. If it ever stops
+  // resolving, every collapsed tree silently renders fully expanded.
+  const ctx = { console, isCollapsed: (id) => id === "p" };
+  vm.createContext(ctx);
+  const TM = installTaskModel(ctx);
+  const pool = [T("p"), T("kid", { subtaskOf: "p" })];
+  // A value crossing back out of a vm carries the VM REALM's prototypes, so a strict
+  // structural assert fails on two identical-looking arrays. `[...]` re-homes it in this
+  // realm. (unfinished-collect.test.js documents the same trap; deepStrictEqual reported
+  // actual ['p'] !== expected ['p'] until this spread was added.)
+  const nodes = [...TM.selectTree(pool)];
+  assert.deepEqual(nodes.map((n) => n.ev.id), ["p"], "the collapsed parent hides its child");
+  assert.equal(nodes[0].collapsed, true);
+  // With no global at all, nothing-collapsed is the documented answer, not a throw.
+  const bare = { console };
+  vm.createContext(bare);
+  assert.equal(installTaskModel(bare).selectTree(pool).length, 2, "no global -> nothing is collapsed");
+});
+
 test("selectTree survives a parent cycle and a runaway depth", () => {
   const cyc = [T("a", { subtaskOf: "b" }), T("b", { subtaskOf: "a" })];
   const out = TaskModel.selectTree(cyc, { pool: cyc });
-  // Both parents are present in the pool, so neither is a root: a pure cycle renders
-  // nothing rather than looping. The important half is that it TERMINATES.
-  assert.ok(Array.isArray(out));
+  // Both parents are present in the pool, so neither is a root: a pure cycle renders nothing
+  // rather than looping. Termination is proven by this test not hanging; assert the OUTCOME
+  // too, because `Array.isArray(out)` is true for every possible implementation.
+  assert.deepEqual(shape(out), [], "a pure cycle has no root, so it renders nothing");
   const chain = [];
   for (let i = 0; i < 40; i++) chain.push(T("n" + i, i ? { subtaskOf: "n" + (i - 1) } : {}));
   const deep = TaskModel.selectTree(chain, { pool: chain });
@@ -262,6 +316,26 @@ test("★ a done row with an OPEN descendant does NOT fold — folding would hid
   partition(day2);
 });
 
+test("★ a finished step under an UNTIMED parent FOLDS — it does not join the Unscheduled subtree", () => {
+  // Shipped as a real bug into review. The fold used to be computed AFTER the unscheduled
+  // closure and skipped whatever the closure had claimed, so a done step under an untimed
+  // parent could never fold: it joined the subtree and rendered as an unchecked row titled
+  // "Mark done" whose checkbox UN-COMPLETED it. Folding first makes the rule uniform.
+  const pool = [untimed("u"), untimed("step", { subtaskOf: "u" }), untimed("rider", { wrapId: "u" })];
+  const day = TaskModel.selectDay(pool, "2026-08-04", res(["step", "rider"]));
+  assert.deepEqual(ids(day.unscheduled), ["u"], "only the open root is in the section");
+  assert.deepEqual(ids(day.folded).sort(), ["rider", "step"], "both finished children fold under it");
+  assert.deepEqual(ids(day.timed), []);
+  partition(day);
+  // ...but a done step with an OPEN step under it still cannot fold, so it DOES join the
+  // subtree -- which is exactly why the call site must pass the real done/open mode.
+  const pool2 = [untimed("u2"), untimed("doneStep", { subtaskOf: "u2" }), untimed("openSub", { subtaskOf: "doneStep" })];
+  const day2 = TaskModel.selectDay(pool2, "2026-08-04", res(["doneStep"]));
+  assert.deepEqual(ids(day2.folded), []);
+  assert.deepEqual(ids(day2.unscheduled).sort(), ["doneStep", "openSub", "u2"]);
+  partition(day2);
+});
+
 test("★ a wrap/shell child does not leak into Unscheduled as a standalone row", () => {
   // The old predicate was `ev.untimed && !isDone(ev) && !isSubtask(ev)` — no
   // !isRideAlong — so an untimed ride-along became a top-level Unscheduled row.
@@ -310,14 +384,21 @@ test("a fully-done subtree folds even when its parent edges form a CYCLE", () =>
   partition(day2);
 });
 
-test("selectDay's unscheduled closure terminates on a parent cycle", () => {
-  const pool = [untimed("u"), untimed("a", { subtaskOf: "u" }), untimed("b", { subtaskOf: "a" })];
-  pool[0].subtaskOf = undefined;
-  // wire a cycle among the descendants
-  pool.push(untimed("c", { subtaskOf: "b" }));
-  pool[1].wrapId = undefined;
+test("selectDay's unscheduled closure walks the whole subtree, and a detached ring is never reached", () => {
+  // The first cut of this test claimed to wire a cycle and wired a CHAIN (u->a->b->c), so
+  // the BFS visited-set guard it named was never taken and deleting that guard left it
+  // green. And the guard is genuinely unreachable for well-formed input: every ev has one
+  // parent pointer, so a cycle is a closed RING with no root above it, and a ring member is
+  // `isNested`, therefore never an unscheduledRoots seed. Pin the reachability fact rather
+  // than pretending to test a cycle.
+  const pool = [
+    untimed("u"), untimed("a", { subtaskOf: "u" }), untimed("b", { subtaskOf: "a" }), untimed("c", { subtaskOf: "b" }),
+    untimed("r1", { subtaskOf: "r3" }), untimed("r2", { subtaskOf: "r1" }), untimed("r3", { subtaskOf: "r2" }),
+  ];
   const day = TaskModel.selectDay(pool, "2026-08-04", res([]));
-  assert.deepEqual(ids(day.unscheduled).sort(), ["a", "b", "c", "u"]);
+  assert.deepEqual(ids(day.unscheduled).sort(), ["a", "b", "c", "u"], "the whole 4-deep subtree comes along");
+  assert.deepEqual(ids(day.unscheduledRoots), ["u"], "a ring member is isNested, so it is never a root");
+  assert.deepEqual(ids(day.timed).sort(), ["r1", "r2", "r3"], "the ring still renders rather than vanishing");
   partition(day);
 });
 

@@ -21,7 +21,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 // C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
 // module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
-const { installTaskModel } = require("./task-model-vm.js");
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const STATE_SRC = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 const SCHEDULE_SRC = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");

@@ -9,7 +9,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 // C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
 // module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
-const { installTaskModel } = require("./task-model-vm.js");
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const dragSource = fs.readFileSync(require.resolve("./public/js/drag.js"), "utf8");
 
@@ -35,10 +35,11 @@ function makeDay(scheduled, opts = {}) {
     dur: function (ev) { return this.pt(ev.end) - this.pt(ev.start); },
     isDone: (ev) => !!ev.done,
     isDeleted: (ev) => !!ev.deleted,
-    isNested: (ev) => !!(ev.wrapId || ev.subtaskOf),
+    // C6a: delegate to the real module (installed just below), not a second copy.
+    isNested: (ev) => context.DCC.TaskModel.isNested(ev),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
-    parentIdOf: (ev) => ev.wrapId || ev.subtaskOf || null,
-    relOf: (ev) => ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null,
+    parentIdOf: (ev) => context.DCC.TaskModel.parentIdOf(ev),
+    relOf: (ev) => context.DCC.TaskModel.relOf(ev),
     isWrap: (ev) => !!ev.isWrap || (Array.isArray(ev.tags) && ev.tags.includes("wrap")),
     loadPinnedStarts: () => pins,
     savePinnedStarts: () => { pinsSaved++; },

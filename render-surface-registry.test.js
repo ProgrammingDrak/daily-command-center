@@ -189,15 +189,53 @@ test("_dccEventOffView is off-view ONLY for an event carrying a different date t
 // — that is the intended shape, because point-eligibility and search matching are not
 // derivation questions. The line is: the shared question comes from the layer, the
 // local one may stay local.
-const { stripJsComments } = require("./js-comment-strip.js");
+
+// ★ THE REGEX IS THE DELIVERABLE, and its first cut was FALSE. Three widenings, each
+// forced by a live offender the previous version walked straight past:
+//
+//  1. WHITESPACE. The literal `scheduled.filter(` misses four real sites, because prettier
+//     had broken them across lines as `scheduled\n  .filter(...)` (day-review.js,
+//     persistence.js, schedule.js x2). A hand count with the literal grep reported 32 when
+//     there were 36 -- the exact undercount this phase exists to stop repeating.
+//  2. THE DEFENSIVE DEFAULT. `(scheduled||[]).filter(...)` puts `||[])` between the
+//     identifier and the dot. `pet-home.js` shipped one of these on a LIVE surface, mixing
+//     the canonical `!isDeleted` with a local `pointEligible`, and the guard passed green.
+//  3. THE OTHER TERMINALS. `.some` / `.every` / `.find` / `.findIndex` derive a task set
+//     from the same global and answer the same questions. `responsibilities.js` had two
+//     `.some(... !isDeleted(e))`, `schedule.js` one, and `schedule.js`/`state.js` carried
+//     three copies of `scheduled.map((ev,i)=>({ev,i})).filter(...)` -- an intermediate
+//     `.map` before the terminal, which no receiver-anchored regex catches.
+//
+// WHAT IT BANS, precisely: reaching the GLOBAL `scheduled` array and deriving a task set
+// from it outside task-model.js. It does NOT ban chaining a surface-specific extra filter
+// onto a canonical selector (`TaskModel.selectOpen(scheduled).filter(pointEligible)`) --
+// that is the intended shape, because point-eligibility and search matching are not
+// derivation questions. The line is: the shared question comes from the layer, the local
+// one may stay local.
+const { stripJsComments } = require("./js-comment-strip-fixture.js");
 const path = require("node:path");
 
-// Whitespace-tolerant on purpose. The literal string `scheduled.filter(` misses FOUR
-// of the real sites, because prettier had broken them across lines as
-// `scheduled\n  .filter(...)` — day-review.js, persistence.js and schedule.js x2. A
-// hand count with the literal grep therefore reported 32 when there were 36, which is
-// exactly the kind of undercount this phase exists to stop repeating.
-const SCHEDULED_FILTER_RX = /\bscheduled\s*\.\s*filter\s*\(/;
+// ★ THE RULE IS PREDICATE-BASED, NOT TERMINAL-BASED, and getting that wrong is the third
+// thing this guard got wrong. A blanket terminal list (`.some|.find|.findIndex`) flagged 25
+// sites that are plain ID LOOKUPS -- `scheduled.find(e => e.id === id)` -- which duplicate
+// nothing and belong exactly where they are. Banning them would be noise the next person
+// silences by deleting the guard.
+//
+// So: the guard fires when code reaches the global `scheduled` and applies one of the FIVE
+// CANONICAL QUESTIONS inline. Those five are precisely what task-model.js owns:
+//   completion (isDone), visibility (isDeleted / the side-project flags), NESTING and the
+//   parent edge (subtaskOf / wrapId / isNested / isSubtask), and scheduledness
+//   (untimed / _dateless).
+// Terminal-agnostic, so `.some(... !isDeleted(e))` is caught and `.find(e => e.id === x)`
+// is not. Statement-bounded (`[^;\n]`) so it cannot run past the call it is judging.
+const RECEIVER = "(?:\\bscheduled\\b|\\(\\s*scheduled\\s*\\|\\|\\s*\\[\\s*\\]\\s*\\))";
+const TERMINAL = "(?:filter|some|every|find|findIndex|flatMap|reduce)";
+const CANONICAL = "(?:isDone\\s*\\(|isDeleted\\s*\\(|isNested\\s*\\(|isSubtask\\s*\\(|isRideAlong\\s*\\(|\\.\\s*subtaskOf\\b|\\.\\s*wrapId\\b|\\.\\s*untimed\\b|\\.\\s*_dateless\\b|\\.\\s*nested\\b|trivFlags\\s*\\[)";
+// `(?:\.\w+\([^;\n]*?\)\s*)*?` allows intermediate chain links (`.map(...)`) before the
+// terminal, which is how `scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev))` hid.
+const SCHEDULED_DERIVE_RX = new RegExp(
+  RECEIVER + "\\s*(?:\\.\\s*\\w+\\s*\\([^;\\n]*?\\)\\s*)*?\\.\\s*" + TERMINAL + "\\s*\\([^;\\n]*?" + CANONICAL
+);
 const JS_DIR = path.join(__dirname, "public", "js");
 const OWNER = "task-model.js";
 
@@ -206,12 +244,14 @@ test("★ no file outside task-model.js derives a task set from `scheduled` dire
   for (const file of fs.readdirSync(JS_DIR).filter((f) => f.endsWith(".js")).sort()) {
     if (file === OWNER) continue;
     const code = stripJsComments(fs.readFileSync(path.join(JS_DIR, file), "utf8"));
-    const rx = new RegExp(SCHEDULED_FILTER_RX.source, "g");
+    const rx = new RegExp(SCHEDULED_DERIVE_RX.source, "g");
     let m;
-    while ((m = rx.exec(code))) offenders.push(file + ":" + code.slice(0, m.index).split("\n").length);
+    while ((m = rx.exec(code))) {
+      offenders.push(file + ":" + code.slice(0, m.index).split("\n").length + "  " + m[0].replace(/\s+/g, " "));
+    }
   }
   assert.deepEqual(offenders, [],
-    "these must call a TaskModel selector instead of filtering `scheduled` inline:\n  " + offenders.join("\n  "));
+    "these must call a TaskModel selector instead of deriving from `scheduled` inline:\n  " + offenders.join("\n  "));
 });
 
 // ★ A source assertion nobody has watched FAIL is a guess about a regex. Three of
@@ -219,35 +259,54 @@ test("★ no file outside task-model.js derives a task set from `scheduled` dire
 // including a source guard whose `[^)]*` could not cross an inner `)`, so it never
 // matched its own passing code. So: run this guard's regex against the code it exists
 // to catch, and against the things it must NOT catch.
-test("★ the `scheduled.filter` guard can actually fail (positive + negative control)", () => {
+test("★ the `scheduled` derivation guard can actually fail (positive + negative control)", () => {
   const mustCatch = [
     'const a = scheduled.filter(ev => !isDone(ev));',                 // the plain form
     'const a=scheduled.filter(ev=>!isDone(ev)&&!isDeleted(ev));',     // minified, no spaces
     'const order = scheduled\n  .filter(ev => ev && ev.untimed)\n  .map(ev => ev.id);', // the multiline form the literal grep missed
     'return scheduled\n        .filter(ev => !isDeleted(ev))',        // day-review.js's real shape
-    'x = scheduled . filter (y);',                                    // spaced out
+    'x = scheduled . filter ( y => ! isDone ( y ) );',                 // spaced out
+    // ── the three shapes the first cut of this guard walked straight past ──
+    'return (scheduled||[]).filter(ev=>ev&&!isDeleted(ev)&&pointEligible(ev)).slice(0,8);', // pet-home.js, a LIVE surface
+    'return ( scheduled || [] ).some(e => ! isDeleted ( e ) );',       // the same default, spaced, .some terminal
+    'return scheduled.some(e=>e&&e.responsibilityId===id&&!isDeleted(e));', // responsibilities.js x2
+    'const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));', // schedule.js x2 + state.js: .map BEFORE the terminal
+    'const n = scheduled.findIndex(ev => !isDone(ev));',
+    'const n = scheduled.every(ev => isDone(ev));',
   ];
   for (const s of mustCatch) {
-    assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(s)), "guard failed to catch: " + JSON.stringify(s));
+    assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments(s)), "guard failed to catch: " + JSON.stringify(s));
   }
   const mustAllow = [
     'const rows = day.unscheduled.filter(ev => !rootIds.has(ev.id));',   // a DIFFERENT array; \b must not match inside "unscheduled"
     'const a = DCC.TaskModel.selectOpen(scheduled).filter(pointEligible);', // the intended shape: canonical selector + local filter
+    'const a = DCC.TaskModel.selectNotDeleted(scheduled).some(e => e.responsibilityId === id);', // ditto, .some terminal
     'const a = rescheduled.filter(x => x);',                             // ditto, another word ending in "scheduled"
     'const a = scheduledItems.filter(x => x);',                          // a different identifier that merely starts with it
+    'const i = scheduled.indexOf(newItem);',                             // not a set derivation
+    'scheduled.splice(insertAt, 0, newItem);',                           // a mutation, not a derivation
+    'const n = scheduled.length;',
+    'scheduled.forEach(ev => paint(ev));',                               // iteration, not selection
+    // ── ID LOOKUPS. 25 of these exist and they duplicate nothing. A terminal-based guard
+    // flagged every one, which is how a guard becomes noise and then gets deleted.
+    'const ev = scheduled.find(e => e.id === id);',
+    'const ev = (scheduled||[]).find(t => t.id === id);',
+    'const i = scheduled.findIndex(e => e.id === movedId);',
+    'const has = scheduled.some(e => e.responsibilityId === id);',       // no canonical question in it
+    'const t = scheduled.find(s => s.title === pomoState.title);',
   ];
   for (const s of mustAllow) {
-    assert.equal(SCHEDULED_FILTER_RX.test(stripJsComments(s)), false, "guard false-positived on: " + JSON.stringify(s));
+    assert.equal(SCHEDULED_DERIVE_RX.test(stripJsComments(s)), false, "guard false-positived on: " + JSON.stringify(s));
   }
   // And the comment strip is what stops a file being flagged for NAMING the pattern
   // while documenting what replaced it — which this very test file does, above.
-  assert.equal(SCHEDULED_FILTER_RX.test(stripJsComments('// the old scheduled.filter(...) predicate is gone')), false);
-  assert.equal(SCHEDULED_FILTER_RX.test(stripJsComments('/* scheduled.filter( */ ok();')), false);
+  assert.equal(SCHEDULED_DERIVE_RX.test(stripJsComments('// the old scheduled.filter(ev=>!isDone(ev)) predicate is gone')), false);
+  assert.equal(SCHEDULED_DERIVE_RX.test(stripJsComments('/* scheduled.filter(ev=>!isDone(ev)) */ ok();')), false);
   // FALSE-NEGATIVE control: a `//` inside a string must not blind the stripper to a
   // real violation later on the same line. A cut-from-first-slash stripper fails this.
-  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments('log("http://x"); const a = scheduled.filter(f);')),
+  assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments('log("http://x"); const a = scheduled.filter(f => !isDone(f));')),
     "a URL literal must not swallow the rest of the line");
-  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments('if(/a\\/b/.test(u)){ const a = scheduled.filter(f); }')),
+  assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments('if(/a\\/b/.test(u)){ const a = scheduled.filter(f => !isDone(f)); }')),
     "a regex literal containing a slash must not swallow the rest of the line");
   // ★ The regex-literal case is NOT hypothetical in this repo, and the first cut of this
   // control was vacuous: `/a\/b/` contains no `//`, so removing the stripper's
@@ -255,15 +314,15 @@ test("★ the `scheduled.filter` guard can actually fail (positive + negative co
   // that actually bites is an ESCAPED SLASH PAIR — `schedule-tab.js:621` really does
   // carry `!/^https?:\/\//.test(url)`, in the file with the most predicates in it. Strip
   // naively and everything after it on that line disappears.
-  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(
-    'if(!url||!/^https?:\\/\\//.test(url)){ const a = scheduled.filter(f); }')),
+  assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments(
+    'if(!url||!/^https?:\\/\\//.test(url)){ const a = scheduled.filter(f => !isDone(f)); }')),
     "an escaped-slash regex (schedule-tab.js:621's real shape) must not swallow the rest of the line");
-  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(
-    'const u=x.replace(/\\/\\//g,"/"); const a = scheduled.filter(f);')),
+  assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments(
+    'const u=x.replace(/\\/\\//g,"/"); const a = scheduled.filter(f => !isDone(f));')),
     "a // inside a regex literal is not a comment");
   // And a `/*` inside a regex must not open a block comment that eats the file.
-  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(
-    'if(/x\\/*y/.test(u)){ const a = scheduled.filter(f); }')),
+  assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments(
+    'if(/x\\/*y/.test(u)){ const a = scheduled.filter(f => !isDone(f)); }')),
     "a /* inside a regex literal must not open a block comment");
 });
 
