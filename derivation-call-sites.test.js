@@ -83,12 +83,14 @@ test("★ the pomodoro picker never offers a NESTED schedule row", () => {
   assert.equal(avail({ id: "c", subtaskOf: "p" }, "consider"), true);
 });
 
-// Any identifier-dot-`nested` read. The first cut whitelisted eight receiver names
-// (ev|s|t|task|item|node|c|p), so `row.nested` / `block.nested` walked straight past it.
-// The whitelist was never needed: requiring an identifier-and-dot prefix already excludes
-// both things it was meant to dodge -- a bare local (`const nested = await ...`) and a CSS
-// class literal ("be-card nested").
-const NESTED_READ_RX = /(?<![\w$.])[A-Za-z_$][\w$]*\s*\.\s*nested\b/;
+// Any dotted-property `nested` read. Two cuts of this were wrong. The first whitelisted eight
+// receiver names (ev|s|t|task|item|node|c|p), so `row.nested` / `block.nested` walked past it.
+// The second added a `(?<![\w$.])` lookbehind whose `.` then excluded a DOTTED receiver --
+// `b.properties.nested` is the natural spelling in a file that reads block properties, and it
+// escaped. The prefix requirement alone is what dodges the two false positives (a bare local
+// `const nested = await ...`, and the class literal "be-card nested"); allowing a dotted chain
+// is what closes the escape.
+const NESTED_READ_RX = /(?<![\w$])[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\.\s*nested\b/;
 
 test("nothing in public/js reads the retired `ev.nested` field any more", () => {
   const dir = require("node:path").join(__dirname, "public", "js");
@@ -106,6 +108,8 @@ test("nothing in public/js reads the retired `ev.nested` field any more", () => 
   assert.ok(NESTED_READ_RX.test("scheduled.filter(s=>!s.nested)"));
   assert.ok(NESTED_READ_RX.test("if(row.nested)return;"), "a renamed receiver must not escape the guard");
   assert.ok(NESTED_READ_RX.test("if(block.nested)return;"));
+  assert.ok(NESTED_READ_RX.test("if(b.properties.nested)return;"), "a DOTTED receiver must not escape either");
+  assert.ok(NESTED_READ_RX.test("if(this.state.nested)return;"));
   // ...and the two things it must NOT flag: a plain local, and a CSS class string.
   assert.equal(NESTED_READ_RX.test("const nested = await _moveOriginDayChildrenTo(id);"), false);
   assert.equal(NESTED_READ_RX.test('el.className = "be-card nested";'), false);

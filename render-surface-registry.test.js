@@ -228,13 +228,27 @@ const path = require("node:path");
 //   (untimed / _dateless).
 // Terminal-agnostic, so `.some(... !isDeleted(e))` is caught and `.find(e => e.id === x)`
 // is not. Statement-bounded (`[^;\n]`) so it cannot run past the call it is judging.
-const RECEIVER = "(?:\\bscheduled\\b|\\(\\s*scheduled\\s*\\|\\|\\s*\\[\\s*\\]\\s*\\))";
+// The receiver is the global array, its defensive-default form, OR one of the layer's own
+// edge lookups applied to it -- `childrenOf(id, scheduled).some(c=>!isDone(c))` is still a
+// canonical question asked inline, and anchoring on `scheduled` alone made the guard blind to
+// five of them (three deciding whether a rollup container can be checked off, which are meant
+// to agree with each other AND with selectDay's fold).
+const RECEIVER = "(?:\\bscheduled\\b" +
+  "|\\(\\s*scheduled\\s*\\|\\|\\s*\\[\\s*\\]\\s*\\)" +
+  "|(?:childrenOf|ridersOf|subtasksOf)\\s*\\([^;\\n]*?\\bscheduled\\b[^;\\n]*?\\))";
 const TERMINAL = "(?:filter|some|every|find|findIndex|flatMap|reduce)";
-const CANONICAL = "(?:isDone\\s*\\(|isDeleted\\s*\\(|isNested\\s*\\(|isSubtask\\s*\\(|isRideAlong\\s*\\(|\\.\\s*subtaskOf\\b|\\.\\s*wrapId\\b|\\.\\s*untimed\\b|\\.\\s*_dateless\\b|\\.\\s*nested\\b|trivFlags\\s*\\[)";
-// `(?:\.\w+\([^;\n]*?\)\s*)*?` allows intermediate chain links (`.map(...)`) before the
+// BARE WORDS, not `isDone\s*\(`. A point-free predicate reference has no open paren, so
+// `scheduled.filter(isDone)` -- sidebar.js's real shape, twice -- was invisible.
+const CANONICAL = "(?:\\b(?:isDone|isDeleted|isNested|isSubtask|isRideAlong)\\b" +
+  "|\\.\\s*subtaskOf\\b|\\.\\s*wrapId\\b|\\.\\s*untimed\\b|\\.\\s*_dateless\\b|\\.\\s*nested\\b|trivFlags\\s*\\[)";
+// `(?:\.\w+\(...\)\s*)*?` allows intermediate chain links (`.map(...)`) before the
 // terminal, which is how `scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev))` hid.
+// The bound is `[^;]{0,N}?`, NOT `[^;\n]`: a prettier-wrapped predicate body spans lines, so
+// excluding `\n` hid every multi-line filter -- including features.js's focus-banner
+// predicate, one of this phase's own headline fixes. `;` still stops the match running past
+// the call it is judging, and the length cap keeps it from wandering when there is no `;`.
 const SCHEDULED_DERIVE_RX = new RegExp(
-  RECEIVER + "\\s*(?:\\.\\s*\\w+\\s*\\([^;\\n]*?\\)\\s*)*?\\.\\s*" + TERMINAL + "\\s*\\([^;\\n]*?" + CANONICAL
+  RECEIVER + "\\s*(?:\\.\\s*\\w+\\s*\\([^;]{0,200}?\\)\\s*)*?\\.\\s*" + TERMINAL + "\\s*\\([^;]{0,400}?" + CANONICAL
 );
 const JS_DIR = path.join(__dirname, "public", "js");
 const OWNER = "task-model.js";
@@ -287,6 +301,17 @@ test("★ the `scheduled` derivation guard can actually fail (positive + negativ
     'const n = scheduled.filter(ev=>isRideAlong(ev));',                    // isRideAlong alone
     'const n = scheduled.filter(s=>!s.nested);',                           // the retired field alone
     'const n = scheduled.filter(ev=>!isDeleted(ev));',                     // isDeleted alone
+    // ── the two shapes the predicate-based rewrite still missed, quoting the real base code
+    'const items=scheduled.filter(ev=>{\n    if(!ev||ev.nested)return false;\n    if(isDone(ev))return false;\n    return true;\n  });', // features.js:1106 -- marker on line 2+
+    'const dc=scheduled.filter(isDone).length;',                           // sidebar.js:5 -- point-free ref
+    'const doneItems=scheduled.filter(isDone);',                           // sidebar.js:67
+    // ── a canonical question asked on a canonical-edge SET is still asked inline
+    'if(childrenOf(parent.id,scheduled).some(c=>!isDone(c)))return;',      // schedule.js:555 real shape
+    'const open=childrenOf(id,scheduled).filter(c=>!isDone(c)).length;',   // schedule.js:891 real shape
+    // ── the three TERMINAL entries that had no control of their own
+    'const existing=scheduled.find(ev=>ev.triageId===tid||(!isDone(ev)&&ev.source==="triage"));', // triage.js:980 base shape
+    'const n = scheduled.reduce((n,ev)=>n+(isDone(ev)?1:0),0);',
+    'const a = scheduled.flatMap(ev=>isDone(ev)?[]:[ev]);',
   ];
   for (const s of mustCatch) {
     assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments(s)), "guard failed to catch: " + JSON.stringify(s));
@@ -308,6 +333,11 @@ test("★ the `scheduled` derivation guard can actually fail (positive + negativ
     'const i = scheduled.findIndex(e => e.id === movedId);',
     'const has = scheduled.some(e => e.responsibilityId === id);',       // no canonical question in it
     'const t = scheduled.find(s => s.title === pomoState.title);',
+    // ── the ROUTED forms of everything above: the layer answers, the call site chains
+    'const open=DCC.TaskModel.selectOpen(childrenOf(id,scheduled)).length;',
+    'const kids=DCC.TaskModel.selectNotDeleted(childrenOf(shellEv.id,scheduled));',
+    'const dc=DCC.TaskModel.selectDone(scheduled).length;',
+    'const hasSubKids=DCC.TaskModel.subtasksOf(id,scheduled).length>0;',
   ];
   for (const s of mustAllow) {
     assert.equal(SCHEDULED_DERIVE_RX.test(stripJsComments(s)), false, "guard false-positived on: " + JSON.stringify(s));

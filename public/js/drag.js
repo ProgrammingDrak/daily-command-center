@@ -51,8 +51,8 @@ function isFixedTimeBlock(ev){
 // the one it started the day at. Falls back to INIT_SCHED before first render.
 function _meetingBlocks(){
   const src=(typeof scheduled!=="undefined"&&Array.isArray(scheduled)&&scheduled.length)?scheduled:INIT_SCHED;
-  return src
-    .filter(ev=>isFixedTimeBlock(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+  return DCC.TaskModel.selectNotDeleted(src)
+    .filter(ev=>isFixedTimeBlock(ev))
     .map(ev=>({s:pt(ev.start),e:pt(ev.end)}))
     .sort((a,b)=>a.s-b.s);
 }

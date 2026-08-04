@@ -79,11 +79,13 @@ test("the three edge lookups answer three different questions", () => {
   assert.deepEqual(TaskModel.childrenOf("p", null), [], "a null pool is empty, not a throw");
 });
 
-test("isScheduled / isDayScoped separate 'no clock time' from 'not this day'", () => {
-  assert.equal(TaskModel.isScheduled(T("a")), true);
-  assert.equal(TaskModel.isScheduled(untimed("u")), false);
-  assert.equal(TaskModel.isDayScoped(T("a")), true);
-  assert.equal(TaskModel.isDayScoped(T("d", { _dateless: true })), false);
+test("the untimed and day-agnostic axes stay separate, through the sets that expose them", () => {
+  // Two different questions: "no clock time" (the Unscheduled section) vs "not this day at
+  // all" (excluded from the progress bar, remaining time and point totals). Asserted through
+  // the SETS, because the bare predicates are not exported -- see the note below.
+  const pool = [T("a"), untimed("u"), T("d", { _dateless: true })];
+  assert.deepEqual(ids(TaskModel.selectTimedActive(pool, res([]))), ["a", "d"], "untimed drops out");
+  assert.deepEqual(ids(TaskModel.selectDayScoped(pool)), ["a", "u"], "_dateless drops out");
 });
 
 // ═══════════════════════════════ injected status ═══════════════════════════════════
@@ -128,14 +130,14 @@ test("selectDayScoped drops day-agnostic rows, and the exported status wrappers 
   assert.deepEqual(ids(TaskModel.selectDayScoped(pool)), ["a", "u"], "_dateless rows are not this day's plan");
   assert.deepEqual(TaskModel.selectDayScoped(null), []);
   assert.deepEqual(ids(TaskModel.selectDayScoped([null, T("x")])), ["x"]);
-  const o = res(["done"], ["del"]);
-  assert.equal(TaskModel.isDone(T("done"), o), true);
-  assert.equal(TaskModel.isDone(T("a"), o), false);
-  assert.equal(TaskModel.isOpen(T("done"), o), false);
-  assert.equal(TaskModel.isOpen(T("a"), o), true);
-  assert.equal(TaskModel.isOpen(null, o), false, "a null ev is not open");
-  assert.equal(TaskModel.isDeleted(T("del"), o), true);
-  assert.equal(TaskModel.isDeleted(T("a"), o), false);
+  // The status PREDICATES (isDone/isOpen/isDeleted) and isScheduled/isDayScoped are
+  // deliberately NOT exported: no call site uses them, and asserting an API nothing consumes
+  // is coverage that reads as thorough and constrains nothing. The SETS are what the routed
+  // sites call, and those are what is pinned here and above.
+  for (const gone of ["isDone", "isOpen", "isDeleted", "isScheduled", "isDayScoped"]) {
+    assert.equal(typeof TaskModel[gone], "undefined", gone + " must stay unexported until a call site needs it");
+  }
+  assert.equal(typeof TaskModel.isNested, "function", "isNested IS read directly by two call sites");
 });
 
 test("selectRoots is 'nothing here parents you', which is NOT selectTopLevel", () => {
@@ -145,6 +147,7 @@ test("selectRoots is 'nothing here parents you', which is NOT selectTopLevel", (
   assert.deepEqual(ids(TaskModel.selectRoots(pool)), ["p", "orphan", "solo"], "the orphan IS a root here");
   assert.deepEqual(ids(TaskModel.selectTopLevel(pool)), ["p", "solo"], "but it is NOT top-level");
   assert.deepEqual(TaskModel.selectRoots(null), []);
+  assert.deepEqual(ids(TaskModel.selectRoots([null, T("x")])), ["x"], "a null member is not a root");
 });
 
 test("selectTopLevel / selectOpenTopLevel drop nested rows of BOTH edge types", () => {
@@ -231,10 +234,13 @@ test("selectTree reads the page's global isCollapsed when opts does not name one
 test("selectTree survives a parent cycle and a runaway depth", () => {
   const cyc = [T("a", { subtaskOf: "b" }), T("b", { subtaskOf: "a" })];
   const out = TaskModel.selectTree(cyc, { pool: cyc });
-  // Both parents are present in the pool, so neither is a root: a pure cycle renders nothing
-  // rather than looping. Termination is proven by this test not hanging; assert the OUTCOME
-  // too, because `Array.isArray(out)` is true for every possible implementation.
-  assert.deepEqual(shape(out), [], "a pure cycle has no root, so it renders nothing");
+  // A ring has no root, so the plain root test never fires for it -- which used to mean the
+  // ring AND everything hanging below it rendered nowhere. `chainCycles` treats a cycling
+  // ancestor chain as rootless so the ring flattens instead of vanishing. Termination is
+  // proven by this test not hanging; assert the OUTCOME too, because `Array.isArray(out)`
+  // is true for every possible implementation.
+  assert.deepEqual(shape(out), ["a@0:subtask", "b@1:subtask"],
+    "a ring flattens from its first member rather than disappearing");
   const chain = [];
   for (let i = 0; i < 40; i++) chain.push(T("n" + i, i ? { subtaskOf: "n" + (i - 1) } : {}));
   const deep = TaskModel.selectTree(chain, { pool: chain });
@@ -254,13 +260,14 @@ const partition = (day) => {
   assert.deepEqual([...seen.keys()].sort(), day.visible.map((e) => e.id).sort(),
     "timed + unscheduled + folded must cover every visible row exactly once");
   const inner = new Set();
-  for (const key of ["open", "done"]) {
+  for (const key of ["open", "done", "nestedDone"]) {
     for (const ev of day[key]) {
-      assert.equal(inner.has(ev.id), false, `${ev.id} is in both open and done`);
+      assert.equal(inner.has(ev.id), false, `${ev.id} is in more than one of open/done/nestedDone`);
       inner.add(ev.id);
     }
   }
-  assert.deepEqual([...inner].sort(), day.timed.map((e) => e.id).sort(), "open + done must cover timed exactly once");
+  assert.deepEqual([...inner].sort(), day.timed.map((e) => e.id).sort(),
+    "open + done + nestedDone must cover timed exactly once");
 };
 
 test("★ selectDay's sections are disjoint AND exhaustive over the visible rows", () => {
@@ -279,21 +286,35 @@ test("★ selectDay's sections are disjoint AND exhaustive over the visible rows
     "deleted and side-project rows are not visible at all");
 });
 
-test("★ a done RIDE-ALONG folds under its visible parent (the subtaskOf-only bug)", () => {
+test("★ a done RIDE-ALONG nests under its wrap and is NOT a standalone Done row", () => {
+  // The phase's named fix, delivered on the surface it was actually about. `folded` means
+  // "no row anywhere, it lives in the parent's detail panel" -- and that panel is built from
+  // subtasksOf, so it has no ride-along home. Folding the rider therefore deleted it from
+  // every surface (its wrap even reported hasKids:false). It belongs in `timed`, rendering
+  // nested and greyed under its wrap, and out of `done`, which is the compact Done section.
   const pool = [T("parent"), T("rider", { wrapId: "parent" })];
   const day = TaskModel.selectDay(pool, "2026-08-04", res(["rider"]));
-  assert.deepEqual(ids(day.folded), ["rider"], "a done ride-along renders inside its parent, not as its own row");
-  assert.deepEqual(ids(day.done), [], "and it must NOT also appear in the compact Done section");
+  assert.deepEqual(ids(day.folded), [], "the wrap edge has no detail-panel home, so nothing folds");
+  assert.deepEqual(ids(day.nestedDone), ["rider"], "it renders nested inline...");
+  assert.deepEqual(ids(day.done), [], "...and NOT as a standalone compact Done row");
+  assert.deepEqual(ids(day.timed).sort(), ["parent", "rider"]);
   partition(day);
-  // The subtask case, which already worked, must keep working.
+  // ...and it really does reach the screen, nested under its wrap with a chevron.
+  const nodes = TaskModel.selectTree(day.timed, { pool: day.visible });
+  assert.deepEqual(shape(nodes), ["parent@0", "rider@1:ride-along"]);
+  assert.equal(nodes[0].hasKids, true, "the wrap must still report children so the row is reachable");
+  // The SUBTASK edge does have a panel home, so it folds out of the list entirely.
   const day2 = TaskModel.selectDay([T("p2"), T("s2", { subtaskOf: "p2" })], "2026-08-04", res(["s2"]));
   assert.deepEqual(ids(day2.folded), ["s2"]);
+  assert.deepEqual(ids(day2.timed), ["p2"]);
+  partition(day2);
 });
 
 test("★ a done nested row whose parent is GONE stays listed — it is not lost", () => {
   const day = TaskModel.selectDay([T("orphan", { subtaskOf: "deleted-parent" })], "2026-08-04", res(["orphan"]));
   assert.deepEqual(ids(day.folded), [], "nothing to fold into");
   assert.deepEqual(ids(day.done), ["orphan"], "it gets its own Done row so it is not lost");
+  partition(day);   // the branch where an exhaustiveness bug would most plausibly land
 });
 
 test("★ a done row with an OPEN descendant does NOT fold — folding would hide live work", () => {
@@ -303,7 +324,10 @@ test("★ a done row with an OPEN descendant does NOT fold — folding would hid
   const pool = [T("root"), T("doneStep", { subtaskOf: "root" }), T("openSubStep", { subtaskOf: "doneStep" })];
   const day = TaskModel.selectDay(pool, "2026-08-04", res(["doneStep"]));
   assert.deepEqual(ids(day.folded), [], "the done step keeps its row because its child is still open");
-  assert.deepEqual(ids(day.done), ["doneStep"]);
+  // It nests under `root`, so it is nestedDone -- rendered inline and greyed, not listed
+  // standalone in a compact Done section.
+  assert.deepEqual(ids(day.nestedDone), ["doneStep"]);
+  assert.deepEqual(ids(day.done), []);
   assert.deepEqual(ids(day.open).sort(), ["openSubStep", "root"]);
   partition(day);
   // And the open child really does reach the screen, nested under its greyed parent.
@@ -313,6 +337,7 @@ test("★ a done row with an OPEN descendant does NOT fold — folding would hid
   const day2 = TaskModel.selectDay(pool, "2026-08-04", res(["doneStep", "openSubStep"]));
   assert.deepEqual(ids(day2.folded).sort(), ["doneStep", "openSubStep"]);
   assert.deepEqual(ids(day2.done), []);
+  assert.deepEqual(ids(day2.timed), ["root"]);
   partition(day2);
 });
 
@@ -323,8 +348,12 @@ test("★ a finished step under an UNTIMED parent FOLDS — it does not join the
   // "Mark done" whose checkbox UN-COMPLETED it. Folding first makes the rule uniform.
   const pool = [untimed("u"), untimed("step", { subtaskOf: "u" }), untimed("rider", { wrapId: "u" })];
   const day = TaskModel.selectDay(pool, "2026-08-04", res(["step", "rider"]));
-  assert.deepEqual(ids(day.unscheduled), ["u"], "only the open root is in the section");
-  assert.deepEqual(ids(day.folded).sort(), ["rider", "step"], "both finished children fold under it");
+  // The done SUBTASK folds (its parent's detail panel lists it). The done RIDE-ALONG has no
+  // panel home, so it stays with its parent -- here that means joining the Unscheduled
+  // closure, where it renders nested and greyed. Neither becomes a standalone row.
+  assert.deepEqual(ids(day.folded), ["step"], "the subtask folds into the panel");
+  assert.deepEqual(ids(day.unscheduled).sort(), ["rider", "u"], "the rider rides along with its parent");
+  assert.deepEqual(ids(day.unscheduledRoots), ["u"], "but only the open root is a root");
   assert.deepEqual(ids(day.timed), []);
   partition(day);
   // ...but a done step with an OPEN step under it still cannot fold, so it DOES join the
@@ -445,4 +474,5 @@ test("selectDay tolerates a null pool and null members without throwing", () => 
   partition(day);
   const day2 = TaskModel.selectDay([null, T("a"), undefined], "2026-08-04", res([]));
   assert.deepEqual(ids(day2.visible), ["a"]);
+  partition(day2);
 });

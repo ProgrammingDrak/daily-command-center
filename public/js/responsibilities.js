@@ -324,7 +324,7 @@
       });
     })(rootId);
     const root=scheduled.find(function(e){return e.id===rootId;});
-    if(root&&typeof isDone==="function"&&!isDone(root)&&!childrenOf(rootId,scheduled).some(function(c){return !isDone(c);})){
+    if(root&&typeof isDone==="function"&&!isDone(root)&&!DCC.TaskModel.selectOpen(childrenOf(rootId,scheduled)).length){
       toggleDone(rootId);
     }
   }

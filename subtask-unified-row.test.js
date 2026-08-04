@@ -82,7 +82,7 @@ function makeDay(scheduled) {
     isNested: (ev) => context.DCC.TaskModel.isNested(ev),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
     parentIdOf: (ev) => context.DCC.TaskModel.parentIdOf(ev),
-    relOf: (ev) => ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null,
+    relOf: (ev) => context.DCC.TaskModel.relOf(ev),
     isWrap: (ev) => !!ev.isWrap,
     userMovable: (ev) => !(ev.type === "meeting" || ev.type === "oneone" || ev.type === "ooo" || ev.type === "break"),
     now: () => 9 * 60,

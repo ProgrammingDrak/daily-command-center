@@ -552,7 +552,7 @@ function _autoCompleteShellAncestors(id,sourceDate){
     const parent=scheduled.find(e=>e.id===pid);
     if(!parent)return;
     if(window.TaskTypes.rule(parent,"autoCompleteWhenChildrenDone")&&!isDone(parent)){
-      if(childrenOf(parent.id,scheduled).some(c=>!isDone(c)))return; // still open work inside
+      if(DCC.TaskModel.selectOpen(childrenOf(parent.id,scheduled)).length)return; // still open work inside
       const bonus=_shellBonusPoints(parent.id);
       const completedAt=new Date();
       manualDone.add(parent.id);doneAt[parent.id]=completedAt;
@@ -583,7 +583,7 @@ function _pointAwardOverride(id){
   if(!ev)return undefined;
   if(window.TaskTypes&&window.TaskTypes.isRollup(ev))return _shellBonusPoints(id);
   if(!window.PointPlan)return undefined;
-  const hasSubKids=childrenOf(id,scheduled).some(c=>relOf(c)==="subtask");
+  const hasSubKids=DCC.TaskModel.subtasksOf(id,scheduled).length>0;
   if(hasSubKids)return window.PointPlan.awardForParentCompletion(id);
   if(ev.subtaskOf)return window.PointPlan.shareFor(ev.subtaskOf,id);
   return undefined;
@@ -888,7 +888,7 @@ function toggleDone(id,opts){
   if(!opts._fromAutoComplete&&window.TaskTypes&&typeof childrenOf==="function"){
     const shellEv=scheduled.find(e=>e.id===id);
     if(shellEv&&window.TaskTypes.rule(shellEv,"blockManualCompleteWithOpenChildren")){
-      const open=childrenOf(id,scheduled).filter(c=>!isDone(c)).length;
+      const open=DCC.TaskModel.selectOpen(childrenOf(id,scheduled)).length;
       if(open){
         if(typeof showToast==="function")showToast("Finish its "+open+" remaining task"+(open>1?"s":"")+" first","info",2600);
         return;

@@ -175,7 +175,7 @@ function shellRollup(id,pool){
     });
   })(id);
   const kids=childrenOf(id,pool);
-  return {points:Math.round(points),done:kids.filter(k=>isDone(k)).length,total:kids.length};
+  return {points:Math.round(points),done:_TM().selectDone(kids).length,total:kids.length};
 }
 
 // Capture a shell's subtree as a reusable, nesting-aware template — the saved
@@ -196,7 +196,7 @@ function captureShellTemplate(shellId,pool){
       out.edge=(relOf(ev)==="subtask")?"subtask":"wrap";
       out.durationMin=Math.max(1,dur(ev)||0)||30;
     }
-    const kids=(depth<20)?childrenOf(ev.id,pool).filter(c=>!seen.has(c.id)&&!isDeleted(c)):[];
+    const kids=(depth<20)?_TM().selectNotDeleted(childrenOf(ev.id,pool)).filter(c=>!seen.has(c.id)):[];
     out.children=kids.map(k=>node(k,depth+1,false));
     return out;
   }
@@ -215,7 +215,7 @@ function shellBonus(points,pct){
 // display-only until they finish (toggleDone enforces the same rule).
 function shellCompleteBlocked(ev){
   return !!(ev&&window.TaskTypes&&window.TaskTypes.rule(ev,"blockManualCompleteWithOpenChildren")&&
-    typeof scheduled!=="undefined"&&childrenOf(ev.id,scheduled).some(c=>!isDone(c)));
+    typeof scheduled!=="undefined"&&_TM().selectOpen(childrenOf(ev.id,scheduled)).length>0);
 }
 
 // Meta chip for a rollup container: children's points, progress, bonus preview.

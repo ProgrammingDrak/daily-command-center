@@ -185,9 +185,14 @@ test("a new task inserts at the first OPEN row's index, not at 0 and not past th
   // Three copies of `scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev))` existed
   // (schedule.js x2, state.js). The layer answers "which are open"; the call site answers
   // "where is it". Getting it wrong drops new tasks at the top of a half-finished day.
+  // SLICE the real expression instead of retyping it. The first cut ran an inline copy and
+  // pinned only its FIRST line, so mutating the last line to `return fi===-1?0:fi;` left both
+  // behavioural assertions passing -- i.e. the two that carry the actual risk guarded nothing.
+  const insertExpr = one(read("schedule.js"),
+    /\(\(\)=>\{const firstOpen=DCC\.TaskModel\.selectOpen\(scheduled\)\[0\];[\s\S]*?\}\)\(\)/, "insertAt IIFE");
   const ctx = ctxWith(
     { isDone: (ev) => ev.id === "d1" || ev.id === "d2", isDeleted: () => false, scheduled: [T("d1"), T("d2"), T("open1"), T("open2")] },
-    ['function firstOpenIdx(){const firstOpen=DCC.TaskModel.selectOpen(scheduled)[0];const fi=firstOpen?scheduled.indexOf(firstOpen):-1;return fi===-1?scheduled.length:fi;}']
+    ["function firstOpenIdx(){return " + insertExpr + ";}"]
   );
   assert.equal(vm.runInContext("firstOpenIdx()", ctx), 2, "index 2 is the first open row");
   ctx.scheduled = [T("d1"), T("d2")];

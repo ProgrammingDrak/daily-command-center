@@ -17,6 +17,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: install the REAL TaskModel INSIDE the context. A require()d copy sees node's
+// globals, never this harness's stubs -- which is the trap task-model-vm-fixture.js exists
+// to close, and these three were still hand-assigning the node-realm module in.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const TaskModel = require("./public/js/task-model.js");
 const { apiStub } = require("./carryover-fixture.js");
@@ -71,7 +75,7 @@ function load(daysByDate, archiveDates) {
   // The blockStore stub stays: collectUnfinished no longer touches it, but
   // _originBlock (the write paths' origin resolver) still does.
   ctx.window.blockStore = store;
-  ctx.window.DCC.TaskModel = TaskModel;
+  installTaskModel(ctx);
   // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.
   // apiStub serves the same fixture through that contract. The server-side half of
   // the predicate is pinned in open-tasks-query.test.js, not here.

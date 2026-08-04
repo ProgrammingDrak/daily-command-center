@@ -25,10 +25,23 @@ const vm = require("node:vm");
 
 const TASK_MODEL_SRC = fs.readFileSync(require.resolve("./public/js/task-model.js"), "utf8");
 
+// state.js's accessor, which its five bare tree globals and several other functions call.
+// Six harnesses slice state.js regions that reach it, so it is installed here too -- SLICED
+// FROM state.js rather than retyped, so a change to how state.js reaches the layer cannot
+// leave the harnesses resolving it a different way.
+const STATE_SRC = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
+const TM_ACCESSOR = (() => {
+  const m = STATE_SRC.match(/function _TM\(\)\{[^\n]*\}/);
+  if (!m) throw new Error("task-model-vm-fixture: could not slice `_TM` out of state.js");
+  return m[0];
+})();
+
 function installTaskModel(ctx) {
   vm.runInContext(TASK_MODEL_SRC, ctx);
   if (!ctx.DCC || !ctx.DCC.TaskModel) throw new Error("installTaskModel: TaskModel did not attach to the context");
+  // Only define _TM if the harness has not already sliced or stubbed one.
+  if (typeof ctx._TM !== "function") vm.runInContext(TM_ACCESSOR, ctx);
   return ctx.DCC.TaskModel;
 }
 
-module.exports = { installTaskModel, TASK_MODEL_SRC };
+module.exports = { installTaskModel, TASK_MODEL_SRC, TM_ACCESSOR };

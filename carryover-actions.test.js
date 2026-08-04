@@ -24,6 +24,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: install the REAL TaskModel INSIDE the context. A require()d copy sees node's
+// globals, never this harness's stubs -- which is the trap task-model-vm-fixture.js exists
+// to close, and these three were still hand-assigning the node-realm module in.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 // C4 moved toBacklog's write into `state.js unscheduleRow`, so this harness loads the
 // REAL function rather than stubbing it. That is not a convenience: the assertion this
@@ -120,7 +124,7 @@ function load(daysByDate, archiveDates) {
   vm.runInContext(unfSource, ctx);
   vm.runInContext([unscheduleRowSource, rowForDateWriteSource, writeRowDateSource, syncBacklogSource, positiveDurationSource].join("\n"), ctx);
   ctx.window.blockStore = store;
-  ctx.window.DCC.TaskModel = TaskModel;
+  installTaskModel(ctx);
   // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.
   // The blockStore stub above stays because _originBlock still resolves through it.
   ctx.window.DCC.api = apiStub(daysByDate);

@@ -449,19 +449,23 @@
   //                     counts and what the manual drag order sorts.
   //   unscheduled       those roots PLUS all of their visible descendants — the
   //                     section AS A SUBTREE.
-  //   folded            done nested rows that render inside a still-visible parent
-  //                     instead of as rows of their own.
-  //   timed             visible − unscheduled − folded. The work list; done rows
-  //                     sit inline in their slot.
+  //   folded            done SUBTASKS of a still-visible parent whose whole subtree is
+  //                     finished. They render in the parent's detail panel, which lists
+  //                     subtasks, so they get no row anywhere. See the fold note below for
+  //                     why this is the subtask edge only.
+  //   timed             visible − unscheduled − folded. The work list; done rows sit
+  //                     inline in their slot, nested under their parent.
   //   open              timed ∧ ¬done.
-  //   done              timed ∧ done — the timeline's compact "Done" section.
+  //   nestedDone        timed ∧ done ∧ nested under a visible parent. Renders inline in the
+  //                     work list; a compact DONE SECTION must not also list it standalone.
+  //   done              timed ∧ done ∧ ¬nestedDone — the timeline's compact "Done" section.
   //   carryover         open rows of opts.carryoverPool, and ONLY when the viewed
   //                     day is the actual today. A past or future day does not
   //                     collect yesterday's leftovers.
   //
   // TWO EXACT INVARIANTS, both pinned by tests:
-  //   timed ⊎ unscheduled ⊎ folded == visible   (disjoint AND exhaustive)
-  //   open  ⊎ done                  == timed    (disjoint AND exhaustive)
+  //   timed ⊎ unscheduled ⊎ folded    == visible   (disjoint AND exhaustive)
+  //   open  ⊎ done ⊎ nestedDone       == timed     (disjoint AND exhaustive)
   //
   // WHY `unscheduled` IS A SUBTREE AND NOT JUST ITS ROOTS. This is what makes the
   // orphan fix safe. `selectTree` now HIDES a child whose parent is in the pool but
@@ -515,29 +519,52 @@
     // that `done(kids[k])` test fails and the false propagates all the way round. So the
     // memo cannot hand back a stale true.
     const subtreeDone = new Map();
-    function allDone(ev, seen) {
+    function allDone(ev, seen, cyc) {
       if (subtreeDone.has(ev.id)) return subtreeDone.get(ev.id);
-      if (seen.has(ev.id)) return true;
+      // ★ A short-circuited answer is NOT cacheable, and an earlier version of this code
+      // memoised it with a comment claiming that was impossible. It is not: a ring can have
+      // branches hanging BELOW it. With A<->B a ring and open C parented on A, walking A
+      // first resolves allDone(B) to true via this short-circuit and CACHES it, before C has
+      // been looked at. B then folds with open work inside its subtree, and selectTree drops
+      // C along with it. `cyc` marks the walk as tainted so nothing on that path is stored.
+      if (seen.has(ev.id)) { cyc.hit = true; return true; }
       seen.add(ev.id);
       const kids = kidsOf.get(ev.id) || [];
       let ok = true;
       for (let k = 0; k < kids.length && ok; k++) {
-        if (!done(kids[k]) || !allDone(kids[k], seen)) ok = false;
+        if (!done(kids[k]) || !allDone(kids[k], seen, cyc)) ok = false;
       }
-      subtreeDone.set(ev.id, ok);
+      if (!cyc.hit) subtreeDone.set(ev.id, ok);
       return ok;
     }
+    // ★ THE FOLD IS THE SUBTASK EDGE ONLY, and the reason is a capability, not a preference.
+    //
+    // Folding means "no row of your own; you live in your parent's detail panel". That panel
+    // (`renderModalItems`, features.js) is built from `subtasksOf` -- it lists SUBTASKS and
+    // has no ride-along item type. So the subtask edge has a home to fold into and the wrap
+    // edge does not. An earlier cut of this phase widened the fold to `parentIdOf` on the
+    // grounds that "a done ride-along never folds" was a bug; it is, but only on the ONE
+    // surface where folding means "do not list this separately" -- the timeline's compact
+    // Done section. Widening it globally deleted the done rider from every surface: it left
+    // `timed`, so the list view stopped nesting it under its wrap, and its wrap reported
+    // hasKids:false so there was not even a chevron to find it behind. The only remaining
+    // trace was the aggregate "N ride-alongs" chip.
+    //
+    // So the two questions are separated, and both are returned:
+    //   folded      -> has a non-list home; keep it out of the work list entirely
+    //   nestedDone  -> renders nested inline under a visible parent; a compact DONE SECTION
+    //                  must not ALSO list it standalone
+    // The list view renders `timed` (done riders included, nested and greyed, which is what
+    // base did) and the timeline's Done section reads `done`, which excludes nestedDone --
+    // so the standalone-Done-row bug the phase set out to fix is still fixed.
     const foldedIds = new Set();
     const folded = [];
     for (let i = 0; i < visible.length; i++) {
       const ev = visible[i];
-      if (!done(ev)) continue;
-      // `parentIdOf`, not `subtaskOf`: a done RIDE-ALONG folds under its parent too.
-      // The two predicates this replaces tested `subtaskOf` only, so a done
-      // ride-along was listed as its own standalone Done row forever.
-      const pid = parentIdOf(ev);
+      if (!done(ev) || !isSubtask(ev)) continue;
+      const pid = ev.subtaskOf;
       if (!pid || !byId.has(pid)) continue;
-      if (!allDone(ev, new Set())) continue;
+      if (!allDone(ev, new Set(), { hit: false })) continue;
       foldedIds.add(ev.id); folded.push(ev);
     }
 
@@ -569,12 +596,16 @@
       }
     }
 
-    const timed = [], openItems = [], doneItems = [];
+    const timed = [], openItems = [], doneItems = [], nestedDone = [];
     for (let i = 0; i < visible.length; i++) {
       const ev = visible[i];
       if (unscheduledIds.has(ev.id) || foldedIds.has(ev.id)) continue;
       timed.push(ev);
-      if (done(ev)) doneItems.push(ev); else openItems.push(ev);
+      if (!done(ev)) { openItems.push(ev); continue; }
+      // `parentIdOf`, so a done RIDE-ALONG counts here too: it renders nested inline in the
+      // work list, so a compact Done section must not list it standalone as well.
+      const pid = parentIdOf(ev);
+      if (pid && byId.has(pid)) nestedDone.push(ev); else doneItems.push(ev);
     }
 
     const today = opts.today || null;
@@ -587,6 +618,7 @@
       timed: timed,
       open: openItems,
       done: doneItems,
+      nestedDone: nestedDone,
       folded: folded,
       carryover: carryover
     };
@@ -622,8 +654,26 @@
     // the orphan-promoting default that naming a pool is supposed to opt out of.
     const pool = Array.isArray(opts.pool) ? opts.pool : list;
     const collapsedFn = _collapsedFn(opts);
-    const poolIds = new Set();
-    for (let i = 0; i < pool.length; i++) if (pool[i]) poolIds.add(pool[i].id);
+    const poolIds = new Set(), poolById = new Map();
+    for (let i = 0; i < pool.length; i++) if (pool[i]) { poolIds.add(pool[i].id); poolById.set(pool[i].id, pool[i]); }
+    // ★ A row whose ancestor chain inside the pool CYCLES has no root, so the plain root test
+    // ("no parent, or parent absent from the pool") never fires for it and neither it nor
+    // anything hanging below it is ever walked -- the ring and its whole branch vanish. Treat
+    // a cycling chain as rootless so the ring flattens instead. Corrupt data only (every
+    // reparent path guards against cycles), but "standalone work must never disappear" is the
+    // rule this phase is built on, and a lost OPEN row is the worst way to break it.
+    function chainCycles(ev) {
+      const walked = new Set();
+      let cur = ev;
+      while (cur) {
+        if (walked.has(cur.id)) return true;
+        walked.add(cur.id);
+        const p = parentIdOf(cur);
+        if (!p || !poolIds.has(p)) return false;
+        cur = poolById.get(p);
+      }
+      return false;
+    }
     const out = [], seen = new Set();
     function walk(ev, depth) {
       if (seen.has(ev.id) || depth > 20) return;   // cycle / runaway guard
@@ -643,7 +693,7 @@
       const ev = list[i];
       if (!ev) continue;
       const p = parentIdOf(ev);
-      if (!p || !poolIds.has(p)) walk(ev, 0);
+      if (!p || !poolIds.has(p) || chainCycles(ev)) walk(ev, 0);
     }
     return out;
   }
@@ -660,12 +710,12 @@
     isSubtask: isSubtask,
     isRideAlong: isRideAlong,
     isNested: isNested,
-    isScheduled: isScheduled,
-    isDayScoped: isDayScoped,
-    // C6a — status
-    isDone: evIsDone,
-    isOpen: evIsOpen,
-    isDeleted: evIsDeleted,
+    // C6a — status. `isDone`/`isOpen`/`isDeleted`/`isScheduled`/`isDayScoped` are NOT
+    // exported: nothing calls them, the 30-odd routed sites all use the SET selectors
+    // (selectDone / selectOpen / selectNotDeleted / selectDayScoped), and shipping a
+    // published predicate whose first real user gets to discover whether it means what its
+    // name says is worse than not shipping it. `isNested` IS exported, because two call
+    // sites read it directly (the focus-id default and the pomodoro guard).
     // C6a — edges
     childrenOf: childrenOf,
     ridersOf: ridersOf,
