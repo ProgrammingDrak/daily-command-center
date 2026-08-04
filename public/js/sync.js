@@ -111,7 +111,7 @@ function saveActions(data) {
           }, {
             parentId: window.blockStore.getDayRootId(),
             date: window.blockStore.getCurrentDate(),
-            sortOrder: i
+            sortOrder: (i + 1) * 1000        // C6c: 1000-spaced; a 0 would have meant "unset"
           }).then(block => { item._blockId = block.id; });
         }
       });
@@ -383,7 +383,7 @@ function savePendingTasks(tasks){
       const props={...task,kind:"pending_task",local_id:localId,id:localId,updatedAt:new Date().toISOString()};
       const existing=task._blockId?window.blockStore.get(task._blockId):byLocal.get(localId);
       if(existing)window.blockStore.updateBlock(existing.id,{...(existing.properties||{}),...props});
-      else window.blockStore.createBlock("block",props,{date:null,sortOrder:idx});
+      else window.blockStore.createBlock("block",props,{date:null,sortOrder: (idx + 1) * 1000});
     });
     blocks.forEach(block=>{
       const localId=(block.properties||{}).local_id||block.id;

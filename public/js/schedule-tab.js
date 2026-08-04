@@ -2474,7 +2474,7 @@ async function _applyBlocksToday(){
     if (b._isNew || (typeof b.id === 'string' && b.id.indexOf('_new_') === 0)){
       const createType = b._createAsScheduleBlock ? 'schedule_block' : 'block';
       const createDate = createType === 'schedule_block' ? null : undefined;
-      await blockStore.createBlock(createType, bProps, { parentId: b.parent_id, date: createDate, sortOrder: j });
+      await blockStore.createBlock(createType, bProps, { parentId: b.parent_id, date: createDate, sortOrder: (j + 1) * 1000 });
     } else {
       await blockStore.updateBlock(b.id, bProps);
     }

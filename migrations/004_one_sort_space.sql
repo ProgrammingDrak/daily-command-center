@@ -19,11 +19,16 @@
 -- ║  schemes sharing one field. Preserving it preserves nonsense. C6b measured this and ║
 -- ║  refused to flip the read on top of it, which is why C6c exists.                    ║
 -- ║                                                                                    ║
--- ║  This migration and the four producer fixes that ship with it (db.js createBlock,   ║
--- ║  createItineraryTask, rescheduleBlocks; block-store.js createBlock) are what make   ║
--- ║  `sort_order` mean one thing. The read flip rides in the same PR and is tolerant of  ║
--- ║  this file NOT having run: the reads are canonical-first with the day_root overlay   ║
--- ║  as a COUNTED fallback, so a deploy landing before the apply loses nothing.          ║
+-- ║  This migration and the five producer fixes that ship with it (db.js createBlock,   ║
+-- ║  createItineraryTask, rescheduleBlocks, updateBlock; block-store.js createBlock) are ║
+-- ║  what make `sort_order` mean one thing.                                              ║
+-- ║                                                                                    ║
+-- ║  ★ APPLY THIS *BEFORE* DEPLOYING THE CLIENT. The read flip is NOT tolerant of this   ║
+-- ║  file not having run -- the overlay fallback only fires when a day has zero          ║
+-- ║  orderable rows, so an un-migrated day would read the mixed column and the first     ║
+-- ║  drag would prune the overlay that held the real order. The other direction is safe  ║
+-- ║  and needs no code: the OLD client reads the overlay and merely dual-writes          ║
+-- ║  `sort_order`, so renumbering underneath it is invisible.                            ║
 -- ╚═══════════════════════════════════════════════════════════════════════════════════╝
 --
 -- WHERE THE ORDER COMES FROM, in priority order per day:

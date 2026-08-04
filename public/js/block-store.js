@@ -159,9 +159,12 @@
   // The day's next 1000-spaced slot from what the cache can see. Deliberately the same shape as
   // db.js nextSortOrderForDay, and deliberately only an OPTIMISTIC guess -- the server recomputes it
   // against every row, including ones this client has not loaded.
+  // BOTH caches: `cacheSet` routes a dateless `type:"block"` row to `_globalCache`, so scanning only
+  // `_dayCache` returned 1000 for every dateless create -- i.e. it manufactured the duplicate
+  // `sort_order` that migration 004 exists to remove.
   function _nextLocalSortOrder(date) {
     let mx = 0;
-    for (const b of _dayCache.values()) {
+    for (const b of [..._dayCache.values(), ..._globalCache.values()]) {
       if (!b || b.deleted_at) continue;
       if ((b.date || null) !== (date || null)) continue;
       const n = Number(b.sort_order);
@@ -399,20 +402,23 @@
         type,
         parent_id: parentId || null,
         date: date !== undefined ? date : _currentDate,
-        properties,
-        // C6c: the OPTIMISTIC order. The server is authoritative (`cacheSet(block)` below replaces
-        // this row with its response, which carries the day's real next slot), but until that lands
-        // -- and for the whole offline WAL window -- this value decides where the row renders. `|| 0`
-        // put every new task at the TOP of the day for that window. Mirror what the server will
-        // assign: the end of this day's space.
-        sort_order: sortOrder || _nextLocalSortOrder(date !== undefined ? date : _currentDate)
+        properties
       };
+      // C6c: `sort_order` is OMITTED from the payload when the caller gave none, so db.createBlock's
+      // `== null` branch computes the day's real next slot against EVERY row -- including ones this
+      // client never loaded. Putting the local guess in the payload instead would have bypassed the
+      // server entirely (schemas.js keeps the field), which is how every dateless create ended up
+      // stamped 1000. The guess belongs on the OPTIMISTIC cache entry only, below.
+      if (sortOrder != null) payload.sort_order = sortOrder;
       // Optimistic cache update BEFORE API call — so reads (e.g. loadNotes) are instant
       // and don't race with the async API response. Same pattern as updateBlock().
       // The id is final from the start now, so there is no placeholder entry to swap out
       // afterwards and no window where the cache holds an id nothing else can resolve.
       const optimistic = {
         ...payload,
+        // Optimistic only: what the server will most likely assign, so the row renders at the end of
+        // its day for the in-flight window (and the whole offline WAL window) instead of the top.
+        sort_order: sortOrder != null ? sortOrder : _nextLocalSortOrder(date !== undefined ? date : _currentDate),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         deleted_at: null

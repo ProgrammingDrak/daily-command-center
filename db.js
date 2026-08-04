@@ -236,8 +236,13 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   // default was `sort_order || 0`, which put every create at the head of the day and produced 289
   // of the 289 zeros on prod. Only task rows participate; a day_root or time_entry keeps 0, which
   // is what it has always had and what nothing orders by.
+  // `== null` ONLY. Treating an explicit 0 as "unset" cannot distinguish "the caller said nothing"
+  // from "the caller said FIRST", and three callers pass a 0-based loop index
+  // (server.js seedScheduleBlocksFromYAML, schedule-tab.js _applyBlocksToday, sync.js
+  // savePendingTasks) -- so item 0 would have been appended AFTER items 1..N-1. Those three are
+  // converted to 1000-spaced in the same change.
   let sortOrderToUse = sort_order;
-  if ((sortOrderToUse == null || sortOrderToUse === 0) && isTaskRow({ type, properties: props })) {
+  if (sortOrderToUse == null && isTaskRow({ type, properties: props })) {
     sortOrderToUse = await nextSortOrderForDay(q, { date, workspace_id });
   }
 
@@ -361,9 +366,20 @@ async function updateBlock(id, { properties, sort_order, parent_id, date }, clie
     validateBlock(existing.type, parsed);
     newProps = parsed;
   }
-  const newSortOrder = sort_order !== undefined ? sort_order : existing.sort_order;
+  // C6c: this is the OTHER day-changing writer, and the most-used one -- PATCH /api/blocks/:id is how
+  // every promote/unschedule goes (state.js scheduleRowOnDay / unscheduleRow -> _writeRowDate).
+  // Keeping the old number across a date change meant a Backlog row promoted onto today arrived
+  // carrying the DATELESS space's number and sorted to the front of the day, which also steals the
+  // earliest cascade slot and re-times everything after it. Re-slot into the target day, same rule
+  // as rescheduleBlocks.
+  let newSortOrder = sort_order !== undefined ? sort_order : existing.sort_order;
   const newParentId = parent_id !== undefined ? parent_id : existing.parent_id;
   const newDate = date !== undefined ? date : existing.date;
+  if (sort_order === undefined
+      && normalizeDate(newDate) !== normalizeDate(existing.date)
+      && isTaskRow({ type: existing.type, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps })) {
+    newSortOrder = await nextSortOrderForDay(q, { date: newDate, workspace_id: existing.workspace_id });
+  }
   await q.query(`UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6`, [newProps, newSortOrder, newParentId, newDate, now, id]);
   await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, newProps, now]);
   // D1 (Track D): if this row is an INSTANCE of a recurring responsibility and it

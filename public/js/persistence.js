@@ -121,12 +121,18 @@ function loadSubtaskOrder(){
         })
         .map(_evIdOfRow);
     });
-    if(Object.keys(out).length)return out;
+    // MERGE per parent, not all-or-nothing. Choosing between the two meant one derivable parent hid
+    // every other parent's saved order -- a parent whose children are not in the day scope would be
+    // invisible while its overlay entry sat there waiting for A4 to delete it.
     const fromBlocks=_bsProp("_subtaskOrder",null);
-    if(fromBlocks&&typeof fromBlocks==="object"&&Object.keys(fromBlocks).length){
-      if(typeof _c6bFallback==="function")_c6bFallback("subtaskOrder",Object.keys(fromBlocks).length);
-      return fromBlocks;
+    if(fromBlocks&&typeof fromBlocks==="object"){
+      let fb=0;
+      Object.keys(fromBlocks).forEach(pid=>{
+        if(out[pid]===undefined&&Array.isArray(fromBlocks[pid])&&fromBlocks[pid].length){out[pid]=fromBlocks[pid];fb++;}
+      });
+      if(fb&&typeof _c6bFallback==="function")_c6bFallback("subtaskOrder",fb);
     }
+    if(Object.keys(out).length)return out;
   }
   try{return JSON.parse(localStorage.getItem(SUBTASK_ORDER_KEY)||"{}")}catch(e){return{}}
 }

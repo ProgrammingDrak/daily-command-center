@@ -1045,10 +1045,11 @@ function _c6bFallback(key,n){
 function _orderableRows(opts){
   if(!window.blockStore)return [];
   const scope=(opts&&"date" in opts)?opts.date:((typeof __state!=="undefined"&&__state&&__state.date)||null);
+  const datedOnly=!!(opts&&opts.datedOnly);
   const rows=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block")];
   return rows.filter(b=>b&&!b.deleted_at&&b.properties
     &&(!DCC.TaskModel.foldsIntoItinerary||DCC.TaskModel.foldsIntoItinerary(b))
-    &&(!scope||b.date===scope||!b.date));
+    &&(datedOnly?b.date===scope:(!scope||b.date===scope||!b.date)));
 }
 // The ev id a row projects to. Matches the fold (`local_id || block.id`), NOT `backlogKey`,
 // because these ids reach `scheduled[]` where a "blk-" prefix would be a visible id change.
@@ -1056,14 +1057,26 @@ function _evIdOfRow(b){return (b.properties&&b.properties.local_id)||b.id;}
 
 // An ev-id list in `sort_order` order. Rows with no sort_order sort last, which is what the
 // orderMap fallbacks these lists feed already did with their 9999 sentinel.
-function _orderFromRows(pick){
-  return _orderableRows()
+// `{datedOnly:true}` for the ORDER axis. `_orderableRows` includes dateless rows on purpose -- the
+// Backlog is day-agnostic and the pin/lock readers want it -- but `sort_order` keeps the dateless rows
+// in their OWN 1000-spaced partition (both `nextSortOrderForDay` and migration 004 scope on
+// `date IS NOT DISTINCT FROM`). Mixing them into one derived list means the day's first row (1000) and
+// the first dateless row (1000) tie, and a drag would then renumber Backlog rows into whichever day
+// was last viewed. Same reasoning the unscheduled axis was left alone for.
+function _orderFromRows(pick,opts){
+  return _orderableRows(opts)
     .filter(b=>typeof pick!=="function"||pick(b))
     .slice()
     .sort((a,b)=>{
       const ao=(a.sort_order==null)?Number.MAX_SAFE_INTEGER:a.sort_order;
       const bo=(b.sort_order==null)?Number.MAX_SAFE_INTEGER:b.sort_order;
-      return ao-bo;
+      // The same `, created_at ASC` tie-break every SQL read here already has. Without it a duplicate
+      // sort_order falls through to cache iteration order, which differs after a boot vs a loadDay vs
+      // an SSE refresh -- the exact non-determinism this phase exists to remove.
+      if(ao!==bo)return ao-bo;
+      const ac=String(a.created_at||""),bc=String(b.created_at||"");
+      if(ac!==bc)return ac<bc?-1:1;
+      return String(a.id)<String(b.id)?-1:1;
     })
     .map(_evIdOfRow);
 }
@@ -1161,7 +1174,7 @@ function savePinnedStarts(data){
 // rearranging only the positions the subset already occupies and leaving every other row exactly
 // where it is. Same mechanic `_reorderActive` (drag.js) uses over `scheduled[]`.
 function _spliceDayOrder(subsetIds){
-  const full=_orderFromRows();
+  const full=_orderFromRows(null,{datedOnly:true});
   if(!full.length)return (subsetIds||[]).map(String);
   const inFull=new Set(full.map(String));
   const subset=(subsetIds||[]).map(String).filter(id=>inFull.has(id));
@@ -2132,12 +2145,19 @@ let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "
 // 1000-spaced space per (date, workspace). Verified across 118 days on a prod restore: **the order
 // the user SEES is byte-identical before and after.**
 //
-// Canonical-first with the overlay as a COUNTED fallback (`window.__DCC_C6B_FALLBACK`), so a deploy
-// landing before 004 is applied loses nothing -- the same tolerance C6b used, for the same reason.
-// A4 removes the overlay keys and this fallback together.
+// ★ 004 IS A HARD PREREQUISITE FOR THIS DEPLOY, and the first cut of this comment claimed otherwise.
+// The overlay fallback below is only reachable when the day has ZERO orderable rows -- i.e. when there
+// is nothing to order -- so it does NOT cover an un-migrated day. On the 40 day_roots carrying
+// `_taskOrder`, deploying first would read the mixed column, and the first drag would then splice into
+// that nonsense AND prune the overlay, destroying the only record of the real order.
+//
+// The ordering is safe in the other direction and needs no code: the OLD client reads the overlay for
+// order and merely dual-writes `sort_order`, so 004 renumbering underneath it is invisible. **Apply
+// 004, verify, then deploy.** The fallback stays as belt-and-braces for a workspace with no rows yet.
+// A4 removes the overlay keys and it together.
 function loadTaskOrder(){
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
-    const derived=_orderFromRows();
+    const derived=_orderFromRows(null,{datedOnly:true});
     if(derived.length)return derived;
     const v=_bsProp("_taskOrder",null);
     if(v&&v.length){_c6bFallback("taskOrder",v.length);return v;}

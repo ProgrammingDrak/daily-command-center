@@ -98,7 +98,7 @@ function ctx(rows, overlay) {
     /function _c6bFallback\(key,n\)\{[\s\S]*?\n\}/,
     /function _orderableRows\(opts\)\{[\s\S]*?\n\}/,
     /function _evIdOfRow\(b\)\{[^\n]*\}/,
-    /function _orderFromRows\(pick\)\{[\s\S]*?\n\}/,
+    /function _orderFromRows\(pick,opts\)\{[\s\S]*?\n\}/,
     /function _writeRowOrder\(ids\)\{[\s\S]*?\n\}/,
     /function _pruneOverlayMap\(key,keep\)\{[\s\S]*?\n\}/,
     /function loadPinnedStarts\(\)\{[\s\S]*?\n\}/,
@@ -468,9 +468,18 @@ test("★★ db.js assigns the day's next slot instead of defaulting to 0", () =
   assert.match(dbCode, /workspace_id IS NOT DISTINCT FROM \$2/);
   assert.match(dbCode, /dcc_is_task_row\(type, properties\)/);
   assert.match(dbCode, /\(Math\.floor\(mx \/ SORT_STEP\) \+ 1\) \* SORT_STEP/);
-  // createBlock uses it when the caller gave nothing
-  assert.match(dbCode, /if \(\(sortOrderToUse == null \|\| sortOrderToUse === 0\) && isTaskRow/);
+  // createBlock uses it when the caller gave nothing -- `== null` ONLY, because an explicit 0 means
+  // "first" to three live callers (server.js seedScheduleBlocksFromYAML, schedule-tab.js
+  // _applyBlocksToday, sync.js x2), all now 1000-spaced.
+  assert.match(dbCode, /if \(sortOrderToUse == null && isTaskRow/);
+  assert.equal(/sortOrderToUse === 0/.test(dbCode), false, "an explicit 0 must not be read as unset");
   assert.equal(/sort_order \|\| 0, user_id/.test(dbCode), false, "the old `sort_order || 0` insert default must be gone");
+  for (const [f, pat] of [["server.js", /sort_order: \(i \+ 1\) \* 1000/], ["public/js/schedule-tab.js", /sortOrder: \(j \+ 1\) \* 1000/], ["public/js/sync.js", /sortOrder: \(i \+ 1\) \* 1000/], ["public/js/sync.js", /sortOrder:\(idx \+ 1\) \* 1000|sortOrder: \(idx \+ 1\) \* 1000/]]) {
+    assert.match(fs.readFileSync(require.resolve("./" + f), "utf8"), pat, f + " still passes a 0-based index");
+  }
+  // updateBlock is the OTHER day-changing writer, and the most-used one
+  assert.match(dbCode, /if \(sort_order === undefined\s*&& normalizeDate\(newDate\) !== normalizeDate\(existing\.date\)/);
+  assert.match(dbCode, /newSortOrder = await nextSortOrderForDay\(q, \{ date: newDate/);
   // createItineraryTask no longer derives an order from the start time
   assert.equal(/derivedSort/.test(dbCode), false, "minutes-of-day derivedSort must stay gone");
   // rescheduleBlocks joins the TARGET day's space
@@ -482,8 +491,14 @@ test("★★ db.js assigns the day's next slot instead of defaulting to 0", () =
 test("★ block-store's OPTIMISTIC create also lands at the end of the day, not the top", () => {
   const bsCode = stripJsComments(fs.readFileSync(require.resolve("./public/js/block-store.js"), "utf8"));
   assert.match(bsCode, /function _nextLocalSortOrder\(date\)/);
-  assert.match(bsCode, /sort_order: sortOrder \|\| _nextLocalSortOrder\(/);
+  // BOTH caches: a dateless `type:"block"` row lives in _globalCache, so scanning only _dayCache
+  // returned 1000 for every dateless create -- manufacturing the duplicate 004 exists to remove.
+  assert.match(bsCode, /for \(const b of \[\.\.\._dayCache\.values\(\), \.\.\._globalCache\.values\(\)\]\)/);
+  // and the PAYLOAD omits sort_order so the server stays authoritative; the guess is optimistic-only
+  assert.match(bsCode, /if \(sortOrder != null\) payload\.sort_order = sortOrder;/);
   assert.equal(/sort_order: sortOrder \|\| 0/.test(bsCode), false, "the `|| 0` optimistic default must be gone");
+  assert.equal(/sort_order: sortOrder \|\| _nextLocalSortOrder/.test(bsCode), false,
+    "the local guess must NOT ride in the payload -- that bypasses the server's real append");
 });
 
 // ══════════════════════════════ migration 004 contract ═══════════════════════════════
