@@ -116,6 +116,17 @@ test("selectVisible hides deleted AND side-project-flagged rows", () => {
   assert.deepEqual(ids(TaskModel.selectVisible(pool, res([], ["del"], ["triv"]))), ["a"]);
 });
 
+test("selectTopLevel / selectOpenTopLevel drop nested rows of BOTH edge types", () => {
+  // The set behind the two dead nesting guards. A mutation making selectTopLevel a
+  // pass-through went uncaught until this existed — `isNested` was covered as a
+  // predicate, the set it feeds was not, and the set is what the call sites use.
+  const pool = [T("top"), T("sub", { subtaskOf: "top" }), T("rider", { wrapId: "top" }), T("topDone")];
+  assert.deepEqual(ids(TaskModel.selectTopLevel(pool)), ["top", "topDone"]);
+  assert.deepEqual(ids(TaskModel.selectOpenTopLevel(pool, res(["topDone"]))), ["top"]);
+  assert.deepEqual(TaskModel.selectTopLevel(null), []);
+  assert.deepEqual(ids(TaskModel.selectTopLevel([null, T("x")])), ["x"]);
+});
+
 // ═══════════════════════════════════ selectTree ════════════════════════════════════
 
 test("selectTree nests subtasks before ride-alongs, and ride-alongs by start time", () => {
