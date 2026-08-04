@@ -187,6 +187,40 @@ async function resolveParentRef(q, { ref, workspaceId, date, selfId }, inTx) {
   }
 }
 
+// ══════════════════════ C6c: ONE `sort_order` NUMBER SPACE ══════════════════════
+//
+// `sort_order` is the itinerary's only persisted order (C6b moved pins and locks onto the row and
+// left the three order LISTS on their day_root overlays precisely because this column was NOT one
+// space). Measured on prod before this phase, over 1815 live task rows: **231** carried the
+// 1000-spaced values a drag writes, **1005** carried minutes-of-day 0..1439 (`createItineraryTask`
+// below), **289** were exactly 0 (this function's old `sort_order || 0` default), and 290 were
+// other. **63 of 113 days held a mix**, so reading the column as the order would have sorted every
+// server-created and every newly-added task ahead of everything the user had ever dragged.
+//
+// The rule now: **every writer uses ONE space, 1000-spaced, per (date, workspace).** A create with
+// no explicit order lands at the END of its day, which is also the only correct UX -- a new task
+// must not jump to the top of a half-finished day.
+//
+// Scoped to task rows and to the row's own (date, workspace) so a day_root, a time_entry or another
+// tenant's rows cannot influence the number. A dateless row (the Backlog) shares one space, which is
+// correct: it is day-agnostic by definition.
+const SORT_STEP = 1000;
+async function nextSortOrderForDay(q, { date, workspace_id }) {
+  const { rows } = await q.query(
+    `SELECT COALESCE(MAX(sort_order), 0) AS mx
+       FROM blocks
+      WHERE deleted_at IS NULL
+        AND date IS NOT DISTINCT FROM $1
+        AND workspace_id IS NOT DISTINCT FROM $2
+        AND dcc_is_task_row(type, properties)`,
+    [date || null, workspace_id || null]
+  );
+  const mx = Number(rows[0] && rows[0].mx) || 0;
+  // Round UP to the next step so a legacy minutes-of-day value (0..1439) cannot leave the next
+  // create colliding with it, and so the space stays readable.
+  return (Math.floor(mx / SORT_STEP) + 1) * SORT_STEP;
+}
+
 async function createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }, client) {
   const blockId = id || crypto.randomUUID();
   const now = new Date().toISOString();
@@ -197,6 +231,15 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
   const props = typeof properties === "string" ? JSON.parse(properties) : { ...(properties || {}) };
   validateBlock(type, props);
   const q = client || pool;
+
+  // C6c: no explicit order -> the END of this row's day, in the one 1000-spaced space. The old
+  // default was `sort_order || 0`, which put every create at the head of the day and produced 289
+  // of the 289 zeros on prod. Only task rows participate; a day_root or time_entry keeps 0, which
+  // is what it has always had and what nothing orders by.
+  let sortOrderToUse = sort_order;
+  if ((sortOrderToUse == null || sortOrderToUse === 0) && isTaskRow({ type, properties: props })) {
+    sortOrderToUse = await nextSortOrderForDay(q, { date, workspace_id });
+  }
 
   let parentId = parent_id || null;
   if (isTaskRow({ type, properties: props })) {
@@ -250,7 +293,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT (id) DO NOTHING
        RETURNING *`,
-      [blockId, type, parentId, date || null, props, sort_order || 0, user_id || null, workspace_id || null, now, now]
+      [blockId, type, parentId, date || null, props, sortOrderToUse || 0, user_id || null, workspace_id || null, now, now]
     );
   } catch (err) {
     // A3's UNIQUE idempotency index fired: another writer committed this key in the
@@ -298,7 +341,7 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
     return { ...parseBlock(found[0]), _resolvedExisting: true };
   }
   await q.query(`INSERT INTO operations (block_id, op_type, after_data, timestamp) VALUES ($1, 'create', $2, $3)`, [blockId, props, now]);
-  return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sort_order || 0, created_at: now, updated_at: now, deleted_at: null };
+  return { id: blockId, type, parent_id: parentId, date: date || null, properties: props, sort_order: sortOrderToUse || 0, created_at: now, updated_at: now, deleted_at: null };
 }
 
 // `client` lets a caller run this inside its own transaction (batchOp,
@@ -855,9 +898,18 @@ async function rescheduleBlocks(moves, creates) {
         newProps = parsed;
       }
       const newDate = m.date !== undefined ? m.date : existing.date;
-      await client.query(`UPDATE blocks SET properties = $1, date = $2, updated_at = $3 WHERE id = $4`, [newProps, newDate, now, m.id]);
+      // C6c: a row that CHANGES DAY joins the target day's space at the end. It used to keep the
+      // originating day's `sort_order`, so an arriving task landed wherever it happened to sit on
+      // the day it came from -- which under a `sort_order` read means a carryover can insert itself
+      // into the middle of today. A same-day re-slot keeps its number (nothing moved).
+      let newSortOrder = existing.sort_order;
+      const dayChanged = normalizeDate(newDate) !== normalizeDate(existing.date);
+      if (dayChanged && isTaskRow({ type: existing.type, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps })) {
+        newSortOrder = await nextSortOrderForDay(client, { date: newDate, workspace_id: existing.workspace_id });
+      }
+      await client.query(`UPDATE blocks SET properties = $1, date = $2, sort_order = $3, updated_at = $4 WHERE id = $5`, [newProps, newDate, newSortOrder, now, m.id]);
       await client.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [m.id, existing.properties, newProps, now]);
-      results.push({ id: m.id, type: existing.type, parent_id: existing.parent_id, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: existing.sort_order, created_at: existing.created_at, updated_at: now, deleted_at: null });
+      results.push({ id: m.id, type: existing.type, parent_id: existing.parent_id, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null });
     }
     for (const c of (creates || [])) {
       results.push(await createBlock(c, client));
@@ -950,11 +1002,12 @@ async function createItineraryTask({ date, properties, userId = null, workspaceI
       console.error("[createItineraryTask] scoring failed (non-fatal):", scoreErr.message);
     }
   }
-  const start = props.start;
-  const derivedSort = (typeof start === "string" && /^\d{2}:\d{2}/.test(start))
-    ? Number(start.slice(0, 2)) * 60 + Number(start.slice(3, 5)) : 0;
-  const sort_order = sortOrder != null ? sortOrder : derivedSort;
-  return createBlock({ type: "block", date, properties: props, sort_order, user_id: userId, workspace_id: workspaceId }, client);
+  // C6c: the minutes-of-day `derivedSort` is GONE. A start time is not an order -- it produced
+  // 1005 of prod's 1815 sort_orders in the 0..1439 range, every one of them sorting ahead of every
+  // 1000-spaced drag value, which is what made the column unreadable as an order. Passing no
+  // sort_order lets createBlock append to the day in the one space. The itinerary still renders
+  // timed rows by their `start`; that is a separate axis and always was.
+  return createBlock({ type: "block", date, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId }, client);
 }
 
 // Batch-create itinerary tasks atomically. The store owns the transaction (per

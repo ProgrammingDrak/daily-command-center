@@ -156,6 +156,20 @@
   // Legacy type names also route to globalCache for backward compat during migration.
   const LEGACY_GLOBAL_TYPES = new Set(["sticky_note", "trivial_task", "life_capture", "pending_task", "schedule_block", "tag"]);
 
+  // The day's next 1000-spaced slot from what the cache can see. Deliberately the same shape as
+  // db.js nextSortOrderForDay, and deliberately only an OPTIMISTIC guess -- the server recomputes it
+  // against every row, including ones this client has not loaded.
+  function _nextLocalSortOrder(date) {
+    let mx = 0;
+    for (const b of _dayCache.values()) {
+      if (!b || b.deleted_at) continue;
+      if ((b.date || null) !== (date || null)) continue;
+      const n = Number(b.sort_order);
+      if (Number.isFinite(n) && n > mx) mx = n;
+    }
+    return (Math.floor(mx / 1000) + 1) * 1000;
+  }
+
   function cacheSet(block) {
     // Remove any prior entry in either cache so a block can migrate between
     // global and day partitions without leaving a stale duplicate behind.
@@ -386,7 +400,12 @@
         parent_id: parentId || null,
         date: date !== undefined ? date : _currentDate,
         properties,
-        sort_order: sortOrder || 0
+        // C6c: the OPTIMISTIC order. The server is authoritative (`cacheSet(block)` below replaces
+        // this row with its response, which carries the day's real next slot), but until that lands
+        // -- and for the whole offline WAL window -- this value decides where the row renders. `|| 0`
+        // put every new task at the TOP of the day for that window. Mirror what the server will
+        // assign: the end of this day's space.
+        sort_order: sortOrder || _nextLocalSortOrder(date !== undefined ? date : _currentDate)
       };
       // Optimistic cache update BEFORE API call — so reads (e.g. loadNotes) are instant
       // and don't race with the async API response. Same pattern as updateBlock().
