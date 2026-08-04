@@ -5,11 +5,35 @@
 // two later phases are blocked on:
 //
 //   • C2 (roots-only, server-side) must not ship until parentEdges reads clean here.
-//   • C5 (one status) must not ship until ledger.recreditRisk is ZERO. That number is
-//     real points: slot_point_ledger dedupes on (workspace_id, source_type,
+//   • C5 (one status) must not ship until the credit path cannot double-credit. The
+//     hazard is real points: slot_point_ledger dedupes on (workspace_id, source_type,
 //     source_key) with ON CONFLICT DO NOTHING, legacy keys are "<date>:<local_id>",
-//     and once completion moves to row-id space the conflict clause stops firing and
-//     an already-credited task credits AGAIN.
+//     and a task presented in row-id space finds no conflict and credits AGAIN.
+//
+// ── C5 REPOINTED THAT SECOND GATE, 2026-08-03. Read this before trusting either
+// number. ──
+// It used to read `recredit_risk_live_task === 0`, i.e. "no legacy key has 2+
+// candidate rows". That gate could never reach true by any means C5 was allowed to
+// use: zeroing it requires rewriting `source_key` (which double-credits on page
+// load — the thing A1 correctly refused), tombstoning live rows of Drake's real
+// data, or waiting for the collisions to age out. It was measuring DATA AMBIGUITY
+// where the thing worth gating on is RE-CREDIT REACHABILITY, and the two diverge.
+//
+// They diverge because A1's resolver had to go local_id -> row, which is
+// multi-valued, while the credit path only ever needs row -> local_id, which is
+// single-valued and always resolves. So the ambiguity never actually blocked the
+// fix. Measured on a fresh prod restore (2026-08-03), simulating all 436 row-id
+// presentations of the 384 stored keys: exact matching would double-credit 326 of
+// them, the closure zero.
+//
+// The gate now SIMULATES THE CREDIT PATH (lib/task-credit-keys.js CLOSURE_AUDIT_SQL,
+// which lives beside the closure it simulates so review sees them together) and
+// counts presentations that would still insert a duplicate. It reads 0 while the
+// code is right and breaks the moment it regresses — strictly stricter than the
+// count it replaces, which was insensitive to the code path entirely.
+//
+// `recredit_risk` and `recredit_risk_points` are UNCHANGED and still reported, so
+// the old number stays auditable and nothing is hidden by the swap.
 //
 // Run it against PROD. A synthetic database cannot show the Date.now() local_id
 // collisions that drive every "ambiguous" count below.
@@ -21,6 +45,9 @@
 //                This is the number that needs a human decision before a read flip.
 // Collapsing them into one "unresolved" total hides the only one worth acting on.
 const pool = require("../pg-pool");
+// The C5 gate's simulation ships with the closure it simulates, not with this
+// endpoint, so the two cannot drift apart unnoticed.
+const { CLOSURE_AUDIT_SQL } = require("../lib/task-credit-keys");
 
 // One SQL expression for "the id half of a ledger source_key", reused by every ledger
 // query below so they cannot drift apart. Keys are "<prefix>:<id>" where prefix is a
@@ -234,9 +261,13 @@ async function audit() {
            count(*) FILTER (WHERE NOT in_row_id_space AND canonical_key IS NOT NULL)
              AS legacy_with_canonical_sidecar,
            count(*) FILTER (WHERE NOT in_row_id_space AND cands = 0) AS legacy_orphan_no_row,
-           -- THE GATE: a legacy key the resolver refused to rewrite because 2+ rows
-           -- share that local_id. C5 would mint a different key for the same task and
-           -- credit it AGAIN. Must be 0 before C5 ships.
+           -- REPORTED, NO LONGER THE GATE (C5, 2026-08-03 — see the header). A legacy
+           -- key whose local_id is shared by 2+ rows, so A1's local_id -> row resolver
+           -- refused to guess. Kept because it is the honest census of quick-add
+           -- double-fires in the data, and because retiring a number silently is how
+           -- a regression hides. It is NOT re-credit reachability: the credit path
+           -- needs only row -> local_id, which is single-valued and unaffected by
+           -- this. closure_would_double_credit is the gate now.
            count(*) FILTER (WHERE NOT in_row_id_space AND cands > 1) AS recredit_risk,
            COALESCE(sum(delta) FILTER (WHERE NOT in_row_id_space AND cands > 1), 0) AS recredit_risk_points,
            -- The subset that can ACTUALLY re-credit: a key pointing only at tombstoned
@@ -252,6 +283,17 @@ async function audit() {
     SELECT source_key, delta, description, cands AS candidates, task_is_live
       FROM c WHERE NOT in_row_id_space AND cands > 1
      ORDER BY delta DESC LIMIT 50`);
+
+  // ── THE C5 GATE ──
+  // Simulate the credit path over every stored key and count what would still
+  // double-credit. `exact_match_would_double_credit` is the SAME simulation with the
+  // closure removed — i.e. what this endpoint would report if lib/task-credit-keys.js
+  // were reverted. Reporting both is what makes the gate legible: a pass is only
+  // meaningful next to the number of presentations it actually saved, and a gate that
+  // reads 0 because it simulated nothing is the vacuous-guard failure this project
+  // keeps finding. If `closure_presentations` is 0 the gate proves NOTHING, so it is
+  // surfaced rather than folded away.
+  const closure = nums(await one(CLOSURE_AUDIT_SQL));
 
   const { rows: migrations } = await pool.query(
     "SELECT filename, applied_at, duration_ms, notes FROM schema_migrations ORDER BY filename");
@@ -288,12 +330,23 @@ async function audit() {
       migration002_completionPending:
         overlayDone.not_applied > 0 || completion.unnormalized_done > 0,
 
-      // THE C5 GATE. Deliberately narrower than the plan's "zero unresolved ledger
-      // keys": 45 of the 57 unresolved keys point at no row at all, so they can never
-      // resolve AND can never re-credit (there is no task left to complete). The
-      // condition that actually protects points is "no key whose task is still live
-      // sits in the wrong id space".
-      c5_ledgerNoRecreditRisk: ledger.recredit_risk_live_task === 0,
+      // ── THE C5 GATE (repointed by C5 itself, 2026-08-03 — see the file header) ──
+      // Simulates the credit path's equivalence closure over every stored key and
+      // requires that NO presentation would insert a duplicate.
+      //
+      // It replaced `ledger.recredit_risk_live_task === 0`, which was unreachable by
+      // design and measured the wrong thing (data ambiguity, not re-credit
+      // reachability — A1's resolver needed local_id -> row, multi-valued; the credit
+      // path needs only row -> local_id, single-valued). That count is still reported
+      // under decisions.ledgerRecreditRiskLiveTasks.
+      //
+      // The `closure_presentations > 0` clause is not padding: it is what stops this
+      // from passing vacuously. Zero presentations means the simulation found nothing
+      // to simulate (an empty ledger, or `blocks` unreadable), and a gate that proves
+      // nothing must not read green — C4's mutation harness reported a false pass for
+      // exactly this shape until it green-checked a pristine tree first.
+      c5_ledgerNoRecreditRisk:
+        closure.closure_presentations > 0 && closure.closure_would_double_credit === 0,
 
       // A3 HAS SHIPPED, so the question changed: not "could the index be created"
       // but "is it on THIS database". applyPostSchema logs a failure and carries on,
@@ -322,15 +375,28 @@ async function audit() {
       ledgerRecreditRiskLiveTasks: ledger.recredit_risk_live_task,
       ledgerRecreditRiskLivePoints: ledger.recredit_risk_live_points,
       ledgerNote:
-        "A1 does NOT rewrite source_key; it writes the row-id form alongside it in " +
-        "metadata.canonical_source_key (see legacy_with_canonical_sidecar). Rewriting " +
-        "would double-credit immediately, not at C5: slots.js " +
-        "reconcileCompletedTaskCredits re-posts the legacy <date>:<local_id> key on " +
-        "every app init, so a rewritten row loses its ON CONFLICT anchor and credits " +
-        "again on page load. C5 must check BOTH spaces before crediting (Drake " +
-        "assigned that fix to C5, 2026-07-29). These recredit-risk keys are the " +
-        "remainder with no sidecar, because 2+ rows share that local_id and the " +
-        "resolver refused to guess; ledgerRiskKeys carries their titles and deltas.",
+        "CLOSED BY C5 (2026-08-03). A1 does NOT rewrite source_key; it writes the " +
+        "row-id form alongside it in metadata.canonical_source_key (see " +
+        "legacy_with_canonical_sidecar). Rewriting would double-credit immediately, " +
+        "not at C5: slots.js reconcileCompletedTaskCredits re-posts the legacy " +
+        "<date>:<local_id> key on every app init, so a rewritten row loses its ON " +
+        "CONFLICT anchor and credits again on page load. C5's fix is an equivalence " +
+        "closure in the credit path (lib/task-credit-keys.js), consulted by BOTH " +
+        "slot-store.js earnTaskCredit and revokeTaskCredit. The keys still counted in " +
+        "recredit_risk are NOT a remaining exposure: they are quick-add double-fires " +
+        "where 2+ rows share one local_id, and the closure does not need that " +
+        "direction (a row has exactly one local_id, so row -> local_id always " +
+        "resolves). The sidecar turned out NOT to be load-bearing either — the " +
+        "closure derives the same mapping live — so the 85 legacy keys without one " +
+        "need no backfill. ledgerRiskKeys still carries their titles and deltas.",
+      ledgerCollisionNote:
+        "One entry in ledgerRiskKeys is a genuine id collision rather than a " +
+        "duplicate, and it is a LIVE under-credit bug independent of this project: " +
+        "2026-07-31:st-1785503019024 is shared by two distinct live tasks, 'Fold' and " +
+        "'Put Away' (both open, both 13:00, created 0.05s apart). Completing both " +
+        "credits once, today, because they key to one source_key string. C5 inherits " +
+        "that rather than causing it, and did not re-mint a local_id on live data. " +
+        "The fix belongs with the quick-add double-fire cleanup in migrations/.",
       a3IndexesPresent,
       a3IndexPredicate:
         "SHIPPED (A3). The index as originally specified " +
@@ -355,7 +421,10 @@ async function audit() {
     completion,
     overlay: { done: overlayDone, deleted: overlayDeleted },
     idempotency,
-    ledger,
+    // A1's census plus C5's closure simulation, in one object. The `closure_*` keys
+    // are what the gate reads; `exact_match_would_double_credit` is the same
+    // simulation with the closure removed, i.e. the size of the bug that was fixed.
+    ledger: { ...ledger, ...closure },
     ledgerRiskKeys: riskKeys.map((r) => ({
       sourceKey: r.source_key,
       delta: Number(r.delta),

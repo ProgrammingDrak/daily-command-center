@@ -414,7 +414,17 @@ function archiveDayState(date, data) { const match = date.match(/^(\d{4})-(\d{2}
 function pruneRecent() { const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000; if (!fs.existsSync(RECENT_DIR)) return; for (const fname of fs.readdirSync(RECENT_DIR)) { if (!fname.endsWith(".json") || fname === "manifest.json") continue; const ts = new Date(fname.replace(".json", "") + "T00:00:00").getTime(); if (ts && ts < cutoff) { fs.unlinkSync(path.join(RECENT_DIR, fname)); } } }
 function getTodayStr() { return new Intl.DateTimeFormat("en-CA", { timeZone: APP_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 function addDays(dateStr, n) { const d = new Date(dateStr + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
-function getDayFilePath(dateStr) { return path.join(DAYS_DIR, dateStr + ".json"); }
+// The date half is caller-supplied and reaches here unvalidated from several routes
+// (`GET /api/state/day` passes `req.query.date` straight through), and `path.join`
+// NORMALIZES `../`, so without this guard the caller chooses the file: a traversal date
+// both discloses any readable .json and, on the write paths, creates one anywhere the
+// process can write. Guarding the path builder rather than each route means a route
+// added later inherits it. Throwing (rather than coercing to today) keeps a malformed
+// date an error instead of silently serving the wrong day.
+function getDayFilePath(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) throw new Error(`invalid day date: ${dateStr}`);
+  return path.join(DAYS_DIR, dateStr + ".json");
+}
 // Single source of truth for a meeting's stable identity (shared with the backfill
 // script). Injected into the materializer and passed into the routes ctx below.
 const meetingIdentity = require("./meeting-identity");
@@ -500,6 +510,41 @@ async function recordLoginEvent(req, { userId, username, workspaceId, eventType 
 
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, sweep: { source_health: [], readers: [], open_item_count: 0, meetings_count: 0 }, glymphatic_brief: { history: [], current: null }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
+// PHASE C5 STEP 4 IS NOT IN THIS CHANGE. The precedence flip that belongs here — read
+// Postgres first, treat the JSON day file as a cache — was written, reviewed three times,
+// and PULLED. Recording why, because the next attempt should start from this and not
+// rediscover it.
+//
+// The bug is real. The file wins whenever it carries a non-empty `schedule.timeline`, and
+// `getDayFilePath` is `data/state/days/<date>.json` with NO workspace segment, so on
+// Railway's ephemeral filesystem a file written by an earlier boot — or by a different
+// workspace — shadows the correct Postgres row for everybody.
+//
+// But this function cannot be fixed alone, and three review rounds kept finding data loss
+// in the attempts:
+//
+//   1. Making the DB win means deciding what a successful read with NO ROW means. It
+//      cannot mean "empty": `routes/social-todo.js appendPublicShareTriageItem` is a
+//      FILE-ONLY writer (readJSON, push a guest's submitted task, writeJSON, no
+//      saveDccState), so the file is the only copy of those items.
+//   2. Any write from this function is write amplification on a shared path reached
+//      ANONYMOUSLY (`buildPublicTodoShare` calls it as
+//      `buildDayResponse(date, null, share.workspace_id)`).
+//   3. But REMOVING the DB-to-file write breaks something worse: six handlers in
+//      routes/dcc.js read this file as their BASE state and then full-replace the
+//      Postgres row (`saveDccState` is `DO UPDATE SET state_json = EXCLUDED.state_json`).
+//      With no rehydration, the skeleton `ensureSkeletonDays` writes at boot becomes the
+//      base, and the next Brief refresh persists it over the real day.
+//   4. And swallowing a failed read into the same branch as an empty one lets an outage
+//      mint a skeleton, serve it as a real empty day, and persist it.
+//
+// (3) is the crux: the fix has to change how routes/dcc.js READS, not just how this
+// function does. That is Track A's file and six hunks, so it belongs in one deliberate
+// change with them — Phase C5b — rather than bolted onto a ledger PR.
+//
+// What DID ship from step 4 is the security half, which is independent: getDayFilePath
+// now validates its date (the traversal hole predates this change), and the two callers
+// that could reach it unvalidated are guarded.
 async function buildDayResponse(dateStr, userId, workspaceId) {
   const dayFile = getDayFilePath(dateStr);
   let enrichment = readJSON(dayFile, null);
@@ -581,6 +626,17 @@ function ensureSkeletonDays() {
 // ── State Endpoints ──
 app.get("/api/state/day", async (req, res) => {
   const dateStr = req.query.date || getTodayStr();
+  // Reject a malformed date as a 400 here, so getDayFilePath's throw cannot land in the
+  // catch below and turn into a 500 (or, worse, a second traversal attempt).
+  //
+  // res.status().json(), NOT the imported `badRequest`. That helper is
+  // `(message) => httpError(message, 400)` — it BUILDS an error for a caller to THROW
+  // (`throw badRequest("...")`, as routes/social-todo.js uses it), it does not send a
+  // response. `return badRequest(res, "Invalid date")` therefore sent nothing and the
+  // request HUNG FOREVER. Caught by probing the guard with curl rather than by a test:
+  // the ingest-route test covers routes/dcc.js's guard, which was written with
+  // res.status(400).json() and worked, so the suite stayed green while this one hung.
+  if (!isValidDate(dateStr)) return res.status(400).json({ error: "Invalid date" });
   try { res.json(await buildDayResponse(dateStr, req.session.userId, req.workspaceId)); }
   catch (e) { res.json(readJSON(getDayFilePath(dateStr), readJSON(DAY_STATE_FILE, null))); }
 });

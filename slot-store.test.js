@@ -29,6 +29,19 @@ function createMockPool(options = {}) {
     }),
     ledgerInserted: false,
     ledgerDelta: options.ledgerDelta ?? null,
+    // C5: the ledger's key is now tracked, because earnTaskCredit's follow-up writes
+    // must target the key the LEDGER holds rather than the one the caller passed.
+    // `ledgerSourceKey` starting non-null with ledgerInserted false is how a test
+    // seeds "a credit already exists under a DIFFERENT spelling of this task".
+    ledgerSourceKey: options.ledgerSourceKey ?? null,
+    ledgerDescription: options.ledgerDescription ?? "Task completed",
+    // Rows the equivalence closure resolves to. null = "let the mock derive it from
+    // ledger state"; an explicit [] means "no equivalent credit exists"; a FUNCTION of
+    // the queried key models a closure that answers differently per key.
+    closureRows: options.closureRows ?? null,
+    // How many candidate rows the closure saw. >1 is what makes a non-exact match
+    // ambiguous, which the strict (revoke) path refuses.
+    candCount: options.candCount ?? 1,
     pointAdds: 0,
     ledgerMetadata: null,
     rewardRows: options.rewardRows || [],
@@ -118,11 +131,60 @@ function createMockPool(options = {}) {
     if (text.includes("SELECT * FROM slot_accounts WHERE workspace_id")) {
       return { rows: [{ workspace_id: params[0], point_balance: state.pointBalance, bank_balance_cents: state.bankBalance, settings: state.settings }] };
     }
+    // C5's equivalence closure (lib/task-credit-keys.js findEquivalentTaskCredit).
+    // MATCHED FIRST, because it is another SELECT over slot_point_ledger and the
+    // narrower handlers below would otherwise swallow it. Both spellings of the
+    // lookup land here: the closure (WITH cand AS ...) and the exact-match fallback
+    // used for a non-date prefix like `shell:<id>`.
+    // The ledger row the mock currently holds, but ONLY when the queried key names it.
+    // Shared by the two lookup handlers below so they cannot disagree about what exists.
+    const heldRowFor = (queriedKey) => {
+      const have = state.ledgerInserted || state.ledgerDelta != null;
+      if (!have || (state.ledgerSourceKey && state.ledgerSourceKey !== queriedKey)) return null;
+      return {
+        // Falls back to the queried key so a test that never set ledgerSourceKey
+        // still models "credited under the key you asked about".
+        source_key: state.ledgerSourceKey ?? queriedKey,
+        delta: state.ledgerDelta,
+        description: state.ledgerDescription,
+        cand_count: state.candCount ?? 1,
+      };
+    };
+
+    // THE CLOSURE (lib/task-credit-keys.js CLOSURE_SQL) — resolves across key spellings.
+    // `closureRows` may be an ARRAY or a FUNCTION of the queried key. The function form
+    // exists because the array form is key-BLIND: it answers identically no matter what
+    // was asked, which models a closure that matches everything — the one failure mode
+    // the real closure admits to, and the one that makes revoke delete another task's
+    // row. A mock that cannot express "declines this key" cannot test the declining.
+    //
+    // cand_count is DERIVED here, never accepted from the test. Round 2 of review caught
+    // the reason: the ambiguity test hand-fed `cand_count: 2` for a row-id presentation
+    // where the real query returned 1, so the strict guard was decorative and the suite
+    // was green anyway. A test must not be able to assert the very fact the production
+    // query computes. `candCount` describes the FIXTURE (how many live rows share the
+    // matched local_id); the mock stamps it onto every closure answer.
+    if (text.includes("WITH cand AS")) {
+      const stamp = (rows) => rows.map(r => ({ ...r, cand_count: state.candCount }));
+      if (typeof state.closureRows === "function") return { rows: stamp(state.closureRows(params[1])) };
+      if (state.closureRows) return { rows: stamp(state.closureRows) };
+      const row = heldRowFor(params[1]);
+      return { rows: row ? [row] : [] };
+    }
+    // THE EXACT MATCH (EXACT_SQL) — a DIFFERENT statement, `source_key = $2`, and it must
+    // be modelled separately. Routing it to the closure handler made the strict path's
+    // fallback return the very ambiguous row strict had just refused, so the refusal
+    // looked broken when it was the mock that was wrong.
+    if (text.includes("SELECT source_key, delta, description FROM slot_point_ledger")) {
+      const row = heldRowFor(params[1]);
+      return { rows: row ? [row] : [] };
+    }
     if (text.includes("INSERT INTO slot_point_ledger")) {
       state.ledgerMetadata = JSON.parse(params[5]);
       if (state.ledgerInserted) return { rows: [] };
       state.ledgerInserted = true;
       state.ledgerDelta = params[2];
+      state.ledgerSourceKey = params[3];
       return { rows: [{ delta: params[2], metadata: state.ledgerMetadata }] };
     }
     if (text.includes("SELECT delta FROM slot_point_ledger")) {
@@ -131,16 +193,32 @@ function createMockPool(options = {}) {
     // revokeTaskCredit: the row is DELETED, not zeroed, which is what re-arms the
     // INSERT's ON CONFLICT DO NOTHING for a later re-completion.
     if (text.includes("DELETE FROM slot_point_ledger")) {
-      const had = state.ledgerInserted;
+      // "the ledger holds a row" is expressible two ways here — inserted during the
+      // test, or seeded via ledgerDelta — and the SELECT handler above already
+      // honors both. Checking only the first made a seeded row undeletable.
+      //
+      // KEY-AWARE, like the closure handler. The real statement is
+      // `DELETE ... WHERE source_key=$2`, so a mock that deletes whatever it holds
+      // regardless of the key cannot express "revoke asked for the wrong row and got
+      // nothing" — and that is precisely the case worth testing, since acting on a
+      // wrong match debits the user for work that is still done.
+      if (!heldRowFor(params[1])) return { rows: [] };
+      const had = true;
       const delta = state.ledgerDelta;
       state.ledgerInserted = false;
       state.ledgerDelta = null;
       return { rows: had ? [{ delta }] : [] };
     }
     if (text.includes("UPDATE slot_point_ledger")) {
+      // rowCount is load-bearing now: earnTaskCredit's upgrade path refuses to move the
+      // balance unless the UPDATE actually matched, so a mock that omits it would make
+      // every top-up look like a vanished row. Routed through heldRowFor so the mock
+      // cannot hold two contradictory views of whether the row exists — round 2 found it
+      // answering rowCount 1 over a ledger that heldRowFor reported as empty.
+      if (!heldRowFor(params[1])) return { rowCount: 0, rows: [] };
       state.ledgerDelta = params[2];
       state.ledgerMetadata = JSON.parse(params[4]);
-      return { rows: [] };
+      return { rowCount: 1, rows: [] };
     }
     if (text.includes("point_balance = point_balance +")) {
       state.pointBalance += params[1];
@@ -428,6 +506,235 @@ test("revokeTaskCredit on an unknown source key is a no-op, not a phantom debit"
   assert.equal(out.delta, 0);
   assert.equal(mockPool.state.pointBalance, 100);
   assert.equal(mockPool.state.pointAdds, 0, "no balance write at all");
+});
+
+// ── Phase C5: the equivalence closure ─────────────────────────────────────────
+// One task has always had TWO source_key spellings — the browser posts
+// `<date>:<local_id>` (public/js/slots.js) and routes/dcc.js / routes/slack-events.js
+// post `<date>:<blockId>`. `ON CONFLICT (workspace_id, source_type, source_key)`
+// compares strings, so the pair never conflicted and the task paid twice. These pin
+// that earn and revoke both act on the key the LEDGER holds, not the one they were
+// handed. The SQL's completeness over real data is verified separately
+// (scripts/credit-closure-check.mjs against a prod restore); the closure's JS
+// contract is in credit-key-closure.test.js.
+const C5_LEGACY_KEY = "2026-06-22:qa-1782144115615-zddpn";
+const C5_ROWID_KEY = "2026-06-22:917e70d8-7eaa-4000-ba84-ff686d7931f5";
+
+test("C5: a task credited under the legacy key does NOT credit again in row-id space", async () => {
+  // Seed "already credited under the legacy spelling", then present the row-id
+  // spelling — exactly what happens when the browser checks a task off and Slack
+  // later ✅s the same task.
+  const mockPool = createMockPool({
+    pointBalance: 100, migrated: true,
+    closureRows: [{ source_key: C5_LEGACY_KEY, delta: 60, description: "Go over Metrics" }],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const out = await store.earnTaskCredit("ws-1", 1, {
+    source_key: C5_ROWID_KEY, task_id: "917e70d8-7eaa-4000-ba84-ff686d7931f5",
+    title: "Go over Metrics", type: "task", duration_minutes: 60,
+  });
+
+  assert.equal(out.awarded, false, "the equivalent credit already exists");
+  assert.equal(out.delta, 0);
+  assert.equal(mockPool.state.pointBalance, 100, "balance untouched");
+  assert.equal(mockPool.state.pointAdds, 0, "no balance write at all");
+  // The strongest assertion available: no INSERT was even attempted. Before C5 the
+  // insert ran, found no conflict on the different key, and banked 60 points.
+  const stmts = mockPool.calls.map(c => String(c.sql || "").replace(/\s+/g, " "));
+  assert.ok(!stmts.some(s => s.includes("INSERT INTO slot_point_ledger")),
+    "must not insert a second ledger row for a credit that already exists");
+});
+
+test("C5: the upgrade path tops up the LEDGER's key, never the key it was handed", async () => {
+  // The quiet way to reintroduce the bug: keep the closure but write the follow-up
+  // UPDATE against the incoming key. It matches no row, the top-up silently vanishes,
+  // and the balance moves anyway — so assert the key the UPDATE actually carried.
+  const mockPool = createMockPool({
+    pointBalance: 100, migrated: true,
+    // SEEDED, not just asserted. The fixture previously declared a credit via
+    // closureRows while leaving the mock's ledger empty, and only passed because the
+    // UPDATE handler reported rowCount 1 over nothing. Once the UPDATE shared
+    // heldRowFor's view, that contradiction surfaced. A test that claims a row exists
+    // has to put one there.
+    ledgerDelta: 30, ledgerSourceKey: C5_LEGACY_KEY,
+    closureRows: [{ source_key: C5_LEGACY_KEY, delta: 30, description: "Go over Metrics" }],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const out = await store.earnTaskCredit("ws-1", 1, {
+    source_key: C5_ROWID_KEY, task_id: "917e70d8-7eaa-4000-ba84-ff686d7931f5",
+    title: "Go over Metrics", type: "task", duration_minutes: 60,
+    points_override: 75,
+  });
+
+  assert.equal(out.adjusted, true, "a bigger award tops the existing credit up");
+  assert.equal(out.delta, 45, "75 scored minus the 30 already banked");
+  assert.equal(mockPool.state.pointBalance, 145);
+
+  const update = mockPool.calls.find(c => String(c.sql || "").includes("UPDATE slot_point_ledger"));
+  assert.ok(update, "the existing row is updated rather than a new one inserted");
+  assert.equal(update.params[1], C5_LEGACY_KEY, "targets the key the ledger holds");
+  assert.notEqual(update.params[1], C5_ROWID_KEY, "NOT the key the caller passed");
+});
+
+test("C5: revoke finds a legacy-keyed credit when handed the row-id key", async () => {
+  // E1 shipped revokeTaskCredit matching the incoming key alone, so a Slack un-✅
+  // could not reach a credit the browser had banked: the points stayed banked AND the
+  // surviving row kept eating the eventual re-completion via ON CONFLICT.
+  const mockPool = createMockPool({
+    pointBalance: 160, migrated: true,
+    ledgerDelta: 60, ledgerSourceKey: C5_LEGACY_KEY,
+    closureRows: [{ source_key: C5_LEGACY_KEY, delta: 60, description: "Go over Metrics" }],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const out = await store.revokeTaskCredit("ws-1", 1, C5_ROWID_KEY);
+
+  assert.equal(out.revoked, true, "the legacy-keyed credit was reachable");
+  assert.equal(out.credits, 60);
+  assert.equal(mockPool.state.pointBalance, 100, "the points came back out");
+  const del = mockPool.calls.find(c => String(c.sql || "").includes("DELETE FROM slot_point_ledger"));
+  assert.equal(del.params[1], C5_LEGACY_KEY, "deletes the row the ledger actually has");
+});
+
+test("C5: revoke does NOT reach a credit belonging to a DIFFERENT task", async () => {
+  // The counterweight to the test above, and the one that matters most: an over-eager
+  // closure would satisfy "revoke finds a legacy-keyed credit" while quietly deleting
+  // whatever row it happened to land on. The pre-existing "unknown source key" test
+  // does not cover this — its ledger is empty, so it proves "nothing to find", not
+  // "found the wrong thing and declined".
+  const mockPool = createMockPool({
+    pointBalance: 160, migrated: true,
+    ledgerDelta: 60, ledgerSourceKey: "2026-06-22:some-other-task",
+    closureRows: (k) => (k === "2026-06-22:some-other-task" ? [{ source_key: k, delta: 60, description: "Other" }] : []),
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  const out = await store.revokeTaskCredit("ws-1", 1, C5_ROWID_KEY);
+
+  assert.equal(out.revoked, false, "an unrelated credit is not reachable");
+  assert.equal(out.credits, 0);
+  assert.equal(mockPool.state.pointBalance, 160, "and the balance is untouched");
+});
+
+test("C5: revoke REFUSES an ambiguous match rather than debiting the wrong task", async () => {
+  // The live prod shape: 2026-07-31:st-1785503019024 is shared by "Fold" and
+  // "Put Away", two distinct tasks. Un-checking one must not delete the other's
+  // credit. strict:true turns the ambiguous hit into today's no-op.
+  const AMBIG_LEGACY = "2026-07-31:st-1785503019024";
+  const mockPool = createMockPool({
+    pointBalance: 130, migrated: true,
+    ledgerDelta: 30, ledgerSourceKey: AMBIG_LEGACY,
+    candCount: 2,   // two live rows share that local_id — the mock stamps this on
+    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold" }],
+  });
+  const store = loadStoreWithMock(mockPool);
+
+  // Un-check "Put Away", presented by row id. Its local_id collides with Fold's.
+  const out = await store.revokeTaskCredit("ws-1", 1, "2026-07-31:fd0ffaf8-5b86-4699-9b74-539da8437edb");
+
+  assert.equal(out.revoked, false, "ambiguity is refused, not guessed at");
+  assert.equal(mockPool.state.pointBalance, 130, "Fold's credit stays banked");
+  const del = mockPool.calls.find(c => String(c.sql || "").includes("DELETE FROM slot_point_ledger"));
+  assert.notEqual(del.params[1], AMBIG_LEGACY, "the colliding key is never the delete target");
+});
+
+test("C5: an EXACT ambiguous key is still revocable — strict refuses guesses, not the key itself", async () => {
+  // Guards the other direction on strict: refusing whenever cand_count > 1 would make
+  // a genuinely-collided task permanently un-revocable even when the caller named its
+  // key exactly. Only NON-exact matches are refused.
+  const AMBIG_LEGACY = "2026-07-31:st-1785503019024";
+  const mockPool = createMockPool({
+    pointBalance: 130, migrated: true,
+    ledgerDelta: 30, ledgerSourceKey: AMBIG_LEGACY, candCount: 2,
+    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold" }],
+  });
+  const out = await loadStoreWithMock(mockPool).revokeTaskCredit("ws-1", 1, AMBIG_LEGACY);
+  assert.equal(out.revoked, true);
+  assert.equal(mockPool.state.pointBalance, 100);
+});
+
+test("C5: a lost same-key insert race re-resolves and still tops the credit up", async () => {
+  // earnTaskCredit's else-arm: the closure said "new", then the INSERT lost a race to
+  // an identical key and returned no rows. Without the re-resolve the caller is told
+  // awarded:false / delta:0 and the racer's smaller credit is never topped up.
+  let calls = 0;
+  const mockPool = createMockPool({
+    pointBalance: 100, migrated: true,
+    closureRows: () => (++calls <= 1 ? [] : [{ source_key: C5_ROWID_KEY, delta: 30, description: "x" }]),
+  });
+  mockPool.state.ledgerInserted = true;   // the racer already committed, so our INSERT no-ops
+  mockPool.state.ledgerSourceKey = C5_ROWID_KEY;
+
+  const out = await loadStoreWithMock(mockPool).earnTaskCredit("ws-1", 1, {
+    source_key: C5_ROWID_KEY, task_id: "t", title: "t", type: "task",
+    duration_minutes: 60, points_override: 75,
+  });
+
+  assert.equal(out.adjusted, true, "the racer's smaller credit is topped up, not dropped");
+  assert.equal(out.delta, 45);
+  assert.equal(mockPool.state.pointBalance, 145);
+});
+
+test("C5: a ledger row that vanishes before the top-up lands does NOT move the balance", async () => {
+  // earnTaskCredit's rowCount arm. The closure reports a 30pt credit under the legacy
+  // key, but by the time the UPDATE runs the row is gone (a concurrent revoke). Without
+  // the rowCount check the balance moves by 45 with no ledger row explaining it — the
+  // exact failure revokeTaskCredit's transaction exists to prevent, reintroduced on the
+  // earn side. Modelled by pointing the ledger at a DIFFERENT key so the UPDATE misses.
+  const mockPool = createMockPool({
+    pointBalance: 100, migrated: true,
+    ledgerDelta: 30, ledgerSourceKey: "2026-06-22:already-revoked-key",
+    closureRows: [{ source_key: C5_LEGACY_KEY, delta: 30, description: "Go over Metrics" }],
+  });
+  const out = await loadStoreWithMock(mockPool).earnTaskCredit("ws-1", 1, {
+    source_key: C5_ROWID_KEY, task_id: "917e70d8-7eaa-4000-ba84-ff686d7931f5",
+    title: "Go over Metrics", type: "task", duration_minutes: 60, points_override: 75,
+  });
+
+  assert.equal(out.adjusted, false, "no top-up is claimed for a row that is not there");
+  assert.equal(out.delta, 0);
+  assert.equal(mockPool.state.pointBalance, 100, "and the balance is untouched");
+});
+
+test("C5: strict refuses an ambiguous match the closure did NOT stipulate away", async () => {
+  // Round 2 found the previous ambiguity test could not fail: it handed the declining
+  // answer in as closureRows, so deleting `strict: true` outright left it green. Here
+  // the closure genuinely RETURNS a colliding credit (as the real query does — verified
+  // on the prod restore, where presenting Put Away's row id returns Fold's credit) and
+  // the only thing standing between that and a wrong debit is the strict guard.
+  const AMBIG_LEGACY = "2026-07-31:st-1785503019024";
+  const mockPool = createMockPool({
+    pointBalance: 130, migrated: true,
+    ledgerDelta: 30, ledgerSourceKey: AMBIG_LEGACY,
+    candCount: 2,
+    closureRows: [{ source_key: AMBIG_LEGACY, delta: 30, description: "Fold" }],
+  });
+  const out = await loadStoreWithMock(mockPool)
+    .revokeTaskCredit("ws-1", 1, "2026-07-31:fd0ffaf8-5b86-4699-9b74-539da8437edb");
+
+  assert.equal(out.revoked, false, "drop strict and this deletes Fold's credit");
+  assert.equal(mockPool.state.pointBalance, 130);
+  assert.equal(mockPool.state.ledgerDelta, 30, "Fold's ledger row survives");
+});
+
+test("C5: a genuinely uncredited task still pays, and under its own key", async () => {
+  // The counterweight to the three above. An over-eager closure that reported
+  // "already credited" for everything would satisfy all of them and silently stop
+  // paying for real work, so this pins the other direction.
+  const mockPool = createMockPool({ pointBalance: 100, migrated: true, closureRows: [] });
+  const store = loadStoreWithMock(mockPool);
+
+  const out = await store.earnTaskCredit("ws-1", 1, {
+    source_key: C5_ROWID_KEY, task_id: "917e70d8-7eaa-4000-ba84-ff686d7931f5",
+    title: "Fresh task", type: "task", duration_minutes: 60,
+  });
+
+  assert.equal(out.awarded, true);
+  assert.equal(out.delta, 60);
+  assert.equal(mockPool.state.pointBalance, 160);
+  assert.equal(mockPool.state.ledgerSourceKey, C5_ROWID_KEY, "inserted under the presented key");
 });
 
 test("revokeTaskCredit requires a source key", async () => {

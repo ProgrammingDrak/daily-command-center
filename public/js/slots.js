@@ -5914,10 +5914,55 @@
     }
   }
 
+  // How recent a completion has to be for the reconciler to touch it.
+  //
+  // C5 NARROWED THIS DELIBERATELY, and the reason is the whole point. This function
+  // used to credit EVERY done task in the fold on every `dcc:data-ready`, with no
+  // age test — which is fine while completion lives in the per-day `_done` overlay
+  // and only the browser writes it, and becomes a liability the moment the ROW is
+  // the source of truth. `migrations/002_completion_status.sql` marks 295 rows
+  // `status:'done'` in one statement; measured on a fresh prod restore
+  // (2026-08-03), 14 of those have no ledger credit under any equivalent key, so
+  // the unnarrowed reconciler would have banked ~250-350 retroactive points for
+  // May/June/July work on Drake's next page load. Drake's call, 2026-08-03: no
+  // retroactive points.
+  //
+  // Narrowing beats the alternatives (pre-stamping those 14 rows with delta 0, or
+  // just accepting the dump) because it fixes the CLASS: any future migration that
+  // marks rows done is now harmless here, not just this one.
+  //
+  // 48 hours, not "today": completing a PAST day's task stamps `completedAt` at
+  // NOW while the row's date stays in the past, so the row date is the wrong field
+  // to gate on and a same-day window would drop the legitimate case. 48h covers a
+  // failed POST the user returns to the next morning, and excludes history.
+  //
+  // What this gives up: a credit that failed months ago and whose queue entry is
+  // gone will no longer self-heal. That is acceptable — `pa-slot-award-queue`
+  // (flushTaskCreditQueue, which runs immediately before this) is the actual retry
+  // mechanism and is durable across reloads; this function was only ever the
+  // backstop for a lost queue.
+  const RECONCILE_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+  // Epoch ms for a completion stamp, or null when there is nothing honest to read.
+  // Accepts the three shapes that actually reach it: a Date (schedule.js's in-memory
+  // path writes `doneAt[id] = new Date()`), an ISO string (the hydrated path, from
+  // the row's completedAt), and a numeric epoch. Anything else is null rather than a
+  // guess — `Date.parse` on a non-string coerces, and "0" parsing as a year is
+  // exactly the kind of accident this returns null for.
+  function _completionMsOf(raw){
+    if(raw instanceof Date){ const ms = raw.getTime(); return Number.isFinite(ms) ? ms : null; }
+    if(typeof raw === "number"){ return Number.isFinite(raw) ? raw : null; }
+    if(typeof raw === "string" && raw.trim()){ const ms = Date.parse(raw); return Number.isFinite(ms) ? ms : null; }
+    return null;
+  }
+
   async function reconcileCompletedTaskCredits(){
     if(typeof scheduled === "undefined" || !Array.isArray(scheduled)) return;
     const sourceDate = (typeof viewDate !== "undefined" && viewDate) || (window.__state && window.__state.date) || "unknown";
     const seen = new Set();
+    const nowMs = Date.now();
+    let skippedStale = 0;
+    let skippedUnstamped = 0;
     for(const task of scheduled){
       if(!task || !task.id || seen.has(task.id)) continue;
       let done = false;
@@ -5927,12 +5972,31 @@
       if(!done) continue;
       seen.add(task.id);
       const doneAtMap = typeof doneAt !== "undefined" ? doneAt : null;
-      const completedAt = doneAtMap && doneAtMap[task.id]
-        ? (doneAtMap[task.id] instanceof Date ? doneAtMap[task.id].toISOString() : new Date(doneAtMap[task.id]).toISOString())
-        : new Date().toISOString();
+      // NO USABLE TIMESTAMP MEANS NO CREDIT, where it used to mean `new Date()` —
+      // i.e. it used to treat an undated completion as if it had just happened, which
+      // is precisely how a row marked done by a migration reads as fresh. Every
+      // completion path stamps completedAt from C5 on, so an unstamped done row is
+      // either pre-C5 history or a migration's work. Both want skipping.
+      //
+      // ONE guard, not two. The first draft had a `!rawDoneAt` early return in front
+      // of this, and the mutation check showed deleting it changed nothing: a null
+      // falls through to a non-finite result anyway. A guard that cannot fail is
+      // worse than no guard, because it reads as protection. Handling the three
+      // shapes here also settles what `Date.parse(0)` would have done — schedule.js
+      // writes a Date on the in-memory path and an ISO string on the hydrated one,
+      // and an epoch number is a plausible third.
+      const doneMs = _completionMsOf(doneAtMap ? doneAtMap[task.id] : null);
+      if(doneMs == null){ skippedUnstamped++; continue; }
+      if(nowMs - doneMs > RECONCILE_MAX_AGE_MS){ skippedStale++; continue; }
+      const completedAt = new Date(doneMs).toISOString();
       try {
         await earnTaskCredit(task, { sourceDate, completedAt, silent: true, reconcile: true });
       } catch(e) {}
+    }
+    // No silent caps: say what was passed over, so "my points didn't land" is
+    // diagnosable from the console instead of by reading this function.
+    if(skippedStale || skippedUnstamped){
+      console.log("[slots] reconcile skipped " + skippedStale + " completion(s) older than 48h and " + skippedUnstamped + " with no completedAt stamp");
     }
   }
 

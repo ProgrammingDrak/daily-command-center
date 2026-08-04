@@ -25,6 +25,10 @@ const {
 // require can never cycle. Tank blocks are slot_rewards rows gated by the tank
 // waterline; see rowToReward and getBankUsage's tank-driven goal.
 const budgetStore = require("./budget-store");
+// C5's ledger gate: one task has two source_key spellings (client `<date>:<local_id>`
+// vs server `<date>:<blockId>`), so credit and revoke must both resolve the
+// equivalence closure instead of comparing key strings. See lib/task-credit-keys.js.
+const { findEquivalentTaskCredit } = require("./lib/task-credit-keys");
 
 const DEFAULT_SPIN_COST = DEFAULT_SPIN_COST_POINTS;
 const DEFAULT_TARGET_DAILY_SPINS = 12;
@@ -2280,38 +2284,75 @@ async function earnTaskCredit(workspaceId, userId, body) {
     const state = await getState(workspaceId, userId);
     return { awarded: false, credits: 0, delta: 0, account: state.account, scoring };
   }
-  const { rows } = await pool.query(
-    `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description, metadata)
-     VALUES ($1,$2,$3,'task_complete',$4,$5,$6)
-     ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
-     RETURNING *`,
-    [workspaceId, userId || null, credits, sourceKey, description, JSON.stringify(metadata)]
-  );
+  // ── C5: ask the EQUIVALENCE CLOSURE, not string equality ──
+  // `ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING` compares keys
+  // as strings, and one task has two spellings: the client posts
+  // `<date>:<local_id>` while routes/dcc.js and routes/slack-events.js post
+  // `<date>:<blockId>`. So completing a task in the UI and then ✅-ing it in Slack
+  // paid TWICE. findEquivalentTaskCredit closes over both spellings (see
+  // lib/task-credit-keys.js for the measurement: 326 of 436 real prod
+  // presentations would double-credit under exact matching, 0 under the closure).
+  //
+  // The returned key may DIFFER from `sourceKey` — it is the key the ledger
+  // actually holds this credit under — so every follow-up write below targets
+  // `existing.sourceKey`, never the incoming one. Writing to the incoming key
+  // would mint the second row we are trying to prevent.
+  let existing = await findEquivalentTaskCredit(pool, workspaceId, sourceKey);
+
   let awarded = false;
   let adjusted = false;
   let delta = 0;
-  if (rows[0]) {
-    awarded = true;
-    delta = credits;
-    await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
-  } else {
-    const { rows: [existing] } = await pool.query(
-      `SELECT delta FROM slot_point_ledger
-       WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2`,
-      [workspaceId, sourceKey]
+
+  if (!existing) {
+    const { rows } = await pool.query(
+      `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description, metadata)
+       VALUES ($1,$2,$3,'task_complete',$4,$5,$6)
+       ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
+       RETURNING *`,
+      [workspaceId, userId || null, credits, sourceKey, description, JSON.stringify(metadata)]
     );
-    if (existing && Number(existing.delta) < credits) {
-      delta = credits - Number(existing.delta || 0);
-      await pool.query(
-        `UPDATE slot_point_ledger
-         SET delta=$3, description=$4, metadata=$5
-         WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2`,
-        [workspaceId, sourceKey, credits, description, JSON.stringify(metadata)]
-      );
-      if (delta !== 0) {
-        adjusted = true;
-        await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
-      }
+    if (rows[0]) {
+      awarded = true;
+      delta = credits;
+      await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
+    } else {
+      // Lost an IDENTICAL-key race between the closure read and this insert. The
+      // ON CONFLICT clause is retained for exactly this: it still makes same-key
+      // concurrency atomic. Re-resolve and fall through to the upgrade path.
+      //
+      // A CROSS-key race (two different surfaces completing one task within the
+      // same few milliseconds, each passing the closure check before the other
+      // commits) can still double-insert. That window is new, and it is strictly
+      // better than what it replaces: today that same pair double-credits 100% of
+      // the time, not occasionally. Closing it properly wants a unique index over
+      // a canonical key, which is A4's territory.
+      existing = await findEquivalentTaskCredit(pool, workspaceId, sourceKey);
+    }
+  }
+
+  // Upgrade path: an equivalent credit exists but for FEWER points than this
+  // completion scores (a subtask slice re-scored as a parent bonus, say). Top it
+  // up rather than inserting, and top up the row the ledger really has.
+  if (!awarded && existing && existing.delta < credits) {
+    delta = credits - existing.delta;
+    // rowCount, not fire-and-forget. Insert-first used to PROVE the row existed one
+    // statement earlier (ON CONFLICT had just fired); now the only evidence is a
+    // separate earlier SELECT, and these two statements are not in a transaction. If a
+    // concurrent revokeTaskCredit deletes the row in between, the UPDATE matches zero
+    // rows without erroring and the balance would still move — points banked with no
+    // ledger row explaining them, which is the exact failure revokeTaskCredit's own
+    // header says its transaction exists to prevent.
+    const { rowCount } = await pool.query(
+      `UPDATE slot_point_ledger
+       SET delta=$3, description=$4, metadata=$5
+       WHERE workspace_id IS NOT DISTINCT FROM $1 AND source_type='task_complete' AND source_key=$2`,
+      [workspaceId, existing.sourceKey, credits, description, JSON.stringify(metadata)]
+    );
+    if (rowCount && delta !== 0) {
+      adjusted = true;
+      await pool.query("UPDATE slot_accounts SET point_balance = point_balance + $2, updated_at=NOW() WHERE workspace_id=$1", [workspaceId, delta]);
+    } else {
+      delta = 0;   // the row vanished under us: report no movement rather than a phantom credit
     }
   }
   const state = await getState(workspaceId, userId);
@@ -2344,6 +2385,20 @@ async function revokeTaskCredit(workspaceId, userId, sourceKey) {
   sourceKey = String(sourceKey || "").trim();
   if (!sourceKey) throw new Error("source_key required");
   await ensureAccount(workspaceId, userId);
+  // ── C5: revoke through the same closure that earnTaskCredit credits through ──
+  // E1 shipped this matching on the incoming key alone, which meant a Slack un-✅
+  // (row-id key) could not find a credit the browser had banked under the legacy
+  // `<date>:<local_id>` key: the points stayed banked AND the surviving ledger row
+  // kept eating the eventual re-completion via ON CONFLICT. E1's own handoff
+  // flagged "revokeTaskCredit must target the key space the WRITER actually used";
+  // this is that, derived rather than guessed. Falls back to the incoming key when
+  // no equivalent exists, so a genuine miss still reports `revoked: false`.
+  // STRICT, unlike the earn path. Over-matching costs nothing when the question is
+  // "should I pay again?" but deletes another task's ledger row when the question is
+  // "which credit do I remove?" — see the `strict` section in lib/task-credit-keys.js.
+  // An ambiguous un-complete degrades to today's no-op instead of debiting the wrong task.
+  const equivalent = await findEquivalentTaskCredit(pool, workspaceId, sourceKey, { strict: true });
+  const targetKey = equivalent ? equivalent.sourceKey : sourceKey;
   const client = await pool.connect();
   let credits = 0;
   let revoked = false;
@@ -2351,9 +2406,9 @@ async function revokeTaskCredit(workspaceId, userId, sourceKey) {
     await client.query("BEGIN");
     const { rows } = await client.query(
       `DELETE FROM slot_point_ledger
-        WHERE workspace_id=$1 AND source_type='task_complete' AND source_key=$2
+        WHERE workspace_id IS NOT DISTINCT FROM $1 AND source_type='task_complete' AND source_key=$2
         RETURNING delta`,
-      [workspaceId, sourceKey]
+      [workspaceId, targetKey]
     );
     revoked = !!rows[0];
     credits = rows[0] ? Number(rows[0].delta || 0) : 0;

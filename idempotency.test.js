@@ -406,7 +406,16 @@ function mountDcc({ rows = [], dedupeCreate = null } = {}) {
     },
     broadcast: (event, payload) => broadcasts.push({ event, payload }),
     buildSkeletonState: (d) => ({ date: d }),
-    getDayFilePath: (d) => `/dev/null/${d}.json`,
+    // MIRRORS PRODUCTION, including the throw. server.js getDayFilePath rejects a
+    // non-ISO date (C5) because path.join normalizes `../` and the date is caller-
+    // supplied. A stub that is total where production throws is the "harness gentler
+    // than reality" shape: it made an unguarded caller in routes/dcc.js — an async
+    // handler with no try, where an unhandled rejection EXITS the process on node >=20 —
+    // untestable and invisible.
+    getDayFilePath: (d) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d))) throw new Error(`invalid day date: ${d}`);
+      return `/dev/null/${d}.json`;
+    },
     getTodayStr: () => "2026-07-30",
     isValidDate: (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")),
     meetingIdentity: (m) => m && m.id,
@@ -675,4 +684,27 @@ test("batch: the scope guard is enforced there too, not just asserted in a comme
 
   assert.equal(status, 404);
   assert.ok(!JSON.stringify(json).includes("salary"), "no row content leaks through the batch path either");
+});
+
+// ── C5: getDayFilePath throws now, so every caller has to gate on the date ────
+// server.js getDayFilePath rejects a non-ISO date (path.join normalizes `../`, and the
+// date is caller-supplied). POST /api/ingest/day-state is `async` with no enclosing try,
+// Express 4 does not observe a rejected promise from a handler, and this repo registers
+// no unhandledRejection hook — so before the guard, one malformed date EXITED THE
+// PROCESS rather than returning an error. The realistic trigger is a publisher sending a
+// serialized Date where a date was expected, not an attacker.
+test("ingest/day-state: a malformed date is a 400, not an unhandled throw", async () => {
+  const { app } = mountDcc();
+  // The exact shape a caller produces with JSON.stringify({ date: new Date() }).
+  const iso = await call(app, "POST", "/api/ingest/day-state", { date: "2026-07-30T04:00:00.000Z" });
+  assert.equal(iso.status, 400, "a datetime is not a date");
+  assert.match(iso.json.error, /Invalid date/);
+
+  // And the traversal shape the throw exists for.
+  const traversal = await call(app, "POST", "/api/ingest/day-state", { date: "../../../etc/passwd" });
+  assert.equal(traversal.status, 400);
+
+  // The happy path still works, so the guard is not simply refusing everything.
+  const ok = await call(app, "POST", "/api/ingest/day-state", { date: "2026-07-30" });
+  assert.notEqual(ok.status, 400, "a real date still ingests");
 });

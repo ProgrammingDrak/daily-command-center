@@ -355,7 +355,16 @@ function mountDcc(rows = []) {
     },
     broadcast: () => {},
     buildSkeletonState: (d) => ({ date: d }),
-    getDayFilePath: (d) => `/dev/null/${d}.json`,
+    // MIRRORS PRODUCTION, including the throw. server.js getDayFilePath rejects a
+    // non-ISO date (C5) because path.join normalizes `../` and the date is caller-
+    // supplied. A stub that is total where production throws is the "harness gentler
+    // than reality" shape: it made an unguarded caller in routes/dcc.js — an async
+    // handler with no try, where an unhandled rejection EXITS the process on node >=20 —
+    // untestable and invisible.
+    getDayFilePath: (d) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d))) throw new Error(`invalid day date: ${d}`);
+      return `/dev/null/${d}.json`;
+    },
     getTodayStr: () => "2026-07-30",
     isValidDate: (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || "")),
     meetingIdentity: (m) => m && m.id,
