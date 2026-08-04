@@ -430,6 +430,17 @@ async function buildPublicTodoShare(share, dateStr, req) {
   const root = blocks.find(b => b.type === "day_root");
   const rootProps = root && root.properties ? root.properties : {};
   const rootDone = rootProps._done || {};
+  // ── C5b: the ROW is the source, the overlays are a legacy union ──
+  //
+  // This read had to change in the SAME phase that moved completion onto the row, or the
+  // share regressed immediately: a task Drake finished today writes `properties.status`
+  // and never touches `_done`, so an overlay-only `doneIds` would have published every
+  // one of his completed tasks as `open` (or `overdue`, once its end time passed).
+  //
+  // The overlay reads stay UNIONED rather than replaced, for the same measured reason
+  // public/js/persistence.js keeps them: 23 of the 401 `_done` entries on prod are still
+  // the only representation of a real completion, and dropping them would publish 23
+  // finished tasks as open on archive-day shares.
   const doneIds = new Set([
     ...((rootDone.ids || []).map(String)),
     ...Object.keys(rootDone.at || {}).map(String)
@@ -443,9 +454,9 @@ async function buildPublicTodoShare(share, dateStr, req) {
     // as public/js/persistence.js reloadPersistedEdits.
     ...(((rootProps._pushed && rootProps._pushed.ids) || [])).map(String)
   ]);
-  for (const block of blocks) {
+  const aliasesOf = (block) => {
     const p = block.properties || {};
-    const aliases = publicTaskIdentityIds({
+    return publicTaskIdentityIds({
       id: p.local_id || block.id,
       local_id: p.local_id,
       blockId: block.id,
@@ -454,6 +465,27 @@ async function buildPublicTodoShare(share, dateStr, req) {
       sourceId: p.sourceId,
       gcal_event_id: p.gcal_event_id
     });
+  };
+  // TOMBSTONES, and they need their own read: `getBlocksByDate` filters
+  // `deleted_at IS NULL`, so a deleted row is simply absent from `blocks` above — which is
+  // right for the row itself and wrong for its TIMELINE twin, which keeps rendering off
+  // `state.schedule.timeline` under the same id. `_deleted` used to hide it; B1/C3 moved
+  // deletion to the `deleted_at` column, so nothing has hidden it since. This is the
+  // "public share keeps showing tasks Drake deleted" half of the phase.
+  let tombstoned = [];
+  try {
+    tombstoned = (await blockDB.getBlocksByDateIncludingDeleted(date, share.workspace_id)).filter(b => b && b.deleted_at);
+  } catch (e) {
+    // A failed read must not publish a DELETED task. Fall back to the overlay-only hide
+    // set and say so, rather than silently treating "cannot tell" as "nothing is hidden".
+    console.warn("[public-share] tombstone read failed; hide set is overlay-only for " + date + ":", e.message);
+  }
+  for (const block of tombstoned) aliasesOf(block).forEach(id => hiddenIds.add(id));
+  for (const block of blocks) {
+    const p = block.properties || {};
+    const aliases = aliasesOf(block);
+    // Row-carried completion, the canonical one as of C5b.
+    if (p.status === "done" || p.done === true || p.completedAt) aliases.forEach(id => doneIds.add(id));
     if (aliases.some(id => doneIds.has(id))) aliases.forEach(id => doneIds.add(id));
     if (aliases.some(id => hiddenIds.has(id))) aliases.forEach(id => hiddenIds.add(id));
   }
