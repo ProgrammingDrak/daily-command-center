@@ -364,6 +364,20 @@ test("★ C6c: loadTaskOrder and loadSubtaskOrder read sort_order; UNSCHEDULED s
   const empty = ctx([], { _taskOrder: ["x", "y"] });
   assert.deepEqual(run(empty, "loadTaskOrder()"), ["x", "y"]);
   assert.deepEqual(run(empty, "window.__DCC_C6B_FALLBACK"), { taskOrder: 2 }, "and it is COUNTED");
+  // ★ loadSubtaskOrder: the children's own sort_order, overlay as a counted fallback. The title of
+  // this test claimed it and did not test it, so the overlay-preference mutation walked past.
+  const sub = ctx([
+    row("p", 1000), row("k2", 2000, { subtaskOf: "p" }), row("k1", 3000, { subtaskOf: "p" }),
+    row("o1", 4000, { subtaskOf: "other" }),
+  ], { _subtaskOrder: { p: ["k1", "k2"] } });
+  assert.deepEqual(run(sub, "loadSubtaskOrder()"), { p: ["k2", "k1"], other: ["o1"] },
+    "sort_order wins over the overlay map");
+  assert.deepEqual(run(sub, "window.__DCC_C6B_FALLBACK"), {});
+  // ...and the overlay IS the fallback when no row carries a subtask edge
+  const noKids = ctx([row("solo", 1000)], { _subtaskOrder: { p: ["a", "b"] } });
+  assert.deepEqual(run(noKids, "loadSubtaskOrder()"), { p: ["a", "b"] });
+  assert.deepEqual(run(noKids, "window.__DCC_C6B_FALLBACK"), { subtaskOrder: 1 }, "COUNTED");
+
   // the unscheduled axis is unchanged, and the reason is in the file
   assert.match(schedCode, /function loadUnscheduledOrder\(\)\{\s*if\(window\.USE_BLOCKSTORE&&window\.blockStore\)\{\s*const v=_bsProp\("_unscheduledOrder",null\);/);
   assert.match(schedSrc, /THE UNSCHEDULED AXIS STAYS ON ITS OVERLAY/);
