@@ -324,16 +324,27 @@ function reloadPersistedEdits() {
       const isFoldableTask=b=>{
         const p=b.properties||{};
         if(!TM.foldsIntoItinerary(b))return false;
-        // C5b dropped the `status==="deleted"||status==="archived"` branches that used to
-        // sit here. C0 kept them on the theory that removing them before A1's cleanup would
-        // resurface legacy tombstones. Measured on prod 2026-08-04 before removing:
-        // ZERO rows carry either value, live or tombstoned, across every workspace. A
-        // tombstone is `deleted_at` (the column) and the blockStore filters on it, so these
-        // two tests were dead code guarding a shape that no longer exists in the data.
-        // status==="done" was ALSO in that list once, which meant a task completed by any
+        // C5b was told to DROP these two branches and deliberately did not, on the strength
+        // of the measurement plus what the rest of the codebase still believes.
+        //
+        // Measured on prod 2026-08-04, every workspace, live rows and tombstones alike: ZERO
+        // rows carry `status:"deleted"` or `"archived"`, so removing them changes no
+        // behavior today — a tombstone is the `deleted_at` COLUMN, which the blockStore
+        // filters upstream of this fold. But FOUR other readers still treat the value as
+        // live: `TaskModel.selectUnscheduled` excludes it (and one-unscheduled-home.test.js
+        // pins that), `schedule.js syncAddedTaskTimes` skips it, and routes/blocks.js reads
+        // it. Dropping it HERE alone would mean a dateless row with that status folds into
+        // the itinerary while being excluded from the Backlog that is supposed to be the same
+        // list — one row, two answers, which is the divergence this whole project exists to
+        // remove. Retiring the vocabulary belongs in one change across all five readers (A4,
+        // with the overlay), not in one reader here.
+        //
+        // status==="done" was ALSO in this list once, which meant a task completed by any
         // server path (Day in Review's Approve, the MCP tools, the Slack ✅, the
         // responsibility hook) silently VANISHED from the itinerary instead of checking off.
-        // A done task is still a task: admit it and seed the done registry from it below.
+        // C0 removed THAT one; a done task is still a task, so it is admitted and the fold
+        // below seeds the done registry from it.
+        if(p.status==="deleted"||p.status==="archived")return false;
         // A completion belongs to a DAY. A dateless row has none, so admitting a
         // done one would fold it onto every day you look at (there are real ones:
         // closed side-project rows) — keep those out, exactly as before.

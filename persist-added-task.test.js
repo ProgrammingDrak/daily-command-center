@@ -71,3 +71,21 @@ test("untimed item with no durMin defaults to 30", () => {
   context.persistAddedTask({ id: "t4", title: "bare", type: "task" }, "2026-07-15");
   assert.equal(created[0].props.duration, 30);
 });
+
+// C5b: an item that is ALREADY done when it is persisted carries its completion onto the row
+// it creates, rather than being marked done afterwards in the day's `_done` overlay.
+// prep.js's distraction log is the caller: doing it after the fact would have to race this
+// async create for a row id that does not exist yet.
+test("an already-done item carries its completion onto the row it creates (C5b)", () => {
+  const { context, created } = makeContext({ blockstore: true });
+  vm.runInContext('persistAddedTask({id:"d1",title:"Slack rabbit hole",durMin:15,status:"done",done:true,completedAt:"2026-08-04T12:00:00Z"})', context);
+  assert.equal(created[0].props.status, "done");
+  assert.equal(created[0].props.done, true);
+  assert.equal(created[0].props.completedAt, "2026-08-04T12:00:00Z");
+  // ...and an ordinary create still says nothing about completion, so the pass-through cannot
+  // quietly mark every new task done.
+  vm.runInContext('persistAddedTask({id:"d2",title:"Ordinary",durMin:30})', context);
+  assert.equal(created[1].props.status, undefined);
+  assert.equal(created[1].props.done, undefined);
+  assert.equal(created[1].props.completedAt, undefined);
+});

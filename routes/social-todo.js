@@ -426,7 +426,26 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
 async function buildPublicTodoShare(share, dateStr, req) {
   const date = isValidDate(dateStr) ? dateStr : getTodayStr();
   const state = await buildDayResponse(date, null, share.workspace_id);
-  const blocks = filterLegacyGcalBlocks(await blockDB.getBlocksByDate(date, share.workspace_id));
+  // ONE day read, split locally. `getBlocksByDateIncludingDeleted` is a strict superset of
+  // `getBlocksByDate` (same table, same date, same order; only the `deleted_at IS NULL`
+  // predicate differs), and this handler is genuinely hot: public-todo-share.js polls
+  // `GET /api/public/todo-share/:token` every 15s per open viewer, on a day that can hold
+  // ~2000 blocks, against a pool capped at 10. Two full-day scans per poll for a superset
+  // relationship is pure waste.
+  //
+  // A failed tombstone read degrades to the live-only read rather than throwing: "cannot
+  // tell" must not publish a deleted task, so the hide set falls back to overlay-only and
+  // says so. `filterLegacyGcalBlocks` is a pure filter, so applying it before the split is
+  // identical for `blocks` and additionally keeps legacy gcal tombstones out of `hiddenIds`.
+  let allRows = null;
+  try {
+    allRows = await blockDB.getBlocksByDateIncludingDeleted(date, share.workspace_id);
+  } catch (e) {
+    console.warn("[public-share] tombstone read failed; hide set is overlay-only for " + date + ":", e.message);
+  }
+  const dayRows = filterLegacyGcalBlocks(allRows || await blockDB.getBlocksByDate(date, share.workspace_id));
+  const blocks = dayRows.filter(b => b && !b.deleted_at);
+  const tombstoned = allRows ? dayRows.filter(b => b && b.deleted_at) : [];
   const root = blocks.find(b => b.type === "day_root");
   const rootProps = root && root.properties ? root.properties : {};
   const rootDone = rootProps._done || {};
@@ -466,20 +485,12 @@ async function buildPublicTodoShare(share, dateStr, req) {
       gcal_event_id: p.gcal_event_id
     });
   };
-  // TOMBSTONES, and they need their own read: `getBlocksByDate` filters
-  // `deleted_at IS NULL`, so a deleted row is simply absent from `blocks` above — which is
-  // right for the row itself and wrong for its TIMELINE twin, which keeps rendering off
+  // TOMBSTONES (split out of the single day read above). `getBlocksByDate` filters
+  // `deleted_at IS NULL`, so a deleted row is simply absent from `blocks` — which is right
+  // for the row itself and wrong for its TIMELINE twin, which keeps rendering off
   // `state.schedule.timeline` under the same id. `_deleted` used to hide it; B1/C3 moved
   // deletion to the `deleted_at` column, so nothing has hidden it since. This is the
   // "public share keeps showing tasks Drake deleted" half of the phase.
-  let tombstoned = [];
-  try {
-    tombstoned = (await blockDB.getBlocksByDateIncludingDeleted(date, share.workspace_id)).filter(b => b && b.deleted_at);
-  } catch (e) {
-    // A failed read must not publish a DELETED task. Fall back to the overlay-only hide
-    // set and say so, rather than silently treating "cannot tell" as "nothing is hidden".
-    console.warn("[public-share] tombstone read failed; hide set is overlay-only for " + date + ":", e.message);
-  }
   for (const block of tombstoned) aliasesOf(block).forEach(id => hiddenIds.add(id));
   for (const block of blocks) {
     const p = block.properties || {};
@@ -763,17 +774,49 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
   };
 
   const dayFile = getDayFilePath(date);
-  let state = null;
+  // ── This is an UNAUTHENTICATED writer, and `saveDccState` is a FULL REPLACE ──
+  //
+  // `ON CONFLICT (date, workspace_id) DO UPDATE SET state_json = EXCLUDED.state_json`
+  // (db.js) replaces the entire day. So whatever this function picks as its base becomes
+  // the day, and a guest holding a share token picks the DATE. That makes the two "just
+  // guess a base" fallbacks the earlier cut had into real data loss:
+  //
+  //   - A FAILED read followed by a successful write replaced the workspace's real day
+  //     (timeline, triage history, glymphatic brief) with the file mirror, or with a bare
+  //     skeleton when no file existed. On Railway's ephemeral filesystem "no file" IS the
+  //     normal post-deploy state, so the realistic outcome was losing the whole row.
+  //   - `getDayFilePath` has no workspace segment and `persistDccDay` writes that mirror
+  //     for EVERY workspace, so seeding from it when this workspace has no row created
+  //     this workspace's row holding ANOTHER tenant's day. And because `buildDayResponse`
+  //     is Postgres-first now, that content would then be served authoritatively and
+  //     published on this share, turning a transient cross-tenant read into a permanent one.
+  //
+  // So it fails closed, for exactly the reason `buildDayResponse` blocker 4 does: an outage
+  // is an error, not an empty Tuesday. A read we could not complete is never a base to
+  // write from, and a no-row read means "no day for THIS workspace" -- never the shared file.
+  let row = null;
   try {
-    const row = await blockDB.getDccState(date, share.workspace_id);
-    if (row && row.state_json) state = row.state_json;
+    row = await blockDB.getDccState(date, share.workspace_id);
   } catch (e) {
-    console.error("[public-todo] day-state read failed for " + date + ", falling back to the file mirror:", e.message);
+    console.error("[public-todo] day-state read failed for " + date + ":", e.message);
+    const err = new Error("Day state is temporarily unavailable; the task was not saved");
+    err.statusCode = 503;
+    throw err;
   }
-  if (!state) state = readJSON(dayFile, null) || buildSkeletonState(date);
+  const state = (row && row.state_json) ? row.state_json : buildSkeletonState(date);
   if (!state.triage) state.triage = { open_items: [], resolved_items: [], cycle_count: 0 };
   if (!Array.isArray(state.triage.open_items)) state.triage.open_items = [];
   if (!Array.isArray(state.triage.resolved_items)) state.triage.resolved_items = [];
+  // A cap, because this is now a DURABLE unauthenticated append into one JSONB blob and
+  // there is no rate limiting anywhere in this app. Unbounded, a share token is enough to
+  // grow one row until reads of it get expensive, which degrades the owner's own
+  // /api/state/day. Before this change the same abuse only cost an ephemeral file.
+  const PUBLIC_ITEM_CAP = 50;
+  if (state.triage.open_items.filter(i => i && i.source === "public_share").length >= PUBLIC_ITEM_CAP) {
+    const err = new Error("This list has reached its limit of guest-submitted tasks for the day");
+    err.statusCode = 429;
+    throw err;
+  }
   state.triage.open_items.push(item);
   if (state.sweep) state.sweep.open_item_count = state.triage.open_items.length;
   state.last_updated_at = now;
@@ -781,7 +824,17 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
   // Postgres FIRST and it must succeed. The whole point is that the guest's task is durable;
   // reporting success after only a file write is what lost them. The file mirror is
   // best-effort after, matching persistDccDay's contract.
-  await blockDB.saveDccState(date, state, null, share.workspace_id);
+  //
+  // `user_id` PRESERVES what the row had. The upsert also does `user_id = EXCLUDED.user_id`,
+  // so passing null erased the owner's id -- and server.js's boot backfill is
+  // `UPDATE dcc_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL`, run
+  // unconditionally on EVERY restart. A nulled row for workspace A therefore had its
+  // workspace_id rewritten to the default workspace on the next deploy, moving A's day out
+  // of A entirely; or it collided with the default workspace's own row for that date
+  // (PRIMARY KEY (date, workspace_id)), aborting the UPDATE into a catch that then skips
+  // ensureWorkspacesForAllUsers for that boot. Deploys are restarts, so a single guest
+  // submission armed it.
+  await blockDB.saveDccState(date, state, (row && row.user_id) || share.owner_id || null, share.workspace_id);
   try {
     writeJSON(dayFile, state);
     updateManifest(date);
@@ -1221,7 +1274,20 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1", [share.id]);
     res.json(await buildPublicTodoShare(share, req.query.date, req));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    // Same convention as the sibling POST below, and C5b is what gave this route a real
+    // failure path: `buildPublicTodoShare` calls `buildDayResponse`, which now THROWS on an
+    // unreadable day where it used to return a skeleton. This endpoint is ANONYMOUS and
+    // polled every 15s, so a DB blip would otherwise hand a guest
+    // "Day state unavailable for <date>: Postgres read failed and no file mirror exists".
+    //
+    // Failing closed here while the owner's own /api/state/day degrades to an empty day is
+    // deliberate, not an accident of which caller was edited: a published list showing
+    // nothing is indistinguishable from a list with nothing on it, and this one has an
+    // audience.
+    console.error("[public-todo] share read failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not load this list right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
@@ -1252,7 +1318,14 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     broadcast("dcc-state-changed", { source: "public-todo-triage", date }, share.workspace_id);
     broadcast("todo-share-changed", { action: "public-triage-create", id: triageItem.id }, share.workspace_id);
     res.status(201).json({ triageItem });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    // C5b: the writer reaches Postgres now, so a `saveDccState` rejection lands here — and
+    // this endpoint is ANONYMOUS. Raw Postgres error text carries table, column and
+    // constraint names. Log the detail, return it only for the statuses this code raises
+    // deliberately (503 unavailable, 429 guest cap), whose messages are written for a guest.
+    console.error("[public-todo] guest task create failed:", e);
+    res.status(e.statusCode || 400).json({ error: e.statusCode ? e.message : "Could not save that task right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {

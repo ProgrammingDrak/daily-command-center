@@ -10,6 +10,7 @@ module.exports = function mount(app, ctx) {
   const {
     DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
     dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity,
+    readDayStateMirror,
     meetingMaterializer, previousDateStr,
     readJSON, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
   } = ctx;
@@ -41,7 +42,23 @@ module.exports = function mount(app, ctx) {
     // Empty-object fallback, not a skeleton: this handler MERGES named sections over
     // `existing`, so an absent day must contribute no sections rather than a full skeleton's
     // worth of empty ones.
-    const existing = await readDccDayState(incoming.date, req, {});
+    //
+    // WRAPPED, and for exactly the reason the paragraph above warns about `getDayFilePath`:
+    // `readDccDayState` THROWS on an unreadable day (rather than handing back a base that
+    // would be full-replaced over the real row), this handler is `async` with NO enclosing
+    // try, Express 4 does not observe a rejected promise, and this repo registers no
+    // `unhandledRejection` hook — so on Node >= 20 that throw would EXIT THE PROCESS instead
+    // of answering 503. Five of the six callers already sit inside a handler-level try; this
+    // was the one that did not. The trigger is mundane: a redeploy wipes
+    // `data/state/days/`, so a scheduled publisher POSTing during a brief DB blip lands on a
+    // date with no per-date mirror.
+    let existing;
+    try {
+      existing = await readDccDayState(incoming.date, req, {});
+    } catch (e) {
+      console.error("[dcc-state ingest] day-state read failed:", e.message);
+      return res.status(503).json({ ok: false, error: e.message });
+    }
     const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
     // "pushed" is LEGACY as of C3 (the pushed subsystem is deleted; a push is a real move
     // now). Nothing writes the section any more, so it is only here to preserve what old
@@ -271,19 +288,42 @@ module.exports = function mount(app, ctx) {
   // as one owner and writing as another is how you would read workspace A's day and save it
   // over workspace B's.
   //
-  // A failed DB read falls through to the file rather than throwing: these handlers are
-  // ingest paths, and refusing an ingest because a read hiccuped loses the incoming packet.
-  // The Postgres WRITE still throws (persistDccDay's contract), so a save can never silently
-  // half-land.
+  // ★ THE FALLBACK CHAIN IS THE DANGEROUS PART, because every caller feeds this straight
+  // into `persistDccDay` -> `saveDccState`, which is a FULL REPLACE.
+  //
+  //   - `DAY_STATE_FILE` is the LAST PUBLISHED day. It has no workspace segment and no
+  //     guarantee its `date` matches the requested one, so using it ungated meant an ingest
+  //     or a Brief decision could base its merge on a different day (possibly another
+  //     tenant's) and persist that as the durable state for this date -- the exact promotion
+  //     this phase exists to eliminate, arriving via a different file. It is only relevant
+  //     when it IS about this date, which is the gate `server.js dayStateUnavailable`
+  //     already applies to the same two files for the same reason.
+  //   - A FAILED read is not an empty day. Falling through to `emptyFallback` after one
+  //     would full-replace a real day with a skeleton. So a read we could not complete,
+  //     with no per-date mirror to stand in, throws; the caller's own try/catch turns that
+  //     into a 500 and the publisher retries. Losing one packet beats overwriting the day
+  //     it was about.
+  //   - A read that SUCCEEDS with no row genuinely means no day yet, so `emptyFallback` is
+  //     correct there and only there.
+  //
   async function readDccDayState(date, req, emptyFallback) {
     const { userId, workspaceId } = resolveOwnerLenient(req);
+    let dbFailed = false;
     try {
       const row = await blockDB.getDccState(date, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
       if (row && row.state_json) return row.state_json;
     } catch (e) {
-      console.error(`[dcc] day-state read failed for ${date}, falling back to the file mirror:`, e.message);
+      dbFailed = true;
+      console.error(`[dcc] day-state read failed for ${date}:`, e.message);
     }
-    return readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || emptyFallback;
+    // `readDayStateMirror` (server.js, shared through ctx) is the one implementation of the
+    // per-date-file-then-date-matching-legacy-file ladder, and it stamps the requested date
+    // onto the result. This used to be a hand-copy that returned the file's own `date`, so a
+    // mirror with a stale date field fed a full-replace under the wrong day.
+    const mirror = readDayStateMirror(date, DAY_STATE_FILE);
+    if (mirror) return mirror;
+    if (dbFailed) throw new Error(`Day state unavailable for ${date}: Postgres read failed and no file mirror exists`);
+    return emptyFallback;
   }
 
   async function persistDccDay(date, merged, req, source) {

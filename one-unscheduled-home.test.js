@@ -54,7 +54,11 @@ const SRC = {
   rowForDateWrite: mustSlice(stateSource, /^async function _rowForDateWrite\(blockId\)\{[\s\S]*?\n\}/m, "_rowForDateWrite"),
   syncBacklog: mustSlice(stateSource, /^function _syncBacklogProjection\(evId,dateStr\)\{[\s\S]*?\n\}/m, "_syncBacklogProjection"),
   positiveDuration: mustSlice(stateSource, /^function _positiveDuration\(candidate,fallback\)\{[\s\S]*?\n\}/m, "_positiveDuration"),
-  enqueueRowProps: mustSlice(stateSource, /^function enqueueRowPropsWrite\(blockId,merge\)\{[\s\S]*?\n\}/m, "enqueueRowPropsWrite"),
+  // C5b widened the signature to `(blockId,merge,extra)` — `extra` is the top-level COLUMN
+  // write (today just `{date}`), which is how a completion promotes a dateless Unscheduled row
+  // onto the day it was finished on. Matching the parameter list loosely so the next argument
+  // does not break the slice; the `mustSlice` guard still fails loudly if the function moves.
+  enqueueRowProps: mustSlice(stateSource, /^function enqueueRowPropsWrite\([^)]*\)\{[\s\S]*?\n\}/m, "enqueueRowPropsWrite"),
   taskAnchorById: mustSlice(tabSource, /^function taskAnchorById\(id\)\{[\s\S]*?\n\}/m, "taskAnchorById"),
   unfRecById: mustSlice(tabSource, /^function _unfRecById\(id\)\{[\s\S]*?\n\}/m, "_unfRecById"),
 };
@@ -1208,6 +1212,43 @@ test("row-properties writes are SERIALIZED, so two edits from one click both sur
     assert.equal(final.title, "New title", "the rename must survive the tag write");
     assert.deepEqual(final.tags, ["home"], "and the tag write must survive too");
     assert.equal(final.local_id, "c-1", "with the rest of the bag intact");
+  });
+});
+
+// C5b: the queue forwards `extra`, the top-level COLUMN write. Only `{date}` uses it today,
+// and it is what stops a completion on a DATELESS Unscheduled row from making the task vanish
+// — `isFoldableTask` rejects `(status==="done"||done===true)&&!b.date` and
+// `selectUnscheduled` rejects `status==="done"`, so a done row with no date is in neither
+// list. Asserted on the real queue because the completion tests reach it through a fake,
+// which cannot catch the argument being dropped here.
+test("the queue forwards the `extra` column write (a completion promotes a dateless row)", () => {
+  const base = row("row-88", null, { local_id: "u-1", title: "Someday", kind: "backlog" });
+  const { store, calls } = makeStore([base], { cached: true });
+  const ctx = ctxWith(["let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps], {
+    window: { blockStore: store },
+    _rowForDateWrite: async () => ({ id: "row-88", properties: base.properties }),
+  });
+  const settled = ctx.enqueueRowPropsWrite("row-88", (p) => Object.assign({}, p, { status: "done" }), { date: "2026-08-04" });
+  return settled.then(() => new Promise((d) => setTimeout(d, 0))).then(() => {
+    assert.equal(calls.update.length, 1);
+    assert.equal(calls.update[0].props.status, "done");
+    assert.deepEqual(calls.update[0].extra, { date: "2026-08-04" },
+      "without the date the finished task is dropped by BOTH the fold and the Unscheduled selector");
+  });
+});
+
+// ...and it stays undefined when nobody asks, so an ordinary properties write cannot
+// accidentally re-date a row.
+test("no `extra` means no column write", () => {
+  const base = row("row-89", "2026-07-28", { local_id: "c-9", title: "Dated" });
+  const { store, calls } = makeStore([base], { cached: true });
+  const ctx = ctxWith(["let _rowPropsChain = Promise.resolve();", SRC.enqueueRowProps], {
+    window: { blockStore: store },
+    _rowForDateWrite: async () => ({ id: "row-89", properties: base.properties }),
+  });
+  const settled = ctx.enqueueRowPropsWrite("row-89", (p) => Object.assign({}, p, { title: "Renamed" }));
+  return settled.then(() => new Promise((d) => setTimeout(d, 0))).then(() => {
+    assert.equal(calls.update[0].extra, undefined);
   });
 });
 

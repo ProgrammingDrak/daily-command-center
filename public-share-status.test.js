@@ -28,39 +28,62 @@ function mustMatch(re, what) {
 }
 
 const IDENTITY_SRC = mustMatch(/function publicTaskIdentityIds\(input\) \{[\s\S]*?\n\}/, "publicTaskIdentityIds");
-// `const rootDone = ...` through the end of the `for (const block of blocks)` loop.
+// The slice runs from the single DAY READ through the end of the `for (const block of blocks)`
+// loop, i.e. it includes the try/catch and the live/tombstoned split — not just the set
+// construction. Starting it below the read would mean the harness supplied `blocks` and
+// `tombstoned` itself and had to fake the degradation warning, so the "fails closed, loudly"
+// test would assert a string the harness wrote rather than one the code emits. That is the
+// assert-on-a-mock-that-cannot-fail trap this project keeps paying for.
 const SETS_SRC = mustMatch(
-  /const rootDone = rootProps\._done \|\| \{\};[\s\S]*?\n {2}for \(const block of blocks\) \{[\s\S]*?\n {2}\}/,
-  "the done/hidden set construction in buildPublicTodoShare"
+  /let allRows = null;[\s\S]*?\n {2}for \(const block of blocks\) \{[\s\S]*?\n {2}\}/,
+  "the day read + done/hidden set construction in buildPublicTodoShare"
 );
 
 // ONE store behind every question, so a fixture cannot claim a row exists for the live
 // read and not for the tombstone read (C5a's mock-contradiction lesson). `rows` is the
 // whole day; the two reads partition it on `deleted_at` exactly as db.js does.
 function build({ rootProps = {}, rows = [], tombstoneReadThrows = false } = {}) {
+  const warnings = [];
+  const reads = [];
+  // The widened slice derives `root`/`rootProps` from the day's own day_root ROW, which is
+  // what production does — so the overlays go on a real row rather than being handed in as a
+  // variable the real code never reads.
+  const allRows = rootProps && Object.keys(rootProps).length
+    ? [{ id: "root-1", type: "day_root", properties: rootProps }].concat(rows)
+    : rows.slice();
   const ctx = {
-    console: { warn: () => {} },
-    rootProps,
+    console: { warn: (...a) => warnings.push(a.map(String).join(" ")) },
     date: "2026-08-04",
     share: { workspace_id: "ws-1" },
-    blocks: rows.filter((r) => !r.deleted_at),
+    // A pure filter in production (server.js), so a pass-through is faithful here.
+    filterLegacyGcalBlocks: (b) => b,
+    // ONE store behind both reads, partitioned on `deleted_at` exactly as db.js's two
+    // queries differ — so a fixture cannot claim a row exists for the live read and not for
+    // the tombstone read (C5a's mock-contradiction lesson).
     blockDB: {
-      getBlocksByDateIncludingDeleted: async () => {
+      getBlocksByDateIncludingDeleted: async (d, ws) => {
+        reads.push(["all", d, ws]);
         if (tombstoneReadThrows) throw new Error("db down");
-        return rows;
+        return allRows;
+      },
+      getBlocksByDate: async (d, ws) => {
+        reads.push(["live", d, ws]);
+        return allRows.filter((r) => !r.deleted_at);
       },
     },
   };
   vm.createContext(ctx);
   vm.runInContext(
-    IDENTITY_SRC + "\n(async () => {\n" + SETS_SRC + "\nglobalThis.__out = { done: [...doneIds].sort(), hidden: [...hiddenIds].sort() };\n})()",
+    IDENTITY_SRC + "\n(async () => {\n" + SETS_SRC + "\nglobalThis.__out = { done: [...doneIds].sort(), hidden: [...hiddenIds].sort(), blocks: blocks.length };\n})()",
     ctx
   );
   // Copied into HOST arrays: the vm has its own realm, so an array built in there is not
   // reference-equal to Array.prototype out here and deepStrictEqual rejects it on the
   // prototype alone, with a "same structure but not reference-equal" message that says
   // nothing about the assertion you meant to make.
-  return new Promise((r) => setTimeout(() => r({ done: [...ctx.__out.done], hidden: [...ctx.__out.hidden] }), 0));
+  return new Promise((r) => setTimeout(() => r({
+    done: [...ctx.__out.done], hidden: [...ctx.__out.hidden], blocks: ctx.__out.blocks, warnings, reads,
+  }), 0));
 }
 
 const row = (id, props, extra) => ({ id, type: "block", properties: props || {}, ...(extra || {}) });
@@ -104,16 +127,31 @@ test("a live row is NOT hidden", async () => {
   assert.deepEqual(out.hidden, []);
 });
 
-test("a failed tombstone read never publishes a deleted task as visible", async () => {
-  // "Cannot tell" must not collapse into "nothing is hidden". The overlay-only hide set is
-  // the degraded answer; silently publishing a deleted task is not an option, and the
-  // warning is what makes the degradation visible.
+// Named for what it PROVES, not for what would be nice. In this branch a deleted task's
+// timeline twin does still publish — the row is absent from `blocks` either way, so nothing
+// can put its aliases in the hide set. The accepted degradation is: keep serving the list,
+// keep the overlay hide set, and SAY SO. The warning is the whole safety story, so it is
+// asserted rather than swallowed.
+test("a failed tombstone read degrades the hide set to the overlay, LOUDLY", async () => {
   const out = await build({
     rootProps: { _deleted: ["overlay-gone"] },
     rows: [row("blk-9", { local_id: "gone-1", title: "x" }, { deleted_at: "2026-08-04T10:00:00Z" })],
     tombstoneReadThrows: true,
   });
   assert.deepEqual(out.hidden, ["overlay-gone"], "falls back to the overlay, does not throw and does not empty the set");
+  assert.equal(out.warnings.length, 1, "a silent degradation publishes a deleted task with nothing in the log");
+  assert.match(out.warnings[0], /tombstone read failed/);
+  assert.ok(out.blocks >= 1, "and the live rows still come through, from the fallback read");
+  assert.deepEqual(out.reads.map((r) => r[0]), ["all", "live"], "the live read is the fallback, not a second unconditional scan");
+});
+
+// The perf half, asserted because it is easy to regress back into two scans: the
+// tombstone-inclusive read is a strict SUPERSET of the live one, and this handler is polled
+// every 15s per open viewer.
+test("the happy path reads the day ONCE", async () => {
+  const out = await build({ rows: [row("blk-1", { local_id: "t1", title: "x" })] });
+  assert.deepEqual(out.reads.map((r) => r[0]), ["all"], "one scan, split locally");
+  assert.deepEqual(out.reads[0].slice(1), ["2026-08-04", "ws-1"], "scoped to the date and the share's workspace");
 });
 
 test("the LEGACY overlays are still read, unioned with the row facts", async () => {

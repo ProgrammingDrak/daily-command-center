@@ -66,26 +66,24 @@ test("dateless twin WITH a dated sibling is suppressed (the duplication bug)", (
   assert.equal(fold(block(null, { local_id: "qa-other", kind: "pending_task" })), true);
 });
 
-// INVERTED IN C5b, deliberately and with the measurement that justified it.
+// KEPT IN C5b, though the phase brief said to invert it.
 //
 // C0 kept `status==="deleted"||status==="archived"` in the fold guard on the theory that
 // dropping them before A1's cleanup would resurface legacy tombstones. Measured on prod
-// 2026-08-04, across every workspace, live rows and tombstones alike: **ZERO rows carry
-// either value.** A tombstone is the `deleted_at` COLUMN, which the blockStore filters
-// before the fold ever sees a row, so these two tests were guarding a shape that does not
-// exist in the data.
+// 2026-08-04, across every workspace, live rows and tombstones alike: ZERO rows carry
+// either value, so dropping the guard changes nothing observable — and that cuts both ways,
+// because keeping it costs nothing either.
 //
-// So this asserts the fold no longer has an opinion about a property nothing sets, and it
-// asserts it on the DATELESS shape on purpose: those two rows are otherwise identical to
-// the "dateless row WITHOUT a dated sibling folds" case above, so if a future change
-// re-adds a status test here this flips back to false and says so.
-test("`status: deleted`/`archived` are not fold criteria any more (C5b: 0 such rows exist)", () => {
+// What settled it is that FOUR other readers still honor the value, `TaskModel.selectUnscheduled`
+// among them (one-unscheduled-home.test.js pins that a dateless `status:"archived"` row is
+// NOT unscheduled). Dropping it here alone would have made this file and that one assert
+// opposite answers for the same row reaching the same surface: folded into the itinerary,
+// excluded from the Backlog the fold's own comment calls the same list. Retiring the
+// vocabulary is one change across all five readers, in A4 with the overlay.
+test("deleted and archived rows never fold", () => {
   const fold = makeFold(TODAY, new Set());
-  assert.equal(fold(block(null, { local_id: "qa-4", kind: "pending_task", status: "deleted" })), true);
-  assert.equal(fold(block(null, { local_id: "qa-5", kind: "pending_task", status: "archived" })), true);
-  // What DOES keep a closed row out is unchanged and still tested: `deleted_at` is
-  // filtered upstream of the fold, and a DATELESS done row has no day to be done on.
-  assert.equal(fold(block(null, { local_id: "qa-4b", kind: "pending_task", status: "done" })), false);
+  assert.equal(fold(block(null, { local_id: "qa-4", kind: "pending_task", status: "deleted" })), false);
+  assert.equal(fold(block(null, { local_id: "qa-5", kind: "pending_task", status: "archived" })), false);
 });
 
 test("a DATED done row folds (server completions render instead of vanishing)", () => {

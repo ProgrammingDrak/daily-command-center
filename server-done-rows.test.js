@@ -204,12 +204,33 @@ test("saveDoneState no longer exists, and nothing calls it", () => {
   assert.deepEqual(callers, [], "live saveDoneState call sites remain");
 });
 
+// The key can arrive through a LOCAL, and that is how the mirror this phase deleted was
+// actually written: `commitDoneOnDate` had `const key="pa-done-"+dateStr; ...
+// localStorage.setItem(key,...)`. A guard matching only `setItem(DONE_KEY` / `setItem("pa-done-`
+// stays green if that block is restored verbatim, i.e. it is decorative for the exact
+// regression it names. So the key VARIABLES are collected first and matched too.
 test("nothing writes the pa-done-<date> localStorage mirror any more", () => {
+  const path = require("node:path");
+  const dir = path.join(__dirname, "public", "js");
   const writers = [];
-  for (const f of fs.readdirSync("public/js")) {
+  for (const f of fs.readdirSync(dir)) {
     if (!f.endsWith(".js")) continue;
-    const src = fs.readFileSync("public/js/" + f, "utf8").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-    if (/setItem\(\s*(DONE_KEY|"pa-done-|'pa-done-|`pa-done-)/.test(src)) writers.push(f);
+    const code = fs.readFileSync(path.join(dir, f), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    const keyVars = [...code.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*["'`]pa-done-/g)].map((m) => m[1]);
+    const names = ["DONE_KEY", ...keyVars].join("|");
+    if (new RegExp('setItem\\(\\s*(?:' + names + '|["\'`]pa-done-)').test(code)) writers.push(f);
   }
   assert.deepEqual(writers, [], "the localStorage done mirror is retired");
+});
+
+// Proves the guard above can actually fail, by running it against the code that WAS deleted.
+// A source-text assertion nobody has watched fail is a guess about a regex.
+test("...and that guard catches the local-variable form it exists for", () => {
+  const deleted = 'const key="pa-done-"+dateStr;\n localStorage.setItem(key,JSON.stringify(d));';
+  const keyVars = [...deleted.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*["'`]pa-done-/g)].map((m) => m[1]);
+  assert.deepEqual(keyVars, ["key"]);
+  const names = ["DONE_KEY", ...keyVars].join("|");
+  assert.equal(new RegExp('setItem\\(\\s*(?:' + names + '|["\'`]pa-done-)').test(deleted), true,
+    "the deleted mirror must trip the guard, or the guard is decorative");
 });

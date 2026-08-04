@@ -36,6 +36,11 @@ function slice(src, re, what) {
 const BUILD_DAY_SRC = slice(SERVER_SRC, /async function buildDayResponse\(dateStr, userId, workspaceId\) \{[\s\S]*?\n\}/, "buildDayResponse");
 const READ_DCC_SRC = slice(DCC_SRC, /async function readDccDayState\(date, req, emptyFallback\) \{[\s\S]*?\n {2}\}/, "readDccDayState");
 const APPEND_SRC = slice(SOCIAL_SRC, /async function appendPublicShareTriageItem\(\{ share[\s\S]*?\n\}/, "appendPublicShareTriageItem");
+// The file-mirror ladder, shared by `dayStateUnavailable` (server.js) and `readDccDayState`
+// (routes/dcc.js, via ctx). Sliced and run for REAL in both harnesses below: it carries the
+// "the legacy file counts only if it IS about this date" gate, which is the safety property
+// under test, so a fake here would test the fake.
+const MIRROR_SRC = slice(SERVER_SRC, /function readDayStateMirror\(dateStr, legacyFile\) \{[\s\S]*?\n\}/, "readDayStateMirror");
 
 const DATE = "2026-08-04";
 const dayWithTimeline = (label) => ({ date: DATE, schedule: { timeline: [{ id: "tl-1", label, type: "task" }] } });
@@ -160,7 +165,7 @@ function runUnavailable({ own = null, legacy = null } = {}) {
     buildSkeletonState: (d) => ({ date: d, last_updated_by: "skeleton", schedule: { timeline: [] } }),
   };
   vm.createContext(ctx);
-  vm.runInContext(UNAVAILABLE_SRC, ctx);
+  vm.runInContext(MIRROR_SRC + "\n" + UNAVAILABLE_SRC, ctx);
   return vm.runInContext(`dayStateUnavailable("${DATE}", "legacy.json", new Error("db down"))`, ctx);
 }
 
@@ -208,7 +213,7 @@ function runReadDcc({ dbRow = null, dbThrows = false, file = null, dayStateFile 
     },
   };
   vm.createContext(ctx);
-  vm.runInContext("  " + READ_DCC_SRC.trimStart(), ctx);
+  vm.runInContext(MIRROR_SRC + "\n  " + READ_DCC_SRC.trimStart(), ctx);
   return () => vm.runInContext(`readDccDayState("${DATE}", {}, {__fallback:true})`, ctx);
 }
 
@@ -240,9 +245,34 @@ test("a failed read falls through to the file instead of losing the ingest", asy
   assert.equal(out.schedule.timeline[0].label, "mirror");
 });
 
+// ★ THE WIRING, not just the helper. Blocker 3 is a property of the six CALL SITES -- the
+// change was pulled three times precisely because the crux lives there rather than in a
+// function -- and reverting any one of them to `readJSON(getDayFilePath(...))` re-arms the
+// boot-skeleton promotion with every behavioral test above still green. Same shape as
+// push-is-a-move.test.js's source sweep.
+test("all six routes/dcc.js mutation handlers take Postgres as their BASE state (blocker 3)", () => {
+  const code = DCC_SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  assert.equal((code.match(/await readDccDayState\(/g) || []).length, 6,
+    "a handler that stopped reading Postgres first re-arms the boot-skeleton promotion");
+  assert.deepEqual(code.match(/(?:existing|state|sourceState)\s*=\s*readJSON\(getDayFilePath/g) || [], [],
+    "the file is the mirror, never the base");
+});
+
+// The one caller without a handler-level try. `readDccDayState` throws now, Express 4 does not
+// observe a rejected promise, and this repo registers no unhandledRejection hook -- so on
+// Node >= 20 an unwrapped throw here EXITS THE PROCESS rather than answering. The handler's own
+// comment documents that hazard for `getDayFilePath`; the same one applies to this call.
+test("/api/ingest/day-state wraps its day-state read (an unobserved throw exits the process)", () => {
+  const handler = DCC_SRC.slice(DCC_SRC.indexOf('app.post("/api/ingest/day-state"'));
+  const upToCall = handler.slice(0, handler.indexOf("await readDccDayState("));
+  assert.match(upToCall, /try \{\s*$/m, "the read must sit inside a try");
+  assert.match(handler.slice(handler.indexOf("await readDccDayState(")), /^[\s\S]{0,400}?catch \(e\) \{[\s\S]{0,300}?res\.status\(503\)/,
+    "and a failure must answer 503, not reject unobserved");
+});
+
 // ── appendPublicShareTriageItem (the former file-only writer) ────────────────
 
-function runAppend({ dbRow = null, saveThrows = false, file = null } = {}) {
+function runAppend({ dbRow = null, saveThrows = false, readThrows = false, file = null } = {}) {
   const saved = [];
   const writes = [];
   const ctx = {
@@ -257,17 +287,20 @@ function runAppend({ dbRow = null, saveThrows = false, file = null } = {}) {
     updateManifest: () => {},
     buildSkeletonState: (d) => ({ date: d, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, sweep: { open_item_count: 0 } }),
     blockDB: {
-      getDccState: async () => dbRow,
+      getDccState: async () => {
+        if (readThrows) throw new Error("connection terminated unexpectedly");
+        return dbRow;
+      },
       saveDccState: async (date, state, userId, ws) => {
         if (saveThrows) throw new Error("db down");
-        saved.push({ date, state, ws });
+        saved.push({ date, state, userId, ws });
       },
     },
   };
   vm.createContext(ctx);
   vm.runInContext(APPEND_SRC, ctx);
   return {
-    call: () => vm.runInContext('appendPublicShareTriageItem({share:{workspace_id:"ws-1",token:"tok"},date:"' + DATE + '",title:"Guest task",durationMinutes:30,visitorName:"Sam",visitorEmail:"",note:"hi",req:{}})', ctx),
+    call: () => vm.runInContext('appendPublicShareTriageItem({share:{workspace_id:"ws-1",token:"tok",owner_id:42},date:"' + DATE + '",title:"Guest task",durationMinutes:30,visitorName:"Sam",visitorEmail:"",note:"hi",req:{}})', ctx),
     saved, writes,
   };
 }
@@ -305,4 +338,75 @@ test("a failed DB save REJECTS instead of reporting success on a lost task", asy
   const { call, writes } = runAppend({ saveThrows: true });
   await assert.rejects(call(), /db down/);
   assert.deepEqual(writes, [], "and no file mirror claims it landed");
+});
+
+// ── The three things that make this writer safe to expose anonymously ─────────
+//
+// All three were added after review and NONE was caught by a mutation check until these
+// tests existed: reverting each one left the whole suite green. This is an UNAUTHENTICATED
+// writer whose every save is a FULL REPLACE of the day (`saveDccState` is
+// `ON CONFLICT ... DO UPDATE SET state_json = EXCLUDED.state_json`), and the guest picks the
+// date, so each of these is the difference between an append and a day-wipe.
+
+test("a failed READ fails closed — it never guesses a base and full-replaces the day", async () => {
+  // The read throwing and the write succeeding is the dangerous combination: the earlier cut
+  // fell back to the workspace-less file mirror, or to a bare skeleton when no file existed.
+  // On Railway's ephemeral filesystem "no file" IS the normal post-deploy state, so the
+  // realistic outcome was replacing the workspace's real day with an empty one.
+  const { call, saved, writes } = runAppend({ readThrows: true, file: { date: DATE, triage: { open_items: [], resolved_items: [] } } });
+  await assert.rejects(call(), /temporarily unavailable/);
+  assert.deepEqual(saved, [], "nothing is written from a base we could not read");
+  assert.deepEqual(writes, [], "and no file mirror either");
+});
+
+test("a no-row read seeds a SKELETON, never the workspace-less file mirror", async () => {
+  // `getDayFilePath` has no workspace segment and `persistDccDay` writes that mirror for every
+  // workspace, so seeding from it would create THIS workspace's row holding ANOTHER tenant's
+  // day — and because buildDayResponse is Postgres-first now, that content would then be
+  // served authoritatively and published on this share.
+  const { call, saved } = runAppend({
+    dbRow: null,
+    file: { date: DATE, triage: { open_items: [{ id: "another-tenants-item" }], resolved_items: [] }, schedule: { timeline: [{ id: "leak" }] } },
+  });
+  await call();
+  assert.equal(saved.length, 1);
+  const ids = [...saved[0].state.triage.open_items].map((i) => i.id);
+  assert.equal(ids.length, 1, "only the guest's own item: " + JSON.stringify(ids));
+  assert.match(ids[0], /^public_share:/);
+  assert.equal(JSON.stringify(saved[0].state.schedule || null), "null", "and no other day's timeline rode along");
+});
+
+test("the owner's user_id is PRESERVED, not erased", async () => {
+  // The upsert does `user_id = EXCLUDED.user_id`, and server.js's boot backfill is
+  // `UPDATE dcc_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL`, run
+  // unconditionally on EVERY restart. So passing null let one guest submission re-home the
+  // workspace's day row to the default workspace on the next deploy — or collide with that
+  // workspace's own row for the date (PRIMARY KEY (date, workspace_id)) and abort the UPDATE
+  // into a catch that skips ensureWorkspacesForAllUsers for that boot.
+  const withUser = runAppend({ dbRow: { user_id: 7, state_json: { date: DATE, triage: { open_items: [], resolved_items: [] } } } });
+  await withUser.call();
+  assert.equal(withUser.saved[0].userId, 7, "the row's own owner wins");
+  // No row yet: fall back to the share's workspace owner rather than nulling the column.
+  const noRow = runAppend({ dbRow: null });
+  await noRow.call();
+  assert.equal(noRow.saved[0].userId, 42, "the share's owner_id");
+});
+
+test("guest submissions are CAPPED, because this is a durable unauthenticated append", async () => {
+  // No rate limiting exists anywhere in this app, and each POST rewrites the whole day
+  // document. Unbounded, a share token is enough to grow one row until reads of it get
+  // expensive, which degrades the owner's own /api/state/day.
+  const existing = Array.from({ length: 50 }, (_, i) => ({ id: "public_share:old-" + i, source: "public_share" }));
+  const { call, saved } = runAppend({ dbRow: { state_json: { date: DATE, triage: { open_items: existing, resolved_items: [] } } } });
+  await assert.rejects(call(), /limit of guest-submitted tasks/);
+  assert.deepEqual(saved, [], "nothing written once the cap is reached");
+  // 49 is still fine, so the cap is a boundary rather than a blanket refusal.
+  const under = runAppend({ dbRow: { state_json: { date: DATE, triage: { open_items: existing.slice(0, 49), resolved_items: [] } } } });
+  await under.call();
+  assert.equal(under.saved.length, 1);
+  // The owner's OWN items do not count toward a guest cap.
+  const ownersOwn = Array.from({ length: 80 }, (_, i) => ({ id: "t-" + i, source: "sweep" }));
+  const mine = runAppend({ dbRow: { state_json: { date: DATE, triage: { open_items: ownersOwn, resolved_items: [] } } } });
+  await mine.call();
+  assert.equal(mine.saved.length, 1, "only public_share items are counted");
 });

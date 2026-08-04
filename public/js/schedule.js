@@ -411,19 +411,46 @@ async function commitDoneOnDate(id,dateStr,opts){
   if(!Array.isArray(rows))rows=[];
   const _idsOf=b=>{const p=(b&&b.properties)||{};return [p.local_id,b&&b.id].filter(Boolean).map(String);};
   const target=rows.find(b=>b&&b.type!=="day_root"&&!b.deleted_at&&_idsOf(b).includes(String(id)))||null;
-  if(target){
+  // `opts.cascade===false` means the CALLER already walks the subtree and is calling this
+  // once per node. `unfinished-tasks.js complete()` does exactly that, and it has to keep
+  // doing it: it credits each node separately, so folding its loop into this cascade would
+  // silently change what a carryover completion pays. Without this flag the two walks
+  // multiply -- the parent's call writes the whole subtree, then every child's call
+  // re-fetches the same day and writes its own subtree again, so a 6-node chain goes from 6
+  // queued writes to 21, all of them serialized behind one global chain.
+  if(target&&opts.cascade===false){
+    if(typeof enqueueRowPropsWrite==="function")enqueueRowPropsWrite(target.id,p=>_doneRowProps(p,nowIso));
+  }else if(target){
     const subtree=[target];
     const seen=new Set([String(target.id)]);
-    // Breadth-first over the rows we already have. `seen` is keyed on the ROW id, which
-    // is single-valued, so a duplicated local_id cannot make this loop forever — the
-    // shape C3's round-3 fix turned into a re-mint bug when it keyed on the wrong id.
+    // ALL THREE edge spaces, because C3 measured that no single one is complete: `parent_id`
+    // alone strands 40 rows across 26 parents (a duplicated parent local_id leaves
+    // `dcc_resolve_local_id` returning NULL, so its children's edges never resolved), and
+    // local-id alone misses 7 live rows whose `subtaskOf` holds a ROW id. A child this walk
+    // does not reach stays open and the carryover collector re-offers it tomorrow, which is
+    // the entire reason the cascade exists — so it matches `lib/reschedule.js
+    // collectSubtreeBlockIds`, the canonical row-level walk, rather than a narrower subset.
+    // `parent_id` costs nothing extra: `getBlocksByDate` is `SELECT *`.
+    //
+    // `seen` is keyed on the ROW id, which is single-valued, so a duplicated local_id cannot
+    // make this loop forever — the shape C3's round-3 fix turned into a re-mint bug when it
+    // keyed on the wrong id. `day_root` is excluded from the frontier, which is the hazard
+    // collectSubtreeBlockIds guards with its own `walkRowIds`.
+    const linkIds=new Set(_idsOf(target));
+    const rowIds=new Set([String(target.id)]);
     for(let i=0;i<subtree.length;i++){
-      const parentIds=_idsOf(subtree[i]);
       rows.forEach(b=>{
         if(!b||b.deleted_at||b.type==="day_root"||seen.has(String(b.id)))return;
         const p=b.properties||{};
         const edge=p.subtaskOf||p.wrapId||null;
-        if(edge&&parentIds.includes(String(edge))){seen.add(String(b.id));subtree.push(b);}
+        const joined=(edge&&linkIds.has(String(edge)))
+          ||(b.parent_id&&rowIds.has(String(b.parent_id)))
+          ||(p.local_id&&linkIds.has(String(p.local_id)));
+        if(!joined)return;
+        if(p.local_id)linkIds.add(String(p.local_id));
+        rowIds.add(String(b.id));
+        seen.add(String(b.id));
+        subtree.push(b);
       });
     }
     // Serialized by the shared queue, so these cannot clobber each other's properties.
@@ -432,23 +459,16 @@ async function commitDoneOnDate(id,dateStr,opts){
   }else{
     // No row on that date. The one live shape for this is an archive-day ev projected
     // from `schedule.timeline`; keep the completion rather than dropping it, loudly.
+    //
+    // Routed through `_patchOverlayDone` with the TARGET day's root, not a hand-rolled
+    // PATCH. The first cut duplicated that function's whole read-modify-write here and paid
+    // for it twice: unqueued (so it could interleave with any other day_root write and lose
+    // it, the exact hazard the queue exists for) and outside `blockStore.apiPatch`, so the
+    // PATCH carried no `_clientId` and the SSE self-echo was NOT suppressed for the tab that
+    // made it — which `_refreshResponsibilityAfterDone` relies on holding for completion writes.
     console.warn("[done] no row on "+dateStr+" for "+id+" — persisting to that day's legacy _done overlay");
-    try{
-      const dayRoot=rows.find(b=>b&&b.type==="day_root")||null;
-      if(dayRoot){
-        const props=dayRoot.properties||{};
-        const existing=props._done||{};
-        const ids=Array.isArray(existing.ids)?existing.ids.slice():[];
-        const at={...((existing.at&&typeof existing.at==="object")?existing.at:{})};
-        if(!ids.includes(id))ids.push(id);
-        at[id]=nowIso;
-        await fetch("/api/blocks/"+dayRoot.id,{
-          method:"PATCH",
-          headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({properties:{...props,_done:{ids:ids,at:at}}})
-        });
-      }
-    }catch(e){}
+    const dayRoot=rows.find(b=>b&&b.type==="day_root")||null;
+    if(dayRoot)_patchOverlayDone(id,true,nowIso,dayRoot.id);
   }
   log("checked-on",id,"Marked done on "+dateStr);
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:award()});
@@ -669,9 +689,14 @@ function _openRowProps(props){
 // INSIDE the queue callback, against the row the queue itself just read — computing
 // `ids` from the cache out here and handing in a finished object is precisely the stale
 // read C4's queue exists to prevent.
-function _patchOverlayDone(id,done,completedAt){
+//
+// `rootId` may be supplied for a day OTHER than the one loaded — the cross-day fallback in
+// commitDoneOnDate has the target day's root in hand and passes it. Without that the overlay
+// half silently ignored the `dateStr` the caller asked for and always wrote the VIEWED day's
+// root, filing another date's completion under today.
+function _patchOverlayDone(id,done,completedAt,rootId){
   if(!window.blockStore||typeof enqueueRowPropsWrite!=="function")return;
-  const rootId=(typeof window.blockStore.getDayRootId==="function")?window.blockStore.getDayRootId():null;
+  rootId=rootId||((typeof window.blockStore.getDayRootId==="function")?window.blockStore.getDayRootId():null);
   if(!rootId)return;
   const iso=(completedAt instanceof Date)?completedAt.toISOString():(completedAt||new Date().toISOString());
   enqueueRowPropsWrite(rootId,p=>{
@@ -703,7 +728,30 @@ function _persistDone(id,done,opts){
   const blockId=(block&&block.id)||null;
   let write=null;
   if(blockId&&typeof enqueueRowPropsWrite==="function"){
-    write=enqueueRowPropsWrite(blockId,p=>done?_doneRowProps(p,opts.completedAt):_openRowProps(p));
+    // ★ A COMPLETION BELONGS TO A DAY, so completing a DATELESS row has to stamp one.
+    //
+    // `_findTaskBlockForDate` falls back to an undated row when nothing matches `dateStr`
+    // (state.js), and a dateless row is exactly what the Unscheduled section and the Backlog
+    // are made of. Marking one done without a date makes the task VANISH from every surface
+    // on the next load, because both readers reject that shape: `isFoldableTask` has
+    // `if((p.status==="done"||p.done===true)&&!b.date)return false` and
+    // `TaskModel.selectUnscheduled` skips `status==="done"`. Not folded, not in the backlog,
+    // gone — the same "a completion makes the task disappear" failure C0 shipped to fix,
+    // reintroduced from the other direction.
+    //
+    // `kind:"backlog"` is dropped with it, matching `scheduleRowOnDay`: a row that now has a
+    // date is not backlog material any more.
+    const stampDay=!!(done&&block&&!block.date&&dateStr);
+    write=enqueueRowPropsWrite(
+      blockId,
+      p=>{
+        if(!done)return _openRowProps(p);
+        const next=_doneRowProps(p,opts.completedAt);
+        if(stampDay&&next.kind==="backlog")delete next.kind;
+        return next;
+      },
+      stampDay?{date:dateStr}:undefined
+    );
   }else if(done){
     console.warn("[done] no row resolves for "+id+" — persisting to the legacy _done overlay");
     return _patchOverlayDone(id,true,opts.completedAt);

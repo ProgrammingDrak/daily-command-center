@@ -644,15 +644,26 @@ function ensureSkeletonDays() {
 // carrying `_unavailable` so a surface can say "couldn't load" rather than "nothing planned".
 // Never written: an unpersisted skeleton cannot become the base state a later full-replace
 // promotes over the real day, which is the whole reason blocker 4 existed.
-function dayStateUnavailable(dateStr, legacyFile, err) {
-  console.error(`[day-response] serving a degraded day for ${dateStr}:`, err && err.message);
+// The file-mirror ladder, in ONE place. `routes/dcc.js readDccDayState` needs exactly this
+// and had a hand-copy of it, which had already drifted in a way that mattered: this version
+// stamps the requested date onto the per-date file result and that one returned the file's
+// own `date`, so a mirror with a stale `date` field fed a full-replace `saveDccState` under
+// the wrong day there and was normalized here. Shared through ctx like the other day-state
+// primitives (`getDayFilePath`, `readJSON`, `buildSkeletonState`).
+//
+// Returns null when nothing on disk is about this date. `legacyFile` is a "last published
+// day" file (`DAY_STATE_FILE` / `TOMORROW_STATE_FILE`) with no workspace segment and no date
+// guarantee, so its own `date` is the only thing that makes it relevant.
+function readDayStateMirror(dateStr, legacyFile) {
   const own = readJSON(getDayFilePath(dateStr), null);
   if (own) return { ...own, date: dateStr };
-  // Only if it is genuinely about this date. These files are "the last published day", so
-  // their date is the only thing that makes them relevant.
   const legacy = readJSON(legacyFile, null);
-  if (legacy && legacy.date === dateStr) return legacy;
-  return { ...buildSkeletonState(dateStr), _unavailable: true };
+  return (legacy && legacy.date === dateStr) ? legacy : null;
+}
+
+function dayStateUnavailable(dateStr, legacyFile, err) {
+  console.error(`[day-response] serving a degraded day for ${dateStr}:`, err && err.message);
+  return readDayStateMirror(dateStr, legacyFile) || { ...buildSkeletonState(dateStr), _unavailable: true };
 }
 
 app.get("/api/state/day", async (req, res) => {
@@ -861,7 +872,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
-  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
+  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readDayStateMirror, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
   ...routeHelpers,

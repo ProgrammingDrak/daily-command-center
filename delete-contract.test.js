@@ -350,6 +350,10 @@ function mountDcc(rows = []) {
         return hits.find(r => !r.deleted_at) || hits[0] || null;
       },
       getBlocksByDateIncludingDeleted: async () => rows,
+      // C5b: the six mutation handlers read Postgres as their BASE state (blocker 3), so the
+      // fake needs the read. Returning null models "no row yet for this day", which sends the
+      // handler down the file-mirror ladder exactly as a fresh Railway container would.
+      getDccState: async () => null,
       createItineraryTask: async (b) => { created.push(b); return { id: "created-" + created.length, ...b }; },
       saveDccState: async (date, state) => { saved.push({ date, state }); },
     },
@@ -373,6 +377,11 @@ function mountDcc(rows = []) {
     },
     previousDateStr: (d) => d,
     readJSON: (_p, fallback) => (fallback === null ? null : (fallback || {})),
+    // C5b: routes/dcc.js takes the file-mirror ladder off ctx now, so `readDccDayState` and
+    // `server.js dayStateUnavailable` share one implementation of the "legacy file counts only
+    // if it IS about this date" gate. Reproduced faithfully rather than stubbed to a constant:
+    // a fake that always returned a day would hide the throw the ingest handler must answer 503 for.
+    readDayStateMirror: (dateStr) => null,
     resolveOwnerLenient: () => ({ userId: 1, workspaceId: MINE }),
     resolveOwnerStrict: async () => ({ userId: 1, workspaceId: MINE }),
     slotStore: { earnTaskCredit: async (_ws, _u, payload) => { credits.push(payload); return { awarded: true, credits: 10 }; } },
