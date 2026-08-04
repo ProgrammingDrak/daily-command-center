@@ -328,7 +328,7 @@ function openDoneModal(id, title, onConfirm, ev){
     const sel = document.getElementById("dm-parent-select");
     const triageParents = loadTriageParents();
     sel.innerHTML = '<option value="">No link \u2014 standalone item</option>' +
-      scheduled.filter(e => !isMeeting(e) && !isDone(e) && e.type !== "ooo").map(e =>
+      DCC.TaskModel.selectOpen(scheduled).filter(e => !isMeeting(e) && e.type !== "ooo").map(e =>
         '<option value="' + e.id + '"' + (triageParents[id] === e.id ? ' selected' : '') + '>' + e.title + ' (' + f12(e.start) + ')</option>'
       ).join('');
   } else {
@@ -1132,7 +1132,7 @@ function buildScheduled() {
   const today = __state && __state.date ? __state.date : new Date().toISOString().split("T")[0];
   const todayLabel = new Date(today + "T12:00:00").toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric"});
   const nowMins = now();
-  const activeAll = scheduled.filter(ev => !isDeleted(ev));
+  const activeAll = DCC.TaskModel.selectNotDeleted(scheduled);
   const active = (typeof taskBankMatches==="function")
     ? activeAll.filter(ev=>taskBankMatches(ev,["title","detail","priority","source","meta"]))
     : activeAll;

@@ -173,3 +173,159 @@ test("_dccEventOffView is off-view ONLY for an event carrying a different date t
   assert.equal(off({ date: "2026-07-20" }, null),         false, "no viewDate -> full refresh (safe default)");
   assert.equal(off(null,                   "2026-07-11"), false, "no event -> full refresh");
 });
+
+// ════════════════════════════════════════════════════════════════════════════════
+// C6a: ONE DERIVATION LAYER — the source guard that outlives the phase
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// C6a routed 36 inline `scheduled.filter(...)` predicates across 11 files into
+// public/js/task-model.js. The refactor is worth nothing on its own: the reason there
+// were 36 is that each new feature added one, and without a guard the 37th arrives
+// with the next feature and the disagreements grow back. THIS is the durable half.
+//
+// WHAT IT BANS, precisely: re-deriving a task set from the GLOBAL `scheduled` array
+// outside task-model.js. It does NOT ban chaining a surface-specific extra filter
+// onto a canonical selector (`TaskModel.selectOpen(scheduled).filter(pointEligible)`)
+// — that is the intended shape, because point-eligibility and search matching are not
+// derivation questions. The line is: the shared question comes from the layer, the
+// local one may stay local.
+const { stripJsComments } = require("./js-comment-strip.js");
+const path = require("node:path");
+
+// Whitespace-tolerant on purpose. The literal string `scheduled.filter(` misses FOUR
+// of the real sites, because prettier had broken them across lines as
+// `scheduled\n  .filter(...)` — day-review.js, persistence.js and schedule.js x2. A
+// hand count with the literal grep therefore reported 32 when there were 36, which is
+// exactly the kind of undercount this phase exists to stop repeating.
+const SCHEDULED_FILTER_RX = /\bscheduled\s*\.\s*filter\s*\(/;
+const JS_DIR = path.join(__dirname, "public", "js");
+const OWNER = "task-model.js";
+
+test("★ no file outside task-model.js derives a task set from `scheduled` directly", () => {
+  const offenders = [];
+  for (const file of fs.readdirSync(JS_DIR).filter((f) => f.endsWith(".js")).sort()) {
+    if (file === OWNER) continue;
+    const code = stripJsComments(fs.readFileSync(path.join(JS_DIR, file), "utf8"));
+    const rx = new RegExp(SCHEDULED_FILTER_RX.source, "g");
+    let m;
+    while ((m = rx.exec(code))) offenders.push(file + ":" + code.slice(0, m.index).split("\n").length);
+  }
+  assert.deepEqual(offenders, [],
+    "these must call a TaskModel selector instead of filtering `scheduled` inline:\n  " + offenders.join("\n  "));
+});
+
+// ★ A source assertion nobody has watched FAIL is a guess about a regex. Three of
+// C5b's new tests were vacuous on their first cut and every one was found this way —
+// including a source guard whose `[^)]*` could not cross an inner `)`, so it never
+// matched its own passing code. So: run this guard's regex against the code it exists
+// to catch, and against the things it must NOT catch.
+test("★ the `scheduled.filter` guard can actually fail (positive + negative control)", () => {
+  const mustCatch = [
+    'const a = scheduled.filter(ev => !isDone(ev));',                 // the plain form
+    'const a=scheduled.filter(ev=>!isDone(ev)&&!isDeleted(ev));',     // minified, no spaces
+    'const order = scheduled\n  .filter(ev => ev && ev.untimed)\n  .map(ev => ev.id);', // the multiline form the literal grep missed
+    'return scheduled\n        .filter(ev => !isDeleted(ev))',        // day-review.js's real shape
+    'x = scheduled . filter (y);',                                    // spaced out
+  ];
+  for (const s of mustCatch) {
+    assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments(s)), "guard failed to catch: " + JSON.stringify(s));
+  }
+  const mustAllow = [
+    'const rows = day.unscheduled.filter(ev => !rootIds.has(ev.id));',   // a DIFFERENT array; \b must not match inside "unscheduled"
+    'const a = DCC.TaskModel.selectOpen(scheduled).filter(pointEligible);', // the intended shape: canonical selector + local filter
+    'const a = rescheduled.filter(x => x);',                             // ditto, another word ending in "scheduled"
+    'const a = scheduledItems.filter(x => x);',                          // a different identifier that merely starts with it
+  ];
+  for (const s of mustAllow) {
+    assert.equal(SCHEDULED_FILTER_RX.test(stripJsComments(s)), false, "guard false-positived on: " + JSON.stringify(s));
+  }
+  // And the comment strip is what stops a file being flagged for NAMING the pattern
+  // while documenting what replaced it — which this very test file does, above.
+  assert.equal(SCHEDULED_FILTER_RX.test(stripJsComments('// the old scheduled.filter(...) predicate is gone')), false);
+  assert.equal(SCHEDULED_FILTER_RX.test(stripJsComments('/* scheduled.filter( */ ok();')), false);
+  // FALSE-NEGATIVE control: a `//` inside a string must not blind the stripper to a
+  // real violation later on the same line. A cut-from-first-slash stripper fails this.
+  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments('log("http://x"); const a = scheduled.filter(f);')),
+    "a URL literal must not swallow the rest of the line");
+  assert.ok(SCHEDULED_FILTER_RX.test(stripJsComments('if(/a\\/b/.test(u)){ const a = scheduled.filter(f); }')),
+    "a regex literal containing a slash must not swallow the rest of the line");
+});
+
+test("★ flattenSchedule stays retired — selectTree is the one tree walker", () => {
+  for (const file of fs.readdirSync(JS_DIR).filter((f) => f.endsWith(".js"))) {
+    const code = stripJsComments(fs.readFileSync(path.join(JS_DIR, file), "utf8"));
+    assert.equal(/function\s+flattenSchedule\s*\(/.test(code), false,
+      file + " re-declares flattenSchedule; roots must resolve against a POOL (TaskModel.selectTree)");
+    assert.equal(/\bflattenSchedule\s*\(/.test(code), false,
+      file + " still CALLS flattenSchedule");
+  }
+  // Negative control: the guard must fire on the code it retired.
+  assert.ok(/function\s+flattenSchedule\s*\(/.test("function flattenSchedule(items){}"));
+  assert.ok(/\bflattenSchedule\s*\(/.test("flattenSchedule(mainItems).forEach(x=>x)"));
+});
+
+// ── C6a: the "8 unregistered surfaces" the phase brief named, MEASURED ──
+//
+// The brief listed eight builds missing from SURFACES: sidebar.js x3,
+// unfinished-tasks.js, public-todo-share.js, features.js x3. Measured against
+// index.html, NONE of them is a registry surface, and registering them would have made
+// the registry claim coverage it does not have:
+//
+//   • sidebar.js buildMiniSchedule / buildSideDone / buildSideConsider /
+//     buildSideBacklog — every one opens `document.getElementById("pomo-<x>-list")`
+//     and returns early. That markup was deleted from index.html in 598cfca
+//     (2026-04-02); nothing in the codebase creates it. Four no-ops.
+//   • features.js buildTaskQueuePanel — same shape, `tqp-panel-*`, deleted by 781657a
+//     ("replace Task Menu tab + bottom Task Queue with edge-pinned side drawers").
+//   • public-todo-share.js — loads on public-todo.html, the GUEST share page. It has
+//     no SURFACES object in scope; there is nothing to register it in.
+//   • unfinished-tasks.js renderRows and features.js renderStickyNotesList — bodies of
+//     modal overlays, created on open. `render()` DEFERS while any modal is open
+//     (_anyModalOpen), so a modal body is deliberately not a registry surface. Their
+//     always-visible side effect, the badge, is registered: `snBadge`.
+//
+// This guard is two-directional on purpose, so it cannot rot into a stale claim: it
+// asserts the dead builds stay UNregistered AND that their containers are still
+// absent. Restore the markup and the test fails, telling you to register the surface.
+const DEAD_BUILD_TARGETS = {
+  buildMiniSchedule: "pomo-mini-list",
+  buildSideDone: "pomo-done-list",
+  buildSideConsider: "pomo-consider-list",
+  buildSideBacklog: "pomo-backlog-list",
+  buildTaskQueuePanel: "tqp-panel-triage",
+};
+
+test("★ the builds whose containers no longer exist stay OUT of SURFACES (and their markup stays gone)", () => {
+  const indexHtml = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+  const c = ctx();
+  const registered = vm.runInContext("JSON.stringify(SURFACES)", c);
+  for (const [fn, containerId] of Object.entries(DEAD_BUILD_TARGETS)) {
+    assert.equal(indexHtml.includes('"' + containerId + '"'), false,
+      `#${containerId} is back in index.html — ${fn} renders again, so REGISTER it in SURFACES ` +
+      `(and delete its entry here). This guard exists so a revived surface is not left un-dirtied.`);
+    assert.equal(registered.includes(fn), false,
+      `${fn} is registered but #${containerId} does not exist — _doRender would call a no-op every render`);
+  }
+});
+
+test("★ every SURFACES build names a function that exists in public/js", () => {
+  const all = fs.readdirSync(JS_DIR).filter((f) => f.endsWith(".js"))
+    .map((f) => stripJsComments(fs.readFileSync(path.join(JS_DIR, f), "utf8"))).join("\n");
+  const registrySrc = SURFACES_SLICE;
+  // Each entry reads `if(typeof buildX==="function")buildX();`
+  const names = [...registrySrc.matchAll(/typeof\s+([A-Za-z_$][\w$]*)\s*===\s*"function"/g)].map((m) => m[1]);
+  assert.ok(names.length >= 20, "expected to find the registry's build function names, got " + names.length);
+  // A build is "defined" by a declaration OR an assignment. `buildScheduleDelegated`
+  // is `window.buildScheduleDelegated = renderDelegatedSidebar` (delegated.js), so a
+  // `function X(`-only check false-positives on a perfectly healthy surface — which is
+  // exactly what the first cut of this test did.
+  const defined = (n) => new RegExp(
+    "(function\\s+" + n + "\\s*\\()" +
+    "|((?:window\\.|const |let |var )" + n + "\\s*=)" +
+    "|(\\b" + n + "\\s*=\\s*(?:function|\\())"
+  ).test(all);
+  const missing = names.filter((n) => !defined(n));
+  assert.deepEqual(missing, [], "SURFACES points at build functions that do not exist: " + missing.join(", "));
+  // Negative control: a name nothing defines must be reported.
+  assert.equal(defined("buildAbsolutelyNothing_c6a"), false);
+});

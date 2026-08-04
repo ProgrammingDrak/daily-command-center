@@ -7,6 +7,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm.js");
 
 const dragSource = fs.readFileSync(require.resolve("./public/js/drag.js"), "utf8");
 
@@ -51,6 +54,7 @@ function makeDay(scheduled) {
   };
   context.dur = context.dur.bind(context);
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(dragSource, context);
   return context;
 }

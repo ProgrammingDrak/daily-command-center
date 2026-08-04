@@ -576,10 +576,11 @@ function openMakeSubtaskOf(childId, anchorEl){
   const esc=(typeof escHtml==="function")?escHtml:(s=>String(s==null?"":s));
   const meeting=(typeof isMeeting==="function")?isMeeting:(()=>false);
   const done=(typeof isDone==="function")?isDone:(()=>false);
-  const candidates=scheduled.filter(e=>
+  // C6a: the reusable half (open rows) comes from the derivation layer; the rest is
+  // this popover's own cycle/self/duplicate-parent guard and stays here.
+  const candidates=DCC.TaskModel.selectOpen(scheduled).filter(e=>
     e&&e.id!==childId&&
     ((typeof pointEligible==="function")?pointEligible(e):(!meeting(e)&&e.type!=="break"&&e.type!=="ooo"))&&
-    !done(e)&&
     e.subtaskOf!==childId&&
     !(typeof _isAncestor==="function"&&_isAncestor(childId,e.id))&&
     !(typeof parentIdOf==="function"&&parentIdOf(scheduled.find(x=>x.id===childId)||{})===e.id)

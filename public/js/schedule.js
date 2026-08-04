@@ -185,8 +185,8 @@ function insertTaskNow(titleArg, durMinArg, opts){
   // cases where the pinned insert bumps a later task past EOD.
   scheduled.splice(insertAt, 0, newItem);
   recalcTimes();
-  const simulatedEnd=scheduled
-    .filter(ev=>!isDone(ev)&&!isDeleted(ev)&&pointEligible(ev))
+  const simulatedEnd=DCC.TaskModel.selectActive(scheduled)
+    .filter(ev=>pointEligible(ev))
     .reduce((max,ev)=>Math.max(max,pt(ev.end)),0);
   scheduled.splice(scheduled.indexOf(newItem), 1);
   recalcTimes(); // restore cascade without the new item
@@ -652,7 +652,7 @@ function _onParentCompleted(id){
   // collectUnfinished. Points are deliberately NOT awarded per child, matching what the
   // parent's own `_pointAwardOverride` pie already covers.
   (function completeSubs(pid){
-    scheduled.filter(c=>c.subtaskOf===pid).forEach(c=>{
+    DCC.TaskModel.subtasksOf(pid,scheduled).forEach(c=>{
       if(!manualDone.has(c.id)){
         const at=new Date();
         manualDone.add(c.id);doneAt[c.id]=at;
@@ -670,7 +670,7 @@ function _onParentCompleted(id){
     return;
   }
   let promoted=0;
-  scheduled.filter(c=>c.wrapId===id&&!isDone(c)).forEach(c=>{
+  DCC.TaskModel.selectOpen(DCC.TaskModel.ridersOf(id,scheduled)).forEach(c=>{
     c.wrapId=null;
     if(typeof _clearPin==="function")_clearPin(c);
     if(typeof _persistEvWrap==="function")_persistEvWrap(c);
@@ -1922,7 +1922,7 @@ function loadTaskOrder(){
   try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]}
 }
 function saveTaskOrder(){
-  const order=scheduled.filter(ev=>!isDone(ev)).map(ev=>ev.id);
+  const order=DCC.TaskModel.selectOpen(scheduled).map(ev=>ev.id);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
     // Save order to day_root for cross-device reads
     _bsSaveProp("_taskOrder", order);
@@ -1960,8 +1960,8 @@ function saveUnscheduledOrder(ids){
   let order=ids;
   if(!Array.isArray(order)){
     if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
-    order=scheduled
-      .filter(ev=>ev&&ev.untimed&&!isDone(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+    order=DCC.TaskModel.selectActive(scheduled)
+      .filter(ev=>ev.untimed)
       .map(ev=>ev.id);
   }
   if(!_bsSaveProp("_unscheduledOrder",order)){

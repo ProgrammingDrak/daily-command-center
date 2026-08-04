@@ -548,22 +548,42 @@ function buildListView(){
   // isActive() is time-of-day only (no date), so the "Now" chip must be gated to
   // today or it would light up on a past/future day whose times overlap the clock.
   const isTodayView=viewDate===((window.DCC&&DCC.dates&&DCC.dates.todayKey)?DCC.dates.todayKey():new Date().toISOString().split("T")[0]);
-  const trivFlags=loadTrivialFlags();
-  const visible=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]);
-  // Completed subtasks live inside their parent's detail panel (shown there as
-  // done), not as standalone rows in the Done section -- so long as the parent
-  // is still visible to open. Orphaned done subtasks stay listed so they aren't lost.
-  const doneItems=visible.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
-  const openItems=visible.filter(ev=>!isDone(ev));
-  const activeIds=new Set(openItems.filter(ev=>pointEligible(ev)).map(ev=>ev.id));
+  // The carryover pool for this render — every unfinished past-day row, parents and
+  // children alike. row() and TaskModel.selectTree do their tree lookups against it
+  // (a child nests under its parent instead of standing alone as its own task).
+  //
+  // C6a: fetched HERE rather than down at the Unscheduled block, because the one
+  // derivation below takes it as input. `_ensureUnfinished` guards on
+  // `_unfinishedFetchedFor` and re-renders itself when its fetch lands, so hoisting
+  // the call changes nothing about when the request goes out.
+  const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
+  let unf=null;
+  if(viewDate===actualToday){
+    _ensureUnfinished(actualToday);
+    unf=_unfinishedCache;
+  }
+  const unfPool=(unf&&Array.isArray(unf.rows))?unf.rows:[];
+
+  // C6a: ONE derivation for the whole view. `day.visible` is the universe (not
+  // deleted, not side-project-flagged), `day.unscheduled` is the Unscheduled SUBTREE,
+  // `day.timed` is the work list with done rows inline, `day.folded` are the done
+  // rows that render inside a still-visible parent, and `day.carryover` is
+  // yesterday's leftovers — empty unless this IS today.
+  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{today:actualToday,carryoverPool:unfPool});
+  const visible=day.visible;
+  // The old `doneItems` here was DEAD -- computed and never read; buildListView
+  // renders done rows inline in the work list, it has no Done section. Deleted
+  // rather than routed, so the fold predicate lives in exactly one surface
+  // (buildSchedule's compact Done section) instead of two, one of them unused.
+  //
+  // The "Work list" badge deliberately counts every open point-eligible row in
+  // `visible`, INCLUDING the Unscheduled ones -- that is what it has always counted,
+  // and `day.open` would silently narrow it to the timed section. Behaviour
+  // preserved; the mismatch between the badge's name and its population is noted in
+  // the phase handoff rather than fixed here.
+  const activeIds=new Set(DCC.TaskModel.selectOpen(visible).filter(ev=>pointEligible(ev)).map(ev=>ev.id));
   const ckSvg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>';
   const gripSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
-
-  // The carryover pool for this render — every unfinished past-day row, parents and
-  // children alike. row() and flattenSchedule do their tree lookups against it (a
-  // child nests under its parent instead of standing alone as its own task).
-  // Assigned below, before any "unfinished" row is built.
-  let unfPool=[];
 
   // groupClass tags a section as part of the Unscheduled drag group so
   // _unscheduledRowIds can span the split Unscheduled / Unfinished headers.
@@ -604,7 +624,7 @@ function buildListView(){
   }
 
   // A node is a SUB row when it is actually NESTED in the rendered tree, not merely
-  // when it carries a parent edge. flattenSchedule returns a subtask whose parent
+  // when it carries a parent edge. selectTree returns a subtask whose parent
   // isn't in this pool as a ROOT (depth 0) — a genuine orphan, and deliberately
   // still visible, because standalone work must never disappear. It has to READ
   // like standalone work too: a rank number and its own type tag, not "·" plus a
@@ -822,24 +842,32 @@ function buildListView(){
   // Untimed tasks (no start -- e.g. API/Slack inserts with no scheduled time)
   // get their own section at the bottom instead of being dropped or forced to
   // 00:00 in the timeline.
-  const untimedItems=visible.filter(ev=>ev.untimed&&!isDone(ev)&&!isSubtask(ev));
-  const untimedIds=new Set(untimedItems.map(e=>e.id));
-  const mainItems=visible.filter(ev=>!untimedIds.has(ev.id)&&!(isDone(ev)&&isSubtask(ev)&&visible.some(p=>p.id===ev.subtaskOf)));
+  //
+  // C6a: `day.timed` replaces the hand-rolled `mainItems`. Same population, with the
+  // fold widened from `subtaskOf` to either parent edge (so a done RIDE-ALONG folds
+  // too) and gated on the subtree being finished (so a done step with open steps under
+  // it stays visible with its children nested, instead of hiding live work).
   section("Work list",activeIds.size);
-  if(!mainItems.length){
+  if(!day.timed.length){
     const empty=document.createElement("div");
     empty.className="it-list-empty";
-    empty.textContent=viewDate===((typeof _actualTodayStr==="function")?_actualTodayStr():viewDate)?"Nothing scheduled for today.":"Nothing scheduled on this day.";
+    empty.textContent=viewDate===actualToday?"Nothing scheduled for today.":"Nothing scheduled on this day.";
     wrap.appendChild(empty);
   }else{
     // Idle-gap markers between consecutive TOP-LEVEL timed rows. Gate on
-    // node.depth===0: flattenSchedule renders roots at depth 0 and nests
+    // node.depth===0: selectTree renders roots at depth 0 and nests
     // subtasks AND ride-alongs at depth>=1 -- both carry their own times and
     // would otherwise clobber prevEnd or inject a stray marker inside a wrap.
     // _rowIsTimed excludes untimed rows; _gapMarkerMins owns the null/threshold
     // logic (see their defs above).
+    //
+    // pool:visible is the orphan fix. A row whose parent is in `visible` but not in
+    // `day.timed` (it is Unscheduled, or a fully-done fold) renders under that parent
+    // where the parent lives, so it must NOT be promoted to a top-level row here.
+    // A row whose parent is genuinely gone from `visible` (deleted, side-project) is
+    // still promoted and still visible.
     let rank=0, prevEnd=null;
-    flattenSchedule(mainItems).forEach(node=>{
+    DCC.TaskModel.selectTree(day.timed,{pool:visible}).forEach(node=>{
       const isSub=_isSubRow(node);
       if(!node.depth&&_rowIsTimed(node.ev)){
         const gm=_gapMarkerMins(prevEnd,pt(node.ev.start));
@@ -855,20 +883,22 @@ function buildListView(){
   // rows keep the amber tag and their origin-day semantics: complete lands on
   // the origin day, reschedule is a true move (server tombstone -> the origin
   // day shows it amber).
-  const actualToday=(typeof _actualTodayStr==="function")?_actualTodayStr():viewDate;
-  let unf=null;
-  if(viewDate===actualToday){
-    _ensureUnfinished(actualToday);
-    unf=_unfinishedCache;
-  }
-  unfPool=(unf&&Array.isArray(unf.rows))?unf.rows:[];
   const uMode=_sectionSort("unscheduled");
-  if(untimedItems.length){
-    section("Unscheduled",untimedItems.length,"unscheduled","uns-group");
-    const unsRows=_sectionSortIsManual(uMode)
-      ? _orderUnscheduled(untimedItems)
-      : _applySectionSort(untimedItems,uMode,ev=>ev.title,_unsCreated);
-    unsRows.forEach((ev,idx)=>wrap.appendChild(row(ev,idx,"open")));
+  if(day.unscheduledRoots.length){
+    // The header counts and the drag/sort order apply to ROOTS; children follow their
+    // parent through selectTree. Before C6a this section rendered a flat list of roots
+    // and a subtask of an untimed parent was promoted into the WORK LIST as a
+    // standalone numbered row -- the parent sat down here, its step sat up there.
+    section("Unscheduled",day.unscheduledRoots.length,"unscheduled","uns-group");
+    const rootOrder=_sectionSortIsManual(uMode)
+      ? _orderUnscheduled(day.unscheduledRoots)
+      : _applySectionSort(day.unscheduledRoots,uMode,ev=>ev.title,_unsCreated);
+    const rootIds=new Set(rootOrder.map(ev=>ev.id));
+    let uRank=0;
+    DCC.TaskModel.selectTree(rootOrder.concat(day.unscheduled.filter(ev=>!rootIds.has(ev.id))),{pool:visible})
+      .forEach(node=>{
+        wrap.appendChild(emitNode(node,_isSubRow(node)?0:uRank++,"open"));
+      });
   }
   // Carryovers get their OWN header and count. One badge used to mean three things
   // (untimed-today + carryover rows shown + carryover total), so no number on the
@@ -882,20 +912,28 @@ function buildListView(){
     // which is what we want — standalone work must never disappear.
     // Both predicates come from DCC.Carryover so this lane, the Catch up modal and
     // the morning prompt cannot drift apart (they already had: two spellings of the
-    // parent edge). Local fallbacks keep the lane rendering if the module is absent.
+    // parent edge). `openRows` is TaskModel.selectCarryover under that name; the roots
+    // walk stays in DCC.Carryover, which is the carryover lane's own derivation and is
+    // already shared by all three of its surfaces.
     const _CO_=(window.DCC&&window.DCC.Carryover)||null;
-    const openRows=_CO_?_CO_.openRows(unfPool):unfPool.filter(ev=>!(ev.__unf&&ev.__unf.done));
-    const roots=_CO_?_CO_.rootsOf(unfPool):openRows.filter(ev=>{const p=parentIdOf(ev);return !p||!openRows.some(x=>x.id===p);});
+    const openRows=_CO_?_CO_.openRows(unfPool):day.carryover;
+    const roots=_CO_?_CO_.rootsOf(unfPool):DCC.TaskModel.selectTopLevel(openRows);
     const rootOrder=_sectionSortIsManual(uMode)
       ? _orderUnscheduled(roots)
       : _applySectionSort(roots,uMode,ev=>ev.title,_unsCreated);
     section("Unfinished",roots.length,null,"uns-group");
-    // Roots first in display order, then the rest of the open rows so flattenSchedule
-    // can still resolve children (it walks each root's subtree via childrenOf and
-    // skips any row whose parent is in the list).
+    // Roots first in display order, then the rest of the open rows so selectTree can
+    // still resolve children (it walks each root's subtree via childrenOf and skips any
+    // row whose parent is in the list).
+    //
+    // pool:openRows, NOT unfPool. A carryover whose parent finished on its origin day is
+    // a deliberate ORPHAN here -- DCC.Carryover.rootsOf already promotes it, because a
+    // done parent renders nowhere in this lane and its open step must not vanish with it.
+    // Pooling against unfPool (which still holds the done parent so subtask counts work)
+    // would hide exactly that row.
     const rootIds=new Set(rootOrder.map(ev=>ev.id));
     let rank=0;
-    flattenSchedule(rootOrder.concat(openRows.filter(ev=>!rootIds.has(ev.id)))).forEach(node=>{
+    DCC.TaskModel.selectTree(rootOrder.concat(openRows.filter(ev=>!rootIds.has(ev.id))),{pool:openRows}).forEach(node=>{
       wrap.appendChild(emitNode(node,_isSubRow(node)?0:rank++,"unfinished"));
     });
     if(unf&&unf.total>openRows.length){
@@ -999,15 +1037,19 @@ function buildSchedule(){
   if(typeof buildScheduleTriage==="function")buildScheduleTriage();
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   if(typeof window.ensureTodoShareReactionsForDate==="function")window.ensureTodoShareReactionsForDate(viewDate);
-  // Separate done vs active vs deleted vs side-project-marked
-  const trivFlags=loadTrivialFlags();
-  const vis=scheduled.filter(ev=>!isDeleted(ev)&&!trivFlags[ev.id]); // Hide side-project-marked items from the schedule
-  // Completed subtasks live inside their parent's detail panel (shown there as
-  // done), not as standalone done one-liners -- so long as the parent is still
-  // visible to open. Orphaned done subtasks stay listed so they aren't lost.
-  const doneItems=vis.filter(ev=>isDone(ev)&&!(isSubtask(ev)&&vis.some(p=>p.id===ev.subtaskOf)));
+  // Separate done vs active vs deleted vs side-project-marked.
+  // C6a: one derivation, same as buildListView. `day.done` is the compact Done
+  // section with the fold widened to either parent edge, so a done RIDE-ALONG now
+  // folds under its parent instead of listing as its own one-liner. Orphaned done
+  // rows (parent deleted or side-project-flagged) stay listed so they aren't lost.
+  const day=DCC.TaskModel.selectDay(scheduled,viewDate,{});
+  const vis=day.visible;                 // Hide side-project-marked items from the schedule
+  const doneItems=day.done;
   const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
-  const activeItems=vis.filter(ev=>!isDone(ev));
+  // Every open visible row, INCLUDING untimed ones — this retired "plan" timeline has
+  // always rendered them (at 00:00), unlike the list view. `day.open` would drop them,
+  // so this stays the wider selector on purpose.
+  const activeItems=DCC.TaskModel.selectOpen(vis);
   // Tasks originally on this day that were rescheduled AWAY to another date. The
   // move leaves a "reschedule_tombstone" block on this day carrying the
   // destination; we render it amber at the bottom.
@@ -1122,7 +1164,9 @@ function buildSchedule(){
     ? String(pomoState.currentTaskRef.id)
     : null;
   const _pomoFocusExists = !!(_pomoFocusId && activeItems.some(ev => String(ev.id) === _pomoFocusId));
-  const _defaultFocusId = (activeItems.find(ev => !ev.subtaskOf && pointEligible(ev)) || activeItems[0] || {}).id;
+  // C6a: `!isNested`, not `!ev.subtaskOf`. Pinning a ride-along as the day's focus is
+  // as meaningless as pinning a subtask, and the subtaskOf-only test let one through.
+  const _defaultFocusId = (activeItems.find(ev => !DCC.TaskModel.isNested(ev) && pointEligible(ev)) || activeItems[0] || {}).id;
   const _focusActiveId = _pinnedActiveExists ? String(_pinnedActiveId) : (_pomoFocusExists ? _pomoFocusId : (_defaultFocusId ? String(_defaultFocusId) : null));
 
   // Subtasks render through the SAME renderItineraryCard as normal tasks, tagged
@@ -1133,7 +1177,7 @@ function buildSchedule(){
   if(!tl._collapseWired){tl._collapseWired=true;tl.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".wrap-collapse");if(!b)return;e.stopPropagation();const item=b.closest("[data-id]");if(item&&typeof toggleCollapsed==="function"){toggleCollapsed(item.dataset.id);render("schedule");}});}
 
   // Render active/upcoming items as full cards; nested subtasks as a lighter card variant.
-  flattenSchedule(activeItems).forEach(node=>{
+  DCC.TaskModel.selectTree(activeItems,{pool:vis}).forEach(node=>{
     const ev=node.ev;
     const isSubNode = node.rel==="subtask";
     // Nested rows sit under their parent — they must not flush a block-time header.
@@ -1568,7 +1612,7 @@ function _scheduleTaskHasDelegate(taskId){
 function buildProgress(){
   const track=document.getElementById("ptrack"),ds=pt("08:45"),de=pt("17:30"),tot=de-ds;
   track.innerHTML="";let cursor=ds;
-  const dayItems=scheduled.filter(ev=>!ev._dateless); // Unscheduled-everywhere rows aren't today's plan
+  const dayItems=DCC.TaskModel.selectDayScoped(scheduled); // Unscheduled-everywhere rows aren't today's plan
   dayItems.forEach(ev=>{
     const s=pt(ev.start),e=pt(ev.end);
     if(s>cursor)addPS(track,cursor,s,"Free","rgba(255,255,255,0.08)",false,tot);
@@ -1591,7 +1635,7 @@ function _isShellEv(ev){
 // Completed real tasks for the day — excludes shell wrappers so they stay out
 // of the Completed count/time and the completed popover list.
 function _dayDoneTasks(){
-  return scheduled.filter(ev=>isDone(ev)&&!_isShellEv(ev));
+  return DCC.TaskModel.selectDone(scheduled).filter(ev=>!_isShellEv(ev));
 }
 // One silver rail per shell under the track, spanning the shell's slot plus
 // every ride-along child (wrapId), so the wrapper reads as a grouping, not a task.
@@ -1644,7 +1688,7 @@ function _currentBlockWindow(){
 function _remainingForScope(scope){
   // _dateless rows (Unscheduled-everywhere) aren't part of this day's plan.
   // Shells are wrappers, not work — they never count as remaining tasks/time.
-  const rem=scheduled.filter(ev=>!isDone(ev)&&!ev._dateless&&!_isShellEv(ev));
+  const rem=DCC.TaskModel.selectDayScoped(DCC.TaskModel.selectOpen(scheduled)).filter(ev=>!_isShellEv(ev));
   if(scope!=="block")return rem;
   const win=_currentBlockWindow();
   if(!win)return [];
@@ -1730,13 +1774,9 @@ function _estimatedTaskPoints(ev){
   return scoring&&scoring.eligible?Math.max(0,Number(scoring.awardPoints)||0):0;
 }
 function _pointEligibleScheduleItems(){
-  const trivFlags=typeof loadTrivialFlags==="function"?loadTrivialFlags():{};
-  return scheduled.filter(ev=>{
-    if(!ev||trivFlags[ev.id])return false;
-    if(ev._dateless)return false; // day-agnostic Unscheduled rows earn nothing here
-    if(typeof isDeleted==="function"&&isDeleted(ev))return false;
-    return true;
-  });
+  // Visible (not deleted, not side-project-flagged) AND scoped to this day —
+  // day-agnostic Unscheduled rows earn nothing here.
+  return DCC.TaskModel.selectDayScoped(DCC.TaskModel.selectVisible(scheduled));
 }
 function _dayPointSummary(){
   const items=_pointEligibleScheduleItems();

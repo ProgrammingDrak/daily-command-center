@@ -232,7 +232,10 @@ function transformState(state) {
           "https://www.notion.so/" + item.source_id.replace(/-/g,"") : "",
         priority: item.priority || "",
         completed: item.completed || false,
-        nested: false,
+        // C6a: `nested: false` DELETED. It was the only writer of `ev.nested`, nothing
+        // ever set it true, and two guards (the focus banner and the pomodoro picker)
+        // read it as "is this a subtask" -- so both could offer a subtask as your next
+        // task. Nesting is TaskModel.isNested(ev), off the real parent edges.
         prep: prep,
         prepStatus: matchedMeeting ? (matchedMeeting.prep_status || null) : null,
         recapStatus: matchedMeeting ? (matchedMeeting.recap_status || null) : null

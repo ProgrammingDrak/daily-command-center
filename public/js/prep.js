@@ -133,7 +133,7 @@ document.getElementById("pomo-stop").addEventListener("click",()=>{
 });
 document.getElementById("pomo-stop-yes").addEventListener("click",()=>{
   const current=getCurrentPomoTask();
-  const task=current&&current.source==="schedule"?current.task:scheduled.find(s=>s.title===pomoState.title && !s.nested);
+  const task=current&&current.source==="schedule"?current.task:DCC.TaskModel.selectTopLevel(scheduled).find(s=>s.title===pomoState.title);
   if(task) toggleDone(task.id);
   showToast("✓ "+pomoState.title+" completed");
   document.getElementById("pomo-stop-confirm").style.display="none";
@@ -272,7 +272,7 @@ document.getElementById("pomo-task-check").addEventListener("click",(e)=>{
 document.getElementById("pomo-task-lightning").addEventListener("click",(e)=>{
   e.stopPropagation();
   const current=getCurrentPomoTask();
-  const task=current&&current.source==="schedule"?current.task:scheduled.find(s=>s.title===pomoState.title && !s.nested);
+  const task=current&&current.source==="schedule"?current.task:DCC.TaskModel.selectTopLevel(scheduled).find(s=>s.title===pomoState.title);
   if(task) toggleDone(task.id);
   showToast("✓ "+pomoState.title+" completed");
 });

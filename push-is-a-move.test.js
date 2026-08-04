@@ -23,6 +23,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm.js");
 
 const STATE_SRC = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 
@@ -87,6 +90,11 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
     loadLockedSet: () => [...lockSet],
     saveLockedSet: (a) => { lockSet.clear(); (a||[]).forEach((x) => lockSet.add(x)); },
     parentIdOf: (e) => (e && (e.wrapId || e.subtaskOf)) || null,
+    // C6a: `childrenOf` was NOT stubbed here and the sliced mover now calls it. Wired
+    // to the real TaskModel rather than hand-rolled: this harness's `parentIdOf` fake
+    // already predates the unified-edge order, and a second narrower copy is how a
+    // harness ends up gentler than production.
+    childrenOf: (id, pool) => context.DCC.TaskModel.childrenOf(id, pool),
     dur: (e) => 30,
     fmt: (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"),
     pt: (s) => { const [h, m] = String(s).split(":").map(Number); return h * 60 + m; },
@@ -175,6 +183,7 @@ function load({ scheduled, rows = {}, rescheduleFails = null, failMaterializeFor
     },
   };
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(MOVER_SRC, context);
   // moveTaskToTomorrow is defined elsewhere in state.js; wire the real one-liner so
   // pushTask's delegation is exercised rather than stubbed away.

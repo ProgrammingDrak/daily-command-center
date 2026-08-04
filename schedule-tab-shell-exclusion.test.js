@@ -7,6 +7,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm.js");
 
 const TaskTypes = require("./public/js/task-types");
 const src = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
@@ -23,6 +26,7 @@ function makeContext(tasks, { done = new Set(), taskTypes = TaskTypes } = {}) {
     isDone: (ev) => done.has(ev.id),
   };
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(source, context);
   return context;
 }

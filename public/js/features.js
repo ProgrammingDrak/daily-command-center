@@ -452,7 +452,7 @@ function renderModalItems(taskId) {
   var items = [];
 
   // Subtasks (real tasks in the unified tree: subtaskOf === taskId)
-  var subs = (typeof scheduled !== 'undefined' ? scheduled.filter(function(t){return t.subtaskOf===taskId;}) : [])
+  var subs = (typeof scheduled !== 'undefined' ? DCC.TaskModel.subtasksOf(taskId, scheduled) : [])
     .map(function(t){return { id:t.id, text:t.title, done:(typeof isDone==='function'&&isDone(t)), created:'2000-01-01' };});
   subs.forEach(function(st) {
     items.push({ type: 'subtask', id: st.id, text: st.text, done: !!st.done, created: st.created || '2000-01-01' });
@@ -1103,12 +1103,11 @@ function updateAddModalCommuteHint() {
 }
 function _focusBannerNextItem(){
   if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return null;
-  const items=scheduled.filter(ev=>{
-    if(!ev||ev.nested)return false;
-    if(typeof isDone==="function"&&isDone(ev))return false;
-    if(typeof isDeleted==="function"&&isDeleted(ev))return false;
-    return !["break","ooo","free_time"].includes(ev.type);
-  });
+  // C6a: `ev.nested` is never true (data.js writes the literal `false`; nothing
+  // assigns it), so THE FOCUS BANNER COULD OFFER A SUBTASK AS "YOUR NEXT TASK".
+  // selectActive + selectTopLevel read the real status registries and parent edges.
+  const items=DCC.TaskModel.selectTopLevel(DCC.TaskModel.selectActive(scheduled))
+    .filter(ev=>!["break","ooo","free_time"].includes(ev.type));
   if(!items.length)return null;
   const pinnedId=(typeof getPinnedActiveId==="function")?getPinnedActiveId():null;
   if(pinnedId){

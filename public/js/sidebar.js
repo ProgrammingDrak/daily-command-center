@@ -1,8 +1,8 @@
 // ======== MINI SCHEDULE SIDEBAR ========
 function buildMiniSchedule(){
   const list=document.getElementById("pomo-mini-list");if(!list)return;
-  const remaining=scheduled.filter(ev=>!isDone(ev));
-  const dc=scheduled.filter(isDone).length;
+  const remaining=DCC.TaskModel.selectOpen(scheduled);
+  const dc=DCC.TaskModel.selectDone(scheduled).length;
   const ct=document.getElementById("pomo-sidebar-count");
   if(ct)ct.textContent=remaining.length+" remaining";
   list.innerHTML="";
@@ -64,7 +64,7 @@ function buildMiniSchedule(){
 // ======== SIDEBAR: DONE TAB ========
 function buildSideDone(){
   const list=document.getElementById("pomo-done-list");if(!list)return;
-  const doneItems=scheduled.filter(isDone);
+  const doneItems=DCC.TaskModel.selectDone(scheduled);
   const viewDate=(__state&&__state.date)||new Date().toISOString().split("T")[0];
   const triageDoneItems=typeof completedTriageTasksForDate==="function"?completedTriageTasksForDate(viewDate):[];
   const badge=document.getElementById("side-done-count");if(badge)badge.textContent=doneItems.length+triageDoneItems.length;

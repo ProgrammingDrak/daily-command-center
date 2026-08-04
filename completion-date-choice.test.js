@@ -19,6 +19,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm.js");
 
 const STATE_SRC = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 const SCHEDULE_SRC = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
@@ -115,6 +118,7 @@ function makeModalCtx({ scheduled = [{ id: "t1", title: "Ship the thing" }] } = 
     toggleDone: (id, opts) => toggles.push({ id, opts, overlayOpen: openState() }),
   };
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(
     mustMatch(STATE_SRC, /function _prettyDateLabel\(dateStr\)\{[\s\S]*?\n\}/, "_prettyDateLabel") + "\n" + CDC_SRC,
     context
@@ -312,6 +316,7 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
   };
   context.USE_BLOCKSTORE = context.window.USE_BLOCKSTORE;
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(TOGGLE_DONE_SRC + "\n" + COMMIT_DONE_SRC + "\n" + PERSIST_DONE_SRC, context);
   context.__rows = rows;
   context.__dayRoot = dayRoot;

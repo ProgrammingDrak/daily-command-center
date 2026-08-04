@@ -12,6 +12,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm.js");
 
 const cardSource = fs.readFileSync(require.resolve("./public/js/itinerary-card.js"), "utf8");
 const schedTabSource = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
@@ -93,6 +96,7 @@ function makeDay(scheduled) {
   };
   context.dur = context.dur.bind(context);
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(dragSource, context);
   return { context, reconcileCalls, persisted };
 }
@@ -208,6 +212,7 @@ test("subShareChipHtml: renders a slice chip, turns 'earned' when the subtask is
   function chip(done) {
     const ctx = { window: {}, document: {}, isDone: () => done };
     vm.createContext(ctx);
+    installTaskModel(ctx);
     vm.runInContext(cardSrc, ctx);
     return ctx.window.subShareChipHtml;
   }

@@ -34,8 +34,7 @@
   function gatherPlanned(dateStr) {
     const isToday = dateStr === todayStr();
     if (isToday && typeof scheduled !== "undefined" && Array.isArray(scheduled) && scheduled.length) {
-      return scheduled
-        .filter(ev => !(typeof isDeleted === "function" && isDeleted(ev)))
+      return DCC.TaskModel.selectNotDeleted(scheduled)
         // A task rescheduled (pushed) away no longer lives on this day, so it
         // doesn't belong in its planned-vs-actual retrospective. Every other
         // schedule view filters these; without it, rescheduling from the Actual

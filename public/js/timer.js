@@ -18,7 +18,10 @@ function _pomoTaskPools(){
 function _pomoTaskAvailable(task,source){
   if(!task)return false;
   if(source==="schedule"){
-    if(task.nested)return false;
+    // C6a: `task.nested` is never true (data.js writes the literal `false`; nothing
+    // assigns it), so THE POMODORO PICKER COULD OFFER A SUBTASK AS YOUR NEXT TASK.
+    // TaskModel.isNested reads the real parent edges.
+    if(DCC.TaskModel.isNested(task))return false;
     if(typeof isDone==="function"&&isDone(task))return false;
     if(typeof isDeleted==="function"&&isDeleted(task))return false;
   }
@@ -290,7 +293,10 @@ function openTaskCompletionModal(taskTitle){
 
   // Build time blocks section
   html+='<div class="completion-section"><div class="completion-section-title">Today\'s Schedule</div>';
-  const scheduleItems=scheduled.filter(s=>!s.nested);
+  // C6a: `!s.nested` was DEAD -- data.js writes `nested:false` and nothing has ever
+  // set it true, so this filter removed nothing and every one of a task's subtasks
+  // was listed here as its own top-level session row.
+  const scheduleItems=DCC.TaskModel.selectTopLevel(scheduled);
   scheduleItems.forEach(s=>{
     const c=cfg(s.type);
     const timeStr=f12(s.start)+" - "+f12(s.end);
@@ -439,7 +445,7 @@ function openUntaskedModal(durSec,type){
   const bodyEl=document.getElementById("untasked-modal-body");
   const actionsEl=document.getElementById("untasked-actions");
 
-  const allTasks=[...scheduled.filter(s=>!isDone(s)&&!s.nested),...consider,...backlog];
+  const allTasks=[...DCC.TaskModel.selectOpenTopLevel(scheduled),...consider,...backlog];
   let html='<div class="completion-section"><div class="completion-section-title">Current Tasks</div>';
   html+=buildTaskListHtml(allTasks);
   html+='</div>';
@@ -538,7 +544,7 @@ function openDistractionModal(capturedStart){
 function buildDistractionTaskList(){
   const list = document.getElementById("distraction-task-list");
   if(!list) return;
-  const tasks = [...scheduled.filter(s=>!s.nested), ...consider, ...backlog];
+  const tasks = [...DCC.TaskModel.selectTopLevel(scheduled), ...consider, ...backlog];
   if(!tasks.length){ list.innerHTML=""; return; }
   list.innerHTML = tasks.slice(0,6).map(t => {
     const c = cfg(t.type);
@@ -734,7 +740,7 @@ function openPivotPicker(){
     if(resolved&&resolved.ref.id)taken.add(resolved.ref.source+":"+resolved.ref.id);
   });
   const available=[
-    ...(typeof scheduled!=="undefined"?scheduled.filter(s=>_pomoTaskAvailable(s,"schedule")&&!taken.has("schedule:"+s.id)).map(s=>Object.assign({_pomoSource:"schedule"},s)):[]),
+    ...(typeof scheduled!=="undefined"?DCC.TaskModel.selectTopLevel(scheduled).filter(s=>_pomoTaskAvailable(s,"schedule")&&!taken.has("schedule:"+s.id)).map(s=>Object.assign({_pomoSource:"schedule"},s)):[]),
     ...(typeof consider!=="undefined"?consider.filter(t=>!taken.has("consider:"+t.id)).map(t=>Object.assign({_pomoSource:"consider"},t)):[]),
     ...(typeof backlog!=="undefined"?backlog.filter(t=>!taken.has("backlog:"+t.id)).map(t=>Object.assign({_pomoSource:"backlog"},t)):[])
   ];

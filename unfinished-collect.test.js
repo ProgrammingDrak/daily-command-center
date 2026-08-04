@@ -316,8 +316,12 @@ test("carryover rows render through the shared tree, with their own pool", () =>
   assert.ok(/wrapBandwidth\(ev,pool\)/.test(schedTabSource) && /subtaskProgress\(ev\.id,pool,isUnfRow\?_unfDone:null\)/.test(schedTabSource));
   assert.equal(/function _unfProgress\b/.test(schedTabSource), false,
     "the duplicated progress walker must stay deleted -- a fix to the walk has to land once");
-  assert.ok(/flattenSchedule\(rootOrder\.concat/.test(schedTabSource),
-    "the lane must render through flattenSchedule so children nest");
+  // C6a: flattenSchedule moved into TaskModel.selectTree, and the lane names its POOL.
+  // `openRows`, not `unfPool`: a carryover whose parent finished on its origin day is a
+  // deliberate orphan here, and pooling against unfPool (which keeps the done parent so
+  // subtask counts work) would hide that still-open step.
+  assert.ok(/selectTree\(rootOrder\.concat\(openRows\.filter\(ev=>!rootIds\.has\(ev\.id\)\)\),\{pool:openRows\}\)/.test(schedTabSource),
+    "the lane must render through TaskModel.selectTree, pooled on openRows, so children nest");
   assert.ok(/emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,"unfinished"\)/.test(schedTabSource),
     "carryover nodes must pass the tree node to row() (subtask variant + indent)");
 });
@@ -351,9 +355,10 @@ test("an ORPHANED subtask renders as top-level, not as a subtask", () => {
 });
 
 test("the Unscheduled badge no longer sums two different things", () => {
-  assert.ok(!/section\("Unscheduled",untimedItems\.length\+/.test(schedTabSource),
+  assert.ok(!/section\("Unscheduled",[^)]*\+/.test(schedTabSource),
     "the Unscheduled count must not add the carryover total");
-  assert.ok(/section\("Unscheduled",untimedItems\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
+  // C6a: the section renders a SUBTREE now, so the badge counts ROOTS explicitly.
+  assert.ok(/section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
   assert.ok(/section\("Unfinished",roots\.length,null,"uns-group"\)/.test(schedTabSource));
 });
 
@@ -422,7 +427,9 @@ test("the carryover progress chip counts done children, nested descendants, and 
   assert.ok(walk, "subtaskProgress must exist in state.js");
   const pred = /function _unfDone\(s\)\{[^\n]*\}/.exec(schedTabSource);
   assert.ok(pred, "_unfDone (the lane's origin-day done predicate) must exist in schedule-tab.js");
-  const built = new Function(`${walk[0]}\n${pred[0]}\nreturn (id,pool)=>subtaskProgress(id,pool,_unfDone);`)();
+  // C6a: the walk resolves its child edge through _TM() -> TaskModel.subtasksOf.
+  // Injected as the REAL module, so the edge predicate under test is the shipped one.
+  const built = new Function("TaskModel", `function _TM(){return TaskModel;}\n${walk[0]}\n${pred[0]}\nreturn (id,pool)=>subtaskProgress(id,pool,_unfDone);`)(TaskModel);
   const laneProgress = built;
 
   const pool = [
