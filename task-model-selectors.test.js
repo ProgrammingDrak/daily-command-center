@@ -476,6 +476,14 @@ test("carryover folds in only on the actual today, and only its open rows", () =
   assert.deepEqual(ids(past.carryover), [], "a past day does not collect yesterday's leftovers");
   const future = TaskModel.selectDay([], "2026-08-09", Object.assign({ today: "2026-08-04" }, o));
   assert.deepEqual(ids(future.carryover), []);
+  // ★ FAIL CLOSED with no `today`. The gate used to read
+  // `(dateStr && today && dateStr !== today) ? [] : collect`, so a caller that passed a pool
+  // and forgot `today` got the FULL pool on every date -- the exact opposite of the rule the
+  // doc block states. buildSchedule calls selectDay with `{}`, so this is one argument away.
+  const noToday = TaskModel.selectDay([], "2026-08-04", o);
+  assert.deepEqual(ids(noToday.carryover), [], "cannot prove this is today -> collect nothing");
+  const noDate = TaskModel.selectDay([], null, Object.assign({ today: "2026-08-04" }, o));
+  assert.deepEqual(ids(noDate.carryover), [], "no viewed date -> collect nothing");
 });
 
 test("selectCarryover is the carryover done predicate, and DCC.Carryover.openRows is it", () => {
