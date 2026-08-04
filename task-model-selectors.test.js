@@ -413,6 +413,32 @@ test("a fully-done subtree folds even when its parent edges form a CYCLE", () =>
   partition(day2);
 });
 
+test("★ a ring with an OPEN branch below it folds NOTHING — the memo must not cache a short-circuit", () => {
+  // `allDone` short-circuits on a revisited node and returns true. An earlier cut MEMOISED
+  // that, with a comment claiming it was impossible to be wrong. It is not: a ring can have
+  // branches hanging below it. Ring A<->B with open C parented on A -- walking A resolves
+  // allDone(B) to true via the short-circuit and caches it BEFORE C is looked at, so B then
+  // folds with open work inside its subtree.
+  const ring = [T("A", { subtaskOf: "B" }), T("B", { subtaskOf: "A" }), T("C", { subtaskOf: "A" })];
+  const day = TaskModel.selectDay(ring, "2026-08-04", res(["A", "B"]));
+  assert.deepEqual(ids(day.folded), [], "nothing may fold while C is open, in EITHER visit order");
+  assert.deepEqual(ids(day.timed).sort(), ["A", "B", "C"]);
+  assert.deepEqual(ids(day.open), ["C"]);
+  partition(day);
+  // Reversed array order walks B first, which is the order that does NOT hit the memo bug --
+  // asserting both is what makes this test order-independent rather than luck.
+  const day2 = TaskModel.selectDay([ring[1], ring[0], ring[2]], "2026-08-04", res(["A", "B"]));
+  assert.deepEqual(ids(day2.folded), []);
+  partition(day2);
+  // ...and the open row still reaches the screen, via chainCycles promoting the ring.
+  const shown = shape(TaskModel.selectTree(day.timed, { pool: day.visible }));
+  assert.ok(shown.some((n) => n.startsWith("C@")), "the open row must render: " + JSON.stringify(shown));
+  // Finish C and the whole ring folds, which proves the short-circuit still ANSWERS true.
+  const day3 = TaskModel.selectDay(ring, "2026-08-04", res(["A", "B", "C"]));
+  assert.deepEqual(ids(day3.folded).sort(), ["A", "B", "C"], "a fully-done ring still folds");
+  partition(day3);
+});
+
 test("selectDay's unscheduled closure walks the whole subtree, and a detached ring is never reached", () => {
   // The first cut of this test claimed to wire a cycle and wired a CHAIN (u->a->b->c), so
   // the BFS visited-set guard it named was never taken and deleting that guard left it
