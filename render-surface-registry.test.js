@@ -273,6 +273,20 @@ test("★ the `scheduled` derivation guard can actually fail (positive + negativ
     'const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));', // schedule.js x2 + state.js: .map BEFORE the terminal
     'const n = scheduled.findIndex(ev => !isDone(ev));',
     'const n = scheduled.every(ev => isDone(ev));',
+    // ── ONE CONTROL PER CANONICAL MARKER, so dropping any single one from the list fails.
+    // Without these, removing `.subtaskOf`/`.wrapId` from CANONICAL went uncaught: every
+    // other control carried an isDone/isDeleted call as well, so the list looked load-bearing
+    // when only two of its eleven entries were actually being exercised.
+    'scheduled.filter(c=>c.subtaskOf===pid).forEach(f);',                  // subtaskOf alone
+    'scheduled.filter(c=>c.wrapId===wrapEv.id).forEach(f);',               // wrapId alone
+    'const u = scheduled.filter(ev=>ev.untimed);',                         // untimed alone
+    'const d = scheduled.filter(ev=>!ev._dateless);',                      // _dateless alone
+    'const v = scheduled.filter(ev=>!trivFlags[ev.id]);',                  // the side-project map alone
+    'const n = scheduled.filter(ev=>!isNested(ev));',                      // isNested alone
+    'const n = scheduled.filter(ev=>!isSubtask(ev));',                     // isSubtask alone
+    'const n = scheduled.filter(ev=>isRideAlong(ev));',                    // isRideAlong alone
+    'const n = scheduled.filter(s=>!s.nested);',                           // the retired field alone
+    'const n = scheduled.filter(ev=>!isDeleted(ev));',                     // isDeleted alone
   ];
   for (const s of mustCatch) {
     assert.ok(SCHEDULED_DERIVE_RX.test(stripJsComments(s)), "guard failed to catch: " + JSON.stringify(s));
