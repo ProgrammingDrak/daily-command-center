@@ -17,6 +17,10 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: install the REAL TaskModel INSIDE the context. A require()d copy sees node's
+// globals, never this harness's stubs -- which is the trap task-model-vm-fixture.js exists
+// to close, and these three were still hand-assigning the node-realm module in.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const TaskModel = require("./public/js/task-model.js");
 const { apiStub } = require("./carryover-fixture.js");
@@ -71,7 +75,7 @@ function load(daysByDate, archiveDates) {
   // The blockStore stub stays: collectUnfinished no longer touches it, but
   // _originBlock (the write paths' origin resolver) still does.
   ctx.window.blockStore = store;
-  ctx.window.DCC.TaskModel = TaskModel;
+  installTaskModel(ctx);
   // C2: the collector reads GET /api/tasks/open instead of scanning the range cache.
   // apiStub serves the same fixture through that contract. The server-side half of
   // the predicate is pinned in open-tasks-query.test.js, not here.
@@ -316,8 +320,12 @@ test("carryover rows render through the shared tree, with their own pool", () =>
   assert.ok(/wrapBandwidth\(ev,pool\)/.test(schedTabSource) && /subtaskProgress\(ev\.id,pool,isUnfRow\?_unfDone:null\)/.test(schedTabSource));
   assert.equal(/function _unfProgress\b/.test(schedTabSource), false,
     "the duplicated progress walker must stay deleted -- a fix to the walk has to land once");
-  assert.ok(/flattenSchedule\(rootOrder\.concat/.test(schedTabSource),
-    "the lane must render through flattenSchedule so children nest");
+  // C6a: flattenSchedule moved into TaskModel.selectTree, and the lane names its POOL.
+  // `openRows`, not `unfPool`: a carryover whose parent finished on its origin day is a
+  // deliberate orphan here, and pooling against unfPool (which keeps the done parent so
+  // subtask counts work) would hide that still-open step.
+  assert.ok(/selectTree\(rootOrder\.concat\(openRows\.filter\(ev=>!rootIds\.has\(ev\.id\)\)\),\{pool:openRows\}\)/.test(schedTabSource),
+    "the lane must render through TaskModel.selectTree, pooled on openRows, so children nest");
   assert.ok(/emitNode\(node,_isSubRow\(node\)\?0:rank\+\+,"unfinished"\)/.test(schedTabSource),
     "carryover nodes must pass the tree node to row() (subtask variant + indent)");
 });
@@ -351,9 +359,20 @@ test("an ORPHANED subtask renders as top-level, not as a subtask", () => {
 });
 
 test("the Unscheduled badge no longer sums two different things", () => {
-  assert.ok(!/section\("Unscheduled",untimedItems\.length\+/.test(schedTabSource),
-    "the Unscheduled count must not add the carryover total");
-  assert.ok(/section\("Unscheduled",untimedItems\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
+  // `[^)]*` cannot cross an inner `)`, which is this repo's known-bad control shape: a
+  // regressed badge whose first term is a CALL -- section("Unscheduled",
+  // _CO_.rootsOf(unfPool).length+day.unscheduledRoots.length, ...) -- stops the class at
+  // rootsOf('s paren before reaching the `+`, so the negated assertion passes. The
+  // production line ends in `;`, so bound the class to the statement instead. And this is a
+  // NEGATED source assertion, so it needs controls: nobody had watched it fire.
+  const sumRx = /section\("Unscheduled",[^;\n]*\+/;
+  assert.equal(sumRx.test(schedTabSource), false, "the Unscheduled count must not add the carryover total");
+  assert.ok(sumRx.test('section("Unscheduled",untimedItems.length+unfRows.length,"unscheduled","uns-group");'),
+    "the guard must fire on the pre-C6a summed badge");
+  assert.ok(sumRx.test('section("Unscheduled",_CO_.rootsOf(unfPool).length+day.unscheduledRoots.length,"unscheduled","uns-group");'),
+    "...and on a summed badge whose first term is a call, which [^)]* could not reach");
+  // C6a: the section renders a SUBTREE now, so the badge counts ROOTS explicitly.
+  assert.ok(/section\("Unscheduled",day\.unscheduledRoots\.length,"unscheduled","uns-group"\)/.test(schedTabSource));
   assert.ok(/section\("Unfinished",roots\.length,null,"uns-group"\)/.test(schedTabSource));
 });
 
@@ -422,7 +441,9 @@ test("the carryover progress chip counts done children, nested descendants, and 
   assert.ok(walk, "subtaskProgress must exist in state.js");
   const pred = /function _unfDone\(s\)\{[^\n]*\}/.exec(schedTabSource);
   assert.ok(pred, "_unfDone (the lane's origin-day done predicate) must exist in schedule-tab.js");
-  const built = new Function(`${walk[0]}\n${pred[0]}\nreturn (id,pool)=>subtaskProgress(id,pool,_unfDone);`)();
+  // C6a: the walk resolves its child edge through _TM() -> TaskModel.subtasksOf.
+  // Injected as the REAL module, so the edge predicate under test is the shipped one.
+  const built = new Function("TaskModel", `function _TM(){return TaskModel;}\n${walk[0]}\n${pred[0]}\nreturn (id,pool)=>subtaskProgress(id,pool,_unfDone);`)(TaskModel);
   const laneProgress = built;
 
   const pool = [

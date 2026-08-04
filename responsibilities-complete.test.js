@@ -7,6 +7,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const src = fs.readFileSync(require.resolve("./public/js/responsibilities.js"), "utf8");
 const fnSource = src.match(/function _completeResponsibilitySubtree[\s\S]*?\n {2}\}/)[0];
@@ -27,6 +30,7 @@ function makeContext(tasks, { done = new Set() } = {}) {
   context.childrenOf = (id, pool) => (pool || []).filter((c) => context.parentIdOf(c) === id);
   context.toggled = toggled;
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(fnSource, context);
   return context;
 }

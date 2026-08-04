@@ -178,15 +178,17 @@ function insertTaskNow(titleArg, durMinArg, opts){
   // Calculate insertion position
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt = activeIdx !== -1 ? activeIdx + 1 :
-    (()=>{const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));return fi.length?fi[0].i:scheduled.length;})();
+    (()=>{const firstOpen=DCC.TaskModel.selectOpen(scheduled)[0];
+      const fi=firstOpen?scheduled.indexOf(firstOpen):-1;
+      return fi===-1?scheduled.length:fi;})();
 
   // Simulate placement: temporarily add, cascade, read the worst end among
   // user-controllable tasks, then remove. Checking only newItem.end would miss
   // cases where the pinned insert bumps a later task past EOD.
   scheduled.splice(insertAt, 0, newItem);
   recalcTimes();
-  const simulatedEnd=scheduled
-    .filter(ev=>!isDone(ev)&&!isDeleted(ev)&&pointEligible(ev))
+  const simulatedEnd=DCC.TaskModel.selectActive(scheduled)
+    .filter(ev=>pointEligible(ev))
     .reduce((max,ev)=>Math.max(max,pt(ev.end)),0);
   scheduled.splice(scheduled.indexOf(newItem), 1);
   recalcTimes(); // restore cascade without the new item
@@ -218,7 +220,9 @@ function insertTaskFromDrawer(title, durMin, opts){
     tags:opts.tags||[],triageId:opts.triageId||null};
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt = activeIdx !== -1 ? activeIdx + 1 :
-    (()=>{const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));return fi.length?fi[0].i:scheduled.length;})();
+    (()=>{const firstOpen=DCC.TaskModel.selectOpen(scheduled)[0];
+      const fi=firstOpen?scheduled.indexOf(firstOpen):-1;
+      return fi===-1?scheduled.length:fi;})();
   scheduled.splice(insertAt, 0, newItem);
   persistAddedTask(newItem);
   recalcTimes();
@@ -257,8 +261,8 @@ window.attachTemplateChildren=attachTemplateChildren;
 // Idempotency: is a shell for this responsibility already live on the viewed day?
 function _shellAlreadyOnDay(responsibilityId){
   if(!responsibilityId||typeof scheduled==="undefined")return false;
-  return scheduled.some(function(e){
-    return e&&e.responsibilityId===responsibilityId&&!isDeleted(e)&&window.TaskTypes&&window.TaskTypes.isRollup(e);
+  return DCC.TaskModel.selectNotDeleted(scheduled).some(function(e){
+    return e.responsibilityId===responsibilityId&&window.TaskTypes&&window.TaskTypes.isRollup(e);
   });
 }
 window._shellAlreadyOnDay=_shellAlreadyOnDay;
@@ -548,7 +552,7 @@ function _autoCompleteShellAncestors(id,sourceDate){
     const parent=scheduled.find(e=>e.id===pid);
     if(!parent)return;
     if(window.TaskTypes.rule(parent,"autoCompleteWhenChildrenDone")&&!isDone(parent)){
-      if(childrenOf(parent.id,scheduled).some(c=>!isDone(c)))return; // still open work inside
+      if(DCC.TaskModel.selectOpen(childrenOf(parent.id,scheduled)).length)return; // still open work inside
       const bonus=_shellBonusPoints(parent.id);
       const completedAt=new Date();
       manualDone.add(parent.id);doneAt[parent.id]=completedAt;
@@ -579,7 +583,7 @@ function _pointAwardOverride(id){
   if(!ev)return undefined;
   if(window.TaskTypes&&window.TaskTypes.isRollup(ev))return _shellBonusPoints(id);
   if(!window.PointPlan)return undefined;
-  const hasSubKids=childrenOf(id,scheduled).some(c=>relOf(c)==="subtask");
+  const hasSubKids=DCC.TaskModel.subtasksOf(id,scheduled).length>0;
   if(hasSubKids)return window.PointPlan.awardForParentCompletion(id);
   if(ev.subtaskOf)return window.PointPlan.shareFor(ev.subtaskOf,id);
   return undefined;
@@ -652,7 +656,7 @@ function _onParentCompleted(id){
   // collectUnfinished. Points are deliberately NOT awarded per child, matching what the
   // parent's own `_pointAwardOverride` pie already covers.
   (function completeSubs(pid){
-    scheduled.filter(c=>c.subtaskOf===pid).forEach(c=>{
+    DCC.TaskModel.subtasksOf(pid,scheduled).forEach(c=>{
       if(!manualDone.has(c.id)){
         const at=new Date();
         manualDone.add(c.id);doneAt[c.id]=at;
@@ -670,7 +674,7 @@ function _onParentCompleted(id){
     return;
   }
   let promoted=0;
-  scheduled.filter(c=>c.wrapId===id&&!isDone(c)).forEach(c=>{
+  DCC.TaskModel.selectOpen(DCC.TaskModel.ridersOf(id,scheduled)).forEach(c=>{
     c.wrapId=null;
     if(typeof _clearPin==="function")_clearPin(c);
     if(typeof _persistEvWrap==="function")_persistEvWrap(c);
@@ -884,7 +888,7 @@ function toggleDone(id,opts){
   if(!opts._fromAutoComplete&&window.TaskTypes&&typeof childrenOf==="function"){
     const shellEv=scheduled.find(e=>e.id===id);
     if(shellEv&&window.TaskTypes.rule(shellEv,"blockManualCompleteWithOpenChildren")){
-      const open=childrenOf(id,scheduled).filter(c=>!isDone(c)).length;
+      const open=DCC.TaskModel.selectOpen(childrenOf(id,scheduled)).length;
       if(open){
         if(typeof showToast==="function")showToast("Finish its "+open+" remaining task"+(open>1?"s":"")+" first","info",2600);
         return;
@@ -1922,7 +1926,7 @@ function loadTaskOrder(){
   try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]}
 }
 function saveTaskOrder(){
-  const order=scheduled.filter(ev=>!isDone(ev)).map(ev=>ev.id);
+  const order=DCC.TaskModel.selectOpen(scheduled).map(ev=>ev.id);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
     // Save order to day_root for cross-device reads
     _bsSaveProp("_taskOrder", order);
@@ -1960,8 +1964,8 @@ function saveUnscheduledOrder(ids){
   let order=ids;
   if(!Array.isArray(order)){
     if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
-    order=scheduled
-      .filter(ev=>ev&&ev.untimed&&!isDone(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+    order=DCC.TaskModel.selectActive(scheduled)
+      .filter(ev=>ev.untimed)
       .map(ev=>ev.id);
   }
   if(!_bsSaveProp("_unscheduledOrder",order)){

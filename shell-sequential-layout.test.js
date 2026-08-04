@@ -7,6 +7,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const dragSource = fs.readFileSync(require.resolve("./public/js/drag.js"), "utf8");
 
@@ -41,16 +44,24 @@ function makeDay(scheduled) {
     dur: function (ev) { return this.pt(ev.end) - this.pt(ev.start); },
     isDone: (ev) => !!ev.done,
     isDeleted: (ev) => !!ev.deleted,
-    isNested: (ev) => !!(ev.wrapId || ev.subtaskOf),
+    // C6a: delegate to the REAL module (installed just below) rather than keeping a second
+    // copy. These agreed with TaskModel by luck; a change to the wrapId-first edge order or
+    // to childrenOf's unified edge would flip production and leave this harness green --
+    // and drag.js:373 was changed in this very phase because exactly that divergence had
+    // been dropping a shell's subtask children from its span.
+    isNested: (ev) => context.DCC.TaskModel.isNested(ev),
     isMeeting: (ev) => ev.type === "meeting" || ev.type === "oneone",
-    parentIdOf: (ev) => ev.wrapId || ev.subtaskOf || null,
-    childrenOf: (id, pool) => (pool || scheduled).filter((c) => (c.wrapId || c.subtaskOf) === id),
+    parentIdOf: (ev) => context.DCC.TaskModel.parentIdOf(ev),
+    // `pool === undefined -> scheduled` is this harness's own default and is KEPT: production
+    // drag.js always passes a pool, and TaskModel's `_arr(pool)` would answer [] here.
+    childrenOf: (id, pool) => context.DCC.TaskModel.childrenOf(id, pool === undefined ? context.scheduled : pool),
     isWrap: (ev) => !!ev.isWrap,
     loadPinnedStarts: () => ({}),
     savePinnedStarts: () => {},
   };
   context.dur = context.dur.bind(context);
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(dragSource, context);
   return context;
 }

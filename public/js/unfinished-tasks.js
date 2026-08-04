@@ -191,7 +191,7 @@
   // Each returns the ids it removed from the lane so the caller can drop the rows.
 
   // Every descendant of `ev` inside the carryover pool, deepest last. Depth-capped
-  // and cycle-guarded, mirroring flattenSchedule.
+  // and cycle-guarded, mirroring TaskModel.selectTree.
   function descendants(ev, pool) {
     const out = [];
     const seen = new Set([ev && ev.id]);
@@ -255,11 +255,15 @@
   // count them, which means every consumer has to filter them the same way -- and
   // three hand-rolled copies is how they end up disagreeing. They already had:
   // the lane used parentIdOf, the prompt inlined wrapId||subtaskOf.
-  function openRows(pool) { return (pool || []).filter(ev => !(ev.__unf && ev.__unf.done)); }
-  function rootsOf(pool) {
-    const open = openRows(pool);
-    return open.filter(ev => { const p = _parentIdOf(ev); return !p || !open.some(x => x.id === p); });
-  }
+  // C6a: the predicate itself lives in TaskModel.selectCarryover. This name stays
+  // because DCC.Carryover is the carryover lane's published API (the itinerary lane,
+  // the Catch up modal and the morning prompt all call it), but there is one body.
+  function openRows(pool) { return DCC.TaskModel.selectCarryover(pool); }
+  // Same deal as openRows: this is TaskModel.selectRoots under the name the three carryover
+  // surfaces call. Keeping a body here made the layer's copy the DEAD one -- selectRoots's only
+  // other call site is schedule-tab's `_CO_ ? ... : ...` fallback, which never fires -- so a fix
+  // to the roots rule would have landed in the branch nobody runs.
+  function rootsOf(pool) { return DCC.TaskModel.selectRoots(openRows(pool)); }
 
   // Complete on the ORIGIN day, subtree included. The old handler completed only
   // the parent, so a carryover parent's children stayed unfinished forever and the

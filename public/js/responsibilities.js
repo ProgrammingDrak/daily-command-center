@@ -148,7 +148,7 @@
   // Already dropped onto the viewed day? (a live itinerary task links back via responsibilityId)
   function _respDroppedToday(id){
     if(typeof scheduled==="undefined")return false;
-    return scheduled.some(e=>e&&e.responsibilityId===id&&!(typeof isDeleted==="function"&&isDeleted(e)));
+    return DCC.TaskModel.selectNotDeleted(scheduled).some(e=>e.responsibilityId===id);
   }
   // Is an instance in flight on some OTHER day? This is the visible half of the
   // pause: instead of silently vanishing, the card says "scheduled for Thu" so
@@ -266,7 +266,7 @@
       // Already materialized on the viewed day? Check that occurrence off instead
       // of minting a duplicate (also covers a rapid double-click).
       if(typeof scheduled!=="undefined"){
-        const existing=scheduled.find(e=>e&&e.responsibilityId===id&&!(typeof isDeleted==="function"&&isDeleted(e)));
+        const existing=DCC.TaskModel.selectNotDeleted(scheduled).find(e=>e.responsibilityId===id);
         if(existing){
           if(typeof isDone!=="function"||!isDone(existing)){
             if(window.TaskTypes&&window.TaskTypes.isRollup&&window.TaskTypes.isRollup(existing))_completeResponsibilitySubtree(existing.id);
@@ -324,7 +324,7 @@
       });
     })(rootId);
     const root=scheduled.find(function(e){return e.id===rootId;});
-    if(root&&typeof isDone==="function"&&!isDone(root)&&!childrenOf(rootId,scheduled).some(function(c){return !isDone(c);})){
+    if(root&&typeof isDone==="function"&&!isDone(root)&&!DCC.TaskModel.selectOpen(childrenOf(rootId,scheduled)).length){
       toggleDone(rootId);
     }
   }

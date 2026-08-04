@@ -20,12 +20,20 @@
 //   selectUnscheduled(blocks, opts) -> the rows that ARE the Unscheduled section
 //     and the Backlog, which C4 made the same list.
 //
+// Everything above answers a question about a persisted BLOCK. Everything C6a added
+// below answers a question about a set of EVs -- "which of these does this surface
+// show, in what order, nested how" -- and it is now the only place allowed to.
+// See "THE DERIVATION LAYER" below for the full contract, and
+// `render-surface-registry.test.js` for the grep that keeps it that way.
+//
 // Browser: loaded after task-serialize.js, before data.js/persistence.js/state.js;
 // exposes window.DCC.TaskModel. Node: require()d by tests. UMD wrapper matches
 // task-serialize.js / task-types.js / day-context.js.
 //
 // This file is the spine later phases build on (Track C: C4's isTaskRow, C5's
-// status derivation, C6's selectDay/selectTree). Keep it pure and dependency-free.
+// status derivation, C6a's selectDay/selectTree). Keep it pure and
+// dependency-free -- see the injected-status note in the C6a section for the one
+// place that invariant cost something, and what it bought.
 //
 // C4 deliberately did NOT put its two write primitives here, even though the phase
 // plan said to: "pure and dependency-free" above is a real invariant (these tests
@@ -266,11 +274,475 @@
     return out;
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // C6a: THE DERIVATION LAYER
+  // ══════════════════════════════════════════════════════════════════════════
+  //
+  // Before this, 36 call sites across 11 files re-derived "which tasks does this
+  // surface show" by filtering the `scheduled` global inline. They disagreed, and
+  // the disagreements were the bugs: a done RIDE-ALONG never folded under its
+  // parent (two fold predicates tested `subtaskOf` only), a wrap/shell child leaked
+  // into Unscheduled as a standalone row (`!isSubtask` where `!isNested` was meant),
+  // and `ev.nested` — which nothing has ever set true — gated the focus banner and
+  // the pomodoro picker, so both could offer you a subtask as "your next task".
+  //
+  // Everything that answers a question ABOUT A SET of evs now lives here, and
+  // `render-surface-registry.test.js` asserts no file outside this one filters
+  // `scheduled` directly. That grep is the durable half of the phase: without it,
+  // the next feature adds predicate #37 and this regrows.
+  //
+  // ── Why status is INJECTED and why a missing resolver THROWS ──
+  //
+  // This file is pure (its tests `require()` it under node with no `window`), but
+  // "is this task done" is not a property of the ev — C5b made completion live on
+  // the task ROW, projected into the in-memory `manualDone` registry that
+  // `isDone(ev)` reads. There is no `ev.done`. So a node-side fallback reading an
+  // ev flag would answer `false` for every real ev: a fake more benign than
+  // production, which C5b established is a different program. Resolvers therefore
+  // come from `opts`, fall back to the page's globals via the same
+  // `typeof x === "function"` idiom `_pt`/`_fmt`/`_ms` already use, and THROW when
+  // neither exists. Loud beats silently-nothing-is-done. Render-time only, and
+  // `_doRender`'s per-surface try/catch contains it.
+  //
+  // `isCollapsed` is the one resolver that defaults: nothing-collapsed is the
+  // truthful answer with no localStorage, not a softened one.
+  function _need(opts, key, globalName, globalFn) {
+    if (opts && typeof opts[key] === "function") return opts[key];
+    if (typeof globalFn === "function") return globalFn;
+    throw new Error(
+      "TaskModel: pass opts." + key + " — no global `" + globalName + "` in this context"
+    );
+  }
+  function _doneFn(opts) {
+    return _need(opts, "isDone", "isDone", typeof isDone === "function" ? isDone : null);
+  }
+  function _deletedFn(opts) {
+    return _need(opts, "isDeleted", "isDeleted", typeof isDeleted === "function" ? isDeleted : null);
+  }
+  // Side-project ("trivial") flags are a MAP of id -> truthy, not a function.
+  // Absent is not the same as empty, so this throws too rather than assuming a
+  // clean slate and quietly showing rows a surface has always hidden.
+  function _trivialFlags(opts) {
+    if (opts && opts.trivialFlags && typeof opts.trivialFlags === "object") return opts.trivialFlags;
+    if (typeof loadTrivialFlags === "function") return loadTrivialFlags() || {};
+    throw new Error("TaskModel: pass opts.trivialFlags — no global `loadTrivialFlags` in this context");
+  }
+  function _collapsedFn(opts) {
+    if (opts && typeof opts.isCollapsed === "function") return opts.isCollapsed;
+    if (typeof isCollapsed === "function") return isCollapsed;
+    return function () { return false; };
+  }
+  function _arr(items) { return Array.isArray(items) ? items : []; }
+
+  // ── Shape predicates: pure functions of one ev, no status needed ──
+  //
+  // parentIdOf is the canonical EV-SPACE edge: wrapId first, then subtaskOf.
+  // `state.js` documents why this deliberately diverges from `lib/reschedule.js`'s
+  // row-space order; do not "fix" that. Mirrored (not moved) from state.js, which
+  // keeps the bare globals every existing call site reads.
+  function parentIdOf(ev) { return (ev && (ev.wrapId || ev.subtaskOf)) || null; }
+  function relOf(ev) { return ev ? (ev.wrapId ? "ride-along" : (ev.subtaskOf ? "subtask" : null)) : null; }
+  function isSubtask(ev) { return !!(ev && ev.subtaskOf); }
+  function isRideAlong(ev) { return !!(ev && ev.wrapId); }
+  // The shape `unfinished-tasks.js` already computed truthfully as
+  // `nested = !!(p.subtaskOf || p.wrapId)`. `ev.nested` (data.js writes it as a
+  // literal `false` and nothing else ever assigns it) is NOT this and never was.
+  function isNested(ev) { return !!parentIdOf(ev); }
+  // Occupies a slot on the timeline. `fromBlock` sets untimed for a dateless row
+  // too, so this covers both "no start" and "day-agnostic".
+  function isScheduled(ev) { return !!ev && !ev.untimed; }
+  // Belongs to THE viewed day, as opposed to an Unscheduled-everywhere row. The
+  // day's progress bar, stats and point totals all scope on this.
+  function isDayScoped(ev) { return !!ev && !ev._dateless; }
+
+  // ── Status predicates ──
+  function evIsDone(ev, opts) { return !!_doneFn(opts)(ev); }
+  function evIsDeleted(ev, opts) { return !!_deletedFn(opts)(ev); }
+  // Open = present and not finished. Deliberately NOT "not deleted": a deleted row
+  // is not open either, but three quarters of the call sites that ask "open?" have
+  // already excluded deleted rows upstream, and folding the two together here would
+  // change what they count. `selectActive` is the both-at-once question.
+  function evIsOpen(ev, opts) { return !!ev && !evIsDone(ev, opts); }
+
+  // ── Edge lookups: three genuinely different questions, so three functions ──
+  // childrenOf: either edge (the unified tree).
+  // ridersOf:   the wrap edge only — ride-alongs occupy time inside their parent's
+  //             window, which is what drag.js's wrap layout re-times.
+  // subtasksOf: the subtask edge only — timeless steps, what a completion cascades.
+  function childrenOf(parentId, pool) { return _arr(pool).filter(function (c) { return parentIdOf(c) === parentId; }); }
+  function ridersOf(parentId, pool) { return _arr(pool).filter(function (c) { return !!c && c.wrapId === parentId; }); }
+  function subtasksOf(parentId, pool) { return _arr(pool).filter(function (c) { return !!c && c.subtaskOf === parentId; }); }
+
+  // ── Set selectors. Each existing call site keeps its EXACT semantics ──
+  //
+  // These are deliberately narrow rather than one clever configurable filter. C6a
+  // routes 36 sites through this layer and fixes only the four the phase names; a
+  // site whose predicate was already right must come out byte-equivalent, and a
+  // named selector makes that reviewable. Where two sites differ only in whether
+  // they excluded deleted rows, that difference is preserved, not harmonised —
+  // harmonising it is a behaviour change nobody asked for. Divergences worth
+  // closing are recorded in the phase handoff instead.
+  function selectDone(items, opts) { const f = _doneFn(opts); return _arr(items).filter(function (ev) { return !!f(ev); }); }
+  function selectOpen(items, opts) { const f = _doneFn(opts); return _arr(items).filter(function (ev) { return !!ev && !f(ev); }); }
+  function selectActive(items, opts) {
+    const d = _doneFn(opts), x = _deletedFn(opts);
+    return _arr(items).filter(function (ev) { return !!ev && !d(ev) && !x(ev); });
+  }
+  // Active AND on the clock — the reflow cascade's population. An untimed row lives
+  // in the Unscheduled section, so it must not consume a time slot.
+  function selectTimedActive(items, opts) {
+    const d = _doneFn(opts), x = _deletedFn(opts);
+    return _arr(items).filter(function (ev) { return !!ev && !d(ev) && !x(ev) && !ev.untimed; });
+  }
+  function selectNotDeleted(items, opts) {
+    const x = _deletedFn(opts);
+    return _arr(items).filter(function (ev) { return !!ev && !x(ev); });
+  }
+  // What a render surface may show at all: not deleted, not flagged as a side
+  // project. The base every section in `selectDay` is carved out of.
+  function selectVisible(items, opts) {
+    const x = _deletedFn(opts), triv = _trivialFlags(opts);
+    return _arr(items).filter(function (ev) { return !!ev && !x(ev) && !triv[ev.id]; });
+  }
+  function selectDayScoped(items) { return _arr(items).filter(isDayScoped); }
+  function selectTopLevel(items) { return _arr(items).filter(function (ev) { return !!ev && !isNested(ev); }); }
+  function selectOpenTopLevel(items, opts) {
+    const d = _doneFn(opts);
+    return _arr(items).filter(function (ev) { return !!ev && !d(ev) && !isNested(ev); });
+  }
+
+  // ── selectRoots: the rows of THIS set that nothing in the set parents ──
+  //
+  // "no parent edge, OR a parent that is not in this list." Distinct from `selectTopLevel`
+  // (`!isNested`), which excludes anything carrying an edge at all: an orphan whose parent
+  // finished on another day IS a root here and is NOT top-level. Conflating the two is how
+  // the carryover lane's fallback started undercounting its own section badge in review.
+  // `DCC.Carryover.rootsOf` is this function under its published name.
+  function selectRoots(items) {
+    const list = _arr(items);
+    const ids = new Set();
+    for (let i = 0; i < list.length; i++) if (list[i]) ids.add(list[i].id);
+    return list.filter(function (ev) {
+      if (!ev) return false;
+      const p = parentIdOf(ev);
+      return !p || !ids.has(p);
+    });
+  }
+
+  // ── selectCarryover: the open rows of a carryover pool ──
+  //
+  // A past-day row's completion is NOT `isDone(ev)` (that reads TODAY's registry) —
+  // it is the origin day's status, which the collector stamps as `__unf.done`.
+  // `unfinished-tasks.js openRows` delegates here so the carryover lane, the Catch
+  // up modal and the morning prompt keep sharing ONE definition; this is its home,
+  // not a second copy.
+  function selectCarryover(pool) {
+    return _arr(pool).filter(function (ev) { return !!ev && !(ev.__unf && ev.__unf.done); });
+  }
+
+  // ── selectDay: the viewed day, partitioned ──
+  //
+  // Returns, for a pool of evs already scoped to the viewed day (`scheduled`):
+  //
+  //   visible           not deleted, not side-project-flagged. The universe below.
+  //   unscheduledRoots  the open, untimed, TOP-LEVEL rows. What the section header
+  //                     counts and what the manual drag order sorts.
+  //   unscheduled       those roots PLUS all of their visible descendants — the
+  //                     section AS A SUBTREE.
+  //   folded            done SUBTASKS of a still-visible parent whose whole subtree is
+  //                     finished. They render in the parent's detail panel, which lists
+  //                     subtasks, so they get no row anywhere. See the fold note below for
+  //                     why this is the subtask edge only.
+  //   timed             visible − unscheduled − folded. The work list; done rows sit
+  //                     inline in their slot, nested under their parent.
+  //   open              timed ∧ ¬done.
+  //   nestedDone        timed ∧ done ∧ nested under a visible parent. Renders inline in the
+  //                     work list; a compact DONE SECTION must not also list it standalone.
+  //   done              timed ∧ done ∧ ¬nestedDone — the timeline's compact "Done" section.
+  //   carryover         open rows of opts.carryoverPool, and ONLY when the viewed
+  //                     day is the actual today. A past or future day does not
+  //                     collect yesterday's leftovers.
+  //
+  // TWO EXACT INVARIANTS, both pinned by tests:
+  //   timed ⊎ unscheduled ⊎ folded    == visible   (disjoint AND exhaustive)
+  //   open  ⊎ done ⊎ nestedDone       == timed     (disjoint AND exhaustive)
+  //
+  // WHY `unscheduled` IS A SUBTREE AND NOT JUST ITS ROOTS. This is what makes the
+  // orphan fix safe. `selectTree` now HIDES a child whose parent is in the pool but
+  // filtered out of the input — so if `unscheduled` held only the roots, a subtask of
+  // an untimed parent would sit in `timed` with its parent absent and would VANISH
+  // instead of being promoted the way it is today. Taking the closure keeps every row
+  // on screen: the child renders nested under its parent inside the Unscheduled
+  // section, which is the "wrap children stay nested" outcome reached without
+  // dropping anything.
+  //
+  // ★ WHY A DONE ROW ONLY FOLDS WHEN ITS WHOLE SUBTREE IS DONE. Folding means "no row
+  // of your own; you live in your parent's detail panel", and `selectTree` will then
+  // hide your children too, because their parent is in the pool but not in the input.
+  // Fold a done parent that still has an OPEN child and that open work disappears
+  // from every surface — worse than the orphan promotion this phase is fixing. So the
+  // fold requires the visible subtree to be finished. A done leaf folds (the common
+  // case), a done step with unfinished steps under it stays as a greyed inline row
+  // with its open children nested beneath it, and nothing is ever dropped. The rule is
+  // self-consistent: every member of a fully-done subtree is itself done, nested, and
+  // parented inside `visible`, so folding the top folds all of it.
+  function selectDay(pool, dateStr, opts) {
+    opts = opts || {};
+    const visible = selectVisible(pool, opts);
+    const done = _doneFn(opts);
+    const byId = new Map();
+    for (let i = 0; i < visible.length; i++) byId.set(visible[i].id, visible[i]);
+    // Adjacency built once: selectDay walks the tree three times (unscheduled
+    // closure, fold check, and the subtree-done test) and childrenOf is a scan.
+    const kidsOf = new Map();
+    for (let i = 0; i < visible.length; i++) {
+      const pid = parentIdOf(visible[i]);
+      if (!pid || !byId.has(pid)) continue;
+      if (!kidsOf.has(pid)) kidsOf.set(pid, []);
+      kidsOf.get(pid).push(visible[i]);
+    }
+
+    // ── Fold FIRST: done, nested under a visible parent, finished all the way down ──
+    //
+    // ★ ORDER MATTERS, and getting it wrong shipped a real bug in review. The fold used
+    // to be computed AFTER the unscheduled closure and skipped anything the closure had
+    // claimed — so a finished step under an untimed parent could never fold, joined the
+    // Unscheduled subtree instead, and rendered as an unchecked row titled "Mark done"
+    // whose checkbox UN-COMPLETED it. Folding first makes the rule uniform: a finished
+    // subtree folds wherever it hangs, timed or untimed.
+    //
+    // Memoised so a deep chain is walked once. `seen` breaks a data cycle by treating the
+    // revisited node as "not blocking", which is the right answer: every ev has one parent
+    // pointer, so a cycle is a closed ring, and a ring whose every member is done IS
+    // finished. The seen short-circuit returns BEFORE writing the memo, so a cached value
+    // was always computed by really walking children; and if any member of a ring is open,
+    // that `done(kids[k])` test fails and the false propagates all the way round. So the
+    // memo cannot hand back a stale true.
+    const subtreeDone = new Map();
+    function allDone(ev, seen, cyc) {
+      if (subtreeDone.has(ev.id)) return subtreeDone.get(ev.id);
+      // ★ A short-circuited answer is NOT cacheable, and an earlier version of this code
+      // memoised it with a comment claiming that was impossible. It is not: a ring can have
+      // branches hanging BELOW it. With A<->B a ring and open C parented on A, walking A
+      // first resolves allDone(B) to true via this short-circuit and CACHES it, before C has
+      // been looked at. B then folds with open work inside its subtree, and selectTree drops
+      // C along with it. `cyc` marks the walk as tainted so nothing on that path is stored.
+      if (seen.has(ev.id)) { cyc.hit = true; return true; }
+      seen.add(ev.id);
+      const kids = kidsOf.get(ev.id) || [];
+      let ok = true;
+      for (let k = 0; k < kids.length && ok; k++) {
+        // ★ `isSubtask` HERE, not just `done`. `kidsOf` is built from `parentIdOf`, so a done
+        // subtask's descendants can include a RIDE-ALONG -- which the fold below can never
+        // claim, because the detail panel has no rider item type. Fold the parent anyway and
+        // that rider is left in `timed` with its parent absent, which selectTree hides: the
+        // row renders on no surface and cannot be un-checked. A fuzz over 30k random days lost
+        // a row on 3.7% of them and EVERY loss was exactly this shape. So the fold requires a
+        // subtree that is itself fold-eligible, which is what makes "the subtree leaves
+        // together" true rather than merely asserted.
+        if (!isSubtask(kids[k]) || !done(kids[k]) || !allDone(kids[k], seen, cyc)) ok = false;
+      }
+      if (!cyc.hit) subtreeDone.set(ev.id, ok);
+      return ok;
+    }
+    // ★ THE FOLD IS THE SUBTASK EDGE ONLY, and the reason is a capability, not a preference.
+    //
+    // Folding means "no row of your own; you live in your parent's detail panel". That panel
+    // (`renderModalItems`, features.js) is built from `subtasksOf` -- it lists SUBTASKS and
+    // has no ride-along item type. So the subtask edge has a home to fold into and the wrap
+    // edge does not. An earlier cut of this phase widened the fold to `parentIdOf` on the
+    // grounds that "a done ride-along never folds" was a bug; it is, but only on the ONE
+    // surface where folding means "do not list this separately" -- the timeline's compact
+    // Done section. Widening it globally deleted the done rider from every surface: it left
+    // `timed`, so the list view stopped nesting it under its wrap, and its wrap reported
+    // hasKids:false so there was not even a chevron to find it behind. The only remaining
+    // trace was the aggregate "N ride-alongs" chip.
+    //
+    // So the two questions are separated, and both are returned:
+    //   folded      -> has a non-list home; keep it out of the work list entirely
+    //   nestedDone  -> renders nested inline under a visible parent; a compact DONE SECTION
+    //                  must not ALSO list it standalone
+    // The list view renders `timed` (done riders included, nested and greyed, which is what
+    // base did) and the timeline's Done section reads `done`, which excludes nestedDone --
+    // so the standalone-Done-row bug the phase set out to fix is still fixed.
+    const foldedIds = new Set();
+    const folded = [];
+    for (let i = 0; i < visible.length; i++) {
+      const ev = visible[i];
+      if (!done(ev) || !isSubtask(ev)) continue;
+      const pid = ev.subtaskOf;
+      if (!pid || !byId.has(pid)) continue;
+      if (!allDone(ev, new Set(), { hit: false })) continue;
+      foldedIds.add(ev.id); folded.push(ev);
+    }
+
+    // ── Unscheduled: the open untimed top-level roots, then their closure ──
+    // `!isNested` (not `!isSubtask`): a wrap/shell ride-along is not a standalone
+    // Unscheduled row, which is the leak this phase closes.
+    const unscheduledRoots = [];
+    for (let i = 0; i < visible.length; i++) {
+      const ev = visible[i];
+      if (ev.untimed && !done(ev) && !isNested(ev)) unscheduledRoots.push(ev);
+    }
+    const unscheduledIds = new Set();
+    const unscheduled = [];
+    const queue = unscheduledRoots.slice();
+    for (let i = 0; i < unscheduledRoots.length; i++) {
+      unscheduledIds.add(unscheduledRoots[i].id);
+      unscheduled.push(unscheduledRoots[i]);
+    }
+    // Breadth-first, skipping folded rows. Skipping cannot orphan anything, and the reason is
+    // the `isSubtask` gate inside `allDone`: a folded row's whole visible subtree is done AND
+    // fold-eligible, so every member of it folds too. The subtree leaves together.
+    // `unscheduledIds` doubles as the visited set, so a parent cycle cannot loop here.
+    while (queue.length) {
+      const parent = queue.shift();
+      const kids = kidsOf.get(parent.id) || [];
+      for (let k = 0; k < kids.length; k++) {
+        if (unscheduledIds.has(kids[k].id) || foldedIds.has(kids[k].id)) continue;
+        unscheduledIds.add(kids[k].id); unscheduled.push(kids[k]); queue.push(kids[k]);
+      }
+    }
+
+    const timed = [], openItems = [], doneItems = [], nestedDone = [];
+    for (let i = 0; i < visible.length; i++) {
+      const ev = visible[i];
+      if (unscheduledIds.has(ev.id) || foldedIds.has(ev.id)) continue;
+      timed.push(ev);
+      if (!done(ev)) { openItems.push(ev); continue; }
+      // `parentIdOf`, so a done RIDE-ALONG counts here too: it renders nested inline in the
+      // work list, so a compact Done section must not list it standalone as well.
+      const pid = parentIdOf(ev);
+      if (pid && byId.has(pid)) nestedDone.push(ev); else doneItems.push(ev);
+    }
+
+    // FAIL CLOSED. The old form was `(dateStr && today && dateStr !== today) ? [] : collect`,
+    // which meant a caller passing a carryoverPool but no `today` got the full pool on EVERY
+    // date -- the exact opposite of the documented today-only rule.
+    const carryover = (opts.today && dateStr === opts.today) ? selectCarryover(opts.carryoverPool) : [];
+
+    return {
+      visible: visible,
+      unscheduledRoots: unscheduledRoots,
+      unscheduled: unscheduled,
+      timed: timed,
+      open: openItems,
+      done: doneItems,
+      nestedDone: nestedDone,
+      folded: folded,
+      carryover: carryover
+    };
+  }
+
+  // ── selectTree: render order for a nested list ──
+  //
+  // Nodes are {ev, depth, rel, hasKids, collapsed}; descendants of a collapsed node
+  // are omitted. Children render subtasks first (a task's own steps stay directly
+  // under it), then ride-alongs by start time.
+  //
+  // ★ THE ORPHAN FIX, and it is entirely in how ROOTS are computed. `state.js`
+  // `flattenSchedule` resolved roots against the INPUT array, so any filter that
+  // dropped a parent promoted its children to depth 0 — a subtask of an untimed,
+  // side-project-flagged, deleted or done-and-folded parent rendered as a top-level
+  // task with a rank number of its own. `state.js:799` documents that as known
+  // behaviour, and it is why every surface except the three list-view call sites
+  // showed subtasks and ride-alongs as flat peers.
+  //
+  // Roots now resolve against `opts.pool` — the unfiltered universe — so:
+  //   • parent absent from the POOL entirely  -> genuine orphan, promoted to depth 0
+  //     and still visible, because standalone work must never disappear
+  //   • parent in the pool but filtered out of `items` -> HIDDEN, because it renders
+  //     inside its parent wherever that parent does render
+  // `opts.pool` defaults to `items`, which is exactly the old behaviour, so a call
+  // site opts in to the fix by naming its pool.
+  function selectTree(items, opts) {
+    opts = opts || {};
+    const list = _arr(items);
+    // Gate on PRESENCE, not truthiness+length. `{pool:[]}` is a legitimate thing for a
+    // filtered caller to compute and it means "the pool is empty, promote everything" --
+    // the old `&& opts.pool.length` silently turned it into `pool = list`, i.e. back into
+    // the orphan-promoting default that naming a pool is supposed to opt out of.
+    const pool = Array.isArray(opts.pool) ? opts.pool : list;
+    const collapsedFn = _collapsedFn(opts);
+    const poolIds = new Set(), poolById = new Map();
+    for (let i = 0; i < pool.length; i++) if (pool[i]) { poolIds.add(pool[i].id); poolById.set(pool[i].id, pool[i]); }
+    // ★ A row whose ancestor chain inside the pool CYCLES has no root, so the plain root test
+    // ("no parent, or parent absent from the pool") never fires for it and neither it nor
+    // anything hanging below it is ever walked -- the ring and its whole branch vanish. Treat
+    // a cycling chain as rootless so the ring flattens instead. Corrupt data only (every
+    // reparent path guards against cycles), but "standalone work must never disappear" is the
+    // rule this phase is built on, and a lost OPEN row is the worst way to break it.
+    function chainCycles(ev) {
+      const walked = new Set();
+      let cur = ev;
+      while (cur) {
+        if (walked.has(cur.id)) return true;
+        walked.add(cur.id);
+        const p = parentIdOf(cur);
+        if (!p || !poolIds.has(p)) return false;
+        cur = poolById.get(p);
+      }
+      return false;
+    }
+    const out = [], seen = new Set();
+    function walk(ev, depth) {
+      if (seen.has(ev.id) || depth > 20) return;   // cycle / runaway guard
+      seen.add(ev.id);
+      const kids = childrenOf(ev.id, list);
+      const hasKids = kids.length > 0;
+      const collapsed = hasKids && !!collapsedFn(ev.id);
+      out.push({ ev: ev, depth: depth, rel: relOf(ev), hasKids: hasKids, collapsed: collapsed });
+      if (hasKids && !collapsed) {
+        const ride = kids.filter(function (k) { return relOf(k) === "ride-along"; })
+          .sort(function (a, b) { return _pt(a.start) - _pt(b.start); });
+        const subs = kids.filter(function (k) { return relOf(k) === "subtask"; });
+        subs.concat(ride).forEach(function (k) { walk(k, depth + 1); });
+      }
+    }
+    for (let i = 0; i < list.length; i++) {
+      const ev = list[i];
+      if (!ev) continue;
+      const p = parentIdOf(ev);
+      if (!p || !poolIds.has(p) || chainCycles(ev)) walk(ev, 0);
+    }
+    return out;
+  }
+
   return {
     fromBlock: fromBlock,
     isTaskRow: isTaskRow,
     foldsIntoItinerary: foldsIntoItinerary,
     backlogKey: backlogKey,
-    selectUnscheduled: selectUnscheduled
+    selectUnscheduled: selectUnscheduled,
+    // C6a — shape
+    parentIdOf: parentIdOf,
+    relOf: relOf,
+    isSubtask: isSubtask,
+    isRideAlong: isRideAlong,
+    isNested: isNested,
+    // C6a — status. `isDone`/`isOpen`/`isDeleted`/`isScheduled`/`isDayScoped` are NOT
+    // exported: nothing calls them, the 30-odd routed sites all use the SET selectors
+    // (selectDone / selectOpen / selectNotDeleted / selectDayScoped), and shipping a
+    // published predicate whose first real user gets to discover whether it means what its
+    // name says is worse than not shipping it. `isNested` IS exported, because two call
+    // sites read it directly (the focus-id default and the pomodoro guard).
+    // C6a — edges
+    childrenOf: childrenOf,
+    ridersOf: ridersOf,
+    subtasksOf: subtasksOf,
+    // C6a — sets
+    selectDone: selectDone,
+    selectOpen: selectOpen,
+    selectActive: selectActive,
+    selectTimedActive: selectTimedActive,
+    selectNotDeleted: selectNotDeleted,
+    selectVisible: selectVisible,
+    selectDayScoped: selectDayScoped,
+    selectTopLevel: selectTopLevel,
+    selectOpenTopLevel: selectOpenTopLevel,
+    selectCarryover: selectCarryover,
+    selectRoots: selectRoots,
+    selectDay: selectDay,
+    selectTree: selectTree
   };
 });

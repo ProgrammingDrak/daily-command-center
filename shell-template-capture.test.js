@@ -7,6 +7,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+// C6a: the sliced code derives its task sets through DCC.TaskModel; install the real
+// module INSIDE the context so it resolves this harness's isDone/isDeleted stubs.
+const { installTaskModel } = require("./task-model-vm-fixture.js");
 
 const stateSource = fs.readFileSync(require.resolve("./public/js/state.js"), "utf8");
 const captureSrc = stateSource.match(/function captureShellTemplate[\s\S]*?\n}/)[0];
@@ -21,6 +24,7 @@ function makeCtx() {
   };
   context.dur = (ev) => context.pt(ev.end) - context.pt(ev.start);
   vm.createContext(context);
+  installTaskModel(context);
   vm.runInContext(captureSrc, context);
   return context;
 }

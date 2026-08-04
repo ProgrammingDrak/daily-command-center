@@ -51,8 +51,8 @@ function isFixedTimeBlock(ev){
 // the one it started the day at. Falls back to INIT_SCHED before first render.
 function _meetingBlocks(){
   const src=(typeof scheduled!=="undefined"&&Array.isArray(scheduled)&&scheduled.length)?scheduled:INIT_SCHED;
-  return src
-    .filter(ev=>isFixedTimeBlock(ev)&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+  return DCC.TaskModel.selectNotDeleted(src)
+    .filter(ev=>isFixedTimeBlock(ev))
     .map(ev=>({s:pt(ev.start),e:pt(ev.end)}))
     .sort((a,b)=>a.s-b.s);
 }
@@ -86,10 +86,10 @@ function taskMatchesBlock(task, block){
 // Tag-aware cascade: tasks are placed into the earliest matching schedule block.
 // Falls back to sequential placement when no block matches or block is full.
 function recalcTimesTagAware(schedBlocks){
-  const active = scheduled.filter(ev => !isDone(ev) && !isDeleted(ev));
+  const active = DCC.TaskModel.selectActive(scheduled);
   if(!active.length) return;
 
-  const firstOrig = INIT_SCHED.find(ev => !isDone(ev) && !isDeleted(ev));
+  const firstOrig = DCC.TaskModel.selectActive(INIT_SCHED)[0];
   const tagAnchorCandidates = active.map(ev => pt(ev.start));
   if(firstOrig) tagAnchorCandidates.push(pt(firstOrig.start));
   let fallbackCursor = Math.min.apply(null, tagAnchorCandidates);
@@ -181,7 +181,7 @@ function recalcTimes(opts){
   // Untimed tasks (no start; e.g. Slack-bookmark inserts) are excluded from the
   // cascade -- they live in the Unscheduled section, not the timeline, so they
   // must not consume a time slot or shift real tasks.
-  const active=scheduled.filter(ev=>!isDone(ev)&&!isDeleted(ev)&&!ev.untimed);
+  const active=DCC.TaskModel.selectTimedActive(scheduled);
   if(!active.length)return;
 
   // Pass 1: place pinned/locked tasks at their pinned start and add them to the
@@ -328,7 +328,7 @@ function _isAncestor(ancestorId,nodeId){
 // First free slot inside a wrap's [start,end] window for a ride-along.
 function _placeInWrapWindow(moved,wrapEv){
   const ws=pt(wrapEv.start),we=pt(wrapEv.end),d=dur(moved)||15;
-  const blockers=scheduled.filter(c=>c.wrapId===wrapEv.id&&c.id!==moved.id)
+  const blockers=DCC.TaskModel.ridersOf(wrapEv.id,scheduled).filter(c=>c.id!==moved.id)
     .map(c=>({s:pt(c.start),e:pt(c.end)})).sort((a,b)=>a.s-b.s);
   let s=_freeStart(ws,d,blockers);
   if(s+d>we)s=ws; // window full: stack at start (over-capacity; bandwidth chip shows it)
@@ -340,7 +340,7 @@ function _placeInWrapWindow(moved,wrapEv){
 function _chainWrapChildren(wrapEv){
   const ws=pt(wrapEv.start),we=pt(wrapEv.end);
   let cursor=ws;
-  scheduled.filter(c=>c.wrapId===wrapEv.id&&!isDone(c)&&!isDeleted(c)).forEach(c=>{
+  DCC.TaskModel.selectActive(DCC.TaskModel.ridersOf(wrapEv.id,scheduled)).forEach(c=>{
     const d=dur(c)||15;
     if(cursor>=we)cursor=ws;
     c.start=fmt(cursor);c.end=fmt(cursor+d);
@@ -367,8 +367,10 @@ function _shellSpan(shellEv,seen){
   seen=seen||new Set();
   if(seen.has(shellEv.id))return 0;
   seen.add(shellEv.id);
-  const kids=(typeof childrenOf==="function"?childrenOf(shellEv.id,scheduled):scheduled.filter(c=>c.wrapId===shellEv.id))
-    .filter(c=>!isDeleted(c));
+  // C6a: the old `typeof childrenOf==="function"` fallback filtered on wrapId ONLY,
+  // so in any context without childrenOf a shell's SUBTASK children were silently
+  // dropped from its span. childrenOf is the unified-tree edge and is what this means.
+  const kids=DCC.TaskModel.selectNotDeleted(childrenOf(shellEv.id,scheduled));
   let sum=0;
   kids.forEach(c=>{ sum += _isSeqShell(c)?_shellSpan(c,seen):(dur(c)>0?dur(c):15); });
   return sum;
@@ -383,8 +385,7 @@ function _layoutShellChildren(shellEv,seen){
   seen.add(shellEv.id);
   const start=pt(shellEv.start||"00:00");
   let cursor=start;
-  const kids=(typeof childrenOf==="function"?childrenOf(shellEv.id,scheduled):scheduled.filter(c=>c.wrapId===shellEv.id))
-    .filter(c=>!isDeleted(c));
+  const kids=DCC.TaskModel.selectNotDeleted(childrenOf(shellEv.id,scheduled));
   kids.forEach(c=>{
     let d;
     if(_isSeqShell(c)){
@@ -408,7 +409,7 @@ function _layoutShellChildren(shellEv,seen){
 function _shiftWrapChildren(wrapEv,oldStart){
   const delta=pt(wrapEv.start)-oldStart;
   if(!delta)return;
-  scheduled.filter(c=>c.wrapId===wrapEv.id).forEach(c=>{
+  DCC.TaskModel.ridersOf(wrapEv.id,scheduled).forEach(c=>{
     c.start=fmt(pt(c.start)+delta);c.end=fmt(pt(c.end)+delta);_persistEvWrap(c);
   });
 }
@@ -448,7 +449,7 @@ function _dropAtTargetLevel(moved,target,after){
   return wrapEv||true;
 }
 function _reorderActive(movedId,targetId,after){
-  const active=scheduled.filter(ev=>!isDone(ev));
+  const active=DCC.TaskModel.selectOpen(scheduled);
   const fi=active.findIndex(x=>x.id===movedId);if(fi===-1)return;
   const[m]=active.splice(fi,1);
   const ti=active.findIndex(x=>x.id===targetId);

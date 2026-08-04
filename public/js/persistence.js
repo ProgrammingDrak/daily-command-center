@@ -106,8 +106,7 @@ function loadSubtaskOrder(){
 
 function saveSubtaskOrder(parentId){
   if(!parentId||typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
-  const order=scheduled
-    .filter(ev=>ev&&ev.subtaskOf===parentId&&!(typeof isDeleted==="function"&&isDeleted(ev)))
+  const order=DCC.TaskModel.selectNotDeleted(DCC.TaskModel.subtasksOf(parentId,scheduled))
     .map(ev=>ev.id);
   const all=loadSubtaskOrder();
   all[parentId]=order;
@@ -438,8 +437,8 @@ function reloadPersistedEdits() {
   try {
     const order = loadTaskOrder();
     if (order.length) {
-      const done = scheduled.filter(ev => isDone(ev));
-      const active = scheduled.filter(ev => !isDone(ev));
+      const done = DCC.TaskModel.selectDone(scheduled);
+      const active = DCC.TaskModel.selectOpen(scheduled);
       // Sort active items by saved order; items not in order go to end
       const orderMap = {};
       order.forEach((id, i) => { orderMap[id] = i; });

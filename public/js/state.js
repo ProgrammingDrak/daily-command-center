@@ -70,7 +70,7 @@ function userMovable(ev){
 // the cascade and render indented under their parent.
 function isWrap(ev){return !!(ev&&(ev.isWrap||ev.type==="wrap"||(Array.isArray(ev.tags)&&ev.tags.includes("wrap"))));}
 function wrapParentId(ev){return ev&&ev.wrapId?ev.wrapId:null;}
-function isRideAlong(ev){return !!wrapParentId(ev);}
+function isRideAlong(ev){return _TM().isRideAlong(ev);}
 // Reorder a flat list so each wrap is immediately followed by its ride-along
 // children. Children whose parent isn't in the list keep their place.
 function groupRideAlongs(items){
@@ -88,7 +88,7 @@ function groupRideAlongs(items){
 }
 function wrapBandwidth(ev,pool){
   if(!isWrap(ev))return null;
-  const kids=(pool||[]).filter(k=>wrapParentId(k)===ev.id&&relOf(k)==="ride-along");
+  const kids=_TM().ridersOf(ev.id,pool);
   if(!kids.length)return null;
   return {count:kids.length,mins:kids.reduce((s,k)=>s+(dur(k)||0),0)};
 }
@@ -104,7 +104,7 @@ function wrapBandwidth(ev,pool){
 // row() with node.rel==="subtask"), same wiring (details modal, radial, drag,
 // checkbox). So the ONLY places allowed to branch on subtaskOf/isSubtask are the
 // documented, minimal set below; anything else is a regression:
-//   • these helpers + flattenSchedule tree ordering
+//   • these helpers + TaskModel.selectTree tree ordering
 //   • recalcTimes isNested skips (drag.js) — nested rows take no cascade slot
 //   • hydrate no-pin for subtasks (persistence.js)
 //   • done-subtask fold filters (schedule-tab.js: fold under a visible parent)
@@ -114,11 +114,18 @@ function wrapBandwidth(ev,pool){
 //     the shared taskCommonProps/taskBlockProps serializer; drag.js _promoteMutate)
 //   • subtask sibling-order persistence (persistence.js saveSubtaskOrder)
 //   • the single variant:"sub" block inside each row builder
-function parentIdOf(ev){return (ev&&(ev.wrapId||ev.subtaskOf))||null;}
-function relOf(ev){return ev?(ev.wrapId?"ride-along":(ev.subtaskOf?"subtask":null)):null;}
-function isSubtask(ev){return !!(ev&&ev.subtaskOf);}
-function isNested(ev){return !!parentIdOf(ev);}
-function childrenOf(id,pool){return (pool||[]).filter(c=>parentIdOf(c)===id);}
+// C6a: these five are BARE GLOBALS with one definition each, in
+// public/js/task-model.js. ~100 call sites read them by these names, so the names
+// stay here and the bodies delegate — no second copy to drift. There is
+// deliberately NO local fallback: task-model.js loads before this file in
+// index.html, so a missing TaskModel is a load-order bug that should be loud, not a
+// silently-divergent duplicate of the thing this phase exists to delete.
+function _TM(){return DCC.TaskModel;}
+function parentIdOf(ev){return _TM().parentIdOf(ev);}
+function relOf(ev){return _TM().relOf(ev);}
+function isSubtask(ev){return _TM().isSubtask(ev);}
+function isNested(ev){return _TM().isNested(ev);}
+function childrenOf(id,pool){return _TM().childrenOf(id,pool);}
 // Subtask completion progress for a parent (recursive over subtask descendants).
 // _seen guards against accidental parent cycles in the data.
 //
@@ -133,7 +140,7 @@ function subtaskProgress(id,pool,doneFn,_seen){
   _seen=_seen||new Set();
   if(_seen.has(id))return null;
   _seen.add(id);
-  const subs=(pool||scheduled).filter(c=>c.subtaskOf===id);
+  const subs=_TM().subtasksOf(id,pool||scheduled);
   if(!subs.length)return null;
   let done=0,total=0;
   subs.forEach(s=>{total++;if(isRowDone(s))done++;const sub=subtaskProgress(s.id,pool,doneFn,_seen);if(sub){total+=sub.total;done+=sub.done;}});
@@ -168,7 +175,7 @@ function shellRollup(id,pool){
     });
   })(id);
   const kids=childrenOf(id,pool);
-  return {points:Math.round(points),done:kids.filter(k=>isDone(k)).length,total:kids.length};
+  return {points:Math.round(points),done:_TM().selectDone(kids).length,total:kids.length};
 }
 
 // Capture a shell's subtree as a reusable, nesting-aware template — the saved
@@ -189,7 +196,7 @@ function captureShellTemplate(shellId,pool){
       out.edge=(relOf(ev)==="subtask")?"subtask":"wrap";
       out.durationMin=Math.max(1,dur(ev)||0)||30;
     }
-    const kids=(depth<20)?childrenOf(ev.id,pool).filter(c=>!seen.has(c.id)&&!isDeleted(c)):[];
+    const kids=(depth<20)?_TM().selectNotDeleted(childrenOf(ev.id,pool)).filter(c=>!seen.has(c.id)):[];
     out.children=kids.map(k=>node(k,depth+1,false));
     return out;
   }
@@ -208,7 +215,7 @@ function shellBonus(points,pct){
 // display-only until they finish (toggleDone enforces the same rule).
 function shellCompleteBlocked(ev){
   return !!(ev&&window.TaskTypes&&window.TaskTypes.rule(ev,"blockManualCompleteWithOpenChildren")&&
-    typeof scheduled!=="undefined"&&childrenOf(ev.id,scheduled).some(c=>!isDone(c)));
+    typeof scheduled!=="undefined"&&_TM().selectOpen(childrenOf(ev.id,scheduled)).length>0);
 }
 
 // Meta chip for a rollup container: children's points, progress, bonus preview.
@@ -244,30 +251,10 @@ function setCollapsedAll(ids,collapsed){
   try{localStorage.setItem("pa-collapsed-v1",JSON.stringify([...s]));}catch(e){}
 }
 
-// Recursive flatten of a task list into render order. Returns nodes
-// {ev, depth, rel, hasKids, collapsed}; descendants of a collapsed node are
-// omitted. Children render subtasks first (a task's own steps stay directly
-// under it), then ride-alongs (concurrent work in the wrap, by start).
-function flattenSchedule(items){
-  const byId=new Map(items.map(e=>[e.id,e]));
-  const out=[],seen=new Set();
-  function walk(ev,depth){
-    if(seen.has(ev.id)||depth>20)return; // cycle / runaway guard
-    seen.add(ev.id);
-    const kids=childrenOf(ev.id,items);
-    const hasKids=kids.length>0;
-    const collapsed=hasKids&&isCollapsed(ev.id);
-    out.push({ev,depth,rel:relOf(ev),hasKids,collapsed});
-    if(hasKids&&!collapsed){
-      const ride=kids.filter(k=>relOf(k)==="ride-along").sort((a,b)=>pt(a.start)-pt(b.start));
-      const subs=kids.filter(k=>relOf(k)==="subtask");
-      subs.concat(ride).forEach(k=>walk(k,depth+1));
-    }
-  }
-  // Roots = items whose parent isn't in this list (top-level or orphaned).
-  items.forEach(ev=>{const p=parentIdOf(ev);if(!p||!byId.has(p))walk(ev,0);});
-  return out;
-}
+// C6a: `flattenSchedule` MOVED to TaskModel.selectTree. It is gone, not wrapped —
+// the point of the move is that roots resolve against a POOL rather than the input
+// array, and a compatibility shim taking only `items` would have kept every caller
+// on the orphan-promoting behaviour while looking fixed. Call sites name their pool.
 function now(){return new Date().getHours()*60+new Date().getMinutes()}
 function isDone(ev){return manualDone.has(ev.id)}
 function isPast(ev){return!manualDone.has(ev.id)&&now()>=pt(ev.end)}
@@ -714,8 +701,9 @@ function _placeTaskAtNextTodaySlot(id){
 
   const activeIdx=scheduled.findIndex(isActive);
   const insertAt=activeIdx!==-1?activeIdx+1:(()=>{
-    const fi=scheduled.map((ev,i)=>({ev,i})).filter(({ev})=>!isDone(ev));
-    return fi.length?fi[0].i:scheduled.length;
+    const firstOpen=_TM().selectOpen(scheduled)[0];
+    const fi=firstOpen?scheduled.indexOf(firstOpen):-1;
+    return fi===-1?scheduled.length:fi;
   })();
   scheduled.splice(insertAt,0,moved);
   if(typeof recalcTimes==="function")recalcTimes();
@@ -796,8 +784,10 @@ async function _materializeTaskOnDate(ev,id,targetDate,fromDate,pinned,opts){
   const keptPins=keepVisible.map(e=>({id:e.id,pinnedStart:e._pinnedStart,locked:e._locked}));
   // Same optimistic cleanup the true move does. Without it the children whose rows were
   // just re-dated stay in `scheduled` on this day, and because their parent is now
-  // filtered out they render as top-level OPEN roots (flattenSchedule treats a row whose
-  // parent is absent as a root) AND keep counting toward the day's scheduled points.
+  // filtered out they would render as top-level OPEN roots AND keep counting toward the
+  // day's scheduled points. (C6a: TaskModel.selectTree now HIDES a child whose parent is
+  // in the pool but filtered from the input, so the promotion only happens when the
+  // parent is genuinely gone -- but this cleanup is still what stops the points count.)
   _removeSubtreeFromScheduled(id);
   for(const back of keepVisible)if(!scheduled.find(e=>e.id===back.id))scheduled.push(back);
   // Put back what the removal wiped off the rows that stayed.
@@ -858,7 +848,7 @@ async function _moveOriginDayChildrenTo(parentId,targetDate,fromDate,_seen){
   _seen=_seen||new Set();
   if(_seen.has(parentId))return out;
   _seen.add(parentId);
-  const kids=scheduled.filter(c=>parentIdOf(c)===parentId);
+  const kids=childrenOf(parentId,scheduled);
   for(const kid of kids){
     const kidBlock=_findTaskBlockForDate(kid.id,fromDate,kid);
     if(!kidBlock){

@@ -43,7 +43,7 @@
 
   function _pool() { return (typeof scheduled !== "undefined" && scheduled) ? scheduled : []; }
   function _findEv(id) { return _pool().find(e => e && e.id === id) || null; }
-  function _subsOf(parentId) { return _pool().filter(c => c && c.subtaskOf === parentId); }
+  function _subsOf(parentId) { return DCC.TaskModel.subtasksOf(parentId, _pool()); }
   function _isDone(id) {
     try { return typeof manualDone !== "undefined" && manualDone.has(id); } catch (e) { return false; }
   }

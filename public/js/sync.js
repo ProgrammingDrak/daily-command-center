@@ -401,7 +401,7 @@ function scheduleActionToday(taskId, idx){
   const item=actions[taskId][idx];
   if(item._scheduled)return;
   // Duplicate check: bail if a non-done task with the same title already exists
-  if(typeof scheduled!=="undefined"&&scheduled.some(s=>s.title===item.text&&!(typeof isDone==="function"?isDone(s):false))){
+  if(typeof scheduled!=="undefined"&&DCC.TaskModel.selectOpen(scheduled).some(s=>s.title===item.text)){
     if(typeof showToast==="function")showToast("Already in today's schedule","info");
     return;
   }

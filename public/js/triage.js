@@ -328,8 +328,14 @@ function openDoneModal(id, title, onConfirm, ev){
     const sel = document.getElementById("dm-parent-select");
     const triageParents = loadTriageParents();
     sel.innerHTML = '<option value="">No link \u2014 standalone item</option>' +
-      scheduled.filter(e => !isMeeting(e) && !isDone(e) && e.type !== "ooo").map(e =>
-        '<option value="' + e.id + '"' + (triageParents[id] === e.id ? ' selected' : '') + '>' + e.title + ' (' + f12(e.start) + ')</option>'
+      DCC.TaskModel.selectOpen(scheduled).filter(e => !isMeeting(e) && e.type !== "ooo").map(e =>
+        // DCC.esc, matching every other builder in this file. Titles here are not all
+        // owner-authored: data.js takes them from the server timeline (calendar summaries,
+        // Slack/Notion items, quick-task payloads, guest public-share submissions, which
+        // routes/social-todo.js only trims and truncates). Assigning innerHTML on a <select>
+        // drops <img>/<svg>, but an <option> start tag IS honoured there, so an unescaped
+        // title could inject a live inline handler, and e.id could break out of value="".
+        '<option value="' + DCC.esc(String(e.id)) + '"' + (triageParents[id] === e.id ? ' selected' : '') + '>' + DCC.esc(e.title || '') + ' (' + f12(e.start) + ')</option>'
       ).join('');
   } else {
     parentSection.style.display = "none";
@@ -977,7 +983,10 @@ function scheduleTriageItem(triageId){
     if(typeof showToast==="function")showToast("Already scheduled","info");
     return;
   }
-  const existing=scheduled.find(ev=>ev.triageId===triageId||(!isDone(ev)&&!isDeleted(ev)&&ev.source==="triage"&&ev.title===item.title));
+  // Two different questions, so two lookups: an exact id match, then "is an open, visible
+  // triage row already called this". The second half is the layer's question.
+  const existing=scheduled.find(ev=>ev.triageId===triageId)
+    ||DCC.TaskModel.selectActive(scheduled).find(ev=>ev.source==="triage"&&ev.title===item.title);
   if(existing){
     scheduledTriage[triageId]={taskId:existing.id,scheduled_at:new Date().toISOString(),title:item.title};
     saveTriageScheduled(scheduledTriage);
@@ -1132,7 +1141,7 @@ function buildScheduled() {
   const today = __state && __state.date ? __state.date : new Date().toISOString().split("T")[0];
   const todayLabel = new Date(today + "T12:00:00").toLocaleDateString("en-US", {weekday:"long", month:"short", day:"numeric"});
   const nowMins = now();
-  const activeAll = scheduled.filter(ev => !isDeleted(ev));
+  const activeAll = DCC.TaskModel.selectNotDeleted(scheduled);
   const active = (typeof taskBankMatches==="function")
     ? activeAll.filter(ev=>taskBankMatches(ev,["title","detail","priority","source","meta"]))
     : activeAll;
