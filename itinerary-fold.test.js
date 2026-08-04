@@ -66,6 +66,20 @@ test("dateless twin WITH a dated sibling is suppressed (the duplication bug)", (
   assert.equal(fold(block(null, { local_id: "qa-other", kind: "pending_task" })), true);
 });
 
+// KEPT IN C5b, though the phase brief said to invert it.
+//
+// C0 kept `status==="deleted"||status==="archived"` in the fold guard on the theory that
+// dropping them before A1's cleanup would resurface legacy tombstones. Measured on prod
+// 2026-08-04, across every workspace, live rows and tombstones alike: ZERO rows carry
+// either value, so dropping the guard changes nothing observable — and that cuts both ways,
+// because keeping it costs nothing either.
+//
+// What settled it is that FOUR other readers still honor the value, `TaskModel.selectUnscheduled`
+// among them (one-unscheduled-home.test.js pins that a dateless `status:"archived"` row is
+// NOT unscheduled). Dropping it here alone would have made this file and that one assert
+// opposite answers for the same row reaching the same surface: folded into the itinerary,
+// excluded from the Backlog the fold's own comment calls the same list. Retiring the
+// vocabulary is one change across all five readers, in A4 with the overlay.
 test("deleted and archived rows never fold", () => {
   const fold = makeFold(TODAY, new Set());
   assert.equal(fold(block(null, { local_id: "qa-4", kind: "pending_task", status: "deleted" })), false);

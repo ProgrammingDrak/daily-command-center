@@ -510,55 +510,61 @@ async function recordLoginEvent(req, { userId, username, workspaceId, eventType 
 
 function buildSkeletonState(dateStr) { return { date: dateStr, last_updated_at: new Date().toISOString(), last_updated_by: "skeleton", watermarks: {}, triage: { open_items: [], resolved_items: [], cycle_count: 0 }, sweep: { source_health: [], readers: [], open_item_count: 0, meetings_count: 0 }, glymphatic_brief: { history: [], current: null }, completions: { tasks: [] }, schedule: { working_hours: { start: "07:00", end: "17:30" }, timeline: [], tasks_scheduled: [], tasks_couldnt_fit: [], stats: {} } }; }
 
-// PHASE C5 STEP 4 IS NOT IN THIS CHANGE. The precedence flip that belongs here — read
-// Postgres first, treat the JSON day file as a cache — was written, reviewed three times,
-// and PULLED. Recording why, because the next attempt should start from this and not
-// rediscover it.
+// PHASE C5b STEP 4: Postgres wins, and this function no longer WRITES anything.
 //
-// The bug is real. The file wins whenever it carries a non-empty `schedule.timeline`, and
-// `getDayFilePath` is `data/state/days/<date>.json` with NO workspace segment, so on
-// Railway's ephemeral filesystem a file written by an earlier boot — or by a different
-// workspace — shadows the correct Postgres row for everybody.
+// The bug it fixes: the file used to win whenever it carried a non-empty
+// `schedule.timeline`, and `getDayFilePath` is `data/state/days/<date>.json` with NO
+// workspace segment, so on Railway's ephemeral filesystem a file written by an earlier
+// boot — or by a different workspace — shadowed the correct Postgres row for everybody.
 //
-// But this function cannot be fixed alone, and three review rounds kept finding data loss
-// in the attempts:
+// C5a built this, had it rejected by review three times, and PULLED it, because the
+// function cannot be fixed alone. All four blockers are resolved here rather than worked
+// around, and each one is why a line below looks the way it does:
 //
-//   1. Making the DB win means deciding what a successful read with NO ROW means. It
-//      cannot mean "empty": `routes/social-todo.js appendPublicShareTriageItem` is a
-//      FILE-ONLY writer (readJSON, push a guest's submitted task, writeJSON, no
-//      saveDccState), so the file is the only copy of those items.
-//   2. Any write from this function is write amplification on a shared path reached
-//      ANONYMOUSLY (`buildPublicTodoShare` calls it as
-//      `buildDayResponse(date, null, share.workspace_id)`).
-//   3. But REMOVING the DB-to-file write breaks something worse: six handlers in
-//      routes/dcc.js read this file as their BASE state and then full-replace the
-//      Postgres row (`saveDccState` is `DO UPDATE SET state_json = EXCLUDED.state_json`).
-//      With no rehydration, the skeleton `ensureSkeletonDays` writes at boot becomes the
-//      base, and the next Brief refresh persists it over the real day.
-//   4. And swallowing a failed read into the same branch as an empty one lets an outage
-//      mint a skeleton, serve it as a real empty day, and persist it.
+//   1. "A successful read with NO ROW cannot mean empty", because
+//      `routes/social-todo.js appendPublicShareTriageItem` was a FILE-ONLY writer holding
+//      the sole copy of guest-submitted tasks. FIXED AT THE WRITER, in this same change:
+//      it now saves to Postgres as well. That was a live data-loss bug on its own — the
+//      only copy of a guest's task lived on an ephemeral filesystem and did not survive a
+//      redeploy (0 such items have ever reached the DB on prod, which is the evidence).
+//      A no-row read can now honestly mean "no day".
+//   2. "Any write from here is amplification on a path reached ANONYMOUSLY"
+//      (`buildPublicTodoShare` calls it as `buildDayResponse(date, null,
+//      share.workspace_id)`). FIXED BY NOT WRITING. A read builds a response; that is all.
+//      It also closes a cross-tenant leak: a guest hitting workspace A's share for date X
+//      wrote A's state into the shared unscoped file, which workspace B then read.
+//   3. "REMOVING the DB-to-file write is worse, because six handlers in routes/dcc.js read
+//      this file as BASE state and then full-replace the Postgres row" — so with no
+//      rehydration the boot skeleton gets promoted over the real day. FIXED IN THOSE SIX
+//      HANDLERS, in this same change: `readDccDayState` reads Postgres first. That was the
+//      crux, and it is why this could never be one file's diff.
+//   4. "A failed read collapsed into the same branch as an empty one lets an outage mint a
+//      skeleton, serve it as a real day, and persist it." FIXED BY THROWING: an outage with
+//      no file to fall back on is an error, not an empty Tuesday. Both `/api/state/day` and
+//      `/api/state/tomorrow` already catch and serve the file mirror.
 //
-// (3) is the crux: the fix has to change how routes/dcc.js READS, not just how this
-// function does. That is Track A's file and six hunks, so it belongs in one deliberate
-// change with them — Phase C5b — rather than bolted onto a ledger PR.
-//
-// What DID ship from step 4 is the security half, which is independent: getDayFilePath
-// now validates its date (the traversal hole predates this change), and the two callers
-// that could reach it unvalidated are guarded.
+// STILL OPEN, and it is Track A's (A4) to close: `getDayFilePath` has no workspace segment,
+// so the FALLBACK path is still shared across tenants. Latent today — only ws-1 has any
+// `dcc_state` row on prod — but ws-3 exists in `blocks`, and a workspace with no row for a
+// date reads whatever the last workspace left in that file. The fix is a file layout change,
+// which is not this phase's to make.
 async function buildDayResponse(dateStr, userId, workspaceId) {
-  const dayFile = getDayFilePath(dateStr);
-  let enrichment = readJSON(dayFile, null);
-  const isSkeleton = !enrichment || !enrichment.schedule || !enrichment.schedule.timeline || enrichment.schedule.timeline.length === 0;
-  if (isSkeleton) {
-    const dccRow = await blockDB.getDccState(dateStr, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
-    if (dccRow && dccRow.state_json) {
-      enrichment = dccRow.state_json;
-      writeJSON(dayFile, enrichment);
-    } else if (!enrichment) {
-      enrichment = buildSkeletonState(dateStr);
-      writeJSON(dayFile, enrichment);
-    }
+  const ws = workspaceId || (userId ? `ws-${userId}` : "ws-1");
+  let enrichment = null;
+  let dbFailed = false;
+  try {
+    const dccRow = await blockDB.getDccState(dateStr, ws);
+    if (dccRow && dccRow.state_json) enrichment = dccRow.state_json;
+  } catch (e) {
+    dbFailed = true;
+    console.error(`[day-response] Postgres read failed for ${dateStr} (${ws}):`, e.message);
   }
+  if (!enrichment) enrichment = readJSON(getDayFilePath(dateStr), null);
+  // The outage branch, kept separate from the empty-day branch on purpose (blocker 4). A
+  // skeleton served here would be indistinguishable from a real empty day to every caller.
+  if (!enrichment && dbFailed) throw new Error(`Day state unavailable for ${dateStr}: Postgres read failed and no file mirror exists`);
+  // A genuinely absent day. Built, served, and NOT written (blocker 2).
+  if (!enrichment) enrichment = buildSkeletonState(dateStr);
   const result = { ...enrichment, date: dateStr };
   if (!result.schedule) result.schedule = { timeline: [] };
   if (!Array.isArray(result.schedule.timeline)) result.schedule.timeline = [];
@@ -624,6 +630,42 @@ function ensureSkeletonDays() {
 }
 
 // ── State Endpoints ──
+// The degraded answer for a day whose state could not be read, and it answers for the day
+// that was ASKED FOR. Found by curl, not by the suite (C5b): `buildDayResponse` now THROWS
+// when Postgres is down and no file mirror exists, instead of minting and persisting a
+// skeleton — and these two catches used to fall through to `DAY_STATE_FILE` /
+// `TOMORROW_STATE_FILE`, which hold whatever day was last published. So asking for
+// 2027-03-09 during an outage answered with 2026-06-03's state, stamped with 2026-06-03. A
+// client cannot defend against that: `data.js transformState` reads `state.date`, sees a past
+// date, treats the timeline as archive and renders that unrelated day's items under the
+// heading you were looking at.
+//
+// So the per-date file is still tried, and after that it is an EMPTY day for the right date,
+// carrying `_unavailable` so a surface can say "couldn't load" rather than "nothing planned".
+// Never written: an unpersisted skeleton cannot become the base state a later full-replace
+// promotes over the real day, which is the whole reason blocker 4 existed.
+// The file-mirror ladder, in ONE place. `routes/dcc.js readDccDayState` needs exactly this
+// and had a hand-copy of it, which had already drifted in a way that mattered: this version
+// stamps the requested date onto the per-date file result and that one returned the file's
+// own `date`, so a mirror with a stale `date` field fed a full-replace `saveDccState` under
+// the wrong day there and was normalized here. Shared through ctx like the other day-state
+// primitives (`getDayFilePath`, `readJSON`, `buildSkeletonState`).
+//
+// Returns null when nothing on disk is about this date. `legacyFile` is a "last published
+// day" file (`DAY_STATE_FILE` / `TOMORROW_STATE_FILE`) with no workspace segment and no date
+// guarantee, so its own `date` is the only thing that makes it relevant.
+function readDayStateMirror(dateStr, legacyFile) {
+  const own = readJSON(getDayFilePath(dateStr), null);
+  if (own) return { ...own, date: dateStr };
+  const legacy = readJSON(legacyFile, null);
+  return (legacy && legacy.date === dateStr) ? legacy : null;
+}
+
+function dayStateUnavailable(dateStr, legacyFile, err) {
+  console.error(`[day-response] serving a degraded day for ${dateStr}:`, err && err.message);
+  return readDayStateMirror(dateStr, legacyFile) || { ...buildSkeletonState(dateStr), _unavailable: true };
+}
+
 app.get("/api/state/day", async (req, res) => {
   const dateStr = req.query.date || getTodayStr();
   // Reject a malformed date as a 400 here, so getDayFilePath's throw cannot land in the
@@ -638,12 +680,12 @@ app.get("/api/state/day", async (req, res) => {
   // res.status(400).json() and worked, so the suite stayed green while this one hung.
   if (!isValidDate(dateStr)) return res.status(400).json({ error: "Invalid date" });
   try { res.json(await buildDayResponse(dateStr, req.session.userId, req.workspaceId)); }
-  catch (e) { res.json(readJSON(getDayFilePath(dateStr), readJSON(DAY_STATE_FILE, null))); }
+  catch (e) { res.json(dayStateUnavailable(dateStr, DAY_STATE_FILE, e)); }
 });
 app.get("/api/state/tomorrow", async (req, res) => {
   const dateStr = addDays(getTodayStr(), 1);
   try { res.json(await buildDayResponse(dateStr, req.session.userId, req.workspaceId)); }
-  catch (e) { res.json(readJSON(getDayFilePath(dateStr), readJSON(TOMORROW_STATE_FILE, null))); }
+  catch (e) { res.json(dayStateUnavailable(dateStr, TOMORROW_STATE_FILE, e)); }
 });
 app.get("/api/state/upcoming", (req, res) => { res.json(readJSON(UPCOMING_FILE, [])); });
 app.get("/api/state/archives", async (req, res) => {
@@ -830,7 +872,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
-  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
+  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readDayStateMirror, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
   ...routeHelpers,

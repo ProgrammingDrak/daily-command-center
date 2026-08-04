@@ -128,12 +128,54 @@ function triageActionLabel(item, link){
   if(value.startsWith("file:"))return "Open file";
   return value ? "Open source" : "";
 }
+// ONE local "today", because data.js loads BEFORE state.js (see task-model.js's load-order
+// note), so `_actualTodayStr` does not exist yet at module-evaluation time — and
+// transformState runs at module evaluation, building INIT_SCHED.
+function _dataTodayStr() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+// ── C5b: the timeline is an ARCHIVE source now, not a live one ──
+//
+// `schedule.timeline` was the itinerary's original home, and it is the second of the two
+// homes this project exists to collapse. For a current day it is worse than redundant, it
+// WINS: the fold skips any row whose id is already in `scheduled`
+// (`persistence.js`: `if(!taskId||scheduled.find(e=>e.id===taskId))return`), so a task with
+// both a timeline item and a row rendered from the timeline copy — no `_blockId`, so no
+// row-properties write could resolve it, and whatever times the publisher last stamped.
+//
+// Measured on prod 2026-08-04 before flipping this, across all 61 `dcc_state` rows:
+// **0 timeline items on any date >= today**, and the newest non-empty timeline anywhere is
+// 2026-05-27. The plan called for a one-time materializer to carry today/future timeline
+// items into rows; there is nothing to carry, so building one would mean shipping an
+// untested write path over a source that has been dead for two months — precisely how you
+// manufacture the duplicates the plan warned about. The demotion is the whole change.
+//
+// Archive days still read it: those 83 items are the only record of those days, and
+// materializing 90 days of archive is the duplicate factory the plan explicitly forbids.
+// Anything dropped is COUNTED and logged, so this can never quietly hide live work.
 function transformState(state) {
   if (!state) return { sched: [], consider: [], bklog: [], triageItems: [], notifications: [] };
   const sched = [], consider = [], bklog = [], triageItems = [], notifications = [];
+  // Polarity is deliberate: only a day whose date is KNOWN, WELL FORMED and today-or-later
+  // demotes its timeline. An absent or malformed `state.date` reads as archive and still
+  // renders, because dropping the only record of a day you cannot classify is the worse
+  // failure. (`buildDayResponse` always stamps `date`, so this is a guard, not a live path.)
+  //
+  // The shape test is not decoration: these are string comparisons, and every letter sorts
+  // ABOVE every digit, so a junk date like "not-a-date" compares as later than any real one
+  // and would have been demoted as "the future" — silently blanking exactly the
+  // unclassifiable day this branch exists to protect.
+  const _dateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(state.date || "")) ? String(state.date) : null;
+  const timelineIsArchive = !(_dateStr && _dateStr >= _dataTodayStr());
+  if (!timelineIsArchive && state.schedule && Array.isArray(state.schedule.timeline) && state.schedule.timeline.length) {
+    console.warn("[data] " + state.schedule.timeline.length + " timeline item(s) on " +
+      (state.date || "an undated day") + " ignored — the block rows are the itinerary for today and future days (C5b)");
+  }
 
   // Timeline -> INIT_SCHED
-  if (state.schedule && state.schedule.timeline) {
+  if (timelineIsArchive && state.schedule && state.schedule.timeline) {
     state.schedule.timeline.filter(item => !isRetiredCalendarStateItem(item)).forEach(item => {
       const typeMap = {meeting:"meeting", task:"task", prep:"task", time_block:"triage",
         focus_time:"focus", free_time:"break", ooo:"ooo"};

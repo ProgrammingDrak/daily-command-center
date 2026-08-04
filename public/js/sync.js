@@ -133,6 +133,27 @@ function saveDismissed(data) {
   localStorage.setItem(DISMISS_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
+// C5b: `saveDoneState` IS GONE. Completion is written to the task ROW
+// (`properties.status`), not to this day's `_done` overlay — see `_persistDone` in
+// schedule.js, which is the one writer now.
+//
+// What it did and why it had to go: it rewrote `_done` WHOLESALE from the in-memory
+// `manualDone` set on every check-off, so any window where `manualDone` was narrower
+// than what was persisted silently un-completed the difference — permanently, because
+// `collectUnfinished` then put every one of them back on today. A read-merge-union
+// would have been the wrong fix (it makes un-checking impossible). Writing the fact to
+// the row it belongs to is the right one: a completion travels with the task across
+// days instead of being a per-day fact about an id.
+//
+// `DONE_KEY` and `loadDoneState` SURVIVE, deliberately, as READS only. `_done` is now
+// legacy data that nothing adds to, in exactly the shape C3 left legacy `_pushed` in:
+// still load-bearing for pre-migration days. Measured on prod 2026-08-04 before
+// deciding (the counts are in phase-C5b-complete.md): of the 401 overlay entries, 23
+// are still the ONLY representation of a real completion — 12 whose local_id is shared
+// by 2+ rows, so migration 002's resolver refused to guess and left every candidate
+// row reading `status:'open'`, and 11 that render from `schedule.timeline` on an
+// archive day with no row at all. Dropping the read flips those 23 finished tasks back
+// to open on Drake's real days. A4 removes the keys; this phase removes the WRITES.
 let DONE_KEY = "pa-done-" + (__state ? __state.date : "unknown");
 function loadDoneState() {
   if (window.USE_BLOCKSTORE && window.blockStore) {
@@ -140,18 +161,6 @@ function loadDoneState() {
     if (v) return { ids: v.ids || [], at: v.at || {} };
   }
   try { const d = JSON.parse(localStorage.getItem(DONE_KEY) || "{}"); return { ids: d.ids || [], at: d.at || {} }; } catch(e) { return { ids: [], at: {} }; }
-}
-function saveDoneState() {
-  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.done && window.blockStore) {
-    const dayRoot = window.blockStore.getDayRootId();
-    const root = window.blockStore.get(dayRoot);
-    if (root) {
-      const props = { ...root.properties, _done: { ids: [...manualDone], at: doneAt } };
-      window.blockStore.updateBlock(dayRoot, props);
-    }
-    return;
-  }
-  localStorage.setItem(DONE_KEY, JSON.stringify({ ids: [...manualDone], at: doneAt })); scheduleIDBSave();
 }
 
 let SESSIONS_KEY = "pa-sessions-" + (__state ? __state.date : "unknown");

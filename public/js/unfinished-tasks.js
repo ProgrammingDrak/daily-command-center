@@ -263,9 +263,20 @@
 
   // Complete on the ORIGIN day, subtree included. The old handler completed only
   // the parent, so a carryover parent's children stayed unfinished forever and the
-  // lane re-offered them the next day. Sequential await is deliberate:
-  // commitDoneOnDate re-reads and patches the same day_root._done overlay each
-  // call, so parallel writes would clobber each other.
+  // lane re-offered them the next day.
+  //
+  // This loop OWNS the walk, so it passes `cascade:false` (C5b). commitDoneOnDate got its
+  // own subtree cascade in C5b, and the two walks multiply: the parent's call would write
+  // the whole subtree, then each child's call would re-fetch the same day and write its own
+  // subtree again (a 6-node chain: 6 queued writes becomes 21, all serialized behind one
+  // global chain, each PATCH preceded by a row GET because origin-day rows are not in
+  // `_dayCache`). Keeping the loop rather than deferring to the cascade is deliberate: each
+  // call credits its own node, so folding them together would change what a carryover
+  // completion pays. Children can also sit on a different day than their parent, which one
+  // date-scoped walk cannot see.
+  //
+  // Sequential await is no longer about clobbering -- per-row writes go through
+  // `enqueueRowPropsWrite`, which serializes them -- but it keeps the ledger calls ordered.
   async function complete(ev, pool) {
     const u = originOf(ev);
     const kids = descendants(ev, pool);
@@ -273,7 +284,7 @@
     for (const t of [ev].concat(kids)) {
       const tu = originOf(t);
       const date = tu.sourceDate || u.sourceDate;
-      try { if (typeof commitDoneOnDate === "function") await commitDoneOnDate(writeId(t) || t.id, date); } catch (e) {}
+      try { if (typeof commitDoneOnDate === "function") await commitDoneOnDate(writeId(t) || t.id, date, { cascade: false }); } catch (e) {}
       removed.push(t.id);
     }
     if (window.blockStore && typeof window.blockStore.invalidateRangeCache === "function") window.blockStore.invalidateRangeCache(u.sourceDate);

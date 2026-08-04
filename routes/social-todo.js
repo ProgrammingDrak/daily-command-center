@@ -426,10 +426,50 @@ function normalizePublicTask(input, doneIds, calendarsById = new Map(), opts = {
 async function buildPublicTodoShare(share, dateStr, req) {
   const date = isValidDate(dateStr) ? dateStr : getTodayStr();
   const state = await buildDayResponse(date, null, share.workspace_id);
-  const blocks = filterLegacyGcalBlocks(await blockDB.getBlocksByDate(date, share.workspace_id));
+  // ONE day read, split locally. `getBlocksByDateIncludingDeleted` is a strict superset of
+  // `getBlocksByDate` (same table, same date, same order; only the `deleted_at IS NULL`
+  // predicate differs), and this handler is genuinely hot: public-todo-share.js polls
+  // `GET /api/public/todo-share/:token` every 15s per open viewer, on a day that can hold
+  // ~2000 blocks, against a pool capped at 10. Two full-day scans per poll for a superset
+  // relationship is pure waste.
+  //
+  // A failed tombstone read degrades to the live-only read rather than throwing: "cannot
+  // tell" must not publish a deleted task, so the hide set falls back to overlay-only and
+  // says so. `filterLegacyGcalBlocks` is a pure filter, so applying it before the split is
+  // identical for `blocks` and additionally keeps legacy gcal tombstones out of `hiddenIds`.
+  // FAILS CLOSED, and round 1 of review got this backwards too. Its first cut degraded to an
+  // overlay-only hide set on a failed tombstone read, which IS fail-OPEN: with `tombstoned`
+  // empty no `deleted_at` alias reaches `hiddenIds`, so the timeline twin of a task the owner
+  // deleted is published again to whoever holds the link, and only pre-B1 `_deleted` entries
+  // still hide anything. Nor does the failure cancel itself out — the tombstone-inclusive scan
+  // is the LARGER of the two queries on a ~2000-block day, so a statement timeout or pool
+  // exhaustion hits it while the narrower live query would have succeeded, which is precisely
+  // the state that tripped the branch. The caller answers a generic 500 and the viewer
+  // re-polls in 15s, so refusing to publish is cheap and correct.
+  let allRows;
+  try {
+    allRows = await blockDB.getBlocksByDateIncludingDeleted(date, share.workspace_id);
+  } catch (e) {
+    console.error("[public-share] tombstone read failed for " + date + ", refusing to publish:", e.message);
+    throw e;
+  }
+  const dayRows = filterLegacyGcalBlocks(allRows);
+  const blocks = dayRows.filter(b => b && !b.deleted_at);
+  const tombstoned = dayRows.filter(b => b && b.deleted_at);
   const root = blocks.find(b => b.type === "day_root");
   const rootProps = root && root.properties ? root.properties : {};
   const rootDone = rootProps._done || {};
+  // ── C5b: the ROW is the source, the overlays are a legacy union ──
+  //
+  // This read had to change in the SAME phase that moved completion onto the row, or the
+  // share regressed immediately: a task Drake finished today writes `properties.status`
+  // and never touches `_done`, so an overlay-only `doneIds` would have published every
+  // one of his completed tasks as `open` (or `overdue`, once its end time passed).
+  //
+  // The overlay reads stay UNIONED rather than replaced, for the same measured reason
+  // public/js/persistence.js keeps them: 23 of the 401 `_done` entries on prod are still
+  // the only representation of a real completion, and dropping them would publish 23
+  // finished tasks as open on archive-day shares.
   const doneIds = new Set([
     ...((rootDone.ids || []).map(String)),
     ...Object.keys(rootDone.at || {}).map(String)
@@ -443,9 +483,9 @@ async function buildPublicTodoShare(share, dateStr, req) {
     // as public/js/persistence.js reloadPersistedEdits.
     ...(((rootProps._pushed && rootProps._pushed.ids) || [])).map(String)
   ]);
-  for (const block of blocks) {
+  const aliasesOf = (block) => {
     const p = block.properties || {};
-    const aliases = publicTaskIdentityIds({
+    return publicTaskIdentityIds({
       id: p.local_id || block.id,
       local_id: p.local_id,
       blockId: block.id,
@@ -454,6 +494,19 @@ async function buildPublicTodoShare(share, dateStr, req) {
       sourceId: p.sourceId,
       gcal_event_id: p.gcal_event_id
     });
+  };
+  // TOMBSTONES (split out of the single day read above). `getBlocksByDate` filters
+  // `deleted_at IS NULL`, so a deleted row is simply absent from `blocks` — which is right
+  // for the row itself and wrong for its TIMELINE twin, which keeps rendering off
+  // `state.schedule.timeline` under the same id. `_deleted` used to hide it; B1/C3 moved
+  // deletion to the `deleted_at` column, so nothing has hidden it since. This is the
+  // "public share keeps showing tasks Drake deleted" half of the phase.
+  for (const block of tombstoned) aliasesOf(block).forEach(id => hiddenIds.add(id));
+  for (const block of blocks) {
+    const p = block.properties || {};
+    const aliases = aliasesOf(block);
+    // Row-carried completion, the canonical one as of C5b.
+    if (p.status === "done" || p.done === true || p.completedAt) aliases.forEach(id => doneIds.add(id));
     if (aliases.some(id => doneIds.has(id))) aliases.forEach(id => doneIds.add(id));
     if (aliases.some(id => hiddenIds.has(id))) aliases.forEach(id => hiddenIds.add(id));
   }
@@ -686,7 +739,22 @@ async function buildPublicTodoShare(share, dateStr, req) {
   };
 }
 
-function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req }) {
+// C5b: this used to be the repo's only FILE-ONLY state writer, and that was a live
+// data-loss bug, not just an obstacle to step 4. A guest's submitted task was written to
+// `data/state/days/<date>.json` and nowhere else; Railway's filesystem is ephemeral, so the
+// only copy did not survive a redeploy. Evidence: ZERO items with `source:"public_share"`
+// have ever reached `dcc_state` on prod.
+//
+// It also made `server.js buildDayResponse` unfixable — a Postgres-first read could not
+// treat "no row" as "no day" while the file held state nothing else had. Postgres is the
+// durable store now and the file stays as the mirror, which is the same contract
+// `persistDccDay` and the day-state ingest already follow.
+//
+// The DB is read as the BASE (not the file) for the identical reason the six readers in
+// routes/dcc.js were repointed: `saveDccState` is `DO UPDATE SET state_json =
+// EXCLUDED.state_json`, so basing the write on a stale file would full-replace the real day
+// with it. Async because of that read; the single caller awaits.
+async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req }) {
   const now = new Date().toISOString();
   const localId = "public-" + crypto.randomUUID();
   const item = {
@@ -716,17 +784,77 @@ function appendPublicShareTriageItem({ share, date, title, durationMinutes, visi
   };
 
   const dayFile = getDayFilePath(date);
-  const state = readJSON(dayFile, null) || buildSkeletonState(date);
+  // ── This is an UNAUTHENTICATED writer, and `saveDccState` is a FULL REPLACE ──
+  //
+  // `ON CONFLICT (date, workspace_id) DO UPDATE SET state_json = EXCLUDED.state_json`
+  // (db.js) replaces the entire day. So whatever this function picks as its base becomes
+  // the day, and a guest holding a share token picks the DATE. That makes the two "just
+  // guess a base" fallbacks the earlier cut had into real data loss:
+  //
+  //   - A FAILED read followed by a successful write replaced the workspace's real day
+  //     (timeline, triage history, glymphatic brief) with the file mirror, or with a bare
+  //     skeleton when no file existed. On Railway's ephemeral filesystem "no file" IS the
+  //     normal post-deploy state, so the realistic outcome was losing the whole row.
+  //   - `getDayFilePath` has no workspace segment and `persistDccDay` writes that mirror
+  //     for EVERY workspace, so seeding from it when this workspace has no row created
+  //     this workspace's row holding ANOTHER tenant's day. And because `buildDayResponse`
+  //     is Postgres-first now, that content would then be served authoritatively and
+  //     published on this share, turning a transient cross-tenant read into a permanent one.
+  //
+  // So it fails closed, for exactly the reason `buildDayResponse` blocker 4 does: an outage
+  // is an error, not an empty Tuesday. A read we could not complete is never a base to
+  // write from, and a no-row read means "no day for THIS workspace" -- never the shared file.
+  let row = null;
+  try {
+    row = await blockDB.getDccState(date, share.workspace_id);
+  } catch (e) {
+    console.error("[public-todo] day-state read failed for " + date + ":", e.message);
+    const err = new Error("Day state is temporarily unavailable; the task was not saved");
+    err.statusCode = 503;
+    throw err;
+  }
+  const state = (row && row.state_json) ? row.state_json : buildSkeletonState(date);
   if (!state.triage) state.triage = { open_items: [], resolved_items: [], cycle_count: 0 };
   if (!Array.isArray(state.triage.open_items)) state.triage.open_items = [];
   if (!Array.isArray(state.triage.resolved_items)) state.triage.resolved_items = [];
+  // A cap, because this is now a DURABLE unauthenticated append into one JSONB blob and
+  // there is no rate limiting anywhere in this app. Unbounded, a share token is enough to
+  // grow one row until reads of it get expensive, which degrades the owner's own
+  // /api/state/day. Before this change the same abuse only cost an ephemeral file.
+  const PUBLIC_ITEM_CAP = 50;
+  if (state.triage.open_items.filter(i => i && i.source === "public_share").length >= PUBLIC_ITEM_CAP) {
+    const err = new Error("This list has reached its limit of guest-submitted tasks for the day");
+    err.statusCode = 429;
+    throw err;
+  }
   state.triage.open_items.push(item);
   if (state.sweep) state.sweep.open_item_count = state.triage.open_items.length;
   state.last_updated_at = now;
   state.last_updated_by = "public-todo-triage";
-  writeJSON(dayFile, state);
-  updateManifest(date);
-  if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, state);
+  // Postgres FIRST and it must succeed. The whole point is that the guest's task is durable;
+  // reporting success after only a file write is what lost them. The file mirror is
+  // best-effort after, matching persistDccDay's contract.
+  //
+  // `user_id` PRESERVES what the row had. The upsert also does `user_id = EXCLUDED.user_id`,
+  // so passing null erased the owner's id -- and server.js's boot backfill is
+  // `UPDATE dcc_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL`, run
+  // unconditionally on EVERY restart. A nulled row for workspace A therefore had its
+  // workspace_id rewritten to the default workspace on the next deploy, moving A's day out
+  // of A entirely; or it collided with the default workspace's own row for that date
+  // (PRIMARY KEY (date, workspace_id)), aborting the UPDATE into a catch that then skips
+  // ensureWorkspacesForAllUsers for that boot. Deploys are restarts, so a single guest
+  // submission armed it.
+  await blockDB.saveDccState(date, state, (row && row.user_id) || share.owner_id || null, share.workspace_id);
+  // NO FILE MIRROR FROM THE ANONYMOUS PATH. `buildDayResponse`'s blocker 2 claims the
+  // cross-tenant leak is closed "BY NOT WRITING" — and this writer, reached by the same
+  // anonymous POST, was still writing a workspace's COMPLETE day (timeline, triage history,
+  // glymphatic brief) into `data/state/days/<date>.json` and, for today, the global
+  // `DAY_STATE_FILE`. Those are the two files `readDccDayState` and `dayStateUnavailable`
+  // read on behalf of OTHER workspaces, so the leak was closed on the read side and left open
+  // on the write side, in one change.
+  //
+  // Nothing needs the mirror here any more: Postgres is the durable store as of this phase
+  // and `buildDayResponse` prefers the row, so dropping it costs nothing.
   return item;
 }
 
@@ -1159,7 +1287,20 @@ app.get("/api/public/todo-share/:token", async (req, res) => {
     if (!share) return res.status(404).json({ error: "Shared todo list is unavailable" });
     await pool.query("UPDATE todo_shares SET last_viewed_at = NOW() WHERE id = $1", [share.id]);
     res.json(await buildPublicTodoShare(share, req.query.date, req));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    // Same convention as the sibling POST below, and C5b is what gave this route a real
+    // failure path: `buildPublicTodoShare` calls `buildDayResponse`, which now THROWS on an
+    // unreadable day where it used to return a skeleton. This endpoint is ANONYMOUS and
+    // polled every 15s, so a DB blip would otherwise hand a guest
+    // "Day state unavailable for <date>: Postgres read failed and no file mirror exists".
+    //
+    // Failing closed here while the owner's own /api/state/day degrades to an empty day is
+    // deliberate, not an accident of which caller was edited: a published list showing
+    // nothing is indistinguishable from a list with nothing on it, and this one has an
+    // audience.
+    console.error("[public-todo] share read failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not load this list right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
@@ -1173,8 +1314,21 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     const visitorName = String(body.visitorName || body.visitor_name || "").trim().slice(0, 80);
     const visitorEmail = String(body.visitorEmail || body.visitor_email || "").trim().slice(0, 180);
     const note = String(body.note || "").trim().slice(0, 1000);
-    const date = isValidDate(body.date) ? body.date : getTodayStr();
-    const triageItem = appendPublicShareTriageItem({
+    // CLAMPED to today or tomorrow. The 50-item cap is per (date, workspace) and the guest
+    // chose the date, so without this it bounded nothing: a script walks dates, 50 items each,
+    // minting a `dcc_state` row per date across every date Postgres accepts. `isValidDate` is
+    // only a shape check (`/^\d{4}-\d{2}-\d{2}$/`, no range). Costs nothing to close — the real
+    // client never sends `date` at all (public-todo-share.js posts name, email, title,
+    // durationMinutes, note), so an arbitrary one is a stale client or an attempt to spread
+    // past the cap.
+    const todayStr = getTodayStr();
+    const tomorrowStr = new Date(new Date(`${todayStr}T12:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
+    const requestedDate = isValidDate(body.date) ? body.date : todayStr;
+    const date = (requestedDate === todayStr || requestedDate === tomorrowStr) ? requestedDate : todayStr;
+    // AWAITED as of C5b: the writer persists to Postgres now, and its DB save throws on
+    // failure. Without the await this handler would answer 201 for a task that never landed,
+    // and the enclosing catch (which turns it into a 500) would never see the rejection.
+    const triageItem = await appendPublicShareTriageItem({
       share,
       date,
       title,
@@ -1187,7 +1341,20 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     broadcast("dcc-state-changed", { source: "public-todo-triage", date }, share.workspace_id);
     broadcast("todo-share-changed", { action: "public-triage-create", id: triageItem.id }, share.workspace_id);
     res.status(201).json({ triageItem });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    // C5b: the writer reaches Postgres now, so a `saveDccState` rejection lands here — and
+    // this endpoint is ANONYMOUS. Raw Postgres error text carries table, column and
+    // constraint names. Log the detail, return it only for the statuses this code raises
+    // deliberately (503 unavailable, 429 guest cap), whose messages are written for a guest.
+    console.error("[public-todo] guest task create failed:", e);
+    // 500 by default, not 400. Every genuine validation failure in this handler is an early
+    // `return res.status(400)`, so what reaches this catch is either a status this code set
+    // deliberately (503 unavailable, 429 cap) or something unexpected — and telling a guest
+    // "bad request" when Postgres is down is a lie that sends them to re-edit a fine task.
+    // Found by probing with the DB stopped: `findTodoShareByToken` throws before the writer is
+    // even reached, so an outage surfaced here as a 400.
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not save that task right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
@@ -1315,7 +1482,19 @@ app.post("/api/public/todo-share/:token/sponsorships", async (req, res) => {
     }
     broadcast("todo-share-changed", { action: "sponsorship-create", id: sponsorship.id }, share.workspace_id);
     res.status(201).json({ ...sponsorship, reward, bounty });
-  } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+  } catch (e) {
+    // ANONYMOUS endpoint, same convention as the share GET and the guest task POST. C5b is what
+    // made this reachable: `buildPublicTodoShare` now THROWS on a failed tombstone read and
+    // `buildDayResponse` throws on an unreadable day, so a pool timeout or schema error inside
+    // them was echoed verbatim here — and `public-todo-share.js` does `alert(e.message)`, so a
+    // link holder got a browser alert full of table and constraint names. Hardening the
+    // function without hardening all four of its callers is what left this open.
+    //
+    // 500, not 400: telling a guest their request was malformed when the server is down means
+    // nothing retries. Deliberate statuses (503/429) keep their own guest-written text.
+    console.error("[public-todo] sponsorship failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not record that right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/reactions", async (req, res) => {
@@ -1384,7 +1563,19 @@ app.post("/api/public/todo-share/:token/reactions", async (req, res) => {
     countRows.forEach(row => { counts[row.emoji] = row.count; });
     broadcast("todo-share-changed", { action: "reaction", taskId, taskDate, emoji, active }, share.workspace_id);
     res.json({ counts, viewerReactions: viewerRows.map(row => row.emoji), active });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    // ANONYMOUS endpoint, same convention as the share GET and the guest task POST. C5b is what
+    // made this reachable: `buildPublicTodoShare` now THROWS on a failed tombstone read and
+    // `buildDayResponse` throws on an unreadable day, so a pool timeout or schema error inside
+    // them was echoed verbatim here — and `public-todo-share.js` does `alert(e.message)`, so a
+    // link holder got a browser alert full of table and constraint names. Hardening the
+    // function without hardening all four of its callers is what left this open.
+    //
+    // 500, not 400: telling a guest their request was malformed when the server is down means
+    // nothing retries. Deliberate statuses (503/429) keep their own guest-written text.
+    console.error("[public-todo] reaction failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not save that reaction right now" });
+  }
 });
 
 app.post("/api/public/todo-share/:token/comments", async (req, res) => {
@@ -1446,7 +1637,19 @@ app.post("/api/public/todo-share/:token/comments", async (req, res) => {
     }));
     broadcast("todo-share-changed", { action: "comment", taskId, taskDate }, share.workspace_id);
     res.status(201).json({ comment: comments[comments.length - 1], comments });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    // ANONYMOUS endpoint, same convention as the share GET and the guest task POST. C5b is what
+    // made this reachable: `buildPublicTodoShare` now THROWS on a failed tombstone read and
+    // `buildDayResponse` throws on an unreadable day, so a pool timeout or schema error inside
+    // them was echoed verbatim here — and `public-todo-share.js` does `alert(e.message)`, so a
+    // link holder got a browser alert full of table and constraint names. Hardening the
+    // function without hardening all four of its callers is what left this open.
+    //
+    // 500, not 400: telling a guest their request was malformed when the server is down means
+    // nothing retries. Deliberate statuses (503/429) keep their own guest-written text.
+    console.error("[public-todo] comment failed:", e);
+    res.status(e.statusCode || 500).json({ error: e.statusCode ? e.message : "Could not post that comment right now" });
+  }
 });
 
 };

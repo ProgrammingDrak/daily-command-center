@@ -240,7 +240,9 @@
   // itinerary as a FINISHED task and check it off through the normal completion
   // path (toggleDone), so it actually shows on the schedule, banks its slot
   // points, and — because the created task carries responsibilityId — resets the
-  // cadence clock via markResponsibilityTaskCompleted. Mirrors "Add to day" then
+  // cadence clock via db.js's propagateResponsibilityDone (C5b: the row write does it;
+  // it used to go through the client-side markResponsibilityTaskCompleted). Mirrors
+  // "Add to day" then
   // an immediate check-off; the old version only reset the clock and left the
   // itinerary untouched (nothing showed up as done on the schedule).
   function completeRepeatResponsibility(id){
@@ -964,16 +966,15 @@
     }
   }
 
-  async function markResponsibilityTaskCompleted(ev){
-    if(!ev||!ev.responsibilityId)return;
-    try{
-      await fetch("/api/responsibilities/"+encodeURIComponent(ev.responsibilityId)+"/complete",{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({taskId:ev.id,completedAt:new Date().toISOString()})
-      });
-      await loadResponsibilities();
-    }catch(e){console.warn("[responsibilities] completion sync failed",e);}
-  }
+  // markResponsibilityTaskCompleted DELETED (C5b step 7). D1 added it as the
+  // belt-and-suspenders half of the one-open-instance invariant, because the itinerary
+  // persisted completion to `day_root._done` and never to the task row -- so
+  // `db.js propagateResponsibilityDone`, which fires on a row flipping to done, could
+  // never see a check-off. C5b makes the row the completion, so that hook now runs the
+  // identical `recurrence.applyCompletion` this function POSTed for. Its other job, the
+  // local sidebar refresh, moved to `_refreshResponsibilityAfterDone` in schedule.js,
+  // chained on the row write. `POST /api/responsibilities/:id/complete` stays: the
+  // Responsibilities surface itself still uses it.
 
   function bindResponsibilities(){
     const repeatSearch=document.getElementById("repeat-responsibilities-search");
@@ -1011,7 +1012,6 @@
   window.refreshScheduleAfterResponsibilityChange=refreshScheduleAfterResponsibilityChange;
   window.openResponsibilityModalWithMenus=function(menus){ openResponsibilityModal(null,{menus:Array.isArray(menus)?menus:[]}); };
   window.renderRepeatResponsibilitiesSidebar=renderRepeatResponsibilitiesSidebar;
-  window.markResponsibilityTaskCompleted=markResponsibilityTaskCompleted;
   // Triage-strip surfacing (Part C): the itinerary triage renderer reads these.
   window.getDueRepeatResponsibilities=getDueRepeatResponsibilities;
   window.scheduleRepeatResponsibility=scheduleRepeatResponsibility;

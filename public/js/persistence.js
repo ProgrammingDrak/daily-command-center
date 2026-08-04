@@ -185,6 +185,18 @@ async function fetchExpressDate(date) {
 // real invariant about real historical data that would otherwise be guarded by nothing.
 // (itinerary-fold.test.js hoisted isFoldableTask out of this same file for the same reason.)
 //
+// LEGACY `_done` (C5b): nothing WRITES this key any more either — completion goes to the
+// task row's `properties.status`, and the fold seeds `manualDone` from the row (see
+// reloadPersistedEdits below). The read stays for the same reason `_pushed`'s does, and it
+// was measured before deciding rather than assumed: of the 401 entries on prod
+// 2026-08-04, migration 002 carried 316 onto rows, 67 point at nothing that renders on
+// any surface, and **23 are still the only representation of a real completion** — 12
+// whose local_id is shared by 2+ rows (002's resolver refused to guess, so every
+// candidate row still reads `status:'open'`: "1:1 with Mike", "Go over Metrics", "Get
+// stuff from my House"…) and 11 that render from `schedule.timeline` on an archive day
+// with no row at all. Dropping this read flips those 23 finished tasks back to open. A4
+// removes the keys.
+//
 // LEGACY `_pushed` (C3): the pushed subsystem is deleted and nothing writes this key any
 // more, but old day_roots still carry it, and a pushed row was never REMOVED from its origin
 // day — only hidden by this overlay. Folding it into deletedSet keeps those days rendering as
@@ -312,11 +324,26 @@ function reloadPersistedEdits() {
       const isFoldableTask=b=>{
         const p=b.properties||{};
         if(!TM.foldsIntoItinerary(b))return false;
-        // deleted/archived rows are closed and stay out. status==="done" used to be
-        // in this list, which meant a task completed by ANY server-side path (Day
-        // in Review's Approve, the MCP tools, the responsibility completion hook)
-        // silently VANISHED from the itinerary instead of checking off. A done task
-        // is still a task: admit it and let the fold below seed the done registry.
+        // C5b was told to DROP these two branches and deliberately did not, on the strength
+        // of the measurement plus what the rest of the codebase still believes.
+        //
+        // Measured on prod 2026-08-04, every workspace, live rows and tombstones alike: ZERO
+        // rows carry `status:"deleted"` or `"archived"`, so removing them changes no
+        // behavior today — a tombstone is the `deleted_at` COLUMN, which the blockStore
+        // filters upstream of this fold. But FOUR other readers still treat the value as
+        // live: `TaskModel.selectUnscheduled` excludes it (and one-unscheduled-home.test.js
+        // pins that), `schedule.js syncAddedTaskTimes` skips it, and routes/blocks.js reads
+        // it. Dropping it HERE alone would mean a dateless row with that status folds into
+        // the itinerary while being excluded from the Backlog that is supposed to be the same
+        // list — one row, two answers, which is the divergence this whole project exists to
+        // remove. Retiring the vocabulary belongs in one change across all five readers (A4,
+        // with the overlay), not in one reader here.
+        //
+        // status==="done" was ALSO in this list once, which meant a task completed by any
+        // server path (Day in Review's Approve, the MCP tools, the Slack ✅, the
+        // responsibility hook) silently VANISHED from the itinerary instead of checking off.
+        // C0 removed THAT one; a done task is still a task, so it is admitted and the fold
+        // below seeds the done registry from it.
         if(p.status==="deleted"||p.status==="archived")return false;
         // A completion belongs to a DAY. A dateless row has none, so admitting a
         // done one would fold it onto every day you look at (there are real ones:
@@ -341,19 +368,27 @@ function reloadPersistedEdits() {
           }
         }
         if(!taskId||scheduled.find(e=>e.id===taskId))return;
-        // Seed the done registry from the ROW. A server-side completion writes
-        // status/done on the block and knows nothing about day_root._done, which is
-        // the only thing the client used to read — so the row is the second source
-        // of truth until C5 makes it the only one. manualDone/doneAt were reset at
-        // the top of reloadPersistedEdits and filled from day_root._done above, so
-        // adding here is additive and everything downstream (isDone, isPast,
-        // isActive, the List partition, day stats, the Done timestamp) just works.
+        // ★ THIS IS THE DONE REGISTRY'S SOURCE NOW (C5b), not a bridge to one.
         //
-        // This deliberately stays in the CALLER rather than moving into fromBlock:
-        // manualDone/doneAt are reloadPersistedEdits' own locals, and fromBlock is
-        // contractually pure (mutates no globals, reads nothing off the page). The
-        // carryover lane doesn't need it either — collectUnfinished admits only
-        // *unfinished* rows. C5 folds row status into the model properly.
+        // C0 added this as a temporary second read, and both the C5 plan and the C5b
+        // brief said to DELETE it here "because it dies with the overlay". That is
+        // backwards: `_done` is what died (as a write — see sync.js), and this is what
+        // replaced it. Delete this loop and `manualDone` is empty on every load, so
+        // nothing renders as done at all.
+        //
+        // `manualDone`/`doneAt` therefore survive as the in-memory PROJECTION of row
+        // status; what C5b removed is their PERSISTENCE. Keeping the projection is what
+        // makes this phase tractable: `isDone(ev)` reads `manualDone` and roughly ten
+        // files consume `isDone` (state.js, sidebar.js, day-review.js, schedule-tab.js,
+        // point-plan.js, prep.js, triage.js, tabs.js, slots.js), so retiring the
+        // registry itself means rewriting the done predicate across all of them, which
+        // is its own phase.
+        //
+        // Stays in the CALLER rather than moving into fromBlock, for the reason C0 gave
+        // and C5b keeps: manualDone/doneAt are reloadPersistedEdits' own locals, and
+        // fromBlock is contractually pure (mutates no globals, reads nothing off the
+        // page). The carryover lane does not need it either — collectUnfinished admits
+        // only *unfinished* rows.
         if(p.done===true||p.status==="done"){
           manualDone.add(taskId);
           if(!doneAt[taskId])doneAt[taskId]=p.completedAt||p.doneAt||null;
