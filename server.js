@@ -618,7 +618,7 @@ async function seedScheduleBlocksFromYAML(userId, workspaceId) {
       else if (tp && current) current.blockType = tp[1]; else if (st && current) current.start = st[1]; else if (en && current) current.end = en[1];
     }
     const valid = blocks.filter(b => b.name && b.blockType && b.start && b.end);
-    for (let i = 0; i < valid.length; i++) { await blockDB.createBlock({ type: "schedule_block", properties: { name: valid[i].name, blockType: valid[i].blockType, start: valid[i].start, end: valid[i].end, protected: false, warnThreshold: 0 }, sort_order: i, user_id: userId || null, workspace_id: workspaceId || null }); }
+    for (let i = 0; i < valid.length; i++) { await blockDB.createBlock({ type: "schedule_block", properties: { name: valid[i].name, blockType: valid[i].blockType, start: valid[i].start, end: valid[i].end, protected: false, warnThreshold: 0 }, sort_order: (i + 1) * 1000, user_id: userId || null, workspace_id: workspaceId || null }); }
     if (valid.length) console.log("[seed] Migrated " + valid.length + " schedule blocks from YAML");
   } catch(e) { console.error("[seed] Error seeding schedule blocks:", e.message); }
 }

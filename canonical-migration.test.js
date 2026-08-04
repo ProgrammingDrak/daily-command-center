@@ -42,6 +42,24 @@ function makeMockPool(initialRows = [], resolveMap = {}) {
       const view = (id) => (staged && staged.has(id)) ? staged.get(id) : (committed.get(id) || null);
       const put = (id, r) => { if (staged) staged.set(id, r); else committed.set(id, r); };
 
+      // C6c: createBlock asks for the day's next `sort_order` slot when the caller gives none.
+      // Answered from the mock's own rows so the real max-then-round-up logic is exercised, not
+      // stubbed past -- a constant here would hide the whole one-number-space change.
+      // C6c: createBlock asks for the day's next `sort_order` slot when the caller gives none.
+      // Answered from the mock's own rows so the real max-then-round-up logic is exercised, not
+      // stubbed past -- a constant here would hide the whole one-number-space change.
+      if (/COALESCE\(MAX\(sort_order\), 0\) AS mx/.test(text)) {
+        const [d, ws] = params;
+        const all = [...committed.values()].concat(staged ? [...staged.values()] : []);
+        const mx = all.reduce((m, r) => {
+          if (!r || r.deleted_at) return m;
+          if ((r.date || null) !== (d || null)) return m;
+          if ((r.workspace_id || null) !== (ws || null)) return m;
+          const n = Number(r.sort_order);
+          return Number.isFinite(n) && n > m ? n : m;
+        }, 0);
+        return { rows: [{ mx }] };
+      }
       if (/dcc_resolve_local_id/.test(text)) {
         const ref = params[2];
         return { rows: [{ pid: Object.prototype.hasOwnProperty.call(resolveMap, ref) ? resolveMap[ref] : null }] };

@@ -42,6 +42,21 @@ function makeMockPool(initialRows = []) {
       if (text === "ROLLBACK") { staged.clear(); return { rows: [] }; }
       const view = (id) => (staged && staged.has(id)) ? staged.get(id) : (committed.has(id) ? committed.get(id) : null);
       const put = (id, r) => { if (staged) staged.set(id, r); else if (r === null) committed.delete(id); else committed.set(id, r); };
+      // C6c: createBlock asks for the day's next `sort_order` slot when the caller gives none.
+      // Answered from the mock's own rows so the real max-then-round-up logic is exercised.
+      if (/COALESCE\(MAX\(sort_order\), 0\) AS mx/.test(text)) {
+        const _d = params[0], _ws = params[1];
+        const _all = (typeof committed !== "undefined" ? [...committed.values()] : [])
+          .concat(typeof staged !== "undefined" && staged ? [...staged.values()] : []);
+        const _mx = _all.reduce((m, r) => {
+          if (!r || r.deleted_at) return m;
+          if ((r.date || null) !== (_d || null)) return m;
+          if ((r.workspace_id || null) !== (_ws || null)) return m;
+          const n = Number(r.sort_order);
+          return Number.isFinite(n) && n > m ? n : m;
+        }, 0);
+        return { rows: [{ mx: _mx }] };
+      }
       if (/^SELECT \* FROM blocks WHERE id/.test(text)) {
         const r = view(params[0]);
         return { rows: r ? [{ ...r }] : [] };

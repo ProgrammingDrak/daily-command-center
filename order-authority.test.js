@@ -98,15 +98,19 @@ function ctx(rows, overlay) {
     /function _c6bFallback\(key,n\)\{[\s\S]*?\n\}/,
     /function _orderableRows\(opts\)\{[\s\S]*?\n\}/,
     /function _evIdOfRow\(b\)\{[^\n]*\}/,
-    /function _orderFromRows\(pick\)\{[\s\S]*?\n\}/,
+    /function _orderFromRows\(pick,opts\)\{[\s\S]*?\n\}/,
     /function _writeRowOrder\(ids\)\{[\s\S]*?\n\}/,
     /function _pruneOverlayMap\(key,keep\)\{[\s\S]*?\n\}/,
     /function loadPinnedStarts\(\)\{[\s\S]*?\n\}/,
     /function savePinnedStarts\(data\)\{[\s\S]*?\n\}/,
     /function loadLockedSet\(\)\{[\s\S]*?\n\}/,
     /function saveLockedSet\(ids\)\{[\s\S]*?\n\}/,
+    /function _spliceDayOrder\(subsetIds\)\{[\s\S]*?\n\}/,
+    /function loadTaskOrder\(\)\{[\s\S]*?\n\}/,
+    /function loadUnscheduledOrder\(\)\{[\s\S]*?\n\}/,
     /function saveTaskOrder\(\)\{[\s\S]*?\n\}/,
   ]) vm.runInContext(one(schedSrc, re, String(re)), c);
+  vm.runInContext(one(persistSrc, /function loadSubtaskOrder\(\)\{[\s\S]*?\n\}/, "loadSubtaskOrder"), c);
   return c;
 }
 const run = (c, expr) => JSON.parse(vm.runInContext("JSON.stringify(" + expr + ")", c));
@@ -336,27 +340,242 @@ test("_writeRowOrder skips an already-correct row, unknown ids, and empty input"
   assert.equal(vm.runInContext("_writeRowOrder(null)", c), 0);
 });
 
-test("saveTaskOrder keeps the overlay as the authority AND stamps sort_order", () => {
-  // Both, deliberately: the overlay is still the read authority (sort_order is not one number
-  // space yet, see the file header) and sort_order is kept current so C6c inherits a usable
-  // column instead of a more drifted one.
-  const c = ctx([row("a", 5000), row("b", 6000)], {});
+test("★ C6c: saveTaskOrder writes sort_order and PRUNES the overlay", () => {
+  // The read is canonical now, so a surviving overlay entry could only resurrect an old position
+  // through the counted fallback. Same shape as C6b's pin/lock prune, and for the same reason.
+  const c = ctx([row("a", 1000), row("b", 2000)], { _taskOrder: ["a", "b"] });
   c.scheduled = [{ id: "b" }, { id: "a" }];
   c.isDone = () => false;
   vm.runInContext("saveTaskOrder()", c);
   assert.deepEqual(run(c, "reordered"), [{ id: "b", sort_order: 1000 }, { id: "a", sort_order: 2000 }]);
-  assert.deepEqual(run(c, "rootProps._taskOrder"), ["b", "a"], "the overlay is still written");
+  assert.deepEqual(run(c, "rootProps._taskOrder"), [], "the overlay list is dropped entirely");
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["b", "a"], "and the next read agrees, from sort_order");
 });
 
-test("★ the three order READS are still overlay-first — C6c owns the flip, and says why", () => {
-  // A guard on a deliberate NON-change, because the tempting version of this phase is the one
-  // that flips these reads, and the reason not to is a measurement nobody will re-take.
-  assert.match(schedCode, /function loadTaskOrder\(\)\{\s*if \(window\.USE_BLOCKSTORE && window\.blockStore\) \{\s*const v = _bsProp\("_taskOrder", null\);/);
+test("★ C6c: loadTaskOrder and loadSubtaskOrder read sort_order; UNSCHEDULED stays on its overlay", () => {
+  // The flip, and the one axis that deliberately did NOT flip. `sort_order` is scoped per
+  // (date, workspace) by definition, and the Unscheduled section mixes today's untimed rows with
+  // past-day carryovers -- so a cross-day section's manual order has no per-day column to live in.
+  // 0 day_roots carry `_unscheduledOrder` on prod, so nothing is lost by leaving it.
+  const c = ctx([row("b", 3000), row("a", 1000), row("c", 2000)], { _taskOrder: ["c", "b", "a"] });
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["a", "c", "b"], "sort_order wins over the overlay");
+  assert.deepEqual(run(c, "window.__DCC_C6B_FALLBACK"), {}, "no fallback needed");
+  // ...and the overlay is still the fallback when no row is orderable
+  const empty = ctx([], { _taskOrder: ["x", "y"] });
+  assert.deepEqual(run(empty, "loadTaskOrder()"), ["x", "y"]);
+  assert.deepEqual(run(empty, "window.__DCC_C6B_FALLBACK"), { taskOrder: 2 }, "and it is COUNTED");
+  // ★ loadSubtaskOrder: the children's own sort_order, overlay as a counted fallback. The title of
+  // this test claimed it and did not test it, so the overlay-preference mutation walked past.
+  const sub = ctx([
+    row("p", 1000), row("k2", 2000, { subtaskOf: "p" }), row("k1", 3000, { subtaskOf: "p" }),
+    row("o1", 4000, { subtaskOf: "other" }),
+  ], { _subtaskOrder: { p: ["k1", "k2"] } });
+  assert.deepEqual(run(sub, "loadSubtaskOrder()"), { p: ["k2", "k1"], other: ["o1"] },
+    "sort_order wins over the overlay map");
+  assert.deepEqual(run(sub, "window.__DCC_C6B_FALLBACK"), {});
+  // ...and the overlay IS the fallback when no row carries a subtask edge
+  const noKids = ctx([row("solo", 1000)], { _subtaskOrder: { p: ["a", "b"] } });
+  assert.deepEqual(run(noKids, "loadSubtaskOrder()"), { p: ["a", "b"] });
+  assert.deepEqual(run(noKids, "window.__DCC_C6B_FALLBACK"), { subtaskOrder: 1 }, "COUNTED");
+
+  // the unscheduled axis is unchanged, and the reason is in the file
   assert.match(schedCode, /function loadUnscheduledOrder\(\)\{\s*if\(window\.USE_BLOCKSTORE&&window\.blockStore\)\{\s*const v=_bsProp\("_unscheduledOrder",null\);/);
-  assert.match(persistCode, /function loadSubtaskOrder\(\)\{\s*const fromBlocks=_bsProp\("_subtaskOrder", null\);/);
-  // and the measurement that justifies it is IN the file, so the next person sees it
-  assert.match(schedSrc, /`sort_order` is not one number space/);
-  assert.match(schedSrc, /63 of 113 days hold a mix/);
+  assert.match(schedSrc, /THE UNSCHEDULED AXIS STAYS ON ITS OVERLAY/);
+  assert.match(schedSrc, /0 day_roots carry `_unscheduledOrder`/);
+});
+
+// ══════════════════ C6c: one number space, and the splice that keeps it ══════════════════
+
+test("★★ _spliceDayOrder rearranges ONLY the subset's own slots, leaving every other row put", () => {
+  // Three writers each numbered `(i+1)*1000` from their OWN index over different subsets of the
+  // same rows, which is what produced 242 days of duplicate sort_order on the restore. Each writer
+  // now splices into the day's total order.
+  const c = ctx([row("A", 1000), row("B", 2000), row("k1", 3000), row("k2", 4000), row("C", 5000)], {});
+  // reorder just B's two steps: they occupy slots 2 and 3, and must stay in slots 2 and 3
+  assert.deepEqual(run(c, '_spliceDayOrder(["k2","k1"])'), ["A", "B", "k2", "k1", "C"]);
+  // a subset that is not contiguous keeps its own slots too
+  assert.deepEqual(run(c, '_spliceDayOrder(["C","A"])'), ["C", "B", "k1", "k2", "A"]);
+  // ids not on the day are dropped rather than inserted
+  assert.deepEqual(run(c, '_spliceDayOrder(["k2","ghost","k1"])'), ["A", "B", "k2", "k1", "C"]);
+  // degenerate inputs are a no-op, not a wipe
+  assert.deepEqual(run(c, '_spliceDayOrder(["A"])'), ["A", "B", "k1", "k2", "C"]);
+  assert.deepEqual(run(c, "_spliceDayOrder([])"), ["A", "B", "k1", "k2", "C"]);
+  assert.deepEqual(run(c, "_spliceDayOrder(null)"), ["A", "B", "k1", "k2", "C"]);
+});
+
+test("★★ saveTaskOrder splices — its subset is the OPEN rows, so a done row must not be collided with", () => {
+  // The collision the splice exists to prevent, at the real call site. saveTaskOrder passes only the
+  // OPEN rows, so on any day with a completed task its subset is a STRICT subset of the day. Writing
+  // that subset directly renumbers from 1000 and lands on top of the done row's number.
+  const c = ctx([row("done", 1000), row("A", 2000), row("B", 3000)], {});
+  c.scheduled = [{ id: "B" }, { id: "A" }];          // only the open rows reach saveTaskOrder
+  c.isDone = (ev) => ev.id === "done";
+  vm.runInContext("saveTaskOrder()", c);
+  const nums = run(c, "_orderableRows().map(b=>b.sort_order)");
+  assert.equal(new Set(nums).size, nums.length,
+    "no duplicate sort_order on the day: " + JSON.stringify(run(c, "_orderableRows().map(b=>b.id+':'+b.sort_order)")));
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["done", "B", "A"],
+    "the done row keeps its slot; only the open rows swapped");
+});
+
+test("★★ saveSubtaskOrder splices too — one parent's steps are always a strict subset", () => {
+  const c = ctx([
+    row("A", 1000), row("B", 2000), row("k1", 3000), row("k2", 4000), row("C", 5000),
+  ], {});
+  c.scheduled = [{ id: "k2", subtaskOf: "B" }, { id: "k1", subtaskOf: "B" }];
+  c.isDeleted = () => false;
+  // saveSubtaskOrder derives its order from scheduled[] then splices
+  vm.runInContext(one(persistSrc, /function saveSubtaskOrder\(parentId\)\{[\s\S]*?\n\}/, "saveSubtaskOrder"), c);
+  vm.runInContext('saveSubtaskOrder("B")', c);
+  const nums = run(c, "_orderableRows().map(b=>b.sort_order)");
+  assert.equal(new Set(nums).size, nums.length,
+    "no duplicate sort_order: " + JSON.stringify(run(c, "_orderableRows().map(b=>b.id+':'+b.sort_order)")));
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["A", "B", "k2", "k1", "C"],
+    "A, B and C keep their slots; only the two steps swapped");
+});
+
+test("★★ the ORDER axis is dated-only, so a dateless Backlog row never ties with a day row", () => {
+  // `sort_order` keeps the dateless rows in their OWN 1000-spaced partition (both
+  // nextSortOrderForDay and 004 scope on `date IS NOT DISTINCT FROM`). Mixing them into one derived
+  // list means the day's first row (1000) and the first dateless row (1000) TIE, and then a drag
+  // renumbers Backlog rows into whichever day happened to be on screen.
+  const c = ctx([row("day1", 1000, {}, TODAY), row("back1", 1000, {}, null), row("day2", 2000, {}, TODAY)], {});
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["day1", "day2"], "the dateless row is not in the day's order");
+  assert.deepEqual(run(c, '_spliceDayOrder(["day2","day1"])'), ["day2", "day1"], "and cannot be renumbered by a day drag");
+  vm.runInContext('_writeRowOrder(_spliceDayOrder(["day2","day1"]))', c);
+  assert.deepEqual(run(c, "reordered").map((r) => r.id), ["day2", "day1"], "the Backlog row was not written");
+  // ...but the pin/lock readers DO want the dateless rows, and still get them
+  assert.deepEqual(run(c, "_orderableRows().map(b=>b.id)").sort(), ["back1", "day1", "day2"]);
+  assert.deepEqual(run(c, "_orderableRows({datedOnly:true,date:'" + TODAY + "'}).map(b=>b.id)").sort(), ["day1", "day2"]);
+});
+
+test("★ a duplicate sort_order falls back to created_at then id, never to cache iteration order", () => {
+  // Every SQL read here already has `, created_at ASC`. Without the same tie-break client-side, a
+  // duplicate (from a lost create race, or a pre-004 day) renders differently after a boot vs a
+  // loadDay vs an SSE refresh -- the exact non-determinism this phase exists to remove.
+  const mk = (id, so, created) => ({ id, type: "block", date: TODAY, sort_order: so, deleted_at: null,
+    created_at: created, properties: { title: id, type: "task", local_id: id } });
+  const c = ctx([mk("late", 1000, "2026-08-04T10:00:00Z"), mk("early", 1000, "2026-08-04T09:00:00Z")], {});
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["early", "late"], "created_at breaks the tie");
+  const same = ctx([mk("b", 1000, "2026-08-04T09:00:00Z"), mk("a", 1000, "2026-08-04T09:00:00Z")], {});
+  assert.deepEqual(run(same, "loadTaskOrder()"), ["a", "b"], "then id, so the answer is total");
+});
+
+test("★ the subtask overlay fallback merges PER PARENT, so one derivable parent hides nothing", () => {
+  // All-or-nothing meant a parent whose children are outside the day scope became invisible while its
+  // overlay entry sat there waiting for A4 to delete it.
+  const c = ctx([row("p", 1000), row("k1", 2000, { subtaskOf: "p" }), row("k2", 3000, { subtaskOf: "p" })],
+    { _subtaskOrder: { p: ["k2", "k1"], gone: ["x", "y"] } });
+  const out = run(c, "loadSubtaskOrder()");
+  assert.deepEqual(out.p, ["k1", "k2"], "the derivable parent uses sort_order");
+  assert.deepEqual(out.gone, ["x", "y"], "and the un-derivable parent still comes from the overlay");
+  assert.deepEqual(run(c, "window.__DCC_C6B_FALLBACK"), { subtaskOrder: 1 }, "exactly one parent filled");
+});
+
+test("★★ a subtask drag cannot collide with the day's top-level rows", () => {
+  // The concrete collision: dragging B's steps used to stamp k2=1000 and k1=2000, so k2 tied with A
+  // and k1 tied with B, and the tie was broken by cache iteration order.
+  const c = ctx([row("A", 1000), row("B", 2000), row("k1", 3000), row("k2", 4000)], {});
+  vm.runInContext('_writeRowOrder(_spliceDayOrder(["k2","k1"]))', c);
+  const orders = run(c, "_orderableRows().map(b=>b.id+':'+b.sort_order)").sort();
+  const nums = run(c, "_orderableRows().map(b=>b.sort_order)");
+  assert.equal(new Set(nums).size, nums.length, "no duplicate sort_order on the day: " + JSON.stringify(orders));
+  assert.deepEqual(run(c, "loadTaskOrder()"), ["A", "B", "k2", "k1"], "and the day order is the spliced one");
+});
+
+test("★ the retired _taskOrder / _subtaskOrder overlay WRITES are gone; only the prune remains", () => {
+  for (const key of ["_taskOrder", "_subtaskOrder"]) {
+    const rx = new RegExp("_bsSaveProp\\(\\s*[\"\']" + key + "[\"\']");
+    assert.equal(rx.test(schedCode) || rx.test(persistCode), false, key + " is still written directly");
+    assert.ok(rx.test('_bsSaveProp("' + key + '", order)'), "control: the guard fires on the retired form");
+  }
+  assert.match(schedCode, /_pruneOverlayMap\("_taskOrder",\(\)=>false\)/);
+  assert.match(persistCode, /_pruneOverlayMap\("_subtaskOrder",k=>String\(k\)!==String\(parentId\)\)/);
+  // _unscheduledOrder IS still written -- that axis deliberately did not flip
+  assert.match(schedCode, /_bsSaveProp\("_unscheduledOrder",order\)/);
+});
+
+// ══════════════════════ C6c: the four `sort_order` producers ══════════════════════════
+
+test("★★ db.js assigns the day's next slot instead of defaulting to 0", () => {
+  const dbSrc = fs.readFileSync(require.resolve("./db.js"), "utf8");
+  const dbCode = stripJsComments(dbSrc);
+  // the shared helper, 1000-spaced, scoped to task rows and to (date, workspace), NULL-safe
+  assert.match(dbCode, /async function nextSortOrderForDay\(q, \{ date, workspace_id \}\)/);
+  assert.match(dbCode, /date IS NOT DISTINCT FROM \$1/);
+  assert.match(dbCode, /workspace_id IS NOT DISTINCT FROM \$2/);
+  assert.match(dbCode, /dcc_is_task_row\(type, properties\)/);
+  assert.match(dbCode, /\(Math\.floor\(mx \/ SORT_STEP\) \+ 1\) \* SORT_STEP/);
+  // createBlock uses it when the caller gave nothing -- `== null` ONLY, because an explicit 0 means
+  // "first" to three live callers (server.js seedScheduleBlocksFromYAML, schedule-tab.js
+  // _applyBlocksToday, sync.js x2), all now 1000-spaced.
+  assert.match(dbCode, /if \(sortOrderToUse == null && isTaskRow/);
+  assert.equal(/sortOrderToUse === 0/.test(dbCode), false, "an explicit 0 must not be read as unset");
+  assert.equal(/sort_order \|\| 0, user_id/.test(dbCode), false, "the old `sort_order || 0` insert default must be gone");
+  for (const [f, pat] of [["server.js", /sort_order: \(i \+ 1\) \* 1000/], ["public/js/schedule-tab.js", /sortOrder: \(j \+ 1\) \* 1000/], ["public/js/sync.js", /sortOrder: \(i \+ 1\) \* 1000/], ["public/js/sync.js", /sortOrder:\(idx \+ 1\) \* 1000|sortOrder: \(idx \+ 1\) \* 1000/]]) {
+    assert.match(fs.readFileSync(require.resolve("./" + f), "utf8"), pat, f + " still passes a 0-based index");
+  }
+  // updateBlock is the OTHER day-changing writer, and the most-used one
+  assert.match(dbCode, /if \(sort_order === undefined\s*&& normalizeDate\(newDate\) !== normalizeDate\(existing\.date\)/);
+  assert.match(dbCode, /newSortOrder = await nextSortOrderForDay\(q, \{ date: newDate/);
+  // createItineraryTask no longer derives an order from the start time
+  assert.equal(/derivedSort/.test(dbCode), false, "minutes-of-day derivedSort must stay gone");
+  // rescheduleBlocks joins the TARGET day's space
+  assert.match(dbCode, /const dayChanged = normalizeDate\(newDate\) !== normalizeDate\(existing\.date\)/);
+  assert.match(dbCode, /newSortOrder = await nextSortOrderForDay\(client, \{ date: newDate/);
+  assert.equal(/sort_order: existing\.sort_order/.test(dbCode), false, "a cross-day move must not keep the origin day's number");
+});
+
+test("★ block-store's OPTIMISTIC create also lands at the end of the day, not the top", () => {
+  const bsCode = stripJsComments(fs.readFileSync(require.resolve("./public/js/block-store.js"), "utf8"));
+  assert.match(bsCode, /function _nextLocalSortOrder\(date\)/);
+  // BOTH caches: a dateless `type:"block"` row lives in _globalCache, so scanning only _dayCache
+  // returned 1000 for every dateless create -- manufacturing the duplicate 004 exists to remove.
+  assert.match(bsCode, /for \(const b of \[\.\.\._dayCache\.values\(\), \.\.\._globalCache\.values\(\)\]\)/);
+  // and the PAYLOAD omits sort_order so the server stays authoritative; the guess is optimistic-only
+  assert.match(bsCode, /if \(sortOrder != null\) payload\.sort_order = sortOrder;/);
+  assert.equal(/sort_order: sortOrder \|\| 0/.test(bsCode), false, "the `|| 0` optimistic default must be gone");
+  assert.equal(/sort_order: sortOrder \|\| _nextLocalSortOrder/.test(bsCode), false,
+    "the local guess must NOT ride in the payload -- that bypasses the server's real append");
+});
+
+// ══════════════════════════════ migration 004 contract ═══════════════════════════════
+
+const SQL4 = fs.readFileSync(require.resolve("./migrations/004_one_sort_space.sql"), "utf8");
+// ★ The "must not contain" assertions run on the CODE, not the header. 004's header legitimately
+// names `slot_point_ledger` (telling you to verify it byte-identical) and quotes the overlay keys,
+// so grepping the raw file failed the very guard it was written to satisfy -- the same
+// comment-vs-code trap the JS source guards hit, arriving in SQL.
+const stripSqlComments = (sql) => sql.split("\n").filter((l) => !/^\s*--/.test(l)).join("\n");
+const SQL4_CODE = stripSqlComments(SQL4);
+
+test("★★ migration 004 is gated, deterministic, idempotent-by-construction, and ledger-free", () => {
+  assert.match(SQL4, /^\s*--\s*@gated:/m, "must be @gated: it REWRITES sort_order on every live task row");
+  // the order source, in priority: overlay position, then existing sort_order, then created_at/id
+  assert.match(SQL4, /ORDER BY \(r\.pos IS NULL\)/, "overlay-named rows first");
+  assert.match(SQL4, /r\.pos,/);
+  assert.match(SQL4, /b\.sort_order,/);
+  assert.match(SQL4, /b\.created_at,/);
+  assert.match(SQL4, /b\.id\n/, "id is the final tie-break, so a re-run cannot shuffle equal rows");
+  // 1000-spaced, partitioned per (date, workspace)
+  assert.match(SQL4, /PARTITION BY b\.date, b\.workspace_id/);
+  assert.match(SQL4, /\* 1000 AS new_sort/);
+  // idempotent by construction: skip a row already correct
+  assert.match(SQL4, /AND b\.sort_order IS DISTINCT FROM n\.new_sort/);
+  // both overlay id spaces resolved, NULL-safe, and the SRF expanded in FROM (C6b's bug)
+  assert.match(SQL4, /b\.properties ->> 'local_id' = o\.ev_id OR b\.id::text = o\.ev_id/);
+  assert.equal((SQL4.match(/IS NOT DISTINCT FROM/g) || []).length >= 2, true);
+  assert.match(SQL4, /WITH ORDINALITY AS t\(ev_id, ord\)/);
+  assert.equal(/THEN \(SELECT jsonb_array_elements_text/.test(SQL4), false, "no CASE-wrapped SRF");
+  // it must not touch the ledger, and must not strip the overlays (A4 owns that)
+  for (const t of ["slot_point_ledger", "point_balance"]) assert.equal(SQL4_CODE.includes(t), false);
+  assert.equal(/\b(DROP|TRUNCATE|DELETE\s+FROM)\b/i.test(SQL4_CODE), false);
+  assert.equal(/properties\s*-\s*'_taskOrder'\s*$|properties\s+-\s+'_taskOrder'/m.test(SQL4_CODE), false,
+    "the overlay keys are A4's to remove -- 004 READS `->` them, it must not `-` strip them");
+  // Controls: the stripped-code guards must still fire on real code.
+  assert.ok(/\b(DROP|TRUNCATE|DELETE\s+FROM)\b/i.test(stripSqlComments("DELETE FROM blocks;")));
+  assert.equal(/\b(DROP|TRUNCATE|DELETE\s+FROM)\b/i.test(stripSqlComments("-- DELETE FROM blocks;")), false);
+  assert.ok(stripSqlComments("SELECT * FROM slot_point_ledger;").includes("slot_point_ledger"));
 });
 
 // ══════════════════════════════ migration 003 contract ═══════════════════════════════

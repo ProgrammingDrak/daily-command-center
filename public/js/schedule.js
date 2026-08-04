@@ -1045,10 +1045,11 @@ function _c6bFallback(key,n){
 function _orderableRows(opts){
   if(!window.blockStore)return [];
   const scope=(opts&&"date" in opts)?opts.date:((typeof __state!=="undefined"&&__state&&__state.date)||null);
+  const datedOnly=!!(opts&&opts.datedOnly);
   const rows=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block")];
   return rows.filter(b=>b&&!b.deleted_at&&b.properties
     &&(!DCC.TaskModel.foldsIntoItinerary||DCC.TaskModel.foldsIntoItinerary(b))
-    &&(!scope||b.date===scope||!b.date));
+    &&(datedOnly?b.date===scope:(!scope||b.date===scope||!b.date)));
 }
 // The ev id a row projects to. Matches the fold (`local_id || block.id`), NOT `backlogKey`,
 // because these ids reach `scheduled[]` where a "blk-" prefix would be a visible id change.
@@ -1056,14 +1057,26 @@ function _evIdOfRow(b){return (b.properties&&b.properties.local_id)||b.id;}
 
 // An ev-id list in `sort_order` order. Rows with no sort_order sort last, which is what the
 // orderMap fallbacks these lists feed already did with their 9999 sentinel.
-function _orderFromRows(pick){
-  return _orderableRows()
+// `{datedOnly:true}` for the ORDER axis. `_orderableRows` includes dateless rows on purpose -- the
+// Backlog is day-agnostic and the pin/lock readers want it -- but `sort_order` keeps the dateless rows
+// in their OWN 1000-spaced partition (both `nextSortOrderForDay` and migration 004 scope on
+// `date IS NOT DISTINCT FROM`). Mixing them into one derived list means the day's first row (1000) and
+// the first dateless row (1000) tie, and a drag would then renumber Backlog rows into whichever day
+// was last viewed. Same reasoning the unscheduled axis was left alone for.
+function _orderFromRows(pick,opts){
+  return _orderableRows(opts)
     .filter(b=>typeof pick!=="function"||pick(b))
     .slice()
     .sort((a,b)=>{
       const ao=(a.sort_order==null)?Number.MAX_SAFE_INTEGER:a.sort_order;
       const bo=(b.sort_order==null)?Number.MAX_SAFE_INTEGER:b.sort_order;
-      return ao-bo;
+      // The same `, created_at ASC` tie-break every SQL read here already has. Without it a duplicate
+      // sort_order falls through to cache iteration order, which differs after a boot vs a loadDay vs
+      // an SSE refresh -- the exact non-determinism this phase exists to remove.
+      if(ao!==bo)return ao-bo;
+      const ac=String(a.created_at||""),bc=String(b.created_at||"");
+      if(ac!==bc)return ac<bc?-1:1;
+      return String(a.id)<String(b.id)?-1:1;
     })
     .map(_evIdOfRow);
 }
@@ -1147,6 +1160,33 @@ function savePinnedStarts(data){
 // Drop entries the caller no longer claims from a retired overlay map/array, so the counted
 // fallback read cannot resurrect a value the user just removed. Shared by pins and locks because
 // they had the identical hole; skips the write entirely when nothing changed.
+// ★ C6c: THE THREE-WRITERS COLLISION, and why every write must be a TOTAL order.
+//
+// `saveTaskOrder` (open rows of `scheduled`), `saveSubtaskOrder` (one parent's children) and
+// `saveUnscheduledOrder` (untimed + carryovers) each called `_writeRowOrder`, which numbers
+// `(i+1)*1000` from ITS OWN index over a DIFFERENT subset of the same rows. They collide: dragging
+// one parent's steps left a child sharing a `sort_order` with an unrelated top-level row, and the tie
+// was then broken by cache iteration order -- which differs after a boot vs a `loadDay` vs an SSE
+// refresh. It did not show while the overlay was the read authority; the moment the read flips, it
+// does. Measured on the restore before 004: **242 days carried a duplicate `sort_order`.**
+//
+// So a writer hands in its subset and this splices that subset into the day's CURRENT total order,
+// rearranging only the positions the subset already occupies and leaving every other row exactly
+// where it is. Same mechanic `_reorderActive` (drag.js) uses over `scheduled[]`.
+function _spliceDayOrder(subsetIds){
+  const full=_orderFromRows(null,{datedOnly:true});
+  if(!full.length)return (subsetIds||[]).map(String);
+  const inFull=new Set(full.map(String));
+  const subset=(subsetIds||[]).map(String).filter(id=>inFull.has(id));
+  if(subset.length<2)return full;                 // nothing to rearrange
+  const member=new Set(subset);
+  const slots=[];
+  full.forEach((id,i)=>{if(member.has(String(id)))slots.push(i);});
+  const out=full.slice();
+  slots.forEach((slot,k)=>{out[slot]=subset[k];});
+  return out;
+}
+
 function _pruneOverlayMap(key,keep){
   const ov=_bsProp(key,null);
   if(!ov)return 0;
@@ -2098,40 +2138,41 @@ function markDoneOnDate(id, date){
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");
-// ★ C6b STOPS HERE FOR ORDER, AND THE MEASUREMENT IS WHY. DEFERRED TO C6c.
+// C6c: `sort_order` IS the order now. C6b stopped short of this because the column was three
+// numbering schemes sharing one field -- 231 rows 1000-spaced from a drag, 1005 minutes-of-day from
+// `db.js createItineraryTask`, 289 zeros from `createBlock`'s default, and 63 of 113 days holding a
+// mix. C6c fixed all four producers and `migrations/004` renumbered every live task row into one
+// 1000-spaced space per (date, workspace). Verified across 118 days on a prod restore: **the order
+// the user SEES is byte-identical before and after.**
 //
-// The plan was to make `sort_order` the read authority and retire this overlay. It is not safe
-// yet, because **`sort_order` is not one number space.** Measured on the prod restore over 1815
-// live task rows: 231 are the 1000-spaced values a DRAG writes, 1005 are minutes-of-day 0..1439
-// (`db.js createItineraryTask`'s `derivedSort`, the funnel for quick-task, brief materialize,
-// task-group schedule and responsibility auto-schedule), 289 are exactly 0 (`createBlock`
-// defaults `sort_order || 0` in both `block-store.js` and `db.js`, and no create renumbers), and
-// 290 are something else. **63 of 113 days hold a mix.** Reading the column as the order would
-// therefore sort every server-created and every newly-added task ahead of everything the user
-// has ever dragged, on more than half the days. A rescheduled row is worse: `db.rescheduleBlocks`
-// preserves the ORIGINATING day's value.
+// ★ 004 IS A HARD PREREQUISITE FOR THIS DEPLOY, and the first cut of this comment claimed otherwise.
+// The overlay fallback below is only reachable when the day has ZERO orderable rows -- i.e. when there
+// is nothing to order -- so it does NOT cover an un-migrated day. On the 40 day_roots carrying
+// `_taskOrder`, deploying first would read the mixed column, and the first drag would then splice into
+// that nonsense AND prune the overlay, destroying the only record of the real order.
 //
-// Collapsing this needs one number space first, which means normalising four producers -- two of
-// them in `db.js`, Track A's file -- plus a per-day renumber migration. That is its own phase.
-// C6b keeps the overlay as the order authority and ships the two axes that ARE self-contained
-// (pins and locks, below). What C6b did fix here is the WRITE: see `saveTaskOrder`.
+// The ordering is safe in the other direction and needs no code: the OLD client reads the overlay for
+// order and merely dual-writes `sort_order`, so 004 renumbering underneath it is invisible. **Apply
+// 004, verify, then deploy.** The fallback stays as belt-and-braces for a workspace with no rows yet.
+// A4 removes the overlay keys and it together.
 function loadTaskOrder(){
-  if (window.USE_BLOCKSTORE && window.blockStore) {
-    const v = _bsProp("_taskOrder", null);
-    if (v && v.length) return v;
+  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
+    const derived=_orderFromRows(null,{datedOnly:true});
+    if(derived.length)return derived;
+    const v=_bsProp("_taskOrder",null);
+    if(v&&v.length){_c6bFallback("taskOrder",v.length);return v;}
   }
   try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]}
 }
-// C6b FIXED THE WRITE even though the read stays on the overlay (see loadTaskOrder). The old
-// dual-write's row filter was `local_id && start`, which silently excluded **1546 of 1815** live
-// task rows (no local_id -- API and Slack inserts) plus 37 more (untimed) from ever having their
-// `sort_order` updated at all. `_writeRowOrder` keys on the EV ID, so both shapes are reordered
-// now, and the column gets closer to usable for C6c rather than drifting further away.
+// C6c: a TOTAL order for the day (see `_spliceDayOrder`), and the overlay is PRUNED rather than
+// written -- the read is canonical now, so a surviving overlay entry could only resurrect an old
+// position through the fallback. C6b's fix stays: `_writeRowOrder` keys on the EV ID, so the 1546 of
+// 1815 live task rows with no `local_id` and the 37 untimed ones are reorderable at all.
 function saveTaskOrder(){
   const order=DCC.TaskModel.selectOpen(scheduled).map(ev=>ev.id);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
-    _bsSaveProp("_taskOrder", order);   // still the read authority until C6c
-    _writeRowOrder(order);
+    _writeRowOrder(_spliceDayOrder(order));
+    _pruneOverlayMap("_taskOrder",()=>false);   // the row is the authority; drop the whole list
     return;
   }
   localStorage.setItem(ORDER_KEY,JSON.stringify(order)); scheduleIDBSave();
@@ -2144,10 +2185,18 @@ function saveTaskOrder(){
 // (recalcTimes skips untimed items). Persist an explicit unified id-list on the
 // day_root (mirrors _subtaskOrder / _taskOrder) so a manual drag order survives
 // reflows and reloads. Rendered by _orderUnscheduled (schedule-tab.js) in manual mode.
-// DEFERRED TO C6c with loadTaskOrder, and this axis has a SECOND blocker of its own: a carryover
-// row lives in `blockStore._rangeCache`, which `getByType` does not read (unfinished-tasks.js
-// documents the split), so a row-derived order cannot even see the rows this section is mostly
-// about. C6c needs the range cache or the carryover lane's own `_originBlock` resolver.
+// ★ THE UNSCHEDULED AXIS STAYS ON ITS OVERLAY, and this is a conceptual limit, not a deferral.
+// The section deliberately mixes today's untimed rows with PAST-DAY carryovers, and `sort_order` is
+// scoped per (date, workspace) by definition -- so a cross-day section's manual order has no per-day
+// column to live in. Numbering a carryover into today's space would lie about which day owns it;
+// numbering it in its own day's space says nothing about where it sits in today's list. A genuine
+// cross-day order axis would be NEW persisted state, not a collapse of existing state, so it is out
+// of scope for a phase whose job is removing duplicate authorities.
+//
+// Measured on prod: **0 day_roots carry `_unscheduledOrder`**, so nothing is lost by leaving it.
+// Second, independent blocker if anyone tries: a carryover row lives in `blockStore._rangeCache`,
+// which `getByType` does not read (`unfinished-tasks.js` documents the split), so `_orderableRows`
+// cannot see most of the rows this section is about.
 function loadUnscheduledOrder(){
   if(window.USE_BLOCKSTORE&&window.blockStore){
     const v=_bsProp("_unscheduledOrder",null);

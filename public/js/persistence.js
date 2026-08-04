@@ -98,12 +98,42 @@ function initKeys() {
   }
 }
 
-// DEFERRED TO C6c with the other two order axes -- `sort_order` is not one number space yet
-// (see schedule.js loadTaskOrder for the measurement). The overlay stays the authority; the
-// WRITE below keeps sort_order current so C6c inherits a column that is not drifting.
+// C6c: derived from the children's own `sort_order`, now that it is one number space (see
+// schedule.js loadTaskOrder for the measurement and migrations/004 for the renumber). A parent's
+// step order is a fact about the STEPS, so it belongs on them -- the overlay keyed it under the
+// parent on the viewed day, which is why moving a parent to another date left its step order behind.
+// Canonical-first with the overlay as a COUNTED fallback; A4 removes both.
 function loadSubtaskOrder(){
-  const fromBlocks=_bsProp("_subtaskOrder", null);
-  if(fromBlocks&&typeof fromBlocks==="object")return fromBlocks;
+  if(window.blockStore&&typeof _orderableRows==="function"){
+    const byParent={};
+    _orderableRows().forEach(b=>{
+      const pid=b.properties.subtaskOf;
+      if(!pid)return;
+      (byParent[pid]=byParent[pid]||[]).push(b);
+    });
+    const out={};
+    Object.keys(byParent).forEach(pid=>{
+      out[pid]=byParent[pid]
+        .sort((a,b)=>{
+          const ao=(a.sort_order==null)?Number.MAX_SAFE_INTEGER:a.sort_order;
+          const bo=(b.sort_order==null)?Number.MAX_SAFE_INTEGER:b.sort_order;
+          return ao-bo;
+        })
+        .map(_evIdOfRow);
+    });
+    // MERGE per parent, not all-or-nothing. Choosing between the two meant one derivable parent hid
+    // every other parent's saved order -- a parent whose children are not in the day scope would be
+    // invisible while its overlay entry sat there waiting for A4 to delete it.
+    const fromBlocks=_bsProp("_subtaskOrder",null);
+    if(fromBlocks&&typeof fromBlocks==="object"){
+      let fb=0;
+      Object.keys(fromBlocks).forEach(pid=>{
+        if(out[pid]===undefined&&Array.isArray(fromBlocks[pid])&&fromBlocks[pid].length){out[pid]=fromBlocks[pid];fb++;}
+      });
+      if(fb&&typeof _c6bFallback==="function")_c6bFallback("subtaskOrder",fb);
+    }
+    if(Object.keys(out).length)return out;
+  }
   try{return JSON.parse(localStorage.getItem(SUBTASK_ORDER_KEY)||"{}")}catch(e){return{}}
 }
 
@@ -111,16 +141,17 @@ function saveSubtaskOrder(parentId){
   if(!parentId||typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
   const order=DCC.TaskModel.selectNotDeleted(DCC.TaskModel.subtasksOf(parentId,scheduled))
     .map(ev=>ev.id);
-  // C6b fixed the WRITE: the reorder is keyed on the EV ID (`_writeRowOrder`) rather than
-  // `local_id`, which is what let a step with no local_id keep its position silently
-  // unpersisted. The overlay stays the read authority until C6c.
-  const all=loadSubtaskOrder();
-  all[parentId]=order;
-  if(!_bsSaveProp("_subtaskOrder",all)){
+  // C6c: a TOTAL order for the day, spliced (see schedule.js `_spliceDayOrder`) -- numbering this
+  // subset from 1000 on its own is what collided with the day's top-level rows and produced 242
+  // days of duplicate `sort_order` on the restore. The overlay is PRUNED for this parent rather
+  // than written, since the row is the authority now.
+  if(window.USE_BLOCKSTORE&&window.blockStore&&window.blockStore.reorder&&typeof _spliceDayOrder==="function"){
+    _writeRowOrder(_spliceDayOrder(order));
+    if(typeof _pruneOverlayMap==="function")_pruneOverlayMap("_subtaskOrder",k=>String(k)!==String(parentId));
+  }else{
+    const all=loadSubtaskOrder();
+    all[parentId]=order;
     try{localStorage.setItem(SUBTASK_ORDER_KEY,JSON.stringify(all))}catch(e){}
-  }
-  if(window.USE_BLOCKSTORE&&window.blockStore&&window.blockStore.reorder&&typeof _writeRowOrder==="function"){
-    _writeRowOrder(order);
   }
   if(typeof scheduleIDBSave==="function")scheduleIDBSave();
 }
