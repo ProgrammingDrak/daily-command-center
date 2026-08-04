@@ -35,7 +35,7 @@ const IDENTITY_SRC = mustMatch(/function publicTaskIdentityIds\(input\) \{[\s\S]
 // test would assert a string the harness wrote rather than one the code emits. That is the
 // assert-on-a-mock-that-cannot-fail trap this project keeps paying for.
 const SETS_SRC = mustMatch(
-  /let allRows = null;[\s\S]*?\n {2}for \(const block of blocks\) \{[\s\S]*?\n {2}\}/,
+  /let allRows;[\s\S]*?\n {2}for \(const block of blocks\) \{[\s\S]*?\n {2}\}/,
   "the day read + done/hidden set construction in buildPublicTodoShare"
 );
 
@@ -52,7 +52,13 @@ function build({ rootProps = {}, rows = [], tombstoneReadThrows = false } = {}) 
     ? [{ id: "root-1", type: "day_root", properties: rootProps }].concat(rows)
     : rows.slice();
   const ctx = {
-    console: { warn: (...a) => warnings.push(a.map(String).join(" ")) },
+    // BOTH channels: the fail-closed path logs with console.error, and a fake missing the
+    // method turns the real throw into "console.error is not a function" — a harness bug
+    // masquerading as the assertion passing for the wrong reason.
+    console: {
+      warn: (...a) => warnings.push(a.map(String).join(" ")),
+      error: (...a) => warnings.push(a.map(String).join(" ")),
+    },
     date: "2026-08-04",
     share: { workspace_id: "ws-1" },
     // A pure filter in production (server.js), so a pass-through is faithful here.
@@ -66,24 +72,23 @@ function build({ rootProps = {}, rows = [], tombstoneReadThrows = false } = {}) 
         if (tombstoneReadThrows) throw new Error("db down");
         return allRows;
       },
-      getBlocksByDate: async (d, ws) => {
-        reads.push(["live", d, ws]);
-        return allRows.filter((r) => !r.deleted_at);
-      },
     },
   };
   vm.createContext(ctx);
+  // The IIFE's rejection is captured, so a fail-closed throw is observable rather than an
+  // unhandled rejection that crashes the runner.
   vm.runInContext(
-    IDENTITY_SRC + "\n(async () => {\n" + SETS_SRC + "\nglobalThis.__out = { done: [...doneIds].sort(), hidden: [...hiddenIds].sort(), blocks: blocks.length };\n})()",
+    IDENTITY_SRC + "\nglobalThis.__done = (async () => {\n" + SETS_SRC + "\nreturn { done: [...doneIds].sort(), hidden: [...hiddenIds].sort(), blocks: blocks.length };\n})().then(o=>{globalThis.__out=o;},e=>{globalThis.__err=e;});",
     ctx
   );
   // Copied into HOST arrays: the vm has its own realm, so an array built in there is not
   // reference-equal to Array.prototype out here and deepStrictEqual rejects it on the
   // prototype alone, with a "same structure but not reference-equal" message that says
   // nothing about the assertion you meant to make.
-  return new Promise((r) => setTimeout(() => r({
-    done: [...ctx.__out.done], hidden: [...ctx.__out.hidden], blocks: ctx.__out.blocks, warnings, reads,
-  }), 0));
+  return new Promise((r) => setTimeout(() => {
+    if (ctx.__err) return r({ threw: String(ctx.__err && ctx.__err.message), warnings, reads });
+    r({ done: [...ctx.__out.done], hidden: [...ctx.__out.hidden], blocks: ctx.__out.blocks, warnings, reads });
+  }, 0));
 }
 
 const row = (id, props, extra) => ({ id, type: "block", properties: props || {}, ...(extra || {}) });
@@ -132,17 +137,23 @@ test("a live row is NOT hidden", async () => {
 // can put its aliases in the hide set. The accepted degradation is: keep serving the list,
 // keep the overlay hide set, and SAY SO. The warning is the whole safety story, so it is
 // asserted rather than swallowed.
-test("a failed tombstone read degrades the hide set to the overlay, LOUDLY", async () => {
+// REWRITTEN after review round 2. The first cut degraded to an overlay-only hide set, which is
+// fail-OPEN: with no tombstones the `deleted_at` aliases never reach `hiddenIds`, so the
+// timeline twin of a task the owner DELETED gets published again to whoever holds the link, and
+// only pre-B1 `_deleted` entries still hide anything. The comment claimed the opposite of what
+// the code did. Nor is the failure self-cancelling: the tombstone-inclusive scan is the LARGER
+// of the two queries on a ~2000-block day, so a statement timeout hits it while the narrower
+// live query would have succeeded — exactly the state that tripped the branch.
+test("a failed tombstone read REFUSES to publish rather than hiding nothing", async () => {
   const out = await build({
     rootProps: { _deleted: ["overlay-gone"] },
     rows: [row("blk-9", { local_id: "gone-1", title: "x" }, { deleted_at: "2026-08-04T10:00:00Z" })],
     tombstoneReadThrows: true,
   });
-  assert.deepEqual(out.hidden, ["overlay-gone"], "falls back to the overlay, does not throw and does not empty the set");
-  assert.equal(out.warnings.length, 1, "a silent degradation publishes a deleted task with nothing in the log");
+  assert.equal(out.threw, "db down", "the caller answers a generic 500 and the viewer re-polls in 15s");
+  assert.equal(out.warnings.length, 1, "and it is logged, not swallowed");
   assert.match(out.warnings[0], /tombstone read failed/);
-  assert.ok(out.blocks >= 1, "and the live rows still come through, from the fallback read");
-  assert.deepEqual(out.reads.map((r) => r[0]), ["all", "live"], "the live read is the fallback, not a second unconditional scan");
+  assert.deepEqual(out.reads.map((r) => r[0]), ["all"], "no second scan to paper over it");
 });
 
 // The perf half, asserted because it is easy to regress back into two scans: the

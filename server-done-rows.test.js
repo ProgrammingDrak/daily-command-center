@@ -178,8 +178,10 @@ test("un-check clears the LEGACY _done entry too, and only that entry", () => {
 });
 
 test("toggleDone's un-check branch calls it (the snap-back regression)", () => {
-  assert.ok(/manualDone\.delete\(id\);delete doneAt\[id\];log\("unchecked",id\);[\s\S]{0,400}?_clearRowDone\(id\);/.test(scheduleSource),
-    "the un-check branch must clear the row before saving");
+  // The call is wrapped in `_refreshResponsibilityAfterDone(...)` now, so the branch chains the
+  // responsibility-cadence refresh on the un-check write as well as the completion write.
+  assert.ok(/manualDone\.delete\(id\);delete doneAt\[id\];log\("unchecked",id\);[\s\S]{0,900}?_clearRowDone\(id\)/.test(scheduleSource),
+    "the un-check branch must clear the row");
 });
 
 // ── half 3: the write side of the overlay is GONE (C5b) ──────────────────────

@@ -437,15 +437,25 @@ async function buildPublicTodoShare(share, dateStr, req) {
   // tell" must not publish a deleted task, so the hide set falls back to overlay-only and
   // says so. `filterLegacyGcalBlocks` is a pure filter, so applying it before the split is
   // identical for `blocks` and additionally keeps legacy gcal tombstones out of `hiddenIds`.
-  let allRows = null;
+  // FAILS CLOSED, and round 1 of review got this backwards too. Its first cut degraded to an
+  // overlay-only hide set on a failed tombstone read, which IS fail-OPEN: with `tombstoned`
+  // empty no `deleted_at` alias reaches `hiddenIds`, so the timeline twin of a task the owner
+  // deleted is published again to whoever holds the link, and only pre-B1 `_deleted` entries
+  // still hide anything. Nor does the failure cancel itself out — the tombstone-inclusive scan
+  // is the LARGER of the two queries on a ~2000-block day, so a statement timeout or pool
+  // exhaustion hits it while the narrower live query would have succeeded, which is precisely
+  // the state that tripped the branch. The caller answers a generic 500 and the viewer
+  // re-polls in 15s, so refusing to publish is cheap and correct.
+  let allRows;
   try {
     allRows = await blockDB.getBlocksByDateIncludingDeleted(date, share.workspace_id);
   } catch (e) {
-    console.warn("[public-share] tombstone read failed; hide set is overlay-only for " + date + ":", e.message);
+    console.error("[public-share] tombstone read failed for " + date + ", refusing to publish:", e.message);
+    throw e;
   }
-  const dayRows = filterLegacyGcalBlocks(allRows || await blockDB.getBlocksByDate(date, share.workspace_id));
+  const dayRows = filterLegacyGcalBlocks(allRows);
   const blocks = dayRows.filter(b => b && !b.deleted_at);
-  const tombstoned = allRows ? dayRows.filter(b => b && b.deleted_at) : [];
+  const tombstoned = dayRows.filter(b => b && b.deleted_at);
   const root = blocks.find(b => b.type === "day_root");
   const rootProps = root && root.properties ? root.properties : {};
   const rootDone = rootProps._done || {};
@@ -835,13 +845,16 @@ async function appendPublicShareTriageItem({ share, date, title, durationMinutes
   // ensureWorkspacesForAllUsers for that boot. Deploys are restarts, so a single guest
   // submission armed it.
   await blockDB.saveDccState(date, state, (row && row.user_id) || share.owner_id || null, share.workspace_id);
-  try {
-    writeJSON(dayFile, state);
-    updateManifest(date);
-    if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, state);
-  } catch (e) {
-    console.error("[public-todo] file mirror failed (db save succeeded):", e.message);
-  }
+  // NO FILE MIRROR FROM THE ANONYMOUS PATH. `buildDayResponse`'s blocker 2 claims the
+  // cross-tenant leak is closed "BY NOT WRITING" — and this writer, reached by the same
+  // anonymous POST, was still writing a workspace's COMPLETE day (timeline, triage history,
+  // glymphatic brief) into `data/state/days/<date>.json` and, for today, the global
+  // `DAY_STATE_FILE`. Those are the two files `readDccDayState` and `dayStateUnavailable`
+  // read on behalf of OTHER workspaces, so the leak was closed on the read side and left open
+  // on the write side, in one change.
+  //
+  // Nothing needs the mirror here any more: Postgres is the durable store as of this phase
+  // and `buildDayResponse` prefers the row, so dropping it costs nothing.
   return item;
 }
 
@@ -1301,7 +1314,17 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     const visitorName = String(body.visitorName || body.visitor_name || "").trim().slice(0, 80);
     const visitorEmail = String(body.visitorEmail || body.visitor_email || "").trim().slice(0, 180);
     const note = String(body.note || "").trim().slice(0, 1000);
-    const date = isValidDate(body.date) ? body.date : getTodayStr();
+    // CLAMPED to today or tomorrow. The 50-item cap is per (date, workspace) and the guest
+    // chose the date, so without this it bounded nothing: a script walks dates, 50 items each,
+    // minting a `dcc_state` row per date across every date Postgres accepts. `isValidDate` is
+    // only a shape check (`/^\d{4}-\d{2}-\d{2}$/`, no range). Costs nothing to close — the real
+    // client never sends `date` at all (public-todo-share.js posts name, email, title,
+    // durationMinutes, note), so an arbitrary one is a stale client or an attempt to spread
+    // past the cap.
+    const todayStr = getTodayStr();
+    const tomorrowStr = new Date(new Date(`${todayStr}T12:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
+    const requestedDate = isValidDate(body.date) ? body.date : todayStr;
+    const date = (requestedDate === todayStr || requestedDate === tomorrowStr) ? requestedDate : todayStr;
     // AWAITED as of C5b: the writer persists to Postgres now, and its DB save throws on
     // failure. Without the await this handler would answer 201 for a task that never landed,
     // and the enclosing catch (which turns it into a 500) would never see the rejection.

@@ -316,13 +316,31 @@ module.exports = function mount(app, ctx) {
       dbFailed = true;
       console.error(`[dcc] day-state read failed for ${date}:`, e.message);
     }
+    // ★ THE MIRROR IS AN OUTAGE STAND-IN ONLY, and round 1 of review got this backwards.
+    //
+    // It consulted the mirror BEFORE testing `dbFailed`, so a clean no-row read returned
+    // `data/state/days/<date>.json` — which has no workspace segment and is written by
+    // `persistDccDay` for every workspace. Every caller feeds this into a full replace, so:
+    // user B posts `/api/dcc/brief/decision` for a date where B's workspace has no row, the
+    // per-date file holds workspace A's day, and B's row is created holding A's timeline. B's
+    // `/api/state/day` then serves it and B's public share publishes A's task titles to
+    // anonymous viewers. A transient file read becomes a permanent cross-tenant row.
+    //
+    // The same PR hardened the guest writer against exactly this ("a no-row read seeds a
+    // SKELETON, never the workspace-less file mirror") and asserted it in a test. Same
+    // hazard, opposite policy, one change. This is the policy both now follow: a read that
+    // SUCCEEDS with no row means no day for THIS workspace, and the unattributable mirror is
+    // only ever better than nothing when we could not read at all.
+    //
     // `readDayStateMirror` (server.js, shared through ctx) is the one implementation of the
     // per-date-file-then-date-matching-legacy-file ladder, and it stamps the requested date
     // onto the result. This used to be a hand-copy that returned the file's own `date`, so a
     // mirror with a stale date field fed a full-replace under the wrong day.
-    const mirror = readDayStateMirror(date, DAY_STATE_FILE);
-    if (mirror) return mirror;
-    if (dbFailed) throw new Error(`Day state unavailable for ${date}: Postgres read failed and no file mirror exists`);
+    if (dbFailed) {
+      const mirror = readDayStateMirror(date, DAY_STATE_FILE);
+      if (mirror) return mirror;
+      throw new Error(`Day state unavailable for ${date}: Postgres read failed and no file mirror exists`);
+    }
     return emptyFallback;
   }
 

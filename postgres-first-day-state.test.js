@@ -229,20 +229,32 @@ test("BASE state for a mutation is the Postgres row, not the file (blocker 3)", 
   assert.equal(out.schedule.timeline[0].label, "from Postgres");
 });
 
-test("no row falls back to the day file, then to DAY_STATE_FILE, then to the caller's empty", async () => {
-  assert.equal((await runReadDcc({ file: dayWithTimeline("day file") })()).schedule.timeline[0].label, "day file");
-  assert.equal((await runReadDcc({ dayStateFile: dayWithTimeline("day-state") })()).schedule.timeline[0].label, "day-state");
+// INVERTED after review round 2, and this is the finding worth remembering: round 1's fix
+// consulted the mirror BEFORE testing whether the read had failed, so a clean no-row read
+// returned `data/state/days/<date>.json` — a file with no workspace segment that
+// `persistDccDay` writes for every workspace. Every caller feeds this into a full replace, so
+// workspace B posting a Brief decision on a date where B has no row would have created B's row
+// holding workspace A's day, then served and published it. The same PR hardened the guest
+// writer against exactly that and asserted it ("a no-row read seeds a SKELETON, never the
+// workspace-less file mirror") — same hazard, opposite policy, one change.
+test("a SUCCESSFUL no-row read never uses the workspace-less mirror", async () => {
   // Compared through JSON: the vm has its own realm, so an object built in there is not
   // reference-equal to one built out here and deepEqual rejects it on the prototype alone.
-  assert.equal(JSON.stringify(await runReadDcc({})()), JSON.stringify({ __fallback: true }));
+  const empty = JSON.stringify({ __fallback: true });
+  assert.equal(JSON.stringify(await runReadDcc({ file: dayWithTimeline("day file") })()), empty,
+    "a per-date file cannot be attributed to a workspace, so it is not a base for a full replace");
+  assert.equal(JSON.stringify(await runReadDcc({ dayStateFile: dayWithTimeline("day-state") })()), empty,
+    "and the last-published-day file certainly is not");
+  assert.equal(JSON.stringify(await runReadDcc({})()), empty, "no row means no day for THIS workspace");
 });
 
-test("a failed read falls through to the file instead of losing the ingest", async () => {
-  // These are ingest paths. Refusing an ingest because a READ hiccuped drops the incoming
-  // packet; the Postgres WRITE still throws (persistDccDay's contract), so a save cannot
-  // silently half-land.
-  const out = await runReadDcc({ dbThrows: true, file: dayWithTimeline("mirror") })();
-  assert.equal(out.schedule.timeline[0].label, "mirror");
+test("the mirror IS used when the read failed — better than overwriting a day we could not read", async () => {
+  assert.equal((await runReadDcc({ dbThrows: true, file: dayWithTimeline("day file") })()).schedule.timeline[0].label, "day file");
+  assert.equal((await runReadDcc({ dbThrows: true, dayStateFile: dayWithTimeline("day-state") })()).schedule.timeline[0].label, "day-state");
+});
+
+test("a failed read with NO mirror throws rather than handing back a base to full-replace with", async () => {
+  await assert.rejects(runReadDcc({ dbThrows: true })(), /Day state unavailable/);
 });
 
 // ★ THE WIRING, not just the helper. Blocker 3 is a property of the six CALL SITES -- the
@@ -318,7 +330,12 @@ test("a guest task is PERSISTED TO POSTGRES, not just to an ephemeral file (bloc
   assert.equal(items[0].title, "Guest task");
   assert.equal(items[0].source, "public_share");
   assert.equal(item.id, items[0].id);
-  assert.ok(writes.length >= 1, "and the file mirror is still written");
+  // NO FILE MIRROR from this path (review round 2). `buildDayResponse` claims the cross-tenant
+  // leak is closed "BY NOT WRITING", and this anonymous writer was still putting a workspace's
+  // complete day into the workspace-less `data/state/days/<date>.json` and the global
+  // `DAY_STATE_FILE` — the two files other workspaces read. Closed on the read side, open on
+  // the write side, in one change.
+  assert.deepEqual(writes, [], "the anonymous path must not write the workspace-less mirrors");
 });
 
 test("the append is based on the Postgres row, so it cannot full-replace a real day", async () => {
@@ -390,6 +407,18 @@ test("the owner's user_id is PRESERVED, not erased", async () => {
   const noRow = runAppend({ dbRow: null });
   await noRow.call();
   assert.equal(noRow.saved[0].userId, 42, "the share's owner_id");
+});
+
+// The cap is per (date, workspace) and the guest chose the date, so without a clamp it bounded
+// nothing: a script walks dates, 50 items each, minting a `dcc_state` row per date across every
+// date Postgres accepts. `isValidDate` is only a shape check with no range. The real client
+// never sends `date` at all, so clamping breaks nothing.
+test("a guest-chosen date is clamped to today or tomorrow, so the cap actually bounds", () => {
+  const handler = SOCIAL_SRC.slice(SOCIAL_SRC.indexOf('app.post("/api/public/todo-share/:token/tasks"'));
+  const region = handler.slice(0, handler.indexOf("appendPublicShareTriageItem"));
+  assert.match(region, /requestedDate === todayStr \|\| requestedDate === tomorrowStr/,
+    "an arbitrary guest date must not reach the writer");
+  assert.match(region, /: todayStr;/, "and anything else falls back to today");
 });
 
 test("guest submissions are CAPPED, because this is a durable unauthenticated append", async () => {

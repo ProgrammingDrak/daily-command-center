@@ -194,7 +194,7 @@ const dayRows = () => [
 ];
 
 function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30", _blockId: "row-t1" }], rescheduleRemovesRow = false, rescheduleResult = undefined, rows = dayRows(), dayRootProps = {} } = {}) {
-  const calls = { reschedule: [], commit: [], credit: [], confirm: [], patched: [], toasts: [], rowWrites: [] };
+  const calls = { reschedule: [], commit: [], credit: [], confirm: [], patched: [], toasts: [], rowWrites: [], backlogSync: [] };
   const manualDone = new Set();
   const dayRoot = { id: "root-" + PAST, date: PAST, type: "day_root", properties: dayRootProps };
   // One day_root PER DATE, registered on demand. The cross-day fallback writes the TARGET
@@ -221,6 +221,10 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
     relOf: () => null,
     parentIdOf: () => null,
     _viewedDateStr: () => viewing,
+    // Recorded, not stubbed away: the Backlog projection is in-memory and only ever REMOVED
+    // here, so a completion that promotes a dateless row and skips this leaves the finished
+    // task in the drawer and both badge counts.
+    _syncBacklogProjection: (evId, d) => calls.backlogSync.push([evId, d]),
     // The real predicate, derived from `rows`: match on local_id, row id or ev._blockId,
     // scoped to the requested date exactly as state.js does. Returning a constant here
     // would let a broken resolver pass.
@@ -245,9 +249,12 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
       if (!next) return null;
       row.properties = next;
       // `extra` is the top-level COLUMN write (today just {date}), which is how a completion
-      // promotes a dateless Unscheduled row onto its day. Applying it here rather than
-      // ignoring it is what lets the dateless test below fail when it is dropped.
-      if (extra && extra.date) row.date = extra.date;
+      // promotes a dateless Unscheduled row onto its day -- and how un-checking gives the date
+      // back. Gated on `!== undefined`, exactly as `db.updateBlock` does
+      // (`const newDate = date !== undefined ? date : existing.date`): a truthiness check here
+      // silently ignores `{date: null}`, which is a fake gentler than production and would
+      // report a working un-promote as broken.
+      if (extra && extra.date !== undefined) row.date = extra.date;
       calls.rowWrites.push({ blockId, properties: { ...next }, extra: extra || null });
       return Promise.resolve();
     },
@@ -547,6 +554,76 @@ test("the subtask cascade persists EACH child's row, not just the parent's", asy
   assert.equal(rows[0].properties.status, "done", "the parent");
   assert.equal(rows[1].properties.status, "done",
     "and the child -- unpersisted, it comes back unfinished and lands back on today");
+});
+
+// ★ THE WALK'S POOL IS TASK ROWS ONLY. Round 1 widened the cascade to read `parent_id` citing
+// lib/reschedule.js's canonical walk — but that walk is fed a FILTERED pool
+// (`type='block' AND (local_id IS NOT NULL OR kind='task')`), and db.js records that the filter
+// is the only thing stopping a subtree walk from reaching a meeting's artifacts. Unfiltered, a
+// meeting row (which HAS a check-off in the List view) cascaded `status:"done"` onto its
+// meeting_prep / meeting_summary / meeting_transcript / proposed_action_item children — and
+// approveActions skips proposals whose status is "approved" or "placed", so overwriting
+// "placed" with "done" makes a PLACED proposal re-approvable, minting a duplicate task and
+// wiping its placedDate.
+test("a cross-day completion never touches non-task children (a meeting's artifacts)", async () => {
+  const rows = [
+    // A meeting: no local_id, keyed by row id, completable as the TARGET.
+    { id: "row-mtg", date: PAST, type: "block", properties: { title: "Standup", kind: "meeting", type: "meeting", status: "open" } },
+    // Its artifacts, all parent_id children on the same date. None is a task row.
+    { id: "row-prep", date: PAST, type: "block", parent_id: "row-mtg", properties: { title: "Prep", kind: "meeting_prep", status: "ready" } },
+    { id: "row-sum", date: PAST, type: "block", parent_id: "row-mtg", properties: { title: "Summary", kind: "meeting_summary", status: "ready" } },
+    { id: "row-prop", date: PAST, type: "block", parent_id: "row-mtg", properties: { title: "Follow up", kind: "proposed_action_item", status: "placed" } },
+    // A REAL subtask of the meeting still has to cascade.
+    { id: "row-kid", date: PAST, type: "block", parent_id: "row-mtg", properties: { local_id: "mtg-kid", title: "Send notes", status: "open" } },
+  ];
+  const { context } = makeChainCtx({
+    viewing: TODAY, rows,
+    scheduled: [{ id: "row-mtg", title: "Standup", type: "meeting", start: "09:00", end: "09:15", _blockId: "row-mtg" }],
+  });
+  vm.runInContext(`commitDoneOnDate("row-mtg","${PAST}")`, context);
+  await flush();
+  await flush();
+  assert.equal(rows[0].properties.status, "done", "the meeting itself completes");
+  assert.equal(rows[4].properties.status, "done", "and its real subtask cascades");
+  assert.equal(rows[1].properties.status, "ready", "meeting_prep is untouched");
+  assert.equal(rows[2].properties.status, "ready", "meeting_summary is untouched");
+  assert.equal(rows[3].properties.status, "placed",
+    "a PLACED proposal must stay placed -- 'done' would put it back in the approvable set");
+});
+
+// The date stamp has to be REVERSIBLE, or a mis-click permanently evicts a task from the
+// Backlog: it had folded onto whatever day you were viewing and shown in the drawer, and
+// afterwards it is pinned to one date and gone from the drawer with no visible action taken.
+test("un-checking a promoted dateless row puts it back in the Backlog", async () => {
+  const rows = [{ id: "row-u1", date: null, type: "block", properties: { local_id: "u1", title: "Someday", kind: "backlog", status: "open" } }];
+  const { context, calls } = makeChainCtx({
+    viewing: TODAY, rows,
+    scheduled: [{ id: "u1", title: "Someday", type: "task", start: "00:00", end: "00:30", untimed: true, _blockId: "row-u1" }],
+  });
+  vm.runInContext('toggleDone("u1")', context);
+  await flush();
+  assert.equal(rows[0].date, TODAY, "promoted onto the day it was finished");
+  assert.equal(rows[0].properties._doneStampedDate, TODAY, "and marked as a completion-stamped date");
+  assert.deepEqual(calls.backlogSync[calls.backlogSync.length - 1], ["u1", TODAY], "and removed from the Backlog projection");
+  vm.runInContext('toggleDone("u1")', context);
+  await flush();
+  assert.equal(rows[0].date, null, "un-checking gives the date back");
+  assert.equal(rows[0].properties.kind, "backlog", "and restores it as backlog material");
+  assert.equal(rows[0].properties._doneStampedDate, undefined, "with the marker cleared");
+  assert.deepEqual(calls.backlogSync[calls.backlogSync.length - 1], ["u1", null], "and re-hydrated into the projection");
+});
+
+// ...and a date the USER chose is not a completion stamp, so it must survive an un-check.
+test("un-checking a genuinely DATED task does not strip its date", async () => {
+  const rows = [{ id: "row-d1", date: TODAY, type: "block", properties: { local_id: "d1", title: "Real task", status: "done", done: true } }];
+  const { context, calls } = makeChainCtx({
+    viewing: TODAY, rows,
+    scheduled: [{ id: "d1", title: "Real task", type: "task", start: "09:00", end: "09:30", _blockId: "row-d1" }],
+  });
+  vm.runInContext('manualDone.add("d1"); toggleDone("d1")', context);
+  await flush();
+  assert.equal(rows[0].date, TODAY, "no _doneStampedDate marker, so the date is the user's");
+  assert.deepEqual(calls.backlogSync, [], "and the Backlog projection is not involved at all");
 });
 
 test("a refused move SAYS so, instead of closing the dialog in silence", async () => {

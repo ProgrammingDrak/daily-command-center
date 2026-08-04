@@ -436,11 +436,32 @@ async function commitDoneOnDate(id,dateStr,opts){
     // make this loop forever — the shape C3's round-3 fix turned into a re-mint bug when it
     // keyed on the wrong id. `day_root` is excluded from the frontier, which is the hazard
     // collectSubtreeBlockIds guards with its own `walkRowIds`.
+    // ★ THE POOL IS FILTERED TO TASK ROWS, and leaving it unfiltered was a real bug.
+    //
+    // `collectSubtreeBlockIds` is never handed a raw day: the route feeds it
+    // `db.getRescheduleSubtreePool`, whose predicate is
+    // `type='block' AND (local_id IS NOT NULL OR kind='task')` — deliberately NOT
+    // `dcc_is_task_row`, because db.js records that the looser test admits meeting artifacts
+    // (`meeting_prep` / `meeting_summary` / `meeting_transcript` / `proposed_action_item`),
+    // which ARE genuine `parent_id` children of a meeting, and "that exclusion is the only
+    // thing preventing" a subtree walk from reaching them. Reading `parent_id` without it did
+    // exactly that: a meeting row has a check-off in the List view, so completing one on a
+    // past day cascaded `status:"done"` onto every artifact hanging off it. That is not
+    // cosmetic — `meeting-automation.js approveActions` skips proposals whose status is
+    // `"approved"` or `"placed"`, so overwriting `"placed"` with `"done"` puts a PLACED
+    // proposal back in the approvable set, which mints a duplicate task and wipes its
+    // placedDate/placedStart.
+    //
+    // `target` is still resolved from the UNFILTERED rows above, because a meeting carries no
+    // `local_id` and must stay completable as the target itself — the same split the server
+    // route makes by passing the parent in separately from the pool.
+    const _walkable=b=>{const p=(b&&b.properties)||{};return !!b&&b.type==="block"&&(!!p.local_id||p.kind==="task");};
+    const pool=rows.filter(_walkable);
     const linkIds=new Set(_idsOf(target));
     const rowIds=new Set([String(target.id)]);
     for(let i=0;i<subtree.length;i++){
-      rows.forEach(b=>{
-        if(!b||b.deleted_at||b.type==="day_root"||seen.has(String(b.id)))return;
+      pool.forEach(b=>{
+        if(!b||b.deleted_at||seen.has(String(b.id)))return;
         const p=b.properties||{};
         const edge=p.subtaskOf||p.wrapId||null;
         const joined=(edge&&linkIds.has(String(edge)))
@@ -742,16 +763,49 @@ function _persistDone(id,done,opts){
     // `kind:"backlog"` is dropped with it, matching `scheduleRowOnDay`: a row that now has a
     // date is not backlog material any more.
     const stampDay=!!(done&&block&&!block.date&&dateStr);
+    // ...and the promotion is REVERSIBLE, because a mis-click must not permanently evict a
+    // task from the Backlog. `_openRowProps` only cleared the completion fields, so
+    // check-then-uncheck left an OPEN, DATED, non-backlog row: it had folded onto whatever day
+    // you were viewing and shown in the drawer, and afterwards it was pinned to one date and
+    // gone from the drawer, with no visible action taken and no way back but an explicit
+    // Move-to-backlog. `_doneStampedDate` records that this date came from a completion, so the
+    // un-check can tell it apart from a date the user actually chose.
+    const unstamp=!!(!done&&block&&block.date&&((block.properties||{})._doneStampedDate===block.date));
     write=enqueueRowPropsWrite(
       blockId,
       p=>{
-        if(!done)return _openRowProps(p);
+        if(!done){
+          const open=_openRowProps(p);
+          if(!open)return null;
+          if(unstamp){
+            delete open._doneStampedDate;
+            if(open._wasBacklog){open.kind="backlog";delete open._wasBacklog;}
+          }
+          return open;
+        }
         const next=_doneRowProps(p,opts.completedAt);
-        if(stampDay&&next.kind==="backlog")delete next.kind;
+        if(stampDay){
+          next._doneStampedDate=dateStr;
+          if(next.kind==="backlog"){delete next.kind;next._wasBacklog=true;}
+        }
         return next;
       },
-      stampDay?{date:dateStr}:undefined
+      stampDay?{date:dateStr}:(unstamp?{date:null}:undefined)
     );
+    // The Backlog projection is in-memory and only ever REMOVED by `_syncBacklogProjection`
+    // (`hydrateBacklogFromBlocks` is additive), so without this the drawer and both badge
+    // counters keep the finished task until a date switch — and the acting tab never
+    // re-hydrates, because the PATCH's own SSE echo is self-suppressed. `_writeRowDate` calls
+    // it for exactly this reason and its comment names the shape: an invariant enforced at one
+    // call site and merely assumed at the other. This is the third date-writing caller.
+    if((stampDay||unstamp)&&write&&typeof _syncBacklogProjection==="function"){
+      const TM=window.DCC&&window.DCC.TaskModel;
+      // TaskModel.backlogKey, not `local_id||blockId`: the projection stores a row with no
+      // local_id under a "blk-" prefix, and deriving the key the other way looks up something
+      // the projection never stored.
+      const bkKey=(TM&&typeof TM.backlogKey==="function")?TM.backlogKey(block):id;
+      Promise.resolve(write).then(()=>_syncBacklogProjection(bkKey,stampDay?dateStr:null)).catch(()=>{});
+    }
   }else if(done){
     console.warn("[done] no row resolves for "+id+" — persisting to the legacy _done overlay");
     return _patchOverlayDone(id,true,opts.completedAt);
@@ -763,7 +817,7 @@ function _persistDone(id,done,opts){
 }
 // Kept as the un-check spelling every caller already used. Now one line, because the
 // row write and the overlay clear are the same primitive read in the other direction.
-function _clearRowDone(id,opts){_persistDone(id,false,opts);}
+function _clearRowDone(id,opts){return _persistDone(id,false,opts);}
 
 // D1's belt-and-suspenders client cadence POST is GONE (C5b step 7). It called
 // `POST /api/responsibilities/:id/complete`, whose handler is
@@ -793,7 +847,14 @@ function toggleDone(id,opts){
     // Clears the row AND any legacy `_done` entry for this id — see `_persistDone`.
     // Either half left set re-hydrates the completion on the next load and the row snaps
     // straight back to done.
-    _clearRowDone(id);
+    //
+    // The sidebar refresh is chained on the un-check too, not just on completion. The row
+    // write clears `status`/`completedAt`, which fires db.js's propagateResponsibilityDone in
+    // its `applyUncompletion` direction — and since the PATCH's own SSE echo is
+    // self-suppressed in the acting tab, nothing else re-reads responsibilities, so the
+    // sidebar kept showing the pushed-forward cadence the server had just walked back.
+    const _uev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
+    _refreshResponsibilityAfterDone(_uev,_clearRowDone(id));
     render();return;
   }
 
