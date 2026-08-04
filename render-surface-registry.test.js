@@ -355,11 +355,14 @@ test("★ stripJsComments strips comments without eating code (its own edge case
   assert.equal(strip("var r = arr[0] / 2; keep();"), "var r = arr[0] / 2; keep();");
   // An unterminated block comment consumes the tail rather than throwing.
   assert.doesNotThrow(() => stripJsComments("a(); /* never closed"));
-  // An unterminated REGEX must bail at the newline rather than swallowing the file: without
-  // the newline bail, an odd stray slash eats every line after it and the guard goes blind
-  // for the rest of the file. `a / b` on one line then a violation on the next.
-  const stray = 'const r = x /y;\nconst a = scheduled.filter(ev=>!isDone(ev));';
-  assert.match(strip(stray), /scheduled\.filter/, "an unterminated regex must not swallow the next line");
+  // An unterminated REGEX must bail at the NEWLINE. Not because it would swallow text -- the
+  // scanner copies what it consumes -- but because without the bail the following lines are
+  // read as regex BODY, so their `//` never registers as a comment and a comment that merely
+  // NAMES the retired pattern becomes a false positive. That is the exact failure the comment
+  // strip exists to prevent, arriving from the other direction.
+  const strayRegex = "const r = /abc;\n// the old scheduled.filter(ev=>!isDone(ev)) is gone\n";
+  assert.equal(SCHEDULED_DERIVE_RX.test(stripJsComments(strayRegex)), false,
+    "an unterminated regex must not turn the next line's comment into code");
   assert.doesNotThrow(() => stripJsComments("const r = /never closed"));
   assert.equal(stripJsComments(""), "");
   assert.equal(stripJsComments(null), "");
