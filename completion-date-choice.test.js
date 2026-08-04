@@ -37,6 +37,14 @@ const CDC_SRC = mustMatch(
 );
 const TOGGLE_DONE_SRC = mustMatch(SCHEDULE_SRC, /function toggleDone\(id,opts\)\{[\s\S]*?\n\}\n/, "toggleDone");
 const COMMIT_DONE_SRC = mustMatch(SCHEDULE_SRC, /async function commitDoneOnDate\(id,dateStr,opts\)\{[\s\S]*?\n\}\n/, "commitDoneOnDate");
+// C5b's done-writer region, run for real rather than stubbed: `_doneRowProps` through
+// `_clearRowDone`. Stubbing `_persistDone` is what would make this whole file assert
+// nothing about where a completion actually lands.
+const PERSIST_DONE_SRC = mustMatch(
+  SCHEDULE_SRC,
+  /function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _clearRowDone\(id,opts\)\{[^\n]*\}/,
+  "the C5b _persistDone region in public/js/schedule.js"
+);
 
 // Let the reschedule -> commit promise chain settle. The chain awaits a fetch and a
 // PATCH, so one microtask tick is not enough.
@@ -165,9 +173,28 @@ test("the modal names the task and the date it was scheduled for", () => {
 
 // ── Context for the CHAIN half: the real toggleDone + commitDoneOnDate, with the
 // mover and the ledger spied on.
-function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30" }], rescheduleRemovesRow = false, rescheduleResult = undefined } = {}) {
-  const calls = { reschedule: [], commit: [], credit: [], confirm: [], patched: [], toasts: [] };
+// ── ONE view of "which rows exist", for every question the harness is asked ──
+//
+// C5a's most expensive mock bug was a pool that held three different views of "does this
+// row exist" across its closure, exact, UPDATE and DELETE handlers. So here
+// `_findTaskBlockForDate`, the `/api/blocks?date=` fetch and every row write read and
+// mutate the SAME array. A fixture cannot claim a row exists for one question and not
+// another, and a write is observable by the next read the way it is in production.
+//
+// The default day is the REALISTIC shape: t1 has a row on the day being viewed, and that
+// row has a subtask child. A day containing only a day_root (which is what this harness
+// used to return) sends every completion down the row-less fallback, so the row write and
+// the subtree cascade would both read as covered while never executing.
+const dayRows = () => [
+  { id: "row-t1", date: PAST, type: "block", properties: { local_id: "t1", title: "Ship the thing", status: "open" } },
+  { id: "row-t1-kid", date: PAST, type: "block", properties: { local_id: "t1-kid", title: "A step", subtaskOf: "t1", status: "open" } },
+];
+
+function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30", _blockId: "row-t1" }], rescheduleRemovesRow = false, rescheduleResult = undefined, rows = dayRows(), dayRootProps = {} } = {}) {
+  const calls = { reschedule: [], commit: [], credit: [], confirm: [], patched: [], toasts: [], rowWrites: [] };
   const manualDone = new Set();
+  const dayRoot = { id: "root-" + PAST, date: PAST, type: "day_root", properties: dayRootProps };
+  const findRow = (blockId) => rows.concat([dayRoot]).find((r) => r.id === blockId) || null;
   const context = {
     console,
     scheduled,
@@ -177,12 +204,37 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
     __state: { date: viewing },
     log: () => {},
     render: () => {},
-    saveDoneState: () => {},
     isDone: (ev) => manualDone.has(ev && ev.id),
     childrenOf: () => [],
     relOf: () => null,
     parentIdOf: () => null,
-    _clearRowDone: () => {},
+    _viewedDateStr: () => viewing,
+    // The real predicate, derived from `rows`: match on local_id, row id or ev._blockId,
+    // scoped to the requested date exactly as state.js does. Returning a constant here
+    // would let a broken resolver pass.
+    _findTaskBlockForDate: (id, dateStr, ev) => {
+      const matches = rows.filter((b) => {
+        const ids = [b.properties && b.properties.local_id, b.id];
+        if (ev && ev._blockId) ids.push(ev._blockId);
+        // The trailing `b.id === ev._blockId` clause is part of the real predicate; a fake
+        // without it is narrower than production and fails a working un-check.
+        return ids.filter(Boolean).map(String).includes(String(id)) ||
+          !!(ev && ev._blockId && String(b.id) === String(ev._blockId));
+      });
+      if (!dateStr) return matches[0] || null;
+      return matches.find((b) => b.date === dateStr) || matches.find((b) => !b.date) || null;
+    },
+    // Applies the merge to the SAME row objects the reads above see, and honors a null
+    // merge as "skip the write" the way state.js does.
+    enqueueRowPropsWrite: (blockId, merge) => {
+      const row = findRow(blockId);
+      if (!row || !row.properties) return null;
+      const next = merge(row.properties);
+      if (!next) return null;
+      row.properties = next;
+      calls.rowWrites.push({ blockId, properties: { ...next } });
+      return Promise.resolve();
+    },
     _onParentCompleted: () => {},
     _beginCompletionCelebration: () => null,
     _finishCompletionCelebration: () => {},
@@ -197,16 +249,33 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
     openCompletionDateConfirm: (id, src, today) => calls.confirm.push({ id, src, today }),
     awardSlotTaskCredit: (ev, opts) => calls.credit.push({ ev: { ...ev }, opts: { ...opts } }),
     localStorage: { getItem: () => null, setItem: () => {} },
-    // The real cross-date commit reads the target day and patches its day_root._done.
+    // The cross-date commit reads the target day's blocks, off the same `rows` store, so
+    // the day it sees is the day the row resolver sees. A day_root is always present (the
+    // server creates one per day) and is what the row-less fallback PATCHes.
     fetch: async (url, init) => {
       if (init && init.method === "PATCH") { calls.patched.push({ url, body: JSON.parse(init.body) }); return { ok: true, json: async () => ({}) }; }
-      return { ok: true, json: async () => [{ id: "root-" + TODAY, type: "day_root", properties: {} }] };
+      const m = /[?&]date=([^&]+)/.exec(String(url));
+      const date = m ? decodeURIComponent(m[1]) : null;
+      const onDay = rows.filter((r) => r.date === date);
+      return { ok: true, json: async () => (date === dayRoot.date ? [dayRoot] : [{ ...dayRoot, id: "root-" + date, date }]).concat(onDay) };
     },
-    window: { USE_BLOCKSTORE: { done: true }, TaskTypes: null },
+    window: { USE_BLOCKSTORE: { done: true }, TaskTypes: null, blockStore: { getDayRootId: () => dayRoot.id, get: findRow } },
     rescheduleTaskToDate: async (id, date, opts) => {
       calls.reschedule.push({ id, date, opts: { ...opts } });
-      // What the TRUE move does: _removeSubtreeFromScheduled drops the row out of
-      // `scheduled` before the completion is committed.
+      // What the TRUE move does, both halves. It RE-DATES the row and its subtree
+      // server-side (C3: one transaction, ids preserved) — without that the harness would
+      // hand every Today-choice completion a target day containing no row, sending it down
+      // the archive fallback and leaving the row write path unexercised.
+      if (rescheduleResult !== false) {
+        const moving = new Set([String(id)]);
+        rows.forEach((r) => {
+          const p = r.properties || {};
+          if (moving.has(String(p.local_id)) || moving.has(String(r.id))) { r.date = date; if (p.local_id) moving.add(String(p.local_id)); }
+        });
+        rows.forEach((r) => { const p = r.properties || {}; if (moving.has(String(p.subtaskOf)) || moving.has(String(p.wrapId))) r.date = date; });
+      }
+      // ...and _removeSubtreeFromScheduled drops the row out of `scheduled` before the
+      // completion is committed.
       if (rescheduleRemovesRow) {
         const i = scheduled.findIndex((e) => e.id === id);
         if (i >= 0) scheduled.splice(i, 1);
@@ -219,7 +288,9 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
   };
   context.USE_BLOCKSTORE = context.window.USE_BLOCKSTORE;
   vm.createContext(context);
-  vm.runInContext(TOGGLE_DONE_SRC + "\n" + COMMIT_DONE_SRC, context);
+  vm.runInContext(TOGGLE_DONE_SRC + "\n" + COMMIT_DONE_SRC + "\n" + PERSIST_DONE_SRC, context);
+  context.__rows = rows;
+  context.__dayRoot = dayRoot;
   // Wrap commitDoneOnDate so the chain's ordering is observable without stubbing it
   // out. Forward EVERY argument: a wrapper that drops the third one silently disables
   // the ev/award handoff it is here to observe, and the test then "fails" against a
@@ -228,7 +299,7 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
     "const __realCommit=commitDoneOnDate; commitDoneOnDate=async function(...a){__commitSpy(a[0],a[1],a[2]);return __realCommit(...a)};",
     Object.assign(context, { __commitSpy: (id, d, o) => calls.commit.push({ id, d, opts: o }) })
   );
-  return { context, calls, manualDone };
+  return { context, calls, manualDone, rows, dayRoot };
 }
 
 test("toggleDone(bringToToday) moves the task FIRST, then commits the completion on today", async () => {
@@ -264,15 +335,106 @@ test("source-date choice credits the ORIGIN day exactly once", async () => {
   assert.equal(calls.patched.length, 0, "same-day fast path: no cross-date day_root patch");
 });
 
-test("Today choice credits TODAY exactly once, and writes today's day_root overlay", async () => {
-  const { context, calls } = makeChainCtx();
+// ★ ADDED IN C5b AFTER A MUTATION CHECK CAUGHT THE GAP. Disabling the row write inside
+// `_persistDone` left this entire file green — so the same-day completion, which is the
+// path Drake clicks most, was asserted nowhere. Both same-day entrances are pinned: the
+// `commitDoneOnDate` fast path (below) and plain `toggleDone` on the day being viewed.
+test("the same-day fast path marks the ROW done (not just the in-memory registry)", async () => {
+  const { context, rows, calls, manualDone } = makeChainCtx();
+  vm.runInContext(`commitDoneOnDate("t1","${PAST}")`, context);
+  await flush();
+  const t1 = rows.find((r) => r.id === "row-t1");
+  assert.equal(t1.properties.status, "done", "the row carries it, so it survives a reload");
+  assert.ok(t1.properties.completedAt);
+  assert.ok(manualDone.has("t1"), "and the in-memory projection agrees");
+  assert.equal(calls.patched.length, 0, "no overlay write");
+});
+
+test("plain toggleDone on the day being viewed marks the ROW done, and un-checking clears it", async () => {
+  const todayRows = [{ id: "row-t1", date: TODAY, type: "block", properties: { local_id: "t1", title: "Ship the thing", status: "open" } }];
+  const { context, rows } = makeChainCtx({ viewing: TODAY, rows: todayRows });
+  vm.runInContext('toggleDone("t1")', context);
+  await flush();
+  assert.equal(rows[0].properties.status, "done");
+  vm.runInContext('toggleDone("t1")', context);
+  await flush();
+  assert.equal(rows[0].properties.status, "open", "un-checking re-opens the row");
+  assert.equal(rows[0].properties.completedAt, undefined, "and drops the completion stamp");
+});
+
+// C0 left `completedBy` behind on an un-check deliberately and flagged clearing it to this
+// phase: no done predicate reads it, but an OPEN row stamped `completedBy:"slack-events"`
+// is a lie to whoever greps for it next.
+test("un-checking clears completedBy, the provenance stamp C0 left behind", async () => {
+  const slackRows = [{ id: "row-t1", date: TODAY, type: "block", properties: { local_id: "t1", title: "Ship the thing", status: "done", done: true, completedAt: "2026-07-31T12:00:00Z", completedBy: "slack-events" } }];
+  const { context, rows } = makeChainCtx({ viewing: TODAY, rows: slackRows });
+  vm.runInContext('manualDone.add("t1"); toggleDone("t1")', context);
+  await flush();
+  assert.equal(rows[0].properties.status, "open");
+  assert.equal(rows[0].properties.completedBy, undefined, "provenance for a completion that no longer exists");
+});
+
+// The `_done` overlay is read-only legacy data now (sync.js), and a read-only source you
+// cannot clear is a completion that cannot be un-done: the next load re-hydrates it and the
+// row snaps straight back to done. That is the C0 wart, inverted.
+test("un-checking also removes a LEGACY _done entry for that id", async () => {
+  const todayRows = [{ id: "row-t1", date: TODAY, type: "block", properties: { local_id: "t1", title: "Ship the thing", status: "done", done: true } }];
+  const { context, dayRoot } = makeChainCtx({ viewing: TODAY, rows: todayRows, dayRootProps: { _done: { ids: ["t1", "other"], at: { t1: "x", other: "y" } } } });
+  vm.runInContext('manualDone.add("t1"); toggleDone("t1")', context);
+  await flush();
+  assert.deepEqual(dayRoot.properties._done.ids, ["other"], "only this id is removed");
+  assert.deepEqual(Object.keys(dayRoot.properties._done.at), ["other"]);
+});
+
+// ...and the inverse, because a PATCH per un-check on every ordinary task is pure write
+// amplification on the day_root. The queue honors a null merge for exactly this.
+test("un-checking an id that is NOT in _done writes nothing to the day_root", async () => {
+  const todayRows = [{ id: "row-t1", date: TODAY, type: "block", properties: { local_id: "t1", status: "done", done: true } }];
+  const { context, calls } = makeChainCtx({ viewing: TODAY, rows: todayRows, dayRootProps: { _done: { ids: ["someone-else"], at: {} } } });
+  vm.runInContext('manualDone.add("t1"); toggleDone("t1")', context);
+  await flush();
+  assert.deepEqual(calls.rowWrites.map((w) => w.blockId), ["row-t1"], "the row, and only the row");
+});
+
+// REWRITTEN IN C5b: this used to assert "writes today's day_root overlay". A cross-day
+// completion now writes the ROW, which is the whole point of the phase — the overlay is a
+// fact about an id on a day, so it could never travel with a task that changed days.
+test("Today choice credits TODAY exactly once, and marks the ROW done, not the overlay", async () => {
+  const { context, calls, rows } = makeChainCtx();
   vm.runInContext(`toggleDone("t1",{markOnDate:"${TODAY}",bringToToday:true})`, context);
   await flush();
   await flush();
   assert.equal(calls.credit.length, 1, "ONE credit -- a second would double-award the same task");
   assert.equal(calls.credit[0].opts.sourceDate, TODAY, "keyed to today, matching where the task now lives");
-  assert.equal(calls.patched.length, 1, "today's _done overlay is written once");
-  assert.deepEqual(calls.patched[0].body.properties._done.ids, ["t1"]);
+  const t1 = rows.find((r) => r.id === "row-t1");
+  assert.equal(t1.properties.status, "done", "the row carries the completion");
+  assert.ok(t1.properties.completedAt, "and when it happened");
+  assert.equal(calls.patched.length, 0, "the day_root _done overlay is NOT written any more");
+});
+
+// The bug this phase was asked to fix, stated as its own test: `_done` held a SINGLE id
+// with no subtree walk, so completing an unfinished parent left every child open and the
+// carryover collector re-offered them the next morning, forever.
+test("a cross-day completion cascades to the subtree", async () => {
+  const { context, rows } = makeChainCtx();
+  vm.runInContext(`toggleDone("t1",{markOnDate:"${TODAY}",bringToToday:true})`, context);
+  await flush();
+  await flush();
+  assert.equal(rows.find((r) => r.id === "row-t1").properties.status, "done");
+  assert.equal(rows.find((r) => r.id === "row-t1-kid").properties.status, "done",
+    "the child moved with its parent and completes with it");
+});
+
+// The residual shape, kept honest rather than silently dropped: an ev projected from
+// `schedule.timeline` on an archive day has no row to carry the fact. Measured on prod
+// 2026-08-04: 11 such entries, none newer than 2026-05-27.
+test("with NO row on the target date, the completion falls back to that day's _done", async () => {
+  const { context, calls } = makeChainCtx({ rows: [] });
+  vm.runInContext(`commitDoneOnDate("tl-legacy","${TODAY}")`, context);
+  await flush();
+  await flush();
+  assert.equal(calls.patched.length, 1, "the completion is persisted, not dropped");
+  assert.deepEqual(calls.patched[0].body.properties._done.ids, ["tl-legacy"]);
 });
 
 test("Today choice credits the REAL task even though the move already removed its row", async () => {
@@ -299,12 +461,16 @@ test("a PERMANENTLY refused move does NOT bank the completion", async () => {
   // on it. Without the guard, a 400 ("Block is deleted", "Block not found") still patched the
   // target day's _done overlay, wrote pa-done-<date> and banked points — for a task sitting
   // unchecked on the day the user was looking at.
-  const { context, calls } = makeChainCtx({ rescheduleResult: false });
+  const { context, calls, rows } = makeChainCtx({ rescheduleResult: false });
   vm.runInContext(`toggleDone("t1",{markOnDate:"${TODAY}",bringToToday:true})`, context);
   await flush(); await flush();
   assert.equal(calls.commit.length, 0, "no commit: the task never reached that date");
   assert.equal(calls.credit.length, 0, "and no points banked on a day it is not on");
   assert.equal(calls.patched.length, 0, "that day's _done overlay is untouched");
+  // C5b: the row is the completion now, so "did not bank it" has to be asserted THERE too.
+  // Checking only `patched` would have gone vacuous the moment the write moved to the row.
+  assert.equal(calls.rowWrites.length, 0, "and no row was marked done");
+  assert.equal(rows.find((r) => r.id === "row-t1").properties.status, "open");
 });
 
 test("a refused move SAYS so, instead of closing the dialog in silence", async () => {

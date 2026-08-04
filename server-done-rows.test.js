@@ -21,6 +21,7 @@ const vm = require("node:vm");
 
 const persistenceSource = fs.readFileSync(require.resolve("./public/js/persistence.js"), "utf8");
 const scheduleSource = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
+const syncSource = fs.readFileSync(require.resolve("./public/js/sync.js"), "utf8");
 
 // ── half 1: the fold seeds the done registry off the row ─────────────────────
 
@@ -69,23 +70,52 @@ test("day_root._done wins the timestamp — it is the user's own completion", ()
 });
 
 // ── half 2: un-checking clears the row, not just the overlay ─────────────────
+//
+// REWORKED FOR C5b. `_clearRowDone` is now one line over `_persistDone`, the single
+// completion writer, so the slice is that whole region and the harness has to supply the
+// two collaborators it resolves through: `_findTaskBlockForDate` (state.js) and
+// `enqueueRowPropsWrite` (state.js, C4's serialized row-properties queue). The queue's
+// null-merge contract is reproduced faithfully — a fake that wrote regardless would hide
+// every "this must not touch the row" case below.
+const clearSource = scheduleSource.match(/function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _clearRowDone\(id,opts\)\{[^\n]*\}/);
+assert.ok(clearSource, "the C5b _persistDone region must exist in schedule.js");
 
-const clearSource = scheduleSource.match(/function _clearRowDone\(id\)\{[\s\S]*?\n\}/);
-assert.ok(clearSource, "_clearRowDone must exist in schedule.js");
-
-function makeClear(blockProps, ev) {
+function makeClear(blockProps, ev, dayRootProps) {
   const calls = [];
+  const row = blockProps ? { id: "blk-1", properties: blockProps } : null;
+  const dayRoot = { id: "root-1", properties: dayRootProps || {} };
   const ctx = {
+    console: { warn: () => {} },
     scheduled: ev ? [ev] : [],
-    window: {
-      blockStore: {
-        get: () => (blockProps ? { id: "blk-1", properties: blockProps } : null),
-        updateBlock: (id, props) => calls.push({ id, props })
-      }
-    }
+    _viewedDateStr: () => null,
+    // Derived from the fixture, and it can MISS: a row that is not cached resolves to
+    // null, which is the legacy-task case below.
+    //
+    // Mirrors state.js's predicate EXACTLY, including the trailing `b.id === ev._blockId`
+    // clause. Leaving that clause out is what this fake did first, and it made the fixture
+    // for the flagship case (ev keyed "t1", row keyed "blk-1") resolve to nothing — a fake
+    // NARROWER than reality, reporting a working un-check as broken.
+    _findTaskBlockForDate: (id, dateStr, e) => {
+      if (!row) return null;
+      const ids = [row.properties && row.properties.local_id, row.id];
+      if (e && e._blockId) ids.push(e._blockId);
+      const byId = ids.filter(Boolean).map(String).includes(String(id));
+      const byBlock = !!(e && e._blockId && String(row.id) === String(e._blockId));
+      return (byId || byBlock) ? row : null;
+    },
+    enqueueRowPropsWrite: (blockId, merge) => {
+      const target = blockId === dayRoot.id ? dayRoot : (row && row.id === blockId ? row : null);
+      if (!target || !target.properties) return null;
+      const next = merge(target.properties);
+      if (!next) return null;              // the queue's null-merge skip
+      target.properties = next;
+      calls.push({ id: blockId, props: next });
+      return null;
+    },
+    window: { blockStore: { getDayRootId: () => dayRoot.id, get: (id) => (id === dayRoot.id ? dayRoot : row) } }
   };
   vm.runInNewContext(clearSource[0] + "\n_clearRowDone(\"t1\");", ctx);
-  return calls;
+  return calls.filter((c) => c.id === "blk-1");
 }
 
 test("un-check clears every completion flag on the row and re-opens its status", () => {
@@ -110,12 +140,76 @@ test("un-check is a no-op when the row carries no completion", () => {
 });
 
 test("un-check is a no-op with no block behind the row (legacy localStorage task)", () => {
-  assert.equal(makeClear({ status: "done" }, { id: "t1" }).length, 0);          // no _blockId
   assert.equal(makeClear(null, { id: "t1", _blockId: "blk-1" }).length, 0);     // block not cached
-  assert.equal(makeClear({ status: "done" }, null).length, 0);                  // not in scheduled[]
+  // NOTE, changed in C5b: an ev with no `_blockId` is no longer a dead end. `_persistDone`
+  // resolves through `_findTaskBlockForDate`, which also matches on `local_id` and row id,
+  // so a completion still lands for an ev whose _blockId was never stamped (prep.js's
+  // distraction log, tabs.js's migrated subtasks). Only a genuinely unresolvable row
+  // (above) skips the write, and that case falls back to the legacy overlay instead.
+  assert.equal(makeClear({ local_id: "t1", status: "done" }, { id: "t1" }).length, 1);
+});
+
+test("un-check clears the LEGACY _done entry too, and only that entry", () => {
+  // The `_done` overlay is read-only legacy data now (sync.js) and is still load-bearing
+  // for 23 measured completions. A read-only source you cannot clear is a completion that
+  // cannot be un-done: the next load re-hydrates it and the row snaps back to done.
+  const calls = [];
+  const dayRoot = { id: "root-1", properties: { _done: { ids: ["t1", "keep"], at: { t1: "a", keep: "b" } } } };
+  const row = { id: "blk-1", properties: { status: "done", done: true } };
+  const ctx = {
+    console: { warn: () => {} },
+    scheduled: [{ id: "t1", _blockId: "blk-1" }],
+    _viewedDateStr: () => null,
+    _findTaskBlockForDate: () => row,
+    enqueueRowPropsWrite: (blockId, merge) => {
+      const target = blockId === dayRoot.id ? dayRoot : row;
+      const next = merge(target.properties);
+      if (!next) return null;
+      target.properties = next;
+      calls.push(blockId);
+      return null;
+    },
+    window: { blockStore: { getDayRootId: () => dayRoot.id, get: () => dayRoot } }
+  };
+  vm.runInNewContext(clearSource[0] + "\n_clearRowDone(\"t1\");", ctx);
+  assert.deepEqual(dayRoot.properties._done.ids, ["keep"]);
+  assert.deepEqual(Object.keys(dayRoot.properties._done.at), ["keep"]);
+  assert.deepEqual(calls, ["blk-1", "root-1"], "the row and the overlay, in that order");
 });
 
 test("toggleDone's un-check branch calls it (the snap-back regression)", () => {
   assert.ok(/manualDone\.delete\(id\);delete doneAt\[id\];log\("unchecked",id\);[\s\S]{0,400}?_clearRowDone\(id\);/.test(scheduleSource),
     "the un-check branch must clear the row before saving");
+});
+
+// ── half 3: the write side of the overlay is GONE (C5b) ──────────────────────
+//
+// The stated done-signal for this phase. Asserted against the source rather than a
+// behavior because the point is an ABSENCE: no caller anywhere, so there is no call to
+// observe. `saveDoneState` rewrote `_done` wholesale from the in-memory `manualDone` set,
+// which meant any window where that set was narrower than what was persisted permanently
+// un-completed the difference — and `collectUnfinished` then put every one back on today.
+test("saveDoneState no longer exists, and nothing calls it", () => {
+  assert.equal(/^\s*function saveDoneState\s*\(/m.test(syncSource), false,
+    "sync.js must not define saveDoneState");
+  const callers = [];
+  for (const f of fs.readdirSync("public/js")) {
+    if (!f.endsWith(".js")) continue;
+    const src = fs.readFileSync("public/js/" + f, "utf8");
+    // Strip comments first: several files legitimately NAME it while explaining what
+    // replaced it, and a bare substring search would read those as live call sites.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    if (/saveDoneState\s*\(/.test(code)) callers.push(f);
+  }
+  assert.deepEqual(callers, [], "live saveDoneState call sites remain");
+});
+
+test("nothing writes the pa-done-<date> localStorage mirror any more", () => {
+  const writers = [];
+  for (const f of fs.readdirSync("public/js")) {
+    if (!f.endsWith(".js")) continue;
+    const src = fs.readFileSync("public/js/" + f, "utf8").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+    if (/setItem\(\s*(DONE_KEY|"pa-done-|'pa-done-|`pa-done-)/.test(src)) writers.push(f);
+  }
+  assert.deepEqual(writers, [], "the localStorage done mirror is retired");
 });

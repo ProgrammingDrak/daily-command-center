@@ -66,6 +66,13 @@ function persistAddedTask(item,targetDate){
       reschedulePlacement:item.reschedulePlacement||null,
       rescheduledFrom:item.rescheduledFrom||null,
       sourceTaskId:item.sourceTaskId||null,
+      // C5b: completion travels on the row, so an item that is ALREADY done when it is
+      // persisted says so here rather than being marked done afterwards in the day's
+      // `_done` overlay. Only prep.js's distraction log uses this today; `undefined`
+      // keys drop out of the JSON body, so every other caller is unaffected.
+      status:item.status||undefined,
+      done:item.done||undefined,
+      completedAt:item.completedAt||undefined,
       added_at:new Date().toISOString()
     },{date});
   }
@@ -378,37 +385,67 @@ async function commitDoneOnDate(id,dateStr,opts){
     const _award=award();
     const _cel=_beginCompletionCelebration(id);
     manualDone.add(id);doneAt[id]=new Date();
-    log("checked",id);saveDoneState();render();
+    log("checked",id);_persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:nowIso});render();
     _finishCompletionCelebration(_cel,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:dateStr,completedAt:nowIso,awardPoints:_award});
     _autoCompleteShellAncestors(id,dateStr);
     return;
   }
 
-  // localStorage mirror so a refresh on the target date sees the completion
-  try{
-    const key="pa-done-"+dateStr;
-    let d={};try{d=JSON.parse(localStorage.getItem(key)||"{}")}catch(e){d={}}
-    if(!d.ids)d.ids=[];if(!d.at)d.at={};
-    if(!d.ids.includes(id))d.ids.push(id);
-    d.at[id]=nowIso;
-    localStorage.setItem(key,JSON.stringify(d));
-  }catch(e){}
-
-  // Server-side: load the target day's day_root and patch its _done property.
-  if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.done){
+  // ── Cross-day completion, C5b: write the ROW, and cascade to its children ──
+  //
+  // This used to patch a single id into the TARGET day's `day_root._done` (plus a
+  // `pa-done-<date>` localStorage mirror) with NO subtree walk, which is the whole
+  // reason completing an unfinished parent left its children unfinished forever: the
+  // carryover collector re-offered every child the next morning. `_done` could not have
+  // fixed it either — it is a fact about an id on a day, and the children may sit on
+  // different days than the parent.
+  //
+  // One `/api/blocks?date=` read serves both jobs: resolve the row for `id`, and give
+  // the child edges to walk. Both parent spaces are unioned (`subtaskOf` for steps,
+  // `wrapId` for ride-alongs) because C3 measured that NEITHER edge space is complete on
+  // its own, and both id spaces are matched (`local_id` and row id) because the carryover
+  // lane hands us a ROW id via `writeId(ev)` while the itinerary hands us a local one.
+  let rows=[];
+  try{rows=await fetch("/api/blocks?date="+encodeURIComponent(dateStr)).then(r=>r.ok?r.json():[]);}catch(e){rows=[];}
+  if(!Array.isArray(rows))rows=[];
+  const _idsOf=b=>{const p=(b&&b.properties)||{};return [p.local_id,b&&b.id].filter(Boolean).map(String);};
+  const target=rows.find(b=>b&&b.type!=="day_root"&&!b.deleted_at&&_idsOf(b).includes(String(id)))||null;
+  if(target){
+    const subtree=[target];
+    const seen=new Set([String(target.id)]);
+    // Breadth-first over the rows we already have. `seen` is keyed on the ROW id, which
+    // is single-valued, so a duplicated local_id cannot make this loop forever — the
+    // shape C3's round-3 fix turned into a re-mint bug when it keyed on the wrong id.
+    for(let i=0;i<subtree.length;i++){
+      const parentIds=_idsOf(subtree[i]);
+      rows.forEach(b=>{
+        if(!b||b.deleted_at||b.type==="day_root"||seen.has(String(b.id)))return;
+        const p=b.properties||{};
+        const edge=p.subtaskOf||p.wrapId||null;
+        if(edge&&parentIds.includes(String(edge))){seen.add(String(b.id));subtree.push(b);}
+      });
+    }
+    // Serialized by the shared queue, so these cannot clobber each other's properties.
+    subtree.forEach(b=>{if(typeof enqueueRowPropsWrite==="function")enqueueRowPropsWrite(b.id,p=>_doneRowProps(p,nowIso));});
+    if(subtree.length>1)log("checked-on",id,"Completed "+(subtree.length-1)+" nested task(s) on "+dateStr);
+  }else{
+    // No row on that date. The one live shape for this is an archive-day ev projected
+    // from `schedule.timeline`; keep the completion rather than dropping it, loudly.
+    console.warn("[done] no row on "+dateStr+" for "+id+" — persisting to that day's legacy _done overlay");
     try{
-      const blocks=await fetch("/api/blocks?date="+dateStr).then(r=>r.json());
-      const dayRoot=Array.isArray(blocks)?blocks.find(b=>b.type==="day_root"):null;
+      const dayRoot=rows.find(b=>b&&b.type==="day_root")||null;
       if(dayRoot){
         const props=dayRoot.properties||{};
-        const existing=props._done||{ids:[],at:{}};
-        const ids=new Set(existing.ids||[]);ids.add(id);
-        const at={...(existing.at||{})};at[id]=nowIso;
+        const existing=props._done||{};
+        const ids=Array.isArray(existing.ids)?existing.ids.slice():[];
+        const at={...((existing.at&&typeof existing.at==="object")?existing.at:{})};
+        if(!ids.includes(id))ids.push(id);
+        at[id]=nowIso;
         await fetch("/api/blocks/"+dayRoot.id,{
           method:"PATCH",
           headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({properties:{...props,_done:{ids:[...ids],at}}})
+          body:JSON.stringify({properties:{...props,_done:{ids:ids,at:at}}})
         });
       }
     }catch(e){}
@@ -455,7 +492,8 @@ function _autoCompleteShellAncestors(id,sourceDate){
       const completedAt=new Date();
       manualDone.add(parent.id);doneAt[parent.id]=completedAt;
       log("checked",parent.id,"Auto-completed: all nested tasks done");
-      saveDoneState();render();
+      _persistDone(parent.id,true,{ev:parent,dateStr:sourceDate,completedAt:completedAt});
+      render();
       awardSlotTaskCredit(parent,{sourceDate:sourceDate,completedAt:completedAt.toISOString(),awardPoints:bonus});
       if(typeof showToast==="function")showToast('"'+(parent.title||"Shell")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
     } else if(!isDone(parent)){
@@ -546,9 +584,19 @@ function awardSlotTaskCredit(ev,opts){
 function _onParentCompleted(id){
   if(typeof scheduled==="undefined")return;
   // 1) Complete subtask descendants recursively (steps of a finished task).
+  // C5b: each cascaded child persists its OWN row status. It used to ride on the caller's
+  // single `saveDoneState()`, which wrote the whole `manualDone` set into one overlay key —
+  // so the cascade was free. Per-row completion has no such shared write, and a child left
+  // unpersisted comes back unfinished on the next load and lands back on today via
+  // collectUnfinished. Points are deliberately NOT awarded per child, matching what the
+  // parent's own `_pointAwardOverride` pie already covers.
   (function completeSubs(pid){
     scheduled.filter(c=>c.subtaskOf===pid).forEach(c=>{
-      if(!manualDone.has(c.id)){manualDone.add(c.id);doneAt[c.id]=new Date();}
+      if(!manualDone.has(c.id)){
+        const at=new Date();
+        manualDone.add(c.id);doneAt[c.id]=at;
+        _persistDone(c.id,true,{ev:c,completedAt:at});
+      }
       completeSubs(c.id);
     });
   })(id);
@@ -570,38 +618,110 @@ function _onParentCompleted(id){
   if(typeof recalcTimes==="function")recalcTimes();
   if(promoted&&typeof showToast==="function")showToast(promoted+" stacked task"+(promoted>1?"s":"")+" moved out of the completed task","info",2600);
 }
-// Un-check the row itself, not just the day's _done overlay. A completion can be
-// written server-side (Day in Review's Approve, MCP, the responsibility hook) as
-// status:"done" on the block; the itinerary fold reads that, so un-checking has to
-// clear it or the completion comes straight back on the next load. Preserves every
-// other property — this is a targeted status clear, not a rewrite.
-function _clearRowDone(id){
-  if(!window.blockStore||typeof window.blockStore.updateBlock!=="function")return;
-  const ev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
-  const blockId=(ev&&ev._blockId)||null;
-  if(!blockId)return;
-  const block=window.blockStore.get(blockId);
-  const p=(block&&block.properties)||null;
-  if(!p)return;
-  if(!(p.done===true||p.status==="done"||p.completed||p.completedAt||p.doneAt))return;
-  const next={...p};
-  delete next.done;delete next.completed;delete next.completedAt;delete next.doneAt;
-  if(next.status==="done")next.status="open";
-  // Fire-and-forget, and swallow the rejection explicitly. updateBlock buffers its
-  // own failures to the WAL and resolves today, but a failed clear must never block
-  // the visible un-check — and it must never surface as an unhandled rejection if
-  // that contract changes underneath us.
-  Promise.resolve(window.blockStore.updateBlock(blockId,next)).catch(()=>{});
+// ======== ONE WRITER FOR "THIS TASK IS DONE" (C5b) ========
+//
+// Completion used to be written to TWO places that knew nothing about each other: the
+// task row's `properties.status` (server paths only — quick-task, Slack reactions, Day
+// in Review's Approve, the MCP tools) and the viewed day's `day_root.properties._done`
+// overlay (the browser only). That split is what made a Slack ✅ VANISH a task (C0),
+// and it is why completing a carried-over parent left its children unfinished forever:
+// `_done` is a fact about an id ON A DAY, so a task that changes days leaves its
+// completion behind. The row travels with the task; the overlay never could.
+//
+// Resolution order, and the order is the point:
+//   1. The ROW. Resolved by id (`_findTaskBlockForDate` matches local_id, row id and
+//      ev._blockId) and written through C4's `enqueueRowPropsWrite` queue, which is
+//      mandatory for any row-properties writer: `db.updateBlock` REPLACES properties
+//      wholesale, so two unqueued read-modify-writes both read the pre-write bag and
+//      the second PATCH drops the first's field.
+//   2. Failing that, the legacy `_done` overlay, PER ID. One ev shape has no row to
+//      carry the fact: one projected from `schedule.timeline` on an archive day.
+//      Measured on prod 2026-08-04: 11 such entries, none newer than 2026-05-27 (the
+//      last day anything wrote a timeline at all). Falling back keeps them persisting
+//      rather than silently dropping a completion, and it warns so the population
+//      cannot grow unnoticed.
+//
+// The fallback is per-id and additive, never `saveDoneState`'s full-set overwrite —
+// that shape is what permanently un-completed any task `manualDone` had lost track of.
+function _doneRowProps(props,completedAt){
+  const iso=(completedAt instanceof Date)?completedAt.toISOString():(completedAt||new Date().toISOString());
+  return {...props,status:"done",done:true,completedAt:iso};
 }
+// Returns null when the row carries no completion at all, so the queue skips the write.
+// C0's version made that check against the CACHED row before deciding; doing it inside the
+// merge tests the row the queue itself just read. It matters for the 12 legacy ambiguous
+// ids: `manualDone` has them (from the `_done` read) while every candidate row still reads
+// `status:'open'`, so un-checking one has real work to do in the overlay and none on the row.
+function _openRowProps(props){
+  if(!props)return null;
+  if(!(props.done===true||props.status==="done"||props.completed||props.completedAt||props.doneAt||props.completedBy))return null;
+  const next={...props};
+  delete next.done;delete next.completed;delete next.completedAt;delete next.doneAt;
+  // `completedBy` is provenance stamped by whichever surface finished the task. C0 left
+  // it behind on an un-check deliberately and flagged clearing it to this phase: no
+  // done-predicate reads it, but an OPEN row carrying `completedBy:"slack-events"` is a
+  // lie to whoever greps for it next.
+  delete next.completedBy;
+  if(next.status==="done")next.status="open";
+  return next;
+}
+// Add or remove ONE id in the day_root `_done` overlay. The read-modify-write happens
+// INSIDE the queue callback, against the row the queue itself just read — computing
+// `ids` from the cache out here and handing in a finished object is precisely the stale
+// read C4's queue exists to prevent.
+function _patchOverlayDone(id,done,completedAt){
+  if(!window.blockStore||typeof enqueueRowPropsWrite!=="function")return;
+  const rootId=(typeof window.blockStore.getDayRootId==="function")?window.blockStore.getDayRootId():null;
+  if(!rootId)return;
+  const iso=(completedAt instanceof Date)?completedAt.toISOString():(completedAt||new Date().toISOString());
+  enqueueRowPropsWrite(rootId,p=>{
+    const cur=(p&&p._done)||{};
+    const ids=Array.isArray(cur.ids)?cur.ids.slice():[];
+    const at={...((cur.at&&typeof cur.at==="object")?cur.at:{})};
+    const i=ids.indexOf(id);
+    // Nothing to remove -> skip the write entirely (the queue honors a null merge). An
+    // un-check fires this for every id, and almost none of them are legacy overlay
+    // entries; without this every single one PATCHed the day_root for no change.
+    if(!done&&i===-1&&!(id in at))return null;
+    // `i!==-1` is re-tested, not implied by the guard above: the guard also lets through
+    // the id-in-`at`-but-not-in-`ids` case, and `ids.splice(-1,1)` there would silently
+    // delete an UNRELATED task's completion off the end of the list.
+    if(done){if(i===-1)ids.push(id);at[id]=iso;}
+    else{if(i!==-1)ids.splice(i,1);delete at[id];}
+    return {...p,_done:{ids:ids,at:at}};
+  });
+}
+// `done=false` clears BOTH halves, always. Clearing only the row lets the legacy
+// `_done` read (sync.js) re-hydrate the completion on the next load so the row snaps
+// straight back to done — the C0 wart, inverted.
+function _persistDone(id,done,opts){
+  opts=opts||{};
+  if(!id)return;
+  const dateStr=opts.dateStr||((typeof _viewedDateStr==="function")?_viewedDateStr():null);
+  const ev=opts.ev||((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null);
+  const block=(typeof _findTaskBlockForDate==="function")?_findTaskBlockForDate(id,dateStr,ev):null;
+  const blockId=(block&&block.id)||null;
+  if(blockId&&typeof enqueueRowPropsWrite==="function"){
+    enqueueRowPropsWrite(blockId,p=>done?_doneRowProps(p,opts.completedAt):_openRowProps(p));
+  }else if(done){
+    console.warn("[done] no row resolves for "+id+" — persisting to the legacy _done overlay");
+    _patchOverlayDone(id,true,opts.completedAt);
+    return;
+  }
+  if(!done)_patchOverlayDone(id,false);
+}
+// Kept as the un-check spelling every caller already used. Now one line, because the
+// row write and the overlay clear are the same primitive read in the other direction.
+function _clearRowDone(id,opts){_persistDone(id,false,opts);}
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
     manualDone.delete(id);delete doneAt[id];log("unchecked",id);
-    // Clearing the day_root overlay is not enough now that the fold also reads
-    // status/done off the row (persistence.js): leave those set and the next reload
-    // re-hydrates the completion and the row snaps back to done. Clear both halves.
+    // Clears the row AND any legacy `_done` entry for this id — see `_persistDone`.
+    // Either half left set re-hydrates the completion on the next load and the row snaps
+    // straight back to done.
     _clearRowDone(id);
-    saveDoneState();render();return;
+    render();return;
   }
 
   // A rollup container (shell) can't be checked while children are open — its
@@ -664,9 +784,10 @@ function toggleDone(id,opts){
       const _award=_pointAwardOverride(id); // read pie BEFORE subtasks cascade
       const _cel=_beginCompletionCelebration(id);
       manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+      _persistDone(id,true,{ev:ev,dateStr:currentDate,completedAt:completedAt});
       _onParentCompleted(id);
       if(ev&&ev.responsibilityId&&typeof window.markResponsibilityTaskCompleted==="function")window.markResponsibilityTaskCompleted(ev);
-      saveDoneState();render();
+      render();
       _finishCompletionCelebration(_cel,id);
       awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
       _autoCompleteShellAncestors(id,currentDate);
@@ -691,11 +812,13 @@ function toggleDone(id,opts){
   const _award=_pointAwardOverride(id); // read pie BEFORE subtasks cascade
   const _cel=_beginCompletionCelebration(id);
   manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
+  const _today=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  _persistDone(id,true,{ev:ev,dateStr:_today,completedAt:completedAt});
   _onParentCompleted(id);
   if(ev&&ev.responsibilityId&&typeof window.markResponsibilityTaskCompleted==="function")window.markResponsibilityTaskCompleted(ev);
-  saveDoneState();render();
+  render();
   _finishCompletionCelebration(_cel,id);
-  const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  const currentDate=_today;
   awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
   _autoCompleteShellAncestors(id,currentDate);
 }

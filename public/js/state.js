@@ -1163,6 +1163,13 @@ async function _rowForDateWrite(blockId){
 //
 // `merge(properties) -> properties` runs AFTER the read, so each caller composes against
 // whatever the previous link actually wrote.
+//
+// C5b: a merge returning NULL means "nothing to change, skip the write". It exists so a
+// caller whose decision depends on the row's CURRENT contents can make that decision
+// against the row the queue just read, instead of pre-deciding from the cache and
+// handing in a finished object — which is the stale read this queue exists to prevent.
+// `_patchOverlayDone` (schedule.js) needs exactly that: "remove this id from `_done` if
+// it is in there" must not PATCH the day_root on every un-check of an id that never was.
 let _rowPropsChain=Promise.resolve();
 function enqueueRowPropsWrite(blockId,merge){
   if(!window.blockStore||!blockId||typeof merge!=="function")return null;
@@ -1170,7 +1177,9 @@ function enqueueRowPropsWrite(blockId,merge){
     .then(()=>_rowForDateWrite(blockId))
     .then(b=>{
       // Refuse on an unresolvable row: spreading nothing over `properties` is a wipe.
-      if(b&&b.properties)return window.blockStore.updateBlock(b.id,merge(b.properties));
+      if(!b||!b.properties)return;
+      const next=merge(b.properties);
+      if(next)return window.blockStore.updateBlock(b.id,next);
     })
     // Per-link, so one failure cannot wedge the queue for the rest of the session.
     .catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});

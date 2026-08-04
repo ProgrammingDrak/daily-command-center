@@ -793,10 +793,10 @@ document.getElementById("rp-restore").addEventListener("click", function() {
   reviewed[_reviewCurrent.id] = { confirmed: false, restored: true, at: new Date().toISOString() };
   saveReviewed(reviewed);
   if (_reviewCurrent.type === "task") {
-    // Uncheck the task
+    // Uncheck the task: the row's status, plus any legacy `_done` entry (C5b).
     manualDone.delete(_reviewCurrent.id);
     delete doneAt[_reviewCurrent.id];
-    saveDoneState();
+    if (typeof _clearRowDone === "function") _clearRowDone(_reviewCurrent.id, { ev: _reviewCurrent });
     log("unchecked", _reviewCurrent.id, "Restored from auto-complete");
   }
   closeReviewPopover();

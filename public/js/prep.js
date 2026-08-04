@@ -167,7 +167,14 @@ function addDistractionToItinerary(title,mins,classify){
     source:"timer-log",
     priority:"Low",
     tags:[],
-    _pinnedStart:fmt(startMin)
+    _pinnedStart:fmt(startMin),
+    // C5b: a logged distraction is work that ALREADY happened, so its row is born done.
+    // It used to be marked done afterwards, in the day's `_done` overlay via
+    // `saveDoneState()`. Doing it as a row write after the fact instead would have to race
+    // the async `persistAddedTask` create below for a row id that does not exist yet.
+    status:"done",
+    done:true,
+    completedAt:new Date().toISOString()
   };
   if(typeof scheduled!=="undefined"&&Array.isArray(scheduled)){
     const insertAt=scheduled.findIndex(ev=>pt(ev.start)>startMin);
@@ -177,8 +184,7 @@ function addDistractionToItinerary(title,mins,classify){
   if(typeof persistAddedTask==="function")persistAddedTask(item);
   if(typeof manualDone!=="undefined"&&manualDone&&typeof manualDone.add==="function"){
     manualDone.add(id);
-    doneAt[id]=new Date();
-    if(typeof saveDoneState==="function")saveDoneState();
+    doneAt[id]=new Date(item.completedAt);
   }
   if(typeof log==="function")log("distraction-log",id,label+": "+title);
   if(typeof render==="function")render();

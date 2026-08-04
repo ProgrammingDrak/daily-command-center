@@ -611,9 +611,12 @@ function openMakeSubtaskOf(childId, anchorEl){
 }
 function toggleSubtask(taskId, stId){
   if(typeof manualDone==="undefined")return;
-  if(manualDone.has(stId)){manualDone.delete(stId);if(typeof doneAt!=="undefined")delete doneAt[stId];}
-  else{manualDone.add(stId);if(typeof doneAt!=="undefined")doneAt[stId]=new Date();}
-  if(typeof saveDoneState==="function")saveDoneState();
+  const nowDone=!manualDone.has(stId);
+  const at=new Date();
+  if(nowDone){manualDone.add(stId);if(typeof doneAt!=="undefined")doneAt[stId]=at;}
+  else{manualDone.delete(stId);if(typeof doneAt!=="undefined")delete doneAt[stId];}
+  // C5b: a subtask's completion is a fact about its ROW, same as its parent's.
+  if(typeof _persistDone==="function")_persistDone(stId,nowDone,{completedAt:at});
   render();
 }
 function deleteSubtask(taskId, stId){
@@ -755,14 +758,19 @@ function migrateLegacySubtasks(){
         scheduled.push({id:st.id,title:st.text,type:"task",subtaskOf:parentId,source:"manual",start:startStr,end:startStr,priority:"Medium",tags:[],meta:""});
         if(st.done&&typeof manualDone!=="undefined")manualDone.add(st.id);
         if(window.blockStore&&window.blockStore.createBlock){
-          window.blockStore.createBlock("block",{local_id:st.id,title:st.text,type:"task",subtaskOf:parentId,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[],added_at:(st.created||new Date().toISOString())},{date:date});
+          // C5b: an already-done legacy subtask is BORN done, stamped into the row it is
+          // being migrated into. It used to lean on the caller's single `saveDoneState()`
+          // below; a per-row write after the fact would have to race this async create for
+          // a row it does not have the id of yet.
+          const props={local_id:st.id,title:st.text,type:"task",subtaskOf:parentId,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[],added_at:(st.created||new Date().toISOString())};
+          if(st.done){props.status="done";props.done=true;props.completedAt=(st.created||new Date().toISOString());}
+          window.blockStore.createBlock("block",props,{date:date});
         }
         migrated++;
       });
     });
     if(migrated){
       if(typeof saveSubtasks==="function")saveSubtasks({}); // retire the legacy store for this day
-      if(typeof saveDoneState==="function")saveDoneState();
     }
     localStorage.setItem(flag,"1");
   }catch(e){}
