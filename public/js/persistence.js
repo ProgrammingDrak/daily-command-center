@@ -98,35 +98,12 @@ function initKeys() {
   }
 }
 
-// C6b: derived from the children's own `sort_order`, not the `_subtaskOrder` overlay map
-// (3 day_roots; migration 001 applied 7 entries). A parent's step order is a fact about the
-// steps, so it belongs on them -- the overlay keyed it under the parent on the viewed day,
-// which is why moving a parent to another date left its step order behind.
+// DEFERRED TO C6c with the other two order axes -- `sort_order` is not one number space yet
+// (see schedule.js loadTaskOrder for the measurement). The overlay stays the authority; the
+// WRITE below keeps sort_order current so C6c inherits a column that is not drifting.
 function loadSubtaskOrder(){
-  if(window.blockStore&&typeof _orderableRows==="function"){
-    const byParent={};
-    _orderableRows().forEach(b=>{
-      const pid=b.properties.subtaskOf;
-      if(!pid)return;
-      (byParent[pid]=byParent[pid]||[]).push(b);
-    });
-    const out={};
-    Object.keys(byParent).forEach(pid=>{
-      out[pid]=byParent[pid]
-        .sort((a,b)=>{
-          const ao=(a.sort_order==null)?Number.MAX_SAFE_INTEGER:a.sort_order;
-          const bo=(b.sort_order==null)?Number.MAX_SAFE_INTEGER:b.sort_order;
-          return ao-bo;
-        })
-        .map(_evIdOfRow);
-    });
-    if(Object.keys(out).length)return out;
-    const fromBlocks=_bsProp("_subtaskOrder",null);
-    if(fromBlocks&&typeof fromBlocks==="object"&&Object.keys(fromBlocks).length){
-      if(typeof _c6bFallback==="function")_c6bFallback("subtaskOrder",Object.keys(fromBlocks).length);
-      return fromBlocks;
-    }
-  }
+  const fromBlocks=_bsProp("_subtaskOrder", null);
+  if(fromBlocks&&typeof fromBlocks==="object")return fromBlocks;
   try{return JSON.parse(localStorage.getItem(SUBTASK_ORDER_KEY)||"{}")}catch(e){return{}}
 }
 
@@ -134,15 +111,16 @@ function saveSubtaskOrder(parentId){
   if(!parentId||typeof scheduled==="undefined"||!Array.isArray(scheduled))return;
   const order=DCC.TaskModel.selectNotDeleted(DCC.TaskModel.subtasksOf(parentId,scheduled))
     .map(ev=>ev.id);
-  // C6b: `sort_order` on the children only. The overlay write is gone, and the reorder is keyed
-  // on the EV ID (`_writeRowOrder`) rather than `local_id`, which is what let a step with no
-  // local_id keep its position silently unpersisted.
+  // C6b fixed the WRITE: the reorder is keyed on the EV ID (`_writeRowOrder`) rather than
+  // `local_id`, which is what let a step with no local_id keep its position silently
+  // unpersisted. The overlay stays the read authority until C6c.
+  const all=loadSubtaskOrder();
+  all[parentId]=order;
+  if(!_bsSaveProp("_subtaskOrder",all)){
+    try{localStorage.setItem(SUBTASK_ORDER_KEY,JSON.stringify(all))}catch(e){}
+  }
   if(window.USE_BLOCKSTORE&&window.blockStore&&window.blockStore.reorder&&typeof _writeRowOrder==="function"){
     _writeRowOrder(order);
-  }else{
-    const all=loadSubtaskOrder();
-    all[parentId]=order;
-    try{localStorage.setItem(SUBTASK_ORDER_KEY,JSON.stringify(all))}catch(e){}
   }
   if(typeof scheduleIDBSave==="function")scheduleIDBSave();
 }

@@ -77,9 +77,9 @@ resolved AS (
   FROM pin_entries pe
   JOIN blocks b
     ON b.deleted_at IS NULL
-   AND b.type = 'block'
+   AND b.type IN ('block','added_task')
    AND b.date = pe.date
-   AND b.workspace_id = pe.workspace_id
+   AND b.workspace_id IS NOT DISTINCT FROM pe.workspace_id
    AND (b.properties ->> 'local_id' = pe.ev_id OR b.id::text = pe.ev_id)
   WHERE dcc_is_task_row(b.type, b.properties)
     -- Existing row values win: creation and 001 both predate every later pin, so a row that
@@ -102,14 +102,20 @@ UPDATE blocks b
 WITH lock_entries AS (
   SELECT dr.date, dr.workspace_id, x.ev_id
   FROM blocks dr
+  -- ★ The SRFs are expanded in the FROM clause, NOT wrapped in a scalar subquery inside CASE.
+  -- The CASE form is not a set expansion: it raises "more than one row returned by a subquery
+  -- used as an expression" for any `_lockedTasks` with >= 2 entries, and returns only the FIRST
+  -- element when there is exactly 1. Since the runner wraps this file in one transaction, that
+  -- error would also roll back step 1's pins backfill -- so a single user locking two tasks in
+  -- the window between the deploy and this apply would have bricked the migration.
   CROSS JOIN LATERAL (
-    SELECT CASE
-             WHEN jsonb_typeof(dr.properties -> '_lockedTasks') = 'array'
-               THEN (SELECT jsonb_array_elements_text(dr.properties -> '_lockedTasks'))
-             WHEN jsonb_typeof(dr.properties -> '_lockedTasks') = 'object'
-               THEN (SELECT jsonb_object_keys(dr.properties -> '_lockedTasks'))
-             ELSE NULL
-           END AS ev_id
+    SELECT e.ev_id
+      FROM jsonb_array_elements_text(dr.properties -> '_lockedTasks') AS e(ev_id)
+     WHERE jsonb_typeof(dr.properties -> '_lockedTasks') = 'array'
+    UNION ALL
+    SELECT k
+      FROM jsonb_object_keys(dr.properties -> '_lockedTasks') AS k
+     WHERE jsonb_typeof(dr.properties -> '_lockedTasks') = 'object'
   ) x
   WHERE dr.type = 'day_root'
     AND dr.deleted_at IS NULL
@@ -121,9 +127,9 @@ lock_resolved AS (
   FROM lock_entries le
   JOIN blocks b
     ON b.deleted_at IS NULL
-   AND b.type = 'block'
+   AND b.type IN ('block','added_task')
    AND b.date = le.date
-   AND b.workspace_id = le.workspace_id
+   AND b.workspace_id IS NOT DISTINCT FROM le.workspace_id
    AND (b.properties ->> 'local_id' = le.ev_id OR b.id::text = le.ev_id)
   WHERE dcc_is_task_row(b.type, b.properties)
     AND COALESCE((b.properties ->> 'locked')::boolean, false) IS NOT TRUE

@@ -1030,10 +1030,25 @@ function _c6bFallback(key,n){
 // Every task row the blockStore currently holds, in ONE place: three call sites built this
 // same union and the third (`saveTaskOrder`) additionally required `local_id && start`, which
 // silently excluded 1546 of 1815 live task rows from ever being reordered.
-function _orderableRows(){
+// ★ DATE-SCOPED BY DEFAULT, and both halves of that matter.
+//
+// `loadGlobals()` GETs every `type=block` row regardless of date and cacheSets them all
+// (persistence.js:290 documents this and date-guards its own fold), so an unscoped sweep returns
+// OTHER DAYS' rows. Two live rows CAN share one ev id -- schedule.js records `carry-200` doing
+// exactly that on the prod restore -- so an unscoped write could stamp a July row from a drag on
+// today, losing the drag AND mutating another day. Dateless rows are always in scope: that is the
+// Backlog, which is day-agnostic by definition (C4).
+//
+// `foldsIntoItinerary`, not `isTaskRow`: task-model.js's own comment says `isTaskRow` alone is
+// "far too wide -- side_project rows, sticky notes and untitled scaffolding all pass the kind
+// exclusions". These lists are keyed by EV ID, so "addressable as an ev" is the question.
+function _orderableRows(opts){
   if(!window.blockStore)return [];
+  const scope=(opts&&"date" in opts)?opts.date:((typeof __state!=="undefined"&&__state&&__state.date)||null);
   const rows=[...window.blockStore.getByType("added_task"),...window.blockStore.getByType("block")];
-  return rows.filter(b=>b&&!b.deleted_at&&b.properties&&(!DCC.TaskModel.isTaskRow||DCC.TaskModel.isTaskRow(b)));
+  return rows.filter(b=>b&&!b.deleted_at&&b.properties
+    &&(!DCC.TaskModel.foldsIntoItinerary||DCC.TaskModel.foldsIntoItinerary(b))
+    &&(!scope||b.date===scope||!b.date));
 }
 // The ev id a row projects to. Matches the fold (`local_id || block.id`), NOT `backlogKey`,
 // because these ids reach `scheduled[]` where a "blk-" prefix would be a visible id change.
@@ -1110,13 +1125,40 @@ function savePinnedStarts(data){
       const id=_evIdOfRow(b);
       const want=data[id]||undefined;
       if(b.properties._pinnedStart===want)return;
-      persistRowProp(id,"_pinnedStart",want,null);
-      wrote++;
+      // Only count a write that was actually ENQUEUED. persistRowProp returns null when it cannot
+      // resolve a row for this ev id on the viewed day, and counting that as written made the
+      // return value (and the test asserting on it) unable to tell a write from a refusal.
+      if(persistRowProp(id,"_pinnedStart",want,null))wrote++;else _c6bFallback("pinRefused",1);
     });
+    // ★ PRUNE THE OVERLAY. Without this there is no way to express "explicitly unpinned":
+    // clearing the row's key is exactly the state the fallback read treats as "the row does not
+    // know, ask the overlay", so an unpin came back on the next reload. The old code could not
+    // have this bug -- it wrote the whole map, so deleting a key deleted it. Verified live: 64
+    // day_roots carry `_pinnedStarts` (178 entries), so this is data, not theory.
+    _pruneOverlayMap("_pinnedStarts",id=>!!data[id]);
     if(rows.length)return wrote;
   }
   localStorage.setItem(PINNED_KEY,JSON.stringify(data)); scheduleIDBSave();
   return 0;
+}
+
+// Drop entries the caller no longer claims from a retired overlay map/array, so the counted
+// fallback read cannot resurrect a value the user just removed. Shared by pins and locks because
+// they had the identical hole; skips the write entirely when nothing changed.
+function _pruneOverlayMap(key,keep){
+  const ov=_bsProp(key,null);
+  if(!ov)return 0;
+  if(Array.isArray(ov)){
+    const next=ov.filter(id=>keep(String(id)));
+    if(next.length===ov.length)return 0;
+    _bsSaveProp(key,next);
+    return ov.length-next.length;
+  }
+  if(typeof ov!=="object")return 0;
+  const next={};let dropped=0;
+  Object.keys(ov).forEach(k=>{if(keep(k))next[k]=ov[k];else dropped++;});
+  if(dropped)_bsSaveProp(key,next);
+  return dropped;
 }
 
 function pinStartTime(id,timeStr){
@@ -1182,9 +1224,11 @@ function saveLockedSet(ids){
       const id=_evIdOfRow(b);
       const shouldLock=want.has(String(id));
       if(!!b.properties.locked===shouldLock)return;
-      persistRowProp(id,"locked",shouldLock?true:undefined,null);
-      wrote++;
+      if(persistRowProp(id,"locked",shouldLock?true:undefined,null))wrote++;else _c6bFallback("lockRefused",1);
     });
+    // Same resurrection hole as pins: the fallback re-supplies a lock for any row without the
+    // key, and an unlock IS that state.
+    _pruneOverlayMap("_lockedTasks",id=>want.has(String(id)));
     if(rows.length)return wrote;
   }
   localStorage.setItem(LOCKED_KEY,JSON.stringify(ids||[]));scheduleIDBSave();
@@ -2052,25 +2096,39 @@ function markDoneOnDate(id, date){
 
 // ======== TASK ORDER PERSISTENCE ========
 let ORDER_KEY = "pa-task-order-" + ((__state && __state.date) ? __state.date : "unknown");
-// C6b: derived from `sort_order`, not from the `_taskOrder` overlay. The overlay held 769 ids
-// across 41 day_roots in TWO id spaces (247 row ids, 495 local_ids, 73 resolving to nothing),
-// and it flattened subtasks into their parents' sibling order.
+// ★ C6b STOPS HERE FOR ORDER, AND THE MEASUREMENT IS WHY. DEFERRED TO C6c.
+//
+// The plan was to make `sort_order` the read authority and retire this overlay. It is not safe
+// yet, because **`sort_order` is not one number space.** Measured on the prod restore over 1815
+// live task rows: 231 are the 1000-spaced values a DRAG writes, 1005 are minutes-of-day 0..1439
+// (`db.js createItineraryTask`'s `derivedSort`, the funnel for quick-task, brief materialize,
+// task-group schedule and responsibility auto-schedule), 289 are exactly 0 (`createBlock`
+// defaults `sort_order || 0` in both `block-store.js` and `db.js`, and no create renumbers), and
+// 290 are something else. **63 of 113 days hold a mix.** Reading the column as the order would
+// therefore sort every server-created and every newly-added task ahead of everything the user
+// has ever dragged, on more than half the days. A rescheduled row is worse: `db.rescheduleBlocks`
+// preserves the ORIGINATING day's value.
+//
+// Collapsing this needs one number space first, which means normalising four producers -- two of
+// them in `db.js`, Track A's file -- plus a per-day renumber migration. That is its own phase.
+// C6b keeps the overlay as the order authority and ships the two axes that ARE self-contained
+// (pins and locks, below). What C6b did fix here is the WRITE: see `saveTaskOrder`.
 function loadTaskOrder(){
-  if(window.blockStore){
-    const derived=_orderFromRows();
-    if(derived.length)return derived;
-    const v=_bsProp("_taskOrder",null);
-    if(v&&v.length){_c6bFallback("taskOrder",v.length);return v;}
+  if (window.USE_BLOCKSTORE && window.blockStore) {
+    const v = _bsProp("_taskOrder", null);
+    if (v && v.length) return v;
   }
   try{return JSON.parse(localStorage.getItem(ORDER_KEY)||"[]")}catch(e){return[]}
 }
-// C6b: `sort_order` only. The old dual-write also stamped `_taskOrder`, and its row filter was
-// `local_id && start` -- which excluded 1546 of 1815 live task rows (no local_id) plus 37 more
-// (untimed) from ever being reordered at all. `_writeRowOrder` keys on the EV ID, so both
-// shapes reorder now.
+// C6b FIXED THE WRITE even though the read stays on the overlay (see loadTaskOrder). The old
+// dual-write's row filter was `local_id && start`, which silently excluded **1546 of 1815** live
+// task rows (no local_id -- API and Slack inserts) plus 37 more (untimed) from ever having their
+// `sort_order` updated at all. `_writeRowOrder` keys on the EV ID, so both shapes are reordered
+// now, and the column gets closer to usable for C6c rather than drifting further away.
 function saveTaskOrder(){
   const order=DCC.TaskModel.selectOpen(scheduled).map(ev=>ev.id);
   if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.reorder&&window.blockStore){
+    _bsSaveProp("_taskOrder", order);   // still the read authority until C6c
     _writeRowOrder(order);
     return;
   }
@@ -2084,18 +2142,14 @@ function saveTaskOrder(){
 // (recalcTimes skips untimed items). Persist an explicit unified id-list on the
 // day_root (mirrors _subtaskOrder / _taskOrder) so a manual drag order survives
 // reflows and reloads. Rendered by _orderUnscheduled (schedule-tab.js) in manual mode.
-// C6b: the same `sort_order` the work list reads, filtered to the rows this section shows.
-// ★ This is the axis the overlay was WORST at, and the reason is in the numbers: 1 day_root,
-// 7 ids, 0 of them row ids, 3 live local_ids, 4 resolving to nothing. The section mixes untimed
-// today rows with past-day CARRYOVERS, and an overlay on the viewed day cannot name a row that
-// lives on another date -- so carryover rows had no order authority at all, which C2 and C3
-// both worked around. On the row, each one carries its own.
+// DEFERRED TO C6c with loadTaskOrder, and this axis has a SECOND blocker of its own: a carryover
+// row lives in `blockStore._rangeCache`, which `getByType` does not read (unfinished-tasks.js
+// documents the split), so a row-derived order cannot even see the rows this section is mostly
+// about. C6c needs the range cache or the carryover lane's own `_originBlock` resolver.
 function loadUnscheduledOrder(){
-  if(window.blockStore){
-    const derived=_orderFromRows(b=>!b.date||!b.properties.start||b.properties.start==="00:00");
-    if(derived.length)return derived;
+  if(window.USE_BLOCKSTORE&&window.blockStore){
     const v=_bsProp("_unscheduledOrder",null);
-    if(Array.isArray(v)&&v.length){_c6bFallback("unscheduledOrder",v.length);return v;}
+    if(Array.isArray(v))return v;
   }
   try{return JSON.parse(localStorage.getItem("pa-unsched-order-"+((__state&&__state.date)||"unknown"))||"[]")}catch(e){return[]}
 }
@@ -2109,12 +2163,11 @@ function saveUnscheduledOrder(ids){
       .filter(ev=>ev.untimed)
       .map(ev=>ev.id);
   }
-  if(!(window.blockStore&&_writeRowOrder(order))){
-    // No blockStore, or nothing actually moved. Only fall back to localStorage in the former
-    // case: a no-op reorder must not resurrect a stale local copy as the authority.
-    if(!window.blockStore){
-      try{localStorage.setItem("pa-unsched-order-"+((__state&&__state.date)||"unknown"),JSON.stringify(order))}catch(e){}
-    }
+  // The overlay stays the authority (see loadUnscheduledOrder) AND sort_order is kept current for
+  // the rows that are reachable, so C6c inherits a column that is not drifting.
+  if(window.blockStore)_writeRowOrder(order);
+  if(!_bsSaveProp("_unscheduledOrder",order)){
+    try{localStorage.setItem("pa-unsched-order-"+((__state&&__state.date)||"unknown"),JSON.stringify(order))}catch(e){}
   }
 }
 
