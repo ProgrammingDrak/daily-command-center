@@ -718,7 +718,22 @@ async function buildPublicTodoShare(share, dateStr, req) {
   };
 }
 
-function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req }) {
+// C5b: this used to be the repo's only FILE-ONLY state writer, and that was a live
+// data-loss bug, not just an obstacle to step 4. A guest's submitted task was written to
+// `data/state/days/<date>.json` and nowhere else; Railway's filesystem is ephemeral, so the
+// only copy did not survive a redeploy. Evidence: ZERO items with `source:"public_share"`
+// have ever reached `dcc_state` on prod.
+//
+// It also made `server.js buildDayResponse` unfixable — a Postgres-first read could not
+// treat "no row" as "no day" while the file held state nothing else had. Postgres is the
+// durable store now and the file stays as the mirror, which is the same contract
+// `persistDccDay` and the day-state ingest already follow.
+//
+// The DB is read as the BASE (not the file) for the identical reason the six readers in
+// routes/dcc.js were repointed: `saveDccState` is `DO UPDATE SET state_json =
+// EXCLUDED.state_json`, so basing the write on a stale file would full-replace the real day
+// with it. Async because of that read; the single caller awaits.
+async function appendPublicShareTriageItem({ share, date, title, durationMinutes, visitorName, visitorEmail, note, req }) {
   const now = new Date().toISOString();
   const localId = "public-" + crypto.randomUUID();
   const item = {
@@ -748,7 +763,14 @@ function appendPublicShareTriageItem({ share, date, title, durationMinutes, visi
   };
 
   const dayFile = getDayFilePath(date);
-  const state = readJSON(dayFile, null) || buildSkeletonState(date);
+  let state = null;
+  try {
+    const row = await blockDB.getDccState(date, share.workspace_id);
+    if (row && row.state_json) state = row.state_json;
+  } catch (e) {
+    console.error("[public-todo] day-state read failed for " + date + ", falling back to the file mirror:", e.message);
+  }
+  if (!state) state = readJSON(dayFile, null) || buildSkeletonState(date);
   if (!state.triage) state.triage = { open_items: [], resolved_items: [], cycle_count: 0 };
   if (!Array.isArray(state.triage.open_items)) state.triage.open_items = [];
   if (!Array.isArray(state.triage.resolved_items)) state.triage.resolved_items = [];
@@ -756,9 +778,17 @@ function appendPublicShareTriageItem({ share, date, title, durationMinutes, visi
   if (state.sweep) state.sweep.open_item_count = state.triage.open_items.length;
   state.last_updated_at = now;
   state.last_updated_by = "public-todo-triage";
-  writeJSON(dayFile, state);
-  updateManifest(date);
-  if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, state);
+  // Postgres FIRST and it must succeed. The whole point is that the guest's task is durable;
+  // reporting success after only a file write is what lost them. The file mirror is
+  // best-effort after, matching persistDccDay's contract.
+  await blockDB.saveDccState(date, state, null, share.workspace_id);
+  try {
+    writeJSON(dayFile, state);
+    updateManifest(date);
+    if (date === getTodayStr()) writeJSON(DAY_STATE_FILE, state);
+  } catch (e) {
+    console.error("[public-todo] file mirror failed (db save succeeded):", e.message);
+  }
   return item;
 }
 
@@ -1206,7 +1236,10 @@ app.post("/api/public/todo-share/:token/tasks", async (req, res) => {
     const visitorEmail = String(body.visitorEmail || body.visitor_email || "").trim().slice(0, 180);
     const note = String(body.note || "").trim().slice(0, 1000);
     const date = isValidDate(body.date) ? body.date : getTodayStr();
-    const triageItem = appendPublicShareTriageItem({
+    // AWAITED as of C5b: the writer persists to Postgres now, and its DB save throws on
+    // failure. Without the await this handler would answer 201 for a task that never landed,
+    // and the enclosing catch (which turns it into a 500) would never see the rejection.
+    const triageItem = await appendPublicShareTriageItem({
       share,
       date,
       title,

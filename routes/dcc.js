@@ -37,7 +37,11 @@ module.exports = function mount(app, ctx) {
     // not an attacker but a publisher sending a serialized Date ("2026-08-03T04:00:00.000Z")
     // where a date was expected. Shape-check before building the path.
     if (!isValidDate(incoming.date)) return res.status(400).json({ error: "Invalid date" });
-    const dayFile = getDayFilePath(incoming.date); const existing = readJSON(dayFile, null) || readJSON(DAY_STATE_FILE, {});
+    const dayFile = getDayFilePath(incoming.date);
+    // Empty-object fallback, not a skeleton: this handler MERGES named sections over
+    // `existing`, so an absent day must contribute no sections rather than a full skeleton's
+    // worth of empty ones.
+    const existing = await readDccDayState(incoming.date, req, {});
     const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
     // "pushed" is LEGACY as of C3 (the pushed subsystem is deleted; a push is a real move
     // now). Nothing writes the section any more, so it is only here to preserve what old
@@ -251,6 +255,37 @@ module.exports = function mount(app, ctx) {
   // /api/dcc/refresh and /api/dcc/deep-sweep/ingest are allow-listed in
   // DCC_ENDPOINTS; until now they had no implementation, which is why the Brief
   // tab's refresh button was a dead end.
+  // ── C5b step 4: Postgres is the BASE state for every mutation in this file ──
+  //
+  // Six handlers here read the JSON day file as their base and then FULL-REPLACE the
+  // Postgres row (`saveDccState` is `DO UPDATE SET state_json = EXCLUDED.state_json`). That
+  // is what made `server.js buildDayResponse` unfixable on its own, and it is recorded in a
+  // comment above that function: with the file as base, the skeleton `ensureSkeletonDays`
+  // writes at boot becomes the base, and the next Brief refresh PERSISTS it over the real
+  // day. On Railway the filesystem is ephemeral, so every redeploy re-arms that.
+  //
+  // Reading the durable store first inverts it: the file can no longer be promoted over
+  // Postgres, and `buildDayResponse` no longer has to write the file to keep these honest.
+  //
+  // `resolveOwnerLenient` deliberately matches what `persistDccDay` uses to WRITE. Reading
+  // as one owner and writing as another is how you would read workspace A's day and save it
+  // over workspace B's.
+  //
+  // A failed DB read falls through to the file rather than throwing: these handlers are
+  // ingest paths, and refusing an ingest because a read hiccuped loses the incoming packet.
+  // The Postgres WRITE still throws (persistDccDay's contract), so a save can never silently
+  // half-land.
+  async function readDccDayState(date, req, emptyFallback) {
+    const { userId, workspaceId } = resolveOwnerLenient(req);
+    try {
+      const row = await blockDB.getDccState(date, workspaceId || (userId ? `ws-${userId}` : "ws-1"));
+      if (row && row.state_json) return row.state_json;
+    } catch (e) {
+      console.error(`[dcc] day-state read failed for ${date}, falling back to the file mirror:`, e.message);
+    }
+    return readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || emptyFallback;
+  }
+
   async function persistDccDay(date, merged, req, source) {
     // Same honesty contract as /api/ingest/day-state: the Postgres write is the
     // durable one and THROWS on failure (callers' try/catch turns that into a
@@ -271,7 +306,7 @@ module.exports = function mount(app, ctx) {
     try {
       const body = req.body || {};
       const date = body.date || (body.packet && body.packet.date) || new Date().toISOString().slice(0, 10);
-      const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+      const existing = await readDccDayState(date, req, buildSkeletonState(date));
       const nextState = dccIntelligence.ingestDeepSweepPacket({ date, state: existing, packet: body.packet || body, source: body.source });
       await persistDccDay(date, nextState, req, "deep-sweep-ingest");
       res.json({ ok: true, date, packet_id: nextState.deep_sweep.last_packet_id, pages: (nextState.glymphatic_brief?.current?.pages || []).length });
@@ -285,7 +320,7 @@ module.exports = function mount(app, ctx) {
     try {
       const body = req.body || {};
       const date = body.date || (body.packet && body.packet.date) || getTodayStr();
-      const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+      const existing = await readDccDayState(date, req, buildSkeletonState(date));
       const nextState = dccIntelligence.ingestTriageCheckPacket({ date, state: existing, packet: body.packet || body });
       await persistDccDay(date, nextState, req, "triage-check-ingest");
       const last = nextState.sweep?.last_triage_check || {};
@@ -306,7 +341,7 @@ module.exports = function mount(app, ctx) {
       const VALID = new Set(["accept", "schedule", "backlog", "drop", "dismiss", "reset"]);
       if (!task_id || !VALID.has(action)) return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|dismiss|reset }" });
       const day = date || new Date().toISOString().slice(0, 10);
-      const state = readJSON(getDayFilePath(day), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(day);
+      const state = await readDccDayState(day, req, buildSkeletonState(day));
       const brief = state.glymphatic_brief || (state.glymphatic_brief = { history: [], current: null });
       const decisions = brief.decisions || (brief.decisions = {});
       const at = new Date().toISOString();
@@ -490,7 +525,7 @@ module.exports = function mount(app, ctx) {
       const dryRun = body.dryRun !== false && body.dry_run !== false;
       if (!isValidDate(sourceDate) || !isValidDate(targetDate)) return res.status(400).json({ error: "Expected sourceDate and targetDate as YYYY-MM-DD" });
       const { userId, workspaceId } = await resolveOwnerStrict(req);
-      const sourceState = readJSON(getDayFilePath(sourceDate), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(sourceDate);
+      const sourceState = await readDccDayState(sourceDate, req, buildSkeletonState(sourceDate));
       // Include soft-deleted rows so a brief task the user deleted is not
       // re-materialized: materializeBriefPlan keys dedup on glymphatic_task_id /
       // source_id, and a tombstone still carries those (mirrors meeting-materializer).
@@ -529,7 +564,7 @@ module.exports = function mount(app, ctx) {
   app.post("/api/dcc/refresh", async (req, res) => {
     try {
       const date = (req.body && req.body.date) || readJSON(DAY_STATE_FILE, {}).date || new Date().toISOString().slice(0, 10);
-      const existing = readJSON(getDayFilePath(date), null) || readJSON(DAY_STATE_FILE, null) || buildSkeletonState(date);
+      const existing = await readDccDayState(date, req, buildSkeletonState(date));
       const { state: nextState } = await dccIntelligence.refreshDccState({ date, state: existing, dataDir: DATA_DIR });
       await persistDccDay(date, nextState, req, "dcc-refresh");
       res.json({ ok: true, date, state: nextState });
