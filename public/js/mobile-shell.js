@@ -75,6 +75,7 @@
   const MORE_TABS = [
     { label:"Delegated", tab:"delegated", badge:"delegated-count" },
     { label:"Pet Home",  tab:"pet-home", badge:"pet-home-badge" },
+    { label:"Japan",     tab:"japan" },
     { label:"Runway",    tab:"runway" }
   ];
 

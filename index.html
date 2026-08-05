@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
+<link rel="stylesheet" href="/public/css/japan-dashboard.css?v=japan-1">
 </head>
 <body>
 <div id="prep-float"></div>
@@ -210,6 +211,7 @@
   <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
+  <button class="tab" data-tab="japan" id="japan-tab-btn">Japan</button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
 </div>
 
@@ -1711,6 +1713,10 @@
   <div id="budget-root"></div>
 </div>
 
+<div class="tab-content" id="tab-japan">
+  <div id="japan-dashboard-root"></div>
+</div>
+
 <!-- Mycelium vault tab (Phase B1): read-only markdown viewer over the git-backed vault. -->
 <div class="tab-content" id="tab-vault">
   <div id="vault-header">
@@ -1841,6 +1847,7 @@
 <!-- Resurfacing + weekly review (B6). Loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-review.js?v=vault-b6-1"></script>
 <script src="/public/js/vault-tab.js?v=vault-b6-1"></script>
+<script src="/public/js/japan-dashboard.js?v=japan-1"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>
