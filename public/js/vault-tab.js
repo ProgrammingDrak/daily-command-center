@@ -79,6 +79,16 @@
     return root;
   }
 
+  // Tree-row tooltip: the slug, plus the node's one-line summary when it has one.
+  // Cheapest possible surfacing -- hovering the tree tells you what a note is
+  // without opening it. Plain text into a title attribute, so esc() at the call
+  // site is the only escaping needed (no HTML injection path here).
+  function tooltipFor(n) {
+    const fm = (n && n.frontmatter) || {};
+    const sum = typeof fm.summary === "string" ? fm.summary.trim() : "";
+    return sum ? `${n.slug}\n\n${sum}` : n.slug;
+  }
+
   function renderTreeNode(node, depth) {
     let html = "";
     const folders = [...node.folders.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -95,7 +105,7 @@
     for (const f of files) {
       const pad = 8 + depth * 14 + 14; // align past the chevron column
       const active = f.node.slug === selectedSlug ? " active" : "";
-      html += `<div class="vtree-row vtree-file${active}" data-slug="${esc(f.node.slug)}" style="padding-left:${pad}px" title="${esc(f.node.slug)}">
+      html += `<div class="vtree-row vtree-file${active}" data-slug="${esc(f.node.slug)}" style="padding-left:${pad}px" title="${esc(tooltipFor(f.node))}">
         <span class="vtree-emoji">${emojiFor(f.node)}</span>
         <span class="vtree-label">${esc(titleOf(f.node))}</span>
       </div>`;

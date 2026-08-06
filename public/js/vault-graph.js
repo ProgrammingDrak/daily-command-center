@@ -173,6 +173,15 @@ window.VaultGraph = (function () {
     simLinks = links;
   }
 
+  // Reverse the five entities escHtml produces. Only ever applied to text that is
+  // then set via textContent, so this cannot reintroduce markup.
+  function unescapeEntities(s) {
+    return String(s)
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&");
+  }
+
   function nodeRadius(deg) {
     return Math.max(R_MIN, Math.min(R_MAX, R_MIN + Math.sqrt(Math.max(0, deg)) * R_SCALE));
   }
@@ -289,6 +298,10 @@ window.VaultGraph = (function () {
 
     const enter = node.enter().append("g").attr("class", "vault-gr-node");
     enter.append("circle");
+    // Native SVG <title> = a free browser tooltip carrying the node's summary.
+    // At this density most labels are hidden (hubs only), so hovering a bare dot
+    // is the main way to find out what it is without clicking through.
+    enter.append("title");
     enter.append("text");
     enter
       .on("click", (ev, d) => onClick(d))
@@ -310,6 +323,15 @@ window.VaultGraph = (function () {
       .attr("r", (d) => d.r)
       .attr("fill", (d) => (d.ghost ? "none" : d.color || data.unmapped))
       .attr("stroke", (d) => (d.ghost ? d.color || data.unmapped : null));
+    // The summary arrives HTML-escaped from the route; <title> takes TEXT, so
+    // decode the few entities escHtml introduces rather than showing &amp;#39; in a
+    // tooltip. textContent means there is no injection path either way.
+    all.select("title").text((d) => {
+      const bits = [d.ghost ? `[[${d.target}]] — dangling` : d.title];
+      if (d.summary) bits.push(unescapeEntities(d.summary));
+      if (!d.ghost) bits.push(`${d.type}${d.date ? ` · ${d.date}` : ""} · ${d.deg} link${d.deg === 1 ? "" : "s"}`);
+      return bits.filter(Boolean).join("\n");
+    });
     all.select("text")
       .attr("x", (d) => d.r + 4).attr("y", 3.5)
       .text((d) => (labelsOn() || d.deg >= LABEL_DEG || isHot(d) ? d.title : ""));

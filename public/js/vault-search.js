@@ -52,13 +52,21 @@
 
   function rowHtml(r) {
     const emoji = r.sensitive ? "🔒" : ((window.DCC && window.DCC.vaultTypeEmoji && window.DCC.vaultTypeEmoji[r.type]) || "📄");
-    // Snippet arrives HTML-escaped from the server; inject as-is (no re-escape).
+    // Snippet AND summary arrive HTML-escaped from the server; inject as-is (no
+    // re-escape, or you get visible &amp;quot; in the UI).
+    //
+    // The summary leads when there is one: the snippet tells you WHERE your term
+    // matched, the summary tells you whether the note is worth opening at all. Both
+    // show when both exist, summary first, because that is the reading order that
+    // answers "is this the one?" fastest.
+    const sum = r.summary ? `<div class="vault-sr-sum">${r.summary}</div>` : "";
     const snip = r.snippet ? `<div class="vault-sr-snip">${r.snippet}</div>` : "";
     return `<div class="vault-sr-row" data-slug="${esc(r.slug)}" role="option" tabindex="-1">
       <span class="vault-sr-emoji">${emoji}</span>
       <span class="vault-sr-main">
         <span class="vault-sr-title">${esc(r.title)}</span>
         <span class="vault-sr-path">${esc(r.slug)}</span>
+        ${sum}
         ${snip}
       </span>
     </div>`;

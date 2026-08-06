@@ -445,6 +445,7 @@ window.VaultTimeline = (function () {
       card.innerHTML =
         `<div class="hc-title">${emojiFor(d)} ${esc(d.title)}</div>
          <div class="hc-meta">${esc(d.date)} · ${esc(d.type)}</div>
+         ${d.summary ? `<div class="hc-sum">${d.summary}</div>` : ""}
          ${ppl}${tags ? `<div class="hc-tags">${tags}</div>` : ""}`;
     }
     card.hidden = false;

@@ -316,6 +316,15 @@ function gapHueColor(str) {
 // A node's dot color = the circular-mean ontology color of its tag set (the ONE
 // color algorithm, parse.colorForTags). Degrades to the unmapped gray when the
 // shared parser/ontology is absent or the node is tagless.
+// A node's escaped one-line summary, or null. Read straight off the index rather
+// than threaded through every caller. Escaped HERE because it lands in a JSON
+// response the client injects (retro F1: escaping is a per-endpoint contract).
+function summaryOf(vault, slug) {
+  const n = vault && vault.nodes && vault.nodes.get(slug);
+  const s = n && n.frontmatter && n.frontmatter.summary;
+  return typeof s === "string" && s.trim() ? escHtml(s.trim()) : null;
+}
+
 function nodeColor(tags, ontology, parse, unmapped) {
   if (!parse || !parse.colorForTags || !ontology || !tags || !tags.length) return unmapped;
   try { return parse.colorForTags(tags, ontology).hex || unmapped; } catch { return unmapped; }
@@ -412,7 +421,18 @@ function vaultReady(res) {
 // Commit a node to disk (VaultStore.write) + queue the durable push. Never logs
 // the body — the commit message carries slugs only.
 async function writeNode(slug, frontmatter, body, { message, expectedHash } = {}) {
-  const node = await ctx.vault.write(slug, { frontmatter: frontmatter || {}, body: body || "", expectedHash });
+  const fm = Object.assign({}, frontmatter || {});
+  // Stamp `updated` on EVERY write from the tab. This is the single chokepoint all
+  // four write paths (create / capture / daily / PUT) already funnel through, so
+  // stamping here is the only place it has to happen -- and the MCP server stamps
+  // the same field on its side, so a note's freshness does not depend on which
+  // surface last touched it.
+  //
+  // `date` is the EVENT date and is never touched: a journal entry written up a
+  // week later still belongs to the day it describes. `updated` is how fresh the
+  // writing is, which is the only reason a reader can trust the summary above it.
+  fm.updated = new Date().toISOString().slice(0, 10);
+  const node = await ctx.vault.write(slug, { frontmatter: fm, body: body || "", expectedHash });
   if (ctx.syncMgr) ctx.syncMgr.notifyChange({ slug, message: message || `update ${slug}` });
   return node;
 }
@@ -719,6 +739,8 @@ app.get("/api/vault/timeline", (req, res) => {
       id: n.slug, slug: n.slug, title: n.title, type: n.type, date: n.date,
       tags: n.tags, people: n.people, event: n.event,
       sensitive: isSensitiveSlug(n.slug),
+      // Escaped here, at the JSON boundary, same contract as /search (retro F1).
+      summary: summaryOf(ctx.vault, n.slug),
       color: nodeColor(n.tags, ontology, parse, unmapped),
     };
   });
@@ -756,7 +778,11 @@ app.get("/api/vault/timeline", (req, res) => {
 // sensitive index is queried ONLY for a PIN-unlocked session (VaultStore.search
 // gates on includeSensitive), so a locked session can't surface sensitive
 // titles/bodies/snippets. ?mode=title powers the quick-switcher (title+alias
-// weighted). Snippets are plain text; HTML-escaped here for the client.
+// weighted). Snippets AND summaries are plain text, HTML-escaped here for the
+// client -- escaping at the JSON boundary is a per-endpoint contract, not a
+// property of the store (retro finding F1 was a real XSS in /digest's
+// unlinked[].snippet for exactly this reason). Any new user-authored string added
+// to this response has to be escaped on the way out, right here.
 app.get("/api/vault/search", (req, res) => {
   if (!vaultReady(res)) return;
   const q = String(req.query.q || "").trim();
@@ -769,7 +795,11 @@ app.get("/api/vault/search", (req, res) => {
   const { results, total } = ctx.vault.search(q, { includeSensitive: isUnlocked(req), limit, offset, mode });
   res.json({
     q, mode, total, offset, limit, tookMs: Date.now() - t0,
-    results: results.map((r) => ({ ...r, snippet: escHtml(r.snippet || "") })),
+    results: results.map((r) => ({
+      ...r,
+      snippet: escHtml(r.snippet || ""),
+      summary: r.summary ? escHtml(r.summary) : null,
+    })),
   });
 });
 
@@ -1149,7 +1179,11 @@ app.get("/api/vault/graph", (req, res) => {
     counts: g.counts,
     unmapped,
     ontologyAvailable: !!ontology,
-    nodes: g.nodes.map((n) => ({ ...n, color: nodeColor(n.tags, ontology, parse, unmapped) })),
+    nodes: g.nodes.map((n) => ({
+      ...n,
+      summary: n.summary ? escHtml(n.summary) : null,
+      color: nodeColor(n.tags, ontology, parse, unmapped),
+    })),
     edges: g.edges,
     ghosts: g.ghosts,
   });

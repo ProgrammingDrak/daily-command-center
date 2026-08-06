@@ -281,3 +281,60 @@ test("_isIgnored: node_modules is skipped so dependency READMEs are not vault no
     assertLossless(store, g, "node_modules vault");
   } finally { await cleanup(dir, store); }
 });
+
+// ── Phase B8: summary + updated surfacing ──
+test("writeNode stamps `updated` on every tab write, and never moves `date`", async () => {
+  const { dir, store } = await makeVault([
+    ["notes/a.md", { type: "note", title: "A", date: "2019-03-03" }, "body"],
+  ]);
+  try {
+    const rm = mountRoutes(store);
+    const put = rm["PUT /api/vault/node/*"];
+    const before = store.get("notes/a");
+    const r = await call(put, {
+      params: { 0: "notes/a" },
+      body: { frontmatter: { type: "note", title: "A", date: "2019-03-03" }, body: "changed", hash: before.hash },
+    });
+    assert.strictEqual(r.code, 200, JSON.stringify(r.body));
+    const after = store.get("notes/a");
+    assert.match(String(after.frontmatter.updated), /^\d{4}-\d{2}-\d{2}$/, "updated stamped by the tab's write path");
+    assert.strictEqual(String(after.frontmatter.date).slice(0, 10), "2019-03-03", "event date untouched");
+  } finally { await cleanup(dir, store); }
+});
+
+test("search + timeline + graph all carry `summary`, HTML-escaped at the boundary", async () => {
+  const { dir, store } = await makeVault([
+    ["notes/x.md",
+      { type: "note", title: "Xenon", date: "2026-01-02", summary: 'Has <script>alert(1)</script> & "quotes"' },
+      "xenon body text"],
+    ["notes/y.md", { type: "note", title: "Yttrium", date: "2026-01-03" }, "links [[notes/x]]"],
+  ]);
+  try {
+    const rm = mountRoutes(store);
+
+    // The store hands back the RAW summary; escaping is the route's job.
+    const raw = store.search("xenon").results.find((r) => r.slug === "notes/x");
+    assert.ok(raw.summary.includes("<script>"), "store returns it raw");
+
+    for (const [label, res, pick] of [
+      ["search", await call(rm["GET /api/vault/search"], { query: { q: "xenon" } }),
+        (b) => b.results.find((r) => r.slug === "notes/x")],
+      ["timeline", await call(rm["GET /api/vault/timeline"]),
+        (b) => b.nodes.find((n) => n.slug === "notes/x")],
+      ["graph", await call(rm["GET /api/vault/graph"]),
+        (b) => b.nodes.find((n) => n.slug === "notes/x")],
+    ]) {
+      const row = pick(res.body);
+      assert.ok(row, `${label}: node missing`);
+      assert.ok(row.summary, `${label}: summary missing`);
+      assert.ok(!row.summary.includes("<script>"), `${label}: RAW <script> reached the client`);
+      assert.ok(row.summary.includes("&lt;script&gt;"), `${label}: not escaped`);
+      assert.ok(row.summary.includes("&amp;"), `${label}: ampersand not escaped`);
+    }
+
+    // A node with no summary reports null rather than "" or undefined, so the
+    // client's `d.summary ? ...` guard behaves the same on every surface.
+    const g = await call(rm["GET /api/vault/graph"]);
+    assert.strictEqual(g.body.nodes.find((n) => n.slug === "notes/y").summary, null);
+  } finally { await cleanup(dir, store); }
+});

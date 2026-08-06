@@ -800,6 +800,12 @@ class VaultStore extends EventEmitter {
         type: h.type || "untyped",
         score: h.score,
         sensitive: isSensitivePath(h.id),
+        // The node's one-line summary, when it has one. A result row can then say
+        // what a note IS rather than only showing the matched fragment -- the
+        // snippet tells you WHERE your term hit, the summary tells you whether the
+        // note is worth opening. Both ship; the client prefers the summary.
+        summary: node && node.frontmatter && typeof node.frontmatter.summary === "string"
+          ? node.frontmatter.summary.trim() || null : null,
         snippet: node ? this._searchSnippet(node.body, h.terms) : "",
       };
     });
@@ -1233,6 +1239,9 @@ class VaultStore extends EventEmitter {
         // the client can hide them; orphans() already discounts their backlinks.
         generated: slug.startsWith("notes/reviews/"),
         sensitive: isSensitivePath(slug),
+        // Carried so the graph can say what a node IS on hover, not just its
+        // title. Escaped at the route boundary like every other authored string.
+        summary: typeof fm.summary === "string" && fm.summary.trim() ? fm.summary.trim() : null,
         deg: 0,
       });
     }
