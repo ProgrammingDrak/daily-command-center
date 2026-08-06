@@ -704,8 +704,14 @@ module.exports = function mount(app, ctx) {
 
   async function refreshCapture(block, kind, seed) {
     const initialProps = block.properties || {};
-    const capture = await captureSlackMessage(initialProps.slack_channel, initialProps.slack_ts, seed);
-    const captured = captureProperties(kind, initialProps.slack_channel, initialProps.slack_ts, capture);
+    const seedChannel = seed && seed.channel && typeof seed.channel === "object"
+      ? seed.channel.id
+      : seed && seed.channel;
+    const channel = String(initialProps.slack_channel || seedChannel || "");
+    const ts = String(initialProps.slack_ts || seed && seed.ts || "");
+    if (!channel || !ts) throw new Error("Slack capture coordinates were missing");
+    const capture = await captureSlackMessage(channel, ts, seed);
+    const captured = captureProperties(kind, channel, ts, capture);
     // Slack calls can take seconds. Re-read before merging so a UI edit made
     // during capture always wins over this delayed automation write.
     const latest = await blockDB.getBlock(block.id) || block;
@@ -789,6 +795,8 @@ module.exports = function mount(app, ctx) {
         WHERE workspace_id = $1
           AND deleted_at IS NULL
           AND properties->>'source' = 'slack-bookmark'
+          AND NULLIF(properties->>'slack_channel', '') IS NOT NULL
+          AND NULLIF(properties->>'slack_ts', '') IS NOT NULL
           AND (properties->>'status' = 'done' OR properties ? 'completedAt')
           AND NOT (properties ? 'slack_done_mirrored_at')
         ORDER BY created_at ASC
@@ -798,6 +806,7 @@ module.exports = function mount(app, ctx) {
     let mirrored = 0;
     for (const block of rows) {
       const props = block.properties || {};
+      if (!props.slack_channel || !props.slack_ts) continue;
       try {
         const ok = await addSlackReaction(props.slack_channel, props.slack_ts, R_DONE);
         if (!ok) continue;

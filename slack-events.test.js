@@ -436,6 +436,38 @@ test("server reconciliation searches both portable reactions and backfills each 
   assert.deepEqual(queries, ["hasmy::bookmark:", "hasmy::busts_in_silhouette:"]);
 });
 
+test("reconciliation repairs legacy poller rows that only stored the idempotency key", async () => {
+  const { handler, api, blocks, calls, setFetch } = makeHarness();
+  await post(handler, reaction("bookmark", "222.531", "222.9"));
+  const legacy = blocks[0].properties;
+  delete legacy.slack_channel;
+  delete legacy.slack_ts;
+  delete legacy.source_message_preview;
+  legacy.capture_status = "retry";
+  setFetch(async (url) => {
+    assert.doesNotMatch(String(url), /reactions\.get/, "the search result is the capture seed");
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  const result = await api.reconcileMatch("bookmark", {
+    ts: "222.531",
+    text: "Review the repaired legacy capture before launch",
+    user: "U1",
+    channel: { id: "C1", name: "general" },
+  });
+  assert.deepEqual(result, { updated: true });
+  assert.equal(blocks[0].properties.slack_channel, "C1");
+  assert.equal(blocks[0].properties.slack_ts, "222.531");
+  assert.equal(blocks[0].properties.source_message_preview, "Review the repaired legacy capture before launch");
+  assert.equal(calls.fetch.some((call) => call.url.includes("reactions.get")), true, "the original webhook capture still used reactions.get");
+});
+
+test("completion mirroring selects only rows with valid Slack coordinates", () => {
+  const source = require("node:fs").readFileSync(require.resolve("./routes/slack-events.js"), "utf8");
+  assert.match(source, /NULLIF\(properties->>'slack_channel', ''\) IS NOT NULL/);
+  assert.match(source, /NULLIF\(properties->>'slack_ts', ''\) IS NOT NULL/);
+  assert.match(source, /if \(!props\.slack_channel \|\| !props\.slack_ts\) continue/);
+});
+
 test("🔖 is idempotent — a duplicate bookmark event makes no second task", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "333.3", "333.9"));
