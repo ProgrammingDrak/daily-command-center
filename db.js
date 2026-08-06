@@ -753,6 +753,33 @@ async function getBlocksByDateIncludingDeleted(date, workspaceId) {
   return rows.map(parseBlock);
 }
 
+// Date-independent calendar identity lookup, plus every row on the matching
+// meeting dates. A calendar event can move backward or forward beyond the
+// current feed horizon; the materializer needs the old parent and its nested
+// task rows in order to move them without changing ids or orphaning children.
+// Tombstones are included so user deletion remains authoritative.
+async function getCalendarMeetingContextBySourceIds(sourceIds, workspaceId) {
+  const ids = (Array.isArray(sourceIds) ? sourceIds : []).map(String).filter(Boolean);
+  if (!ids.length) return [];
+  const { rows } = await pool.query(
+    `WITH meeting_dates AS (
+       SELECT DISTINCT date
+         FROM blocks
+        WHERE workspace_id IS NOT DISTINCT FROM $2
+          AND properties->>'source' = 'calendar'
+          AND properties->>'type' IN ('meeting','oneone')
+          AND properties->>'source_id' = ANY($1::text[])
+     )
+     SELECT b.*
+       FROM blocks b
+       JOIN meeting_dates md ON b.date = md.date
+      WHERE b.workspace_id IS NOT DISTINCT FROM $2
+      ORDER BY b.date ASC, b.sort_order ASC, b.created_at ASC`,
+    [ids, workspaceId || null]
+  );
+  return rows.map(parseBlock);
+}
+
 // The candidate pool for a reschedule subtree walk (lib/reschedule.js): every task row
 // on the origin date, PLUS undated rows carrying a subtaskOf/wrapId link.
 //
@@ -1242,7 +1269,7 @@ module.exports = {
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
   undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
-  getBlocksByDate, getBlocksByDateIncludingDeleted, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
+  getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,

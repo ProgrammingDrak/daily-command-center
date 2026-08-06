@@ -52,6 +52,11 @@ module.exports = function createMeetingMaterializer(deps) {
   function sortOrderFor(start) {
     return start ? hhmmToMin(start) : 0;
   }
+  function shiftHHMM(hhmm, delta) {
+    if (!hhmm || !Number.isFinite(delta)) return hhmm;
+    const shifted = ((hhmmToMin(hhmm) + delta) % 1440 + 1440) % 1440;
+    return `${String(Math.floor(shifted / 60)).padStart(2, "0")}:${String(shifted % 60).padStart(2, "0")}`;
+  }
   // ET-local calendar date (YYYY-MM-DD) for an ISO instant. Mirrors isoToHHMM:
   // both read the wall-clock in TZ, so a meeting's day and its time never disagree.
   // A raw UTC slice would roll an evening-ET meeting onto the next day.
@@ -233,15 +238,71 @@ module.exports = function createMeetingMaterializer(deps) {
     }
 
     // Process every date with incoming meetings, plus every date in the
-    // cancellation window (empty ones just get a cancellation sweep).
+    // cancellation window. Load the entire window first so an event that moved
+    // to another day can keep its durable block id and its nested work.
     const processDates = [...new Set([...byDate.keys(), ...cancelSet])].sort();
+    const blocksByDate = new Map();
+    const calendarBySource = new Map();
+    let identityContext = [];
+    const incomingSourceIds = [...new Set([...incomingIdsByDate.values()].flatMap((ids) => [...ids]))];
+    if (incomingSourceIds.length && typeof blockDB.getCalendarMeetingContextBySourceIds === "function") {
+      try {
+        identityContext = await blockDB.getCalendarMeetingContextBySourceIds(incomingSourceIds, workspaceId);
+      } catch (e) {
+        console.error("[meeting-materializer] identity lookup failed:", e.message);
+        throw e;
+      }
+    }
     for (const pd of processDates) {
+      try {
+        const blocks = await blockDB.getBlocksByDateIncludingDeleted(pd, workspaceId);
+        blocksByDate.set(pd, blocks);
+        for (const b of blocks) {
+          const p = b.properties || {};
+          if (p.source === "calendar" && (p.type === "meeting" || p.type === "oneone") && p.source_id) {
+            calendarBySource.set(String(p.source_id), b);
+          }
+        }
+      } catch (e) {
+        console.error("[meeting-materializer] block lookup failed for", pd + ":", e.message);
+        blocksByDate.set(pd, null);
+      }
+    }
+    const allBlocksById = new Map();
+    for (const block of [...identityContext, ...[...blocksByDate.values()].filter(Boolean).flat()]) {
+      if (block && block.id) allBlocksById.set(block.id, block);
+    }
+    const allBlocks = [...allBlocksById.values()];
+    for (const b of allBlocks) {
+      const p = b.properties || {};
+      if (p.source === "calendar" && (p.type === "meeting" || p.type === "oneone") && p.source_id) {
+        calendarBySource.set(String(p.source_id), b);
+      }
+    }
+
+    const claimedBlockIds = new Set();
+    // Reconcile/create every incoming event before cancellation. This ordering
+    // prevents an old-date row from being deleted before its new-date sweep can
+    // move that same row and preserve child edges.
+    for (const pd of processDates) {
+      if (!blocksByDate.get(pd)) continue;
       await materializeDate({
         date: pd,
         eligible: byDate.get(pd) || [],
-        incomingIds: incomingIdsByDate.get(pd) || new Set(),
-        doCancel: cancelSet.has(pd),
+        allBlocks,
+        calendarBySource,
+        claimedBlockIds,
         userId, workspaceId, result,
+      });
+    }
+    for (const pd of processDates) {
+      if (!cancelSet.has(pd) || !blocksByDate.get(pd)) continue;
+      await cancelDate({
+        blocks: blocksByDate.get(pd),
+        allBlocks,
+        incomingIds: incomingIdsByDate.get(pd) || new Set(),
+        claimedBlockIds,
+        result,
       });
     }
 
@@ -250,26 +311,10 @@ module.exports = function createMeetingMaterializer(deps) {
 
   // Create, reconcile, and (optionally) cancel the calendar meeting blocks for a
   // SINGLE date. Accumulates into the shared `result`.
-  async function materializeDate({ date, eligible, incomingIds, doCancel, userId, workspaceId, result }) {
-    // Index existing calendar meeting blocks (incl. soft-deleted) by source_id.
-    let blocks = [];
-    try {
-      blocks = await blockDB.getBlocksByDateIncludingDeleted(date, workspaceId);
-    } catch (e) {
-      console.error("[meeting-materializer] block lookup failed for", date + ":", e.message);
-      return;
-    }
-    const bySourceId = new Map();
-    for (const b of blocks) {
-      const p = b.properties || {};
-      if (p.source === "calendar" && (p.type === "meeting" || p.type === "oneone") && p.source_id) {
-        bySourceId.set(String(p.source_id), b);
-      }
-    }
-
+  async function materializeDate({ date, eligible, allBlocks, calendarBySource, claimedBlockIds, userId, workspaceId, result }) {
     let rootEnsured = false;
     for (const { meeting, identity, start, end, durationMinutes } of eligible) {
-      const existing = bySourceId.get(identity);
+      const existing = calendarBySource.get(identity);
 
       // User deleted it, so respect that and never resurrect. This check was the
       // reference implementation the shared guard was lifted from; it now calls the
@@ -289,12 +334,14 @@ module.exports = function createMeetingMaterializer(deps) {
           // sweep-filled "ready" is never clobbered and pending is never re-stamped.
           const wantsPending = !p.prep_status && withinPrepHorizon(meeting.start);
           const changed =
-            p.start !== start || p.end !== end || p.title !== nextTitle ||
+            existing.date !== date || p.start !== start || p.end !== end || p.title !== nextTitle ||
             p.synced_gcal_start !== start || p.synced_gcal_end !== end ||
             // Heal meetings materialized before the point-earning tag existed:
             // a one-time reconcile stamps the tag + points, then stays idempotent.
             !hasMeetingTag(p) || wantsPending;
           if (changed) {
+            const oldDate = existing.date;
+            const oldStart = p.start;
             const props = {
               ...p,
               title: nextTitle,
@@ -310,13 +357,27 @@ module.exports = function createMeetingMaterializer(deps) {
             if (wantsPending) props.prep_status = "pending";
             stampMeetingPoints(props, durationMinutes);
             try {
-              await blockDB.updateBlock(existing.id, { properties: props, sort_order: sortOrderFor(start) });
+              const childMoves = nestedMoveOps({ parent: existing, allBlocks, oldDate, newDate: date, oldStart, newStart: start });
+              const parentOp = { op: "update", id: existing.id, properties: props, sort_order: sortOrderFor(start), date };
+              if (childMoves.length) {
+                if (typeof blockDB.batchOp !== "function") throw new Error("atomic batch update is unavailable");
+                await blockDB.batchOp([parentOp, ...childMoves]);
+              } else {
+                await blockDB.updateBlock(existing.id, parentOp);
+              }
+              existing.date = date;
+              existing.properties = props;
+              for (const move of childMoves) {
+                const child = allBlocks.find((row) => row.id === move.id);
+                if (child) { child.date = move.date; child.properties = move.properties; }
+              }
               result.updated++;
             } catch (e) {
               console.error("[meeting-materializer] update failed:", e.message);
             }
           }
         }
+        claimedBlockIds.add(existing.id);
         result.blockIds.push(existing.id);
         continue;
       }
@@ -331,24 +392,87 @@ module.exports = function createMeetingMaterializer(deps) {
         });
         result.created++;
         result.blockIds.push(created.id);
+        claimedBlockIds.add(created.id);
+        calendarBySource.set(identity, created);
       } catch (e) {
         console.error("[meeting-materializer] create failed:", e.message);
       }
     }
+  }
 
-    // Cancellation: soft-delete live calendar blocks whose event vanished from the
-    // feed. Only meetings still absent are removed; completed ones survive.
-    if (doCancel) {
-      for (const [sid, b] of bySourceId) {
-        if (incomingIds.has(sid)) continue;
-        if (b.deleted_at) continue;
-        if (isCompleted(b.properties || {})) continue;
-        try {
+  function aliasesOf(block) {
+    const p = (block && block.properties) || {};
+    return [...new Set([block && block.id, p.local_id].filter(Boolean))];
+  }
+
+  function nestedMoveOps({ parent, allBlocks, oldDate, newDate, oldStart, newStart }) {
+    if (!parent || !Array.isArray(allBlocks)) return [];
+    const delta = hhmmToMin(newStart) - hhmmToMin(oldStart);
+    const childrenByParent = new Map();
+    for (const block of allBlocks) {
+      if (!block || block.deleted_at) continue;
+      const p = block.properties || {};
+      const pid = p.wrapId || p.subtaskOf;
+      if (!pid) continue;
+      if (!childrenByParent.has(pid)) childrenByParent.set(pid, []);
+      childrenByParent.get(pid).push(block);
+    }
+    const seenRows = new Set([parent.id]);
+    const queue = aliasesOf(parent).flatMap((id) => childrenByParent.get(id) || []);
+    const moves = [];
+    while (queue.length) {
+      const child = queue.shift();
+      const p = child.properties || {};
+      if (!child.id || seenRows.has(child.id)) continue;
+      seenRows.add(child.id);
+      const nextProps = { ...p };
+      if (delta && p.start) nextProps.start = shiftHHMM(p.start, delta);
+      if (delta && p.end) nextProps.end = shiftHHMM(p.end, delta);
+      if (delta || oldDate !== newDate) {
+        moves.push({ op: "update", id: child.id, properties: nextProps, date: newDate });
+      }
+      aliasesOf(child).forEach((id) => (childrenByParent.get(id) || []).forEach((next) => queue.push(next)));
+    }
+    return moves;
+  }
+
+  // Cancellation: soft-delete live calendar blocks whose event vanished from the
+  // feed. Only meetings still absent are removed; completed ones survive.
+  async function cancelDate({ blocks, allBlocks, incomingIds, claimedBlockIds, result }) {
+    for (const b of blocks) {
+      const p = b.properties || {};
+      if (p.source !== "calendar" || (p.type !== "meeting" && p.type !== "oneone") || !p.source_id) continue;
+      if (incomingIds.has(String(p.source_id)) || claimedBlockIds.has(b.id)) continue;
+      if (b.deleted_at || isCompleted(p)) continue;
+      try {
+        const parentAliases = new Set(aliasesOf(b));
+        const childOps = allBlocks.filter((child) => {
+          if (!child || child.deleted_at || child.id === b.id) return false;
+          const cp = child.properties || {};
+          return parentAliases.has(cp.wrapId || cp.subtaskOf);
+        }).map((child) => {
+          const cp = { ...(child.properties || {}), wrapId: null, subtaskOf: null, rel: null };
+          if (child.properties && child.properties.subtaskOf && cp.start && cp.end && hhmmToMin(cp.end) <= hhmmToMin(cp.start)) {
+            const startMin = hhmmToMin(cp.start);
+            const endMin = Math.min(1439, startMin + 30);
+            cp.end = `${String(Math.floor(endMin / 60)).padStart(2, "0")}:${String(endMin % 60).padStart(2, "0")}`;
+            cp.duration = Math.max(0, endMin - startMin);
+          }
+          return { op: "update", id: child.id, properties: cp, parent_id: null, date: child.date };
+        });
+        if (childOps.length) {
+          if (typeof blockDB.batchOp !== "function") throw new Error("atomic cancellation batch is unavailable");
+          await blockDB.batchOp([...childOps, { op: "delete", id: b.id }]);
+          for (const op of childOps) {
+            const child = allBlocks.find((row) => row.id === op.id);
+            if (child) child.properties = op.properties;
+          }
+        } else {
           await blockDB.deleteBlock(b.id);
-          result.cancelled++;
-        } catch (e) {
-          console.error("[meeting-materializer] cancel failed:", e.message);
         }
+        result.cancelled++;
+      } catch (e) {
+        console.error("[meeting-materializer] cancel failed:", e.message);
       }
     }
   }

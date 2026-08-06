@@ -580,7 +580,9 @@ function openMakeSubtaskOf(childId, anchorEl){
   // this popover's own cycle/self/duplicate-parent guard and stays here.
   const candidates=DCC.TaskModel.selectOpen(scheduled).filter(e=>
     e&&e.id!==childId&&
-    ((typeof pointEligible==="function")?pointEligible(e):(!meeting(e)&&e.type!=="break"&&e.type!=="ooo"))&&
+    // Meetings are fixed-time but still valid parents. They can own either a
+    // timeless subtask or a full nested task performed during the meeting.
+    ((typeof pointEligible==="function")?(pointEligible(e)||meeting(e)):(meeting(e)||e.type!=="break"&&e.type!=="ooo"))&&
     e.subtaskOf!==childId&&
     !(typeof _isAncestor==="function"&&_isAncestor(childId,e.id))&&
     !(typeof parentIdOf==="function"&&parentIdOf(scheduled.find(x=>x.id===childId)||{})===e.id)

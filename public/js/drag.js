@@ -28,7 +28,10 @@ function dOver(e,id){
   const draggingCarryover=(typeof _unfRecById==="function")&&_unfRecById(dragId);
   // Drop on the body of a task = nest inside it; drop near the top/bottom edge = reorder to that slot.
   // Plain body-drop = ride-along (own time/points); hold Shift = subtask (shares the parent's pie).
-  const canNest=!draggingCarryover&&targetEv&&typeof isMeeting==="function"&&!isMeeting(targetEv)&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
+  // Meetings are valid parents too: a normal body-drop represents concurrent
+  // work during the meeting, while Shift+drop creates a pie subtask relevant to
+  // the meeting. Only the existing carryover and cycle guards block nesting.
+  const canNest=!draggingCarryover&&targetEv&&!(typeof _isAncestor==="function"&&_isAncestor(dragId,id));
   if(canNest&&y>h*0.25&&y<h*0.75){
     tgt.classList.add("drag-over-nest");
     tgt.classList.toggle("drag-over-nest-sub",!!e.shiftKey);
@@ -409,9 +412,21 @@ function _layoutShellChildren(shellEv,seen){
 function _shiftWrapChildren(wrapEv,oldStart){
   const delta=pt(wrapEv.start)-oldStart;
   if(!delta)return;
-  DCC.TaskModel.ridersOf(wrapEv.id,scheduled).forEach(c=>{
-    c.start=fmt(pt(c.start)+delta);c.end=fmt(pt(c.end)+delta);_persistEvWrap(c);
-  });
+  const seen=new Set([wrapEv.id]);
+  const kids=(id)=>typeof childrenOf==="function"
+    ?childrenOf(id,scheduled)
+    :(typeof DCC.TaskModel.childrenOf==="function"
+      ?DCC.TaskModel.childrenOf(id,scheduled)
+      :DCC.TaskModel.ridersOf(id,scheduled).concat(DCC.TaskModel.subtasksOf(id,scheduled)));
+  const stack=kids(wrapEv.id).slice();
+  while(stack.length){
+    const c=stack.shift();
+    if(!c||seen.has(c.id))continue;
+    seen.add(c.id);
+    if(c.start&&c.end){c.start=fmt(pt(c.start)+delta);c.end=fmt(pt(c.end)+delta);}
+    _persistEvWrap(c);
+    kids(c.id).forEach(k=>{if(k&&!seen.has(k.id))stack.push(k);});
+  }
 }
 // Edge drop on a NESTED row: join the target's parent at the target's level
 // (ride-along or subtask), ordered before/after the target, then re-chain the
@@ -534,6 +549,7 @@ function dDrop(e,tid){
   // flow around its NEW slot. The calendar still wins on the next sweep
   // (synced_gcal_start is untouched), so this is a hold-until-next-sync move.
   if(isFixedTimeBlock(moved)&&typeof userMovable==="function"&&userMovable(moved)){
+    const oldStart=pt(moved.start);
     const r0=e.currentTarget.getBoundingClientRect();
     const after0=(e.clientY-r0.top)>=r0.height/2;
     const d=dur(moved)||30;
@@ -543,6 +559,9 @@ function dDrop(e,tid){
     delete moved._pinnedStart;            // meetings hold via fixedTime, not pins
     _reorderActive(moved.id,target.id,after0); // keep list order coherent w/ new time
     recalcTimes({orderWins:true});
+    // A meeting can own concurrent nested tasks. Keep those tasks at the same
+    // offset inside the meeting when the meeting itself is manually re-timed.
+    _shiftWrapChildren(moved,oldStart);
     _finishDrag(old);return;
   }
 
@@ -566,7 +585,7 @@ function dDrop(e,tid){
   // mid-row band doesn't silently turn the scheduled task into a subtask.
   const r=e.currentTarget.getBoundingClientRect();
   const y=e.clientY-r.top,h=r.height;
-  const nest=(!wasUntimed&&typeof isMeeting==="function"&&!isMeeting(target)&&y>h*0.25&&y<h*0.75&&!_isAncestor(moved.id,target.id));
+  const nest=(!wasUntimed&&y>h*0.25&&y<h*0.75&&!_isAncestor(moved.id,target.id));
   const after=y>=h/2;
 
   // ---- Case A: dragging a WRAP -> move it; its ride-alongs follow by the same delta ----
@@ -650,4 +669,3 @@ window.DCC_DRAG = {
   end(){ dEnd(); },
   activeId(){ return dragId; }
 };
-
