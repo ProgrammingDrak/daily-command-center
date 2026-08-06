@@ -1720,6 +1720,7 @@
     <span class="vault-viewtoggle" id="vault-viewtoggle" role="tablist">
       <button class="vault-vbtn active" data-view="explorer" type="button" role="tab">Explorer</button>
       <button class="vault-vbtn" data-view="timeline" type="button" role="tab" title="The signature timeline">Timeline</button>
+      <button class="vault-vbtn" data-view="graph" type="button" role="tab" title="Force-directed graph of every note and link">Graph</button>
     </span>
     <select id="vault-type-filter" class="vault-ctl">
       <option value="">All types</option>
@@ -1750,6 +1751,10 @@
          mode; in Timeline mode it sits above the reading pane (which renders a
          clicked dot's note below). -->
     <div id="vault-timeline"></div>
+    <!-- Graph (Phase B7): force-directed view of every note and every resolved
+         link. Hidden unless #vault-body.gr-mode; shares the reading pane below,
+         same as Timeline mode. -->
+    <div id="vault-graph"></div>
     <!-- Canvas (Phase B4b): the focused thread whiteboard. Hidden unless
          #vault-body.canvas-mode (entered from a timeline thread). -->
     <div id="vault-canvas"></div>
@@ -1840,7 +1845,9 @@
 <script src="/public/js/vault-search.js?v=vault-b5-2"></script>
 <!-- Resurfacing + weekly review (B6). Loads before vault-tab.js, which wires it. -->
 <script src="/public/js/vault-review.js?v=vault-b6-1"></script>
-<script src="/public/js/vault-tab.js?v=vault-b6-1"></script>
+<!-- Graph (B7): the global force-directed view. Needs the same vendored d3 above; loads before vault-tab.js, which wires it. -->
+<script src="/public/js/vault-graph.js?v=vault-b7-1"></script>
+<script src="/public/js/vault-tab.js?v=vault-b7-1"></script>
 <script src="/public/js/features.js"></script>
 <script src="/public/js/glymphatic-brief.js"></script>
 <script id="local-state-export" type="application/json">{}</script>

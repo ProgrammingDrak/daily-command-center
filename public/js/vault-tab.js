@@ -495,21 +495,38 @@
     // down first. Otherwise canvas-mode CSS masks the tl-mode/explorer switch and
     // the control looks dead (viewMode would desync from what's on screen).
     if (inCanvas()) teardownCanvas();
-    viewMode = mode === "timeline" ? "timeline" : "explorer";
+    viewMode = mode === "timeline" || mode === "graph" ? mode : "explorer";
     const body = document.getElementById("vault-body");
-    if (body) body.classList.toggle("tl-mode", viewMode === "timeline");
+    if (body) {
+      body.classList.toggle("tl-mode", viewMode === "timeline");
+      body.classList.toggle("gr-mode", viewMode === "graph");
+    }
     document.querySelectorAll("#vault-viewtoggle .vault-vbtn").forEach((b) =>
       b.classList.toggle("active", b.dataset.view === viewMode));
     if (viewMode === "timeline") { if (window.VaultTimeline) window.VaultTimeline.render(); }
+    else if (viewMode === "graph") {
+      // Hand the graph the currently-open note first, so its selected ring and
+      // local-hop mode start in step with the reading pane instead of drifting.
+      if (window.VaultGraph) { window.VaultGraph.setSelected(selectedSlug); window.VaultGraph.render(); }
+    }
     else renderTree();
   }
 
-  // The timeline endpoint's payload changes on any write or unlock, so drop its
-  // cache and re-render when we're looking at it.
+  // The timeline AND graph endpoints' payloads change on any write or unlock, so
+  // drop both caches and re-render whichever we're actually looking at. Kept as
+  // one function because every call site wants both: a write that adds an edge
+  // changes the graph exactly as much as it changes the timeline, and letting the
+  // graph keep a stale cache is how you get a node whose links do not match the
+  // note open right beneath it.
   function refreshTimeline() {
-    if (!window.VaultTimeline) return;
-    window.VaultTimeline.invalidate();
-    if (viewMode === "timeline") window.VaultTimeline.render();
+    if (window.VaultTimeline) {
+      window.VaultTimeline.invalidate();
+      if (viewMode === "timeline") window.VaultTimeline.render();
+    }
+    if (window.VaultGraph) {
+      window.VaultGraph.invalidate();
+      if (viewMode === "graph") window.VaultGraph.render();
+    }
   }
 
   // ── Search / switcher / saved-view bridge (B5, consumed by VaultSearch) ──
@@ -544,7 +561,7 @@
     activeType = type;
     const sel = document.getElementById("vault-type-filter");
     if (sel) sel.value = type;
-    setView(view.surface === "timeline" ? "timeline" : "explorer");
+    setView(view.surface === "timeline" || view.surface === "graph" ? view.surface : "explorer");
   }
 
   // ── Focused thread canvas (B4b) ──
@@ -627,6 +644,10 @@
 
   async function loadDetail(slug) {
     if (!slug) { renderDetail(null); return; }
+    // Keep the graph's selected ring (and its local-hop root) pointed at whatever
+    // the reading pane is showing, however we got here — tree click, wikilink,
+    // search hit, ⌘K jump. Cheap no-op when the graph has never been mounted.
+    if (window.VaultGraph) window.VaultGraph.setSelected(slug);
     // In canvas mode the reading pane is a drawer: any navigation to a note
     // (card header, or a wikilink/backlink click inside a card) reveals it.
     if (inCanvas()) openReadingDrawer();
@@ -666,7 +687,7 @@
     await loadOntology();
     await Promise.all([loadStatus(), loadList()]);
     if (selectedSlug) loadDetail(selectedSlug);
-    if (viewMode === "timeline") refreshTimeline();
+    if (viewMode === "timeline" || viewMode === "graph") refreshTimeline();
   }
 
   // After a write (capture/new/edit/daily): refresh list+status, then select the
@@ -708,6 +729,14 @@
     if (window.VaultTimeline) window.VaultTimeline.init({
       onSelect: (slug) => { selectedSlug = slug; loadDetail(slug); },
       onOpenCanvas: (payload) => enterCanvas(payload),
+    });
+
+    // Graph (B7): same contract as the timeline — clicking a node loads that note
+    // into the shared reading pane below, no second renderer.
+    if (window.VaultGraph) window.VaultGraph.init({
+      onSelect: (slug) => { selectedSlug = slug; loadDetail(slug); },
+      esc: (s) => esc(s),
+      emojiFor: (node) => emojiFor(node),
     });
 
     // Canvas (B4b): reuses the tab's body renderer + tag pills + reading pane. A
