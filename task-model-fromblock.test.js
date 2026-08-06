@@ -125,13 +125,13 @@ test("pure: the source block is never mutated", () => {
 // `if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task)`)
 // and wrapId/isWrap, which drive ride-along nesting in the carryover lane.
 const BASE_KEYS = [
-  "_blockId", "_dateless", "alertKey", "alertType", "ampUrl", "calUrl", "capacityBucket",
-  "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
+  "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "ampUrl", "calUrl", "capacityBucket",
+  "completedAt", "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
   "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
   "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus",
   "prepStatus", "priority", "publicVisibility", "recapStatus", "recordingReview",
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
-  "responsibilityTitle", "rsvp_status", "source", "sourceTaskId", "source_id", "start",
+  "responsibilityTitle", "rsvp_status", "source", "sourceTaskId", "source_id", "start", "startedAt", "status",
   "subtaskOf", "tags", "taskGroupId", "title", "triageId", "type", "untimed", "wrapId"
 ].sort();
 
@@ -157,13 +157,16 @@ test("every projected key round-trips its property, including the ones nothing a
       triageId: "ti", delegatedItemId: "di", linkedBlockId: "lb", linkedTagId: "lt",
       ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
       subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
-      sourceTaskId: "st"
+      sourceTaskId: "st", status: "open", startedAt: "2026-07-28T15:00:00.000Z",
+      completedAt: null, actualMinutes: 12, aiSummary: "Thread context"
     }
   }));
   assert.deepStrictEqual(ev, {
     id: "qa-1", title: "T", type: "task", _blockId: "row-9", _dateless: false,
     createdAt: "2026-07-28T14:00:00.000Z", start: "09:00", end: "09:30", meta: "M",
     detail: "D", source: "slack", source_id: "https://s/1", notes: "N", untimed: false,
+    status: "open", startedAt: "2026-07-28T15:00:00.000Z", completedAt: null,
+    actualMinutes: 12, aiSummary: "Thread context",
     notionUrl: "https://n", calUrl: "https://c", priority: "Low", tags: ["a"], kind: "task",
     location: "Room", hangout_link: "https://meet", rsvp_status: "yes",
     prepStatus: "ready", recapStatus: "ready", dashboardRef: "dash", recordingReview: true,
@@ -192,4 +195,13 @@ test("deriveEnd clamps at the end of the day instead of producing a negative dur
   const normal = TaskModel.fromBlock(
     block({ properties: { local_id: "l", start: "09:00", duration: 45 } }), { deriveEnd: true });
   assert.equal(normal.end, "09:45");
+});
+
+test("in-progress state follows the hourglass lifecycle and completion always wins", () => {
+  const running = { startedAt: "2026-07-28T15:00:00.000Z", status: "open", completedAt: null };
+  assert.equal(TaskModel.isInProgress(running, false), true);
+  assert.equal(TaskModel.isInProgress(running, true), false, "the day completion overlay wins");
+  assert.equal(TaskModel.isInProgress({ ...running, status: "done" }, false), false);
+  assert.equal(TaskModel.isInProgress({ ...running, completedAt: "2026-07-28T16:00:00.000Z" }, false), false);
+  assert.equal(TaskModel.isInProgress({ ...running, startedAt: null }, false), false, "removing the hourglass clears the state");
 });

@@ -132,6 +132,7 @@ test("isTaskRow admits real tasks and rejects containers and scaffolding", () =>
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "delegated_item" } }), false);
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "task_group" } }), false);
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "reschedule_tombstone" } }), false);
+  assert.equal(db.isTaskRow({ type: "block", properties: { kind: "slack_reaction_tombstone" } }), false);
   // responsibility* is a prefix match, so every variant is covered by one rule.
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "responsibility_item" } }), false);
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "responsibility_trigger" } }), false);

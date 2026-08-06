@@ -132,7 +132,8 @@ function parseBlock(row) {
 // stated in both places and MUST stay in sync, so change them together.
 // Exclusions: containers (day_root), time-tracking segments (time_entry), standing
 // lists (delegated_item), responsibility scaffolding (responsibility*), group
-// templates (task_group), move tombstones (reschedule_tombstone).
+// templates (task_group), move tombstones (reschedule_tombstone), and Slack
+// reaction-order tombstones (slack_reaction_tombstone).
 // Shells and meetings ARE task rows.
 // `triage_suppression` joins the list for the same reason `reschedule_tombstone` is
 // on it: it is a dateless bookkeeping row, not work. Left off, `isTaskRow` would be
@@ -142,7 +143,7 @@ function parseBlock(row) {
 // It stays out of the client's Unscheduled list either way (TaskModel.selectUnscheduled
 // requires a `title`, and suppressions deliberately store theirs as `itemTitle`), so
 // this is about not polluting the task space rather than about a visible bug.
-const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression"]);
+const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"]);
 function isTaskRow(block) {
   if (!block) return false;
   const type = block.type;

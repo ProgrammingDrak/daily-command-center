@@ -670,7 +670,11 @@ function buildListView(){
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
-    el.className="it-list-item"+(isDoneRow?" done":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"");
+    const inProgress=!!(window.DCC&&window.DCC.TaskModel&&typeof window.DCC.TaskModel.isInProgress==="function"&&window.DCC.TaskModel.isInProgress(ev,isDoneRow));
+    let progressTime="";
+    if(inProgress&&ev.startedAt){const parsedStart=new Date(ev.startedAt);if(!isNaN(parsedStart.getTime()))progressTime=parsedStart.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});}
+    const inProgressChip=inProgress?'<span class="task-progress-pill" title="Started'+(progressTime?' at '+progressTime:'')+'">In progress</span>':'';
+    el.className="it-list-item"+(isDoneRow?" done":"")+(isUnfRow?" unfinished-row":"")+(subRow?" sub":"")+(isActive(ev)&&!isUnfRow?" active":"")+(movable?" movable":"")+(isRideAlong(ev)?" ride-along":"")+(isWrap(ev)?" wrap-parent":"")+(tt&&tt.cardClass?" "+tt.cardClass:"")+(typeof isBountyTask==="function"&&isBountyTask(ev.id)?" row-bounty":"")+(inProgress?" task-in-progress":"");
     if(node&&node.depth)el.style.marginLeft=(node.depth*22)+"px";
     el.dataset.id=ev.id;
     if(movable){el.draggable=true;el.addEventListener("dragstart",e=>dStart(e,ev.id));el.addEventListener("dragend",dEnd);}
@@ -705,6 +709,7 @@ function buildListView(){
     // first (one click silently does two things), or leave it off. Drake's call,
     // 2026-08-03: leave it off until the semantics are chosen. Not a missing feature.
     el.innerHTML=
+      (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
       chev+
       '<div class="it-list-rank">'+(subRow?'·':(idx+1))+'</div>'+
       '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
@@ -718,6 +723,7 @@ function buildListView(){
         // concurrent nested work or relevant subtasks; only done rows skip it.
         '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
+          inProgressChip+
           nowChip+
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
           (subTimeless?'':'<span>'+ms(dur(ev))+'</span>')+
