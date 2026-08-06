@@ -16,7 +16,9 @@ const {
   isSuppressed,
   applyTriageSuppressions,
   buildSuppressionProperties,
+  suppressionFromBlock,
   suppressionsFromBlocks,
+  suppressionDayKey,
 } = require("./triage-suppressions");
 const { mergeOpenItems, triageItemKey: intelKey } = require("./dcc-intelligence");
 
@@ -79,11 +81,16 @@ test("a re-emitted item stays suppressed — the defect that made deletions evap
   );
 });
 
-test("the raw list is never destroyed, so Undo has something to restore", () => {
-  // Caught on a live local run, not in review: an earlier cut filtered at the INGEST door
-  // as well, which stripped the item from stored state. Deleting the suppression then
-  // restored nothing — the item was gone until the next sweep happened to re-emit it.
-  // mergeOpenItems must stay suppression-blind for Undo to be lossless.
+test("suppressing then unsuppressing round-trips, because the overlay never mutates its input", () => {
+  // Undo is only lossless if suppression is a projection rather than an edit. This pins
+  // the pure half of that: the same stored list serves filtered or unfiltered depending
+  // solely on the suppressions passed in, with no re-sweep and no repair step.
+  //
+  // The half that actually regressed is NOT here, because it cannot be: the destructive
+  // cut was at POST /api/ingest/day-state, a route that never calls into this module.
+  // An earlier version of this test asserted mergeOpenItems ignores suppressions and
+  // could therefore never fail. triage-suppression-routes.test.js guards the real door,
+  // behaviourally and by source, and both halves are mutation-proved.
   const now = Date.parse("2026-08-05T12:00:00Z");
   const item = { id: "gmail:abc", type: "email", first_seen_at: "2026-08-04T00:00:00Z" };
   const stored = mergeOpenItems([item], [item], now);
@@ -94,6 +101,87 @@ test("the raw list is never destroyed, so Undo has something to restore", () => 
     ["gmail:abc"],
     "and removing the suppression serves it again, with no re-sweep needed"
   );
+  assert.deepEqual(stored.map((i) => i.id), ["gmail:abc"], "neither call mutated the stored list");
+});
+
+test("suppressed_items is scoped to the day, while open_items is filtered against all of them", () => {
+  // The asymmetry, as a property. Narrowing the open_items input resurrects the bug;
+  // widening the suppressed_items output makes Completed accumulate everything ever
+  // handled, on every date, one DOM row and one click listener each.
+  const suppressions = [
+    { triage_id: "gmail:old", reason: "done", at: "2026-06-01T09:00:00.000Z" },
+    { triage_id: "gmail:today", reason: "done", at: "2026-08-05T14:00:00.000Z" },
+  ];
+  const out = applyTriageSuppressions(
+    { open_items: [{ id: "gmail:old" }, { id: "gmail:today" }, { id: "slack:live" }] },
+    suppressions,
+    { date: "2026-08-05" }
+  );
+  assert.deepEqual(out.open_items.map((i) => i.id), ["slack:live"], "BOTH stay suppressed, regardless of age");
+  assert.deepEqual(out.suppressed_items.map((s) => s.triage_id), ["gmail:today"], "only today's owes a Completed row");
+});
+
+test("an EVENING completion belongs to the local day it happened on, not the UTC one", () => {
+  // The regression a UTC `.slice(0, 10)` gives you, and the reason the earlier version
+  // of this test could not catch it: 14:00Z is 10:00 ET, same calendar day in both
+  // clocks, so it passed either way. 01:30Z is 21:30 the PREVIOUS evening in ET -- the
+  // window where a third of every day's completions land. Getting this wrong drops the
+  // item off both days' Completed lists and takes its Undo with it.
+  const evening = [{ triage_id: "gmail:pm", reason: "done", at: "2026-08-06T01:30:00.000Z" }];
+  const tz = { timeZone: "America/New_York" };
+  assert.deepEqual(
+    applyTriageSuppressions({ open_items: [] }, evening, { date: "2026-08-05", ...tz }).suppressed_items.map((s) => s.triage_id),
+    ["gmail:pm"],
+    "handled at 21:30 ET on the 5th, so it is the 5th's Completed row"
+  );
+  assert.deepEqual(
+    applyTriageSuppressions({ open_items: [] }, evening, { date: "2026-08-06", ...tz }).suppressed_items,
+    [],
+    "and not the 6th's, even though the UTC stamp says 08-06"
+  );
+  // The item stays suppressed on every date regardless, which is the half that must
+  // never depend on this arithmetic.
+  assert.deepEqual(
+    applyTriageSuppressions({ open_items: [{ id: "gmail:pm" }] }, evening, { date: "2026-08-06", ...tz }).open_items,
+    []
+  );
+});
+
+test("suppressionDayKey normalizes what it is handed, including a pg Date", () => {
+  // suppressionFromBlock falls back to the row's created_at, and node-postgres returns
+  // timestamptz as a Date, whose String() is "Wed Aug 06 ..." and matches no date.
+  assert.equal(suppressionDayKey(new Date("2026-08-06T01:30:00.000Z"), { timeZone: "America/New_York" }), "2026-08-05");
+  assert.equal(suppressionDayKey("2026-08-06T01:30:00.000Z", { timeZone: "UTC" }), "2026-08-06");
+  assert.equal(suppressionDayKey("2026-08-06T01:30:00.000Z"), "2026-08-06", "no zone: UTC, the old behaviour");
+  assert.equal(suppressionDayKey(""), "");
+  assert.equal(suppressionDayKey("not a date"), "not a date".slice(0, 10), "unparseable degrades, does not throw");
+});
+
+test("a trivial dismissal is recorded as trivial, so a second device agrees it was not work", () => {
+  // Without the flag on the row, the phone (which has no local overlay) counts a
+  // "not worth it" dismissal as completed work in the Done tab and the day's totals.
+  assert.equal(buildSuppressionProperties({ triageId: "a", trivial: true }).trivial, true);
+  assert.equal(buildSuppressionProperties({ triageId: "a" }).trivial, false);
+  const row = suppressionFromBlock({ id: "s1", properties: { kind: "triage_suppression", triage_id: "a", trivial: true } });
+  assert.equal(row.trivial, true);
+});
+
+test("with no date to scope by, the full list is served rather than an empty one", () => {
+  // A missing Completed list is a lost Undo, which is worse than a long one.
+  const suppressions = [{ triage_id: "a", reason: "done", at: "2026-06-01T09:00:00.000Z" }];
+  assert.equal(applyTriageSuppressions({ open_items: [] }, suppressions).suppressed_items.length, 1);
+  assert.equal(applyTriageSuppressions({ open_items: [] }, suppressions, {}).suppressed_items.length, 1);
+});
+
+test("stored strings are coerced and clamped, because these rows ride along on day reads", () => {
+  const props = buildSuppressionProperties({
+    triageId: "gmail:abc",
+    itemTitle: "T".repeat(500),
+    note: "N".repeat(4000),
+  });
+  assert.equal(props.itemTitle.length, 220);
+  assert.equal(props.note.length, 1000);
+  assert.equal(typeof buildSuppressionProperties({ itemTitle: { evil: 1 } }).itemTitle, "string");
 });
 
 test("applyTriageSuppressions strips open items and hands back what it stripped", () => {

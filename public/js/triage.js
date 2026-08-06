@@ -553,7 +553,7 @@ function dismissTriage(triageId, note, trivial) {
   // Done is a decision, not a view preference: record it where it outlives the day.
   // Fire-and-forget — the local overlay above already re-rendered, and the toast
   // inside persistTriageSuppression is the only thing a failure needs to say.
-  persistTriageSuppression(triageId, item, "done", dismissed[triageId].note);
+  persistTriageSuppression(triageId, item, "done", dismissed[triageId].note, trivial);
   if(!wasDismissed&&window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
     window.SlotRewards.earnTaskCredit(triageTaskPayload(item));
   }
@@ -579,7 +579,7 @@ function triageItemKeyFor(item) {
   const source = item.source || item.type || "unknown";
   return source + "|" + (item.source_id || item.id || item.title || "");
 }
-async function persistTriageSuppression(triageId, item, reason, note) {
+async function persistTriageSuppression(triageId, item, reason, note, trivial) {
   try {
     const res = await fetch("/api/triage/suppressions", {
       method: "POST",
@@ -590,7 +590,8 @@ async function persistTriageSuppression(triageId, item, reason, note) {
         key: triageItemKeyFor(item),
         title: (item && item.title) || "",
         reason: reason || "done",
-        note: note || ""
+        note: note || "",
+        trivial: !!trivial
       })
     });
     if (!res.ok) throw new Error((await res.text()) || ("HTTP " + res.status));
@@ -612,6 +613,14 @@ async function removeTriageSuppression(triageId) {
 // Suppressions the server already knows about, keyed by triage id. Read straight off
 // the day response so every surface (itinerary strip, tasks drawer, phone) agrees
 // without its own fetch.
+// Forget the local echo of a server suppression. Two Undo paths need this (the delete
+// toast and the Completed row), and the read half next door is already single-sourced;
+// a hand-copy is what this feature's server half just finished removing.
+function dropLocalSuppressionEcho(triageId) {
+  if (!(__state && __state.triage)) return;
+  const list = __state.triage.suppressed_items || [];
+  __state.triage.suppressed_items = list.filter(s => s.triage_id !== triageId);
+}
 function serverTriageSuppressions() {
   const list = (__state && __state.triage && __state.triage.suppressed_items) || [];
   const map = {};
@@ -661,7 +670,13 @@ function deleteTriageItem(triageId) {
           nextParents[triageId] = previousParent;
           saveTriageParents(nextParents);
         }
-        await persistTriageRestore(triageId, item, originalIndex);
+        // Clear the local echo of the server suppression too. By the time this toast is
+        // clickable the delete's own broadcast has usually round-tripped and repopulated
+        // __state.triage.suppressed_items, and buildTriage's visibleTriage filter drops
+        // any item carrying a "deleted" suppression -- so without this the toast said
+        // "restored" and restored nothing.
+        dropLocalSuppressionEcho(triageId);
+        await persistTriageRestore(triageId);
         if (typeof buildScheduleTriage === "function") buildScheduleTriage();
         buildTriage();
         if (typeof buildTaskQueuePanel === "function") buildTaskQueuePanel();
@@ -952,8 +967,24 @@ function triageCompletionDateKey(value){
 function completedTriageTasksForDate(dateStr){
   const dismissed=typeof loadDismissed==="function"?loadDismissed():{};
   const viewDate=dateStr||((__state&&__state.date)||triageCompletionDateKey(new Date()));
-  return (INIT_TRIAGE||[]).map(item=>{
-    const done=dismissed[item.id];
+  // The SHARED answer to "what triage got completed on this date": sidebar.js (Done tab
+  // + count badge) and schedule-tab.js (Completed Today, and its actual/planned totals)
+  // all read it. Deriving it purely from INIT_TRIAGE x the local `dismissed` overlay
+  // broke the moment the server started stripping suppressed items out of open_items --
+  // the item left INIT_TRIAGE, so this could never emit it and the work disappeared from
+  // the Done tab seconds after being marked done. Suppressions fold in HERE rather than
+  // at each of the three call sites, so those surfaces cannot drift from the triage panel
+  // on what "completed" means.
+  const suppressed=serverTriageSuppressions();
+  const byId=new Map((INIT_TRIAGE||[]).map(i=>[i.id,i]));
+  Object.keys(suppressed).forEach(id=>{
+    if(suppressed[id].reason==="done"&&!byId.has(id)){
+      byId.set(id,{id:id,title:suppressed[id].title||"(handled)",priority:"low"});
+    }
+  });
+  return Array.from(byId.values()).map(item=>{
+    const sup=suppressed[item.id];
+    const done=dismissed[item.id]||(sup&&sup.reason==="done"?{dismissed_at:sup.at,note:sup.note||"",trivial:!!sup.trivial}:null);
     if(!done||done.trivial)return null;
     const completedAt=done.dismissed_at||done.completed_at||done.at;
     if(triageCompletionDateKey(completedAt)!==viewDate)return null;
@@ -1282,10 +1313,12 @@ function buildTriage() {
   const visibleTriage = INIT_TRIAGE.filter(i => !deletedTriage.includes(i.id) && !(suppressed[i.id] && suppressed[i.id].reason === "deleted"));
   const active = visibleTriage.filter(i => !dismissed[i.id] && !scheduledTriage[i.id] && !suppressed[i.id]);
   const completed = visibleTriage.filter(i => !!dismissed[i.id] || (suppressed[i.id] && suppressed[i.id].reason === "done"));
-  // Items handled on an earlier day (or in another tab) are no longer in INIT_TRIAGE
-  // at all — the server strips them from open_items — so the Completed list has to be
-  // rebuilt from the suppression records themselves or the Undo affordance vanishes
-  // with them.
+  // Items handled in another tab (or earlier today, before a reload) are no longer in
+  // INIT_TRIAGE at all -- the server strips them from open_items -- so the Completed
+  // list has to be rebuilt from the suppression records themselves or the Undo
+  // affordance vanishes with them. `suppressed_items` arrives already scoped to the day
+  // being viewed (triage-suppressions.js), which is what keeps this list from growing
+  // into every item ever handled.
   const inInit = new Set(INIT_TRIAGE.map(i => i.id));
   const completedRemote = Object.keys(suppressed)
     .filter(id => !inInit.has(id) && suppressed[id].reason === "done")
@@ -1296,7 +1329,11 @@ function buildTriage() {
   const low = active.filter(i => i.priority === "low" || (i.priority !== "high" && i.priority !== "medium"));
 
   const countEl = document.getElementById("triage-count");
-  if (countEl) countEl.textContent = active.length + (completed.length ? " / " + (active.length + completed.length) : "");
+  // Count what the section actually renders, remote rows included -- otherwise a day
+  // whose completions all came from another device shows a bare active count above a
+  // "Completed (7)" block.
+  const completedRows = completed.concat(completedRemote);
+  if (countEl) countEl.textContent = active.length + (completedRows.length ? " / " + (active.length + completedRows.length) : "");
 
   const highEl = document.getElementById("triage-high");
   if (highEl) {
@@ -1329,7 +1366,6 @@ function buildTriage() {
     }
   }
   if (completedEl) {
-    const completedRows = completed.concat(completedRemote);
     if (completedRows.length) {
       completedEl.innerHTML = '<div class="tri-completed-section">' +
         '<div class="tri-completed-label">✔ Completed (' + completedRows.length + ')</div>' +
@@ -1338,12 +1374,17 @@ function buildTriage() {
           const note = d.note || item._note || (suppressed[item.id] && suppressed[item.id].note) || "";
           const parent = triageParents[item.id];
           const parentTask = parent ? scheduled.find(e => e.id === parent) : null;
-          return '<div class="tri-compact-row" data-tri-id="' + item.id + '">' +
-            '<span class="tri-compact-chk" data-undo-tri="' + item.id + '" title="Undo — restore to triage">✓</span>' +
+          // DCC.esc on every interpolated value, attribute positions included. Triage
+          // titles are third-party text (swept Gmail subjects, Slack message bodies),
+          // and a suppression now PERSISTS one server-side, so an unescaped title here
+          // would re-execute on every device on every load rather than living and dying
+          // in the one tab that dismissed it. There is no CSP to fall back on.
+          return '<div class="tri-compact-row" data-tri-id="' + DCC.esc(item.id) + '">' +
+            '<span class="tri-compact-chk" data-undo-tri="' + DCC.esc(item.id) + '" title="Undo — restore to triage">✓</span>' +
             '<span class="tri-compact-bar" style="background:' + (priColors[item.priority] || "var(--text-muted)") + '"></span>' +
-            '<span class="tri-compact-title">' + item.title + '</span>' +
-            (parentTask ? '<span class="tri-compact-parent">' + parentTask.title + '</span>' : '') +
-            (note ? '<span class="tri-compact-note">' + note + '</span>' : '') +
+            '<span class="tri-compact-title">' + DCC.esc(item.title) + '</span>' +
+            (parentTask ? '<span class="tri-compact-parent">' + DCC.esc(parentTask.title) + '</span>' : '') +
+            (note ? '<span class="tri-compact-note">' + DCC.esc(note) + '</span>' : '') +
           '</div>';
         }).join('') +
       '</div>';
@@ -1357,8 +1398,7 @@ function buildTriage() {
           delete dismissed[id];
           saveDismissed(dismissed);
           if (suppressed[id]) {
-            const list = (__state && __state.triage && __state.triage.suppressed_items) || [];
-            if (__state && __state.triage) __state.triage.suppressed_items = list.filter(s => s.triage_id !== id);
+            dropLocalSuppressionEcho(id);
             removeTriageSuppression(id).then(() => {
               // The item's own fields only return on a fresh day read: it was stripped
               // from open_items server-side for as long as it was suppressed.

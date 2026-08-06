@@ -25,10 +25,12 @@
 // So suppression cannot live in the day state at all: the sweep owns that section
 // and replaces it. It lives in its own dateless rows instead
 // (type="block", properties.kind="triage_suppression"), which are workspace-scoped,
-// survive every publish, and belong to no single date. The read path
-// (buildDayResponse) and the write path (the ingest merge) both apply them, so a
-// re-emitted item is stripped whether it arrives from the sweep or from a stale
-// mirror.
+// survive every publish, and belong to no single date.
+//
+// They are applied on the READ path only (buildDayResponse), never before a write.
+// Filtering at the ingest door too was tried and reverted: it strips the item out of
+// stored state, so undoing the suppression restores nothing. Storage stays raw and
+// complete; exactly one place decides what a client sees.
 //
 // Pure module, no DB or express imports, so the tests can require() it under plain
 // node the way dcc-intelligence.js's do.
@@ -77,19 +79,65 @@ function isSuppressed(item, index) {
 // Strip suppressed items out of a triage section and hand back what was stripped.
 //
 // `suppressed_items` rides along because the client still has to render the
-// "Completed" list and offer Undo, and it can no longer derive that from
-// open_items — the whole point is that a handled item is gone from open_items on
-// every device. Returns a NEW object; the caller's triage is not mutated.
-function applyTriageSuppressions(triage, suppressions) {
+// "Completed" list and offer Undo, and it can no longer derive that from open_items:
+// the whole point is that a handled item is gone from open_items on every device.
+//
+// The two halves are scoped DIFFERENTLY, and the asymmetry is the load-bearing part:
+//
+//   open_items       is filtered against EVERY suppression, forever. An item handled
+//                    three months ago must still be filtered out of today's list, so
+//                    narrowing this input would resurrect exactly what the feature
+//                    exists to bury.
+//
+//   suppressed_items is filtered to the day being read. It feeds one thing, the
+//                    "Completed" list on a single day's view, and that list is
+//                    day-scoped everywhere else (the local overlay it merges with
+//                    lives under a date-stamped localStorage key). Shipping the
+//                    unbounded set instead made Completed accumulate every item ever
+//                    handled, on every date including past ones, and had the client
+//                    mint a DOM row plus a fresh click listener per entry on every
+//                    render.
+//
+// Returns a NEW object; the caller's triage is not mutated.
+// Which LOCAL day a suppression belongs to.
+//
+// Not a `.slice(0, 10)` on the ISO string, which is the shape this started as and is
+// wrong by one day for a third of every evening: `at` is a UTC instant
+// (`new Date().toISOString()`), while the date being read is the app's local calendar
+// day (server.js getTodayStr formats in APP_TIME_ZONE, default America/New_York). An
+// item handled at 21:30 ET on the 5th stores "2026-08-06T01:30:00Z", so the UTC slice
+// files it under the 6th: it vanishes from the 5th's Completed list (losing its Undo)
+// and cannot be recovered from the 6th either, because the CLIENT re-filters with
+// triageCompletionDateKey, which converts the same instant back to local time.
+//
+// `at` is also normalized rather than trusted: suppressionFromBlock falls back to the
+// row's created_at, and node-postgres hands back timestamptz as a Date, whose String()
+// is "Wed Aug 06 ..." and would never match a YYYY-MM-DD.
+function suppressionDayKey(at, opts) {
+  if (!at) return "";
+  const tz = opts && opts.timeZone;
+  const d = at instanceof Date ? at : new Date(at);
+  if (isNaN(d.getTime())) return String(at).slice(0, 10);
+  if (!tz) return d.toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(d);
+}
+
+function applyTriageSuppressions(triage, suppressions, opts) {
   const base = triage && typeof triage === "object" ? triage : {};
   const list = Array.isArray(suppressions) ? suppressions : [];
   if (!list.length) return { ...base, suppressed_items: [] };
   const index = suppressionIndex(list);
   const openItems = Array.isArray(base.open_items) ? base.open_items : [];
+  const date = (opts && opts.date) || base.date || "";
+  // No date to scope by means hand back the full list rather than silently an empty
+  // one: a missing Completed list is a lost Undo, which is worse than a long one.
+  const forDay = date ? list.filter((s) => suppressionDayKey(s && s.at, opts) === date) : list;
   return {
     ...base,
     open_items: openItems.filter((item) => !isSuppressed(item, index)),
-    suppressed_items: list,
+    suppressed_items: forDay,
   };
 }
 
@@ -98,15 +146,27 @@ function applyTriageSuppressions(triage, suppressions) {
 // selectUnscheduled treats a dateless titled block as BACKLOG WORK. Storing the
 // title as `title` would file every handled triage item into Drake's backlog. It
 // goes in `itemTitle`, which no selector reads.
-function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at }) {
+// Every field is String()-coerced and clamped. These rows are durable and unbounded
+// in count, and they are read back on the day path, so an unclamped value is not
+// merely untidy: a non-string would persist as nested JSON, and the global
+// express.json({limit:"5mb"}) would let one request store a multi-megabyte title that
+// then rides along on day reads. The 220/1000 limits match what the repo already
+// applies to the same two fields in routes/social-todo.js.
+function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at, trivial }) {
   return {
     kind: SUPPRESSION_KIND,
-    triage_id: triageId || "",
-    key: key || "",
-    itemTitle: itemTitle || "",
+    triage_id: String(triageId || "").trim().slice(0, 300),
+    key: String(key || "").trim().slice(0, 300),
+    itemTitle: String(itemTitle || "").trim().slice(0, 220),
     reason: reason === "deleted" ? "deleted" : "done",
-    note: note || "",
-    at: at || new Date().toISOString(),
+    // A trivial dismissal ("not worth it") is handled, but it is NOT completed work.
+    // completedTriageTasksForDate drops it, and that check used to read the local
+    // overlay -- which the phone does not have. Without persisting the flag, a trivial
+    // dismissal on the laptop showed up on the phone as done work, in the Done tab and
+    // in the day's actual/planned totals, so the two devices disagreed about the day.
+    trivial: !!trivial,
+    note: String(note || "").trim().slice(0, 1000),
+    at: String(at || new Date().toISOString()),
   };
 }
 
@@ -122,8 +182,11 @@ function suppressionFromBlock(block) {
     key: p.key || "",
     title: p.itemTitle || "",
     reason: p.reason || "done",
+    trivial: !!p.trivial,
     note: p.note || "",
-    at: p.at || block.created_at || "",
+    // created_at arrives from node-postgres as a Date; ISO-normalize so every consumer
+    // (and suppressionDayKey) sees one shape.
+    at: p.at || (block.created_at instanceof Date ? block.created_at.toISOString() : block.created_at) || "",
   };
 }
 
@@ -134,6 +197,7 @@ function suppressionsFromBlocks(blocks) {
 module.exports = {
   SUPPRESSION_KIND,
   triageItemKey,
+  suppressionDayKey,
   suppressionIndex,
   isSuppressed,
   applyTriageSuppressions,

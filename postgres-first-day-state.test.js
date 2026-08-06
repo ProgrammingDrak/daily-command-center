@@ -67,6 +67,10 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionB
     buildSkeletonState: (d) => ({ date: d, last_updated_by: "skeleton", schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
+    // buildDayResponse scopes suppressed_items to the app's LOCAL day, so the zone is
+    // part of what it reads. Pinned here rather than left to the host's TZ so the
+    // evening-boundary behaviour stays deterministic in CI.
+    APP_TIME_ZONE: "America/New_York",
     blockDB: {
       getDccState: async () => {
         if (dbThrows) throw new Error("connection terminated unexpectedly");
@@ -154,6 +158,10 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
     buildSkeletonState: (d) => ({ date: d, schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
     triageSuppressions: require("./triage-suppressions"),
+    // buildDayResponse scopes suppressed_items to the app's LOCAL day, so the zone is
+    // part of what it reads. Pinned here rather than left to the host's TZ so the
+    // evening-boundary behaviour stays deterministic in CI.
+    APP_TIME_ZONE: "America/New_York",
     blockDB: {
       getDccState: async (d, ws) => { asked.push([d, ws]); return null; },
       getBlocksByKind: async (kind, ws) => { askedSuppressions.push([kind, ws]); return []; },
@@ -184,13 +192,33 @@ test("a suppressed triage item is stripped from the day, and rides along as supp
       { id: "slack:dm:D1:123", type: "slack", title: "still open" },
     ] } } },
     suppressionBlocks: [
-      { id: "sup-1", properties: { kind: "triage_suppression", triage_id: "gmail:abc", key: "email|gmail:abc", itemTitle: "handled last week", reason: "done" } },
+      { id: "sup-1", properties: { kind: "triage_suppression", triage_id: "gmail:abc", key: "email|gmail:abc", itemTitle: "handled today", reason: "done", at: DATE + "T14:02:00.000Z" } },
     ],
   });
   const out = await call();
   assert.deepEqual(out.triage.open_items.map((i) => i.id), ["slack:dm:D1:123"]);
   assert.equal(out.triage.suppressed_items.length, 1, "the client renders Completed + Undo from this");
   assert.equal(out.triage.suppressed_items[0].triage_id, "gmail:abc");
+});
+
+test("an item handled on an EARLIER day stays suppressed, but does not clutter today's Completed", async () => {
+  // The scoping asymmetry, at the boundary that applies it. open_items must be filtered
+  // against every suppression ever (or the item is back tomorrow, which is the whole
+  // bug); suppressed_items must be filtered to the day being read (or Completed
+  // accumulates every item ever handled, on every date, one DOM row and one click
+  // listener each).
+  const { call } = runBuildDay({
+    dbRow: { state_json: { date: DATE, schedule: { timeline: [] }, triage: { open_items: [
+      { id: "gmail:old", type: "email", title: "handled weeks ago" },
+      { id: "slack:dm:D1:123", type: "slack", title: "still open" },
+    ] } } },
+    suppressionBlocks: [
+      { id: "sup-old", properties: { kind: "triage_suppression", triage_id: "gmail:old", reason: "done", at: "2026-06-01T09:00:00.000Z" } },
+    ],
+  });
+  const out = await call();
+  assert.deepEqual(out.triage.open_items.map((i) => i.id), ["slack:dm:D1:123"], "still suppressed, forever");
+  assert.deepEqual(out.triage.suppressed_items, [], "but it is not today's Completed row");
 });
 
 test("an unreadable suppression overlay degrades to the RAW triage list, not to a failed day", async () => {

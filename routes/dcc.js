@@ -13,7 +13,7 @@ module.exports = function mount(app, ctx) {
     dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity,
     readDayStateMirror,
     meetingMaterializer, previousDateStr,
-    readJSON, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
+    readJSON, readTriageSuppressionsForWorkspace, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
   } = ctx;
   const materializeGuard = createMaterializeGuard({ blockDB });
 
@@ -33,23 +33,14 @@ module.exports = function mount(app, ctx) {
   // ── Triage suppressions ──
   // Dateless rows, so "I handled this" outlives the day you handled it on, and
   // outlives the sweep's next full-replace of the triage section. See
-  // triage-suppressions.js for why neither the day_root nor the day state can hold
-  // this. Best-effort on read: a DB hiccup must degrade to "show the raw list",
-  // never to a failed day response.
-  async function readTriageSuppressions(workspaceId) {
-    try {
-      const blocks = await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
-      return triageSuppressions.suppressionsFromBlocks(blocks);
-    } catch (e) {
-      console.error("[triage suppressions] read failed (non-fatal):", e.message);
-      return [];
-    }
-  }
-
-  app.get("/api/triage/suppressions", async (req, res) => {
-    const { workspaceId } = resolveOwnerLenient(req);
-    res.json({ suppressions: await readTriageSuppressions(workspaceId) });
-  });
+  // triage-suppressions.js for why neither the day_root nor the day state can hold it.
+  //
+  // The READER is server.js's, handed over through ctx, and is deliberately not a copy.
+  // This file already carries the lesson: readDayStateMirror is shared the same way,
+  // and the comment on it records that the hand-copy it replaced drifted and fed a
+  // full-replace under the wrong day. There is no GET route either -- the client reads
+  // suppressions off `__state.triage.suppressed_items` on the day response, so a second
+  // endpoint serving the same data would be one more thing to keep in agreement.
 
   app.post("/api/triage/suppressions", async (req, res) => {
     const body = req.body || {};
@@ -63,7 +54,7 @@ module.exports = function mount(app, ctx) {
     try {
       // Idempotent: handling the same item twice (two tabs, a retry, an undo then
       // a redo) must leave exactly one row, or Undo would have to delete N of them.
-      const existing = await readTriageSuppressions(workspaceId);
+      const existing = await readTriageSuppressionsForWorkspace(workspaceId);
       const already = existing.find((s) => (triageId && s.triage_id === triageId) || (key && s.key === key));
       if (already) return res.json({ ok: true, suppression: already, created: false });
       const block = await blockDB.createBlock({
@@ -74,6 +65,7 @@ module.exports = function mount(app, ctx) {
           itemTitle: body.title || "",
           reason: body.reason,
           note: body.note,
+          trivial: body.trivial,
         }),
         user_id: userId || null,
         workspace_id: workspaceId || null,
@@ -94,7 +86,7 @@ module.exports = function mount(app, ctx) {
     if (!triageId) return res.status(400).json({ error: "Missing triage id" });
     const { workspaceId } = resolveOwnerLenient(req);
     try {
-      const existing = await readTriageSuppressions(workspaceId);
+      const existing = await readTriageSuppressionsForWorkspace(workspaceId);
       const matches = existing.filter((s) => s.triage_id === triageId || s.key === triageId);
       for (const match of matches) {
         if (match.block_id) await blockDB.deleteBlock(match.block_id);

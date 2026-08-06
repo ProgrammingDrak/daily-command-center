@@ -880,6 +880,27 @@ const POST_SCHEMA_STATEMENTS = [
       WHERE properties->>'idempotency_key' IS NOT NULL;
   `],
 
+  // Serves db.getBlocksByKind, which this change just moved onto the hot read path:
+  // buildDayResponse applies the triage-suppression overlay on EVERY /api/state/day and
+  // /api/state/tomorrow, and on the anonymous public-share poll (15s per open viewer).
+  // Its predicate is `type='block' AND properties->>'kind'=$1 AND workspace_id=$2 AND
+  // deleted_at IS NULL ORDER BY created_at`, and nothing indexed `properties->>'kind'`
+  // before this: the two candidates the planner had (idx_blocks_type_date,
+  // idx_blocks_workspace_date) both lead on a date column the query never predicates on,
+  // and `type='block'` is most of the table, so every day read seq-scanned and
+  // JSON-parsed the live block rows to find a handful of suppressions. Same shape, and
+  // the same argument, as idx_blocks_idem_key above.
+  //
+  // The `deleted_at IS NULL` partial predicate is safe here because the QUERY implies it
+  // (unlike the case that broke idx_blocks_local_id). created_at is the trailing column
+  // so the index also satisfies the ORDER BY. The other two getBlocksByKind callers
+  // (task_menu, task_group in routes/blocks.js) ride along for free.
+  ["idx_blocks_kind", `
+    CREATE INDEX IF NOT EXISTS idx_blocks_kind
+      ON blocks (workspace_id, (properties->>'kind'), created_at)
+      WHERE deleted_at IS NULL;
+  `],
+
   // Serves db.getBlocksByDateIncludingDeleted, the tombstone-inclusive day load
   // that every dedupe path and responsibility-store.loadDaySlottingContext runs.
   //

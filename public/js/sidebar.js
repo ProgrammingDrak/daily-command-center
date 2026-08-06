@@ -111,7 +111,9 @@ function buildSideDone(){
       el.innerHTML=
         '<span class="done-check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span>'+
         '<span class="side-bar" style="background:'+c.color+';opacity:0.5"></span>'+
-        '<div class="done-body"><div class="done-title">'+ev.title+'</div>'+
+        // DCC.esc: a triage title is third-party text (swept Gmail subjects, Slack message bodies) and a handled one now PERSISTS server-side, so it replays here on every device on every load.
+        // The sibling list below already escapes (buildSideConsider).
+        '<div class="done-body"><div class="done-title">'+DCC.esc(ev.title)+'</div>'+
         '<div class="done-meta"><span>'+ms(durMin)+' planned</span>'+(isTriage?'<span>triage</span>':focusMin>0?'<span>'+ms(focusMin)+' focused</span>':'')+'</div></div>';
       list.appendChild(el);
     });
