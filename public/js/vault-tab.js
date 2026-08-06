@@ -79,6 +79,15 @@
     return root;
   }
 
+  // Obsidian's Folder Notes behaviour, which is the one plugin convention worth
+  // copying outright: a folder's hub note is named after the folder
+  // (people/people.md), so clicking the folder OPENS that hub, and the hub is
+  // hidden from the file list beneath it. Without the hiding you get an index file
+  // in every folder cluttering the tree, which is the thing the convention exists
+  // to avoid.
+  const hubSlugFor = (dirPath) => `${dirPath}/${dirPath.split("/").pop()}`;
+  const hubNodeFor = (dirPath) => allNodes.find((n) => n.slug === hubSlugFor(dirPath));
+
   // Tree-row tooltip: the slug, plus the node's one-line summary when it has one.
   // Cheapest possible surfacing -- hovering the tree tells you what a note is
   // without opening it. Plain text into a title attribute, so esc() at the call
@@ -95,13 +104,22 @@
     for (const f of folders) {
       const isCollapsed = collapsed.has(f.path);
       const pad = 8 + depth * 14;
-      html += `<div class="vtree-row vtree-folder" data-folder="${esc(f.path)}" style="padding-left:${pad}px">
+      const hub = hubNodeFor(f.path);
+      const hubAttr = hub ? ` data-hub="${esc(hub.slug)}"` : "";
+      const hubCls = hub ? " has-hub" : "";
+      const hubTip = hub ? ` title="${esc(tooltipFor(hub))}"` : "";
+      html += `<div class="vtree-row vtree-folder${hubCls}" data-folder="${esc(f.path)}"${hubAttr}${hubTip} style="padding-left:${pad}px">
         <span class="vtree-chevron${isCollapsed ? " collapsed" : ""}">▶</span>
         <span class="vtree-label">${esc(f.name)}</span>
       </div>`;
       if (!isCollapsed) html += renderTreeNode(f, depth + 1);
     }
-    const files = node.files.slice().sort((a, b) => titleOf(a.node).localeCompare(titleOf(b.node)));
+    // Hide this folder's own hub from the list: clicking the folder is how you open
+    // it, so listing it again is the index-file clutter the convention avoids.
+    const ownHub = node.path ? hubSlugFor(node.path) : null;
+    const files = node.files.slice()
+      .filter((f) => f.node.slug !== ownHub)
+      .sort((a, b) => titleOf(a.node).localeCompare(titleOf(b.node)));
     for (const f of files) {
       const pad = 8 + depth * 14 + 14; // align past the chevron column
       const active = f.node.slug === selectedSlug ? " active" : "";
@@ -125,8 +143,13 @@
     el.querySelectorAll(".vtree-folder").forEach((row) => {
       row.addEventListener("click", () => {
         const p = row.dataset.folder;
+        // Expand/collapse still happens -- the hub opening is additive, so the
+        // chevron keeps working exactly as it did for folders without one.
         if (collapsed.has(p)) collapsed.delete(p); else collapsed.add(p);
+        const hub = row.dataset.hub;
+        if (hub) selectedSlug = hub;
         renderTree();
+        if (hub) loadDetail(hub);
       });
     });
     el.querySelectorAll(".vtree-file").forEach((row) => {

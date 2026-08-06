@@ -883,19 +883,36 @@ class VaultStore extends EventEmitter {
   // ── Orphans (B5 discovery): nodes with zero in AND out edges, excluding the
   // inbox/fleeting staging area (expected to be unlinked). Sensitive orphans are
   // withheld unless includeSensitive, mirroring search.
+  // A node whose outlinks are GENERATED, not curated: weekly-review digests and
+  // folder hub notes. Their backlinks must not count as evidence that a note is
+  // connected, and they must not be resurfaced as "worth re-seeing" -- they are
+  // derived artifacts, not thinking.
+  //
+  // Retro F2, measured: generating 11 hub notes over this corpus dropped the orphan
+  // count from 108 to 20 without a single human linking anything. Unguarded, the
+  // resurfacing engine would lose the orphan signal entirely and the weekly review
+  // would stop showing genuinely disconnected notes -- silently, and forever.
+  _isGenerated(slug) {
+    const s = String(slug);
+    if (s.startsWith("notes/reviews/")) return true;
+    const n = this.nodes.get(s);
+    return !!(n && n.frontmatter && n.frontmatter.type === "hub");
+  }
+
   orphans({ includeSensitive = false } = {}) {
     const out = [];
     for (const node of this.nodes.values()) {
       const slug = node.slug;
       const fm = node.frontmatter || {};
       if (fm.type === "fleeting" || slug.startsWith("inbox/")) continue;
+      if (fm.type === "hub") continue;   // a hub is a map, not a note that can be orphaned
       if (!includeSensitive && isSensitivePath(slug)) continue;
       const outN = (this.outlinks.get(slug) || []).length;
       // Ignore backlinks whose SOURCE is a weekly review note: the digest auto-
       // links every orphan it lists (so the review is itself in the graph), which
       // would otherwise "de-orphan" a note nobody actually curated — silently
       // shrinking next week's orphan set and killing its resurface signal.
-      const inN = (this.backlinks.get(slug) || []).filter((b) => !String(b.source).startsWith("notes/reviews/")).length;
+      const inN = (this.backlinks.get(slug) || []).filter((b) => !this._isGenerated(b.source)).length;
       if (outN === 0 && inN === 0) {
         out.push({ slug, title: fm.title || slug.split("/").pop(), type: fm.type || "untyped", sensitive: isSensitivePath(slug) });
       }
@@ -940,7 +957,7 @@ class VaultStore extends EventEmitter {
       const slug = node.slug;
       const fm = node.frontmatter || {};
       if (fm.type === "fleeting" || slug.startsWith("inbox/")) continue;
-      if (slug.startsWith("notes/reviews/")) continue;   // don't resurface the digests
+      if (this._isGenerated(slug)) continue;   // digests AND hubs: derived, not thinking
       if (!includeSensitive && isSensitivePath(slug)) continue;
       cands.push(node);
     }
@@ -1237,7 +1254,7 @@ class VaultStore extends EventEmitter {
         // they read as hubs they did not earn (the F2 lesson: an artifact that
         // links into the graph it describes corrupts its own signal). Flagged so
         // the client can hide them; orphans() already discounts their backlinks.
-        generated: slug.startsWith("notes/reviews/"),
+        generated: this._isGenerated(slug),
         sensitive: isSensitivePath(slug),
         // Carried so the graph can say what a node IS on hover, not just its
         // title. Escaped at the route boundary like every other authored string.
@@ -1308,7 +1325,14 @@ class VaultStore extends EventEmitter {
         // test asserts exactly that identity.
         danglingLinks: ghosts.reduce((s, g) => s + g.links, 0),
         hiddenEdges,
-        orphans: nodes.filter((n) => n.deg === 0).length,
+        // Deliberately NOT `deg === 0`. Hub notes and weekly digests link everything
+        // they list, so by raw degree almost nothing is an orphan once hubs exist
+        // (measured: 108 -> 20). The legend calls this "orphans in the vault", so it
+        // has to mean the same thing orphans() means -- one definition, both
+        // surfaces, or the graph quietly contradicts the weekly review.
+        // `deg` itself stays raw: visually a hub-linked node DOES have edges, and it
+        // is what sizes the dot.
+        orphans: this.orphans({ includeSensitive }).length,
         hidden: includeSensitive ? 0 : this.nodes.size - nodes.length,
       },
     };

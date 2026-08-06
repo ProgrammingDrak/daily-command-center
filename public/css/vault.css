@@ -517,3 +517,10 @@
 /* Search-result summary line (Phase B8). Sits above the snippet: the summary says
    whether the note is worth opening, the snippet says where the term matched. */
 .vault-sr-sum{font-size:12.5px;color:var(--text);opacity:.85;margin-top:2px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ── Phase B9: folder hub notes ── */
+/* A folder that HAS a hub reads as openable, not just expandable. The dot is the
+   only affordance distinguishing it, deliberately quiet -- the chevron still means
+   expand, and clicking does both. */
+.vtree-folder.has-hub .vtree-label::after{content:"•";margin-left:6px;color:var(--accent);opacity:.75;font-size:14px;line-height:0}
+.vtree-folder.has-hub:hover .vtree-label{color:var(--accent-light,#60a5fa)}
