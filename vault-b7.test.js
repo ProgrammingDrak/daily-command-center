@@ -384,3 +384,29 @@ test("hubs are generated nodes: their backlinks never de-orphan, and they are ne
     assert.ok(g.nodes.find((n) => n.slug === "notes/lonely").deg > 0, "raw deg stays raw (it sizes the dot)");
   } finally { await cleanup(dir, store); }
 });
+
+// ── Phase B10: hover preview relies on GET /node/* refusing sensitive bodies ──
+test("a locked session cannot read a sensitive body — the hover preview's only guard", async () => {
+  const { dir, store } = await makeVault([
+    ["health/therapy/s1.md", { type: "therapy", title: "Session One", date: "2026-01-01", summary: "private" }, "the body"],
+    ["notes/a.md", { type: "note", title: "A", date: "2026-01-02", summary: "public" }, "fine"],
+  ]);
+  try {
+    const rm = mountRoutes(store);
+    const get = rm["GET /api/vault/node/*"];
+
+    // The preview fetches this exact endpoint. If it ever answered 200 while
+    // locked, hovering a wikilink would walk straight around the PIN gate that the
+    // reading pane enforces -- so this is the assertion the feature rests on.
+    const locked = await call(get, { params: { 0: "health/therapy/s1" } });
+    assert.strictEqual(locked.code, 403, "sensitive body must be refused while locked");
+    assert.ok(!JSON.stringify(locked.body).includes("the body"));
+
+    const open = await call(get, { params: { 0: "health/therapy/s1" }, unlocked: true });
+    assert.strictEqual(open.code, 200, "and readable once unlocked");
+
+    const normal = await call(get, { params: { 0: "notes/a" } });
+    assert.strictEqual(normal.code, 200);
+    assert.strictEqual(normal.body.frontmatter.summary, "public", "summary reaches the preview");
+  } finally { await cleanup(dir, store); }
+});

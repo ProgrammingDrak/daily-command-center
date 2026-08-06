@@ -524,3 +524,19 @@
    expand, and clicking does both. */
 .vtree-folder.has-hub .vtree-label::after{content:"•";margin-left:6px;color:var(--accent);opacity:.75;font-size:14px;line-height:0}
 .vtree-folder.has-hub:hover .vtree-label{color:var(--accent-light,#60a5fa)}
+
+/* ── Phase B10: wikilink hover preview (Obsidian's page preview) ── */
+/* Fixed-position so it escapes the reading pane's overflow:auto -- a card clipped
+   by its own scroll container is the classic version of this bug. pointer-events
+   none because it is a glance, not a surface, and it must never sit between the
+   cursor and the link it describes. */
+.vault-hovercard{position:fixed;z-index:1400;display:none;width:340px;max-height:260px;overflow:hidden;
+  background:color-mix(in srgb,var(--bg,#0f172a) 96%,transparent);backdrop-filter:blur(6px);
+  border:1px solid var(--border);border-radius:10px;box-shadow:0 14px 40px rgba(0,0,0,.5);
+  padding:11px 13px;pointer-events:none}
+.vault-hovercard.open{display:block}
+.vault-hovercard .vhc-title{font-size:14px;font-weight:650;color:var(--text);line-height:1.3}
+.vault-hovercard .vhc-path{font-size:11px;color:var(--text-muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:2px}
+.vault-hovercard .vhc-sum{font-size:12.5px;color:var(--text);margin-top:7px;line-height:1.45}
+.vault-hovercard .vhc-body{font-size:12px;color:var(--text-muted);margin-top:7px;line-height:1.5;
+  display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}

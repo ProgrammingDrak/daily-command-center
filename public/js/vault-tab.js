@@ -242,8 +242,112 @@
         renderTree();
         loadDetail(slug);
       });
+      wireHoverPreview(a);
     });
     container.querySelectorAll('a[href^="http"]').forEach((a) => { a.target = "_blank"; a.rel = "noopener noreferrer"; });
+  }
+
+  // ── Hover preview on wikilinks (Obsidian's page preview) ──
+  //
+  // The interaction that makes a linked vault feel navigable: you find out what is
+  // behind a link without losing your place. Obsidian's single best affordance and
+  // the last thing the tab was missing.
+  //
+  // Deliberate choices:
+  //   • 420ms delay. Instant previews fire while the cursor merely crosses a link
+  //     on its way somewhere else, which is worse than no preview.
+  //   • Bodies are cached per slug for the session. Re-hovering a link is the
+  //     common case and should not re-fetch.
+  //   • Sensitive nodes NEVER preview while locked. The reading pane already gates
+  //     them behind a PIN; a hover card that leaked the body would walk straight
+  //     around that gate.
+  //   • The card is aria-hidden and pointer-events:none -- it is a glance, not a
+  //     thing to interact with, and it must never sit between the cursor and the
+  //     link it describes.
+  const PREVIEW_DELAY_MS = 420;
+  const previewCache = new Map();   // slug -> {title, summary, excerpt, type}
+  let previewTimer = null;
+
+  function previewCard() {
+    let el = document.getElementById("vault-hovercard");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "vault-hovercard";
+      el.className = "vault-hovercard";
+      el.setAttribute("aria-hidden", "true");
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function hidePreview() {
+    clearTimeout(previewTimer);
+    const el = document.getElementById("vault-hovercard");
+    if (el) el.classList.remove("open");
+  }
+
+  async function previewData(slug) {
+    if (previewCache.has(slug)) return previewCache.get(slug);
+    const r = await fetch(`/api/vault/node/${encodeURIComponent(slug).replace(/%2F/g, "/")}`);
+    if (!r.ok) throw new Error(String(r.status));   // 403 on a locked sensitive node
+    const node = await r.json();
+    const fm = node.frontmatter || {};
+    const data = {
+      type: fm.type || "untyped",
+      title: fm.title || slug.split("/").pop(),
+      summary: typeof fm.summary === "string" ? fm.summary.trim() : "",
+      // Strip the scaffolding a template leaves behind so the excerpt is prose,
+      // not a run of empty headings.
+      excerpt: String(node.body || "")
+        .replace(/^---[\s\S]*?---/, "")
+        .replace(/^#+\s*/gm, "")
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+        .replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, "$2")
+        .replace(/[*_`>]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 300),
+    };
+    previewCache.set(slug, data);
+    return data;
+  }
+
+  function wireHoverPreview(a) {
+    const slug = a.dataset.slug;
+    if (!slug) return;
+    a.addEventListener("mouseleave", hidePreview);
+    a.addEventListener("mouseenter", () => {
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(async () => {
+        // Locked sensitive node: say so, never fetch the body.
+        if (isSensitive(slug) && !unlock.unlocked) {
+          showPreview(a, { type: "locked", title: "🔒 Sensitive note", summary: "Unlock to read this.", excerpt: "" });
+          return;
+        }
+        try { showPreview(a, await previewData(slug)); } catch { hidePreview(); }
+      }, PREVIEW_DELAY_MS);
+    });
+  }
+
+  function showPreview(anchor, d) {
+    const el = previewCard();
+    el.innerHTML =
+      `<div class="vhc-title">${d.type === "locked" ? "" : emojiFor({ slug: anchor.dataset.slug, frontmatter: { type: d.type } })} ${esc(d.title)}</div>
+       <div class="vhc-path">${esc(anchor.dataset.slug)}</div>
+       ${d.summary ? `<div class="vhc-sum">${esc(d.summary)}</div>` : ""}
+       ${d.excerpt ? `<div class="vhc-body">${esc(d.excerpt)}</div>` : ""}`;
+    el.classList.add("open");
+
+    // Place below-right of the link, then pull back inside the viewport. Measured
+    // after `open` so the card has real dimensions to clamp against.
+    const r = anchor.getBoundingClientRect();
+    const w = el.offsetWidth, h = el.offsetHeight, M = 10;
+    let left = r.left;
+    let top = r.bottom + 6;
+    if (left + w + M > window.innerWidth) left = Math.max(M, window.innerWidth - w - M);
+    if (top + h + M > window.innerHeight) top = Math.max(M, r.top - h - 6);   // flip above
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
   }
 
   function renderSensitivePlaceholder(node) {
