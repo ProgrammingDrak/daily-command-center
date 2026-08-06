@@ -13,22 +13,37 @@ const meetingIdentity = (m) =>
 function makeBlockDB(seed) {
   let seq = 0;
   const store = (seed || []).slice();
-  return {
+  const db = {
     store,
+    failUpdateIds: new Set(),
+    failIdentityLookup: false,
     async getBlocksByDateIncludingDeleted(date, ws) {
       return store.filter((b) => b.date === date && b.workspace_id === ws);
+    },
+    async getCalendarMeetingContextBySourceIds(sourceIds, ws) {
+      if (db.failIdentityLookup) throw new Error("injected identity lookup failure");
+      const ids = new Set(sourceIds.map(String));
+      const dates = new Set(store.filter((b) => {
+        const p = b.properties || {};
+        return b.workspace_id === ws && p.source === "calendar" &&
+          (p.type === "meeting" || p.type === "oneone") && ids.has(String(p.source_id));
+      }).map((b) => b.date));
+      return store.filter((b) => b.workspace_id === ws && dates.has(b.date));
     },
     async createBlock({ type, date, properties, sort_order, user_id, workspace_id }) {
       const b = { id: "blk-" + (++seq), type, date, properties, sort_order, user_id, workspace_id, deleted_at: null };
       store.push(b);
       return b;
     },
-    async updateBlock(id, { properties, sort_order }) {
+    async updateBlock(id, { properties, sort_order, date, parent_id }) {
+      if (db.failUpdateIds.has(id)) { db.failUpdateIds.delete(id); throw new Error("injected update failure " + id); }
       const b = store.find((x) => x.id === id);
       if (!b) throw new Error("not found " + id);
       if (b.deleted_at) throw new Error("deleted " + id);
       b.properties = properties;
       if (sort_order !== undefined) b.sort_order = sort_order;
+      if (date !== undefined) b.date = date;
+      if (parent_id !== undefined) b.parent_id = parent_id;
       return b;
     },
     async deleteBlock(id) {
@@ -38,6 +53,22 @@ function makeBlockDB(seed) {
     },
     async ensureDayRoot() {},
   };
+  db.batchOp = async (operations) => {
+    const before = JSON.parse(JSON.stringify(store));
+    try {
+      const blocks = [];
+      for (const op of operations) {
+        if (op.op === "update") blocks.push(await db.updateBlock(op.id, op));
+        else if (op.op === "delete") blocks.push(await db.deleteBlock(op.id));
+        else throw new Error("unsupported test batch op " + op.op);
+      }
+      return { blocks };
+    } catch (error) {
+      store.splice(0, store.length, ...before);
+      throw error;
+    }
+  };
+  return db;
 }
 
 function M(blockDB) {
@@ -245,6 +276,111 @@ test("calendar wins: a changed gcal time overwrites the block start/end", async 
   assert.equal(bySid(db, "e1").properties.start, "14:00"); // 18:00Z = 14:00 EDT
 });
 
+test("calendar time changes shift the meeting's entire nested subtree", async () => {
+  const db = makeBlockDB();
+  await M(db)(args([mtg("e1", "2026-07-09T14:00:00Z", "2026-07-09T15:00:00Z")]));
+  const parent = bySid(db, "e1");
+  db.store.push(
+    { id: "child", type: "block", date: DATE, workspace_id: "ws-1", deleted_at: null,
+      properties: { local_id: "child-local", title: "Work during call", wrapId: parent.id, start: "10:15", end: "10:45" } },
+    { id: "grandchild", type: "block", date: DATE, workspace_id: "ws-1", deleted_at: null,
+      properties: { local_id: "grand-local", title: "Relevant step", subtaskOf: "child-local", start: "10:20", end: "10:20" } },
+  );
+
+  await M(db)(args([mtg("e1", "2026-07-09T16:00:00Z", "2026-07-09T17:00:00Z")]));
+  assert.equal(db.store.find((b) => b.id === "child").properties.start, "12:15");
+  assert.equal(db.store.find((b) => b.id === "grandchild").properties.start, "12:20");
+});
+
+test("a cross-day calendar move keeps the parent id and moves nested work with it", async () => {
+  const db = makeBlockDB();
+  await M(db)(args([mtg("e1", "2026-07-09T14:00:00Z", "2026-07-09T15:00:00Z")]));
+  const parent = bySid(db, "e1");
+  const parentId = parent.id;
+  db.store.push({
+    id: "child", type: "block", date: DATE, workspace_id: "ws-1", deleted_at: null,
+    properties: { local_id: "child-local", title: "Work during call", wrapId: parentId, start: "10:15", end: "10:45" },
+  });
+
+  const res = await M(db)(args([
+    mtg("e1", "2026-07-10T14:00:00Z", "2026-07-10T15:00:00Z"),
+  ]));
+  assert.equal(res.created, 0);
+  assert.equal(bySid(db, "e1").id, parentId);
+  assert.equal(bySid(db, "e1").date, "2026-07-10");
+  assert.equal(db.store.find((b) => b.id === "child").date, "2026-07-10");
+  assert.equal(db.store.find((b) => b.id === "child").properties.wrapId, parentId);
+  assert.equal(res.cancelled, 0);
+});
+
+test("a reverse cross-day move finds the old parent outside the new feed horizon", async () => {
+  const oldDate = "2026-07-14";
+  const db = makeBlockDB([
+    { id: "old-parent", type: "block", date: oldDate, workspace_id: "ws-1", deleted_at: null,
+      properties: { title: "e1", type: "meeting", source: "calendar", source_id: "e1", tags: ["meeting"],
+        status: "open", start: "10:00", end: "11:00", synced_gcal_start: "10:00", synced_gcal_end: "11:00" } },
+    { id: "child", type: "block", date: oldDate, workspace_id: "ws-1", deleted_at: null,
+      properties: { local_id: "child-local", title: "Work during call", wrapId: "old-parent", start: "10:15", end: "10:45" } },
+  ]);
+  const res = await M(db)(args([
+    mtg("e1", "2026-07-10T14:00:00Z", "2026-07-10T15:00:00Z"),
+  ]));
+  assert.equal(res.created, 0);
+  assert.equal(bySid(db, "e1").id, "old-parent");
+  assert.equal(bySid(db, "e1").date, "2026-07-10");
+  assert.equal(db.store.find((b) => b.id === "child").date, "2026-07-10");
+});
+
+test("reverse-horizon identity lookup fails closed instead of creating a duplicate", async () => {
+  const db = makeBlockDB([
+    { id: "old-parent", type: "block", date: "2026-07-14", workspace_id: "ws-1", deleted_at: null,
+      properties: { title: "e1", type: "meeting", source: "calendar", source_id: "e1", tags: ["meeting"],
+        status: "open", start: "10:00", end: "11:00" } },
+  ]);
+  db.failIdentityLookup = true;
+  await assert.rejects(
+    M(db)(args([mtg("e1", "2026-07-10T14:00:00Z", "2026-07-10T15:00:00Z")])),
+    /identity lookup failure/,
+  );
+  assert.equal(db.store.filter((b) => (b.properties || {}).source_id === "e1").length, 1);
+});
+
+test("calendar subtree moves are atomic and retry cleanly after a child write failure", async () => {
+  const db = makeBlockDB();
+  await M(db)(args([mtg("e1", "2026-07-09T14:00:00Z", "2026-07-09T15:00:00Z")]));
+  const parent = bySid(db, "e1");
+  db.store.push({ id: "child", type: "block", date: DATE, workspace_id: "ws-1", deleted_at: null,
+    properties: { title: "Work during call", wrapId: parent.id, start: "10:15", end: "10:45" } });
+  db.failUpdateIds.add("child");
+  const movedFeed = [mtg("e1", "2026-07-09T16:00:00Z", "2026-07-09T17:00:00Z")];
+
+  const failed = await M(db)(args(movedFeed));
+  assert.equal(failed.updated, 0);
+  assert.equal(bySid(db, "e1").properties.start, "10:00");
+  assert.equal(db.store.find((b) => b.id === "child").properties.start, "10:15");
+
+  const retried = await M(db)(args(movedFeed));
+  assert.equal(retried.updated, 1);
+  assert.equal(bySid(db, "e1").properties.start, "12:00");
+  assert.equal(db.store.find((b) => b.id === "child").properties.start, "12:15");
+});
+
+test("subtree traversal honors wrap precedence and both row/local id aliases", async () => {
+  const db = makeBlockDB();
+  await M(db)(args([mtg("e1", "2026-07-09T14:00:00Z", "2026-07-09T15:00:00Z")]));
+  const parent = bySid(db, "e1");
+  db.store.push(
+    { id: "child-row", type: "block", date: DATE, workspace_id: "ws-1", deleted_at: null,
+      properties: { local_id: "child-local", title: "Dual edge", wrapId: parent.id, subtaskOf: "other",
+        start: "10:10", end: "10:40" } },
+    { id: "grand-row", type: "block", date: DATE, workspace_id: "ws-1", deleted_at: null,
+      properties: { title: "Row-id descendant", wrapId: "child-row", start: "10:20", end: "10:30" } },
+  );
+  await M(db)(args([mtg("e1", "2026-07-09T16:00:00Z", "2026-07-09T17:00:00Z")]));
+  assert.equal(db.store.find((b) => b.id === "child-row").properties.start, "12:10");
+  assert.equal(db.store.find((b) => b.id === "grand-row").properties.start, "12:20");
+});
+
 test("completed meeting is never overwritten by a re-sync", async () => {
   const db = makeBlockDB();
   await M(db)(args([mtg("e1", "2026-07-09T16:30:00Z", "2026-07-09T17:30:00Z")]));
@@ -264,6 +400,29 @@ test("cancellation: a meeting that vanishes from the feed is soft-deleted", asyn
   assert.equal(res.cancelled, 1);
   assert.ok(bySid(db, "e2").deleted_at);
   assert.ok(!bySid(db, "e1").deleted_at);
+});
+
+test("cancellation atomically promotes user-owned children instead of orphaning them", async () => {
+  const db = makeBlockDB();
+  await M(db)(args([
+    mtg("e1", "2026-07-09T16:30:00Z", "2026-07-09T17:30:00Z"),
+    mtg("later", "2026-07-10T16:30:00Z", "2026-07-10T17:30:00Z"),
+  ]));
+  const parent = bySid(db, "e1");
+  db.store.push({ id: "child", type: "block", parent_id: parent.id, date: DATE, workspace_id: "ws-1", deleted_at: null,
+    properties: { title: "Relevant action", subtaskOf: parent.id, rel: "subtask", start: "23:50", end: "23:50" } });
+  const res = await M(db)(args([
+    mtg("later", "2026-07-10T16:30:00Z", "2026-07-10T17:30:00Z"),
+  ]));
+  const child = db.store.find((b) => b.id === "child");
+  assert.equal(res.cancelled, 1);
+  assert.ok(bySid(db, "e1").deleted_at);
+  assert.equal(child.properties.subtaskOf, null);
+  assert.equal(child.properties.wrapId, null);
+  assert.equal(child.properties.rel, null);
+  assert.equal(child.parent_id, null);
+  assert.equal(child.properties.end, "23:59");
+  assert.equal(child.properties.duration, 9);
 });
 
 test("cancellation never touches a completed meeting", async () => {

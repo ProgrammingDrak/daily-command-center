@@ -59,8 +59,14 @@
           : ev;
         const s = window.TaskPoints.estimate(payload);
         if (s && s.eligible && s.awardPoints > 0) return _round(s.awardPoints);
+        if (s && s.eligible === false) return 0;
       } catch (e) {}
     }
+    // A non-earning parent must not acquire a duration-sized point pool merely
+    // because a subtask was attached. TaskPoints normally makes this decision;
+    // the registry guard preserves it when that scorer is unavailable.
+    if (ev && window.TaskTypes && typeof window.TaskTypes.rule === "function" &&
+        window.TaskTypes.rule(ev, "earnsOwnPoints") === false) return 0;
     const mins = ev ? Number(ev.durMin || ev.duration || (typeof dur === "function" ? dur(ev) : 0)) : 0;
     return _round(mins > 0 ? mins : 14);
   }
@@ -76,7 +82,6 @@
 
     const raw = _loadAll()[parentId] || {};
     let pool = _round(raw.pool != null ? raw.pool : estimatePool(parentId));
-    if (pool < 1) pool = 1;
     let bonus = raw.bonus != null ? _round(raw.bonus) : _round(pool * DEFAULT_BONUS_PCT);
     if (bonus > pool) bonus = pool;
 

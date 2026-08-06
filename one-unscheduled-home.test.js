@@ -866,7 +866,8 @@ test("the row + and the row click are no longer gated on isUnfRow, and the bount
   assert.ok(/isDoneRow/.test(gate), "sanity: the slice really is the gate expression — " + JSON.stringify(gate));
   assert.equal(/isUnfRow/.test(gate), false,
     "the + must render on carryover rows now — gate was " + JSON.stringify(gate));
-  assert.ok(/isMeeting\(ev\)/.test(gate), "meetings still skip it: their children are prep artifacts");
+  assert.equal(/isMeeting\(ev\)/.test(gate), false,
+    "meetings can own concurrent nested work or relevant subtasks now");
 
   // The details-modal click listener must be attached unconditionally.
   //

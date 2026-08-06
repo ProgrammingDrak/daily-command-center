@@ -714,10 +714,9 @@ function buildListView(){
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
-        // The "+" now renders on carryover rows too (C4). isDoneRow and meetings still
-        // skip it: a done row takes no new work, and a meeting's children are its prep
-        // artifacts, not subtasks.
-        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow||isMeeting(ev)?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
+        // The "+" renders on carryover rows and meetings too. A meeting can own
+        // concurrent nested work or relevant subtasks; only done rows skip it.
+        '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(ev.title)+'">'+escHtml(ev.title)+'</span>'+srcTag(ev.source)+sourceJumpLink(ev)+listPrivacyChip(ev)+taskTagChipsHtml(ev)+bountyChip+(isDoneRow?'':'<button class="btn-add-menu row-add-menu" data-add-id="'+ev.id+'" title="Add a task before / after / inside">+</button>')+'</div>'+
         '<div class="it-list-meta">'+
           nowChip+
           '<span class="tag '+c.cls+'">'+(subRow?'Subtask':c.tag)+'</span>'+
@@ -2718,4 +2717,3 @@ function openDurationSheet(ev){
   // next frame: trigger slide-up transition
   requestAnimationFrame(()=>backdrop.classList.add("open"));
 }
-
