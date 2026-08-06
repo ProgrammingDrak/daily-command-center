@@ -338,3 +338,49 @@ test("search + timeline + graph all carry `summary`, HTML-escaped at the boundar
     assert.strictEqual(g.body.nodes.find((n) => n.slug === "notes/y").summary, null);
   } finally { await cleanup(dir, store); }
 });
+
+// ── Phase B9: hub notes ──
+test("hubs are generated nodes: their backlinks never de-orphan, and they are neither orphaned nor resurfaced", async () => {
+  let { dir, store } = await makeVault([
+    ["notes/lonely.md", { type: "note", title: "Lonely", date: "2020-01-01" }, "nothing links to me"],
+    ["notes/other.md", { type: "note", title: "Other", date: "2020-01-02" }, "also alone"],
+  ]);
+  try {
+    // Baseline: both are orphans.
+    assert.strictEqual(store.orphans().length, 2, "both start orphaned");
+
+    // Now add the folder's hub, which links everything it lists.
+    await writeNode(dir, "notes/notes.md",
+      { type: "hub", title: "Notes", date: "2026-08-06", tags: ["hub"] },
+      "# Notes\n\n- [[notes/lonely]]\n- [[notes/other]]\n");
+    // A fresh store over the same dir: init() does the scan, which is the honest
+    // way to pick up a file written behind the watcher's back in a test.
+    await store.close();
+    store = new VaultStore({ vaultDir: dir, indexFile: null });
+    await store.init();
+
+    // THE F2 GUARD. Measured on the real corpus, generating 11 hubs dropped orphans
+    // from 108 to 20 with no human linking anything. If a hub's backlinks counted,
+    // the resurfacing engine would silently lose the orphan signal forever.
+    assert.strictEqual(store.orphans().length, 2,
+      "hub backlinks must NOT de-orphan the notes it lists");
+
+    // The hub itself is a map, not a note that can be orphaned or resurfaced.
+    assert.ok(!store.orphans().some((o) => o.slug === "notes/notes"), "a hub is never an orphan");
+    const { picks } = store.resurface({ n: 50, dayKey: "2026-08-06" });
+    assert.ok(picks.length, "resurface returned something to check against");
+    assert.ok(!picks.some((p) => p.slug === "notes/notes"), "a hub is never resurfaced");
+
+    // And the graph flags it so the client can hide it.
+    const g = store.graphAll();
+    assert.strictEqual(g.nodes.find((n) => n.slug === "notes/notes").generated, true);
+    assert.strictEqual(g.nodes.find((n) => n.slug === "notes/lonely").generated, false);
+
+    // The graph's orphan STAT must agree with orphans(). By raw degree these two
+    // notes now have an edge each (to the hub), so a `deg === 0` count would say 0
+    // and quietly contradict the weekly review's 2.
+    assert.strictEqual(g.counts.orphans, store.orphans().length, "one orphan definition, both surfaces");
+    assert.strictEqual(g.counts.orphans, 2);
+    assert.ok(g.nodes.find((n) => n.slug === "notes/lonely").deg > 0, "raw deg stays raw (it sizes the dot)");
+  } finally { await cleanup(dir, store); }
+});
