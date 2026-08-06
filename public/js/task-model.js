@@ -103,6 +103,11 @@
       meta: p.meta || ("Custom task · " + _ms(d)),
       detail: p.detail || "", source: p.source || "manual",
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
+      status: p.status || "open",
+      startedAt: p.startedAt || null,
+      completedAt: p.completedAt || null,
+      actualMinutes: p.actualMinutes == null ? null : Number(p.actualMinutes),
+      aiSummary: p.aiSummary || "",
       notionUrl: p.notionUrl || "", calUrl: p.calUrl || "", priority: p.priority || "High",
       tags: Array.isArray(p.tags) ? p.tags : [],
       kind: p.kind || "",
@@ -153,6 +158,15 @@
     return task;
   }
 
+  // Slack's ⌛ state is durable task data, separate from the schedule's "Now"
+  // calculation. A row stays visibly in progress until the hourglass is removed
+  // or any completion representation wins. `done` lets renderers include their
+  // canonical day-overlay answer without coupling this pure module to globals.
+  function isInProgress(task, done) {
+    task = task || {};
+    return !!task.startedAt && !done && task.status !== "done" && !task.completedAt;
+  }
+
   // ── C4: is this row a task at all? ──
   //
   // The client twin of `dcc_is_task_row` (db.js / migration 001), exclusion list
@@ -177,7 +191,7 @@
   // its own query. The fold has always rejected them by the same kind test, so
   // matching `dcc_is_task_row` exactly keeps the twin claim TRUE and changes no
   // behavior. Widening both halves together is a phase of its own.
-  const NON_TASK_KINDS = ["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression"];
+  const NON_TASK_KINDS = ["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"];
   const NON_TASK_TYPES = ["day_root", "time_entry"];
   function isTaskRow(block) {
     block = block || {};
@@ -710,6 +724,7 @@
 
   return {
     fromBlock: fromBlock,
+    isInProgress: isInProgress,
     isTaskRow: isTaskRow,
     foldsIntoItinerary: foldsIntoItinerary,
     backlogKey: backlogKey,

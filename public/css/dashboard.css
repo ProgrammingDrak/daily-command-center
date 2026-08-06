@@ -633,6 +633,12 @@
   /* Drag-the-now-pill: highlight the card you're about to pin onto. */
   .tl-item.pin-drop-target .card{box-shadow:inset 0 0 0 2px var(--accent),0 0 12px rgba(59,130,246,0.35)!important}
   .card-active{border-color:rgba(59,130,246,0.4)!important;background:rgba(59,130,246,0.04)!important;box-shadow:inset 3px 0 0 var(--accent)}
+  /* Slack ⌛: durable work state, distinct from the schedule's time-based "Now".
+     A real child owns the glow so bounty, pinned, hover, and drag overlays compose. */
+  .task-in-progress .task-progress-ring{position:absolute;inset:-3px;border:2px solid #93c5fd;border-radius:11px;box-shadow:0 0 0 0 rgba(0,117,235,0.28);pointer-events:none;z-index:4;animation:task-progress-pulse 2.2s ease-in-out infinite}
+  @keyframes task-progress-pulse{0%,100%{opacity:.62;box-shadow:0 0 0 0 rgba(0,117,235,0.28)}50%{opacity:1;box-shadow:0 0 0 6px rgba(0,117,235,0)}}
+  .task-progress-pill{display:inline-flex;align-items:center;border:1px solid #93c5fd;border-radius:999px;padding:1px 7px;background:#e8f2fe;color:#0068d1;font-size:9px;font-weight:800;line-height:1.4;letter-spacing:.2px;white-space:nowrap}
+  @media (prefers-reduced-motion:reduce){.task-in-progress .task-progress-ring{animation:none;opacity:1;box-shadow:0 0 0 3px rgba(0,117,235,.16)}}
   .card-bounty{border-color:rgba(251,191,36,0.65)!important;box-shadow:0 0 0 1px rgba(251,191,36,0.4),0 0 18px rgba(251,191,36,0.3),inset 3px 0 0 var(--amber)}
   .it-list-item.row-bounty{border-color:rgba(251,191,36,0.55)!important;box-shadow:0 0 0 1px rgba(251,191,36,0.35),0 0 14px rgba(251,191,36,0.25)}
   /* Sponsor (visitor-placed) bounty: purple instead of the amber self-bounty. Must follow .card-bounty to win. */
@@ -2800,6 +2806,8 @@
 .delegated-card-body{flex:1;min-width:0}
 .delegated-card-title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
 .delegated-card-link{font-size:9px;text-transform:uppercase;letter-spacing:0.4px;border:1px solid var(--border);border-radius:999px;padding:1px 6px;color:var(--accent-light);flex-shrink:0}
+.delegated-card-source{font-size:9px;font-weight:700;text-decoration:none;border:1px solid #93c5fd;border-radius:999px;padding:1px 6px;color:#60a5fa;flex-shrink:0}
+.delegated-card-source:hover{background:rgba(59,130,246,.12);text-decoration:none}
 .delegated-card-meta{display:flex;gap:10px;font-size:11px;color:var(--text-muted);margin-top:2px;flex-wrap:wrap}
 .delegated-card-when{font-variant-numeric:tabular-nums}
 .delegated-card-channel{text-transform:capitalize}

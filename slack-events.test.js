@@ -18,9 +18,13 @@ function makeHarness(opts = {}) {
   process.env.DRAKE_SLACK_USER_ID = opts.drakeUid !== undefined ? opts.drakeUid : DRAKE;
   process.env.DCC_SERVICE_USER_ID = "1";
   process.env.DCC_SERVICE_WORKSPACE_ID = "ws-1";
+  process.env.SLACK_DELEGATE_IMPORT_AFTER = opts.delegateImportAfter || "2026-01-01T00:00:00.000Z";
+  if (opts.anthropicKey) process.env.ANTHROPIC_API_KEY = opts.anthropicKey;
+  else delete process.env.ANTHROPIC_API_KEY;
+  process.env.SLACK_RECONCILE_ENABLED = "0";
 
   const blocks = [];            // {id, date, properties, type}
-  const calls = { credit: [], revoke: [], broadcast: [], reactionsAdd: [] };
+  const calls = { credit: [], revoke: [], broadcast: [], reactionsAdd: [], fetch: [] };
   let seq = 0;
   // Stand in for the day_root `_done` overlay the browser writes. Handlers that
   // ask "was this finished elsewhere?" read it through blockDB.getBlock.
@@ -38,9 +42,22 @@ function makeHarness(opts = {}) {
   // load-bearing invariant (a bot's reaction never matches the poller's
   // `hasmy::bookmark:` search), and it is invisible unless asserted.
   process.env.SLACK_USER_TOKEN = "xoxp-test";
-  let fetchImpl = async (url, init) => ({ status: 200, json: async () => ({ ok: true }) });
+  let fetchImpl = async (url, _init) => {
+    if (String(url).includes("reactions.get")) {
+      const parsed = new URL(url);
+      const ts = parsed.searchParams.get("timestamp");
+      return { ok: true, status: 200, json: async () => ({
+        ok: true,
+        message: { ts, text: "Please review the launch checklist with Alex tomorrow", user: "U_ALEX" },
+      }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
   global.fetch = async (url, init) => {
-    calls.reactionsAdd.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+    calls.fetch.push({ url: String(url), init: init || {} });
+    if (String(url).includes("reactions.add")) {
+      calls.reactionsAdd.push({ url, headers: init.headers, body: Object.fromEntries(new URLSearchParams(init.body)) });
+    }
     return fetchImpl(url, init);
   };
   const setFetch = (fn) => { fetchImpl = fn; };
@@ -114,8 +131,8 @@ function makeHarness(opts = {}) {
 
   let handler;
   const app = { post: (path, fn) => { if (path === "/api/slack/events") handler = fn; } };
-  mount(app, ctx);
-  return { handler, blocks, calls, overlay, dayRootRow, setFetch, failDayRootWrite };
+  const api = mount(app, ctx);
+  return { handler, api, blocks, calls, overlay, dayRootRow, setFetch, failDayRootWrite };
 }
 
 function sign(rawBody, ts) {
@@ -167,18 +184,256 @@ test("bad signature is rejected 401 and does nothing", async () => {
   assert.equal(blocks.length, 0);
 });
 
-test("🔖 creates a 5-min title_pending task keyed by channel:ts", async () => {
+test("🔖 creates a useful captured task keyed by channel:ts before AI is available", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "222.2", "222.9"));
   assert.equal(blocks.length, 1);
   const p = blocks[0].properties;
   assert.equal(p.idempotency_key, "slack-bookmark:C1:222.2");
   assert.equal(p.estimatedMinutes, 5);
-  assert.equal(p.title_pending, true);
+  assert.equal(p.title, "Please review the launch checklist with Alex tomorrow");
+  assert.equal(p.captureTitle, p.title);
+  assert.equal(p.capture_status, "captured");
+  assert.equal(p.enrichment_status, "waiting_for_key");
   assert.equal(p.source, "slack-bookmark");
   assert.equal(p.status, "open");
   // source_id must be an http(s) URL so the DCC row renders the "Slack ↗" pill
   assert.match(p.source_id, /^https:\/\/.*slack\.com\/archives\//);
+});
+
+test("👥 creates a delegated item with tomorrow's check-in and removes an untouched item", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.3", "222.9"));
+  assert.equal(blocks.length, 1);
+  const item = blocks[0];
+  assert.equal(item.date, null);
+  assert.equal(item.properties.kind, "delegated_item");
+  assert.equal(item.properties.idempotency_key, "slack-delegate:C1:222.3");
+  assert.equal(item.properties.myTask, "Please review the launch checklist with Alex tomorrow");
+  assert.equal(item.properties.checkInMode, "date");
+  assert.equal(item.properties.checkInDate, "2026-07-29");
+  assert.match(item.properties.source_id, /^https:\/\/.*slack\.com\/archives\//);
+  assert.ok(calls.broadcast.some((b) => b.payload.action === "slack-delegate-create"));
+
+  await post(handler, removal("busts_in_silhouette", "222.3"));
+  assert.equal(item.deleted, true);
+  assert.ok(calls.broadcast.some((b) => b.payload.action === "slack-delegate-cancel"));
+});
+
+test("removing 👥 preserves a completed delegated item", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.4", "222.9"));
+  blocks[0].properties.status = "done";
+  blocks[0].properties.completedAt = "2026-07-28T18:00:00.000Z";
+  await post(handler, removal("busts_in_silhouette", "222.4"));
+  assert.equal(blocks[0].deleted, undefined);
+  assert.ok(blocks[0].properties.slack_delegate_reaction_removed_at);
+});
+
+test("removing 👥 preserves any user-edited delegated item fields", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("busts_in_silhouette", "222.41", "222.9"));
+  blocks[0].properties.notes = "Morgan owns this, ask for legal approval first.";
+  blocks[0].properties.delegatee = { name: "Morgan" };
+  blocks[0].properties.checkInDate = "2026-08-03";
+  await post(handler, removal("busts_in_silhouette", "222.41"));
+  assert.equal(blocks[0].deleted, undefined);
+  assert.equal(blocks[0].properties.delegatee.name, "Morgan");
+  assert.equal(blocks[0].properties.checkInDate, "2026-08-03");
+  assert.match(blocks[0].properties.notes, /legal approval/);
+});
+
+test("a removal that arrives before creation leaves a durable tombstone, not a phantom delegate", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, removal("busts_in_silhouette", "222.42"));
+  await post(handler, reaction("busts_in_silhouette", "222.42", "1000.1"));
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].deleted, undefined);
+  assert.equal(blocks[0].properties.kind, "slack_reaction_tombstone");
+  assert.equal(blocks[0].properties.hidden, true);
+  assert.equal(blocks[0].properties.idempotency_key, "slack-delegate:C1:222.42");
+});
+
+test("hidden reaction tombstones are never captured or enriched", async () => {
+  const { handler, api, blocks, calls } = makeHarness({ anthropicKey: "test-anthropic" });
+  await post(handler, removal("busts_in_silhouette", "222.421"));
+  const before = calls.fetch.length;
+  const result = await api.reconcileMatch("delegate", {
+    ts: "222.421", text: "This must never become a visible task", channel: { id: "C1", name: "general" },
+  });
+  assert.deepEqual(result, { skipped: true });
+  assert.equal(await api.enrichBlock(blocks[0].id), false);
+  assert.equal(calls.fetch.length, before);
+  assert.equal(blocks[0].properties.kind, "slack_reaction_tombstone");
+  assert.equal(blocks[0].properties.title, undefined);
+});
+
+test("delayed message capture re-reads the row and preserves concurrent user edits", async () => {
+  const { handler, blocks, setFetch } = makeHarness();
+  setFetch(async (url) => {
+    if (String(url).includes("reactions.get")) {
+      blocks[0].properties.notes = "Keep this user-authored context.";
+      blocks[0].properties.myTask = "Keep this user-authored delegate title";
+      blocks[0].properties.delegatee = { name: "Taylor" };
+      return { ok: true, status: 200, json: async () => ({ ok: true, message: {
+        ts: "222.43", text: "Please follow up on the renewal packet tomorrow", user: "U1",
+      } }) };
+    }
+    if (String(url).includes("chat.getPermalink")) return { ok: true, status: 200, json: async () => ({ ok: true, permalink: "https://example.slack.com/archives/C1/p22243" }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  await post(handler, reaction("busts_in_silhouette", "222.43", "222.9"));
+  assert.equal(blocks[0].properties.notes, "Keep this user-authored context.");
+  assert.equal(blocks[0].properties.myTask, "Keep this user-authored delegate title");
+  assert.deepEqual(blocks[0].properties.delegatee, { name: "Taylor" });
+  assert.equal(blocks[0].properties.source_message_preview, "Please follow up on the renewal packet tomorrow");
+});
+
+test("delayed bookmark capture never replaces user-authored notes", async () => {
+  const { handler, blocks, setFetch } = makeHarness();
+  setFetch(async (url) => {
+    if (String(url).includes("reactions.get")) {
+      blocks[0].properties.notes = "Keep my investigation notes.";
+      return { ok: true, status: 200, json: async () => ({ ok: true, message: {
+        ts: "222.44", text: "Please investigate the failed renewal workflow", user: "U1",
+      } }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  await post(handler, reaction("bookmark", "222.44", "222.9"));
+  assert.equal(blocks[0].properties.notes, "Keep my investigation notes.");
+  assert.equal(blocks[0].properties.source_message_preview, "Please investigate the failed renewal workflow");
+});
+
+test("Haiku enriches from the full thread while retaining capture metadata", async () => {
+  const { handler, blocks, setFetch, calls } = makeHarness({ anthropicKey: "test-anthropic" });
+  setFetch(async (url) => {
+    if (String(url).includes("reactions.get")) return { ok: true, status: 200, json: async () => ({ ok: true, message: { ts: "222.5", thread_ts: "222.0", text: "Can you get this launch issue sorted with Jamie?", user: "U1" } }) };
+    if (String(url).includes("conversations.replies")) return { ok: true, status: 200, json: async () => ({ ok: true, messages: [
+      { ts: "222.0", user: "U2", text: "Launch is blocked on the pricing approval." },
+      { ts: "222.5", user: "U1", text: "Can you get this launch issue sorted with Jamie?" },
+      { ts: "222.6", user: "U3", text: "Jamie has the approval packet." },
+    ] }) };
+    if (String(url).includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: JSON.stringify({ title: "Get Jamie's pricing approval for launch", summary: "The launch is blocked until Jamie completes the pricing approval packet." }) }] }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  await post(handler, reaction("bookmark", "222.5", "222.9"));
+  const props = blocks[0].properties;
+  assert.equal(props.title, "Get Jamie's pricing approval for launch");
+  assert.equal(props.captureTitle, "Can you get this launch issue sorted with Jamie?");
+  assert.equal(props.aiSummary, "The launch is blocked until Jamie completes the pricing approval packet.");
+  assert.equal(props.detail, props.aiSummary);
+  assert.equal(props.enrichment_status, "complete");
+  const anthropicCall = calls.fetch.find((c) => c.url.includes("api.anthropic.com"));
+  const payload = JSON.parse(anthropicCall.init.body);
+  const promptData = JSON.parse(payload.messages[0].content);
+  assert.equal(promptData.thread.length, 3, "the root, reacted message, and reply reach Haiku");
+});
+
+test("thread enrichment paginates replies and stores Slack's canonical permalink", async () => {
+  const { handler, blocks, setFetch, calls } = makeHarness({ anthropicKey: "test-anthropic" });
+  setFetch(async (url) => {
+    const value = String(url);
+    if (value.includes("reactions.get")) return { ok: true, status: 200, json: async () => ({ ok: true, message: {
+      ts: "222.55", thread_ts: "222.50", text: "Please resolve the final launch dependency", user: "U1",
+    } }) };
+    if (value.includes("chat.getPermalink")) return { ok: true, status: 200, json: async () => ({
+      ok: true,
+      permalink: "https://example.slack.com/archives/C1/p22255?thread_ts=222.50&cid=C1",
+    }) };
+    if (value.includes("conversations.replies")) {
+      const cursor = new URL(value).searchParams.get("cursor");
+      return cursor === "page-2"
+        ? { ok: true, status: 200, json: async () => ({ ok: true, messages: [{ ts: "222.56", user: "U2", text: "The final approval arrived." }], response_metadata: { next_cursor: "" } }) }
+        : { ok: true, status: 200, json: async () => ({ ok: true, messages: [{ ts: "222.50", user: "U3", text: "Launch dependency thread." }, { ts: "222.55", user: "U1", text: "Please resolve the final launch dependency" }], response_metadata: { next_cursor: "page-2" } }) };
+    }
+    if (value.includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: JSON.stringify({ title: "Resolve the final launch dependency", summary: "The final approval has arrived." }) }] }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  await post(handler, reaction("bookmark", "222.55", "222.9"));
+  assert.equal(blocks[0].properties.source_id, "https://example.slack.com/archives/C1/p22255?thread_ts=222.50&cid=C1");
+  const replyCalls = calls.fetch.filter((c) => c.url.includes("conversations.replies"));
+  assert.equal(replyCalls.length, 2);
+  assert.equal(new URL(replyCalls[1].url).searchParams.get("cursor"), "page-2");
+  const anthropicCall = calls.fetch.find((c) => c.url.includes("api.anthropic.com"));
+  const prompt = JSON.parse(JSON.parse(anthropicCall.init.body).messages[0].content);
+  assert.ok(prompt.thread.some((message) => message.text === "The final approval arrived."));
+});
+
+test("Haiku metadata never overwrites a title edited while enrichment is running", async () => {
+  const { handler, blocks, setFetch } = makeHarness({ anthropicKey: "test-anthropic" });
+  setFetch(async (url) => {
+    if (String(url).includes("reactions.get")) return { ok: true, status: 200, json: async () => ({
+      ok: true,
+      message: { ts: "222.51", thread_ts: "222.51", text: "Please investigate the customer billing failure today", user: "U1" },
+    }) };
+    if (String(url).includes("conversations.replies")) {
+      blocks[0].properties.title = "Keep my manually edited title";
+      return { ok: true, status: 200, json: async () => ({ ok: true, messages: [
+        { ts: "222.51", user: "U1", text: "Please investigate the customer billing failure today" },
+      ] }) };
+    }
+    if (String(url).includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: JSON.stringify({
+      title: "Investigate customer billing failure",
+      summary: "A customer billing failure needs investigation today.",
+    }) }] }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  await post(handler, reaction("bookmark", "222.51", "222.59"));
+  assert.equal(blocks[0].properties.title, "Keep my manually edited title");
+  assert.equal(blocks[0].properties.aiTitle, "Investigate customer billing failure");
+  assert.equal(blocks[0].properties.aiSummary, "A customer billing failure needs investigation today.");
+});
+
+test("malformed Haiku output keeps the useful fallback and schedules a retry", async () => {
+  const { handler, blocks, setFetch } = makeHarness({ anthropicKey: "test-anthropic" });
+  setFetch(async (url) => {
+    if (String(url).includes("reactions.get")) return { ok: true, status: 200, json: async () => ({
+      ok: true,
+      message: { ts: "222.52", text: "Please investigate the customer billing failure today", user: "U1" },
+    }) };
+    if (String(url).includes("conversations.replies")) return { ok: true, status: 200, json: async () => ({ ok: true, messages: [
+      { ts: "222.52", user: "U1", text: "Please investigate the customer billing failure today" },
+    ] }) };
+    if (String(url).includes("api.anthropic.com")) return { ok: true, status: 200, json: async () => ({ content: [{ type: "text", text: "not json" }] }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  await post(handler, reaction("bookmark", "222.52", "222.59"));
+  const p = blocks[0].properties;
+  assert.equal(p.title, "Please investigate the customer billing failure today");
+  assert.equal(p.enrichment_status, "retry");
+  assert.equal(p.enrichment_attempts, 1);
+  assert.ok(Date.parse(p.enrichment_next_attempt_at) > Date.now());
+});
+
+test("server reconciliation searches both portable reactions and backfills each record type", async () => {
+  const { api, blocks, calls, setFetch } = makeHarness();
+  const nowTs = `${Math.floor(Date.now() / 1000) + 1}.000001`;
+  setFetch(async (url) => {
+    if (String(url).includes("search.messages")) {
+      const query = new URL(url).searchParams.get("query");
+      const delegate = query === "hasmy::busts_in_silhouette:";
+      return { ok: true, status: 200, json: async () => ({ ok: true, messages: {
+        matches: [{
+          ts: delegate ? nowTs : "222.53",
+          text: delegate ? "Follow up with Morgan about the signed contract" : "Review the renewal proposal before Friday afternoon",
+          user: "U1",
+          channel: { id: "C1", name: "general" },
+        }],
+        paging: { pages: 1 },
+      } }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  const stats = await api.runReconciliation();
+  assert.equal(stats.bookmarks, 1);
+  assert.equal(stats.delegates, 1);
+  assert.ok(blocks.some((b) => b.properties.idempotency_key === "slack-bookmark:C1:222.53"));
+  assert.ok(blocks.some((b) => b.properties.idempotency_key === `slack-delegate:C1:${nowTs}`));
+  const queries = calls.fetch
+    .filter((c) => c.url.includes("search.messages"))
+    .map((c) => new URL(c.url).searchParams.get("query"));
+  assert.deepEqual(queries, ["hasmy::bookmark:", "hasmy::busts_in_silhouette:"]);
 });
 
 test("🔖 is idempotent — a duplicate bookmark event makes no second task", async () => {
@@ -330,7 +585,8 @@ test("un-✅ reopens the task, drops the timer row, and reverses the credit", as
   assert.equal(task.properties.doneAt, undefined);
   assert.equal(task.properties.completedBy, undefined);
   assert.equal(task.properties.actualMinutes, undefined);
-  assert.equal(task.properties.notes, undefined, "the ⏱ note is gone");
+  assert.doesNotMatch(task.properties.notes, /Took ~/i, "the timer note is gone while Slack context remains");
+  assert.match(task.properties.notes, /Bookmarked from Slack/);
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 0, "no orphaned Day Review segment");
   assert.deepEqual(calls.revoke, [`${task.date}:${task.id}`], "credit reversed on the same key ✅ used");
   assert.equal(calls.reactionsAdd.length, 1, "🔖 goes back on the message");

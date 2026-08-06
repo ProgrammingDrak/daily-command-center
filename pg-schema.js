@@ -662,7 +662,8 @@ const POST_SCHEMA_STATEMENTS = [
   // Is this row a "task" for canonical-model purposes? The JS twin is db.isTaskRow.
   // Exclusions: containers (day_root), time-tracking segments (time_entry),
   // standing lists (delegated_item), responsibility scaffolding (responsibility*),
-  // group templates (task_group) and move tombstones (reschedule_tombstone).
+  // group templates (task_group), move tombstones (reschedule_tombstone), and
+  // Slack reaction-order tombstones (slack_reaction_tombstone).
   // Shells and meetings ARE task rows.
   ["fn dcc_is_task_row", `
     CREATE OR REPLACE FUNCTION dcc_is_task_row(p_type text, p_props jsonb)
@@ -670,7 +671,7 @@ const POST_SCHEMA_STATEMENTS = [
       SELECT p_type IS DISTINCT FROM 'day_root'
          AND p_type IS DISTINCT FROM 'time_entry'
          AND COALESCE(p_props->>'kind', '') NOT IN
-             ('delegated_item', 'task_group', 'reschedule_tombstone', 'triage_suppression')
+             ('delegated_item', 'task_group', 'reschedule_tombstone', 'triage_suppression', 'slack_reaction_tombstone')
          AND COALESCE(p_props->>'kind', '') NOT LIKE 'responsibility%'
     $fn$;
   `],

@@ -235,7 +235,7 @@
     const waiting = (p.title || "").trim();
     const myTask = (p.myTask || "").trim();
     const headline = myTask || waiting || "(untitled)";
-    const note = truncate(p.notes || "", 120);
+    const note = truncate(p.aiSummary || p.notes || "", 120);
 
     // Subline: legacy items may still carry a separate what/who; surface them
     // under the headline. The due label always shows.
@@ -256,6 +256,9 @@
       : '<div class="delegated-card-score ' + cls + '">' + u.score + '</div>';
 
     const linkChip = p.linkedBlockId ? '<span class="delegated-card-link">linked task</span>' : '';
+    const sourceLink = /^https?:\/\//.test(p.source_id || "")
+      ? '<a class="delegated-card-source" href="' + esc(p.source_id) + '" target="_blank" rel="noopener" title="Open Slack message" onclick="event.stopPropagation()">Slack &#8599;</a>'
+      : '';
 
     const actionButtons = done ?
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
@@ -269,7 +272,7 @@
     return '<div class="' + cardCls + '" data-id="' + esc(item.id) + '">' +
       badge +
       '<div class="delegated-card-body">' +
-        '<div class="delegated-card-title">' + esc(headline) + linkChip + '</div>' +
+        '<div class="delegated-card-title">' + esc(headline) + linkChip + sourceLink + '</div>' +
         '<div class="delegated-card-meta">' +
           sub +
           '<span class="delegated-card-when">' + esc(dueLabel(item)) + '</span>' +
