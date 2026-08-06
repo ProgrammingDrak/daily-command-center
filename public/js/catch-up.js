@@ -21,6 +21,14 @@
   "use strict";
 
   const FLAG = "_catchUpReviewed";
+  // The footer's "Move all" handler, held so a second open can unbind the first.
+  // ensureModal() reuses one overlay forever and close() only drops the `open` class,
+  // so every openPrompt call re-binds this button. {once:true} de-registers a handler
+  // only after it FIRES, so an unclicked one stays live: morning prompt, close it,
+  // sweep arrives, click "Move all" -> both handlers run over their own captured pools,
+  // double-moving rows and fighting over the button's label. Harmless while openPrompt
+  // ran once per load; openArrivals is the second entry that made it reachable.
+  let _allHandler = null;
 
   function reviewed() {
     if (typeof _bsProp !== "function") return true;   // no day_root yet: don't prompt blind
@@ -69,6 +77,47 @@
   function openOf(pool) { return window.DCC.Carryover.openRows(pool); }
   function rootsOf(pool) { return window.DCC.Carryover.rootsOf(pool); }
 
+  // ── the row-level calendar button ──
+  // Same glyph and same class as the itinerary rows' reschedule control, wired to
+  // the same anchored day picker. The big Today / Tomorrow / Drop buttons stay;
+  // this reaches any OTHER day without leaving the modal. Rows here aren't entries
+  // in scheduled[], so the picker runs in its date-only "pick" mode and the caller
+  // owns the write (see DCC.wireDateButton in core.js).
+  function calBtn(cls, label) { return window.DCC.dateButtonHtml(cls, label); }
+  function wireCal(btn, title, onPick) {
+    // Raw title: the popover escapes the whole header itself (schedule-popover.js), so
+    // escaping here too renders a literal &#39; for any apostrophe.
+    window.DCC.wireDateButton(btn, { header: 'Move "' + title + '" to…', actionLabel: "Move", onPick: onPick });
+  }
+
+  // ── triage rows ──
+  // Swept items (Slack mentions, mail needing a reply) ride in this same modal:
+  // the morning recap covers everything waiting on Drake, whether it slipped off
+  // yesterday or arrived thirty seconds ago. They are NOT blocks, so none of the
+  // DCC.Carryover actions apply — scheduling one CREATES a task on the chosen day
+  // (triage.js scheduleTriageOnDate, which routes through the app's canonical
+  // scheduleTaskOnDate) and dropping one deletes the triage item itself
+  // (deleteTriageItem: durable day-state write, with Undo).
+  // No Backlog spoke: a triage item has no dateless block form to become.
+  function activeTriage() {
+    if (typeof activeTriageItems !== "function") return [];
+    try { return activeTriageItems() || []; } catch (e) { return []; }
+  }
+  function triageAge(item) {
+    const iso = item && (item.first_seen_at || item.created_at);
+    if (!iso) return "";
+    const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    if (!isFinite(days)) return "";
+    return days < 1 ? "today" : (days + "d old");
+  }
+  function triageMeta(item) {
+    return [
+      item.source || item.type || "triage",
+      (typeof triagePriorityLabel === "function") ? triagePriorityLabel(item.priority) : item.priority,
+      triageAge(item)
+    ].filter(Boolean).join(" · ");
+  }
+
   // ── modal (reuses the .carryover-* CSS) ──
   function ensureModal() {
     let overlay = document.getElementById("catchup-overlay");
@@ -108,31 +157,118 @@
     if (typeof render === "function") render();
   }
 
-  function openPrompt(pool, total) {
+  function openPrompt(pool, total, cfg) {
+    cfg = cfg || {};
     const CO = window.DCC.Carryover;
     const overlay = ensureModal();
     const roots = rootsOf(pool);
+    const triage = cfg.triage || [];
+    const olderTriage = cfg.olderTriage || [];
     const hintEl = overlay.querySelector("#catchup-hint");
     const listEl = overlay.querySelector("#catchup-list");
     const allBtn = overlay.querySelector("#catchup-all");
-    overlay.querySelector("#catchup-title").textContent = "Here's what slipped";
+    overlay.querySelector("#catchup-title").textContent = cfg.title || "Here's what slipped";
     // `total` is the collector's count of OPEN rows before the MAX_ROWS cap, so it
     // has to be compared against the open rows we actually have — not the whole
     // pool, which carries done children too and made this branch unreachable.
     const openCount = openOf(pool).length;
-    hintEl.textContent = roots.length + " unfinished task" + (roots.length === 1 ? "" : "s") +
-      " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "") +
-      " — move what still matters, drop what doesn't. Anything you leave stays on its own day in the Unfinished lane.";
+    const taskPhrase = roots.length + " unfinished task" + (roots.length === 1 ? "" : "s") +
+      " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "");
+    const triagePhrase = triage.length + " item" + (triage.length === 1 ? "" : "s") + " waiting on a reply";
+    hintEl.textContent =
+      (roots.length && triage.length ? taskPhrase + " and " + triagePhrase
+        : triage.length ? triagePhrase : taskPhrase) +
+      " — move what still matters, drop what doesn't. Anything you leave stays where it is.";
     listEl.innerHTML = "";
 
-    const rowEls = new Map();
+    const rowEls = new Map();   // unfinished rows, keyed by ev.id
+    const triEls = new Map();   // triage rows, keyed by triage item id
+    // Closing on the last row is the same courtesy either list gives: once there is
+    // nothing left to answer, the modal has no reason to sit there. An unexpanded
+    // "older waiting" line still counts as something to answer — closing over it
+    // would hide the queue it exists to advertise.
+    let olderPending = olderTriage.length > 0;
+    const closeIfDrained = () => { if (!rowEls.size && !triEls.size && !olderPending) close(); };
     const settle = (res) => {
       if (!res) return false;
       (res.removed || []).forEach(id => { const el = rowEls.get(id); if (el) { el.remove(); rowEls.delete(id); } });
-      if (!listEl.children.length) close();
+      closeIfDrained();
       return true;
     };
+    // Only label the groups when BOTH are on screen; with one kind of row the hint
+    // above already said what this is.
+    const label = (text) => {
+      if (!roots.length || !triage.length) return;
+      const el = document.createElement("div");
+      el.className = "cu-section-label";
+      el.textContent = text;
+      listEl.appendChild(el);
+    };
 
+    label("Needs a reply");
+    const addTriageRow = (item, before) => {
+      const el = document.createElement("div");
+      el.className = "carryover-row";
+      const safe = (window.DCC && window.DCC.safeUrl) || (u => "");
+      const href = safe(item.draft_link || item.draft_url) || safe(item.link || item.source_url);
+      el.innerHTML =
+        '<div class="carryover-row-info">' +
+          '<div class="cu-title-line">' +
+            '<div class="carryover-row-title"></div>' +
+            calBtn("cu-cal", "Schedule on a day") +
+          '</div>' +
+          '<div class="carryover-row-meta">' + esc(triageMeta(item)) +
+            (href ? ' · <a class="cu-tri-link" href="' + esc(href) + '" target="_blank" rel="noopener">Open</a>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="carryover-row-actions">' +
+          '<button class="carryover-btn carryover-btn-schedule cu-tri-today">Today</button>' +
+          '<button class="carryover-btn carryover-btn-schedule cu-tri-tomorrow">Tomorrow</button>' +
+          '<button class="carryover-btn carryover-btn-drop cu-tri-drop">Drop</button>' +
+        '</div>';
+      el.querySelector(".carryover-row-title").textContent = item.title || "Untitled";
+      const busy = (on) => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
+      const forget = () => { el.remove(); triEls.delete(item.id); closeIfDrained(); };
+      // A refused schedule (no free slot, already on the day) leaves the row alone
+      // and re-enables it, same contract the task rows use.
+      const runTri = async (fn) => { busy(true); if (await fn()) forget(); else busy(false); };
+      const place = (d2) => runTri(async () => {
+        if (typeof scheduleTriageOnDate !== "function") return false;
+        return !!(await scheduleTriageOnDate(item.id, d2));
+      });
+      el.querySelector(".cu-tri-today").addEventListener("click", () => place(todayStr()));
+      el.querySelector(".cu-tri-tomorrow").addEventListener("click", () => place(tomorrowStr()));
+      el.querySelector(".cu-tri-drop").addEventListener("click", () => {
+        if (typeof deleteTriageItem !== "function") return;
+        deleteTriageItem(item.id);   // durable + its own 8s Undo toast
+        forget();
+      });
+      wireCal(el.querySelector(".cu-cal"), item.title || "Untitled", place);
+      triEls.set(item.id, el);
+      // `before` keeps expanded older items INSIDE the triage group. Appending them
+      // instead dropped them below the Slipped section, orphaned from their heading.
+      if (before && typeof listEl.insertBefore === "function") listEl.insertBefore(el, before);
+      else listEl.appendChild(el);
+    };
+    triage.forEach(i => addTriageRow(i));
+
+    // Older triage is deliberately not listed when the pet just delivered: the
+    // envelope holds what arrived, not the whole queue. One line says the rest
+    // exists, and clicking it appends them in place — re-opening the modal would
+    // re-bind the footer's "Move all" and run it twice per click.
+    if (olderTriage.length) {
+      const more = document.createElement("button");
+      more.className = "carryover-skip cu-tri-older";
+      more.textContent = "…and " + olderTriage.length + " older waiting";
+      more.addEventListener("click", () => {
+        olderPending = false;
+        olderTriage.forEach(i => addTriageRow(i, more));   // above the line, then drop it
+        more.remove();
+      });
+      listEl.appendChild(more);
+    }
+
+    label("Slipped");
     roots.forEach(ev => {
       const el = document.createElement("div");
       const kids = CO.descendants(ev, pool).length;
@@ -141,7 +277,10 @@
       el.className = "carryover-row";
       el.innerHTML =
         '<div class="carryover-row-info">' +
-          '<div class="carryover-row-title"></div>' +
+          '<div class="cu-title-line">' +
+            '<div class="carryover-row-title"></div>' +
+            calBtn("cu-cal", "Move to a day") +
+          '</div>' +
           '<div class="carryover-row-meta">' + esc(durLabel) +
             (kids ? " · +" + kids + " nested" : "") +
             ' · from ' + esc(prettyDate((ev.__unf || {}).sourceDate)) +
@@ -160,37 +299,71 @@
       el.querySelector(".cu-tomorrow").addEventListener("click", () => run(() => CO.moveTo(ev, tomorrowStr(), { pool })));
       el.querySelector(".cu-backlog").addEventListener("click", () => run(() => CO.toBacklog(ev, pool)));
       el.querySelector(".cu-drop").addEventListener("click", () => run(() => CO.drop(ev, pool)));
+      // The calendar pick lands in the SAME mover the day buttons use — one write
+      // path, so an arbitrary day can't behave differently from Today.
+      wireCal(el.querySelector(".cu-cal"), ev.title || "Untitled", (d2) => run(() => CO.moveTo(ev, d2, { pool })));
       rowEls.set(ev.id, el);
       listEl.appendChild(el);
     });
 
+
     // Move all: one row at a time on purpose. Each move is a server transaction and
     // the placement engine has to see the previous landing to pick the next slot.
-    allBtn.addEventListener("click", async () => {
+    // Triage rows come along — the button says "all", and a swept item that needs a
+    // reply today is exactly the kind of thing this button is for.
+    if (_allHandler && typeof allBtn.removeEventListener === "function") {
+      allBtn.removeEventListener("click", _allHandler);
+    }
+    _allHandler = async () => {
+      _allHandler = null;                 // {once:true} already unbound it
       allBtn.disabled = true;
       const original = allBtn.textContent;
       const queue = [...rowEls.keys()];
+      const triQueue = [...triEls.keys()];
+      const step = (n) => { allBtn.textContent = "Moving " + n + " of " + (queue.length + triQueue.length) + "…"; };
       let moved = 0;
       const target = todayStr();
       for (const id of queue) {
         const ev = pool.find(x => x.id === id);
         if (!ev) continue;
-        allBtn.textContent = "Moving " + (moved + 1) + " of " + queue.length + "…";
+        step(moved + 1);
         // deferRefold: every row here lands on the day being viewed, so the per-row
         // refold fired N times and only the last was observable. One at the end.
         if (settle(await CO.moveTo(ev, target, { pool, deferRefold: true }))) moved++;
       }
-      if (moved) await CO.refoldViewedDay(target);
+      let placed = 0;
+      for (const id of triQueue) {
+        step(moved + placed + 1);
+        if (typeof scheduleTriageOnDate !== "function") break;
+        // Same deferral the task loop above gets, for the same reason: each call
+        // otherwise re-fetches the day context, re-loads the day, and runs a full
+        // unscoped render, undoing the one batched refold N times over. silent so the
+        // per-item toasts don't bury the summary one.
+        if (await scheduleTriageOnDate(id, target, { deferRefold: true, silent: true })) placed++;
+      }
+      // One refold for the whole batch, after BOTH loops have written.
+      if (moved || placed) await CO.refoldViewedDay(target);
+      if (placed) {
+        if (typeof buildScheduleTriage === "function") buildScheduleTriage();
+        if (typeof buildTriage === "function") buildTriage();
+      }
       allBtn.textContent = original;
       allBtn.disabled = false;
       close();
-      if (typeof showToast === "function" && moved) showToast("Moved " + moved + " unfinished task" + (moved === 1 ? "" : "s") + " to today", "success");
-    }, { once: true });
+      const parts = [];
+      if (moved) parts.push(moved + " unfinished task" + (moved === 1 ? "" : "s"));
+      if (placed) parts.push(placed + " triage item" + (placed === 1 ? "" : "s"));
+      if (typeof showToast === "function" && parts.length) showToast("Moved " + parts.join(" and ") + " to today", "success");
+    };
+    allBtn.addEventListener("click", _allHandler, { once: true });
 
     overlay.classList.add("open");
   }
 
-  // ── entry point ──
+  // ── entry points ──
+  // The morning prompt. Gated once per DAY on today's day_root, so a second device
+  // doesn't re-ask. Everything waiting rides in one pass: what slipped off the last
+  // two weeks, plus every triage item still needing a reply.
   async function initCatchUp() {
     if (typeof __todayDate === "undefined" || !__todayDate) return;
     if (typeof viewMode !== "undefined" && viewMode && viewMode !== "today") return;
@@ -198,11 +371,40 @@
     if (!CO || reviewed()) return;
     let res = { rows: [], total: 0 };
     try { res = await CO.collect(); } catch (e) { return; }
+    const triage = activeTriage();
+    // Everything already waiting at boot is "the morning recap", not "an arrival" —
+    // banking it here is what stops the courier from running the pet at page load
+    // for mail Drake has already been shown.
+    const courier = window.DCC && window.DCC.TriageCourier;
+    if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.map(i => i.id));
     // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
     // nothing to catch up on, and prompting on it opened an empty-feeling modal.
-    if (!rootsOf(res.rows).length) { markReviewed(); return; }
-    openPrompt(res.rows, res.total);
+    if (!rootsOf(res.rows).length && !triage.length) { markReviewed(); return; }
+    openPrompt(res.rows, res.total, { triage: triage });
+  }
+
+  // The courier's prompt: the pet just delivered, so lead with what arrived. Older
+  // triage stays folded behind one line, and the day's unfinished tasks ride along
+  // exactly as they do in the morning. Deliberately NOT gated on the reviewed flag —
+  // new mail is new, whether or not the morning pass already happened.
+  async function openArrivals(newIds) {
+    const CO = window.DCC && window.DCC.Carryover;
+    if (!CO) return false;
+    const ids = new Set(newIds || []);
+    const all = activeTriage();
+    const fresh = all.filter(i => ids.has(i.id));
+    if (!fresh.length) return false;
+    let res = { rows: [], total: 0 };
+    try { res = await CO.collect(); } catch (e) { res = { rows: [], total: 0 }; }
+    openPrompt(res.rows, res.total, {
+      title: "Fresh from the sweep",
+      triage: fresh,
+      olderTriage: all.filter(i => !ids.has(i.id))
+    });
+    return true;
   }
 
   window.initCatchUp = initCatchUp;
+  const DCC = (window.DCC = window.DCC || {});
+  DCC.CatchUp = { openArrivals: openArrivals };
 })();

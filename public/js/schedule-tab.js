@@ -97,7 +97,9 @@ function _canPlaceBounty(ev,isDoneRow){
   return true;
 }
 const _bountyBtnSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
-const _calSvg='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>';
+// One calendar glyph for the whole app (core.js). It used to be spelled out here
+// AND in itinerary-card.js, and the catch-up modals now want it too.
+const _calSvg=(window.DCC&&window.DCC.icons&&window.DCC.icons.calendar)||"";
 // Open the prep briefing for a meeting. Used by the Prep chip and the radial
 // Prep/Recap spoke. The only surface with an INLINE meeting-auto-panel is the
 // retired #timeline (display:none; switchToDate still builds it hidden), so a

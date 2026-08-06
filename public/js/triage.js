@@ -871,8 +871,9 @@ function buildTriageCard(item) {
   const barColor = isDismissed ? "var(--green)" : (triTypeColors[item.type] || "#a78bfa");
   const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
-  const linkLabel = item.link_label || item.action_label || "Open";
-  const draftLink = item.draft_link || item.draft_url || "";
+  const linkLabel = DCC.esc(item.link_label || item.action_label || "Open");
+  // Sweep-provided hrefs: allowlist the scheme AND escape the attribute.
+  const draftLink = window.DCC.safeUrlAttr(item.draft_link || item.draft_url);
   const draftLabel = item.draft_type === 'gmail' ? 'DRAFT' : 'MSG';
   const draftChip = item.draft_id
     ? (draftLink
@@ -883,19 +884,19 @@ function buildTriageCard(item) {
     '<div class="bar" style="background:' + barColor + '"></div>' +
     '<div class="body">' +
       '<div class="title-row">' +
-        '<span class="ttl">' + t.emoji + ' ' + item.title + '</span>' +
+        '<span class="ttl">' + t.emoji + ' ' + DCC.esc(item.title) + '</span>' +
         triEscBadge(item.escalation) +
       '</div>' +
       '<div class="meta">' +
         '<span class="' + priCls + '">' + (item.priority || 'medium') + '</span>' +
-        (item.queue_label || item.source_label ? '<span>' + (item.queue_label || item.source_label) + '</span>' : '') +
-        (item.link ? '<a href="' + item.link + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">' + linkLabel + '</a>' : '') +
-        (item.auto_task_url ? '<a href="' + item.auto_task_url + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a855f7);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
+        (item.queue_label || item.source_label ? '<span>' + DCC.esc(item.queue_label || item.source_label) + '</span>' : '') +
+        (window.DCC.safeUrlAttr(item.link) ? '<a href="' + window.DCC.safeUrlAttr(item.link) + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">' + linkLabel + '</a>' : '') +
+        (window.DCC.safeUrlAttr(item.auto_task_url) ? '<a href="' + window.DCC.safeUrlAttr(item.auto_task_url) + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a855f7);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
         draftChip +
         '<span>' + ageParts.join(' \u00b7 ') + '</span>' +
-        (isDismissed ? '<span style="color:var(--green)">\u2713 ' + (dismissed[item.id].trivial ? 'Dismissed' : dismissed[item.id].note || 'Resolved') + '</span>' : '') +
+        (isDismissed ? '<span style="color:var(--green)">\u2713 ' + (dismissed[item.id].trivial ? 'Dismissed' : DCC.esc(dismissed[item.id].note || 'Resolved')) + '</span>' : '') +
       '</div>' +
-      (item.summary ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">' + item.summary + '</div>' : '') +
+      (item.summary ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4">' + DCC.esc(item.summary) + '</div>' : '') +
     '</div>' +
     notesButton({id: item.id, title: item.title}) +
     '<div class="tri-check' + (isDismissed ? ' dismissed' : '') + '" data-dismiss-id="' + item.id + '" data-dismiss-title="' + (item.title || '').replace(/"/g, '&quot;') + '">\u2713</div>' +
@@ -1021,6 +1022,115 @@ function activeTriageItems(){
   const suppressed=serverTriageSuppressions();
   return (INIT_TRIAGE||[]).filter(i=>!dismissed[i.id]&&!scheduledTriage[i.id]&&!deletedTriage.includes(i.id)&&!suppressed[i.id]);
 }
+// The task-shaped properties a triage item becomes. Shared by every "put this
+// triage item on the schedule" path so the created row is spelled one way.
+function triageTaskProps(triageId,item){
+  return {
+    priority:triagePriorityLabel(item.priority),
+    source:"triage",
+    meta:"Triage item",
+    detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
+    tags:["triage"],
+    triageId:triageId
+  };
+}
+// Already on the schedule? Two different questions, so two lookups: an exact id
+// match, then "is an open, visible triage row already called this". The second
+// half is the layer's question.
+// dateStr scopes that second lookup: `scheduled` holds only the VIEWED day's rows,
+// so a same-titled task sitting on today cannot answer "is this already on
+// Thursday". Without the scope, a Tomorrow click reports "already on the schedule"
+// and links the item to a task on the wrong day.
+function existingTriageTask(triageId,item,dateStr){
+  const byId=scheduled.find(ev=>ev.triageId===triageId);
+  if(byId)return byId;
+  const viewing=(typeof viewDate!=="undefined"&&viewDate)?viewDate:null;
+  if(dateStr&&viewing&&dateStr!==viewing)return null;
+  return DCC.TaskModel.selectActive(scheduled).find(ev=>ev.source==="triage"&&ev.title===item.title);
+}
+// Record the triage -> task link and repaint. saveTriageScheduled feeds
+// activeTriageItems(), so this is also what makes the item leave the strip.
+function recordTriageScheduled(triageId,item,taskId,toastMsg,opts){
+  opts=opts||{};
+  const st=loadTriageScheduled();
+  st[triageId]={taskId:taskId,scheduled_at:new Date().toISOString(),title:item.title};
+  saveTriageScheduled(st);
+  // Scheduling is a DECISION, and the day_root write above is only its local echo.
+  // 65a17c1 moved dismiss and delete onto dateless suppression rows because day_root
+  // state expires at midnight and does not cross devices, and it left _triageScheduled
+  // behind -- named in triage-suppressions.js's own header as part of that defect.
+  // This PR is what makes the leftover load-bearing: the morning recap and the courier
+  // both list activeTriageItems(), so without a durable record an item turned into a
+  // task on Tuesday is back in Wednesday's recap asking for a reply, and "Today" mints
+  // a duplicate because `scheduled` cannot see Tuesday's row either.
+  // Reason "done" with a note is deliberate: a dedicated "scheduled" arm would mean
+  // changing the server's reason normaliser, which is a wider change than this needs.
+  persistTriageSuppression(triageId,item,"scheduled","Scheduled",false);
+  if(toastMsg&&typeof showToast==="function")showToast(toastMsg,"success");
+  if(opts.deferRepaint||opts.deferRefold)return;
+  buildScheduleTriage();
+  buildTriage();
+}
+// Put a triage item on a DATE, no time step. The catch-up modal's Today /
+// Tomorrow / calendar-pick all land here: one click, one free slot, done.
+// scheduleTaskOnDate (state.js) is the app's canonical create-on-a-target-date —
+// same day context and free-slot engine the reschedule compute uses.
+// Returns the created (or already-existing) block, or null if nothing was written.
+// Returns the block (or the already-linked task) on success and null ONLY when
+// nothing was written. Callers treat falsy as "refused, leave the row alone", so a
+// path that records the link and then returns null leaves an unclearable row behind
+// and a modal that can never auto-close.
+async function scheduleTriageOnDate(triageId,dateStr,opts){
+  opts=opts||{};
+  const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
+  if(!item||!dateStr)return null;
+  const scheduledTriage=loadTriageScheduled();
+  if(scheduledTriage[triageId]){
+    if(typeof showToast==="function")showToast("Already scheduled","info");
+    return scheduledTriage[triageId];   // already handled: the row should go
+  }
+  const existing=existingTriageTask(triageId,item,dateStr);
+  if(existing){
+    recordTriageScheduled(triageId,item,existing.id,null,opts);
+    if(typeof showToast==="function")showToast("Already on the schedule","info");
+    return existing;                     // the link WAS written
+  }
+  if(typeof scheduleTaskOnDate!=="function")return null;
+  const durMin=triageDuration(item);
+  const ev=Object.assign({
+    id:"triage-task-"+triageId,
+    title:item.title||"Triage item",
+    type:"task",
+    start:"00:00",
+    end:"00:"+String(Math.min(59,durMin)).padStart(2,"0"),
+    durMin:durMin
+  },triageTaskProps(triageId,item));
+  // silent:true so this owns the success copy -- which means it also owns the FAILURE
+  // copy. Without the toast below a packed day makes Today look like a dead button:
+  // the row's buttons flicker disabled and nothing else happens anywhere.
+  const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(dateStr):dateStr;
+  const block=await scheduleTaskOnDate(ev,dateStr,{useExisting:true,silent:true});
+  if(!block){
+    if(!opts.silent&&typeof showToast==="function")showToast("No free slot on "+label+"'s schedule","error");
+    return null;
+  }
+  const bp=block.properties||{};
+  // Landing on the day being VIEWED means the itinerary has to be refolded, or the
+  // new row exists on the server and nowhere on screen until a reload. Same four
+  // calls delegated.js makes after its scheduleTaskOnDate, for the same reason.
+  // deferRefold lets a batch caller ("Move all to today") pay for this once at the
+  // end instead of per item, the same contract DCC.Carryover.moveTo already offers.
+  const viewing=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+  if(dateStr===viewing&&!opts.deferRefold){
+    try{ await window.blockStore.loadDay(dateStr); }catch(e){}
+    if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+    if(typeof recalcTimes==="function")recalcTimes();
+    if(typeof render==="function")render();
+  }
+  const at=(bp.start&&typeof f12==="function")?(" at "+f12(bp.start)):"";
+  recordTriageScheduled(triageId,item,bp.local_id||block.id,opts.silent?null:("Scheduled "+label+at),opts);
+  return block;
+}
 function scheduleTriageItem(triageId){
   const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
   if(!item)return;
@@ -1029,38 +1139,18 @@ function scheduleTriageItem(triageId){
     if(typeof showToast==="function")showToast("Already scheduled","info");
     return;
   }
-  // Two different questions, so two lookups: an exact id match, then "is an open, visible
-  // triage row already called this". The second half is the layer's question.
-  const existing=scheduled.find(ev=>ev.triageId===triageId)
-    ||DCC.TaskModel.selectActive(scheduled).find(ev=>ev.source==="triage"&&ev.title===item.title);
+  const existing=existingTriageTask(triageId,item);
   if(existing){
-    scheduledTriage[triageId]={taskId:existing.id,scheduled_at:new Date().toISOString(),title:item.title};
-    saveTriageScheduled(scheduledTriage);
+    recordTriageScheduled(triageId,item,existing.id,null);
     if(typeof showToast==="function")showToast("Already on the schedule","info");
-    buildScheduleTriage();
-    buildTriage();
     return;
   }
   // Reuse the shared task scheduler -- the same day/time + duration picker the
   // tasks below and repeat responsibilities use. Default 5m (triageDuration); the
   // picker's duration buttons bump it up when the case needs more.
   const durMin=triageDuration(item);
-  const opts={
-    priority:triagePriorityLabel(item.priority),
-    source:"triage",
-    meta:"Triage item",
-    detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
-    tags:["triage"],
-    triageId:triageId
-  };
-  const record=function(taskId){
-    const st=loadTriageScheduled();
-    st[triageId]={taskId:taskId,scheduled_at:new Date().toISOString(),title:item.title};
-    saveTriageScheduled(st);
-    if(typeof showToast==="function")showToast("Triage item scheduled","success");
-    buildScheduleTriage();
-    buildTriage();
-  };
+  const opts=triageTaskProps(triageId,item);
+  const record=function(taskId){ recordTriageScheduled(triageId,item,taskId,"Triage item scheduled"); };
   if(typeof openSchedulePicker==="function"){
     openSchedulePicker(item.title,durMin,Object.assign({},opts,{
       onScheduled:function(info){ record(info&&(info.localId||info.blockId)); }
@@ -1071,6 +1161,8 @@ function scheduleTriageItem(triageId){
   const newTask=insertTaskFromDrawer(item.title,durMin,opts);
   record(newTask&&newTask.id);
 }
+window.scheduleTriageOnDate=scheduleTriageOnDate;
+window.activeTriageItems=activeTriageItems;
 function buildScheduleTriageCard(item){
   const pri=triagePriorityLabel(item.priority);
   const priCls=pri==="High"?"pri-hi":pri==="Low"?"pri-lo":"pri-med";
@@ -1078,18 +1170,20 @@ function buildScheduleTriageCard(item){
   const safeTitle=(item.title||"Triage item").replace(/"/g,'&quot;');
   // Scheme-allowlist the draft/source URLs: they come from the sweep, so never
   // let a javascript:/data: URI reach an href.
-  const safeUrl=u=>{u=String(u||"");return /^(https?:|mailto:)/i.test(u)?u:"";};
-  const draftHref=safeUrl(item.draft_link||item.draft_url);
-  const srcHref=safeUrl(item.link);
+  // safeUrlAttr, not safeUrl: these land straight in an href, and the scheme check
+  // alone does not stop a swept URL from closing the attribute and opening an
+  // event handler. Same helper the catch-up modal's row link uses.
+  const draftHref=window.DCC.safeUrlAttr(item.draft_link||item.draft_url);
+  const srcHref=window.DCC.safeUrlAttr(item.link);
   return '<div class="board-card schedule-triage-card" data-schedule-triage-id="'+item.id+'">'+
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
       '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
       '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+'<span>'+ms(triageDuration(item))+'</span>'+
-        (srcHref?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+(item.link_label||item.action_label||"Open")+'</a>':'')+
+        (srcHref?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+DCC.esc(item.link_label||item.action_label||"Open")+'</a>':'')+
         (draftHref?'<a href="'+draftHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--green);text-decoration:none;font-weight:600">Review draft</a>':(item.draft_id?'<span style="color:var(--green);font-weight:600">Draft ready</span>':''))+
       '</div>'+
-      (item.summary?'<div class="schedule-triage-summary">'+item.summary+'</div>':'')+
+      (item.summary?'<div class="schedule-triage-summary">'+DCC.esc(item.summary)+'</div>':'')+
       (item.draft_preview?'<div class="schedule-triage-summary" style="border-left:2px solid var(--green);padding-left:8px;opacity:.9">'+DCC.esc(item.draft_preview)+'</div>':'')+
     '</div>'+
     '<button class="add-btn schedule-triage-schedule" data-triage-id="'+item.id+'">Schedule</button>'+
@@ -1175,9 +1269,9 @@ function buildScheduleTriage(){
   el.querySelectorAll(".schedule-triage-quick").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();dismissTriage(btn.dataset.triageId,"",false);});
   });
-  el.querySelectorAll(".schedule-triage-delete").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();deleteTriageItem(btn.dataset.triageId);});
-  });
+  // NOTE: .schedule-triage-delete is wired ONCE, above. A second identical pass
+  // used to live here, so one click ran deleteTriageItem twice — two day-state
+  // POSTs and two independent Undo toasts for one item.
 }
 
 function buildScheduled() {

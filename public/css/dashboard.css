@@ -1839,7 +1839,18 @@
   .carryover-list{display:flex;flex-direction:column;gap:6px}
   .carryover-row{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--card);border:1px solid var(--border);border-radius:6px}
   .carryover-row-info{flex:1;min-width:0}
-  .carryover-row-title{font-size:13px;color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .carryover-row-title{font-size:13px;color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;min-width:0}
+  /* The name and its calendar button share one line. `flex:0 1 auto` keeps the button
+     hugging the END OF THE NAME rather than right-aligned at the column edge (which
+     is what flex:1 does, and it reads as a column of unrelated icons). min-width:0
+     preserves the ellipsis, so a long name truncates and the button follows it
+     instead of being shoved out of the row. */
+  .cu-title-line{display:flex;align-items:center;gap:2px;min-width:0}
+  .cu-title-line .btn-schedule svg{pointer-events:none}
+  /* Only shown when both kinds of row are on screen at once. */
+  .cu-section-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);margin:4px 0 -2px}
+  .cu-tri-link{color:var(--accent-light);text-decoration:none}
+  .cu-tri-link:hover{text-decoration:underline}
   .carryover-row-meta{font-size:11px;color:var(--text-muted);margin-top:2px}
   .carryover-row-actions{display:flex;gap:4px;flex-shrink:0}
   .carryover-btn{padding:5px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap}
@@ -3384,6 +3395,44 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @keyframes slotBankPetDeposit{0%{transform:scaleX(var(--runner-turn)) scale(1)}54%{transform:scaleX(var(--runner-turn)) scale(1.22) rotate(-4deg)}100%{transform:scaleX(var(--runner-turn)) scale(0.96) rotate(2deg)}}
 @keyframes slotBankPetDust{0%{opacity:0;transform:translate(0,0) scale(0.4)}28%{opacity:1;transform:translate(-8px,0) scale(1)}100%{opacity:0;transform:translate(-24px,8px) scale(0.25)}}
 @keyframes slotBankCollectPop{0%{opacity:0;transform:translateY(8px) scale(0.48)}22%{opacity:1;transform:translateY(-8px) scale(1.16)}68%{opacity:1;transform:translateY(-14px) scale(1)}100%{opacity:0;transform:translateY(-28px) scale(0.82)}}
+
+/* ── PET COURIER (pet-courier.js) ─ shares slotBankPetRun/Dust keyframes ────────────────────────────────────────────
+   The same body as the bank runner above, minus the Slots-tab coupling: this one
+   is appended to <body>, so it can cross any tab. Travel is a transition on
+   left/top; the gait is a separate steps() animation, so path and bounce stay
+   independent. The envelope is the carried token. */
+.pet-courier{--runner-turn:1;--pet-courier-color:#f2b56b;position:fixed;z-index:10006;width:54px;height:58px;margin:-29px 0 0 -27px;border-radius:44% 44% 38% 38%;background:var(--pet-courier-color);box-shadow:inset 0 -7px 0 rgba(0,0,0,0.12),0 8px 18px rgba(0,0,0,0.26);display:flex;align-items:center;justify-content:center;color:#281706;font-weight:950;pointer-events:none;transition:left 0.24s linear,top 0.24s cubic-bezier(.18,.86,.18,1);transform:translateZ(0) scaleX(var(--runner-turn));will-change:left,top,transform}
+.pet-courier strong{font-size:20px;line-height:1}
+.pet-courier em{position:absolute;top:-8px;right:6px;font-style:normal;font-size:14px;color:#fff7cc;text-shadow:0 1px 2px rgba(0,0,0,0.45)}
+.pet-courier .pet-courier-ears:before,.pet-courier .pet-courier-ears:after{content:"";position:absolute;top:-8px;width:18px;height:18px;border-radius:7px 7px 3px 3px;background:var(--pet-courier-color);box-shadow:inset 0 -3px 0 rgba(0,0,0,0.1)}
+.pet-courier .pet-courier-ears:before{left:7px;transform:rotate(-18deg)}
+.pet-courier .pet-courier-ears:after{right:7px;transform:rotate(18deg)}
+.pet-courier .pet-courier-face:before,.pet-courier .pet-courier-face:after{content:"";position:absolute;top:25px;width:6px;height:6px;border-radius:50%;background:#24130a}
+.pet-courier .pet-courier-face:before{left:17px}
+.pet-courier .pet-courier-face:after{right:17px}
+.pet-courier.running{animation:slotBankPetRun 0.28s steps(2,end) infinite}
+.pet-courier.carrying{box-shadow:inset 0 -7px 0 rgba(0,0,0,0.12),0 8px 18px rgba(0,0,0,0.26),0 0 26px rgba(96,165,250,0.42)}
+.pet-courier.depositing{animation:petCourierDeposit 0.32s cubic-bezier(.18,1.3,.24,1) both}
+/* In its mouth: low and forward, not perched on its back. */
+.pet-courier-envelope{position:absolute;right:-10px;bottom:6px;width:24px;height:17px;border-radius:3px;background:linear-gradient(#fdfdf7,#e9e4d2);border:1px solid rgba(255,255,255,0.9);display:grid;place-items:center;color:#3b2b22;font-size:11px;line-height:1;box-shadow:0 0 12px rgba(147,197,253,0.7);opacity:0;transform:scale(0.5)}
+.pet-courier.carrying .pet-courier-envelope{opacity:1;animation:petCourierCarry 0.44s ease-in-out infinite alternate}
+.pet-courier-dust{position:fixed;z-index:10004;width:9px;height:6px;border-radius:999px;background:rgba(148,163,184,0.6);box-shadow:0 0 10px rgba(148,163,184,0.4);pointer-events:none;animation:slotBankPetDust 0.54s ease-out both}
+/* What it leaves behind, at the drop point. */
+.pet-courier-drop{position:fixed;z-index:10005;margin:-14px 0 0 -14px;font-size:26px;line-height:1;color:#f8fafc;text-shadow:0 2px 10px rgba(96,165,250,0.8);pointer-events:none;animation:petCourierDrop 0.7s cubic-bezier(.18,1.3,.24,1) both}
+/* The envelope waits here when Drake is mid-sentence or has a modal open. */
+.pet-courier-chip{position:fixed;bottom:64px;right:16px;z-index:9998;display:flex;align-items:center;gap:6px;padding:7px 11px;border-radius:999px;border:1px solid var(--accent);background:var(--card);color:var(--text);font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,0.45);animation:petCourierDrop 0.5s cubic-bezier(.18,1.3,.24,1) both}
+.pet-courier-chip:hover{background:var(--card-hover)}
+.pet-courier-chip-glyph{font-size:14px;line-height:1}
+.pet-courier-chip-count{min-width:16px;height:16px;border-radius:999px;background:var(--accent);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
+@keyframes petCourierCarry{0%{transform:translateY(0) scale(0.95) rotate(-6deg)}100%{transform:translateY(-2px) scale(1.05) rotate(6deg)}}
+@keyframes petCourierDeposit{0%{transform:scaleX(var(--runner-turn)) scale(1)}54%{transform:scaleX(var(--runner-turn)) scale(1.18) rotate(-4deg)}100%{transform:scaleX(var(--runner-turn)) scale(0.96) rotate(2deg)}}
+@keyframes petCourierDrop{0%{opacity:0;transform:translateY(10px) scale(0.5)}40%{opacity:1;transform:translateY(-6px) scale(1.18)}100%{opacity:1;transform:translateY(0) scale(1)}}
+/* No pet animation in the app had this guard. The delivery still happens — the
+   modal opens directly, pet-courier.js skips the run entirely. */
+@media (prefers-reduced-motion:reduce){
+  .pet-courier,.pet-courier-dust,.pet-courier-drop,.pet-courier-chip,.pet-courier-envelope{animation:none}
+  .pet-courier{transition:none}
+}
 .slot-coin-field{position:fixed;inset:0;z-index:9998;pointer-events:none;overflow:hidden;opacity:0;transition:opacity 0.24s ease}
 .slot-coin-field.active{opacity:1}
 .slot-coin-ground{position:absolute;left:0;right:0;bottom:0;height:10px;background:linear-gradient(180deg,rgba(250,204,21,0.18),rgba(120,75,14,0.36));box-shadow:0 -8px 24px rgba(250,204,21,0.12)}

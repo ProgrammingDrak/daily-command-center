@@ -501,10 +501,6 @@
       (total > openCount || truncated ? " (showing " + openCount + " of " + totalStr + ")" : "") +
       " from " + scope + " — choose what to do with each.";
 
-    // Default custom date: two days out (distinct from Today/Tomorrow).
-    const seed = new Date(); seed.setDate(seed.getDate() + 2);
-    const seedStr = ymd(seed);
-
     rows.forEach(ev => {
       const el = document.createElement("div");
       el.className = "carryover-row";
@@ -515,7 +511,15 @@
       const kids = descendants(ev, pool).length;
       el.innerHTML =
         '<div class="carryover-row-info">' +
-          '<div class="carryover-row-title"></div>' +
+          '<div class="cu-title-line">' +
+            '<div class="carryover-row-title"></div>' +
+            // Any other day lives behind the same calendar button the itinerary rows
+            // use. It replaced a bare <input type="date"> + Move pair, which was an
+            // unstyled OS date picker sitting on a dark modal (.resched-date-input is
+            // only styled inside .resched-popover) and a second spelling of "move
+            // this to a day" three buttons away from the first.
+            window.DCC.dateButtonHtml("unf-cal", "Move to a day") +
+          '</div>' +
           '<div class="carryover-row-meta">' + (d > 0 ? esc(fmtDur(d)) : "step") +
             (kids ? " · +" + kids + " nested" : "") +
             (ev.priority ? " · " + esc(ev.priority) : "") +
@@ -525,8 +529,6 @@
         '<div class="carryover-row-actions">' +
           '<button class="carryover-btn carryover-btn-schedule unf-today">Today</button>' +
           '<button class="carryover-btn carryover-btn-schedule unf-tomorrow">Tomorrow</button>' +
-          '<input type="date" class="resched-date-input unf-date" value="' + seedStr + '" />' +
-          '<button class="carryover-btn unf-move">Move</button>' +
           '<button class="carryover-btn unf-backlog">Backlog</button>' +
           '<button class="carryover-btn carryover-btn-drop unf-drop">Drop</button>' +
         '</div>';
@@ -549,10 +551,10 @@
         const tmr = (typeof __tomorrowDate !== "undefined" && __tomorrowDate) ? __tomorrowDate : ymd(new Date(Date.now() + 86400000));
         busy(); done(await moveTo(ev, tmr, { pool: pool }));
       });
-      el.querySelector(".unf-move").addEventListener("click", async () => {
-        const v = el.querySelector(".unf-date").value;
-        if (!v || !/^\d{4}-\d{2}-\d{2}$/.test(v)) { if (typeof showToast === "function") showToast("Pick a valid date", "error"); return; }
-        busy(); done(await moveTo(ev, v, { pool: pool }));
+      window.DCC.wireDateButton(el.querySelector(".unf-cal"), {
+        header: 'Move "' + ev.title + '" to…',   // the popover escapes it (schedule-popover.js)
+        actionLabel: "Move",
+        onPick: async (v) => { busy(); done(await moveTo(ev, v, { pool: pool })); }
       });
       el.querySelector(".unf-backlog").addEventListener("click", async () => { busy(); done(await toBacklog(ev, pool)); });
       el.querySelector(".unf-drop").addEventListener("click", async () => { busy(); done(await drop(ev, pool)); });

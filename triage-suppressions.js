@@ -158,7 +158,13 @@ function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at
     triage_id: String(triageId || "").trim().slice(0, 300),
     key: String(key || "").trim().slice(0, 300),
     itemTitle: String(itemTitle || "").trim().slice(0, 220),
-    reason: reason === "deleted" ? "deleted" : "done",
+    // Three dispositions, not two. "scheduled" is suppressed from open_items exactly
+    // like the others (isSuppressed never looks at reason), but it is NOT completed
+    // work: the four client sites that gate on reason==="done" feed the Done tab,
+    // Completed Today and the day's actual/planned minute totals. Recording a
+    // scheduled item as done counted it there while the task it created was still
+    // open on the itinerary, so the same work was billed twice.
+    reason: (reason === "deleted" || reason === "scheduled") ? reason : "done",
     // A trivial dismissal ("not worth it") is handled, but it is NOT completed work.
     // completedTriageTasksForDate drops it, and that check used to read the local
     // overlay -- which the phone does not have. Without persisting the flag, a trivial
