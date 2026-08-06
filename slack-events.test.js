@@ -188,12 +188,12 @@ test("🔖 is idempotent — a duplicate bookmark event makes no second task", a
   assert.equal(blocks.length, 1);
 });
 
-test("⏳ then ✅ records exact elapsed, points, and a time_entry", async () => {
+test("⌛ then ✅ records exact elapsed, points, and a time_entry", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "444.4", "444.9"));
-  await post(handler, reaction("hourglass_flowing_sand", "444.4", "1720000000.000000"));
+  await post(handler, reaction("hourglass", "444.4", "1720000000.000000"));
   const started = blocks[0].properties.startedAt;
-  assert.ok(started, "startedAt stamped by ⏳");
+  assert.ok(started, "startedAt stamped by ⌛");
   // ✅ exactly 40 minutes later
   await post(handler, reaction("white_check_mark", "444.4", "1720002400.000000"));
   const p = blocks[0].properties;
@@ -213,7 +213,19 @@ test("⏳ then ✅ records exact elapsed, points, and a time_entry", async () =>
   assert.equal(te.properties.source, "slack");
 });
 
-test("🔖 → ✅ with no ⏳ defaults to 5 minutes", async () => {
+test(":hourglass_flowing_sand: no longer starts the Slack timer", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("bookmark", "legacy.1", "legacy.9"));
+  await post(handler, reaction("hourglass_flowing_sand", "legacy.1", "1720000000.000000"));
+  assert.equal(blocks[0].properties.startedAt, undefined);
+  assert.equal(blocks[0].properties.everStarted, undefined);
+
+  await post(handler, reaction("white_check_mark", "legacy.1", "1720002400.000000"));
+  assert.equal(blocks[0].properties.actualMinutes, 5, "ignored legacy reaction uses the no-timer fallback");
+  assert.equal(calls.credit[0].actual_minutes, 5);
+});
+
+test("🔖 → ✅ with no ⌛ defaults to 5 minutes", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "555.5", "555.9"));
   await post(handler, reaction("white_check_mark", "555.5", "1720000000.000000"));
@@ -257,7 +269,7 @@ const removal = (name, ts, user = DRAKE) => ({
 // next 🔖 created a duplicate of work the user had explicitly dropped. The lookup
 // now includes tombstones (mirroring findBriefBlock in routes/dcc.js) and a
 // tombstoned hit means "the user cancelled this — do not re-create".
-test("removing 🔖 before ⏳/✅ cancels the task, and re-adding 🔖 does NOT resurrect it", async () => {
+test("removing 🔖 before ⌛/✅ cancels the task, and re-adding 🔖 does NOT resurrect it", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "aaa.1", "aaa.9"));
   assert.equal(blocks[0].deleted, undefined);
@@ -268,10 +280,10 @@ test("removing 🔖 before ⏳/✅ cancels the task, and re-adding 🔖 does NOT
   assert.equal(blocks.filter(b => b.type === "block" && !b.deleted).length, 0, "and the tombstone stays a tombstone");
 });
 
-test("removing 🔖 after ⏳ is ignored — an in-flight task is kept", async () => {
+test("removing 🔖 after ⌛ is ignored — an in-flight task is kept", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "bbb.1", "bbb.9"));
-  await post(handler, reaction("hourglass_flowing_sand", "bbb.1", "1720000000.000000"));
+  await post(handler, reaction("hourglass", "bbb.1", "1720000000.000000"));
   await post(handler, removal("bookmark", "bbb.1"));
   assert.equal(blocks[0].deleted, undefined);
   assert.ok(blocks[0].properties.startedAt);
@@ -281,12 +293,12 @@ test("removing 🔖 after ⏳ is ignored — an in-flight task is kept", async (
 
 // The keep-guard bug: clearStart DELETES startedAt, so the old
 // `startedAt || completedAt` check passed and threw away real work.
-test("🔖 → ⏳ → un-⏳ → un-🔖 keeps the task (everStarted is sticky)", async () => {
+test("🔖 → ⌛ → un-⌛ → un-🔖 keeps the task (everStarted is sticky)", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "ccc.1", "ccc.9"));
-  await post(handler, reaction("hourglass_flowing_sand", "ccc.1", "1720000000.000000"));
-  await post(handler, removal("hourglass_flowing_sand", "ccc.1"));
-  assert.equal(blocks[0].properties.startedAt, undefined, "un-⏳ still clears the running timer");
+  await post(handler, reaction("hourglass", "ccc.1", "1720000000.000000"));
+  await post(handler, removal("hourglass", "ccc.1"));
+  assert.equal(blocks[0].properties.startedAt, undefined, "un-⌛ still clears the running timer");
   assert.equal(blocks[0].properties.everStarted, true, "but the fact it was started is sticky");
   await post(handler, removal("bookmark", "ccc.1"));
   assert.equal(blocks[0].deleted, undefined, "worked-on task survives un-🔖");
@@ -303,7 +315,7 @@ test("un-🔖 keeps a task that was checked off in the DCC UI (_done overlay)", 
 test("un-✅ reopens the task, drops the timer row, and reverses the credit", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "eee.1", "eee.9"));
-  await post(handler, reaction("hourglass_flowing_sand", "eee.1", "1720000000.000000"));
+  await post(handler, reaction("hourglass", "eee.1", "1720000000.000000"));
   await post(handler, reaction("white_check_mark", "eee.1", "1720001200.000000"));
   const task = blocks[0];
   assert.equal(task.properties.done, true);
@@ -331,16 +343,16 @@ test("un-✅ reopens the task, drops the timer row, and reverses the credit", as
   assert.ok(calls.broadcast.some(b => b.payload.action === "slack-undone"));
 });
 
-test("un-✅ then re-✅ re-times from the original ⏳ and re-credits", async () => {
+test("un-✅ then re-✅ re-times from the original ⌛ and re-credits", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "fff.1", "fff.9"));
-  await post(handler, reaction("hourglass_flowing_sand", "fff.1", "1720000000.000000"));
+  await post(handler, reaction("hourglass", "fff.1", "1720000000.000000"));
   await post(handler, reaction("white_check_mark", "fff.1", "1720001200.000000"));
   await post(handler, removal("white_check_mark", "fff.1"));
   await post(handler, reaction("white_check_mark", "fff.1", "1720001200.000000"));
   const p = blocks[0].properties;
   assert.equal(p.done, true);
-  assert.equal(p.actualMinutes, 20, "measured from the original ⏳, not from zero");
+  assert.equal(p.actualMinutes, 20, "measured from the original ⌛, not from zero");
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 1);
   assert.equal(calls.credit.length, 2, "the ledger row was deleted, so the re-completion is credited again");
 });
@@ -350,7 +362,7 @@ test("un-✅ then re-✅ re-times from the original ⏳ and re-credits", async (
 test("the 🔖 re-added after un-✅ echoes back harmlessly — no duplicate, no loop", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "jjj.1", "jjj.9"));
-  await post(handler, reaction("hourglass_flowing_sand", "jjj.1", "1720000000.000000"));
+  await post(handler, reaction("hourglass", "jjj.1", "1720000000.000000"));
   await post(handler, reaction("white_check_mark", "jjj.1", "1720001200.000000"));
   await post(handler, removal("white_check_mark", "jjj.1"));
   assert.equal(calls.reactionsAdd.length, 1);
@@ -463,11 +475,11 @@ test("un-✅ is idempotent — a retried removal does not double-revoke", async 
   assert.equal(calls.revoke.length, 1);
 });
 
-test("⏳ and ✅ ignore a cancelled (tombstoned) task", async () => {
+test("⌛ and ✅ ignore a cancelled (tombstoned) task", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "iii.1", "iii.9"));
   await post(handler, removal("bookmark", "iii.1"));
-  await post(handler, reaction("hourglass_flowing_sand", "iii.1", "1720000000.000000"));
+  await post(handler, reaction("hourglass", "iii.1", "1720000000.000000"));
   await post(handler, reaction("white_check_mark", "iii.1", "1720001200.000000"));
   assert.equal(blocks[0].properties.startedAt, undefined);
   assert.equal(blocks[0].properties.done, undefined);

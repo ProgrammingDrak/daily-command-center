@@ -1,4 +1,4 @@
-// Unit tests for lib/task-timing.js — the ⏳→✅ duration ledger extracted from
+// Unit tests for lib/task-timing.js — the ⌛→✅ duration ledger extracted from
 // routes/slack-events.js (dcc-canonical-task-model E1).
 //
 // Two things are being pinned down here. First, the load-bearing guard: with no
@@ -100,7 +100,9 @@ test("finalizeTiming computes real elapsed minutes from startedAt", async () => 
   assert.equal(res.timed, true);
   assert.equal(res.actualMinutes, 40);
   assert.match(task.properties.notes, /Took ~40m/);
+  assert.match(task.properties.notes, /\(⌛ /, "generated task note uses the :hourglass: glyph");
   assert.equal(timerFor(task.id).properties.durSec, 2400);
+  assert.equal(timerFor(task.id).properties.note, "Slack ⌛→✅ timer");
 });
 
 test("finalizeTiming keeps the user's own notes and appends the ⏱ line", async () => {
@@ -132,7 +134,7 @@ test("finalizeTiming writes mergeProps even when there is nothing to time", asyn
   assert.equal(task.properties.actualMinutes, undefined, "still no invented minutes");
 });
 
-test("a ⏳ left running for days is capped, and the SEGMENT is capped with it", async () => {
+test("a ⌛ left running for days is capped, and the SEGMENT is capped with it", async () => {
   const { timing, addTask, timerFor } = makeHarness();
   const MAX = createTaskTiming.MAX_TIMED_MINUTES;
   const task = addTask({ title: "Forgotten", startedAt: new Date(END - 3 * 24 * 60 * MIN).toISOString() });
@@ -163,7 +165,7 @@ test("clearTiming un-times a task, strips only the ⏱ line, and drops the timer
   assert.equal(task.properties.completedAt, undefined);
   assert.equal(task.properties.status, "open");
   assert.equal(task.properties.notes, "call Ben back", "user text survives, ⏱ line does not");
-  assert.ok(task.properties.startedAt, "startedAt survives so a re-✅ measures from the original ⏳");
+  assert.ok(task.properties.startedAt, "startedAt survives so a re-✅ measures from the original ⌛");
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 0);
   assert.equal(deleted.length, 1, "the timer row is hard-deleted, not tombstoned");
   // Read the PERSISTED copy, not the caller's object, so this fails if the write
@@ -194,7 +196,7 @@ test("reconcileTiming closes a timer on a row completed through the _done overla
   assert.equal(task.properties.actualMinutes, 18, "real elapsed, measured to the overlay's completion time");
   assert.equal(task.properties.actualMinutesFrom, "reconcile", "read-derived timing stays distinguishable from a real Slack measurement");
   assert.equal(timerFor(task.id).properties.durSec, 1080);
-  assert.match(timerFor(task.id).properties.note, /closed on completion/);
+  assert.equal(timerFor(task.id).properties.note, "Slack ⌛ timer (closed on completion)");
   // The segment is minted mid-read, so it has to be folded into the array the
   // caller is about to return or Day Review shows the time one refresh late.
   assert.equal(blocks.length, before + 1);
@@ -310,7 +312,7 @@ test("a derived stamp is still withdrawable after startedAt is gone", async () =
   assert.equal(await timing.reconcileTiming(blocks, {}), 1);
   assert.equal(task.properties.actualMinutes, 12);
 
-  // un-⏳ in Slack clears startedAt, then the task is un-checked in the UI.
+  // un-⌛ in Slack clears startedAt, then the task is un-checked in the UI.
   delete task.properties.startedAt;
   root.properties._done = { ids: [], at: {} };
 
@@ -397,7 +399,7 @@ test("reconcileTiming survives one failing row and still settles the rest", asyn
 });
 
 test("stripTookNote leaves prose untouched", () => {
-  assert.equal(createTaskTiming.stripTookNote("hello\n\n⏱ Took ~4m (⏳ 2:00p → ✅ 2:04p)"), "hello");
+  assert.equal(createTaskTiming.stripTookNote("hello\n\n⏱ Took ~4m (⌛ 2:00p → ✅ 2:04p)"), "hello");
   assert.equal(createTaskTiming.stripTookNote("⏱ ~5m (✅ 2:04p, no timer)"), "");
   assert.equal(createTaskTiming.stripTookNote("just prose"), "just prose");
   assert.equal(createTaskTiming.stripTookNote(""), "");
