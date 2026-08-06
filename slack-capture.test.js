@@ -48,3 +48,14 @@ test("fallback permalinks preserve thread reply context", () => {
     "https://example.slack.com/archives/C123/p1700000000000100"
   );
 });
+
+test("file-only Slack messages use file titles as capture text", () => {
+  assert.equal(
+    capture.normalizeSlackMessage({ ts: "1.2", text: "", files: [{ title: "Signed renewal packet.pdf" }] }).text,
+    "Signed renewal packet.pdf"
+  );
+  assert.equal(
+    capture.normalizeSlackMessage({ ts: "1.3", files: [{ name: "launch-checklist.xlsx" }, { title: "Approval notes" }] }).text,
+    "launch-checklist.xlsx; Approval notes"
+  );
+});
