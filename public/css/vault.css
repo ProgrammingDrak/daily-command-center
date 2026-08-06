@@ -241,6 +241,9 @@
 .vault-tl-hovercard[hidden]{display:none}
 .vault-tl-hovercard .hc-title{font-weight:600;color:var(--text);margin-bottom:2px}
 .vault-tl-hovercard .hc-meta{color:var(--text-muted);font-size:11.5px}
+/* Summary line in the timeline hover card (Phase B8): what the note IS, not just
+   its title and date. Clamped to 3 lines so a long one cannot grow the card. */
+.vault-tl-hovercard .hc-sum{color:var(--text);font-size:12px;line-height:1.45;margin-top:4px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .vault-tl-hovercard .hc-people{color:var(--text-muted);font-size:11.5px;margin-top:3px}
 .vault-tl-hovercard .hc-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
 .vault-tl-hovercard .hc-tag{font-size:11px;background:var(--bg-elev);border-radius:4px;padding:1px 6px;color:var(--text-muted)}
@@ -510,3 +513,7 @@
   #vault-body.gr-mode #vault-graph{min-height:300px}
   .vault-gr-legend{width:150px;font-size:10px}
 }
+
+/* Search-result summary line (Phase B8). Sits above the snippet: the summary says
+   whether the note is worth opening, the snippet says where the term matched. */
+.vault-sr-sum{font-size:12.5px;color:var(--text);opacity:.85;margin-top:2px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
