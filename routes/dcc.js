@@ -5,6 +5,7 @@ const createMaterializeGuard = require("../lib/materialize-guard");
 // Pure helpers come off the module, persistence comes off the factory — the layering
 // lib/task-timing.js and responsibility-store.js both state in their headers.
 const { assertNotResurrecting, dedupeStatus } = createMaterializeGuard;
+const triageSuppressions = require("../triage-suppressions");
 
 module.exports = function mount(app, ctx) {
   const {
@@ -28,6 +29,83 @@ module.exports = function mount(app, ctx) {
     if (!idemKey) return null;
     return materializeGuard.findForDedupe(workspaceId, { idempotencyKey: idemKey });
   }
+
+  // ── Triage suppressions ──
+  // Dateless rows, so "I handled this" outlives the day you handled it on, and
+  // outlives the sweep's next full-replace of the triage section. See
+  // triage-suppressions.js for why neither the day_root nor the day state can hold
+  // this. Best-effort on read: a DB hiccup must degrade to "show the raw list",
+  // never to a failed day response.
+  async function readTriageSuppressions(workspaceId) {
+    try {
+      const blocks = await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
+      return triageSuppressions.suppressionsFromBlocks(blocks);
+    } catch (e) {
+      console.error("[triage suppressions] read failed (non-fatal):", e.message);
+      return [];
+    }
+  }
+
+  app.get("/api/triage/suppressions", async (req, res) => {
+    const { workspaceId } = resolveOwnerLenient(req);
+    res.json({ suppressions: await readTriageSuppressions(workspaceId) });
+  });
+
+  app.post("/api/triage/suppressions", async (req, res) => {
+    const body = req.body || {};
+    const triageId = String(body.triage_id || body.id || "").trim();
+    // The composite key is what mergeOpenItems dedupes on; the bare id is the
+    // client's handle. Either alone is enough to match, but a row with neither
+    // would suppress nothing, so refuse it rather than store a no-op.
+    const key = String(body.key || "").trim();
+    if (!triageId && !key) return res.status(400).json({ error: "Missing triage id" });
+    const { userId, workspaceId } = resolveOwnerLenient(req);
+    try {
+      // Idempotent: handling the same item twice (two tabs, a retry, an undo then
+      // a redo) must leave exactly one row, or Undo would have to delete N of them.
+      const existing = await readTriageSuppressions(workspaceId);
+      const already = existing.find((s) => (triageId && s.triage_id === triageId) || (key && s.key === key));
+      if (already) return res.json({ ok: true, suppression: already, created: false });
+      const block = await blockDB.createBlock({
+        type: "block",
+        properties: triageSuppressions.buildSuppressionProperties({
+          triageId,
+          key,
+          itemTitle: body.title || "",
+          reason: body.reason,
+          note: body.note,
+        }),
+        user_id: userId || null,
+        workspace_id: workspaceId || null,
+      });
+      broadcast("dcc-state-changed", { source: "triage-suppression", action: "add" }, workspaceId);
+      res.json({ ok: true, suppression: triageSuppressions.suppressionFromBlock(block), created: true });
+    } catch (e) {
+      console.error("[triage suppressions] create failed:", e.message);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // Undo. Keyed by triage id (what every client caller has) and deleting EVERY
+  // match rather than the first — a pre-idempotency row and a new one can coexist
+  // on prod, and leaving one behind would look like the undo silently failed.
+  app.delete("/api/triage/suppressions/:triageId", async (req, res) => {
+    const triageId = String(req.params.triageId || "").trim();
+    if (!triageId) return res.status(400).json({ error: "Missing triage id" });
+    const { workspaceId } = resolveOwnerLenient(req);
+    try {
+      const existing = await readTriageSuppressions(workspaceId);
+      const matches = existing.filter((s) => s.triage_id === triageId || s.key === triageId);
+      for (const match of matches) {
+        if (match.block_id) await blockDB.deleteBlock(match.block_id);
+      }
+      broadcast("dcc-state-changed", { source: "triage-suppression", action: "remove" }, workspaceId);
+      res.json({ ok: true, removed: matches.length });
+    } catch (e) {
+      console.error("[triage suppressions] delete failed:", e.message);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
 
   app.post("/api/ingest/day-state", async (req, res) => {
     const incoming = req.body; if (!incoming || !incoming.date) return res.status(400).json({ error: "Missing date" });
@@ -70,6 +148,14 @@ module.exports = function mount(app, ctx) {
     merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
     delete merged.meetings_tomorrow;
     const { userId: ingestUserId, workspaceId: ingestWorkspaceId } = resolveOwnerLenient(req);
+    // NOTE, because the obvious change here is wrong: suppressions are deliberately NOT
+    // applied to `merged` before it is stored. `triage` is a full-replace section, so
+    // filtering here looks like the natural place to stop the sweep resurrecting a handled
+    // item — but it DESTROYS the item, and Undo then has nothing to restore. Caught on a
+    // live local run: suppress -> sweep republishes -> the door strips it -> DELETE the
+    // suppression -> the item never comes back, because the stored state no longer had it.
+    // Storage stays raw and complete; buildDayResponse (server.js) overlays suppressions on
+    // the way OUT, which is the single place that decides what a client sees.
     // Materialize calendar meetings into durable task blocks BEFORE persisting
     // state, so the very next day read finds the real blocks and suppresses the
     // synthesized ghost. Best-effort: a materialization hiccup must never fail

@@ -134,7 +134,15 @@ function parseBlock(row) {
 // lists (delegated_item), responsibility scaffolding (responsibility*), group
 // templates (task_group), move tombstones (reschedule_tombstone).
 // Shells and meetings ARE task rows.
-const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone"]);
+// `triage_suppression` joins the list for the same reason `reschedule_tombstone` is
+// on it: it is a dateless bookkeeping row, not work. Left off, `isTaskRow` would be
+// true for it, which costs a `nextSortOrderForDay` round trip per create AND walks
+// the shared dateless sort space forward — the space the BACKLOG lives in (#268:
+// date IS NULL is the Backlog). It would also get `status: "open"` stamped on it.
+// It stays out of the client's Unscheduled list either way (TaskModel.selectUnscheduled
+// requires a `title`, and suppressions deliberately store theirs as `itemTitle`), so
+// this is about not polluting the task space rather than about a visible bug.
+const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression"]);
 function isTaskRow(block) {
   if (!block) return false;
   const type = block.type;

@@ -39,6 +39,7 @@ const capabilities = require("./capabilities");
 const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
 const dccIntelligence = require("./dcc-intelligence");
+const triageSuppressions = require("./triage-suppressions");
 
 // ── Clerk (managed login widget) via the shared drake-auth kit — optional.
 // With no keys, social login is simply hidden and the existing
@@ -578,6 +579,17 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
     (item) => !(item && (item.type === "meeting" || item.type === "oneone"))
   );
   result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
+  // Apply the durable triage suppressions on the way out, so a handled item is gone
+  // on every device and every day — not just in the tab that handled it. This is the
+  // half that heals the rows already on prod: state written before suppressions
+  // existed still carries the full open list, and filtering on read means nobody has
+  // to wait for the next publish to see their own decisions. `suppressed_items` rides
+  // along because the client renders "Completed" and its Undo from it, and can no
+  // longer derive that from open_items.
+  result.triage = triageSuppressions.applyTriageSuppressions(
+    result.triage,
+    await readTriageSuppressionsForWorkspace(ws)
+  );
   // The `result._deleted` surfacing query that used to sit here is GONE (A2 step 6).
   // #253 added it for exactly one consumer, carryover-review.js, so that pass would not
   // re-offer a timeline task the user had deleted. C1 (#261) deleted carryover-review.js
@@ -587,6 +599,19 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   // overlay off the day_root BLOCK's properties, which is a different source and is
   // untouched. This was a second per-day query on every day-response read, for nobody.
   return result;
+}
+
+// Same best-effort contract routes/dcc.js uses: suppressions are an overlay, and an
+// unreadable overlay must degrade to "show the raw triage list" rather than fail the
+// whole day response.
+async function readTriageSuppressionsForWorkspace(workspaceId) {
+  try {
+    const blocks = await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
+    return triageSuppressions.suppressionsFromBlocks(blocks);
+  } catch (e) {
+    console.error("[day-response] triage suppression read failed (non-fatal):", e.message);
+    return [];
+  }
 }
 
 async function getScheduleBlocks(userId, workspaceId) {

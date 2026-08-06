@@ -44,13 +44,18 @@ const APPEND_SRC = slice(SOCIAL_SRC, /async function appendPublicShareTriageItem
 // "the legacy file counts only if it IS about this date" gate, which is the safety property
 // under test, so a fake here would test the fake.
 const MIRROR_SRC = slice(SERVER_SRC, /function readDayStateMirror\(dateStr, legacyFile\) \{[\s\S]*?\n\}/, "readDayStateMirror");
+// buildDayResponse now overlays the durable triage suppressions (triage-suppressions.js).
+// Sliced and run for REAL rather than stubbed, for the same reason the mirror ladder is:
+// its degrade-to-empty-on-DB-failure behaviour is a safety property, and a fake would test
+// the fake.
+const SUPPRESSIONS_SRC = slice(SERVER_SRC, /async function readTriageSuppressionsForWorkspace\(workspaceId\) \{[\s\S]*?\n\}/, "readTriageSuppressionsForWorkspace");
 
 const DATE = "2026-08-04";
 const dayWithTimeline = (label) => ({ date: DATE, schedule: { timeline: [{ id: "tl-1", label, type: "task" }] } });
 
 // ── buildDayResponse ─────────────────────────────────────────────────────────
 
-function runBuildDay({ dbRow = null, dbThrows = false, file = null } = {}) {
+function runBuildDay({ dbRow = null, dbThrows = false, file = null, suppressionBlocks = [], suppressionsThrow = false } = {}) {
   const writes = [];
   const ctx = {
     console: { error: () => {}, warn: () => {} },
@@ -61,14 +66,20 @@ function runBuildDay({ dbRow = null, dbThrows = false, file = null } = {}) {
     writeJSON: (p, data) => writes.push({ p, data }),
     buildSkeletonState: (d) => ({ date: d, last_updated_by: "skeleton", schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
+    triageSuppressions: require("./triage-suppressions"),
     blockDB: {
       getDccState: async () => {
         if (dbThrows) throw new Error("connection terminated unexpectedly");
         return dbRow;
       },
+      getBlocksByKind: async () => {
+        if (suppressionsThrow) throw new Error("connection terminated unexpectedly");
+        return suppressionBlocks;
+      },
     },
   };
   vm.createContext(ctx);
+  vm.runInContext(SUPPRESSIONS_SRC, ctx);
   vm.runInContext(BUILD_DAY_SRC, ctx);
   return { call: () => vm.runInContext(`buildDayResponse("${DATE}", null, "ws-1")`, ctx), writes };
 }
@@ -131,6 +142,10 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
   // buildPublicTodoShare calls this as buildDayResponse(date, null, share.workspace_id), so
   // a workspace argument that got dropped would serve ws-1's day on someone else's share.
   const asked = [];
+  // The suppression overlay is a SECOND per-workspace lookup on this path, so it is
+  // recorded against the same resolved workspace. An unscoped one would hide ws-7's
+  // triage items behind ws-1's decisions.
+  const askedSuppressions = [];
   const ctx = {
     console: { error: () => {} },
     getDayFilePath: (d) => "days/" + d + ".json",
@@ -138,14 +153,56 @@ test("the row is read for the caller's OWN workspace, not a default", async () =
     writeJSON: () => { throw new Error("must not write"); },
     buildSkeletonState: (d) => ({ date: d, schedule: { timeline: [] } }),
     getScheduleBlocks: async () => [],
-    blockDB: { getDccState: async (d, ws) => { asked.push([d, ws]); return null; } },
+    triageSuppressions: require("./triage-suppressions"),
+    blockDB: {
+      getDccState: async (d, ws) => { asked.push([d, ws]); return null; },
+      getBlocksByKind: async (kind, ws) => { askedSuppressions.push([kind, ws]); return []; },
+    },
   };
   vm.createContext(ctx);
+  vm.runInContext(SUPPRESSIONS_SRC, ctx);
   vm.runInContext(BUILD_DAY_SRC, ctx);
   await vm.runInContext(`buildDayResponse("${DATE}", null, "ws-7")`, ctx);
   await vm.runInContext(`buildDayResponse("${DATE}", 42, null)`, ctx);
   await vm.runInContext(`buildDayResponse("${DATE}", null, null)`, ctx);
   assert.deepEqual(asked, [[DATE, "ws-7"], [DATE, "ws-42"], [DATE, "ws-1"]]);
+  assert.deepEqual(askedSuppressions, [
+    ["triage_suppression", "ws-7"],
+    ["triage_suppression", "ws-42"],
+    ["triage_suppression", "ws-1"],
+  ]);
+});
+
+test("a suppressed triage item is stripped from the day, and rides along as suppressed_items", async () => {
+  // The whole point, at the read boundary: "I handled this" must hold on a device that
+  // has never seen this day before, which is how it surfaced (a phone showing 23 items
+  // the desktop had cleared). The suppression row is dateless, so the date being read
+  // is irrelevant to whether it applies.
+  const { call } = runBuildDay({
+    dbRow: { state_json: { date: DATE, schedule: { timeline: [] }, triage: { open_items: [
+      { id: "gmail:abc", type: "email", title: "handled last week" },
+      { id: "slack:dm:D1:123", type: "slack", title: "still open" },
+    ] } } },
+    suppressionBlocks: [
+      { id: "sup-1", properties: { kind: "triage_suppression", triage_id: "gmail:abc", key: "email|gmail:abc", itemTitle: "handled last week", reason: "done" } },
+    ],
+  });
+  const out = await call();
+  assert.deepEqual(out.triage.open_items.map((i) => i.id), ["slack:dm:D1:123"]);
+  assert.equal(out.triage.suppressed_items.length, 1, "the client renders Completed + Undo from this");
+  assert.equal(out.triage.suppressed_items[0].triage_id, "gmail:abc");
+});
+
+test("an unreadable suppression overlay degrades to the RAW triage list, not to a failed day", async () => {
+  // Fail-open is deliberate and is the safer direction of the two: showing an item you
+  // already handled is a papercut, losing the whole day response is an outage.
+  const { call } = runBuildDay({
+    dbRow: { state_json: { date: DATE, schedule: { timeline: [] }, triage: { open_items: [{ id: "gmail:abc", type: "email" }] } } },
+    suppressionsThrow: true,
+  });
+  const out = await call();
+  assert.deepEqual(out.triage.open_items.map((i) => i.id), ["gmail:abc"]);
+  assert.deepEqual(out.triage.suppressed_items, []);
 });
 
 // ── dayStateUnavailable (the degraded answer) ────────────────────────────────
