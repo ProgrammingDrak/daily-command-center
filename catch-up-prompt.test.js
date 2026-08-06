@@ -26,6 +26,10 @@ const TaskModel = require("./public/js/task-model.js");
 const { apiStub } = require("./carryover-fixture.js");
 const unfSource = fs.readFileSync(require.resolve("./public/js/unfinished-tasks.js"), "utf8");
 const catchUpSource = fs.readFileSync(require.resolve("./public/js/catch-up.js"), "utf8");
+// The REAL core.js, same discipline as installTaskModel: the row's calendar button is
+// built and wired by DCC.dateButtonHtml / DCC.wireDateButton, so stubbing those would
+// only test the stub. core.js has no parse-time side effects beyond defining DCC.
+const coreSource = fs.readFileSync(require.resolve("./public/js/core.js"), "utf8");
 
 const TODAY = "2026-07-29";
 const ymd = (offsetDays) => {
@@ -51,6 +55,15 @@ function FakeEl(tag) {
     addEventListener(ev, fn) { (el._on[ev] = el._on[ev] || []).push(fn); },
     fire(ev, arg) { (el._on[ev] || []).forEach(fn => fn(arg || { target: el })); },
     appendChild(c) { el.children.push(c); return c; },
+    // Strict like the real DOM: a non-child reference is a TypeError, not a silent
+    // append. The forgiving version hid a bug where forEach's index arrived as the
+    // reference node and every browser threw while the tests stayed green.
+    insertBefore(c, ref) {
+      const i = el.children.indexOf(ref);
+      if (i < 0) throw new TypeError("insertBefore: reference is not a child");
+      el.children.splice(i, 0, c);
+      return c;
+    },
     remove() { el._removed = true; },
     querySelector(sel) { if (!el._q.has(sel)) el._q.set(sel, FakeEl("div")); return el._q.get(sel); },
     // Return the stubs this element has actually handed out for button selectors, so
@@ -75,7 +88,10 @@ function fakeDocument() {
 }
 
 // Boot the collector + the prompt in one context and return handles.
-function load(daysByDate, archiveDates) {
+// `extra` adds context globals — used to stand in for triage.js (activeTriageItems,
+// scheduleTriageOnDate, deleteTriageItem) and schedule-popover.js's day picker, the
+// three collaborators the prompt reaches through typeof guards.
+function load(daysByDate, archiveDates, extra) {
   const store = {
     async loadDateRange() {},
     getRangeCache(date) { return daysByDate[date] ? { blocks: daysByDate[date] } : null; },
@@ -102,10 +118,12 @@ function load(daysByDate, archiveDates) {
     invalidateUnfinishedSection() {},
     showToast() {}
   };
+  Object.assign(ctx, extra || {});
   ctx.window = ctx;
   ctx.self = ctx;
   ctx.URLSearchParams = URLSearchParams;
   vm.createContext(ctx);
+  vm.runInContext(coreSource, ctx);
   vm.runInContext(unfSource, ctx);
   ctx.window.blockStore = store;
   installTaskModel(ctx);
@@ -286,4 +304,177 @@ test("Move all to today drains the queue, defers the refold, and marks the day r
     "each move targets today and defers its refold to the batch");
   assert.equal(refolds, 1, "exactly ONE refold for the whole batch, not one per row");
   assert.ok(saved._catchUpReviewed, "the day is marked reviewed when the batch closes it");
+});
+
+// ───────────────── triage rides along (the sweep's items) ─────────────────
+// Swept triage items appear in this same modal, but they are NOT blocks: none of
+// DCC.Carryover applies to them. Scheduling one CREATES a task on the chosen day
+// and dropping one deletes the triage item. These pin that the modal reaches the
+// triage writers and nothing else, since routing a triage row through moveTo would
+// try to reschedule a block id that does not exist.
+const TRI = (id, over) => Object.assign({
+  id, title: "Reply to " + id, source: "slack", priority: "High",
+  first_seen_at: "2026-07-27T09:00:00.000Z", link: "https://example.com/" + id
+}, over || {});
+
+// A context wired with triage collaborators. `calls` records every write the modal
+// attempts, so a test can assert the destination as well as the fact of the call.
+function triageCtx(daysByDate, archiveDates, items, over) {
+  const calls = { placed: [], dropped: [], pickers: [], seen: [] };
+  const extra = Object.assign({
+    activeTriageItems: () => items.slice(),
+    triagePriorityLabel: (p) => p || "Medium",
+    scheduleTriageOnDate: async (id, date) => { calls.placed.push({ id, date }); return { id: "blk-" + id, properties: {} }; },
+    deleteTriageItem: (id) => { calls.dropped.push(id); },
+    openDatePickPopover: (anchor, opts) => { calls.pickers.push(opts); }
+  }, over || {});
+  const h = load(daysByDate, archiveDates, extra);
+  // The courier's seen-set sink. initCatchUp banks whatever is already waiting at
+  // boot so the pet never runs for mail the morning prompt just showed.
+  h.ctx.window.DCC.TriageCourier = { markSeen: (ids) => { calls.seen.push(...ids); } };
+  return Object.assign(h, { calls });
+}
+const rowsOf = (ctx) => ctx.document.getElementById("catchup-overlay")
+  .querySelector("#catchup-list").children;
+const titleOf = (r) => r.querySelector(".carryover-row-title").textContent;
+
+test("triage items ride along with the tasks that slipped, in their own section", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  // Triage leads: something waiting on a reply is more time-sensitive than something
+  // that slipped, and burying it under N slipped rows means scrolling for the thing
+  // the pet just delivered.
+  const listed = [...rowsOf(ctx)].map(titleOf).filter(Boolean);
+  assert.deepEqual(listed, ["Reply to m1", "Slipped"]);
+  // Section labels only appear when both kinds are present — two of them here.
+  assert.equal([...rowsOf(ctx)].filter(r => r.className === "cu-section-label").length, 2);
+});
+
+test("a triage-only morning still opens the prompt (and does not mark it reviewed)", async () => {
+  const d = ymd(1);
+  // Nothing unfinished at all: the old gate returned early on an empty root list,
+  // which would have swallowed a mailbox full of replies.
+  const { ctx, saved } = triageCtx({ [d]: [dayRoot({ _done: { ids: ["only"] } }), blk("only", d, {})] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Reply to m1"]);
+  assert.equal(saved._catchUpReviewed, undefined, "an open prompt has not been answered yet");
+});
+
+test("boot banks what is already waiting so the pet does not run at page load", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1"), TRI("m2")]);
+  await ctx.window.initCatchUp();
+  assert.deepEqual(calls.seen, ["m1", "m2"]);
+});
+
+test("Today and Tomorrow on a triage row schedule it on that date and clear the row", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1"), TRI("m2")]);
+  await ctx.window.initCatchUp();
+  const [first, second] = [...rowsOf(ctx)];
+  first.querySelector(".cu-tri-today").fire("click");
+  await new Promise(r => setTimeout(r, 0));
+  second.querySelector(".cu-tri-tomorrow").fire("click");
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }, { id: "m2", date: "2026-07-30" }]);
+  assert.ok(first._removed && second._removed, "a scheduled item leaves the list");
+});
+
+test("a refused schedule leaves the triage row in place and re-enables it", async () => {
+  const d = ymd(1);
+  // No free slot / already on that day: scheduleTriageOnDate returns null, and the
+  // row must survive so the answer isn't silently lost.
+  const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")],
+    { scheduleTriageOnDate: async () => null });
+  await ctx.window.initCatchUp();
+  const r = [...rowsOf(ctx)][0];
+  r.querySelector(".cu-tri-today").fire("click");
+  await new Promise(r2 => setTimeout(r2, 0));
+  assert.equal(r._removed, false);
+  assert.equal(r.querySelector(".cu-tri-today").disabled, false);
+});
+
+test("Drop on a triage row deletes the triage item, never a block", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  let carryoverDrops = 0;
+  ctx.window.DCC.Carryover.drop = async () => { carryoverDrops++; return null; };
+  const r = [...rowsOf(ctx)][0];
+  r.querySelector(".cu-tri-drop").fire("click");
+  await new Promise(r2 => setTimeout(r2, 0));
+  assert.deepEqual(calls.dropped, ["m1"], "routes through deleteTriageItem (durable, with Undo)");
+  assert.equal(carryoverDrops, 0, "and never through the block dropper");
+  assert.equal(r._removed, true);
+});
+
+// ───────────────── the calendar button (both row kinds) ─────────────────
+// The point of the button is that an arbitrary day behaves EXACTLY like Today —
+// same mover, same write. A second code path here is how "Today works but the 12th
+// silently doesn't" happens.
+test("the calendar button on a task row routes its pick through the same mover", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], []);
+  await ctx.window.initCatchUp();
+  const moves = [];
+  ctx.window.DCC.Carryover.moveTo = async (ev, date) => { moves.push({ id: ev.id, date }); return { removed: [ev.id] }; };
+  const r = [...rowsOf(ctx)][0];
+  r.querySelector(".cu-cal").fire("click", { target: r.querySelector(".cu-cal") });
+  assert.equal(calls.pickers.length, 1, "opens the shared day picker");
+  assert.match(calls.pickers[0].header, /Move "Slipped" to/);
+  await calls.pickers[0].onPick("2026-08-12");
+  assert.deepEqual(moves, [{ id: "t1", date: "2026-08-12" }]);
+  assert.equal(r._removed, true);
+});
+
+test("the calendar button on a triage row routes its pick through the triage scheduler", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  const r = [...rowsOf(ctx)][0];
+  r.querySelector(".cu-cal").fire("click", { target: r.querySelector(".cu-cal") });
+  assert.equal(calls.pickers.length, 1);
+  await calls.pickers[0].onPick("2026-08-12");
+  assert.deepEqual(calls.placed, [{ id: "m1", date: "2026-08-12" }]);
+});
+
+test("Move all to today takes the triage rows with it", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("a", d, { title: "A" })] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  ctx.window.DCC.Carryover.moveTo = async (ev) => ({ removed: [ev.id] });
+  ctx.window.DCC.Carryover.refoldViewedDay = async () => {};
+  ctx.document.getElementById("catchup-overlay").querySelector("#catchup-all").fire("click");
+  await new Promise(r => setTimeout(r, 20));
+  assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }],
+    "'all' means all — a swept reply is exactly what this button is for");
+});
+
+// ───────────────── the courier's prompt (openArrivals) ─────────────────
+test("openArrivals leads with what arrived and folds the rest behind one line", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d],
+    [TRI("new1"), TRI("old1"), TRI("old2")]);
+  const shown = await ctx.window.DCC.CatchUp.openArrivals(["new1"]);
+  assert.equal(shown, true);
+  const listed = [...rowsOf(ctx)].map(titleOf).filter(Boolean);
+  assert.deepEqual(listed, ["Reply to new1", "Slipped"], "the arrival leads; older items are not listed up front");
+  const older = [...rowsOf(ctx)].find(r => r.className && r.className.indexOf("cu-tri-older") > -1);
+  assert.ok(older, "but one line says they exist");
+  assert.match(older.textContent, /2 older waiting/);
+  // Expanding appends in place rather than re-opening the modal, which would
+  // re-bind the footer's "Move all" and run it twice per click.
+  older.fire("click");
+  assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean),
+    ["Reply to new1", "Reply to old1", "Reply to old2", "Slipped"]);
+});
+
+test("openArrivals ignores ids that are no longer active, and never prompts empty", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("still-here")]);
+  // The item was handled elsewhere between the sweep and the delivery.
+  const shown = await ctx.window.DCC.CatchUp.openArrivals(["already-gone"]);
+  assert.equal(shown, false);
+  assert.equal(ctx.document.getElementById("catchup-overlay"), null);
 });

@@ -26,6 +26,55 @@
       .replace(/'/g, "&#39;");
   };
 
+  // ── icons ──────────────────────────────────────────────────────────────
+  // Inline SVG glyphs shared by more than one surface. The calendar was copied
+  // verbatim into schedule-tab.js and itinerary-card.js, and the catch-up modals
+  // wanted a third — the point at which a duplicated string becomes a drift
+  // hazard. One copy, here, where every file can read it at parse time.
+  DCC.icons = {
+    calendar: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>'
+  };
+
+  // ── safeUrl ────────────────────────────────────────────────────────────
+  // Scheme-allowlist for URLs that came from OUTSIDE the app (sweep packets,
+  // meeting artifacts): anything not http(s)/mailto renders as no link at all,
+  // so a javascript: href can never reach an anchor. Was a local const in
+  // triage.js's card builder; the catch-up modal renders the same sweep URLs.
+  DCC.safeUrl = function safeUrl(u) {
+    u = String(u == null ? "" : u);
+    return /^(https?:|mailto:)/i.test(u) ? u : "";
+  };
+
+  // ── dateButtonHtml ─────────────────────────────────────────────────────
+  // Markup for the row-level calendar button, in the same class the itinerary
+  // rows use so it inherits their hover/tooltip styling. Built as a string
+  // because callers assemble whole rows via innerHTML; wire it up after with
+  // DCC.wireDateButton.
+  DCC.dateButtonHtml = function dateButtonHtml(cls, label) {
+    label = DCC.esc(label || "Pick a day");
+    return '<button class="btn-schedule ' + DCC.esc(cls || "") + '" data-tooltip="' + label +
+      '" aria-label="' + label + '">' + DCC.icons.calendar + '</button>';
+  };
+
+  // ── wireDateButton ─────────────────────────────────────────────────────
+  // The calendar button on a row: click -> the shared anchored day picker
+  // (schedule-popover.js). Rows in the catch-up modals are not entries in
+  // scheduled[], so mode "reschedule" would silently bail — they go through the
+  // "pick" contract and own the write, exactly like delegated.js's follow-ups.
+  // opts: {header, actionLabel, onPick(dateStr)}.
+  DCC.wireDateButton = function wireDateButton(btn, opts) {
+    if (!btn || !opts || typeof btn.addEventListener !== "function") return;
+    btn.addEventListener("click", function (e) {
+      if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+      if (typeof window.openDatePickPopover !== "function") return;
+      window.openDatePickPopover(btn, {
+        header: opts.header || "Move to…",
+        actionLabel: opts.actionLabel || "Move",
+        onPick: opts.onPick
+      });
+    });
+  };
+
   // ── api ────────────────────────────────────────────────────────────────
   // Fetch wrapper: JSON in/out, normalized errors. Superset of the per-tab
   // api() clones (todo-share/punishments/slots/pet-home differed only in the

@@ -113,6 +113,12 @@
         if(typeof buildTriage === 'function') buildTriage();
         if(typeof buildNotifications === 'function') buildNotifications();
         if(typeof updateStats === 'function') updateStats();
+        // INIT_TRIAGE is committed and painted by here, so the courier can diff the
+        // active items against what Drake has already been shown. It decides for
+        // itself whether anything is new — this fires on every refresh, not just a
+        // sweep, because a deferred refresh (isEditing above) retries with no event
+        // and would lose the "triage-check-ingest" source.
+        if(typeof window.notifyTriageArrivals === 'function') window.notifyTriageArrivals();
       }
       if(upcoming) window.__DCC_UPCOMING__ = upcoming;
       showIndicator("Updated!", "var(--green)");

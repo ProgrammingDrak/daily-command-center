@@ -1021,6 +1021,82 @@ function activeTriageItems(){
   const suppressed=serverTriageSuppressions();
   return (INIT_TRIAGE||[]).filter(i=>!dismissed[i.id]&&!scheduledTriage[i.id]&&!deletedTriage.includes(i.id)&&!suppressed[i.id]);
 }
+// The task-shaped properties a triage item becomes. Shared by every "put this
+// triage item on the schedule" path so the created row is spelled one way.
+function triageTaskProps(triageId,item){
+  return {
+    priority:triagePriorityLabel(item.priority),
+    source:"triage",
+    meta:"Triage item",
+    detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
+    tags:["triage"],
+    triageId:triageId
+  };
+}
+// Already on the schedule? Two different questions, so two lookups: an exact id
+// match, then "is an open, visible triage row already called this". The second
+// half is the layer's question.
+function existingTriageTask(triageId,item){
+  return scheduled.find(ev=>ev.triageId===triageId)
+    ||DCC.TaskModel.selectActive(scheduled).find(ev=>ev.source==="triage"&&ev.title===item.title);
+}
+// Record the triage -> task link and repaint. saveTriageScheduled feeds
+// activeTriageItems(), so this is also what makes the item leave the strip.
+function recordTriageScheduled(triageId,item,taskId,toastMsg){
+  const st=loadTriageScheduled();
+  st[triageId]={taskId:taskId,scheduled_at:new Date().toISOString(),title:item.title};
+  saveTriageScheduled(st);
+  if(toastMsg&&typeof showToast==="function")showToast(toastMsg,"success");
+  buildScheduleTriage();
+  buildTriage();
+}
+// Put a triage item on a DATE, no time step. The catch-up modal's Today /
+// Tomorrow / calendar-pick all land here: one click, one free slot, done.
+// scheduleTaskOnDate (state.js) is the app's canonical create-on-a-target-date —
+// same day context and free-slot engine the reschedule compute uses.
+// Returns the created (or already-existing) block, or null if nothing was written.
+async function scheduleTriageOnDate(triageId,dateStr){
+  const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
+  if(!item||!dateStr)return null;
+  const scheduledTriage=loadTriageScheduled();
+  if(scheduledTriage[triageId]){
+    if(typeof showToast==="function")showToast("Already scheduled","info");
+    return null;
+  }
+  const existing=existingTriageTask(triageId,item);
+  if(existing){
+    recordTriageScheduled(triageId,item,existing.id,null);
+    if(typeof showToast==="function")showToast("Already on the schedule","info");
+    return null;
+  }
+  if(typeof scheduleTaskOnDate!=="function")return null;
+  const durMin=triageDuration(item);
+  const ev=Object.assign({
+    id:"triage-task-"+triageId,
+    title:item.title||"Triage item",
+    type:"task",
+    start:"00:00",
+    end:"00:"+String(Math.min(59,durMin)).padStart(2,"0"),
+    durMin:durMin
+  },triageTaskProps(triageId,item));
+  const block=await scheduleTaskOnDate(ev,dateStr,{useExisting:true,silent:true});
+  if(!block)return null;
+  const bp=block.properties||{};
+  // Landing on the day being VIEWED means the itinerary has to be refolded, or the
+  // new row exists on the server and nowhere on screen until a reload. Same four
+  // calls delegated.js makes after its scheduleTaskOnDate, for the same reason.
+  const viewing=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+  if(dateStr===viewing){
+    try{ await window.blockStore.loadDay(dateStr); }catch(e){}
+    if(typeof reloadPersistedEdits==="function")reloadPersistedEdits();
+    if(typeof recalcTimes==="function")recalcTimes();
+    if(typeof render==="function")render();
+  }
+  const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(dateStr):dateStr;
+  const at=(bp.start&&typeof f12==="function")?(" at "+f12(bp.start)):"";
+  recordTriageScheduled(triageId,item,bp.local_id||block.id,"Scheduled "+label+at);
+  return block;
+}
 function scheduleTriageItem(triageId){
   const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
   if(!item)return;
@@ -1029,38 +1105,18 @@ function scheduleTriageItem(triageId){
     if(typeof showToast==="function")showToast("Already scheduled","info");
     return;
   }
-  // Two different questions, so two lookups: an exact id match, then "is an open, visible
-  // triage row already called this". The second half is the layer's question.
-  const existing=scheduled.find(ev=>ev.triageId===triageId)
-    ||DCC.TaskModel.selectActive(scheduled).find(ev=>ev.source==="triage"&&ev.title===item.title);
+  const existing=existingTriageTask(triageId,item);
   if(existing){
-    scheduledTriage[triageId]={taskId:existing.id,scheduled_at:new Date().toISOString(),title:item.title};
-    saveTriageScheduled(scheduledTriage);
+    recordTriageScheduled(triageId,item,existing.id,null);
     if(typeof showToast==="function")showToast("Already on the schedule","info");
-    buildScheduleTriage();
-    buildTriage();
     return;
   }
   // Reuse the shared task scheduler -- the same day/time + duration picker the
   // tasks below and repeat responsibilities use. Default 5m (triageDuration); the
   // picker's duration buttons bump it up when the case needs more.
   const durMin=triageDuration(item);
-  const opts={
-    priority:triagePriorityLabel(item.priority),
-    source:"triage",
-    meta:"Triage item",
-    detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
-    tags:["triage"],
-    triageId:triageId
-  };
-  const record=function(taskId){
-    const st=loadTriageScheduled();
-    st[triageId]={taskId:taskId,scheduled_at:new Date().toISOString(),title:item.title};
-    saveTriageScheduled(st);
-    if(typeof showToast==="function")showToast("Triage item scheduled","success");
-    buildScheduleTriage();
-    buildTriage();
-  };
+  const opts=triageTaskProps(triageId,item);
+  const record=function(taskId){ recordTriageScheduled(triageId,item,taskId,"Triage item scheduled"); };
   if(typeof openSchedulePicker==="function"){
     openSchedulePicker(item.title,durMin,Object.assign({},opts,{
       onScheduled:function(info){ record(info&&(info.localId||info.blockId)); }
@@ -1071,6 +1127,8 @@ function scheduleTriageItem(triageId){
   const newTask=insertTaskFromDrawer(item.title,durMin,opts);
   record(newTask&&newTask.id);
 }
+window.scheduleTriageOnDate=scheduleTriageOnDate;
+window.activeTriageItems=activeTriageItems;
 function buildScheduleTriageCard(item){
   const pri=triagePriorityLabel(item.priority);
   const priCls=pri==="High"?"pri-hi":pri==="Low"?"pri-lo":"pri-med";
@@ -1078,7 +1136,7 @@ function buildScheduleTriageCard(item){
   const safeTitle=(item.title||"Triage item").replace(/"/g,'&quot;');
   // Scheme-allowlist the draft/source URLs: they come from the sweep, so never
   // let a javascript:/data: URI reach an href.
-  const safeUrl=u=>{u=String(u||"");return /^(https?:|mailto:)/i.test(u)?u:"";};
+  const safeUrl=window.DCC.safeUrl;
   const draftHref=safeUrl(item.draft_link||item.draft_url);
   const srcHref=safeUrl(item.link);
   return '<div class="board-card schedule-triage-card" data-schedule-triage-id="'+item.id+'">'+
@@ -1175,9 +1233,9 @@ function buildScheduleTriage(){
   el.querySelectorAll(".schedule-triage-quick").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();dismissTriage(btn.dataset.triageId,"",false);});
   });
-  el.querySelectorAll(".schedule-triage-delete").forEach(btn=>{
-    btn.addEventListener("click",e=>{e.stopPropagation();deleteTriageItem(btn.dataset.triageId);});
-  });
+  // NOTE: .schedule-triage-delete is wired ONCE, above. A second identical pass
+  // used to live here, so one click ran deleteTriageItem twice — two day-state
+  // POSTs and two independent Undo toasts for one item.
 }
 
 function buildScheduled() {

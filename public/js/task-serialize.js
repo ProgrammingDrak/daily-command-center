@@ -42,6 +42,11 @@
       source: src.source || "manual",
       tags: Array.isArray(src.tags) ? src.tags : [],
       delegatedItemId: src.delegatedItemId || null,
+      // The triage item this task came from. Its absence here was a silent link
+      // break: every picker-based create path serializes through this function, so
+      // a scheduled triage row landed with triageId null and the strip's
+      // ev.triageId === triageId dedupe could never match.
+      triageId: src.triageId || null,
       linkedBlockId: src.linkedBlockId || null,
       linkedTagId: src.linkedTagId || null,
       commuteMinutes: commuteMinutes,

@@ -210,13 +210,33 @@ test("a new task inserts at the first OPEN row's index, not at 0 and not past th
 // ─────────────────────────────── triage: two questions, two lookups ──────────────────────
 
 test("triage scheduling matches by id OR by an open visible triage row of the same title", () => {
-  const rx = /const existing=scheduled\.find\(ev=>ev\.triageId===triageId\)\s*\|\|DCC\.TaskModel\.selectActive\(scheduled\)\.find\(ev=>ev\.source==="triage"&&ev\.title===item\.title\);/;
+  // The two-lookup shape now lives in ONE helper (existingTriageTask), because two
+  // paths schedule a triage item: the strip's picker and the catch-up modal's
+  // date-only buttons. Inlining it twice is how they would drift apart.
+  const rx = /return scheduled\.find\(ev=>ev\.triageId===triageId\)\s*\|\|DCC\.TaskModel\.selectActive\(scheduled\)\.find\(ev=>ev\.source==="triage"&&ev\.title===item\.title\);/;
   assert.match(triageCode, rx);
   // Negative controls: the merged single-lookup form, and dropping either half.
-  assert.equal(rx.test('const existing=scheduled.find(ev=>ev.triageId===triageId);'), false,
+  assert.equal(rx.test('return scheduled.find(ev=>ev.triageId===triageId);'), false,
     "dropping the title match would re-mint a duplicate task");
-  assert.equal(rx.test('const existing=scheduled.find(ev=>ev.triageId===triageId||(!isDone(ev)&&!isDeleted(ev)&&ev.source==="triage"&&ev.title===item.title));'), false,
+  assert.equal(rx.test('return scheduled.find(ev=>ev.triageId===triageId||(!isDone(ev)&&!isDeleted(ev)&&ev.source==="triage"&&ev.title===item.title));'), false,
     "the pre-C6a merged predicate must not satisfy this");
+  // And both schedulers must go through it rather than re-deriving the answer.
+  for (const fn of ["function scheduleTriageItem(", "async function scheduleTriageOnDate("]) {
+    const body = triageCode.slice(triageCode.indexOf(fn));
+    assert.match(body.slice(0, 900), /existingTriageTask\(triageId,item\)/, fn + " must route through the shared lookup");
+  }
+});
+
+test("scheduling a triage item onto the VIEWED day refolds the itinerary", () => {
+  // scheduleTaskOnDate writes a block; it does not touch the in-memory scheduled[]
+  // that the itinerary renders. Without this refold the row exists on the server and
+  // nowhere on screen until a reload — which reads as "Today did nothing".
+  const body = triageCode.slice(triageCode.indexOf("async function scheduleTriageOnDate("));
+  const fn = body.slice(0, body.indexOf("\nfunction scheduleTriageItem("));
+  assert.match(fn, /dateStr===viewing/, "must compare the target date to the viewed date");
+  for (const call of ["blockStore.loadDay(dateStr)", "reloadPersistedEdits()", "recalcTimes()", "render()"]) {
+    assert.ok(fn.indexOf(call) > -1, "missing " + call + " — the same fold delegated.js does");
+  }
 });
 
 test("the done-modal parent list escapes both the title and the id", () => {

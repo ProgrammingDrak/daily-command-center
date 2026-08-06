@@ -307,5 +307,20 @@
   }
   bind();
   load().then(renderPetHome).catch(()=>{});
-  window.PetHome={render:renderPetHome,awardTask,toggleTaskPrivacy,privacyChip};
+  // Who the pet IS (colour + glyph + accessory), for surfaces outside this tab that
+  // draw their own body. Loads the state once and caches it, so a caller on the
+  // itinerary doesn't need to know the endpoint or re-spell the glyph maps above.
+  // Falls back to the same defaults pet-home-store.js ships (Mochi, sprout).
+  async function identity(){
+    if(!state){ try{ await load(); }catch(e){} }
+    const pet=(state&&state.pet)||{};
+    return {
+      name:pet.name||"Mochi",
+      base:pet.base||"sprout",
+      color:pet.color||"#f2b56b",
+      glyph:petGlyph(pet.base),
+      accessory:accessoryGlyph(pet.accessory)
+    };
+  }
+  window.PetHome={render:renderPetHome,awardTask,toggleTaskPrivacy,privacyChip,identity};
 })();

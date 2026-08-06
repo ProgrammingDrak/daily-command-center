@@ -1855,6 +1855,10 @@
 <script src="/public/js/day-review.js"></script>
 <script src="/public/js/delegated.js"></script>
 <script src="/public/js/pet-home.js"></script>
+<!-- pet-courier.js: the pet delivers new triage arrivals. Needs PetHome.identity
+     (above) and DCC.CatchUp (catch-up.js) at CALL time, not parse time; sse.js
+     loads later and calls window.notifyTriageArrivals. -->
+<script src="/public/js/pet-courier.js"></script>
 <script src="/public/js/todo-share.js"></script>
 <script src="/public/js/slots.js"></script>
 <script src="/public/js/punishments.js"></script>
