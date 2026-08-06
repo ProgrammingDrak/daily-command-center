@@ -311,6 +311,10 @@
   // draw their own body. Loads the state once and caches it, so a caller on the
   // itinerary doesn't need to know the endpoint or re-spell the glyph maps above.
   // Falls back to the same defaults pet-home-store.js ships (Mochi, sprout).
+  // NOT YET MIGRATED: slots.js still carries its own byte-identical copies of the two
+  // maps above (slotPetGlyph / slotPetAccessory) plus its own state fetch, because
+  // renderSlotPetHome is synchronous and this is async. Adding a fifth base means
+  // editing there too; a sync identitySync() companion would unblock that repoint.
   async function identity(){
     if(!state){ try{ await load(); }catch(e){} }
     const pet=(state&&state.pet)||{};

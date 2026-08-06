@@ -87,3 +87,14 @@ test("taskBlockProps carries the shared value fields through", () => {
   assert.equal(b.delegatedItemId, "D");
   assert.deepEqual(b.tags, ["x"]);
 });
+
+// The triage -> task link. Without triageId here, every picker-based create path wrote
+// null and the strip's `ev.triageId === triageId` dedupe could never match, so the same
+// item could be scheduled twice. Nothing pinned it: the catch-up tests stub the
+// scheduler, and fromBlock's tests feed it a hand-built block rather than this output.
+test("triageId survives serialization (the scheduled-triage dedupe link)", () => {
+  assert.equal(taskCommonProps({}).triageId, null, "absent by default, never undefined");
+  assert.equal(taskCommonProps({ triageId: "gmail:abc" }).triageId, "gmail:abc");
+  assert.equal(taskBlockProps({ triageId: "gmail:abc" }, { local_id: "x" }).triageId, "gmail:abc",
+    "and through the block form, which is what scheduleTaskOnDate writes");
+});

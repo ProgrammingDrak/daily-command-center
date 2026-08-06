@@ -68,6 +68,13 @@
     try { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
     catch (e) { return false; }
   }
+  // _bsProp/_bsSaveProp address the day being VIEWED, not today: they resolve through
+  // blockStore.getDayRootId(), which follows whatever day was last loaded. catch-up.js
+  // guards on viewMode before it so much as reads _catchUpReviewed, and every entry
+  // that can reach the prompt needs the same guard, not just the SSE one.
+  function onTodayView() {
+    return !(typeof viewMode !== "undefined" && viewMode && viewMode !== "today");
+  }
   function catchUpOpen() {
     const o = document.getElementById("catchup-overlay") || document.getElementById("unfinished-overlay");
     return !!(o && o.classList && o.classList.contains("open"));
@@ -107,11 +114,32 @@
   // Show what's waiting. `force` means Drake clicked the chip, so skip the
   // are-you-busy check — he just answered it.
   async function flushPending(force) {
+    // The run owns its own delivery. Without this, a focusout 300ms into the 1.4s
+    // animation delivers the ids and empties _pending, and the run then opens on an
+    // empty list and leaves a chip reading "0".
+    if (_running) return false;
+    // Same guard notifyTriageArrivals uses, because this path reaches the same prompt
+    // and closing it calls markReviewed() -> the VIEWED day's root. Without it, a
+    // visibilitychange retry while Drake is planning tomorrow opens a today-oriented
+    // prompt over tomorrow and stamps _catchUpReviewed on tomorrow's root, so
+    // tomorrow's morning catch-up never opens. Keep the chip: the envelope stays
+    // reachable for when he is back on today.
+    if (!onTodayView()) { if (_pending.length) showChip(_pending.length); return false; }
+    // Reconcile first: an item handled from the triage strip instead of the chip is
+    // no longer active, so openArrivals returns false for it forever. Without this
+    // the chip sits there all session claiming N and doing nothing when clicked.
+    if (_pending.length) {
+      const live = new Set(activeTriage().map(i => i.id));
+      _pending = _pending.filter(id => live.has(id));
+    }
     if (!_pending.length) { hideChip(); return false; }
-    if (!force && busyElsewhere()) return false;
-    const ids = _pending.slice();
-    const shown = await open(ids);
-    if (shown) { _pending = []; hideChip(); }
+    if (!force && busyElsewhere()) { showChip(_pending.length); return false; }
+    const batch = _pending.slice();
+    _running = true;                     // hold it: an SSE tick can land inside this await
+    let shown = false;
+    try { shown = await open(batch); } finally { _running = false; }
+    if (shown) _pending = _pending.filter(id => batch.indexOf(id) === -1);
+    if (_pending.length) showChip(_pending.length); else hideChip();
     return shown;
   }
   function wireRetry() {
@@ -210,6 +238,14 @@
   async function notifyTriageArrivals() {
     wireRetry();
     if (_running) return false;
+    // _bsProp/_bsSaveProp address the day being VIEWED, not today: they resolve through
+    // blockStore.getDayRootId(), which follows whatever day was last loaded. catch-up.js
+    // guards on viewMode before it so much as reads _catchUpReviewed, for exactly this
+    // reason. Without the same guard, a refresh that lands while Drake is planning
+    // tomorrow reads tomorrow's root (no baseline), writes the seen list onto it, and
+    // today's root keeps a stale list -- so the same mail re-delivers after a reload,
+    // and an archive day (read-only everywhere else) gets written to.
+    if (!onTodayView()) return false;
     const active = activeTriage().map(i => i.id);
     const seen = seenIds();
     // First look with no baseline anywhere (initCatchUp normally sets it at boot, but
@@ -227,9 +263,15 @@
     _running = true;
     try {
       if (!reducedMotion()) await runCourier();
-      const shown = await open(_pending);
-      if (shown) { _pending = []; hideChip(); }
-      else showChip(_pending.length);
+      // Re-check: the run takes ~1.4s, and Drake can click into a note or open a modal
+      // while the pet is mid-screen. Opening over that is the one behavior that would
+      // make this feature something to turn off.
+      if (busyElsewhere()) { showChip(_pending.length); return false; }
+      if (!_pending.length) return false;
+      const batch = _pending.slice();
+      const shown = await open(batch);
+      if (shown) _pending = _pending.filter(id => batch.indexOf(id) === -1);
+      if (_pending.length) showChip(_pending.length); else hideChip();
       return shown;
     } finally { _running = false; }
   }

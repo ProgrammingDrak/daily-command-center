@@ -53,6 +53,13 @@ function FakeEl(tag) {
     children: [], style: {}, dataset: {}, _q: new Map(), _on: {},
     classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } },
     addEventListener(ev, fn) { (el._on[ev] = el._on[ev] || []).push(fn); },
+    // The real DOM has this, and the footer's re-bind guard needs it: without it the
+    // harness silently keeps every handler openPrompt ever attached, so a fix for the
+    // stacked "Move all" listener could not be expressed here.
+    removeEventListener(ev, fn) {
+      const list = el._on[ev]; if (!list) return;
+      const i = list.indexOf(fn); if (i > -1) list.splice(i, 1);
+    },
     fire(ev, arg) { (el._on[ev] || []).forEach(fn => fn(arg || { target: el })); },
     appendChild(c) { el.children.push(c); return c; },
     // Strict like the real DOM: a non-child reference is a TypeError, not a silent
@@ -324,7 +331,10 @@ function triageCtx(daysByDate, archiveDates, items, over) {
   const extra = Object.assign({
     activeTriageItems: () => items.slice(),
     triagePriorityLabel: (p) => p || "Medium",
-    scheduleTriageOnDate: async (id, date) => { calls.placed.push({ id, date }); return { id: "blk-" + id, properties: {} }; },
+    scheduleTriageOnDate: async (id, date, opts) => {
+      calls.placed.push(opts ? { id, date, opts } : { id, date });
+      return { id: "blk-" + id, properties: {} };
+    },
     deleteTriageItem: (id) => { calls.dropped.push(id); },
     openDatePickPopover: (anchor, opts) => { calls.pickers.push(opts); }
   }, over || {});
@@ -415,14 +425,17 @@ test("Drop on a triage row deletes the triage item, never a block", async () => 
 // silently doesn't" happens.
 test("the calendar button on a task row routes its pick through the same mover", async () => {
   const d = ymd(1);
-  const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], []);
+  // An apostrophe in the title is the case that catches double-escaping: the popover
+  // escapes the header itself, so an esc() here would render a literal &#39;.
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Bob's & Sue's deck" })] }, [d], []);
   await ctx.window.initCatchUp();
   const moves = [];
   ctx.window.DCC.Carryover.moveTo = async (ev, date) => { moves.push({ id: ev.id, date }); return { removed: [ev.id] }; };
   const r = [...rowsOf(ctx)][0];
   r.querySelector(".cu-cal").fire("click", { target: r.querySelector(".cu-cal") });
   assert.equal(calls.pickers.length, 1, "opens the shared day picker");
-  assert.match(calls.pickers[0].header, /Move "Slipped" to/);
+  assert.equal(calls.pickers[0].header, 'Move "Bob\'s & Sue\'s deck" to…',
+    "the caller passes the title RAW; the popover owns the escaping");
   await calls.pickers[0].onPick("2026-08-12");
   assert.deepEqual(moves, [{ id: "t1", date: "2026-08-12" }]);
   assert.equal(r._removed, true);
@@ -447,7 +460,7 @@ test("Move all to today takes the triage rows with it", async () => {
   ctx.window.DCC.Carryover.refoldViewedDay = async () => {};
   ctx.document.getElementById("catchup-overlay").querySelector("#catchup-all").fire("click");
   await new Promise(r => setTimeout(r, 20));
-  assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }],
+  assert.deepEqual(calls.placed.map(p => p.id + "@" + p.date), ["m1@" + TODAY],
     "'all' means all — a swept reply is exactly what this button is for");
 });
 
@@ -477,4 +490,71 @@ test("openArrivals ignores ids that are no longer active, and never prompts empt
   const shown = await ctx.window.DCC.CatchUp.openArrivals(["already-gone"]);
   assert.equal(shown, false);
   assert.equal(ctx.document.getElementById("catchup-overlay"), null);
+});
+
+// ───────── the overlay is reused, so a second open must not stack handlers ─────────
+// ensureModal() hands back ONE overlay forever and close() only drops the `open`
+// class, so #catchup-all is re-bound on every openPrompt. {once:true} de-registers a
+// handler only after it FIRES, so the morning prompt's unclicked handler was still
+// live when the courier opened the arrivals prompt: one click ran both, each over its
+// own captured pool. openArrivals is the second entry point that made this reachable.
+test("a second open does not leave the first Move-all handler bound", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("a", d, { title: "A" })] }, [d], [TRI("m1")]);
+  ctx.window.DCC.Carryover.refoldViewedDay = async () => {};
+  await ctx.window.initCatchUp();
+  await ctx.window.DCC.CatchUp.openArrivals(["m1"]);      // same overlay, footer re-bound
+  const moves = [];
+  ctx.window.DCC.Carryover.moveTo = async (ev) => { moves.push(ev.id); return { removed: [ev.id] }; };
+  ctx.document.getElementById("catchup-overlay").querySelector("#catchup-all").fire("click");
+  await new Promise(r => setTimeout(r, 20));
+  assert.deepEqual(moves, ["a"], "one move per row, not one per open");
+  assert.deepEqual(calls.placed.map(p => p.id + "@" + p.date), ["m1@" + TODAY],
+    "and the triage row is written once, not once per open");
+});
+
+test("Move all defers the per-item refold for triage rows too", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot(), blk("a", d, { title: "A" })] }, [d], [TRI("m1"), TRI("m2")]);
+  let refolds = 0;
+  ctx.window.DCC.Carryover.moveTo = async (ev) => ({ removed: [ev.id] });
+  ctx.window.DCC.Carryover.refoldViewedDay = async () => { refolds++; };
+  ctx.document.getElementById("catchup-overlay") // build it first
+    || await ctx.window.initCatchUp();
+  await ctx.window.initCatchUp();
+  ctx.document.getElementById("catchup-overlay").querySelector("#catchup-all").fire("click");
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(refolds, 1, "ONE refold for the whole batch, after both loops");
+  assert.ok(calls.placed.every(p => p.opts && p.opts.deferRefold && p.opts.silent),
+    "each triage write defers its own refold and stays quiet, like the task writes");
+});
+
+// ───────── the shared row helpers, asserted on their real output ─────────
+// FakeEl.querySelector mints a stub for ANY selector and wireDateButton returns
+// silently on a falsy button, so the click tests above would still pass if the button
+// never reached the markup. Assert the markup itself, and unit-test the helpers.
+test("core.js's shared row helpers emit what the callers query for", () => {
+  const { ctx } = load({}, [], {});
+  const DCC = ctx.window.DCC;
+  const html = DCC.dateButtonHtml("cu-cal", 'Move "X" to a day');
+  assert.match(html, /^<button class="btn-schedule cu-cal"/, "carries the caller's class");
+  assert.match(html, /aria-label="Move &quot;X&quot; to a day"/, "and escapes the label");
+  assert.ok(DCC.icons.calendar.startsWith("<svg"), "the glyph is the shared SVG");
+  assert.equal(DCC.safeUrl("javascript:alert(1)"), "", "sweep URLs are scheme-allowlisted");
+  assert.equal(DCC.safeUrl("  https://x.test/a  "), "https://x.test/a", "and trimmed");
+  assert.equal(DCC.safeUrlAttr('https://x.test/a" onmouseover="alert(1)'),
+    "https://x.test/a&quot; onmouseover=&quot;alert(1)", "attribute form escapes the quote");
+});
+
+test("the calendar button is really in both row kinds' markup", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  const rows = [...rowsOf(ctx)].filter(r => r.className === "carryover-row");
+  assert.equal(rows.length, 2);
+  for (const r of rows) {
+    assert.match(r.innerHTML, /<div class="cu-title-line">/, "the name and the button share a line");
+    assert.match(r.innerHTML, /<button class="btn-schedule cu-cal"[^>]*aria-label="/,
+      "the button is in the row markup, not just in a querySelector stub");
+  }
 });

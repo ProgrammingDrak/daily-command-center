@@ -552,7 +552,7 @@
         busy(); done(await moveTo(ev, tmr, { pool: pool }));
       });
       window.DCC.wireDateButton(el.querySelector(".unf-cal"), {
-        header: 'Move "' + esc(ev.title) + '" to…',
+        header: 'Move "' + ev.title + '" to…',   // the popover escapes it (schedule-popover.js)
         actionLabel: "Move",
         onPick: async (v) => { busy(); done(await moveTo(ev, v, { pool: pool })); }
       });

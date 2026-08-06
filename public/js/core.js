@@ -40,10 +40,21 @@
   // meeting artifacts): anything not http(s)/mailto renders as no link at all,
   // so a javascript: href can never reach an anchor. Was a local const in
   // triage.js's card builder; the catch-up modal renders the same sweep URLs.
+  // .trim() so this is a true superset of the per-file copies it is meant to absorb
+  // (glymphatic-brief.js's gbSafeUrl trims, because its refs are reconstructed from
+  // comms and arrive with leading whitespace); without it, repointing that copy would
+  // silently stop rendering links that render today.
   DCC.safeUrl = function safeUrl(u) {
-    u = String(u == null ? "" : u);
+    u = String(u == null ? "" : u).trim();
     return /^(https?:|mailto:)/i.test(u) ? u : "";
   };
+
+  // Allowlist AND attribute-escape in one call. safeUrl only checks the scheme, so a
+  // swept URL like `https://x.test/a" onmouseover="alert(1)` passes it and then breaks
+  // out of the href it is interpolated into. Two call sites disagreeing about whose job
+  // the escaping is, is exactly the drift consolidating this was meant to prevent, so
+  // the safe form is the one with the short name.
+  DCC.safeUrlAttr = function safeUrlAttr(u) { return DCC.esc(DCC.safeUrl(u)); };
 
   // ── dateButtonHtml ─────────────────────────────────────────────────────
   // Markup for the row-level calendar button, in the same class the itinerary

@@ -213,18 +213,46 @@ test("triage scheduling matches by id OR by an open visible triage row of the sa
   // The two-lookup shape now lives in ONE helper (existingTriageTask), because two
   // paths schedule a triage item: the strip's picker and the catch-up modal's
   // date-only buttons. Inlining it twice is how they would drift apart.
-  const rx = /return scheduled\.find\(ev=>ev\.triageId===triageId\)\s*\|\|DCC\.TaskModel\.selectActive\(scheduled\)\.find\(ev=>ev\.source==="triage"&&ev\.title===item\.title\);/;
-  assert.match(triageCode, rx);
+  // Both halves must still be there, as two separate lookups.
+  const byId = /const byId=scheduled\.find\(ev=>ev\.triageId===triageId\);/;
+  const byTitle = /return DCC\.TaskModel\.selectActive\(scheduled\)\.find\(ev=>ev\.source==="triage"&&ev\.title===item\.title\);/;
+  assert.match(triageCode, byId);
+  assert.match(triageCode, byTitle);
+  // And the title half must stay DATE-SCOPED: `scheduled` holds only the viewed day,
+  // so it cannot answer "is this already on Thursday". Unscoped, a Tomorrow click
+  // reports "already on the schedule" and links the item to the wrong day's task.
+  assert.match(triageCode, /if\(dateStr&&viewing&&dateStr!==viewing\)return null;/);
   // Negative controls: the merged single-lookup form, and dropping either half.
-  assert.equal(rx.test('return scheduled.find(ev=>ev.triageId===triageId);'), false,
+  assert.equal(byTitle.test('return scheduled.find(ev=>ev.triageId===triageId);'), false,
     "dropping the title match would re-mint a duplicate task");
-  assert.equal(rx.test('return scheduled.find(ev=>ev.triageId===triageId||(!isDone(ev)&&!isDeleted(ev)&&ev.source==="triage"&&ev.title===item.title));'), false,
+  assert.equal(byId.test('return scheduled.find(ev=>ev.triageId===triageId||(!isDone(ev)&&!isDeleted(ev)&&ev.source==="triage"&&ev.title===item.title));'), false,
     "the pre-C6a merged predicate must not satisfy this");
   // And both schedulers must go through it rather than re-deriving the answer.
   for (const fn of ["function scheduleTriageItem(", "async function scheduleTriageOnDate("]) {
     const body = triageCode.slice(triageCode.indexOf(fn));
-    assert.match(body.slice(0, 900), /existingTriageTask\(triageId,item\)/, fn + " must route through the shared lookup");
+    // The date-specific scheduler passes dateStr; the strip's picker path does not.
+    assert.match(body.slice(0, 1200), /existingTriageTask\(triageId,item(,dateStr)?\)/,
+      fn + " must route through the shared lookup");
   }
+});
+
+test("a scheduled triage item is recorded DURABLY, and not as completed work", () => {
+  // The load-bearing half of this feature: 65a17c1 moved dismiss and delete onto
+  // dateless suppression rows because day_root state expires at midnight, and left
+  // _triageScheduled behind. Without the durable write, an item turned into a task on
+  // Tuesday is back in Wednesday's recap and "Today" mints a duplicate.
+  const rec = triageCode.slice(triageCode.indexOf("function recordTriageScheduled("));
+  const fn = rec.slice(0, rec.indexOf("\nasync function scheduleTriageOnDate("));
+  assert.match(fn, /persistTriageSuppression\(triageId,item,"scheduled","Scheduled",false\)/,
+    "the decision outlives the day, in the same authority dismiss and delete use");
+  // reason MUST NOT be "done": four client sites read reason==="done" as completed work
+  // (Done tab, Completed Today, the plan timeline, and the day's actual/planned totals),
+  // so "done" billed the item as finished while its new task was still open.
+  assert.equal(/persistTriageSuppression\([^)]*"done"/.test(fn), false,
+    "scheduled is its own disposition, not a completion");
+  // And the server has to preserve the third value rather than collapsing it.
+  const sup = require("node:fs").readFileSync(require.resolve("./triage-suppressions.js"), "utf8");
+  assert.match(sup, /reason: \(reason === "deleted" \|\| reason === "scheduled"\) \? reason : "done"/);
 });
 
 test("scheduling a triage item onto the VIEWED day refolds the itinerary", () => {
@@ -233,7 +261,13 @@ test("scheduling a triage item onto the VIEWED day refolds the itinerary", () =>
   // nowhere on screen until a reload — which reads as "Today did nothing".
   const body = triageCode.slice(triageCode.indexOf("async function scheduleTriageOnDate("));
   const fn = body.slice(0, body.indexOf("\nfunction scheduleTriageItem("));
-  assert.match(fn, /dateStr===viewing/, "must compare the target date to the viewed date");
+  // deferRefold is a contract the "Move all" batch depends on: without it the batched
+  // refold is undone once per item by a per-item loadDay + full render.
+  assert.match(fn, /if\(dateStr===viewing&&!opts\.deferRefold\)/,
+    "must compare the target to the viewed date AND honour the batch deferral");
+  // A packed day must never be silent, and must never stack one toast per batch item.
+  assert.match(fn, /if\(!block\)\{\s*\n\s*if\(!opts\.silent&&typeof showToast==="function"\)showToast\("No free slot on "/,
+    "the no-slot failure toast exists and respects opts.silent");
   for (const call of ["blockStore.loadDay(dateStr)", "reloadPersistedEdits()", "recalcTimes()", "render()"]) {
     assert.ok(fn.indexOf(call) > -1, "missing " + call + " — the same fold delegated.js does");
   }

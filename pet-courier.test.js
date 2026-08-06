@@ -61,9 +61,12 @@ function load(opts) {
     : { _triageCourierSeen: [] };
   const unmount = (el) => { if (el.id) byId.delete(el.id); };
 
+  const live = { hidden: !!opts.hidden, editing: !!opts.editing, viewMode: opts.viewMode || "today" };
   const doc = {
-    hidden: !!opts.hidden,
-    activeElement: opts.editing ? { tagName: "TEXTAREA" } : null,
+    get hidden() { return live.hidden; },
+    get activeElement() { return live.editing ? { tagName: "TEXTAREA" } : null; },
+    _on: {},
+    fireDoc(ev) { (doc._on[ev] || []).slice().forEach(fn => fn({})); },
     body: {
       appendChild(el) {
         appended.push(el);
@@ -74,7 +77,7 @@ function load(opts) {
     },
     getElementById(id) { return byId.get(id) || null; },
     createElement(tag) { return FakeEl(tag, unmount); },
-    addEventListener() {}
+    addEventListener(ev, fn) { (doc._on[ev] = doc._on[ev] || []).push(fn); }
   };
   if (opts.triageSection) {
     const sec = FakeEl("section", unmount);
@@ -88,11 +91,12 @@ function load(opts) {
   const ctx = {
     console, document: doc, setTimeout, clearTimeout,
     innerWidth: 1200, innerHeight: 800,
-    matchMedia: () => ({ matches: !!opts.reducedMotion }),
+    matchMedia: (q) => ({ matches: q === "(prefers-reduced-motion: reduce)" && !!opts.reducedMotion }),
     activeTriageItems: () => items.slice(),
     _bsProp: (k) => (Object.prototype.hasOwnProperty.call(saved, k) ? saved[k] : null),
     _bsSaveProp: (k, v) => { saved[k] = v; },
     _anyModalOpen: () => !!opts.modalOpen,
+    get viewMode() { return live.viewMode; },
     PetHome: { identity: async () => ({ name: "Mochi", base: "sprout", color: "#abc", glyph: "S", accessory: "" }) }
   };
   ctx.window = ctx;
@@ -109,7 +113,8 @@ function load(opts) {
     }
   };
   vm.runInContext(courierSource, ctx);
-  return { ctx, saved, opened, appended, events, items, chip: () => byId.get("pet-courier-chip") || null };
+  return { ctx, saved, opened, appended, events, items, live, doc,
+           chip: () => byId.get("pet-courier-chip") || null };
 }
 
 const item = (id) => ({ id, title: "Reply to " + id });
@@ -227,4 +232,73 @@ test("the pet runs, and the modal opens only after it has", async () => {
   assert.ok(pet, "a body-level runner is used — the slots one is gated to its own tab");
   assert.match(pet.innerHTML, /pet-courier-envelope/, "carrying the envelope");
   assert.equal(pet._removed, true, "and it cleans itself up when it leaves");
+});
+
+// ─────────────────────── the guards the review found missing ───────────────────────
+
+test("a waiting envelope delivers itself once the tab is visible again", async () => {
+  // wireRetry's listeners are the only thing that delivers a banked envelope without a
+  // click. With the fake document dropping listeners, this whole branch was dead.
+  const h = load({ reducedMotion: true, hidden: true, items: [item("m1")] });
+  await h.ctx.window.notifyTriageArrivals();
+  assert.ok(h.chip(), "held as a chip while the tab was hidden");
+  assert.equal(h.opened.length, 0);
+  h.live.hidden = false;
+  h.doc.fireDoc("visibilitychange");
+  await new Promise(r => setTimeout(r, 0));
+  assert.deepEqual(h.opened, [["m1"]], "and delivers itself when he comes back");
+  assert.equal(h.chip(), null);
+});
+
+test("a chip whose item was handled elsewhere clears instead of sticking forever", async () => {
+  // openArrivals returns false once an id is no longer active, so without reconciling
+  // _pending the chip claimed "1" for the rest of the session and did nothing on click.
+  const h = load({ reducedMotion: true, editing: true, items: [item("m1")] });
+  await h.ctx.window.notifyTriageArrivals();
+  assert.ok(h.chip(), "waiting, because he was typing");
+  h.items.length = 0;                       // handled from the triage strip instead
+  h.live.editing = false;
+  h.doc.fireDoc("focusout");
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(h.chip(), null, "the envelope is gone because its item is");
+  assert.equal(h.opened.length, 0, "and no empty modal was opened");
+});
+
+test("the seen set is only ever read or written while viewing TODAY", async () => {
+  // _bsProp/_bsSaveProp address the day being VIEWED. Writing the seen list onto
+  // tomorrow's (or an archive day's) root leaves today's stale, so the same mail
+  // re-delivers after a reload. catch-up.js guards on viewMode for the same reason.
+  const h = load({ reducedMotion: true, items: [item("m1")], viewMode: "archive" });
+  assert.equal(await h.ctx.window.notifyTriageArrivals(), false);
+  assert.equal(h.opened.length, 0, "no delivery against a day that is not the mailbox");
+  assert.equal(h.saved._triageCourierSeen.length, 0, "and nothing banked onto that day's root");
+  // Back on today, the same arrival is delivered normally.
+  h.live.viewMode = "today";
+  assert.equal(await h.ctx.window.notifyTriageArrivals(), true);
+  assert.deepEqual(h.opened, [["m1"]]);
+});
+
+test("a retry that lands mid-run does not steal the delivery", async () => {
+  // flushPending used to ignore _running: a focusout during the ~1.4s animation
+  // delivered the ids and emptied _pending, so the run then opened on an empty list
+  // and left a chip reading "0".
+  const h = load({ items: [item("m1")], triageSection: true });   // animated, not reduced
+  const run = h.ctx.window.notifyTriageArrivals();
+  await new Promise(r => setTimeout(r, 300));                     // mid-animation
+  h.doc.fireDoc("focusout");
+  await new Promise(r => setTimeout(r, 100));
+  assert.equal(h.opened.length, 0, "the retry must not open while the pet is still running");
+  await run;
+  assert.deepEqual(h.opened, [["m1"]], "the run delivers it, exactly once");
+  assert.equal(h.chip(), null, "and no bogus zero-count chip is left behind");
+});
+
+test("going busy DURING the run holds the envelope instead of opening over it", async () => {
+  const h = load({ items: [item("m1")], triageSection: true });
+  const run = h.ctx.window.notifyTriageArrivals();
+  await new Promise(r => setTimeout(r, 300));
+  h.live.editing = true;                    // he started typing while the pet ran
+  assert.equal(await run, false);
+  assert.equal(h.opened.length, 0, "no modal over a half-typed note");
+  assert.ok(h.chip(), "the envelope waits");
 });

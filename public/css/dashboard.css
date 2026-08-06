@@ -3396,7 +3396,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 @keyframes slotBankPetDust{0%{opacity:0;transform:translate(0,0) scale(0.4)}28%{opacity:1;transform:translate(-8px,0) scale(1)}100%{opacity:0;transform:translate(-24px,8px) scale(0.25)}}
 @keyframes slotBankCollectPop{0%{opacity:0;transform:translateY(8px) scale(0.48)}22%{opacity:1;transform:translateY(-8px) scale(1.16)}68%{opacity:1;transform:translateY(-14px) scale(1)}100%{opacity:0;transform:translateY(-28px) scale(0.82)}}
 
-/* ── PET COURIER (pet-courier.js) ────────────────────────────────────────────
+/* ── PET COURIER (pet-courier.js) ─ shares slotBankPetRun/Dust keyframes ────────────────────────────────────────────
    The same body as the bank runner above, minus the Slots-tab coupling: this one
    is appended to <body>, so it can cross any tab. Travel is a transition on
    left/top; the gait is a separate steps() animation, so path and bounce stay
@@ -3410,13 +3410,13 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .pet-courier .pet-courier-face:before,.pet-courier .pet-courier-face:after{content:"";position:absolute;top:25px;width:6px;height:6px;border-radius:50%;background:#24130a}
 .pet-courier .pet-courier-face:before{left:17px}
 .pet-courier .pet-courier-face:after{right:17px}
-.pet-courier.running{animation:petCourierRun 0.28s steps(2,end) infinite}
+.pet-courier.running{animation:slotBankPetRun 0.28s steps(2,end) infinite}
 .pet-courier.carrying{box-shadow:inset 0 -7px 0 rgba(0,0,0,0.12),0 8px 18px rgba(0,0,0,0.26),0 0 26px rgba(96,165,250,0.42)}
 .pet-courier.depositing{animation:petCourierDeposit 0.32s cubic-bezier(.18,1.3,.24,1) both}
 /* In its mouth: low and forward, not perched on its back. */
 .pet-courier-envelope{position:absolute;right:-10px;bottom:6px;width:24px;height:17px;border-radius:3px;background:linear-gradient(#fdfdf7,#e9e4d2);border:1px solid rgba(255,255,255,0.9);display:grid;place-items:center;color:#3b2b22;font-size:11px;line-height:1;box-shadow:0 0 12px rgba(147,197,253,0.7);opacity:0;transform:scale(0.5)}
 .pet-courier.carrying .pet-courier-envelope{opacity:1;animation:petCourierCarry 0.44s ease-in-out infinite alternate}
-.pet-courier-dust{position:fixed;z-index:10004;width:9px;height:6px;border-radius:999px;background:rgba(148,163,184,0.6);box-shadow:0 0 10px rgba(148,163,184,0.4);pointer-events:none;animation:petCourierDust 0.54s ease-out both}
+.pet-courier-dust{position:fixed;z-index:10004;width:9px;height:6px;border-radius:999px;background:rgba(148,163,184,0.6);box-shadow:0 0 10px rgba(148,163,184,0.4);pointer-events:none;animation:slotBankPetDust 0.54s ease-out both}
 /* What it leaves behind, at the drop point. */
 .pet-courier-drop{position:fixed;z-index:10005;margin:-14px 0 0 -14px;font-size:26px;line-height:1;color:#f8fafc;text-shadow:0 2px 10px rgba(96,165,250,0.8);pointer-events:none;animation:petCourierDrop 0.7s cubic-bezier(.18,1.3,.24,1) both}
 /* The envelope waits here when Drake is mid-sentence or has a modal open. */
@@ -3424,10 +3424,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .pet-courier-chip:hover{background:var(--card-hover)}
 .pet-courier-chip-glyph{font-size:14px;line-height:1}
 .pet-courier-chip-count{min-width:16px;height:16px;border-radius:999px;background:var(--accent);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
-@keyframes petCourierRun{0%{transform:translateY(0) scaleX(var(--runner-turn)) scaleY(1)}50%{transform:translateY(-7px) scaleX(calc(var(--runner-turn) * 1.08)) scaleY(0.92)}100%{transform:translateY(0) scaleX(var(--runner-turn)) scaleY(1)}}
 @keyframes petCourierCarry{0%{transform:translateY(0) scale(0.95) rotate(-6deg)}100%{transform:translateY(-2px) scale(1.05) rotate(6deg)}}
 @keyframes petCourierDeposit{0%{transform:scaleX(var(--runner-turn)) scale(1)}54%{transform:scaleX(var(--runner-turn)) scale(1.18) rotate(-4deg)}100%{transform:scaleX(var(--runner-turn)) scale(0.96) rotate(2deg)}}
-@keyframes petCourierDust{0%{opacity:0;transform:translate(0,0) scale(0.4)}28%{opacity:1;transform:translate(-8px,0) scale(1)}100%{opacity:0;transform:translate(-24px,8px) scale(0.25)}}
 @keyframes petCourierDrop{0%{opacity:0;transform:translateY(10px) scale(0.5)}40%{opacity:1;transform:translateY(-6px) scale(1.18)}100%{opacity:1;transform:translateY(0) scale(1)}}
 /* No pet animation in the app had this guard. The delivery still happens — the
    modal opens directly, pet-courier.js skips the run entirely. */

@@ -21,6 +21,14 @@
   "use strict";
 
   const FLAG = "_catchUpReviewed";
+  // The footer's "Move all" handler, held so a second open can unbind the first.
+  // ensureModal() reuses one overlay forever and close() only drops the `open` class,
+  // so every openPrompt call re-binds this button. {once:true} de-registers a handler
+  // only after it FIRES, so an unclicked one stays live: morning prompt, close it,
+  // sweep arrives, click "Move all" -> both handlers run over their own captured pools,
+  // double-moving rows and fighting over the button's label. Harmless while openPrompt
+  // ran once per load; openArrivals is the second entry that made it reachable.
+  let _allHandler = null;
 
   function reviewed() {
     if (typeof _bsProp !== "function") return true;   // no day_root yet: don't prompt blind
@@ -77,7 +85,9 @@
   // owns the write (see DCC.wireDateButton in core.js).
   function calBtn(cls, label) { return window.DCC.dateButtonHtml(cls, label); }
   function wireCal(btn, title, onPick) {
-    window.DCC.wireDateButton(btn, { header: 'Move "' + esc(title) + '" to…', actionLabel: "Move", onPick: onPick });
+    // Raw title: the popover escapes the whole header itself (schedule-popover.js), so
+    // escaping here too renders a literal &#39; for any apostrophe.
+    window.DCC.wireDateButton(btn, { header: 'Move "' + title + '" to…', actionLabel: "Move", onPick: onPick });
   }
 
   // ── triage rows ──
@@ -301,7 +311,11 @@
     // the placement engine has to see the previous landing to pick the next slot.
     // Triage rows come along — the button says "all", and a swept item that needs a
     // reply today is exactly the kind of thing this button is for.
-    allBtn.addEventListener("click", async () => {
+    if (_allHandler && typeof allBtn.removeEventListener === "function") {
+      allBtn.removeEventListener("click", _allHandler);
+    }
+    _allHandler = async () => {
+      _allHandler = null;                 // {once:true} already unbound it
       allBtn.disabled = true;
       const original = allBtn.textContent;
       const queue = [...rowEls.keys()];
@@ -317,12 +331,21 @@
         // refold fired N times and only the last was observable. One at the end.
         if (settle(await CO.moveTo(ev, target, { pool, deferRefold: true }))) moved++;
       }
-      if (moved) await CO.refoldViewedDay(target);
       let placed = 0;
       for (const id of triQueue) {
         step(moved + placed + 1);
         if (typeof scheduleTriageOnDate !== "function") break;
-        if (await scheduleTriageOnDate(id, target)) placed++;
+        // Same deferral the task loop above gets, for the same reason: each call
+        // otherwise re-fetches the day context, re-loads the day, and runs a full
+        // unscoped render, undoing the one batched refold N times over. silent so the
+        // per-item toasts don't bury the summary one.
+        if (await scheduleTriageOnDate(id, target, { deferRefold: true, silent: true })) placed++;
+      }
+      // One refold for the whole batch, after BOTH loops have written.
+      if (moved || placed) await CO.refoldViewedDay(target);
+      if (placed) {
+        if (typeof buildScheduleTriage === "function") buildScheduleTriage();
+        if (typeof buildTriage === "function") buildTriage();
       }
       allBtn.textContent = original;
       allBtn.disabled = false;
@@ -331,7 +354,8 @@
       if (moved) parts.push(moved + " unfinished task" + (moved === 1 ? "" : "s"));
       if (placed) parts.push(placed + " triage item" + (placed === 1 ? "" : "s"));
       if (typeof showToast === "function" && parts.length) showToast("Moved " + parts.join(" and ") + " to today", "success");
-    }, { once: true });
+    };
+    allBtn.addEventListener("click", _allHandler, { once: true });
 
     overlay.classList.add("open");
   }
