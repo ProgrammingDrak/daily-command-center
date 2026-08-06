@@ -19,6 +19,9 @@ const {
   suppressionFromBlock,
   suppressionsFromBlocks,
   suppressionDayKey,
+  matchingSuppression,
+  snapshotTriageItem,
+  mergeTriageForIngest,
 } = require("./triage-suppressions");
 const { mergeOpenItems, triageItemKey: intelKey } = require("./dcc-intelligence");
 
@@ -53,6 +56,41 @@ test("a suppression matches on the composite key OR the bare id", () => {
   assert.equal(isSuppressed(LIVE_ITEM, byId), true);
   assert.equal(isSuppressed({ id: "other", type: "email" }, byKey), false);
   assert.equal(isSuppressed({ id: "other", type: "email" }, byId), false);
+});
+
+test("a legacy Gmail thread suppression is a cutoff, not a permanent conversation tombstone", () => {
+  const suppression = { triage_id: "gmail:thread-1", reason: "done", at: "2026-08-05T15:00:00Z" };
+  const index = suppressionIndex([suppression]);
+  const oldTurn = {
+    id: "gmail:thread-1:message-a",
+    type: "email",
+    conversation_id: "thread-1",
+    received_at: "2026-08-05T14:00:00Z",
+  };
+  const newTurn = { ...oldTurn, id: "gmail:thread-1:message-b", received_at: "2026-08-05T16:00:00Z" };
+  assert.equal(matchingSuppression(oldTurn, index), suppression, "the already-handled turn stays dead");
+  assert.equal(isSuppressed(newTurn, index), false, "a later inbound turn is allowed through");
+});
+
+test("an unparseable Gmail received date never gets hidden by a legacy cutoff", () => {
+  const index = suppressionIndex([{ triage_id: "gmail:thread-1", at: "2026-08-05T15:00:00Z" }]);
+  assert.equal(isSuppressed({ id: "gmail:thread-1:new", conversation_id: "thread-1" }, index), false);
+});
+
+test("suppression snapshots are allowlisted and bounded", () => {
+  const snap = snapshotTriageItem({
+    id: "gmail:t:m",
+    title: "T".repeat(500),
+    summary: "S".repeat(4000),
+    receivedAt: "2026-08-05T14:00:00Z",
+    conversationId: "t",
+    arbitrary: { payload: "must not persist" },
+  });
+  assert.equal(snap.title.length, 220);
+  assert.equal(snap.summary.length, 1000);
+  assert.equal(snap.received_at, "2026-08-05T14:00:00Z");
+  assert.equal(snap.conversation_id, "t");
+  assert.equal("arbitrary" in snap, false);
 });
 
 test("a re-emitted item stays suppressed — the defect that made deletions evaporate", () => {
@@ -206,6 +244,21 @@ test("applyTriageSuppressions with none is a pass-through that still declares th
   assert.deepEqual(out.open_items, [{ id: "a" }]);
   assert.deepEqual(out.suppressed_items, []);
   assert.deepEqual(applyTriageSuppressions(null, []).suppressed_items, []);
+});
+
+test("ingest preserves explicitly reopened snapshots but not stale source rows", () => {
+  const merged = mergeTriageForIngest({
+    open_items: [
+      { id: "gmail:t:restored", title: "Restored", _dcc_reopened: true },
+      { id: "gmail:t:stale", title: "Stale" },
+    ],
+    resolved_items: [],
+  }, {
+    open_items: [{ id: "gmail:t:new", title: "New" }],
+    resolved_items: [{ id: "gmail:t:restored" }, { id: "gmail:t:old" }],
+  });
+  assert.deepEqual(merged.open_items.map((item) => item.id), ["gmail:t:restored", "gmail:t:new"]);
+  assert.deepEqual(merged.resolved_items.map((item) => item.id), ["gmail:t:old"]);
 });
 
 test("the stored row never carries a `title`, because a dateless titled block is BACKLOG", () => {

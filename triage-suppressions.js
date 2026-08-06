@@ -37,6 +37,72 @@
 
 const SUPPRESSION_KIND = "triage_suppression";
 
+const SNAPSHOT_STRING_FIELDS = {
+  id: 300,
+  type: 80,
+  source: 80,
+  source_id: 300,
+  title: 220,
+  summary: 1000,
+  priority: 40,
+  source_ref: 1000,
+  link: 1000,
+  link_label: 80,
+  action_label: 80,
+  draft_id: 300,
+  draft_type: 40,
+  draft_link: 1000,
+  draft_url: 1000,
+  draft_preview: 1000,
+  received_at: 80,
+  conversation_id: 300,
+  thread_id: 300,
+};
+
+function clipped(value, max) {
+  return String(value == null ? "" : value).trim().slice(0, max);
+}
+
+function gmailConversationIdFromItemId(id) {
+  const text = String(id || "");
+  if (!text.startsWith("gmail:")) return "";
+  const parts = text.split(":");
+  return parts.length >= 2 ? parts[1] : "";
+}
+
+function triageConversationId(item) {
+  if (!item) return "";
+  return clipped(
+    item.conversation_id || item.conversationId || item.thread_id || item.threadId
+      || gmailConversationIdFromItemId(item.id),
+    300
+  );
+}
+
+function triageReceivedAt(item) {
+  if (!item) return "";
+  return clipped(item.received_at || item.receivedAt || "", 80);
+}
+
+// Persist only the fields needed to render a completed row or restore an item after
+// Undo. The source payload is third-party data and Express accepts a 5 MB body, so a
+// raw object copy would turn every suppression into an unbounded durable blob.
+function snapshotTriageItem(item) {
+  const source = item && typeof item === "object" ? item : {};
+  const out = {};
+  for (const [field, max] of Object.entries(SNAPSHOT_STRING_FIELDS)) {
+    let value = source[field];
+    if (field === "received_at") value = triageReceivedAt(source);
+    if (field === "conversation_id") value = triageConversationId(source);
+    if (value !== undefined && value !== null && value !== "") out[field] = clipped(value, max);
+  }
+  for (const field of ["estimated_minutes", "duration_minutes", "durationMinutes", "durMin"]) {
+    const n = Number(source[field]);
+    if (Number.isFinite(n) && n >= 0) out[field] = n;
+  }
+  return out;
+}
+
 // The identity of a triage item, and it MUST stay byte-identical to the key
 // mergeOpenItems builds — a suppression that keys differently than the merge does
 // is a suppression that never matches. dcc-intelligence.js imports this rather
@@ -60,20 +126,46 @@ function triageItemKey(item) {
 // resurrect the entire backlog. The bare id is the client's handle and is stable
 // across that change.
 function suppressionIndex(suppressions) {
-  const keys = new Set();
-  const ids = new Set();
+  const keys = new Map();
+  const ids = new Map();
+  const gmailCutoffs = new Map();
   for (const s of suppressions || []) {
-    if (!s) continue;
-    if (s.key) keys.add(s.key);
-    if (s.triage_id) ids.add(s.triage_id);
+    if (!s || s.active === false) continue;
+    if (s.key) keys.set(s.key, s);
+    if (s.triage_id) ids.set(s.triage_id, s);
+    // Before Sweep Suite gained message-level Gmail ids, a handled turn was stored as
+    // gmail:<thread>. Treat that legacy row as a time cutoff, not a permanent thread
+    // tombstone: old messages stay dead, but a later inbound turn is allowed through.
+    if (/^gmail:[^:]+$/.test(String(s.triage_id || "")) && s.at) {
+      const conversationId = gmailConversationIdFromItemId(s.triage_id);
+      if (!gmailCutoffs.has(conversationId)) gmailCutoffs.set(conversationId, []);
+      gmailCutoffs.get(conversationId).push(s);
+    }
   }
-  return { keys, ids };
+  return { keys, ids, gmailCutoffs };
+}
+
+function matchingSuppression(item, index) {
+  if (!item || !index) return false;
+  if (index.ids.size && item.id && index.ids.has(item.id)) return index.ids.get(item.id);
+  const key = triageItemKey(item);
+  if (index.keys.size && index.keys.has(key)) return index.keys.get(key);
+
+  const conversationId = triageConversationId(item);
+  const receivedAt = Date.parse(triageReceivedAt(item));
+  if (!conversationId || Number.isNaN(receivedAt)) return null;
+  const cutoffs = index.gmailCutoffs && index.gmailCutoffs.get(conversationId);
+  if (!cutoffs) return null;
+  return cutoffs
+    .filter((s) => {
+      const cutoff = Date.parse(s.at);
+      return !Number.isNaN(cutoff) && receivedAt <= cutoff;
+    })
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0] || null;
 }
 
 function isSuppressed(item, index) {
-  if (!item || !index) return false;
-  if (index.ids.size && item.id && index.ids.has(item.id)) return true;
-  return index.keys.size > 0 && index.keys.has(triageItemKey(item));
+  return !!matchingSuppression(item, index);
 }
 
 // Strip suppressed items out of a triage section and hand back what was stripped.
@@ -141,6 +233,31 @@ function applyTriageSuppressions(triage, suppressions, opts) {
   };
 }
 
+// A publish owns its source-derived triage list, with one deliberate exception:
+// Undo may restore a saved snapshot after the source has already reconciled that
+// exact id into resolved_items. Keep those explicitly reopened rows until the
+// user handles them again. Incoming facts still refresh a matching row.
+function mergeTriageForIngest(existing, incoming) {
+  const previous = existing && typeof existing === "object" ? existing : {};
+  const next = incoming && typeof incoming === "object" ? incoming : {};
+  const reopened = (Array.isArray(previous.open_items) ? previous.open_items : [])
+    .filter((item) => item && item._dcc_reopened === true);
+  const byId = new Map(reopened.map((item) => [String(item.id || triageItemKey(item)), item]));
+  for (const item of Array.isArray(next.open_items) ? next.open_items : []) {
+    if (!item) continue;
+    const id = String(item.id || triageItemKey(item));
+    byId.set(id, { ...(byId.get(id) || {}), ...item });
+  }
+  const reopenedIds = new Set(reopened.map((item) => String(item.id || "")));
+  return {
+    ...previous,
+    ...next,
+    open_items: Array.from(byId.values()),
+    resolved_items: (Array.isArray(next.resolved_items) ? next.resolved_items : [])
+      .filter((item) => !reopenedIds.has(String(item && item.id || ""))),
+  };
+}
+
 // Shape a suppression row for storage. `title` is deliberately NOT stored under a
 // `title` property: these are dateless type="block" rows, and TaskModel's
 // selectUnscheduled treats a dateless titled block as BACKLOG WORK. Storing the
@@ -152,19 +269,14 @@ function applyTriageSuppressions(triage, suppressions, opts) {
 // express.json({limit:"5mb"}) would let one request store a multi-megabyte title that
 // then rides along on day reads. The 220/1000 limits match what the repo already
 // applies to the same two fields in routes/social-todo.js.
-function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at, trivial }) {
+function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at, trivial, conversationId, receivedAt, itemSnapshot }) {
+  const snapshot = snapshotTriageItem(itemSnapshot);
   return {
     kind: SUPPRESSION_KIND,
     triage_id: String(triageId || "").trim().slice(0, 300),
     key: String(key || "").trim().slice(0, 300),
     itemTitle: String(itemTitle || "").trim().slice(0, 220),
-    // Three dispositions, not two. "scheduled" is suppressed from open_items exactly
-    // like the others (isSuppressed never looks at reason), but it is NOT completed
-    // work: the four client sites that gate on reason==="done" feed the Done tab,
-    // Completed Today and the day's actual/planned minute totals. Recording a
-    // scheduled item as done counted it there while the task it created was still
-    // open on the itinerary, so the same work was billed twice.
-    reason: (reason === "deleted" || reason === "scheduled") ? reason : "done",
+    reason: reason === "deleted" ? "deleted" : "done",
     // A trivial dismissal ("not worth it") is handled, but it is NOT completed work.
     // completedTriageTasksForDate drops it, and that check used to read the local
     // overlay -- which the phone does not have. Without persisting the flag, a trivial
@@ -173,6 +285,11 @@ function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at
     trivial: !!trivial,
     note: String(note || "").trim().slice(0, 1000),
     at: String(at || new Date().toISOString()),
+    conversation_id: clipped(conversationId || triageConversationId(snapshot), 300),
+    received_at: clipped(receivedAt || triageReceivedAt(snapshot), 80),
+    itemSnapshot: snapshot,
+    active: true,
+    reopenedAt: "",
   };
 }
 
@@ -190,6 +307,11 @@ function suppressionFromBlock(block) {
     reason: p.reason || "done",
     trivial: !!p.trivial,
     note: p.note || "",
+    conversation_id: p.conversation_id || "",
+    received_at: p.received_at || "",
+    item: p.itemSnapshot && typeof p.itemSnapshot === "object" ? p.itemSnapshot : {},
+    active: p.active !== false && !block.deleted_at,
+    reopened_at: p.reopenedAt || "",
     // created_at arrives from node-postgres as a Date; ISO-normalize so every consumer
     // (and suppressionDayKey) sees one shape.
     at: p.at || (block.created_at instanceof Date ? block.created_at.toISOString() : block.created_at) || "",
@@ -197,7 +319,7 @@ function suppressionFromBlock(block) {
 }
 
 function suppressionsFromBlocks(blocks) {
-  return (blocks || []).map(suppressionFromBlock).filter(Boolean);
+  return (blocks || []).map(suppressionFromBlock).filter((s) => s && s.active);
 }
 
 module.exports = {
@@ -205,9 +327,15 @@ module.exports = {
   triageItemKey,
   suppressionDayKey,
   suppressionIndex,
+  matchingSuppression,
   isSuppressed,
   applyTriageSuppressions,
   buildSuppressionProperties,
   suppressionFromBlock,
   suppressionsFromBlocks,
+  gmailConversationIdFromItemId,
+  triageConversationId,
+  triageReceivedAt,
+  snapshotTriageItem,
+  mergeTriageForIngest,
 };

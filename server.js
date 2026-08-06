@@ -997,6 +997,8 @@ app.listen(PORT, async () => {
     const defaultUser = await auth.ensureDefaultUser();
     if (defaultUser) { defaultUserId = defaultUser.id; const wsId = `ws-${defaultUserId}`; await pool.query("UPDATE blocks SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); await pool.query("UPDATE dcc_state SET user_id = $1, workspace_id = $2 WHERE user_id IS NULL", [defaultUserId, wsId]); }
     await blockDB.ensureWorkspacesForAllUsers();
+    const triageBackfilled = await blockDB.backfillLegacyTriageSuppressions();
+    if (triageBackfilled > 0) console.log(`[triage] Backfilled ${triageBackfilled} legacy suppression(s)`);
   } catch (e) { console.error("[auth] Startup error:", e.message); }
 
   console.log(`  GCal:       Realtime sync disabled; hiding legacy cached calendar blocks`);

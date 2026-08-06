@@ -1120,6 +1120,117 @@ async function ensureDccStateTable() {
   await pool.query("CREATE INDEX IF NOT EXISTS idx_dcc_state_workspace ON dcc_state(workspace_id, date)");
 }
 
+// One-time-compatible bridge from the date-scoped overlays that predated durable
+// triage suppressions. It is safe on every startup: the generated id is stable and
+// the NOT EXISTS guard also respects suppressions created through the API.
+async function backfillLegacyTriageSuppressions() {
+  const { rows } = await pool.query(`
+    WITH dismissed AS (
+      SELECT b.workspace_id, b.user_id, entry.key AS triage_id,
+             CASE
+               WHEN COALESCE(entry.value->>'dismissed_at', '') ~ '^\\d{4}-\\d{2}-\\d{2}T'
+                 THEN (entry.value->>'dismissed_at')::timestamptz
+               ELSE b.updated_at
+             END AS handled_at,
+             lower(COALESCE(entry.value->>'trivial', 'false')) IN ('true', 't', '1') AS trivial,
+             COALESCE(entry.value->>'note', '') AS note,
+             ''::text AS item_title,
+             'done'::text AS reason
+        FROM blocks b
+        CROSS JOIN LATERAL jsonb_each(
+          CASE WHEN jsonb_typeof(b.properties->'_dismissed') = 'object'
+            THEN b.properties->'_dismissed' ELSE '{}'::jsonb END
+        ) entry
+       WHERE b.type = 'day_root' AND b.deleted_at IS NULL
+    ), deleted_overlay AS (
+      SELECT b.workspace_id, b.user_id, entry.triage_id, b.updated_at AS handled_at,
+             false AS trivial, ''::text AS note, ''::text AS item_title,
+             'deleted'::text AS reason
+        FROM blocks b
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(b.properties->'_triageDeleted') = 'array'
+            THEN b.properties->'_triageDeleted' ELSE '[]'::jsonb END
+        ) entry(triage_id)
+       WHERE b.type = 'day_root' AND b.deleted_at IS NULL
+    ), state_deleted AS (
+      SELECT s.workspace_id, s.user_id, item->>'id' AS triage_id,
+             CASE
+               WHEN COALESCE(item->>'deleted_at', '') ~ '^\\d{4}-\\d{2}-\\d{2}T'
+                 THEN (item->>'deleted_at')::timestamptz
+               ELSE s.updated_at
+             END AS handled_at,
+             false AS trivial, ''::text AS note, COALESCE(item->>'title', '') AS item_title,
+             'deleted'::text AS reason
+        FROM dcc_state s
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(s.state_json#>'{triage,deleted_items}') = 'array'
+            THEN s.state_json#>'{triage,deleted_items}' ELSE '[]'::jsonb END
+        ) item
+    ), state_resolved AS (
+      SELECT s.workspace_id, s.user_id, item->>'id' AS triage_id,
+             CASE
+               WHEN COALESCE(item->>'resolved_at', '') ~ '^\\d{4}-\\d{2}-\\d{2}T'
+                 THEN (item->>'resolved_at')::timestamptz
+               ELSE s.updated_at
+             END AS handled_at,
+             false AS trivial,
+             CASE WHEN lower(COALESCE(item->>'resolved_reason', '')) = 'replied'
+               THEN 'Replied at source' ELSE '' END AS note,
+             COALESCE(item->>'title', '') AS item_title,
+             CASE WHEN lower(COALESCE(item->>'resolved_reason', '')) = 'deleted'
+               THEN 'deleted' ELSE 'done' END AS reason
+        FROM dcc_state s
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(s.state_json#>'{triage,resolved_items}') = 'array'
+            THEN s.state_json#>'{triage,resolved_items}' ELSE '[]'::jsonb END
+        ) item
+       WHERE lower(COALESCE(item->>'resolved_reason', '')) IN ('replied', 'done', 'deleted')
+    ), candidates AS (
+      SELECT * FROM dismissed
+      UNION ALL SELECT * FROM deleted_overlay
+      UNION ALL SELECT * FROM state_deleted
+      UNION ALL SELECT * FROM state_resolved
+    ), deduped AS (
+      SELECT DISTINCT ON (workspace_id, triage_id)
+             workspace_id, user_id, triage_id, handled_at, trivial, note, item_title, reason
+        FROM candidates
+       WHERE workspace_id IS NOT NULL AND COALESCE(triage_id, '') <> ''
+       ORDER BY workspace_id, triage_id, handled_at DESC, (reason = 'deleted') DESC
+    )
+    INSERT INTO blocks
+      (id, type, parent_id, date, properties, sort_order, created_at, updated_at, deleted_at, user_id, workspace_id)
+    SELECT 'triage-suppression-legacy-' || md5(d.workspace_id || '|' || d.triage_id),
+           'block', NULL, NULL,
+           jsonb_build_object(
+             'kind', 'triage_suppression',
+             'triage_id', left(d.triage_id, 300),
+             'key', '',
+             'itemTitle', left(d.item_title, 220),
+             'reason', d.reason,
+             'trivial', d.trivial,
+             'note', left(d.note, 1000),
+             'at', d.handled_at::text,
+             'conversation_id', CASE WHEN d.triage_id ~ '^gmail:[^:]+$' THEN split_part(d.triage_id, ':', 2) ELSE '' END,
+             'received_at', '',
+             'itemSnapshot', '{}'::jsonb,
+             'active', true,
+             'reopenedAt', ''
+           ),
+           0, d.handled_at, NOW(), NULL, d.user_id, d.workspace_id
+      FROM deduped d
+     WHERE NOT EXISTS (
+       SELECT 1 FROM blocks live
+        WHERE live.workspace_id = d.workspace_id
+          AND live.deleted_at IS NULL
+          AND live.properties->>'kind' = 'triage_suppression'
+          AND live.properties->>'triage_id' = d.triage_id
+     )
+    ON CONFLICT (id) DO NOTHING
+    RETURNING id
+  `);
+  return rows.length;
+}
+
 async function saveDccState(date, stateJson, userId, workspaceId) {
   const now = new Date().toISOString();
   const wsId = workspaceId || (userId ? `ws-${userId}` : "ws-1");
@@ -1273,7 +1384,7 @@ module.exports = {
   getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
-  ensureDccStateTable, saveDccState, getDccState, purgeSoftDeleted, getOperations,
+  ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
   findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, getFutureDatesWithBlocks

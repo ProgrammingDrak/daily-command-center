@@ -48,6 +48,12 @@ function mountSuppressions(seed = []) {
         const row = blocks.find((b) => b.id === id);
         if (row) row.deleted_at = "2026-08-06T00:00:00.000Z";
       },
+      getBlock: async (id) => blocks.find((b) => b.id === id) || null,
+      updateBlock: async (id, patch) => {
+        const row = blocks.find((b) => b.id === id);
+        if (row && patch.properties) row.properties = patch.properties;
+        return row;
+      },
       getDccState: async () => null,
       saveDccState: async (date, state) => { saved.push({ date, state }); },
       getBlocksByDateIncludingDeleted: async () => [],
@@ -106,7 +112,7 @@ test("the ingest door STORES the raw triage section, suppressed items and all", 
   // suppression afterwards and there is nothing left to restore, because the stored
   // state no longer contains it. Suppression is a READ-time overlay for this reason.
   const { app, saved } = mountSuppressions([sup("s1", { triage_id: "gmail:abc", reason: "deleted" })]);
-  const { status } = await callDcc(app, "POST", "/api/ingest/day-state", {
+  const { status, json } = await callDcc(app, "POST", "/api/ingest/day-state", {
     date: "2026-07-30",
     triage: { open_items: [{ id: "gmail:abc", type: "email" }, { id: "slack:1", type: "slack" }] },
   });
@@ -117,6 +123,43 @@ test("the ingest door STORES the raw triage section, suppressed items and all", 
     ["gmail:abc", "slack:1"],
     "storage stays raw; filtering here would leave Undo nothing to restore"
   );
+  assert.deepEqual(json.suppressed_resolutions.map((r) => r.id), ["gmail:abc"], "publisher can reconcile the exact hidden id");
+});
+
+test("ingest reconciliation admits a newer Gmail turn after a legacy cutoff", async () => {
+  const { app } = mountSuppressions([sup("s1", { triage_id: "gmail:thread-1", reason: "done", at: "2026-08-06T14:00:00Z" })]);
+  const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    triage: { open_items: [
+      { id: "gmail:thread-1:old", type: "email", conversation_id: "thread-1", received_at: "2026-08-06T13:00:00Z" },
+      { id: "gmail:thread-1:new", type: "email", conversation_id: "thread-1", received_at: "2026-08-06T15:00:00Z" },
+    ] },
+  });
+  assert.deepEqual(json.suppressed_resolutions.map((r) => r.id), ["gmail:thread-1:old"]);
+});
+
+test("ingest imports source-side replied items into the durable ledger", async () => {
+  const { app, blocks } = mountSuppressions();
+  const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    triage: {
+      open_items: [],
+      resolved_items: [{
+        id: "gmail:thread-1:message-1",
+        type: "email",
+        title: "Answered",
+        conversation_id: "thread-1",
+        received_at: "2026-08-06T12:00:00Z",
+        resolved_at: "2026-08-06T13:00:00Z",
+        resolved_reason: "replied",
+      }],
+    },
+  });
+  assert.equal(json.imported_resolutions, 1);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].properties.triage_id, "gmail:thread-1:message-1");
+  assert.equal(blocks[0].properties.reason, "done");
+  assert.equal(blocks[0].properties.received_at, "2026-08-06T12:00:00Z");
 });
 
 test("no suppression call happens before the state is written", async () => {
@@ -152,21 +195,37 @@ test("handling the same item twice leaves exactly one row", async () => {
   assert.equal(blocks.filter((x) => !x.deleted_at).length, 1);
 });
 
-test("DELETE removes EVERY match, so a pre-idempotency duplicate cannot survive Undo", async () => {
+test("DELETE deactivates EVERY match, so a pre-idempotency duplicate cannot survive Undo", async () => {
   const { app, blocks } = mountSuppressions([
     sup("s1", { triage_id: "gmail:abc", reason: "done" }),
     sup("s2", { triage_id: "gmail:abc", reason: "done" }),
   ]);
   const { json } = await callDcc(app, "DELETE", "/api/triage/suppressions/gmail:abc");
   assert.equal(json.removed, 2);
-  assert.equal(blocks.filter((x) => !x.deleted_at).length, 0);
+  assert.equal(blocks.filter((x) => x.properties.active !== false).length, 0);
+  assert.equal(blocks[0].properties.active, false);
+  assert.match(blocks[0].properties.reopenedAt, /^2026-/);
 });
 
-test("DELETE matches on the composite key too, not just the bare id", async () => {
+test("DELETE deactivates a composite-key match too", async () => {
   const { app, blocks } = mountSuppressions([sup("s1", { triage_id: "", key: "email|gmail:abc", reason: "done" })]);
   const { json } = await callDcc(app, "DELETE", "/api/triage/suppressions/" + encodeURIComponent("email|gmail:abc"));
   assert.equal(json.removed, 1);
-  assert.equal(blocks.filter((x) => !x.deleted_at).length, 0);
+  assert.equal(blocks.filter((x) => x.properties.active !== false).length, 0);
+});
+
+test("Undo restores the bounded snapshot into day state before reopening", async () => {
+  const { app, blocks, saved } = mountSuppressions([sup("s1", {
+    triage_id: "gmail:t:m",
+    reason: "done",
+    itemSnapshot: { id: "gmail:t:m", title: "Restore me", received_at: "2026-08-05T12:00:00Z" },
+  })]);
+  const { json } = await callDcc(app, "DELETE", "/api/triage/suppressions/gmail:t:m?date=2026-08-06");
+  assert.equal(json.restored_item.id, "gmail:t:m");
+  assert.equal(json.restored_item._dcc_reopened, true);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].state.triage.open_items[0].title, "Restore me");
+  assert.equal(blocks[0].properties.active, false);
 });
 
 test("a body with neither triage_id nor key is refused rather than stored as a no-op", async () => {
@@ -188,6 +247,24 @@ test("stored title and note are coerced and clamped", async () => {
   assert.equal(props.itemTitle.length, 220);
   assert.equal(props.note.length, 1000);
   assert.equal(typeof props.itemTitle, "string");
+});
+
+test("the route stores bounded restore metadata and source timestamps", async () => {
+  const { app, blocks } = mountSuppressions();
+  const { json } = await callDcc(app, "POST", "/api/triage/suppressions", {
+    triage_id: "gmail:thread-1:message-1",
+    conversation_id: "thread-1",
+    received_at: "2026-08-06T13:00:00Z",
+    item: { id: "gmail:thread-1:message-1", title: "Subject", arbitrary: "drop me" },
+  });
+  assert.equal(blocks[0].properties.conversation_id, "thread-1");
+  assert.equal(blocks[0].properties.received_at, "2026-08-06T13:00:00Z");
+  assert.deepEqual(blocks[0].properties.itemSnapshot, {
+    id: "gmail:thread-1:message-1",
+    title: "Subject",
+    conversation_id: "thread-1",
+  });
+  assert.equal(json.suppression.active, true);
 });
 
 test("a non-string title is coerced, not persisted as nested JSON", async () => {
