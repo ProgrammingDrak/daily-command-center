@@ -66,6 +66,9 @@ module.exports = function mount(app, ctx) {
           reason: body.reason,
           note: body.note,
           trivial: body.trivial,
+          conversationId: body.conversation_id || body.conversationId,
+          receivedAt: body.received_at || body.receivedAt,
+          itemSnapshot: body.item,
         }),
         user_id: userId || null,
         workspace_id: workspaceId || null,
@@ -78,21 +81,60 @@ module.exports = function mount(app, ctx) {
     }
   });
 
-  // Undo. Keyed by triage id (what every client caller has) and deleting EVERY
-  // match rather than the first — a pre-idempotency row and a new one can coexist
-  // on prod, and leaving one behind would look like the undo silently failed.
+  // Undo. Keyed by triage id (what every client caller has) and deactivating EVERY
+  // match rather than the first. A pre-idempotency row and a new one can coexist
+  // on prod, and leaving one active would look like the undo silently failed.
   app.delete("/api/triage/suppressions/:triageId", async (req, res) => {
     const triageId = String(req.params.triageId || "").trim();
     if (!triageId) return res.status(400).json({ error: "Missing triage id" });
-    const { workspaceId } = resolveOwnerLenient(req);
+    const { userId, workspaceId } = resolveOwnerLenient(req);
     try {
-      const existing = await readTriageSuppressionsForWorkspace(workspaceId);
+      const blocks = typeof blockDB.getBlocksByKind === "function"
+        ? await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId)
+        : [];
+      const existing = blocks.length
+        ? blocks.map(triageSuppressions.suppressionFromBlock).filter(Boolean)
+        : await readTriageSuppressionsForWorkspace(workspaceId);
       const matches = existing.filter((s) => s.triage_id === triageId || s.key === triageId);
+      const requestedDate = isValidDate(req.query && req.query.date) ? req.query.date : "";
+      const savedSnapshot = matches.map((match) => match.item).find((item) => item && Object.keys(item).length) || null;
+      let restoredItem = null;
+      // Persist the saved snapshot before reopening the ledger row. If this write
+      // fails, the active suppression remains in place and a retry is safe.
+      if (requestedDate && savedSnapshot && typeof blockDB.getDccState === "function") {
+        const row = await blockDB.getDccState(requestedDate, workspaceId);
+        const state = row && row.state_json ? row.state_json : buildSkeletonState(requestedDate);
+        const triage = state.triage && typeof state.triage === "object" ? state.triage : {};
+        const openItems = Array.isArray(triage.open_items) ? triage.open_items.slice() : [];
+        restoredItem = {
+          ...savedSnapshot,
+          id: savedSnapshot.id || triageId,
+          status: "open",
+          _dcc_reopened: true,
+          reopened_at: new Date().toISOString(),
+        };
+        const index = openItems.findIndex((item) => item && item.id === restoredItem.id);
+        if (index >= 0) openItems[index] = { ...openItems[index], ...restoredItem };
+        else openItems.push(restoredItem);
+        state.triage = { ...triage, open_items: openItems };
+        await blockDB.saveDccState(requestedDate, state, (row && row.user_id) || userId, workspaceId);
+      }
       for (const match of matches) {
-        if (match.block_id) await blockDB.deleteBlock(match.block_id);
+        if (!match.block_id) continue;
+        // Keep an audit of the explicit reopen on the inactive row. The active read
+        // excludes it, while an investigation can distinguish Undo from cleanup or
+        // an unrelated block deletion.
+        if (typeof blockDB.getBlock === "function" && typeof blockDB.updateBlock === "function") {
+          const block = await blockDB.getBlock(match.block_id);
+          if (block) {
+            await blockDB.updateBlock(match.block_id, {
+              properties: { ...(block.properties || {}), active: false, reopenedAt: new Date().toISOString() },
+            });
+          }
+        }
       }
       broadcast("dcc-state-changed", { source: "triage-suppression", action: "remove" }, workspaceId);
-      res.json({ ok: true, removed: matches.length });
+      res.json({ ok: true, removed: matches.length, restored_item: restoredItem, date: requestedDate });
     } catch (e) {
       console.error("[triage suppressions] delete failed:", e.message);
       res.status(500).json({ ok: false, error: e.message });
@@ -129,13 +171,16 @@ module.exports = function mount(app, ctx) {
       console.error("[dcc-state ingest] day-state read failed:", e.message);
       return res.status(503).json({ ok: false, error: e.message });
     }
-    const DCC_SECTIONS = ["schedule", "triage", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
+    const DCC_SECTIONS = ["schedule", "watermarks", "notifications", "assessment", "sweep", "sweep_stats", "glymphatic_brief", "meta", "report_card", "orchestrator", "mutations", "completions", "personal", "meetings"];
     // "pushed" is LEGACY as of C3 (the pushed subsystem is deleted; a push is a real move
     // now). Nothing writes the section any more, so it is only here to preserve what old
     // day files already carry rather than drop it on the next ingest.
     const USER_SECTIONS = ["done", "pushed", "deleted", "durChanges", "notes", "actions", "sessions", "mood", "reviewed", "subtasks"];
     const merged = { ...existing };
     for (const key of DCC_SECTIONS) { if (key in incoming) merged[key] = incoming[key]; }
+    if ("triage" in incoming) {
+      merged.triage = triageSuppressions.mergeTriageForIngest(existing.triage, incoming.triage);
+    }
     for (const key of USER_SECTIONS) { if (key in existing && !(key in incoming)) merged[key] = existing[key]; if (key in incoming && !(key in existing)) merged[key] = incoming[key]; }
     merged.date = incoming.date; merged.last_updated_at = new Date().toISOString(); merged.last_updated_by = incoming.last_updated_by || "scheduled-task";
     delete merged.meetings_tomorrow;
@@ -190,6 +235,80 @@ module.exports = function mount(app, ctx) {
       console.error("[dcc-state ingest] db save FAILED:", e.message);
       return res.status(500).json({ ok: false, error: "db save failed: " + e.message });
     }
+    // Import source-side handled signals into the same durable ledger. Replied,
+    // Done, and Delete are durable decisions; age-out is source retention, not a
+    // user resolution. An explicitly reopened DCC snapshot wins over an older
+    // source resolution so Undo remains durable across later publishes.
+    let importedResolutions = 0;
+    try {
+      const resolvedItems = incoming.triage && Array.isArray(incoming.triage.resolved_items)
+        ? incoming.triage.resolved_items
+        : [];
+      const reopenedIds = new Set(
+        (existing.triage && Array.isArray(existing.triage.open_items) ? existing.triage.open_items : [])
+          .filter((item) => item && item._dcc_reopened === true)
+          .map((item) => String(item.id || ""))
+      );
+      const allBlocks = typeof blockDB.getBlocksByKind === "function"
+        ? await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, ingestWorkspaceId)
+        : [];
+      const knownIds = new Set(allBlocks.map(triageSuppressions.suppressionFromBlock).filter(Boolean).map((s) => s.triage_id));
+      for (const item of resolvedItems) {
+        if (!item || !item.id || reopenedIds.has(String(item.id)) || knownIds.has(String(item.id))) continue;
+        const sourceReason = String(item.resolved_reason || item.reason || "").toLowerCase();
+        if (!["replied", "done", "deleted"].includes(sourceReason)) continue;
+        await blockDB.createBlock({
+          type: "block",
+          properties: triageSuppressions.buildSuppressionProperties({
+            triageId: item.id,
+            key: triageSuppressions.triageItemKey(item),
+            itemTitle: item.title || "",
+            reason: sourceReason === "deleted" ? "deleted" : "done",
+            note: sourceReason === "replied" ? "Replied at source" : "",
+            at: item.resolved_at || item.received_at || new Date().toISOString(),
+            conversationId: triageSuppressions.triageConversationId(item),
+            receivedAt: triageSuppressions.triageReceivedAt(item),
+            itemSnapshot: item,
+          }),
+          user_id: ingestUserId || null,
+          workspace_id: ingestWorkspaceId || null,
+        });
+        knownIds.add(String(item.id));
+        importedResolutions += 1;
+      }
+      if (importedResolutions) {
+        console.log(`[dcc-state ingest] ${importedResolutions} source resolution(s) imported`);
+      }
+    } catch (e) {
+      console.error("[dcc-state ingest] source resolution import failed (non-fatal):", e.message);
+    }
+    // Storage remains raw so Undo can reveal the item immediately. After that durable
+    // write, tell a Sweep Suite publisher which of ITS submitted open ids are hidden by
+    // DCC decisions. A new publisher can move those exact ids into resolved_items;
+    // older publishers ignore the additive response field.
+    let suppressedResolutions = [];
+    try {
+      const suppressions = await readTriageSuppressionsForWorkspace(ingestWorkspaceId);
+      const index = triageSuppressions.suppressionIndex(suppressions);
+      const incomingOpen = incoming.triage && Array.isArray(incoming.triage.open_items)
+        ? incoming.triage.open_items
+        : [];
+      suppressedResolutions = incomingOpen.map((item) => {
+        const suppression = triageSuppressions.matchingSuppression(item, index);
+        if (!suppression) return null;
+        return {
+          id: item.id,
+          reason: suppression.reason || "done",
+          resolved_at: suppression.at || "",
+          conversation_id: triageSuppressions.triageConversationId(item),
+        };
+      }).filter(Boolean);
+      if (suppressedResolutions.length) {
+        console.log(`[dcc-state ingest] ${suppressedResolutions.length} triage item(s) suppressed for source reconciliation`);
+      }
+    } catch (e) {
+      console.error("[dcc-state ingest] suppression reconciliation failed (non-fatal):", e.message);
+    }
     // JSON day files are the best-effort local mirror (offline record, fast reads).
     try {
       writeJSON(dayFile, merged);
@@ -198,7 +317,12 @@ module.exports = function mount(app, ctx) {
       console.error("[dcc-state ingest] file mirror failed (db save succeeded):", e.message);
     }
     broadcast("dcc-state-changed", { source: "day-state", date: incoming.date }, ingestWorkspaceId);
-    res.json({ ok: true, date: incoming.date });
+    res.json({
+      ok: true,
+      date: incoming.date,
+      suppressed_resolutions: suppressedResolutions,
+      imported_resolutions: importedResolutions,
+    });
   });
 
   // Additive single-task drop for token-only clients (no password session).

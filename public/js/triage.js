@@ -544,22 +544,41 @@ function closeDismissModal() {
   document.getElementById("tri-dismiss-overlay").classList.remove("open");
   currentDismissId = null;
 }
-function dismissTriage(triageId, note, trivial) {
-  const dismissed = loadDismissed();
-  const wasDismissed = !!dismissed[triageId];
+const _triageSuppressionInFlight = new Set();
+async function dismissTriage(triageId, note, trivial) {
+  if (_triageSuppressionInFlight.has(triageId)) return false;
   const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId)||{id:triageId,title:"Triage item completed"};
-  dismissed[triageId] = { note: note || (trivial ? "Dismissed" : ""), dismissed_at: new Date().toISOString(), trivial: !!trivial };
-  saveDismissed(dismissed);
-  // Done is a decision, not a view preference: record it where it outlives the day.
-  // Fire-and-forget — the local overlay above already re-rendered, and the toast
-  // inside persistTriageSuppression is the only thing a failure needs to say.
-  persistTriageSuppression(triageId, item, "done", dismissed[triageId].note, trivial);
-  if(!wasDismissed&&window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
-    window.SlotRewards.earnTaskCredit(triageTaskPayload(item));
+  _triageSuppressionInFlight.add(triageId);
+  try {
+    const dismissed = loadDismissed();
+    const wasDismissed = !!dismissed[triageId];
+    const completedAt = new Date().toISOString();
+    const saved = await persistTriageSuppression(triageId, item, "done", note || (trivial ? "Dismissed" : ""), trivial);
+    dismissed[triageId] = {
+      note: note || (trivial ? "Dismissed" : ""),
+      dismissed_at: completedAt,
+      trivial: !!trivial,
+      received_at: item.receivedAt || item.received_at || "",
+    };
+    saveDismissed(dismissed);
+    if (__state && __state.triage && saved && saved.suppression) {
+      const list = (__state.triage.suppressed_items || []).filter(s => s.triage_id !== triageId);
+      list.push(saved.suppression);
+      __state.triage.suppressed_items = list;
+    }
+    if(!wasDismissed&&window.SlotRewards&&typeof window.SlotRewards.earnTaskCredit==="function"){
+      window.SlotRewards.earnTaskCredit(triageTaskPayload(item));
+    }
+    closeDismissModal();
+    if(typeof buildScheduleTriage==="function")buildScheduleTriage();
+    buildTriage();
+    return true;
+  } catch (e) {
+    if (typeof showToast === "function") showToast("Could not resolve triage item: " + e.message, "error");
+    return false;
+  } finally {
+    _triageSuppressionInFlight.delete(triageId);
   }
-  closeDismissModal();
-  if(typeof buildScheduleTriage==="function")buildScheduleTriage();
-  buildTriage();
 }
 // ── Durable triage suppressions ──
 //
@@ -580,35 +599,34 @@ function triageItemKeyFor(item) {
   return source + "|" + (item.source_id || item.id || item.title || "");
 }
 async function persistTriageSuppression(triageId, item, reason, note, trivial) {
-  try {
-    const res = await fetch("/api/triage/suppressions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({
-        triage_id: triageId,
-        key: triageItemKeyFor(item),
-        title: (item && item.title) || "",
-        reason: reason || "done",
-        note: note || "",
-        trivial: !!trivial
-      })
-    });
-    if (!res.ok) throw new Error((await res.text()) || ("HTTP " + res.status));
-  } catch (e) {
-    if (typeof showToast === "function") showToast("Handled here, but the save failed: " + e.message, "error");
-  }
+  const res = await fetch("/api/triage/suppressions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({
+      triage_id: triageId,
+      key: triageItemKeyFor(item),
+      title: (item && item.title) || "",
+      reason: reason || "done",
+      note: note || "",
+      trivial: !!trivial,
+      conversation_id: item && (item.conversationId || item.conversation_id || item.thread_id || item.threadId) || "",
+      received_at: item && (item.receivedAt || item.received_at) || "",
+      item: item || null
+    })
+  });
+  if (!res.ok) throw new Error((await res.text()) || ("HTTP " + res.status));
+  return res.json();
 }
 async function removeTriageSuppression(triageId) {
-  try {
-    const res = await fetch("/api/triage/suppressions/" + encodeURIComponent(triageId), {
-      method: "DELETE",
-      credentials: "same-origin"
-    });
-    if (!res.ok) throw new Error((await res.text()) || ("HTTP " + res.status));
-  } catch (e) {
-    if (typeof showToast === "function") showToast("Restored here, but the save failed: " + e.message, "error");
-  }
+  const date = (__state && __state.date) || "";
+  const suffix = date ? ("?date=" + encodeURIComponent(date)) : "";
+  const res = await fetch("/api/triage/suppressions/" + encodeURIComponent(triageId) + suffix, {
+    method: "DELETE",
+    credentials: "same-origin"
+  });
+  if (!res.ok) throw new Error((await res.text()) || ("HTTP " + res.status));
+  return res.json();
 }
 // Suppressions the server already knows about, keyed by triage id. Read straight off
 // the day response so every surface (itinerary strip, tasks drawer, phone) agrees
@@ -631,10 +649,20 @@ async function persistTriageDeletion(triageId, item) {
   await persistTriageSuppression(triageId, item, "deleted");
 }
 async function persistTriageRestore(triageId) {
-  await removeTriageSuppression(triageId);
+  return removeTriageSuppression(triageId);
 }
-function deleteTriageItem(triageId) {
+async function deleteTriageItem(triageId) {
+  if (_triageSuppressionInFlight.has(triageId)) return false;
   const item = (INIT_TRIAGE || []).find(i => i.id === triageId);
+  _triageSuppressionInFlight.add(triageId);
+  try {
+    await persistTriageDeletion(triageId, item);
+  } catch (e) {
+    if (typeof showToast === "function") showToast("Could not delete triage item: " + e.message, "error");
+    _triageSuppressionInFlight.delete(triageId);
+    return false;
+  }
+  _triageSuppressionInFlight.delete(triageId);
   const originalIndex = Math.max(0, (INIT_TRIAGE || []).findIndex(i => i.id === triageId));
   const dismissed = loadDismissed();
   const previousDismissed = dismissed[triageId];
@@ -644,7 +672,6 @@ function deleteTriageItem(triageId) {
   if (__data && __data.triageItems) __data.triageItems = INIT_TRIAGE;
   if (dismissed[triageId]) { delete dismissed[triageId]; saveDismissed(dismissed); }
   if (scheduledTriage[triageId]) { delete scheduledTriage[triageId]; saveTriageScheduled(scheduledTriage); }
-  const deletePersist = persistTriageDeletion(triageId, item);
   const deleted = loadDeletedTriage();
   if (!deleted.includes(triageId)) { deleted.push(triageId); saveDeletedTriage(deleted); }
   const triageParents = loadTriageParents();
@@ -654,9 +681,16 @@ function deleteTriageItem(triageId) {
     showToast("Triage item deleted", "success", 8000, {
       label: "Undo",
       onClick: async () => {
-        await deletePersist.catch(() => {});
-        if (item && !(INIT_TRIAGE || []).some(i => i.id === triageId)) {
-          INIT_TRIAGE.splice(Math.min(originalIndex, INIT_TRIAGE.length), 0, item);
+        let restoredItem = item;
+        try {
+          const restored = await persistTriageRestore(triageId);
+          if (restored && restored.restored_item) restoredItem = restored.restored_item;
+        } catch (e) {
+          if (typeof showToast === "function") showToast("Could not restore triage item: " + e.message, "error");
+          return;
+        }
+        if (restoredItem && !(INIT_TRIAGE || []).some(i => i.id === triageId)) {
+          INIT_TRIAGE.splice(Math.min(originalIndex, INIT_TRIAGE.length), 0, restoredItem);
         }
         if (__data && __data.triageItems) __data.triageItems = INIT_TRIAGE;
         const nextDismissed = loadDismissed();
@@ -676,7 +710,6 @@ function deleteTriageItem(triageId) {
         // any item carrying a "deleted" suppression -- so without this the toast said
         // "restored" and restored nothing.
         dropLocalSuppressionEcho(triageId);
-        await persistTriageRestore(triageId);
         if (typeof buildScheduleTriage === "function") buildScheduleTriage();
         buildTriage();
         if (typeof buildTaskQueuePanel === "function") buildTaskQueuePanel();
@@ -689,6 +722,7 @@ function deleteTriageItem(triageId) {
   buildTriage();
   if(typeof buildTaskQueuePanel==="function")buildTaskQueuePanel();
   if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
+  return true;
 }
 
 let TRIAGE_DELETED_KEY = "pa-triage-deleted-" + ((__state && __state.date) || "unknown");
@@ -858,6 +892,23 @@ function triEscBadge(esc) {
   const cls = "tri-esc-" + (esc || "normal");
   return '<span class="tri-esc '+cls+'">'+(esc || "normal")+'</span>';
 }
+function triageReceivedDate(item, nowValue) {
+  const raw=item&&(item.receivedAt||item.received_at);
+  if(!raw)return null;
+  const received=new Date(raw);
+  if(isNaN(received.getTime()))return null;
+  const now=nowValue?new Date(nowValue):new Date();
+  const includeYear=isNaN(now.getTime())||received.getFullYear()!==now.getFullYear();
+  const dateText=received.toLocaleDateString("en-US",Object.assign({month:"short",day:"numeric"},includeYear?{year:"numeric"}:{}));
+  return {
+    label:"Received "+dateText,
+    title:"Received "+received.toLocaleString("en-US",{dateStyle:"medium",timeStyle:"short"})
+  };
+}
+function triageReceivedDateHtml(item){
+  const received=triageReceivedDate(item);
+  return received?'<span title="'+DCC.esc(received.title)+'">'+DCC.esc(received.label)+'</span>':'';
+}
 function buildTriageCard(item) {
   const dismissed = loadDismissed();
   const isDismissed = !!dismissed[item.id];
@@ -893,6 +944,7 @@ function buildTriageCard(item) {
         (window.DCC.safeUrlAttr(item.link) ? '<a href="' + window.DCC.safeUrlAttr(item.link) + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">' + linkLabel + '</a>' : '') +
         (window.DCC.safeUrlAttr(item.auto_task_url) ? '<a href="' + window.DCC.safeUrlAttr(item.auto_task_url) + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a855f7);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
         draftChip +
+        triageReceivedDateHtml(item) +
         '<span>' + ageParts.join(' \u00b7 ') + '</span>' +
         (isDismissed ? '<span style="color:var(--green)">\u2713 ' + (dismissed[item.id].trivial ? 'Dismissed' : DCC.esc(dismissed[item.id].note || 'Resolved')) + '</span>' : '') +
       '</div>' +
@@ -980,7 +1032,7 @@ function completedTriageTasksForDate(dateStr){
   const byId=new Map((INIT_TRIAGE||[]).map(i=>[i.id,i]));
   Object.keys(suppressed).forEach(id=>{
     if(suppressed[id].reason==="done"&&!byId.has(id)){
-      byId.set(id,{id:id,title:suppressed[id].title||"(handled)",priority:"low"});
+      byId.set(id,Object.assign({id:id,title:suppressed[id].title||"(handled)",priority:"low"},suppressed[id].item||{}));
     }
   });
   return Array.from(byId.values()).map(item=>{
@@ -997,6 +1049,7 @@ function completedTriageTasksForDate(dateStr){
       title:item.title||payload.title,
       completedAt,
       note:done.note||"",
+      receivedAt:item.receivedAt||item.received_at||"",
       source:"triage",
       type:"task",
       durMin:payload.durMin||payload.duration_minutes||30,
@@ -1055,17 +1108,9 @@ function recordTriageScheduled(triageId,item,taskId,toastMsg,opts){
   const st=loadTriageScheduled();
   st[triageId]={taskId:taskId,scheduled_at:new Date().toISOString(),title:item.title};
   saveTriageScheduled(st);
-  // Scheduling is a DECISION, and the day_root write above is only its local echo.
-  // 65a17c1 moved dismiss and delete onto dateless suppression rows because day_root
-  // state expires at midnight and does not cross devices, and it left _triageScheduled
-  // behind -- named in triage-suppressions.js's own header as part of that defect.
-  // This PR is what makes the leftover load-bearing: the morning recap and the courier
-  // both list activeTriageItems(), so without a durable record an item turned into a
-  // task on Tuesday is back in Wednesday's recap asking for a reply, and "Today" mints
-  // a duplicate because `scheduled` cannot see Tuesday's row either.
-  // Reason "done" with a note is deliberate: a dedicated "scheduled" arm would mean
-  // changing the server's reason normaliser, which is a wider change than this needs.
-  persistTriageSuppression(triageId,item,"scheduled","Scheduled",false);
+  // Scheduling creates work but does not resolve the inbound message. The local
+  // link removes it from this day's strip; only Done, Quick Complete, or Delete
+  // writes a durable exact-item resolution.
   if(toastMsg&&typeof showToast==="function")showToast(toastMsg,"success");
   if(opts.deferRepaint||opts.deferRefold)return;
   buildScheduleTriage();
@@ -1179,7 +1224,7 @@ function buildScheduleTriageCard(item){
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
       '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
-      '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+'<span>'+ms(triageDuration(item))+'</span>'+
+      '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+triageReceivedDateHtml(item)+'<span>'+ms(triageDuration(item))+'</span>'+
         (srcHref?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+DCC.esc(item.link_label||item.action_label||"Open")+'</a>':'')+
         (draftHref?'<a href="'+draftHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--green);text-decoration:none;font-weight:600">Review draft</a>':(item.draft_id?'<span style="color:var(--green);font-weight:600">Draft ready</span>':''))+
       '</div>'+
@@ -1416,7 +1461,7 @@ function buildTriage() {
   const inInit = new Set(INIT_TRIAGE.map(i => i.id));
   const completedRemote = Object.keys(suppressed)
     .filter(id => !inInit.has(id) && suppressed[id].reason === "done")
-    .map(id => ({ id: id, title: suppressed[id].title || "(handled)", priority: "low", _remote: true, _note: suppressed[id].note || "" }));
+    .map(id => Object.assign({ id: id, title: suppressed[id].title || "(handled)", priority: "low", _remote: true, _note: suppressed[id].note || "" }, suppressed[id].item || {}));
 
   const high = active.filter(i => i.priority === "high");
   const med = active.filter(i => i.priority === "medium");
@@ -1486,18 +1531,30 @@ function buildTriage() {
       // render: the local overlay is what this tab reads, the server suppression is
       // what every other surface, and tomorrow, reads.
       completedEl.querySelectorAll(".tri-compact-chk").forEach(chk => {
-        chk.addEventListener("click", e => {
+        chk.addEventListener("click", async e => {
           e.stopPropagation();
           const id = chk.dataset.undoTri;
+          let restoredItem = null;
+          if (suppressed[id]) {
+            try {
+              const restored = await removeTriageSuppression(id);
+              restoredItem = restored && restored.restored_item;
+            } catch (err) {
+              if (typeof showToast === "function") showToast("Could not restore triage item: " + err.message, "error");
+              return;
+            }
+          }
           delete dismissed[id];
           saveDismissed(dismissed);
+          if (restoredItem && !(INIT_TRIAGE || []).some(item => item.id === id)) {
+            INIT_TRIAGE.push(restoredItem);
+            if (__data) __data.triageItems = INIT_TRIAGE;
+          }
           if (suppressed[id]) {
             dropLocalSuppressionEcho(id);
-            removeTriageSuppression(id).then(() => {
-              // The item's own fields only return on a fresh day read: it was stripped
-              // from open_items server-side for as long as it was suppressed.
-              if (typeof window.refreshDccStateFromServer === "function") window.refreshDccStateFromServer();
-            });
+            // The item's own fields return on a fresh day read: raw day state was kept
+            // intact while the read-time suppression hid it.
+            if (typeof window.refreshDccStateFromServer === "function") window.refreshDccStateFromServer();
           }
           buildTriage();
         });

@@ -32,6 +32,7 @@ function mustSlice(src, re, what) {
 const KEY_FN = mustSlice(SRC, /^function triageItemKeyFor\(item\) \{[\s\S]*?\n\}/m, "triageItemKeyFor");
 const SERVER_SUPS = mustSlice(SRC, /^function serverTriageSuppressions\(\) \{[\s\S]*?\n\}/m, "serverTriageSuppressions");
 const BUILD = mustSlice(SRC, /^function buildTriage\(\) \{[\s\S]*?\n\}/m, "buildTriage");
+const RECEIVED_DATE = mustSlice(SRC, /^function triageReceivedDate\(item, nowValue\) \{[\s\S]*?\n\}/m, "triageReceivedDate");
 
 // ── the third copy of the key ────────────────────────────────────────────────
 
@@ -56,6 +57,26 @@ test("the CLIENT key builder agrees with the server's, on every shape", () => {
   for (const item of shapes) {
     assert.equal(clientKey(item), triageItemKey(item), "drift on " + JSON.stringify(item));
   }
+});
+
+test("received date uses the source timestamp, adds the year only when needed, and rejects junk", () => {
+  const format = vm.runInNewContext("(" + RECEIVED_DATE + ")", {});
+  assert.equal(format({ receivedAt: "2026-08-03T16:00:00Z" }, "2026-08-06T16:00:00Z").label, "Received Aug 3");
+  assert.equal(format({ received_at: "2025-08-03T16:00:00Z" }, "2026-08-06T16:00:00Z").label, "Received Aug 3, 2025");
+  assert.equal(format({ receivedAt: "not-a-date" }, "2026-08-06T16:00:00Z"), null);
+  assert.equal(format({}, "2026-08-06T16:00:00Z"), null);
+});
+
+test("the view model preserves received_at instead of substituting first_seen_at", () => {
+  const dataSrc = fs.readFileSync(require.resolve("./public/js/data.js"), "utf8");
+  assert.match(dataSrc, /receivedAt:\s*item\.received_at\s*\|\|\s*item\.receivedAt\s*\|\|\s*""/);
+});
+
+test("Done and Delete wait for durable suppression before changing local state", () => {
+  const dismiss = mustSlice(SRC, /^async function dismissTriage\(triageId, note, trivial\) \{[\s\S]*?\n\}/m, "dismissTriage");
+  const remove = mustSlice(SRC, /^async function deleteTriageItem\(triageId\) \{[\s\S]*?\n\}/m, "deleteTriageItem");
+  assert.ok(dismiss.indexOf("await persistTriageSuppression") < dismiss.indexOf("saveDismissed(dismissed)"));
+  assert.ok(remove.indexOf("await persistTriageDeletion") < remove.indexOf("INIT_TRIAGE ="));
 });
 
 // ── the Completed list ───────────────────────────────────────────────────────

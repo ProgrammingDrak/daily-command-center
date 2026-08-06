@@ -290,6 +290,8 @@ function transformState(state) {
         escalation: item.escalation_level || "normal",
         cycleCount: item.cycle_count || 1,
         notes: item.notes || "",
+        receivedAt: item.received_at || item.receivedAt || "",
+        conversationId: item.conversation_id || item.conversationId || item.thread_id || item.threadId || "",
         firstSeen: item.first_seen_at || "",
         lastSeen: item.last_seen_at || ""
       });

@@ -236,23 +236,13 @@ test("triage scheduling matches by id OR by an open visible triage row of the sa
   }
 });
 
-test("a scheduled triage item is recorded DURABLY, and not as completed work", () => {
-  // The load-bearing half of this feature: 65a17c1 moved dismiss and delete onto
-  // dateless suppression rows because day_root state expires at midnight, and left
-  // _triageScheduled behind. Without the durable write, an item turned into a task on
-  // Tuesday is back in Wednesday's recap and "Today" mints a duplicate.
+test("scheduling a triage item does not resolve its inbound message", () => {
   const rec = triageCode.slice(triageCode.indexOf("function recordTriageScheduled("));
   const fn = rec.slice(0, rec.indexOf("\nasync function scheduleTriageOnDate("));
-  assert.match(fn, /persistTriageSuppression\(triageId,item,"scheduled","Scheduled",false\)/,
-    "the decision outlives the day, in the same authority dismiss and delete use");
-  // reason MUST NOT be "done": four client sites read reason==="done" as completed work
-  // (Done tab, Completed Today, the plan timeline, and the day's actual/planned totals),
-  // so "done" billed the item as finished while its new task was still open.
-  assert.equal(/persistTriageSuppression\([^)]*"done"/.test(fn), false,
-    "scheduled is its own disposition, not a completion");
-  // And the server has to preserve the third value rather than collapsing it.
+  assert.equal(/persistTriageSuppression\(/.test(fn), false,
+    "Schedule creates a task link but only Done, Quick Complete, and Delete resolve a message");
   const sup = require("node:fs").readFileSync(require.resolve("./triage-suppressions.js"), "utf8");
-  assert.match(sup, /reason: \(reason === "deleted" \|\| reason === "scheduled"\) \? reason : "done"/);
+  assert.match(sup, /reason: reason === "deleted" \? "deleted" : "done"/);
 });
 
 test("scheduling a triage item onto the VIEWED day refolds the itinerary", () => {
