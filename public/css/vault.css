@@ -439,3 +439,74 @@
   .vault-search-wrap{flex:1 1 100%;max-width:none}
   .vault-rv-inbox-row{flex-direction:column;gap:6px}
 }
+
+/* ── Phase B7: the global graph view ── */
+
+/* Graph mode flips the body to a column, same shape as tl-mode: graph on top,
+   the SAME reading pane below (one #vault-detail, never a second renderer). */
+#vault-graph{display:none}
+#vault-body.gr-mode{flex-direction:column}
+#vault-body.gr-mode #vault-tree{display:none}
+#vault-body.gr-mode #vault-timeline{display:none}
+/* Taller floor than tl-mode's 360px on purpose: a timeline is a strip and reads
+   fine short, but a force layout needs AREA -- squeeze the height and the fit has
+   to scale the whole graph down to fit the narrow axis. */
+#vault-body.gr-mode #vault-graph{display:flex;flex-direction:column;flex:1 1 auto;min-height:min(560px,68vh);max-height:74vh}
+#vault-body.gr-mode #vault-reading{flex:0 0 auto;max-height:38vh;border-top:1px solid var(--border);padding:16px 22px 40px}
+
+.vault-gr-bar{display:flex;align-items:center;gap:6px;padding:8px 4px}
+.vault-gr-spacer{flex:1}
+.vault-gr-btn{font-size:11px;background:var(--bg-elev);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 10px;cursor:pointer}
+.vault-gr-btn:hover{border-color:var(--text-muted)}
+.vault-gr-btn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.vault-gr-btn:disabled{opacity:.5;cursor:default}
+.vault-gr-btn:disabled:hover{border-color:var(--border)}
+
+.vault-gr-surface{position:relative;flex:1 1 auto;min-height:280px;border-top:1px solid var(--border);overflow:hidden}
+/* inset:0 rather than height:100%. A percentage height on an <svg> inside a
+   flex-basis:auto parent does NOT resolve in Chrome -- it fell back to the SVG
+   default 150px inside a 516px surface, so every node below y=150 was clipped
+   away while the DOM still reported correct positions for all 182 of them. The
+   layout and the fit were both computed against the surface's real 516px, which
+   is why the graph looked like it was drawing a third of the corpus into a band.
+   Absolute inset pins the SVG to the surface with no percentage to resolve. */
+.vault-gr-svg{display:block;position:absolute;inset:0;width:100%;height:100%;cursor:grab}
+.vault-gr-svg:active{cursor:grabbing}
+.vault-gr-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:14px;text-align:center;padding:24px}
+
+/* Edges. A body link is a hairline; a TYPED link (a frontmatter field naming its
+   own edge, e.g. players:) is accented and heavier — the distinction Obsidian
+   cannot draw, since its links are all untyped. Dangling targets are dashed. */
+.vault-gr-link{stroke:var(--border);stroke-width:1;opacity:.5}
+.vault-gr-link.typed{stroke:var(--accent);stroke-width:1.6;opacity:.55}
+.vault-gr-link.dangling{stroke:var(--text-muted);stroke-width:1;opacity:.3;stroke-dasharray:3 3}
+.vault-gr-link.hot{opacity:.95;stroke-width:2.2}
+
+/* Nodes */
+.vault-gr-node{cursor:pointer}
+/* Thin separator stroke only: at 1.5px it ate most of a small dot's area. */
+.vault-gr-node circle{stroke:var(--bg,#0f172a);stroke-width:1;transition:opacity .12s}
+.vault-gr-node text{font-size:10.5px;fill:var(--text-muted);pointer-events:none;paint-order:stroke;stroke:var(--bg,#0f172a);stroke-width:2.5px;stroke-linejoin:round}
+.vault-gr-node:hover circle{stroke:var(--text)}
+.vault-gr-node:hover text{fill:var(--text)}
+.vault-gr-node.selected circle{stroke:var(--text);stroke-width:2.5}
+.vault-gr-node.selected text{fill:var(--text);font-weight:600}
+.vault-gr-node.dimmed{opacity:.22}
+.vault-gr-node.ghost circle{stroke-dasharray:2.5 2.5;stroke-width:1.4}
+.vault-gr-node.ghost text{font-style:italic}
+.vault-gr-node.generated circle{stroke:var(--purple,#a78bfa);stroke-width:2;stroke-dasharray:2 2}
+
+/* Legend rail — same glassmorphic panel as the timeline's */
+.vault-gr-legend{position:absolute;top:10px;right:10px;width:210px;max-height:calc(100% - 20px);overflow-y:auto;background:color-mix(in srgb,var(--bg,#0f172a) 86%,transparent);backdrop-filter:blur(3px);border:1px solid var(--border);border-radius:9px;padding:9px 11px;pointer-events:none}
+.vault-gr-legend-h{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;margin-bottom:6px}
+.vault-gr-stat{font-size:11.5px;color:var(--text-muted);margin:2px 0}
+.vault-gr-stat.locked{color:var(--text-muted)}
+.vault-gr-stat.warn{color:var(--amber,#f59e0b)}
+.vault-gr-key{font-size:11px;color:var(--text-muted);margin-top:5px;display:flex;align-items:center;gap:6px}
+.vault-gr-key .k-line{display:inline-block;width:16px;height:0;border-top:1px solid var(--border)}
+.vault-gr-key .k-line.typed{border-top:1.6px solid var(--accent)}
+
+@media (max-width:780px){
+  #vault-body.gr-mode #vault-graph{min-height:300px}
+  .vault-gr-legend{width:150px;font-size:10px}
+}

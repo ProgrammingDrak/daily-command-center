@@ -1126,6 +1126,35 @@ app.delete("/api/vault/node/*", async (req, res) => {
   }
 });
 
+// Whole-corpus graph for the global graph view. Registered BEFORE the /graph/*
+// per-slug route below: Express matches in order, and `/graph` with no trailing
+// segment would not hit `/graph/*` anyway, but keeping them adjacent in this
+// order makes the pair obvious to the next reader.
+//
+// Nodes arrive pre-colored through the same nodeColor() the timeline uses, so
+// both views resolve a node to the same hue from one ontology implementation
+// (parse.js colorForTags) rather than two. Sensitive nodes are dropped by
+// graphAll() on a locked session, not redacted -- see the note there.
+app.get("/api/vault/graph", (req, res) => {
+  if (!vaultReady(res)) return;
+
+  const g = ctx.vault.graphAll({ includeSensitive: isUnlocked(req) });
+
+  const parse = loadParse(ctx);
+  const ontology = loadOntology(ctx);
+  let unmapped = "#9ca3af";
+  if (ontology && ontology.render && ontology.render.unmapped) unmapped = ontology.render.unmapped;
+
+  res.json({
+    counts: g.counts,
+    unmapped,
+    ontologyAvailable: !!ontology,
+    nodes: g.nodes.map((n) => ({ ...n, color: nodeColor(n.tags, ontology, parse, unmapped) })),
+    edges: g.edges,
+    ghosts: g.ghosts,
+  });
+});
+
 app.get("/api/vault/graph/*", (req, res) => {
   if (!vaultReady(res)) return;
   const slug = req.params[0];

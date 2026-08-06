@@ -302,6 +302,11 @@ class VaultStore extends EventEmitter {
     return true;
   }
 
+  // Defers to _isIgnored rather than carrying its own inline dot-check. It used to
+  // have one, which meant the boot scan and the chokidar watcher enforced two
+  // separate ignore rules -- so teaching the watcher to skip node_modules did
+  // nothing to the initial index, and 152 package READMEs still landed as nodes.
+  // One rule, both readers.
   async _walkMarkdown(dir) {
     const out = [];
     const walk = async (d) => {
@@ -309,8 +314,8 @@ class VaultStore extends EventEmitter {
       try { entries = await fsp.readdir(d, { withFileTypes: true }); }
       catch { return; }
       for (const entry of entries) {
-        if (entry.name.startsWith(".")) continue;
         const full = path.join(d, entry.name);
+        if (this._isIgnored(full)) continue;
         if (entry.isDirectory()) { await walk(full); continue; }
         if (entry.name.endsWith(".md")) out.push(full);
       }
@@ -478,11 +483,21 @@ class VaultStore extends EventEmitter {
   // developed) would make chokidar ignore the whole tree and silently kill live
   // sync. Relative evaluation watches the vault wherever it lives; prod (no
   // dot-ancestor) behaves exactly as before. Extracted for unit testing.
+  // Dot-segments (.git, .mycelium) were the original rule. node_modules had to
+  // join them: tools/mcp-server/ and tools/media/ install dependencies INSIDE the
+  // vault, and every npm package ships a README.md, so a local clone with deps
+  // installed indexed 152 package READMEs as vault nodes -- 46% of the corpus,
+  // every one of them an orphan, polluting list/search/orphans/timeline and
+  // burying the real graph. Prod never showed it (its clone is --depth 1 and
+  // node_modules is gitignored), which is exactly why it went unnoticed.
+  //
+  // The MCP server's own walker and .mycelium/lint/*.js already skip node_modules;
+  // VaultStore was the one reader that did not. A dependency's README is not a note.
   _isIgnored(p) {
     if (p.endsWith(".tmp") || p.endsWith(".sync-queue.json")) return true;
     const rel = path.relative(this.vaultDir, p);
     if (!rel || rel.startsWith("..")) return false; // the root itself / outside
-    return rel.split(path.sep).some((seg) => seg.startsWith("."));
+    return rel.split(path.sep).some((seg) => seg.startsWith(".") || seg === "node_modules");
   }
 
   _startWatcher() {
@@ -1170,6 +1185,123 @@ class VaultStore extends EventEmitter {
       outlinks,
       backlinks,
       neighbors: Array.from(neighborSet),
+    };
+  }
+
+  // Whole-corpus graph for the global graph view. graph(slug) above is the 1-hop
+  // neighbourhood the reading pane's Linked-mentions panel wants; this is every
+  // node and every edge at once, laid out client-side by d3-force.
+  //
+  // Edge resolution matches routes/vault.js renderWikilinks() EXACTLY: an exact
+  // slug hit is a real edge, anything else is dangling. DCC deliberately has no
+  // basename fallback (the MCP server does), so `[[collins]]` against a node at
+  // `people/collins-quaintance` is dangling here just as it renders dimmed in the
+  // note. If the graph resolved links the reading pane calls dead, the two
+  // surfaces would disagree about the same link and neither would be trustworthy.
+  //
+  // Dangling targets come back separately as `ghosts` with their inbound count,
+  // never mixed into `nodes` -- they have no file, so they have no type, date or
+  // tags, and letting them into the node list would corrupt every count derived
+  // from it. The client draws them only on request. They are worth drawing at
+  // least once: the folded journal import carries ~50 links into the OLD vault's
+  // folder names, and this view is the only place that decay is visible.
+  //
+  // Sensitive nodes on a locked session are dropped ENTIRELY, not collapsed to
+  // anonymous dots the way the timeline does it. A dateless grey dot on an axis
+  // leaks nothing; a graph node leaks structure -- its degree plus its visible
+  // neighbours' titles narrow down what it is. Their edges go with them.
+  graphAll({ includeSensitive = false } = {}) {
+    const visible = (slug) => includeSensitive || !isSensitivePath(slug);
+
+    const nodes = [];
+    const index = new Map();            // slug -> position in nodes
+    for (const node of this.nodes.values()) {
+      const slug = node.slug;
+      if (!visible(slug)) continue;
+      const fm = node.frontmatter || {};
+      index.set(slug, nodes.length);
+      nodes.push({
+        id: slug,
+        slug,
+        title: fm.title || slug.split("/").pop(),
+        type: fm.type || "untyped",
+        date: nodeDate(fm),
+        tags: facetValues(fm.tags),
+        // Weekly-review notes are GENERATED and link every note they surface, so
+        // they read as hubs they did not earn (the F2 lesson: an artifact that
+        // links into the graph it describes corrupts its own signal). Flagged so
+        // the client can hide them; orphans() already discounts their backlinks.
+        generated: slug.startsWith("notes/reviews/"),
+        sensitive: isSensitivePath(slug),
+        deg: 0,
+      });
+    }
+
+    const edges = [];
+    const ghostMap = new Map();         // unresolved target -> {srcs:Set, links:n}
+    // Every outlink not drawn because an ENDPOINT is outside the visible node set
+    // -- a hidden sensitive node at either end, or a stale outlinks entry whose
+    // source node is gone. indexSummary().totalEdges counts raw outlinks including
+    // those, so they have to be counted here too or the lossless identity breaks.
+    // (It did: skipping a hidden SOURCE with a bare `continue` silently dropped
+    // its whole link list, which is what the B7 identity assertion caught.)
+    let hiddenEdges = 0;
+    for (const [source, links] of this.outlinks) {
+      if (!index.has(source)) { hiddenEdges += links.length; continue; }
+      for (const { target, type } of links) {
+        if (index.has(target)) {
+          edges.push({ s: source, t: target, type: type || "body" });
+          nodes[index.get(source)].deg++;
+          nodes[index.get(target)].deg++;
+        } else if (this.nodes.has(target)) {
+          // Resolves to a real node we are deliberately hiding (sensitive on a
+          // locked session). NOT a dangling link -- do not report it as decay,
+          // and do not leak the target slug. Counted only in aggregate.
+          hiddenEdges++;
+        } else {
+          if (!ghostMap.has(target)) ghostMap.set(target, { srcs: new Set(), links: 0 });
+          const g = ghostMap.get(target);
+          g.srcs.add(source);
+          g.links++;
+        }
+      }
+    }
+
+    // Ghosts carry their SOURCES, not just a count: the graph draws a dangling
+    // target as a hollow satellite wired to the notes pointing at it, which is
+    // the only way the view answers "which notes have rot in them". A bare count
+    // renders an unattached dot nobody can act on.
+    //
+    // Two counts on purpose. `inbound` is DISTINCT notes (what the UI says out
+    // loud, and what sources.length is); `links` is raw wikilink occurrences,
+    // which is higher when one note points at the same dead target twice. Both
+    // are here so the totals below can be audited against the store's own
+    // totalEdges -- a graph that quietly loses edges is worse than no graph.
+    const ghosts = Array.from(ghostMap, ([target, g]) => ({
+      target,
+      inbound: g.srcs.size,
+      links: g.links,
+      sources: Array.from(g.srcs).sort(),
+    })).sort((a, b) => b.inbound - a.inbound || (a.target < b.target ? -1 : 1));
+
+    return {
+      nodes,
+      edges,
+      ghosts,
+      counts: {
+        nodes: nodes.length,
+        edges: edges.length,
+        ghosts: ghosts.length,
+        // Raw dangling wikilink occurrences, and edges suppressed because one end
+        // is a hidden sensitive node. With these,
+        //   edges + danglingLinks + hiddenEdges === indexSummary().totalEdges
+        // for a locked session, so the view is provably lossless. The graph-store
+        // test asserts exactly that identity.
+        danglingLinks: ghosts.reduce((s, g) => s + g.links, 0),
+        hiddenEdges,
+        orphans: nodes.filter((n) => n.deg === 0).length,
+        hidden: includeSensitive ? 0 : this.nodes.size - nodes.length,
+      },
     };
   }
 
