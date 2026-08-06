@@ -50,8 +50,10 @@ const dayRoot = (props) => ({ id: "root", type: "day_root", properties: props ||
 function FakeEl(tag) {
   const el = {
     tag, id: "", className: "", innerHTML: "", textContent: "", disabled: false,
-    children: [], style: {}, dataset: {}, _q: new Map(), _on: {},
+    hidden: false, children: [], style: {}, dataset: {}, _attrs: new Map(), _q: new Map(), _on: {},
     classList: { _s: new Set(), add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); }, contains(c) { return this._s.has(c); } },
+    setAttribute(k, v) { el._attrs.set(k, String(v)); },
+    getAttribute(k) { return el._attrs.has(k) ? el._attrs.get(k) : null; },
     addEventListener(ev, fn) { (el._on[ev] = el._on[ev] || []).push(fn); },
     // The real DOM has this, and the footer's re-bind guard needs it: without it the
     // harness silently keeps every handler openPrompt ever attached, so a fix for the
@@ -72,14 +74,19 @@ function FakeEl(tag) {
       return c;
     },
     remove() { el._removed = true; },
-    querySelector(sel) { if (!el._q.has(sel)) el._q.set(sel, FakeEl("div")); return el._q.get(sel); },
+    contains(node) { for (let cur = node; cur; cur = cur._parent) if (cur === el) return true; return false; },
+    focus() { el._focused = true; },
+    querySelector(sel) {
+      if (!el._q.has(sel)) { const child = FakeEl("div"); child._parent = el; el._q.set(sel, child); }
+      return el._q.get(sel);
+    },
     // Return the stubs this element has actually handed out for button selectors, so
     // busy()'s disable pass is observable instead of writing into the void.
     querySelectorAll(sel) {
       if (sel !== "button") return [];
       return [...el._q.entries()].filter(([k]) => /^\.(cu-|catchup-)/.test(k)).map(([, v]) => v);
     },
-    _removed: false
+    _removed: false, _focused: false, _parent: null
   };
   return el;
 }
@@ -87,6 +94,7 @@ function fakeDocument() {
   const byId = new Map();
   return {
     readyState: "complete",
+    activeElement: null,
     body: { appendChild(el) { if (el.id) byId.set(el.id, el); return el; } },
     getElementById(id) { return byId.get(id) || null; },
     createElement(tag) { return FakeEl(tag); },
@@ -286,6 +294,110 @@ test("Backlog routes through toBacklog, and a REFUSED action leaves the row in p
   assert.equal(called, true);
   assert.equal(r._removed, false, "a refused action must not remove the row");
   assert.equal(r.querySelector(".cu-drop").disabled, false, "and must re-enable the buttons");
+});
+
+test("Complete routes the root and full pool through the shared origin-day completion", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [
+    dayRoot(), blk("p", d, { title: "Slipped" }), blk("k", d, { title: "Kid", subtaskOf: "p" })
+  ] }, [d]);
+  await ctx.window.initCatchUp();
+  let got = null;
+  const r = row0(ctx);
+  ctx.window.DCC.Carryover.complete = async (ev, pool) => {
+    got = { id: ev.id, pool: pool.length, disabled: r.querySelector(".cu-drop").disabled };
+    return { removed: [ev.id, "k"] };
+  };
+  r.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  await settled();
+  assert.deepEqual(got, { id: "p", pool: 2, disabled: true });
+  assert.equal(r._removed, true, "the completed row leaves the review");
+});
+
+test("a failed completion stays in the review instead of pretending it persisted", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
+  await ctx.window.initCatchUp();
+  const r = row0(ctx);
+  ctx.window.DCC.Carryover.complete = async () => null;
+  r.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  await settled();
+  assert.equal(r._removed, false);
+  assert.equal(r.querySelector(".cu-drop").disabled, false, "the user can retry after a failed write");
+});
+
+test("completing the focused row moves focus to the next completion control", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [dayRoot(), blk("a", d, { title: "A" }), blk("b", d, { title: "B" })] }, [d]);
+  await ctx.window.initCatchUp();
+  const rows = ctx.document.getElementById("catchup-overlay").querySelector("#catchup-list").children;
+  const firstComplete = rows[0].querySelector(".cu-complete");
+  const secondComplete = rows[1].querySelector(".cu-complete");
+  ctx.document.activeElement = firstComplete;
+  ctx.window.DCC.Carryover.complete = async (ev) => ({ removed: [ev.id] });
+  firstComplete.fire("click", { stopPropagation() {} });
+  await settled();
+  assert.equal(secondComplete._focused, true);
+});
+
+test("completing the final focused row returns focus to the task launcher", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [dayRoot(), blk("a", d, { title: "A" })] }, [d]);
+  const launcher = ctx.document.createElement("button");
+  launcher.id = "dcc-launcher-btn";
+  ctx.document.body.appendChild(launcher);
+  await ctx.window.initCatchUp();
+  const row = row0(ctx);
+  const complete = row.querySelector(".cu-complete");
+  ctx.document.activeElement = complete;
+  ctx.window.DCC.Carryover.complete = async (ev) => ({ removed: [ev.id] });
+  complete.fire("click", { stopPropagation() {} });
+  await settled();
+  assert.equal(launcher._focused, true);
+});
+
+test("the full title is available on hover and the row expands read-only details", async () => {
+  const d = ymd(1);
+  const longTitle = "Review the full Offers Script draft and all implementation notes";
+  const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: longTitle })] }, [d]);
+  await ctx.window.initCatchUp();
+  const r = row0(ctx);
+  const title = r.querySelector(".carryover-row-title");
+  const toggle = r.querySelector(".cu-details-toggle");
+  const panel = r.querySelector(".cu-details");
+  assert.equal(title.title, longTitle, "native hover text carries the untruncated title");
+  assert.equal(toggle.getAttribute("aria-label"), "Show notes and details for " + longTitle);
+
+  ctx.window.DCC.Carryover.loadDetails = async () => ({
+    title: longTitle,
+    details: ["Compare the new fallback against the control."],
+    notes: ["Ask Growth to review the final copy."]
+  });
+  toggle.fire("click");
+  await settled();
+  assert.equal(panel.hidden, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(toggle.getAttribute("aria-label"), "Hide notes and details for " + longTitle);
+  const sections = r.querySelector(".cu-details-body").children;
+  assert.deepEqual(sections.map(s => s.children[0].textContent), ["Details", "Notes"]);
+  assert.deepEqual(sections.map(s => s.children[1].textContent), [
+    "Compare the new fallback against the control.", "Ask Growth to review the final copy."
+  ]);
+});
+
+test("details expansion uses a native button and explains an empty task", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
+  await ctx.window.initCatchUp();
+  const r = row0(ctx);
+  const toggle = r.querySelector(".cu-details-toggle");
+  ctx.window.DCC.Carryover.loadDetails = async () => ({ title: "Slipped", details: [], notes: [] });
+  assert.match(r.innerHTML, /<button type="button" class="cu-details-toggle"/,
+    "native button semantics provide Enter and Space activation without a wrapper key handler");
+  toggle.fire("click");
+  await settled();
+  assert.equal(r.querySelector(".cu-details").hidden, false);
+  assert.equal(r.querySelector(".cu-details-body").textContent, "No notes or details on this task.");
 });
 
 test("Move all to today drains the queue, defers the refold, and marks the day reviewed", async () => {
@@ -550,7 +662,7 @@ test("the calendar button is really in both row kinds' markup", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
   await ctx.window.initCatchUp();
-  const rows = [...rowsOf(ctx)].filter(r => r.className === "carryover-row");
+  const rows = [...rowsOf(ctx)].filter(r => r.className && r.className.indexOf("carryover-row") > -1);
   assert.equal(rows.length, 2);
   for (const r of rows) {
     assert.match(r.innerHTML, /<div class="cu-title-line">/, "the name and the button share a line");

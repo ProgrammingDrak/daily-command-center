@@ -235,6 +235,34 @@ test("complete marks the row AND every descendant, each on its ORIGIN day", asyn
   assert.deepEqual(plain(res.removed.slice().sort()), ["k", "p"]);
 });
 
+test("complete refuses to remove the row when an origin-day write fails", async () => {
+  const { d, days } = parentAndKid();
+  const h = load(days, [d]);
+  const { rows } = await h.CO.collect();
+  const parent = rows.find(r => r.id === "p");
+  h.ctx.commitDoneOnDate = async () => { throw new Error("offline"); };
+
+  const res = await h.CO.complete(parent, rows);
+  assert.equal(res, null);
+  assert.equal(h.calls.toast.kind, "error");
+  assert.match(h.calls.toast.msg, /Could not mark complete/);
+});
+
+test("loadDetails combines task fields with linked origin-day note text", async () => {
+  const { d, days } = parentAndKid();
+  days[d][1].properties.detail = "Compare the proposed flow.";
+  days[d].push({
+    id: "note-p", type: "block", date: d, parent_id: "p",
+    properties: { _sourceTaskId: "p", html: "<p>Ask Growth to review.</p>", text: "Ask Growth to review." }
+  });
+  const h = load(days, [d]);
+  const { rows } = await h.CO.collect();
+  const payload = await h.CO.loadDetails(rows.find(r => r.id === "p"));
+  assert.equal(payload.title, "Do Laundry");
+  assert.deepEqual(plain(payload.details), ["Compare the proposed flow."]);
+  assert.deepEqual(plain(payload.notes), ["sort darks", "Ask Growth to review."]);
+});
+
 // ───────────────────────────── moveTo ─────────────────────────────
 
 test("moveTo reschedules the ORIGIN block id to the target date and carries the subtree", async () => {

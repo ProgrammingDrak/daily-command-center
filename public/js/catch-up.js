@@ -183,16 +183,34 @@
 
     const rowEls = new Map();   // unfinished rows, keyed by ev.id
     const triEls = new Map();   // triage rows, keyed by triage item id
+    let detailSeq = 0;
     // Closing on the last row is the same courtesy either list gives: once there is
     // nothing left to answer, the modal has no reason to sit there. An unexpanded
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
     const closeIfDrained = () => { if (!rowEls.size && !triEls.size && !olderPending) close(); };
-    const settle = (res) => {
+    const settle = (res, focusRow) => {
       if (!res) return false;
-      (res.removed || []).forEach(id => { const el = rowEls.get(id); if (el) { el.remove(); rowEls.delete(id); } });
+      const orderedRows = Array.from(rowEls.values());
+      const restoreIndex = focusRow ? orderedRows.indexOf(focusRow) : -1;
+      (res.removed || []).forEach(id => {
+        const el = rowEls.get(id);
+        if (!el) return;
+        el.remove();
+        rowEls.delete(id);
+      });
       closeIfDrained();
+      // Removing the focused completion button otherwise drops keyboard users back
+      // onto the document. Keep their place in the review whenever another row remains.
+      if (restoreIndex >= 0) {
+        const remaining = new Set(rowEls.values());
+        const next = orderedRows.slice(restoreIndex + 1).find(row => remaining.has(row));
+        const previous = orderedRows.slice(0, restoreIndex).reverse().find(row => remaining.has(row));
+        const target = (next || previous)?.querySelector(".cu-complete")
+          || document.getElementById("dcc-launcher-btn");
+        if (target && typeof target.focus === "function") target.focus();
+      }
       return true;
     };
     // Only label the groups when BOTH are on screen; with one kind of row the hint
@@ -274,11 +292,19 @@
       const kids = CO.descendants(ev, pool).length;
       const d = (typeof dur === "function") ? Math.max(0, dur(ev)) : 0;
       const durLabel = d > 0 ? ((typeof ms === "function") ? ms(d) : d + "m") : "step";
-      el.className = "carryover-row";
+      const title = ev.title || "Untitled";
+      const detailId = "cu-task-details-" + (++detailSeq);
+      el.className = "carryover-row cu-task-row";
       el.innerHTML =
+        '<button type="button" class="cu-complete" aria-label="' + esc("Mark complete: " + title) + '" title="Mark complete">' +
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>' +
+        '</button>' +
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
-            '<div class="carryover-row-title"></div>' +
+            '<button type="button" class="cu-details-toggle" aria-expanded="false" aria-controls="' + detailId + '">' +
+              '<span class="carryover-row-title"></span>' +
+              '<svg class="cu-details-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>' +
+            '</button>' +
             calBtn("cu-cal", "Move to a day") +
           '</div>' +
           '<div class="carryover-row-meta">' + esc(durLabel) +
@@ -291,17 +317,78 @@
           '<button class="carryover-btn carryover-btn-schedule cu-tomorrow">Tomorrow</button>' +
           '<button class="carryover-btn cu-backlog">Backlog</button>' +
           '<button class="carryover-btn carryover-btn-drop cu-drop">Drop</button>' +
+        '</div>' +
+        '<div class="cu-details" id="' + detailId + '" role="region" aria-label="Task notes and details" hidden>' +
+          '<div class="cu-details-full-title"></div>' +
+          '<div class="cu-details-body" aria-live="polite">Loading details…</div>' +
         '</div>';
-      el.querySelector(".carryover-row-title").textContent = ev.title || "Untitled";
+      const titleEl = el.querySelector(".carryover-row-title");
+      const toggleEl = el.querySelector(".cu-details-toggle");
+      const detailEl = el.querySelector(".cu-details");
+      const detailBody = el.querySelector(".cu-details-body");
+      detailEl.hidden = true;
+      titleEl.textContent = title;
+      titleEl.title = title;
+      toggleEl.setAttribute("aria-label", "Show notes and details for " + title);
+      el.querySelector(".cu-details-full-title").textContent = title;
+
+      let detailLoaded = false;
+      const renderDetailSection = (labelText, values) => {
+        const section = document.createElement("div");
+        section.className = "cu-details-section";
+        const labelEl = document.createElement("div");
+        labelEl.className = "cu-details-label";
+        labelEl.textContent = labelText;
+        const textEl = document.createElement("div");
+        textEl.className = "cu-details-text";
+        textEl.textContent = values.join("\n\n");
+        section.appendChild(labelEl);
+        section.appendChild(textEl);
+        detailBody.appendChild(section);
+      };
+      const openDetails = async (opening) => {
+        detailEl.hidden = !opening;
+        toggleEl.setAttribute("aria-expanded", opening ? "true" : "false");
+        toggleEl.setAttribute("aria-label", (opening ? "Hide" : "Show") + " notes and details for " + title);
+        el.classList[opening ? "add" : "remove"]("details-open");
+        if (!opening || detailLoaded) return;
+        detailLoaded = true;
+        detailBody.textContent = "Loading details…";
+        try {
+          const payload = (typeof CO.loadDetails === "function")
+            ? await CO.loadDetails(ev)
+            : { details: [ev.detail].filter(Boolean), notes: [ev.notes].filter(Boolean) };
+          detailBody.textContent = "";
+          detailBody.innerHTML = "";
+          const details = (payload && Array.isArray(payload.details)) ? payload.details : [];
+          const notes = (payload && Array.isArray(payload.notes)) ? payload.notes : [];
+          if (details.length) renderDetailSection("Details", details);
+          if (notes.length) renderDetailSection("Notes", notes);
+          if (!details.length && !notes.length) detailBody.textContent = "No notes or details on this task.";
+        } catch (e) {
+          detailBody.textContent = "Could not load this task's details.";
+          detailLoaded = false;
+        }
+      };
+      const toggleDetails = () => openDetails(detailEl.hidden);
+      toggleEl.addEventListener("click", toggleDetails);
+
       const busy = (on) => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
-      const run = async (fn) => { busy(true); if (!settle(await fn())) busy(false); };
+      // Capture this row BEFORE disabling its buttons. Browsers move focus off a
+      // disabled control immediately, so inspecting document.activeElement after
+      // the async write returns is already too late to restore keyboard position.
+      const run = async (fn) => { busy(true); if (!settle(await fn(), el)) busy(false); };
+      el.querySelector(".cu-complete").addEventListener("click", e => {
+        e.stopPropagation();
+        run(() => CO.complete(ev, pool));
+      });
       el.querySelector(".cu-today").addEventListener("click", () => run(() => CO.moveTo(ev, todayStr(), { pool })));
       el.querySelector(".cu-tomorrow").addEventListener("click", () => run(() => CO.moveTo(ev, tomorrowStr(), { pool })));
       el.querySelector(".cu-backlog").addEventListener("click", () => run(() => CO.toBacklog(ev, pool)));
       el.querySelector(".cu-drop").addEventListener("click", () => run(() => CO.drop(ev, pool)));
       // The calendar pick lands in the SAME mover the day buttons use — one write
       // path, so an arbitrary day can't behave differently from Today.
-      wireCal(el.querySelector(".cu-cal"), ev.title || "Untitled", (d2) => run(() => CO.moveTo(ev, d2, { pool })));
+      wireCal(el.querySelector(".cu-cal"), title, (d2) => run(() => CO.moveTo(ev, d2, { pool })));
       rowEls.set(ev.id, el);
       listEl.appendChild(el);
     });

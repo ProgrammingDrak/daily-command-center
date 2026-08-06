@@ -261,7 +261,7 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
       // report a working un-promote as broken.
       if (extra && extra.date !== undefined) row.date = extra.date;
       calls.rowWrites.push({ blockId, properties: { ...next }, extra: extra || null });
-      return Promise.resolve();
+      return Promise.resolve(row);
     },
     _onParentCompleted: () => {},
     _beginCompletionCelebration: () => null,
@@ -422,6 +422,26 @@ test("cascade:false suppresses it, so the carryover lane's own loop is not doubl
   assert.equal(rows.find((r) => r.id === "row-t1").properties.status, "done", "the named node still completes");
   assert.equal(rows.find((r) => r.id === "row-t1-kid").properties.status, "open",
     "the caller owns the walk; a second one multiplies the queued writes");
+});
+
+test("cross-day cascade:false refuses a completion whose row write did not persist", async () => {
+  const { context, calls } = makeChainCtx({ viewing: TODAY });
+  context.enqueueRowPropsWrite = () => Promise.resolve(null);
+  await assert.rejects(
+    vm.runInContext(`commitDoneOnDate("t1","${PAST}",{cascade:false})`, context),
+    /Completion did not persist/
+  );
+  assert.equal(calls.credit.length, 0, "a refused write must not bank completion credit");
+});
+
+test("cross-day cascade:false refuses a missing origin row instead of claiming success", async () => {
+  const { context, calls } = makeChainCtx({ viewing: TODAY, rows: [] });
+  await assert.rejects(
+    vm.runInContext(`commitDoneOnDate("missing","${PAST}",{cascade:false})`, context),
+    /Completion target unavailable/
+  );
+  assert.equal(calls.credit.length, 0);
+  assert.equal(calls.rowWrites.length, 0);
 });
 
 test("plain toggleDone on the day being viewed marks the ROW done, and un-checking clears it", async () => {

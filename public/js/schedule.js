@@ -443,7 +443,9 @@ async function commitDoneOnDate(id,dateStr,opts){
   // re-fetches the same day and writes its own subtree again, so a 6-node chain goes from 6
   // queued writes to 21, all of them serialized behind one global chain.
   if(target&&opts.cascade===false){
-    if(typeof enqueueRowPropsWrite==="function")enqueueRowPropsWrite(target.id,p=>_doneRowProps(p,nowIso));
+    if(typeof enqueueRowPropsWrite!=="function")throw new Error("Completion queue unavailable");
+    const persisted=await enqueueRowPropsWrite(target.id,p=>_doneRowProps(p,nowIso));
+    if(!persisted)throw new Error("Completion did not persist");
   }else if(target){
     const subtree=[target];
     const seen=new Set([String(target.id)]);
@@ -501,6 +503,10 @@ async function commitDoneOnDate(id,dateStr,opts){
     // Serialized by the shared queue, so these cannot clobber each other's properties.
     subtree.forEach(b=>{if(typeof enqueueRowPropsWrite==="function")enqueueRowPropsWrite(b.id,p=>_doneRowProps(p,nowIso));});
     if(subtree.length>1)log("checked-on",id,"Completed "+(subtree.length-1)+" nested task(s) on "+dateStr);
+  }else if(opts.cascade===false){
+    // Carryover completion is row-authoritative. A failed day read or a missing
+    // target cannot fall back to an absent legacy overlay and still look successful.
+    throw new Error("Completion target unavailable");
   }else{
     // No row on that date. The one live shape for this is an archive-day ev projected
     // from `schedule.timeline`; keep the completion rather than dropping it, loudly.

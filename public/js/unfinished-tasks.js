@@ -238,6 +238,52 @@
     return hit || ((typeof bs.get === "function") ? bs.get(id) : null);
   }
 
+  // Read-only detail payload for any carryover surface. A carryover task belongs to
+  // its origin day, while the normal Task Details modal resolves notes from the day
+  // currently being viewed. Opening that editor here would therefore show an empty
+  // shell and could save new notes onto the wrong day. Keep the cross-day lookup next
+  // to the other origin-aware operations and return plain text for safe rendering.
+  async function loadDetails(ev) {
+    const u = originOf(ev);
+    const bs = window.blockStore;
+    const block = await _originBlock(u.sourceId, u.sourceDate);
+    const props = (block && block.properties) || {};
+    const details = [];
+    const notes = [];
+    const add = (list, value) => {
+      if (typeof value !== "string") return;
+      const text = value.trim();
+      if (text && !list.includes(text)) list.push(text);
+    };
+
+    add(details, ev && ev.detail);
+    add(details, ev && ev.description);
+    add(details, props.detail);
+    add(details, props.description);
+    add(notes, ev && ev.notes);
+    add(notes, props.notes);
+
+    // Rich notes are separate blocks keyed by the task block id, local id, or the
+    // legacy `_sourceTaskId`. saveNotes writes both html and plain text; use only the
+    // text representation here so the caller never has to trust stored markup.
+    const keys = new Set([u.sourceId, u.sourceLocalId, ev && ev.id].filter(Boolean));
+    const cached = (bs && u.sourceDate && typeof bs.getRangeCache === "function")
+      ? bs.getRangeCache(u.sourceDate) : null;
+    const rows = (cached && Array.isArray(cached.blocks)) ? cached.blocks : [];
+    rows.forEach(b => {
+      const p = (b && b.properties) || {};
+      const linked = keys.has(b && b.parent_id) || keys.has(p._sourceTaskId);
+      const noteRow = b && (b.type === "note" || (p._sourceTaskId && p.html));
+      if (linked && noteRow) add(notes, p.text);
+    });
+
+    return {
+      title: (ev && ev.title) || props.title || "Untitled",
+      details: details,
+      notes: notes
+    };
+  }
+
   // state.js owns the canonical parent-edge precedence (wrapId before subtaskOf) and
   // documents it as a live divergence with the server twin (lib/reschedule.js
   // collectSubtreeBlockIds is subtaskOf-first) that has to be kept in step. Prefer
@@ -288,7 +334,13 @@
     for (const t of [ev].concat(kids)) {
       const tu = originOf(t);
       const date = tu.sourceDate || u.sourceDate;
-      try { if (typeof commitDoneOnDate === "function") await commitDoneOnDate(writeId(t) || t.id, date, { cascade: false }); } catch (e) {}
+      try {
+        if (typeof commitDoneOnDate !== "function") throw new Error("Completion writer unavailable");
+        await commitDoneOnDate(writeId(t) || t.id, date, { cascade: false });
+      } catch (e) {
+        if (typeof showToast === "function") showToast("Could not mark complete: " + ev.title, "error");
+        return null;
+      }
       removed.push(t.id);
     }
     if (window.blockStore && typeof window.blockStore.invalidateRangeCache === "function") window.blockStore.invalidateRangeCache(u.sourceDate);
@@ -610,6 +662,7 @@
     descendants: descendants,
     openRows: openRows,
     rootsOf: rootsOf,
+    loadDetails: loadDetails,
     recollect: recollect,
     refoldViewedDay: refoldViewedDay,
     complete: complete,
