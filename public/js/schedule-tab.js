@@ -1131,7 +1131,9 @@ function buildSchedule(){
       timeStr:timeStr.replace(/ (AM|PM)/,""),
       checkTitle:"Completed triage",
       barColor:"var(--purple,#a78bfa)",
-      title:ev.title,
+      // renderCompactRow's contract is "caller decides escaping" (itinerary-card.js),
+      // and a triage title is third-party text (swept Gmail subjects, Slack message bodies) and a handled one now PERSISTS server-side, so it replays here on every device on every load.
+      title:DCC.esc(ev.title),
       chipsHtml:'<span class="tag tag-task" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a78bfa)">Triage</span>',
       timeRange:timeStr
     });
@@ -1875,7 +1877,8 @@ function showStatPopover(statId, event) {
       html += triageDone.map(ev => {
         const t = ev.completedAt ? new Date(ev.completedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '—';
         const planned=ev.durMin||30;
-        return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+ev.title+'</span><span class="sp-dur">'+ms(planned)+' <span style="font-size:10px;opacity:0.6">(triage)</span></span></div>';
+        // DCC.esc: a triage title is third-party text (swept Gmail subjects, Slack message bodies) and a handled one now PERSISTS server-side, so it replays here on every device on every load.
+        return '<div class="sp-row"><span class="sp-time">'+t+'</span><span class="sp-label">'+DCC.esc(ev.title)+'</span><span class="sp-dur">'+ms(planned)+' <span style="font-size:10px;opacity:0.6">(triage)</span></span></div>';
       }).join('');
       const totalActual=done.reduce((a,ev)=>a+_actualMin(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0), totalPlanned=done.reduce((a,ev)=>a+dur(ev),0)+triageDone.reduce((a,ev)=>a+(ev.durMin||30),0);
       html+='<div class="sp-note">Actual: '+ms(totalActual)+' / Planned: '+ms(totalPlanned)+'</div>';

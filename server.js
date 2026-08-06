@@ -39,6 +39,7 @@ const capabilities = require("./capabilities");
 const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
 const dccIntelligence = require("./dcc-intelligence");
+const triageSuppressions = require("./triage-suppressions");
 
 // ── Clerk (managed login widget) via the shared drake-auth kit — optional.
 // With no keys, social login is simply hidden and the existing
@@ -577,7 +578,23 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   result.schedule.timeline = (result.schedule.timeline || []).filter(
     (item) => !(item && (item.type === "meeting" || item.type === "oneone"))
   );
-  result.schedule.blocks = await getScheduleBlocks(userId, workspaceId);
+  // Concurrent, not sequential: neither reads the other's result, and this is the
+  // hottest read path in the app (both state endpoints, plus the anonymous share poll
+  // through buildPublicTodoShare). Both swallow their own errors and resolve to [],
+  // so Promise.all adds no rejection path.
+  const [scheduleBlocks, suppressions] = await Promise.all([
+    getScheduleBlocks(userId, workspaceId),
+    readTriageSuppressionsForWorkspace(ws),
+  ]);
+  result.schedule.blocks = scheduleBlocks;
+  // Apply the durable triage suppressions on the way out, so a handled item is gone on
+  // every device and every day, not just in the tab that handled it. This is also the
+  // half that heals the rows already on prod: state written before suppressions existed
+  // still carries the full open list, and filtering on read means nobody waits for the
+  // next publish to see their own decisions. `suppressed_items` rides along scoped to
+  // THIS date, because the client renders one day's "Completed" list and its Undo from
+  // it (see the scoping note in triage-suppressions.js).
+  result.triage = triageSuppressions.applyTriageSuppressions(result.triage, suppressions, { date: dateStr, timeZone: APP_TIME_ZONE });
   // The `result._deleted` surfacing query that used to sit here is GONE (A2 step 6).
   // #253 added it for exactly one consumer, carryover-review.js, so that pass would not
   // re-offer a timeline task the user had deleted. C1 (#261) deleted carryover-review.js
@@ -587,6 +604,19 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   // overlay off the day_root BLOCK's properties, which is a different source and is
   // untouched. This was a second per-day query on every day-response read, for nobody.
   return result;
+}
+
+// Same best-effort contract routes/dcc.js uses: suppressions are an overlay, and an
+// unreadable overlay must degrade to "show the raw triage list" rather than fail the
+// whole day response.
+async function readTriageSuppressionsForWorkspace(workspaceId) {
+  try {
+    const blocks = await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
+    return triageSuppressions.suppressionsFromBlocks(blocks);
+  } catch (e) {
+    console.error("[day-response] triage suppression read failed (non-fatal):", e.message);
+    return [];
+  }
 }
 
 async function getScheduleBlocks(userId, workspaceId) {
@@ -872,7 +902,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
-  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readDayStateMirror, readJSON, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
+  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
   ...routeHelpers,

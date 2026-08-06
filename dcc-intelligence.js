@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { triageItemKey } = require("./triage-suppressions");
 
 const SOURCE_CONFIG_FILE = path.join("config", "dcc-sources.json");
 
@@ -244,14 +245,18 @@ function triageItemAgedOut(item, now) {
   return ageDays > limit;
 }
 
+// Deliberately NOT suppression-aware. "Drake handled this" is a read-time overlay
+// (triage-suppressions.js, applied in buildDayResponse) precisely so that this list
+// stays the raw record — filtering here would delete the item from stored state and
+// leave Undo with nothing to restore. The key function is shared with the overlay so
+// the two agree on item identity.
 function mergeOpenItems(existing, incoming, now = Date.now()) {
   const byKey = new Map();
   for (const item of asArray(existing)) {
-    const key = `${item.source || item.type || "unknown"}|${item.source_id || item.id || item.title}`;
-    byKey.set(key, item);
+    byKey.set(triageItemKey(item), item);
   }
   for (const item of incoming) {
-    const key = `${item.source || item.type || "unknown"}|${item.source_id || item.id || item.title}`;
+    const key = triageItemKey(item);
     const prev = byKey.get(key);
     const merged = { ...prev, ...item, status: "open" };
     // Preserve the earliest-seen timestamp. A re-emission carries a freshly
@@ -675,4 +680,5 @@ module.exports = {
   frontPageTasks,
   mergeOpenItems,
   normalizeTriageItem,
+  triageItemKey,
 };

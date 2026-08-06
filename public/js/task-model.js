@@ -177,7 +177,7 @@
   // its own query. The fold has always rejected them by the same kind test, so
   // matching `dcc_is_task_row` exactly keeps the twin claim TRUE and changes no
   // behavior. Widening both halves together is a phase of its own.
-  const NON_TASK_KINDS = ["delegated_item", "task_group", "reschedule_tombstone"];
+  const NON_TASK_KINDS = ["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression"];
   const NON_TASK_TYPES = ["day_root", "time_entry"];
   function isTaskRow(block) {
     block = block || {};
