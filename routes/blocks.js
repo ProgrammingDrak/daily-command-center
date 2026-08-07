@@ -576,7 +576,8 @@ module.exports = function mount(app, ctx) {
       assertBlockOwnership(parent, req.workspaceId);
       if (parent.deleted_at) return res.status(400).json({ error: "Block is deleted" });
       const parentProps = parent.properties || {};
-      if (parentProps.source === "calendar" && (parentProps.type === "meeting" || parentProps.kind === "meeting" || parentProps.type === "oneone")) {
+      const calendarOwned = ["calendar", "gcal"].includes(String(parentProps.source || "").toLowerCase()) || !!parentProps.calendar_id;
+      if (calendarOwned && (parentProps.type === "meeting" || parentProps.kind === "meeting" || parentProps.type === "oneone")) {
         return res.status(409).json({ error: "Calendar meetings must be moved in their source calendar" });
       }
       // A day_root is the day's container, not a task on it. Its children by parent_id

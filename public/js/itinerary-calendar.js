@@ -38,7 +38,7 @@
   function spansDate(ev,ds){return !!ev.allDay&&String(ev.allDayStart||ev._block.date)<=ds&&String(ev.allDayEnd||addDays(ev.allDayStart||ev._block.date,1))>ds;}
   function isMeeting(ev){return ev&&(["meeting","oneone"].includes(ev.type)||ev.kind==="meeting");}
   function isComplete(ev){return !!(ev&&(ev.status==="done"||ev.completedAt));}
-  function importedMeeting(ev){return isMeeting(ev)&&String(ev.source||"").toLowerCase()==="calendar";}
+  function importedMeeting(ev){return isMeeting(ev)&&(["calendar","gcal"].includes(String(ev.source||"").toLowerCase())||!!ev.calendarId||String(ev.sourceKey||"").startsWith("calendar:"));}
   function stableId(ev){return String(ev._blockId||ev.id||"");}
 
   // Pack only within connected overlap groups. A later disjoint group starts over at one lane.
@@ -89,7 +89,14 @@
     if(a.getFullYear()!==b.getFullYear())return a.toLocaleDateString(undefined,{...opts,year:"numeric"})+" - "+b.toLocaleDateString(undefined,{...opts,year:"numeric"});
     return a.toLocaleDateString(undefined,opts)+" - "+b.toLocaleDateString(undefined,{...opts,year:"numeric"});
   }
-  function sourceColor(ev){return state.colors[ev.sourceKey]||ev.calendarColor||(ev.sourceKey&&ev.sourceKey.startsWith("calendar:")?DEFAULT_COLORS.calendar:DEFAULT_COLORS[ev.sourceKey])||DEFAULT_COLORS.other;}
+  function safeColor(value,fallback){return /^#[0-9a-f]{6}$/i.test(String(value||""))?String(value):fallback;}
+  function sourceColor(ev){
+    const fallback=(ev.sourceKey&&ev.sourceKey.startsWith("calendar:")?DEFAULT_COLORS.calendar:DEFAULT_COLORS[ev.sourceKey])||DEFAULT_COLORS.other;
+    return safeColor(state.colors[ev.sourceKey]||ev.calendarColor,fallback);
+  }
+  function safeExternalUrl(value,base){
+    try{const url=new URL(String(value||""),base||(root&&root.location&&root.location.href));return ["http:","https:"].includes(url.protocol)?url.href:"";}catch(e){return "";}
+  }
   function icon(name){
     const path={menu:'<line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/>',calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><line x1="16" y1="3" x2="16" y2="7"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="3" y1="10" x2="21" y2="10"/>',chevleft:'<polyline points="15 18 9 12 15 6"/>',chevright:'<polyline points="9 18 15 12 9 6"/>',eye:'<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/>',eyeoff:'<path d="M3 3l18 18"/><path d="M10.6 6.2A10.8 10.8 0 0 1 12 6c6.5 0 10 6 10 6a17 17 0 0 1-2.1 2.8M6.7 6.7C3.7 8.4 2 12 2 12s3.5 6 10 6a10.8 10.8 0 0 0 3.3-.5"/>',external:'<path d="M14 3h7v7"/><path d="M10 14L21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',users:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',pin:'<path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0z"/><circle cx="12" cy="10" r="2"/>'}[name]||"";
     return '<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+path+'</svg>';
@@ -222,8 +229,9 @@
     const kids=childrenOf(ev,state.loaded);
     const p=ev._block.properties||{};
     let actions="";
-    if(ev.calUrl)actions+='<a href="'+escapeHtml(ev.calUrl)+'" target="_blank" rel="noopener">Open in Google Calendar '+icon("external")+'</a>';
-    if(ev.hangout_link)actions+='<a href="'+escapeHtml(ev.hangout_link)+'" target="_blank" rel="noopener">Join '+icon("external")+'</a>';
+    const calendarUrl=safeExternalUrl(ev.calUrl),joinUrl=safeExternalUrl(ev.hangout_link),sourceUrl=safeExternalUrl(p.source_ref||ev.notionUrl);
+    if(calendarUrl)actions+='<a href="'+escapeHtml(calendarUrl)+'" target="_blank" rel="noopener">Open in Google Calendar '+icon("external")+'</a>';
+    if(joinUrl)actions+='<a href="'+escapeHtml(joinUrl)+'" target="_blank" rel="noopener">Join '+icon("external")+'</a>';
     if(meeting)actions+='<button type="button" class="iwc-prep">'+((ev.recapStatus||new Date()>=new Date((ev._block.date||"")+"T"+ev.start))?'Recap':'Prep')+'</button>';
     panel.innerHTML='<div class="iwc-inspector-head"><span class="iwc-type-mark">'+(meeting?icon("calendar"):'☐')+'</span><h3>'+(meeting?'Meeting':'Task')+'</h3><button class="iwc-close" type="button" aria-label="Close">×</button></div>'+
       (sourceOwned?'<p class="iwc-authority">Time and title are managed by Google Calendar.</p>':'')+
@@ -237,7 +245,7 @@
       (ev.rsvp_status?'<div class="iwc-detail-row">RSVP · '+escapeHtml(ev.rsvp_status)+'</div>':'')+
       '<div class="iwc-actions">'+actions+'<button type="button" class="iwc-complete" '+(past?'disabled':'')+'>'+(isComplete(ev)?'Mark open':'Complete')+'</button></div>'+
       inspectorField("Notes","notes",ev.notes||ev.detail||"",{type:"textarea",readonly:past})+
-      (p.source_ref||ev.notionUrl?'<a class="iwc-source-link" href="'+escapeHtml(p.source_ref||ev.notionUrl)+'" target="_blank" rel="noopener">Open source '+icon("external")+'</a>':'')+
+      (sourceUrl?'<a class="iwc-source-link" href="'+escapeHtml(sourceUrl)+'" target="_blank" rel="noopener">Open source '+icon("external")+'</a>':'')+
       '<section class="iwc-children"><h4>Children · '+kids.length+'</h4>'+(kids.length?kids.map(c=>'<div class="iwc-child">'+(isComplete(c)?'✓ ':'○ ')+escapeHtml(c.title||"Untitled")+'</div>').join(""):'<p class="iwc-empty">No nested work.</p>')+'</section>';
     panel.hidden=false;
     panel.querySelector(".iwc-close").onclick=()=>{panel.hidden=true;state.selectedId=null;};
@@ -348,5 +356,5 @@
     else if(state.initialScroll){const now=easternNow(),inWeek=now.date>=state.anchor&&now.date<=addDays(state.anchor,6);scroller.scrollTop=Math.max(0,((inWeek?now.minute/60:8)*HOUR_PX)-140);if(root.innerWidth<=760&&inWeek)scroller.scrollLeft=Math.max(0,(parseDate(now.date).getDay()*132)-50);state.initialScroll=false;}
   }
 
-  return {build,packOverlaps,weekStart,addDays,dateString,minuteOf,clock,snap,spansDate,rootItems,_resetForTests:function(){state={anchor:null,syncedViewDate:null,hidden:new Set(),colors:{},railCollapsed:false,openSource:null,selectedId:null,loaded:[],initialScroll:true};}};
+  return {build,packOverlaps,weekStart,addDays,dateString,minuteOf,clock,snap,spansDate,rootItems,safeColor,safeExternalUrl,_resetForTests:function(){state={anchor:null,syncedViewDate:null,hidden:new Set(),colors:{},railCollapsed:false,openSource:null,selectedId:null,loaded:[],initialScroll:true};}};
 });

@@ -229,6 +229,22 @@ test("calendar-owned meetings reject placement before any move", async () => {
   assert.equal(calls.reschedule.length, 0);
 });
 
+test("legacy gcal and calendar-id meetings retain source placement authority", async () => {
+  for (const properties of [
+    { source: "gcal", type: "meeting", start: "09:00", end: "10:00" },
+    { source: "manual", type: "meeting", calendar_id: "primary", start: "09:00", end: "10:00" },
+  ]) {
+    const parent = blk("B1", "m1", { properties });
+    const { app, calls } = mountApp({ parent, pool: [parent] });
+    const { status } = await post(app, "B1", {
+      targetDate: FROM,
+      placement: { kind: "timed", start: "10:00", end: "11:00" },
+    });
+    assert.equal(status, 409);
+    assert.equal(calls.reschedule.length, 0);
+  }
+});
+
 test("placement that pushes a timed child outside the day rolls back before the transaction", async () => {
   const parent = blk("B1", "t1", { properties: { start: "22:00", end: "23:00" } });
   const kid = blk("B2", "t2", { subtaskOf: "t1", properties: { start: "23:00", end: "23:45" } });

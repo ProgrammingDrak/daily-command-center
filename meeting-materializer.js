@@ -100,7 +100,7 @@ module.exports = function createMeetingMaterializer(deps) {
   // hours is "prep-eligible" — a newly materialized one gets stamped prep_status
   // "pending" so its card shows a pending chip immediately, and the sweep's prep
   // lane (review_meetings.py, same 36h window) picks it up and posts the real
-          // brief, flipping the block to "ready". Past/far-future meetings get no stamp
+  // brief, flipping the block to "ready". Past/far-future meetings get no stamp
   // (no chip): recap is the past's job, and far-out prep would just go stale.
   const PREP_HORIZON_MS = 36 * 60 * 60 * 1000;
   function withinPrepHorizon(startIso) {

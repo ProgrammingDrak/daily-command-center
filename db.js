@@ -740,13 +740,13 @@ async function getBlocksByDate(date, workspaceId) {
   const { rows } = workspaceId
     ? await pool.query(`SELECT * FROM blocks WHERE workspace_id = $2 AND deleted_at IS NULL
         AND (date = $1 OR (properties->>'all_day' = 'true'
-          AND NULLIF(properties->>'all_day_start','')::date <= $1
-          AND NULLIF(properties->>'all_day_end','')::date > $1))
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $1
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
         ORDER BY date ASC, sort_order ASC, created_at ASC`, [date, workspaceId])
     : await pool.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
         AND (date = $1 OR (properties->>'all_day' = 'true'
-          AND NULLIF(properties->>'all_day_start','')::date <= $1
-          AND NULLIF(properties->>'all_day_end','')::date > $1))
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $1
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
         ORDER BY date ASC, sort_order ASC, created_at ASC`, [date]);
   return rows.map(parseBlock);
 }
@@ -1287,13 +1287,13 @@ async function getBlocksByDateRange(startDate, endDate, workspaceId) {
   const { rows } = workspaceId
     ? await pool.query(`SELECT * FROM blocks WHERE workspace_id = $3 AND deleted_at IS NULL
         AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
-          AND NULLIF(properties->>'all_day_start','')::date <= $2
-          AND NULLIF(properties->>'all_day_end','')::date > $1))
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
         ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate, workspaceId])
     : await pool.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
         AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
-          AND NULLIF(properties->>'all_day_start','')::date <= $2
-          AND NULLIF(properties->>'all_day_end','')::date > $1))
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
         ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate]);
   return rows.map(parseBlock);
 }
