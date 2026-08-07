@@ -236,6 +236,30 @@ test("triage scheduling matches by id OR by an open visible triage row of the sa
   }
 });
 
+test("every triage scheduling path carries the canonical source deeplink", () => {
+  const start = triageCode.indexOf("function triageTaskProps(");
+  const end = triageCode.indexOf("\nfunction existingTriageTask(", start);
+  const propsFn = triageCode.slice(start, end);
+  assert.match(propsFn, /source_id:window\.DCC\.taskSourceUrl\(item\)/,
+    "the shared triage property bag must retain Slack/Gmail provenance");
+
+  for (const fn of ["function scheduleTriageItem(", "async function scheduleTriageOnDate("]) {
+    const body = triageCode.slice(triageCode.indexOf(fn));
+    assert.match(body.slice(0, 1600), /triageTaskProps\(triageId,item\)/,
+      fn + " must use the provenance-preserving shared property bag");
+  }
+});
+
+test("itinerary source buttons use the canonical safe URL and label mapping", () => {
+  const start = schedTabSrc.indexOf("function sourceJumpLink(");
+  const end = schedTabSrc.indexOf("\n  // A node is a SUB row", start);
+  const sourceFn = stripJsComments(schedTabSrc.slice(start, end));
+  assert.match(sourceFn, /DCC\.taskSourceUrl\(ev&&ev\.source_id\)/);
+  assert.match(sourceFn, /DCC\.taskSourceLabel\(url\)/);
+  assert.equal(/\/slack\\\.com\//.test(sourceFn), false,
+    "the row renderer must not carry a second Slack-only label rule");
+});
+
 test("scheduling a triage item does not resolve its inbound message", () => {
   const rec = triageCode.slice(triageCode.indexOf("function recordTriageScheduled("));
   const fn = rec.slice(0, rec.indexOf("\nasync function scheduleTriageOnDate("));

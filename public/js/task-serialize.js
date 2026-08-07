@@ -7,7 +7,7 @@
 // window.DCC.taskCommonProps / taskBlockProps. Node: require()d by tests. UMD
 // wrapper matches task-types.js.
 //
-//   taskCommonProps(ev, overrides) -> the 13 shared value fields, canonical
+//   taskCommonProps(ev, overrides) -> the 14 shared value fields, canonical
 //     defaults, commute reconciled both directions. Key names are the shared
 //     ones (delegatedItemId/linkedBlockId/commuteMinutes/…). Used directly by
 //     the in-memory/clone shapes (id/type/start/end added by the caller).
@@ -28,8 +28,30 @@
     const DCC = (root.DCC = root.DCC || {});
     DCC.taskCommonProps = api.taskCommonProps;
     DCC.taskBlockProps = api.taskBlockProps;
+    DCC.taskSourceUrl = api.taskSourceUrl;
+    DCC.taskSourceLabel = api.taskSourceLabel;
   }
 })(typeof self !== "undefined" ? self : this, function () {
+  // Source-backed triage items arrive with several field names depending on the
+  // reader that produced them. Resolve that vocabulary once so scheduling, row
+  // rendering and the one-time backfill cannot disagree about the deeplink.
+  function taskSourceUrl(value) {
+    const src = value && typeof value === "object" ? value : null;
+    const raw = src
+      ? (src.source_id || src.link || src.source_ref || src.source_url || src.url || src.action_url || src.actionUrl || src.evidence_link || "")
+      : value;
+    const url = String(raw == null ? "" : raw).trim();
+    return /^https?:\/\//i.test(url) ? url : "";
+  }
+
+  function taskSourceLabel(value) {
+    const url = taskSourceUrl(value).toLowerCase();
+    if (!url) return "";
+    if (url.includes("slack.com/")) return "Slack";
+    if (url.includes("mail.google.com/")) return "Email";
+    return "Source";
+  }
+
   function taskCommonProps(ev, overrides) {
     const src = Object.assign({}, ev || {}, overrides || {});
     const commuteMinutes = src.commuteMinutes || src.commute_minutes || null;
@@ -40,6 +62,10 @@
       detail: src.detail || "",
       notionUrl: src.notionUrl || "",
       source: src.source || "manual",
+      // Preserve the original identity verbatim. Some task sources use a
+      // non-URL identifier here; the renderer separately decides whether the
+      // value is a safe jump link.
+      source_id: src.source_id || "",
       tags: Array.isArray(src.tags) ? src.tags : [],
       delegatedItemId: src.delegatedItemId || null,
       // The triage item this task came from. Its absence here was a silent link
@@ -68,5 +94,10 @@
     });
   }
 
-  return { taskCommonProps: taskCommonProps, taskBlockProps: taskBlockProps };
+  return {
+    taskCommonProps: taskCommonProps,
+    taskBlockProps: taskBlockProps,
+    taskSourceUrl: taskSourceUrl,
+    taskSourceLabel: taskSourceLabel
+  };
 });

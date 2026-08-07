@@ -1081,6 +1081,7 @@ function triageTaskProps(triageId,item){
   return {
     priority:triagePriorityLabel(item.priority),
     source:"triage",
+    source_id:window.DCC.taskSourceUrl(item),
     meta:"Triage item",
     detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
     tags:["triage"],
