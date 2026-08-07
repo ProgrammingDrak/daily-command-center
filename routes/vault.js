@@ -166,6 +166,8 @@ function ext(filename, mime) {
 
 const INLINE_MAX = 2 * 1024 * 1024;
 const LFS_MAX = 10 * 1024 * 1024;
+const JOURNAL_CAPTURE_SCHEMA_VERSION = 1;
+const JOURNAL_CLASSIFICATION_THRESHOLD = 0.7;
 
 // Media gate v2 (frozen media-manifest-spec). Picks an original's band from size
 // + kind. Sensitive media is inline-only under private/ (never LFS/cold, which
@@ -181,6 +183,93 @@ function mediaPlacement({ bytes, mime, sensitive }) {
     throw err;
   }
   return bytes < INLINE_MAX ? { band: "inline" } : { band: "lfs" };
+}
+
+function normalizeTextList(value, field) {
+  if (value == null || value === "") return [];
+  let list = value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith("[")) {
+      try { list = JSON.parse(trimmed); }
+      catch { throw new Error(`${field} must be a JSON array or newline-delimited text`); }
+    } else {
+      list = trimmed.split(/\r?\n/);
+    }
+  }
+  if (!Array.isArray(list)) throw new Error(`${field} must be an array`);
+  if (list.length > 50) throw new Error(`${field} has too many items`);
+  return list.map((item) => {
+    const text = typeof item === "string" ? item : item && item.text;
+    if (typeof text !== "string" || !text.trim()) throw new Error(`${field} contains an empty item`);
+    if (text.length > 2000) throw new Error(`${field} contains an item over 2000 characters`);
+    return text.trim();
+  });
+}
+
+function validCaptureDate(value) {
+  const s = String(value || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+// Versioned, deliberately narrow contract for the first handwritten-journal
+// pilot. The selected chat performs transcription; DCC validates and persists
+// the model output beside the immutable source. Every derived item cites the
+// same full-image anchor for M2. A later review phase can add region anchors
+// without changing the stable media identity.
+function journalIngestRecord({ source, transcript, highlights, lowConfidence, classification, confidence, classificationRationale }) {
+  const cleanTranscript = String(transcript || "").trim();
+  if (!cleanTranscript) throw new Error("transcript required");
+  if (cleanTranscript.length > 200000) throw new Error("transcript is too large");
+  if (!source || !/^[a-f0-9]{64}$/i.test(source.hash || "")) throw new Error("valid source required");
+  const requestedType = String(classification || "").trim();
+  if (requestedType !== "journal") throw new Error("this pilot accepts journal classification only");
+  const score = Number(confidence);
+  if (!Number.isFinite(score) || score < 0 || score > 1) {
+    throw new Error("classification confidence must be between 0 and 1");
+  }
+
+  const evidence = normalizeTextList(highlights, "highlights");
+  const uncertain = normalizeTextList(lowConfidence, "lowConfidence");
+  const sourceId = `media:sha256:${source.hash.toLowerCase()}`;
+  const sourceAnchor = `${sourceId}#image:full`;
+  const sourceSectionId = `source-${source.hash.slice(0, 12).toLowerCase()}`;
+  const type = score >= JOURNAL_CLASSIFICATION_THRESHOLD ? "journal" : "fleeting";
+  const rationale = String(classificationRationale || "").trim().slice(0, 1000);
+  const filename = String(source.filename || "handwritten journal image").replace(/[\[\]\r\n]/g, "");
+  const cite = (line, label) => `- ${line} ([${label}](#${sourceSectionId})) <!-- evidence: ${sourceAnchor} -->`;
+  const body = [
+    `<a id="${sourceSectionId}"></a>`,
+    "## Source",
+    `![${filename}](${sourceId})`,
+    "",
+    `Source identity: \`${sourceId}\``,
+    "",
+    "## Transcription",
+    `<!-- source-anchor: ${sourceAnchor}; transcript-version: 1 -->`,
+    cleanTranscript,
+    "",
+    "## Highlights",
+    ...(evidence.length ? evidence.map((line) => cite(line, "source")) : ["- None extracted."]),
+    "",
+    "## Low-confidence passages",
+    ...(uncertain.length ? uncertain.map((line) => cite(line, "check source")) : ["- None identified."]),
+  ].join("\n");
+
+  const frontmatter = {
+    capture_schema_version: JOURNAL_CAPTURE_SCHEMA_VERSION,
+    capture_kind: "handwritten_journal_image",
+    source_id: sourceId,
+    source_anchor: sourceAnchor,
+    transcript_version: 1,
+    capture_classification: requestedType,
+    capture_classification_confidence: score,
+  };
+  if (rationale) frontmatter.capture_classification_rationale = rationale;
+  return { type, frontmatter, body, sourceId, sourceAnchor, transcript: cleanTranscript };
 }
 
 // ── Media serving v2 (B3): resolution + render helpers ──
@@ -1198,7 +1287,7 @@ app.get("/api/vault/graph/*", (req, res) => {
 // ── Attachments (media gate v2) ──
 // Write an original into the right band, drop a spec-v2 manifest beside it, and
 // queue the commit. Returns the content-addressed ref the editor inserts.
-async function ingestMedia(buf, filename, mime, { sensitive } = {}) {
+async function ingestMedia(buf, filename, mime, { sensitive, textSidecar } = {}) {
   const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
   const hash12 = sha256.slice(0, 12);
   const year = currentYear();
@@ -1219,6 +1308,8 @@ async function ingestMedia(buf, filename, mime, { sensitive } = {}) {
   const manifestRel = sensitive
     ? `media/manifests/private/${year}/${hash12}.json`
     : `media/manifests/${year}/${hash12}.json`;
+  const sidecarText = typeof textSidecar === "string" && textSidecar.trim() ? textSidecar.trim() + "\n" : null;
+  const sidecarRel = sidecarText ? manifestRel.replace(/\.json$/, ".txt") : null;
   const manifest = {
     schema_version: 2,
     hash: `sha256:${sha256}`,
@@ -1236,11 +1327,12 @@ async function ingestMedia(buf, filename, mime, { sensitive } = {}) {
     local_copies: [],
     album: "",
     exif: {},
-    text_sidecar: null,
+    text_sidecar: sidecarRel,
     visibility: sensitive ? "sensitive" : null,
   };
   const manifestAbs = path.join(ctx.vault.vaultDir, manifestRel);
   await fsp.mkdir(path.dirname(manifestAbs), { recursive: true });
+  if (sidecarRel) await fsp.writeFile(path.join(ctx.vault.vaultDir, sidecarRel), sidecarText, "utf8");
   await fsp.writeFile(manifestAbs, JSON.stringify(manifest, null, 2) + "\n");
   // Keep the media index warm: a just-attached blob is renderable immediately,
   // without waiting for a rescan (manifests aren't watched — see findManifest).
@@ -1250,8 +1342,116 @@ async function ingestMedia(buf, filename, mime, { sensitive } = {}) {
   // Commit both files together (git add . via the sync queue). Message carries
   // the hash only — never the filename of sensitive media.
   if (ctx.syncMgr) ctx.syncMgr.notifyChange({ slug: blobRel, message: `attach ${hash12} (${band})` });
-  return { hash: sha256, ref: `media:sha256:${sha256}`, band, filename: manifest.filename, mime: manifest.mime, bytes };
+  return { hash: sha256, ref: `media:sha256:${sha256}`, band, filename: manifest.filename, mime: manifest.mime, bytes, textSidecar: sidecarRel };
 }
+
+// One-chat handwritten-journal pilot. The chat reads the uploaded page and
+// submits its transcript plus visible uncertainty. This endpoint performs one
+// validated media-backed write, using the canonical daily journal slug when the
+// classification is confident and the inbox fallback when it is not.
+app.post("/api/vault/journal-image-ingest", (req, res) => {
+  if (!vaultReady(res)) return;
+  upload.single("file")(req, res, async (err) => {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "big media goes through mycelium-media ingest" });
+      return res.status(400).json({ error: err.message });
+    }
+    if (!req.file) return res.status(400).json({ error: "journal image required" });
+    if (!String(req.file.mimetype || "").startsWith("image/")) {
+      return res.status(400).json({ error: "handwritten journal capture must be an image" });
+    }
+
+    try {
+      const b = req.body || {};
+      const sourcePreview = {
+        hash: crypto.createHash("sha256").update(req.file.buffer).digest("hex"),
+        filename: req.file.originalname,
+      };
+      // Validate classification, transcript, evidence lists, and the source hash
+      // before any file is written. Malformed model output must fail visibly.
+      const preview = journalIngestRecord({ ...b, source: sourcePreview });
+      const date = String(b.date || (ctx.getTodayStr ? ctx.getTodayStr() : new Date().toISOString().slice(0, 10)));
+      if (!validCaptureDate(date)) return res.status(400).json({ error: "date must be a real YYYY-MM-DD date" });
+
+      // The source hash is the retry key. If the client lost the first response,
+      // do not append the same page and transcript a second time.
+      const prior = ctx.vault.nodes && Array.from(ctx.vault.nodes.values()).find((node) => {
+        if (!node || isSensitiveSlug(node.slug)) return false;
+        const fm = (node && node.frontmatter) || {};
+        const ids = Array.isArray(fm.source_ids) ? fm.source_ids : (fm.source_ids ? [fm.source_ids] : []);
+        return fm.source_id === preview.sourceId || ids.includes(preview.sourceId);
+      });
+      if (prior) {
+        return res.status(200).json({
+          slug: prior.slug,
+          node: prior,
+          created: false,
+          deduplicated: true,
+          source: { id: preview.sourceId, anchor: preview.sourceAnchor, ref: preview.sourceId },
+          classification: { type: prior.frontmatter.type, confidence: Number(b.confidence), fallback: prior.frontmatter.type !== "journal" },
+        });
+      }
+
+      const source = await ingestMedia(req.file.buffer, req.file.originalname, req.file.mimetype, {
+        sensitive: false,
+        textSidecar: preview.transcript,
+      });
+      const record = journalIngestRecord({ ...b, source });
+      const explicitTitle = String(b.title || "").trim().slice(0, 200);
+      const sourceIds = (fm) => {
+        const values = [];
+        if (Array.isArray(fm.source_ids)) values.push(...fm.source_ids);
+        else if (fm.source_ids) values.push(fm.source_ids);
+        if (fm.source_id) values.push(fm.source_id);
+        values.push(record.sourceId);
+        return Array.from(new Set(values.map(String)));
+      };
+
+      let slug, existing, frontmatter, body;
+      if (record.type === "journal") {
+        slug = `journal/${date.slice(0, 4)}/${date}`;
+        existing = ctx.vault.get(slug);
+        frontmatter = Object.assign({}, existing && existing.frontmatter, record.frontmatter, {
+          type: "journal",
+          title: (existing && existing.frontmatter && existing.frontmatter.title) || explicitTitle || date,
+          date,
+        });
+        frontmatter.source_ids = sourceIds((existing && existing.frontmatter) || {});
+        body = existing && String(existing.body || "").trim()
+          ? `${String(existing.body).trimEnd()}\n\n---\n\n${record.body}`
+          : record.body;
+      } else {
+        const leaf = slugify(explicitTitle || `${date} handwritten journal`);
+        slug = `inbox/${leaf}`;
+        for (let i = 2; ctx.vault.has(slug); i++) slug = `inbox/${leaf}-${i}`;
+        frontmatter = Object.assign({}, record.frontmatter, {
+          type: "fleeting",
+          title: explicitTitle || `Handwritten journal ${date}`,
+          created: new Date().toISOString(),
+          date,
+          source_ids: [record.sourceId],
+        });
+        body = record.body;
+      }
+
+      const node = await writeNode(slug, frontmatter, body, {
+        message: `journal image ingest ${slug}`,
+        expectedHash: existing && existing.hash,
+      });
+      res.status(existing ? 200 : 201).json({
+        slug,
+        node,
+        created: !existing,
+        source: { id: record.sourceId, anchor: record.sourceAnchor, ref: source.ref, textSidecar: source.textSidecar },
+        classification: { type: record.type, confidence: Number(b.confidence), fallback: record.type !== "journal" },
+      });
+    } catch (e) {
+      if (e && e.code === "TOO_BIG") return res.status(413).json({ error: e.message });
+      if (e && e.code === "STALE_WRITE") return res.status(409).json({ error: "conflict", currentHash: e.currentHash });
+      res.status(400).json({ error: e.message });
+    }
+  });
+});
 
 app.post("/api/vault/attach", (req, res) => {
   if (!vaultReady(res)) return;
@@ -1531,6 +1731,9 @@ module.exports.slugify = slugify;
 module.exports.typeDirOk = typeDirOk;
 module.exports.dirRegex = dirRegex;
 module.exports.mediaPlacement = mediaPlacement;
+module.exports.journalIngestRecord = journalIngestRecord;
+module.exports.normalizeTextList = normalizeTextList;
+module.exports.validCaptureDate = validCaptureDate;
 // B3 media-serving pure helpers (vault-b3.test.js).
 module.exports.mediaKind = mediaKind;
 module.exports.mediaCandidates = mediaCandidates;

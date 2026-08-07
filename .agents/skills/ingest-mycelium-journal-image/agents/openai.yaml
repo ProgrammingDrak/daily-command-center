@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ingest Mycelium Journal Image"
+  short_description: "Turn handwriting into a source-backed journal"
+  default_prompt: "Use $ingest-mycelium-journal-image to transcribe this handwritten journal image and store it in Mycelium."
