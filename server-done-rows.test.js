@@ -139,14 +139,29 @@ test("un-check is a no-op when the row carries no completion", () => {
   assert.equal(makeClear({ title: "t", status: "open" }, { id: "t1", _blockId: "blk-1" }).length, 0);
 });
 
-test("un-check is a no-op with no block behind the row (legacy localStorage task)", () => {
-  assert.equal(makeClear(null, { id: "t1", _blockId: "blk-1" }).length, 0);     // block not cached
+test("un-check is a no-op with no row identity (legacy localStorage task)", () => {
+  assert.equal(makeClear(null, { id: "t1" }).length, 0);
   // NOTE, changed in C5b: an ev with no `_blockId` is no longer a dead end. `_persistDone`
   // resolves through `_findTaskBlockForDate`, which also matches on `local_id` and row id,
   // so a completion still lands for an ev whose _blockId was never stamped (prep.js's
   // distraction log, tabs.js's migrated subtasks). Only a genuinely unresolvable row
   // (above) skips the write, and that case falls back to the legacy overlay instead.
   assert.equal(makeClear({ local_id: "t1", status: "done" }, { id: "t1" }).length, 1);
+});
+
+test("a cache miss still writes through the rendered task's authoritative row id", () => {
+  const calls = [];
+  const ev = { id: "t1", _blockId: "blk-1" };
+  const ctx = {
+    console: { warn: () => {} },
+    scheduled: [ev],
+    _viewedDateStr: () => "2026-08-07",
+    _findTaskBlockForDate: () => null,
+    enqueueRowPropsWrite: (blockId) => { calls.push(blockId); return Promise.resolve({ id: blockId }); },
+    window: { blockStore: { getDayRootId: () => null } },
+  };
+  vm.runInNewContext(clearSource[0] + '\n_persistDone("t1",true,{ev:scheduled[0],completedAt:"2026-08-07T17:00:00Z"});', ctx);
+  assert.deepEqual(calls, ["blk-1"], "the queue can fetch the missing cache row by its explicit id");
 });
 
 test("un-check clears the LEGACY _done entry too, and only that entry", () => {
