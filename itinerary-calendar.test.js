@@ -64,6 +64,7 @@ test("source styling and links reject executable metadata", () => {
   assert.equal(calendar.safeColor("#12aBcF", "#000000"), "#12aBcF");
   assert.equal(calendar.safeColor("red;position:fixed", "#000000"), "#000000");
   assert.equal(calendar.safeExternalUrl("https://calendar.google.com/event?x=1", "https://dcc.example/"), "https://calendar.google.com/event?x=1");
+  assert.equal(calendar.safeExternalUrl("", "https://dcc.example/"), "");
   assert.equal(calendar.safeExternalUrl("javascript:alert(1)", "https://dcc.example/"), "");
   assert.equal(calendar.safeExternalUrl("data:text/html,pwned", "https://dcc.example/"), "");
 });

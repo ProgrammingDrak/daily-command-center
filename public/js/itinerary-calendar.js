@@ -95,6 +95,7 @@
     return safeColor(state.colors[ev.sourceKey]||ev.calendarColor,fallback);
   }
   function safeExternalUrl(value,base){
+    if(!String(value||"").trim())return "";
     try{const url=new URL(String(value||""),base||(root&&root.location&&root.location.href));return ["http:","https:"].includes(url.protocol)?url.href:"";}catch(e){return "";}
   }
   function icon(name){
