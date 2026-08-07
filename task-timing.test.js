@@ -105,6 +105,36 @@ test("finalizeTiming computes real elapsed minutes from startedAt", async () => 
   assert.equal(timerFor(task.id).properties.note, "Slack ⌛→✅ timer");
 });
 
+test("finalizeTiming keeps exact elapsed time but schedules and scores the padded five-minute window", async () => {
+  const { timing, addTask, timerFor } = makeHarness();
+  const startedAt = "2026-07-28T15:32:00.000Z"; // 11:32 AM New York
+  const completedAt = Date.parse("2026-07-28T15:46:00.000Z");
+  const task = addTask({
+    title: "Measured",
+    startedAt,
+    start: "15:55",
+    end: "16:30",
+    duration: 35,
+    estimatedMinutes: 35,
+  });
+  const res = await timing.finalizeTiming({ block: task, endMs: completedAt });
+  assert.equal(res.actualMinutes, 14);
+  assert.deepEqual(
+    { start: res.roundedWindow.start, end: res.roundedWindow.end, durationMinutes: res.roundedWindow.durationMinutes },
+    { start: "11:30", end: "11:50", durationMinutes: 20 }
+  );
+  assert.equal(task.properties.actualMinutes, 14);
+  assert.equal(task.properties.start, "11:30");
+  assert.equal(task.properties.end, "11:50");
+  assert.equal(task.properties.duration, 20);
+  assert.equal(task.properties.durationMinutes, 20);
+  assert.equal(task.properties.estimatedMinutes, 20);
+  assert.equal(task.properties.pointsDurationMinutes, 20);
+  assert.equal(task.properties.pointsBreakdown.durationMinutes, 20);
+  assert.equal(task.properties.points, 20);
+  assert.equal(timerFor(task.id).properties.durSec, 14 * 60, "Day Review retains the exact interval");
+});
+
 test("finalizeTiming keeps the user's own notes and appends the ⏱ line", async () => {
   const { timing, addTask } = makeHarness();
   const task = addTask({ title: "Timed", notes: "call Ben back", startedAt: new Date(END - 10 * MIN).toISOString() });
@@ -166,6 +196,10 @@ test("clearTiming un-times a task, strips only the ⏱ line, and drops the timer
   assert.equal(task.properties.status, "open");
   assert.equal(task.properties.notes, "call Ben back", "user text survives, ⏱ line does not");
   assert.ok(task.properties.startedAt, "startedAt survives so a re-✅ measures from the original ⌛");
+  assert.equal(task.properties.start, "13:45", "the rounded actual block remains after reopening");
+  assert.equal(task.properties.end, "14:00");
+  assert.equal(task.properties.duration, 15);
+  assert.equal(task.properties.pointsDurationMinutes, 15);
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 0);
   assert.equal(deleted.length, 1, "the timer row is hard-deleted, not tombstoned");
   // Read the PERSISTED copy, not the caller's object, so this fails if the write

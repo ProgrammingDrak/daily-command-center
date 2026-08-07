@@ -152,6 +152,7 @@
     console.log('[SSE] Block update from another source:', msg.action, msg.blockIds?.length || 0, 'blocks');
     // Re-apply persisted edits from updated cache and re-render UI
     if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
+    if(typeof refreshOpenAddModalDetails === 'function') refreshOpenAddModalDetails({fromBlockStore:true});
     if(typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
     if(typeof render === 'function') render();
     if(typeof paintPivotTasks === 'function') paintPivotTasks();

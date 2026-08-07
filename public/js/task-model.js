@@ -107,6 +107,7 @@
       startedAt: p.startedAt || null,
       completedAt: p.completedAt || null,
       actualMinutes: p.actualMinutes == null ? null : Number(p.actualMinutes),
+      pointsDurationMinutes: p.pointsDurationMinutes == null ? null : Number(p.pointsDurationMinutes),
       aiSummary: p.aiSummary || "",
       notionUrl: p.notionUrl || "", calUrl: p.calUrl || "", priority: p.priority || "High",
       tags: Array.isArray(p.tags) ? p.tags : [],

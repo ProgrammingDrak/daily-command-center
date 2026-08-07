@@ -890,6 +890,11 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
+app.get("/public/js/app-config.js", (req, res) => {
+  res.type("application/javascript");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.send(`window.DCC_APP_TIME_ZONE=${JSON.stringify(APP_TIME_ZONE)};`);
+});
 app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 
 // Calendar meetings -> durable task blocks (see meeting-materializer.js).

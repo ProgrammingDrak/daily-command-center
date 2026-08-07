@@ -2193,6 +2193,7 @@ function clampInt(value, min, max) {
 function normalizeTaskCreditBody(body = {}) {
   return {
     ...body,
+    points_duration_minutes: body.points_duration_minutes ?? body.pointsDurationMinutes,
     duration_minutes: body.duration_minutes ?? body.durationMinutes ?? body.duration_min ?? body.dur_min ?? body.duration ?? body.durMin,
     actual_minutes: body.actual_minutes ?? body.actualMinutes ?? body.focus_minutes ?? body.focusMin,
     commute_to_minutes: body.commute_to_minutes ?? body.commuteToMinutes ?? body.commute_minutes_to ?? body.commuteMinutesTo ?? body.commuteMinutes ?? body.commute_minutes ?? body.commuteTime,
@@ -2266,6 +2267,7 @@ async function earnTaskCredit(workspaceId, userId, body) {
       source: body.source || null,
       tags: body.tags || [],
       duration_minutes: body.duration_minutes ?? body.durationMinutes ?? body.duration ?? body.durMin ?? null,
+      points_duration_minutes: body.points_duration_minutes ?? body.pointsDurationMinutes ?? null,
       actual_minutes: body.actual_minutes ?? body.actualMinutes ?? null,
       effort_tier: body.effort_tier || body.effortTier || null,
       attention_tier: body.attention_tier || body.attentionTier || null,
