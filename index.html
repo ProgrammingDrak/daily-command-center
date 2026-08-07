@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/public/css/tokens.css?v=tokens-1">
 <link rel="stylesheet" href="/public/css/core-ui.css?v=core-ui-1">
 <link rel="stylesheet" href="/public/css/dashboard.css">
+<link rel="stylesheet" href="/public/css/calendar-week.css?v=calendar-week-1">
 <link rel="stylesheet" href="/public/css/vault.css?v=vault-b6-1">
 </head>
 <body>
@@ -225,6 +226,7 @@
     <span style="margin-left:auto">
       <span class="sched-view-toggle" id="sched-view-toggle">
         <button class="svt-btn active" data-view="list">List</button>
+        <button class="svt-btn" data-view="calendar">Calendar</button>
         <button class="svt-btn" data-view="actual">Actual</button>
       </span>
       <span class="sched-drag-hint sched-drag-hint-desktop" style="margin-left:10px">Drag to reorder &middot; +/- to adjust time &middot; Check to complete</span>
@@ -236,6 +238,7 @@
   <section class="schedule-triage-section" id="schedule-triage-section" style="display:none" aria-label="Triage"></section>
   <div class="tl" id="timeline" style="display:none"></div>
   <div id="list-view" class="it-list-view"></div>
+  <div id="calendar-view" class="it-calendar-view" style="display:none"></div>
   <div id="actual-view" style="display:none"></div>
 </div>
 
@@ -1826,6 +1829,7 @@
 <script src="/public/js/tag-manager.js"></script>
 <script src="/public/js/itinerary-card.js"></script>
 <script src="/public/js/schedule-tab.js"></script>
+<script src="/public/js/itinerary-calendar.js?v=calendar-week-1"></script>
 <script src="/public/js/touch-drag.js"></script>
 <script src="/public/js/meeting-automation.js"></script>
 <script src="/public/js/sync.js"></script>

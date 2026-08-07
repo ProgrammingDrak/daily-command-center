@@ -1392,7 +1392,7 @@ function _tabActive(name){const el=document.getElementById("tab-"+name);return !
 
 const SURFACES = {
   scheduleTimeline:{build:()=>{if(typeof buildSchedule==="function")buildSchedule();},        isVisible:()=>_tabActive("schedule")&&schedView==="plan"},
-  scheduleTriage:  {build:()=>{if(typeof buildScheduleTriage==="function")buildScheduleTriage();},isVisible:()=>_tabActive("schedule")&&schedView!=="actual"},
+  scheduleTriage:  {build:()=>{if(typeof buildScheduleTriage==="function")buildScheduleTriage();},isVisible:()=>_tabActive("schedule")&&schedView==="list"},
   // buildScheduleDelegated (renderDelegatedSidebar) + refreshMeetingAutomationPanels
   // were side effects of buildSchedule (schedule-tab.js:602,962). Since buildSchedule
   // is now gated off, they must be their own surfaces or they'd go stale on render.

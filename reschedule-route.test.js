@@ -19,7 +19,7 @@ const TO = "2026-07-31";
 
 const blk = (id, localId, extra = {}) => ({
   id, type: "block", date: FROM, parent_id: extra.parent_id || null, workspace_id: MINE, user_id: 1,
-  properties: { local_id: localId, title: "T " + id, subtaskOf: extra.subtaskOf || null, wrapId: extra.wrapId || null, kind: extra.kind || null }
+  properties: { local_id: localId, title: "T " + id, subtaskOf: extra.subtaskOf || null, wrapId: extra.wrapId || null, kind: extra.kind || null, ...(extra.properties || {}) }
 });
 
 function mountApp({ parent, pool: poolRows = [], existingTomb = null } = {}) {
@@ -41,7 +41,7 @@ function mountApp({ parent, pool: poolRows = [], existingTomb = null } = {}) {
       getRescheduleTombstone: async (fromDate, movedBlockId, ws) => { calls.tombFor.push({ fromDate, movedBlockId, ws }); return (existingTomb && (existingTomb.properties||{}).movedBlockId === movedBlockId) ? existingTomb : null; },
       rescheduleBlocks: async (moves, creates) => {
         calls.reschedule.push({ moves, creates });
-        return { blocks: [...moves.map((m) => ({ id: m.id })), ...creates.map((c, i) => ({ id: "tomb-" + i, ...c }))] };
+        return { blocks: [...moves.map((m) => ({ type: "block", ...m })), ...creates.map((c, i) => ({ id: "tomb-" + i, ...c }))] };
       },
       getCarryoverPool: async () => ({ rows: [], dayRoots: [], overlays: {}, scanned: 0 }),
       getBlock: async () => null, updateBlock: async (id, p) => ({ id, properties: p }),
@@ -108,7 +108,7 @@ test("the parent carries the pinned times; its subtree just changes date", async
   assert.equal(moves[0].properties._pinnedStart, "09:15");
   assert.equal(moves[0].properties.end, "09:45");
   assert.equal(moves[0].properties.rescheduledFrom.date, FROM);
-  assert.equal(moves[1].properties, undefined, "a subtask keeps its own times");
+  assert.equal(moves[1].properties.start, undefined, "a timeless subtask keeps no time fields");
   assert.equal(moves[1].date, TO);
   assert.deepEqual(body.moved, ["B1", "B2"]);
 });
@@ -169,6 +169,102 @@ test("a move to the date it is already on is refused", async () => {
   const { status, body } = await post(app, "B1", { targetDate: FROM });
   assert.equal(status, 400);
   assert.match(body.error, /Already on that date/);
+  assert.equal(calls.reschedule.length, 0);
+});
+
+test("same-day exact placement updates time without a tombstone", async () => {
+  const parent = blk("B1", "t1", { properties: { start: "09:00", end: "09:30" } });
+  const { app, calls } = mountApp({ parent, pool: [parent] });
+  const { status, body } = await post(app, "B1", {
+    targetDate: FROM,
+    placement: { kind: "timed", start: "11:15", end: "12:00" },
+  });
+  assert.equal(status, 200);
+  assert.equal(calls.reschedule[0].moves[0].properties.start, "11:15");
+  assert.equal(calls.reschedule[0].moves[0].properties.end, "12:00");
+  assert.equal(calls.reschedule[0].creates.length, 0);
+  assert.equal(body.blocks[0].properties.start, "11:15");
+});
+
+test("timed placement shifts descendant times and preserves relative descendant dates", async () => {
+  const parent = blk("B1", "t1", { properties: { start: "09:00", end: "10:00" } });
+  const kid = { ...blk("B2", "t2", { subtaskOf: "t1", properties: { start: "09:30", end: "09:45" } }), date: "2026-07-31" };
+  const { app, calls } = mountApp({ parent, pool: [parent, kid] });
+  const { status } = await post(app, "B1", {
+    targetDate: "2026-08-01",
+    placement: { kind: "timed", start: "10:00", end: "11:00" },
+  });
+  assert.equal(status, 200);
+  const movedKid = calls.reschedule[0].moves.find(m => m.id === "B2");
+  assert.equal(movedKid.date, "2026-08-02");
+  assert.equal(movedKid.properties.start, "10:30");
+  assert.equal(movedKid.properties.end, "10:45");
+});
+
+test("all-day placement uses an exclusive end and strips timed fields", async () => {
+  const parent = blk("B1", "t1", { properties: { start: "09:00", end: "10:00" } });
+  const { app, calls } = mountApp({ parent, pool: [parent] });
+  const { status } = await post(app, "B1", {
+    targetDate: FROM,
+    placement: { kind: "all_day", endDate: "2026-08-02" },
+  });
+  assert.equal(status, 200);
+  const props = calls.reschedule[0].moves[0].properties;
+  assert.equal(props.all_day, true);
+  assert.equal(props.all_day_start, FROM);
+  assert.equal(props.all_day_end, "2026-08-02");
+  assert.equal(props.start, undefined);
+  assert.equal(calls.reschedule[0].creates.length, 0);
+});
+
+test("calendar-owned meetings reject placement before any move", async () => {
+  const parent = blk("B1", "m1", { properties: { source: "calendar", type: "meeting", start: "09:00", end: "10:00" } });
+  const { app, calls } = mountApp({ parent, pool: [parent] });
+  const { status, body } = await post(app, "B1", {
+    targetDate: FROM,
+    placement: { kind: "timed", start: "10:00", end: "11:00" },
+  });
+  assert.equal(status, 409);
+  assert.match(body.error, /source calendar/i);
+  assert.equal(calls.reschedule.length, 0);
+});
+
+test("placement that pushes a timed child outside the day rolls back before the transaction", async () => {
+  const parent = blk("B1", "t1", { properties: { start: "22:00", end: "23:00" } });
+  const kid = blk("B2", "t2", { subtaskOf: "t1", properties: { start: "23:00", end: "23:45" } });
+  const { app, calls } = mountApp({ parent, pool: [parent, kid] });
+  const { status, body } = await post(app, "B1", {
+    targetDate: FROM,
+    placement: { kind: "timed", start: "23:00", end: "23:45" },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /outside the day/i);
+  assert.equal(calls.reschedule.length, 0);
+});
+
+test("shell duration is child-derived and cannot be resized", async () => {
+  const parent = blk("B1", "shell", { properties: { type: "shell", kind: "shell", start: "09:00", end: "11:00" } });
+  const kid = blk("B2", "step", { subtaskOf: "shell", properties: { start: "09:30", end: "10:00" } });
+  const { app, calls } = mountApp({ parent, pool: [parent, kid] });
+  const { status, body } = await post(app, "B1", {
+    targetDate: FROM,
+    placement: { kind: "timed", start: "09:00", end: "10:30" },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /derived from its children/i);
+  assert.equal(calls.reschedule.length, 0);
+});
+
+test("a wrap cannot shrink before its latest shifted child", async () => {
+  const parent = blk("B1", "wrap", { properties: { type: "wrap", kind: "wrap", isWrap: true, start: "09:00", end: "11:00" } });
+  const kid = blk("B2", "rider", { wrapId: "wrap", properties: { start: "10:00", end: "10:45" } });
+  const { app, calls } = mountApp({ parent, pool: [parent, kid] });
+  const { status, body } = await post(app, "B1", {
+    targetDate: FROM,
+    placement: { kind: "timed", start: "09:00", end: "10:30" },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /latest timed child/i);
   assert.equal(calls.reschedule.length, 0);
 });
 

@@ -56,9 +56,10 @@ function pointEligible(ev){
 // Two independent axes for a fixed-time block:
 //  - reflow-exempt (fixedTime): recalcTimes never bumps it (isFixedTimeBlock).
 //  - user-movable: the user can still drag / re-time it by hand.
-// A meeting is both (holds its slot, but you can move it manually); ooo/break
-// are fixed AND not user-movable. Registry-driven so the two never drift.
+// A DCC-owned meeting can hold its slot and still be moved manually. Imported
+// calendar meetings remain source-owned. OOO and break rows are fixed too.
 function userMovable(ev){
+  if(ev&&ev.source==="calendar"&&(ev.type==="meeting"||ev.kind==="meeting"||ev.type==="oneone"))return false;
   if(ev&&window.TaskTypes&&typeof window.TaskTypes.rule==="function")return window.TaskTypes.rule(ev,"movable")!==false;
   return !isMeeting(ev)&&(!ev||(ev.type!=="ooo"&&ev.type!=="break"));
 }

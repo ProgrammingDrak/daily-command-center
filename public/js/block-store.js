@@ -263,13 +263,15 @@
     // purged by the 30-day purgeSoftDeleted sweep). There is nothing left to revive, so
     // retrying can only fail again.
     if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete") && err.status === 404) return true;
-    // 409 is terminal for an undelete SPECIFICALLY, and only for an undelete.
+    // 409 is terminal for undelete and reschedule specifically. An undelete
     // db.undeleteBlock raises it when clearing deleted_at would move the row into
     // idx_blocks_idem_unique's predicate while a LIVE row already holds that
     // idempotency key. The twin does not disappear on retry, so without this the entry
     // re-queues forever behind a permanent "N edits pending" banner. db.js flags this
     // as B2's to wire up, and prod has 32 duplicate key groups of exactly this shape.
-    if (entry.op === "undelete" && err.status === 409) return true;
+    // A reschedule gets 409 only when the row is an imported meeting whose
+    // source calendar owns placement. That authority will not change on retry.
+    if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
     return false;
   }
 
@@ -605,18 +607,22 @@
     // of subtree size, one broadcast the origin client ignores (own clientId) — so
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
-    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate } = {}) {
+    async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement } = {}) {
       setSaving();
       // fromDate: the viewed origin day, used by the server when the block row
       // itself is undated (task-bar pending_tasks) so the move can't 400.
-      const body = { targetDate, parentStart, parentEnd, fromDate };
+      const body = { targetDate, parentStart, parentEnd, fromDate, placement };
       const walId = walPush({ op: "reschedule", id: blockId, data: body });
       try {
         const result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
         (result.moved || []).forEach(id => cacheDelete(id));
+        (result.blocks || []).forEach(b => { if (b && b.id) cacheSet(b); });
         // Tombstone(s) land on the ORIGIN (current) day — cache them so the amber
         // "Rescheduled away" list renders now, since we ignore our own SSE echo.
         (result.created || []).forEach(b => { if (b && b.id) cacheSet(b); });
+        // A single durable all-day block can cover dates beyond either anchor.
+        // Clear the week partitions after placement so no expanded copy stays stale.
+        this.invalidateRangeCache();
         walRemove(walId);
         setSaved();
         return result;
@@ -624,7 +630,7 @@
         // Same permanence rule as isPermanentReplayFailure: 400/404 are final,
         // 401/403 (auth blips) and 5xx/network stay buffered for replay. The
         // verdict is stamped on the error so callers don't re-derive it.
-        if (e) e.permanent = e.status === 400 || e.status === 404;
+        if (e) e.permanent = e.status === 400 || e.status === 404 || e.status === 409;
         if (e && e.permanent) {
           // Permanent rejection: the server refused for a reason a retry cannot change
           // ("Already on that date", "Block is deleted", "Block not found", a bad
@@ -797,20 +803,34 @@
         // Group blocks by date
         const byDate = {};
         for (const b of blocks) {
-          const d = b.date || "unknown";
-          if (!byDate[d]) byDate[d] = [];
-          byDate[d].push(b);
+          const p = b.properties || {};
+          if (p.all_day && p.all_day_start && p.all_day_end) {
+            const cur = new Date(p.all_day_start + "T12:00:00Z");
+            const stop = new Date(p.all_day_end + "T12:00:00Z");
+            while (cur < stop) {
+              const ds = cur.toISOString().slice(0, 10);
+              if (ds >= startDate && ds <= endDate) {
+                if (!byDate[ds]) byDate[ds] = [];
+                if (!byDate[ds].some(x => x.id === b.id)) byDate[ds].push(b);
+              }
+              cur.setUTCDate(cur.getUTCDate() + 1);
+            }
+          } else {
+            const ds = b.date || "unknown";
+            if (!byDate[ds]) byDate[ds] = [];
+            byDate[ds].push(b);
+          }
         }
         // Cache each date
-        const d = new Date(startDate);
-        const end = new Date(endDate);
+        const d = new Date(startDate + "T12:00:00Z");
+        const end = new Date(endDate + "T12:00:00Z");
         while (d <= end) {
           const ds = d.toISOString().slice(0, 10);
           this._rangeCache.set(ds, {
             blocks: byDate[ds] || [],
             dccState: dccStates[ds] || null
           });
-          d.setDate(d.getDate() + 1);
+          d.setUTCDate(d.getUTCDate() + 1);
         }
         return { blocks, dccStates };
       } catch (e) {

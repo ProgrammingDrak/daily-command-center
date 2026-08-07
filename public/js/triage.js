@@ -1273,7 +1273,7 @@ function buildScheduleTriage(){
   if(!el)return;
   const items=activeTriageItems();
   const recurring=(typeof window.getDueRepeatResponsibilities==="function")?window.getDueRepeatResponsibilities():[];
-  if((!items.length&&!recurring.length)||schedView==="actual"){
+  if((!items.length&&!recurring.length)||schedView!=="list"){
     el.style.display="none";
     el.innerHTML="";
     return;

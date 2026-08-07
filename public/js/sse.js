@@ -8,6 +8,7 @@
   let reconnectTimer = null;
   let indicator = null;
   let pendingDccUpdate = false;
+  let pendingCalendarBlockUpdate = false;
 
   function isEditing(){
     const active = document.activeElement;
@@ -149,6 +150,7 @@
     if(window.__RESCHEDULE_IN_FLIGHT__) return;
     // Let BlockStore handle cross-tab sync (updates in-memory cache)
     await window.blockStore.handleBlocksChanged(msg);
+    window.blockStore.invalidateRangeCache();
     console.log('[SSE] Block update from another source:', msg.action, msg.blockIds?.length || 0, 'blocks');
     // Re-apply persisted edits from updated cache and re-render UI
     if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
@@ -159,6 +161,14 @@
     if(typeof loadResponsibilities === 'function') loadResponsibilities();
     if(typeof loadTaskMenus === 'function') loadTaskMenus();
     if(typeof loadTaskGroups === 'function') loadTaskGroups();
+    if(typeof schedView !== 'undefined' && schedView === 'calendar' && typeof buildItineraryCalendar === 'function'){
+      if(isEditing()){
+        pendingCalendarBlockUpdate = true;
+        showIndicator("Calendar update pending...");
+      }else{
+        await buildItineraryCalendar();
+      }
+    }
   }
 
   function connect(){
@@ -248,6 +258,15 @@
           pendingDccUpdate = false;
           hideIndicator();
           refreshDccState();
+        }
+      }, 500);
+    }
+    if(pendingCalendarBlockUpdate){
+      setTimeout(function(){
+        if(!isEditing()){
+          pendingCalendarBlockUpdate = false;
+          hideIndicator();
+          if(typeof schedView !== 'undefined' && schedView === 'calendar' && typeof buildItineraryCalendar === 'function') buildItineraryCalendar();
         }
       }, 500);
     }
