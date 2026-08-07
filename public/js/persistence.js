@@ -253,7 +253,7 @@ function applyDayRootOverlays(props, { manualDone, doneAt, deletedSet }) {
   list((props._pushed || {}).ids).forEach(id => deletedSet.add(id));
 }
 
-function reloadPersistedEdits() {
+function resetPersistedEditState() {
   // Reset mutable UI state
   manualDone = new Set();
   doneAt = {};
@@ -262,6 +262,10 @@ function reloadPersistedEdits() {
   commuteTimes = {};
   deletedSet = new Set();
   dailyBounty = null;
+}
+
+function reloadPersistedEdits() {
+  resetPersistedEditState();
 
   // Reload from blockStore day_root (primary) or localStorage (fallback)
   if (window.USE_BLOCKSTORE && window.blockStore) {
@@ -388,6 +392,7 @@ function reloadPersistedEdits() {
       if(_tmReady)addedBlocks.forEach(block=>{
         const p=block.properties||{};
         const taskId=p.local_id||block.id;   // API task blocks have no local_id; key on the row id
+        if(!taskId)return;
         // Safety net: a stale cached day file can still carry the synthesized
         // meeting ghost (id "mtg-<sourceId>") for this same event. The real
         // block wins -> drop the ghost so it can't double-render before the next
@@ -399,7 +404,6 @@ function reloadPersistedEdits() {
             if(e&&e.id!==taskId&&(e.type==="meeting"||e.type==="oneone")&&String(e.source_id||"")===sid)scheduled.splice(i,1);
           }
         }
-        if(!taskId||scheduled.find(e=>e.id===taskId))return;
         // ★ THIS IS THE DONE REGISTRY'S SOURCE NOW (C5b), not a bridge to one.
         //
         // C0 added this as a temporary second read, and both the C5 plan and the C5b
@@ -425,6 +429,11 @@ function reloadPersistedEdits() {
           manualDone.add(taskId);
           if(!doneAt[taskId])doneAt[taskId]=p.completedAt||p.doneAt||null;
         }
+        // A live refresh commonly reaches this function with the block task already
+        // present in `scheduled`. Completion projection must happen BEFORE this
+        // duplicate guard: reloadPersistedEdits resets manualDone above, so returning
+        // first makes every completed row look open until a hard page reload.
+        if(scheduled.find(e=>e.id===taskId))return;
         // The block -> ev projection lives in task-model.js now: ONE shape shared
         // with the carryover lane (schedule-tab.js), which used to hand-roll a
         // narrower bag and drop half the fields the row builder reads.
@@ -528,6 +537,19 @@ function reloadPersistedEdits() {
   } catch(e) { recalcTimes(); }
 }
 
+// Rebuild the mutable task projections from their immutable day-state baselines, then
+// fold the current BlockStore snapshot over them. Live events and passive refreshes must
+// use this instead of calling reloadPersistedEdits directly: that function deliberately
+// resets completion/deletion registries, but it does not remove block tasks already folded
+// into `scheduled`, so a deleted or moved row can otherwise linger on screen indefinitely.
+function refoldTaskStateFromBlockCache() {
+  scheduled = JSON.parse(JSON.stringify((typeof INIT_SCHED !== "undefined" && INIT_SCHED) || []));
+  consider = JSON.parse(JSON.stringify((typeof INIT_CONSIDER !== "undefined" && INIT_CONSIDER) || []));
+  backlog = JSON.parse(JSON.stringify((typeof INIT_BACKLOG !== "undefined" && INIT_BACKLOG) || []));
+  reloadPersistedEdits();
+  if (typeof normalizePomoStateRefs === "function") normalizePomoStateRefs();
+}
+
 async function switchToDate(dateStr) {
   if (!dateStr) return;
 
@@ -586,9 +608,10 @@ async function switchToDate(dateStr) {
   initKeys();
 
   // Load BlockStore data for the new date
+  let dayBlocksLoaded = true;
   if (window.blockStore) {
     try {
-      await window.blockStore.loadDay(dateStr);
+      dayBlocksLoaded = Array.isArray(await window.blockStore.loadDay(dateStr));
     } catch(e) { console.warn("[BlockStore] loadDay failed for", dateStr, e); }
   }
 
@@ -597,8 +620,15 @@ async function switchToDate(dateStr) {
   // localStorage; the seed had no effect. fetchExpressDate is still called
   // earlier in this function for archive snapshots that arrive as nav stubs.
 
-  reloadPersistedEdits();
-  if (typeof normalizePomoStateRefs === "function") normalizePomoStateRefs();
+  if (dayBlocksLoaded) {
+    reloadPersistedEdits();
+    if (typeof normalizePomoStateRefs === "function") normalizePomoStateRefs();
+  } else {
+    // Keep the newly selected day's immutable schedule, but never fold the previous
+    // day's cache into it when hydration failed or was invalidated by a concurrent write.
+    resetPersistedEditState();
+    recalcTimes();
+  }
 
   // Toggle readonly mode for archives
   document.body.classList.toggle("view-readonly", viewMode === "archive");
