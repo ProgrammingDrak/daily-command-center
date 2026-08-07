@@ -804,7 +804,13 @@ function _persistDone(id,done,opts){
   const ev=opts.ev||((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null);
   if(done&&typeof _applyMeasuredCompletionToEv==="function")_applyMeasuredCompletionToEv(ev,opts.completedAt||new Date().toISOString());
   const block=(typeof _findTaskBlockForDate==="function")?_findTaskBlockForDate(id,dateStr,ev):null;
-  const blockId=(block&&block.id)||null;
+  // The rendered task already carries its authoritative row id. A live refresh can
+  // temporarily leave `scheduled` populated while BlockStore is between cache
+  // snapshots; in that window `_findTaskBlockForDate` misses, completion falls through
+  // to an unavailable day-root overlay, and points are awarded without any task write.
+  // The shared row queue can fetch a cache miss by id, so keep the explicit identity
+  // instead of turning a transient cache gap into a dropped completion.
+  const blockId=(block&&block.id)||(ev&&ev._blockId)||null;
   let write=null;
   if(blockId&&typeof enqueueRowPropsWrite==="function"){
     // ★ A COMPLETION BELONGS TO A DAY, so completing a DATELESS row has to stamp one.
