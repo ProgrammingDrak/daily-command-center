@@ -79,8 +79,19 @@
     // stale (e.g. stamped by an old reflow), so ignore it and keep the row
     // in the Unscheduled section until a drag gives it a real slot.
     const dateless = !block.date;
-    const hasStoredTime = !dateless && p.start && p.start !== "00:00";
-    const untimed = !p.start || dateless;    // no scheduled time -> Unscheduled section
+    const allDay = !!p.all_day;
+    const hasStoredTime = !allDay && !dateless && p.start && p.start !== "00:00";
+    const untimed = (!p.start && !allDay) || dateless;    // no scheduled time -> Unscheduled section
+    const rawSource = String(p.source || "manual").toLowerCase();
+    const isCalendarSource = rawSource === "calendar" || rawSource === "gcal" || !!p.calendar_id;
+    const sourceKey = isCalendarSource
+      ? "calendar:" + (p.account_key || p.account_email || "default") + ":" + (p.calendar_id || "primary")
+      : (rawSource.includes("slack") || p.alertType === "slack" ? "slack"
+        : (rawSource === "notion" || (rawSource === "manual" && p.notionUrl) ? "notion"
+          : (["manual", "quick-task", "triage", "responsibility", "reward"].includes(rawSource) ? "dcc" : "other")));
+    const sourceLabel = isCalendarSource
+      ? (p.calendar_name || p.account_email || "Calendar")
+      : ({ notion: "Notion", slack: "Slack", dcc: "DCC", other: "Other" }[sourceKey] || "Other");
     // `end`: the legacy fallback fmt(d) reads a DURATION as a clock time, so a
     // block with start "09:00" and no end got end "00:30" -> dur(ev) negative.
     // Harmless for today's rows (recalcTimes rewrites them immediately), fatal
@@ -104,12 +115,20 @@
       detail: p.detail || "", source: p.source || "manual",
       source_id: p.source_id || "", notes: p.notes || "", untimed: untimed,
       status: p.status || "open",
+      allDay: allDay,
+      allDayStart: p.all_day_start || (allDay ? block.date : null),
+      allDayEnd: p.all_day_end || null,
+      sourceKey: sourceKey,
+      sourceLabel: sourceLabel,
       startedAt: p.startedAt || null,
       completedAt: p.completedAt || null,
       actualMinutes: p.actualMinutes == null ? null : Number(p.actualMinutes),
       pointsDurationMinutes: p.pointsDurationMinutes == null ? null : Number(p.pointsDurationMinutes),
       aiSummary: p.aiSummary || "",
       notionUrl: p.notionUrl || "", calUrl: p.calUrl || "", priority: p.priority || "High",
+      calendarId: p.calendar_id || "", calendarName: p.calendar_name || "",
+      calendarColor: p.calendar_color || "", calendarAccountKey: p.account_key || "",
+      calendarAccountEmail: p.account_email || "",
       tags: Array.isArray(p.tags) ? p.tags : [],
       kind: p.kind || "",
       // Meeting affordances (join link / location / RSVP), and the block id

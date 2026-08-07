@@ -2,14 +2,18 @@
 document.querySelectorAll(".svt-btn").forEach(btn=>{
   btn.addEventListener("click",()=>{
     schedView=btn.dataset.view;
+    try{localStorage.setItem("dcc-itinerary-view",schedView);}catch(e){}
     document.querySelectorAll(".svt-btn").forEach(b=>b.classList.toggle("active",b.dataset.view===schedView));
     document.getElementById("timeline").style.display=schedView==="plan"?"block":"none";
     const listView=document.getElementById("list-view");
     if(listView)listView.style.display=schedView==="list"?"flex":"none";
+    const calendarView=document.getElementById("calendar-view");
+    if(calendarView)calendarView.style.display=schedView==="calendar"?"block":"none";
     document.getElementById("actual-view").style.display=schedView==="actual"?"block":"none";
     if(typeof buildScheduleDelegated==="function")buildScheduleDelegated();
     if(typeof buildScheduleTriage==="function")buildScheduleTriage();
     if(schedView==="list")buildListView();
+    if(schedView==="calendar"&&typeof buildItineraryCalendar==="function")buildItineraryCalendar();
     if(schedView==="actual"){if(typeof buildDayReview==="function")buildDayReview(typeof viewDate!=="undefined"?viewDate:null);else buildActualView();}
   });
 });

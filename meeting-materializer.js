@@ -6,14 +6,14 @@
 // second-class citizen: no notes, no completion, no subtasks, no manual move.
 // This materializes each calendar meeting into a real `type:"meeting"` block
 // (a normal task the reflow engine treats as fixed-time) keyed by the gcal
-// event identity, so it behaves like every other task while still holding its
-// slot.
+// event identity. Timed and all-day facts remain source-authoritative while
+// local notes, completion, and nested work stay user-owned.
 //
 // Contract:
 //   - CREATE a block the first time an event's identity is seen on a date.
 //   - RECONCILE existing blocks calendar-wins: the calendar's start/end/title
-//     overwrite the block on each sweep (a user's manual move therefore holds
-//     only until the next sweep — Drake's chosen precedence). Completed blocks
+//     overwrite the block on each sweep. The placement API rejects imported
+//     meeting moves so the UI never offers a temporary change. Completed blocks
 //     are never touched.
 //   - NEVER resurrect a user-deleted meeting: soft-deleted rows are looked up
 //     by source_id and left dead.
@@ -139,7 +139,7 @@ module.exports = function createMeetingMaterializer(deps) {
     return props;
   }
 
-  function buildProps({ meeting, identity, start, end, durationMinutes }) {
+  function buildProps({ meeting, identity, start, end, durationMinutes, allDay, allDayStart, allDayEnd }) {
     const title = meeting.title || "(No title)";
     const props = {
       title,
@@ -147,12 +147,21 @@ module.exports = function createMeetingMaterializer(deps) {
       kind: "meeting",
       tags: ["meeting"],
       status: "open",
-      start,
-      end,
+      ...(allDay ? {
+        all_day: true,
+        all_day_start: allDayStart,
+        all_day_end: allDayEnd,
+      } : { start, end }),
       estimatedMinutes: durationMinutes,
       priority: "Medium",
       source: "calendar",
       source_id: identity,
+      calUrl: meeting.source_ref || meeting.htmlLink || meeting.calUrl || "",
+      calendar_id: meeting.calendar_id || meeting.gcal_calendar_id || "",
+      calendar_name: meeting.calendar_name || "",
+      calendar_color: meeting.calendar_color || "",
+      account_key: meeting.account_key || "",
+      account_email: meeting.account_email || "",
       created_by: "calendar-ingest",
       created_at: new Date().toISOString(),
       location: meeting.location || "",
@@ -163,15 +172,15 @@ module.exports = function createMeetingMaterializer(deps) {
         : Number(meeting.attendee_count || 0),
       // Provenance: what the calendar last told us. Kept for debugging and a
       // future "manual wins until the gcal time itself changes" mode.
-      synced_gcal_start: start,
-      synced_gcal_end: end,
+      synced_gcal_start: allDay ? allDayStart : start,
+      synced_gcal_end: allDay ? allDayEnd : end,
       synced_gcal_title: title,
     };
     // Auto-prep: stamp a next-day meeting "pending" at birth so the card carries a
     // prep chip by morning with no button press. Only on CREATE — reconcile spreads
     // ...p, so a later "ready" (sweep-filled) or "pending" survives untouched, which
     // keeps re-ingest idempotent (a filled prep is never reset).
-    if (withinPrepHorizon(meeting.start)) props.prep_status = "pending";
+    if (!allDay && withinPrepHorizon(meeting.start)) props.prep_status = "pending";
     stampMeetingPoints(props, durationMinutes);
     return props;
   }
@@ -197,16 +206,27 @@ module.exports = function createMeetingMaterializer(deps) {
 
     for (const m of list) {
       if (!m || !m.start) continue;
-      const d = isoToDate(m.start);
+      const allDay = !!m.all_day;
+      const allDayStart = allDay ? String(m.start_date || m.start || "").slice(0, 10) : null;
+      const d = allDay ? allDayStart : isoToDate(m.start);
       if (!d) continue;
-      if (d > horizonEnd) horizonEnd = d;
+      const allDayEnd = allDay ? String(m.end_date || m.end || addDaysISO(d, 1) || "").slice(0, 10) : null;
+      const coveredEnd = allDay && allDayEnd ? addDaysISO(allDayEnd, -1) : d;
+      if ((coveredEnd || d) > horizonEnd) horizonEnd = coveredEnd || d;
       const identity = meetingIdentity(m);
       if (identity) {
         if (!incomingIdsByDate.has(d)) incomingIdsByDate.set(d, new Set());
         incomingIdsByDate.get(d).add(String(identity));
       }
       // Eligibility for a rendered/materialized block.
-      if (m.all_day || !m.end) continue;
+      if (allDay) {
+        if (!identity || !allDayEnd || allDayEnd <= d) continue;
+        if (!byDate.has(d)) byDate.set(d, []);
+        byDate.get(d).push({ meeting: m, identity: String(identity), start: null, end: null,
+          durationMinutes: 0, allDay: true, allDayStart: d, allDayEnd });
+        continue;
+      }
+      if (!m.end) continue;
       const sd = new Date(m.start), ed = new Date(m.end);
       if (Number.isNaN(sd.getTime()) || Number.isNaN(ed.getTime())) continue;
       if (!identity) continue;
@@ -313,7 +333,7 @@ module.exports = function createMeetingMaterializer(deps) {
   // SINGLE date. Accumulates into the shared `result`.
   async function materializeDate({ date, eligible, allBlocks, calendarBySource, claimedBlockIds, userId, workspaceId, result }) {
     let rootEnsured = false;
-    for (const { meeting, identity, start, end, durationMinutes } of eligible) {
+    for (const { meeting, identity, start, end, durationMinutes, allDay, allDayStart, allDayEnd } of eligible) {
       const existing = calendarBySource.get(identity);
 
       // User deleted it, so respect that and never resurrect. This check was the
@@ -332,10 +352,23 @@ module.exports = function createMeetingMaterializer(deps) {
           // window and miss the create-time pending stamp. Stamp it here as they
           // cross INTO the window on a later sweep. Guarded by !p.prep_status so a
           // sweep-filled "ready" is never clobbered and pending is never re-stamped.
-          const wantsPending = !p.prep_status && withinPrepHorizon(meeting.start);
+          const wantsPending = !allDay && !p.prep_status && withinPrepHorizon(meeting.start);
+          const nextCalUrl = meeting.source_ref || meeting.htmlLink || meeting.calUrl || p.calUrl || "";
+          const nextCalendarId = meeting.calendar_id || meeting.gcal_calendar_id || p.calendar_id || "";
+          const nextCalendarName = meeting.calendar_name || p.calendar_name || "";
+          const nextCalendarColor = meeting.calendar_color || p.calendar_color || "";
+          const nextAccountKey = meeting.account_key || p.account_key || "";
+          const nextAccountEmail = meeting.account_email || p.account_email || "";
           const changed =
-            existing.date !== date || p.start !== start || p.end !== end || p.title !== nextTitle ||
-            p.synced_gcal_start !== start || p.synced_gcal_end !== end ||
+            existing.date !== date || p.title !== nextTitle ||
+            (!!p.all_day !== !!allDay) ||
+            (allDay ? (p.all_day_start !== allDayStart || p.all_day_end !== allDayEnd)
+              : (p.start !== start || p.end !== end)) ||
+            p.synced_gcal_start !== (allDay ? allDayStart : start) ||
+            p.synced_gcal_end !== (allDay ? allDayEnd : end) ||
+            p.calUrl !== nextCalUrl || p.calendar_id !== nextCalendarId ||
+            p.calendar_name !== nextCalendarName || p.calendar_color !== nextCalendarColor ||
+            p.account_key !== nextAccountKey || p.account_email !== nextAccountEmail ||
             // Heal meetings materialized before the point-earning tag existed:
             // a one-time reconcile stamps the tag + points, then stays idempotent.
             !hasMeetingTag(p) || wantsPending;
@@ -345,15 +378,29 @@ module.exports = function createMeetingMaterializer(deps) {
             const props = {
               ...p,
               title: nextTitle,
-              start, end,
+              ...(allDay ? {
+                all_day: true, all_day_start: allDayStart, all_day_end: allDayEnd,
+                start: undefined, end: undefined,
+              } : {
+                all_day: false, all_day_start: undefined, all_day_end: undefined,
+                start, end,
+              }),
               estimatedMinutes: durationMinutes,
               location: meeting.location || p.location || "",
               hangout_link: meeting.hangout_link || meeting.conferenceUrl || p.hangout_link || "",
               rsvp_status: meeting.myResponseStatus || meeting.rsvp_status || p.rsvp_status || "",
-              synced_gcal_start: start,
-              synced_gcal_end: end,
+              calUrl: nextCalUrl,
+              calendar_id: nextCalendarId,
+              calendar_name: nextCalendarName,
+              calendar_color: nextCalendarColor,
+              account_key: nextAccountKey,
+              account_email: nextAccountEmail,
+              synced_gcal_start: allDay ? allDayStart : start,
+              synced_gcal_end: allDay ? allDayEnd : end,
               synced_gcal_title: nextTitle,
             };
+            if (allDay) { delete props.start; delete props.end; }
+            else { delete props.all_day_start; delete props.all_day_end; }
             if (wantsPending) props.prep_status = "pending";
             stampMeetingPoints(props, durationMinutes);
             try {
@@ -385,7 +432,7 @@ module.exports = function createMeetingMaterializer(deps) {
       // First time we've seen this event on this date, so create the block.
       try {
         if (!rootEnsured) { await blockDB.ensureDayRoot(date, userId, workspaceId); rootEnsured = true; }
-        const props = buildProps({ meeting, identity, start, end, durationMinutes });
+        const props = buildProps({ meeting, identity, start, end, durationMinutes, allDay, allDayStart, allDayEnd });
         const created = await blockDB.createBlock({
           type: "block", date, properties: props, sort_order: sortOrderFor(start),
           user_id: userId, workspace_id: workspaceId,
@@ -407,7 +454,8 @@ module.exports = function createMeetingMaterializer(deps) {
 
   function nestedMoveOps({ parent, allBlocks, oldDate, newDate, oldStart, newStart }) {
     if (!parent || !Array.isArray(allBlocks)) return [];
-    const delta = hhmmToMin(newStart) - hhmmToMin(oldStart);
+    const delta = oldStart && newStart ? hhmmToMin(newStart) - hhmmToMin(oldStart) : 0;
+    const dateDelta = Math.round((new Date(`${newDate}T12:00:00Z`) - new Date(`${oldDate}T12:00:00Z`)) / 86400000);
     const childrenByParent = new Map();
     for (const block of allBlocks) {
       if (!block || block.deleted_at) continue;
@@ -428,8 +476,12 @@ module.exports = function createMeetingMaterializer(deps) {
       const nextProps = { ...p };
       if (delta && p.start) nextProps.start = shiftHHMM(p.start, delta);
       if (delta && p.end) nextProps.end = shiftHHMM(p.end, delta);
+      if (dateDelta && p.all_day) {
+        if (p.all_day_start) nextProps.all_day_start = addDaysISO(p.all_day_start, dateDelta);
+        if (p.all_day_end) nextProps.all_day_end = addDaysISO(p.all_day_end, dateDelta);
+      }
       if (delta || oldDate !== newDate) {
-        moves.push({ op: "update", id: child.id, properties: nextProps, date: newDate });
+        moves.push({ op: "update", id: child.id, properties: nextProps, date: addDaysISO(child.date || oldDate, dateDelta) || newDate });
       }
       aliasesOf(child).forEach((id) => (childrenByParent.get(id) || []).forEach((next) => queue.push(next)));
     }

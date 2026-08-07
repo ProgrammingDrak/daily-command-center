@@ -738,8 +738,16 @@ async function getSubtree(rootIds, workspaceId) {
 
 async function getBlocksByDate(date, workspaceId) {
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE date = $1 AND workspace_id = $2 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`, [date, workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE date = $1 AND deleted_at IS NULL ORDER BY sort_order ASC, created_at ASC`, [date]);
+    ? await pool.query(`SELECT * FROM blocks WHERE workspace_id = $2 AND deleted_at IS NULL
+        AND (date = $1 OR (properties->>'all_day' = 'true'
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $1
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
+        ORDER BY date ASC, sort_order ASC, created_at ASC`, [date, workspaceId])
+    : await pool.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
+        AND (date = $1 OR (properties->>'all_day' = 'true'
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $1
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
+        ORDER BY date ASC, sort_order ASC, created_at ASC`, [date]);
   return rows.map(parseBlock);
 }
 
@@ -814,13 +822,26 @@ async function getRescheduleSubtreePool(fromDate, workspaceId) {
   const isTask = `(b.properties->>'local_id' IS NOT NULL OR b.properties->>'kind' = 'task')`;
   const linked = `(b.properties->>'subtaskOf' IS NOT NULL OR b.properties->>'wrapId' IS NOT NULL)`;
   const { rows } = await pool.query(
-    `SELECT b.* FROM blocks b
-      WHERE b.workspace_id IS NOT DISTINCT FROM $2
-        AND b.deleted_at IS NULL
-        AND b.type = 'block'
-        AND ${isTask}
-        AND (b.date = $1 OR (b.date IS NULL AND ${linked}))
-      ORDER BY b.sort_order ASC, b.created_at ASC`,
+    `WITH RECURSIVE task_pool AS (
+       SELECT b.* FROM blocks b
+        WHERE b.workspace_id IS NOT DISTINCT FROM $2
+          AND b.deleted_at IS NULL
+          AND b.type = 'block'
+          AND ${isTask}
+          AND (b.date = $1 OR (b.date IS NULL AND ${linked}))
+       UNION
+       SELECT c.* FROM blocks c
+         JOIN task_pool p ON (
+           c.parent_id = p.id OR
+           c.properties->>'subtaskOf' = p.properties->>'local_id' OR
+           c.properties->>'wrapId' = p.properties->>'local_id'
+         )
+        WHERE c.workspace_id IS NOT DISTINCT FROM $2
+          AND c.deleted_at IS NULL
+          AND c.type = 'block'
+          AND (c.properties->>'local_id' IS NOT NULL OR c.properties->>'kind' = 'task')
+     )
+     SELECT * FROM task_pool ORDER BY sort_order ASC, created_at ASC`,
     [fromDate, workspaceId || null]
   );
   return rows.map(parseBlock);
@@ -1264,8 +1285,16 @@ async function getOperations(blockId, limit = 50) {
 
 async function getBlocksByDateRange(startDate, endDate, workspaceId) {
   const { rows } = workspaceId
-    ? await pool.query(`SELECT * FROM blocks WHERE date >= $1 AND date <= $2 AND workspace_id = $3 AND deleted_at IS NULL ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate, workspaceId])
-    : await pool.query(`SELECT * FROM blocks WHERE date >= $1 AND date <= $2 AND deleted_at IS NULL ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate]);
+    ? await pool.query(`SELECT * FROM blocks WHERE workspace_id = $3 AND deleted_at IS NULL
+        AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
+        ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate, workspaceId])
+    : await pool.query(`SELECT * FROM blocks WHERE deleted_at IS NULL
+        AND ((date >= $1 AND date <= $2) OR (properties->>'all_day' = 'true'
+          AND CASE WHEN properties->>'all_day_start' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_start')::date END <= $2
+          AND CASE WHEN properties->>'all_day_end' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (properties->>'all_day_end')::date END > $1))
+        ORDER BY date ASC, sort_order ASC, created_at ASC`, [startDate, endDate]);
   return rows.map(parseBlock);
 }
 

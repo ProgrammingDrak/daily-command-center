@@ -636,7 +636,9 @@ async function switchToDate(dateStr) {
   document.body.classList.toggle("view-tomorrow", viewMode === "tomorrow");
 
   // Default to Actual tab for archives, List otherwise (Blocks view removed 2026-07)
-  const targetView = (viewMode === "archive") ? "actual" : "list";
+  let preferredView="list";
+  try{preferredView=localStorage.getItem("dcc-itinerary-view")||"list";}catch(e){}
+  const targetView = (viewMode === "archive") ? "actual" : (["list","calendar","actual"].includes(preferredView)?preferredView:"list");
   const toggleBtns = document.querySelectorAll("#sched-view-toggle .svt-btn");
   toggleBtns.forEach(b => {
     b.classList.toggle("active", b.dataset.view === targetView);
@@ -645,9 +647,11 @@ async function switchToDate(dateStr) {
   const timelineEl = document.getElementById("timeline");
   const listViewEl = document.getElementById("list-view");
   const actualViewEl = document.getElementById("actual-view");
+  const calendarViewEl = document.getElementById("calendar-view");
   if (timelineEl) timelineEl.style.display = schedView === "plan" ? "block" : "none";
   if (listViewEl) listViewEl.style.display = schedView === "list" ? "flex" : "none";
   if (actualViewEl) actualViewEl.style.display = schedView === "actual" ? "block" : "none";
+  if (calendarViewEl) calendarViewEl.style.display = schedView === "calendar" ? "block" : "none";
 
   // Update date nav display
   updateDateNav();
@@ -659,6 +663,7 @@ async function switchToDate(dateStr) {
   if (typeof paintPivotTasks === "function") paintPivotTasks();
   if (schedView === "actual") { if (typeof buildDayReview === "function") buildDayReview(viewDate); else if (typeof buildActualView === "function") buildActualView(); }
   else if (schedView === "list" && typeof buildListView === "function") buildListView();
+  else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();
   if (typeof buildTriage === "function") buildTriage();
   if (typeof buildNotifications === "function") buildNotifications();
 }

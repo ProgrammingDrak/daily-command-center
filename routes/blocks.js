@@ -550,18 +550,36 @@ module.exports = function mount(app, ctx) {
   // load-bearing subtree move should not be churned by the P8 extraction.
   app.post("/api/blocks/:id/reschedule", async (req, res) => {
     try {
-      const { targetDate, parentStart, parentEnd, _clientId } = req.body || {};
+      const { targetDate, parentStart, parentEnd, placement, _clientId } = req.body || {};
       if (!targetDate || !isValidDate(targetDate)) return res.status(400).json({ error: "Invalid targetDate" });
       // parentStart/parentEnd are written straight into properties.start/end; guard the
       // format so a hand-crafted call can't poison a task's time fields with junk.
       const isHHMM = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
       if (parentStart != null && !isHHMM(parentStart)) return res.status(400).json({ error: "Invalid parentStart (want HH:MM)" });
       if (parentEnd != null && !isHHMM(parentEnd)) return res.status(400).json({ error: "Invalid parentEnd (want HH:MM)" });
+      const place = placement || ((parentStart || parentEnd) ? { kind: "timed", start: parentStart, end: parentEnd } : null);
+      if (place && place.kind !== "timed" && place.kind !== "all_day") return res.status(400).json({ error: "Invalid placement kind" });
+      if (place && place.kind === "timed" && (!isHHMM(place.start) || !isHHMM(place.end))) {
+        return res.status(400).json({ error: "Timed placement requires HH:MM start and end" });
+      }
+      if (place && place.kind === "timed") {
+        const toMin = v => Number(v.slice(0, 2)) * 60 + Number(v.slice(3));
+        if (toMin(place.end) <= toMin(place.start)) return res.status(400).json({ error: "Placement end must be after start" });
+      }
+      if (place && place.kind === "all_day") {
+        if (!isValidDate(place.endDate) || place.endDate <= targetDate) return res.status(400).json({ error: "All-day endDate must be after targetDate" });
+      }
       // Tombstone-inclusive: rescheduling a deleted task must fail with the explicit
       // "Block is deleted" the move path raises, not a 404 that reads as "never existed".
       const parent = await blockDB.getBlockIncludingDeleted(req.params.id);
       if (!parent) return res.status(404).json({ error: "Block not found" });
       assertBlockOwnership(parent, req.workspaceId);
+      if (parent.deleted_at) return res.status(400).json({ error: "Block is deleted" });
+      const parentProps = parent.properties || {};
+      const calendarOwned = ["calendar", "gcal"].includes(String(parentProps.source || "").toLowerCase()) || !!parentProps.calendar_id;
+      if (calendarOwned && (parentProps.type === "meeting" || parentProps.kind === "meeting" || parentProps.type === "oneone")) {
+        return res.status(409).json({ error: "Calendar meetings must be moved in their source calendar" });
+      }
       // A day_root is the day's container, not a task on it. Its children by parent_id
       // are every task on that date (migration 001: 1328 such edges), so now that the
       // subtree walk reads parent_id as well as the local-id links, moving one would
@@ -576,7 +594,8 @@ module.exports = function mount(app, ctx) {
       if (bodyFromDate != null && !isValidDate(bodyFromDate)) return res.status(400).json({ error: "Invalid fromDate" });
       const fromDate = parent.date || bodyFromDate;
       if (!fromDate) return res.status(400).json({ error: "Block has no source date to move from" });
-      if (fromDate === targetDate) return res.status(400).json({ error: "Already on that date" });
+      const dateChanged = fromDate !== targetDate;
+      if (!dateChanged && !place) return res.status(400).json({ error: "Already on that date" });
       const parentLocalId = (parent.properties || {}).local_id || null;
 
       // Gather the origin day's task rows (plus undated linked strays) and walk the
@@ -589,14 +608,62 @@ module.exports = function mount(app, ctx) {
       const byId = new Map(dayBlocks.map(b => [b.id, b]));
       byId.set(parent.id, parent); // parent may lack local_id and be absent from dayBlocks
       const now = new Date().toISOString();
+      const toMin = v => v && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? Number(v.slice(0, 2)) * 60 + Number(v.slice(3)) : null;
+      const toHHMM = n => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+      const oldParentStart = toMin(parentProps.start);
+      const newParentStart = place && place.kind === "timed" ? toMin(place.start) : oldParentStart;
+      const timeDelta = oldParentStart != null && newParentStart != null ? newParentStart - oldParentStart : 0;
+      const dateDelta = Math.round((new Date(targetDate + "T12:00:00Z") - new Date(fromDate + "T12:00:00Z")) / 86400000);
+      const shiftDate = (value, delta) => {
+        if (!value || !delta) return value;
+        const d = new Date(String(value).slice(0, 10) + "T12:00:00Z");
+        d.setUTCDate(d.getUTCDate() + delta);
+        return d.toISOString().slice(0, 10);
+      };
+      const oldParentEnd = toMin(parentProps.end);
+      const newParentEnd = place && place.kind === "timed" ? toMin(place.end) : oldParentEnd;
+      const isShell = parentProps.type === "shell" || parentProps.kind === "shell";
+      if (isShell && place && place.kind === "timed" && oldParentStart != null && oldParentEnd != null &&
+          newParentEnd - newParentStart !== oldParentEnd - oldParentStart) {
+        return res.status(400).json({ error: "Shell duration is derived from its children" });
+      }
       const moves = subtreeIds.map(bid => {
         const b = byId.get(bid);
-        if (bid !== parent.id) return { id: bid, date: targetDate };
-        const properties = { ...((b && b.properties) || {}), rescheduledFrom: { date: fromDate, at: now } };
-        if (parentStart) { properties.start = parentStart; properties._pinnedStart = parentStart; }
-        if (parentEnd) properties.end = parentEnd;
-        return { id: bid, date: targetDate, properties };
+        const properties = { ...((b && b.properties) || {}) };
+        if (bid === parent.id) {
+          if (dateChanged) properties.rescheduledFrom = { date: fromDate, at: now };
+          if (place && place.kind === "timed") {
+            properties.start = place.start; properties.end = place.end; properties._pinnedStart = place.start;
+            delete properties.all_day; delete properties.all_day_start; delete properties.all_day_end;
+          } else if (place && place.kind === "all_day") {
+            properties.all_day = true; properties.all_day_start = targetDate; properties.all_day_end = place.endDate;
+            delete properties.start; delete properties.end; delete properties._pinnedStart;
+          }
+        } else {
+          if (timeDelta && properties.start && properties.end) {
+            const startMin = toMin(properties.start), endMin = toMin(properties.end);
+            if (startMin != null && endMin != null) {
+              const shiftedStart = startMin + timeDelta, shiftedEnd = endMin + timeDelta;
+              if (shiftedStart < 0 || shiftedEnd > 1439 || shiftedEnd <= shiftedStart) {
+                const err = new Error("Placement would move nested work outside the day"); err.statusCode = 400; throw err;
+              }
+              properties.start = toHHMM(shiftedStart); properties.end = toHHMM(shiftedEnd);
+            }
+          }
+          if (dateDelta && properties.all_day) {
+            properties.all_day_start = shiftDate(properties.all_day_start, dateDelta);
+            properties.all_day_end = shiftDate(properties.all_day_end, dateDelta);
+          }
+        }
+        const rowDate = bid === parent.id
+          ? targetDate
+          : (dateChanged ? shiftDate((b && b.date) || fromDate, dateDelta) : ((b && b.date) || targetDate));
+        return { id: bid, date: rowDate, properties };
       });
+      if (place && place.kind === "timed" && (parentProps.isWrap || parentProps.type === "wrap" || parentProps.kind === "wrap")) {
+        const latestChildEnd = moves.slice(1).reduce((latest, move) => Math.max(latest, toMin((move.properties || {}).end) || -1), -1);
+        if (latestChildEnd > toMin(place.end)) return res.status(400).json({ error: "Wrap cannot end before its latest timed child" });
+      }
 
       // One tombstone per (moved task, origin day) so the amber list stays clean
       // across repeated reschedules. Reuse an existing one instead of piling up.
@@ -606,8 +673,8 @@ module.exports = function mount(app, ctx) {
       // that meant any future tightening of the pool's task predicate would silently
       // restart the pile-up.
       const creates = [];
-      const existingTomb = await blockDB.getRescheduleTombstone(fromDate, parent.id, req.workspaceId);
-      if (!existingTomb) {
+      const existingTomb = dateChanged ? await blockDB.getRescheduleTombstone(fromDate, parent.id, req.workspaceId) : null;
+      if (dateChanged && !existingTomb) {
         creates.push({
           type: "block",
           date: fromDate,
@@ -631,7 +698,7 @@ module.exports = function mount(app, ctx) {
       const movedIds = moves.map(m => m.id);
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
-      res.json({ moved: movedIds, created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
+      res.json({ moved: movedIds, blocks: result.blocks.slice(0, moves.length), created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
     } catch (e) { res.status(e.statusCode || e.status || 400).json({ error: e.message }); }
   });
 

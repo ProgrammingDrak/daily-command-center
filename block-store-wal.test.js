@@ -273,7 +273,7 @@ test("a rejected undelete puts the tombstone BACK, so the cache stops serving th
   assert.equal(store.get("b1"), null, "a refused restore must not leave the row cached");
 });
 
-test("a 409 on a non-undelete op stays buffered -- 409 is terminal for undelete only", async () => {
+test("a 409 batch stays buffered while source-owned reschedule conflicts are terminal", async () => {
   // The mirror of the 503 batch control above. The 404 widening is guarded in both
   // directions; without this, widening the 409 rule to every op (or copying the line into
   // the shared list) would silently dead-letter retryable writes, which is data loss with
@@ -281,8 +281,14 @@ test("a 409 on a non-undelete op stays buffered -- 409 is terminal for undelete 
   const { store, storage } = makeStore({ fetchStatus: 409 });
   seedWal(storage, [{ op: "batch", data: { operations: [{ op: "delete", id: "b1" }] }, _walId: "w1", timestamp: minsAgo(1) }]);
   await store.replayWAL();
-  assert.equal(wal(storage).length, 1, "a 409 batch is retryable; only an undelete's 409 can never resolve");
+  assert.equal(wal(storage).length, 1, "a 409 batch is retryable");
   assert.equal(dead(storage).length, 0);
+
+  const sourceOwned = makeStore({ fetchStatus: 409 });
+  seedWal(sourceOwned.storage, [{ op: "reschedule", id: "m1", data: { targetDate: "2026-07-10" }, _walId: "w2", timestamp: minsAgo(1) }]);
+  await sourceOwned.store.replayWAL();
+  assert.equal(wal(sourceOwned.storage).length, 0, "a source-authority rejection does not retry forever");
+  assert.equal(dead(sourceOwned.storage).length, 1);
 });
 
 test("cancelBufferedWrite refuses to cancel a write that already replayed", async () => {
@@ -389,6 +395,15 @@ test("rescheduleBlock drops the WAL entry and stamps e.permanent on a 400", asyn
     (e) => e.permanent === true
   );
   assert.equal(wal(storage).length, 0, "permanent rejection must not stay buffered");
+});
+
+test("rescheduleBlock treats a source-authority 409 as permanent", async () => {
+  const { store, storage } = makeStore({ fetchStatus: 409 });
+  await assert.rejects(
+    () => store.rescheduleBlock("meeting-1", "2026-07-10", { placement: { kind: "timed", start: "09:00", end: "10:00" } }),
+    (e) => e.permanent === true
+  );
+  assert.equal(wal(storage).length, 0);
 });
 
 test("rescheduleBlock keeps the WAL entry and marks non-permanent on a 401 auth blip", async () => {

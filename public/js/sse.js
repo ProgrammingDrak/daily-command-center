@@ -8,6 +8,7 @@
   let reconnectTimer = null;
   let indicator = null;
   let pendingDccUpdate = false;
+  let pendingCalendarBlockUpdate = false;
   let deferredBlockEvent = false;
   let deferredBlockTimer = null;
   let deferredBlockRetryMs = 500;
@@ -290,6 +291,7 @@
       queueBlockEvent(msg);
       return;
     }
+    if(typeof window.blockStore.invalidateRangeCache === "function") window.blockStore.invalidateRangeCache();
     console.log('[SSE] Block update from another source:', msg.action, msg.blockIds?.length || 0, 'blocks');
     // Re-apply persisted edits from updated cache and re-render UI
     if(typeof refoldTaskStateFromBlockCache === 'function') refoldTaskStateFromBlockCache();
@@ -304,6 +306,14 @@
     if(typeof loadResponsibilities === 'function') loadResponsibilities();
     if(typeof loadTaskMenus === 'function') loadTaskMenus();
     if(typeof loadTaskGroups === 'function') loadTaskGroups();
+    if(typeof schedView !== 'undefined' && schedView === 'calendar' && typeof buildItineraryCalendar === 'function'){
+      if(isEditing()){
+        pendingCalendarBlockUpdate = true;
+        showIndicator("Calendar update pending...");
+      }else{
+        await buildItineraryCalendar();
+      }
+    }
   }
 
   const taskRefresh=createTaskRefreshCoordinator({
@@ -410,6 +420,15 @@
           pendingDccUpdate = false;
           hideIndicator();
           refreshDccState();
+        }
+      }, 500);
+    }
+    if(pendingCalendarBlockUpdate){
+      setTimeout(function(){
+        if(!isEditing()){
+          pendingCalendarBlockUpdate = false;
+          hideIndicator();
+          if(typeof schedView !== 'undefined' && schedView === 'calendar' && typeof buildItineraryCalendar === 'function') buildItineraryCalendar();
         }
       }, 500);
     }

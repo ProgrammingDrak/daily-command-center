@@ -117,16 +117,70 @@ test("a materialized meeting earns reduced-but-nonzero points via the meeting ta
   assert.equal(b.properties.pointsBreakdown.eligible, true);
 });
 
-test("skips all-day meetings; materializes a timed meeting on its own ET date", async () => {
+test("materializes all-day and timed meetings on their own anchor dates", async () => {
   const db = makeBlockDB();
   const res = await M(db)(args([
-    mtg("allday", "2026-07-09T00:00:00Z", "2026-07-09T23:59:00Z", { all_day: true }),
+    mtg("allday", "2026-07-09", "2026-07-12", {
+      all_day: true,
+      start_date: "2026-07-09",
+      end_date: "2026-07-12",
+      calendar_id: "primary",
+      calendar_name: "Work",
+      calendar_color: "#0075eb",
+      account_key: "work-account",
+      account_email: "drake@example.com",
+      source_ref: "https://calendar.google.com/event?eid=allday",
+    }),
     mtg("other", "2026-07-10T15:00:00Z", "2026-07-10T16:00:00Z"),
   ]));
-  assert.equal(res.created, 1); // "other" now materializes (multi-day horizon)...
-  assert.equal(bySid(db, "other").date, "2026-07-10"); // ...on its own date
-  assert.equal(bySid(db, "allday"), undefined); // all-day never materialized
-  assert.equal(db.store.length, 1);
+  assert.equal(res.created, 2);
+  assert.equal(bySid(db, "other").date, "2026-07-10");
+  const allDay = bySid(db, "allday");
+  assert.equal(allDay.date, "2026-07-09");
+  assert.equal(allDay.properties.all_day, true);
+  assert.equal(allDay.properties.all_day_start, "2026-07-09");
+  assert.equal(allDay.properties.all_day_end, "2026-07-12");
+  assert.equal(allDay.properties.start, undefined);
+  assert.equal(allDay.properties.calendar_id, "primary");
+  assert.equal(allDay.properties.calendar_name, "Work");
+  assert.equal(allDay.properties.account_key, "work-account");
+  assert.equal(allDay.properties.account_email, "drake@example.com");
+  assert.match(allDay.properties.calUrl, /calendar\.google\.com/);
+  assert.equal(db.store.length, 2);
+});
+
+test("all-day reconciliation keeps one parent id, shifts nested dates, and refreshes source metadata", async () => {
+  const db = makeBlockDB();
+  const first = mtg("allmove", "2026-07-09", "2026-07-11", {
+    all_day: true, start_date: "2026-07-09", end_date: "2026-07-11",
+    calendar_id: "team", calendar_name: "Old name", account_key: "work",
+  });
+  await M(db)(args([first]));
+  const parent = bySid(db, "allmove");
+  db.store.push({
+    id: "child", type: "block", date: "2026-07-10", workspace_id: "ws-1", deleted_at: null,
+    properties: {
+      local_id: "child", title: "Attached all-day task", kind: "task", subtaskOf: parent.id,
+      all_day: true, all_day_start: "2026-07-10", all_day_end: "2026-07-12",
+    },
+  });
+  const moved = mtg("allmove", "2026-07-12", "2026-07-15", {
+    all_day: true, start_date: "2026-07-12", end_date: "2026-07-15",
+    calendar_id: "team", calendar_name: "Team offsites", calendar_color: "#00b373",
+    account_key: "work", account_email: "drake@example.com",
+  });
+  const res = await M(db)(args([moved]));
+  assert.equal(res.updated, 1);
+  assert.equal(bySid(db, "allmove").id, parent.id);
+  assert.equal(parent.date, "2026-07-12");
+  assert.equal(parent.properties.all_day_end, "2026-07-15");
+  assert.equal(parent.properties.calendar_name, "Team offsites");
+  assert.equal(parent.properties.calendar_color, "#00b373");
+  assert.equal(parent.properties.account_email, "drake@example.com");
+  const child = db.store.find(row => row.id === "child");
+  assert.equal(child.date, "2026-07-13");
+  assert.equal(child.properties.all_day_start, "2026-07-13");
+  assert.equal(child.properties.all_day_end, "2026-07-15");
 });
 
 test("multi-day horizon: one payload materializes a block on each ET date", async () => {

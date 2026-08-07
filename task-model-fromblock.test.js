@@ -125,13 +125,14 @@ test("pure: the source block is never mutated", () => {
 // `if(task.reschedulePlacement==="earliest"&&!task.subtaskOf)scheduled.unshift(task)`)
 // and wrapId/isWrap, which drive ride-along nesting in the carryover lane.
 const BASE_KEYS = [
-  "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "ampUrl", "calUrl", "capacityBucket",
+  "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "allDay", "allDayEnd", "allDayStart", "ampUrl", "calUrl",
+  "calendarAccountEmail", "calendarAccountKey", "calendarColor", "calendarId", "calendarName", "capacityBucket",
   "completedAt", "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
   "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
   "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus", "pointsDurationMinutes",
   "prepStatus", "priority", "publicVisibility", "recapStatus", "recordingReview",
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
-  "responsibilityTitle", "rsvp_status", "source", "sourceTaskId", "source_id", "start", "startedAt", "status",
+  "responsibilityTitle", "rsvp_status", "source", "sourceKey", "sourceLabel", "sourceTaskId", "source_id", "start", "startedAt", "status",
   "subtaskOf", "tags", "taskGroupId", "title", "triageId", "type", "untimed", "wrapId"
 ].sort();
 
@@ -165,9 +166,13 @@ test("every projected key round-trips its property, including the ones nothing a
     id: "qa-1", title: "T", type: "task", _blockId: "row-9", _dateless: false,
     createdAt: "2026-07-28T14:00:00.000Z", start: "09:00", end: "09:30", meta: "M",
     detail: "D", source: "slack", source_id: "https://s/1", notes: "N", untimed: false,
-    status: "open", startedAt: "2026-07-28T15:00:00.000Z", completedAt: null,
+    status: "open", allDay: false, allDayStart: null, allDayEnd: null,
+    sourceKey: "slack", sourceLabel: "Slack",
+    startedAt: "2026-07-28T15:00:00.000Z", completedAt: null,
     actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
-    notionUrl: "https://n", calUrl: "https://c", priority: "Low", tags: ["a"], kind: "task",
+    notionUrl: "https://n", calUrl: "https://c", priority: "Low",
+    calendarId: "", calendarName: "", calendarColor: "", calendarAccountKey: "", calendarAccountEmail: "",
+    tags: ["a"], kind: "task",
     location: "Room", hangout_link: "https://meet", rsvp_status: "yes",
     prepStatus: "ready", recapStatus: "ready", dashboardRef: "dash", recordingReview: true,
     meetingBlockId: "mb", isPlaceholder: true, placeholderMenus: ["m"], taskGroupId: "tg",
@@ -204,4 +209,34 @@ test("in-progress state follows the hourglass lifecycle and completion always wi
   assert.equal(TaskModel.isInProgress({ ...running, status: "done" }, false), false);
   assert.equal(TaskModel.isInProgress({ ...running, completedAt: "2026-07-28T16:00:00.000Z" }, false), false);
   assert.equal(TaskModel.isInProgress({ ...running, startedAt: null }, false), false, "removing the hourglass clears the state");
+});
+
+test("calendar source identity is independent from meeting type", () => {
+  const meeting = TaskModel.fromBlock(block({
+    properties: {
+      type: "meeting", kind: "meeting", source: "calendar",
+      calendar_id: "team", calendar_name: "Team calendar",
+      account_key: "work", account_email: "drake@example.com",
+    },
+  }));
+  assert.equal(meeting.type, "meeting");
+  assert.equal(meeting.sourceKey, "calendar:work:team");
+  assert.equal(meeting.sourceLabel, "Team calendar");
+});
+
+test("source normalization gives Slack precedence and unknown origins fall back to Other", () => {
+  const slack = TaskModel.fromBlock(block({ properties: { source: "manual", alertType: "slack", notionUrl: "https://notion.so/task" } }));
+  const unknown = TaskModel.fromBlock(block({ properties: { source: "custom-importer" } }));
+  assert.equal(slack.sourceKey, "slack");
+  assert.equal(slack.sourceLabel, "Slack");
+  assert.equal(unknown.sourceKey, "other");
+  assert.equal(unknown.sourceLabel, "Other");
+});
+
+test("all-day rows stay scheduled and retain exclusive date bounds", () => {
+  const allDay = TaskModel.fromBlock(block({ properties: { all_day: true, all_day_start: "2026-08-07", all_day_end: "2026-08-10" } }));
+  assert.equal(allDay.allDay, true);
+  assert.equal(allDay.untimed, false);
+  assert.equal(allDay.allDayStart, "2026-08-07");
+  assert.equal(allDay.allDayEnd, "2026-08-10");
 });
