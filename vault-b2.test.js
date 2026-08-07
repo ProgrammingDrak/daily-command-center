@@ -95,6 +95,55 @@ test("write: expectAbsent prevents a queued create from replacing a new node", a
   }
 });
 
+test("write/delete operations share one per-slug queue and preserve call order", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "vault-b2-"));
+  const vs = new VaultStore({ vaultDir: dir });
+  await vs.init();
+  try {
+    const original = await vs.write("notes/ordered", { frontmatter: { type: "note" }, body: "original" });
+    const writeFirst = vs.write("notes/ordered", {
+      frontmatter: { type: "note" }, body: "replacement", expectedHash: original.hash,
+    });
+    const deleteSecond = vs.delete("notes/ordered");
+    const [written, deleted] = await Promise.all([writeFirst, deleteSecond]);
+    assert.ok(written.hash);
+    assert.strictEqual(deleted, true);
+    assert.strictEqual(vs.get("notes/ordered"), null);
+    await assert.rejects(() => fsp.access(path.join(dir, "notes", "ordered.md")));
+
+    const recreated = await vs.write("notes/ordered", { frontmatter: { type: "note" }, body: "again" });
+    const deleteFirst = vs.delete("notes/ordered");
+    const staleWriteSecond = vs.write("notes/ordered", {
+      frontmatter: { type: "note" }, body: "stale", expectedHash: recreated.hash,
+    });
+    const settled = await Promise.allSettled([deleteFirst, staleWriteSecond]);
+    assert.strictEqual(settled[0].status, "fulfilled");
+    assert.strictEqual(settled[0].value, true);
+    assert.strictEqual(settled[1].status, "rejected");
+    assert.strictEqual(settled[1].reason.code, "STALE_WRITE");
+    assert.strictEqual(vs.get("notes/ordered"), null);
+  } finally {
+    await vs.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("init sweeps unique atomic-write crash residue before indexing or sync", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "vault-b2-"));
+  const residue = path.join(dir, "notes", `crash.md.123-${"a".repeat(12)}.tmp`);
+  await fsp.mkdir(path.dirname(residue), { recursive: true });
+  await fsp.writeFile(residue, "plaintext residue", "utf8");
+  const vs = new VaultStore({ vaultDir: dir });
+  try {
+    await vs.init();
+    await assert.rejects(() => fsp.access(residue));
+    assert.strictEqual(vs.get("notes/crash"), null);
+  } finally {
+    await vs.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Sensitive-gate normalization (the `..` bypass regression) ──
 test("normalizeSlug closes the `..` sensitive-gate bypass", () => {
   const vs = new VaultStore({ vaultDir: "/v" });

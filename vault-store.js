@@ -499,7 +499,7 @@ class VaultStore extends EventEmitter {
   // The MCP server's own walker and .mycelium/lint/*.js already skip node_modules;
   // VaultStore was the one reader that did not. A dependency's README is not a note.
   _isIgnored(p) {
-    if (p.endsWith(".tmp") || /\.tmp-\d+-[a-f0-9]{12}$/.test(p) || p.endsWith(".sync-queue.json")) return true;
+    if (p.endsWith(".tmp") || p.endsWith(".sync-queue.json")) return true;
     const rel = path.relative(this.vaultDir, p);
     if (!rel || rel.startsWith("..")) return false; // the root itself / outside
     return rel.split(path.sep).some((seg) => seg.startsWith(".") || seg === "node_modules");
@@ -1204,7 +1204,10 @@ class VaultStore extends EventEmitter {
     const file = this._pathFromSlug(safeSlug);
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const serialized = matter.stringify(body || "", frontmatter || {});
-    const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+    // Keep the established .tmp suffix so startup sweeping and the vault's
+    // existing *.tmp gitignore both cover crash residue. The pid/random segment
+    // makes concurrent writers use distinct paths.
+    const tmp = `${file}.${process.pid}-${crypto.randomBytes(6).toString("hex")}.tmp`;
     try {
       await fsp.writeFile(tmp, serialized, "utf8");
       await fsp.rename(tmp, file);
@@ -1225,6 +1228,10 @@ class VaultStore extends EventEmitter {
 
   async delete(slug) {
     const safeSlug = this.normalizeSlug(slug);
+    return this._withWriteLock(safeSlug, () => this._deleteUnlocked(safeSlug));
+  }
+
+  async _deleteUnlocked(safeSlug) {
     const file = this._pathFromSlug(safeSlug);
     if (!fs.existsSync(file)) return false;
     await fsp.unlink(file);
