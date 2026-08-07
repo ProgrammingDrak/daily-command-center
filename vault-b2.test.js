@@ -78,6 +78,23 @@ test("write: expectedHash on a node that was deleted under us is a conflict", as
   }
 });
 
+test("write: expectAbsent prevents a queued create from replacing a new node", async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "vault-b2-"));
+  const vs = new VaultStore({ vaultDir: dir });
+  await vs.init();
+  try {
+    const first = vs.write("notes/new", { frontmatter: { type: "note" }, body: "first", expectAbsent: true });
+    const second = vs.write("notes/new", { frontmatter: { type: "note" }, body: "second", expectAbsent: true });
+    const settled = await Promise.allSettled([first, second]);
+    assert.strictEqual(settled.filter((result) => result.status === "fulfilled").length, 1);
+    assert.strictEqual(settled.filter((result) => result.status === "rejected" && result.reason.code === "STALE_WRITE").length, 1);
+    assert.strictEqual(vs.get("notes/new").body.trim(), "first");
+  } finally {
+    await vs.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Sensitive-gate normalization (the `..` bypass regression) ──
 test("normalizeSlug closes the `..` sensitive-gate bypass", () => {
   const vs = new VaultStore({ vaultDir: "/v" });

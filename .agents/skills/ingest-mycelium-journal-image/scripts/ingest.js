@@ -3,6 +3,7 @@
 
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const os = require("node:os");
 const FormDataCtor = globalThis.FormData;
 const BlobCtor = globalThis.Blob;
 
@@ -52,6 +53,9 @@ function validatePayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("payload must be a JSON object");
   if (typeof payload.transcript !== "string" || !payload.transcript.trim()) throw new Error("payload transcript is required");
   if ((payload.classification || "journal") !== "journal") throw new Error("pilot classification must be journal");
+  if (payload.confidence == null || (typeof payload.confidence === "string" && !payload.confidence.trim())) {
+    throw new Error("payload confidence is required");
+  }
   const confidence = Number(payload.confidence);
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error("payload confidence must be between 0 and 1");
   for (const key of ["highlights", "lowConfidence"]) {
@@ -74,8 +78,11 @@ async function postWithRetry(base, options) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const response = await fetchWithTimeout(`${base}/api/vault/journal-image-ingest`, options, REQUEST_TIMEOUT_MS);
-      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) return response;
+      if (response.ok) return response;
+      const retryable = response.status >= 500 || [408, 409, 425, 429].includes(response.status);
+      if (!retryable) return response;
       lastError = new Error(`${response.status} ${response.statusText}`);
+      await response.arrayBuffer().catch(() => {});
     } catch (error) { lastError = error; }
     if (attempt < MAX_ATTEMPTS) {
       if (attempt === 1) {
@@ -87,6 +94,23 @@ async function postWithRetry(base, options) {
   throw lastError || new Error("request failed");
 }
 
+async function resolveConnection(args = {}) {
+  const configDir = process.env.DCC_CONFIG_DIR || path.join(os.homedir(), ".claude", "dcc");
+  const profilesPath = path.join(configDir, "profiles.json");
+  let data = {};
+  try { data = JSON.parse(await fs.readFile(profilesPath, "utf8")); }
+  catch (error) {
+    if (error.code !== "ENOENT") throw new Error(`could not read ${profilesPath}: ${error.message}`);
+  }
+  const profileName = process.env.DCC_PROFILE || data.default;
+  const profile = profileName && data.profiles && data.profiles[profileName] || {};
+  const token = process.env.DCC_PA_TOKEN || process.env.SECRET_PA_TOKEN || process.env.DCC_TOKEN || process.env.SECRET_DCC_TOKEN || profile.token || "";
+  const base = String(
+    args.baseUrl || process.env.DCC_BASE_URL || process.env.DCC_API_BASE_URL || profile.base_url || DEFAULT_BASE
+  ).replace(/\/+$/, "");
+  return { base, token, profile: profileName || null };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { process.stdout.write(usage() + "\n"); return; }
@@ -96,9 +120,11 @@ async function main() {
   const payload = validatePayload(JSON.parse(payloadText));
   const imagePath = path.resolve(args.image);
   const image = await fs.readFile(imagePath);
+  if (image.length > 10 * 1024 * 1024) throw new Error("image is over the 10 MB journal-ingest limit");
   const mime = mimeFor(imagePath);
   if (!mime.startsWith("image/")) throw new Error("image path must use a supported image extension");
-  const base = String(args.baseUrl || process.env.DCC_BASE_URL || DEFAULT_BASE).replace(/\/+$/, "");
+  const connection = await resolveConnection(args);
+  const { base } = connection;
 
   if (args.dryRun) {
     process.stdout.write(JSON.stringify({
@@ -113,9 +139,9 @@ async function main() {
     return;
   }
 
-  const token = process.env.DCC_PA_TOKEN || process.env.SECRET_PA_TOKEN || "";
+  const { token } = connection;
   const local = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(base);
-  if (!token && !local) throw new Error("set DCC_PA_TOKEN or SECRET_PA_TOKEN for production ingest");
+  if (!token && !local) throw new Error("configure a DCC profile token or set DCC_PA_TOKEN/SECRET_PA_TOKEN for production ingest");
 
   const form = new FormDataCtor();
   form.append("file", new BlobCtor([image], { type: mime }), path.basename(imagePath));
@@ -134,7 +160,11 @@ async function main() {
   process.stdout.write(JSON.stringify(result, null, 2) + "\n");
 }
 
-main().catch((error) => {
-  process.stderr.write(`Journal ingest failed: ${error.message}\n`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`Journal ingest failed: ${error.message}\n`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { parseArgs, validatePayload, resolveConnection, postWithRetry };

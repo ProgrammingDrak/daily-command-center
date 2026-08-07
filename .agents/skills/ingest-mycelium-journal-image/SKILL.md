@@ -26,7 +26,7 @@ Process exactly one handwritten journal image through the source-preserving pilo
 }
 ```
 
-6. Use `scripts/ingest.js` with the image path and payload file. Run `--dry-run` first when validating a new environment. Production requires `DCC_PA_TOKEN` or `SECRET_PA_TOKEN`; local development can use `DCC_BASE_URL=http://localhost:8090` without a token.
+6. Use `scripts/ingest.js` with the image path and payload file. Run `--dry-run` first to validate the inputs without sending a request. Production authentication resolves from `DCC_PA_TOKEN` or `SECRET_PA_TOKEN` first, then the selected `DCC_PROFILE` (or default) in `~/.claude/dcc/profiles.json`; local development can use `DCC_BASE_URL=http://localhost:8090` without a token. Images over 10 MB must use the deeper media-ingest path.
 7. Send the write only when the user asked to store or ingest the page. Report the returned Mycelium slug, whether the entry was created or deduplicated, and whether low classification confidence caused an inbox fallback.
 
 The endpoint preserves the original, writes the transcript sidecar, and links highlights and uncertain passages to the source image. Confidence below `0.7` files the capture to `inbox/` as `fleeting`. Never present that fallback as a completed journal entry.

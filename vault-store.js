@@ -165,6 +165,11 @@ class VaultStore extends EventEmitter {
     this.nodes = new Map();
     this.outlinks = new Map();
     this.backlinks = new Map();
+    // Serialize in-process writes per slug. Besides preserving optimistic-lock
+    // semantics across the whole read/check/write sequence, this prevents two
+    // writers from sharing an atomic-write temp path and leaving disk and the
+    // live index out of sync.
+    this._writeQueues = new Map();
     // Inverted facet indexes for the timeline (B4a): facet value -> Set(slug),
     // maintained incrementally at the same mutation sites as backlinks so thread
     // derivation is O(matches-in-range), not O(corpus) per request.
@@ -494,7 +499,7 @@ class VaultStore extends EventEmitter {
   // The MCP server's own walker and .mycelium/lint/*.js already skip node_modules;
   // VaultStore was the one reader that did not. A dependency's README is not a note.
   _isIgnored(p) {
-    if (p.endsWith(".tmp") || p.endsWith(".sync-queue.json")) return true;
+    if (p.endsWith(".tmp") || /\.tmp-\d+-[a-f0-9]{12}$/.test(p) || p.endsWith(".sync-queue.json")) return true;
     const rel = path.relative(this.vaultDir, p);
     if (!rel || rel.startsWith("..")) return false; // the root itself / outside
     return rel.split(path.sep).some((seg) => seg.startsWith(".") || seg === "node_modules");
@@ -1151,24 +1156,61 @@ class VaultStore extends EventEmitter {
     return null;
   }
 
-  async write(slug, { frontmatter, body, expectedHash } = {}) {
+  async _withWriteLock(slug, fn) {
+    const previous = this._writeQueues.get(slug) || Promise.resolve();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    this._writeQueues.set(slug, gate);
+    await previous.catch(() => {});
+    try { return await fn(); }
+    finally {
+      release();
+      if (this._writeQueues.get(slug) === gate) this._writeQueues.delete(slug);
+    }
+  }
+
+  async write(slug, { frontmatter, body, expectedHash, expectAbsent = false } = {}) {
     if (!slug || typeof slug !== "string") throw new Error("slug required");
     const safeSlug = this.normalizeSlug(slug);
+    return this._withWriteLock(safeSlug, () => this._writeUnlocked(safeSlug, { frontmatter, body, expectedHash, expectAbsent }));
+  }
+
+  // Atomic read-modify-write for append-style callers. The updater runs while
+  // the same per-slug lock used by write() is held, so it always sees the latest
+  // in-process value and cannot lose a concurrent edit.
+  async mutate(slug, updater) {
+    if (!slug || typeof slug !== "string") throw new Error("slug required");
+    if (typeof updater !== "function") throw new Error("updater required");
+    const safeSlug = this.normalizeSlug(slug);
+    return this._withWriteLock(safeSlug, async () => {
+      const next = await updater(this.nodes.get(safeSlug) || null);
+      if (!next || typeof next !== "object") throw new Error("updater must return a write record");
+      return this._writeUnlocked(safeSlug, next);
+    });
+  }
+
+  async _writeUnlocked(safeSlug, { frontmatter, body, expectedHash, expectAbsent = false } = {}) {
     // Optimistic lock: when the caller passes the hash it loaded, refuse the
     // write if the on-disk node has moved on (concurrent Obsidian/other-tab
     // edit). null current + a non-null expected = the node was deleted under us,
     // also a conflict. Omitting expectedHash (create, or force) skips the check.
-    if (expectedHash != null) {
-      const cur = this.nodes.get(safeSlug);
-      const curHash = cur ? cur.hash : null;
+    const cur = this.nodes.get(safeSlug);
+    const curHash = cur ? cur.hash : null;
+    if (expectAbsent) {
+      if (curHash !== null) throw new StaleWriteError(curHash);
+    } else if (expectedHash != null) {
       if (curHash !== expectedHash) throw new StaleWriteError(curHash);
     }
     const file = this._pathFromSlug(safeSlug);
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const serialized = matter.stringify(body || "", frontmatter || {});
-    const tmp = file + ".tmp";
-    await fsp.writeFile(tmp, serialized, "utf8");
-    await fsp.rename(tmp, file);
+    const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString("hex")}`;
+    try {
+      await fsp.writeFile(tmp, serialized, "utf8");
+      await fsp.rename(tmp, file);
+    } finally {
+      await fsp.unlink(tmp).catch(() => {});
+    }
     const stat = await fsp.stat(file);
     const prevLinks = this.outlinks.get(safeSlug) || [];
     const prevFacets = this._currentFacets(safeSlug);
