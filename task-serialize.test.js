@@ -1,7 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { taskCommonProps, taskBlockProps } = require("./public/js/task-serialize");
+const {
+  taskCommonProps,
+  taskBlockProps,
+  taskSourceUrl,
+  taskSourceLabel,
+} = require("./public/js/task-serialize");
 
 // This module exists to stop the field-drift the six hand-built task-property
 // bags had accumulated, so these tests pin the exact defaulting/reconciliation
@@ -16,6 +21,7 @@ test("taskCommonProps applies canonical defaults for an empty task", () => {
   assert.equal(c.detail, "");
   assert.equal(c.notionUrl, "");
   assert.equal(c.source, "manual");
+  assert.equal(c.source_id, "");
   assert.deepEqual(c.tags, []);
   assert.equal(c.delegatedItemId, null);
   assert.equal(c.linkedBlockId, null);
@@ -97,4 +103,31 @@ test("triageId survives serialization (the scheduled-triage dedupe link)", () =>
   assert.equal(taskCommonProps({ triageId: "gmail:abc" }).triageId, "gmail:abc");
   assert.equal(taskBlockProps({ triageId: "gmail:abc" }, { local_id: "x" }).triageId, "gmail:abc",
     "and through the block form, which is what scheduleTaskOnDate writes");
+});
+
+test("source_id survives every shared task serialization path", () => {
+  const url = "https://cleverrealestate.slack.com/archives/C1/p123";
+  assert.equal(taskCommonProps({ source_id: url }).source_id, url);
+  assert.equal(taskBlockProps({ source_id: url }, { local_id: "x" }).source_id, url);
+  assert.equal(taskCommonProps({ source_id: "calendar-event-1" }).source_id, "calendar-event-1",
+    "non-URL source identities must not be erased by URL rendering rules");
+});
+
+test("taskSourceUrl normalizes triage provenance and rejects unsafe schemes", () => {
+  const slack = "https://cleverrealestate.slack.com/archives/C1/p123";
+  const gmail = "https://mail.google.com/mail/u/0/#all/abc";
+  assert.equal(taskSourceUrl({ source_ref: slack }), slack);
+  assert.equal(taskSourceUrl({ source_url: gmail }), gmail);
+  assert.equal(taskSourceUrl({ link: "  " + slack + "  " }), slack);
+  assert.equal(taskSourceUrl({ source_id: "javascript:alert(1)", source_ref: slack }), "",
+    "an explicitly unsafe source_id must not fall through to a different field");
+  assert.equal(taskSourceUrl({ source_ref: "mailto:person@example.com" }), "");
+  assert.equal(taskSourceUrl({ source_ref: "javascript:alert(1)" }), "");
+});
+
+test("taskSourceLabel distinguishes Slack, Gmail and generic sources", () => {
+  assert.equal(taskSourceLabel("https://cleverrealestate.slack.com/archives/C1/p123"), "Slack");
+  assert.equal(taskSourceLabel("https://mail.google.com/mail/u/0/#all/abc"), "Email");
+  assert.equal(taskSourceLabel("https://example.com/item/1"), "Source");
+  assert.equal(taskSourceLabel("not-a-url"), "");
 });
