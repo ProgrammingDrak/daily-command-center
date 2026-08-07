@@ -26,6 +26,11 @@
   // source of truth, so this never has to be pruned.
   const _tombstones = new Set();
   let _currentDate = null;
+  let _dayLoadSequence = 0;
+  let _dayLoadTargetDate = null;
+  const _dayLoadsByDate = new Map();
+  let _mutationGeneration = 0;
+  let _activeWriteRequests = 0;
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
   // the cached root reliably, not a naive "day-root-<date>" that misses.
@@ -33,6 +38,10 @@
 
   // ── Save Status Helpers ──
   function setSaving() {
+    // A passive read captures this number before its request. Any mutation that
+    // starts before the response is applied invalidates that snapshot, even when
+    // the write finishes quickly enough that the WAL is empty again by then.
+    _mutationGeneration++;
     if (typeof updateSaveStatus === "function") updateSaveStatus("saving", "Saving...");
   }
   function setSaved() {
@@ -101,44 +110,59 @@
 
   // ── API Helpers ──
   async function apiPost(url, body) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, _clientId: CLIENT_ID })
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      const e = new Error(err.error || `API error ${res.status}`);
-      e.status = res.status;
-      throw e;
+    _activeWriteRequests++;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, _clientId: CLIENT_ID })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error || `API error ${res.status}`);
+        e.status = res.status;
+        throw e;
+      }
+      return await res.json();
+    } finally {
+      _activeWriteRequests--;
     }
-    return res.json();
   }
 
   async function apiPatch(url, body) {
-    const res = await fetch(url, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, _clientId: CLIENT_ID })
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      const e = new Error(err.error || `API error ${res.status}`);
-      e.status = res.status;
-      throw e;
+    _activeWriteRequests++;
+    try {
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, _clientId: CLIENT_ID })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error || `API error ${res.status}`);
+        e.status = res.status;
+        throw e;
+      }
+      return await res.json();
+    } finally {
+      _activeWriteRequests--;
     }
-    return res.json();
   }
 
   async function apiDelete(url) {
-    const res = await fetch(url + "?_clientId=" + CLIENT_ID, { method: "DELETE" });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      const e = new Error(err.error || `API error ${res.status}`);
-      e.status = res.status;
-      throw e;
+    _activeWriteRequests++;
+    try {
+      const res = await fetch(url + "?_clientId=" + CLIENT_ID, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error || `API error ${res.status}`);
+        e.status = res.status;
+        throw e;
+      }
+      return await res.json();
+    } finally {
+      _activeWriteRequests--;
     }
-    return res.json();
   }
 
   async function apiGet(url) {
@@ -215,6 +239,7 @@
     }
     setSaving();
     _contentTimers[id] = setTimeout(() => {
+      delete _contentTimers[id];
       blockStore.updateBlock(id, properties).catch(e => {
         setError("Note save failed: " + e.message);
       });
@@ -228,12 +253,13 @@
       const block = cacheGet(id);
       if (block) {
         // Use keepalive for beforeunload survival
+        _activeWriteRequests++;
         fetch("/api/blocks/" + id, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ properties: block.properties, _clientId: CLIENT_ID }),
           keepalive: true
-        }).catch(() => {});
+        }).catch(() => {}).finally(() => { _activeWriteRequests--; });
       }
       delete _contentTimers[id];
     }
@@ -276,10 +302,15 @@
   }
 
   let _replaying = false;
+  function hasPendingWritesNow() {
+    return _replaying || _activeWriteRequests > 0 || Object.keys(_contentTimers).length > 0 || walGet().length > 0;
+  }
+
   async function replayWAL() {
     if (_replaying) return; // avoid overlapping replays (SSE reconnect + boot)
     const entries = walGet();
     if (!entries.length) return;
+    _mutationGeneration++;
     _replaying = true;
     console.log("[BlockStore] Replaying", entries.length, "buffered writes...");
     let succeeded = 0, failed = 0, dropped = 0;
@@ -360,6 +391,30 @@
     if (failed === 0) {
       console.log("[BlockStore] WAL replay complete (", succeeded, "writes,", dropped, "stale dropped )");
       setSaved();
+      // Replay writes through the API helpers, not the cache. Rehydrate both cache
+      // partitions immediately so the originating tab does not wait for a timer or
+      // hard reload to see the acknowledged result (own SSE echoes are ignored).
+      const refreshDate = _currentDate || _dayLoadTargetDate;
+      if (refreshDate) {
+        // A foreign event or a fresh local edit can invalidate either GET while it is
+        // in flight. Retry both partitions together with a short bounded backoff; one
+        // interrupted attempt must not leave a replayed dateless delete cached forever.
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const [dayBlocks, globalBlocks] = await Promise.all([
+            blockStore.loadDay(refreshDate),
+            blockStore.loadGlobals(),
+          ]);
+          if (Array.isArray(dayBlocks) && Array.isArray(globalBlocks)) {
+            if (typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
+              window.dispatchEvent(new CustomEvent("blockstore-wal-drained"));
+            }
+            break;
+          }
+          if (attempt < 4) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(250 * (2 ** attempt), 2000)));
+          }
+        }
+      }
     } else {
       console.warn("[BlockStore] WAL replay:", succeeded, "ok,", dropped, "stale dropped,", failed, "still queued for retry");
       setError(failed + " edits pending — will retry");
@@ -670,38 +725,73 @@
 
     // Load all blocks for a date (replaces the 11-fetch waterfall)
     async loadDay(dateStr) {
-      _currentDate = dateStr;
-      _currentDayRootId = null;
-      _dayCache.clear();
-      try {
-        const blocks = await apiGet("/api/blocks?date=" + dateStr);
-        // Route through cacheSet so pinned/global blocks land in _globalCache
-        // rather than being evicted on the next date switch.
-        for (const b of blocks) cacheSet(b);
-        // Resolve the real day_root id (may be workspace-prefixed server-side).
-        // saveDoneState / reloadPersistedEdits / child-block parentId all depend
-        // on this being the id the server actually stored.
-        const root = blocks.find(b => b.type === "day_root");
-        if (root) _currentDayRootId = root.id;
-        return blocks;
-      } catch (e) {
-        console.error("[BlockStore] loadDay failed:", e);
-        return [];
-      }
+      // Navigation and the passive timer often ask for the same day together. Share
+      // that request so neither caller can supersede the other and then hydrate from
+      // the previous day's cache while the winning request is still pending.
+      const existing = _dayLoadsByDate.get(dateStr);
+      if (existing && existing.mutationGeneration === _mutationGeneration && _dayLoadTargetDate === dateStr) return existing.promise;
+      // A persisted WAL can exist before boot has any optimistic cache to protect.
+      // Permit that one initial hydration; replay will rehydrate and notify once it
+      // drains. Runtime refreshes still refuse to replace a populated optimistic cache.
+      const allowInitialHydration = _currentDate === null && _dayCache.size === 0;
+      if (hasPendingWritesNow() && !allowInitialHydration) return null;
+
+      const sequence = ++_dayLoadSequence;
+      _dayLoadTargetDate = dateStr;
+      const mutationGeneration = _mutationGeneration;
+      let entry = null;
+      const load = (async () => {
+        try {
+          const blocks = await apiGet("/api/blocks?date=" + dateStr);
+          // A different date won, or a write started after this GET. In either case,
+          // applying the response would replace newer cache state with an old snapshot.
+          if (sequence !== _dayLoadSequence || mutationGeneration !== _mutationGeneration || (hasPendingWritesNow() && !allowInitialHydration)) return null;
+          // Fetch first, replace second. Clearing before the request created an empty-cache
+          // window where an unrelated SSE event could rebuild the whole itinerary as open.
+          _currentDate = dateStr;
+          _currentDayRootId = null;
+          _dayCache.clear();
+          // Route through cacheSet so pinned/global blocks land in _globalCache
+          // rather than being evicted on the next date switch.
+          for (const b of blocks) cacheSet(b);
+          // Resolve the real day_root id (may be workspace-prefixed server-side).
+          // saveDoneState / reloadPersistedEdits / child-block parentId all depend
+          // on this being the id the server actually stored.
+          const root = blocks.find(b => b.type === "day_root");
+          if (root) _currentDayRootId = root.id;
+          return blocks;
+        } catch (e) {
+          console.error("[BlockStore] loadDay failed:", e);
+          return null;
+        }
+      })().finally(() => {
+        if (_dayLoadsByDate.get(dateStr) === entry) _dayLoadsByDate.delete(dateStr);
+      });
+      entry = { promise: load, mutationGeneration };
+      _dayLoadsByDate.set(dateStr, entry);
+      return load;
     },
 
     // Load global blocks (unified blocks without dates + legacy global types)
     async loadGlobals() {
       const types = ["block", ...LEGACY_GLOBAL_TYPES].join(",");
+      const allowInitialHydration = _globalCache.size === 0;
+      if (hasPendingWritesNow() && !allowInitialHydration) return null;
+      const mutationGeneration = _mutationGeneration;
       try {
         const blocks = await apiGet("/api/blocks?type=" + types);
+        if (mutationGeneration !== _mutationGeneration || (hasPendingWritesNow() && !allowInitialHydration)) return null;
+        // This query is the complete live set for every type routed to the global
+        // partition. Replace that partition so a replayed delete is represented by
+        // the row's absence instead of leaving the old cached copy behind forever.
+        _globalCache.clear();
         // Route through cacheSet so pinned blocks (sticky notes stored with a
         // stale date) are classified as global and survive date navigation.
         for (const b of blocks) cacheSet(b);
         return blocks;
       } catch (e) {
         console.error("[BlockStore] loadGlobals failed:", e);
-        return [];
+        return null;
       }
     },
 
@@ -853,6 +943,10 @@
     // Called by SSE when blocks change from another source (tab, scheduled task)
     async handleBlocksChanged(event) {
       if (event.clientId === CLIENT_ID) return; // ignore own changes
+      // A row-level reconciliation that starts after a full-day GET must win. Bump
+      // the same generation used by loadDay so the older snapshot cannot clear and
+      // replace the just-refreshed foreign row when it resolves later.
+      _mutationGeneration++;
       // A restore performed elsewhere has to clear our local tombstone FIRST, or the
       // loop below skips the very id we were told to re-read and the row stays
       // invisible in this tab until a reload. POST /api/blocks/:id/undelete carries
@@ -896,6 +990,16 @@
 
     // ── WAL ──
     replayWAL,
+
+    // Passive refreshes must not replace optimistic client state with a server snapshot
+    // while a write is queued, debounced, active, or replaying.
+    hasPendingWrites() {
+      return hasPendingWritesNow();
+    },
+
+    getMutationGeneration() {
+      return _mutationGeneration;
+    },
 
     // ── Debug ──
     debug() {

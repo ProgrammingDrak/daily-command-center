@@ -282,12 +282,18 @@ function _persistMeetingFlag(taskId, key, val) {
 // Notes editor via seedNoteForTask, so this shows only the meta — no duplication).
 function _amBuildDetails(ev){
   if(!ev) return '';
+  var esc=(window.DCC&&typeof window.DCC.esc==='function')?window.DCC.esc:function(v){return String(v==null?'':v);};
   var meta=[];
-  if(ev.priority) meta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">'+ev.priority+' priority</span>');
+  if(ev.priority) meta.push('<span class="pri-'+(ev.priority==="High"?"hi":ev.priority==="Medium"?"med":"lo")+'">'+esc(ev.priority)+' priority</span>');
   if(typeof dur==='function') meta.push('<span>'+(typeof ms==='function'?ms(dur(ev)):dur(ev)+'m')+'</span>');
   if(ev.start&&ev.end&&typeof f12==='function') meta.push('<span>'+f12(ev.start)+' - '+f12(ev.end)+'</span>');
   if(ev.source&&typeof srcTag==='function') meta.push('<span class="am-det-src">Source:</span>'+srcTag(ev.source));
-  if(ev.notionUrl) meta.push('<a href="'+ev.notionUrl+'" target="_blank" onclick="event.stopPropagation()">Open in Notion</a>');
+  if(ev.notionUrl){
+    try{
+      var notionUrl=new URL(String(ev.notionUrl),window.location.origin);
+      if(notionUrl.protocol==='http:'||notionUrl.protocol==='https:')meta.push('<a href="'+esc(notionUrl.href)+'" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">Open in Notion</a>');
+    }catch(e){}
+  }
   return meta.join('');
 }
 
@@ -375,6 +381,29 @@ function openAddModal(taskId, taskTitle) {
 
   document.getElementById('add-modal-overlay').classList.add('open');
   setTimeout(function() { if(window._amBlockEditor) window._amBlockEditor.focus(); }, 80);
+}
+
+// Repaint only the read-only metadata while this modal is open. Rebuilding the
+// modal would destroy an in-progress notes edit, which is why ordinary renders
+// are deferred until closeAddModal.
+function refreshOpenAddModalDetails(opts) {
+  if (!_addModalTaskId) return;
+  opts=opts||{};
+  var overlay = document.getElementById('add-modal-overlay');
+  if (!overlay || !overlay.classList.contains('open')) return;
+  var anchor = (typeof taskAnchorById === 'function') ? taskAnchorById(_addModalTaskId) : null;
+  var taskEntry = null;
+  if(opts.fromBlockStore&&_addModalBlockId&&window.blockStore&&window.DCC&&window.DCC.TaskModel&&typeof window.DCC.TaskModel.fromBlock==='function'){
+    var freshBlock=window.blockStore.get(_addModalBlockId);
+    if(freshBlock)taskEntry=window.DCC.TaskModel.fromBlock(freshBlock);
+  }
+  taskEntry=taskEntry||(anchor ? anchor.ev
+    : ((typeof scheduled !== 'undefined') ? scheduled.find(function(ev) { return ev.id === _addModalTaskId; }) : null));
+  var detEl = document.getElementById('am-details-section');
+  if (!detEl) return;
+  var detHtml = _amBuildDetails(taskEntry);
+  detEl.innerHTML = detHtml;
+  detEl.style.display = detHtml ? '' : 'none';
 }
 
 // Modal header title — click to rename (Enter/blur saves, Escape cancels), meetings stay read-only.

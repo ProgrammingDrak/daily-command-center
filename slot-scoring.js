@@ -122,6 +122,10 @@ function positiveNumber(value) {
 }
 
 function resolveDurationMinutes(input = {}) {
+  const scoringDuration = positiveNumber(
+    input.points_duration_minutes ?? input.pointsDurationMinutes
+  );
+  if (scoringDuration > 0) return Math.round(scoringDuration);
   const actual = positiveNumber(input.actual_minutes ?? input.actualMinutes);
   if (actual > 0) return Math.round(actual);
   const scheduled = positiveNumber(input.duration_minutes ?? input.durationMinutes ?? input.duration ?? input.durMin);

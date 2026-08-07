@@ -623,9 +623,9 @@ function buildListView(){
   // Jump-to-source link for API-inserted tasks whose source_id is a URL (e.g.
   // the Slack-bookmark poller stores the message permalink). Opens in a new tab.
   function sourceJumpLink(ev){
-    const url=ev&&ev.source_id;
-    if(!url||!/^https?:\/\//.test(url))return "";
-    const label=/slack\.com/.test(url)?"Slack":"Source";
+    const url=DCC.taskSourceUrl(ev&&ev.source_id);
+    if(!url)return "";
+    const label=DCC.taskSourceLabel(url);
     return '<a class="src-jump" href="'+escHtml(url)+'" target="_blank" rel="noopener" title="Open source ('+label+')" onclick="event.stopPropagation()">'+label+' ↗</a>';
   }
 

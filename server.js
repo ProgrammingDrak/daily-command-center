@@ -205,6 +205,9 @@ app.use(async (req, res, next) => {
     // quick-task (no session on a headless run); the digest never contains
     // sensitive content, and a token request is `locked` so the gate holds.
     if (req.method === "POST" && req.path === "/api/vault/digest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
+    // A Codex chat can transcribe one uploaded journal image and hand the
+    // validated source-backed payload to Mycelium without a browser session.
+    if (req.method === "POST" && req.path === "/api/vault/journal-image-ingest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-artifacts" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
     if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
@@ -890,6 +893,11 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
+app.get("/public/js/app-config.js", (req, res) => {
+  res.type("application/javascript");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.send(`window.DCC_APP_TIME_ZONE=${JSON.stringify(APP_TIME_ZONE)};`);
+});
 app.use("/public", express.static(path.join(PROJECT_DIR, "public"), { etag: false, lastModified: false, setHeaders: (res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.setHeader("Pragma", "no-cache"); } }));
 
 // Calendar meetings -> durable task blocks (see meeting-materializer.js).

@@ -129,7 +129,7 @@ const BASE_KEYS = [
   "calendarAccountEmail", "calendarAccountKey", "calendarColor", "calendarId", "calendarName", "capacityBucket",
   "completedAt", "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
   "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
-  "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus",
+  "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus", "pointsDurationMinutes",
   "prepStatus", "priority", "publicVisibility", "recapStatus", "recordingReview",
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
   "responsibilityTitle", "rsvp_status", "source", "sourceKey", "sourceLabel", "sourceTaskId", "source_id", "start", "startedAt", "status",
@@ -159,7 +159,7 @@ test("every projected key round-trips its property, including the ones nothing a
       ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
       subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
       sourceTaskId: "st", status: "open", startedAt: "2026-07-28T15:00:00.000Z",
-      completedAt: null, actualMinutes: 12, aiSummary: "Thread context"
+      completedAt: null, actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context"
     }
   }));
   assert.deepStrictEqual(ev, {
@@ -169,7 +169,7 @@ test("every projected key round-trips its property, including the ones nothing a
     status: "open", allDay: false, allDayStart: null, allDayEnd: null,
     sourceKey: "slack", sourceLabel: "Slack",
     startedAt: "2026-07-28T15:00:00.000Z", completedAt: null,
-    actualMinutes: 12, aiSummary: "Thread context",
+    actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
     notionUrl: "https://n", calUrl: "https://c", priority: "Low",
     calendarId: "", calendarName: "", calendarColor: "", calendarAccountKey: "", calendarAccountEmail: "",
     tags: ["a"], kind: "task",

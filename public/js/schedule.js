@@ -382,6 +382,7 @@ async function commitDoneOnDate(id,dateStr,opts){
   const nowIso=new Date().toISOString();
   const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
   const ev=scheduled.find(e=>e.id===id)||opts.ev||null;
+  if(typeof _applyMeasuredCompletionToEv==="function")_applyMeasuredCompletionToEv(ev,nowIso);
   const award=()=>opts.awardPoints!==undefined?opts.awardPoints:_pointAwardOverride(id);
 
   // Same-day completion: take the in-memory fast path
@@ -714,9 +715,35 @@ function _onParentCompleted(id){
 //
 // The fallback is per-id and additive, never `saveDoneState`'s full-set overwrite —
 // that shape is what permanently un-completed any task `manualDone` had lost track of.
+function _applyMeasuredCompletionToEv(ev,completedAt){
+  if(!ev||typeof window==="undefined"||!window.MeasuredTaskWindow||typeof window.MeasuredTaskWindow.measuredTaskWindow!=="function")return null;
+  const measured=window.MeasuredTaskWindow.measuredTaskWindow(ev.startedAt,completedAt,{timeZone:window.DCC_APP_TIME_ZONE||"America/New_York"});
+  if(!measured)return null;
+  const minutes=measured.durationMinutes;
+  ev.start=measured.start;ev.end=measured.end;
+  ev.durMin=minutes;ev.duration=minutes;ev.durationMinutes=minutes;ev.estimatedMinutes=minutes;
+  ev.pointsDurationMinutes=minutes;ev._pinnedStart=measured.start;ev.untimed=false;
+  if(typeof refreshOpenAddModalDetails==="function")refreshOpenAddModalDetails();
+  return measured;
+}
 function _doneRowProps(props,completedAt){
   const iso=(completedAt instanceof Date)?completedAt.toISOString():(completedAt||new Date().toISOString());
-  return {...props,status:"done",done:true,completedAt:iso};
+  const next={...props,status:"done",done:true,completedAt:iso};
+  if(typeof window!=="undefined"&&window.MeasuredTaskWindow&&typeof window.MeasuredTaskWindow.measuredTaskWindow==="function"){
+    const measured=window.MeasuredTaskWindow.measuredTaskWindow(props&&props.startedAt,iso,{timeZone:window.DCC_APP_TIME_ZONE||"America/New_York"});
+    if(measured){
+      const minutes=measured.durationMinutes;
+      next.start=measured.start;next.end=measured.end;
+      next.duration=minutes;next.durationMinutes=minutes;next.estimatedMinutes=minutes;
+      next.pointsDurationMinutes=minutes;next._pinnedStart=measured.start;
+      const explicitOverride=next.pointsOverride!=null||(next.pointsBreakdown&&next.pointsBreakdown.pointsOverride!=null);
+      if(!explicitOverride&&window.TaskPoints&&typeof window.TaskPoints.estimate==="function"){
+        const scored=window.TaskPoints.estimate({...next,points_duration_minutes:minutes});
+        next.points=scored.awardPoints;next.pointsBreakdown=scored;
+      }
+    }
+  }
+  return next;
 }
 // Returns null when the row carries no completion at all, so the queue skips the write.
 // C0's version made that check against the CACHED row before deciding; doing it inside the
@@ -775,6 +802,7 @@ function _persistDone(id,done,opts){
   if(!id)return;
   const dateStr=opts.dateStr||((typeof _viewedDateStr==="function")?_viewedDateStr():null);
   const ev=opts.ev||((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null);
+  if(done&&typeof _applyMeasuredCompletionToEv==="function")_applyMeasuredCompletionToEv(ev,opts.completedAt||new Date().toISOString());
   const block=(typeof _findTaskBlockForDate==="function")?_findTaskBlockForDate(id,dateStr,ev):null;
   const blockId=(block&&block.id)||null;
   let write=null;
