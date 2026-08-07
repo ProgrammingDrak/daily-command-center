@@ -104,3 +104,21 @@ test("commute time adds one tenth point per minute across both legs", () => {
   assert.equal(scoring.commutePoints, 5);
   assert.equal(scoring.awardPoints, 65);
 });
+
+test("frontend scoring and payload prefer the rounded points duration over exact elapsed time", () => {
+  const TaskPoints = loadTaskPoints();
+  const task = {
+    id: "timed-task",
+    title: "Timed task",
+    start: "11:30",
+    end: "11:50",
+    durMin: 20,
+    actualMinutes: 14,
+    pointsDurationMinutes: 20,
+  };
+  const payload = TaskPoints.buildPayload(task, {});
+  assert.equal(payload.actual_minutes, 14);
+  assert.equal(payload.points_duration_minutes, 20);
+  assert.equal(TaskPoints.estimate(payload).durationMinutes, 20);
+  assert.equal(TaskPoints.estimate(payload).awardPoints, 20);
+});

@@ -297,6 +297,7 @@
       reloadPersistedEdits();
       if(typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
     }
+    if(typeof refreshOpenAddModalDetails === 'function') refreshOpenAddModalDetails({fromBlockStore:true});
     if(typeof render === 'function') render();
     if(typeof paintPivotTasks === 'function') paintPivotTasks();
     if(typeof updateStats === 'function') updateStats();

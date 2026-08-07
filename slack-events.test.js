@@ -500,6 +500,33 @@ test("⌛ then ✅ records exact elapsed, points, and a time_entry", async () =>
   assert.equal(te.properties.source, "slack");
 });
 
+test("⌛ then ✅ replaces the planned slot with a rounded measured window", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  await post(handler, reaction("bookmark", "rounded.1", "rounded.9"));
+  const startSeconds = String(Date.parse("2026-07-28T15:32:00.000Z") / 1000);
+  const endSeconds = String(Date.parse("2026-07-28T15:46:00.000Z") / 1000);
+  await post(handler, reaction("hourglass", "rounded.1", startSeconds));
+  await post(handler, reaction("white_check_mark", "rounded.1", endSeconds));
+
+  const task = blocks.find(b => b.type === "block");
+  assert.equal(task.properties.actualMinutes, 14);
+  assert.equal(task.properties.start, "11:30");
+  assert.equal(task.properties.end, "11:50");
+  assert.equal(task.properties.duration, 20);
+  assert.equal(task.properties.durationMinutes, 20);
+  assert.equal(task.properties.estimatedMinutes, 20);
+  assert.equal(task.properties.pointsDurationMinutes, 20);
+  assert.equal(task.properties.pointsBreakdown.durationMinutes, 20);
+  assert.equal(calls.credit[0].actual_minutes, 14);
+  assert.equal(calls.credit[0].duration_minutes, 20);
+  assert.equal(calls.credit[0].points_duration_minutes, 20);
+
+  const entry = blocks.find(b => b.type === "time_entry");
+  assert.equal(entry.properties.start, "11:32");
+  assert.equal(entry.properties.end, "11:46");
+  assert.equal(entry.properties.durSec, 14 * 60);
+});
+
 test(":hourglass_flowing_sand: no longer starts the Slack timer", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "legacy.1", "legacy.9"));
@@ -643,6 +670,24 @@ test("un-✅ then re-✅ re-times from the original ⌛ and re-credits", async (
   assert.equal(p.actualMinutes, 20, "measured from the original ⌛, not from zero");
   assert.equal(blocks.filter(b => b.type === "time_entry").length, 1);
   assert.equal(calls.credit.length, 2, "the ledger row was deleted, so the re-completion is credited again");
+});
+
+test("a cross-day re-completion keeps the retained rounded scoring duration", async () => {
+  const { handler, blocks, calls } = makeHarness();
+  const start = String(Date.parse("2026-07-28T15:32:00.000Z") / 1000);
+  const firstEnd = String(Date.parse("2026-07-28T15:46:00.000Z") / 1000);
+  const nextDayEnd = String(Date.parse("2026-07-29T04:02:00.000Z") / 1000);
+  await post(handler, reaction("bookmark", "cross-day.1", "cross-day.9"));
+  await post(handler, reaction("hourglass", "cross-day.1", start));
+  await post(handler, reaction("white_check_mark", "cross-day.1", firstEnd));
+  await post(handler, removal("white_check_mark", "cross-day.1"));
+  await post(handler, reaction("white_check_mark", "cross-day.1", nextDayEnd));
+
+  const p = blocks[0].properties;
+  assert.equal(p.pointsDurationMinutes, 20, "the rounded schedule basis survives reopening");
+  assert.equal(calls.credit.length, 2);
+  assert.equal(calls.credit[1].points_duration_minutes, 20);
+  assert.ok(calls.credit[1].actual_minutes > 20, "exact elapsed time is still recorded independently");
 });
 
 // The 🔖 we re-add is added AS DRAKE (user token — a bot's reaction would not match

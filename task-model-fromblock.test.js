@@ -128,7 +128,7 @@ const BASE_KEYS = [
   "_blockId", "_dateless", "actualMinutes", "aiSummary", "alertKey", "alertType", "ampUrl", "calUrl", "capacityBucket",
   "completedAt", "createdAt", "dashboardRef", "delegatedItemId", "detail", "end", "hangout_link",
   "hubspotUrl", "id", "isPlaceholder", "isWrap", "kind", "linkedBlockId", "linkedTagId",
-  "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus",
+  "location", "meetingBlockId", "meta", "notes", "notionUrl", "placeholderMenus", "pointsDurationMinutes",
   "prepStatus", "priority", "publicVisibility", "recapStatus", "recordingReview",
   "rescheduledFrom", "reschedulePlacement", "responsibilityId", "responsibilityScore",
   "responsibilityTitle", "rsvp_status", "source", "sourceTaskId", "source_id", "start", "startedAt", "status",
@@ -158,7 +158,7 @@ test("every projected key round-trips its property, including the ones nothing a
       ampUrl: "https://amp", hubspotUrl: "https://hs", wrapId: "w", isWrap: true,
       subtaskOf: "p", reschedulePlacement: "earliest", rescheduledFrom: "2026-07-27",
       sourceTaskId: "st", status: "open", startedAt: "2026-07-28T15:00:00.000Z",
-      completedAt: null, actualMinutes: 12, aiSummary: "Thread context"
+      completedAt: null, actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context"
     }
   }));
   assert.deepStrictEqual(ev, {
@@ -166,7 +166,7 @@ test("every projected key round-trips its property, including the ones nothing a
     createdAt: "2026-07-28T14:00:00.000Z", start: "09:00", end: "09:30", meta: "M",
     detail: "D", source: "slack", source_id: "https://s/1", notes: "N", untimed: false,
     status: "open", startedAt: "2026-07-28T15:00:00.000Z", completedAt: null,
-    actualMinutes: 12, aiSummary: "Thread context",
+    actualMinutes: 12, pointsDurationMinutes: 20, aiSummary: "Thread context",
     notionUrl: "https://n", calUrl: "https://c", priority: "Low", tags: ["a"], kind: "task",
     location: "Room", hangout_link: "https://meet", rsvp_status: "yes",
     prepStatus: "ready", recapStatus: "ready", dashboardRef: "dash", recordingReview: true,

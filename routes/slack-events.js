@@ -612,13 +612,17 @@ module.exports = function mount(app, ctx) {
       },
     });
     const actualMin = timing.actualMinutes != null ? timing.actualMinutes : NO_HOURGLASS_MIN;
+    const finalProps = task.properties || props;
+    const pointsDuration = (timing.roundedWindow && timing.roundedWindow.durationMinutes) || finalProps.pointsDurationMinutes;
 
     // Points — idempotent on source_key (mirrors log-done so a later reconcile dedupes).
     try {
       await slotStore.earnTaskCredit(OWNER_WORKSPACE_ID, OWNER_USER_ID, {
         source_key: creditKeyFor(task),
-        task_id: task.id, title, type: "task", tags: [],
-        duration_minutes: props.estimatedMinutes || NO_HOURGLASS_MIN,
+        task_id: task.id, title, type: finalProps.type || "task", tags: finalProps.tags || [],
+        priority: finalProps.priority || "",
+        duration_minutes: finalProps.estimatedMinutes || NO_HOURGLASS_MIN,
+        points_duration_minutes: pointsDuration || undefined,
         actual_minutes: actualMin, completed_at: completedIso,
       });
     } catch (e) { console.error("[slack-events] credit failed (non-fatal):", e.message); }

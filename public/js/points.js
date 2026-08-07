@@ -138,6 +138,8 @@
     return 30;
   }
   function durationMinutes(input){
+    const scoring = num(input.points_duration_minutes || input.pointsDurationMinutes);
+    if(scoring > 0) return Math.round(scoring);
     const actual = num(input.actual_minutes || input.actualMinutes);
     if(actual > 0) return Math.round(actual);
     const planned = num(input.duration_minutes || input.durationMinutes || input.durMin || input.duration);
@@ -234,6 +236,7 @@
     options = options || {};
     const actual = actualMinutes(task);
     const planned = plannedMinutes(task);
+    const pointsDuration = num(task.points_duration_minutes || task.pointsDurationMinutes);
     const commuteTo = num(task.commuteToMinutes || task.commute_to_minutes || task.commuteMinutes || task.commute_minutes || task.commuteTime);
     const commuteBack = num(task.commuteBackMinutes || task.commute_back_minutes || task.commuteReturnMinutes || task.commute_return_minutes || task.returnCommuteMinutes);
     const bounty = options.bounty === true || task.bounty === true;
@@ -256,6 +259,7 @@
       bounty_count: resolvedBountyCount,
       partner_bounty: partnerBounty || resolvedBountyCount > 1,
       actual_minutes: actual > 0 ? actual : undefined,
+      points_duration_minutes: pointsDuration > 0 ? Math.round(pointsDuration) : undefined,
       duration_minutes: planned,
       commute_to_minutes: commuteTo > 0 ? Math.round(commuteTo) : undefined,
       commute_back_minutes: commuteBack > 0 ? Math.round(commuteBack) : undefined,
