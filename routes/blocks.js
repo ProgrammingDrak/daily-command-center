@@ -658,7 +658,13 @@ module.exports = function mount(app, ctx) {
         const rowDate = bid === parent.id
           ? targetDate
           : (dateChanged ? shiftDate((b && b.date) || fromDate, dateDelta) : ((b && b.date) || targetDate));
-        return { id: bid, date: rowDate, properties };
+        return {
+          id: bid,
+          date: rowDate,
+          properties,
+          expectedDate: b ? b.date : parent.date,
+          expectedUpdatedAt: b ? b.updated_at : parent.updated_at,
+        };
       });
       if (place && place.kind === "timed" && (parentProps.isWrap || parentProps.type === "wrap" || parentProps.kind === "wrap")) {
         const latestChildEnd = moves.slice(1).reduce((latest, move) => Math.max(latest, toMin((move.properties || {}).end) || -1), -1);
@@ -699,7 +705,11 @@ module.exports = function mount(app, ctx) {
       const created = result.blocks.slice(moves.length); // tombstone(s) appended after moves
       broadcast("blocks-changed", { action: "reschedule", blockIds: result.blocks.map(b => b.id), clientId: _clientId }, req.workspaceId);
       res.json({ moved: movedIds, blocks: result.blocks.slice(0, moves.length), created, parentId: parent.id, fromDate, targetDate, count: movedIds.length });
-    } catch (e) { res.status(e.statusCode || e.status || 400).json({ error: e.message }); }
+    } catch (e) {
+      const body = { error: e.message };
+      if (e.code) body.code = e.code;
+      res.status(e.statusCode || e.status || 400).json(body);
+    }
   });
 
   // Quick-task route removed from blocks.js 2026-07: it duplicated (and shadowed)

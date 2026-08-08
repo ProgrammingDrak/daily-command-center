@@ -54,7 +54,8 @@ function makeStore(opts = {}) {
       // passes because nothing could be fetched, not because the code suppressed it.
       const _st = typeof opts.fetchStatus === "function" ? opts.fetchStatus(url, init) : opts.fetchStatus;
       if (_st && _st !== 200) {
-        return { ok: false, status: _st, statusText: "err", json: async () => ({ error: "nope" }) };
+        const errorBody = typeof opts.errorBody === "function" ? opts.errorBody(url, init) : opts.errorBody;
+        return { ok: false, status: _st, statusText: "err", json: async () => errorBody || ({ error: "nope" }) };
       }
       if (opts.fetchReject) throw new TypeError("network down");
       // fetchBodyFn lets a test answer with something DERIVED from the request — needed
@@ -424,4 +425,49 @@ test("rescheduleBlock keeps the WAL entry on a 503 and on a network error", asyn
   const sNet = makeStore({ fetchReject: true });
   await assert.rejects(() => sNet.store.rescheduleBlock("b1", "2026-07-10", {}), (e) => !e.permanent);
   assert.equal(wal(sNet.storage).length, 1);
+});
+
+test("rescheduleBlock retries a stale subtree snapshot once and clears the WAL on success", async () => {
+  let attempts = 0;
+  const { store, storage } = makeStore({
+    fetchStatus: (url) => String(url).includes("/reschedule") && ++attempts === 1 ? 409 : 200,
+    errorBody: { error: "Task changed while it was being moved", code: "RESCHEDULE_STALE" },
+    fetchBody: { moved: ["b1"], blocks: [], created: [] },
+  });
+  const result = await store.rescheduleBlock("b1", "2026-07-10", { fromDate: "2026-07-08" });
+  assert.deepEqual(result.moved, ["b1"]);
+  assert.equal(attempts, 2, "the stale plan is rebuilt exactly once");
+  assert.equal(wal(storage).length, 0, "the original intent is acknowledged, not left to replay");
+});
+
+test("rapid moves of one task are sent in click order while different tasks stay parallel", async () => {
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  let requestNo = 0;
+  const { store, fetchCalls } = makeStore({
+    fetchBodyFn: async (url) => {
+      requestNo++;
+      if (String(url).includes("/b1/reschedule") && requestNo === 1) await firstGate;
+      return { moved: [], blocks: [], created: [] };
+    },
+  });
+
+  const first = store.rescheduleBlock("b1", "2026-07-10", {});
+  const second = store.rescheduleBlock("b1", "2026-07-11", {});
+  const other = store.rescheduleBlock("b2", "2026-07-12", {});
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const urlsBeforeRelease = fetchCalls.map((call) => String(call.url));
+  assert.equal(urlsBeforeRelease.filter((url) => url.includes("/b1/reschedule")).length, 1,
+    "the second move of b1 waits for its predecessor");
+  assert.equal(urlsBeforeRelease.filter((url) => url.includes("/b2/reschedule")).length, 1,
+    "an unrelated task is not globally serialized");
+
+  releaseFirst();
+  await Promise.all([first, second, other]);
+  const b1Bodies = fetchCalls
+    .filter((call) => String(call.url).includes("/b1/reschedule"))
+    .map((call) => JSON.parse(call.init.body).targetDate);
+  assert.deepEqual(b1Bodies, ["2026-07-10", "2026-07-11"], "the newest click lands last");
 });

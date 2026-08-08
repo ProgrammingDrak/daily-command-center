@@ -31,6 +31,11 @@
   const _dayLoadsByDate = new Map();
   let _mutationGeneration = 0;
   let _activeWriteRequests = 0;
+  // A task can be moved repeatedly faster than the network round trip. Serialize
+  // those intents per row so the server sees them in click order and the final
+  // destination is always the most recent one. Different tasks still move in
+  // parallel.
+  const _rescheduleChains = new Map();
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
   // the cached root reliably, not a naive "day-root-<date>" that misses.
@@ -121,6 +126,7 @@
         const err = await res.json().catch(() => ({ error: res.statusText }));
         const e = new Error(err.error || `API error ${res.status}`);
         e.status = res.status;
+        e.code = err.code;
         throw e;
       }
       return await res.json();
@@ -663,13 +669,25 @@
     // no snap-back, no duplication, no stranded children. The moved blocks now live
     // on targetDate, so evict them from the current-day cache.
     async rescheduleBlock(blockId, targetDate, { parentStart, parentEnd, fromDate, placement } = {}) {
+      const previous = _rescheduleChains.get(blockId) || Promise.resolve();
+      const run = previous.catch(() => {}).then(async () => {
       setSaving();
       // fromDate: the viewed origin day, used by the server when the block row
       // itself is undated (task-bar pending_tasks) so the move can't 400.
       const body = { targetDate, parentStart, parentEnd, fromDate, placement };
       const walId = walPush({ op: "reschedule", id: blockId, data: body });
       try {
-        const result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
+        let result;
+        try {
+          result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
+        } catch (e) {
+          // A different tab may have moved this row after the route read it but
+          // before its transaction acquired the lock. The server rejects that stale
+          // subtree plan so no children can be stranded. Repeating once rebuilds the
+          // plan from the row's current day and preserves the user's intent.
+          if (!(e && e.status === 409 && e.code === "RESCHEDULE_STALE")) throw e;
+          result = await apiPost("/api/blocks/" + blockId + "/reschedule", body);
+        }
         (result.moved || []).forEach(id => cacheDelete(id));
         (result.blocks || []).forEach(b => { if (b && b.id) cacheSet(b); });
         // Tombstone(s) land on the ORIGIN (current) day — cache them so the amber
@@ -702,6 +720,13 @@
           setError("Reschedule failed — buffered for retry");
         }
         throw e;
+      }
+      });
+      _rescheduleChains.set(blockId, run);
+      try {
+        return await run;
+      } finally {
+        if (_rescheduleChains.get(blockId) === run) _rescheduleChains.delete(blockId);
       }
     },
 
