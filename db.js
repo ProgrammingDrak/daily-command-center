@@ -964,6 +964,24 @@ async function rescheduleBlocks(moves, creates) {
       const existing = rows[0];
       if (!existing) throw new Error(`Block not found: ${m.id}`);
       if (existing.deleted_at) throw new Error(`Block is deleted: ${m.id}`);
+      // The route discovers the subtree before entering this transaction. Another
+      // reschedule can commit between that read and this lock, leaving `moves` based
+      // on the old day. Applying that stale plan can move the parent alone and strand
+      // its children. Compare the parent snapshot after taking the row lock and make
+      // the client rebuild the request from current state instead.
+      const hasExpectedDate = Object.prototype.hasOwnProperty.call(m, "expectedDate");
+      const expectedDate = normalizeDate(m.expectedDate);
+      const actualDate = normalizeDate(existing.date);
+      const expectedUpdatedAt = m.expectedUpdatedAt == null ? null : new Date(m.expectedUpdatedAt).getTime();
+      const actualUpdatedAt = existing.updated_at == null ? null : new Date(existing.updated_at).getTime();
+      const dateChangedSinceRead = hasExpectedDate && expectedDate !== actualDate;
+      const versionChangedSinceRead = expectedUpdatedAt != null && actualUpdatedAt != null && expectedUpdatedAt !== actualUpdatedAt;
+      if (dateChangedSinceRead || versionChangedSinceRead) {
+        const err = new Error("Task changed while it was being moved");
+        err.statusCode = 409;
+        err.code = "RESCHEDULE_STALE";
+        throw err;
+      }
       let newProps = existing.properties;
       if (m.properties !== undefined) {
         const parsed = typeof m.properties === "string" ? JSON.parse(m.properties) : m.properties;
