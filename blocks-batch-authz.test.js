@@ -122,6 +122,20 @@ test("a batch update of another workspace's block is refused", async () => {
   assert.equal(batched.length, 0);
 });
 
+test("a batch completion transition cannot bypass the base revision protocol", async () => {
+  const { app, batched } = mountApp();
+  const { status, json } = await postBatch(app, [{
+    op: "update",
+    id: "mine-1",
+    properties: { title: "mine", status: "open" },
+    completionIntent: "reopen",
+    completionMutationId: "old-offline-batch",
+  }]);
+  assert.equal(status, 400);
+  assert.equal(json.code, "COMPLETION_BASE_REQUIRED");
+  assert.equal(batched.length, 0);
+});
+
 test("a batch reorder is checked per item, not just on the first", async () => {
   // The interesting case: a legitimate own-block id first, so a naive check that only
   // looked at operations[0] or at op.id (which reorder does not have) passes.

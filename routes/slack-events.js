@@ -606,6 +606,7 @@ module.exports = function mount(app, ctx) {
     const timing = await finalizeTiming({
       block: task, endMs: eventMs, fallbackMinutes: NO_HOURGLASS_MIN, title,
       userId: OWNER_USER_ID, workspaceId: OWNER_WORKSPACE_ID,
+      completionIntent: "complete",
       mergeProps: {
         status: "done", done: true, completed: true,
         completedAt: completedIso, doneAt: completedIso, completedBy: "slack-events",
@@ -677,6 +678,7 @@ module.exports = function mount(app, ctx) {
       block: task,
       mergeProps: { status: "open" },
       dropProps: ["done", "completed", "completedAt", "doneAt", "completedBy"],
+      completionIntent: "reopen",
     });
 
     // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).

@@ -250,9 +250,10 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
     enqueueRowPropsWrite: (blockId, merge, extra) => {
       const row = findRow(blockId);
       if (!row || !row.properties) return null;
-      const next = merge(row.properties);
+      const next = merge(row.properties, row);
       if (!next) return null;
       row.properties = next;
+      extra = typeof extra === "function" ? extra(row, next) : extra;
       // `extra` is the top-level COLUMN write (today just {date}), which is how a completion
       // promotes a dateless Unscheduled row onto its day -- and how un-checking gives the date
       // back. Gated on `!== undefined`, exactly as `db.updateBlock` does
