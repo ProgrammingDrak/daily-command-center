@@ -13,7 +13,7 @@ const createTaskTiming = require("./lib/task-timing");
 const MIN = 60000;
 const END = Date.parse("2026-07-28T18:00:00.000Z");
 
-function makeHarness() {
+function makeHarness(opts = {}) {
   const blocks = [];
   const deleted = [];
   const counts = { query: 0, update: 0 };
@@ -36,9 +36,10 @@ function makeHarness() {
       if (String(id).startsWith("boom")) throw new Error("write rejected " + id);
       const b = blocks.find(x => x.id === id);
       if (!b) throw new Error("not found " + id);
-      stored.set(id, copy(properties));
-      b.properties = properties;
-      return { id };
+      const written = opts.writeResult ? opts.writeResult(copy(properties), id) : properties;
+      stored.set(id, copy(written));
+      b.properties = written;
+      return { id, properties: copy(written) };
     },
     createBlock: async ({ id, type, date, properties, parent_id }) => {
       const b = { id, type, date, properties, parent_id };
@@ -80,6 +81,20 @@ test("finalizeTiming no-ops with no startedAt and no fallback — never invents 
   assert.equal(task.properties.actualMinutes, undefined);
   assert.equal(task.properties.notes, undefined);
   assert.equal(timerFor(task.id), undefined, "no phantom time_entry");
+});
+
+test("timing keeps the authoritative properties returned by a guarded write", async () => {
+  const completedAt = new Date(END).toISOString();
+  const { timing, addTask } = makeHarness({
+    writeResult: properties => ({ ...properties, status: "done", done: true, completedAt }),
+  });
+  const task = addTask({ title: "Racing", status: "open" });
+
+  await timing.finalizeTiming({ block: task, endMs: END, fallbackMinutes: 5 });
+
+  assert.equal(task.properties.status, "done");
+  assert.equal(task.properties.completedAt, completedAt);
+  assert.equal(task.properties.actualMinutes, 5);
 });
 
 test("finalizeTiming honors an explicit fallback (the Slack 🔖→✅ rule)", async () => {

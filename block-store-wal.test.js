@@ -9,6 +9,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const { setImmediate } = require("node:timers");
 
 const source = fs.readFileSync(require.resolve("./public/js/block-store.js"), "utf8");
 
@@ -25,7 +26,7 @@ FrozenDate.UTC = Date.UTC;
 // Fresh vm context per test: in-memory localStorage, controllable fetch, and
 // the browser globals block-store.js touches at load (listeners are inert).
 function makeStore(opts = {}) {
-  const storage = new Map();
+  const storage = opts.storage || new Map();
   const localStorage = {
     getItem: (k) => (storage.has(k) ? storage.get(k) : null),
     setItem: (k, v) => storage.set(k, String(v)),
@@ -42,12 +43,13 @@ function makeStore(opts = {}) {
     localStorage,
     sessionStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
     crypto: { randomUUID: () => "uuid-" + Math.random().toString(36).slice(2) },
-    navigator: { onLine: true },
+    navigator: { onLine: true, ...(opts.locks ? { locks: opts.locks } : {}) },
     addEventListener: () => {},
     removeEventListener: () => {},
     document: { addEventListener: () => {}, visibilityState: "visible" },
     fetch: async (url, init) => {
       fetchCalls.push({ url, init });
+      if (opts.fetchImpl) return await opts.fetchImpl(url, init);
       // fetchStatus may be a FUNCTION of the url, so a test can fail one endpoint while
       // letting others answer. A blanket status makes some assertions vacuous: 409-ing
       // everything also 409s the follow-up GET, so a "the row is not cached" assertion
@@ -71,6 +73,18 @@ function makeStore(opts = {}) {
   vm.createContext(context);
   vm.runInContext(source, context);
   return { store: context.window.blockStore, storage, fetchCalls, context };
+}
+
+function makeSharedLocks() {
+  const tails = new Map();
+  return {
+    request(name, callback) {
+      const previous = tails.get(name) || Promise.resolve();
+      const current = previous.catch(() => {}).then(callback);
+      tails.set(name, current);
+      return current.finally(() => { if (tails.get(name) === current) tails.delete(name); });
+    },
+  };
 }
 
 const WAL_KEY = "blockstore-wal";
@@ -114,6 +128,431 @@ test("replayWAL does not age-gate an update, and a create well inside 24h still 
   await store.replayWAL();
   assert.equal(fetchCalls.length, 2, "old update and hour-old create both still replay");
   assert.equal(dead(storage).length, 0);
+});
+
+test("a newer reopen supersedes an ack-lost completion and stays ordered per row", async () => {
+  let rejectFirst;
+  let requestCount = 0;
+  const opts = {
+    fetchImpl: async (_url, init) => {
+      if (!init || init.method !== "PATCH") {
+        return { ok: true, status: 200, json: async () => ({
+          id: "b1", type: "block", date: null,
+          properties: { title: "Original", status: "open", kind: "backlog" },
+        }) };
+      }
+      requestCount++;
+      if (requestCount === 1) {
+        return await new Promise((_resolve, reject) => { rejectFirst = reject; });
+      }
+      const sent = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08", properties: sent.properties,
+      }) };
+    },
+  };
+  const { store, storage, fetchCalls } = makeStore(opts);
+  await store.handleBlocksChanged({ blockIds: ["b1"] });
+  fetchCalls.length = 0;
+
+  const complete = store.updateBlock("b1", { status: "done", done: true }, { completionIntent: "complete" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetchCalls.length, 1, "the completion starts immediately");
+
+  const reopen = store.updateBlock("b1", { status: "open" }, { completionIntent: "reopen" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetchCalls.length, 1, "the reopen waits behind the same-row completion");
+  assert.equal(wal(storage).length, 1, "only the newest full-row update remains buffered");
+  assert.equal(wal(storage)[0].data.completionIntent, "reopen");
+
+  rejectFirst(new TypeError("ack lost"));
+  await Promise.all([complete, reopen]);
+
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(JSON.parse(fetchCalls[0].init.body).completionIntent, "complete");
+  assert.equal(JSON.parse(fetchCalls[1].init.body).completionIntent, "reopen");
+  assert.equal(wal(storage).length, 0, "the acknowledged reopen clears the only surviving entry");
+});
+
+test("an ordinary edit inherits a still-buffered completion before superseding it", async () => {
+  let rejectFirst;
+  let requestCount = 0;
+  const opts = {
+    fetchImpl: async (_url, init) => {
+      if (!init || init.method !== "PATCH") {
+        return { ok: true, status: 200, json: async () => ({
+          id: "b1", type: "block", date: null,
+          properties: { title: "Original", status: "open", kind: "backlog" },
+        }) };
+      }
+      requestCount++;
+      if (requestCount === 1) {
+        return await new Promise((_resolve, reject) => { rejectFirst = reject; });
+      }
+      const sent = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08",
+        properties: sent.completionIntent === "complete"
+          ? { ...sent.properties, status: "done", done: true }
+          : { ...sent.properties, status: "open" },
+      }) };
+    },
+  };
+  const { store, storage, fetchCalls } = makeStore(opts);
+  await store.handleBlocksChanged({ blockIds: ["b1"] });
+  fetchCalls.length = 0;
+
+  const complete = store.updateBlock(
+    "b1",
+    {
+      title: "Original", status: "done", done: true,
+      completedAt: "2026-07-08T11:00:00.000Z",
+      _doneStampedDate: "2026-07-08", _wasBacklog: true,
+    },
+    { completionIntent: "complete", date: "2026-07-08" }
+  );
+  await new Promise(resolve => setImmediate(resolve));
+  const rename = store.updateBlock("b1", {
+    title: "Renamed", status: "done", done: true,
+    completedAt: "2026-07-08T11:00:00.000Z",
+    _doneStampedDate: "2026-07-08", _wasBacklog: true,
+  });
+
+  assert.equal(wal(storage).length, 1);
+  assert.equal(wal(storage)[0].data.completionIntent, "complete", "the rename carries the pending transition");
+  assert.equal(wal(storage)[0].data.date, "2026-07-08", "and keeps top-level promotion metadata");
+  rejectFirst(new TypeError("ack lost"));
+  await Promise.all([complete, rename]);
+
+  const renameBody = JSON.parse(fetchCalls[1].init.body);
+  assert.equal(renameBody.completionIntent, "complete");
+  assert.equal(renameBody.date, "2026-07-08");
+  assert.equal(renameBody.properties.completedAt, "2026-07-08T11:00:00.000Z");
+  assert.equal(renameBody.properties._doneStampedDate, "2026-07-08");
+  assert.equal(renameBody.properties._wasBacklog, true);
+  assert.equal("kind" in renameBody.properties, false, "completion keeps the Backlog promotion's kind removal");
+  assert.equal(store.get("b1").properties.status, "done");
+  assert.equal(store.get("b1").properties.title, "Renamed");
+  assert.equal(wal(storage).length, 0);
+});
+
+test("a coalesced rename survives a completion conflict rebase", async () => {
+  let rejectCompletion;
+  let patchCount = 0;
+  let getCount = 0;
+  const { store, storage, fetchCalls } = makeStore({
+    fetchImpl: async (_url, init) => {
+      if (!init || init.method !== "PATCH") {
+        getCount++;
+        return { ok: true, status: 200, json: async () => getCount === 1
+          ? {
+              id: "b1", type: "block", date: "2026-07-08",
+              properties: {
+                title: "Original", detail: "Old detail", notes: "Original notes",
+                status: "open", _completionRevision: "base-r0",
+              },
+            }
+          : {
+              id: "b1", type: "block", date: "2026-07-08",
+              properties: {
+                title: "Remote title", detail: "Remote detail", notes: "Remote notes",
+                status: "open", _completionRevision: "remote-r2",
+              },
+            } };
+      }
+      patchCount++;
+      if (patchCount === 1) {
+        return await new Promise((_resolve, reject) => { rejectCompletion = reject; });
+      }
+      if (patchCount === 2) {
+        return { ok: false, status: 409, json: async () => ({
+          error: "Task completion changed since this edit was created", code: "COMPLETION_CONFLICT",
+        }) };
+      }
+      const sent = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08",
+        properties: sent.properties,
+      }) };
+    },
+  });
+  await store.handleBlocksChanged({ blockIds: ["b1"] });
+  fetchCalls.length = 0;
+
+  const complete = store.updateBlock("b1", {
+    title: "Original", detail: "Old detail", notes: "Timed completion notes",
+    status: "done", done: true,
+    completedAt: "2026-07-08T11:00:00.000Z",
+  }, { completionIntent: "complete" });
+  await new Promise(resolve => setImmediate(resolve));
+  const rename = store.updateBlock("b1", {
+    title: "Local rename", detail: "Old detail", notes: "User edited notes",
+    status: "done", done: true,
+    completedAt: "2026-07-08T11:00:00.000Z",
+  });
+
+  rejectCompletion(new TypeError("ack lost"));
+  await Promise.all([complete, rename]);
+
+  assert.equal(fetchCalls.length, 4, "completion, combined conflict, refresh, retry");
+  const retry = JSON.parse(fetchCalls[3].init.body);
+  assert.equal("completionIntent" in retry, false, "the stale inherited completion loses to remote reopen");
+  assert.equal("completionBaseRevision" in retry, false);
+  assert.equal(retry.properties.title, "Local rename", "the later local edit remains intentional");
+  assert.equal(retry.properties.detail, "Remote detail", "unchanged stale fields still rebase to latest");
+  assert.equal(retry.properties.notes, "User edited notes", "a later overlapping edit wins over completion");
+  assert.equal(retry.properties.status, "open", "the intervening explicit reopen remains authoritative");
+  assert.equal("done" in retry.properties, false);
+  assert.equal("completedAt" in retry.properties, false);
+  assert.equal(wal(storage).length, 0);
+});
+
+test("a stale cross-device completion replay is dead-lettered on revision conflict", async () => {
+  const { store, storage, fetchCalls } = makeStore({
+    fetchStatus: 409,
+    errorBody: { error: "Task completion changed since this edit was created", code: "COMPLETION_CONFLICT" },
+  });
+  seedWal(storage, [{
+    op: "update", id: "b1",
+    data: {
+      properties: { status: "done", done: true },
+      completionIntent: "complete", completionMutationId: "old-mutation",
+      completionBaseRevision: "old-revision",
+    },
+    _walId: "old-device-complete", timestamp: minsAgo(1),
+  }]);
+
+  await store.replayWAL();
+
+  assert.equal(fetchCalls.length, 1, "stale replay is never refreshed and retried");
+  assert.equal(wal(storage).length, 0);
+  assert.equal(dead(storage).length, 1);
+  assert.match(dead(storage)[0].reason, /409/);
+});
+
+test("a live completion conflict refreshes the revision and retries once", async () => {
+  let patchCount = 0;
+  let getCount = 0;
+  const { store, storage, fetchCalls } = makeStore({
+    fetchImpl: async (url, init) => {
+      if (!init || init.method !== "PATCH") {
+        getCount++;
+        return { ok: true, status: 200, json: async () => ({
+          id: "b1", type: "block", date: "2026-07-08",
+          properties: getCount === 1
+            ? {
+                title: "Stale title", detail: "Old detail", status: "done", done: true,
+                _doneStampedDate: "2026-07-08", _wasBacklog: true,
+                _completionRevision: "client-old",
+              }
+            : {
+                title: "Newer title", detail: "Keep me", status: "done", done: true,
+                _doneStampedDate: "2026-07-08", _wasBacklog: true,
+                _completionRevision: "server-latest",
+              },
+        }) };
+      }
+      patchCount++;
+      if (patchCount === 1) {
+        return { ok: false, status: 409, json: async () => ({
+          error: "Task completion changed since this edit was created", code: "COMPLETION_CONFLICT",
+        }) };
+      }
+      const sent = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08",
+        properties: { ...sent.properties, status: "open", _completionRevision: "reopen-new" },
+      }) };
+    },
+  });
+
+  await store.handleBlocksChanged({ blockIds: ["b1"] });
+  fetchCalls.length = 0;
+  const result = await store.updateBlock(
+    "b1",
+    { title: "Stale title", detail: "Old detail", status: "open", kind: "backlog" },
+    { completionIntent: "reopen", date: null }
+  );
+
+  assert.equal(fetchCalls.length, 3, "PATCH conflict, GET current row, PATCH retry");
+  const retry = JSON.parse(fetchCalls[2].init.body);
+  assert.equal(retry.completionBaseRevision, "server-latest");
+  assert.equal(retry.properties.title, "Newer title", "retry rebases onto current unrelated fields");
+  assert.equal(retry.properties.detail, "Keep me");
+  assert.equal(retry.properties.status, "open");
+  assert.equal(retry.properties.kind, "backlog", "completion-time Backlog promotion is reversed");
+  assert.equal("done" in retry.properties, false);
+  assert.equal("_doneStampedDate" in retry.properties, false);
+  assert.equal("_wasBacklog" in retry.properties, false);
+  assert.equal(result.properties.status, "open");
+  assert.equal(wal(storage).length, 0);
+});
+
+test("a cache-miss completion uses its freshly fetched row as CAS and delta base", async () => {
+  let patchCount = 0;
+  const fetchedBase = {
+    id: "b1", type: "block", date: "2026-07-08",
+    properties: {
+      title: "Old title", detail: "Keep-current", status: "open",
+      _completionRevision: "reopen-r2",
+    },
+  };
+  const { store, storage, fetchCalls } = makeStore({
+    fetchImpl: async (_url, init) => {
+      if (!init || init.method !== "PATCH") {
+        return { ok: true, status: 200, json: async () => ({
+          id: "b1", type: "block", date: "2026-07-08",
+          properties: {
+            title: "Concurrent title", detail: "Keep-current", status: "open",
+            _completionRevision: "newer-r3",
+          },
+        }) };
+      }
+      patchCount++;
+      if (patchCount === 1) {
+        return { ok: false, status: 409, json: async () => ({
+          error: "Task completion changed since this edit was created", code: "COMPLETION_CONFLICT",
+        }) };
+      }
+      const sent = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08",
+        properties: { ...sent.properties, _completionRevision: "complete-r4" },
+      }) };
+    },
+  });
+
+  const result = await store.updateBlock("b1", {
+    title: "Old title", detail: "Keep-current", status: "done", done: true,
+    completedAt: "2026-07-08T12:00:00.000Z",
+    _completionRevision: "reopen-r2",
+  }, { completionIntent: "complete", _completionBaseBlock: fetchedBase });
+
+  assert.equal(fetchCalls.length, 3);
+  const first = JSON.parse(fetchCalls[0].init.body);
+  assert.equal(first.completionBaseRevision, "reopen-r2");
+  assert.equal("_completionBaseBlock" in first, false, "client-only base never reaches the API");
+  const retry = JSON.parse(fetchCalls[2].init.body);
+  assert.equal(retry.completionBaseRevision, "newer-r3");
+  assert.equal(retry.properties.title, "Concurrent title", "unchanged stale fields rebase to latest");
+  assert.equal(retry.properties.status, "done");
+  assert.equal(retry.properties.completedAt, "2026-07-08T12:00:00.000Z");
+  assert.equal(result.properties._completionRevision, "complete-r4");
+  assert.equal(wal(storage).length, 0);
+});
+
+test("a legacy base-less completion WAL entry is dead-lettered on protocol rejection", async () => {
+  const { store, storage, fetchCalls } = makeStore({
+    fetchStatus: 400,
+    errorBody: {
+      error: "completionBaseRevision is required for completion transitions",
+      code: "COMPLETION_BASE_REQUIRED",
+    },
+  });
+  seedWal(storage, [{
+    op: "update", id: "b1",
+    data: {
+      properties: { status: "open" },
+      completionIntent: "reopen", completionMutationId: "legacy-reopen",
+    },
+    _walId: "legacy-base-less", timestamp: minsAgo(1),
+  }]);
+
+  await store.replayWAL();
+
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(wal(storage).length, 0);
+  assert.equal(dead(storage).length, 1);
+  assert.match(dead(storage)[0].reason, /400/);
+});
+
+test("a live reopen is ordered after an in-flight completion replay", async () => {
+  let resolveReplay;
+  let requestCount = 0;
+  const opts = {
+    fetchImpl: async (_url, init) => {
+      requestCount++;
+      const sent = JSON.parse(init.body);
+      if (requestCount === 1) {
+        return await new Promise(resolve => {
+          resolveReplay = () => resolve({ ok: true, status: 200, json: async () => ({
+            id: "b1", type: "block", date: "2026-07-08", properties: sent.properties,
+          }) });
+        });
+      }
+      return { ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08", properties: { status: "open", title: "Latest" },
+      }) };
+    },
+  };
+  const { store, storage, fetchCalls } = makeStore(opts);
+  seedWal(storage, [{
+    op: "update", id: "b1",
+    data: { properties: { status: "done", done: true }, completionIntent: "complete" },
+    _walId: "old-complete", timestamp: minsAgo(1),
+  }]);
+
+  const replay = store.replayWAL();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetchCalls.length, 1);
+  const reopen = store.updateBlock("b1", { status: "open", title: "Latest" }, { completionIntent: "reopen" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetchCalls.length, 1, "the live reopen waits for the same-row replay");
+  assert.equal(wal(storage).length, 1);
+  assert.equal(wal(storage)[0].data.completionIntent, "reopen");
+
+  resolveReplay();
+  await Promise.all([replay, reopen]);
+
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(JSON.parse(fetchCalls[0].init.body).completionIntent, "complete");
+  assert.equal(JSON.parse(fetchCalls[1].init.body).completionIntent, "reopen");
+  assert.equal(store.get("b1").properties.status, "open");
+  assert.equal(wal(storage).length, 0);
+});
+
+test("the origin-wide row lock orders a second tab's reopen after stale replay", async () => {
+  const storage = new Map();
+  const locks = makeSharedLocks();
+  let resolveReplay;
+  const replayTab = makeStore({
+    storage, locks,
+    fetchImpl: async (_url, init) => await new Promise(resolve => {
+      const sent = JSON.parse(init.body);
+      resolveReplay = () => resolve({ ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08", properties: sent.properties,
+      }) });
+    }),
+  });
+  const liveTab = makeStore({
+    storage, locks,
+    fetchImpl: async (_url, init) => {
+      const sent = JSON.parse(init.body);
+      return { ok: true, status: 200, json: async () => ({
+        id: "b1", type: "block", date: "2026-07-08", properties: sent.properties,
+      }) };
+    },
+  });
+  seedWal(storage, [{
+    op: "update", id: "b1",
+    data: { properties: { status: "done", done: true }, completionIntent: "complete", completionMutationId: "old" },
+    _walId: "old-complete", timestamp: minsAgo(1),
+  }]);
+
+  const replay = replayTab.store.replayWAL();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(replayTab.fetchCalls.length, 1);
+  const reopen = liveTab.store.updateBlock("b1", { status: "open" }, { completionIntent: "reopen" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(liveTab.fetchCalls.length, 0, "the other tab waits on the origin-wide row lock");
+
+  resolveReplay();
+  await Promise.all([replay, reopen]);
+
+  assert.equal(liveTab.fetchCalls.length, 1);
+  assert.equal(JSON.parse(liveTab.fetchCalls[0].init.body).completionIntent, "reopen");
+  assert.equal(liveTab.store.get("b1").properties.status, "open");
+  assert.equal(wal(storage).length, 0);
 });
 
 // ── B2: client-minted ids, create replay semantics, batch permanence ──

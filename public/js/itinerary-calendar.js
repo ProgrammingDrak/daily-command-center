@@ -208,7 +208,7 @@
         await Promise.resolve(root._persistDone(ev.id,false,{ev,dateStr:ev._block.date}));
       }else{
         const p={...ev._block.properties,status:checked?"done":"open",completedAt:checked?new Date().toISOString():null};
-        await root.blockStore.updateBlock(ev._blockId,p);
+        await root.blockStore.updateBlock(ev._blockId,p,{completionIntent:checked?"complete":"reopen"});
       }
     }catch(e){toast(e.message||"Could not update completion.","error");return;}
     root.blockStore.invalidateRangeCache(ev._block.date);
@@ -264,7 +264,10 @@
       const next={...ev._block.properties};
       next[input.name]=input.name==="tags"?input.value.split(",").map(x=>x.trim()).filter(Boolean):input.value;
       if(input.name==="notes"&&next.detail&&!next.notes)next.detail=input.value;
-      await root.blockStore.updateBlock(ev._blockId,next);await build({keepScroll:true});openInspector(ev._blockId);
+      const completionExtra=input.name==="status"
+        ?{completionIntent:input.value==="done"?"complete":"reopen"}
+        :undefined;
+      await root.blockStore.updateBlock(ev._blockId,next,completionExtra);await build({keepScroll:true});openInspector(ev._blockId);
     }));
     if(focusTitle){const title=panel.querySelector('[name="title"]');if(title&&!title.readOnly){title.focus();title.select();}}
   }

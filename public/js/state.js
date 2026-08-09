@@ -1153,7 +1153,7 @@ async function _rowForDateWrite(blockId){
 // "invariant enforced at one call site and merely assumed at the other" shape this project
 // has been bitten by every phase. One queue, so a new writer inherits it.
 //
-// `merge(properties) -> properties` runs AFTER the read, so each caller composes against
+// `merge(properties, block) -> properties` runs AFTER the read, so each caller composes against
 // whatever the previous link actually wrote.
 //
 // C5b: a merge returning NULL means "nothing to change, skip the write". It exists so a
@@ -1162,10 +1162,9 @@ async function _rowForDateWrite(blockId){
 // handing in a finished object — which is the stale read this queue exists to prevent.
 // `_patchOverlayDone` (schedule.js) needs exactly that: "remove this id from `_done` if
 // it is in there" must not PATCH the day_root on every un-check of an id that never was.
-// `extra` carries the top-level COLUMN changes `blockStore.updateBlock` accepts beyond
-// properties — today just `{date}`, used when a completion has to promote a dateless
-// (Unscheduled / backlog) row onto the day it was finished on. Same parameter
-// `scheduleRowOnDay` uses for the same reason.
+// `extra` carries the top-level metadata `blockStore.updateBlock` accepts beyond
+// properties. It may be a function of the freshly-read block when a column decision
+// (such as promoting a dateless completion) must not be made from a stale cache.
 let _rowPropsChain=Promise.resolve();
 function enqueueRowPropsWrite(blockId,merge,extra){
   if(!window.blockStore||!blockId||typeof merge!=="function")return null;
@@ -1174,8 +1173,17 @@ function enqueueRowPropsWrite(blockId,merge,extra){
     .then(b=>{
       // Refuse on an unresolvable row: spreading nothing over `properties` is a wipe.
       if(!b||!b.properties)return;
-      const next=merge(b.properties);
-      if(next)return window.blockStore.updateBlock(b.id,next,extra||undefined);
+      const next=merge(b.properties,b);
+      const resolvedExtra=typeof extra==="function"?extra(b,next):extra;
+      if(next){
+        // On a cache miss, BlockStore cannot otherwise know which revision/property
+        // snapshot the merge used. Hand the freshly fetched row through as client-only
+        // base metadata for explicit completion CAS and exact-delta construction.
+        const writeExtra=resolvedExtra&&resolvedExtra.completionIntent
+          ?{...resolvedExtra,_completionBaseBlock:b}
+          :(resolvedExtra||undefined);
+        return window.blockStore.updateBlock(b.id,next,writeExtra);
+      }
     })
     // Per-link, so one failure cannot wedge the queue for the rest of the session.
     .catch(e=>{console.warn("[row] properties write failed for "+blockId+":",e);});

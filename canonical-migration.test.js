@@ -92,6 +92,14 @@ function makeMockPool(initialRows = [], resolveMap = {}) {
         if (cur) put(params[2], { ...cur, deleted_at: params[0], updated_at: params[1] });
         return { rows: [] };
       }
+      if (/^UPDATE blocks SET properties = /.test(text)) {
+        const cur = view(params[5]);
+        const properties = params[0];
+        if (cur) put(params[5], {
+          ...cur, properties, sort_order: params[1], parent_id: params[2], date: params[3], updated_at: params[4],
+        });
+        return { rows: cur ? [{ properties }] : [] };
+      }
       if (/^INSERT INTO operations/.test(text)) return { rows: [] };
       throw new Error("Unhandled mock query: " + text.slice(0, 70));
     }
@@ -139,6 +147,149 @@ test("isTaskRow admits real tasks and rejects containers and scaffolding", () =>
   assert.equal(db.isTaskRow({ type: "block", properties: { kind: "responsibility_task" } }), false);
 
   assert.equal(db.isTaskRow(null), false);
+});
+
+test("a stale reconciler update cannot reopen a completed task", async () => {
+  const pool = makeMockPool([row("task-1", {
+    title: "Persist me", status: "done", done: true,
+    completedAt: "2026-08-08T14:00:00.000Z", completedBy: "itinerary",
+  })]);
+  const db = loadDbWithMock(pool);
+
+  const result = await db.updateBlock("task-1", { properties: {
+    title: "Persist me", status: "open", actualMinutes: 25, actualMinutesFrom: "reconcile",
+  } });
+
+  assert.equal(result.properties.status, "done");
+  assert.equal(result.properties.done, true);
+  assert.equal(result.properties.completedAt, "2026-08-08T14:00:00.000Z");
+  assert.equal(result.properties.completedBy, "itinerary");
+  assert.equal(result.properties.actualMinutes, 25);
+  assert.equal(pool._committed.get("task-1").properties.status, "done");
+});
+
+test("updateBlock locks the row before deriving completion state", async () => {
+  const pool = makeMockPool([row("task-1", {
+    title: "Race me", status: "done", done: true,
+    completedAt: "2026-08-08T14:00:00.000Z", completedBy: "other-tab",
+  })]);
+  const db = loadDbWithMock(pool);
+
+  const result = await db.updateBlock("task-1", { properties: {
+    title: "Race me", status: "open", actualMinutes: 25, actualMinutesFrom: "reconcile",
+  } });
+
+  assert.equal(result.properties.status, "done");
+  assert.equal(result.properties.completedAt, "2026-08-08T14:00:00.000Z");
+  assert.equal(result.properties.completedBy, "other-tab");
+  assert.equal(result.properties.actualMinutes, 25);
+  assert.ok(pool._log.some(entry => /SELECT \* FROM blocks WHERE id = \$1 FOR UPDATE/.test(entry.text)));
+  assert.ok(pool._log.some(entry => entry.text === "BEGIN"));
+  assert.ok(pool._log.some(entry => entry.text === "COMMIT"));
+});
+
+test("a stale done snapshot cannot re-complete a task after explicit reopen", async () => {
+  const stale = { title: "Race me", status: "done", done: true,
+    completedAt: "2026-08-08T14:00:00.000Z" };
+  const pool = makeMockPool([row("task-1", stale)]);
+  const db = loadDbWithMock(pool);
+
+  await db.updateBlock("task-1", {
+    properties: { title: "Race me", status: "open" }, completionIntent: "reopen",
+  });
+  const result = await db.updateBlock("task-1", { properties: { ...stale, actualMinutes: 25 } });
+
+  assert.equal(result.properties.status, "open");
+  assert.equal(result.properties.done, undefined);
+  assert.equal(result.properties.completedAt, undefined);
+  assert.equal(result.properties.actualMinutes, 25);
+});
+
+test("a properties-omitting update leaves the locked row properties untouched", async () => {
+  const completedAt = "2026-08-08T14:00:00.000Z";
+  const pool = makeMockPool([row("task-1", { title: "Move me", status: "done", done: true, completedAt })]);
+  const db = loadDbWithMock(pool);
+
+  const result = await db.updateBlock("task-1", { sort_order: 2000 });
+
+  assert.equal(result.properties.status, "done");
+  assert.equal(result.properties.completedAt, completedAt);
+  assert.equal(result.sort_order, 2000);
+});
+
+test("ordinary non-completion status changes remain writable", async () => {
+  const pool = makeMockPool([row("task-1", { title: "Start me", status: "open" })]);
+  const db = loadDbWithMock(pool);
+
+  const result = await db.updateBlock("task-1", { properties: { title: "Start me", status: "in_progress" } });
+
+  assert.equal(result.properties.status, "in_progress");
+});
+
+test("ordinary open-row edits preserve the latest completion revision", async () => {
+  const pool = makeMockPool([row("task-1", {
+    title: "Before", status: "open", _completionRevision: "reopen-r2",
+  })]);
+  const db = loadDbWithMock(pool);
+
+  const result = await db.updateBlock("task-1", { properties: { title: "After", status: "open" } });
+
+  assert.equal(result.properties.title, "After");
+  assert.equal(result.properties._completionRevision, "reopen-r2");
+});
+
+test("only an explicit completion intent may reopen a completed task", async () => {
+  const pool = makeMockPool([row("task-1", {
+    title: "Reopen me", status: "done", done: true, completedAt: "2026-08-08T14:00:00.000Z",
+  })]);
+  const db = loadDbWithMock(pool);
+
+  const result = await db.updateBlock("task-1", {
+    properties: { title: "Reopen me", status: "open", completedAt: "stale" },
+    completionIntent: "reopen",
+  });
+
+  assert.equal(result.properties.status, "open");
+  for (const key of ["done", "completed", "completedAt", "doneAt", "completedBy"]) {
+    assert.equal(key in result.properties, false, key + " must be cleared by the explicit reopen");
+  }
+});
+
+test("same-state explicit retries preserve the transition revision", async () => {
+  const pool = makeMockPool([row("task-1", {
+    title: "Already open", status: "open",
+    _completionRevision: "reopen-r1", _completionMutationId: "reopen-m1",
+  })]);
+  const db = loadDbWithMock(pool);
+
+  const result = await db.updateBlock("task-1", {
+    properties: { title: "Still open", status: "open" },
+    completionIntent: "reopen",
+    completionMutationId: "reopen-m2",
+    completionBaseRevision: "reopen-r1",
+  });
+
+  assert.equal(result.properties._completionRevision, "reopen-r1");
+  assert.equal(result.properties._completionMutationId, "reopen-m1");
+});
+
+test("a stale cross-device completion transition is rejected by base revision", async () => {
+  const pool = makeMockPool([row("task-1", {
+    title: "Newest", status: "open",
+    _completionRevision: "reopen-new", _completionMutationId: "reopen-new-mutation",
+  })]);
+  const db = loadDbWithMock(pool);
+
+  await assert.rejects(
+    db.updateBlock("task-1", {
+      properties: { title: "Old snapshot", status: "done", done: true },
+      completionIntent: "complete",
+      completionMutationId: "complete-old-mutation",
+      completionBaseRevision: "complete-old-base",
+    }),
+    error => error && error.statusCode === 409 && error.publicCode === "COMPLETION_CONFLICT"
+  );
+  assert.equal(pool._committed.get("task-1").properties.status, "open");
 });
 
 // ── Create-time dual-write ──

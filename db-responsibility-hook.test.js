@@ -104,7 +104,7 @@ test("a task flipping to done resets its responsibility definition's cadence, wi
     defRow({ lastCompletedAt: "2026-06-01T00:00:00Z", openInstanceBlockId: "t1", openInstanceDate: TASK_DATE }),
   ]);
   const db = loadDbWithMock(pool);
-  await db.updateBlock("t1", { properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" } });
+  await db.updateBlock("t1", { properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" }, completionIntent: "complete" });
   assert.equal(def(pool).lastCompletedAt, "2026-07-29T12:00:00Z");
   assert.equal(def(pool).previousCompletedAt, "2026-06-01T00:00:00Z", "so un-checking can revert");
   assert.equal(def(pool).openInstanceBlockId, undefined, "completing releases the pause");
@@ -116,7 +116,10 @@ test("un-checking the same task restores the previous clock and puts the instanc
     defRow({ lastCompletedAt: "2026-07-29T12:00:00Z", previousCompletedAt: "2026-06-01T00:00:00Z", lastCompletedTaskId: "t1" }),
   ]);
   const db = loadDbWithMock(pool);
-  await db.updateBlock("t1", { properties: { responsibilityId: "r1", local_id: "l1" } });
+  await db.updateBlock("t1", {
+    properties: { responsibilityId: "r1", local_id: "l1" },
+    completionIntent: "reopen",
+  });
   assert.equal(def(pool).lastCompletedAt, "2026-06-01T00:00:00Z");
   assert.equal(def(pool).openInstanceBlockId, "t1");
   // The date must come from the block's date COLUMN. Reading it off properties
@@ -143,8 +146,8 @@ test("a block with no responsibilityId costs zero extra queries (this is the hot
   const before = pool._log.length;
   await db.updateBlock("t1", { properties: { local_id: "l1", title: "renamed" } });
   const queries = pool._log.slice(before).map(l => l.text.slice(0, 30));
-  // SELECT the row, UPDATE it, INSERT the operation. Nothing more.
-  assert.equal(queries.length, 3, `expected 3 queries, got ${JSON.stringify(queries)}`);
+  // BEGIN, locked SELECT, UPDATE, operation, COMMIT. No reconciliation work.
+  assert.equal(queries.length, 5, `expected one five-query transaction, got ${JSON.stringify(queries)}`);
 });
 
 test("TENANCY: the hook refuses to touch a definition in another workspace", async () => {
@@ -157,7 +160,7 @@ test("TENANCY: the hook refuses to touch a definition in another workspace", asy
     defRow({ lastCompletedAt: "2026-06-01T00:00:00Z" }, { workspace_id: "ws-3" }),
   ]);
   const db = loadDbWithMock(pool);
-  await db.updateBlock("t1", { properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" } });
+  await db.updateBlock("t1", { properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" }, completionIntent: "complete" });
   assert.equal(def(pool).lastCompletedAt, "2026-06-01T00:00:00Z", "a foreign definition is left alone");
 });
 
@@ -167,7 +170,7 @@ test("a responsibilityId pointing at something that is not a responsibility_item
     defRow({ lastCompletedAt: "2026-06-01T00:00:00Z" }, { properties: { kind: "task_menu", title: "not a responsibility" } }),
   ]);
   const db = loadDbWithMock(pool);
-  await db.updateBlock("t1", { properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" } });
+  await db.updateBlock("t1", { properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" }, completionIntent: "complete" });
   assert.equal(pool._committed.get("r1").properties.kind, "task_menu");
   assert.equal(pool._committed.get("r1").properties.lastCompletedAt, undefined);
 });
@@ -175,7 +178,7 @@ test("a responsibilityId pointing at something that is not a responsibility_item
 test("a missing definition is a no-op, and the task write still succeeds", async () => {
   const pool = makeMockPool([taskRow({ responsibilityId: "gone", local_id: "l1" })]);
   const db = loadDbWithMock(pool);
-  const out = await db.updateBlock("t1", { properties: { responsibilityId: "gone", local_id: "l1", status: "done" } });
+  const out = await db.updateBlock("t1", { properties: { responsibilityId: "gone", local_id: "l1", status: "done" }, completionIntent: "complete" });
   assert.equal(out.properties.status, "done", "a dangling responsibilityId must not block marking the task done");
 });
 
@@ -188,7 +191,57 @@ test("inside a caller's transaction the hook is SKIPPED, so it can never abort t
     defRow({ lastCompletedAt: "2026-06-01T00:00:00Z" }),
   ]);
   const db = loadDbWithMock(pool);
-  await db.batchOp([{ op: "update", id: "t1", properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" } }]);
+  await db.batchOp([{ op: "update", id: "t1", properties: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" }, completionIntent: "complete" }]);
   assert.equal(pool._committed.get("t1").properties.status, "done", "the batch itself commits");
   assert.equal(def(pool).lastCompletedAt, "2026-06-01T00:00:00Z", "the definition is deliberately left for the reconciler");
+});
+
+test("a delayed completion side effect cannot overtake a newer reopen", async () => {
+  const pool = makeMockPool([
+    taskRow({ responsibilityId: "r1", local_id: "l1", status: "open" }),
+    defRow({
+      lastCompletedAt: "2026-06-01T00:00:00Z",
+      openInstanceBlockId: "t1", openInstanceDate: TASK_DATE,
+    }),
+  ]);
+  const db = loadDbWithMock(pool);
+
+  await db.propagateResponsibilityDone({
+    id: "t1",
+    before: { responsibilityId: "r1", local_id: "l1", status: "open" },
+    after: { responsibilityId: "r1", local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z" },
+    at: "2026-07-29T12:00:00Z", date: TASK_DATE, workspaceId: "ws-1",
+  });
+
+  assert.equal(def(pool).lastCompletedAt, "2026-06-01T00:00:00Z");
+  assert.equal(def(pool).openInstanceBlockId, "t1");
+});
+
+test("an old completion side effect cannot pass after reopen and a newer completion", async () => {
+  const pool = makeMockPool([
+    taskRow({
+      responsibilityId: "r1", local_id: "l1", status: "done",
+      completedAt: "2026-07-29T14:00:00Z", _completionRevision: "new-complete",
+    }),
+    defRow({
+      lastCompletedAt: "2026-07-29T14:00:00Z",
+      previousCompletedAt: "2026-06-01T00:00:00Z",
+      lastCompletedTaskId: "t1",
+    }),
+  ]);
+  const db = loadDbWithMock(pool);
+
+  await db.propagateResponsibilityDone({
+    id: "t1",
+    before: { responsibilityId: "r1", local_id: "l1", status: "open" },
+    after: {
+      responsibilityId: "r1", local_id: "l1", status: "done",
+      completedAt: "2026-07-29T13:00:00Z", _completionRevision: "old-complete",
+    },
+    completionRevision: "old-complete",
+    at: "2026-07-29T13:00:00Z", date: TASK_DATE, workspaceId: "ws-1",
+  });
+
+  assert.equal(def(pool).lastCompletedAt, "2026-07-29T14:00:00Z");
+  assert.equal(def(pool).previousCompletedAt, "2026-06-01T00:00:00Z");
 });

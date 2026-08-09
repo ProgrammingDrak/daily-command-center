@@ -102,7 +102,7 @@ function saveActions(data) {
             _sourceTaskId: taskId,
             ...(item._scheduled ? { scheduled: item._scheduled, scheduledAt: item._scheduledAt } : {}),
             ...(item._notionQueued ? { _notionQueued: true, _notionQueuedAt: item._notionQueuedAt } : {})
-          });
+          }, { completionIntent: item.done ? "complete" : "reopen" });
         } else {
           window.blockStore.createBlock("block", {
             text: item.text, priority: item.priority || "Medium", done: !!item.done,
@@ -450,4 +450,3 @@ function exportPendingTasks(){
   if(!el){el=document.createElement("script");el.id="pending-tasks-export";el.type="application/json";document.body.appendChild(el);}
   el.textContent=JSON.stringify(loadPendingTasks());
 }
-

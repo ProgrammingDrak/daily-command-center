@@ -189,6 +189,25 @@ test("PATCH on a tombstone reports 'Block is deleted', not 'Block not found'", a
   assert.equal(status, 500, "current shape; see the comment before changing it");
 });
 
+test("PATCH requires a completion base revision for browser transitions", async () => {
+  const { app } = mountApp();
+  const rejected = await call(app, "PATCH", "/api/blocks/live-1", {
+    properties: { title: "Alive", status: "done", done: true },
+    completionIntent: "complete",
+    completionMutationId: "old-offline-write",
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.json.code, "COMPLETION_BASE_REQUIRED");
+
+  const accepted = await call(app, "PATCH", "/api/blocks/live-1", {
+    properties: { title: "Alive", status: "done", done: true },
+    completionIntent: "complete",
+    completionMutationId: "current-write",
+    completionBaseRevision: null,
+  });
+  assert.equal(accepted.status, 200, "null is the valid base for a row with no prior transition");
+});
+
 test("deleting a row does not let it dodge the ownership check", async () => {
   // If a mutation route fetched live-only, a foreign TOMBSTONE would read as "not
   // found" before authorization ran — the right status by luck, and the wrong reason.

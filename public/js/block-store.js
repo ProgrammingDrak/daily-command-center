@@ -36,6 +36,7 @@
   // destination is always the most recent one. Different tasks still move in
   // parallel.
   const _rescheduleChains = new Map();
+  const _updateChains = new Map();
   // Server IDs for day_root are workspace-prefixed (e.g. "day-root-ws-1-2026-04-24").
   // Resolved from the block list returned by loadDay() so callsites can look up
   // the cached root reliably, not a naive "day-root-<date>" that misses.
@@ -65,7 +66,14 @@
   function walPush(entry) {
     const entryId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : ("w-" + Date.now() + "-" + Math.random().toString(36).slice(2));
     try {
-      const wal = JSON.parse(localStorage.getItem(WAL_KEY) || "[]");
+      let wal = JSON.parse(localStorage.getItem(WAL_KEY) || "[]");
+      // Updates replace the complete properties document, so the newest update for
+      // one row fully supersedes every older buffered update for that row. This also
+      // makes completion intent last-write-wins after a lost acknowledgement: an old
+      // buffered complete can never replay after a newer reopen.
+      if (entry && entry.op === "update" && entry.id) {
+        wal = wal.filter(e => !(e && e.op === "update" && e.id === entry.id));
+      }
       wal.push({ ...entry, _walId: entryId, timestamp: new Date().toISOString() });
       localStorage.setItem(WAL_KEY, JSON.stringify(wal));
     } catch {}
@@ -84,6 +92,94 @@
 
   function walGet() {
     try { return JSON.parse(localStorage.getItem(WAL_KEY) || "[]"); } catch { return []; }
+  }
+
+  function walPendingCompletionTransition(id) {
+    const updates = walGet().filter(e => e && e.op === "update" && e.id === id && e.data && e.data.completionIntent);
+    if (!updates.length) return null;
+    const data = updates[updates.length - 1].data;
+    const entry = updates[updates.length - 1];
+    // A completion entry written by an older client has no base/patch metadata and
+    // must not be upgraded into a fresh ordinary edit. The server will reject and
+    // dead-letter it during replay instead.
+    if (!Object.prototype.hasOwnProperty.call(data, "completionBaseRevision") || !entry.completionPropertyPatch) return null;
+    return {
+      intent: data.completionIntent,
+      mutationId: data.completionMutationId,
+      data,
+      propertyPatch: entry.completionPropertyPatch,
+    };
+  }
+
+  function samePropertyValue(a, b) {
+    if (a === b) return true;
+    try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+  }
+
+  // Record the exact property delta made by the user action, rather than guessing
+  // from a completion-field allowlist. This includes measured timing/points and the
+  // removal/restoration of `kind:"backlog"`, while excluding an unchanged stale title.
+  function makeCompletionPropertyPatch(beforeProps, afterProps) {
+    const before = beforeProps || {};
+    const after = afterProps || {};
+    const set = {};
+    const unset = [];
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (!Object.prototype.hasOwnProperty.call(after, key) || after[key] === undefined) {
+        if (Object.prototype.hasOwnProperty.call(before, key)) unset.push(key);
+      } else if (!Object.prototype.hasOwnProperty.call(before, key) || !samePropertyValue(before[key], after[key])) {
+        set[key] = after[key];
+      }
+    }
+    return { set, unset };
+  }
+
+  function applyCompletionPropertyPatch(baseProps, patch) {
+    const next = { ...(baseProps || {}) };
+    for (const key of (patch && patch.unset) || []) delete next[key];
+    Object.assign(next, (patch && patch.set) || {});
+    return next;
+  }
+
+  function mergeCompletionPropertyPatches(older, newer) {
+    const set = { ...((older && older.set) || {}) };
+    const unset = new Set((older && older.unset) || []);
+    for (const key of (newer && newer.unset) || []) {
+      delete set[key];
+      unset.add(key);
+    }
+    for (const [key, value] of Object.entries((newer && newer.set) || {})) {
+      unset.delete(key);
+      set[key] = value;
+    }
+    return { set, unset: [...unset] };
+  }
+
+  function walReplaceData(entryId, data) {
+    try {
+      const wal = walGet();
+      const entry = wal.find(e => e && e._walId === entryId);
+      if (!entry) return;
+      entry.data = data;
+      localStorage.setItem(WAL_KEY, JSON.stringify(wal));
+    } catch {}
+  }
+
+  function withCrossTabUpdateLock(id, send) {
+    const locks = typeof navigator !== "undefined" && navigator.locks;
+    if (locks && typeof locks.request === "function") {
+      return locks.request("dcc-block-update:" + id, send);
+    }
+    return send();
+  }
+
+  function queueUpdateRequest(id, send) {
+    const previous = _updateChains.get(id) || Promise.resolve();
+    const queued = previous.catch(() => {}).then(() => withCrossTabUpdateLock(id, send));
+    _updateChains.set(id, queued);
+    return queued.finally(() => {
+      if (_updateChains.get(id) === queued) _updateChains.delete(id);
+    });
   }
 
   function walMoveToDeadLetter(entry, reason) {
@@ -147,6 +243,7 @@
         const err = await res.json().catch(() => ({ error: res.statusText }));
         const e = new Error(err.error || `API error ${res.status}`);
         e.status = res.status;
+        e.code = err.code;
         throw e;
       }
       return await res.json();
@@ -304,6 +401,7 @@
     // A reschedule gets 409 only when the row is an imported meeting whose
     // source calendar owns placement. That authority will not change on retry.
     if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
+    if (entry.op === "update" && err.status === 409 && err.code === "COMPLETION_CONFLICT") return true;
     return false;
   }
 
@@ -352,7 +450,12 @@
             await apiPost("/api/blocks", entry.data);
             break;
           case "update":
-            await apiPatch("/api/blocks/" + entry.id, entry.data);
+            await queueUpdateRequest(entry.id, async () => {
+              // The replay loop snapshots the WAL before awaiting. A newer live
+              // update may supersede this entry while it waits on the row chain.
+              if (!walGet().some(e => e && e._walId === entry._walId)) return;
+              await apiPatch("/api/blocks/" + entry.id, entry.data);
+            });
             break;
           case "delete":
             await apiDelete("/api/blocks/" + entry.id);
@@ -509,29 +612,119 @@
     },
 
     // Update a block (full properties replacement)
-    async updateBlock(id, properties, extra) {
+    updateBlock(id, properties, extra) {
       setSaving();
-      // extra carries top-level column changes the server PATCH accepts beyond
-      // properties — today just {date}, used when an Unscheduled row is
-      // promoted onto a day.
-      extra = extra || {};
-      // Optimistic cache update BEFORE API call — so reads are instant
-      const existing = cacheGet(id);
+      // extra carries top-level PATCH metadata beyond properties. `date` promotes
+      // an Unscheduled row, while `completionIntent` makes a deliberate done/open
+      // transition survive stale full-properties writers and WAL replay.
+      extra = { ...(extra || {}) };
+      // The shared row queue may have fetched an uncached row immediately before
+      // calling us. Use that authoritative snapshot for CAS/delta derivation without
+      // leaking the client-only row into the HTTP body.
+      const suppliedBaseBlock = extra._completionBaseBlock || null;
+      delete extra._completionBaseBlock;
+      // Optimistic cache update BEFORE API call, and the base revision for an
+      // explicit transition. A replay from another device is rejected if this
+      // revision no longer matches the durable row.
+      const directExtra = { ...extra };
+      const directCompletionIntent = !!extra.completionIntent;
+      const existing = cacheGet(id) || suppliedBaseBlock;
+      let completionPropertyPatch = null;
+      let inheritedOrdinaryPatch = null;
+      // A later ordinary edit is built from the optimistic full-row snapshot. If a
+      // preceding completion is still buffered, the edit must carry that transition
+      // forward before it supersedes the old WAL entry. Otherwise a failed complete
+      // followed by a successful rename would persist the rename and silently lose done.
+      const pendingCompletion = walPendingCompletionTransition(id);
+      if (!extra.completionIntent && pendingCompletion) {
+        const carried = {};
+        for (const key of ["date", "parent_id", "sort_order", "completionBaseRevision"]) {
+          if (extra[key] === undefined && pendingCompletion.data[key] !== undefined) {
+            carried[key] = pendingCompletion.data[key];
+          }
+        }
+        extra = {
+          ...carried,
+          ...extra,
+          completionIntent: pendingCompletion.intent,
+          completionMutationId: pendingCompletion.mutationId,
+        };
+        const pendingPatch = pendingCompletion.propertyPatch;
+        // The coalesced request represents two user actions: the older completion
+        // and this newer ordinary edit. Preserve both deltas for a possible conflict
+        // rebase, with the newer ordinary edit winning on any overlapping field.
+        // Compute the newer delta BEFORE applying the older transition. Doing it in
+        // the opposite order erases an overlapping later edit such as Notes changed
+        // immediately after a timed completion appended its measurement line.
+        const ordinaryBase = (existing && existing.properties) || pendingCompletion.data.properties || {};
+        const ordinaryPatch = makeCompletionPropertyPatch(ordinaryBase, properties);
+        inheritedOrdinaryPatch = ordinaryPatch;
+        completionPropertyPatch = mergeCompletionPropertyPatches(pendingPatch, ordinaryPatch);
+        properties = applyCompletionPropertyPatch(ordinaryBase, completionPropertyPatch);
+      }
+      if (extra.completionIntent && !extra.completionMutationId) {
+        extra = { ...extra, completionMutationId: crypto.randomUUID() };
+      }
+      if (extra.completionIntent && extra.completionBaseRevision === undefined) {
+        extra = {
+          ...extra,
+          completionBaseRevision: existing && existing.properties
+            ? (existing.properties._completionRevision || null)
+            : null,
+        };
+      }
+      if (extra.completionIntent && !completionPropertyPatch) {
+        completionPropertyPatch = makeCompletionPropertyPatch(existing && existing.properties, properties);
+      }
       const optimistic = existing ? { ...existing, ...extra, properties, updated_at: new Date().toISOString() } : null;
       if (optimistic) cacheSet(optimistic);
       // Pre-write to WAL so the mutation survives a mid-flight reload / close.
-      const walId = walPush({ op: "update", id, data: { properties, ...extra } });
-      try {
-        const block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
-        cacheSet(block); // Replace optimistic with server response
-        walRemove(walId);
-        setSaved();
-        return block;
-      } catch (e) {
-        setError("Save failed — buffered for retry");
-        // Entry stays in WAL; replayed on next connect.
-        return optimistic || existing;
-      }
+      const walId = walPush({
+        op: "update", id, data: { properties, ...extra },
+        ...(completionPropertyPatch ? { completionPropertyPatch } : {}),
+      });
+      const write = queueUpdateRequest(id, async () => {
+        try {
+          let block;
+          try {
+            block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
+          } catch (e) {
+            if (!(e && e.status === 409 && e.code === "COMPLETION_CONFLICT" && extra.completionIntent)) throw e;
+            // This is a live user action, not replayWAL. Refresh the server revision
+            // and retry once so the newest direct intent wins. WAL replay never takes
+            // this branch and dead-letters its stale transition instead.
+            const latest = await apiGet("/api/blocks/" + id);
+            if (!directCompletionIntent && inheritedOrdinaryPatch) {
+              // This action was an ordinary edit carrying an older buffered
+              // transition. A conflict means another device has since made an
+              // explicit completion decision. Preserve that newer boundary and retry
+              // only the ordinary edit; the inherited intent has lost its race.
+              properties = applyCompletionPropertyPatch(latest && latest.properties, inheritedOrdinaryPatch);
+              extra = { ...directExtra };
+              completionPropertyPatch = null;
+            } else {
+              properties = applyCompletionPropertyPatch(latest && latest.properties, completionPropertyPatch);
+              extra = {
+                ...extra,
+                completionBaseRevision: latest && latest.properties
+                  ? (latest.properties._completionRevision || null)
+                  : null,
+              };
+            }
+            walReplaceData(walId, { properties, ...extra });
+            block = await apiPatch("/api/blocks/" + id, { properties, ...extra });
+          }
+          cacheSet(block); // Replace optimistic with server response
+          walRemove(walId);
+          setSaved();
+          return block;
+        } catch (e) {
+          setError("Save failed — buffered for retry");
+          // A newer same-row update may already have superseded this WAL entry.
+          return optimistic || existing;
+        }
+      });
+      return write;
     },
 
     // Debounced update for content editing (notes, descriptions)

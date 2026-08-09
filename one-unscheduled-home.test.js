@@ -1216,7 +1216,7 @@ test("row-properties writes are SERIALIZED, so two edits from one click both sur
   });
 });
 
-// C5b: the queue forwards `extra`, the top-level COLUMN write. Only `{date}` uses it today,
+// C5b: the queue resolves and forwards `extra`, the top-level write metadata.
 // and it is what stops a completion on a DATELESS Unscheduled row from making the task vanish
 // — `isFoldableTask` rejects `(status==="done"||done===true)&&!b.date` and
 // `selectUnscheduled` rejects `status==="done"`, so a done row with no date is in neither
@@ -1229,12 +1229,19 @@ test("the queue forwards the `extra` column write (a completion promotes a datel
     window: { blockStore: store },
     _rowForDateWrite: async () => ({ id: "row-88", properties: base.properties }),
   });
-  const settled = ctx.enqueueRowPropsWrite("row-88", (p) => Object.assign({}, p, { status: "done" }), { date: "2026-08-04" });
+  const settled = ctx.enqueueRowPropsWrite(
+    "row-88",
+    (p, block) => Object.assign({}, p, { status: "done", sourceRow: block.id }),
+    block => ({ date: block.date ? undefined : "2026-08-04", completionIntent: "complete" })
+  );
   return settled.then(() => new Promise((d) => setTimeout(d, 0))).then(() => {
     assert.equal(calls.update.length, 1);
     assert.equal(calls.update[0].props.status, "done");
-    assert.deepEqual(calls.update[0].extra, { date: "2026-08-04" },
-      "without the date the finished task is dropped by BOTH the fold and the Unscheduled selector");
+    assert.equal(calls.update[0].props.sourceRow, "row-88", "the merge sees the freshly-read row");
+    assert.equal(calls.update[0].extra.date, "2026-08-04");
+    assert.equal(calls.update[0].extra.completionIntent, "complete");
+    assert.equal(calls.update[0].extra._completionBaseBlock.id, "row-88",
+      "the fetched cache-miss row also becomes the completion CAS/delta base");
   });
 });
 

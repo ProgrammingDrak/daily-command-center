@@ -18,6 +18,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const { setImmediate } = require("node:timers");
 
 const persistenceSource = fs.readFileSync(require.resolve("./public/js/persistence.js"), "utf8");
 const scheduleSource = fs.readFileSync(require.resolve("./public/js/schedule.js"), "utf8");
@@ -152,16 +153,26 @@ test("un-check is a no-op with no row identity (legacy localStorage task)", () =
 test("a cache miss still writes through the rendered task's authoritative row id", () => {
   const calls = [];
   const ev = { id: "t1", _blockId: "blk-1" };
+  const fetched = { id: "blk-1", date: null, properties: { title: "Persist me", status: "open", kind: "backlog" } };
   const ctx = {
     console: { warn: () => {} },
     scheduled: [ev],
     _viewedDateStr: () => "2026-08-07",
     _findTaskBlockForDate: () => null,
-    enqueueRowPropsWrite: (blockId) => { calls.push(blockId); return Promise.resolve({ id: blockId }); },
+    enqueueRowPropsWrite: (blockId, merge, extra) => {
+      const props = merge(fetched.properties, fetched);
+      calls.push({ blockId, props, extra: typeof extra === "function" ? extra(fetched, props) : extra });
+      return Promise.resolve({ id: blockId });
+    },
     window: { blockStore: { getDayRootId: () => null } },
   };
   vm.runInNewContext(clearSource[0] + '\n_persistDone("t1",true,{ev:scheduled[0],completedAt:"2026-08-07T17:00:00Z"});', ctx);
-  assert.deepEqual(calls, ["blk-1"], "the queue can fetch the missing cache row by its explicit id");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].blockId, "blk-1");
+  assert.equal(calls[0].props.status, "done");
+  assert.equal(calls[0].props._doneStampedDate, "2026-08-07");
+  assert.equal(calls[0].extra.date, "2026-08-07");
+  assert.equal(calls[0].extra.completionIntent, "complete");
 });
 
 test("un-check clears the LEGACY _done entry too, and only that entry", () => {
@@ -190,6 +201,37 @@ test("un-check clears the LEGACY _done entry too, and only that entry", () => {
   assert.deepEqual(dayRoot.properties._done.ids, ["keep"]);
   assert.deepEqual(Object.keys(dayRoot.properties._done.at), ["keep"]);
   assert.deepEqual(calls, ["blk-1", "root-1"], "the row and the overlay, in that order");
+});
+
+test("side-project completion and undo declare their durable completion intent", async () => {
+  const featuresSource = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
+  const toggleSource = featuresSource.match(/function toggleTrivialTask\(id\)\{[\s\S]*?\n\}/);
+  assert.ok(toggleSource, "toggleTrivialTask must remain available");
+
+  const calls = [];
+  const block = { id: "side-1", properties: { kind: "side_project", text: "Durable", done: false } };
+  const ctx = {
+    window: {
+      USE_BLOCKSTORE: { trivialTasks: true },
+      blockStore: {
+        get: () => block,
+        updateBlock: (id, properties, extra) => {
+          calls.push({ id, properties, extra });
+          block.properties = properties;
+          return Promise.resolve();
+        },
+      },
+    },
+    buildTrivialTasks: () => {},
+    buildSchedule: () => {},
+  };
+  vm.runInNewContext(toggleSource[0] + '\ntoggleTrivialTask("side-1");', ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInNewContext('toggleTrivialTask("side-1");', ctx);
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(calls[0].extra.completionIntent, "complete");
+  assert.equal(calls[1].extra.completionIntent, "reopen");
 });
 
 test("toggleDone's un-check branch calls it (the snap-back regression)", () => {

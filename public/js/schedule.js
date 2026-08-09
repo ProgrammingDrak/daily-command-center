@@ -826,7 +826,8 @@ function _persistDone(id,done,opts){
     //
     // `kind:"backlog"` is dropped with it, matching `scheduleRowOnDay`: a row that now has a
     // date is not backlog material any more.
-    const stampDay=!!(done&&block&&!block.date&&dateStr);
+    let writeRow=block||null;
+    let stampDay=false;
     // ...and the promotion is REVERSIBLE, because a mis-click must not permanently evict a
     // task from the Backlog. `_openRowProps` only cleared the completion fields, so
     // check-then-uncheck left an OPEN, DATED, non-backlog row: it had folded onto whatever day
@@ -834,10 +835,13 @@ function _persistDone(id,done,opts){
     // gone from the drawer, with no visible action taken and no way back but an explicit
     // Move-to-backlog. `_doneStampedDate` records that this date came from a completion, so the
     // un-check can tell it apart from a date the user actually chose.
-    const unstamp=!!(!done&&block&&block.date&&((block.properties||{})._doneStampedDate===block.date));
+    let unstamp=false;
     write=enqueueRowPropsWrite(
       blockId,
-      p=>{
+      (p,b)=>{
+        writeRow=b||writeRow;
+        stampDay=!!(done&&b&&!b.date&&dateStr);
+        unstamp=!!(!done&&b&&b.date&&((b.properties||{})._doneStampedDate===b.date));
         if(!done){
           const open=_openRowProps(p);
           if(!open)return null;
@@ -854,7 +858,12 @@ function _persistDone(id,done,opts){
         }
         return next;
       },
-      stampDay?{date:dateStr}:(unstamp?{date:null}:undefined)
+      ()=>({
+        ...(stampDay?{date:dateStr}:(unstamp?{date:null}:{})),
+        // The API uses this intent to distinguish a real undo from a stale
+        // properties snapshot produced by a background reconciliation.
+        completionIntent:done?"complete":"reopen"
+      })
     );
     // The Backlog projection is in-memory and only ever REMOVED by `_syncBacklogProjection`
     // (`hydrateBacklogFromBlocks` is additive), so without this the drawer and both badge
@@ -862,13 +871,16 @@ function _persistDone(id,done,opts){
     // re-hydrates, because the PATCH's own SSE echo is self-suppressed. `_writeRowDate` calls
     // it for exactly this reason and its comment names the shape: an invariant enforced at one
     // call site and merely assumed at the other. This is the third date-writing caller.
-    if((stampDay||unstamp)&&write&&typeof _syncBacklogProjection==="function"){
-      const TM=window.DCC&&window.DCC.TaskModel;
-      // TaskModel.backlogKey, not `local_id||blockId`: the projection stores a row with no
-      // local_id under a "blk-" prefix, and deriving the key the other way looks up something
-      // the projection never stored.
-      const bkKey=(TM&&typeof TM.backlogKey==="function")?TM.backlogKey(block):id;
-      Promise.resolve(write).then(()=>_syncBacklogProjection(bkKey,stampDay?dateStr:null)).catch(()=>{});
+    if(write&&typeof _syncBacklogProjection==="function"){
+      Promise.resolve(write).then(()=>{
+        if(!stampDay&&!unstamp)return;
+        const TM=window.DCC&&window.DCC.TaskModel;
+        // TaskModel.backlogKey, not `local_id||blockId`: the projection stores a row with no
+        // local_id under a "blk-" prefix, and deriving the key the other way looks up something
+        // the projection never stored.
+        const bkKey=(TM&&typeof TM.backlogKey==="function")?TM.backlogKey(writeRow):id;
+        return _syncBacklogProjection(bkKey,stampDay?dateStr:null);
+      }).catch(()=>{});
     }
   }else if(done){
     console.warn("[done] no row resolves for "+id+" — persisting to the legacy _done overlay");

@@ -236,6 +236,18 @@ module.exports = function mount(app, ctx) {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
+    // Browser completion writes are optimistic full-document replacements. Their
+    // revision precondition is mandatory so an offline entry created before a newer
+    // complete/reopen cannot cross the durable boundary later. Trusted server-side
+    // integrations call db.updateBlock directly and do not pass through this route.
+    if (req.body && req.body.completionIntent
+        && !Object.prototype.hasOwnProperty.call(req.body, "completionBaseRevision")) {
+      res.status(400).json({
+        error: "completionBaseRevision is required for completion transitions",
+        code: "COMPLETION_BASE_REQUIRED",
+      });
+      return;
+    }
     const result = await blockDB.updateBlock(req.params.id, req.body);
     broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
     return result;
@@ -284,6 +296,15 @@ module.exports = function mount(app, ctx) {
   app.post("/api/blocks/batch", route(async (req, res) => {
     const { operations, _clientId } = req.body;
     if (!Array.isArray(operations)) { res.status(400).json({ error: "operations must be an array" }); return; }
+    const baseLessTransition = operations.some(op => op && op.op === "update" && op.completionIntent
+      && !Object.prototype.hasOwnProperty.call(op, "completionBaseRevision"));
+    if (baseLessTransition) {
+      res.status(400).json({
+        error: "completionBaseRevision is required for completion transitions",
+        code: "COMPLETION_BASE_REQUIRED",
+      });
+      return;
+    }
     const { userId, workspaceId } = await resolveOwnerStrict(req);
 
     // AUTHORIZE every block id this batch REFERENCES, before batchOp opens its

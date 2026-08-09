@@ -359,46 +359,188 @@ async function createBlock({ id, type, parent_id, date, properties, sort_order, 
 }
 
 // `client` lets a caller run this inside its own transaction (batchOp,
-// rescheduleBlocks-style tx work); omit it and each statement autocommits on
-// the pool. Without threading the client through, a "wrapped in a tx" batch
-// would silently escape the tx on its update rows.
-async function updateBlock(id, { properties, sort_order, parent_id, date }, client) {
-  const q = client || pool;
-  const now = new Date().toISOString();
-  const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1", [id]);
-  const existing = rows[0];
-  if (!existing) throw new Error(`Block not found: ${id}`);
-  if (existing.deleted_at) throw new Error(`Block is deleted: ${id}`);
-  let newProps = existing.properties;
-  if (properties !== undefined) {
-    const parsed = typeof properties === "string" ? JSON.parse(properties) : properties;
-    validateBlock(existing.type, parsed);
-    newProps = parsed;
+// rescheduleBlocks-style tx work). Without one, updateBlock owns a short
+// transaction so the read/merge/write lifecycle stays under one row lock.
+// Completion is a state transition, not an incidental member of a properties bag.
+// Most callers still update that bag as a full replacement, and some reconcilers run
+// after reading a slightly older copy of the row. Without this guard, any one of those
+// writers can replace a just-completed task with its stale `status:"open"` snapshot.
+//
+// Normal writes therefore preserve an existing task completion. The two deliberate
+// directions must identify themselves: completion writers pass `complete`, and their
+// explicit undo paths pass `reopen`.
+function isCompletedTaskProps(props) {
+  const p = props || {};
+  return p.status === "done" || p.done === true || p.completed === true || !!p.completedAt || !!p.doneAt;
+}
+
+function completedProps(props, existing, now, mutationId) {
+  const prior = existing || {};
+  const transition = !isCompletedTaskProps(prior);
+  const next = { ...(props || {}) };
+  next.status = "done";
+  next.done = true;
+  for (const key of ["completed", "completedAt", "doneAt", "completedBy"]) {
+    if (prior[key] !== undefined) next[key] = prior[key];
   }
+  if (!next.completedAt && !next.doneAt) next.completedAt = now;
+  next._completionRevision = transition ? crypto.randomUUID() : (prior._completionRevision || crypto.randomUUID());
+  next._completionMutationId = transition
+    ? (mutationId || crypto.randomUUID())
+    : (prior._completionMutationId || mutationId || crypto.randomUUID());
+  return next;
+}
+
+function reopenedProps(props, existing, mutationId) {
+  const prior = existing || {};
+  const transition = isCompletedTaskProps(prior);
+  const next = { ...(props || {}) };
+  next.status = next.status && next.status !== "done" ? next.status : "open";
+  delete next.done;
+  delete next.completed;
+  delete next.completedAt;
+  delete next.doneAt;
+  delete next.completedBy;
+  next._completionRevision = transition ? crypto.randomUUID() : (prior._completionRevision || crypto.randomUUID());
+  next._completionMutationId = transition
+    ? (mutationId || crypto.randomUUID())
+    : (prior._completionMutationId || mutationId || crypto.randomUUID());
+  return next;
+}
+
+const COMPLETION_PROP_KEYS = ["status", "done", "completed", "completedAt", "doneAt", "completedBy", "_completionRevision", "_completionMutationId"];
+function preserveCompletionProps(props, existing) {
+  if (!isCompletedTaskProps(props) && !isCompletedTaskProps(existing)) {
+    const next = { ...(props || {}) };
+    delete next._completionRevision;
+    delete next._completionMutationId;
+    if (existing && existing._completionRevision !== undefined) {
+      next._completionRevision = existing._completionRevision;
+    }
+    if (existing && existing._completionMutationId !== undefined) {
+      next._completionMutationId = existing._completionMutationId;
+    }
+    return next;
+  }
+  const next = { ...(props || {}) };
+  for (const key of COMPLETION_PROP_KEYS) delete next[key];
+  for (const key of COMPLETION_PROP_KEYS) {
+    if (existing && existing[key] !== undefined) next[key] = existing[key];
+  }
+  return next;
+}
+
+function applyCompletionIntent(existingProps, proposedProps, completionIntent, now, taskRow, completionMutationId) {
+  if (!taskRow || !proposedProps) return proposedProps;
+  if (completionIntent !== undefined && completionIntent !== "complete" && completionIntent !== "reopen") {
+    throw new Error("Invalid completion intent");
+  }
+  if (completionIntent === "reopen") return reopenedProps(proposedProps, existingProps, completionMutationId);
+  if (completionIntent === "complete") return completedProps(proposedProps, existingProps, now, completionMutationId);
+  // Completion fields are owned by the durable row, in either direction. This
+  // prevents both halves of the lost-update race: an old open snapshot cannot undo
+  // a completion, and an old done snapshot cannot undo an explicit reopen.
+  return preserveCompletionProps(proposedProps, existingProps);
+}
+
+async function updateBlock(id, fields, client) {
+  const {
+    properties, sort_order, parent_id, date, completionIntent,
+    completionMutationId, completionBaseRevision,
+  } = fields;
+  if (completionIntent !== undefined && completionIntent !== "complete" && completionIntent !== "reopen") {
+    throw new Error("Invalid completion intent");
+  }
+  if (completionMutationId !== undefined
+      && (typeof completionMutationId !== "string" || !/^[A-Za-z0-9:_-]{1,128}$/.test(completionMutationId))) {
+    const error = new Error("Invalid completion mutation id");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (completionBaseRevision !== undefined && completionBaseRevision !== null
+      && (typeof completionBaseRevision !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(completionBaseRevision))) {
+    const error = new Error("Invalid completion base revision");
+    error.statusCode = 400;
+    throw error;
+  }
+  // A row lock is the database boundary for this state transition. When no caller
+  // owns a transaction, own one here so the read, property merge, write, and operation
+  // record all observe the same completion state. Callers such as batchOp already pass
+  // their transaction client and inherit the same FOR UPDATE lock.
+  const ownsTransaction = !client && typeof pool.connect === "function";
+  const q = ownsTransaction ? await pool.connect() : (client || pool);
+  const now = new Date().toISOString();
+  let existing;
+  let writtenProps;
+  let result;
+  try {
+    if (ownsTransaction) await q.query("BEGIN");
+    const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [id]);
+    existing = rows[0];
+    if (!existing) throw new Error(`Block not found: ${id}`);
+    if (existing.deleted_at) throw new Error(`Block is deleted: ${id}`);
+    if (completionIntent && Object.prototype.hasOwnProperty.call(fields, "completionBaseRevision")) {
+      const currentProps = existing.properties || {};
+      const currentRevision = currentProps._completionRevision || null;
+      const targetDone = completionIntent === "complete";
+      const sameMutation = !!(completionMutationId
+        && currentProps._completionMutationId === completionMutationId
+        && isCompletedTaskProps(currentProps) === targetDone);
+      if (!sameMutation && (completionBaseRevision || null) !== currentRevision) {
+        const conflict = new Error("Task completion changed since this edit was created");
+        conflict.statusCode = 409;
+        conflict.publicCode = "COMPLETION_CONFLICT";
+        throw conflict;
+      }
+    }
+    let newProps = existing.properties;
+    if (properties !== undefined) {
+      const parsed = typeof properties === "string" ? JSON.parse(properties) : properties;
+      validateBlock(existing.type, parsed);
+      newProps = applyCompletionIntent(existing.properties, parsed, completionIntent, now,
+        isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
+    }
   // C6c: this is the OTHER day-changing writer, and the most-used one -- PATCH /api/blocks/:id is how
   // every promote/unschedule goes (state.js scheduleRowOnDay / unscheduleRow -> _writeRowDate).
   // Keeping the old number across a date change meant a Backlog row promoted onto today arrived
   // carrying the DATELESS space's number and sorted to the front of the day, which also steals the
   // earliest cascade slot and re-times everything after it. Re-slot into the target day, same rule
   // as rescheduleBlocks.
-  let newSortOrder = sort_order !== undefined ? sort_order : existing.sort_order;
-  const newParentId = parent_id !== undefined ? parent_id : existing.parent_id;
-  const newDate = date !== undefined ? date : existing.date;
-  if (sort_order === undefined
-      && normalizeDate(newDate) !== normalizeDate(existing.date)
-      && isTaskRow({ type: existing.type, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps })) {
-    newSortOrder = await nextSortOrderForDay(q, { date: newDate, workspace_id: existing.workspace_id });
+    let newSortOrder = sort_order !== undefined ? sort_order : existing.sort_order;
+    const newParentId = parent_id !== undefined ? parent_id : existing.parent_id;
+    const newDate = date !== undefined ? date : existing.date;
+    if (sort_order === undefined
+        && normalizeDate(newDate) !== normalizeDate(existing.date)
+        && isTaskRow({ type: existing.type, properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps })) {
+      newSortOrder = await nextSortOrderForDay(q, { date: newDate, workspace_id: existing.workspace_id });
+    }
+    const { rows: writtenRows } = await q.query(
+      `UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6 RETURNING properties`,
+      [newProps, newSortOrder, newParentId, newDate, now, id]
+    );
+    writtenProps = writtenRows[0] && writtenRows[0].properties !== undefined
+      ? (typeof writtenRows[0].properties === "string" ? JSON.parse(writtenRows[0].properties) : writtenRows[0].properties)
+      : newProps;
+    await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, writtenProps, now]);
+    result = { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: writtenProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
+    if (ownsTransaction) await q.query("COMMIT");
+  } catch (error) {
+    if (ownsTransaction) {
+      try { await q.query("ROLLBACK"); } catch (_) { /* preserve the write error */ }
+    }
+    throw error;
+  } finally {
+    if (ownsTransaction) q.release();
   }
-  await q.query(`UPDATE blocks SET properties = $1, sort_order = $2, parent_id = $3, date = $4, updated_at = $5 WHERE id = $6`, [newProps, newSortOrder, newParentId, newDate, now, id]);
-  await q.query(`INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp) VALUES ($1, 'update', $2, $3, $4)`, [id, existing.properties, newProps, now]);
   // D1 (Track D): if this row is an INSTANCE of a recurring responsibility and it
   // just crossed the done line, reset its definition's cadence here rather than
   // asking four separate UI paths to remember to. See propagateResponsibilityDone.
   await propagateResponsibilityDone({
-    id, before: existing.properties, after: newProps, at: now, client,
-    date: normalizeDate(newDate), workspaceId: existing.workspace_id,
+    id, before: existing.properties, after: writtenProps, at: now, client,
+    date: result.date, workspaceId: existing.workspace_id,
+    completionRevision: writtenProps && writtenProps._completionRevision,
   });
-  return { id, type: existing.type, parent_id: newParentId, date: normalizeDate(newDate), properties: typeof newProps === "string" ? JSON.parse(newProps) : newProps, sort_order: newSortOrder, created_at: existing.created_at, updated_at: now, deleted_at: null };
+  return result;
 }
 
 // ── Recurrence completion propagation (dcc-canonical-task-model D1) ──
@@ -431,25 +573,52 @@ async function updateBlock(id, { properties, sort_order, parent_id, date }, clie
 // their reminder for a full cadence) or stamp an open instance they control onto
 // it, which the reconciler would then keep reading as "open" -- a permanent,
 // self-sustaining suppression of someone else's recurring work.
-async function propagateResponsibilityDone({ id, before, after, at, date, client, workspaceId }) {
+async function propagateResponsibilityDone({ id, before, after, at, date, client, workspaceId, completionRevision }) {
   if (client) return;
+  let q;
+  let ownsTransaction = false;
   try {
     const beforeProps = typeof before === "string" ? JSON.parse(before) : (before || {});
     const afterProps = typeof after === "string" ? JSON.parse(after) : (after || {});
     const respId = afterProps.responsibilityId || beforeProps.responsibilityId;
     if (!respId) return;
-    const isDone = (p) => p.status === "done" || !!p.completedAt;
+    const isDone = isCompletedTaskProps;
     const wasDone = isDone(beforeProps);
     const nowDone = isDone(afterProps);
     if (wasDone === nowDone) return;
 
-    // getBlock rather than a bespoke SELECT: it is this file's own read primitive
-    // and already handles the properties parse.
-    const definition = await getBlock(respId);
-    if (!definition || definition.deleted_at) return;
-    if (definition.workspace_id && workspaceId && definition.workspace_id !== workspaceId) return;
+    // Completion propagation runs after the task write commits so a broken cadence
+    // row cannot block completion. Serialize it through a fresh lock on the task,
+    // then verify this transition is still current. Without this check, a delayed
+    // completion side effect can land after a newer reopen and clear its restored
+    // responsibility pointer.
+    ownsTransaction = typeof pool.connect === "function";
+    q = ownsTransaction ? await pool.connect() : pool;
+    if (ownsTransaction) await q.query("BEGIN");
+    const { rows: taskRows } = await q.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [id]);
+    const currentTask = taskRows[0];
+    const currentProps = currentTask && (currentTask.properties || {});
+    if (!currentTask || isDone(currentProps) !== nowDone
+        || (completionRevision && currentProps._completionRevision !== completionRevision)) {
+      if (ownsTransaction) await q.query("COMMIT");
+      return;
+    }
+
+    const { rows: definitionRows } = await q.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [respId]);
+    const definition = definitionRows[0] ? parseBlock(definitionRows[0]) : null;
+    if (!definition || definition.deleted_at) {
+      if (ownsTransaction) await q.query("COMMIT");
+      return;
+    }
+    if (definition.workspace_id && workspaceId && definition.workspace_id !== workspaceId) {
+      if (ownsTransaction) await q.query("COMMIT");
+      return;
+    }
     const defProps = definition.properties || {};
-    if (defProps.kind !== "responsibility_item") return;
+    if (defProps.kind !== "responsibility_item") {
+      if (ownsTransaction) await q.query("COMMIT");
+      return;
+    }
 
     const next = nowDone
       ? recurrence.applyCompletion(defProps, { completedAt: afterProps.completedAt || at, taskId: id })
@@ -463,9 +632,15 @@ async function propagateResponsibilityDone({ id, before, after, at, date, client
     // owns that pairing everywhere else in this file. Re-entry is bounded because
     // a responsibility_item carries no responsibilityId of its own, so the nested
     // call returns at the `!respId` guard above.
-    await updateBlock(respId, { properties: next });
+    await updateBlock(respId, { properties: next }, q);
+    if (ownsTransaction) await q.query("COMMIT");
   } catch (e) {
+    if (ownsTransaction && q) {
+      try { await q.query("ROLLBACK"); } catch (_) { /* preserve non-fatal behavior */ }
+    }
     console.warn("[db:propagateResponsibilityDone] non-fatal", e && e.message);
+  } finally {
+    if (ownsTransaction && q) q.release();
   }
 }
 
@@ -1428,6 +1603,7 @@ module.exports = {
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
   undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
+  isCompletedTaskProps, applyCompletionIntent, propagateResponsibilityDone,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
