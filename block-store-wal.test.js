@@ -138,6 +138,29 @@ test("a permanent completion rejection rolls back optimistic state and rejects",
   assert.equal(store.get("b1").properties.status, "open");
 });
 
+for (const status of [401, 403]) {
+  test(`completion auth rejection ${status} rolls back instead of promising a retry`, async () => {
+    const initial = { id: "b1", type: "block", date: "2026-07-08", properties: { title: "T", status: "open" } };
+    const { store, storage } = makeStore({
+      fetchImpl: async (url) => {
+        if (!String(url).includes("/completion")) return { ok: true, status: 200, json: async () => initial };
+        return { ok: false, status, statusText: "auth", json: async () => ({
+          error: status === 401 ? "Authentication required" : "Workspace access denied",
+          code: status === 401 ? "AUTH_REQUIRED" : "WORKSPACE_FORBIDDEN",
+          retryable: false,
+          requestId: `auth-${status}`,
+        }) };
+      },
+    });
+    await store.handleBlocksChanged({ blockIds: ["b1"] });
+
+    await assert.rejects(store.setTaskCompletion("b1", true, { taskDate: "2026-07-08" }), /required|denied/);
+    assert.equal(wal(storage).length, 0, "auth rejection must not stay queued");
+    assert.equal(dead(storage).length, 1, "auth rejection remains available for diagnostics");
+    assert.equal(store.get("b1").properties.status, "open", "optimistic completion rolls back");
+  });
+}
+
 test("a transient completion remains visibly pending and survives reload replay", async () => {
   const storage = new Map();
   const initial = { id: "b1", type: "block", date: "2026-07-08", properties: { title: "T", status: "open" } };

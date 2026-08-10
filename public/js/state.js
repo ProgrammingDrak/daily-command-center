@@ -1255,9 +1255,14 @@ function _findTaskBlockForDate(id,dateStr,ev){
   const matches=blocks.filter(b=>{
     if(!b||b.deleted_at)return false;
     const p=b.properties||{};
-    const ids=[p.local_id,b.id];
-    if(ev&&ev._blockId)ids.push(ev._blockId);
-    return ids.map(String).includes(String(id))||!!(ev&&ev._blockId&&String(b.id)===String(ev._blockId));
+    // `ev._blockId` identifies the candidate ROW, not another alias for every row.
+    // Appending it to `ids` made every block match whenever the rendered event was
+    // keyed by its row id (`ev.id === ev._blockId`). Materialized meetings and API
+    // tasks use exactly that shape, so completion selected the first unrelated block
+    // on the day and the server correctly rejected responsibility/bookkeeping rows as
+    // "not a task". Compare the candidate's own id to the anchor instead.
+    return [p.local_id,b.id].filter(Boolean).map(String).includes(String(id))
+      ||!!(ev&&ev._blockId&&String(b.id)===String(ev._blockId));
   });
   if(dateStr){
     const exact=matches.find(b=>b.date===dateStr);
