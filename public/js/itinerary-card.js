@@ -293,9 +293,9 @@
           // Radial on every row now, meetings included: it carries the Prep/Recap
           // spoke that opens the meeting-automation panel (schedule-tab.js). This
           // retires the old dead .btn-meeting-auto gear, which had no click handler.
-          (guest?'':'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="'+(isMeeting(ev)?'Meeting prep and actions…':'Task actions…')+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>')+
+          (guest?'':'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="'+(isMeeting(ev)?'Meeting prep and actions…':'Task actions…')+'" aria-label="'+(isMeeting(ev)?'Meeting prep and actions':'Task actions')+'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>')+
           bountyControl+
-          (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
+          (guest?'':'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule" aria-label="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>')+
           (guest||subTimeless?'':'<div class="dur">'+
             // Task cards: read-only badge (adjust via the radial's Duration…);
             // meetings keep the ±15 stepper and the tappable badge.
