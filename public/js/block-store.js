@@ -907,7 +907,12 @@
           }
           return result;
         } catch (error) {
-          const permanent = error && (error.status === 400 || error.status === 404 || error.status === 409);
+          // Authentication failures cannot become durable by replaying the same
+          // unauthenticated request. Keeping them in the WAL pins a misleading
+          // "will retry" banner and lets an old intent land after a later sign-in.
+          // Roll back and surface them like every other terminal 4xx rejection.
+          const permanent = error && (error.status === 400 || error.status === 401
+            || error.status === 403 || error.status === 404 || error.status === 409);
           if (permanent) {
             _completionMetrics.rejected++;
             walMoveToDeadLetter(walGet().find(entry => entry && entry._walId === walId),
