@@ -207,8 +207,9 @@
       }else if(!checked&&typeof root._persistDone==="function"){
         await Promise.resolve(root._persistDone(ev.id,false,{ev,dateStr:ev._block.date}));
       }else{
-        const p={...ev._block.properties,status:checked?"done":"open",completedAt:checked?new Date().toISOString():null};
-        await root.blockStore.updateBlock(ev._blockId,p,{completionIntent:checked?"complete":"reopen"});
+        await root.blockStore.setTaskCompletion(ev._blockId,checked,{
+          block:ev._block,taskDate:ev._block.date,completedAt:checked?new Date().toISOString():null
+        });
       }
     }catch(e){toast(e.message||"Could not update completion.","error");return;}
     root.blockStore.invalidateRangeCache(ev._block.date);
@@ -261,13 +262,16 @@
         else{const s=minuteOf((form.querySelector('[name="start"]')||{}).value||ev.start),e=minuteOf((form.querySelector('[name="end"]')||{}).value||ev.end);await place(ev._blockId,day,"timed",s,Math.max(s+15,e));}
         return;
       }
+      if(input.name==="status"){
+        await root.blockStore.setTaskCompletion(ev._blockId,input.value==="done",{
+          block:ev._block,taskDate:ev._block.date,completedAt:input.value==="done"?new Date().toISOString():null
+        });
+        await build({keepScroll:true});openInspector(ev._blockId);return;
+      }
       const next={...ev._block.properties};
       next[input.name]=input.name==="tags"?input.value.split(",").map(x=>x.trim()).filter(Boolean):input.value;
       if(input.name==="notes"&&next.detail&&!next.notes)next.detail=input.value;
-      const completionExtra=input.name==="status"
-        ?{completionIntent:input.value==="done"?"complete":"reopen"}
-        :undefined;
-      await root.blockStore.updateBlock(ev._blockId,next,completionExtra);await build({keepScroll:true});openInspector(ev._blockId);
+      await root.blockStore.updateBlock(ev._blockId,next);await build({keepScroll:true});openInspector(ev._blockId);
     }));
     if(focusTitle){const title=panel.querySelector('[name="title"]');if(title&&!title.readOnly){title.focus();title.select();}}
   }

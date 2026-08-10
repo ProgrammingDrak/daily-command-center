@@ -201,7 +201,7 @@ const dayRows = () => [
 function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship the thing", type: "task", start: "09:00", end: "09:30", _blockId: "row-t1" }], rescheduleRemovesRow = false, rescheduleResult = undefined, rows = dayRows(), dayRootProps = {} } = {}) {
   const calls = { reschedule: [], commit: [], credit: [], confirm: [], patched: [], toasts: [], rowWrites: [], backlogSync: [] };
   const manualDone = new Set();
-  const dayRoot = { id: "root-" + PAST, date: PAST, type: "day_root", properties: dayRootProps };
+  const dayRoot = { id: "root-" + viewing, date: viewing, type: "day_root", properties: dayRootProps };
   // One day_root PER DATE, registered on demand. The cross-day fallback writes the TARGET
   // day's root (its id comes back from the /api/blocks?date= response), so a registry keyed
   // only on the viewed day's root would silently resolve nothing and the write would vanish.
@@ -288,7 +288,68 @@ function makeChainCtx({ viewing = PAST, scheduled = [{ id: "t1", title: "Ship th
       const onDay = rows.filter((r) => r.date === date);
       return { ok: true, json: async () => [rootFor(date)].concat(onDay) };
     },
-    window: { USE_BLOCKSTORE: { done: true }, TaskTypes: null, blockStore: { getDayRootId: () => dayRoot.id, get: findRow } },
+    window: { USE_BLOCKSTORE: { done: true }, TaskTypes: null, blockStore: {
+      getDayRootId: () => dayRoot.id,
+      get: findRow,
+      setTaskCompletion: async (taskRef, completed, opts) => {
+        const date = opts.taskDate || viewing;
+        const target = findRow(taskRef) || rows.find(r =>
+          String((r.properties || {}).local_id) === String(taskRef) && (!date || !r.date || r.date === date));
+        if (!target) {
+          if (!date) throw new Error("Completion target unavailable");
+          const root = rootFor(date);
+          const overlay = root.properties._done || { ids: [], at: {} };
+          const ids = (overlay.ids || []).filter(value => String(value) !== String(taskRef));
+          const at = { ...(overlay.at || {}) };
+          if (completed) { ids.push(String(taskRef)); at[taskRef] = opts.completedAt; }
+          else delete at[taskRef];
+          root.properties._done = { ...overlay, ids, at };
+          calls.rowWrites.push({ blockId: root.id, properties: { ...root.properties }, extra: null });
+          return { ok: true, mutationId: "m-legacy", persistenceTarget: "legacy_overlay", task: { id: taskRef, type: "legacy_task", date, properties: { status: completed ? "done" : "open" } }, affectedTasks: [] };
+        }
+        const selected = [target];
+        if (completed) {
+          const localIds = new Set([(target.properties || {}).local_id, target.id].filter(Boolean).map(String));
+          const rowIds = new Set([String(target.id)]);
+          let changed = true;
+          while (changed) {
+            changed = false;
+            for (const candidate of rows) {
+              if (rowIds.has(String(candidate.id))) continue;
+              const p = candidate.properties || {};
+              const taskLike = !!p.local_id || p.kind === "task";
+              if (!taskLike || (p.wrapId && !p.subtaskOf)) continue;
+              if ((p.subtaskOf && localIds.has(String(p.subtaskOf))) || (candidate.parent_id && rowIds.has(String(candidate.parent_id)))) {
+                selected.push(candidate);rowIds.add(String(candidate.id));if(p.local_id)localIds.add(String(p.local_id));changed=true;
+              }
+            }
+          }
+        }
+        for (const row of selected) {
+          const p = { ...(row.properties || {}) };
+          if (completed) {
+            p.status = "done";p.done = true;p.completedAt = opts.completedAt;
+            if (!row.date && date) { row.date = date;p._doneStampedDate = date;if(p.kind === "backlog"){delete p.kind;p._wasBacklog=true;} }
+          } else {
+            if (p.status === "done")p.status = "open";
+            for (const key of ["done","completed","completedAt","doneAt","completedBy"])delete p[key];
+            if (row.date && p._doneStampedDate === row.date) { row.date = null;delete p._doneStampedDate;if(p._wasBacklog){p.kind="backlog";delete p._wasBacklog;} }
+          }
+          row.properties = p;
+          calls.rowWrites.push({ blockId: row.id, properties: { ...p }, extra: { date: row.date } });
+        }
+        if (!completed) {
+          const root = rootFor(target.date || date);
+          const overlay = root.properties._done;
+          if (overlay) {
+            const keys = new Set([taskRef,target.id,(target.properties||{}).local_id].filter(Boolean).map(String));
+            overlay.ids = (overlay.ids || []).filter(value => !keys.has(String(value)));
+            for (const key of keys) if (overlay.at) delete overlay.at[key];
+          }
+        }
+        return { ok: true, mutationId: "m-row", persistenceTarget: "task_row", task: target, affectedTasks: selected };
+      }
+    } },
     rescheduleTaskToDate: async (id, date, opts) => {
       calls.reschedule.push({ id, date, opts: { ...opts } });
       // What the TRUE move does, both halves. It RE-DATES the row and its subtree
@@ -406,7 +467,7 @@ test("the same-day fast path cascades to the subtree (the 'done on its original 
 });
 
 // ...and the carryover lane, which walks the subtree ITSELF, must not get a second walk.
-test("cascade:false suppresses it, so the carryover lane's own loop is not doubled", async () => {
+test("cascade:false still uses the server's single atomic subtree transition", async () => {
   // The child MUST be in `scheduled`, or this test is vacuous: `_onParentCompleted` walks
   // `scheduled.filter(c=>c.subtaskOf===pid)`, so with the default one-ev fixture there is
   // nothing to cascade and the assertion passes whether the flag is honored or not. Caught by a
@@ -421,28 +482,22 @@ test("cascade:false suppresses it, so the carryover lane's own loop is not doubl
   vm.runInContext(`commitDoneOnDate("t1","${PAST}",{cascade:false})`, context);
   await flush();
   assert.equal(rows.find((r) => r.id === "row-t1").properties.status, "done", "the named node still completes");
-  assert.equal(rows.find((r) => r.id === "row-t1-kid").properties.status, "open",
-    "the caller owns the walk; a second one multiplies the queued writes");
+  assert.equal(rows.find((r) => r.id === "row-t1-kid").properties.status, "done",
+    "the server owns one atomic walk regardless of the legacy client flag");
 });
 
-test("cross-day cascade:false refuses a completion whose row write did not persist", async () => {
+test("cross-day completion no longer depends on the legacy row-properties queue", async () => {
   const { context, calls } = makeChainCtx({ viewing: TODAY });
   context.enqueueRowPropsWrite = () => Promise.resolve(null);
-  await assert.rejects(
-    vm.runInContext(`commitDoneOnDate("t1","${PAST}",{cascade:false})`, context),
-    /Completion did not persist/
-  );
-  assert.equal(calls.credit.length, 0, "a refused write must not bank completion credit");
+  await vm.runInContext(`commitDoneOnDate("t1","${PAST}",{cascade:false})`, context);
+  assert.equal(calls.credit.length, 1, "the dedicated endpoint acknowledged before credit");
 });
 
-test("cross-day cascade:false refuses a missing origin row instead of claiming success", async () => {
-  const { context, calls } = makeChainCtx({ viewing: TODAY, rows: [] });
-  await assert.rejects(
-    vm.runInContext(`commitDoneOnDate("missing","${PAST}",{cascade:false})`, context),
-    /Completion target unavailable/
-  );
-  assert.equal(calls.credit.length, 0);
-  assert.equal(calls.rowWrites.length, 0);
+test("a missing canonical row uses the explicit legacy persistence target", async () => {
+  const { context, calls, rootFor } = makeChainCtx({ viewing: TODAY, rows: [] });
+  await vm.runInContext(`commitDoneOnDate("missing","${PAST}",{cascade:false})`, context);
+  assert.equal(calls.credit.length, 1);
+  assert.deepEqual(rootFor(PAST).properties._done.ids, ["missing"]);
 });
 
 test("plain toggleDone on the day being viewed marks the ROW done, and un-checking clears it", async () => {

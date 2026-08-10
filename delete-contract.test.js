@@ -76,6 +76,17 @@ function mountApp(extraBlocks = {}) {
         blocks[id] = { ...row, properties: patch.properties || row.properties };
         return blocks[id];
       },
+      setTaskCompletion: async ({ taskRef, completed, completedAt, mutationId }) => {
+        const row = blocks[taskRef];
+        if (!row) throw new Error(`Block not found: ${taskRef}`);
+        const properties = { ...(row.properties || {}) };
+        if (completed) { properties.status = "done"; properties.done = true; properties.completedAt = completedAt || "now"; }
+        else { properties.status = "open"; delete properties.done; delete properties.completedAt; }
+        properties._completionRevision = "test-revision";
+        properties._completionMutationId = mutationId;
+        blocks[taskRef] = { ...row, properties };
+        return { task: blocks[taskRef], affectedTasks: [blocks[taskRef]], revision: "test-revision", persistenceTarget: "task_row", broadcastIds: [taskRef] };
+      },
       getChildren: async () => [],
       reorderBlocks: async () => {},
       getBlocksByDate: async () => [],
@@ -400,7 +411,7 @@ function mountDcc(rows = []) {
     // `server.js dayStateUnavailable` share one implementation of the "legacy file counts only
     // if it IS about this date" gate. Reproduced faithfully rather than stubbed to a constant:
     // a fake that always returned a day would hide the throw the ingest handler must answer 503 for.
-    readDayStateMirror: (dateStr) => null,
+    readDayStateMirror: (_dateStr) => null,
     resolveOwnerLenient: () => ({ userId: 1, workspaceId: MINE }),
     resolveOwnerStrict: async () => ({ userId: 1, workspaceId: MINE }),
     slotStore: { earnTaskCredit: async (_ws, _u, payload) => { credits.push(payload); return { awarded: true, credits: 10 }; } },

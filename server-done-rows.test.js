@@ -81,7 +81,7 @@ test("day_root._done wins the timestamp — it is the user's own completion", ()
 const clearSource = scheduleSource.match(/function _doneRowProps\(props,completedAt\)\{[\s\S]*?function _refreshResponsibilityAfterDone\(ev,write\)\{[\s\S]*?\n\}/);
 assert.ok(clearSource, "the C5b _persistDone region must exist in schedule.js");
 
-function makeClear(blockProps, ev, dayRootProps) {
+async function makeClear(blockProps, ev, dayRootProps) {
   const calls = [];
   const row = blockProps ? { id: "blk-1", properties: blockProps } : null;
   const dayRoot = { id: "root-1", properties: dayRootProps || {} };
@@ -104,23 +104,35 @@ function makeClear(blockProps, ev, dayRootProps) {
       const byBlock = !!(e && e._blockId && String(row.id) === String(e._blockId));
       return (byId || byBlock) ? row : null;
     },
-    enqueueRowPropsWrite: (blockId, merge) => {
-      const target = blockId === dayRoot.id ? dayRoot : (row && row.id === blockId ? row : null);
-      if (!target || !target.properties) return null;
-      const next = merge(target.properties);
-      if (!next) return null;              // the queue's null-merge skip
-      target.properties = next;
-      calls.push({ id: blockId, props: next });
-      return null;
-    },
-    window: { blockStore: { getDayRootId: () => dayRoot.id, get: (id) => (id === dayRoot.id ? dayRoot : row) } }
+    window: { blockStore: {
+      getDayRootId: () => dayRoot.id,
+      get: (id) => (id === dayRoot.id ? dayRoot : row),
+      setTaskCompletion: async (taskRef, done, opts) => {
+        if (row) {
+          const next = { ...row.properties };
+          if (done) { next.status = "done"; next.done = true; next.completedAt = opts.completedAt; }
+          else {
+            if (next.status === "done") next.status = "open";
+            for (const key of ["done", "completed", "completedAt", "doneAt", "completedBy"]) delete next[key];
+          }
+          row.properties = next;
+          calls.push({ id: row.id, props: next, taskRef, opts });
+        }
+        if (!done && dayRoot.properties._done) {
+          const overlay = dayRoot.properties._done;
+          overlay.ids = (overlay.ids || []).filter(id => id !== "t1");
+          if (overlay.at) delete overlay.at.t1;
+        }
+        return { ok: true, task: row, affectedTasks: row ? [row] : [], mutationId: "m1" };
+      }
+    } }
   };
-  vm.runInNewContext(clearSource[0] + "\n_clearRowDone(\"t1\");", ctx);
+  await vm.runInNewContext(clearSource[0] + "\n_clearRowDone(\"t1\");", ctx);
   return calls.filter((c) => c.id === "blk-1");
 }
 
-test("un-check clears every completion flag on the row and re-opens its status", () => {
-  const calls = makeClear(
+test("un-check clears every completion flag on the row and re-opens its status", async () => {
+  const calls = await makeClear(
     { title: "t", status: "done", done: true, completed: true, completedAt: "x", doneAt: "x", tags: ["keep"], start: "09:00" },
     { id: "t1", _blockId: "blk-1" }
   );
@@ -136,46 +148,42 @@ test("un-check clears every completion flag on the row and re-opens its status",
   assert.equal(props.title, "t");
 });
 
-test("un-check is a no-op when the row carries no completion", () => {
-  assert.equal(makeClear({ title: "t", status: "open" }, { id: "t1", _blockId: "blk-1" }).length, 0);
+test("un-check sends an explicit reopen even when the cached row appears open", async () => {
+  assert.equal((await makeClear({ title: "t", status: "open" }, { id: "t1", _blockId: "blk-1" })).length, 1);
 });
 
-test("un-check is a no-op with no row identity (legacy localStorage task)", () => {
-  assert.equal(makeClear(null, { id: "t1" }).length, 0);
+test("un-check supports a legacy local-id target and a canonical local_id row", async () => {
+  assert.equal((await makeClear(null, { id: "t1" })).length, 0);
   // NOTE, changed in C5b: an ev with no `_blockId` is no longer a dead end. `_persistDone`
   // resolves through `_findTaskBlockForDate`, which also matches on `local_id` and row id,
   // so a completion still lands for an ev whose _blockId was never stamped (prep.js's
   // distraction log, tabs.js's migrated subtasks). Only a genuinely unresolvable row
   // (above) skips the write, and that case falls back to the legacy overlay instead.
-  assert.equal(makeClear({ local_id: "t1", status: "done" }, { id: "t1" }).length, 1);
+  assert.equal((await makeClear({ local_id: "t1", status: "done" }, { id: "t1" })).length, 1);
 });
 
-test("a cache miss still writes through the rendered task's authoritative row id", () => {
+test("a cache miss still writes through the rendered task's authoritative row id", async () => {
   const calls = [];
   const ev = { id: "t1", _blockId: "blk-1" };
-  const fetched = { id: "blk-1", date: null, properties: { title: "Persist me", status: "open", kind: "backlog" } };
   const ctx = {
     console: { warn: () => {} },
     scheduled: [ev],
     _viewedDateStr: () => "2026-08-07",
     _findTaskBlockForDate: () => null,
-    enqueueRowPropsWrite: (blockId, merge, extra) => {
-      const props = merge(fetched.properties, fetched);
-      calls.push({ blockId, props, extra: typeof extra === "function" ? extra(fetched, props) : extra });
-      return Promise.resolve({ id: blockId });
-    },
-    window: { blockStore: { getDayRootId: () => null } },
+    window: { blockStore: {
+      getDayRootId: () => null,
+      setTaskCompletion: async (blockId, done, opts) => { calls.push({ blockId, done, opts }); return { ok: true }; }
+    } },
   };
-  vm.runInNewContext(clearSource[0] + '\n_persistDone("t1",true,{ev:scheduled[0],completedAt:"2026-08-07T17:00:00Z"});', ctx);
+  await vm.runInNewContext(clearSource[0] + '\n_persistDone("t1",true,{ev:scheduled[0],completedAt:"2026-08-07T17:00:00Z"});', ctx);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].blockId, "blk-1");
-  assert.equal(calls[0].props.status, "done");
-  assert.equal(calls[0].props._doneStampedDate, "2026-08-07");
-  assert.equal(calls[0].extra.date, "2026-08-07");
-  assert.equal(calls[0].extra.completionIntent, "complete");
+  assert.equal(calls[0].done, true);
+  assert.equal(calls[0].opts.taskDate, "2026-08-07");
+  assert.equal(calls[0].opts.resolveRow, true);
 });
 
-test("un-check clears the LEGACY _done entry too, and only that entry", () => {
+test("un-check clears the LEGACY _done entry too, and only that entry", async () => {
   // The `_done` overlay is read-only legacy data now (sync.js) and is still load-bearing
   // for 23 measured completions. A read-only source you cannot clear is a completion that
   // cannot be un-done: the next load re-hydrates it and the row snaps back to done.
@@ -187,17 +195,19 @@ test("un-check clears the LEGACY _done entry too, and only that entry", () => {
     scheduled: [{ id: "t1", _blockId: "blk-1" }],
     _viewedDateStr: () => null,
     _findTaskBlockForDate: () => row,
-    enqueueRowPropsWrite: (blockId, merge) => {
-      const target = blockId === dayRoot.id ? dayRoot : row;
-      const next = merge(target.properties);
-      if (!next) return null;
-      target.properties = next;
-      calls.push(blockId);
-      return null;
-    },
-    window: { blockStore: { getDayRootId: () => dayRoot.id, get: () => dayRoot } }
+    window: { blockStore: {
+      getDayRootId: () => dayRoot.id,
+      get: () => dayRoot,
+      setTaskCompletion: async () => {
+        row.properties = { status: "open" };
+        dayRoot.properties._done.ids = dayRoot.properties._done.ids.filter(id => id !== "t1");
+        delete dayRoot.properties._done.at.t1;
+        calls.push("blk-1", "root-1");
+        return { ok: true };
+      }
+    } }
   };
-  vm.runInNewContext(clearSource[0] + "\n_clearRowDone(\"t1\");", ctx);
+  await vm.runInNewContext(clearSource[0] + "\n_clearRowDone(\"t1\");", ctx);
   assert.deepEqual(dayRoot.properties._done.ids, ["keep"]);
   assert.deepEqual(Object.keys(dayRoot.properties._done.at), ["keep"]);
   assert.deepEqual(calls, ["blk-1", "root-1"], "the row and the overlay, in that order");
@@ -215,9 +225,9 @@ test("side-project completion and undo declare their durable completion intent",
       USE_BLOCKSTORE: { trivialTasks: true },
       blockStore: {
         get: () => block,
-        updateBlock: (id, properties, extra) => {
-          calls.push({ id, properties, extra });
-          block.properties = properties;
+        setTaskCompletion: (id, completed, opts) => {
+          calls.push({ id, completed, opts });
+          block.properties.done = completed;
           return Promise.resolve();
         },
       },
@@ -230,14 +240,14 @@ test("side-project completion and undo declare their durable completion intent",
   vm.runInNewContext('toggleTrivialTask("side-1");', ctx);
   await new Promise(resolve => setImmediate(resolve));
 
-  assert.equal(calls[0].extra.completionIntent, "complete");
-  assert.equal(calls[1].extra.completionIntent, "reopen");
+  assert.equal(calls[0].completed, true);
+  assert.equal(calls[1].completed, false);
 });
 
 test("toggleDone's un-check branch calls it (the snap-back regression)", () => {
   // The call is wrapped in `_refreshResponsibilityAfterDone(...)` now, so the branch chains the
   // responsibility-cadence refresh on the un-check write as well as the completion write.
-  assert.ok(/manualDone\.delete\(id\);delete doneAt\[id\];log\("unchecked",id\);[\s\S]{0,900}?_clearRowDone\(id\)/.test(scheduleSource),
+  assert.ok(/manualDone\.delete\(id\);delete doneAt\[id\];log\("unchecked",id\);[\s\S]{0,1800}?_clearRowDone\(id/.test(scheduleSource),
     "the un-check branch must clear the row");
 });
 

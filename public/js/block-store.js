@@ -14,6 +14,7 @@
   const WAL_KEY = "blockstore-wal"; // durable write-ahead log in localStorage
   const WAL_DEAD_LETTER_KEY = "blockstore-wal-dead-letter";
   const WAL_LEGACY_SESSION_KEY = "blockstore-wal"; // same name, older sessionStorage home
+  const _completionMetrics = { acknowledged: 0, queued: 0, replayed: 0, rejected: 0 };
 
   // ── Partitioned Cache ──
   let _dayCache = new Map();   // id → block (cleared on date switch)
@@ -58,6 +59,11 @@
     if (typeof updateSaveStatus === "function") updateSaveStatus("error", display);
     if (typeof showToast === "function") showToast(msg || display || "Save failed - will retry", "error");
   }
+  function setPending(msg) {
+    const display = msg || "Completion pending - retrying";
+    if (typeof updateSaveStatus === "function") updateSaveStatus("saving", display);
+    if (typeof showToast === "function") showToast(display, "info");
+  }
 
   // ── Write-Ahead Log (localStorage) ──
   // Every mutation pushes an entry before the fetch fires and removes it only on
@@ -71,8 +77,8 @@
       // one row fully supersedes every older buffered update for that row. This also
       // makes completion intent last-write-wins after a lost acknowledgement: an old
       // buffered complete can never replay after a newer reopen.
-      if (entry && entry.op === "update" && entry.id) {
-        wal = wal.filter(e => !(e && e.op === "update" && e.id === entry.id));
+      if (entry && (entry.op === "update" || entry.op === "completion") && entry.id) {
+        wal = wal.filter(e => !(e && e.op === entry.op && e.id === entry.id));
       }
       wal.push({ ...entry, _walId: entryId, timestamp: new Date().toISOString() });
       localStorage.setItem(WAL_KEY, JSON.stringify(wal));
@@ -92,6 +98,55 @@
 
   function walGet() {
     try { return JSON.parse(localStorage.getItem(WAL_KEY) || "[]"); } catch { return []; }
+  }
+
+  function walPendingTaskCompletion(id) {
+    const entries = walGet().filter(e => e && e.op === "completion" && String(e.id) === String(id));
+    return entries.length ? entries[entries.length - 1] : null;
+  }
+
+  function applyCompletionState(properties, completed, completedAt) {
+    const next = { ...(properties || {}) };
+    if (completed) {
+      next.status = "done";
+      next.done = true;
+      next.completedAt = completedAt || next.completedAt || new Date().toISOString();
+    } else {
+      if (next.status === "done") next.status = "open";
+      for (const key of ["done", "completed", "completedAt", "doneAt", "completedBy"]) delete next[key];
+    }
+    return next;
+  }
+
+  function overlayPendingCompletion(block) {
+    if (!block || !block.id) return block;
+    if (block.type === "day_root") {
+      const pendingForDay = walGet().filter(entry => entry && entry.op === "completion"
+        && entry.data && entry.data.taskDate === block.date);
+      if (!pendingForDay.length) return block;
+      const props = { ...(block.properties || {}) };
+      const done = { ...((props._done && typeof props._done === "object") ? props._done : {}) };
+      let ids = Array.isArray(done.ids) ? done.ids.map(String) : [];
+      const at = { ...((done.at && typeof done.at === "object") ? done.at : {}) };
+      for (const entry of pendingForDay) {
+        const key = String(entry.id);
+        ids = ids.filter(id => id !== key);
+        if (entry.data.completed) { ids.push(key); at[key] = entry.data.completedAt; }
+        else delete at[key];
+      }
+      props._done = { ...done, ids, at };
+      return { ...block, properties: props, _completionState: "pending" };
+    }
+    const pending = walPendingTaskCompletion(block.id);
+    if (!pending) return block;
+    const data = pending.data || {};
+    return {
+      ...block,
+      date: data.completed && !block.date && data.taskDate ? data.taskDate : block.date,
+      properties: applyCompletionState(block.properties, !!data.completed, data.completedAt),
+      _completionState: "pending",
+      _completionMutationId: data.mutationId || null,
+    };
   }
 
   function walPendingCompletionTransition(id) {
@@ -209,6 +264,39 @@
   }
   walMigrateFromSession();
 
+  // Convert completion entries written by the full-document PATCH client into the
+  // narrow intent format. Dead-letter entries are intentionally untouched because
+  // replaying an already-rejected historical intent could reverse a newer decision.
+  function walMigrateCompletionEntries() {
+    try {
+      const wal = walGet();
+      let changed = false;
+      const migrated = wal.map(entry => {
+        if (!entry || entry.op !== "update" || !entry.data || !entry.data.completionIntent) return entry;
+        changed = true;
+        const data = entry.data;
+        const props = data.properties || {};
+        return {
+          op: "completion",
+          id: entry.id,
+          data: {
+            completed: data.completionIntent === "complete",
+            completedAt: props.completedAt || props.doneAt || null,
+            taskDate: data.date || null,
+            mutationId: data.completionMutationId || ((crypto && crypto.randomUUID) ? crypto.randomUUID() : ("cm-" + Date.now())),
+            expectedRevision: Object.prototype.hasOwnProperty.call(data, "completionBaseRevision")
+              ? data.completionBaseRevision : null,
+          },
+          _walId: entry._walId,
+          timestamp: entry.timestamp,
+          migratedFrom: "full_properties_completion",
+        };
+      });
+      if (changed) localStorage.setItem(WAL_KEY, JSON.stringify(migrated));
+    } catch {}
+  }
+  walMigrateCompletionEntries();
+
   // ── API Helpers ──
   async function apiPost(url, body) {
     _activeWriteRequests++;
@@ -223,6 +311,9 @@
         const e = new Error(err.error || `API error ${res.status}`);
         e.status = res.status;
         e.code = err.code;
+        e.retryable = err.retryable;
+        e.requestId = err.requestId;
+        e.currentTask = err.currentTask;
         throw e;
       }
       return await res.json();
@@ -301,6 +392,7 @@
   }
 
   function cacheSet(block) {
+    block = overlayPendingCompletion(block);
     // Remove any prior entry in either cache so a block can migrate between
     // global and day partitions without leaving a stale duplicate behind.
     _dayCache.delete(block.id);
@@ -391,7 +483,7 @@
     // "undelete" too: A2's route 404s when the row is gone for real (hard-deleted, or
     // purged by the 30-day purgeSoftDeleted sweep). There is nothing left to revive, so
     // retrying can only fail again.
-    if ((entry.op === "update" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete") && err.status === 404) return true;
+    if ((entry.op === "update" || entry.op === "completion" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete") && err.status === 404) return true;
     // 409 is terminal for undelete and reschedule specifically. An undelete
     // db.undeleteBlock raises it when clearing deleted_at would move the row into
     // idx_blocks_idem_unique's predicate while a LIVE row already holds that
@@ -401,7 +493,7 @@
     // A reschedule gets 409 only when the row is an imported meeting whose
     // source calendar owns placement. That authority will not change on retry.
     if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
-    if (entry.op === "update" && err.status === 409 && err.code === "COMPLETION_CONFLICT") return true;
+    if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
     return false;
   }
 
@@ -457,6 +549,24 @@
               await apiPatch("/api/blocks/" + entry.id, entry.data);
             });
             break;
+          case "completion": {
+            const result = await queueUpdateRequest(entry.id, async () => {
+              if (!walGet().some(e => e && e._walId === entry._walId)) return null;
+              return apiPost("/api/tasks/" + encodeURIComponent(entry.id) + "/completion", { ...entry.data, _replay: true });
+            });
+            if (result) {
+              _completionMetrics.replayed++;
+              walRemove(entry._walId);
+              (result.affectedTasks || []).forEach(cacheSet);
+              if (result.task && result.task.type !== "legacy_task") cacheSet(result.task);
+              if (typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
+                window.dispatchEvent(new CustomEvent("task-completion-confirmed", {
+                  detail: { ...result, replayed: true, clientMeta: entry.meta || null },
+                }));
+              }
+            }
+            break;
+          }
           case "delete":
             await apiDelete("/api/blocks/" + entry.id);
             break;
@@ -487,6 +597,13 @@
             _tombstones.add(entry.id);
             cacheDelete(entry.id);
             setError("A restore could not be completed — reload to see the current state");
+          }
+          if (entry.op === "completion" && entry.id) {
+            _completionMetrics.rejected++;
+            const current = e.currentTask;
+            if (current && current.type !== "legacy_task") cacheSet(current);
+            else cacheDelete(entry.id);
+            setError("Completion rejected" + (e.requestId ? " (request " + e.requestId + ")" : ""));
           }
           dropped++;
           console.warn("[BlockStore] WAL replay moved stale entry to dead-letter:", entry.op, entry.id || "", e.message);
@@ -716,6 +833,7 @@
           }
           cacheSet(block); // Replace optimistic with server response
           walRemove(walId);
+          _completionMetrics.acknowledged++;
           setSaved();
           return block;
         } catch (e) {
@@ -725,6 +843,86 @@
         }
       });
       return write;
+    },
+
+    // The only client primitive for changing task completion. It sends an intent,
+    // not a full properties document, and distinguishes acknowledged, pending, and
+    // permanently failed states for callers.
+    setTaskCompletion(taskRef, completed, context) {
+      context = { ...(context || {}) };
+      const mutationId = context.mutationId || ((crypto && crypto.randomUUID)
+        ? crypto.randomUUID() : ("cm-" + Date.now() + "-" + Math.random().toString(36).slice(2)));
+      return queueUpdateRequest(taskRef, async () => {
+        setSaving();
+        let existing = context.block || cacheGet(taskRef) || null;
+        // A rendered task can retain its row id while the cache is being refreshed.
+        // Fetch that row so the first request carries the real revision instead of
+        // manufacturing a conflict from a null base.
+        if (!existing && context.resolveRow !== false) {
+          try { existing = await apiGet("/api/blocks/" + encodeURIComponent(taskRef)); }
+          catch (e) { if (e && e.status !== 404) throw e; }
+        }
+        const completedAt = completed
+          ? (context.completedAt instanceof Date ? context.completedAt.toISOString() : (context.completedAt || new Date().toISOString()))
+          : null;
+        const body = {
+          completed: !!completed,
+          completedAt,
+          taskDate: context.taskDate || (existing && existing.date) || null,
+          mutationId,
+          expectedRevision: context.expectedRevision !== undefined
+            ? context.expectedRevision
+            : (existing && existing.properties ? (existing.properties._completionRevision || null) : null),
+        };
+        const optimistic = existing ? {
+          ...existing,
+          date: completed && !existing.date && body.taskDate ? body.taskDate : existing.date,
+          properties: applyCompletionState(existing.properties, !!completed, completedAt),
+          _completionState: "pending",
+          _completionMutationId: mutationId,
+          updated_at: new Date().toISOString(),
+        } : null;
+        const walId = walPush({ op: "completion", id: taskRef, data: body, meta: context.sideEffects || null });
+        if (optimistic) cacheSet(optimistic);
+        try {
+          let result;
+          try {
+            result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
+          } catch (error) {
+            if (!(error && error.status === 409 && error.code === "COMPLETION_CONFLICT")) throw error;
+            const current = error.currentTask || await apiGet("/api/blocks/" + encodeURIComponent(taskRef));
+            const stillNewest = walGet().some(entry => entry && entry._walId === walId);
+            if (!stillNewest) throw error;
+            body.expectedRevision = current && current.properties
+              ? (current.properties._completionRevision || null) : null;
+            walReplaceData(walId, body);
+            result = await apiPost("/api/tasks/" + encodeURIComponent(taskRef) + "/completion", body);
+          }
+          walRemove(walId);
+          (result.affectedTasks || []).forEach(cacheSet);
+          if (result.task && result.task.type !== "legacy_task") cacheSet(result.task);
+          setSaved();
+          if (typeof CustomEvent === "function" && typeof window.dispatchEvent === "function") {
+            window.dispatchEvent(new CustomEvent("task-completion-confirmed", { detail: result }));
+          }
+          return result;
+        } catch (error) {
+          const permanent = error && (error.status === 400 || error.status === 404 || error.status === 409);
+          if (permanent) {
+            _completionMetrics.rejected++;
+            walMoveToDeadLetter(walGet().find(entry => entry && entry._walId === walId),
+              `${error.status || "error"} ${error.message || ""}`.trim());
+            if (error.currentTask && error.currentTask.type !== "legacy_task") cacheSet(error.currentTask);
+            else if (existing) cacheSet(existing);
+            else cacheDelete(taskRef);
+            setError((error.message || "Completion rejected") + (error.requestId ? " (request " + error.requestId + ")" : ""));
+            throw error;
+          }
+          _completionMetrics.queued++;
+          setPending("Completion pending - will retry");
+          return { ok: false, pending: true, mutationId, task: optimistic, error };
+        }
+      });
     },
 
     // Debounced update for content editing (notes, descriptions)
@@ -1227,7 +1425,8 @@
         dayCacheSize: _dayCache.size,
         globalCacheSize: _globalCache.size,
         walEntries: walGet().length,
-        deadLetterEntries: (() => { try { return JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY) || "[]").length; } catch { return 0; } })()
+        deadLetterEntries: (() => { try { return JSON.parse(localStorage.getItem(WAL_DEAD_LETTER_KEY) || "[]").length; } catch { return 0; } })(),
+        completionMetrics: { ..._completionMetrics }
       };
     }
   };
