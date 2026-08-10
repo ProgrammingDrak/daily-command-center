@@ -4496,6 +4496,37 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
   .subtask-add-pop .sub-add-go{padding:10px 15px;font-size:15px;border-radius:8px}
   .subtask-add-pop .sub-add-more{font-size:20px;padding:6px 9px}
 }
+
+/* Narrow app panes and phone-sized windows keep the same action set as wide
+   rows. Use a compact 2x2 cluster instead of dropping destructive controls. */
+@media (max-width:760px){
+  .it-list-item:not(.subtask-row){grid-template-columns:auto minmax(0,1fr) 82px !important}
+  .it-list-item:not(.subtask-row) .it-list-actions{
+    display:grid !important;
+    grid-template-columns:repeat(2,38px) !important;
+    grid-auto-rows:38px !important;
+    gap:6px !important;
+    align-items:center !important;
+    justify-content:end !important;
+  }
+  .it-list-actions .btn-bounty{display:inline-flex !important;grid-column:1;grid-row:1;width:38px;height:38px}
+  .it-list-actions .btn-task-radial{display:inline-flex !important;grid-column:2;grid-row:1;width:38px;height:38px}
+  .it-list-actions .btn-del-task{display:inline-flex !important;grid-column:2;grid-row:2;width:38px;height:38px}
+}
+
+/* A card can be narrow inside a split pane while the browser remains wide, so
+   key this fallback to the card container as well as the viewport rules above. */
+@container (max-width:760px){
+  .card{grid-template-columns:44px minmax(0,1fr) 38px 38px !important;grid-template-rows:44px 44px !important;column-gap:6px !important}
+  .card .chk{grid-column:1 !important;grid-row:1 !important}
+  .card .chk-col{grid-column:1 !important;grid-row:2 !important}
+  .card>.body{grid-column:2 !important;grid-row:1 / span 2 !important}
+  .card .btn-task-radial{display:inline-flex !important;grid-column:3 !important;grid-row:1 !important;width:38px;height:38px;justify-self:center}
+  .card .btn-bounty{display:inline-flex !important;grid-column:4 !important;grid-row:1 !important;width:38px;height:38px;justify-self:center}
+  .card .pomo-btn{display:inline-flex !important;grid-column:3 !important;grid-row:2 !important;width:38px;height:38px;justify-self:center}
+  .card .btn-del-task{display:inline-flex !important;grid-column:4 !important;grid-row:2 !important;width:38px;height:38px;justify-self:center}
+}
+
 /* Touch devices (no hover): guarantee hover-revealed actions are always shown.
  * CONVENTION: any control that defaults to opacity:0 and is revealed by a
  * parent :hover MUST be listed here, or it is unreachable on a phone. Tooltips

@@ -113,6 +113,10 @@ function openMeetingPanel(ev,opts){
   if(typeof openPrepModal==="function"){ openPrepModal(ev,opts); return; }
   if(typeof refreshMeetingAutomationPanels==="function")refreshMeetingAutomationPanels(ev.meetingBlockId||ev.id);
 }
+function openTaskNotes(ev){
+  if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);
+  else if(typeof openNotesDrawer==="function")openNotesDrawer(ev.id,ev.title);
+}
 // Meeting rows get a focused radial: the Prep/Recap spoke (contextual by whether
 // the meeting has started) plus duration and add-task. The task-only spokes
 // (delegate/backlog/repeat/lock) don't apply to a calendar block, so they're left
@@ -124,6 +128,8 @@ function buildMeetingRadialItems(ev,trig){
     {icon:started?"📝":"📋", label:started?"Recap":"Prep", onPick:()=>openMeetingPanel(ev,{defaultTab:started?"recap":"prep"})},
     {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
     {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
+    {icon:"📝", label:"Notes & actions", onPick:()=>openTaskNotes(ev)},
+    {icon:"🗑", label:"Delete task", onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}},
   ];
 }
 function buildTaskRadialItems(ev,trig){
@@ -138,7 +144,13 @@ function buildTaskRadialItems(ev,trig){
   // Meetings are auto-locked (calendar time holds during reflow); a manual lock
   // toggle is meaningless for them (toggleLock no-ops on meetings), so omit it.
   if(!isMeeting(ev))items.push({icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});
-  items.push({icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}});
+  items.push(
+    {icon:"➕", label:"Add task…", onPick:()=>{if(typeof openSubtaskAdd==="function")openSubtaskAdd(ev.id,trig);else if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);}},
+    // These stay on the top fan because compact cards hide secondary inline
+    // controls. The radial must remain a complete action surface at any width.
+    {icon:"📝", label:"Notes & actions", onPick:()=>openTaskNotes(ev)},
+    {icon:"🗑", label:"Delete task", onPick:()=>{if(typeof openDeleteConfirm==="function")openDeleteConfirm(ev.id);}}
+  );
   return items;
 }
 // Sub-fan: everything that moves or converts the task, grouped so the top
@@ -760,8 +772,8 @@ function buildListView(){
         // click and schedule sits by the time label (see .it-list-meta). Every
         // other action rides the radial behind the arrow trigger.
         (!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
-        (!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
-        (!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
+        (!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…" aria-label="Task actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
+        (!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule" aria-label="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
       '</div>';
 
     el.querySelector(".it-list-check").addEventListener("click",e=>{
