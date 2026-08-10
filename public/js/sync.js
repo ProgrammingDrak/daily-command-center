@@ -97,12 +97,17 @@ function saveActions(data) {
       if (!Array.isArray(items)) continue;
       items.forEach((item, i) => {
         if (item._blockId) {
-          window.blockStore.updateBlock(item._blockId, {
-            text: item.text, priority: item.priority, done: !!item.done,
+          const metadata = {
+            text: item.text, priority: item.priority,
             _sourceTaskId: taskId,
             ...(item._scheduled ? { scheduled: item._scheduled, scheduledAt: item._scheduledAt } : {}),
             ...(item._notionQueued ? { _notionQueued: true, _notionQueuedAt: item._notionQueuedAt } : {})
-          }, { completionIntent: item.done ? "complete" : "reopen" });
+          };
+          window.blockStore.updateBlock(item._blockId, metadata).then(() =>
+            window.blockStore.setTaskCompletion(item._blockId,!!item.done,{
+              taskDate:window.blockStore.getCurrentDate(),completedAt:item.done?(item.doneAt||new Date().toISOString()):null
+            })
+          ).catch(e=>console.warn("[actions] completion failed:",e));
         } else {
           window.blockStore.createBlock("block", {
             text: item.text, priority: item.priority || "Medium", done: !!item.done,

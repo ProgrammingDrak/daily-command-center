@@ -35,6 +35,15 @@ const {
   DUE_THRESHOLD, writableProps,
 } = require("../responsibility-store");
 
+const completionMetrics = {
+  accepted: 0,
+  duplicate: 0,
+  replayed: 0,
+  conflicted: 0,
+  rejected: 0,
+  legacyFallback: 0,
+};
+
 module.exports = function mount(app, ctx) {
   const { blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool } = ctx;
 
@@ -108,6 +117,22 @@ module.exports = function mount(app, ctx) {
     return key ? String(key) : null;
   }
   function safeParseProps(raw) { try { return JSON.parse(raw) || {}; } catch { return {}; } }
+
+  function completionRetryable(status) {
+    return status === 401 || status === 403 || status >= 500;
+  }
+
+  function logCompletion(req, fields) {
+    const record = {
+      event: "task_completion",
+      at: new Date().toISOString(),
+      workspaceId: req.workspaceId || null,
+      userId: req.session && req.session.userId || null,
+      ...fields,
+      metrics: { ...completionMetrics },
+    };
+    console.log("[task-completion] " + JSON.stringify(record));
+  }
 
   // ★ LIVE MATCHES ONLY, and this is the one place in the codebase where that is the
   // right reading of a key. Everywhere else — routes/dcc.js's three writers, the
@@ -225,6 +250,65 @@ module.exports = function mount(app, ctx) {
     return results.length === 1 ? results[0] : results;
   }));
 
+  // Completion is a state transition, not a full-document block edit. This route is
+  // the single durable boundary used by every browser completion surface.
+  app.post("/api/tasks/:taskRef/completion", async (req, res) => {
+    const requestId = crypto.randomUUID();
+    const startedAt = Date.now();
+    res.setHeader("X-Request-Id", requestId);
+    const body = req.body || {};
+    try {
+      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const result = await blockDB.setTaskCompletion({
+        taskRef: req.params.taskRef,
+        completed: body.completed,
+        completedAt: body.completedAt || null,
+        taskDate: body.taskDate || null,
+        mutationId: body.mutationId,
+        expectedRevision: body.expectedRevision ?? null,
+        userId,
+        workspaceId,
+      });
+      if (result.duplicate) completionMetrics.duplicate++;
+      else if (body._replay) completionMetrics.replayed++;
+      else completionMetrics.accepted++;
+      if (result.persistenceTarget === "legacy_overlay") completionMetrics.legacyFallback++;
+      const blockIds = result.broadcastIds || (result.task && result.task.id ? [result.task.id] : []);
+      if (blockIds.length) {
+        broadcast("blocks-changed", {
+          action: "completion", blockIds, clientId: body._clientId,
+          mutationId: body.mutationId,
+        }, workspaceId);
+      }
+      logCompletion(req, {
+        requestId, mutationId: body.mutationId || null, taskRef: req.params.taskRef,
+        resolvedTaskId: result.task && result.task.id || null, taskDate: body.taskDate || null,
+        persistenceTarget: result.persistenceTarget, result: result.duplicate ? "duplicate" : "accepted",
+        affectedCount: (result.affectedTasks || []).length, durationMs: Date.now() - startedAt,
+      });
+      res.json({
+        ok: true, mutationId: body.mutationId, persistenceTarget: result.persistenceTarget,
+        task: result.task, affectedTasks: result.affectedTasks || [], revision: result.revision,
+        duplicate: !!result.duplicate, requestId,
+      });
+    } catch (error) {
+      const status = error.statusCode || error.status || 500;
+      if (status === 409) completionMetrics.conflicted++; else completionMetrics.rejected++;
+      logCompletion(req, {
+        requestId, mutationId: body.mutationId || null, taskRef: req.params.taskRef,
+        taskDate: body.taskDate || null, result: status === 409 ? "conflicted" : "rejected",
+        code: error.publicCode || "COMPLETION_FAILED", status, durationMs: Date.now() - startedAt,
+      });
+      res.status(status).json({
+        error: error.message,
+        code: error.publicCode || "COMPLETION_FAILED",
+        retryable: completionRetryable(status),
+        requestId,
+        ...(error.currentTask ? { currentTask: error.currentTask } : {}),
+      });
+    }
+  });
+
   // The mutation routes below fetch TOMBSTONE-INCLUDED on purpose, and say so by
   // calling getBlockIncludingDeleted rather than getBlock. The two db functions behave
   // identically today (getBlock never filtered deleted_at), so this is a statement of
@@ -236,17 +320,36 @@ module.exports = function mount(app, ctx) {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
-    // Browser completion writes are optimistic full-document replacements. Their
-    // revision precondition is mandatory so an offline entry created before a newer
-    // complete/reopen cannot cross the durable boundary later. Trusted server-side
-    // integrations call db.updateBlock directly and do not pass through this route.
-    if (req.body && req.body.completionIntent
-        && !Object.prototype.hasOwnProperty.call(req.body, "completionBaseRevision")) {
-      res.status(400).json({
-        error: "completionBaseRevision is required for completion transitions",
-        code: "COMPLETION_BASE_REQUIRED",
+    // Compatibility window for already-open clients and their old WAL entries.
+    // Ignore the stale full properties snapshot and delegate only the completion
+    // intent to the same narrow transaction as the dedicated endpoint.
+    if (req.body && req.body.completionIntent) {
+      if (!Object.prototype.hasOwnProperty.call(req.body, "completionBaseRevision")) {
+        res.status(400).json({
+          error: "completionBaseRevision is required for completion transitions",
+          code: "COMPLETION_BASE_REQUIRED",
+        });
+        return;
+      }
+      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const props = typeof req.body.properties === "string"
+        ? safeParseProps(req.body.properties) : (req.body.properties || {});
+      const mutationId = req.body.completionMutationId || crypto.randomUUID();
+      const result = await blockDB.setTaskCompletion({
+        taskRef: req.params.id,
+        completed: req.body.completionIntent === "complete",
+        completedAt: props.completedAt || props.doneAt || null,
+        taskDate: req.body.date || existing.date || null,
+        mutationId,
+        expectedRevision: req.body.completionBaseRevision,
+        userId,
+        workspaceId,
       });
-      return;
+      const blockIds = result.broadcastIds || [req.params.id];
+      broadcast("blocks-changed", {
+        action: "completion", blockIds, clientId: req.body._clientId, mutationId,
+      }, workspaceId);
+      return result.task;
     }
     const result = await blockDB.updateBlock(req.params.id, req.body);
     broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);

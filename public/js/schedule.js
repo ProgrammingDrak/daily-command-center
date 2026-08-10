@@ -376,7 +376,7 @@ function _finishCompletionCelebration(ctx, id){
 // {title:"Task completed", type:"task"} — wrong title in the log, and default
 // duration scoring instead of the task's own pie/rollup award. Whoever moves the
 // row is the only one who can still see it, so they hand it over.
-async function commitDoneOnDate(id,dateStr,opts){
+async function _legacyCommitDoneOnDate(id,dateStr,opts){
   if(!id||!dateStr)return;
   opts=opts||{};
   const nowIso=new Date().toISOString();
@@ -527,6 +527,49 @@ async function commitDoneOnDate(id,dateStr,opts){
   _autoCompleteShellAncestors(id,dateStr);
 }
 
+// Durable replacement for the historical cross-day writer above. The old body is
+// retained temporarily as executable documentation for the many date and scoring
+// rules this path accumulated, but no runtime caller reaches it.
+async function commitDoneOnDate(id,dateStr,opts){
+  if(!id||!dateStr)return false;
+  opts=opts||{};
+  const currentDate=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
+  const ev=((typeof scheduled!=="undefined"&&scheduled.find(e=>e.id===id))||opts.ev||null);
+  const completedAt=new Date();
+  const completedIso=completedAt.toISOString();
+  const award=opts.awardPoints!==undefined?opts.awardPoints:_pointAwardOverride(id);
+  const celebration=currentDate===dateStr?_beginCompletionCelebration(id):null;
+  if(currentDate===dateStr){
+    manualDone.add(id);doneAt[id]=completedAt;log("checked",id);render();
+  }
+  try{
+    const result=await _persistDone(id,true,{ev:ev,dateStr:dateStr,completedAt:completedIso});
+    if(result&&result.pending){
+      if(typeof showToast==="function")showToast("Completion queued and will retry","info",3200);
+      return result;
+    }
+    _refreshResponsibilityAfterDone(ev,Promise.resolve(result));
+    if(currentDate===dateStr&&opts.cascade!==false)_onParentCompleted(id);
+    log("checked-on",id,"Marked done on "+dateStr);
+    render();
+    if(celebration)_finishCompletionCelebration(celebration,id);
+    awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{
+      sourceDate:dateStr,completedAt:completedIso,awardPoints:award,
+      sourceKey:"completion:"+((result&&result.mutationId)||id)
+    });
+    _autoCompleteShellAncestors(id,dateStr);
+    if(currentDate!==dateStr&&typeof showToast==="function"){
+      const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(dateStr):dateStr;
+      showToast("Marked done on "+label,"success");
+    }
+    return result;
+  }catch(error){
+    if(currentDate===dateStr){manualDone.delete(id);delete doneAt[id];render();}
+    if(typeof showToast==="function")showToast(error.message||"Completion was not saved","error",4200);
+    return false;
+  }
+}
+
 // Completion bonus for a rollup container (shell): bonusPct × the estimated
 // value of its whole subtree. Each descendant that isn't a pie subtask
 // contributes its own estimate (PointPlan.estimatePool — the points-chip
@@ -564,10 +607,16 @@ function _autoCompleteShellAncestors(id,sourceDate){
       const completedAt=new Date();
       manualDone.add(parent.id);doneAt[parent.id]=completedAt;
       log("checked",parent.id,"Auto-completed: all nested tasks done");
-      _persistDone(parent.id,true,{ev:parent,dateStr:sourceDate,completedAt:completedAt});
+      const write=_persistDone(parent.id,true,{ev:parent,dateStr:sourceDate,completedAt:completedAt});
       render();
-      awardSlotTaskCredit(parent,{sourceDate:sourceDate,completedAt:completedAt.toISOString(),awardPoints:bonus});
-      if(typeof showToast==="function")showToast('"'+(parent.title||"Shell")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
+      Promise.resolve(write).then(result=>{
+        if(result&&result.pending)return;
+        awardSlotTaskCredit(parent,{sourceDate:sourceDate,completedAt:completedAt.toISOString(),awardPoints:bonus,sourceKey:"completion:"+((result&&result.mutationId)||parent.id)});
+        if(typeof showToast==="function")showToast('"'+(parent.title||"Shell")+'" complete!'+(bonus?" +"+bonus+" pt bonus":""),"success",3200);
+      }).catch(error=>{
+        manualDone.delete(parent.id);delete doneAt[parent.id];render();
+        if(typeof showToast==="function")showToast(error.message||"Shell completion was not saved","error",4200);
+      });
     } else if(!isDone(parent)){
       return; // an open non-rollup ancestor blocks everything above it
     }
@@ -655,19 +704,14 @@ function awardSlotTaskCredit(ev,opts){
 //   - unfinished ride-alongs (independent concurrent work) promote out to standalone tasks.
 function _onParentCompleted(id){
   if(typeof scheduled==="undefined")return;
-  // 1) Complete subtask descendants recursively (steps of a finished task).
-  // C5b: each cascaded child persists its OWN row status. It used to ride on the caller's
-  // single `saveDoneState()`, which wrote the whole `manualDone` set into one overlay key —
-  // so the cascade was free. Per-row completion has no such shared write, and a child left
-  // unpersisted comes back unfinished on the next load and lands back on today via
-  // collectUnfinished. Points are deliberately NOT awarded per child, matching what the
-  // parent's own `_pointAwardOverride` pie already covers.
+  // 1) Reflect the server's atomic subtask cascade in memory. Persistence belongs to
+  // POST /api/tasks/:taskRef/completion, so the browser must not issue one write per
+  // child and leave a half-completed tree when any request fails.
   (function completeSubs(pid){
     DCC.TaskModel.subtasksOf(pid,scheduled).forEach(c=>{
       if(!manualDone.has(c.id)){
         const at=new Date();
         manualDone.add(c.id);doneAt[c.id]=at;
-        _persistDone(c.id,true,{ev:c,completedAt:at});
       }
       completeSubs(c.id);
     });
@@ -799,97 +843,32 @@ function _patchOverlayDone(id,done,completedAt,rootId){
 // straight back to done — the C0 wart, inverted.
 function _persistDone(id,done,opts){
   opts=opts||{};
-  if(!id)return;
+  if(!id)return Promise.reject(new Error("Completion target unavailable"));
   const dateStr=opts.dateStr||((typeof _viewedDateStr==="function")?_viewedDateStr():null);
   const ev=opts.ev||((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null);
   if(done&&typeof _applyMeasuredCompletionToEv==="function")_applyMeasuredCompletionToEv(ev,opts.completedAt||new Date().toISOString());
   const block=(typeof _findTaskBlockForDate==="function")?_findTaskBlockForDate(id,dateStr,ev):null;
-  // The rendered task already carries its authoritative row id. A live refresh can
-  // temporarily leave `scheduled` populated while BlockStore is between cache
-  // snapshots; in that window `_findTaskBlockForDate` misses, completion falls through
-  // to an unavailable day-root overlay, and points are awarded without any task write.
-  // The shared row queue can fetch a cache miss by id, so keep the explicit identity
-  // instead of turning a transient cache gap into a dropped completion.
-  const blockId=(block&&block.id)||(ev&&ev._blockId)||null;
-  let write=null;
-  if(blockId&&typeof enqueueRowPropsWrite==="function"){
-    // ★ A COMPLETION BELONGS TO A DAY, so completing a DATELESS row has to stamp one.
-    //
-    // `_findTaskBlockForDate` falls back to an undated row when nothing matches `dateStr`
-    // (state.js), and a dateless row is exactly what the Unscheduled section and the Backlog
-    // are made of. Marking one done without a date makes the task VANISH from every surface
-    // on the next load, because both readers reject that shape: `isFoldableTask` has
-    // `if((p.status==="done"||p.done===true)&&!b.date)return false` and
-    // `TaskModel.selectUnscheduled` skips `status==="done"`. Not folded, not in the backlog,
-    // gone — the same "a completion makes the task disappear" failure C0 shipped to fix,
-    // reintroduced from the other direction.
-    //
-    // `kind:"backlog"` is dropped with it, matching `scheduleRowOnDay`: a row that now has a
-    // date is not backlog material any more.
-    let writeRow=block||null;
-    let stampDay=false;
-    // ...and the promotion is REVERSIBLE, because a mis-click must not permanently evict a
-    // task from the Backlog. `_openRowProps` only cleared the completion fields, so
-    // check-then-uncheck left an OPEN, DATED, non-backlog row: it had folded onto whatever day
-    // you were viewing and shown in the drawer, and afterwards it was pinned to one date and
-    // gone from the drawer, with no visible action taken and no way back but an explicit
-    // Move-to-backlog. `_doneStampedDate` records that this date came from a completion, so the
-    // un-check can tell it apart from a date the user actually chose.
-    let unstamp=false;
-    write=enqueueRowPropsWrite(
-      blockId,
-      (p,b)=>{
-        writeRow=b||writeRow;
-        stampDay=!!(done&&b&&!b.date&&dateStr);
-        unstamp=!!(!done&&b&&b.date&&((b.properties||{})._doneStampedDate===b.date));
-        if(!done){
-          const open=_openRowProps(p);
-          if(!open)return null;
-          if(unstamp){
-            delete open._doneStampedDate;
-            if(open._wasBacklog){open.kind="backlog";delete open._wasBacklog;}
-          }
-          return open;
-        }
-        const next=_doneRowProps(p,opts.completedAt);
-        if(stampDay){
-          next._doneStampedDate=dateStr;
-          if(next.kind==="backlog"){delete next.kind;next._wasBacklog=true;}
-        }
-        return next;
-      },
-      ()=>({
-        ...(stampDay?{date:dateStr}:(unstamp?{date:null}:{})),
-        // The API uses this intent to distinguish a real undo from a stale
-        // properties snapshot produced by a background reconciliation.
-        completionIntent:done?"complete":"reopen"
-      })
-    );
-    // The Backlog projection is in-memory and only ever REMOVED by `_syncBacklogProjection`
-    // (`hydrateBacklogFromBlocks` is additive), so without this the drawer and both badge
-    // counters keep the finished task until a date switch — and the acting tab never
-    // re-hydrates, because the PATCH's own SSE echo is self-suppressed. `_writeRowDate` calls
-    // it for exactly this reason and its comment names the shape: an invariant enforced at one
-    // call site and merely assumed at the other. This is the third date-writing caller.
-    if(write&&typeof _syncBacklogProjection==="function"){
-      Promise.resolve(write).then(()=>{
-        if(!stampDay&&!unstamp)return;
-        const TM=window.DCC&&window.DCC.TaskModel;
-        // TaskModel.backlogKey, not `local_id||blockId`: the projection stores a row with no
-        // local_id under a "blk-" prefix, and deriving the key the other way looks up something
-        // the projection never stored.
-        const bkKey=(TM&&typeof TM.backlogKey==="function")?TM.backlogKey(writeRow):id;
-        return _syncBacklogProjection(bkKey,stampDay?dateStr:null);
-      }).catch(()=>{});
-    }
-  }else if(done){
-    console.warn("[done] no row resolves for "+id+" — persisting to the legacy _done overlay");
-    return _patchOverlayDone(id,true,opts.completedAt);
+  const priorDate=block&&block.date;
+  const taskRef=(block&&block.id)||(ev&&ev._blockId)||id;
+  if(!window.blockStore||typeof window.blockStore.setTaskCompletion!=="function"){
+    return Promise.reject(new Error("Completion service unavailable"));
   }
-  if(!done)_patchOverlayDone(id,false);
-  // Returned so a caller that must run AFTER the row lands can chain on it — the
-  // responsibility-cadence refresh below is the one that needs it.
-  return write;
+  return window.blockStore.setTaskCompletion(taskRef,!!done,{
+    block:block||null,
+    taskDate:dateStr||((block&&block.date)||null),
+    completedAt:done?(opts.completedAt||new Date().toISOString()):null,
+    resolveRow:!!((block&&block.id)||(ev&&ev._blockId)),
+    sideEffects:{eventId:id,sourceDate:dateStr||null}
+  }).then(result=>{
+    if(result&&result.pending)return result;
+    const persistedTask=result&&result.task;
+    if(typeof _syncBacklogProjection==="function"&&block&&persistedTask&&priorDate!==persistedTask.date){
+      const TM=window.DCC&&window.DCC.TaskModel;
+      const bkKey=(TM&&typeof TM.backlogKey==="function")?TM.backlogKey(block):id;
+      return Promise.resolve(_syncBacklogProjection(bkKey,persistedTask.date||null)).then(()=>result);
+    }
+    return result;
+  });
 }
 // Kept as the un-check spelling every caller already used. Now one line, because the
 // row write and the overlay clear are the same primitive read in the other direction.
@@ -916,6 +895,25 @@ function _refreshResponsibilityAfterDone(ev,write){
   if(!ev||!ev.responsibilityId||typeof window.loadResponsibilities!=="function")return;
   Promise.resolve(write).then(()=>window.loadResponsibilities()).catch(()=>{});
 }
+if(typeof window!=="undefined"&&typeof window.addEventListener==="function"){
+  window.addEventListener("task-completion-confirmed",event=>{
+    const detail=event&&event.detail;
+    const task=detail&&detail.task;
+    const meta=detail&&detail.clientMeta;
+    if(!detail||!detail.replayed||!task||!task.properties||task.properties.status!=="done")return;
+    const eventId=(meta&&meta.eventId)||(task.properties.local_id)||task.id;
+    const ev=(typeof scheduled!=="undefined"&&scheduled.find(item=>String(item.id)===String(eventId)))||null;
+    if(typeof manualDone!=="undefined")manualDone.add(eventId);
+    if(typeof doneAt!=="undefined")doneAt[eventId]=task.properties.completedAt||new Date().toISOString();
+    if(typeof render==="function")render();
+    awardSlotTaskCredit(ev||{id:eventId,title:task.properties.title||"Task completed",type:"task"},{
+      sourceDate:(meta&&meta.sourceDate)||task.date,
+      completedAt:task.properties.completedAt||new Date().toISOString(),
+      sourceKey:"completion:"+(detail.mutationId||task.properties._completionMutationId||eventId)
+    });
+    _refreshResponsibilityAfterDone(ev,Promise.resolve(detail));
+  });
+}
 function toggleDone(id,opts){
   opts=opts||{};
   if(manualDone.has(id)){
@@ -930,8 +928,16 @@ function toggleDone(id,opts){
     // self-suppressed in the acting tab, nothing else re-reads responsibilities, so the
     // sidebar kept showing the pushed-forward cadence the server had just walked back.
     const _uev=(typeof scheduled!=="undefined")?scheduled.find(e=>e.id===id):null;
-    _refreshResponsibilityAfterDone(_uev,_clearRowDone(id));
-    render();return;
+    const _reopen=_clearRowDone(id,{ev:_uev,dateStr:(typeof _viewedDateStr==="function")?_viewedDateStr():null});
+    render();
+    Promise.resolve(_reopen).then(result=>{
+      if(result&&result.pending){if(typeof showToast==="function")showToast("Reopen queued and will retry","info",3200);return;}
+      _refreshResponsibilityAfterDone(_uev,Promise.resolve(result));
+    }).catch(error=>{
+      manualDone.add(id);doneAt[id]=new Date();render();
+      if(typeof showToast==="function")showToast(error.message||"Reopen was not saved","error",4200);
+    });
+    return;
   }
 
   // A rollup container (shell) can't be checked while children are open — its
@@ -989,22 +995,7 @@ function toggleDone(id,opts){
     if(currentDate&&currentDate>today){
       // Future-day plans are editable pre-plans. If the user is intentionally
       // viewing that day and checks a task off, persist the completion there.
-      const ev=scheduled.find(e=>e.id===id);
-      const completedAt=new Date();
-      const _award=_pointAwardOverride(id); // read pie BEFORE subtasks cascade
-      const _cel=_beginCompletionCelebration(id);
-      manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
-      _refreshResponsibilityAfterDone(ev,_persistDone(id,true,{ev:ev,dateStr:currentDate,completedAt:completedAt}));
-      _onParentCompleted(id);
-      render();
-      _finishCompletionCelebration(_cel,id);
-      awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
-      _autoCompleteShellAncestors(id,currentDate);
-      if(typeof showToast==="function"){
-        const label=(typeof _prettyDateLabel==="function")?_prettyDateLabel(currentDate):currentDate;
-        showToast("Marked done on "+label,"success");
-      }
-      return;
+      return commitDoneOnDate(id,currentDate,{ev:scheduled.find(e=>e.id===id)});
     }
     if(currentDate&&currentDate<today){
       // Past: ask the user whether they did it today or back on the original date.
@@ -1016,19 +1007,8 @@ function toggleDone(id,opts){
     }
   }
 
-  const ev=scheduled.find(e=>e.id===id);
-  const completedAt=new Date();
-  const _award=_pointAwardOverride(id); // read pie BEFORE subtasks cascade
-  const _cel=_beginCompletionCelebration(id);
-  manualDone.add(id);doneAt[id]=completedAt;log("checked",id);
   const _today=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
-  _refreshResponsibilityAfterDone(ev,_persistDone(id,true,{ev:ev,dateStr:_today,completedAt:completedAt}));
-  _onParentCompleted(id);
-  render();
-  _finishCompletionCelebration(_cel,id);
-  const currentDate=_today;
-  awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{sourceDate:currentDate,completedAt:completedAt.toISOString(),awardPoints:_award});
-  _autoCompleteShellAncestors(id,currentDate);
+  return commitDoneOnDate(id,_today,{ev:scheduled.find(e=>e.id===id)});
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;

@@ -97,6 +97,90 @@ function seedWal(storage, entries) {
   storage.set(WAL_KEY, JSON.stringify(entries));
 }
 
+test("setTaskCompletion clears its WAL only after authoritative acknowledgement", async () => {
+  const initial = { id: "b1", type: "block", date: "2026-07-08", properties: { title: "Keep", status: "open", detail: "Keep too" } };
+  const { store, storage, fetchCalls } = makeStore({
+    fetchBodyFn: (url, init) => {
+      if (!String(url).includes("/completion")) return initial;
+      const sent = JSON.parse(init.body);
+      return { ok: true, mutationId: sent.mutationId, persistenceTarget: "task_row", revision: "rev-2", affectedTasks: [],
+        task: { ...initial, properties: { ...initial.properties, status: "done", done: true, completedAt: sent.completedAt, _completionRevision: "rev-2" } } };
+    },
+  });
+  await store.handleBlocksChanged({ blockIds: ["b1"] });
+  fetchCalls.length = 0;
+  const result = await store.setTaskCompletion("b1", true, { taskDate: "2026-07-08", completedAt: "2026-07-08T12:00:00Z" });
+  assert.equal(result.ok, true);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0].url, "/api/tasks/b1/completion");
+  assert.equal(JSON.parse(fetchCalls[0].init.body).completed, true);
+  assert.equal(wal(storage).length, 0);
+  assert.equal(store.get("b1").properties.status, "done");
+  assert.equal(store.get("b1").properties.detail, "Keep too");
+  assert.equal(store.get("b1")._completionState, undefined);
+});
+
+test("a permanent completion rejection rolls back optimistic state and rejects", async () => {
+  const initial = { id: "b1", type: "block", date: "2026-07-08", properties: { title: "T", status: "open" } };
+  const { store, storage, fetchCalls } = makeStore({
+    fetchImpl: async (url) => {
+      if (!String(url).includes("/completion")) return { ok: true, status: 200, json: async () => initial };
+      return { ok: false, status: 400, statusText: "bad", json: async () => ({
+        error: "Invalid completion", code: "COMPLETION_STATE_REQUIRED", retryable: false, requestId: "req-1",
+      }) };
+    },
+  });
+  await store.handleBlocksChanged({ blockIds: ["b1"] });
+  fetchCalls.length = 0;
+  await assert.rejects(store.setTaskCompletion("b1", true, { taskDate: "2026-07-08" }), /Invalid completion/);
+  assert.equal(wal(storage).length, 0);
+  assert.equal(dead(storage).length, 1);
+  assert.equal(store.get("b1").properties.status, "open");
+});
+
+test("a transient completion remains visibly pending and survives reload replay", async () => {
+  const storage = new Map();
+  const initial = { id: "b1", type: "block", date: "2026-07-08", properties: { title: "T", status: "open" } };
+  const first = makeStore({ storage, fetchImpl: async (url) => {
+    if (!String(url).includes("/completion")) return { ok: true, status: 200, json: async () => initial };
+    throw new TypeError("network down");
+  } });
+  await first.store.handleBlocksChanged({ blockIds: ["b1"] });
+  const pending = await first.store.setTaskCompletion("b1", true, { taskDate: "2026-07-08", completedAt: "2026-07-08T12:00:00Z" });
+  assert.equal(pending.pending, true);
+  assert.equal(wal(storage).length, 1);
+  assert.equal(first.store.get("b1").properties.status, "done");
+  assert.equal(first.store.get("b1")._completionState, "pending");
+
+  const second = makeStore({ storage, fetchBodyFn: (url, init) => {
+    if (!String(url).includes("/completion")) return initial;
+    const sent = JSON.parse(init.body);
+    return { ok: true, mutationId: sent.mutationId, persistenceTarget: "task_row", revision: "rev-2", affectedTasks: [],
+      task: { ...initial, properties: { ...initial.properties, status: "done", done: true, completedAt: sent.completedAt, _completionRevision: "rev-2" } } };
+  } });
+  await second.store.replayWAL();
+  assert.equal(wal(storage).length, 0);
+  assert.equal(second.store.get("b1").properties.status, "done");
+  assert.equal(second.store.get("b1")._completionState, undefined);
+});
+
+test("startup migrates a pending full-properties completion into a narrow intent", () => {
+  const storage = new Map();
+  seedWal(storage, [{
+    op: "update", id: "b1", _walId: "old-1", timestamp: minsAgo(1),
+    data: { properties: { title: "Stale", status: "done", done: true, completedAt: "2026-07-08T12:00:00Z" },
+      completionIntent: "complete", completionMutationId: "legacy-1", completionBaseRevision: "rev-1", date: "2026-07-08" },
+  }]);
+  makeStore({ storage });
+  const entry = wal(storage)[0];
+  assert.equal(entry.op, "completion");
+  assert.deepEqual({ ...entry.data }, {
+    completed: true, completedAt: "2026-07-08T12:00:00Z", taskDate: "2026-07-08",
+    mutationId: "legacy-1", expectedRevision: "rev-1",
+  });
+  assert.equal("properties" in entry.data, false);
+});
+
 test("replayWAL dead-letters a reschedule entry older than 15 minutes without replaying it", async () => {
   const { store, storage, fetchCalls } = makeStore();
   seedWal(storage, [{ op: "reschedule", id: "b1", data: { targetDate: "2026-07-10" }, _walId: "w1", timestamp: minsAgo(16) }]);

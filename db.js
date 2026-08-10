@@ -443,6 +443,291 @@ function applyCompletionIntent(existingProps, proposedProps, completionIntent, n
   return preserveCompletionProps(proposedProps, existingProps);
 }
 
+function taskCompletionError(message, statusCode, publicCode, currentTask) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.publicCode = publicCode;
+  if (currentTask) error.currentTask = currentTask;
+  return error;
+}
+
+function validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision }) {
+  if (!taskRef || typeof taskRef !== "string" || taskRef.length > 256) {
+    throw taskCompletionError("A valid task reference is required", 400, "COMPLETION_TASK_REQUIRED");
+  }
+  if (typeof completed !== "boolean") {
+    throw taskCompletionError("completed must be a boolean", 400, "COMPLETION_STATE_REQUIRED");
+  }
+  if (!mutationId || typeof mutationId !== "string" || !/^[A-Za-z0-9:_-]{1,128}$/.test(mutationId)) {
+    throw taskCompletionError("A valid completion mutation id is required", 400, "COMPLETION_MUTATION_REQUIRED");
+  }
+  if (taskDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(taskDate))) {
+    throw taskCompletionError("taskDate must be YYYY-MM-DD", 400, "COMPLETION_DATE_INVALID");
+  }
+  if (completedAt != null && !Number.isFinite(Date.parse(completedAt))) {
+    throw taskCompletionError("completedAt must be an ISO timestamp", 400, "COMPLETION_TIME_INVALID");
+  }
+  if (expectedRevision != null
+      && (typeof expectedRevision !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(expectedRevision))) {
+    throw taskCompletionError("Invalid completion revision", 400, "COMPLETION_REVISION_INVALID");
+  }
+}
+
+function completionWalkableRow(block) {
+  if (!block || block.type !== "block" || block.deleted_at) return false;
+  const props = block.properties || {};
+  return !!props.local_id || props.kind === "task";
+}
+
+function collectCompletionSubtreeIds(rows, parent) {
+  const parentLocalId = parent && parent.properties && parent.properties.local_id;
+  const localIds = new Set(parentLocalId ? [String(parentLocalId)] : []);
+  const rowIds = new Set(parent && parent.id ? [String(parent.id)] : []);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const row of rows) {
+      if (!row || rowIds.has(String(row.id))) continue;
+      const props = row.properties || {};
+      // Ride-alongs use wrapId and remain independent work. The UI promotes them
+      // out of a completed parent instead of completing them.
+      if (props.wrapId && !props.subtaskOf) continue;
+      const joined = (props.subtaskOf && localIds.has(String(props.subtaskOf)))
+        || (row.parent_id && rowIds.has(String(row.parent_id)));
+      if (!joined) continue;
+      rowIds.add(String(row.id));
+      if (props.local_id) localIds.add(String(props.local_id));
+      changed = true;
+    }
+  }
+  return rowIds;
+}
+
+// The durable completion boundary. Completion owns a small set of task fields and
+// never replaces a caller's full properties snapshot. The target and its task
+// descendants are locked and written in one transaction, so a completed parent
+// cannot commit while one of its steps remains open.
+async function setTaskCompletion({
+  taskRef, completed, completedAt = null, taskDate = null, mutationId,
+  expectedRevision = null, userId = null, workspaceId = null,
+}) {
+  validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
+  const q = await pool.connect();
+  const at = completed ? (completedAt || new Date().toISOString()) : null;
+  const now = new Date().toISOString();
+  let beforeRows = [];
+  let affected = [];
+  let overlayBroadcastId = null;
+  let target = null;
+  try {
+    await q.query("BEGIN");
+
+    let { rows: directRows } = await q.query(
+      `SELECT * FROM blocks
+        WHERE id = $1 AND deleted_at IS NULL
+          AND workspace_id IS NOT DISTINCT FROM $2
+        FOR UPDATE`,
+      [taskRef, workspaceId]
+    );
+    target = directRows[0] ? parseBlock(directRows[0]) : null;
+
+    if (!target) {
+      const params = [taskRef, workspaceId];
+      let dateClause = "";
+      if (taskDate) { params.push(taskDate); dateClause = " AND date = $3"; }
+      const { rows } = await q.query(
+        `SELECT * FROM blocks
+          WHERE properties->>'local_id' = $1 AND deleted_at IS NULL
+            AND workspace_id IS NOT DISTINCT FROM $2${dateClause}
+          ORDER BY updated_at DESC, id ASC
+          FOR UPDATE`,
+        params
+      );
+      if (rows.length > 1) {
+        throw taskCompletionError("Task reference is ambiguous", 409, "COMPLETION_TARGET_AMBIGUOUS");
+      }
+      target = rows[0] ? parseBlock(rows[0]) : null;
+    }
+
+    if (!target) {
+      if (!taskDate) throw taskCompletionError("Task not found", 404, "COMPLETION_TARGET_NOT_FOUND");
+      const rootId = await ensureDayRoot(taskDate, userId, workspaceId, q);
+      const { rows } = await q.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [rootId]);
+      const root = rows[0] ? parseBlock(rows[0]) : null;
+      if (!root) throw taskCompletionError("Day container not found", 404, "COMPLETION_LEGACY_ROOT_NOT_FOUND");
+      const rootProps = { ...(root.properties || {}) };
+      const done = { ...((rootProps._done && typeof rootProps._done === "object") ? rootProps._done : {}) };
+      const ids = Array.isArray(done.ids) ? done.ids.map(String) : [];
+      const timestamps = { ...((done.at && typeof done.at === "object") ? done.at : {}) };
+      const revisions = { ...((done.revisions && typeof done.revisions === "object") ? done.revisions : {}) };
+      const mutations = { ...((done.mutations && typeof done.mutations === "object") ? done.mutations : {}) };
+      const key = String(taskRef);
+      const alreadyApplied = mutations[key] === mutationId
+        && (completed ? ids.includes(key) : !ids.includes(key));
+      const currentRevision = revisions[key] || null;
+      if (!alreadyApplied && (expectedRevision || null) !== currentRevision) {
+        throw taskCompletionError("Task completion changed since this edit was created", 409,
+          "COMPLETION_CONFLICT", { id: key, date: taskDate, properties: { status: ids.includes(key) ? "done" : "open", _completionRevision: currentRevision } });
+      }
+      if (!alreadyApplied) {
+        const nextIds = ids.filter(id => id !== key);
+        if (completed) nextIds.push(key);
+        if (completed) timestamps[key] = at; else delete timestamps[key];
+        revisions[key] = crypto.randomUUID();
+        mutations[key] = mutationId;
+        rootProps._done = { ...done, ids: nextIds, at: timestamps, revisions, mutations };
+        await q.query(
+          "UPDATE blocks SET properties = $1, updated_at = $2 WHERE id = $3",
+          [rootProps, now, root.id]
+        );
+        await q.query(
+          `INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp)
+           VALUES ($1, 'completion', $2, $3, $4)`,
+          [root.id, root.properties, rootProps, now]
+        );
+      }
+      await q.query("COMMIT");
+      const revision = alreadyApplied ? currentRevision : revisions[key];
+      return {
+        task: { id: key, type: "legacy_task", date: taskDate, properties: {
+          status: completed ? "done" : "open", ...(completed ? { done: true, completedAt: at } : {}),
+          _completionRevision: revision, _completionMutationId: mutationId,
+        } },
+        affectedTasks: [], revision, persistenceTarget: "legacy_overlay",
+        duplicate: alreadyApplied, broadcastIds: [root.id],
+      };
+    }
+
+    if (target.type === "day_root" || !isTaskRow(target)) {
+      throw taskCompletionError("The referenced block is not a task", 400, "COMPLETION_TARGET_INVALID");
+    }
+
+    const currentProps = target.properties || {};
+    const currentRevision = currentProps._completionRevision || null;
+    const sameMutation = currentProps._completionMutationId === mutationId
+      && isCompletedTaskProps(currentProps) === completed;
+    if (!sameMutation && (expectedRevision || null) !== currentRevision) {
+      throw taskCompletionError("Task completion changed since this edit was created", 409,
+        "COMPLETION_CONFLICT", target);
+    }
+    if (sameMutation) {
+      await q.query("COMMIT");
+      return {
+        task: target, affectedTasks: [target], revision: currentRevision,
+        persistenceTarget: "task_row", duplicate: true, broadcastIds: [target.id],
+      };
+    }
+
+    let rowsToWrite = [target];
+    if (completed) {
+      const { rows } = await q.query(
+        `SELECT * FROM blocks
+          WHERE deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $1
+            AND date IS NOT DISTINCT FROM $2::date
+          FOR UPDATE`,
+        [workspaceId, target.date || null]
+      );
+      const poolRows = rows.map(parseBlock).filter(completionWalkableRow);
+      const ids = collectCompletionSubtreeIds(poolRows, target);
+      rowsToWrite = [target, ...poolRows.filter(row => row.id !== target.id && ids.has(row.id))];
+    }
+
+    beforeRows = rowsToWrite.map(row => ({ ...row, properties: { ...(row.properties || {}) } }));
+    for (const row of rowsToWrite) {
+      const before = row.properties || {};
+      let props = completed
+        ? completedProps(before, before, at, mutationId)
+        : reopenedProps(before, before, mutationId);
+      // Idempotency belongs to the request, including a same-state request. The
+      // generic completion helpers intentionally preserve the prior mutation on a
+      // no-op transition, so the dedicated endpoint stamps its own identity here.
+      props._completionMutationId = mutationId;
+      if (completed && userId != null) props.completedBy = String(userId);
+      let date = row.date || null;
+      if (completed && !date && taskDate) {
+        date = taskDate;
+        props._doneStampedDate = taskDate;
+        if (props.kind === "backlog") { delete props.kind; props._wasBacklog = true; }
+      } else if (!completed && date && props._doneStampedDate === date) {
+        date = null;
+        delete props._doneStampedDate;
+        if (props._wasBacklog) { props.kind = "backlog"; delete props._wasBacklog; }
+      }
+      const { rows: written } = await q.query(
+        `UPDATE blocks SET properties = $1, date = $2, updated_at = $3
+          WHERE id = $4 RETURNING *`,
+        [props, date, now, row.id]
+      );
+      const parsed = parseBlock(written[0] || { ...row, properties: props, date, updated_at: now });
+      affected.push(parsed);
+      await q.query(
+        `INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp)
+         VALUES ($1, 'completion', $2, $3, $4)`,
+        [row.id, before, props, now]
+      );
+    }
+
+    // Reopening also clears any legacy overlay that can still make the read path
+    // project this canonical row as done after refresh. This stays inside the same
+    // transaction as the row transition, so the two sources cannot disagree.
+    if (!completed && (target.date || taskDate)) {
+      const overlayDate = target.date || taskDate;
+      const { rows: roots } = await q.query(
+        `SELECT * FROM blocks WHERE type = 'day_root' AND date = $1
+          AND deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $2
+          FOR UPDATE`,
+        [overlayDate, workspaceId]
+      );
+      if (roots[0]) {
+        const root = parseBlock(roots[0]);
+        const rootProps = { ...(root.properties || {}) };
+        const done = { ...((rootProps._done && typeof rootProps._done === "object") ? rootProps._done : {}) };
+        const keys = new Set([taskRef, target.id, (target.properties || {}).local_id].filter(Boolean).map(String));
+        const ids = Array.isArray(done.ids) ? done.ids.map(String) : [];
+        const timestamps = { ...((done.at && typeof done.at === "object") ? done.at : {}) };
+        const nextIds = ids.filter(id => !keys.has(id));
+        let changed = nextIds.length !== ids.length;
+        for (const key of keys) {
+          if (Object.prototype.hasOwnProperty.call(timestamps, key)) { delete timestamps[key]; changed = true; }
+        }
+        if (changed) {
+          rootProps._done = { ...done, ids: nextIds, at: timestamps };
+          await q.query("UPDATE blocks SET properties = $1, updated_at = $2 WHERE id = $3", [rootProps, now, root.id]);
+          await q.query(
+            `INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp)
+             VALUES ($1, 'completion-overlay-clear', $2, $3, $4)`,
+            [root.id, root.properties, rootProps, now]
+          );
+          overlayBroadcastId = root.id;
+        }
+      }
+    }
+    await q.query("COMMIT");
+  } catch (error) {
+    try { await q.query("ROLLBACK"); } catch { /* preserve completion error */ }
+    throw error;
+  } finally {
+    q.release();
+  }
+
+  // Cadence propagation is deliberately outside the task transaction and remains
+  // non-fatal, matching updateBlock's existing completion contract.
+  for (let i = 0; i < affected.length; i++) {
+    const row = affected[i];
+    const before = beforeRows.find(item => item.id === row.id);
+    await propagateResponsibilityDone({
+      id: row.id, before: before && before.properties, after: row.properties, at: now,
+      date: row.date, workspaceId, completionRevision: row.properties && row.properties._completionRevision,
+    });
+  }
+  const task = affected.find(row => row.id === target.id) || affected[0];
+  return {
+    task, affectedTasks: affected, revision: task && task.properties && task.properties._completionRevision,
+    persistenceTarget: "task_row", duplicate: false,
+    broadcastIds: [...affected.map(row => row.id), ...(overlayBroadcastId ? [overlayBroadcastId] : [])],
+  };
+}
+
 async function updateBlock(id, fields, client) {
   const {
     properties, sort_order, parent_id, date, completionIntent,
@@ -526,7 +811,7 @@ async function updateBlock(id, fields, client) {
     if (ownsTransaction) await q.query("COMMIT");
   } catch (error) {
     if (ownsTransaction) {
-      try { await q.query("ROLLBACK"); } catch (_) { /* preserve the write error */ }
+      try { await q.query("ROLLBACK"); } catch { /* preserve the write error */ }
     }
     throw error;
   } finally {
@@ -636,7 +921,7 @@ async function propagateResponsibilityDone({ id, before, after, at, date, client
     if (ownsTransaction) await q.query("COMMIT");
   } catch (e) {
     if (ownsTransaction && q) {
-      try { await q.query("ROLLBACK"); } catch (_) { /* preserve non-fatal behavior */ }
+      try { await q.query("ROLLBACK"); } catch { /* preserve non-fatal behavior */ }
     }
     console.warn("[db:propagateResponsibilityDone] non-fatal", e && e.message);
   } finally {
@@ -1603,7 +1888,7 @@ module.exports = {
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
   undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
-  isCompletedTaskProps, applyCompletionIntent, propagateResponsibilityDone,
+  isCompletedTaskProps, applyCompletionIntent, setTaskCompletion, propagateResponsibilityDone,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
