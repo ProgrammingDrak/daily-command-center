@@ -141,6 +141,7 @@ function buildTaskRadialItems(ev,trig){
     {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
     {icon:"🍅", label:"Pomodoro",  onPick:()=>{if(typeof openPomodoro==="function")openPomodoro(ev.title,dur(ev),{id:ev.id,source:"schedule",title:ev.title});}},
   ];
+  if(ev.repeatMode==="scheduled")items.push({icon:"↻", label:"Repeat options…", onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
   // Meetings are auto-locked (calendar time holds during reflow); a manual lock
   // toggle is meaningless for them (toggleLock no-ops on meetings), so omit it.
   if(!isMeeting(ev))items.push({icon:ev._locked?"🔓":"🔒", label:ev._locked?"Unlock":"Lock", onPick:()=>{if(typeof toggleLock==="function")toggleLock(ev.id);}});

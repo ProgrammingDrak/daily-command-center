@@ -15,7 +15,7 @@ const {
   cadenceDays, responsibilityScore, preferredCompletionDue,
   firstFreeSlot, minutesToHHMM, hhmmToMinutes,
   buildResponsibilityTaskProps, parseOffersAmpAlert, normalizeResponsibility,
-  normalizeTemplateTree,
+  normalizeTemplateTree, writableProps,
 } = require("./responsibility-store");
 
 // ── Pure: cadence ──
@@ -173,6 +173,38 @@ test("normalizeResponsibility stamps importanceScore into properties", () => {
   const out = normalizeResponsibility({ id: "r", properties: { cadence: "daily", lastCompletedAt: "2026-01-01T00:00:00" } });
   assert.equal(typeof out.properties.importanceScore, "number");
   assert.equal(out.properties.importanceScore, 100);
+});
+
+test("scheduled read fields are derived and stripped before writes", () => {
+  const normalized = normalizeResponsibility({ id: "r", properties: {
+    kind: "responsibility_item", repeatType: "scheduled", title: "Hydrate",
+    scheduleRule: {
+      version: 1, patternType: "calendar", timeZone: "America/New_York",
+      startDate: "2026-07-11", frequency: "daily", interval: 1,
+      times: ["09:00"], end: { type: "never" },
+    },
+  } }, new Date("2026-07-11T12:00:00.000Z"), "America/New_York");
+  assert.match(normalized.properties.recurrenceSummary, /^Every day/);
+  assert.equal(normalized.properties.nextOccurrences.length, 5);
+  const clean = writableProps(normalized.properties);
+  assert.equal(clean.recurrenceSummary, undefined);
+  assert.equal(clean.nextOccurrences, undefined);
+  assert.equal(clean.recurrenceError, undefined);
+  assert.equal(clean.importanceScore, undefined);
+});
+
+test("scheduled importance rises to 100 as the next occurrence comes due", () => {
+  const props = {
+    kind: "responsibility_item", repeatType: "scheduled", title: "Hydrate",
+    scheduleRule: {
+      version: 1, patternType: "dates", timeZone: "America/New_York",
+      dateTimes: ["2026-07-11T09:00", "2026-07-17T09:00"], end: { type: "never" },
+    },
+  };
+  const dueSoon = normalizeResponsibility({ id: "r", properties: props }, new Date("2026-07-11T12:59:00.000Z"), "America/New_York");
+  const farAway = normalizeResponsibility({ id: "r", properties: props }, new Date("2026-07-11T13:01:00.000Z"), "America/New_York");
+  assert.equal(dueSoon.properties.importanceScore, 100);
+  assert.ok(farAway.properties.importanceScore < dueSoon.properties.importanceScore);
 });
 
 // ── Factory: fake blockDB ──

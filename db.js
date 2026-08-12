@@ -131,7 +131,8 @@ function parseBlock(row) {
 // dcc_is_task_row (pg-schema.js POST_SCHEMA_STATEMENTS) — the exclusion list is
 // stated in both places and MUST stay in sync, so change them together.
 // Exclusions: containers (day_root), time-tracking segments (time_entry), standing
-// lists (delegated_item), responsibility scaffolding (responsibility*), group
+// lists (delegated_item), responsibility scaffolding (responsibility* except the
+// dated responsibility_task instance), group
 // templates (task_group), move tombstones (reschedule_tombstone), and Slack
 // reaction-order tombstones (slack_reaction_tombstone).
 // Shells and meetings ARE task rows.
@@ -150,7 +151,7 @@ function isTaskRow(block) {
   if (type === "day_root" || type === "time_entry") return false;
   const kind = ((block.properties || {}).kind) || "";
   if (NON_TASK_KINDS.has(kind)) return false;
-  if (kind.startsWith("responsibility")) return false;
+  if (kind.startsWith("responsibility") && kind !== "responsibility_task") return false;
   return true;
 }
 
@@ -904,6 +905,12 @@ async function propagateResponsibilityDone({ id, before, after, at, date, client
       if (ownsTransaction) await q.query("COMMIT");
       return;
     }
+    // Calendar-driven repeats create independent occurrences. Completing one
+    // must not pause the series or reset its schedule.
+    if (defProps.repeatType === "scheduled") {
+      if (ownsTransaction) await q.query("COMMIT");
+      return;
+    }
 
     const next = nowDone
       ? recurrence.applyCompletion(defProps, { completedAt: afterProps.completedAt || at, taskId: id })
@@ -1039,6 +1046,63 @@ async function findByIdempotencyKey(workspaceId, key) {
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
+// Batch twin of findByIdempotencyKey for recurrence materialization. A day can
+// contain many generated occurrences, and one lookup per key would turn the
+// hottest itinerary read into an N+1 query loop. Tombstones remain visible so a
+// skipped occurrence is never recreated.
+async function getBlocksByIdempotencyKeys(workspaceId, keys, client) {
+  const wanted = [...new Set((Array.isArray(keys) ? keys : []).map(String).filter(Boolean))];
+  if (!wanted.length) return [];
+  const { rows } = await (client || pool).query(
+    `SELECT DISTINCT ON (properties->>'idempotency_key') *
+       FROM blocks
+      WHERE properties->>'idempotency_key' = ANY($1::text[])
+        AND workspace_id IS NOT DISTINCT FROM $2
+      ORDER BY properties->>'idempotency_key', (deleted_at IS NULL) DESC,
+        ((properties->>'recurrenceSupersededBy') IS NULL) DESC, created_at ASC`,
+    [wanted, workspaceId || null]
+  );
+  return rows.map(parseBlock);
+}
+
+// All materialized rows belonging to a scheduled repeat series. Every root and
+// shell child carries repeatSeriesId, which makes series reconciliation one
+// tenant-scoped query instead of a date-by-date scan.
+async function getRepeatSeriesBlocks(seriesId, workspaceId, opts = {}, client) {
+  const params = [String(seriesId), workspaceId || null];
+  const where = [
+    "properties->>'repeatSeriesId' = $1",
+    "workspace_id IS NOT DISTINCT FROM $2",
+  ];
+  if (!opts.includeDeleted) where.push("deleted_at IS NULL");
+  if (opts.fromDate) { params.push(String(opts.fromDate)); where.push(`date >= $${params.length}`); }
+  const { rows } = await (client || pool).query(
+    `SELECT * FROM blocks WHERE ${where.join(" AND ")} ORDER BY date ASC, sort_order ASC, created_at ASC`,
+    params
+  );
+  return rows.map(parseBlock);
+}
+
+// Serialize every materialize/edit/delete operation for one scheduled series,
+// across processes as well as within this Node instance. The callback receives
+// the same transaction client that owns the advisory lock. This avoids pool
+// exhaustion when several series operations wait at once.
+async function withRepeatSeriesLock(seriesId, workspaceId, work) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${workspaceId || ""}:${seriesId}`]);
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch { /* preserve the original error */ }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // ── Carryover pool ───────────────────────────────────────────────────────────
 // The structural half of the carryover/catch-up lane, moved off the client. This
 // REPLACES the zero-caller getOpenTasksBefore A1 added speculatively for this
@@ -1096,19 +1160,14 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
   const limit = opts.limit || 500;
   const ws = workspaceId || null;
 
-  // dcc_is_task_row excludes `kind LIKE 'responsibility%'`, which is right for the
-  // `responsibility_item` scaffolding and WRONG for `responsibility_task`: those are
-  // real dated, timed itinerary rows minted by createItineraryTask, and the client
-  // scan (which had no kind filter at all) always collected them. 19 exist on the prod
-  // restore. They are all finished today, so this is latent rather than live, but an
-  // unfinished recurring task is precisely what a carryover lane is for.
+  // dcc_is_task_row owns the responsibility distinction too: definitions and
+  // triggers are scaffolding, while a responsibility_task is real dated work.
   const { rows } = await pool.query(
     `SELECT b.* FROM blocks b
       WHERE b.workspace_id IS NOT DISTINCT FROM $1
         AND b.deleted_at IS NULL
         AND b.type = ANY($4::text[])
-        AND (dcc_is_task_row(b.type, b.properties)
-             OR COALESCE(b.properties->>'kind', '') = 'responsibility_task')
+        AND dcc_is_task_row(b.type, b.properties)
         AND COALESCE(b.properties->>'type', '') <> ALL($5::text[])
         AND (COALESCE(b.properties->>'start', '') <> ''
              OR b.properties->>'subtaskOf' IS NOT NULL
@@ -1368,19 +1427,20 @@ async function getChildren(parentId, workspaceId) {
   return rows.map(parseBlock);
 }
 
-async function getBlock(id) {
-  const { rows } = await pool.query("SELECT * FROM blocks WHERE id = $1", [id]);
+async function getBlock(id, client) {
+  const { rows } = await (client || pool).query("SELECT * FROM blocks WHERE id = $1", [id]);
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
 // ── Batch Operations ──
 
-async function batchOp(operations) {
+async function batchOp(operations, transactionClient) {
   const batchId = crypto.randomUUID();
   const results = [];
-  const client = await pool.connect();
+  const ownsTransaction = !transactionClient;
+  const client = transactionClient || await pool.connect();
   try {
-    await client.query("BEGIN");
+    if (ownsTransaction) await client.query("BEGIN");
     for (const op of operations) {
       switch (op.op) {
         case "create": results.push(await createBlock(op, client)); break;
@@ -1390,12 +1450,12 @@ async function batchOp(operations) {
         default: throw new Error(`Unknown batch operation: ${op.op}`);
       }
     }
-    await client.query("COMMIT");
+    if (ownsTransaction) await client.query("COMMIT");
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (ownsTransaction) await client.query("ROLLBACK");
     throw err;
   } finally {
-    client.release();
+    if (ownsTransaction) client.release();
   }
   return { batchId, blocks: results };
 }
@@ -1539,7 +1599,7 @@ async function ensureDayRoot(date, userId, workspaceId, client) {
 //   client     a pg client to run inside a caller's transaction
 // The canonical dual-write (local_id, status, parent_id/rel) is NOT repeated here —
 // this funnels through createBlock, which owns it. One insertion point, not two.
-async function createItineraryTask({ date, properties, userId = null, workspaceId = null, sortOrder, score = false, ensureRoot = true, client } = {}) {
+async function createItineraryTask({ id, parent_id, date, properties, userId = null, workspaceId = null, sortOrder, score = false, ensureRoot = true, client } = {}) {
   if (ensureRoot) await ensureDayRoot(date, userId, workspaceId);
   const props = { ...(properties || {}) };
   if (score) {
@@ -1558,37 +1618,63 @@ async function createItineraryTask({ date, properties, userId = null, workspaceI
   // 1000-spaced drag value, which is what made the column unreadable as an order. Passing no
   // sort_order lets createBlock append to the day in the one space. The itinerary still renders
   // timed rows by their `start`; that is a separate axis and always was.
-  return createBlock({ type: "block", date, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId }, client);
+  return createBlock({ id, type: "block", parent_id: parent_id || null, date, properties: props, sort_order: sortOrder, user_id: userId, workspace_id: workspaceId }, client);
 }
 
 // Batch-create itinerary tasks atomically. The store owns the transaction (per
 // the repo's store-owns-transactions idiom, like rescheduleBlocks/batchOp), so
 // callers hand over a list of items instead of driving pool clients themselves.
 // Each distinct day root is ensured once up front (idempotent), then every item
-// is inserted on one pooled client inside a single BEGIN/COMMIT.
-// items: [{ date, properties, sortOrder?, score? }]; opts apply to every item.
-async function createItineraryTasks(items, { userId = null, workspaceId = null, score = false } = {}) {
+// and its optional day-root subtask overlay are written inside one BEGIN/COMMIT.
+// items: [{ date, properties, sortOrder?, score?, subtasks? }]; opts apply to every item.
+async function createItineraryTasks(items, { userId = null, workspaceId = null, score = false } = {}, transactionClient) {
   if (!Array.isArray(items) || items.length === 0) return [];
+  const ownsTransaction = !transactionClient;
+  const client = transactionClient || await pool.connect();
   const dates = [...new Set(items.map((it) => it.date).filter(Boolean))];
-  for (const d of dates) await ensureDayRoot(d, userId, workspaceId);
-  const client = await pool.connect();
+  const rootIds = new Map();
   try {
-    await client.query("BEGIN");
+    if (ownsTransaction) await client.query("BEGIN");
+    for (const d of dates) rootIds.set(d, await ensureDayRoot(d, userId, workspaceId, client));
     const created = [];
     for (const it of items) {
       created.push(await createItineraryTask({
-        date: it.date, properties: it.properties, userId, workspaceId,
+        id: it.id, parent_id: it.parent_id, date: it.date, properties: it.properties, userId, workspaceId,
         sortOrder: it.sortOrder, score: it.score != null ? it.score : score,
         ensureRoot: false, client,
       }));
     }
-    await client.query("COMMIT");
+    // Default subtasks use the legacy day_root._subtasks map. Fold them into
+    // this transaction so an occurrence never exists without its configured
+    // checklist after a partial failure.
+    for (const date of dates) {
+      const withSubtasks = items.filter((it) => it.date === date && Array.isArray(it.subtasks) && it.subtasks.length);
+      if (!withSubtasks.length) continue;
+      const rootId = rootIds.get(date);
+      const { rows } = await client.query("SELECT * FROM blocks WHERE id = $1 FOR UPDATE", [rootId]);
+      if (!rows[0]) throw new Error(`Missing day root ${rootId}`);
+      const root = parseBlock(rows[0]);
+      const rootProps = root.properties || {};
+      const allSubtasks = { ...(rootProps._subtasks || {}) };
+      for (const it of withSubtasks) {
+        const localId = it.properties && it.properties.local_id;
+        if (!localId) continue;
+        allSubtasks[localId] = it.subtasks.map((value, index) => ({
+          id: `st-${crypto.randomUUID().slice(0, 12)}-${index}`,
+          text: String(value),
+          done: false,
+          created: new Date().toISOString(),
+        }));
+      }
+      await updateBlock(rootId, { properties: { ...rootProps, _subtasks: allSubtasks } }, client);
+    }
+    if (ownsTransaction) await client.query("COMMIT");
     return created;
   } catch (e) {
-    await client.query("ROLLBACK");
+    if (ownsTransaction) await client.query("ROLLBACK");
     throw e;
   } finally {
-    client.release();
+    if (ownsTransaction) client.release();
   }
 }
 
@@ -1886,7 +1972,7 @@ module.exports = {
   pool, BLOCK_SCHEMAS, VALID_TYPES, validateBlock,
   createBlock, updateBlock, deleteBlock,
   // Canonical task model primitives (A1) — no callers yet except the audit endpoint.
-  undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, isIdempotencyConflict,
+  undeleteBlock, getBlockIncludingDeleted, findByIdempotencyKey, getBlocksByIdempotencyKeys, getRepeatSeriesBlocks, withRepeatSeriesLock, isIdempotencyConflict,
   getCarryoverPool, carryoverSkipTypes, getSubtree, isTaskRow,
   isCompletedTaskProps, applyCompletionIntent, setTaskCompletion, propagateResponsibilityDone,
   getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,

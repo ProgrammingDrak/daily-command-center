@@ -7,6 +7,7 @@
   // scalar DOM fields, so a nested template can't ride a form input — it's stashed
   // here between openResponsibilityModal and formProps/saveResponsibility.
   let _pendingTemplateTree = null;
+  let _seriesEditContext = null;
   let _sidebarQuery = "";
   let _sidebarFilter = "active";
   let _sidebarSort = "urgency";
@@ -23,6 +24,23 @@
   function isAsNeeded(props){
     const raw=String((props&&props.cadence)||"").toLowerCase();
     return raw==="as_needed"||raw==="as-needed"||raw==="as needed"||props&&props.asNeeded;
+  }
+
+  function repeatType(props){ return props&&props.repeatType==="scheduled"?"scheduled":"readiness"; }
+  function isScheduled(props){ return repeatType(props)==="scheduled"; }
+
+  function scheduledResponsibilityLabels(props){
+    props=props||{};
+    const summary=String(props.recurrenceSummary||"Scheduled repeat").trim();
+    let repeats=summary;
+    if(/^Every\b/i.test(summary))repeats="Repeats "+summary.charAt(0).toLowerCase()+summary.slice(1);
+    else if(/specific date/i.test(summary))repeats="Scheduled on "+summary;
+    const first=Array.isArray(props.nextOccurrences)?props.nextOccurrences[0]:null;
+    const nextDate=first&&first.instant?new Date(first.instant):null;
+    const next=nextDate&&!isNaN(nextDate.getTime())
+      ?"Next scheduled "+nextDate.toLocaleString(undefined,{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
+      :"No future occurrences";
+    return {repeats,next};
   }
 
   function cadencePreset(props){
@@ -133,7 +151,7 @@
   // The due line. One constant, shared with delegated items via urgency.js; the
   // server's copy is DUE_THRESHOLD in lib/recurrence.js. Was hardcoded four
   // times (here twice more below, plus routes/blocks.js auto-schedule).
-  const DUE_THRESHOLD=(window.urgency&&window.urgency.DUE_THRESHOLD)||70;
+  const DUE_THRESHOLD=(window.urgency&&window.urgency.DUE_THRESHOLD)||75;
 
   // Delegates to the app's one "today" helper (state.js) rather than
   // re-implementing it, so a future clock-offset/viewDate nuance there applies here too.
@@ -201,6 +219,7 @@
   function getDueRepeatResponsibilities(){
     return getResponsibilities().map(item=>{
       const p=item.properties||{};
+      if(isScheduled(p))return null;
       if((p.status||"active")!=="active")return null;
       if(isAsNeeded(p))return null;
       // THE PAUSE (plus pause/skip). One predicate, evaluated server-side: an
@@ -426,6 +445,8 @@
     let items=getResponsibilities();
     if(_sidebarFilter==="active")items=items.filter(i=>((i.properties||{}).status||"active")==="active");
     else if(_sidebarFilter==="due")items=items.filter(i=>Number((i.properties||{}).importanceScore||0)>=DUE_THRESHOLD && (i.properties||{}).status!=="archived");
+    else if(_sidebarFilter==="readiness")items=items.filter(i=>!isScheduled(i.properties||{}));
+    else if(_sidebarFilter==="scheduled")items=items.filter(i=>isScheduled(i.properties||{}));
     else if(_sidebarFilter==="archived")items=items.filter(i=>(i.properties||{}).status==="archived");
     else if(["green","blue","yellow","red"].includes(_sidebarFilter)){
       items=items.filter(i=>(i.properties||{}).status!=="archived" && scoreClass(Number((i.properties||{}).importanceScore||0))===_sidebarFilter);
@@ -451,20 +472,29 @@
     });
   }
 
+  function splitRepeatResponsibilityItems(items){
+    const timed=[];
+    const asNeeded=[];
+    for(const item of items||[]){
+      const props=(item&&item.properties)||{};
+      if(!isScheduled(props)&&isAsNeeded(props))asNeeded.push(item);
+      else timed.push(item);
+    }
+    return {timed,asNeeded};
+  }
+
   function renderRepeatResponsibilitiesSidebar(){
     const mount=document.getElementById("repeat-responsibilities-list");
+    const asNeededMount=document.getElementById("repeat-responsibilities-as-needed-list");
     const all=getResponsibilities();
     const due=all.filter(i=>Number((i.properties||{}).importanceScore||0)>=DUE_THRESHOLD && (i.properties||{}).status!=="archived").length;
     const badge=document.getElementById("repeat-responsibilities-section-count");
     if(badge){badge.textContent=due;badge.style.display=due?"":"none";}
     if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();
-    if(!mount)return;
+    if(!mount||!asNeededMount)return;
     const items=sidebarItems();
-    if(!items.length){
-      mount.innerHTML='<div class="delegated-empty">'+(_sidebarQuery?'No repeat responsibilities match that search.':'No repeat responsibilities yet.')+'</div>';
-      return;
-    }
-    mount.innerHTML=items.map(item=>{
+    const groups=splitRepeatResponsibilityItems(items);
+    const cardHtml=item=>{
       const p=item.properties||{};
       const score=Number(p.importanceScore||0);
       const cls=scoreClass(score);
@@ -480,6 +510,8 @@
       const inflight=openInstanceInfo(p);
       const paused=pausedInfo(p);
       const skipped=skippedInfo(p);
+      const scheduledMode=isScheduled(p);
+      const scheduleLabels=scheduledMode?scheduledResponsibilityLabels(p):null;
       // Pill shape is inlined rather than added to dashboard.css: that file is a
       // render surface Track C owns, and the recurring triage card already sets
       // the same precedent for inlining a chip's shape.
@@ -487,22 +519,26 @@
       const stateChip=inflight?'<span class="resp-state-chip inflight" style="'+chipCss+'background:rgba(59,130,246,0.18);color:var(--accent-light)">'+esc(inflight.label)+'</span>'
         :paused?'<span class="resp-state-chip paused" style="'+chipCss+'background:rgba(148,163,184,0.2);color:var(--text-muted)">'+esc(paused.label)+'</span>'
         :skipped?'<span class="resp-state-chip skipped" style="'+chipCss+'background:var(--amber-bg);color:var(--amber)">'+esc(skipped.label)+'</span>':'';
+      const typeChip='<span class="resp-state-chip repeat-type" style="'+chipCss+'background:rgba(139,92,246,0.14);color:var(--purple,#a78bfa)">'+(scheduledMode?'Scheduled':'Readiness')+'</span>';
       return '<div class="repeat-resp-card '+cls+(expanded?' expanded':'')+(inflight?' inflight':'')+((paused||skipped)?' resp-quiet':'')+'" data-id="'+esc(item.id)+'">'+
-        (asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule for today">+</button>':'<button type="button" class="repeat-resp-score resp-score '+cls+'" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule '+esc(p.title||"repeat responsibility")+' for today">'+score+'</button>')+
+        (scheduledMode?'<span class="repeat-resp-score resp-score scheduled" title="Scheduled repeat">&#8635;</span>'
+          :(asNeeded?'<button type="button" class="repeat-resp-score resp-score resp-score-plus" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule for today">+</button>':'<button type="button" class="repeat-resp-score resp-score '+cls+'" data-act="schedule-pick" title="Schedule for today" aria-label="Schedule '+esc(p.title||"repeat responsibility")+' for today">'+score+'</button>'))+
         '<div class="repeat-resp-main" role="button" tabindex="0" data-act="toggle" aria-expanded="'+(expanded?'true':'false')+'">'+
           '<div class="repeat-resp-title-row">'+
-            '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+stateChip+
+            '<div class="repeat-resp-title">'+esc(p.title||"(untitled)")+'</div>'+typeChip+stateChip+
           '</div>'+
+          (scheduledMode?'<div class="repeat-resp-schedule-summary"><span>'+esc(scheduleLabels.repeats)+'</span><strong>'+esc(scheduleLabels.next)+'</strong></div>':'')+
           (expanded?'<div class="repeat-resp-details">'+
-            '<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>'+
+            (scheduledMode?'':'<div class="repeat-resp-meter"><span class="'+cls+'" style="width:'+timing.progress+'%"></span></div>')+
             '<div class="repeat-resp-meta">'+
-              '<span>'+cadenceLabel(p)+'</span>'+
-              (asNeeded?'':'<span>'+esc(dueLabel(p))+'</span>')+
+              '<span>'+(scheduledMode?'Scheduled':'Readiness')+'</span>'+
+              (scheduledMode?'':'<span>'+esc(cadenceLabel(p))+'</span>')+
+              (scheduledMode?'':(asNeeded?'':'<span>'+esc(dueLabel(p))+'</span>'))+
               '<span>'+esc(p.estimatedMinutes||30)+'m</span>'+
-              '<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>'+
+              (scheduledMode?'':'<span>'+esc(daysAgo(p.lastCompletedAt))+'</span>')+
             '</div>'+
             (subtasks.length?'<div class="repeat-resp-subtasks">'+subtasks.slice(0,4).map(s=>'<span>'+esc(s)+'</span>').join("")+(subtasks.length>4?'<span>+'+(subtasks.length-4)+'</span>':'')+'</div>':'')+
-            (preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
+            (!scheduledMode&&preferred?'<div class="resp-preferred-nudge">'+esc(preferred)+'</div>':'')+
           '</div>':'')+
         '</div>'+
         // Skip / Pause / Resume: the escapes that did not exist before D1. The
@@ -510,9 +546,9 @@
         // element in public/ or index.html ever carried data-act="archive" —
         // it was unreachable dead code. These buttons reach it.
         '<div class="repeat-resp-actions">'+
-          '<button type="button" data-act="complete">Complete</button>'+
+          (scheduledMode?'':'<button type="button" data-act="complete">Complete</button>')+
           (expanded?
-            (inflight?'<button type="button" data-act="drop-instance" title="Forget the scheduled instance and resume the cadence">Un-schedule</button>':'<button type="button" data-act="skip" title="Skip this cycle without marking it done">Skip</button>')+
+            (scheduledMode?'':(inflight?'<button type="button" data-act="drop-instance" title="Forget the scheduled instance and resume the cadence">Un-schedule</button>':'<button type="button" data-act="skip" title="Skip this cycle without marking it done">Skip</button>'))+
             ((paused||(p.status||"active")!=="active")
               ?'<button type="button" data-act="activate" title="Resume this responsibility">Resume</button>'
               :'<button type="button" data-act="archive" title="Pause indefinitely">Pause</button>')+
@@ -520,8 +556,19 @@
           :'')+
         '</div>'+
       '</div>';
-    }).join("");
-    mount.querySelectorAll(".repeat-resp-card [data-act]").forEach(btn=>{
+    };
+    const noMatch=_sidebarQuery?'No repeat responsibilities match that search.':null;
+    mount.innerHTML=groups.timed.length
+      ?groups.timed.map(cardHtml).join("")
+      :'<div class="delegated-empty">'+esc(noMatch||"No scheduled or cadence-based responsibilities.")+'</div>';
+    asNeededMount.innerHTML=groups.asNeeded.length
+      ?groups.asNeeded.map(cardHtml).join("")
+      :'<div class="delegated-empty">'+esc(noMatch||"No as-needed responsibilities.")+'</div>';
+    const timedCount=document.getElementById("repeat-responsibilities-timed-count");
+    const asNeededCount=document.getElementById("repeat-responsibilities-as-needed-count");
+    if(timedCount)timedCount.textContent=groups.timed.length;
+    if(asNeededCount)asNeededCount.textContent=groups.asNeeded.length;
+    [mount,asNeededMount].forEach(listMount=>listMount.querySelectorAll(".repeat-resp-card [data-act]").forEach(btn=>{
       btn.addEventListener("click",e=>{
         e.stopPropagation();
         const card=btn.closest(".repeat-resp-card");
@@ -542,7 +589,7 @@
           btn.click();
         });
       }
-    });
+    }));
   }
 
   // Drop a repeat responsibility onto today via the shared time-bucket picker.
@@ -649,10 +696,16 @@
       }else if(act==="remove"){
         const title=(item.properties&&item.properties.title)||"this repeat responsibility";
         if(!window.confirm('Remove "'+title+'"? This cannot be undone.'))return;
-        const res=await fetch("/api/responsibilities/"+encodeURIComponent(id),{method:"DELETE"});
+        const scheduledMode=isScheduled(item.properties||{});
+        const res=await fetch(scheduledMode
+          ?"/api/responsibilities/"+encodeURIComponent(id)+"/series-change"
+          :"/api/responsibilities/"+encodeURIComponent(id),scheduledMode
+          ?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",scope:"series"})}
+          :{method:"DELETE"});
         if(!res.ok)throw new Error((await res.json()).error||res.statusText);
         _items=_items.filter(i=>i.id!==id);
         renderRepeatResponsibilitiesSidebar();
+        if(scheduledMode)await refreshScheduleAfterResponsibilityChange();
         if(typeof showToast==="function")showToast("Repeat responsibility removed","success");
       }else if(act==="edit"){
         openResponsibilityModal(id);
@@ -699,7 +752,7 @@
     const isShell=!!(task&&window.TaskTypes&&(window.TaskTypes.isRollup(task)||window.TaskTypes.rule(task,"childLayout")==="sequential"));
     const templateTree=(isShell&&typeof captureShellTemplate==="function"&&task&&task.id&&typeof scheduled!=="undefined")
       ?captureShellTemplate(task.id,scheduled):null;
-    return {
+    const result={
       title,
       domain:"professional",
       area:taskArea(task),
@@ -810,9 +863,83 @@
     }
   }
 
-  function openResponsibilityModal(id,defaults){
+  function csvNumbers(value,min,max){
+    return [...new Set(String(value||"").split(/[,\s]+/).map(Number).filter(n=>Number.isInteger(n)&&n>=min&&n<=max))];
+  }
+
+  function readScheduleRule(){
+    const patternType=document.getElementById("resp-schedule-pattern")?.value||"calendar";
+    const endType=document.getElementById("resp-schedule-end-type")?.value||"never";
+    const end={type:endType};
+    if(endType==="on")end.date=document.getElementById("resp-schedule-end-date")?.value||"";
+    if(endType==="after")end.count=Math.max(1,Math.min(730,parseInt(document.getElementById("resp-schedule-end-count")?.value,10)||1));
+    const rule={
+      version:1,
+      patternType,
+      timeZone:document.getElementById("resp-schedule-time-zone")?.value.trim()||window.DCC_APP_TIME_ZONE||"America/New_York",
+      end
+    };
+    if(patternType==="dates"){
+      rule.dateTimes=String(document.getElementById("resp-schedule-date-times")?.value||"").split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
+      return rule;
+    }
+    rule.startDate=document.getElementById("resp-schedule-start-date")?.value||_todayStr();
+    rule.frequency=document.getElementById("resp-schedule-frequency")?.value||"weekly";
+    rule.interval=Math.max(1,Math.min(365,parseInt(document.getElementById("resp-schedule-interval")?.value,10)||1));
+    rule.times=String(document.getElementById("resp-schedule-times")?.value||"").split(/[,\s]+/).map(v=>v.trim()).filter(Boolean);
+    rule.weekDays=Array.from(document.querySelectorAll("#resp-schedule-weekdays input:checked")).map(input=>Number(input.value));
+    rule.monthMode=document.getElementById("resp-schedule-month-mode")?.value||"month_days";
+    rule.monthDays=csvNumbers(document.getElementById("resp-schedule-month-days")?.value,1,31);
+    rule.ordinal=parseInt(document.getElementById("resp-schedule-ordinal")?.value,10)||1;
+    rule.ordinalWeekday=parseInt(document.getElementById("resp-schedule-ordinal-weekday")?.value,10)||0;
+    rule.months=csvNumbers(document.getElementById("resp-schedule-months")?.value,1,12);
+    return rule;
+  }
+
+  let _previewTimer=null;
+  async function refreshSchedulePreview(){
+    const mount=document.getElementById("resp-schedule-preview");
+    if(!mount||document.getElementById("resp-repeat-type")?.value!=="scheduled")return;
+    clearTimeout(_previewTimer);
+    _previewTimer=setTimeout(async()=>{
+      mount.textContent="Checking schedule…";
+      try{
+        const res=await fetch("/api/responsibilities/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({scheduleRule:readScheduleRule()})});
+        if(!res.ok)throw new Error(await responseErrorMessage(res));
+        const data=await res.json();
+        const next=(data.nextOccurrences||[]).map(item=>new Date(item.instant).toLocaleString(undefined,{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}));
+        mount.innerHTML='<strong>'+esc(data.summary||"Scheduled repeat")+'</strong>'+(next.length?'<span>Next: '+next.map(esc).join(" · ")+'</span>':'<span>No future occurrences.</span>');
+      }catch(error){mount.innerHTML='<span class="error">'+esc(error.message||String(error))+'</span>';}
+    },180);
+  }
+
+  function syncScheduleFields(){
+    const pattern=document.getElementById("resp-schedule-pattern")?.value||"calendar";
+    document.querySelectorAll(".resp-schedule-calendar-field").forEach(el=>{el.style.display=pattern==="calendar"?"":"none";});
+    const dates=document.getElementById("resp-schedule-dates-field");if(dates)dates.style.display=pattern==="dates"?"":"none";
+    const frequency=document.getElementById("resp-schedule-frequency")?.value||"weekly";
+    const weekdays=document.getElementById("resp-schedule-weekdays");if(weekdays)weekdays.style.display=frequency==="weekly"?"flex":"none";
+    const monthFields=document.getElementById("resp-schedule-month-fields");if(monthFields)monthFields.style.display=(frequency==="monthly"||frequency==="yearly")?"grid":"none";
+    const months=document.getElementById("resp-schedule-year-months");if(months)months.style.display=frequency==="yearly"?"":"none";
+    const mode=document.getElementById("resp-schedule-month-mode")?.value||"month_days";
+    document.querySelectorAll("[data-month-mode]").forEach(el=>{el.style.display=el.dataset.monthMode===mode?"":"none";});
+    const endType=document.getElementById("resp-schedule-end-type")?.value||"never";
+    const dateWrap=document.getElementById("resp-schedule-end-date-wrap");if(dateWrap)dateWrap.style.display=endType==="on"?"":"none";
+    const countWrap=document.getElementById("resp-schedule-end-count-wrap");if(countWrap)countWrap.style.display=endType==="after"?"":"none";
+    refreshSchedulePreview();
+  }
+
+  function syncRepeatType(){
+    const scheduled=document.getElementById("resp-repeat-type")?.value==="scheduled";
+    document.querySelectorAll(".resp-readiness-field").forEach(el=>{el.style.display=scheduled?"none":"";});
+    const scheduleFields=document.getElementById("resp-scheduled-fields");if(scheduleFields)scheduleFields.style.display=scheduled?"":"none";
+    if(scheduled)syncScheduleFields();
+  }
+
+  function openResponsibilityModal(id,defaults,seriesEditContext){
     const item=id?_items.find(i=>i.id===id):null;
     const p=item?(item.properties||{}):(defaults||{});
+    _seriesEditContext=seriesEditContext||null;
     // Carry any saved shell structure through the modal (editing keeps the
     // existing tree; a shell-sourced create stashes the freshly captured one).
     _pendingTemplateTree=(p.templateTree&&p.templateTree.root)?p.templateTree:null;
@@ -822,6 +949,7 @@
     document.getElementById("resp-title").value=p.title||"";
     document.getElementById("resp-domain").value=p.domain||"professional";
     document.getElementById("resp-area").value=p.area||"general";
+    document.getElementById("resp-repeat-type").value=repeatType(p);
     const preset=document.getElementById("resp-cadence-preset");
     if(preset)preset.value=cadencePreset(p);
     document.getElementById("resp-cadence-days").value=p.cadenceDays||7;
@@ -839,6 +967,25 @@
     document.getElementById("resp-preferred-custom-anchor").value=p.preferredCustomAnchor||p.preferredDate||todayIso;
     document.getElementById("resp-preferred-custom-days").value=p.preferredCustomDays||p.cadenceDays||30;
     syncPreferredCompletion();
+    const schedule=p.scheduleRule||{};
+    document.getElementById("resp-schedule-pattern").value=schedule.patternType||"calendar";
+    document.getElementById("resp-schedule-start-date").value=schedule.startDate||todayIso;
+    document.getElementById("resp-schedule-time-zone").value=schedule.timeZone||window.DCC_APP_TIME_ZONE||_localTz()||"America/New_York";
+    document.getElementById("resp-schedule-frequency").value=schedule.frequency||"weekly";
+    document.getElementById("resp-schedule-interval").value=schedule.interval||1;
+    document.getElementById("resp-schedule-times").value=(schedule.times||["09:00"]).join(", ");
+    document.querySelectorAll("#resp-schedule-weekdays input").forEach(input=>{input.checked=(schedule.weekDays||[today.getDay()]).includes(Number(input.value));});
+    document.getElementById("resp-schedule-month-mode").value=schedule.monthMode||"month_days";
+    document.getElementById("resp-schedule-month-days").value=(schedule.monthDays||[today.getDate()]).join(", ");
+    document.getElementById("resp-schedule-ordinal").value=String(schedule.ordinal||1);
+    document.getElementById("resp-schedule-ordinal-weekday").value=String(schedule.ordinalWeekday!=null?schedule.ordinalWeekday:today.getDay());
+    document.getElementById("resp-schedule-months").value=(schedule.months||[today.getMonth()+1]).join(", ");
+    const end=schedule.end||{type:"never"};
+    document.getElementById("resp-schedule-end-type").value=end.type||"never";
+    document.getElementById("resp-schedule-end-date").value=end.date||todayIso;
+    document.getElementById("resp-schedule-end-count").value=end.count||10;
+    document.getElementById("resp-schedule-date-times").value=(schedule.dateTimes||[]).join("\n");
+    syncRepeatType();
     document.getElementById("resp-capacity-bucket").value=p.capacityBucket||"work_admin";
     const menusMount=document.getElementById("resp-menus-list");
     if(menusMount){
@@ -848,7 +995,9 @@
     const subtaskInput=document.getElementById("resp-default-subtask-input");
     if(subtaskInput)subtaskInput.value="";
     setDefaultSubtasks(Array.isArray(p.defaultSubtasks)?p.defaultSubtasks:[]);
-    document.getElementById("resp-modal-title").textContent=id?"Edit repeat responsibility":(p.createdFrom==="task"?"Task to repeat responsibility":"New repeat responsibility");
+    document.getElementById("resp-modal-title").textContent=_seriesEditContext&&_seriesEditContext.scope==="following"
+      ?"Edit this and following occurrences"
+      :(id?"Edit repeat responsibility":(p.createdFrom==="task"?"Task to repeat responsibility":"New repeat responsibility"));
     document.getElementById("responsibility-modal-overlay").classList.add("open");
     setTimeout(()=>document.getElementById("resp-title").focus(),20);
   }
@@ -856,11 +1005,113 @@
   function closeResponsibilityModal(){
     const overlay=document.getElementById("responsibility-modal-overlay");
     if(overlay)overlay.classList.remove("open");
+    _seriesEditContext=null;
+  }
+
+  function closeRepeatOccurrenceModal(){
+    const overlay=document.getElementById("repeat-occurrence-modal-overlay");
+    if(overlay)overlay.classList.remove("open");
+  }
+
+  function syncRepeatOccurrenceScope(){
+    const scope=document.getElementById("repeat-occurrence-scope")?.value||"occurrence";
+    const occurrence=scope==="occurrence";
+    const fields=document.getElementById("repeat-occurrence-fields");
+    const hint=document.getElementById("repeat-occurrence-series-hint");
+    const edit=document.getElementById("repeat-occurrence-edit");
+    const remove=document.getElementById("repeat-occurrence-delete");
+    if(fields)fields.style.display=occurrence?"grid":"none";
+    if(hint)hint.style.display=occurrence?"none":"";
+    if(edit)edit.textContent=occurrence?"Save occurrence":"Edit schedule";
+    if(remove)remove.textContent=scope==="occurrence"?"Skip this occurrence":(scope==="following"?"Delete this and following":"Delete series");
+  }
+
+  async function postScheduledSeriesChange(seriesId,payload){
+    const res=await fetch("/api/responsibilities/"+encodeURIComponent(seriesId)+"/series-change",{
+      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)
+    });
+    if(!res.ok)throw new Error(await responseErrorMessage(res));
+    return res.json();
+  }
+
+  async function openScheduledOccurrenceActions(task){
+    if(!task||task.repeatMode!=="scheduled"||!task.repeatSeriesId||!task.repeatOccurrenceKey)return;
+    if(!_items.some(item=>item.id===task.repeatSeriesId))await loadResponsibilities();
+    document.getElementById("repeat-occurrence-series-id").value=task.repeatSeriesId;
+    document.getElementById("repeat-occurrence-key").value=task.repeatOccurrenceKey;
+    document.getElementById("repeat-occurrence-block-id").value=task.repeatOccurrenceRootId||task._blockId||"";
+    document.getElementById("repeat-occurrence-description").textContent=task.title+" · "+task.repeatOccurrenceKey.replace("T"," at ");
+    document.getElementById("repeat-occurrence-scope").value="occurrence";
+    document.getElementById("repeat-occurrence-title").value=task.title||"";
+    const viewed=(typeof viewDate!=="undefined"&&viewDate)||(window.__DCC_STATE__&&window.__DCC_STATE__.date)||task.repeatOccurrenceKey.slice(0,10);
+    document.getElementById("repeat-occurrence-date").value=viewed;
+    document.getElementById("repeat-occurrence-time").value=task.start||task.repeatOccurrenceKey.slice(11);
+    document.getElementById("repeat-occurrence-duration").value=taskDurationMinutes(task);
+    syncRepeatOccurrenceScope();
+    document.getElementById("repeat-occurrence-modal-overlay").classList.add("open");
+  }
+
+  async function editScheduledOccurrence(){
+    const seriesId=document.getElementById("repeat-occurrence-series-id")?.value;
+    const occurrenceKey=document.getElementById("repeat-occurrence-key")?.value;
+    const blockId=document.getElementById("repeat-occurrence-block-id")?.value||null;
+    const scope=document.getElementById("repeat-occurrence-scope")?.value||"occurrence";
+    if(!seriesId)return;
+    if(scope!=="occurrence"){
+      closeRepeatOccurrenceModal();
+      openResponsibilityModal(seriesId,null,scope==="following"?{scope,occurrenceKey}:null);
+      return;
+    }
+    try{
+      await postScheduledSeriesChange(seriesId,{
+        action:"update",scope,occurrenceKey,blockId,
+        changes:{task:{
+          title:document.getElementById("repeat-occurrence-title")?.value.trim()||"",
+          date:document.getElementById("repeat-occurrence-date")?.value||"",
+          start:document.getElementById("repeat-occurrence-time")?.value||"",
+          durationMinutes:Math.max(1,parseInt(document.getElementById("repeat-occurrence-duration")?.value,10)||30)
+        }}
+      });
+      closeRepeatOccurrenceModal();
+      await loadResponsibilities();
+      await refreshScheduleAfterResponsibilityChange();
+      if(typeof showToast==="function")showToast("Scheduled occurrence updated","success");
+    }catch(error){if(typeof showToast==="function")showToast("Update failed: "+(error.message||error),"error");}
+  }
+
+  async function deleteScheduledOccurrence(){
+    const seriesId=document.getElementById("repeat-occurrence-series-id")?.value;
+    const occurrenceKey=document.getElementById("repeat-occurrence-key")?.value;
+    const blockId=document.getElementById("repeat-occurrence-block-id")?.value||null;
+    const scope=document.getElementById("repeat-occurrence-scope")?.value||"occurrence";
+    if(!seriesId)return;
+    if(scope!=="occurrence"&&!window.confirm(scope==="following"?"Delete this and every following open occurrence?":"Delete this scheduled series and every open current or future occurrence?"))return;
+    try{
+      await postScheduledSeriesChange(seriesId,{action:"delete",scope,occurrenceKey,blockId});
+      closeRepeatOccurrenceModal();
+      await loadResponsibilities();
+      await refreshScheduleAfterResponsibilityChange();
+      if(typeof showToast==="function")showToast(scope==="occurrence"?"Occurrence skipped":"Scheduled series updated","success");
+    }catch(error){if(typeof showToast==="function")showToast("Delete failed: "+(error.message||error),"error");}
   }
 
   // The library lives in a dedicated modal now (the drawer just opens it). Same
   // tool/list IDs as before, so renderRepeatResponsibilitiesSidebar populates it.
+  let _responsibilityManagerTrigger=null;
+  const _managerFocusable='button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  function trapResponsibilityManagerFocus(event){
+    if(event.key!=="Tab")return;
+    const overlay=document.getElementById("responsibility-manage-overlay");
+    if(!overlay?.classList.contains("open"))return;
+    const items=Array.from(overlay.querySelectorAll(_managerFocusable)).filter(el=>el.offsetParent!==null);
+    if(!items.length){event.preventDefault();return;}
+    const first=items[0],last=items[items.length-1];
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+  }
   function openResponsibilityManager(){
+    if(typeof window.closeTasksDrawer==="function")window.closeTasksDrawer();
+    _responsibilityManagerTrigger=document.activeElement;
     const overlay=document.getElementById("responsibility-manage-overlay");
     if(!overlay)return;
     overlay.classList.add("open");
@@ -871,6 +1122,8 @@
   function closeResponsibilityManager(){
     const overlay=document.getElementById("responsibility-manage-overlay");
     if(overlay)overlay.classList.remove("open");
+    if(_responsibilityManagerTrigger&&typeof _responsibilityManagerTrigger.focus==="function")_responsibilityManagerTrigger.focus();
+    _responsibilityManagerTrigger=null;
   }
 
   function formProps(){
@@ -886,7 +1139,7 @@
     const customDays=Math.max(1,parseInt(document.getElementById("resp-cadence-days").value,10)||7);
     const cadenceDays=cadence==="as_needed"?null:(cadenceMap[cadence]||customDays);
     const preferredCadence=document.getElementById("resp-preferred-cadence")?.value||"none";
-    return {
+    const result={
       templateTree:(_pendingTemplateTree&&_pendingTemplateTree.root)?_pendingTemplateTree:undefined,
       title:document.getElementById("resp-title").value.trim(),
       domain:document.getElementById("resp-domain").value,
@@ -914,6 +1167,9 @@
         ||(editing&&editing.properties&&editing.properties.anchorMode)
         ||"completion")
     };
+    result.repeatType=document.getElementById("resp-repeat-type")?.value==="scheduled"?"scheduled":"readiness";
+    if(result.repeatType==="scheduled")result.scheduleRule=readScheduleRule();
+    return result;
   }
 
   function readSelectedMenus(){
@@ -952,14 +1208,21 @@
     const props=formProps();
     if(!props.title){if(typeof showToast==="function")showToast("Title is required","error");return;}
     try{
-      const res=await fetch(id?"/api/responsibilities/"+encodeURIComponent(id):"/api/responsibilities",{
-        method:id?"PATCH":"POST",
+      const context=_seriesEditContext;
+      const scoped=!!(id&&context&&context.scope);
+      const res=await fetch(scoped
+        ?"/api/responsibilities/"+encodeURIComponent(id)+"/series-change"
+        :(id?"/api/responsibilities/"+encodeURIComponent(id):"/api/responsibilities"),{
+        method:scoped?"POST":(id?"PATCH":"POST"),
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({properties:props})
+        body:JSON.stringify(scoped
+          ?{action:"update",scope:context.scope,occurrenceKey:context.occurrenceKey,changes:props}
+          :{properties:props})
       });
       if(!res.ok)throw new Error(await responseErrorMessage(res));
       closeResponsibilityModal();
       await loadResponsibilities();
+      if(scoped)await refreshScheduleAfterResponsibilityChange();
       if(typeof showToast==="function")showToast("Responsibility saved","success");
     }catch(e){
       if(typeof showToast==="function")showToast("Save failed: "+(e.message||e),"error");
@@ -991,8 +1254,14 @@
     if(manageClose)manageClose.addEventListener("click",closeResponsibilityManager);
     const manageOverlay=document.getElementById("responsibility-manage-overlay");
     if(manageOverlay)manageOverlay.addEventListener("click",e=>{if(e.target===manageOverlay)closeResponsibilityManager();});
+    document.addEventListener("keydown",trapResponsibilityManagerFocus);
     const cadencePresetEl=document.getElementById("resp-cadence-preset");
     if(cadencePresetEl)cadencePresetEl.addEventListener("change",syncCadencePreset);
+    const repeatTypeEl=document.getElementById("resp-repeat-type");
+    if(repeatTypeEl)repeatTypeEl.addEventListener("change",syncRepeatType);
+    document.querySelectorAll("#resp-scheduled-fields input,#resp-scheduled-fields select,#resp-scheduled-fields textarea").forEach(el=>{
+      el.addEventListener(el.tagName==="SELECT"?"change":"input",syncScheduleFields);
+    });
     const preferredCadenceEl=document.getElementById("resp-preferred-cadence");
     if(preferredCadenceEl)preferredCadenceEl.addEventListener("change",syncPreferredCompletion);
     const subtaskAdd=document.getElementById("resp-default-subtask-add");
@@ -1005,6 +1274,16 @@
     if(save)save.addEventListener("click",saveResponsibility);
     const overlay=document.getElementById("responsibility-modal-overlay");
     if(overlay)overlay.addEventListener("click",e=>{if(e.target===overlay)closeResponsibilityModal();});
+    const occurrenceScope=document.getElementById("repeat-occurrence-scope");
+    if(occurrenceScope)occurrenceScope.addEventListener("change",syncRepeatOccurrenceScope);
+    const occurrenceCancel=document.getElementById("repeat-occurrence-cancel");
+    if(occurrenceCancel)occurrenceCancel.addEventListener("click",closeRepeatOccurrenceModal);
+    const occurrenceEdit=document.getElementById("repeat-occurrence-edit");
+    if(occurrenceEdit)occurrenceEdit.addEventListener("click",editScheduledOccurrence);
+    const occurrenceDelete=document.getElementById("repeat-occurrence-delete");
+    if(occurrenceDelete)occurrenceDelete.addEventListener("click",deleteScheduledOccurrence);
+    const occurrenceOverlay=document.getElementById("repeat-occurrence-modal-overlay");
+    if(occurrenceOverlay)occurrenceOverlay.addEventListener("click",e=>{if(e.target===occurrenceOverlay)closeRepeatOccurrenceModal();});
   }
 
   document.addEventListener("DOMContentLoaded",bindResponsibilities);
@@ -1012,6 +1291,8 @@
   window.refreshScheduleAfterResponsibilityChange=refreshScheduleAfterResponsibilityChange;
   window.openResponsibilityModalWithMenus=function(menus){ openResponsibilityModal(null,{menus:Array.isArray(menus)?menus:[]}); };
   window.renderRepeatResponsibilitiesSidebar=renderRepeatResponsibilitiesSidebar;
+  window.scheduledResponsibilityLabels=scheduledResponsibilityLabels;
+  window.splitRepeatResponsibilityItems=splitRepeatResponsibilityItems;
   // Triage-strip surfacing (Part C): the itinerary triage renderer reads these.
   window.getDueRepeatResponsibilities=getDueRepeatResponsibilities;
   window.scheduleRepeatResponsibility=scheduleRepeatResponsibility;
@@ -1023,6 +1304,7 @@
   window.snoozeRepeatResponsibility=skipRepeatResponsibility;
   window.pauseRepeatResponsibility=pauseRepeatResponsibility;
   window.resumeRepeatResponsibility=resumeRepeatResponsibility;
+  window.openScheduledOccurrenceActions=openScheduledOccurrenceActions;
   window.responsibilityOpenInstanceInfo=openInstanceInfo;
   window.openRepeatResponsibilityManager=function(){ if(typeof openResponsibilityManager==="function")openResponsibilityManager(); };
   window.openRepeatResponsibilityFromTask=function(task){
