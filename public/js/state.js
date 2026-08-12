@@ -1805,6 +1805,11 @@ function _stashUndoSnapshot(id,snap){
   }
 }
 function openDeleteConfirm(id){
+  const ev=scheduled.find(e=>e.id===id);
+  if(ev&&ev.repeatMode==="scheduled"&&typeof window.openScheduledOccurrenceActions==="function"){
+    window.openScheduledOccurrenceActions(ev);
+    return;
+  }
   deleteTaskWithUndo(id);
 }
 // THE single client entry point for "delete this task", and it fires the real

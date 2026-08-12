@@ -140,6 +140,21 @@ test("done -> done writes nothing: the hook fires on the TRANSITION, not on ever
   assert.equal(defWrites.length, 0, "an already-done task being edited must not re-stamp the definition");
 });
 
+test("completing a scheduled occurrence never resets or delays its series", async () => {
+  const pool = makeMockPool([
+    taskRow({ responsibilityId: "r1", repeatMode: "scheduled", repeatOccurrenceKey: "2026-07-29T09:00", local_id: "l1" }),
+    defRow({ repeatType: "scheduled", scheduleRule: { version: 1 }, lastCompletedAt: "2026-06-01T00:00:00Z" }),
+  ]);
+  const db = loadDbWithMock(pool);
+  await db.updateBlock("t1", { properties: {
+    responsibilityId: "r1", repeatMode: "scheduled", repeatOccurrenceKey: "2026-07-29T09:00",
+    local_id: "l1", status: "done", completedAt: "2026-07-29T12:00:00Z",
+  } });
+  assert.equal(def(pool).lastCompletedAt, "2026-06-01T00:00:00Z");
+  const definitionWrites = pool._log.filter((entry) => /^UPDATE blocks SET properties/.test(entry.text) && entry.params[5] === "r1");
+  assert.equal(definitionWrites.length, 0);
+});
+
 test("a block with no responsibilityId costs zero extra queries (this is the hottest write path)", async () => {
   const pool = makeMockPool([taskRow({ local_id: "l1", title: "ordinary task" })]);
   const db = loadDbWithMock(pool);

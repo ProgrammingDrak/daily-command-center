@@ -22,6 +22,7 @@ const { isValidDate } = require("./lib/route-helpers");
 // lib/recurrence.js so it stays pure and testable. This module owns the reads
 // and writes; that one owns the decisions. See its header for the invariant.
 const recurrence = require("./lib/recurrence");
+const scheduledRecurrence = require("./lib/scheduled-recurrence");
 
 const RESPONSIBILITY_KINDS = new Set(["responsibility_item", "responsibility_trigger"]);
 
@@ -70,6 +71,7 @@ function preferredCompletionDue(props, at = new Date(), tz = null) {
 //      identical card reappear milliseconds later and keep reappearing all day.
 function responsibilityScore(props, at = new Date(), tz = null) {
   if (!props) return 0;
+  if (props.repeatType === "scheduled") return 0;
   if (recurrence.isSuppressed(props, at, tz)) return 0;
   const days = cadenceDays(props);
   let base = 0;
@@ -106,6 +108,38 @@ function responsibilityScore(props, at = new Date(), tz = null) {
 // pause. One decider, computed in the USER's zone, read as a flag.
 function normalizeResponsibility(block, at = new Date(), tz = null) {
   const properties = block.properties || {};
+  if (properties.repeatType === "scheduled") {
+    let scheduleRule = properties.scheduleRule;
+    let recurrenceSummary = "Scheduled repeat";
+    let nextOccurrences = [];
+    let recurrenceError = null;
+    try {
+      scheduleRule = scheduledRecurrence.normalizeScheduleRule(scheduleRule, { defaultTimeZone: tz || null });
+      recurrenceSummary = scheduledRecurrence.scheduleSummary(scheduleRule);
+      nextOccurrences = scheduledRecurrence.nextOccurrences(scheduleRule, { after: at, targetTimeZone: tz || scheduleRule.timeZone, limit: 5 });
+    } catch (error) {
+      recurrenceError = error.message || String(error);
+    }
+    return {
+      ...block,
+      properties: {
+        ...properties,
+        repeatType: "scheduled",
+        scheduleRule,
+        // Scheduled work climbs from 0 to 100 during the week before its next
+        // occurrence. Once created, an overdue occurrence is managed by the
+        // ordinary task elevation flow, while the definition points forward.
+        importanceScore: nextOccurrences[0]
+          ? Math.max(0, Math.min(100, Math.round(100 - ((new Date(nextOccurrences[0].instant) - at) / (7 * 86400000)) * 100)))
+          : 0,
+        suppressed: false,
+        preferredDue: false,
+        recurrenceSummary,
+        nextOccurrences,
+        recurrenceError,
+      },
+    };
+  }
   return {
     ...block,
     properties: {
@@ -126,12 +160,40 @@ function writableProps(props) {
   delete clean.importanceScore;
   delete clean.suppressed;
   delete clean.preferredDue;
+  delete clean.recurrenceSummary;
+  delete clean.nextOccurrences;
+  delete clean.recurrenceError;
   return clean;
 }
 
 function taskDuration(props) {
   // Durations are granular to the minute (floor 1). Only the UI presets snap to 15.
   return Math.max(1, Math.round(Number(props.estimatedMinutes || props.duration || props.durationMin || 30)));
+}
+
+function invalidScheduled(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function validateScheduledTaskBounds(props, rule) {
+  const template = normalizeTemplateTree(props.templateTree);
+  const shellDuration = template ? (function total(node, isRoot = false) {
+    const own = !isRoot && node.edge !== "subtask" ? Math.max(1, Number(node.durationMin) || 30) : 0;
+    return own + (node.children || []).reduce((sum, child) => sum + total(child), 0);
+  })(template.root, true) : 0;
+  const duration = template ? shellDuration : taskDuration(props);
+  if (!Number.isFinite(duration) || duration < 1 || duration > 1440) throw invalidScheduled("Scheduled duration must be between 1 and 1440 minutes");
+  if (rule.patternType === "calendar") {
+    for (const time of rule.times) {
+      if (hhmmToMinutes(time) + duration > 1440) throw invalidScheduled("Scheduled tasks cannot cross midnight");
+    }
+  } else {
+    for (const key of rule.dateTimes) {
+      if (hhmmToMinutes(key.slice(11)) + duration > 1440) throw invalidScheduled("Scheduled tasks cannot cross midnight");
+    }
+  }
 }
 
 function defaultSubtasksForResponsibility(props, alertProps = {}) {
@@ -258,7 +320,7 @@ function parseOffersAmpAlert(text) {
 // ── Persistence-touching operations ──
 // Factory: the caller injects blockDB, the two server-scope helpers
 // (getScheduleBlocks, getTodayStr), and the shared assertBlockOwnership guard.
-function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership }) {
+function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, appTimeZone = "America/New_York" }) {
   // Read the day_root row for a date WITHOUT creating one. ensureDayRoot()
   // would insert a row as a side effect of a read, which a GET must never do,
   // so the id derivation (and its ws-1 legacy fallback) is mirrored here as a
@@ -354,7 +416,7 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
   // Runs on the read every client already makes, so the itinerary and the
   // triage strip converge without anyone scheduling a sweep.
   async function resolveOpenInstances(items, workspaceId) {
-    const pending = items.filter(b => recurrence.hasOpenInstance(b.properties || {}));
+    const pending = items.filter(b => (b.properties || {}).repeatType !== "scheduled" && recurrence.hasOpenInstance(b.properties || {}));
     if (!pending.length) return items;
     const today = getTodayStr();
     const settled = new Map();
@@ -408,8 +470,8 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     return resolved.map(b => normalizeResponsibility(b, at, tz));
   }
 
-  async function getResponsibilityBlock(id, workspaceId, { tz = null } = {}) {
-    const block = await blockDB.getBlock(id);
+  async function getResponsibilityBlock(id, workspaceId, { tz = null, client = null } = {}) {
+    const block = await blockDB.getBlock(id, client);
     if (!block) return null;
     assertBlockOwnership(block, workspaceId);
     if (!RESPONSIBILITY_KINDS.has((block.properties || {}).kind)) return null;
@@ -432,12 +494,12 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
   // threaded uniformly so every response's derived score is computed on the user's
   // calendar day, and `at` is captured once so a transition cannot straddle
   // midnight relative to its own scoring.
-  async function applyLifecycle(id, workspaceId, { existing = null, tz = null }, transition) {
-    const current = existing || await getResponsibilityBlock(id, workspaceId, { tz });
+  async function applyLifecycle(id, workspaceId, { existing = null, tz = null, client = null }, transition) {
+    const current = existing || await getResponsibilityBlock(id, workspaceId, { tz, client });
     if (!current) return null;
     const at = new Date();
     const next = transition(writableProps(current.properties), at);
-    return normalizeResponsibility(await blockDB.updateBlock(id, { properties: next }), at, tz);
+    return normalizeResponsibility(await blockDB.updateBlock(id, { properties: next }, client), at, tz);
   }
 
   async function markResponsibilityComplete(id, workspaceId, { completedAt, taskId, existing, tz } = {}) {
@@ -466,13 +528,19 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     // accidental permanent pause) or below it (a silent no-op), so anything that
     // is not a date becomes an explicit indefinite pause.
     const safeUntil = until && isValidDate(String(until).slice(0, 10)) ? until : null;
-    return applyLifecycle(id, workspaceId, { existing, tz }, (props) =>
-      recurrence.applyPause(props, safeUntil));
+    if ((existing && existing.properties || {}).repeatType === "scheduled") {
+      return withSeriesLock(id, workspaceId, (client) => applyLifecycle(id, workspaceId, { tz, client }, (props) =>
+        recurrence.applyPause(props, safeUntil)));
+    }
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props) => recurrence.applyPause(props, safeUntil));
   }
 
   async function resumeResponsibility(id, workspaceId, { existing, tz } = {}) {
-    return applyLifecycle(id, workspaceId, { existing, tz }, (props) =>
-      recurrence.applyResume(props));
+    if ((existing && existing.properties || {}).repeatType === "scheduled") {
+      return withSeriesLock(id, workspaceId, (client) => applyLifecycle(id, workspaceId, { tz, client }, (props) =>
+        recurrence.applyResume(props)));
+    }
+    return applyLifecycle(id, workspaceId, { existing, tz }, (props) => recurrence.applyResume(props));
   }
 
   // Stamp the in-flight instance onto the definition. Called by the server
@@ -507,6 +575,27 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
       updatedAt: nowIso,
       ...properties
     };
+    props.repeatType = properties.repeatType === "scheduled" ? "scheduled" : "readiness";
+    if (props.repeatType === "scheduled") {
+      props.scheduleRule = scheduledRecurrence.normalizeScheduleRule(properties.scheduleRule, {
+        defaultTimeZone: appTimeZone,
+        today: getTodayStr(),
+      });
+      validateScheduledTaskBounds(props, props.scheduleRule);
+      if (!props.repeatIdentityId && existing) props.repeatIdentityId = (existing.properties || {}).repeatIdentityId || existing.id;
+      if (!props.materializedThrough) props.materializedThrough = scheduledRecurrence.addDays(getTodayStr(), -1);
+      // Scheduled occurrences are independent. Carrying readiness lifecycle
+      // pointers into this mode would suppress the series after its first task.
+      delete props.openInstanceBlockId;
+      delete props.openInstanceLocalId;
+      delete props.openInstanceDate;
+      delete props.openInstanceAt;
+      delete props.skipUntil;
+    } else {
+      delete props.scheduleRule;
+      delete props.repeatIdentityId;
+      delete props.materializedThrough;
+    }
     // A saved shell structure round-trips through the spread above; validate and
     // clamp it here (or drop it if malformed) so a bad tree never persists.
     if (properties.templateTree) {
@@ -516,9 +605,9 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     if (existing) {
       // writableProps: `existing` came back from normalizeResponsibility, so merging
       // it raw would persist the derived importanceScore/suppressed/preferredDue.
-      return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...writableProps(existing.properties), ...props, createdAt: existing.properties.createdAt || props.createdAt } }));
+      return normalizeResponsibility(await blockDB.updateBlock(existing.id, { properties: { ...writableProps(existing.properties), ...props, createdAt: existing.properties.createdAt || props.createdAt } }), new Date(), appTimeZone);
     }
-    return normalizeResponsibility(await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null }));
+    return normalizeResponsibility(await blockDB.createBlock({ type: "block", properties: props, sort_order: 0, user_id: userId || null, workspace_id: workspaceId || null }), new Date(), appTimeZone);
   }
 
   // Load a day's existing blocks and work-hour bounds once, plus the blockers
@@ -599,6 +688,512 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     const allSubtasks = { ...(rootProps._subtasks || {}) };
     allSubtasks[localId] = subtasks.map((text, i) => ({ id: "st-" + Date.now() + "-" + i, text, done: false, created: new Date().toISOString() }));
     await blockDB.updateBlock(rootId, { properties: { ...rootProps, _subtasks: allSubtasks } });
+  }
+
+  function scheduledIdentity(seriesId, occurrenceKey) {
+    return `repeat:${seriesId}:${occurrenceKey}`;
+  }
+
+  function shiftTime(value, delta) {
+    if (!value || !/^\d{2}:\d{2}$/.test(value)) return value;
+    return minutesToHHMM(hhmmToMinutes(value) + delta);
+  }
+
+  function scheduledBaseProps(responsibility, occurrence, rootId) {
+    const props = responsibility.properties || {};
+    return {
+      responsibilityId: responsibility.id,
+      responsibilityTitle: props.title,
+      repeatMode: "scheduled",
+      repeatSeriesId: responsibility.id,
+      repeatIdentityId: props.repeatIdentityId || responsibility.id,
+      repeatOccurrenceKey: occurrence.occurrenceKey,
+      repeatOccurrenceInstant: occurrence.instant,
+      repeatOccurrenceRootId: rootId,
+      repeatTimeZone: occurrence.timeZone,
+      source: "responsibility",
+      tags: ["responsibility", "scheduled-repeat", props.domain, props.area, props.capacityBucket].filter(Boolean),
+      capacityBucket: props.capacityBucket || null,
+      status: "open",
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  // Build one generated occurrence as block rows. A shell's entire tree is in
+  // the returned array so createItineraryTasks can commit it atomically.
+  function scheduledRowsForOccurrence(responsibility, occurrence) {
+    const props = responsibility.properties || {};
+    const duration = taskDuration(props);
+    const startMin = hhmmToMinutes(occurrence.start);
+    const rootId = crypto.randomUUID();
+    const rootLocalId = `repeat-${crypto.randomUUID().slice(0, 12)}`;
+    const base = scheduledBaseProps(responsibility, occurrence, rootId);
+    const template = normalizeTemplateTree(props.templateTree);
+    const key = scheduledIdentity(props.repeatIdentityId || responsibility.id, occurrence.occurrenceKey);
+    if (!template) {
+      const root = {
+        date: occurrence.date,
+        id: rootId,
+        properties: {
+          ...base,
+          kind: "scheduled_repeat_task",
+          local_id: rootLocalId,
+          idempotency_key: key,
+          title: props.nextTaskTitle || props.title,
+          detail: props.description || "",
+          type: "task",
+          duration,
+          start: occurrence.start,
+          end: minutesToHHMM(startMin + duration),
+          priority: props.priority || "Medium",
+          meta: `Scheduled repeat · ${props.area || props.domain || "general"} · ${duration}m`,
+        },
+      };
+      const children = defaultSubtasksForResponsibility(props, {}).map((title) => ({
+        date: occurrence.date,
+        id: crypto.randomUUID(),
+        parent_id: rootId,
+        properties: {
+          ...base,
+          kind: "scheduled_repeat_task",
+          local_id: `repeat-child-${crypto.randomUUID().slice(0, 12)}`,
+          title,
+          detail: "",
+          type: "task",
+          duration: 0,
+          start: occurrence.start,
+          end: occurrence.start,
+          priority: "Medium",
+          meta: "Scheduled repeat subtask",
+          subtaskOf: rootLocalId,
+          rel: "subtask",
+        },
+      }));
+      return [root, ...children];
+    }
+
+    const rows = [];
+    let cursor = startMin;
+    function appendNode(node, parentRowId, parentLocalId, isRoot) {
+      const rowId = isRoot ? rootId : crypto.randomUUID();
+      const localId = isRoot ? rootLocalId : `repeat-child-${crypto.randomUUID().slice(0, 12)}`;
+      const timed = isRoot || node.edge !== "subtask";
+      const nodeDuration = isRoot ? 0 : Math.max(1, Number(node.durationMin) || 30);
+      const nodeStart = timed ? minutesToHHMM(cursor) : null;
+      if (!isRoot && timed) cursor += nodeDuration;
+      const properties = {
+        ...base,
+        kind: "scheduled_repeat_task",
+        local_id: localId,
+        title: node.title,
+        detail: node.detail || "",
+        type: isRoot ? "shell" : (node.type || "task"),
+        duration: nodeDuration,
+        priority: node.priority || (isRoot ? "High" : "Medium"),
+        meta: isRoot ? "Scheduled repeat shell" : "Scheduled repeat step",
+      };
+      if (isRoot) {
+        properties.idempotency_key = key;
+        properties.start = occurrence.start;
+        properties.end = occurrence.start;
+        properties.isWrap = true;
+      } else if (node.edge === "subtask") {
+        properties.subtaskOf = parentLocalId;
+        properties.rel = "subtask";
+      } else {
+        properties.wrapId = parentLocalId;
+        properties.rel = "ride_along";
+        properties.start = nodeStart;
+        properties.end = minutesToHHMM(hhmmToMinutes(nodeStart) + nodeDuration);
+      }
+      const row = { date: occurrence.date, id: rowId, parent_id: parentRowId || null, properties };
+      rows.push(row);
+      for (const child of node.children || []) appendNode(child, rowId, localId, false);
+      return row;
+    }
+    const rootRow = appendNode(template.root, null, null, true);
+    const elapsed = Math.max(0, cursor - startMin);
+    if (startMin + elapsed > 1440) throw badLifecycle("Scheduled shell work cannot cross midnight");
+    rootRow.properties.duration = elapsed;
+    rootRow.properties.end = minutesToHHMM(startMin + elapsed);
+    return rows;
+  }
+
+  function withSeriesLock(id, workspaceId, work) {
+    return typeof blockDB.withRepeatSeriesLock === "function"
+      ? blockDB.withRepeatSeriesLock(id, workspaceId, work)
+      : work(null);
+  }
+
+  function activeScheduledDefinition(block) {
+    const props = (block && block.properties) || {};
+    return !!block && !block.deleted_at && props.kind === "responsibility_item" && props.repeatType === "scheduled"
+      && (props.status || "active") === "active" && !recurrence.isPaused(props, new Date(), appTimeZone);
+  }
+
+  function sameWorkspace(block, workspaceId) {
+    return block && (block.workspace_id || null) === (workspaceId || null);
+  }
+
+  async function materializeDefinitionForDate(id, { date, userId, workspaceId, targetTimeZone, allowPast = false, outputDate = null, occurrenceKey = null }) {
+    return withSeriesLock(id, workspaceId, async (client) => {
+      // Re-read after taking the shared series lock. This makes an update or
+      // deletion authoritative over a day load that began a moment earlier.
+      const responsibility = await blockDB.getBlock(id, client);
+      if (!sameWorkspace(responsibility, workspaceId) || !activeScheduledDefinition(responsibility)) return [];
+      if (!allowPast && date < getTodayStr()) return [];
+      const props = responsibility.properties || {};
+      const rule = scheduledRecurrence.normalizeScheduleRule(props.scheduleRule, {
+        defaultTimeZone: appTimeZone, today: getTodayStr(),
+      });
+      validateScheduledTaskBounds(props, rule);
+      let occurrences = scheduledRecurrence.occurrencesForDate(rule, date, {
+        targetTimeZone: targetTimeZone || appTimeZone, today: getTodayStr(),
+      });
+      if (occurrenceKey) occurrences = occurrences.filter((occurrence) => occurrence.occurrenceKey === occurrenceKey);
+      if (!occurrences.length) return [];
+      const identityId = props.repeatIdentityId || responsibility.id;
+      const keys = occurrences.map((occurrence) => scheduledIdentity(identityId, occurrence.occurrenceKey));
+      const existing = await blockDB.getBlocksByIdempotencyKeys(workspaceId, keys, client);
+      const reserved = new Set(existing.filter((row) => !row.deleted_at || !(row.properties || {}).recurrenceSupersededBy)
+        .map((row) => (row.properties || {}).idempotency_key).filter(Boolean));
+      const missing = occurrences.filter((occurrence) => !reserved.has(scheduledIdentity(identityId, occurrence.occurrenceKey)));
+      if (!missing.length) return [];
+      const rows = missing.flatMap((occurrence) => scheduledRowsForOccurrence(responsibility, occurrence));
+      if (outputDate && isValidDate(outputDate)) rows.forEach((row) => { row.date = outputDate; });
+      try {
+        return await blockDB.createItineraryTasks(rows, { userId, workspaceId }, client);
+      } catch (error) {
+        if (blockDB.isIdempotencyConflict && blockDB.isIdempotencyConflict(error)) return [];
+        throw error;
+      }
+    });
+  }
+
+  async function materializeScheduledRepeatsForDate({ date, userId, workspaceId, targetTimeZone = appTimeZone }) {
+    if (!isValidDate(date)) return [];
+    const definitions = (await blockDB.getResponsibilityBlocks(workspaceId)).filter(activeScheduledDefinition);
+    const created = [];
+    for (const definition of definitions) {
+      try {
+        created.push(...await materializeDefinitionForDate(definition.id, { date, userId, workspaceId, targetTimeZone }));
+      } catch (error) {
+        console.warn("[scheduled-repeat] materialization failed", definition.id, error.message);
+      }
+    }
+    return created;
+  }
+
+  // Catch every series up through today before its list is shown. A sleeping
+  // server may wake after one or more scheduled moments; those dated tasks are
+  // still created and immediately enter the ordinary carryover/elevation flow.
+  async function catchUpScheduledRepeats({ userId, workspaceId, throughDate = getTodayStr(), targetTimeZone = appTimeZone }) {
+    if (!isValidDate(throughDate)) return [];
+    const definitions = (await blockDB.getResponsibilityBlocks(workspaceId)).filter(activeScheduledDefinition);
+    const created = [];
+    for (const listed of definitions) {
+      await withSeriesLock(listed.id, workspaceId, async (client) => {
+        const responsibility = await blockDB.getBlock(listed.id, client);
+        if (!sameWorkspace(responsibility, workspaceId) || !activeScheduledDefinition(responsibility)) return;
+        const props = responsibility.properties || {};
+        const rule = scheduledRecurrence.normalizeScheduleRule(props.scheduleRule, { defaultTimeZone: appTimeZone, today: getTodayStr() });
+        let cursor = props.materializedThrough || scheduledRecurrence.addDays(throughDate, -1);
+        if (cursor < scheduledRecurrence.addDays(rule.startDate || throughDate, -1)) cursor = scheduledRecurrence.addDays(rule.startDate, -1);
+        for (let guard = 0; cursor < throughDate && guard < 730; guard++) {
+          cursor = scheduledRecurrence.addDays(cursor, 1);
+          const occurrences = scheduledRecurrence.occurrencesForDate(rule, cursor, { targetTimeZone, today: getTodayStr() });
+          if (!occurrences.length) continue;
+          const identityId = props.repeatIdentityId || responsibility.id;
+          const keys = occurrences.map((occurrence) => scheduledIdentity(identityId, occurrence.occurrenceKey));
+          const existing = await blockDB.getBlocksByIdempotencyKeys(workspaceId, keys, client);
+          const reserved = new Set(existing.filter((row) => !row.deleted_at || !(row.properties || {}).recurrenceSupersededBy)
+            .map((row) => (row.properties || {}).idempotency_key).filter(Boolean));
+          const rows = occurrences.filter((occurrence) => !reserved.has(scheduledIdentity(identityId, occurrence.occurrenceKey)))
+            .flatMap((occurrence) => scheduledRowsForOccurrence(responsibility, occurrence));
+          if (rows.length) created.push(...await blockDB.createItineraryTasks(rows, { userId, workspaceId }, client));
+        }
+        // Persist only the last day actually scanned. Very old series are
+        // caught up in bounded batches instead of silently skipping history.
+        const fresh = await blockDB.getBlock(responsibility.id, client);
+        await blockDB.updateBlock(responsibility.id, { properties: { ...(fresh.properties || {}), materializedThrough: cursor, updatedAt: new Date().toISOString() } }, client);
+      });
+    }
+    return created;
+  }
+
+  function definitionChanges(existingProps, changes) {
+    const raw = changes && changes.properties && typeof changes.properties === "object" ? changes.properties : (changes || {});
+    const next = { ...writableProps(existingProps), ...raw, kind: "responsibility_item", repeatType: "scheduled", updatedAt: new Date().toISOString() };
+    delete next.id;
+    next.scheduleRule = scheduledRecurrence.normalizeScheduleRule(raw.scheduleRule || next.scheduleRule, {
+      defaultTimeZone: appTimeZone,
+      today: getTodayStr(),
+    });
+    if (raw.templateTree !== undefined) {
+      const template = normalizeTemplateTree(raw.templateTree);
+      if (template) next.templateTree = template; else delete next.templateTree;
+    }
+    return next;
+  }
+
+  function isCompleted(row) {
+    const props = (row && row.properties) || {};
+    return props.status === "done" || !!props.completedAt;
+  }
+
+  function groupSeriesRows(rows) {
+    const groups = new Map();
+    for (const row of rows) {
+      const key = (row.properties || {}).repeatOccurrenceKey;
+      if (!key) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    }
+    return groups;
+  }
+
+  function openGroup(group) {
+    const root = group.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id) || group[0];
+    return !isCompleted(root);
+  }
+
+  async function changeScheduledSeriesLocked({ id, workspaceId, userId, action, scope, occurrenceKey, blockId, changes = {}, client = null }) {
+    if (!["update", "delete"].includes(action)) throw badLifecycle("action must be update or delete");
+    if (!["occurrence", "following", "series"].includes(scope)) throw badLifecycle("scope must be occurrence, following, or series");
+    const definition = await getResponsibilityBlock(id, workspaceId, { tz: appTimeZone, client });
+    if (!definition || (definition.properties || {}).repeatType !== "scheduled") return null;
+    if (scope !== "series" && !scheduledRecurrence.validLocalKey(occurrenceKey)) throw badLifecycle("occurrenceKey must be YYYY-MM-DDTHH:mm");
+    const today = getTodayStr();
+    const rows = await blockDB.getRepeatSeriesBlocks(id, workspaceId, { includeDeleted: false }, client);
+    const groups = groupSeriesRows(rows);
+    const operations = [];
+    const rematerializeDates = new Set();
+    const replacementTargets = [];
+    let newDefinitionId = null;
+
+    if (scope === "occurrence") {
+      const group = groups.get(occurrenceKey) || [];
+      const target = blockId ? group.find((row) => row.id === blockId) : group.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id);
+      if (!target) throw badLifecycle("Scheduled occurrence not found", 404);
+      if (action === "delete") {
+        for (const row of group) operations.push({ op: "delete", id: row.id });
+      } else {
+        const taskChanges = changes.task && typeof changes.task === "object" ? changes.task : changes;
+        if (taskChanges.date != null && !isValidDate(taskChanges.date)) throw badLifecycle("Date must be YYYY-MM-DD");
+        if (taskChanges.start != null && !scheduledRecurrence.validTime(taskChanges.start)) throw badLifecycle("Start time must be HH:MM");
+        const targetDate = isValidDate(taskChanges.date) ? taskChanges.date : target.date;
+        const nextStart = scheduledRecurrence.validTime(taskChanges.start) ? taskChanges.start : (target.properties || {}).start;
+        const nextDuration = taskChanges.durationMinutes == null ? Number((target.properties || {}).duration || 30) : Number(taskChanges.durationMinutes);
+        if (!Number.isFinite(nextDuration) || nextDuration < 1 || nextDuration > 1440) throw badLifecycle("Duration must be between 1 and 1440 minutes");
+        if (hhmmToMinutes(nextStart) + nextDuration > 1440) throw badLifecycle("Scheduled tasks cannot cross midnight");
+        const delta = hhmmToMinutes(nextStart) - hhmmToMinutes((target.properties || {}).start);
+        for (const row of group) {
+          const props = { ...(row.properties || {}), recurrenceOverride: true };
+          if (row.id === target.id) {
+            if (taskChanges.title != null) props.title = String(taskChanges.title).slice(0, 300);
+            if (taskChanges.detail != null) props.detail = String(taskChanges.detail).slice(0, 2000);
+            if (taskChanges.durationMinutes != null && props.type !== "shell") props.duration = Math.max(1, Number(taskChanges.durationMinutes) || props.duration || 30);
+          }
+          if (props.start) props.start = shiftTime(props.start, delta);
+          if (props.end) props.end = shiftTime(props.end, delta);
+          if (row.id === target.id && props.type !== "shell" && taskChanges.durationMinutes != null) props.end = minutesToHHMM(hhmmToMinutes(props.start) + props.duration);
+          operations.push({ op: "update", id: row.id, properties: props, date: targetDate });
+        }
+      }
+    }
+
+    if (scope === "following") {
+      const oldProps = writableProps(definition.properties || {});
+      const truncatedRule = { ...oldProps.scheduleRule, effectiveUntil: occurrenceKey };
+      operations.push({ op: "update", id, properties: { ...oldProps, scheduleRule: truncatedRule, updatedAt: new Date().toISOString() } });
+      for (const [key, group] of groups) {
+        if (key >= occurrenceKey && openGroup(group)) {
+          for (const row of group) {
+            if (action === "update") operations.push({
+              op: "update", id: row.id,
+              properties: { ...(row.properties || {}), recurrenceSupersededBy: newDefinitionId || "pending" },
+            });
+            operations.push({ op: "delete", id: row.id });
+          }
+          if (action === "update") {
+            const root = group.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id) || group[0];
+            replacementTargets.push({ sourceKey: key, outputDate: root.date });
+          }
+        }
+      }
+      if (action === "update") {
+        newDefinitionId = crypto.randomUUID();
+        const nextProps = definitionChanges(oldProps, changes);
+        validateScheduledTaskBounds(nextProps, nextProps.scheduleRule);
+        nextProps.repeatIdentityId = oldProps.repeatIdentityId || id;
+        nextProps.slug = `${oldProps.slug || "scheduled-repeat"}-from-${occurrenceKey.replace(/[^0-9]/g, "")}`;
+        nextProps.createdAt = new Date().toISOString();
+        const selectedGroup = groups.get(occurrenceKey) || [];
+        const selectedRoot = selectedGroup.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id) || selectedGroup[0];
+        const selectedInstant = selectedRoot && (selectedRoot.properties || {}).repeatOccurrenceInstant;
+        const boundaryDate = selectedInstant
+          ? scheduledRecurrence.instantToLocalKey(new Date(selectedInstant), nextProps.scheduleRule.timeZone).slice(0, 10)
+          : occurrenceKey.slice(0, 10);
+        const oldTimes = oldProps.scheduleRule.patternType === "dates"
+          ? (oldProps.scheduleRule.dateTimes || []).filter((key) => key.slice(0, 10) === occurrenceKey.slice(0, 10)).map((key) => key.slice(11))
+          : (oldProps.scheduleRule.times || []);
+        const newTimes = nextProps.scheduleRule.patternType === "dates"
+          ? (nextProps.scheduleRule.dateTimes || []).filter((key) => key.slice(0, 10) === boundaryDate).map((key) => key.slice(11))
+          : (nextProps.scheduleRule.times || []);
+        const oldIndex = Math.max(0, oldTimes.indexOf(occurrenceKey.slice(11)));
+        const mappedTime = newTimes[Math.min(oldIndex, Math.max(0, newTimes.length - 1))] || occurrenceKey.slice(11);
+        nextProps.scheduleRule = { ...nextProps.scheduleRule, effectiveFrom: `${boundaryDate}T${mappedTime}` };
+        delete nextProps.scheduleRule.effectiveUntil;
+        if (oldProps.scheduleRule && oldProps.scheduleRule.end && oldProps.scheduleRule.end.type === "after"
+            && nextProps.scheduleRule.end && nextProps.scheduleRule.end.type === "after") {
+          // The editor's count is the total series count. Preserve that meaning
+          // across a split by carrying only the unconsumed remainder forward.
+          const total = Number(nextProps.scheduleRule.end.count || oldProps.scheduleRule.end.count);
+          const used = scheduledRecurrence.occurrenceCountBefore(oldProps.scheduleRule, occurrenceKey, { defaultTimeZone: appTimeZone, today });
+          nextProps.scheduleRule.end.count = Math.max(1, total - used);
+        }
+        for (const target of replacementTargets) {
+          const sourceDate = target.sourceKey.slice(0, 10);
+          const sourceTime = target.sourceKey.slice(11);
+          const sourceTimes = oldProps.scheduleRule.patternType === "dates"
+            ? (oldProps.scheduleRule.dateTimes || []).filter((key) => key.slice(0, 10) === sourceDate).map((key) => key.slice(11))
+            : (oldProps.scheduleRule.times || []);
+          const candidateDate = target.sourceKey === occurrenceKey ? boundaryDate : sourceDate;
+          const candidateTimes = nextProps.scheduleRule.patternType === "dates"
+            ? (nextProps.scheduleRule.dateTimes || []).filter((key) => key.slice(0, 10) === candidateDate).map((key) => key.slice(11))
+            : (nextProps.scheduleRule.times || []);
+          const ordinal = Math.max(0, sourceTimes.indexOf(sourceTime));
+          const candidateTime = candidateTimes[Math.min(ordinal, Math.max(0, candidateTimes.length - 1))] || sourceTime;
+          const candidateInstant = scheduledRecurrence.localKeyToInstant(`${candidateDate}T${candidateTime}`, nextProps.scheduleRule.timeZone);
+          target.date = scheduledRecurrence.instantToLocalKey(candidateInstant, appTimeZone).slice(0, 10);
+          target.occurrenceKey = `${candidateDate}T${candidateTime}`;
+        }
+        operations.push({ op: "create", id: newDefinitionId, type: "block", parent_id: null, date: null, properties: nextProps, sort_order: 0, user_id: userId, workspace_id: workspaceId });
+      }
+    }
+
+    if (scope === "series") {
+      if (action === "delete") {
+        operations.push({ op: "delete", id });
+        for (const [, group] of groups) {
+          const root = group.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id) || group[0];
+          if (root.date >= today && openGroup(group)) for (const row of group) operations.push({ op: "delete", id: row.id });
+        }
+      } else {
+        const nextProps = definitionChanges(definition.properties || {}, changes);
+        validateScheduledTaskBounds(nextProps, nextProps.scheduleRule);
+        operations.push({ op: "update", id, properties: nextProps });
+        for (const [, group] of groups) {
+          const root = group.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id) || group[0];
+          if (root.date < today || !openGroup(group)) continue;
+          rematerializeDates.add(root.date);
+          const wanted = scheduledRecurrence.occurrencesForDate(nextProps.scheduleRule, root.date, { targetTimeZone: appTimeZone, today });
+          const occurrence = wanted.find((item) => item.occurrenceKey === (root.properties || {}).repeatOccurrenceKey);
+          if (!occurrence) {
+            for (const row of group) operations.push({ op: "delete", id: row.id });
+            continue;
+          }
+          if ((root.properties || {}).recurrenceOverride) continue;
+          const oldStart = (root.properties || {}).start;
+          const delta = hhmmToMinutes(occurrence.start) - hhmmToMinutes(oldStart);
+          for (const row of group) {
+            const props = { ...(row.properties || {}) };
+            if (row.id === root.id) {
+              props.title = nextProps.nextTaskTitle || nextProps.title;
+              props.detail = nextProps.description || props.detail || "";
+              if (props.type !== "shell") props.duration = taskDuration(nextProps);
+            }
+            if (props.start) props.start = shiftTime(props.start, delta);
+            if (props.end) props.end = shiftTime(props.end, delta);
+            props.repeatOccurrenceInstant = occurrence.instant;
+            props.repeatTimeZone = occurrence.timeZone;
+            props.repeatOccurrenceKey = occurrence.occurrenceKey;
+            if (row.id === root.id && props.type !== "shell") props.end = minutesToHHMM(hhmmToMinutes(props.start) + props.duration);
+            operations.push({ op: "update", id: row.id, properties: props, date: occurrence.date });
+          }
+        }
+      }
+    }
+
+    // The replacement id is known only after the following-series branch has
+    // built it. Replace the temporary marker before the atomic batch commits.
+    if (newDefinitionId) {
+      for (const op of operations) {
+        if (op.op === "update" && op.properties && op.properties.recurrenceSupersededBy === "pending") {
+          op.properties.recurrenceSupersededBy = newDefinitionId;
+        }
+      }
+    }
+    const result = operations.length ? await blockDB.batchOp(operations, client) : { blocks: [] };
+    if (action === "update") {
+      const activeId = newDefinitionId || id;
+      rematerializeDates.add(today);
+      const updated = await getResponsibilityBlock(activeId, workspaceId, { tz: appTimeZone, client });
+      return {
+        definition: updated,
+        newDefinitionId,
+        blocks: result.blocks,
+        rematerializeDates: [...rematerializeDates].sort(),
+        replacementTargets,
+      };
+    }
+    return { deleted: true, newDefinitionId: null, blocks: result.blocks };
+  }
+
+  async function changeScheduledSeries(args) {
+    const result = await withSeriesLock(args.id, args.workspaceId, (client) => changeScheduledSeriesLocked({ ...args, client }));
+    if (result && result.definition) {
+      for (const target of result.replacementTargets || []) {
+        await materializeDefinitionForDate(result.definition.id, {
+          date: target.date,
+          outputDate: target.outputDate,
+          occurrenceKey: target.occurrenceKey,
+          allowPast: true,
+          userId: args.userId,
+          workspaceId: args.workspaceId,
+          targetTimeZone: appTimeZone,
+        });
+      }
+      for (const date of result.rematerializeDates || []) {
+        await materializeDefinitionForDate(result.definition.id, {
+          date, userId: args.userId, workspaceId: args.workspaceId, targetTimeZone: appTimeZone,
+        });
+      }
+      delete result.rematerializeDates;
+      delete result.replacementTargets;
+    }
+    return result;
+  }
+
+  async function convertScheduledToReadiness({ id, workspaceId, changes = {} }) {
+    return withSeriesLock(id, workspaceId, async (client) => {
+      const definition = await getResponsibilityBlock(id, workspaceId, { tz: appTimeZone, client });
+      if (!definition || (definition.properties || {}).repeatType !== "scheduled") return null;
+      const rows = await blockDB.getRepeatSeriesBlocks(id, workspaceId, { includeDeleted: false }, client);
+      const props = {
+        ...writableProps(definition.properties || {}),
+        ...(changes.properties || changes),
+        repeatType: "readiness",
+        updatedAt: new Date().toISOString(),
+      };
+      delete props.scheduleRule;
+      delete props.repeatIdentityId;
+      delete props.materializedThrough;
+      const operations = [{ op: "update", id, properties: props }];
+      const today = getTodayStr();
+      for (const [, group] of groupSeriesRows(rows)) {
+        const root = group.find((row) => (row.properties || {}).repeatOccurrenceRootId === row.id) || group[0];
+        if (root.date >= today && openGroup(group)) for (const row of group) operations.push({ op: "delete", id: row.id });
+      }
+      await blockDB.batchOp(operations, client);
+      return getResponsibilityBlock(id, workspaceId, { tz: appTimeZone, client });
+    });
+  }
+
+  function badLifecycle(message, statusCode = 400) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    return error;
   }
 
   async function getKindedBlock(id, kind, workspaceId) {
@@ -726,6 +1321,10 @@ function createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, as
     upsertResponsibility,
     loadDaySlottingContext,
     scheduleResponsibilityTask,
+    materializeScheduledRepeatsForDate,
+    catchUpScheduledRepeats,
+    changeScheduledSeries,
+    convertScheduledToReadiness,
     attachDefaultSubtasks,
     getKindedBlock,
     applyForwardDiff,
@@ -768,6 +1367,7 @@ Object.assign(module.exports, {
   normalizeTemplateTree,
   parseOffersAmpAlert,
   writableProps,
+  scheduledRecurrence,
   RESPONSIBILITY_KINDS,
   // recurrence lifecycle: re-exported so callers get one import surface
   recurrence,

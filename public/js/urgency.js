@@ -43,7 +43,7 @@
   // (three in responsibilities.js, one in routes/blocks.js). The server's copy
   // is DUE_THRESHOLD in lib/recurrence.js -- one constant per runtime, and the
   // two must agree.
-  const DUE_THRESHOLD = 70;
+  const DUE_THRESHOLD = 75;
 
   window.urgency = { timing, score, scoreClass, DUE_THRESHOLD };
 })();

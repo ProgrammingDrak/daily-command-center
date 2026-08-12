@@ -721,6 +721,6 @@ test("setOpenInstance drops a forged non-date rather than storing it as openInst
 // ── The due-line constant ──
 
 test("DUE_THRESHOLD is the one server-side copy of the due line", () => {
-  assert.equal(recurrence.DUE_THRESHOLD, 70);
-  assert.equal(require("./responsibility-store").DUE_THRESHOLD, 70);
+  assert.equal(recurrence.DUE_THRESHOLD, 75);
+  assert.equal(require("./responsibility-store").DUE_THRESHOLD, 75);
 });

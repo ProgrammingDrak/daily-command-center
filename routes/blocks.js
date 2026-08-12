@@ -32,7 +32,7 @@ const {
   firstFreeSlot, minutesToHHMM, hhmmToMinutes, taskDuration,
   buildResponsibilityTaskProps, parseOffersAmpAlert,
   normalizeResponsibility, defaultSubtasksForResponsibility,
-  DUE_THRESHOLD, writableProps,
+  DUE_THRESHOLD, writableProps, scheduledRecurrence,
 } = require("../responsibility-store");
 
 const completionMetrics = {
@@ -56,7 +56,7 @@ module.exports = function mount(app, ctx) {
 
   // The responsibility domain + slot engine + apply-forward engine live in
   // responsibility-store.js; instantiate it here with the server-scope deps.
-  const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership });
+  const respStore = createResponsibilityStore({ blockDB, getScheduleBlocks, getTodayStr, assertBlockOwnership, appTimeZone: ctx.APP_TIME_ZONE });
 
   // The shared no-resurrection contract (lib/materialize-guard.js). Used here by the
   // task-group schedule route; routes/dcc.js and meeting-materializer.js hold the
@@ -360,7 +360,16 @@ module.exports = function mount(app, ctx) {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
-    const result = await blockDB.deleteBlock(req.params.id);
+    const props = existing.properties || {};
+    const result = props.kind === "responsibility_item" && props.repeatType === "scheduled"
+      ? await respStore.changeScheduledSeries({
+          id: req.params.id,
+          workspaceId: req.workspaceId,
+          userId: req.session && req.session.userId,
+          action: "delete",
+          scope: "series",
+        })
+      : await blockDB.deleteBlock(req.params.id);
     broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId);
     return result;
   }));
@@ -535,6 +544,19 @@ module.exports = function mount(app, ctx) {
     if (req.query.date) {
       if (!isValidDate(req.query.date)) { res.status(400).json({ error: "Invalid date" }); return; }
       await blockDB.ensureDayRoot(req.query.date, req.session.userId, req.workspaceId);
+      await respStore.catchUpScheduledRepeats({
+        userId: req.session.userId, workspaceId: req.workspaceId,
+        throughDate: getTodayStr(), targetTimeZone: ctx.APP_TIME_ZONE,
+      });
+      // Catch-up above creates only dates that were genuinely missed after a
+      // schedule existed. The requested day is then materialized directly when
+      // it is today or future, while unrelated historical days stay untouched.
+      await respStore.materializeScheduledRepeatsForDate({
+        date: req.query.date,
+        userId: req.session.userId,
+        workspaceId: req.workspaceId,
+        targetTimeZone: ctx.APP_TIME_ZONE,
+      });
       return withReconciledTiming(filterLegacyGcalBlocks(await blockDB.getBlocksByDate(req.query.date, req.workspaceId)), req);
     } else if (req.query.type) {
       const types = req.query.type.split(",").filter(t => blockDB.VALID_TYPES.has(t));
@@ -847,9 +869,13 @@ module.exports = function mount(app, ctx) {
   // in the Node process's zone gave the wrong answer for a 5-6 hour window
   // every day on a UTC host with a US-Central user -- and the client trusted
   // this server value over its own. Optional, so an older client is unaffected.
-  app.get("/api/responsibilities", route(async (req) => ({
-    items: await respStore.getResponsibilityBlocks(req.workspaceId, { tz: (req.query && req.query.tz) || null }),
-  })));
+  app.get("/api/responsibilities", route(async (req) => {
+    await respStore.catchUpScheduledRepeats({
+      userId: req.session.userId, workspaceId: req.workspaceId,
+      throughDate: getTodayStr(), targetTimeZone: ctx.APP_TIME_ZONE,
+    });
+    return { items: await respStore.getResponsibilityBlocks(req.workspaceId, { tz: (req.query && req.query.tz) || null }) };
+  }));
 
   // Kept an explicit try/catch (not route()) so the enriched apiErrorMessage
   // (message · detail · code) survives — these accept freeform properties JSON
@@ -864,21 +890,54 @@ module.exports = function mount(app, ctx) {
         userId, workspaceId,
         properties: { ...incoming, title: String(incoming.title).trim() }
       });
+      if ((created.properties || {}).repeatType === "scheduled") {
+        await respStore.catchUpScheduledRepeats({ userId, workspaceId, throughDate: getTodayStr(), targetTimeZone: ctx.APP_TIME_ZONE });
+      }
       broadcast("blocks-changed", { action: "responsibility-upsert", blockIds: [created.id] }, workspaceId);
       res.json(created);
     } catch (e) { console.error("[responsibilities:create]", e); res.status(e.statusCode || e.status || 400).json({ error: apiErrorMessage(e) }); }
   });
+
+  app.post("/api/responsibilities/preview", route(async (req) => {
+    const rule = scheduledRecurrence.normalizeScheduleRule((req.body && req.body.scheduleRule) || req.body, {
+      defaultTimeZone: ctx.APP_TIME_ZONE,
+      today: getTodayStr(),
+    });
+    return {
+      scheduleRule: rule,
+      summary: scheduledRecurrence.scheduleSummary(rule),
+      nextOccurrences: scheduledRecurrence.nextOccurrences(rule, { targetTimeZone: ctx.APP_TIME_ZONE, limit: 5 }),
+    };
+  }));
 
   app.patch("/api/responsibilities/:id", async (req, res) => {
     try {
       const existing = await respStore.getResponsibilityBlock(req.params.id, req.workspaceId);
       if (!existing) return res.status(404).json({ error: "Responsibility not found" });
       const incoming = (req.body && req.body.properties) || req.body || {};
-      // writableProps: `existing` is normalized, so a raw merge would persist the
-      // derived importanceScore / suppressed / preferredDue into the row and its
-      // operations-log entry, freezing a stale answer for the next raw reader.
-      const merged = { ...writableProps(existing.properties), ...incoming, kind: existing.properties.kind, updatedAt: new Date().toISOString() };
-      const updated = normalizeResponsibility(await blockDB.updateBlock(req.params.id, { properties: merged }));
+      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      let updated;
+      const wasScheduled = (existing.properties || {}).repeatType === "scheduled";
+      const becomesScheduled = incoming.repeatType === "scheduled" || (incoming.repeatType == null && wasScheduled);
+      const staysScheduled = wasScheduled && becomesScheduled;
+      if (staysScheduled) {
+        const changed = await respStore.changeScheduledSeries({
+          id: req.params.id, workspaceId, userId, action: "update", scope: "series",
+          changes: { properties: incoming },
+        });
+        updated = changed.definition;
+      } else if (wasScheduled && !becomesScheduled) {
+        updated = await respStore.convertScheduledToReadiness({
+          id: req.params.id, workspaceId, userId,
+          changes: { ...incoming, repeatType: "readiness", kind: existing.properties.kind },
+        });
+      } else {
+        const merged = { ...writableProps(existing.properties), ...incoming, kind: existing.properties.kind, updatedAt: new Date().toISOString() };
+        updated = await respStore.upsertResponsibility({ properties: merged, userId, workspaceId });
+        if (!wasScheduled && becomesScheduled) {
+          await respStore.catchUpScheduledRepeats({ userId, workspaceId, throughDate: getTodayStr(), targetTimeZone: ctx.APP_TIME_ZONE });
+        }
+      }
       broadcast("blocks-changed", { action: "responsibility-update", blockIds: [updated.id] }, req.workspaceId);
       res.json(updated);
     } catch (e) { console.error("[responsibilities:update]", e); res.status(e.statusCode || e.status || 400).json({ error: apiErrorMessage(e) }); }
@@ -887,8 +946,32 @@ module.exports = function mount(app, ctx) {
   app.delete("/api/responsibilities/:id", route(async (req, res) => {
     const existing = await respStore.getResponsibilityBlock(req.params.id, req.workspaceId);
     if (!existing) { res.status(404).json({ error: "Responsibility not found" }); return; }
-    const result = await blockDB.deleteBlock(req.params.id);
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const result = (existing.properties || {}).repeatType === "scheduled"
+      ? await respStore.changeScheduledSeries({ id: req.params.id, workspaceId, userId, action: "delete", scope: "series" })
+      : await blockDB.deleteBlock(req.params.id);
     broadcast("blocks-changed", { action: "responsibility-delete", blockIds: [req.params.id] }, req.workspaceId);
+    return result;
+  }));
+
+  app.post("/api/responsibilities/:id/series-change", route(async (req, res) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const body = req.body || {};
+    const result = await respStore.changeScheduledSeries({
+      id: req.params.id,
+      userId,
+      workspaceId,
+      action: body.action,
+      scope: body.scope,
+      occurrenceKey: body.occurrenceKey,
+      blockId: body.blockId || null,
+      changes: body.changes || {},
+    });
+    if (!result) { res.status(404).json({ error: "Scheduled responsibility not found" }); return; }
+    broadcast("blocks-changed", {
+      action: "responsibility-series-change",
+      blockIds: [req.params.id, result.newDefinitionId, ...(result.blocks || []).map((block) => block && block.id)].filter(Boolean),
+    }, workspaceId);
     return result;
   }));
 

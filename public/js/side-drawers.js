@@ -1,14 +1,32 @@
-// ======== SIDE DRAWERS ========
-// Right edge: one tab rail. "Tasks" is permanent; individual sections can be
-// dragged onto the same rail as solo tabs.
+// ======== TASK MANAGER MODALS ========
+// The right-edge rail remains a set of shortcuts. Each shortcut now opens a
+// centered manager scoped to that task type instead of a slide-out drawer.
 
 (function(){
-  const TASKS_OPEN_KEY = "pa-tasks-drawer-open";
   const PINNED_SECTIONS_KEY = "pa-sidecar-sections";
-  const MOBILE_BREAKPOINT = 1023;
   const DEFAULT_SECTIONS = ["tm-side-projects-section", "tm-repeat-responsibilities-section"];
+  let modalTrigger = null;
+  const FOCUSABLE = 'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
-  function isMobile(){ return window.matchMedia("(max-width:" + MOBILE_BREAKPOINT + "px)").matches; }
+  function visibleFocusable(root){
+    return Array.from(root?.querySelectorAll(FOCUSABLE) || []).filter(el => el.offsetParent !== null && !el.closest(".solo-hidden"));
+  }
+
+  function trapFocus(event, root){
+    if(event.key !== "Tab") return;
+    const items = visibleFocusable(root);
+    if(!items.length){ event.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if(!root.contains(document.activeElement)){ event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+    else if(event.shiftKey && document.activeElement === first){ event.preventDefault(); last.focus(); }
+    else if(!event.shiftKey && document.activeElement === last){ event.preventDefault(); first.focus(); }
+  }
+
+  function focusInsideTasks(){
+    const d = drawer();
+    const target = d?.dataset.soloSection ? sectionById(d.dataset.soloSection) : d;
+    (visibleFocusable(target)[0] || document.getElementById("tasks-drawer-close"))?.focus();
+  }
 
   function setOpen(drawer, open){
     if(!drawer) return;
@@ -30,7 +48,7 @@
   }
 
   function sectionBadge(section){
-    const badge = section && section.querySelector(":scope > summary .badge");
+    const badge = section && section.querySelector(":scope > summary .badge, :scope > .tm-section-header .badge");
     if(!badge) return { text: "", show: false };
     const text = (badge.textContent || "").trim();
     return { text, show: badge.style.display !== "none" && !!text && text !== "0" };
@@ -66,7 +84,7 @@
     const bd = document.getElementById("side-drawer-backdrop");
     if(!bd) return;
     const tasksOpen = drawer()?.classList.contains("open");
-    bd.classList.toggle("show", isMobile() && tasksOpen);
+    bd.classList.toggle("show", !!tasksOpen);
   }
 
   function syncBodyClasses(){
@@ -83,10 +101,10 @@
     document.getElementById("tasks-drawer-title").textContent = solo ? sectionLabel(sectionById(sectionId)) : "Tasks";
     const allBtn = document.getElementById("tasks-drawer-all");
     if(allBtn) allBtn.style.display = solo ? "" : "none";
-    document.querySelectorAll("#tasks-drawer details.tm-section").forEach(sec => {
+    document.querySelectorAll("#tasks-drawer .tm-section").forEach(sec => {
       const hidden = solo && sec.id !== sectionId;
       sec.classList.toggle("solo-hidden", hidden);
-      if(solo && !hidden) sec.open = true;
+      if(solo && !hidden && sec.tagName === "DETAILS") sec.open = true;
     });
     document.querySelectorAll("#sidecar-tabs .sidecar-tab[data-section-id]").forEach(btn => {
       btn.classList.toggle("active", solo && btn.dataset.sectionId === sectionId);
@@ -96,20 +114,23 @@
 
   function openTasks(opts){
     const d = drawer();
+    const wasOpen = d?.classList.contains("open");
+    if(!wasOpen) modalTrigger = document.activeElement;
     setOpen(d, true);
     if(!(opts && opts.solo)) setSoloSection(null);
-    try { localStorage.setItem(TASKS_OPEN_KEY, "1"); } catch(e){}
     syncBodyClasses(); syncBackdrop();
     updateRailActiveState();
+    if(!wasOpen || !d.querySelector(".side-drawer-body")?.contains(document.activeElement)) setTimeout(focusInsideTasks, 20);
   }
 
   function closeTasks(opts){
     const d = drawer();
     setOpen(d, false);
     if(!(opts && opts.keepSolo)) setSoloSection(null);
-    if(!(opts && opts.skipPersist)){ try { localStorage.removeItem(TASKS_OPEN_KEY); } catch(e){} }
     syncBodyClasses(); syncBackdrop();
     updateRailActiveState();
+    if(modalTrigger && typeof modalTrigger.focus === "function") modalTrigger.focus();
+    modalTrigger = null;
   }
 
   function toggleTasks(){
@@ -119,8 +140,14 @@
   }
 
   function openTasksToSection(sectionId, opts){
+    if(sectionId === "tm-repeat-responsibilities-section" && typeof window.openRepeatResponsibilityManager === "function"){
+      closeTasks();
+      window.openRepeatResponsibilityManager();
+      return;
+    }
     openTasks({ solo: opts && opts.solo });
     if(opts && opts.solo) setSoloSection(sectionId);
+    setTimeout(focusInsideTasks, 20);
     const sec = sectionById(sectionId);
     if(sec){
       sec.open = true;
@@ -336,7 +363,7 @@
 
   function init(){
     document.getElementById("tasks-drawer-close")?.addEventListener("click", () => closeTasks());
-    document.getElementById("tasks-drawer-all")?.addEventListener("click", () => { setSoloSection(null); openTasks(); });
+    document.getElementById("tasks-drawer-all")?.addEventListener("click", () => { setSoloSection(null); setTimeout(focusInsideTasks, 0); });
     bindSectionDragging();
     bindRailDrop();
     renderSidecarTabs(loadPinnedSections());
@@ -350,8 +377,9 @@
     }
 
     document.addEventListener("keydown", e => {
+      const d = drawer();
+      if(d?.classList.contains("open")) trapFocus(e, d.querySelector(".side-drawer-body"));
       if(e.key === "Escape"){
-        const d = drawer();
         if(d?.classList.contains("open")) closeTasks();
       }
     });
@@ -366,11 +394,6 @@
 
     window.addEventListener("resize", () => { syncBackdrop(); syncBodyClasses(); });
 
-    try {
-      if(!isMobile()){
-        if(localStorage.getItem(TASKS_OPEN_KEY)) openTasks();
-      }
-    } catch(e){}
   }
 
   if(document.readyState === "loading"){

@@ -153,6 +153,12 @@
       responsibilityTitle: p.responsibilityTitle || "",
       capacityBucket: p.capacityBucket || "",
       responsibilityScore: p.responsibilityScore || null,
+      repeatMode: p.repeatMode || null,
+      repeatSeriesId: p.repeatSeriesId || null,
+      repeatOccurrenceKey: p.repeatOccurrenceKey || null,
+      repeatOccurrenceInstant: p.repeatOccurrenceInstant || null,
+      repeatOccurrenceRootId: p.repeatOccurrenceRootId || null,
+      recurrenceOverride: !!p.recurrenceOverride,
       alertKey: p.alertKey || null,
       alertType: p.alertType || null,
       publicVisibility: p.publicVisibility || "public",
@@ -205,12 +211,11 @@
   //     parent_id children of a meeting, so a task move would re-date a prep doc).
   //     db.js:698-714 says do not unify them without re-measuring. C4 did not.
   //
-  // Known hole, inherited deliberately and NOT widened here: this excludes
-  // `responsibility%`, which C2 measured is wrong for `responsibility_task` (19 real
-  // dated timed rows on the prod restore). C2 works around it with an explicit OR in
-  // its own query. The fold has always rejected them by the same kind test, so
-  // matching `dcc_is_task_row` exactly keeps the twin claim TRUE and changes no
-  // behavior. Widening both halves together is a phase of its own.
+  // Responsibility definitions and triggers are scaffolding, but a
+  // `responsibility_task` is the dated itinerary instance. Excluding that root while
+  // admitting its `subtaskOf` children promotes every child to a standalone task and
+  // makes the responsibility itself disappear. Keep this exception aligned with
+  // db.js and dcc_is_task_row in pg-schema.js.
   const NON_TASK_KINDS = ["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"];
   const NON_TASK_TYPES = ["day_root", "time_entry"];
   function isTaskRow(block) {
@@ -218,7 +223,7 @@
     if (NON_TASK_TYPES.indexOf(block.type) !== -1) return false;
     const kind = (block.properties || {}).kind || "";
     if (NON_TASK_KINDS.indexOf(kind) !== -1) return false;
-    if (/^responsibility/.test(kind)) return false;
+    if (/^responsibility/.test(kind) && kind !== "responsibility_task") return false;
     return true;
   }
 

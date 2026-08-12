@@ -251,12 +251,13 @@
   <span class="float-trivial-count" id="float-trivial-count">0</span>
 </button>
 
-<!-- Side drawer: Tasks (right edge) -->
+<!-- Task manager modal. The historic drawer IDs remain because task renderers and
+     mobile navigation target them, but the surface now opens as a modal. -->
+<div class="sidecar-tabs" id="sidecar-tabs" aria-label="Task sidecar shortcuts">
+  <div class="sidecar-drop-hint" id="sidecar-drop-hint">Drop section</div>
+</div>
 <aside class="side-drawer side-drawer-right" id="tasks-drawer" aria-hidden="true">
-  <div class="sidecar-tabs" id="sidecar-tabs" aria-label="Task sidecar shortcuts">
-    <div class="sidecar-drop-hint" id="sidecar-drop-hint">Drop section</div>
-  </div>
-  <div class="side-drawer-body">
+  <div class="side-drawer-body" role="dialog" aria-modal="true" aria-labelledby="tasks-drawer-title">
     <div class="side-drawer-header">
       <h3 id="tasks-drawer-title">Tasks</h3>
       <button class="side-drawer-all" id="tasks-drawer-all" type="button" style="display:none">All tasks</button>
@@ -374,7 +375,7 @@
 
         <!-- Repeat responsibilities: due ones surface in the Itinerary triage
              strip; the full library lives in a dedicated manage modal. -->
-        <div class="tm-section" id="tm-repeat-responsibilities-section">
+        <div class="tm-section" id="tm-repeat-responsibilities-section" data-sidecar-label="Repeat responsibilities">
           <button type="button" class="tm-section-header tm-section-link" id="repeat-responsibilities-open"
                   style="width:100%;border:0;background:none;font:inherit;color:inherit;cursor:pointer;text-align:left;display:flex;align-items:center;gap:6px">
             <span class="tm-chevron" style="visibility:hidden"></span>
@@ -990,9 +991,9 @@
      triage strip; this is where you curate the set. Same element IDs the drawer
      used, so renderRepeatResponsibilitiesSidebar + bindings target them here. -->
 <div class="delegated-modal-overlay" id="responsibility-manage-overlay">
-  <div class="delegated-modal-box" style="max-width:640px">
+  <div class="delegated-modal-box" style="max-width:640px" role="dialog" aria-modal="true" aria-labelledby="responsibility-manage-title">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-      <h3 class="delegated-modal-title" style="margin:0">Manage repeat responsibilities</h3>
+      <h3 class="delegated-modal-title" id="responsibility-manage-title" style="margin:0">Manage repeat responsibilities</h3>
       <button type="button" id="responsibility-manage-close" class="delegated-modal-cancel" aria-label="Close">Close</button>
     </div>
     <div class="repeat-resp-tools" style="margin-top:10px">
@@ -1000,6 +1001,8 @@
       <select id="repeat-responsibilities-filter" title="Filter repeat responsibilities">
         <option value="active">Active</option>
         <option value="due">Due soon</option>
+        <option value="readiness">Readiness</option>
+        <option value="scheduled">Scheduled</option>
         <option value="green">Green</option>
         <option value="blue">Blue</option>
         <option value="yellow">Yellow</option>
@@ -1016,8 +1019,69 @@
       </select>
       <button type="button" id="repeat-responsibilities-new">+ New</button>
     </div>
-    <div class="repeat-resp-list" id="repeat-responsibilities-list">
-      <div class="delegated-empty">No repeat responsibilities yet.</div>
+    <div class="repeat-resp-groups">
+      <details class="repeat-resp-group" id="repeat-responsibilities-timed" open>
+        <summary>
+          <span class="tm-chevron"></span>
+          Scheduled or cadence-based
+          <span class="repeat-resp-group-hint">100 = due now</span>
+          <span class="badge" id="repeat-responsibilities-timed-count">0</span>
+        </summary>
+        <div class="repeat-resp-list" id="repeat-responsibilities-list">
+          <div class="delegated-empty">No scheduled or cadence-based responsibilities.</div>
+        </div>
+      </details>
+      <details class="repeat-resp-group" id="repeat-responsibilities-as-needed">
+        <summary>
+          <span class="tm-chevron"></span>
+          As needed
+          <span class="badge" id="repeat-responsibilities-as-needed-count">0</span>
+        </summary>
+        <div class="repeat-resp-list" id="repeat-responsibilities-as-needed-list">
+          <div class="delegated-empty">No as-needed responsibilities.</div>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- Actions for one materialized scheduled-repeat occurrence. -->
+<div class="delegated-modal-overlay" id="repeat-occurrence-modal-overlay">
+  <div class="delegated-modal-box repeat-occurrence-modal" style="max-width:500px">
+    <h3 class="delegated-modal-title">Scheduled repeat options</h3>
+    <input type="hidden" id="repeat-occurrence-series-id" />
+    <input type="hidden" id="repeat-occurrence-key" />
+    <input type="hidden" id="repeat-occurrence-block-id" />
+    <p class="dm-hint" id="repeat-occurrence-description"></p>
+    <label class="delegated-modal-label">Apply change to</label>
+    <select id="repeat-occurrence-scope" class="delegated-modal-input">
+      <option value="occurrence">Only this occurrence</option>
+      <option value="following">This and following occurrences</option>
+      <option value="series">Every open occurrence in the series</option>
+    </select>
+    <div id="repeat-occurrence-fields" class="resp-form-grid">
+      <div style="grid-column:1/-1">
+        <label class="delegated-modal-label">Title</label>
+        <input type="text" id="repeat-occurrence-title" class="delegated-modal-input" maxlength="300" />
+      </div>
+      <div>
+        <label class="delegated-modal-label">Date</label>
+        <input type="date" id="repeat-occurrence-date" class="delegated-modal-input" />
+      </div>
+      <div>
+        <label class="delegated-modal-label">Time</label>
+        <input type="time" id="repeat-occurrence-time" class="delegated-modal-input" />
+      </div>
+      <div>
+        <label class="delegated-modal-label">Minutes</label>
+        <input type="number" id="repeat-occurrence-duration" class="delegated-modal-input" min="1" max="1440" />
+      </div>
+    </div>
+    <p class="dm-hint" id="repeat-occurrence-series-hint" style="display:none">The series editor will open so you can change its calendar rule and copied task details.</p>
+    <div class="delegated-modal-actions repeat-occurrence-actions">
+      <button type="button" class="secondary" id="repeat-occurrence-cancel">Cancel</button>
+      <button type="button" class="danger" id="repeat-occurrence-delete">Skip this occurrence</button>
+      <button type="button" class="primary" id="repeat-occurrence-edit">Save occurrence</button>
     </div>
   </div>
 </div>
@@ -1041,8 +1105,13 @@
       </select>
       <label class="delegated-modal-label">Area</label>
       <input type="text" id="resp-area" class="delegated-modal-input" maxlength="80" placeholder="bug_management" />
+      <label class="delegated-modal-label">Repeat type</label>
+      <select id="resp-repeat-type" class="delegated-modal-input">
+        <option value="readiness">Readiness-based · surface in triage at 75%</option>
+        <option value="scheduled">Scheduled · create tasks at exact times</option>
+      </select>
       <div class="resp-form-grid">
-        <div>
+        <div class="resp-readiness-field">
           <label class="delegated-modal-label">Cadence</label>
           <select id="resp-cadence-preset" class="delegated-modal-input">
             <option value="as_needed">As needed</option>
@@ -1053,7 +1122,7 @@
             <option value="custom">Custom days</option>
           </select>
         </div>
-        <div id="resp-cadence-days-wrap">
+        <div id="resp-cadence-days-wrap" class="resp-readiness-field">
           <label class="delegated-modal-label">Cadence days</label>
           <input type="number" id="resp-cadence-days" class="delegated-modal-input" min="1" max="365" value="7" />
         </div>
@@ -1065,20 +1134,20 @@
       <!-- anchorMode: shipped in D1 with no UI control, because the control belongs
            here in index.html (a Track C surface). "completion" is every existing
            item's behavior, so it stays the default. -->
-      <label class="delegated-modal-label">Cadence clock <span class="dm-hint">(what the next due date counts from)</span></label>
-      <select id="resp-anchor-mode" class="delegated-modal-input">
+      <label class="delegated-modal-label resp-readiness-field">Cadence clock <span class="dm-hint">(what the next due date counts from)</span></label>
+      <select id="resp-anchor-mode" class="delegated-modal-input resp-readiness-field">
         <option value="completion">When I complete it</option>
         <option value="calendar">Its calendar day, however late I tick it</option>
       </select>
-      <label class="delegated-modal-label">Preferred date to complete</label>
-      <select id="resp-preferred-cadence" class="delegated-modal-input">
+      <label class="delegated-modal-label resp-readiness-field">Preferred date to complete</label>
+      <select id="resp-preferred-cadence" class="delegated-modal-input resp-readiness-field">
         <option value="none">No preferred day</option>
         <option value="weekly">Day of week</option>
         <option value="monthly">Day of month</option>
         <option value="custom">Custom repeat</option>
         <option value="yearly">Yearly date</option>
       </select>
-      <div class="resp-preferred-grid" id="resp-preferred-grid">
+      <div class="resp-preferred-grid resp-readiness-field" id="resp-preferred-grid">
         <div class="resp-preferred-field" data-preferred-field="weekly">
           <label class="delegated-modal-label">Day of week</label>
           <select id="resp-preferred-weekday" class="delegated-modal-input">
@@ -1124,6 +1193,90 @@
           <label class="delegated-modal-label">Day</label>
           <input type="number" id="resp-preferred-year-day" class="delegated-modal-input" min="1" max="31" value="1" />
         </div>
+      </div>
+      <div id="resp-scheduled-fields" class="resp-scheduled-fields" style="display:none">
+        <div class="resp-repeat-callout">Creates independent itinerary tasks. An unfinished occurrence never blocks the next one.</div>
+        <div class="resp-form-grid">
+          <div>
+            <label class="delegated-modal-label">Pattern</label>
+            <select id="resp-schedule-pattern" class="delegated-modal-input">
+              <option value="calendar">Calendar pattern</option>
+              <option value="dates">Specific dates</option>
+            </select>
+          </div>
+          <div class="resp-schedule-calendar-field">
+            <label class="delegated-modal-label">Starts</label>
+            <input type="date" id="resp-schedule-start-date" class="delegated-modal-input" />
+          </div>
+          <div>
+            <label class="delegated-modal-label">Time zone</label>
+            <input type="text" id="resp-schedule-time-zone" class="delegated-modal-input" placeholder="America/New_York" />
+          </div>
+        </div>
+        <div class="resp-schedule-calendar-field">
+          <div class="resp-form-grid">
+            <div>
+              <label class="delegated-modal-label">Repeat every</label>
+              <input type="number" id="resp-schedule-interval" class="delegated-modal-input" min="1" max="365" value="1" />
+            </div>
+            <div>
+              <label class="delegated-modal-label">Unit</label>
+              <select id="resp-schedule-frequency" class="delegated-modal-input">
+                <option value="daily">Day</option>
+                <option value="weekly" selected>Week</option>
+                <option value="monthly">Month</option>
+                <option value="yearly">Year</option>
+              </select>
+            </div>
+            <div>
+              <label class="delegated-modal-label">Times <span class="dm-hint">(comma separated)</span></label>
+              <input type="text" id="resp-schedule-times" class="delegated-modal-input" value="09:00" placeholder="09:00, 15:00" />
+            </div>
+          </div>
+          <div id="resp-schedule-weekdays" class="resp-weekday-picker">
+            <label><input type="checkbox" value="1"> Mon</label><label><input type="checkbox" value="2"> Tue</label>
+            <label><input type="checkbox" value="3"> Wed</label><label><input type="checkbox" value="4"> Thu</label>
+            <label><input type="checkbox" value="5"> Fri</label><label><input type="checkbox" value="6"> Sat</label>
+            <label><input type="checkbox" value="0"> Sun</label>
+          </div>
+          <div id="resp-schedule-month-fields" class="resp-form-grid" style="display:none">
+            <div>
+              <label class="delegated-modal-label">Monthly pattern</label>
+              <select id="resp-schedule-month-mode" class="delegated-modal-input">
+                <option value="month_days">Day of month</option>
+                <option value="ordinal_weekday">Ordinal weekday</option>
+                <option value="last_day">Last day</option>
+                <option value="last_weekday">Last weekday</option>
+              </select>
+            </div>
+            <div data-month-mode="month_days">
+              <label class="delegated-modal-label">Days <span class="dm-hint">(comma separated)</span></label>
+              <input type="text" id="resp-schedule-month-days" class="delegated-modal-input" value="1" placeholder="1, 15, 31" />
+            </div>
+            <div data-month-mode="ordinal_weekday">
+              <label class="delegated-modal-label">Ordinal</label>
+              <select id="resp-schedule-ordinal" class="delegated-modal-input"><option value="1">First</option><option value="2">Second</option><option value="3">Third</option><option value="4">Fourth</option><option value="5">Fifth</option><option value="-1">Last</option></select>
+            </div>
+            <div data-month-mode="ordinal_weekday">
+              <label class="delegated-modal-label">Weekday</label>
+              <select id="resp-schedule-ordinal-weekday" class="delegated-modal-input"><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select>
+            </div>
+            <div id="resp-schedule-year-months" style="display:none">
+              <label class="delegated-modal-label">Months <span class="dm-hint">(1–12)</span></label>
+              <input type="text" id="resp-schedule-months" class="delegated-modal-input" value="1" placeholder="1, 4, 7, 10" />
+            </div>
+          </div>
+          <div class="resp-form-grid">
+            <div><label class="delegated-modal-label">Ends</label><select id="resp-schedule-end-type" class="delegated-modal-input"><option value="never">Never</option><option value="on">On date</option><option value="after">After count</option></select></div>
+            <div id="resp-schedule-end-date-wrap" style="display:none"><label class="delegated-modal-label">End date</label><input type="date" id="resp-schedule-end-date" class="delegated-modal-input" /></div>
+            <div id="resp-schedule-end-count-wrap" style="display:none"><label class="delegated-modal-label">Occurrences</label><input type="number" id="resp-schedule-end-count" class="delegated-modal-input" min="1" max="730" value="10" /></div>
+          </div>
+        </div>
+        <div id="resp-schedule-dates-field" style="display:none">
+          <label class="delegated-modal-label">Specific local date-times <span class="dm-hint">(one YYYY-MM-DDTHH:mm per line)</span></label>
+          <textarea id="resp-schedule-date-times" class="delegated-modal-input" rows="4" placeholder="2026-08-10T09:00&#10;2026-08-13T15:30"></textarea>
+        </div>
+        <div id="resp-schedule-preview" class="resp-schedule-preview" aria-live="polite"></div>
       </div>
       <label class="delegated-modal-label">Capacity bucket</label>
       <select id="resp-capacity-bucket" class="delegated-modal-input">

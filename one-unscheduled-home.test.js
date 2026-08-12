@@ -156,8 +156,10 @@ test("isTaskRow's exclusion list is READ from the SQL definition, not restated h
     assert.equal(TaskModel.isTaskRow(row("x", null, { kind, local_id: "l" })), false,
       kind + " is excluded by dcc_is_task_row, so TaskModel.isTaskRow must exclude it too");
   }
-  assert.ok(/responsibility%/.test(body), "the SQL must still exclude responsibility%");
+  assert.ok(/responsibility%/.test(body), "the SQL must still identify responsibility scaffolding by prefix");
+  assert.ok(/responsibility_task/.test(body), "the SQL must exempt dated responsibility task instances");
   assert.equal(TaskModel.isTaskRow(row("x", null, { kind: "responsibility_item", local_id: "l" })), false);
+  assert.equal(TaskModel.isTaskRow(row("x", "2026-08-03", { kind: "responsibility_task", local_id: "l" })), true);
   // types, not kinds
   assert.equal(TaskModel.isTaskRow({ type: "day_root", properties: {} }), false);
   assert.equal(TaskModel.isTaskRow({ type: "time_entry", properties: {} }), false);
@@ -170,6 +172,28 @@ test("foldsIntoItinerary admits SHELLS — the branch syncAddedTaskTimes was mis
   const shellByType = row("s2", "2026-08-03", { type: "shell" });
   assert.equal(TaskModel.foldsIntoItinerary(shellByKind), true, "kind:shell must fold");
   assert.equal(TaskModel.foldsIntoItinerary(shellByType), true, "type:shell must fold");
+});
+
+test("a responsibility task root stays visible so its default subtasks remain nested", () => {
+  const blocks = [
+    row("root-row", "2026-08-03", {
+      kind: "responsibility_task", local_id: "do-laundry", title: "Do Laundry",
+      start: "09:00", end: "09:30", duration: 30,
+    }),
+    row("dryer-row", "2026-08-03", {
+      local_id: "dryer", title: "Transfer it to Dryer", subtaskOf: "do-laundry",
+      start: "09:00", end: "09:00", duration: 0,
+    }),
+    row("fold-row", "2026-08-03", {
+      local_id: "fold", title: "Fold", subtaskOf: "do-laundry",
+      start: "09:00", end: "09:00", duration: 0,
+    }),
+  ];
+  const folded = blocks.filter(TaskModel.foldsIntoItinerary).map((block) => TaskModel.fromBlock(block));
+  const shape = TaskModel.selectTree(folded, { pool: folded })
+    .map((node) => `${node.ev.title}@${node.depth}`);
+  assert.deepEqual(shape, ["Do Laundry@0", "Transfer it to Dryer@1", "Fold@1"],
+    "dropping the responsibility_task root recreates the production bug: every child is promoted to depth 0");
 });
 
 test("syncAddedTaskTimes persists a SHELL's times, and still skips a non-task row", () => {

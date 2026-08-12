@@ -14,11 +14,8 @@
 //     It hid 1084 of 1548 real roots.
 //   • `type='block'` alone drops schedule_item / added_task rows the lane shows.
 //   • dcc_is_task_row is not the whole filter -- 1137 meetings/breaks/focus rows
-//     passed it and would have flooded the lane...
-//   • ...and it is not quite the RIGHT filter either: it excludes
-//     `kind LIKE 'responsibility%'`, which is correct for responsibility_item
-//     scaffolding and wrong for responsibility_task, a real dated timed row the
-//     client scan always collected (19 on the restore).
+//     passed it and would have flooded the lane. The shared predicate itself
+//     distinguishes responsibility scaffolding from dated responsibility_task work.
 //   • a row with no start and no parent edge was never carryover work.
 //   • and the correction review forced: this returns the POOL, not the roots. A
 //     nested row whose parent does not qualify still has to render, so membership
@@ -98,8 +95,8 @@ test("the pool query carries every term of the client predicate it replaced", as
   const { text, params } = pool.log[0];
   assert.match(text, /b\.type = ANY\(\$4::text\[\]\)/, "three row types, not just 'block'");
   assert.match(text, /dcc_is_task_row\(b\.type, b\.properties\)/, "one task-row predicate, not a copy");
-  assert.match(text, /COALESCE\(b\.properties->>'kind', ''\) = 'responsibility_task'/,
-    "responsibility_task is real itinerary work and must not be filtered out with the scaffolding");
+  assert.doesNotMatch(text, /OR\s+COALESCE\(b\.properties->>'kind', ''\) = 'responsibility_task'/,
+    "responsibility_task belongs in the shared task-row predicate, not a query-local workaround");
   assert.match(text, /COALESCE\(b\.properties->>'type', ''\) <> ALL\(\$5::text\[\]\)/, "fixed-type skip");
   assert.match(text, /properties->>'subtaskOf' IS NOT NULL/, "start-or-nested keeps timeless subtasks");
   assert.match(text, /properties->>'wrapId' IS NOT NULL/,
