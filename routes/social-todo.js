@@ -1119,8 +1119,8 @@ app.post("/api/social/rewards/queue/:id/claim", route(req =>
 // Schedule a won reward into the itinerary: the front-end places the block,
 // then parks the chosen time + block id on the queue row.
 app.post("/api/social/rewards/queue/:id/schedule", route((req) => {
-  const { scheduledFor = null, blockId = null } = req.body || {};
-  return socialStore.scheduleReward(intParam(req, "id"), req.session.userId, { scheduledFor, blockId });
+  const { scheduledFor = null, blockId = null, expectedBlockId } = req.body || {};
+  return socialStore.scheduleReward(intParam(req, "id"), req.session.userId, { scheduledFor, blockId, expectedBlockId });
 }));
 
 // Undo a schedule: reward returns to the queue (front-end removes the block).

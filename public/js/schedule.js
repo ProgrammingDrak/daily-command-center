@@ -202,12 +202,12 @@ function insertTaskNow(titleArg, durMinArg, opts){
   // The dated block from persistAddedTask is the single record. The old extra
   // savePendingTasks push here minted a dateless kind:"pending_task" twin with
   // the same local_id that nothing ever deleted.
-  persistAddedTask(newItem);
+  const persistence=persistAddedTask(newItem);
   log("scheduled",id,"Quick-added at "+startStr+": "+title);
   render();
   checkBlockWarnings(newItem);
   if(typeof opts.onScheduled==="function"){
-    try{opts.onScheduled({localId:id,blockId:id,start:startStr,dateStr:(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null});}catch(e){}
+    try{opts.onScheduled({localId:id,blockId:id,start:startStr,dateStr:(window.blockStore&&window.blockStore.getCurrentDate&&window.blockStore.getCurrentDate())||null,persisted:Promise.resolve(persistence)});}catch(e){}
   }
 }
 
@@ -555,7 +555,7 @@ async function commitDoneOnDate(id,dateStr,opts){
     if(celebration)_finishCompletionCelebration(celebration,id);
     awardSlotTaskCredit(ev||{id:id,title:"Task completed",type:"task"},{
       sourceDate:dateStr,completedAt:completedIso,awardPoints:award,
-      sourceKey:"completion:"+((result&&result.mutationId)||id)
+      sourceKey:"completion:"+((result&&result.mutationId)||id),silent:!!opts.silent
     });
     _autoCompleteShellAncestors(id,dateStr);
     if(currentDate!==dateStr&&typeof showToast==="function"){
@@ -995,7 +995,7 @@ function toggleDone(id,opts){
     if(currentDate&&currentDate>today){
       // Future-day plans are editable pre-plans. If the user is intentionally
       // viewing that day and checks a task off, persist the completion there.
-      return commitDoneOnDate(id,currentDate,{ev:scheduled.find(e=>e.id===id)});
+      return commitDoneOnDate(id,currentDate,{ev:scheduled.find(e=>e.id===id),silent:!!opts.silent});
     }
     if(currentDate&&currentDate<today){
       // Past: ask the user whether they did it today or back on the original date.
@@ -1008,7 +1008,7 @@ function toggleDone(id,opts){
   }
 
   const _today=(typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||null);
-  return commitDoneOnDate(id,_today,{ev:scheduled.find(e=>e.id===id)});
+  return commitDoneOnDate(id,_today,{ev:scheduled.find(e=>e.id===id),silent:!!opts.silent});
 }
 function adjustDur(id,delta){
   const ev=scheduled.find(e=>e.id===id);if(!ev)return;

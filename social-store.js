@@ -331,7 +331,11 @@ async function listRewardQueue(ownerUserId, { status = null } = {}) {
   return rows;
 }
 
-async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, counter, columns, eventMetadata }) {
+function expectedColumnsMatch(item, expectedColumns) {
+  return !expectedColumns || Object.entries(expectedColumns).every(([column, expected]) => item[column] === expected);
+}
+
+async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, counter, columns, eventMetadata, expectedColumns }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -343,6 +347,10 @@ async function _transition(queueId, ownerUserId, { from, to, stamp, eventType, c
     if (!item) { await client.query("ROLLBACK"); throw new Error("reward not found"); }
     if (from && !from.includes(item.status)) {
       // Status guard: losing writer no-ops instead of corrupting state.
+      await client.query("COMMIT");
+      return { item, changed: false };
+    }
+    if (!expectedColumnsMatch(item, expectedColumns)) {
       await client.query("COMMIT");
       return { item, changed: false };
     }
@@ -396,11 +404,12 @@ const claimReward = (queueId, ownerUserId) =>
  *  X"; the reward is still redeemed (burned) when the user actually does it.
  *  `scheduledFor` is an ISO timestamp string (or null); `blockId` links the
  *  itinerary block. Re-scheduling an already-scheduled reward just moves it. */
-const scheduleReward = (queueId, ownerUserId, { scheduledFor = null, blockId = null } = {}) =>
+const scheduleReward = (queueId, ownerUserId, { scheduledFor = null, blockId = null, expectedBlockId } = {}) =>
   _transition(queueId, ownerUserId, {
     from: ["queued", "claimed", "scheduled"], to: "scheduled", stamp: null, eventType: "scheduled",
     columns: { scheduled_for: scheduledFor, scheduled_block_id: blockId },
     eventMetadata: { scheduledFor, blockId },
+    expectedColumns: expectedBlockId === undefined ? null : { scheduled_block_id: expectedBlockId },
   });
 
 /** Undo a schedule: a scheduled reward returns to the queue and the parked
@@ -797,5 +806,6 @@ module.exports = {
     isoDate,
     isQueueableSpinWin,
     TERMINAL_QUEUE_STATES,
+    expectedColumnsMatch,
   },
 };
