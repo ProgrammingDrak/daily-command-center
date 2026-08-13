@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const socialStore = require("./social-store");
 const { _test } = socialStore;
 
-const { resolveReviewState, scopeMatches, isoDate, isQueueableSpinWin, TERMINAL_QUEUE_STATES } = _test;
+const { resolveReviewState, scopeMatches, isoDate, isQueueableSpinWin, TERMINAL_QUEUE_STATES, expectedColumnsMatch } = _test;
 
 test("allowlisted sponsor auto-approves; everyone else is pending", () => {
   assert.equal(resolveReviewState(true), "auto_approved");
@@ -38,6 +38,14 @@ test("reward-queue lifecycle transitions are exported", () => {
   assert.equal(typeof socialStore.redeemReward, "function");
   assert.equal(typeof socialStore.claimReward, "function");
   assert.equal(typeof socialStore.discardReward, "function");
+});
+
+test("reward scheduling compare-and-set rejects a stale block link", () => {
+  const queued = { status: "queued", scheduled_block_id: null };
+  const scheduled = { status: "scheduled", scheduled_block_id: "task-current" };
+  assert.equal(expectedColumnsMatch(queued, { scheduled_block_id: null }), true);
+  assert.equal(expectedColumnsMatch(scheduled, { scheduled_block_id: "task-current" }), true);
+  assert.equal(expectedColumnsMatch(scheduled, { scheduled_block_id: "task-stale" }), false);
 });
 
 test("isoDate returns a YYYY-MM-DD string", () => {
