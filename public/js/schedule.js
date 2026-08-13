@@ -1783,12 +1783,12 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     recalcTimes();
     // Single record: persistAddedTask's dated block. (A savePendingTasks push
     // here used to mint an orphaned dateless pending_task twin.)
-    persistAddedTask(newItem);
+    const persistence=persistAddedTask(newItem);
     log("scheduled",id,"Scheduled at "+timeStr+": "+title);
     render();
     checkBlockWarnings(newItem);
     if(typeof options.onScheduled==="function"){
-      try{options.onScheduled({localId:id,blockId:id,start:timeStr,dateStr});}catch(e){}
+      try{options.onScheduled({localId:id,blockId:id,start:timeStr,dateStr,persisted:Promise.resolve(persistence)});}catch(e){}
     }
   } else {
     // Different day: persist to blockstore for that target date
@@ -1797,12 +1797,13 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
     const newItem=Object.assign({id,title,type:_type,start:timeStr,end:fmt(pt(timeStr)+durMin),
       isWrap:(window.TaskTypes&&window.TaskTypes.rule(_type,"dragMovesSubtree"))||undefined},
       schedulePickerFields(durMin,options));
+    let persistence=null;
     if(window.USE_BLOCKSTORE&&window.USE_BLOCKSTORE.addedTasks&&window.blockStore){
       const bprops=Object.assign(
         window.DCC.taskBlockProps(newItem,{local_id:id,duration:durMin,start:timeStr,end:newItem.end}),
         {_pinnedStart:timeStr,added_at:new Date().toISOString()}
       );
-      window.blockStore.createBlock("block",bprops,{date:dateStr});
+      persistence=window.blockStore.createBlock("block",bprops,{date:dateStr});
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
       render();
     } else {
@@ -1817,7 +1818,7 @@ function commitScheduledTask(title,durMin,dateStr,timeStr,options){
       log("scheduled",id,"Scheduled for "+dateStr+" "+timeStr+": "+title);
     }
     if(typeof options.onScheduled==="function"){
-      try{options.onScheduled({localId:id,blockId:id,start:timeStr,dateStr});}catch(e){}
+      try{options.onScheduled({localId:id,blockId:id,start:timeStr,dateStr,persisted:Promise.resolve(persistence)});}catch(e){}
     }
   }
 }

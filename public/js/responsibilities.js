@@ -318,8 +318,11 @@
         type:"task",responsibilityId:id,responsibilityTitle:title,priority:"High",
         source:"responsibility",tags:tags,detail:p.description||"",
         idempotencyKey:"resp:"+id+":"+curDate,
-        onScheduled:function(info){
-          try{if(typeof addSubtask==="function"&&info&&info.localId){defaults.forEach(function(t){if(t)addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start});});}}catch(e){}
+        onScheduled:async function(info){
+          try{
+            if(info&&info.persisted)await info.persisted;
+            if(typeof addSubtask==="function"&&info&&info.localId){defaults.forEach(function(t){if(t)addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start});});}
+          }catch(e){console.warn("[responsibilities] parent or subtask persistence failed",e);return;}
           if(info&&info.localId&&typeof toggleDone==="function")toggleDone(info.localId);
           finish();
         }
@@ -635,12 +638,16 @@
       tags:tags,
       meta:"Responsibility · "+(p.area||p.domain||"general")+" · "+dur+"m",
       detail:p.description||"",
-      onScheduled:function(info){
+      onScheduled:async function(info){
         try{
+          // The future-date parent write is asynchronous. Wait for its row to
+          // exist before child creates ask the server to resolve subtaskOf into
+          // the canonical parent_id edge.
+          if(info&&info.persisted)await info.persisted;
           if(typeof addSubtask==="function"&&info&&info.localId){
             defaults.forEach(function(t){if(t)addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start});});
           }
-        }catch(e){console.warn("[responsibilities] subtask attach failed",e);}
+        }catch(e){console.warn("[responsibilities] parent or subtask persistence failed",e);return;}
         registerOpenInstance(id,info);
       }
     });
