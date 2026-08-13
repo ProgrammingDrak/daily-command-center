@@ -33,7 +33,7 @@ test("library filters and occurrence scope prompt expose both modes and all edit
   assert.match(scheduleSource, /Repeat options/);
 });
 
-async function clientWindow(items) {
+async function clientWindow(items, globals = {}) {
   const document = {
     addEventListener() {},
     getElementById() { return null; },
@@ -55,6 +55,7 @@ async function clientWindow(items) {
     window, DCC, document, scheduled: [], console, Intl, Date, Math, JSON,
     encodeURIComponent, setTimeout, clearTimeout,
     fetch: async () => ({ ok: true, json: async () => ({ items }) }),
+    ...globals,
   };
   vm.createContext(context);
   vm.runInContext(clientSource, context, { filename: "responsibilities.js" });
@@ -113,4 +114,87 @@ test("manager separates cadence-based and as-needed responsibilities", async () 
   assert.deepEqual(Array.from(groups.timed, (item) => item.id), ["cadence", "scheduled"]);
   assert.deepEqual(Array.from(groups.asNeeded, (item) => item.id), ["as-needed"]);
   assert.match(clientSource, /Number\(bp\.importanceScore\|\|0\)-Number\(ap\.importanceScore\|\|0\)/);
+});
+
+test("future responsibility scheduling forwards the selected date and parent start to every default subtask", () => {
+  assert.match(clientSource,
+    /addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start\}\)/,
+    "the picker callback must keep each child on the same day as its parent");
+  assert.equal((clientSource.match(/addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start\}\)/g)||[]).length, 2,
+    "both scheduling and schedule-then-complete paths must preserve the parent placement");
+});
+
+test("future responsibility children wait for the parent write acknowledgement", async () => {
+  let pickerOptions;
+  let releaseParent;
+  const parentPersisted = new Promise((resolve) => { releaseParent = resolve; });
+  const children = [];
+  const item = {
+    id: "laundry",
+    properties: {
+      title: "Do Laundry",
+      estimatedMinutes: 30,
+      defaultSubtasks: ["Wash", "Dry", "Fold"],
+    },
+  };
+  const window = await clientWindow([item], {
+    openSchedulePicker(_title, _duration, options) { pickerOptions = options; },
+    addSubtask(parentId, title, placement) { const child = { parentId, title, placement }; children.push(child); return child; },
+  });
+
+  window.scheduleRepeatResponsibility("laundry");
+  assert.ok(pickerOptions && typeof pickerOptions.onScheduled === "function");
+  const callback = pickerOptions.onScheduled({
+    localId: "future-parent",
+    dateStr: "2026-08-14",
+    start: "08:00",
+    persisted: parentPersisted,
+  });
+  await Promise.resolve();
+  assert.equal(children.length, 0, "no child write begins while the parent create is pending");
+
+  releaseParent();
+  await callback;
+  assert.deepEqual(children.map((child) => child.title), ["Wash", "Dry", "Fold"]);
+  assert.ok(children.every((child) => child.parentId === "future-parent"));
+  assert.ok(children.every((child) => child.placement.date === "2026-08-14"));
+});
+
+test("schedule-then-complete waits for every default subtask write", async () => {
+  let releaseChild;
+  const pendingChild = new Promise((resolve) => { releaseChild = resolve; });
+  const toggled = [];
+  let insertedOptions;
+  const item = {
+    id: "laundry-complete",
+    properties: {
+      title: "Do Laundry",
+      estimatedMinutes: 30,
+      defaultSubtasks: ["Wash", "Dry", "Fold"],
+    },
+  };
+  const window = await clientWindow([item], {
+    insertTaskNow(_title, _duration, options) { insertedOptions = options; },
+    addSubtask(_parentId, title) {
+      const persisted = title === "Dry" ? pendingChild : Promise.resolve();
+      return Object.defineProperty({ title }, "_persisted", { value: persisted, enumerable: false });
+    },
+    toggleDone(id) { toggled.push(id); },
+  });
+
+  window.completeRepeatResponsibility("laundry-complete");
+  assert.ok(insertedOptions && typeof insertedOptions.onScheduled === "function");
+  const callback = insertedOptions.onScheduled({
+    localId: "complete-parent",
+    dateStr: "2026-08-13",
+    start: "08:00",
+    persisted: Promise.resolve(),
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(toggled, [], "the parent cannot complete while any child write is pending");
+
+  releaseChild();
+  await callback;
+  assert.deepEqual(toggled, ["complete-parent"]);
 });

@@ -917,7 +917,7 @@ test("the row + and the row click are no longer gated on isUnfRow, and the bount
 
 test("addSubtask on a carryover creates on the ORIGIN day and stays out of today's plan", () => {
   const tabsSource = fs.readFileSync(require.resolve("./public/js/tabs.js"), "utf8");
-  const src = mustSlice(tabsSource, /^function addSubtask\(taskId, text\)\{[\s\S]*?\n\}/m, "addSubtask");
+  const src = mustSlice(tabsSource, /^function addSubtask\(taskId, text, options\)\{[\s\S]*?\n\}/m, "addSubtask");
   const { store, calls } = makeStore([]);
   const carry = { id: "c-1", title: "Do laundry", start: "09:00", __unf: { sourceId: "row-77", sourceDate: "2026-07-28" } };
   const ctx = ctxWith([src], {
@@ -941,6 +941,34 @@ test("addSubtask on a carryover creates on the ORIGIN day and stays out of today
     "the lane must re-collect, or the new child does not appear until a reload");
   assert.ok(ctx.recollectedPending && typeof ctx.recollectedPending.then === "function",
     "and the IN-FLIGHT create must be handed over: the lane reads the SERVER, so re-collecting first lets the read be served before the POST lands and then cache an answer without the new row");
+});
+
+test("addSubtask for a future scheduled parent uses the parent's date and stays out of today", () => {
+  const tabsSource = fs.readFileSync(require.resolve("./public/js/tabs.js"), "utf8");
+  const src = mustSlice(tabsSource, /^function addSubtask\(taskId, text, options\)\{[\s\S]*?\n\}/m, "addSubtask");
+  const { store, calls } = makeStore([]);
+  let renders = 0;
+  const ctx = ctxWith([src], {
+    window: { blockStore: store, DCC: {} },
+    scheduled: [],
+    viewDate: "2026-08-13",
+    taskAnchorById: () => null,
+    render: () => { renders++; },
+  });
+
+  ctx.addSubtask("future-parent", "Put it in the washer", {
+    date: "2026-08-14",
+    parentStart: "08:00",
+  });
+
+  assert.equal(calls.create.length, 1);
+  assert.equal(calls.create[0].extra.date, "2026-08-14",
+    "the child must be persisted beside its future parent");
+  assert.equal(calls.create[0].props.subtaskOf, "future-parent");
+  assert.equal(calls.create[0].props.start, "08:00");
+  assert.equal(ctx.scheduled.length, 0,
+    "a future child must never appear as a standalone row in today's plan");
+  assert.equal(renders, 0, "today's unchanged plan does not need a speculative repaint");
 });
 
 test("addTaskAdjacent on a carryover: origin day, and today's plan is NOT reflowed", () => {
@@ -1392,7 +1420,7 @@ test("every details-modal write helper routes through _amWriteRowProps", () => {
 
 test("addSubtask on an ordinary row is unchanged: viewed day, and it joins the plan", () => {
   const tabsSource = fs.readFileSync(require.resolve("./public/js/tabs.js"), "utf8");
-  const src = mustSlice(tabsSource, /^function addSubtask\(taskId, text\)\{[\s\S]*?\n\}/m, "addSubtask");
+  const src = mustSlice(tabsSource, /^function addSubtask\(taskId, text, options\)\{[\s\S]*?\n\}/m, "addSubtask");
   const { store, calls } = makeStore([]);
   const parent = { id: "s-1", title: "Today's task", start: "10:00" };
   const ctx = ctxWith([src], {
