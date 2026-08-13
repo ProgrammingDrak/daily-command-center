@@ -79,6 +79,24 @@ test("Done and Delete wait for durable suppression before changing local state",
   assert.ok(remove.indexOf("await persistTriageDeletion") < remove.indexOf("INIT_TRIAGE ="));
 });
 
+test("scheduling persists a dateless scheduled suppression before hiding the card", () => {
+  const record = mustSlice(SRC, /^async function recordTriageScheduled\(triageId,item,taskId,toastMsg,opts\)\{[\s\S]*?\n\}/m, "recordTriageScheduled");
+  assert.match(record, /await persistTriageSuppression\(triageId,item,"scheduled"/);
+  assert.ok(record.indexOf("await persistTriageSuppression") < record.indexOf("saveTriageScheduled(st)"));
+  assert.match(record, /if\(opts\.deferRepaint\|\|opts\.deferRefold\)return true/);
+  const taskProps = mustSlice(SRC, /^function triageTaskProps\(triageId,item\)\{[\s\S]*?\n\}/m, "triageTaskProps");
+  assert.match(taskProps, /triageId:triageId/);
+  assert.match(taskProps, /triageReceivedAt:/);
+});
+
+test("the durable ledger overrides stale local scheduling after a linked task is released", () => {
+  const current = mustSlice(SRC, /^function currentTriageScheduled\(\)\{[\s\S]*?\n\}/m, "currentTriageScheduled");
+  assert.match(current, /if\(!Array\.isArray\(ledger\)\)return loadTriageScheduled\(\)/);
+  assert.match(current, /s\.reason==="scheduled"/);
+  const active = mustSlice(SRC, /^function activeTriageItems\(\)\{[\s\S]*?\n\}/m, "activeTriageItems");
+  assert.match(active, /scheduledTriage=currentTriageScheduled\(\)/);
+});
+
 // ── the Completed list ───────────────────────────────────────────────────────
 
 function runBuildTriage({ initTriage = [], suppressedItems = [], dismissed = {} } = {}) {
@@ -96,6 +114,7 @@ function runBuildTriage({ initTriage = [], suppressedItems = [], dismissed = {} 
     loadTriageParents: () => ({}),
     loadDeletedTriage: () => [],
     loadTriageScheduled: () => ({}),
+    currentTriageScheduled: () => ({}),
     buildTriageCard: (i) => "<card>" + i.id + "</card>",
     notesButton: () => "",
     saveDismissed: () => {},

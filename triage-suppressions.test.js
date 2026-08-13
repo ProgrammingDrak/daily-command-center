@@ -286,6 +286,26 @@ test("reason is a closed set — anything unrecognized is the conservative 'done
   assert.equal(buildSuppressionProperties({}).reason, "done");
 });
 
+test("scheduled is a durable hidden state without pretending the source was handled", () => {
+  const props = buildSuppressionProperties({
+    triageId: "slack:dm:D1:1",
+    reason: "scheduled",
+    taskId: "triage-task-1",
+    scheduledFor: "2026-08-14",
+  });
+  assert.equal(props.reason, "scheduled");
+  assert.equal(props.task_id, "triage-task-1");
+  assert.equal(props.scheduled_for, "2026-08-14");
+  const suppression = suppressionFromBlock({ id: "s1", properties: props });
+  assert.equal(suppression.reason, "scheduled");
+  assert.equal(suppression.task_id, "triage-task-1");
+  assert.deepEqual(
+    applyTriageSuppressions({ open_items: [{ id: "slack:dm:D1:1" }] }, [suppression]).open_items,
+    [],
+    "scheduled work stays out of future elevation surfaces"
+  );
+});
+
 test("blocks that are not suppressions are ignored on the way back in", () => {
   const rows = suppressionsFromBlocks([
     { id: "s1", properties: { kind: "triage_suppression", triage_id: "a", reason: "done", itemTitle: "A" } },

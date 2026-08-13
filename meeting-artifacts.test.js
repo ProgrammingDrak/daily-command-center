@@ -25,6 +25,9 @@ function makeStore(seed) {
     async getBlocksByDate(date, ws) {
       return store.filter((b) => b.date === date && !b.deleted_at && (!ws || b.workspace_id === ws));
     },
+    async getBlocksByKind(kind, ws) {
+      return store.filter((b) => (b.properties || {}).kind === kind && !b.deleted_at && (!ws || b.workspace_id === ws));
+    },
     async createBlock({ id, type, parent_id, date, properties, sort_order, user_id, workspace_id }) {
       const b = { id: id || "blk-" + (++seq), type, parent_id: parent_id || null, date, properties, sort_order, user_id, workspace_id, deleted_at: null };
       store.push(b);
@@ -38,6 +41,12 @@ function makeStore(seed) {
       if (sort_order !== undefined) b.sort_order = sort_order;
       if (parent_id !== undefined) b.parent_id = parent_id;
       if (date !== undefined) b.date = date;
+      return b;
+    },
+    async deleteBlock(id) {
+      const b = store.find((x) => x.id === id);
+      if (!b) throw new Error("not found " + id);
+      b.deleted_at = new Date().toISOString();
       return b;
     },
   };
@@ -223,6 +232,62 @@ test("placeApprovedAction stamps the originating proposal placed + placedDate (d
   assert.equal(proposal.properties.status, "placed");   // Recap tab reads this as "Scheduled ✓"
   assert.equal(proposal.properties.placedDate, "2026-07-20");
   assert.equal(proposal.properties.placedStart, "14:00");
+});
+
+test("listProposedActions projects only open meeting proposals with meeting context", async () => {
+  seedMeeting("mlist", { title: "Weekly planning", start: "10:00", end: "10:30" });
+  mem.store.push(
+    { id: "plist", type: "block", parent_id: "mlist", date: "2026-07-09", created_at: "2026-07-09T11:00:00Z",
+      properties: { kind: "proposed_action_item", text: "Send the brief", owner: "drake", priority: "High", status: "proposed" }, workspace_id: "ws-1", user_id: 1, deleted_at: null },
+    { id: "placed-list", type: "block", parent_id: "mlist", date: "2026-07-09",
+      properties: { kind: "proposed_action_item", text: "Already placed", status: "placed" }, workspace_id: "ws-1", user_id: 1, deleted_at: null }
+  );
+  const rows = await automation.listProposedActions({ workspaceId: "ws-1" });
+  const row = rows.find(item => item.id === "plist");
+  assert.deepEqual(row, {
+    id: "plist", meetingId: "mlist", meetingTitle: "Weekly planning", meetingDate: "2026-07-09",
+    meetingStart: "10:00", meetingEnd: "10:30", title: "Send the brief", owner: "drake",
+    priority: "High", createdAt: "2026-07-09T11:00:00Z",
+  });
+  assert.equal(rows.some(item => item.id === "placed-list"), false);
+});
+
+test("dismissProposedAction removes a proposal from the elevation read model", async () => {
+  seedMeeting("mdismiss", { title: "Review" });
+  mem.store.push({ id: "pdismiss", type: "block", parent_id: "mdismiss", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "No longer needed", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  await automation.dismissProposedAction("mdismiss", "pdismiss", { workspaceId: "ws-1" });
+  assert.equal((await mem.getBlock("pdismiss")).properties.status, "dismissed");
+  assert.equal((await automation.listProposedActions({ workspaceId: "ws-1" })).some(item => item.id === "pdismiss"), false);
+});
+
+test("placeProposedAction retries from an already-approved child without duplicating it", async () => {
+  seedMeeting("mretry", { title: "Retry review" });
+  mem.store.push({ id: "pretry", type: "block", parent_id: "mretry", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Retry the placement", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const approved = await automation.approveActions("mretry", { workspaceId: "ws-1", userId: 1, actionIds: ["pretry"] });
+  const approvedId = approved.approvedBlocks[0].id;
+  const before = childrenOf("mretry").length;
+  const result = await automation.placeProposedAction("mretry", "pretry", {
+    workspaceId: "ws-1", userId: 1, date: "2026-07-21",
+  });
+  assert.equal(result.actionBlockId, approvedId);
+  assert.equal(childrenOf("mretry").length, before - 1, "placement detaches the existing approved child");
+  assert.equal((await mem.getBlock("pretry")).properties.status, "placed");
+});
+
+test("approved but unplaced actions remain visible and can be dismissed cleanly", async () => {
+  seedMeeting("mapproved", { title: "Approved review" });
+  mem.store.push({ id: "papproved", type: "block", parent_id: "mapproved", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Remove me", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const approved = await automation.approveActions("mapproved", { workspaceId: "ws-1", userId: 1, actionIds: ["papproved"] });
+  assert.equal((await automation.listProposedActions({ workspaceId: "ws-1" })).some(item => item.id === "papproved"), true);
+  await automation.dismissProposedAction("mapproved", "papproved", { workspaceId: "ws-1" });
+  assert.equal((await mem.getBlock("papproved")).properties.status, "dismissed");
+  assert.equal(await mem.getBlock(approved.approvedBlocks[0].id), null);
 });
 
 test("placeApprovedAction 404s on a missing action and a cross-workspace action", async () => {

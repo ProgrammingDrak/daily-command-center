@@ -260,13 +260,14 @@ test("itinerary source buttons use the canonical safe URL and label mapping", ()
     "the row renderer must not carry a second Slack-only label rule");
 });
 
-test("scheduling a triage item does not resolve its inbound message", () => {
-  const rec = triageCode.slice(triageCode.indexOf("function recordTriageScheduled("));
+test("scheduling a triage item persists placement without resolving its inbound message", () => {
+  const rec = triageCode.slice(triageCode.indexOf("async function recordTriageScheduled("));
   const fn = rec.slice(0, rec.indexOf("\nasync function scheduleTriageOnDate("));
-  assert.equal(/persistTriageSuppression\(/.test(fn), false,
-    "Schedule creates a task link but only Done, Quick Complete, and Delete resolve a message");
+  assert.match(fn, /persistTriageSuppression\(triageId,item,"scheduled"/,
+    "Schedule writes a dateless placement link so tomorrow cannot elevate it again");
   const sup = require("node:fs").readFileSync(require.resolve("./triage-suppressions.js"), "utf8");
-  assert.match(sup, /reason: reason === "deleted" \? "deleted" : "done"/);
+  assert.match(sup, /\["scheduled", "deleted"\]\.includes\(reason\)/,
+    "scheduled is distinct from Done/Delete and must not be reported as a source resolution");
 });
 
 test("scheduling a triage item onto the VIEWED day refolds the itinerary", () => {
