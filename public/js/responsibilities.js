@@ -321,7 +321,10 @@
         onScheduled:async function(info){
           try{
             if(info&&info.persisted)await info.persisted;
-            if(typeof addSubtask==="function"&&info&&info.localId){defaults.forEach(function(t){if(t)addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start});});}
+            if(typeof addSubtask==="function"&&info&&info.localId){
+              const children=defaults.map(function(t){return t?addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start}):null;});
+              await Promise.all(children.map(function(child){return child&&child._persisted;}).filter(Boolean));
+            }
           }catch(e){console.warn("[responsibilities] parent or subtask persistence failed",e);return;}
           if(info&&info.localId&&typeof toggleDone==="function")toggleDone(info.localId);
           finish();
@@ -645,7 +648,8 @@
           // the canonical parent_id edge.
           if(info&&info.persisted)await info.persisted;
           if(typeof addSubtask==="function"&&info&&info.localId){
-            defaults.forEach(function(t){if(t)addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start});});
+            const children=defaults.map(function(t){return t?addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start}):null;});
+            await Promise.all(children.map(function(child){return child&&child._persisted;}).filter(Boolean));
           }
         }catch(e){console.warn("[responsibilities] parent or subtask persistence failed",e);return;}
         registerOpenInstance(id,info);

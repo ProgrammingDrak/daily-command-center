@@ -139,7 +139,7 @@ test("future responsibility children wait for the parent write acknowledgement",
   };
   const window = await clientWindow([item], {
     openSchedulePicker(_title, _duration, options) { pickerOptions = options; },
-    addSubtask(parentId, title, placement) { children.push({ parentId, title, placement }); },
+    addSubtask(parentId, title, placement) { const child = { parentId, title, placement }; children.push(child); return child; },
   });
 
   window.scheduleRepeatResponsibility("laundry");
@@ -158,4 +158,43 @@ test("future responsibility children wait for the parent write acknowledgement",
   assert.deepEqual(children.map((child) => child.title), ["Wash", "Dry", "Fold"]);
   assert.ok(children.every((child) => child.parentId === "future-parent"));
   assert.ok(children.every((child) => child.placement.date === "2026-08-14"));
+});
+
+test("schedule-then-complete waits for every default subtask write", async () => {
+  let releaseChild;
+  const pendingChild = new Promise((resolve) => { releaseChild = resolve; });
+  const toggled = [];
+  let insertedOptions;
+  const item = {
+    id: "laundry-complete",
+    properties: {
+      title: "Do Laundry",
+      estimatedMinutes: 30,
+      defaultSubtasks: ["Wash", "Dry", "Fold"],
+    },
+  };
+  const window = await clientWindow([item], {
+    insertTaskNow(_title, _duration, options) { insertedOptions = options; },
+    addSubtask(_parentId, title) {
+      const persisted = title === "Dry" ? pendingChild : Promise.resolve();
+      return Object.defineProperty({ title }, "_persisted", { value: persisted, enumerable: false });
+    },
+    toggleDone(id) { toggled.push(id); },
+  });
+
+  window.completeRepeatResponsibility("laundry-complete");
+  assert.ok(insertedOptions && typeof insertedOptions.onScheduled === "function");
+  const callback = insertedOptions.onScheduled({
+    localId: "complete-parent",
+    dateStr: "2026-08-13",
+    start: "08:00",
+    persisted: Promise.resolve(),
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(toggled, [], "the parent cannot complete while any child write is pending");
+
+  releaseChild();
+  await callback;
+  assert.deepEqual(toggled, ["complete-parent"]);
 });

@@ -415,6 +415,10 @@ function addSubtask(taskId, text, options){
     blockProps.type="task";blockProps.subtaskOf=taskId;blockProps.publicVisibility="public";blockProps.added_at=new Date().toISOString();
     created=window.blockStore.createBlock("block",blockProps,{date:date});
   }
+  // Keep the public return value as the task object, but expose its write
+  // acknowledgement non-enumerably so compound actions can wait without this
+  // runtime-only promise leaking into task serialization or persisted JSON.
+  Object.defineProperty(task,"_persisted",{value:Promise.resolve(created),enumerable:false});
   // Snapshot/rebalance the parent's point pie now that it has (one more) subtask.
   if(onViewedDay&&window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(taskId);
   // A carryover parent's new child only appears once the lane re-reads its origin day,
