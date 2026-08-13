@@ -269,14 +269,15 @@ function mergeTriageForIngest(existing, incoming) {
 // express.json({limit:"5mb"}) would let one request store a multi-megabyte title that
 // then rides along on day reads. The 220/1000 limits match what the repo already
 // applies to the same two fields in routes/social-todo.js.
-function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at, trivial, conversationId, receivedAt, itemSnapshot }) {
+function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at, trivial, conversationId, receivedAt, itemSnapshot, taskId, scheduledFor }) {
   const snapshot = snapshotTriageItem(itemSnapshot);
+  const normalizedReason = ["scheduled", "deleted"].includes(reason) ? reason : "done";
   return {
     kind: SUPPRESSION_KIND,
     triage_id: String(triageId || "").trim().slice(0, 300),
     key: String(key || "").trim().slice(0, 300),
     itemTitle: String(itemTitle || "").trim().slice(0, 220),
-    reason: reason === "deleted" ? "deleted" : "done",
+    reason: normalizedReason,
     // A trivial dismissal ("not worth it") is handled, but it is NOT completed work.
     // completedTriageTasksForDate drops it, and that check used to read the local
     // overlay -- which the phone does not have. Without persisting the flag, a trivial
@@ -288,6 +289,8 @@ function buildSuppressionProperties({ triageId, key, itemTitle, reason, note, at
     conversation_id: clipped(conversationId || triageConversationId(snapshot), 300),
     received_at: clipped(receivedAt || triageReceivedAt(snapshot), 80),
     itemSnapshot: snapshot,
+    task_id: clipped(taskId, 300),
+    scheduled_for: clipped(scheduledFor, 80),
     active: true,
     reopenedAt: "",
   };
@@ -310,6 +313,8 @@ function suppressionFromBlock(block) {
     conversation_id: p.conversation_id || "",
     received_at: p.received_at || "",
     item: p.itemSnapshot && typeof p.itemSnapshot === "object" ? p.itemSnapshot : {},
+    task_id: p.task_id || "",
+    scheduled_for: p.scheduled_for || "",
     active: p.active !== false && !block.deleted_at,
     reopened_at: p.reopenedAt || "",
     // created_at arrives from node-postgres as a Date; ISO-normalize so every consumer

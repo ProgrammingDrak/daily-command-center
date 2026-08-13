@@ -118,6 +118,51 @@
     ].filter(Boolean).join(" · ");
   }
 
+  // ── meeting follow-ups ──
+  // Recap actions are durable child blocks, intentionally excluded from ordinary
+  // task and carryover queries until Drake approves one. This read model keeps
+  // that approval boundary while making the proposals visible beside Sweep triage.
+  async function loadMeetingActions() {
+    if (typeof fetch !== "function") return [];
+    try {
+      const res = await fetch("/api/meetings/actions/proposed");
+      const body = await res.json();
+      return res.ok && Array.isArray(body.items) ? body.items : [];
+    } catch (e) { return []; }
+  }
+  async function postJson(url, body) {
+    const res = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Request failed");
+    return data;
+  }
+  async function placeMeetingAction(item, date) {
+    try {
+      const url = "/api/meetings/" + encodeURIComponent(item.meetingId) + "/actions/" +
+        encodeURIComponent(item.id) + "/schedule";
+      await postJson(url, { date: date });
+      return true;
+    } catch (e) {
+      if (typeof showToast === "function") showToast(e.message || "Could not schedule meeting follow-up", "error");
+      return false;
+    }
+  }
+  async function dismissMeetingAction(item) {
+    try {
+      await postJson(
+        "/api/meetings/" + encodeURIComponent(item.meetingId) + "/actions/" + encodeURIComponent(item.id) + "/dismiss",
+        {}
+      );
+      return true;
+    } catch (e) {
+      if (typeof showToast === "function") showToast(e.message || "Could not dismiss meeting follow-up", "error");
+      return false;
+    }
+  }
+
   // ── modal (reuses the .carryover-* CSS) ──
   function ensureModal() {
     let overlay = document.getElementById("catchup-overlay");
@@ -164,6 +209,7 @@
     const roots = rootsOf(pool);
     const triage = cfg.triage || [];
     const olderTriage = cfg.olderTriage || [];
+    const meetingActions = cfg.meetingActions || [];
     const hintEl = overlay.querySelector("#catchup-hint");
     const listEl = overlay.querySelector("#catchup-list");
     const allBtn = overlay.querySelector("#catchup-all");
@@ -174,22 +220,26 @@
     const openCount = openOf(pool).length;
     const taskPhrase = roots.length + " unfinished task" + (roots.length === 1 ? "" : "s") +
       " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "");
-    const triagePhrase = triage.length + " item" + (triage.length === 1 ? "" : "s") + " waiting on a reply";
-    hintEl.textContent =
-      (roots.length && triage.length ? taskPhrase + " and " + triagePhrase
-        : triage.length ? triagePhrase : taskPhrase) +
+    const triagePhrase = triage.length + " Sweep item" + (triage.length === 1 ? "" : "s") + " waiting";
+    const meetingPhrase = meetingActions.length + " meeting follow-up" + (meetingActions.length === 1 ? "" : "s");
+    const phrases = [];
+    if (triage.length) phrases.push(triagePhrase);
+    if (meetingActions.length) phrases.push(meetingPhrase);
+    if (roots.length) phrases.push(taskPhrase);
+    hintEl.textContent = phrases.join(phrases.length > 2 ? ", " : " and ") +
       " — move what still matters, drop what doesn't. Anything you leave stays where it is.";
     listEl.innerHTML = "";
 
     const rowEls = new Map();   // unfinished rows, keyed by ev.id
     const triEls = new Map();   // triage rows, keyed by triage item id
+    const meetingEls = new Map(); // recap proposals, keyed by proposed-action id
     let detailSeq = 0;
     // Closing on the last row is the same courtesy either list gives: once there is
     // nothing left to answer, the modal has no reason to sit there. An unexpanded
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
-    const closeIfDrained = () => { if (!rowEls.size && !triEls.size && !olderPending) close(); };
+    const closeIfDrained = () => { if (!rowEls.size && !triEls.size && !meetingEls.size && !olderPending) close(); };
     const settle = (res, focusRow) => {
       if (!res) return false;
       const orderedRows = Array.from(rowEls.values());
@@ -213,17 +263,19 @@
       }
       return true;
     };
-    // Only label the groups when BOTH are on screen; with one kind of row the hint
-    // above already said what this is.
+    // Labels appear when more than one source is present. That preserves the compact
+    // one-lane prompt while giving Sweep triage, meeting actions, and slipped tasks
+    // their own sections whenever they share the modal.
+    const sectionCount = Number(!!triage.length) + Number(!!meetingActions.length) + Number(!!roots.length);
     const label = (text) => {
-      if (!roots.length || !triage.length) return;
+      if (sectionCount < 2) return;
       const el = document.createElement("div");
       el.className = "cu-section-label";
       el.textContent = text;
       listEl.appendChild(el);
     };
 
-    label("Needs a reply");
+    if (triage.length) label("Email and Slack");
     const addTriageRow = (item, before) => {
       const el = document.createElement("div");
       el.className = "carryover-row";
@@ -286,7 +338,51 @@
       listEl.appendChild(more);
     }
 
-    label("Slipped");
+    if (meetingActions.length) label("Meeting follow-ups");
+    meetingActions.forEach(item => {
+      const el = document.createElement("div");
+      const mine = item.owner !== "other";
+      el.className = "carryover-row cu-meeting-row";
+      el.innerHTML =
+        '<div class="carryover-row-info">' +
+          '<div class="cu-title-line">' +
+            '<div class="carryover-row-title"></div>' +
+            (mine ? calBtn("cu-cal", "Schedule on a day") : "") +
+          '</div>' +
+          '<div class="carryover-row-meta">' + esc(item.meetingTitle || "Meeting") +
+            (item.meetingDate ? " · " + esc(prettyDate(item.meetingDate)) : "") +
+            " · " + esc(item.priority || "Medium") +
+            (mine ? "" : " · delegated") +
+          '</div>' +
+        '</div>' +
+        '<div class="carryover-row-actions">' +
+          (mine ? '<button class="carryover-btn carryover-btn-schedule cu-mtg-today">Today</button>' +
+            '<button class="carryover-btn carryover-btn-schedule cu-mtg-tomorrow">Tomorrow</button>' : "") +
+          '<button class="carryover-btn cu-mtg-recap">Recap</button>' +
+          '<button class="carryover-btn carryover-btn-drop cu-mtg-drop">Dismiss</button>' +
+        '</div>';
+      el.querySelector(".carryover-row-title").textContent = item.title || "Meeting follow-up";
+      const busy = on => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
+      const forget = () => { el.remove(); meetingEls.delete(item.id); closeIfDrained(); };
+      const runMeeting = async fn => { busy(true); if (await fn()) forget(); else busy(false); };
+      const place = date => runMeeting(() => placeMeetingAction(item, date));
+      if (mine) {
+        el.querySelector(".cu-mtg-today").addEventListener("click", () => place(todayStr()));
+        el.querySelector(".cu-mtg-tomorrow").addEventListener("click", () => place(tomorrowStr()));
+        wireCal(el.querySelector(".cu-cal"), item.title || "Meeting follow-up", place);
+      }
+      el.querySelector(".cu-mtg-recap").addEventListener("click", () => {
+        if (typeof openPrepModal === "function") openPrepModal({
+          id: item.meetingId, meetingBlockId: item.meetingId,
+          title: item.meetingTitle || "Meeting", start: item.meetingStart, end: item.meetingEnd
+        }, { defaultTab: "recap" });
+      });
+      el.querySelector(".cu-mtg-drop").addEventListener("click", () => runMeeting(() => dismissMeetingAction(item)));
+      meetingEls.set(item.id, el);
+      listEl.appendChild(el);
+    });
+
+    if (roots.length) label("Slipped");
     roots.forEach(ev => {
       const el = document.createElement("div");
       const kids = CO.descendants(ev, pool).length;
@@ -407,7 +503,8 @@
       const original = allBtn.textContent;
       const queue = [...rowEls.keys()];
       const triQueue = [...triEls.keys()];
-      const step = (n) => { allBtn.textContent = "Moving " + n + " of " + (queue.length + triQueue.length) + "…"; };
+      const meetingQueue = meetingActions.filter(item => item.owner !== "other" && meetingEls.has(item.id));
+      const step = (n) => { allBtn.textContent = "Moving " + n + " of " + (queue.length + triQueue.length + meetingQueue.length) + "…"; };
       let moved = 0;
       const target = todayStr();
       for (const id of queue) {
@@ -428,8 +525,13 @@
         // per-item toasts don't bury the summary one.
         if (await scheduleTriageOnDate(id, target, { deferRefold: true, silent: true })) placed++;
       }
+      let meetingPlaced = 0;
+      for (const item of meetingQueue) {
+        step(moved + placed + meetingPlaced + 1);
+        if (await placeMeetingAction(item, target)) meetingPlaced++;
+      }
       // One refold for the whole batch, after BOTH loops have written.
-      if (moved || placed) await CO.refoldViewedDay(target);
+      if (moved || placed || meetingPlaced) await CO.refoldViewedDay(target);
       if (placed) {
         if (typeof buildScheduleTriage === "function") buildScheduleTriage();
         if (typeof buildTriage === "function") buildTriage();
@@ -440,6 +542,7 @@
       const parts = [];
       if (moved) parts.push(moved + " unfinished task" + (moved === 1 ? "" : "s"));
       if (placed) parts.push(placed + " triage item" + (placed === 1 ? "" : "s"));
+      if (meetingPlaced) parts.push(meetingPlaced + " meeting follow-up" + (meetingPlaced === 1 ? "" : "s"));
       if (typeof showToast === "function" && parts.length) showToast("Moved " + parts.join(" and ") + " to today", "success");
     };
     allBtn.addEventListener("click", _allHandler, { once: true });
@@ -457,7 +560,8 @@
     const CO = window.DCC && window.DCC.Carryover;
     if (!CO || reviewed()) return;
     let res = { rows: [], total: 0 };
-    try { res = await CO.collect(); } catch (e) { return; }
+    let meetingActions = [];
+    try { [res, meetingActions] = await Promise.all([CO.collect(), loadMeetingActions()]); } catch (e) { return; }
     const triage = activeTriage();
     // Everything already waiting at boot is "the morning recap", not "an arrival" —
     // banking it here is what stops the courier from running the pet at page load
@@ -466,8 +570,8 @@
     if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.map(i => i.id));
     // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
     // nothing to catch up on, and prompting on it opened an empty-feeling modal.
-    if (!rootsOf(res.rows).length && !triage.length) { markReviewed(); return; }
-    openPrompt(res.rows, res.total, { triage: triage });
+    if (!rootsOf(res.rows).length && !triage.length && !meetingActions.length) { markReviewed(); return; }
+    openPrompt(res.rows, res.total, { triage: triage, meetingActions: meetingActions });
   }
 
   // The courier's prompt: the pet just delivered, so lead with what arrived. Older
@@ -486,12 +590,32 @@
     openPrompt(res.rows, res.total, {
       title: "Fresh from the sweep",
       triage: fresh,
-      olderTriage: all.filter(i => !ids.has(i.id))
+      olderTriage: all.filter(i => !ids.has(i.id)),
+      meetingActions: await loadMeetingActions()
+    });
+    return true;
+  }
+
+  // A recap can land at either scheduled sweep, after the once-per-day morning
+  // flag has already been set. The SSE handler calls this entry point so newly
+  // extracted meeting actions are elevated immediately instead of waiting for a
+  // manual trip back to the meeting card.
+  async function openMeetingActions() {
+    const CO = window.DCC && window.DCC.Carryover;
+    if (!CO) return false;
+    const meetingActions = await loadMeetingActions();
+    if (!meetingActions.length) return false;
+    let res = { rows: [], total: 0 };
+    try { res = await CO.collect(); } catch (e) {}
+    openPrompt(res.rows, res.total, {
+      title: "Fresh meeting follow-ups",
+      triage: activeTriage(),
+      meetingActions: meetingActions
     });
     return true;
   }
 
   window.initCatchUp = initCatchUp;
   const DCC = (window.DCC = window.DCC || {});
-  DCC.CatchUp = { openArrivals: openArrivals };
+  DCC.CatchUp = { openArrivals: openArrivals, openMeetingActions: openMeetingActions };
 })();

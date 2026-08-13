@@ -28,6 +28,7 @@ const createTaskTiming = require("../lib/task-timing");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
 const createResponsibilityStore = require("../responsibility-store");
+const triageSuppressions = require("../triage-suppressions");
 const {
   firstFreeSlot, minutesToHHMM, hhmmToMinutes, taskDuration,
   buildResponsibilityTaskProps, parseOffersAmpAlert,
@@ -70,6 +71,72 @@ module.exports = function mount(app, ctx) {
   // actualMinutes gets finalized. In-memory candidate filter first, so a day with
   // no orphaned timer costs zero queries. See lib/task-timing.js.
   const { reconcileTiming } = createTaskTiming({ pool, blockDB, timeZone: ctx.APP_TIME_ZONE });
+
+  function isCompleted(block) {
+    const props = (block && block.properties) || {};
+    return props.status === "done" || props.done === true || !!props.completedAt;
+  }
+
+  // The itinerary task is the durable lifecycle handle for a scheduled Sweep item.
+  // Completion upgrades its placement link to done, reopen restores scheduled, and
+  // deleting unfinished work releases only the placement link back to triage.
+  async function transitionLinkedTriage(block, reason, atMs) {
+    const props = (block && block.properties) || {};
+    const triageId = String(props.triageId || props.triage_id || "").trim();
+    if (!triageId || typeof blockDB.getBlocksByKind !== "function") return null;
+    const workspaceId = block.workspace_id || null;
+    const rows = await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, workspaceId);
+    const active = rows
+      .map((row) => ({ row, suppression: triageSuppressions.suppressionFromBlock(row) }))
+      .filter(({ suppression }) => suppression && suppression.active && suppression.triage_id === triageId);
+    if (reason === "release") {
+      let released = 0;
+      for (const { row, suppression } of active) {
+        if (suppression.reason !== "scheduled") continue;
+        await blockDB.updateBlock(row.id, {
+          properties: { ...(row.properties || {}), active: false, reopenedAt: new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString() },
+        });
+        released += 1;
+      }
+      if (released) broadcast("dcc-state-changed", { source: "triage-suppression", action: "remove" }, workspaceId);
+      return released;
+    }
+    const deleted = active.find(({ suppression }) => suppression.reason === "deleted");
+    if (deleted) return deleted.suppression;
+    const nextReason = reason === "scheduled" ? "scheduled" : "done";
+    const at = new Date(Number.isFinite(atMs) ? atMs : Date.now()).toISOString();
+    if (active.length) {
+      let last = null;
+      for (const { row } of active) {
+        const nextProps = {
+          ...(row.properties || {}), reason: nextReason, at,
+          task_id: String(props.local_id || block.id || "").slice(0, 300),
+          scheduled_for: String(block.date || "").slice(0, 80), active: true,
+        };
+        last = await blockDB.updateBlock(row.id, { properties: nextProps });
+      }
+      const suppression = triageSuppressions.suppressionFromBlock(last);
+      broadcast("dcc-state-changed", { source: "triage-suppression", action: "update" }, workspaceId);
+      return suppression;
+    }
+    const created = await blockDB.createBlock({
+      type: "block",
+      properties: triageSuppressions.buildSuppressionProperties({
+        triageId, key: String(props.triageKey || ""), itemTitle: props.triageTitle || props.title || "",
+        reason: nextReason, at, taskId: props.local_id || block.id, scheduledFor: block.date || "",
+        itemSnapshot: {
+          id: triageId, title: props.triageTitle || props.title || "", type: props.triageType || "",
+          source_ref: props.triageSourceRef || "", received_at: props.triageReceivedAt || "",
+          conversation_id: props.triageConversationId || "",
+        },
+      }),
+      user_id: block.user_id || null,
+      workspace_id: workspaceId,
+    });
+    const suppression = triageSuppressions.suppressionFromBlock(created);
+    broadcast("dcc-state-changed", { source: "triage-suppression", action: "add" }, workspaceId);
+    return suppression;
+  }
   // Never let a read fail on a reconcile: the itinerary must still render.
   async function withReconciledTiming(blocks, req) {
     try { await reconcileTiming(blocks, { userId: req.session && req.session.userId, workspaceId: req.workspaceId }); }
@@ -273,6 +340,7 @@ module.exports = function mount(app, ctx) {
       else if (body._replay) completionMetrics.replayed++;
       else completionMetrics.accepted++;
       if (result.persistenceTarget === "legacy_overlay") completionMetrics.legacyFallback++;
+      if (result.task) await transitionLinkedTriage(result.task, isCompleted(result.task) ? "done" : "scheduled", Date.parse(body.completedAt || ""));
       const blockIds = result.broadcastIds || (result.task && result.task.id ? [result.task.id] : []);
       if (blockIds.length) {
         broadcast("blocks-changed", {
@@ -345,6 +413,7 @@ module.exports = function mount(app, ctx) {
         userId,
         workspaceId,
       });
+      if (result.task) await transitionLinkedTriage(result.task, isCompleted(result.task) ? "done" : "scheduled", Date.parse(props.completedAt || props.doneAt || ""));
       const blockIds = result.broadcastIds || [req.params.id];
       broadcast("blocks-changed", {
         action: "completion", blockIds, clientId: req.body._clientId, mutationId,
@@ -352,6 +421,8 @@ module.exports = function mount(app, ctx) {
       return result.task;
     }
     const result = await blockDB.updateBlock(req.params.id, req.body);
+    if (!isCompleted(existing) && isCompleted(result)) await transitionLinkedTriage(result, "done", Date.now());
+    else if (isCompleted(existing) && !isCompleted(result)) await transitionLinkedTriage(result, "scheduled", Date.now());
     broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
     return result;
   }));
@@ -370,6 +441,7 @@ module.exports = function mount(app, ctx) {
           scope: "series",
         })
       : await blockDB.deleteBlock(req.params.id);
+    await transitionLinkedTriage(existing, "release", Date.now());
     broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId);
     return result;
   }));
@@ -391,6 +463,7 @@ module.exports = function mount(app, ctx) {
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     const result = await blockDB.undeleteBlock(req.params.id);
+    if (!isCompleted(result)) await transitionLinkedTriage(result, "scheduled", Date.now());
     // `undeletedIds` is the signal Track B asked for: block-store.js keeps a local
     // _tombstones set that makes handleBlocksChanged SKIP re-fetching an id it believes
     // is deleted, so a restore performed in another tab would stay invisible until a
@@ -458,6 +531,12 @@ module.exports = function mount(app, ctx) {
     }
 
     const opsWithUser = operations.map(op => op && op.op === "create" ? { ...op, user_id: userId, workspace_id: workspaceId } : op);
+    const deletedBlocks = [];
+    for (const op of opsWithUser) {
+      if (!op || op.op !== "delete" || !op.id) continue;
+      const block = await blockDB.getBlockIncludingDeleted(op.id);
+      if (block) deletedBlocks.push(block);
+    }
 
     // A3 idempotency, resolved BEFORE batchOp opens its transaction. It has to
     // happen out here: findForDedupe reads through the pool and could not see the
@@ -535,6 +614,8 @@ module.exports = function mount(app, ctx) {
       if (!blockDB.isIdempotencyConflict(err)) throw err;
       result = await runBatch(opsWithUser);
     }
+
+    for (const block of deletedBlocks) await transitionLinkedTriage(block, "release", Date.now());
 
     broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean), clientId: _clientId }, req.workspaceId);
     return result;

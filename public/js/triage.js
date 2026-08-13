@@ -598,7 +598,8 @@ function triageItemKeyFor(item) {
   const source = item.source || item.type || "unknown";
   return source + "|" + (item.source_id || item.id || item.title || "");
 }
-async function persistTriageSuppression(triageId, item, reason, note, trivial) {
+async function persistTriageSuppression(triageId, item, reason, note, trivial, opts) {
+  opts = opts || {};
   const res = await fetch("/api/triage/suppressions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -612,6 +613,8 @@ async function persistTriageSuppression(triageId, item, reason, note, trivial) {
       trivial: !!trivial,
       conversation_id: item && (item.conversationId || item.conversation_id || item.thread_id || item.threadId) || "",
       received_at: item && (item.receivedAt || item.received_at) || "",
+      task_id: opts.taskId || "",
+      scheduled_for: opts.scheduledFor || "",
       item: item || null
     })
   });
@@ -1068,9 +1071,23 @@ function triagePointsChip(item){
   const title="Completing this triage item earns about "+scoring.awardPoints+" points. "+scoring.durationMinutes+"m, "+scoring.effortTier+" effort, "+scoring.attentionTier+" attention, "+(scoring.importanceTier||"normal")+" importance.";
   return '<span class="points-chip'+(scoring.awardPoints>=20?' bonus':'')+'" title="'+title.replace(/"/g,'&quot;')+'">'+scoring.awardPoints+' pts</span>';
 }
+function currentTriageScheduled(){
+  const ledger=__state&&__state.triage&&__state.triage.suppressed_items;
+  if(!Array.isArray(ledger))return loadTriageScheduled();
+  const links={};
+  ledger.forEach(s=>{
+    if(s&&s.active!==false&&s.reason==="scheduled"&&s.triage_id){
+      links[s.triage_id]={taskId:s.task_id||"",scheduled_at:s.at||"",title:s.title||""};
+    }
+  });
+  return links;
+}
 function activeTriageItems(){
   const dismissed=loadDismissed();
-  const scheduledTriage=loadTriageScheduled();
+  // Once the server supplies the durable ledger it is the authority. Keeping the
+  // old local scheduled map in the filter forever would hide an item even after
+  // its linked task was deleted and the server intentionally released it.
+  const scheduledTriage=currentTriageScheduled();
   const deletedTriage=loadDeletedTriage();
   const suppressed=serverTriageSuppressions();
   return (INIT_TRIAGE||[]).filter(i=>!dismissed[i.id]&&!scheduledTriage[i.id]&&!deletedTriage.includes(i.id)&&!suppressed[i.id]);
@@ -1085,7 +1102,13 @@ function triageTaskProps(triageId,item){
     meta:"Triage item",
     detail:[item.summary,item.notes].filter(Boolean).join("\n\n"),
     tags:["triage"],
-    triageId:triageId
+    triageId:triageId,
+    triageKey:triageItemKeyFor(item),
+    triageTitle:item.title||"",
+    triageType:item.type||item.source||"",
+    triageSourceRef:item.source_ref||item.link||"",
+    triageReceivedAt:item.receivedAt||item.received_at||"",
+    triageConversationId:item.conversationId||item.conversation_id||item.thread_id||item.threadId||""
   };
 }
 // Already on the schedule? Two different questions, so two lookups: an exact id
@@ -1104,8 +1127,22 @@ function existingTriageTask(triageId,item,dateStr){
 }
 // Record the triage -> task link and repaint. saveTriageScheduled feeds
 // activeTriageItems(), so this is also what makes the item leave the strip.
-function recordTriageScheduled(triageId,item,taskId,toastMsg,opts){
+async function recordTriageScheduled(triageId,item,taskId,toastMsg,opts){
   opts=opts||{};
+  try{
+    const saved=await persistTriageSuppression(triageId,item,"scheduled","",false,{
+      taskId:taskId,
+      scheduledFor:opts.scheduledFor||((typeof viewDate!=="undefined"&&viewDate)?viewDate:((__state&&__state.date)||""))
+    });
+    if(__state&&__state.triage&&saved&&saved.suppression){
+      const list=(__state.triage.suppressed_items||[]).filter(s=>s.triage_id!==triageId);
+      list.push(saved.suppression);
+      __state.triage.suppressed_items=list;
+    }
+  }catch(e){
+    if(typeof showToast==="function")showToast("Task was created, but triage scheduling did not persist: "+e.message,"error",5200);
+    return false;
+  }
   const st=loadTriageScheduled();
   st[triageId]={taskId:taskId,scheduled_at:new Date().toISOString(),title:item.title};
   saveTriageScheduled(st);
@@ -1113,9 +1150,10 @@ function recordTriageScheduled(triageId,item,taskId,toastMsg,opts){
   // link removes it from this day's strip; only Done, Quick Complete, or Delete
   // writes a durable exact-item resolution.
   if(toastMsg&&typeof showToast==="function")showToast(toastMsg,"success");
-  if(opts.deferRepaint||opts.deferRefold)return;
+  if(opts.deferRepaint||opts.deferRefold)return true;
   buildScheduleTriage();
   buildTriage();
+  return true;
 }
 // Put a triage item on a DATE, no time step. The catch-up modal's Today /
 // Tomorrow / calendar-pick all land here: one click, one free slot, done.
@@ -1130,14 +1168,15 @@ async function scheduleTriageOnDate(triageId,dateStr,opts){
   opts=opts||{};
   const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
   if(!item||!dateStr)return null;
-  const scheduledTriage=loadTriageScheduled();
+  const scheduledTriage=currentTriageScheduled();
   if(scheduledTriage[triageId]){
     if(typeof showToast==="function")showToast("Already scheduled","info");
     return scheduledTriage[triageId];   // already handled: the row should go
   }
   const existing=existingTriageTask(triageId,item,dateStr);
   if(existing){
-    recordTriageScheduled(triageId,item,existing.id,null,opts);
+    const linked=await recordTriageScheduled(triageId,item,existing.id,null,Object.assign({},opts,{scheduledFor:dateStr}));
+    if(!linked)return null;
     if(typeof showToast==="function")showToast("Already on the schedule","info");
     return existing;                     // the link WAS written
   }
@@ -1174,21 +1213,21 @@ async function scheduleTriageOnDate(triageId,dateStr,opts){
     if(typeof render==="function")render();
   }
   const at=(bp.start&&typeof f12==="function")?(" at "+f12(bp.start)):"";
-  recordTriageScheduled(triageId,item,bp.local_id||block.id,opts.silent?null:("Scheduled "+label+at),opts);
+  const linked=await recordTriageScheduled(triageId,item,bp.local_id||block.id,opts.silent?null:("Scheduled "+label+at),Object.assign({},opts,{scheduledFor:dateStr}));
+  if(!linked)return null;
   return block;
 }
-function scheduleTriageItem(triageId){
+async function scheduleTriageItem(triageId){
   const item=(INIT_TRIAGE||[]).find(i=>i.id===triageId);
   if(!item)return;
-  const scheduledTriage=loadTriageScheduled();
+  const scheduledTriage=currentTriageScheduled();
   if(scheduledTriage[triageId]){
     if(typeof showToast==="function")showToast("Already scheduled","info");
     return;
   }
   const existing=existingTriageTask(triageId,item);
   if(existing){
-    recordTriageScheduled(triageId,item,existing.id,null);
-    if(typeof showToast==="function")showToast("Already on the schedule","info");
+    if(await recordTriageScheduled(triageId,item,existing.id,null)&&typeof showToast==="function")showToast("Already on the schedule","info");
     return;
   }
   // Reuse the shared task scheduler -- the same day/time + duration picker the
@@ -1196,16 +1235,16 @@ function scheduleTriageItem(triageId){
   // picker's duration buttons bump it up when the case needs more.
   const durMin=triageDuration(item);
   const opts=triageTaskProps(triageId,item);
-  const record=function(taskId){ recordTriageScheduled(triageId,item,taskId,"Triage item scheduled"); };
+  const record=async function(taskId){ return recordTriageScheduled(triageId,item,taskId,"Triage item scheduled"); };
   if(typeof openSchedulePicker==="function"){
     openSchedulePicker(item.title,durMin,Object.assign({},opts,{
-      onScheduled:function(info){ record(info&&(info.localId||info.blockId)); }
+      onScheduled:async function(info){ await record(info&&(info.localId||info.blockId)); }
     }));
     return;
   }
   // Fallback if the picker markup isn't present: schedule directly.
   const newTask=insertTaskFromDrawer(item.title,durMin,opts);
-  record(newTask&&newTask.id);
+  await record(newTask&&newTask.id);
 }
 window.scheduleTriageOnDate=scheduleTriageOnDate;
 window.activeTriageItems=activeTriageItems;
@@ -1445,7 +1484,7 @@ function buildTriage() {
   const deletedTriage = loadDeletedTriage();
 
   // Split into active vs completed (dismissed)
-  const scheduledTriage = loadTriageScheduled();
+  const scheduledTriage = currentTriageScheduled();
   // A server suppression outranks every local overlay: it is the record that survived
   // the day and the sweep. A "deleted" one is gone outright; a "done" one still owes
   // the user a Completed row with an Undo, same as a locally-dismissed item.

@@ -138,6 +138,15 @@ test("ingest reconciliation admits a newer Gmail turn after a legacy cutoff", as
   assert.deepEqual(json.suppressed_resolutions.map((r) => r.id), ["gmail:thread-1:old"]);
 });
 
+test("a scheduled suppression hides the card but is not reported as a source resolution", async () => {
+  const { app } = mountSuppressions([sup("s1", { triage_id: "slack:dm:D1:1", reason: "scheduled", at: "2026-08-06T14:00:00Z" })]);
+  const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    triage: { open_items: [{ id: "slack:dm:D1:1", type: "slack" }] },
+  });
+  assert.deepEqual(json.suppressed_resolutions, [], "scheduling is placement, not source completion");
+});
+
 test("ingest imports source-side replied items into the durable ledger", async () => {
   const { app, blocks } = mountSuppressions();
   const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
@@ -160,6 +169,31 @@ test("ingest imports source-side replied items into the durable ledger", async (
   assert.equal(blocks[0].properties.triage_id, "gmail:thread-1:message-1");
   assert.equal(blocks[0].properties.reason, "done");
   assert.equal(blocks[0].properties.received_at, "2026-08-06T12:00:00Z");
+});
+
+test("a source reply upgrades an existing scheduled link to done", async () => {
+  const { app, blocks } = mountSuppressions([sup("s1", {
+    triage_id: "slack:dm:D1:1",
+    reason: "scheduled",
+    at: "2026-08-06T12:00:00Z",
+  })]);
+  const { json } = await callDcc(app, "POST", "/api/ingest/day-state", {
+    date: "2026-08-06",
+    triage: {
+      open_items: [],
+      resolved_items: [{
+        id: "slack:dm:D1:1",
+        type: "slack",
+        title: "Answered",
+        resolved_at: "2026-08-06T13:00:00Z",
+        resolved_reason: "replied",
+      }],
+    },
+  });
+  assert.equal(json.imported_resolutions, 1);
+  assert.equal(blocks[0].properties.reason, "done");
+  assert.equal(blocks[0].properties.note, "Replied at source");
+  assert.equal(blocks.length, 1);
 });
 
 test("no suppression call happens before the state is written", async () => {
@@ -192,6 +226,28 @@ test("handling the same item twice leaves exactly one row", async () => {
   const b = await callDcc(app, "POST", "/api/triage/suppressions", { triage_id: "gmail:abc", key: "email|gmail:abc", title: "T" });
   assert.equal(a.json.created, true);
   assert.equal(b.json.created, false);
+  assert.equal(blocks.filter((x) => !x.deleted_at).length, 1);
+});
+
+test("Done upgrades an existing scheduled link instead of creating a second row", async () => {
+  const { app, blocks } = mountSuppressions();
+  const scheduled = await callDcc(app, "POST", "/api/triage/suppressions", {
+    triage_id: "gmail:t:m",
+    key: "email|gmail:t:m",
+    title: "Reply",
+    reason: "scheduled",
+    task_id: "task-1",
+    scheduled_for: "2026-08-07",
+  });
+  const done = await callDcc(app, "POST", "/api/triage/suppressions", {
+    triage_id: "gmail:t:m",
+    key: "email|gmail:t:m",
+    title: "Reply",
+    reason: "done",
+  });
+  assert.equal(scheduled.json.suppression.reason, "scheduled");
+  assert.equal(done.json.updated, true);
+  assert.equal(done.json.suppression.reason, "done");
   assert.equal(blocks.filter((x) => !x.deleted_at).length, 1);
 });
 

@@ -56,7 +56,38 @@ module.exports = function mount(app, ctx) {
       // a redo) must leave exactly one row, or Undo would have to delete N of them.
       const existing = await readTriageSuppressionsForWorkspace(workspaceId);
       const already = existing.find((s) => (triageId && s.triage_id === triageId) || (key && s.key === key));
-      if (already) return res.json({ ok: true, suppression: already, created: false });
+      if (already) {
+        const requestedReason = body.reason === "scheduled" ? "scheduled" : (body.reason === "deleted" ? "deleted" : "done");
+        // Scheduling must never downgrade an item that was already completed or
+        // deleted. Done/Delete do upgrade a scheduled link, which is how completing
+        // the linked itinerary task closes the original triage item.
+        if (requestedReason === "scheduled" && already.reason !== "scheduled") {
+          return res.json({ ok: true, suppression: already, created: false });
+        }
+        if (already.reason === requestedReason) {
+          return res.json({ ok: true, suppression: already, created: false });
+        }
+        const current = already.block_id && typeof blockDB.getBlock === "function"
+          ? await blockDB.getBlock(already.block_id)
+          : null;
+        if (current && typeof blockDB.updateBlock === "function") {
+          const nextProps = {
+            ...(current.properties || {}),
+            reason: requestedReason,
+            note: String(body.note || already.note || "").trim().slice(0, 1000),
+            trivial: !!body.trivial,
+            at: String(body.at || new Date().toISOString()),
+            task_id: String(body.task_id || already.task_id || "").trim().slice(0, 300),
+            scheduled_for: String(body.scheduled_for || already.scheduled_for || "").trim().slice(0, 80),
+            active: true,
+          };
+          const updated = await blockDB.updateBlock(already.block_id, { properties: nextProps });
+          const suppression = triageSuppressions.suppressionFromBlock(updated || { ...current, properties: nextProps });
+          broadcast("dcc-state-changed", { source: "triage-suppression", action: "update" }, workspaceId);
+          return res.json({ ok: true, suppression, created: false, updated: true });
+        }
+        return res.json({ ok: true, suppression: already, created: false });
+      }
       const block = await blockDB.createBlock({
         type: "block",
         properties: triageSuppressions.buildSuppressionProperties({
@@ -69,6 +100,8 @@ module.exports = function mount(app, ctx) {
           conversationId: body.conversation_id || body.conversationId,
           receivedAt: body.received_at || body.receivedAt,
           itemSnapshot: body.item,
+          taskId: body.task_id,
+          scheduledFor: body.scheduled_for,
         }),
         user_id: userId || null,
         workspace_id: workspaceId || null,
@@ -252,11 +285,31 @@ module.exports = function mount(app, ctx) {
       const allBlocks = typeof blockDB.getBlocksByKind === "function"
         ? await blockDB.getBlocksByKind(triageSuppressions.SUPPRESSION_KIND, ingestWorkspaceId)
         : [];
-      const knownIds = new Set(allBlocks.map(triageSuppressions.suppressionFromBlock).filter(Boolean).map((s) => s.triage_id));
+      const knownById = new Map(allBlocks.map(triageSuppressions.suppressionFromBlock).filter(Boolean).map((s) => [s.triage_id, s]));
       for (const item of resolvedItems) {
-        if (!item || !item.id || reopenedIds.has(String(item.id)) || knownIds.has(String(item.id))) continue;
+        if (!item || !item.id || reopenedIds.has(String(item.id))) continue;
         const sourceReason = String(item.resolved_reason || item.reason || "").toLowerCase();
         if (!["replied", "done", "deleted"].includes(sourceReason)) continue;
+        const existingResolution = knownById.get(String(item.id));
+        if (existingResolution) {
+          // A source reply is stronger evidence than "scheduled". Upgrade the
+          // durable link so it becomes a real handled decision on every surface.
+          if (existingResolution.reason === "scheduled" && existingResolution.block_id && typeof blockDB.getBlock === "function" && typeof blockDB.updateBlock === "function") {
+            const block = await blockDB.getBlock(existingResolution.block_id);
+            if (block) {
+              await blockDB.updateBlock(existingResolution.block_id, {
+                properties: {
+                  ...(block.properties || {}),
+                  reason: sourceReason === "deleted" ? "deleted" : "done",
+                  note: sourceReason === "replied" ? "Replied at source" : (block.properties || {}).note || "",
+                  at: item.resolved_at || item.received_at || new Date().toISOString(),
+                },
+              });
+              importedResolutions += 1;
+            }
+          }
+          continue;
+        }
         await blockDB.createBlock({
           type: "block",
           properties: triageSuppressions.buildSuppressionProperties({
@@ -273,7 +326,7 @@ module.exports = function mount(app, ctx) {
           user_id: ingestUserId || null,
           workspace_id: ingestWorkspaceId || null,
         });
-        knownIds.add(String(item.id));
+        knownById.set(String(item.id), { triage_id: String(item.id), reason: sourceReason === "deleted" ? "deleted" : "done" });
         importedResolutions += 1;
       }
       if (importedResolutions) {
@@ -295,7 +348,10 @@ module.exports = function mount(app, ctx) {
         : [];
       suppressedResolutions = incomingOpen.map((item) => {
         const suppression = triageSuppressions.matchingSuppression(item, index);
-        if (!suppression) return null;
+        // A scheduled item is already placed work, not a handled source message.
+        // Keep it hidden from repeat elevation, but leave it open in Sweep until
+        // the linked task completes, Drake replies, or retention ages it out.
+        if (!suppression || suppression.reason === "scheduled") return null;
         return {
           id: item.id,
           reason: suppression.reason || "done",

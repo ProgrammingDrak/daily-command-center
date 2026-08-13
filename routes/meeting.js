@@ -5,6 +5,14 @@ module.exports = function mount(app, ctx) {
   const { broadcast, getTodayStr, isValidDate, meetingAutomation } = ctx;
 
 // ── Meeting Automation ──
+app.get("/api/meetings/actions/proposed", async (req, res) => {
+  try {
+    res.json({ items: await meetingAutomation.listProposedActions({ workspaceId: req.workspaceId, limit: req.query?.limit }) });
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
 app.get("/api/meetings/:blockId/automation", async (req, res) => {
   try {
     res.json(await meetingAutomation.getAutomation(req.params.blockId, req.workspaceId));
@@ -74,6 +82,33 @@ app.post("/api/meetings/:blockId/actions/approve", async (req, res) => {
       actionIds: Array.isArray(req.body?.actionIds) ? req.body.actionIds : [],
     });
     broadcast("blocks-changed", { action: "meeting-actions-approved", blockIds: [req.params.blockId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/meetings/:blockId/actions/:actionId/dismiss", async (req, res) => {
+  try {
+    const result = await meetingAutomation.dismissProposedAction(req.params.blockId, req.params.actionId, {
+      workspaceId: req.workspaceId,
+    });
+    broadcast("blocks-changed", { action: "meeting-action-dismissed", blockIds: [req.params.blockId, req.params.actionId] }, req.workspaceId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.statusCode || 500).json({ error: e.message });
+  }
+});
+
+app.post("/api/meetings/:blockId/actions/:actionId/schedule", async (req, res) => {
+  try {
+    const result = await meetingAutomation.placeProposedAction(req.params.blockId, req.params.actionId, {
+      workspaceId: req.workspaceId,
+      userId: req.session && req.session.userId,
+      date: req.body && req.body.date,
+      start: req.body && req.body.start,
+    });
+    broadcast("blocks-changed", { action: "meeting-action-scheduled", blockIds: [req.params.blockId, result.actionBlockId].filter(Boolean) }, req.workspaceId);
     res.json(result);
   } catch (e) {
     res.status(e.statusCode || 500).json({ error: e.message });

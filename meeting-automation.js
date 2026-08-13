@@ -506,7 +506,10 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
   // Exclude both "approved" and "placed": placement is terminal, so a placed
   // proposal must not be re-approvable (that would mint a duplicate task and wipe
   // its placedDate/placedStart — the durable "Scheduled ✓" signal).
-  const proposals = artifacts.filter(b => propsOf(b).kind === "proposed_action_item" && propsOf(b).status !== "approved" && propsOf(b).status !== "placed");
+  const proposals = artifacts.filter(b => {
+    const p = propsOf(b);
+    return p.kind === "proposed_action_item" && p.status !== "approved" && p.status !== "placed" && p.status !== "dismissed";
+  });
   const selected = actionIds.length ? proposals.filter(b => actionIds.includes(b.id)) : proposals;
   const created = [];
   for (const proposal of selected) {
@@ -539,6 +542,55 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
     });
   }
   return { ...(await getAutomation(blockId, workspaceId)), approvedCount: created.length, approvedBlocks: created };
+}
+
+// One cross-meeting read model for the morning elevation modal. Proposals remain
+// children of their meeting until Drake schedules them, so the ordinary task
+// queries intentionally cannot see them.
+async function listProposedActions({ workspaceId, limit = 50 } = {}) {
+  if (!workspaceId || typeof blockDB.getBlocksByKind !== "function") return [];
+  const proposals = await blockDB.getBlocksByKind("proposed_action_item", workspaceId);
+  const rows = [];
+  for (const proposal of proposals) {
+    const p = propsOf(proposal);
+    if (!["proposed", "approved"].includes(p.status) || p.done === true || !proposal.parent_id) continue;
+    let meeting;
+    try { meeting = await loadMeeting(proposal.parent_id, workspaceId); }
+    catch { continue; }
+    const mp = propsOf(meeting);
+    rows.push({
+      id: proposal.id,
+      meetingId: meeting.id,
+      meetingTitle: titleOf(meeting),
+      meetingDate: meeting.date || null,
+      meetingStart: mp.start || null,
+      meetingEnd: mp.end || null,
+      title: p.text || p.title || "Meeting follow-up",
+      owner: p.owner === "other" || p.owner === "others" ? "other" : "drake",
+      priority: p.priority || "Medium",
+      createdAt: proposal.created_at || null,
+    });
+  }
+  rows.sort((a, b) => String(b.meetingDate || b.createdAt || "").localeCompare(String(a.meetingDate || a.createdAt || "")));
+  return rows.slice(0, Math.max(1, Math.min(200, Number(limit) || 50)));
+}
+
+async function dismissProposedAction(blockId, actionId, { workspaceId } = {}) {
+  const meeting = await loadMeeting(blockId, workspaceId);
+  const artifacts = await loadArtifacts(meeting.id, workspaceId);
+  const proposal = artifacts.find(b => b.id === actionId && propsOf(b).kind === "proposed_action_item");
+  if (!proposal) throw Object.assign(new Error("Proposed action not found for this meeting"), { statusCode: 404 });
+  const p = propsOf(proposal);
+  if (p.status === "dismissed") return getAutomation(meeting.id, workspaceId);
+  if (!["proposed", "approved"].includes(p.status)) throw Object.assign(new Error("Only an unplaced action can be dismissed"), { statusCode: 409 });
+  if (p.status === "approved" && p.approvedBlockId && typeof blockDB.deleteBlock === "function") {
+    const approved = await blockDB.getBlock(p.approvedBlockId);
+    if (approved && !approved.deleted_at) await blockDB.deleteBlock(approved.id);
+  }
+  await blockDB.updateBlock(proposal.id, {
+    properties: { ...p, status: "dismissed", dismissedAt: new Date().toISOString() },
+  });
+  return getAutomation(meeting.id, workspaceId);
 }
 
 // Place an already-approved action onto a day. approveActions leaves each action
@@ -591,6 +643,36 @@ async function placeApprovedAction(blockId, actionBlockId, { workspaceId, userId
     }
   }
   return { ok: true, actionBlockId: action.id, date, start: nextProps.start || null };
+}
+
+// Catch Up schedules a proposal in one retry-safe server operation. Approval and
+// placement are separate durable writes, so a placement failure must be able to
+// resume from the approvedBlockId instead of minting another child or stranding
+// the proposal outside the elevation read model.
+async function placeProposedAction(blockId, proposalId, { workspaceId, userId, date, start = null }) {
+  const meeting = await loadMeeting(blockId, workspaceId);
+  let artifacts = await loadArtifacts(meeting.id, workspaceId);
+  let proposal = artifacts.find(b => b.id === proposalId && propsOf(b).kind === "proposed_action_item");
+  if (!proposal) throw Object.assign(new Error("Proposed action not found for this meeting"), { statusCode: 404 });
+  let p = propsOf(proposal);
+  if (p.status === "placed") {
+    return { ok: true, actionBlockId: p.approvedBlockId || null, date: p.placedDate || date, start: p.placedStart || null, duplicate: true };
+  }
+  if (p.status === "dismissed") throw Object.assign(new Error("Dismissed action cannot be scheduled"), { statusCode: 409 });
+
+  let action = p.approvedBlockId ? await blockDB.getBlock(p.approvedBlockId) : null;
+  if (!action || action.deleted_at) {
+    const approved = await approveActions(meeting.id, { workspaceId, userId, actionIds: [proposal.id] });
+    action = (approved.approvedBlocks || [])[0] || null;
+    if (!action) {
+      artifacts = await loadArtifacts(meeting.id, workspaceId);
+      proposal = artifacts.find(b => b.id === proposalId && propsOf(b).kind === "proposed_action_item");
+      p = propsOf(proposal);
+      action = p.approvedBlockId ? await blockDB.getBlock(p.approvedBlockId) : null;
+    }
+  }
+  if (!action || action.deleted_at) throw Object.assign(new Error("Could not approve meeting action"), { statusCode: 409 });
+  return placeApprovedAction(meeting.id, action.id, { workspaceId, userId, date, start });
 }
 
 // Artifact HTML is always rendered into the meeting panel via innerHTML, and
@@ -741,7 +823,10 @@ module.exports = {
   generatePrep,
   updateArtifactContent,
   ingestTranscript,
+  listProposedActions,
   approveActions,
+  dismissProposedAction,
   placeApprovedAction,
+  placeProposedAction,
   applyArtifacts,
 };

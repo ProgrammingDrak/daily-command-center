@@ -1327,8 +1327,8 @@
     var items = gbTriageItems(current, {all:true});
     var drafted = items.filter(function(i){ return i.draft_status === "drafted"; }).length;
     var label = drafted ? drafted + (drafted === 1 ? " reply drafted and waiting for review" : " replies drafted and waiting for review")
-      : items.length ? items.length + " open triage items, none drafted yet"
-      : "No open triage items";
+      : items.length ? items.length + " actionable triage items, none drafted yet"
+      : "No actionable triage items";
     return '<section class="gb-section">'+
       '<div class="gb-section-title">Triage</div>'+
       '<div class="gb-row"><span class="gb-row-title">'+gbEsc(label)+'</span>'+
