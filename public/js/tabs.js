@@ -373,16 +373,24 @@ loadSubtasks=function(){
 // not today. Without that, a subtask added to a past-day parent was created on today with
 // a subtaskOf edge pointing at a row that is not in today's plan: an orphan on both days.
 // That is why the "+" was hidden on carryover rows until now.
-function addSubtask(taskId, text){
+function addSubtask(taskId, text, options){
   if(!text||!text.trim())return;
+  options=options||{};
   text=text.trim();
   const anchor=(typeof taskAnchorById==="function")?taskAnchorById(taskId):null;
   const parent=anchor?anchor.ev:((typeof scheduled!=="undefined")?scheduled.find(e=>e.id===taskId):null);
   // Rollup containers (shells) only take full-fledged nested tasks, never
   // timeless pie subtasks — reroute so the parent's pie is never created.
   if(parent&&window.TaskTypes&&window.TaskTypes.rule(parent,"childEdge")==="wrap")return addStackedTask(taskId,text);
-  const id="st-"+Date.now();
-  const startStr=(parent&&parent.start)||"00:00";
+  const id="st-"+Date.now()+"-"+Math.random().toString(36).slice(2,7);
+  // A newly scheduled future parent is not in scheduled[] yet, so taskAnchorById
+  // cannot discover its date or start. The schedule picker passes both explicitly.
+  // Keeping that placement context here makes parent and children one dated tree
+  // instead of creating an orphaned child row on whichever day is currently open.
+  const viewedDate=(typeof viewDate!=="undefined"&&viewDate)
+    ?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null);
+  const date=options.date||(anchor&&anchor.date)||viewedDate;
+  const startStr=options.parentStart||(parent&&parent.start)||"00:00";
   // A subtask is a FULL task, shaped by the same serializer as every other task
   // (detail/notionUrl/commute/delegated/tags all defaulted for free), so future
   // fields reach subtasks automatically. The only subtask-specific bits: the
@@ -397,12 +405,10 @@ function addSubtask(taskId, text){
   // origin day, so pushing it into scheduled[] would render it as a standalone task on
   // today (its parent is not in this array, so the nesting walk cannot find it) while the
   // block sits on another date. The carryover lane re-collects instead, below.
-  const onViewedDay=!anchor||!anchor.carryover;
+  const onViewedDay=(!date||!viewedDate||date===viewedDate)&&(!anchor||!anchor.carryover);
   if(onViewedDay&&typeof scheduled!=="undefined")scheduled.push(task);
   let created=null;
   if(window.blockStore&&window.blockStore.createBlock){
-    const date=anchor?anchor.date
-      :((typeof viewDate!=="undefined"&&viewDate)?viewDate:((typeof __state!=="undefined"&&__state)?__state.date:null));
     const blockProps=(window.DCC&&window.DCC.taskBlockProps)
       ? window.DCC.taskBlockProps({},Object.assign({},overrides,{local_id:id,duration:0,start:startStr,end:startStr}))
       : {local_id:id,title:text,source:"manual",start:startStr,end:startStr,duration:0,priority:"Medium",tags:[]};
@@ -410,11 +416,11 @@ function addSubtask(taskId, text){
     created=window.blockStore.createBlock("block",blockProps,{date:date});
   }
   // Snapshot/rebalance the parent's point pie now that it has (one more) subtask.
-  if(window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(taskId);
+  if(onViewedDay&&window.PointPlan&&typeof window.PointPlan.ensure==="function")window.PointPlan.ensure(taskId);
   // A carryover parent's new child only appears once the lane re-reads its origin day,
   // and that read has to happen AFTER the create commits — see _recollectCarryover.
-  if(!onViewedDay)_recollectCarryover(anchor.date,created);
-  else render();
+  if(anchor&&anchor.carryover)_recollectCarryover(anchor.date,created);
+  else if(onViewedDay)render();
   return task;
 }
 

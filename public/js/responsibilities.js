@@ -319,7 +319,7 @@
         source:"responsibility",tags:tags,detail:p.description||"",
         idempotencyKey:"resp:"+id+":"+curDate,
         onScheduled:function(info){
-          try{if(typeof addSubtask==="function"&&info&&info.localId){defaults.forEach(function(t){if(t)addSubtask(info.localId,t);});}}catch(e){}
+          try{if(typeof addSubtask==="function"&&info&&info.localId){defaults.forEach(function(t){if(t)addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start});});}}catch(e){}
           if(info&&info.localId&&typeof toggleDone==="function")toggleDone(info.localId);
           finish();
         }
@@ -638,7 +638,7 @@
       onScheduled:function(info){
         try{
           if(typeof addSubtask==="function"&&info&&info.localId){
-            defaults.forEach(function(t){if(t)addSubtask(info.localId,t);});
+            defaults.forEach(function(t){if(t)addSubtask(info.localId,t,{date:info.dateStr,parentStart:info.start});});
           }
         }catch(e){console.warn("[responsibilities] subtask attach failed",e);}
         registerOpenInstance(id,info);

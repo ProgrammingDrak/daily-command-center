@@ -114,3 +114,11 @@ test("manager separates cadence-based and as-needed responsibilities", async () 
   assert.deepEqual(Array.from(groups.asNeeded, (item) => item.id), ["as-needed"]);
   assert.match(clientSource, /Number\(bp\.importanceScore\|\|0\)-Number\(ap\.importanceScore\|\|0\)/);
 });
+
+test("future responsibility scheduling forwards the selected date and parent start to every default subtask", () => {
+  assert.match(clientSource,
+    /addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start\}\)/,
+    "the picker callback must keep each child on the same day as its parent");
+  assert.equal((clientSource.match(/addSubtask\(info\.localId,t,\{date:info\.dateStr,parentStart:info\.start\}\)/g)||[]).length, 2,
+    "both scheduling and schedule-then-complete paths must preserve the parent placement");
+});
