@@ -673,6 +673,18 @@ test("meeting retention candidates reject impossible calendar dates", async () =
   const { status } = await getPath(app, "/api/dcc/meeting-retention-candidates?start=2026-02-31&end=2026-03-01");
   assert.equal(status, 400);
 });
+
+test("meeting retention candidates omit completed lifecycle rows", async () => {
+  const rows = [{
+    id: "done", type: "block", date: "2026-08-14", workspace_id: "ws-1",
+    properties: { type: "meeting", recap_status: "ready", dashboard_ref: "done",
+      recording_artifact: { status: "compacted", cleanup_pending: false } },
+  }];
+  const app = mountApp(rows, []);
+  const { status, json } = await getPath(app, "/api/dcc/meeting-retention-candidates?start=2026-08-01&end=2026-08-14");
+  assert.equal(status, 200);
+  assert.deepEqual(json, []);
+});
 const mtgBlock = (id, sid, title, date) => ({ id, type: "block", parent_id: null, date, properties: { title, type: "meeting", source: "calendar", source_id: sid }, workspace_id: "ws-1", user_id: 1, deleted_at: null });
 
 test("endpoint resolves the meeting block by identity and calls applyArtifacts", async () => {

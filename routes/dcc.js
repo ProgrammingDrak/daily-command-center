@@ -71,8 +71,8 @@ module.exports = function mount(app, ctx) {
         const meeting = [p.type, p.kind, block.type].map((v) => String(v || "").toLowerCase())
           .some((v) => v === "meeting" || v === "oneone");
         const artifact = p.recording_artifact || {};
-        const actionable = p.recording_review || p.recap_status === "ready" || p.dashboard_ref
-          || artifact.status === "hot" || artifact.cleanup_pending;
+        const needsDiscovery = (p.recording_review || p.recap_status === "ready") && !p.dashboard_ref;
+        const actionable = needsDiscovery || artifact.status === "hot" || artifact.cleanup_pending;
         return meeting && (actionable || (requestedId && block.id === requestedId));
       }).map((block) => {
         const p = block.properties || {};
