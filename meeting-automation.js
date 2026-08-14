@@ -441,6 +441,13 @@ function normalizedActionText(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!?;:]+$/g, "");
 }
 
+function citationStart(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
 function sanitizeSignal(signal) {
   if (!signal || typeof signal !== "object") return null;
   const source = ["google_chat", "meet_chat_file", "transcript"].includes(signal.source)
@@ -572,7 +579,7 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
         meetingSource: {
           meetingBlockId: meeting.id,
           dashboardRef: propsOf(meeting).dashboard_ref || null,
-          start: Number.isFinite(Number(p.start)) ? Number(p.start) : null,
+          start: citationStart(p.start),
           quote: p.quote || "",
         },
         meetingAutomation: {
@@ -631,7 +638,7 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
       priority: p.priority || "Medium",
       origin: p.origin === "signaled" ? "signaled" : "automated",
       signal: p.signal || null,
-      start: Number.isFinite(Number(p.start)) ? Number(p.start) : null,
+      start: citationStart(p.start),
       quote: p.quote || "",
       dashboardRef: mp.dashboard_ref || null,
       approvedBlockId,
@@ -875,20 +882,54 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       const duplicate = existingByText.get(textKey);
       if (duplicate) {
         const prior = propsOf(duplicate);
+        const incomingStart = citationStart(a.start);
+        const incomingQuote = String(a.quote || "").trim().slice(0, 2000);
+        const updated = {
+          ...prior,
+          origin: origin === "signaled" ? "signaled" : prior.origin,
+          signal: origin === "signaled" ? signal : prior.signal,
+          start: incomingStart !== null ? incomingStart : citationStart(prior.start),
+          quote: incomingQuote || prior.quote || "",
+          sources: origin === "signaled" ? sanitizeSources([
+            ...(Array.isArray(prior.sources) ? prior.sources : []),
+            ...(Array.isArray(a && a.sources) ? a.sources : []),
+          ]) : prior.sources,
+        };
         // A later explicit marker upgrades the same extracted task in place. Do
         // not resurrect a dismissed/placed proposal or mint a duplicate task.
-        if (origin === "signaled" && prior.origin !== "signaled") {
+        if ((origin === "signaled" && prior.origin !== "signaled") ||
+            (incomingStart !== null && incomingStart !== prior.start) ||
+            (incomingQuote && incomingQuote !== prior.quote)) {
           await blockDB.updateBlock(duplicate.id, {
-            properties: {
-              ...prior,
-              origin: "signaled",
-              signal,
-              sources: sanitizeSources([
-                ...(Array.isArray(prior.sources) ? prior.sources : []),
-                ...(Array.isArray(a && a.sources) ? a.sources : []),
-              ]),
-            },
+            properties: updated,
           });
+
+          // The proposal is the dedupe anchor, but the approved task is the
+          // durable object Drake works from. Keep its source citation current
+          // even after the task has been placed on the itinerary.
+          if (prior.approvedBlockId) {
+            const approved = await blockDB.getBlock(prior.approvedBlockId);
+            if (approvedActionMatches(approved, duplicate, workspaceId)) {
+              const approvedProps = propsOf(approved);
+              await blockDB.updateBlock(approved.id, {
+                properties: {
+                  ...approvedProps,
+                  meetingSource: {
+                    ...(approvedProps.meetingSource || {}),
+                    meetingBlockId: meeting.id,
+                    dashboardRef: String(dashboardRef || "").trim() || propsOf(meeting).dashboard_ref || null,
+                    start: updated.start,
+                    quote: updated.quote,
+                  },
+                  meetingAutomation: {
+                    ...(approvedProps.meetingAutomation || {}),
+                    origin: updated.origin,
+                    signal: updated.signal || null,
+                  },
+                },
+              });
+            }
+          }
         }
         continue;
       }
@@ -904,7 +945,7 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
           status: "proposed",
           done: false,
           sources: sanitizeSources(a.sources),
-          start: Number.isFinite(Number(a.start)) ? Number(a.start) : null,
+          start: citationStart(a.start),
           quote: String(a.quote || "").trim().slice(0, 2000),
         },
       });

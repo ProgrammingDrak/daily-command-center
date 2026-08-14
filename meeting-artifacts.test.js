@@ -152,6 +152,85 @@ test("an explicit signal is stored with provenance and upgrades an automated dup
   });
 });
 
+test("a duplicate action gains later transcript citation fields without losing provenance", async () => {
+  seedMeeting("mcitation");
+  await automation.applyArtifacts("mcitation", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief", owner: "drake", origin: "signaled",
+      signal: { source: "google_chat", phrase: "action item", excerpt: "Action item: send it" } }],
+  });
+  await automation.applyArtifacts("mcitation", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief.", owner: "drake", start: 91.5, quote: "I'll send it." }],
+  });
+  const action = childrenOf("mcitation", "proposed_action_item")[0].properties;
+  assert.equal(action.origin, "signaled");
+  assert.equal(action.start, 91.5);
+  assert.equal(action.quote, "I'll send it.");
+});
+
+test("missing, blank, negative, and non-finite timestamps never become zero-second citations", async () => {
+  seedMeeting("m-no-fake-citations", { title: "No fake citations", dashboard_ref: "no-fakes" });
+  await automation.applyArtifacts("m-no-fake-citations", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [
+      { text: "Action without timestamp", start: null },
+      { text: "Action with blank timestamp", start: "" },
+      { text: "Action with negative timestamp", start: -1 },
+      { text: "Action with infinite timestamp", start: Infinity },
+    ],
+  });
+  const proposals = childrenOf("m-no-fake-citations", "proposed_action_item");
+  assert.equal(proposals.length, 4);
+  assert.equal(proposals.every(action => action.properties.start === null), true);
+  const projected = (await automation.listProposedActions({ workspaceId: "ws-1" }))
+    .filter(action => action.meetingId === "m-no-fake-citations");
+  assert.equal(projected.every(action => action.start === null), true);
+
+  const approved = await automation.approveActions("m-no-fake-citations", {
+    workspaceId: "ws-1", userId: 1,
+  });
+  assert.equal(approved.approvedBlocks.every(action => action.properties.meetingSource.start === null), true);
+});
+
+test("later citation enrichment follows an action through approval and placement", async () => {
+  seedMeeting("m-citation-sync", { title: "Citation sync", dashboard_ref: "initial-review" });
+  await automation.applyArtifacts("m-citation-sync", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief", owner: "drake" }],
+  });
+  const approved = await automation.approveActions("m-citation-sync", { workspaceId: "ws-1", userId: 1 });
+  const taskId = approved.approvedBlocks[0].id;
+
+  await automation.applyArtifacts("m-citation-sync", {
+    workspaceId: "ws-1", userId: 1, dashboardRef: "updated-review",
+    proposedActions: [{
+      text: "Send the launch brief.", owner: "drake", start: 91.5, quote: "I'll send it.", origin: "signaled",
+      signal: { source: "transcript", phrase: "action item", excerpt: "Action item: send the launch brief" },
+    }],
+  });
+  let task = await mem.getBlock(taskId);
+  assert.deepEqual(task.properties.meetingSource, {
+    meetingBlockId: "m-citation-sync", dashboardRef: "updated-review", start: 91.5, quote: "I'll send it.",
+  });
+  assert.equal(task.properties.meetingAutomation.origin, "signaled");
+
+  await automation.placeApprovedAction("m-citation-sync", taskId, {
+    workspaceId: "ws-1", userId: 1, date: "2026-07-20", start: "14:00",
+  });
+  await automation.applyArtifacts("m-citation-sync", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief", start: 120, quote: "The final quote." }],
+  });
+  task = await mem.getBlock(taskId);
+  assert.equal(task.parent_id, null);
+  assert.equal(task.date, "2026-07-20");
+  assert.equal(task.properties.kind, "task");
+  assert.equal(task.properties.start, "14:00");
+  assert.equal(task.properties.meetingSource.start, 120);
+  assert.equal(task.properties.meetingSource.quote, "The final quote.");
+});
+
 test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {
   seedMeeting("m-retention");
   const bundle = await automation.applyArtifacts("m-retention", {

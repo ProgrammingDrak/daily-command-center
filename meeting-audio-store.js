@@ -25,6 +25,15 @@ function safeSlug(value) {
   return slug;
 }
 
+function normalizeExpiry(value, now = Date.now()) {
+  const parsed = Date.parse(String(value || ""));
+  const max = now + (14 * 24 * 60 * 60 * 1000) + (5 * 60 * 1000);
+  if (!Number.isFinite(parsed) || parsed <= now || parsed > max) {
+    throw Object.assign(new Error("A valid meeting audio expiry within 14 days is required"), { statusCode: 400 });
+  }
+  return new Date(parsed).toISOString();
+}
+
 function clientFor(config) {
   const signature = [config.accessKeyId, config.endpoint, config.region].join("|");
   if (!cachedClient || cachedSignature !== signature) {
@@ -39,8 +48,8 @@ function clientFor(config) {
   return cachedClient;
 }
 
-function keyFor(slug) {
-  return `meetings/hot/${safeSlug(slug)}/audio.m4a`;
+function keyFor(slug, workspaceId) {
+  return `meetings/hot/${safeSlug(workspaceId)}/${safeSlug(slug)}/audio.m4a`;
 }
 
 function requireConfig(env) {
@@ -49,36 +58,45 @@ function requireConfig(env) {
   return config;
 }
 
-async function putHotAudio(slug, body, { expiresAt, env = process.env } = {}) {
+async function putHotAudio(slug, body, { expiresAt, workspaceId, env = process.env } = {}) {
   const config = requireConfig(env);
-  const key = keyFor(slug);
+  const normalizedExpiry = normalizeExpiry(expiresAt);
+  const key = keyFor(slug, workspaceId);
   await clientFor(config).send(new PutObjectCommand({
     Bucket: config.bucket,
     Key: key,
     Body: body,
     ContentType: "audio/mp4",
-    Metadata: expiresAt ? { expires_at: String(expiresAt) } : undefined,
+    Metadata: { expires_at: normalizedExpiry },
   }));
-  return { provider: "r2", bucket: config.bucket, key, expires_at: expiresAt || null, bytes: body.length };
+  return { provider: "r2", bucket: config.bucket, key, expires_at: normalizedExpiry, bytes: body.length };
 }
 
-async function presignHotAudio(ref, { env = process.env, expiresIn = 600 } = {}) {
+async function presignHotAudio(ref, { env = process.env, expiresIn = 600, workspaceId } = {}) {
   const config = requireConfig(env);
   if (!ref || !ref.key) throw Object.assign(new Error("Hot audio reference is missing"), { statusCode: 404 });
+  const prefix = `meetings/hot/${safeSlug(workspaceId)}/`;
+  if (!String(ref.key).startsWith(prefix) || (ref.bucket && ref.bucket !== config.bucket)) {
+    throw Object.assign(new Error("Hot audio reference is outside this workspace"), { statusCode: 403 });
+  }
   return getSignedUrl(clientFor(config), new GetObjectCommand({
-    Bucket: ref.bucket || config.bucket,
+    Bucket: config.bucket,
     Key: ref.key,
   }), { expiresIn });
 }
 
-async function deleteHotAudio(ref, { env = process.env } = {}) {
+async function deleteHotAudio(ref, { env = process.env, workspaceId } = {}) {
   const config = requireConfig(env);
   if (!ref || !ref.key) return false;
+  const prefix = `meetings/hot/${safeSlug(workspaceId)}/`;
+  if (!String(ref.key).startsWith(prefix) || (ref.bucket && ref.bucket !== config.bucket)) {
+    throw Object.assign(new Error("Hot audio reference is outside this workspace"), { statusCode: 403 });
+  }
   await clientFor(config).send(new DeleteObjectCommand({
-    Bucket: ref.bucket || config.bucket,
+    Bucket: config.bucket,
     Key: ref.key,
   }));
   return true;
 }
 
-module.exports = { configFromEnv, safeSlug, keyFor, putHotAudio, presignHotAudio, deleteHotAudio };
+module.exports = { configFromEnv, safeSlug, normalizeExpiry, keyFor, putHotAudio, presignHotAudio, deleteHotAudio };
