@@ -1893,8 +1893,9 @@
   .carryover-skip:hover{color:var(--text);background:rgba(255,255,255,0.05)}
   @media(max-width:420px){
     .carryover-overlay{padding:12px}
-    .cu-task-row .carryover-row-actions{flex:0 0 100%;min-width:0;padding-left:38px;justify-content:flex-start}
-    .cu-task-row .carryover-btn{flex:1 1 calc(50% - 2px);min-width:0;padding-left:6px;padding-right:6px}
+    .cu-task-row,.cu-triage-row,.cu-meeting-row{align-items:flex-start;flex-wrap:wrap}
+    .cu-task-row .carryover-row-actions,.cu-triage-row .carryover-row-actions,.cu-meeting-row .carryover-row-actions{flex:0 0 100%;min-width:0;padding-left:38px;justify-content:flex-start}
+    .cu-task-row .carryover-btn,.cu-triage-row .carryover-btn,.cu-meeting-row .carryover-btn{flex:1 1 calc(50% - 2px);min-width:0;padding-left:6px;padding-right:6px}
   }
 
   /* ======== TASK MANAGER MODAL + SHORTCUT RAIL ======== */

@@ -234,6 +234,25 @@ test("placeApprovedAction stamps the originating proposal placed + placedDate (d
   assert.equal(proposal.properties.placedStart, "14:00");
 });
 
+test("placeApprovedAction cannot stamp a foreign proposal through forged provenance", async () => {
+  seedMeeting("mforged");
+  mem.store.push(
+    { id: "foreign-proposal", type: "block", parent_id: "foreign-meeting", date: "2026-07-09",
+      properties: { kind: "proposed_action_item", text: "Private", status: "approved", approvedBlockId: "foreign-child" },
+      workspace_id: "ws-OTHER", user_id: 2, deleted_at: null },
+    { id: "forged-action", type: "block", parent_id: "mforged", date: "2026-07-09",
+      properties: { kind: "task", title: "Local action",
+        meetingAutomation: { meetingBlockId: "mforged", proposedActionId: "foreign-proposal" } },
+      workspace_id: "ws-1", user_id: 1, deleted_at: null }
+  );
+  await automation.placeApprovedAction("mforged", "forged-action", {
+    workspaceId: "ws-1", userId: 1, date: "2026-07-20", start: "15:00",
+  });
+  const foreign = await mem.getBlock("foreign-proposal");
+  assert.equal(foreign.properties.status, "approved");
+  assert.equal(foreign.properties.placedDate, undefined);
+});
+
 test("listProposedActions projects only open meeting proposals with meeting context", async () => {
   seedMeeting("mlist", { title: "Weekly planning", start: "10:00", end: "10:30" });
   mem.store.push(
@@ -247,7 +266,7 @@ test("listProposedActions projects only open meeting proposals with meeting cont
   assert.deepEqual(row, {
     id: "plist", meetingId: "mlist", meetingTitle: "Weekly planning", meetingDate: "2026-07-09",
     meetingStart: "10:00", meetingEnd: "10:30", title: "Send the brief", owner: "drake",
-    priority: "High", createdAt: "2026-07-09T11:00:00Z",
+    priority: "High", approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
   });
   assert.equal(rows.some(item => item.id === "placed-list"), false);
 });
@@ -288,6 +307,85 @@ test("approved but unplaced actions remain visible and can be dismissed cleanly"
   await automation.dismissProposedAction("mapproved", "papproved", { workspaceId: "ws-1" });
   assert.equal((await mem.getBlock("papproved")).properties.status, "dismissed");
   assert.equal(await mem.getBlock(approved.approvedBlocks[0].id), null);
+});
+
+test("completed approved actions leave the Loose Ends read model", async () => {
+  seedMeeting("mcomplete", { title: "Completed review" });
+  mem.store.push({ id: "pcomplete", type: "block", parent_id: "mcomplete", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Already handled", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const approved = await automation.approveActions("mcomplete", { workspaceId: "ws-1", userId: 1, actionIds: ["pcomplete"] });
+  const action = approved.approvedBlocks[0];
+  const visible = (await automation.listProposedActions({ workspaceId: "ws-1" })).find(item => item.id === "pcomplete");
+  assert.equal(visible.approvedBlockId, action.id, "approved id is exposed so a failed completion can retry");
+  await mem.updateBlock(action.id, { properties: { ...action.properties, status: "done", done: true, completedAt: "2026-08-14T10:00:00Z" } });
+  assert.equal((await automation.listProposedActions({ workspaceId: "ws-1" })).some(item => item.id === "pcomplete"), false);
+});
+
+test("a deleted approved action is hidden as stale and recreated on retry", async () => {
+  seedMeeting("mdeleted", { title: "Deleted action review" });
+  mem.store.push({ id: "pdeleted", type: "block", parent_id: "mdeleted", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Recreate me", status: "proposed" },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const first = await automation.approveActions("mdeleted", { workspaceId: "ws-1", userId: 1, actionIds: ["pdeleted"] });
+  const staleId = first.approvedBlocks[0].id;
+  await mem.deleteBlock(staleId);
+
+  const visible = (await automation.listProposedActions({ workspaceId: "ws-1" })).find(item => item.id === "pdeleted");
+  assert.equal(visible.approvedBlockId, null, "a deleted child is never offered to the client for completion");
+
+  const retried = await automation.approveActions("mdeleted", { workspaceId: "ws-1", userId: 1, actionIds: ["pdeleted"] });
+  const replacement = retried.approvedBlocks[0];
+  assert.notEqual(replacement.id, staleId);
+  assert.equal(replacement.deleted_at, null);
+  assert.equal((await mem.getBlock("pdeleted")).properties.approvedBlockId, replacement.id);
+});
+
+test("a cross-workspace approvedBlockId is neither exposed nor reused", async () => {
+  seedMeeting("mforeign", { title: "Workspace boundary review" });
+  mem.store.push(
+    { id: "pforeign", type: "block", parent_id: "mforeign", date: "2026-07-09",
+      properties: { kind: "proposed_action_item", text: "Keep workspaces separate", status: "approved", approvedBlockId: "foreign-action" },
+      workspace_id: "ws-1", user_id: 1, deleted_at: null },
+    { id: "foreign-action", type: "block", parent_id: "mforeign", date: "2026-07-09",
+      properties: { kind: "task", title: "Private task", status: "done", done: true,
+        meetingAutomation: { meetingBlockId: "mforeign", proposedActionId: "pforeign" } },
+      workspace_id: "ws-OTHER", user_id: 2, deleted_at: null }
+  );
+
+  const visible = (await automation.listProposedActions({ workspaceId: "ws-1" })).find(item => item.id === "pforeign");
+  assert.ok(visible, "foreign completion state must not hide the local proposal");
+  assert.equal(visible.approvedBlockId, null, "foreign ids must not cross the read-model boundary");
+
+  const repaired = await automation.approveActions("mforeign", { workspaceId: "ws-1", userId: 1, actionIds: ["pforeign"] });
+  assert.equal(repaired.approvedBlocks[0].workspace_id, "ws-1");
+  assert.notEqual(repaired.approvedBlocks[0].id, "foreign-action");
+});
+
+test("dismiss and schedule never mutate a foreign approvedBlockId", async () => {
+  seedMeeting("mboundary", { title: "Boundary mutation review" });
+  const foreign = { id: "foreign-mutation", type: "block", parent_id: "mboundary", date: "2026-07-09",
+    properties: { kind: "task", title: "Do not touch",
+      meetingAutomation: { meetingBlockId: "mboundary", proposedActionId: "pdismiss-foreign" } },
+    workspace_id: "ws-OTHER", user_id: 2, deleted_at: null };
+  mem.store.push(
+    { id: "pdismiss-foreign", type: "block", parent_id: "mboundary", date: "2026-07-09",
+      properties: { kind: "proposed_action_item", text: "Dismiss safely", status: "approved", approvedBlockId: foreign.id },
+      workspace_id: "ws-1", user_id: 1, deleted_at: null },
+    foreign
+  );
+  await automation.dismissProposedAction("mboundary", "pdismiss-foreign", { workspaceId: "ws-1" });
+  assert.equal(foreign.deleted_at, null, "dismiss must leave another workspace's action untouched");
+
+  mem.store.push({ id: "pschedule-foreign", type: "block", parent_id: "mboundary", date: "2026-07-09",
+    properties: { kind: "proposed_action_item", text: "Schedule safely", status: "approved", approvedBlockId: foreign.id },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null });
+  const placed = await automation.placeProposedAction("mboundary", "pschedule-foreign", {
+    workspaceId: "ws-1", userId: 1, date: "2026-07-18",
+  });
+  assert.notEqual(placed.actionBlockId, foreign.id);
+  assert.equal(foreign.parent_id, "mboundary");
+  assert.equal(foreign.date, "2026-07-09");
 });
 
 test("placeApprovedAction 404s on a missing action and a cross-workspace action", async () => {

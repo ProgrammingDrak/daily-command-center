@@ -500,6 +500,13 @@ async function ingestTranscript(blockId, { workspaceId, userId, transcriptText, 
   return { ...(await getAutomation(blockId, workspaceId)), createdActionCount: createdActions.length };
 }
 
+function approvedActionMatches(action, proposal, workspaceId) {
+  if (!action || action.deleted_at || String(action.workspace_id || "") !== String(workspaceId || "")) return false;
+  const provenance = propsOf(action).meetingAutomation || {};
+  return String(provenance.meetingBlockId || "") === String(proposal.parent_id || "") &&
+    String(provenance.proposedActionId || "") === String(proposal.id || "");
+}
+
 async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const artifacts = await loadArtifacts(blockId, workspaceId);
@@ -508,12 +515,21 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
   // its placedDate/placedStart — the durable "Scheduled ✓" signal).
   const proposals = artifacts.filter(b => {
     const p = propsOf(b);
-    return p.kind === "proposed_action_item" && p.status !== "approved" && p.status !== "placed" && p.status !== "dismissed";
+    return p.kind === "proposed_action_item" &&
+      (p.status === "proposed" || (actionIds.length > 0 && p.status === "approved"));
   });
   const selected = actionIds.length ? proposals.filter(b => actionIds.includes(b.id)) : proposals;
   const created = [];
+  let approvedCount = 0;
   for (const proposal of selected) {
     const p = propsOf(proposal);
+    if (p.status === "approved" && p.approvedBlockId) {
+      const existing = await blockDB.getBlock(p.approvedBlockId);
+      if (approvedActionMatches(existing, proposal, workspaceId)) {
+        created.push(existing);
+        continue;
+      }
+    }
     const action = await blockDB.createBlock({
       type: "block",
       parent_id: meeting.id,
@@ -537,11 +553,12 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
       workspace_id: workspaceId,
     });
     created.push(action);
+    approvedCount += 1;
     await blockDB.updateBlock(proposal.id, {
       properties: { ...p, status: "approved", approvedAt: new Date().toISOString(), approvedBlockId: action.id },
     });
   }
-  return { ...(await getAutomation(blockId, workspaceId)), approvedCount: created.length, approvedBlocks: created };
+  return { ...(await getAutomation(blockId, workspaceId)), approvedCount, approvedBlocks: created };
 }
 
 // One cross-meeting read model for the morning elevation modal. Proposals remain
@@ -554,6 +571,15 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
   for (const proposal of proposals) {
     const p = propsOf(proposal);
     if (!["proposed", "approved"].includes(p.status) || p.done === true || !proposal.parent_id) continue;
+    let approvedBlockId = null;
+    if (p.status === "approved" && p.approvedBlockId) {
+      const approved = await blockDB.getBlock(p.approvedBlockId);
+      if (approvedActionMatches(approved, proposal, workspaceId)) {
+        approvedBlockId = approved.id;
+        const ap = propsOf(approved);
+        if (ap.status === "done" || ap.done === true || !!ap.completedAt) continue;
+      }
+    }
     let meeting;
     try { meeting = await loadMeeting(proposal.parent_id, workspaceId); }
     catch { continue; }
@@ -568,6 +594,7 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
       title: p.text || p.title || "Meeting follow-up",
       owner: p.owner === "other" || p.owner === "others" ? "other" : "drake",
       priority: p.priority || "Medium",
+      approvedBlockId,
       createdAt: proposal.created_at || null,
     });
   }
@@ -585,7 +612,7 @@ async function dismissProposedAction(blockId, actionId, { workspaceId } = {}) {
   if (!["proposed", "approved"].includes(p.status)) throw Object.assign(new Error("Only an unplaced action can be dismissed"), { statusCode: 409 });
   if (p.status === "approved" && p.approvedBlockId && typeof blockDB.deleteBlock === "function") {
     const approved = await blockDB.getBlock(p.approvedBlockId);
-    if (approved && !approved.deleted_at) await blockDB.deleteBlock(approved.id);
+    if (approvedActionMatches(approved, proposal, workspaceId)) await blockDB.deleteBlock(approved.id);
   }
   await blockDB.updateBlock(proposal.id, {
     properties: { ...p, status: "dismissed", dismissedAt: new Date().toISOString() },
@@ -632,7 +659,14 @@ async function placeApprovedAction(blockId, actionBlockId, { workspaceId, userId
   if (proposedActionId) {
     try {
       const proposal = await blockDB.getBlock(proposedActionId);
-      if (proposal && !proposal.deleted_at) {
+      const proposalProps = propsOf(proposal);
+      const scopedProposal = proposal && !proposal.deleted_at &&
+        String(proposal.workspace_id || "") === String(workspaceId || "") &&
+        String(proposal.parent_id || "") === String(meeting.id) &&
+        proposalProps.kind === "proposed_action_item" &&
+        String(proposalProps.approvedBlockId || "") === String(action.id) &&
+        approvedActionMatches(action, proposal, workspaceId);
+      if (scopedProposal) {
         const pp = propsOf(proposal);
         await blockDB.updateBlock(proposal.id, {
           properties: { ...pp, status: "placed", placedDate: date, placedStart: nextProps.start || null },
@@ -656,12 +690,19 @@ async function placeProposedAction(blockId, proposalId, { workspaceId, userId, d
   if (!proposal) throw Object.assign(new Error("Proposed action not found for this meeting"), { statusCode: 404 });
   let p = propsOf(proposal);
   if (p.status === "placed") {
-    return { ok: true, actionBlockId: p.approvedBlockId || null, date: p.placedDate || date, start: p.placedStart || null, duplicate: true };
+    const placed = p.approvedBlockId ? await blockDB.getBlock(p.approvedBlockId) : null;
+    return {
+      ok: true,
+      actionBlockId: approvedActionMatches(placed, proposal, workspaceId) ? placed.id : null,
+      date: p.placedDate || date,
+      start: p.placedStart || null,
+      duplicate: true,
+    };
   }
   if (p.status === "dismissed") throw Object.assign(new Error("Dismissed action cannot be scheduled"), { statusCode: 409 });
 
   let action = p.approvedBlockId ? await blockDB.getBlock(p.approvedBlockId) : null;
-  if (!action || action.deleted_at) {
+  if (!approvedActionMatches(action, proposal, workspaceId)) {
     const approved = await approveActions(meeting.id, { workspaceId, userId, actionIds: [proposal.id] });
     action = (approved.approvedBlocks || [])[0] || null;
     if (!action) {
@@ -671,7 +712,9 @@ async function placeProposedAction(blockId, proposalId, { workspaceId, userId, d
       action = p.approvedBlockId ? await blockDB.getBlock(p.approvedBlockId) : null;
     }
   }
-  if (!action || action.deleted_at) throw Object.assign(new Error("Could not approve meeting action"), { statusCode: 409 });
+  if (!approvedActionMatches(action, proposal, workspaceId)) {
+    throw Object.assign(new Error("Could not approve meeting action"), { statusCode: 409 });
+  }
   return placeApprovedAction(meeting.id, action.id, { workspaceId, userId, date, start });
 }
 
