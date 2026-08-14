@@ -118,11 +118,6 @@
         }
       }
     }catch(e){}
-    try{
-      if(typeof pomoState !== "undefined" && pomoState.taskTime && task.title && pomoState.taskTime[task.title] > 0){
-        return Math.round(pomoState.taskTime[task.title] / 60);
-      }
-    }catch(e){}
     return num(task.actual_minutes || task.actualMinutes);
   }
   function plannedMinutes(task){

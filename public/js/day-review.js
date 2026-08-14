@@ -7,8 +7,8 @@
 // array, which is empty for past days (it is hydrated from a dcc_state snapshot
 // that only exists for a handful of days). This view instead sources the plan
 // DIRECTLY from blockStore (the durable source of truth), so every past day
-// populates. Actual time comes from `time_entry` blocks (timer / pomodoro /
-// manual), with graceful fallback to legacy `_sessions` / pomodoro taskTime.
+// populates. Actual time comes from `time_entry` blocks, with a read-only
+// fallback to legacy `_sessions` data.
 (function () {
   "use strict";
 
@@ -89,7 +89,7 @@
   }
 
   // segments [{startMin|null, durMin, source}] for an event, from time_entry blocks
-  // (preferred) with fallback to legacy _sessions / pomodoro taskTime.
+  // (preferred) with fallback to legacy _sessions.
   function actualSegmentsFor(ev, ctx) {
     const segs = [];
     for (const te of ctx.timeEntries) {
@@ -105,8 +105,6 @@
     if (Array.isArray(sess) && sess.length) {
       return sess.map(s => ({ startMin: s.start ? toMin(s.start) : null, durMin: s.durationMin || 0, source: "legacy", _id: null }));
     }
-    const pomoSec = ctx.pomoTaskTime[ev.title];
-    if (pomoSec) return [{ startMin: null, durMin: pomoSec / 60, source: "legacy", _id: null }];
     return [];
   }
 
@@ -135,7 +133,6 @@
     const ctx = {
       timeEntries: (window.blockStore && window.blockStore.getTimeEntries) ? window.blockStore.getTimeEntries(dateStr) : [],
       sessions: (typeof loadSessions === "function") ? (loadSessions() || {}) : {},
-      pomoTaskTime: (typeof pomoState !== "undefined" && pomoState && pomoState.taskTime) ? pomoState.taskTime : {},
       done: (typeof loadDoneState === "function") ? loadDoneState() : { ids: [], at: {} }
     };
     const doneIds = new Set((ctx.done.ids || []));
@@ -149,19 +146,11 @@
         startMin: toMin(ev.start), endMin: Math.max(toMin(ev.end), toMin(ev.start) + 5),
         editable: ev.source !== "gcal" || true /* allow logging time on anything */ };
     });
-    // unscheduled actual time (time_entry / pomo with no matching plan block)
-    const matchedTitles = new Set(planned.map(p => normTitle(p.title)));
+    // Unscheduled actual time from entries with no matching plan block.
     const extras = [];
     const seenExtra = new Set();
-    // Every title that has a real time_entry. A time_entry is authoritative over
-    // the legacy pomoTaskTime accumulator, so the pomo fallback below must skip
-    // any title already covered here — otherwise a pomo session that wrote a
-    // time_entry (keyed by blockId) AND incremented pomoTaskTime (keyed by title)
-    // gets counted twice in the HUD's unscheduled-time total.
-    const titlesWithEntries = new Set();
     for (const te of ctx.timeEntries) {
       const p = te.properties || {};
-      if (p.taskTitle) titlesWithEntries.add(normTitle(p.taskTitle));
       const matched = planned.some(ev => entryMatchesEvent(p, ev));
       if (matched) continue;
       const key = (p.blockId || normTitle(p.taskTitle) || te.id);
@@ -169,12 +158,6 @@
       const ex = extras.find(x => (x.blockId && x.blockId === p.blockId) || normTitle(x.title) === normTitle(p.taskTitle));
       if (ex) ex.min += (p.durSec || 0) / 60;
     }
-    Object.entries(ctx.pomoTaskTime || {}).forEach(([title, sec]) => {
-      if (matchedTitles.has(normTitle(title))) return;
-      if (titlesWithEntries.has(normTitle(title))) return;
-      if (seenExtra.has(normTitle(title))) return;
-      extras.push({ title, min: sec / 60, blockId: null });
-    });
     return { dateStr, rows, extras, ctx };
   }
 
@@ -271,7 +254,7 @@
         const segH = Math.max(4, (seg.durMin / 60) * HOUR_HEIGHT);
         stackBase = segStart + seg.durMin;
         const fill = document.createElement("div");
-        fill.className = "dr-fill" + (seg.source === "pomo" ? " pomo" : "") + (seg.source === "legacy" ? " legacy" : "");
+        fill.className = "dr-fill" + (seg.source === "legacy" ? " legacy" : "");
         fill.style.cssText = "top:" + minsToY(segStart) + "px;height:" + segH + "px;left:" + leftCalc + ";width:" + blockWidth + ";--dr-color:" + color + ";";
         fill.title = (seg.startMin != null ? fmtClock(segStart) + " · " : "") + fmtDur(seg.durMin) + (seg.source ? " (" + seg.source + ")" : "");
         grid.appendChild(fill);

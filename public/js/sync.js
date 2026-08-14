@@ -181,68 +181,6 @@ function saveSessions(data) {
   localStorage.setItem(SESSIONS_KEY, JSON.stringify(data)); scheduleIDBSave();
 }
 
-// ======== POMODORO STATE PERSISTENCE ========
-let POMO_STATE_KEY = "pa-pomo-state-" + (__state ? __state.date : "unknown");
-// localOnly=true: only write to localStorage (used by per-second ticks to avoid hammering Railway).
-// localOnly=false (default): write to localStorage + BlockStore/Railway (used by pause/stop/start/mode changes).
-function savePomoState(localOnly) {
-  const data = {
-    title: pomoState.title, currentTaskRef: pomoState.currentTaskRef || null, workMin: pomoState.workMin, mode: pomoState.mode,
-    total: pomoState.total, remaining: pomoState.remaining, running: pomoState.running,
-    sessions: pomoState.sessions, soundOn: pomoState.soundOn, sessionLog: pomoState.sessionLog,
-    taskTime: pomoState.taskTime, taskDone: pomoState.taskDone, stackedSessions: pomoState.stackedSessions,
-    pivotTasks: pomoState.pivotTasks||[],
-    collapsedView: pomoState.collapsedView||"mini",
-    savedAt: Date.now()
-  };
-  // Always keep localStorage for same-device instant restore on reload
-  try { localStorage.setItem(POMO_STATE_KEY, JSON.stringify(data)); } catch(e) {}
-  // Skip server persist during per-second ticks — only sync on meaningful events
-  if (localOnly) return;
-  // Also persist to day_root for cross-device sync
-  _bsSaveProp("_pomoState", data);
-  // Log the most recent session as a typed time_entry so it surfaces as actual
-  // time in the day-review overlay. Single source of truth: this replaces the
-  // old untyped "block" write so pomodoro time is never double-counted.
-  // sessionLog is unshift()ed, so [0] is the newest session.
-  if (window.USE_BLOCKSTORE && window.USE_BLOCKSTORE.pomo && window.blockStore && pomoState.sessionLog.length) {
-    const lastSession = pomoState.sessionLog[0];
-    if (lastSession && !lastSession._blockSaved) {
-      if ((lastSession.type || "work") === "work" && (lastSession.durSec || 0) > 0) {
-        const d = window.blockStore.getCurrentDate();
-        const endMin = (typeof pt === "function" && lastSession.time) ? pt(lastSession.time) : 0;
-        const startMin = Math.max(0, endMin - Math.round((lastSession.durSec || 0) / 60));
-        const hhmm = m => String(Math.floor(m / 60) % 24).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
-        window.blockStore.logTimeEntry({
-          blockId: pomoState.currentTaskRef || null,
-          taskTitle: lastSession.title || "",
-          start: endMin ? (d + "T" + hhmm(startMin) + ":00") : null,
-          end: endMin ? (d + "T" + hhmm(endMin) + ":00") : null,
-          durSec: lastSession.durSec || 0,
-          source: "pomo",
-          pomoType: lastSession.type || "work",
-          date: d
-        });
-      }
-      lastSession._blockSaved = true;
-    }
-  }
-}
-// Flush pomo state to server on tab close so mid-timer state isn't lost
-window.addEventListener("beforeunload", function() {
-  if (pomoState && pomoState.running) savePomoState();
-});
-function loadPomoState() {
-  // Check localStorage first (fast, same-device)
-  try {
-    const raw = localStorage.getItem(POMO_STATE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch(e) {}
-  // Cross-device fallback: check day_root (populated after blockStore.loadDay())
-  const v = _bsProp("_pomoState", null);
-  return v || null;
-}
-
 // Restore checked state from localStorage (survives re-renders)
 (function() {
   const saved = loadDoneState();

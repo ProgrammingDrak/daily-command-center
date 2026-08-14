@@ -29,7 +29,7 @@ const {
   slackPermalink,
   sourceNotes,
 } = require("../lib/slack-capture");
-const { isBlockDone } = createTaskTiming;
+const { isBlockDone, isStaleWorkEvent } = createTaskTiming;
 
 module.exports = function mount(app, ctx) {
   const { pool, blockDB, slotStore, broadcast, crypto, getTodayStr, APP_TIME_ZONE } = ctx;
@@ -328,9 +328,10 @@ module.exports = function mount(app, ctx) {
       // workspace_id is selected so the timer row's delete fence in
       // lib/task-timing.js has a tenant to check against rather than falling
       // through its "unknown workspace" branch.
-      `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id FROM blocks
+      `SELECT id, type, parent_id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, user_id, workspace_id FROM blocks
         WHERE properties->>'idempotency_key' = $1 AND workspace_id = $2
-        ORDER BY deleted_at IS NULL DESC, created_at DESC LIMIT 1`,
+        ORDER BY (COALESCE(properties->>'kind', '') = 'slack_reaction_tombstone') ASC,
+                 deleted_at IS NULL DESC, created_at DESC LIMIT 1`,
       [idemKey, OWNER_WORKSPACE_ID]
     );
     return rows[0] || null;
@@ -349,24 +350,6 @@ module.exports = function mount(app, ctx) {
       if (i < tries - 1) await new Promise(r => setTimeout(r, 400));
     }
     return null;
-  }
-
-  // Read the day's `_done` overlay for a task's date. The browser check-off is
-  // persisted THERE, not on the row (until C5), so any handler that asks "has
-  // this been finished?" has to look.
-  //
-  // NO try/catch, deliberately, for the reason responsibility-store's readDayRoot
-  // documents: a failed read must NOT be reported as "nothing was completed on
-  // this day". The caller's response to that lie is deleteBlock. processEvent is
-  // already wrapped in a .catch at the endpoint, so a throw here is logged and
-  // the task simply survives, which is the safe direction.
-  //
-  // getBlock, not ensureDayRoot: this is a read, and ensureDayRoot would CREATE
-  // the row. Mirrors readDayRoot's legacy un-prefixed fallback, which is ws-1 only.
-  async function dayRootPropsFor(date) {
-    let root = await blockDB.getBlock(`day-root-${OWNER_WORKSPACE_ID}-${date}`);
-    if (!root && OWNER_WORKSPACE_ID === "ws-1") root = await blockDB.getBlock(`day-root-${date}`);
-    return (root && root.properties) || null;
   }
 
   // Drop this task from the day's `_done` overlay. Un-completing has to clear
@@ -412,6 +395,17 @@ module.exports = function mount(app, ctx) {
       return false;
     }
   }
+  async function removeSlackReaction(channel, ts, name) {
+    if (!USER_TOKEN) { console.warn(`[slack-events] SLACK_USER_TOKEN unset - cannot remove :${name}:`); return false; }
+    try {
+      await slackApi("reactions.remove", { channel, timestamp: ts, name }, { post: true });
+      return true;
+    } catch (e) {
+      if (e.code === "no_reaction") return true;
+      console.error(`[slack-events] reactions.remove :${name}: failed:`, e.message);
+      return false;
+    }
+  }
   function addMin(hhmm, min) {
     const [h, m] = hhmm.split(":").map(Number);
     const t = h * 60 + m + min;
@@ -422,7 +416,7 @@ module.exports = function mount(app, ctx) {
   // hidden idempotency row ensures the delayed add cannot leave a phantom task.
   // This is intentionally not create-then-delete: a failed second write could
   // otherwise expose an empty delegated card permanently.
-  async function createReactionTombstone(kind, channel, ts) {
+  async function createReactionTombstone(kind, channel, ts, eventMs = Date.now()) {
     const idemKey = kind === "delegate" ? delegateKeyFor(channel, ts) : keyFor(channel, ts);
     if (await findTaskByKey(idemKey)) return;
     const created = await blockDB.createBlock({
@@ -439,6 +433,7 @@ module.exports = function mount(app, ctx) {
         slack_ts: ts,
         created_by: "slack-events-tombstone",
         created_at: new Date().toISOString(),
+        ...(kind === "bookmark" ? { slackBookmarkChangedAt: new Date(eventMs).toISOString() } : {}),
       },
       user_id: OWNER_USER_ID,
       workspace_id: OWNER_WORKSPACE_ID,
@@ -458,17 +453,43 @@ module.exports = function mount(app, ctx) {
   // actualMinutes + the ⏱ note + the Day Review time_entry live in lib/task-timing.js
   // (extracted from handleDone, E1) so the itinerary read path can close a ⌛ timer
   // that some OTHER surface completed. See that module's header.
-  const { finalizeTiming, clearTiming } = createTaskTiming({ pool, blockDB, timeZone: TZ });
+  const { startWork, pauseWork, completeWork, reopenWork } = createTaskTiming({ pool, blockDB, timeZone: TZ });
+
+  function completionMutationId(actionId, taskId, direction) {
+    const seed = `${actionId || "slack"}:${taskId}:${direction}`;
+    return `slack:${crypto.createHash("sha256").update(seed).digest("hex").slice(0, 48)}`;
+  }
 
   // ── 🔖 create ───────────────────────────────────────────────────────────
-  async function handleBookmark(channel, ts, seed) {
+  async function handleBookmark(channel, ts, seed, eventMs = Date.now()) {
     const idemKey = keyFor(channel, ts);
-    // Any hit stops creation — live (webhook retry, or the poller already made it)
-    // OR tombstoned. A tombstone means the user deliberately cancelled this
-    // message's task; re-adding 🔖 must not resurrect it as a fresh row.
-    const existing = await findTaskByKey(idemKey);
+    let existing = await findTaskByKey(idemKey);
     if (existing) {
-      if (existing.deleted_at) console.log(`[slack-events] 🔖 on a cancelled task for ${channel}:${ts} — not re-created`);
+      const existingProps = existing.properties || {};
+      const previousMs = Date.parse(existingProps.slackBookmarkChangedAt || "");
+      const isOrderTombstone = existingProps.kind === "slack_reaction_tombstone";
+      if (Number.isFinite(previousMs) && (eventMs < previousMs || (eventMs === previousMs && !isOrderTombstone))) return;
+      if (isOrderTombstone) {
+        await blockDB.deleteBlock(existing.id);
+        existing = null;
+      }
+    }
+    if (existing) {
+      const existingProps = existing.properties || {};
+      const previousMs = Date.parse(existingProps.slackBookmarkChangedAt || "");
+      if (existing.deleted_at) {
+        if (typeof blockDB.undeleteBlock !== "function") return;
+        const restored = await blockDB.undeleteBlock(existing.id);
+        const restoredProps = restored.properties || {};
+        const next = { ...restoredProps, status: restoredProps.status === "cancelled" ? "open" : restoredProps.status, slackBookmarkChangedAt: new Date(eventMs).toISOString() };
+        delete next.startedAt;
+        delete next.activeWorkSessionId;
+        delete next.startedBy;
+        if (JSON.stringify(next) !== JSON.stringify(restoredProps)) await blockDB.updateBlock(restored.id, { properties: next });
+        broadcast("blocks-changed", { action: "slack-bookmark-restore", blockIds: [existing.id], date: existing.date }, OWNER_WORKSPACE_ID);
+      } else if (!Number.isFinite(previousMs) || eventMs > previousMs) {
+        await blockDB.updateBlock(existing.id, { properties: { ...existingProps, slackBookmarkChangedAt: new Date(eventMs).toISOString() } });
+      }
       return;
     }
     const date = getTodayStr();
@@ -483,6 +504,7 @@ module.exports = function mount(app, ctx) {
       priority: "Medium",
       source: "slack-bookmark", created_by: "slack-events",
       created_at: new Date().toISOString(),
+      slackBookmarkChangedAt: new Date(eventMs).toISOString(),
       start: "09:00", end: addMin("09:00", NO_HOURGLASS_MIN),
       idempotency_key: idemKey,
     };
@@ -553,55 +575,62 @@ module.exports = function mount(app, ctx) {
     } });
   }
 
-  // ── 🔖 removed → cancel an un-started task (a clean undo for a mis-bookmark) ─
-  //
-  // The keep-guard is wide on purpose. It used to be `startedAt || completedAt`,
-  // but clearStart DELETES startedAt, so `🔖 → ⌛ → un-⌛ → un-🔖` slipped through
-  // and soft-deleted a task that had already been worked on. `everStarted` is the
-  // sticky version of startedAt that un-⌛ never clears; the done checks cover
-  // completion from any surface, including the browser's `_done` overlay.
-  //
-  // Un-🔖 keeps its meaning — a clean undo for a mis-bookmark — it just stops
-  // being a delete enabler for work that actually happened.
-  async function handleBookmarkRemoved(channel, ts) {
-    const task = await findLiveTaskByKey(keyFor(channel, ts));
+  // Removing Slack's bookmark removes the canonical DCC task too. If it is
+  // active, settle that session first so deleting the task never loses work.
+  async function handleBookmarkRemoved(channel, ts, eventMs = Date.now()) {
+    const idemKey = keyFor(channel, ts);
+    const task = await findLiveTaskByKey(idemKey);
     if (!task) {
-      await createReactionTombstone("bookmark", channel, ts);
+      const existing = await findTaskByKey(idemKey);
+      if (existing && existing.deleted_at && (existing.properties || {}).kind !== "slack_reaction_tombstone") return;
+      if (existing && (existing.properties || {}).kind === "slack_reaction_tombstone") {
+        const props = existing.properties || {};
+        const previousMs = Date.parse(props.slackBookmarkChangedAt || "");
+        if (!Number.isFinite(previousMs) || eventMs > previousMs) {
+          await blockDB.updateBlock(existing.id, { properties: { ...props, slackBookmarkChangedAt: new Date(eventMs).toISOString() } });
+        }
+        return;
+      }
+      await createReactionTombstone("bookmark", channel, ts, eventMs);
       return;
     }
     const props = task.properties || {};
-    // isBlockDone already covers status/done/completed/completedAt/doneAt plus the
-    // day overlay, so only the "was worked on" half is left to check here.
-    if (props.startedAt || props.everStarted) return;
-    if (isBlockDone(task, await dayRootPropsFor(task.date))) return;
+    const previousMs = Date.parse(props.slackBookmarkChangedAt || "");
+    if (Number.isFinite(previousMs) && eventMs < previousMs) return;
+    if (isStaleWorkEvent(props, eventMs)) return;
+    const removedProps = { ...props, slackBookmarkChangedAt: new Date(eventMs).toISOString() };
+    const stamped = await blockDB.updateBlock(task.id, { properties: removedProps });
+    task.properties = stamped && stamped.properties ? stamped.properties : removedProps;
+    if ((task.properties || {}).startedAt) {
+      await pauseWork({ block: task, atMs: eventMs, actor: "slack", actionId: `bookmark-remove:${channel}:${ts}:${eventMs}` });
+    }
     await blockDB.deleteBlock(task.id);
+    await removeSlackReaction(channel, ts, R_START);
+    await removeSlackReaction(channel, ts, R_DONE);
     broadcast("blocks-changed", { action: "slack-bookmark-cancel", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
   }
 
   // ── ⌛ start ────────────────────────────────────────────────────────────
-  async function handleStart(channel, ts, eventMs) {
+  async function handleStart(channel, ts, eventMs, actionId = null) {
     const task = await findTaskWithRetry(keyFor(channel, ts));
     if (!task) { console.warn(`[slack-events] ⌛ with no task for ${channel}:${ts} — ignored`); return; }
-    const props = task.properties || {};
-    if (props.startedAt || props.completedAt) return;   // first ⌛ wins; never restart a done task
-    // everStarted is deliberately never cleared — see handleBookmarkRemoved.
-    await blockDB.updateBlock(task.id, { properties: { ...props, startedAt: new Date(eventMs).toISOString(), everStarted: true } });
+    const started = await startWork({ block: task, atMs: eventMs, actor: "slack", actionId: actionId || `${channel}:${ts}:${eventMs}` });
+    if (!started.changed && (started.reason === "not-trackable" || started.reason === "completed")) {
+      await removeSlackReaction(channel, ts, R_START);
+    }
     broadcast("blocks-changed", { action: "slack-start", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
   }
 
   // ── ⌛ removed → clear a not-yet-completed start ──────────────────────────
-  async function clearStart(channel, ts) {
+  async function clearStart(channel, ts, eventMs = Date.now(), actionId = null) {
     const task = await findLiveTaskByKey(keyFor(channel, ts));
     if (!task) return;
-    const props = task.properties || {};
-    if (!props.startedAt || props.completedAt) return;
-    const { startedAt: _startedAt, ...rest } = props;   // everStarted intentionally survives
-    await blockDB.updateBlock(task.id, { properties: rest });
+    await pauseWork({ block: task, atMs: eventMs, actor: "slack", actionId });
     broadcast("blocks-changed", { action: "slack-start-clear", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
   }
 
   // ── ✅ complete ───────────────────────────────────────────────────────────
-  async function handleDone(channel, ts, eventMs) {
+  async function handleDone(channel, ts, eventMs, actionId = null) {
     const task = await findTaskWithRetry(keyFor(channel, ts));
     if (!task) { console.warn(`[slack-events] ✅ with no task for ${channel}:${ts} — ignored`); return; }
     const props = task.properties || {};
@@ -609,22 +638,23 @@ module.exports = function mount(app, ctx) {
 
     const completedIso = new Date(eventMs).toISOString();
     const title = props.title || "Slack task";
-
-    // One write: the completion stamps ride along with the timing fields, exactly
-    // as they did before the extraction. fallbackMinutes is the Slack-only
-    // "🔖→✅ with no ⌛ ⇒ assume 5 minutes" rule; no other caller passes it.
-    const timing = await finalizeTiming({
-      block: task, endMs: eventMs, fallbackMinutes: NO_HOURGLASS_MIN, title,
-      userId: OWNER_USER_ID, workspaceId: OWNER_WORKSPACE_ID,
-      completionIntent: "complete",
-      mergeProps: {
-        status: "done", done: true, completed: true,
-        completedAt: completedIso, doneAt: completedIso, completedBy: "slack-events",
-      },
+    const mutationId = completionMutationId(actionId || completedIso, task.id, "complete");
+    const durable = await blockDB.setTaskCompletion({
+      taskRef: task.id,
+      completed: true,
+      completedAt: completedIso,
+      taskDate: task.date || null,
+      mutationId,
+      expectedRevision: props._completionRevision || null,
+      userId: OWNER_USER_ID,
+      workspaceId: OWNER_WORKSPACE_ID,
     });
-    const actualMin = timing.actualMinutes != null ? timing.actualMinutes : NO_HOURGLASS_MIN;
-    const finalProps = task.properties || props;
-    const pointsDuration = (timing.roundedWindow && timing.roundedWindow.durationMinutes) || finalProps.pointsDurationMinutes;
+    const canonical = durable.task || task;
+    const completion = await completeWork({ block: canonical, atMs: eventMs, actor: "slack-events", actionId: mutationId, normalizeExisting: true });
+    if (!completion.changed && !durable.duplicate) return;
+    const finalProps = canonical.properties || props;
+    const actualMin = finalProps.actualMinutes || 0;
+    const actualCompletedIso = finalProps.completedAt || completedIso;
 
     // Points — idempotent on source_key (mirrors log-done so a later reconcile dedupes).
     try {
@@ -633,8 +663,8 @@ module.exports = function mount(app, ctx) {
         task_id: task.id, title, type: finalProps.type || "task", tags: finalProps.tags || [],
         priority: finalProps.priority || "",
         duration_minutes: finalProps.estimatedMinutes || NO_HOURGLASS_MIN,
-        points_duration_minutes: pointsDuration || undefined,
-        actual_minutes: actualMin, completed_at: completedIso,
+        points_duration_minutes: finalProps.pointsDurationMinutes || undefined,
+        actual_minutes: actualMin, completed_at: actualCompletedIso,
       });
     } catch (e) { console.error("[slack-events] credit failed (non-fatal):", e.message); }
 
@@ -646,11 +676,12 @@ module.exports = function mount(app, ctx) {
   // v1 ignored this, so a mis-check was stuck done forever with the points banked.
   // The full inverse of handleDone, in the same order, so nothing is left half-done:
   // reopen the row, drop the timing, reverse the credit, restore the queue.
-  async function handleUndone(channel, ts) {
+  async function handleUndone(channel, ts, eventMs = Date.now(), actionId = null) {
     const task = await findLiveTaskByKey(keyFor(channel, ts));
     if (!task) { console.warn(`[slack-events] un-✅ with no task for ${channel}:${ts} — ignored`); return; }
     const props = task.properties || {};
     if (!props.completedAt) return;   // never completed by us (or a Slack retry) — idempotent
+    if (isStaleWorkEvent(props, eventMs)) return;
 
     // Reverse the points FIRST, and abort the un-complete entirely if it fails.
     // Without the revoke the balance keeps credit for work that was un-done AND,
@@ -668,7 +699,7 @@ module.exports = function mount(app, ctx) {
 
     // The overlay is the OTHER completion store, and it is cleared before the row
     // for the same reason the revoke is: a failure has to leave both stores "done"
-    // rather than half-reversed. If this ran after clearTiming and failed, the
+    // rather than half-reversed. If this ran after reopening the row and failed, the
     // overlay would silently re-apply the completion (reconcileTiming re-derives
     // the timing just cleared, the UI keeps rendering the row checked) while the
     // credit stayed revoked. Bailing here keeps completedAt on the row, so
@@ -680,16 +711,19 @@ module.exports = function mount(app, ctx) {
       return;
     }
 
-    // Reopen + un-time in one write. clearTiming strips only the ⏱ line it wrote
-    // and hard-deletes the timer segment, so Day Review loses the phantom block.
-    // `startedAt` / `everStarted` deliberately survive: the work DID start, and a
-    // later re-✅ should measure from the original ⌛, not from zero.
-    await clearTiming({
-      block: task,
-      mergeProps: { status: "open" },
-      dropProps: ["done", "completed", "completedAt", "doneAt", "completedBy"],
-      completionIntent: "reopen",
+    const mutationId = completionMutationId(actionId || eventMs, task.id, "reopen");
+    const durable = await blockDB.setTaskCompletion({
+      taskRef: task.id,
+      completed: false,
+      completedAt: null,
+      taskDate: task.date || null,
+      mutationId,
+      expectedRevision: props._completionRevision || null,
+      userId: OWNER_USER_ID,
+      workspaceId: OWNER_WORKSPACE_ID,
     });
+    const canonical = durable.task || task;
+    await reopenWork({ block: canonical, atMs: eventMs, actor: "slack-events", actionId: mutationId });
 
     // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).
     await addSlackReaction(channel, ts, R_BOOKMARK);
@@ -805,36 +839,74 @@ module.exports = function mount(app, ctx) {
     return enriched;
   }
 
-  async function mirrorDccCompletions(limit = 20) {
+  async function projectTaskToSlack(block) {
+    if (!block) return false;
+    if (String(block.workspace_id || "") !== String(OWNER_WORKSPACE_ID || "")) return false;
+    const props = block.properties || {};
+    const channel = props.slack_channel;
+    const ts = props.slack_ts;
+    if (!channel || !ts || props.source !== "slack-bookmark") return false;
+    try {
+      if (block.deleted_at) {
+        await removeSlackReaction(channel, ts, R_START);
+        await removeSlackReaction(channel, ts, R_DONE);
+        await removeSlackReaction(channel, ts, R_BOOKMARK);
+        return true;
+      }
+      const done = isBlockDone(block, null);
+      const active = !done && !!props.startedAt;
+      await addSlackReaction(channel, ts, R_BOOKMARK);
+      if (done) {
+        await addSlackReaction(channel, ts, R_DONE);
+        await removeSlackReaction(channel, ts, R_START);
+      } else if (active) {
+        await addSlackReaction(channel, ts, R_START);
+        await removeSlackReaction(channel, ts, R_DONE);
+      } else {
+        await removeSlackReaction(channel, ts, R_START);
+        await removeSlackReaction(channel, ts, R_DONE);
+      }
+      return true;
+    } catch (error) {
+      console.warn(`[slack-events] projection retry for ${block.id}:`, error.message);
+      return false;
+    }
+  }
+
+  async function syncSlackTaskReactions(blockOrId) {
+    const block = typeof blockOrId === "object" && blockOrId
+      ? blockOrId
+      : await blockDB.getBlockIncludingDeleted(blockOrId);
+    return projectTaskToSlack(block);
+  }
+
+  let mirrorCursor = null;
+  async function mirrorDccCompletions() {
     const { rows } = await pool.query(
-      `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id
+      `SELECT id, to_char(date, 'YYYY-MM-DD') AS date, properties, deleted_at, workspace_id, updated_at
          FROM blocks
         WHERE workspace_id = $1
-          AND deleted_at IS NULL
           AND properties->>'source' = 'slack-bookmark'
           AND NULLIF(properties->>'slack_channel', '') IS NOT NULL
           AND NULLIF(properties->>'slack_ts', '') IS NOT NULL
-          AND (properties->>'status' = 'done' OR properties ? 'completedAt')
-          AND NOT (properties ? 'slack_done_mirrored_at')
-        ORDER BY created_at ASC
-        LIMIT $2`,
-      [OWNER_WORKSPACE_ID, limit]
+          AND ($2::timestamptz IS NULL OR updated_at > $2::timestamptz
+            OR (updated_at = $2::timestamptz AND id > $3))
+        ORDER BY updated_at ASC, id ASC
+        LIMIT $4`,
+      [OWNER_WORKSPACE_ID, mirrorCursor && mirrorCursor.updatedAt, mirrorCursor && mirrorCursor.id || "", 20]
     );
-    let mirrored = 0;
-    for (const block of rows) {
-      const props = block.properties || {};
-      if (!props.slack_channel || !props.slack_ts) continue;
-      try {
-        const ok = await addSlackReaction(props.slack_channel, props.slack_ts, R_DONE);
-        if (!ok) continue;
-        await blockDB.updateBlock(block.id, { properties: { ...props, slack_done_mirrored_at: new Date().toISOString() } });
-        mirrored += 1;
-      } catch (error) {
-        console.warn(`[slack-events] completion mirror retry for ${block.id}:`, error.message);
-      }
+    if (!rows.length) {
+      mirrorCursor = null;
+      return 0;
     }
+    let mirrored = 0;
+    for (const block of rows) if (await projectTaskToSlack(block)) mirrored += 1;
+    const last = rows[rows.length - 1];
+    mirrorCursor = { updatedAt: last.updated_at, id: last.id };
     return mirrored;
   }
+
+  ctx.syncSlackTaskReactions = syncSlackTaskReactions;
 
   let reconciliationRunning = false;
   async function runReconciliation() {
@@ -903,17 +975,18 @@ module.exports = function mount(app, ctx) {
     if (!ev.item || ev.item.type !== "message") return;
     const { channel, ts } = ev.item;
     const eventMs = Math.round(Number(ev.event_ts) * 1000) || Date.now();
+    const actionId = ev._eventId || `${ev.type}:${channel}:${ts}:${ev.reaction}:${ev.event_ts || eventMs}`;
     if (ev.type === "reaction_removed") {
-      if (ev.reaction === R_START) return clearStart(channel, ts);
-      if (ev.reaction === R_BOOKMARK) return handleBookmarkRemoved(channel, ts);
+      if (ev.reaction === R_START) return clearStart(channel, ts, eventMs, actionId);
+      if (ev.reaction === R_BOOKMARK) return handleBookmarkRemoved(channel, ts, eventMs);
       if (ev.reaction === R_DELEGATE) return handleDelegateRemoved(channel, ts);
-      if (ev.reaction === R_DONE) return handleUndone(channel, ts);
+      if (ev.reaction === R_DONE) return handleUndone(channel, ts, eventMs, actionId);
       return;
     }
-    if (ev.reaction === R_BOOKMARK) return handleBookmark(channel, ts);
+    if (ev.reaction === R_BOOKMARK) return handleBookmark(channel, ts, null, eventMs);
     if (ev.reaction === R_DELEGATE) return handleDelegate(channel, ts);
-    if (ev.reaction === R_START) return handleStart(channel, ts, eventMs);
-    if (ev.reaction === R_DONE) return handleDone(channel, ts, eventMs);
+    if (ev.reaction === R_START) return handleStart(channel, ts, eventMs, actionId);
+    if (ev.reaction === R_DONE) return handleDone(channel, ts, eventMs, actionId);
   }
 
   // ── endpoint ──────────────────────────────────────────────────────────────
@@ -926,7 +999,7 @@ module.exports = function mount(app, ctx) {
     if (!verifySlack(req)) return res.status(401).end();
     res.status(200).end();                                          // ack within Slack's 3s window
     if (body.type === "event_callback" && body.event) {
-      enqueueEvent(body.event).catch(e => console.error("[slack-events] process failed:", e && e.message));
+      enqueueEvent({ ...body.event, _eventId: body.event_id || null }).catch(e => console.error("[slack-events] process failed:", e && e.message));
     }
   });
 

@@ -81,7 +81,6 @@
     var escHtml          = opts.escHtml          || W("escHtml")          || defEsc;
     var notesButton      = opts.notesButton      || W("notesButton")      || function(){ return ""; };
     var reactionChipsHtml= opts.reactionChipsHtml|| W("todoShareReactionChipsHtml") || function(){ return ""; };
-    var _pomoSvg         = opts.pomoSvg          || (typeof pomoSvg!=="undefined" ? pomoSvg : "");
 
     // pointsChip / petPrivacyChip were local closures in buildSchedule; moved here
     // verbatim. Owner uses these; guest overrides via opts (points from payload).
@@ -248,6 +247,7 @@
     var tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     var shellChip=(tt&&tt.rollupMode&&typeof shellRollupChip==="function")?shellRollupChip(ev):'';
     var chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
+    var workButton=(!guest&&window.DCCWorkSessions&&typeof window.DCCWorkSessions.itineraryActionButtonsHtml==="function")?window.DCCWorkSessions.itineraryActionButtonsHtml(ev,taskDone):'';
 
     // Inline clock (lock indicator + start/end). Empty for a timeless subtask.
     var tinlineHtml=subTimeless
@@ -285,11 +285,7 @@
               taskTagChipsHtml(ev)+
             '</div>'+
           '</div>'+
-          // Notes open by clicking the card's open space (no notes icon); the
-          // schedule calendar sits by the time in the title row above.
-          // Meetings keep their direct pomodoro button; task cards start one
-          // from the radial. Row keeps only radial / delete / done.
-          (guest?'':(isMeeting(ev)?'<button class="pomo-btn" data-pomo-id="'+ev.id+'" data-pomo-source="schedule" data-pomo-title="'+ev.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+d+'" title="Start pomodoro timer">'+_pomoSvg+'</button>':''))+
+          workButton+
           // Radial on every row now, meetings included: it carries the Prep/Recap
           // spoke that opens the meeting-automation panel (schedule-tab.js). This
           // retires the old dead .btn-meeting-auto gear, which had no click handler.

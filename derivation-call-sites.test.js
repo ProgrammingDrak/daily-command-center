@@ -3,9 +3,8 @@
 // task-model-selectors.test.js proves the mechanism. This file proves the surfaces are
 // wired to it — and it exists because they were not covered. A mutation pass over C6a
 // found six mutations the suite missed, and EVERY ONE was at a call site rather than in
-// the layer: reverting the focus-id default to `!ev.subtaskOf`, removing the pomodoro
-// picker's nesting guard, removing the focus banner's, rendering Unscheduled flat again,
-// dropping buildSchedule's fold, and — the worst of them — pooling the list view's tree
+// the layer: reverting the focus-id default to `!ev.subtaskOf`, rendering Unscheduled
+// flat again, dropping buildSchedule's fold, and — the worst of them — pooling the list view's tree
 // on `day.timed` instead of `visible`, which silently un-does the orphan fix on the one
 // surface Drake actually uses.
 //
@@ -20,68 +19,8 @@ const vm = require("node:vm");
 const { installTaskModel } = require("./task-model-vm-fixture.js");
 const { stripJsComments } = require("./js-comment-strip-fixture.js");
 
-const featuresSrc = fs.readFileSync(require.resolve("./public/js/features.js"), "utf8");
-const timerSrc = fs.readFileSync(require.resolve("./public/js/timer.js"), "utf8");
 const schedTabSrc = fs.readFileSync(require.resolve("./public/js/schedule-tab.js"), "utf8");
 const schedTabCode = stripJsComments(schedTabSrc);
-
-const one = (src, re, what) => { const m = src.match(re); if (!m) throw new Error("slice failed: " + what); return m[0]; };
-
-// ══════════════════════ the two guards that were DEAD, run for real ══════════════════
-
-// `ev.nested` was written by data.js as a literal `false` and set true by nothing, so
-// `if(ev.nested) return false` never fired and `!ev.nested` removed nothing. Both of
-// these therefore OFFERED A SUBTASK as your next task. Now they read the parent edges.
-function focusCtx(scheduled, doneIds) {
-  const ctx = {
-    console,
-    scheduled,
-    isDone: (ev) => new Set(doneIds || []).has(ev.id),
-    isDeleted: () => false,
-    getPinnedActiveId: () => null,
-    isActive: () => false,
-    pt: (s) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(s || "00:00")); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; },
-    now: () => 0,
-  };
-  vm.createContext(ctx);
-  installTaskModel(ctx);
-  vm.runInContext(one(featuresSrc, /function _focusBannerNextItem\(\)\{[\s\S]*?\n\}/, "_focusBannerNextItem"), ctx);
-  return ctx;
-}
-
-test("★ the focus banner never offers a NESTED row as 'your next task'", () => {
-  const sub = { id: "step", title: "step", subtaskOf: "parent", type: "task", start: "08:00", end: "08:30" };
-  const rider = { id: "rider", title: "rider", wrapId: "shell", type: "task", start: "08:30", end: "09:00" };
-  const top = { id: "real", title: "real", type: "task", start: "09:00", end: "09:30" };
-
-  // A subtask FIRST in the array: before C6a this was returned as the next task.
-  assert.equal(focusCtx([sub, top]).DCC && vm.runInContext("_focusBannerNextItem().id", focusCtx([sub, top])), "real");
-  assert.equal(vm.runInContext("_focusBannerNextItem().id", focusCtx([rider, top])), "real",
-    "a ride-along is nested too — the old `!ev.nested` and a `!isSubtask` fix would both miss it");
-  // Nothing but nested rows -> no banner at all, rather than a meaningless one.
-  assert.equal(vm.runInContext("_focusBannerNextItem()", focusCtx([sub, rider])), null);
-  // The ordinary case still works, and a done top-level row is skipped.
-  assert.equal(vm.runInContext("_focusBannerNextItem().id", focusCtx([top], [])), "real");
-  assert.equal(vm.runInContext("_focusBannerNextItem()", focusCtx([top], ["real"])), null);
-  // break/ooo/free_time stay excluded (unchanged behaviour).
-  assert.equal(vm.runInContext("_focusBannerNextItem()", focusCtx([{ id: "b", type: "break", start: "09:00", end: "09:30" }])), null);
-});
-
-test("★ the pomodoro picker never offers a NESTED schedule row", () => {
-  const ctx = { console, isDone: () => false, isDeleted: () => false };
-  vm.createContext(ctx);
-  installTaskModel(ctx);
-  vm.runInContext(one(timerSrc, /function _pomoTaskAvailable\(task,source\)\{[\s\S]*?\n\}/, "_pomoTaskAvailable"), ctx);
-  const avail = (task, src) => vm.runInContext(`_pomoTaskAvailable(${JSON.stringify(task)},${JSON.stringify(src)})`, ctx);
-  assert.equal(avail({ id: "a" }, "schedule"), true);
-  assert.equal(avail({ id: "s", subtaskOf: "p" }, "schedule"), false, "a subtask is not a pomodoro target");
-  assert.equal(avail({ id: "r", wrapId: "w" }, "schedule"), false, "nor is a ride-along");
-  // The legacy field must not be what decides it, in either direction.
-  assert.equal(avail({ id: "s2", subtaskOf: "p", nested: false }, "schedule"), false);
-  assert.equal(avail({ id: "a2", nested: true }, "schedule"), true);
-  // consider/backlog pools carry no parent edges and are unaffected.
-  assert.equal(avail({ id: "c", subtaskOf: "p" }, "consider"), true);
-});
 
 // Any dotted-property `nested` read. Two cuts of this were wrong. The first whitelisted eight
 // receiver names (ev|s|t|task|item|node|c|p), so `row.nested` / `block.nested` walked past it.

@@ -233,7 +233,7 @@ function transformState(state) {
         priority: item.priority || "",
         completed: item.completed || false,
         // C6a: `nested: false` DELETED. It was the only writer of `ev.nested`, nothing
-        // ever set it true, and two guards (the focus banner and the pomodoro picker)
+        // ever set it true, and task selection guards
         // read it as "is this a subtask" -- so both could offer a subtask as your next
         // task. Nesting is TaskModel.isNested(ev), off the real parent edges.
         prep: prep,

@@ -74,12 +74,38 @@ function makeHarness(opts = {}) {
     },
     blockDB: {
       getBlock: async (id) => (id === dayRootRow.id ? dayRootRow : blocks.find(b => b.id === id) || null),
+      getBlockIncludingDeleted: async (id) => (id === dayRootRow.id ? dayRootRow : blocks.find(b => b.id === id) || null),
+      getTaskTimeEntries: async (blockId, workspaceId, options = {}) => blocks.filter(b => b.type === "time_entry"
+        && b.properties.blockId === blockId
+        && (!workspaceId || !b.workspace_id || b.workspace_id === workspaceId)
+        && (options.includeDeleted || !b.deleted_at)),
+      setTaskCompletion: async ({ taskRef, completed, completedAt, mutationId }) => {
+        const b = blocks.find(x => x.id === taskRef || (x.properties || {}).local_id === taskRef);
+        if (!b) throw new Error("not found " + taskRef);
+        const props = { ...(b.properties || {}) };
+        if (completed) {
+          props.status = "done";
+          props.done = true;
+          props.completed = true;
+          props.completedAt = completedAt;
+          props.doneAt = completedAt;
+        } else {
+          props.status = "open";
+          delete props.done;
+          delete props.completed;
+          delete props.completedAt;
+          delete props.doneAt;
+        }
+        props._completionMutationId = mutationId;
+        b.properties = props;
+        return { task: b, affectedTasks: [b], revision: mutationId, persistenceTarget: "task_row", duplicate: false, broadcastIds: [b.id] };
+      },
       createItineraryTask: async ({ date, properties }) => {
-        const b = { id: `blk-${++seq}`, date, type: "block", properties };
+        const b = { id: `blk-${++seq}`, date, type: "block", properties, workspace_id: "ws-1", user_id: 1, deleted_at: null };
         blocks.push(b); return { id: b.id };
       },
       createBlock: async ({ id, type, date, properties }) => {
-        const b = { id: id || `blk-${++seq}`, date, type, properties };
+        const b = { id: id || `blk-${++seq}`, date, type, properties, workspace_id: "ws-1", user_id: 1, deleted_at: null };
         blocks.push(b); return { id: b.id };
       },
       updateBlock: async (id, { properties }) => {
@@ -93,7 +119,14 @@ function makeHarness(opts = {}) {
       },
       deleteBlock: async (id) => {
         const b = blocks.find(x => x.id === id);
-        if (b) b.deleted = true; return { id };
+        if (b) { b.deleted = true; b.deleted_at = new Date().toISOString(); } return { id };
+      },
+      undeleteBlock: async (id) => {
+        const b = blocks.find(x => x.id === id);
+        if (!b) throw new Error("not found " + id);
+        delete b.deleted;
+        b.deleted_at = null;
+        return b;
       },
       ensureDayRoot: async () => dayRootRow.id,
     },
@@ -132,7 +165,7 @@ function makeHarness(opts = {}) {
   let handler;
   const app = { post: (path, fn) => { if (path === "/api/slack/events") handler = fn; } };
   const api = mount(app, ctx);
-  return { handler, api, blocks, calls, overlay, dayRootRow, setFetch, failDayRootWrite };
+  return { handler, api, ctx, blocks, calls, overlay, dayRootRow, setFetch, failDayRootWrite };
 }
 
 function sign(rawBody, ts) {
@@ -502,7 +535,19 @@ test("completion mirroring selects only rows with valid Slack coordinates", () =
   const source = require("node:fs").readFileSync(require.resolve("./routes/slack-events.js"), "utf8");
   assert.match(source, /NULLIF\(properties->>'slack_channel', ''\) IS NOT NULL/);
   assert.match(source, /NULLIF\(properties->>'slack_ts', ''\) IS NOT NULL/);
-  assert.match(source, /if \(!props\.slack_channel \|\| !props\.slack_ts\) continue/);
+  assert.match(source, /ORDER BY updated_at ASC, id ASC/);
+  assert.match(source, /LIMIT \$4/);
+  assert.match(source, /mirrorCursor/);
+});
+
+test("Slack projection refuses blocks from another workspace", async () => {
+  const { ctx, calls } = makeHarness();
+  const projected = await ctx.syncSlackTaskReactions({
+    id: "foreign-task", type: "block", workspace_id: "ws-attacker", deleted_at: null,
+    properties: { source: "slack-bookmark", slack_channel: "CSECRET", slack_ts: "123.45", status: "open" },
+  });
+  assert.equal(projected, false);
+  assert.equal(calls.fetch.length, 0);
 });
 
 test("🔖 is idempotent — a duplicate bookmark event makes no second task", async () => {
@@ -525,7 +570,7 @@ test("⌛ then ✅ records exact elapsed, points, and a time_entry", async () =>
   assert.equal(p.completed, true);
   assert.equal(p.actualMinutes, 40);
   assert.ok(p.completedAt, "completedAt stamped");
-  assert.match(p.notes, /Took ~40m/);
+  assert.match(p.notes, /Bookmarked from Slack/);
   // points credited with both estimate and actual
   assert.equal(calls.credit.length, 1);
   assert.equal(calls.credit[0].actual_minutes, 40);
@@ -534,10 +579,10 @@ test("⌛ then ✅ records exact elapsed, points, and a time_entry", async () =>
   assert.ok(te, "time_entry created");
   assert.equal(te.properties.blockId, blocks[0].id);
   assert.equal(te.properties.durSec, 2400);
-  assert.equal(te.properties.source, "slack");
+  assert.equal(te.properties.source, "work-session");
 });
 
-test("⌛ then ✅ replaces the planned slot with a rounded measured window", async () => {
+test("⌛ then ✅ preserves the planned slot and records a measured work session", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "rounded.1", "rounded.9"));
   const startSeconds = String(Date.parse("2026-07-28T15:32:00.000Z") / 1000);
@@ -547,16 +592,11 @@ test("⌛ then ✅ replaces the planned slot with a rounded measured window", as
 
   const task = blocks.find(b => b.type === "block");
   assert.equal(task.properties.actualMinutes, 14);
-  assert.equal(task.properties.start, "11:30");
-  assert.equal(task.properties.end, "11:50");
-  assert.equal(task.properties.duration, 20);
-  assert.equal(task.properties.durationMinutes, 20);
-  assert.equal(task.properties.estimatedMinutes, 20);
-  assert.equal(task.properties.pointsDurationMinutes, 20);
-  assert.equal(task.properties.pointsBreakdown.durationMinutes, 20);
+  assert.equal(task.properties.start, "09:00");
+  assert.equal(task.properties.end, "09:05");
+  assert.equal(task.properties.estimatedMinutes, 5);
   assert.equal(calls.credit[0].actual_minutes, 14);
-  assert.equal(calls.credit[0].duration_minutes, 20);
-  assert.equal(calls.credit[0].points_duration_minutes, 20);
+  assert.equal(calls.credit[0].duration_minutes, 5);
 
   const entry = blocks.find(b => b.type === "time_entry");
   assert.equal(entry.properties.start, "11:32");
@@ -582,7 +622,7 @@ test("🔖 → ✅ with no ⌛ defaults to 5 minutes", async () => {
   await post(handler, reaction("white_check_mark", "555.5", "1720000000.000000"));
   const p = blocks[0].properties;
   assert.equal(p.actualMinutes, 5);
-  assert.match(p.notes, /no timer/);
+  assert.match(p.notes, /Bookmarked from Slack/);
   assert.equal(calls.credit[0].actual_minutes, 5);
   const te = blocks.find(b => b.type === "time_entry");
   assert.equal(te.properties.durSec, 300);
@@ -609,9 +649,9 @@ test("✅ on a never-bookmarked message creates nothing", async () => {
   assert.equal(blocks.length, 0);
 });
 
-const removal = (name, ts, user = DRAKE) => ({
+const removal = (name, ts, user = DRAKE, evTs = "1900000000.000000") => ({
   type: "event_callback",
-  event: { type: "reaction_removed", user, reaction: name, item: { type: "message", channel: "C1", ts }, event_ts: "999.9" },
+  event: { type: "reaction_removed", user, reaction: name, item: { type: "message", channel: "C1", ts }, event_ts: evTs },
 });
 
 // INVERTED IN E1. This used to assert that re-adding 🔖 minted a fresh task,
@@ -620,47 +660,66 @@ const removal = (name, ts, user = DRAKE) => ({
 // next 🔖 created a duplicate of work the user had explicitly dropped. The lookup
 // now includes tombstones (mirroring findBriefBlock in routes/dcc.js) and a
 // tombstoned hit means "the user cancelled this — do not re-create".
-test("removing 🔖 before ⌛/✅ cancels the task, and re-adding 🔖 does NOT resurrect it", async () => {
+test("removing 🔖 deletes the task, and re-adding 🔖 restores that same task", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "aaa.1", "aaa.9"));
   assert.equal(blocks[0].deleted, undefined);
   await post(handler, removal("bookmark", "aaa.1"));
   assert.equal(blocks[0].deleted, true);
-  await post(handler, reaction("bookmark", "aaa.1", "aaa.95"));
+  await post(handler, reaction("bookmark", "aaa.1", "1900000100.000000"));
   assert.equal(blocks.filter(b => b.type === "block").length, 1, "no second task minted");
-  assert.equal(blocks.filter(b => b.type === "block" && !b.deleted).length, 0, "and the tombstone stays a tombstone");
+  assert.equal(blocks.filter(b => b.type === "block" && !b.deleted).length, 1, "the original task is restored");
 });
 
-test("removing 🔖 after ⌛ is ignored — an in-flight task is kept", async () => {
+test("a delayed bookmark add cannot restore a task deleted later in the DCC", async () => {
+  const { handler, blocks } = makeHarness();
+  await post(handler, reaction("bookmark", "aaa.2", "1900000000.000000"));
+  const task = blocks[0];
+  const deletedAt = new Date(1900000200 * 1000).toISOString();
+  task.properties.slackBookmarkChangedAt = deletedAt;
+  task.deleted = true;
+  task.deleted_at = deletedAt;
+
+  await post(handler, reaction("bookmark", "aaa.2", "1900000100.000000"));
+  assert.equal(task.deleted, true);
+  assert.equal(task.deleted_at, deletedAt);
+
+  await post(handler, reaction("bookmark", "aaa.2", "1900000300.000000"));
+  assert.equal(task.deleted, undefined);
+  assert.equal(task.deleted_at, null);
+});
+
+test("removing 🔖 after ⌛ settles work and deletes the task", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "bbb.1", "bbb.9"));
   await post(handler, reaction("hourglass", "bbb.1", "1720000000.000000"));
   await post(handler, removal("bookmark", "bbb.1"));
-  assert.equal(blocks[0].deleted, undefined);
-  assert.ok(blocks[0].properties.startedAt);
+  assert.equal(blocks[0].deleted, true);
+  assert.equal(blocks[0].properties.startedAt, undefined);
+  assert.ok(blocks[0].properties.actualMinutes > 0);
 });
 
 // ── E1: the reaction lifecycle is reversible ────────────────────────────────
 
 // The keep-guard bug: clearStart DELETES startedAt, so the old
 // `startedAt || completedAt` check passed and threw away real work.
-test("🔖 → ⌛ → un-⌛ → un-🔖 keeps the task (everStarted is sticky)", async () => {
+test("🔖 → ⌛ → un-⌛ saves a session, then un-🔖 deletes the task", async () => {
   const { handler, blocks } = makeHarness();
   await post(handler, reaction("bookmark", "ccc.1", "ccc.9"));
   await post(handler, reaction("hourglass", "ccc.1", "1720000000.000000"));
   await post(handler, removal("hourglass", "ccc.1"));
   assert.equal(blocks[0].properties.startedAt, undefined, "un-⌛ still clears the running timer");
-  assert.equal(blocks[0].properties.everStarted, true, "but the fact it was started is sticky");
+  assert.ok(blocks[0].properties.actualMinutes > 0, "the paused session is retained");
   await post(handler, removal("bookmark", "ccc.1"));
-  assert.equal(blocks[0].deleted, undefined, "worked-on task survives un-🔖");
+  assert.equal(blocks[0].deleted, true, "bookmark removal deletes worked-on tasks too");
 });
 
-test("un-🔖 keeps a task that was checked off in the DCC UI (_done overlay)", async () => {
+test("un-🔖 deletes a task that was checked off in the DCC UI", async () => {
   const { handler, blocks, overlay } = makeHarness();
   await post(handler, reaction("bookmark", "ddd.1", "ddd.9"));
   overlay._done.ids.push(blocks[0].id);              // the browser check-off
   await post(handler, removal("bookmark", "ddd.1"));
-  assert.equal(blocks[0].deleted, undefined);
+  assert.equal(blocks[0].deleted, true);
 });
 
 test("un-✅ reopens the task, drops the timer row, and reverses the credit", async () => {
@@ -680,10 +739,9 @@ test("un-✅ reopens the task, drops the timer row, and reverses the credit", as
   assert.equal(task.properties.completedAt, undefined);
   assert.equal(task.properties.doneAt, undefined);
   assert.equal(task.properties.completedBy, undefined);
-  assert.equal(task.properties.actualMinutes, undefined);
-  assert.doesNotMatch(task.properties.notes, /Took ~/i, "the timer note is gone while Slack context remains");
+  assert.equal(task.properties.actualMinutes, 20);
   assert.match(task.properties.notes, /Bookmarked from Slack/);
-  assert.equal(blocks.filter(b => b.type === "time_entry").length, 0, "no orphaned Day Review segment");
+  assert.equal(blocks.filter(b => b.type === "time_entry" && !b.deleted_at).length, 1, "measured work history is preserved");
   assert.deepEqual(calls.revoke, [`${task.date}:${task.id}`], "credit reversed on the same key ✅ used");
   assert.equal(calls.reactionsAdd.length, 1, "🔖 goes back on the message");
   // Assert the WHOLE outbound call. `name` alone would still pass if the token
@@ -695,13 +753,13 @@ test("un-✅ reopens the task, drops the timer row, and reverses the credit", as
   assert.ok(calls.broadcast.some(b => b.payload.action === "slack-undone"));
 });
 
-test("un-✅ then re-✅ re-times from the original ⌛ and re-credits", async () => {
+test("un-✅ then re-✅ keeps measured history and re-credits", async () => {
   const { handler, blocks, calls } = makeHarness();
   await post(handler, reaction("bookmark", "fff.1", "fff.9"));
   await post(handler, reaction("hourglass", "fff.1", "1720000000.000000"));
   await post(handler, reaction("white_check_mark", "fff.1", "1720001200.000000"));
-  await post(handler, removal("white_check_mark", "fff.1"));
-  await post(handler, reaction("white_check_mark", "fff.1", "1720001200.000000"));
+  await post(handler, removal("white_check_mark", "fff.1", DRAKE, "1720001300.000000"));
+  await post(handler, reaction("white_check_mark", "fff.1", "1720001400.000000"));
   const p = blocks[0].properties;
   assert.equal(p.done, true);
   assert.equal(p.actualMinutes, 20, "measured from the original ⌛, not from zero");
@@ -709,7 +767,7 @@ test("un-✅ then re-✅ re-times from the original ⌛ and re-credits", async (
   assert.equal(calls.credit.length, 2, "the ledger row was deleted, so the re-completion is credited again");
 });
 
-test("a cross-day re-completion keeps the retained rounded scoring duration", async () => {
+test("a cross-day re-completion keeps the retained measured session", async () => {
   const { handler, blocks, calls } = makeHarness();
   const start = String(Date.parse("2026-07-28T15:32:00.000Z") / 1000);
   const firstEnd = String(Date.parse("2026-07-28T15:46:00.000Z") / 1000);
@@ -717,14 +775,13 @@ test("a cross-day re-completion keeps the retained rounded scoring duration", as
   await post(handler, reaction("bookmark", "cross-day.1", "cross-day.9"));
   await post(handler, reaction("hourglass", "cross-day.1", start));
   await post(handler, reaction("white_check_mark", "cross-day.1", firstEnd));
-  await post(handler, removal("white_check_mark", "cross-day.1"));
+  await post(handler, removal("white_check_mark", "cross-day.1", DRAKE, String(Number(firstEnd) + 60)));
   await post(handler, reaction("white_check_mark", "cross-day.1", nextDayEnd));
 
   const p = blocks[0].properties;
-  assert.equal(p.pointsDurationMinutes, 20, "the rounded schedule basis survives reopening");
+  assert.equal(p.actualMinutes, 14, "the original measured work is preserved");
   assert.equal(calls.credit.length, 2);
-  assert.equal(calls.credit[1].points_duration_minutes, 20);
-  assert.ok(calls.credit[1].actual_minutes > 20, "exact elapsed time is still recorded independently");
+  assert.equal(calls.credit[1].actual_minutes, 14);
 });
 
 // The 🔖 we re-add is added AS DRAKE (user token — a bot's reaction would not match
@@ -738,7 +795,7 @@ test("the 🔖 re-added after un-✅ echoes back harmlessly — no duplicate, no
   assert.equal(calls.reactionsAdd.length, 1);
 
   // Slack replays our own reactions.add as a reaction_added event.
-  await post(handler, reaction("bookmark", "jjj.1", "jjj.99"));
+  await post(handler, reaction("bookmark", "jjj.1", "1900000100.000000"));
   assert.equal(blocks.filter(b => b.type === "block").length, 1, "no second task");
   assert.equal(blocks[0].properties.status, "open", "still open — the echo changes nothing");
   assert.equal(calls.reactionsAdd.length, 1, "and it does not trigger another reactions.add");

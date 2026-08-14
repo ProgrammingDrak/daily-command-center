@@ -68,7 +68,7 @@ function persistAddedTask(item,targetDate){
       sourceTaskId:item.sourceTaskId||null,
       // C5b: completion travels on the row, so an item that is ALREADY done when it is
       // persisted says so here rather than being marked done afterwards in the day's
-      // `_done` overlay. Only prep.js's distraction log uses this today; `undefined`
+      // `_done` overlay. `undefined`
       // keys drop out of the JSON body, so every other caller is unaffected.
       status:item.status||undefined,
       done:item.done||undefined,

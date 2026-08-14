@@ -60,21 +60,19 @@ manual checks below in a few seconds.
 - [ ] **Side projects section**: Add a side project from the task bar or move a task into Side Projects. Checkbox toggles, X deletes. Done items collapse.
 - [ ] **Notifications**: If state.notifications exist, notification cards render in triage tab.
 
-## 4. POMODORO TIMER
+## 4. ACTIVE WORK
 
-- [ ] **Start from schedule**: Click clock icon on any task card. Timer tab activates, task name set, duration set.
-- [ ] **Start/Pause/Resume**: "Start to Focus" starts countdown. "Pause" pauses. "Resume" resumes.
-- [ ] **Reset**: Click "Reset". Timer resets to current mode's full duration.
-- [ ] **Skip phase**: Click "Skip". Ends current phase, triggers completion logic.
-- [ ] **Mode switch**: Click Focus/Short Break/Long Break. Timer resets to new duration.
-- [ ] **+1 minute**: Click "+1". Adds 60 seconds.
-- [ ] **Sound toggle**: Click "Sound: On/Off". Toggles beep on phase completion.
-- [ ] **Phase auto-progression**: Timer hits 0 → logs session, beep plays, session dots update, mode switches.
-- [ ] **Task completion modal**: Click checkmark on timer task. Modal shows schedule + pomodoros for attribution.
-- [ ] **Task picker**: Click task area in timer (not checkmark). Searchable picker overlay with Schedule/Consider/Backlog items.
-- [ ] **Report sub-tab**: Click "Report" in timer. Shows focus time, session count, per-task bars, session log.
-- [ ] **Timer badge**: While running, Timer tab shows pulsing badge.
-- [ ] **State persists across reload**: Refresh page. Timer resumes where it was (accounts for elapsed time).
+- [ ] **Start from itinerary**: Click Start on a task. The task appears in Active Work and Slack gains an hourglass when linked.
+- [ ] **Pause and resume**: Pause saves the current session. Start begins a new session without changing the planned slot.
+- [ ] **Complete from itinerary**: An active task shows Complete under Pause. Completing removes it from Active Work immediately.
+- [ ] **Complete from Active Work**: Complete checks off the task, closes the active session, and removes it from the dock.
+- [ ] **Multiple active tasks**: Start two tasks. Both remain visible and independently controllable.
+- [ ] **Task picker**: Use Start work in the launcher. Search Schedule, Consider, and Backlog tasks.
+- [ ] **Work history**: Open task details. Planned, actual, active time, and individual sessions render correctly.
+- [ ] **Reload persistence**: Refresh while work is active. Active Work restores from the task row.
+- [ ] **Slack parity**: Adding or removing bookmark, hourglass, and check reactions produces the same lifecycle as DCC controls.
+- [ ] **Slack deletion parity**: Removing a bookmark deletes the DCC task. Re-adding restores the same task instead of duplicating it.
+- [ ] **Meeting rule**: Completing a meeting later records completion at its planned end and actual time as its planned window.
 
 ## 5. DATE NAVIGATION & ARCHIVES
 
@@ -93,12 +91,12 @@ manual checks below in a few seconds.
 - [ ] **Undo**: Click "Undo". Last action reverses (uncheck, re-check, or restore order).
 - [ ] **Reset All**: Click "Reset". Schedule/consider/backlog restore to initial API state.
 
-## 9. SIDEBAR (Timer Tab)
+## 9. ACTIVE WORK SURFACES
 
-- [ ] **Mini schedule**: Timer tab sidebar shows remaining tasks with color bars, times, pomodoro start buttons.
-- [ ] **Done panel**: Click "Done" tab in sidebar. Shows completed tasks with planned vs focused time.
-- [ ] **Consider panel**: Click "Consider" tab. Shows consider items with metadata and pomodoro buttons.
-- [ ] **Backlog panel**: Click "Backlog" tab. Shows backlog items with stage badges and pomodoro buttons.
+- [ ] **Dock placement**: Active Work sits above the itinerary and is hidden when nothing is running.
+- [ ] **Itinerary controls**: Idle tasks show Start. Active tasks show Pause with Complete underneath.
+- [ ] **Compact utility rail**: Rank dead space is gone. Navigation, drag, and completion controls occupy one narrow rail.
+- [ ] **Responsive controls**: Active Work and itinerary controls remain reachable on narrow screens.
 
 ## 10. UPCOMING MEETINGS TAB
 
@@ -168,7 +166,7 @@ manual checks below in a few seconds.
 - [ ] **All 11 endpoints fetched**: Console shows "[API Boot] All data loaded from API" with date, upcoming count, archive count, prep count.
 - [ ] **Green success banner**: Banner turns green "Data loaded!" and auto-removes after 1.2s.
 - [ ] **Error fallback**: If API is down, banner shows red "API load failed" and auto-removes after 3s. Cached data used.
-- [ ] **Pomodoro restores**: If timer was running before reload, it resumes with elapsed time accounted for.
+- [ ] **Active work restores**: Tasks with an open work session reappear in Active Work after reload.
 - [ ] **SSE connects**: Console shows "[SSE] Connected to live update stream".
 
 ---

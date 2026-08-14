@@ -35,7 +35,7 @@ function buildActualView(dateStr){
 
 // ── Task-row radial: every task-level action fans out from the row's arrow ──
 // The row itself keeps only done / notes / delete visible; everything else
-// (schedule, duration, pomodoro, lock, add, subtask, delegate, repeat,
+// (schedule, duration, work sessions, lock, add, subtask, delegate, repeat,
 // backlog, bounty) is a spoke here. Items are built fresh per open so dynamic
 // state — the lock flag, bounty availability — is read at fan time.
 // Duration presets: popover on desktop, bottom sheet on touch/narrow. Shared
@@ -139,8 +139,10 @@ function buildTaskRadialItems(ev,trig){
     // "Change task" sub-fan (openRadialMenu closes the current fan first).
     {icon:"🔀", label:"Change task…", onPick:()=>openTaskChangeRadial(ev,trig)},
     {icon:"⏱", label:"Duration…", onPick:()=>openDurPopover(ev,trig)},
-    {icon:"🍅", label:"Pomodoro",  onPick:()=>{if(typeof openPomodoro==="function")openPomodoro(ev.title,dur(ev),{id:ev.id,source:"schedule",title:ev.title});}},
   ];
+  if(typeof window!=="undefined"&&window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
+    items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
+  }
   if(ev.repeatMode==="scheduled")items.push({icon:"↻", label:"Repeat options…", onPick:()=>{if(typeof window.openScheduledOccurrenceActions==="function")window.openScheduledOccurrenceActions(ev);}});
   // Meetings are auto-locked (calendar time holds during reflow); a manual lock
   // toggle is meaningless for them (toggleLock no-ops on meetings), so omit it.
@@ -237,8 +239,9 @@ function buildCarryoverRadialItems(ev,trig,acts){
     {icon:"📅", label:"Move…",   onPick:()=>acts.move(trig)},
     {icon:"💡", label:"Backlog", onPick:()=>acts.backlog()},
   ];
-  if(typeof openPomodoro==="function")
-    items.push({icon:"🍅", label:"Pomodoro", onPick:()=>openPomodoro(ev.title,dur(ev),{id:ev.id,source:"carryover",title:ev.title})});
+  if(window.DCCWorkSessions&&window.DCCWorkSessions.policy(ev)==="work_sessions"){
+    items.unshift({icon:ev.startedAt?"⏸":"▶",label:ev.startedAt?"Pause work":"Start work",onPick:()=>window.DCCWorkSessions.act(ev,ev.startedAt?"pause":"start")});
+  }
   items.push({icon:"🗑", label:"Drop", onPick:()=>acts.drop()});
   return items;
 }
@@ -680,10 +683,9 @@ function buildListView(){
     const subSlice=(subRow&&ev.subtaskOf&&window.PointPlan&&typeof window.PointPlan.shareFor==="function")?window.PointPlan.shareFor(ev.subtaskOf,ev.id):null;
     const subSliceHtml=(typeof subShareChipHtml==="function")?subShareChipHtml(ev,subSlice):'';
     // Always emit a leading cell (button when expandable, else a spacer) so every
-    // row has the same child count and lands in the same grid columns. Without the
-    // spacer, expandable rows had one extra leading child that overflowed the
-    // fixed-column grid -- shoving the title right and wrapping actions to a 2nd line.
-    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'<span class="wrap-collapse-spacer"></span>';
+    // Expand and reorder controls share one compact navigation cell. Rows without
+    // children do not need an empty chevron column.
+    const chev=(node&&node.hasKids)?'<button class="wrap-collapse'+(node.collapsed?' collapsed':'')+'" title="Collapse / expand">'+(node.collapsed?'▸':'▾')+'</button>':'';
     const el=document.createElement("div");
     const tt=window.TaskTypes?window.TaskTypes.get(ev):null;
     const chkBlocked=(typeof shellCompleteBlocked==="function")&&shellCompleteBlocked(ev);
@@ -712,6 +714,7 @@ function buildListView(){
     const recQueued=(openRow&&isMeeting(ev)&&ev.recordingReview&&!ev.dashboardRef)?'<span class="prep-flag rec-queued" title="Queued for recording review">&#128252; Review</span>':'';
     const recFlag=(openRow&&isMeeting(ev)&&ev.dashboardRef)?'<a class="prep-flag rec-flag" href="/meetings/'+encodeURIComponent(ev.id)+'/dashboard" target="_blank" rel="noopener" title="Open the recording review dashboard" onclick="event.stopPropagation()" style="text-decoration:none">&#9654; Recording</a>':'';
     const streakChip=openRow?habitStreakChip(ev):'';
+    const workButton=(window.DCCWorkSessions&&typeof window.DCCWorkSessions.itineraryActionButtonsHtml==="function")?window.DCCWorkSessions.itineraryActionButtonsHtml(ev,isDoneRow):'';
     // C4 opened the row "+" and the row's open-space click on carryover rows. Both used
     // to resolve their target with scheduled.find() alone, which a past-day row is not
     // in; they now go through taskAnchorById, which looks in both pools and returns the
@@ -725,14 +728,15 @@ function buildListView(){
     // origin day (a past day's total changes after the fact), force a move to today
     // first (one click silently does two things), or leave it off. Drake's call,
     // 2026-08-03: leave it off until the semantics are chosen. Not a missing feature.
+    const gripTitle=movable?('Drag to reorder'+(subRow?'':', position '+(idx+1))):'Fixed item';
     el.innerHTML=
       (inProgress?'<span class="task-progress-ring" aria-hidden="true"></span>':'')+
-      chev+
-      '<div class="it-list-rank">'+(subRow?'·':(idx+1))+'</div>'+
-      '<div class="grip it-list-grip" title="'+(movable?'Drag to reorder':'Fixed item')+'">'+gripSvg+'</div>'+
-      '<div class="it-list-check-col">'+
-        '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isUnfRow?'Mark done on '+escHtml(_unfPrettyDate(r.sourceDate)):(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')))+'">'+ckSvg+'</button>'+
-        (!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="'+(isUnfRow?'Quick complete on '+escHtml(_unfPrettyDate(r.sourceDate)):'Quick complete')+'">&#9889;</button>':'')+
+      '<div class="it-list-utility">'+
+        '<div class="it-list-nav">'+chev+'<div class="grip it-list-grip" title="'+gripTitle+'">'+gripSvg+'</div></div>'+
+        '<div class="it-list-check-col">'+
+          '<button class="chk it-list-check'+(isDoneRow?' on':'')+(chkBlocked?' chk-blocked':'')+'" title="'+(isUnfRow?'Mark done on '+escHtml(_unfPrettyDate(r.sourceDate)):(isDoneRow?'Uncheck':(chkBlocked?'Completes automatically when all nested tasks are done':'Mark done')))+'">'+ckSvg+'</button>'+
+          (!isDoneRow&&!(tt&&tt.rollupMode)?'<button class="chk-quick" title="'+(isUnfRow?'Quick complete on '+escHtml(_unfPrettyDate(r.sourceDate)):'Quick complete')+'">&#9889;</button>':'')+
+        '</div>'+
       '</div>'+
       '<div class="bar" style="background:'+(isUnfRow?'var(--amber,#f59e0b)':((tt&&tt.barColor)||taskTagColor(ev)||c.color))+'"></div>'+
       '<div class="it-list-main">'+
@@ -773,6 +777,7 @@ function buildListView(){
         // click and schedule sits by the time label (see .it-list-meta). Every
         // other action rides the radial behind the arrow trigger.
         (!isUnfRow&&_canPlaceBounty(ev,isDoneRow)?'<button class="btn-bounty" data-bounty-id="'+ev.id+'" data-tooltip="Set bounty - 2x points" aria-label="Set bounty">'+_bountyBtnSvg+'</button>':'')+
+        workButton+
         (!isDoneRow?'<button class="btn-task-radial" data-radial-id="'+ev.id+'" data-tooltip="Task actions…" aria-label="Task actions"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>':'')+
         (!isDoneRow?'<button class="btn-del-task" data-del-id="'+ev.id+'" data-tooltip="Remove from schedule" aria-label="Remove from schedule"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>':'')+
       '</div>';
@@ -990,10 +995,10 @@ function buildListView(){
       const el=document.createElement("div");
       el.className="it-list-item resched-away-row";
       el.innerHTML=
-        '<span class="wrap-collapse-spacer"></span>'+
-        '<div class="it-list-rank">·</div>'+
-        '<div class="grip it-list-grip" title="Fixed item">'+gripSvg+'</div>'+
-        '<div class="it-list-check-col"><button class="chk it-list-check" title="Restore to this day">'+ckSvg+'</button></div>'+
+        '<div class="it-list-utility">'+
+          '<div class="it-list-nav"><div class="grip it-list-grip" title="Fixed item">'+gripSvg+'</div></div>'+
+          '<div class="it-list-check-col"><button class="chk it-list-check" title="Restore to this day">'+ckSvg+'</button></div>'+
+        '</div>'+
         '<div class="bar" style="background:var(--amber,#f59e0b)"></div>'+
         '<div class="it-list-main">'+
           '<div class="it-list-title-row"><span class="ttl" title="'+escHtml(p.title||"Task")+'">'+escHtml(p.title||"Task")+'</span></div>'+
@@ -1190,19 +1195,16 @@ function buildSchedule(){
   }
 
 
-  // The timeline pill is a focus marker, not a clock marker. Prefer the explicit
-  // pinned task, then the loaded pomodoro task, then the first open itinerary item.
+  // The timeline pill is a focus marker. Prefer an explicitly pinned task, then
+  // an actively tracked task, then the first open itinerary item.
   const isToday = __state && __state.date === new Date().toISOString().split("T")[0];
   const _pinnedActiveId = (typeof getPinnedActiveId === "function") ? getPinnedActiveId() : null;
   const _pinnedActiveExists = !!(_pinnedActiveId && activeItems.some(ev => ev.id === _pinnedActiveId));
-  const _pomoFocusId = (typeof pomoState !== "undefined" && pomoState && pomoState.currentTaskRef && pomoState.currentTaskRef.id)
-    ? String(pomoState.currentTaskRef.id)
-    : null;
-  const _pomoFocusExists = !!(_pomoFocusId && activeItems.some(ev => String(ev.id) === _pomoFocusId));
+  const _trackedFocus = activeItems.find(ev => !!ev.startedAt);
   // C6a: `!isNested`, not `!ev.subtaskOf`. Pinning a ride-along as the day's focus is
   // as meaningless as pinning a subtask, and the subtaskOf-only test let one through.
   const _defaultFocusId = (activeItems.find(ev => !DCC.TaskModel.isNested(ev) && pointEligible(ev)) || activeItems[0] || {}).id;
-  const _focusActiveId = _pinnedActiveExists ? String(_pinnedActiveId) : (_pomoFocusExists ? _pomoFocusId : (_defaultFocusId ? String(_defaultFocusId) : null));
+  const _focusActiveId = _pinnedActiveExists ? String(_pinnedActiveId) : (_trackedFocus ? String(_trackedFocus.id) : (_defaultFocusId ? String(_defaultFocusId) : null));
 
   // Subtasks render through the SAME renderItineraryCard as normal tasks, tagged
   // variant:"sub" (lighter card, pie-slice chip, no clock while timeless). All the
@@ -1264,8 +1266,6 @@ function buildSchedule(){
     // task cards show a read-only badge and adjust duration via the radial.
     const dbadge=el.querySelector(".dbadge");
     if(dbadge&&isMeeting(ev))dbadge.addEventListener("click",e=>{e.stopPropagation();openDurPopover(ev,dbadge);});
-    const pomo=el.querySelector(".pomo-btn");
-    if(pomo)pomo.addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     const sb=el.querySelector(".btn-schedule");if(sb)sb.addEventListener("click",e=>{e.stopPropagation();if(typeof openSchedulePopover==="function")openSchedulePopover({mode:"reschedule",id:ev.id,anchorEl:sb,view:"date"});});
     const pb=el.querySelector(".btn-task-radial");if(pb)pb.addEventListener("click",e=>{e.stopPropagation();openTaskRadial(ev,pb)});
     // Row-level quick add: same universal popover the radial's ➕ spoke opens.
@@ -1301,7 +1301,7 @@ function buildSchedule(){
     }
     const db=el.querySelector(".btn-del-task");if(db)db.addEventListener("click",e=>{e.stopPropagation();openDeleteConfirm(db.dataset.delId)});
     // Subtask and trivial task management moved to Add Items modal (openAddModal)
-    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".pomo-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-schedule")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".wrap-collapse")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
+    el.querySelector(".card").addEventListener("click",e=>{if(e.target.closest(".chk")||e.target.closest(".chk-quick")||e.target.closest(".dbtn")||e.target.closest(".dbadge")||e.target.closest(".dur-popover")||e.target.closest(".grip")||e.target.closest(".work-action-btn")||e.target.closest(".btn-repeat-resp")||e.target.closest(".btn-move-menu")||e.target.closest(".move-menu-popup")||e.target.closest(".btn-del-task")||e.target.closest(".btn-lock")||e.target.closest(".btn-bounty")||e.target.closest(".btn-schedule")||e.target.closest(".btn-add-menu")||e.target.closest(".add-menu-popup")||e.target.closest(".wrap-collapse")||e.target.closest(".itinerary-reactions")||e.target.closest(".card-triv-section")||e.target.closest(".start-time")||e.target.closest(".ttl"))return;if(typeof openAddModal==="function")openAddModal(ev.id,ev.title);});
 
     // Inline title edit — click title to rename, blur/Enter to save
     if(!isMeeting(ev)){
@@ -1475,7 +1475,7 @@ function openMoveMenu(id, anchorEl){
 function buildConsider(){
   const board=document.getElementById("consider-board");board.innerHTML="";
   // Surface backlog items flagged Priority alongside Notion-driven consider items.
-  const fromBacklog=backlog.filter(t=>t.stage==="Priority").map(t=>Object.assign({_pomoSource:"backlog"},t));
+  const fromBacklog=backlog.filter(t=>t.stage==="Priority");
   const merged=consider.concat(fromBacklog);
   const ccBadge=document.getElementById("consider-count");if(ccBadge)ccBadge.textContent=merged.length;
   if(!merged.length){board.innerHTML='<div class="board-empty">Nothing flagged for today. Nice work, or add tasks via Notion.</div>';return}
@@ -1512,16 +1512,15 @@ function buildConsider(){
       '</div>'+
       (hasD?chev:'')+
       notesButton({id: t.id, title: t.title})+
-      '<button class="pomo-btn" data-pomo-id="'+t.id+'" data-pomo-source="'+(t._pomoSource||"consider")+'" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+      ((window.DCCWorkSessions&&window.DCCWorkSessions.actionButtonHtml)?window.DCCWorkSessions.actionButtonHtml(t,false):'')+
       '<button class="add-btn" data-id="'+t.id+'"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg> Schedule</button>'+
       '<button class="add-btn repeat-resp-btn" data-id="'+t.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
       (hasD?'<div class="detail-panel" style="width:100%;padding-left:14px"><div class="detail-inner">'+dParts.join('')+'</div></div>':'');
     const cnb=el.querySelector(".notes-btn");if(cnb)cnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(cnb.dataset.notesId,cnb.dataset.notesTitle)});
-    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     el.querySelector(".add-btn").addEventListener("click",e=>{e.stopPropagation();addToSchedule(t.id)});
     const repeatBtn=el.querySelector(".repeat-resp-btn");
     if(repeatBtn)repeatBtn.addEventListener("click",e=>{e.stopPropagation();if(typeof openRepeatResponsibilityFromTask==="function")openRepeatResponsibilityFromTask(t)});
-    el.addEventListener("click",e=>{if(e.target.closest(".add-btn")||e.target.closest(".pomo-btn")||e.target.closest(".notes-btn"))return;const panel=el.querySelector(".detail-panel");if(panel){panel.classList.toggle("open");const cv=el.querySelector(":scope > svg");if(cv)cv.style.transform=panel.classList.contains("open")?"rotate(180deg)":""}});
+    el.addEventListener("click",e=>{if(e.target.closest(".add-btn")||e.target.closest(".work-action-btn")||e.target.closest(".notes-btn"))return;const panel=el.querySelector(".detail-panel");if(panel){panel.classList.toggle("open");const cv=el.querySelector(":scope > svg");if(cv)cv.style.transform=panel.classList.contains("open")?"rotate(180deg)":""}});
     board.appendChild(el);
   });
 }
@@ -1583,7 +1582,7 @@ function buildBacklog(){
           '<button class="bc-act bc-act-later" data-id="'+t.id+'" title="Schedule for a later date">Later\u2026</button>'+
           '<button class="bc-act bc-act-repeat" data-id="'+t.id+'" title="Turn into a repeat responsibility">Repeat</button>'+
           notesButton({id: t.id, title: t.title})+
-          '<button class="pomo-btn bc-act-icon" data-pomo-id="'+t.id+'" data-pomo-source="backlog" data-pomo-title="'+t.title.replace(/"/g,'&quot;')+'" data-pomo-dur="'+t.durMin+'" title="Start pomodoro timer">'+pomoSvg+'</button>'+
+          ((window.DCCWorkSessions&&window.DCCWorkSessions.actionButtonHtml)?window.DCCWorkSessions.actionButtonHtml(t,false):'')+
           '<button class="delegate-btn bc-act-icon" data-id="'+t.id+'" data-title="'+t.title.replace(/"/g,'&quot;')+'" title="'+(isDelegated?'Edit delegated item linked to this task':'Delegate this task')+'">'+(isDelegated?'\u2713':'\u2191')+'</button>'+
           '<button class="task-bank-icon-btn bank-edit-btn" data-id="'+t.id+'" title="Edit task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button>'+
           '<button class="task-bank-icon-btn danger bank-delete-btn" data-id="'+t.id+'" title="Delete task"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>'+
@@ -1593,7 +1592,6 @@ function buildBacklog(){
 
     if(el.querySelector("[data-bank-edit-id]"))el.classList.add("expanded");
     const bnb=el.querySelector(".notes-btn");if(bnb)bnb.addEventListener("click",e=>{e.stopPropagation();openNotesDrawer(bnb.dataset.notesId,bnb.dataset.notesTitle)});
-    el.querySelector(".pomo-btn").addEventListener("click",e=>{e.stopPropagation();const b=e.currentTarget;openPomodoro(b.dataset.pomoTitle,parseInt(b.dataset.pomoDur),{id:b.dataset.pomoId,source:b.dataset.pomoSource,title:b.dataset.pomoTitle})});
     el.querySelector(".delegate-btn").addEventListener("click",e=>{
       e.stopPropagation();
       const btn=e.currentTarget;
@@ -1701,9 +1699,8 @@ function addPS(track,s,e,title,color,done,tot){
 
 // ======== STATS ========
 function _actualMin(ev){
-  // Get actual time worked: timer > saved sessions > planned duration
-  if(typeof pomoState!=="undefined" && pomoState.taskTime && pomoState.taskTime[ev.title]>0)
-    return Math.round(pomoState.taskTime[ev.title]/60);
+  // Actual session totals are projected directly from the canonical task row.
+  if(ev.actualMinutes!=null)return Number(ev.actualMinutes)||0;
   try{const s=loadSessions();if(s[ev.id]&&s[ev.id].length)return s[ev.id].reduce((a,x)=>a+x.durationMin,0);}catch(e){}
   return dur(ev);
 }

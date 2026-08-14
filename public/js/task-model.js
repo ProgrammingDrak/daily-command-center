@@ -323,7 +323,7 @@
   // parent (two fold predicates tested `subtaskOf` only), a wrap/shell child leaked
   // into Unscheduled as a standalone row (`!isSubtask` where `!isNested` was meant),
   // and `ev.nested` — which nothing has ever set true — gated the focus banner and
-  // the pomodoro picker, so both could offer you a subtask as "your next task".
+  // task pickers, so both could offer you a subtask as "your next task".
   //
   // Everything that answers a question ABOUT A SET of evs now lives here, and
   // `render-surface-registry.test.js` asserts no file outside this one filters
@@ -765,7 +765,7 @@
     // (selectDone / selectOpen / selectNotDeleted / selectDayScoped), and shipping a
     // published predicate whose first real user gets to discover whether it means what its
     // name says is worse than not shipping it. `isNested` IS exported, because two call
-    // sites read it directly (the focus-id default and the pomodoro guard).
+    // sites read it directly when choosing a default focused task.
     // C6a — edges
     childrenOf: childrenOf,
     ridersOf: ridersOf,

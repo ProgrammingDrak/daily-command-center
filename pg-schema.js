@@ -66,6 +66,9 @@ CREATE INDEX IF NOT EXISTS idx_blocks_date
   ON blocks(date) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_blocks_workspace_date
   ON blocks(workspace_id, date) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_blocks_time_entry_task
+  ON blocks(workspace_id, (properties->>'blockId'), date)
+  WHERE type = 'time_entry' AND deleted_at IS NULL;
 
 -- ── Workspace Members ──
 CREATE TABLE IF NOT EXISTS workspace_members (
