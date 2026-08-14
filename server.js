@@ -175,6 +175,12 @@ function attachSweepServiceAuth(req) {
   req.dccServiceAuth = { userId, workspaceId, source: "sweep-suite" };
   req.workspaceId = workspaceId;
 }
+function attachMeetingRetentionServiceAuth(req) {
+  const userId = Number(process.env.DCC_SERVICE_USER_ID || 1);
+  const workspaceId = process.env.DCC_SERVICE_WORKSPACE_ID || `ws-${userId}`;
+  req.dccServiceAuth = { userId, workspaceId, source: "meeting-retention" };
+  req.workspaceId = workspaceId;
+}
 function isAllowedSweepBlockItem(item) { const props = item && item.properties; return item && item.type === "block" && props && props.kind === "sweep_suite_task"; }
 function getRequestOrigin(req) {
   const forwardedFor = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
@@ -213,6 +219,13 @@ app.use(async (req, res, next) => {
     if (req.method === "POST" && req.path === "/api/vault/journal-image-ingest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-artifacts" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-signals" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
+    if (req.method === "GET" && req.path === "/api/dcc/meeting-retention-candidates") {
+      if (trustLocalhost(req) || await hasServiceToken(req, "dcc")) {
+        attachMeetingRetentionServiceAuth(req);
+        return next();
+      }
+      return res.status(401).json({ error: "Meeting retention service token required" });
+    }
     if (req.path.startsWith("/api/dcc/meeting-audio/")) {
       if (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep"))) {
         attachSweepServiceAuth(req);
