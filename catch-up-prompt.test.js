@@ -234,7 +234,7 @@ test("an already-reviewed day never prompts twice", async () => {
 });
 
 // ─────────────── the action path: something has to CLICK ───────────────
-// The four row buttons and "Move all to today" were entirely unexercised: FakeEl
+// The row buttons and "Move all to today" were entirely unexercised: FakeEl
 // defined fire() and no test called it. For a module that exists because
 // carryover-review.js's buttons only LOOKED real ("Drop was a single log line -- it
 // deleted NOTHING"), "no test clicks anything" is the gap that matters most.
@@ -261,40 +261,15 @@ test("Drop routes the listed ROOT through DCC.Carryover.drop and clears its row"
   assert.equal(r._removed, true, "the settled row is removed from the list");
 });
 
-test("Today and Tomorrow move the root to the right date", async () => {
-  const d = ymd(1);
-  for (const [sel, expected] of [[".cu-today", TODAY], [".cu-tomorrow", "2026-07-30"]]) {
-    const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
-    await ctx.window.initCatchUp();
-    let target = null;
-    ctx.window.DCC.Carryover.moveTo = async (ev, date) => { target = date; return { removed: [ev.id] }; };
-    row0(ctx).querySelector(sel).fire("click");
-    await settled();
-    assert.equal(target, expected, `${sel} must move to ${expected}`);
-  }
-});
-
-test("Backlog routes through toBacklog, and a REFUSED action leaves the row in place", async () => {
+test("Today moves the root to the current day", async () => {
   const d = ymd(1);
   const { ctx } = load({ [d]: [dayRoot(), blk("p", d, { title: "Slipped" })] }, [d]);
   await ctx.window.initCatchUp();
-  let called = false;
-  const r = row0(ctx);
-  // toBacklog returns null when it cannot resolve the origin row. The prompt must not
-  // pretend the row is handled: settle(null) is falsy, so the row stays and the
-  // buttons are re-enabled for another try. Assert the disable IN FLIGHT as well as
-  // the re-enable after -- FakeEl defaults disabled:false, so checking only the
-  // re-enable would still pass if busy() silently became a no-op.
-  ctx.window.DCC.Carryover.toBacklog = async () => {
-    assert.equal(r.querySelector(".cu-drop").disabled, true, "buttons must disable while the action is in flight");
-    called = true;
-    return null;
-  };
-  r.querySelector(".cu-backlog").fire("click");
+  let target = null;
+  ctx.window.DCC.Carryover.moveTo = async (ev, date) => { target = date; return { removed: [ev.id] }; };
+  row0(ctx).querySelector(".cu-today").fire("click");
   await settled();
-  assert.equal(called, true);
-  assert.equal(r._removed, false, "a refused action must not remove the row");
-  assert.equal(r.querySelector(".cu-drop").disabled, false, "and must re-enable the buttons");
+  assert.equal(target, TODAY);
 });
 
 test("Complete routes the root and full pool through the shared origin-day completion", async () => {
@@ -394,7 +369,7 @@ test("details expansion uses a native button and explains an empty task", async 
   const r = row0(ctx);
   const toggle = r.querySelector(".cu-details-toggle");
   ctx.window.DCC.Carryover.loadDetails = async () => ({ title: "Slipped", details: [], notes: [] });
-  assert.match(r.innerHTML, /<button type="button" class="cu-details-toggle"/,
+  assert.match(r.innerHTML, /<button type="button" class="carryover-btn cu-details-action cu-details-toggle"[^>]*>Details<\/button>/,
     "native button semantics provide Enter and Space activation without a wrapper key handler");
   toggle.fire("click");
   await settled();
@@ -505,6 +480,48 @@ test("completing the final meeting follow-up returns focus to the task launcher"
   assert.equal(launcher._focused, true);
 });
 
+test("meeting Details opens that meeting's recap", async () => {
+  const opened = [];
+  const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], {
+    fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }),
+    openPrepModal: (meeting, opts) => opened.push({ meeting, opts })
+  });
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  row.querySelector(".cu-mtg-details").fire("click");
+  assert.deepEqual(JSON.parse(JSON.stringify(opened)), [{
+    meeting: {
+      id: "meeting-1", meetingBlockId: "meeting-1", title: "Investor weekly",
+      start: "13:00", end: "14:00"
+    },
+    opts: { defaultTab: "recap" }
+  }]);
+  assert.equal(row._removed, false, "viewing the recap does not resolve the follow-up");
+});
+
+test("a delegated meeting row can be intentionally scheduled with Today", async () => {
+  const delegated = { ...MTG_ACTION, id: "delegated-1", owner: "other" };
+  const scheduled = [];
+  const fetch = async (url, opts) => {
+    if (url === "/api/meetings/actions/proposed") {
+      return { ok: true, json: async () => ({ items: [delegated] }) };
+    }
+    if (url.endsWith("/actions/delegated-1/schedule")) {
+      scheduled.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], { fetch });
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  assert.match(row.innerHTML, /class="btn-schedule cu-cal"/, "delegated rows keep the shared calendar control");
+  row.querySelector(".cu-mtg-today").fire("click");
+  await settled();
+  assert.deepEqual(scheduled, [{ date: TODAY }]);
+  assert.equal(row._removed, true);
+});
+
 // ───────────────── triage rides along (the sweep's items) ─────────────────
 // Swept triage items appear in this same modal, but they are NOT blocks: none of
 // DCC.Carryover applies to them. Scheduling one CREATES a task on the chosen day
@@ -573,6 +590,33 @@ test("the unified modal follows the requested section order", async () => {
   );
   const journal = [...allRowsOf(ctx)].find(r => r.className === "cu-journal-wrap");
   assert.match(journal.innerHTML, /Journal/);
+});
+
+test("every Loose Ends row uses checkmark, title, calendar, Today, Drop, Details in that order", async () => {
+  const d = ymd(1);
+  const delegated = { ...MTG_ACTION, id: "proposal-2", owner: "other", title: "Wait for finance" };
+  const { ctx } = triageCtx(
+    { [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] },
+    [d],
+    [TRI("s1")],
+    { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION, delegated] }) }) }
+  );
+  await ctx.window.initCatchUp();
+  const rows = [...rowsOf(ctx)];
+  assert.equal(rows.length, 4);
+  for (const row of rows) {
+    const html = row.innerHTML;
+    const completeAt = html.indexOf('class="cu-complete"');
+    const titleAt = html.indexOf('class="carryover-row-title"');
+    const calendarAt = html.indexOf('class="btn-schedule cu-cal"');
+    const actionsAt = html.indexOf('class="carryover-row-actions"');
+    assert.ok(completeAt > -1 && completeAt < titleAt, "the checkmark leads the row");
+    assert.ok(titleAt < calendarAt && calendarAt < actionsAt, "title and calendar precede the text actions");
+    const actionHtml = /<div class="carryover-row-actions">([\s\S]*?)<\/div>/.exec(html)[1];
+    const labels = [...actionHtml.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map(match => match[1]);
+    assert.deepEqual(labels, ["Today", "Drop", "Details"]);
+    assert.doesNotMatch(actionHtml, /Tomorrow|Backlog|Dismiss|Recap/);
+  }
 });
 
 test("an unaddressed Day in Review keeps the Loose Ends reminder after close", async () => {
@@ -669,17 +713,31 @@ test("boot banks what is already waiting so the pet does not run at page load", 
   assert.deepEqual(calls.seen, ["m1", "m2"]);
 });
 
-test("Today and Tomorrow on a triage row schedule it on that date and clear the row", async () => {
+test("Today on a triage row schedules it on the current day and clears the row", async () => {
   const d = ymd(1);
-  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1"), TRI("m2")]);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
   await ctx.window.initCatchUp();
-  const [first, second] = [...rowsOf(ctx)];
+  const first = [...rowsOf(ctx)][0];
   first.querySelector(".cu-tri-today").fire("click");
   await new Promise(r => setTimeout(r, 0));
-  second.querySelector(".cu-tri-tomorrow").fire("click");
-  await new Promise(r => setTimeout(r, 0));
-  assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }, { id: "m2", date: "2026-07-30" }]);
-  assert.ok(first._removed && second._removed, "a scheduled item leaves the list");
+  assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }]);
+  assert.equal(first._removed, true, "a scheduled item leaves the list");
+});
+
+test("triage Details expands the item context without changing its metadata", async () => {
+  const d = ymd(1);
+  const item = TRI("m1", { summary: "Needs a reply before Friday", draft_preview: "Thanks for checking in." });
+  const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [item]);
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  const toggle = row.querySelector(".cu-tri-details");
+  const details = row.querySelector(".cu-details");
+  assert.match(row.innerHTML, /slack · High · \d+d old · <a class="cu-tri-link"/);
+  toggle.fire("click");
+  assert.equal(details.hidden, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(row.querySelector(".cu-details-body").children.map(section => section.children[0].textContent),
+    ["Summary", "Draft preview"]);
 });
 
 test("triage rows have an already-done checkmark that resolves them", async () => {
@@ -734,7 +792,7 @@ test("Drop on a triage row deletes the triage item, never a block", async () => 
   assert.equal(r._removed, true);
 });
 
-// ───────────────── the calendar button (both row kinds) ─────────────────
+// ───────────────── the calendar button (every row kind) ─────────────────
 // The point of the button is that an arbitrary day behaves EXACTLY like Today —
 // same mover, same write. A second code path here is how "Today works but the 12th
 // silently doesn't" happens.
@@ -861,12 +919,14 @@ test("core.js's shared row helpers emit what the callers query for", () => {
     "https://x.test/a&quot; onmouseover=&quot;alert(1)", "attribute form escapes the quote");
 });
 
-test("the calendar button is really in both row kinds' markup", async () => {
+test("the calendar button is really in every row kind's markup", async () => {
   const d = ymd(1);
-  const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
+  const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")], {
+    fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) })
+  });
   await ctx.window.initCatchUp();
   const rows = [...rowsOf(ctx)].filter(r => r.className && r.className.indexOf("carryover-row") > -1);
-  assert.equal(rows.length, 2);
+  assert.equal(rows.length, 3);
   for (const r of rows) {
     assert.match(r.innerHTML, /<div class="cu-title-line">/, "the name and the button share a line");
     assert.match(r.innerHTML, /<button class="btn-schedule cu-cal"[^>]*aria-label="/,

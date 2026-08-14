@@ -1,7 +1,7 @@
 // ======== MORNING CATCH-UP ========
 // One prompt, on the first load of a new day: here's what slipped, clear it in a
-// single pass. Move each row to today or tomorrow, send it to the backlog, or drop
-// it — and "Move all to today" for the whole list at once.
+// single pass. Move each row to today or another calendar day, drop it, inspect
+// details, or use "Move all to today" for the whole list at once.
 //
 // Replaces carryover-review.js, which looked like this feature and wasn't:
 //   • "For Today" minted a brand-new task id and never touched the origin, so the
@@ -49,10 +49,9 @@
     if (CO && typeof CO.prettyDate === "function") return CO.prettyDate(iso);
     return iso;
   }
-  // state.js owns these two (_resolvedTodayDate / _resolvedTomorrowDate) with exactly
-  // these semantics, and every other "move it to today / tomorrow" affordance in the
-  // app resolves through them. state.js loads well before this file, so prefer the
-  // canonical pair; the inline fallbacks only exist if load order ever changes. Note
+  // state.js owns _resolvedTodayDate with the same semantics as every other "move it
+  // to today" affordance in the app. state.js loads well before this file, so prefer
+  // the canonical helper; the inline fallback only exists if load order ever changes. Note
   // the local fallback below is UTC while the canonical helper is local-time, so a
   // copy could disagree by a day in the evening -- another reason to defer.
   function todayStr() {
@@ -60,13 +59,6 @@
     if (typeof __todayDate === "string" && __todayDate) return __todayDate;
     return new Date().toISOString().slice(0, 10);
   }
-  function tomorrowStr() {
-    if (typeof _resolvedTomorrowDate === "function") return _resolvedTomorrowDate();
-    if (typeof __tomorrowDate !== "undefined" && __tomorrowDate) return __tomorrowDate;
-    const d = new Date(Date.now() + 86400000);
-    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-  }
-
   // Both predicates come from DCC.Carryover, the same place the projection and the
   // actions do. They used to be local copies here, which is how "this prompt has to
   // agree with the lane" became a comment instead of an invariant: the lane spelled
@@ -84,8 +76,8 @@
 
   // ── the row-level calendar button ──
   // Same glyph and same class as the itinerary rows' reschedule control, wired to
-  // the same anchored day picker. The big Today / Tomorrow / Drop buttons stay;
-  // this reaches any OTHER day without leaving the modal. Rows here aren't entries
+  // the same anchored day picker. The Today / Drop / Details actions stay identical
+  // across row types; the calendar reaches any other day without leaving the modal. Rows here aren't entries
   // in scheduled[], so the picker runs in its date-only "pick" mode and the caller
   // owns the write (see DCC.wireDateButton in core.js).
   function calBtn(cls, label) { return window.DCC.dateButtonHtml(cls, label); }
@@ -93,6 +85,35 @@
     return '<button type="button" class="cu-complete" aria-label="' + esc("Mark done: " + title) + '" title="Already done">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>' +
     '</button>';
+  }
+  function rowActions(scope, detailsClass, title) {
+    return '<div class="carryover-row-actions">' +
+      '<button type="button" class="carryover-btn carryover-btn-schedule cu-today ' + scope + '-today" aria-label="' + esc("Schedule today: " + title) + '">Today</button>' +
+      '<button type="button" class="carryover-btn carryover-btn-drop cu-drop ' + scope + '-drop" aria-label="' + esc("Drop: " + title) + '">Drop</button>' +
+      '<button type="button" class="carryover-btn cu-details-action ' + detailsClass + '" aria-label="' + esc("Show details for " + title) + '">Details</button>' +
+    '</div>';
+  }
+  function detailShell(id, label) {
+    return '<div class="cu-details" id="' + id + '" role="region" aria-label="' + esc(label) + '" hidden>' +
+      '<div class="cu-details-full-title"></div>' +
+      '<div class="cu-details-body" aria-live="polite"></div>' +
+    '</div>';
+  }
+  function appendDetailSection(container, labelText, values) {
+    const clean = (values || []).filter(Boolean);
+    if (!clean.length) return false;
+    const section = document.createElement("div");
+    section.className = "cu-details-section";
+    const labelEl = document.createElement("div");
+    labelEl.className = "cu-details-label";
+    labelEl.textContent = labelText;
+    const textEl = document.createElement("div");
+    textEl.className = "cu-details-text";
+    textEl.textContent = clean.join("\n\n");
+    section.appendChild(labelEl);
+    section.appendChild(textEl);
+    container.appendChild(section);
+    return true;
   }
   function wireCal(btn, title, onPick) {
     // Raw title: the popover escapes the whole header itself (schedule-popover.js), so
@@ -375,11 +396,13 @@
 
     const addTriageRow = (item, before) => {
       const el = document.createElement("div");
-      el.className = "carryover-row cu-triage-row";
+      const title = item.title || "Untitled";
+      const detailId = "cu-triage-details-" + (++detailSeq);
+      el.className = "carryover-row cu-unified-row cu-triage-row";
       const safe = (window.DCC && window.DCC.safeUrl) || (u => "");
       const href = safe(item.draft_link || item.draft_url) || safe(item.link || item.source_url);
       el.innerHTML =
-        completeBtn(item.title || "Untitled") +
+        completeBtn(title) +
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
@@ -389,12 +412,32 @@
             (href ? ' · <a class="cu-tri-link" href="' + esc(href) + '" target="_blank" rel="noopener">Open</a>' : '') +
           '</div>' +
         '</div>' +
-        '<div class="carryover-row-actions">' +
-          '<button class="carryover-btn carryover-btn-schedule cu-tri-today">Today</button>' +
-          '<button class="carryover-btn carryover-btn-schedule cu-tri-tomorrow">Tomorrow</button>' +
-          '<button class="carryover-btn carryover-btn-drop cu-tri-drop">Drop</button>' +
-        '</div>';
-      el.querySelector(".carryover-row-title").textContent = item.title || "Untitled";
+        rowActions("cu-tri", "cu-details-toggle cu-tri-details", title) +
+        detailShell(detailId, "Communication item details");
+      const titleEl = el.querySelector(".carryover-row-title");
+      const toggleEl = el.querySelector(".cu-tri-details");
+      const detailEl = el.querySelector(".cu-details");
+      const detailBody = el.querySelector(".cu-details-body");
+      detailEl.hidden = true;
+      titleEl.textContent = title;
+      titleEl.title = title;
+      toggleEl.setAttribute("aria-expanded", "false");
+      toggleEl.setAttribute("aria-controls", detailId);
+      toggleEl.setAttribute("aria-label", "Show details for " + title);
+      el.querySelector(".cu-details-full-title").textContent = title;
+      const hasDetails = [
+        appendDetailSection(detailBody, "Summary", [item.summary, item.snippet, item.excerpt]),
+        appendDetailSection(detailBody, "Draft preview", [item.draft_preview]),
+        appendDetailSection(detailBody, "Details", [item.detail, item.description])
+      ].some(Boolean);
+      if (!hasDetails) detailBody.textContent = "No additional details on this item.";
+      toggleEl.addEventListener("click", () => {
+        const opening = detailEl.hidden;
+        detailEl.hidden = !opening;
+        toggleEl.setAttribute("aria-expanded", opening ? "true" : "false");
+        toggleEl.setAttribute("aria-label", (opening ? "Hide" : "Show") + " details for " + title);
+        el.classList[opening ? "add" : "remove"]("details-open");
+      });
       const busy = (on) => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
       const forget = () => forgetRow(el, triEls, item.id);
       // A refused schedule (no free slot, already on the day) leaves the row alone
@@ -421,7 +464,6 @@
         return !!(await scheduleTriageOnDate(item.id, d2));
       });
       el.querySelector(".cu-tri-today").addEventListener("click", () => place(todayStr()));
-      el.querySelector(".cu-tri-tomorrow").addEventListener("click", () => place(tomorrowStr()));
       el.querySelector(".cu-tri-drop").addEventListener("click", () => {
         if (typeof deleteTriageItem !== "function") return;
         deleteTriageItem(item.id);   // durable + its own 8s Undo toast
@@ -461,13 +503,13 @@
     meetingActions.forEach(item => {
       const el = document.createElement("div");
       const mine = item.owner !== "other";
-      el.className = "carryover-row cu-meeting-row";
+      el.className = "carryover-row cu-unified-row cu-meeting-row";
       el.innerHTML =
         completeBtn(item.title || "Meeting follow-up") +
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
-            (mine ? calBtn("cu-cal", "Schedule on a day") : "") +
+            calBtn("cu-cal", "Schedule on a day") +
           '</div>' +
           '<div class="carryover-row-meta">' + esc(item.meetingTitle || "Meeting") +
             (item.meetingDate ? " · " + esc(prettyDate(item.meetingDate)) : "") +
@@ -475,13 +517,11 @@
             (mine ? "" : " · delegated") +
           '</div>' +
         '</div>' +
-        '<div class="carryover-row-actions">' +
-          (mine ? '<button class="carryover-btn carryover-btn-schedule cu-mtg-today">Today</button>' +
-            '<button class="carryover-btn carryover-btn-schedule cu-mtg-tomorrow">Tomorrow</button>' : "") +
-          '<button class="carryover-btn cu-mtg-recap">Recap</button>' +
-          '<button class="carryover-btn carryover-btn-drop cu-mtg-drop">Dismiss</button>' +
-        '</div>';
-      el.querySelector(".carryover-row-title").textContent = item.title || "Meeting follow-up";
+        rowActions("cu-mtg", "cu-mtg-details", item.title || "Meeting follow-up");
+      const meetingTitleEl = el.querySelector(".carryover-row-title");
+      meetingTitleEl.textContent = item.title || "Meeting follow-up";
+      meetingTitleEl.title = item.title || "Meeting follow-up";
+      el.querySelector(".cu-mtg-details").setAttribute("aria-label", "Open recap for " + (item.title || "Meeting follow-up"));
       const busy = on => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
       const forget = () => forgetRow(el, meetingEls, item.id);
       const runMeeting = async fn => {
@@ -499,12 +539,9 @@
         e.stopPropagation();
         runMeeting(() => completeMeetingAction(item));
       });
-      if (mine) {
-        el.querySelector(".cu-mtg-today").addEventListener("click", () => place(todayStr()));
-        el.querySelector(".cu-mtg-tomorrow").addEventListener("click", () => place(tomorrowStr()));
-        wireCal(el.querySelector(".cu-cal"), item.title || "Meeting follow-up", place);
-      }
-      el.querySelector(".cu-mtg-recap").addEventListener("click", () => {
+      el.querySelector(".cu-mtg-today").addEventListener("click", () => place(todayStr()));
+      wireCal(el.querySelector(".cu-cal"), item.title || "Meeting follow-up", place);
+      el.querySelector(".cu-mtg-details").addEventListener("click", () => {
         if (typeof openPrepModal === "function") openPrepModal({
           id: item.meetingId, meetingBlockId: item.meetingId,
           title: item.meetingTitle || "Meeting", start: item.meetingStart, end: item.meetingEnd
@@ -523,15 +560,12 @@
       const durLabel = d > 0 ? ((typeof ms === "function") ? ms(d) : d + "m") : "step";
       const title = ev.title || "Untitled";
       const detailId = "cu-task-details-" + (++detailSeq);
-      el.className = "carryover-row cu-task-row";
+      el.className = "carryover-row cu-unified-row cu-task-row";
       el.innerHTML =
         completeBtn(title) +
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
-            '<button type="button" class="cu-details-toggle" aria-expanded="false" aria-controls="' + detailId + '">' +
-              '<span class="carryover-row-title"></span>' +
-              '<svg class="cu-details-chevron" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>' +
-            '</button>' +
+            '<div class="carryover-row-title"></div>' +
             calBtn("cu-cal", "Move to a day") +
           '</div>' +
           '<div class="carryover-row-meta">' + esc(durLabel) +
@@ -539,16 +573,8 @@
             ' · from ' + esc(prettyDate((ev.__unf || {}).sourceDate)) +
           '</div>' +
         '</div>' +
-        '<div class="carryover-row-actions">' +
-          '<button class="carryover-btn carryover-btn-schedule cu-today">Today</button>' +
-          '<button class="carryover-btn carryover-btn-schedule cu-tomorrow">Tomorrow</button>' +
-          '<button class="carryover-btn cu-backlog">Backlog</button>' +
-          '<button class="carryover-btn carryover-btn-drop cu-drop">Drop</button>' +
-        '</div>' +
-        '<div class="cu-details" id="' + detailId + '" role="region" aria-label="Task notes and details" hidden>' +
-          '<div class="cu-details-full-title"></div>' +
-          '<div class="cu-details-body" aria-live="polite">Loading details…</div>' +
-        '</div>';
+        rowActions("cu-task", "cu-details-toggle", title) +
+        detailShell(detailId, "Task notes and details");
       const titleEl = el.querySelector(".carryover-row-title");
       const toggleEl = el.querySelector(".cu-details-toggle");
       const detailEl = el.querySelector(".cu-details");
@@ -556,23 +582,12 @@
       detailEl.hidden = true;
       titleEl.textContent = title;
       titleEl.title = title;
+      toggleEl.setAttribute("aria-expanded", "false");
+      toggleEl.setAttribute("aria-controls", detailId);
       toggleEl.setAttribute("aria-label", "Show notes and details for " + title);
       el.querySelector(".cu-details-full-title").textContent = title;
 
       let detailLoaded = false;
-      const renderDetailSection = (labelText, values) => {
-        const section = document.createElement("div");
-        section.className = "cu-details-section";
-        const labelEl = document.createElement("div");
-        labelEl.className = "cu-details-label";
-        labelEl.textContent = labelText;
-        const textEl = document.createElement("div");
-        textEl.className = "cu-details-text";
-        textEl.textContent = values.join("\n\n");
-        section.appendChild(labelEl);
-        section.appendChild(textEl);
-        detailBody.appendChild(section);
-      };
       const openDetails = async (opening) => {
         detailEl.hidden = !opening;
         toggleEl.setAttribute("aria-expanded", opening ? "true" : "false");
@@ -589,8 +604,8 @@
           detailBody.innerHTML = "";
           const details = (payload && Array.isArray(payload.details)) ? payload.details : [];
           const notes = (payload && Array.isArray(payload.notes)) ? payload.notes : [];
-          if (details.length) renderDetailSection("Details", details);
-          if (notes.length) renderDetailSection("Notes", notes);
+          if (details.length) appendDetailSection(detailBody, "Details", details);
+          if (notes.length) appendDetailSection(detailBody, "Notes", notes);
           if (!details.length && !notes.length) detailBody.textContent = "No notes or details on this task.";
         } catch (e) {
           detailBody.textContent = "Could not load this task's details.";
@@ -618,8 +633,6 @@
         run(() => CO.complete(ev, pool));
       });
       el.querySelector(".cu-today").addEventListener("click", () => run(() => CO.moveTo(ev, todayStr(), { pool })));
-      el.querySelector(".cu-tomorrow").addEventListener("click", () => run(() => CO.moveTo(ev, tomorrowStr(), { pool })));
-      el.querySelector(".cu-backlog").addEventListener("click", () => run(() => CO.toBacklog(ev, pool)));
       el.querySelector(".cu-drop").addEventListener("click", () => run(() => CO.drop(ev, pool)));
       // The calendar pick lands in the SAME mover the day buttons use — one write
       // path, so an arbitrary day can't behave differently from Today.
