@@ -5164,6 +5164,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .prep-tab:hover{color:var(--text)}
 .prep-tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
 /* Recap tab: action items rendered inline under the summary, each schedulable */
+.recap-action-group + .recap-action-group{margin-top:var(--sp-5)}
 .recap-actions .recap-action{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--sp-3);padding:var(--sp-2) 0;line-height:1.5}
 .recap-actions .recap-action + .recap-action{border-top:1px solid var(--border)}
 .recap-action-text{flex:1;min-width:0}

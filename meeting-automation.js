@@ -434,6 +434,29 @@ function extractActionCandidates(text) {
   return [...new Set(candidates)].slice(0, 12);
 }
 
+function normalizedActionText(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!?;:]+$/g, "");
+}
+
+function sanitizeSignal(signal) {
+  if (!signal || typeof signal !== "object") return null;
+  const source = ["google_chat", "meet_chat_file", "transcript"].includes(signal.source)
+    ? signal.source : "transcript";
+  const clean = {
+    source,
+    phrase: String(signal.phrase || "").trim().slice(0, 100),
+    at: String(signal.at || "").trim().slice(0, 80),
+    excerpt: String(signal.excerpt || "").trim().slice(0, 1000),
+  };
+  const context = Array.isArray(signal.context) ? signal.context.slice(0, 12).map(item => ({
+    at: String(item?.at || "").trim().slice(0, 80),
+    speaker: item?.speaker === "drake" ? "drake" : "participant",
+    excerpt: String(item?.excerpt || "").trim().slice(0, 500),
+  })).filter(item => item.at || item.excerpt) : [];
+  if (context.length) clean.context = context;
+  return clean.phrase || clean.at || clean.excerpt || context.length ? clean : null;
+}
+
 async function ingestTranscript(blockId, { workspaceId, userId, transcriptText, sources = [] }) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const text = String(transcriptText || "").trim();
@@ -491,6 +514,7 @@ async function ingestTranscript(blockId, { workspaceId, userId, transcriptText, 
         title: actionText,
         text: actionText,
         priority: "Medium",
+        origin: "automated",
         status: "proposed",
         done: false,
         sources,
@@ -546,6 +570,8 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
           meetingBlockId: meeting.id,
           proposedActionId: proposal.id,
           approvedAt: new Date().toISOString(),
+          origin: p.origin === "signaled" ? "signaled" : "automated",
+          signal: p.signal || null,
         },
       },
       sort_order: 500 + created.length,
@@ -594,6 +620,8 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
       title: p.text || p.title || "Meeting follow-up",
       owner: p.owner === "other" || p.owner === "others" ? "other" : "drake",
       priority: p.priority || "Medium",
+      origin: p.origin === "signaled" ? "signaled" : "automated",
+      signal: p.signal || null,
       approvedBlockId,
       createdAt: proposal.created_at || null,
     });
@@ -820,26 +848,53 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
 
   if (Array.isArray(proposedActions) && proposedActions.length) {
     const existing = await loadArtifacts(meeting.id, workspaceId);
-    const seen = new Set(
-      existing.filter(b => propsOf(b).kind === "proposed_action_item").map(b => String(propsOf(b).text || "").toLowerCase())
+    const existingByText = new Map(
+      existing.filter(b => propsOf(b).kind === "proposed_action_item")
+        .map(b => [normalizedActionText(propsOf(b).text), b])
+        .filter(([key]) => key)
     );
     let idx = 0;
     for (const a of proposedActions) {
       const text = String((a && (a.text || a.title)) || "").trim();
-      if (!text || seen.has(text.toLowerCase())) continue;
-      await upsertArtifact({
+      const textKey = normalizedActionText(text);
+      if (!textKey) continue;
+      const origin = a && a.origin === "signaled" ? "signaled" : "automated";
+      const signal = origin === "signaled" ? sanitizeSignal(a.signal) : null;
+      const duplicate = existingByText.get(textKey);
+      if (duplicate) {
+        const prior = propsOf(duplicate);
+        // A later explicit marker upgrades the same extracted task in place. Do
+        // not resurrect a dismissed/placed proposal or mint a duplicate task.
+        if (origin === "signaled" && prior.origin !== "signaled") {
+          await blockDB.updateBlock(duplicate.id, {
+            properties: {
+              ...prior,
+              origin: "signaled",
+              signal,
+              sources: sanitizeSources([
+                ...(Array.isArray(prior.sources) ? prior.sources : []),
+                ...(Array.isArray(a && a.sources) ? a.sources : []),
+              ]),
+            },
+          });
+        }
+        continue;
+      }
+      const created = await upsertArtifact({
         meeting, workspaceId, userId, kind: "proposed_action_item", sortOrder: 300 + idx,
         properties: {
           title: text,
           text,
           owner: (a.owner === "other" || a.owner === "others") ? "other" : "drake",
           priority: a.priority || "Medium",
+          origin,
+          signal,
           status: "proposed",
           done: false,
           sources: sanitizeSources(a.sources),
         },
       });
-      seen.add(text.toLowerCase());
+      existingByText.set(textKey, created);
       applied.proposedActions += 1;
       idx += 1;
     }

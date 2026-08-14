@@ -499,6 +499,20 @@ test("meeting Details opens that meeting's recap", async () => {
   assert.equal(row._removed, false, "viewing the recap does not resolve the follow-up");
 });
 
+test("signaled meeting actions render above automated meeting actions", async () => {
+  const automated = { ...MTG_ACTION, id: "auto-1", title: "Automated follow-up", origin: "automated" };
+  const signaled = { ...MTG_ACTION, id: "signal-1", title: "Explicit follow-up", origin: "signaled" };
+  const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], {
+    fetch: async () => ({ ok: true, json: async () => ({ items: [automated, signaled] }) }),
+  });
+  await ctx.window.initCatchUp();
+  const children = [...allRowsOf(ctx)];
+  const labels = children.filter(r => r.className === "cu-section-label").map(r => r.textContent);
+  assert.deepEqual(labels, ["Signaled Action Items from Meetings", "Automated Action Items from Meetings"]);
+  assert.ok(children.indexOf(children.find(r => titleOf(r) === "Explicit follow-up")) <
+    children.indexOf(children.find(r => titleOf(r) === "Automated follow-up")));
+});
+
 test("a delegated meeting row keeps the shared layout without stealing the owner's task", async () => {
   const delegated = { ...MTG_ACTION, id: "delegated-1", owner: "other" };
   const scheduled = [];
@@ -664,7 +678,7 @@ test("the unified modal follows the requested section order", async () => {
   await ctx.window.initCatchUp();
   assert.deepEqual(
     [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
-    ["Slipped tasks", "Slack", "Gmail", "Meeting follow-ups", "Day in Review"]
+    ["Slipped tasks", "Slack", "Gmail", "Automated Action Items from Meetings", "Day in Review"]
   );
   const journal = [...allRowsOf(ctx)].find(r => r.className === "cu-journal-wrap");
   assert.match(journal.innerHTML, /Journal/);
