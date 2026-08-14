@@ -425,6 +425,84 @@ test("Move all to today drains the queue, defers the refold, and marks the day r
   assert.ok(saved._catchUpReviewed, "the day is marked reviewed when the batch closes it");
 });
 
+// ───────────────── meeting follow-ups from recap documents ─────────────────
+const MTG_ACTION = {
+  id: "proposal-1", meetingId: "meeting-1", meetingTitle: "Investor weekly",
+  meetingDate: "2026-07-28", meetingStart: "13:00", meetingEnd: "14:00",
+  title: "Send the updated investor brief", owner: "drake", priority: "High"
+};
+
+function meetingCtx(action, completionResult) {
+  const calls = { approved: [], completed: [] };
+  const fetch = async (url, opts) => {
+    const body = opts && opts.body ? JSON.parse(opts.body) : {};
+    if (url === "/api/meetings/actions/proposed") {
+      return { ok: true, json: async () => ({ items: [action] }) };
+    }
+    if (url.endsWith("/actions/approve")) {
+      calls.approved.push(body.actionIds);
+      return { ok: true, json: async () => ({ approvedBlocks: [{ id: "approved-1" }] }) };
+    }
+    throw new Error("Unexpected URL " + url);
+  };
+  const ctx = load({ [ymd(1)]: [dayRoot()] }, [ymd(1)], { fetch });
+  ctx.ctx.window.blockStore.setTaskCompletion = async (id, completed, opts) => {
+    calls.completed.push({ id, completed, taskDate: opts.taskDate });
+    return completionResult || { ok: true };
+  };
+  return Object.assign(ctx, { calls });
+}
+
+test("meeting follow-ups have an already-done checkmark that completes the approved action", async () => {
+  const { ctx, calls } = meetingCtx(MTG_ACTION);
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls.approved, [["proposal-1"]]);
+  assert.deepEqual(calls.completed, [{ id: "approved-1", completed: true, taskDate: "2026-07-28" }]);
+  assert.equal(row._removed, true);
+});
+
+test("retrying an approved meeting follow-up completes its existing action without duplicating it", async () => {
+  const { ctx, calls } = meetingCtx({ ...MTG_ACTION, approvedBlockId: "approved-existing" });
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls.approved, []);
+  assert.deepEqual(calls.completed, [{ id: "approved-existing", completed: true, taskDate: "2026-07-28" }]);
+  assert.equal(row._removed, true);
+});
+
+test("a pending meeting completion stays visible, re-enables, and restores focus", async () => {
+  const { ctx, calls } = meetingCtx(MTG_ACTION, { ok: false, pending: true });
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  const complete = row.querySelector(".cu-complete");
+  ctx.document.activeElement = complete;
+  complete.fire("click", { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls.completed, [{ id: "approved-1", completed: true, taskDate: "2026-07-28" }]);
+  assert.equal(row._removed, false, "the row must remain until the canonical write is acknowledged");
+  assert.equal(complete.disabled, false, "the user can retry a queued or failed write");
+  assert.equal(complete._focused, true, "keyboard focus returns to the action that needs a retry");
+});
+
+test("completing the final meeting follow-up returns focus to the task launcher", async () => {
+  const { ctx } = meetingCtx(MTG_ACTION);
+  const launcher = ctx.document.createElement("button");
+  launcher.id = "dcc-launcher-btn";
+  ctx.document.body.appendChild(launcher);
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  const complete = row.querySelector(".cu-complete");
+  ctx.document.activeElement = complete;
+  complete.fire("click", { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(launcher._focused, true);
+});
+
 // ───────────────── triage rides along (the sweep's items) ─────────────────
 // Swept triage items appear in this same modal, but they are NOT blocks: none of
 // DCC.Carryover applies to them. Scheduling one CREATES a task on the chosen day
@@ -439,13 +517,17 @@ const TRI = (id, over) => Object.assign({
 // A context wired with triage collaborators. `calls` records every write the modal
 // attempts, so a test can assert the destination as well as the fact of the call.
 function triageCtx(daysByDate, archiveDates, items, over) {
-  const calls = { placed: [], dropped: [], pickers: [], seen: [] };
+  const calls = { placed: [], completed: [], dropped: [], pickers: [], seen: [] };
   const extra = Object.assign({
     activeTriageItems: () => items.slice(),
     triagePriorityLabel: (p) => p || "Medium",
     scheduleTriageOnDate: async (id, date, opts) => {
       calls.placed.push(opts ? { id, date, opts } : { id, date });
       return { id: "blk-" + id, properties: {} };
+    },
+    dismissTriage: async (id, note, trivial) => {
+      calls.completed.push({ id, note, trivial });
+      return true;
     },
     deleteTriageItem: (id) => { calls.dropped.push(id); },
     openDatePickPopover: (anchor, opts) => { calls.pickers.push(opts); }
@@ -501,6 +583,30 @@ test("Today and Tomorrow on a triage row schedule it on that date and clear the 
   await new Promise(r => setTimeout(r, 0));
   assert.deepEqual(calls.placed, [{ id: "m1", date: TODAY }, { id: "m2", date: "2026-07-30" }]);
   assert.ok(first._removed && second._removed, "a scheduled item leaves the list");
+});
+
+test("triage rows have an already-done checkmark that resolves them", async () => {
+  const d = ymd(1);
+  const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  row.querySelector(".cu-complete").fire("click", { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls.completed, [{ id: "m1", note: "Already done", trivial: false }]);
+  assert.equal(row._removed, true);
+});
+
+test("completing focused triage moves focus to the next source's completion control", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
+  await ctx.window.initCatchUp();
+  const rows = [...rowsOf(ctx)].filter(row => row.className.includes("carryover-row"));
+  const triageComplete = rows[0].querySelector(".cu-complete");
+  const slippedComplete = rows[1].querySelector(".cu-complete");
+  ctx.document.activeElement = triageComplete;
+  triageComplete.fire("click", { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(slippedComplete._focused, true);
 });
 
 test("a refused schedule leaves the triage row in place and re-enables it", async () => {

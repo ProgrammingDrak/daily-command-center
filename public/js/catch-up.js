@@ -84,6 +84,11 @@
   // in scheduled[], so the picker runs in its date-only "pick" mode and the caller
   // owns the write (see DCC.wireDateButton in core.js).
   function calBtn(cls, label) { return window.DCC.dateButtonHtml(cls, label); }
+  function completeBtn(title) {
+    return '<button type="button" class="cu-complete" aria-label="' + esc("Mark done: " + title) + '" title="Already done">' +
+      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>' +
+    '</button>';
+  }
   function wireCal(btn, title, onPick) {
     // Raw title: the popover escapes the whole header itself (schedule-popover.js), so
     // escaping here too renders a literal &#39; for any apostrophe.
@@ -150,6 +155,31 @@
       return false;
     }
   }
+  async function completeMeetingAction(item) {
+    try {
+      let actionBlockId = item.approvedBlockId || null;
+      if (!actionBlockId) {
+        const approved = await postJson(
+          "/api/meetings/" + encodeURIComponent(item.meetingId) + "/actions/approve",
+          { actionIds: [item.id] }
+        );
+        const block = (approved.approvedBlocks || [])[0];
+        const proposal = (approved.proposedActions || []).find(action => action.id === item.id);
+        actionBlockId = (block && block.id) || (proposal && proposal.approvedBlockId) || null;
+      }
+      if (!actionBlockId) return false;
+      if (!window.blockStore || typeof window.blockStore.setTaskCompletion !== "function") {
+        throw new Error("Completion writer unavailable");
+      }
+      const result = await window.blockStore.setTaskCompletion(actionBlockId, true, {
+        completedAt: new Date().toISOString(), taskDate: item.meetingDate || null
+      });
+      return !!(result && result.ok === true);
+    } catch (e) {
+      if (typeof showToast === "function") showToast(e.message || "Could not complete meeting follow-up", "error");
+      return false;
+    }
+  }
   async function dismissMeetingAction(item) {
     try {
       await postJson(
@@ -173,7 +203,7 @@
     overlay.innerHTML =
       '<div class="carryover">' +
         '<div class="carryover-hdr">' +
-          '<h3 id="catchup-title">Catch up</h3>' +
+          '<h3 id="catchup-title">Loose Ends</h3>' +
           '<button class="pvb-close" id="catchup-close">&times;</button>' +
         '</div>' +
         '<div class="carryover-body">' +
@@ -213,7 +243,7 @@
     const hintEl = overlay.querySelector("#catchup-hint");
     const listEl = overlay.querySelector("#catchup-list");
     const allBtn = overlay.querySelector("#catchup-all");
-    overlay.querySelector("#catchup-title").textContent = cfg.title || "Here's what slipped";
+    overlay.querySelector("#catchup-title").textContent = cfg.title || "Loose Ends";
     // `total` is the collector's count of OPEN rows before the MAX_ROWS cap, so it
     // has to be compared against the open rows we actually have — not the whole
     // pool, which carries done children too and made this branch unreachable.
@@ -233,6 +263,7 @@
     const rowEls = new Map();   // unfinished rows, keyed by ev.id
     const triEls = new Map();   // triage rows, keyed by triage item id
     const meetingEls = new Map(); // recap proposals, keyed by proposed-action id
+    const activeReviewRows = new Set();
     let detailSeq = 0;
     // Closing on the last row is the same courtesy either list gives: once there is
     // nothing left to answer, the modal has no reason to sit there. An unexpanded
@@ -240,26 +271,40 @@
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
     const closeIfDrained = () => { if (!rowEls.size && !triEls.size && !meetingEls.size && !olderPending) close(); };
+    const focusAfterRemoval = (orderedRows, removedIndex) => {
+      const next = orderedRows.slice(removedIndex + 1).find(row => activeReviewRows.has(row));
+      const previous = orderedRows.slice(0, removedIndex).reverse().find(row => activeReviewRows.has(row));
+      const fallback = overlay.classList.contains("open")
+        ? overlay.querySelector("#catchup-skip")
+        : document.getElementById("dcc-launcher-btn");
+      const target = (next || previous)?.querySelector(".cu-complete") || fallback;
+      if (target && typeof target.focus === "function") target.focus();
+    };
+    const forgetRow = (el, map, id) => {
+      const orderedRows = Array.from(listEl.children).filter(row => activeReviewRows.has(row));
+      const restoreIndex = orderedRows.indexOf(el);
+      el.remove();
+      map.delete(id);
+      activeReviewRows.delete(el);
+      closeIfDrained();
+      if (restoreIndex >= 0) focusAfterRemoval(orderedRows, restoreIndex);
+    };
     const settle = (res, focusRow) => {
       if (!res) return false;
-      const orderedRows = Array.from(rowEls.values());
+      const orderedRows = Array.from(listEl.children).filter(row => activeReviewRows.has(row));
       const restoreIndex = focusRow ? orderedRows.indexOf(focusRow) : -1;
       (res.removed || []).forEach(id => {
         const el = rowEls.get(id);
         if (!el) return;
         el.remove();
         rowEls.delete(id);
+        activeReviewRows.delete(el);
       });
       closeIfDrained();
       // Removing the focused completion button otherwise drops keyboard users back
       // onto the document. Keep their place in the review whenever another row remains.
       if (restoreIndex >= 0) {
-        const remaining = new Set(rowEls.values());
-        const next = orderedRows.slice(restoreIndex + 1).find(row => remaining.has(row));
-        const previous = orderedRows.slice(0, restoreIndex).reverse().find(row => remaining.has(row));
-        const target = (next || previous)?.querySelector(".cu-complete")
-          || document.getElementById("dcc-launcher-btn");
-        if (target && typeof target.focus === "function") target.focus();
+        focusAfterRemoval(orderedRows, restoreIndex);
       }
       return true;
     };
@@ -278,10 +323,11 @@
     if (triage.length) label("Email and Slack");
     const addTriageRow = (item, before) => {
       const el = document.createElement("div");
-      el.className = "carryover-row";
+      el.className = "carryover-row cu-triage-row";
       const safe = (window.DCC && window.DCC.safeUrl) || (u => "");
       const href = safe(item.draft_link || item.draft_url) || safe(item.link || item.source_url);
       el.innerHTML =
+        completeBtn(item.title || "Untitled") +
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
@@ -298,10 +344,26 @@
         '</div>';
       el.querySelector(".carryover-row-title").textContent = item.title || "Untitled";
       const busy = (on) => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
-      const forget = () => { el.remove(); triEls.delete(item.id); closeIfDrained(); };
+      const forget = () => forgetRow(el, triEls, item.id);
       // A refused schedule (no free slot, already on the day) leaves the row alone
       // and re-enables it, same contract the task rows use.
-      const runTri = async (fn) => { busy(true); if (await fn()) forget(); else busy(false); };
+      const runTri = async (fn) => {
+        const focused = document.activeElement && el.contains(document.activeElement)
+          ? document.activeElement : el.querySelector(".cu-complete");
+        busy(true);
+        if (await fn()) forget();
+        else {
+          busy(false);
+          if (focused && typeof focused.focus === "function") focused.focus();
+        }
+      };
+      el.querySelector(".cu-complete").addEventListener("click", e => {
+        e.stopPropagation();
+        runTri(async () => {
+          if (typeof dismissTriage !== "function") return false;
+          return !!(await dismissTriage(item.id, "Already done", false));
+        });
+      });
       const place = (d2) => runTri(async () => {
         if (typeof scheduleTriageOnDate !== "function") return false;
         return !!(await scheduleTriageOnDate(item.id, d2));
@@ -315,6 +377,7 @@
       });
       wireCal(el.querySelector(".cu-cal"), item.title || "Untitled", place);
       triEls.set(item.id, el);
+      activeReviewRows.add(el);
       // `before` keeps expanded older items INSIDE the triage group. Appending them
       // instead dropped them below the Slipped section, orphaned from their heading.
       if (before && typeof listEl.insertBefore === "function") listEl.insertBefore(el, before);
@@ -344,6 +407,7 @@
       const mine = item.owner !== "other";
       el.className = "carryover-row cu-meeting-row";
       el.innerHTML =
+        completeBtn(item.title || "Meeting follow-up") +
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
@@ -363,9 +427,22 @@
         '</div>';
       el.querySelector(".carryover-row-title").textContent = item.title || "Meeting follow-up";
       const busy = on => el.querySelectorAll("button").forEach(b => { b.disabled = !!on; });
-      const forget = () => { el.remove(); meetingEls.delete(item.id); closeIfDrained(); };
-      const runMeeting = async fn => { busy(true); if (await fn()) forget(); else busy(false); };
+      const forget = () => forgetRow(el, meetingEls, item.id);
+      const runMeeting = async fn => {
+        const focused = document.activeElement && el.contains(document.activeElement)
+          ? document.activeElement : el.querySelector(".cu-complete");
+        busy(true);
+        if (await fn()) forget();
+        else {
+          busy(false);
+          if (focused && typeof focused.focus === "function") focused.focus();
+        }
+      };
       const place = date => runMeeting(() => placeMeetingAction(item, date));
+      el.querySelector(".cu-complete").addEventListener("click", e => {
+        e.stopPropagation();
+        runMeeting(() => completeMeetingAction(item));
+      });
       if (mine) {
         el.querySelector(".cu-mtg-today").addEventListener("click", () => place(todayStr()));
         el.querySelector(".cu-mtg-tomorrow").addEventListener("click", () => place(tomorrowStr()));
@@ -379,6 +456,7 @@
       });
       el.querySelector(".cu-mtg-drop").addEventListener("click", () => runMeeting(() => dismissMeetingAction(item)));
       meetingEls.set(item.id, el);
+      activeReviewRows.add(el);
       listEl.appendChild(el);
     });
 
@@ -392,9 +470,7 @@
       const detailId = "cu-task-details-" + (++detailSeq);
       el.className = "carryover-row cu-task-row";
       el.innerHTML =
-        '<button type="button" class="cu-complete" aria-label="' + esc("Mark complete: " + title) + '" title="Mark complete">' +
-          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>' +
-        '</button>' +
+        completeBtn(title) +
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<button type="button" class="cu-details-toggle" aria-expanded="false" aria-controls="' + detailId + '">' +
@@ -473,7 +549,15 @@
       // Capture this row BEFORE disabling its buttons. Browsers move focus off a
       // disabled control immediately, so inspecting document.activeElement after
       // the async write returns is already too late to restore keyboard position.
-      const run = async (fn) => { busy(true); if (!settle(await fn(), el)) busy(false); };
+      const run = async (fn) => {
+        const focused = document.activeElement && el.contains(document.activeElement)
+          ? document.activeElement : el.querySelector(".cu-complete");
+        busy(true);
+        if (!settle(await fn(), el)) {
+          busy(false);
+          if (focused && typeof focused.focus === "function") focused.focus();
+        }
+      };
       el.querySelector(".cu-complete").addEventListener("click", e => {
         e.stopPropagation();
         run(() => CO.complete(ev, pool));
@@ -486,6 +570,7 @@
       // path, so an arbitrary day can't behave differently from Today.
       wireCal(el.querySelector(".cu-cal"), title, (d2) => run(() => CO.moveTo(ev, d2, { pool })));
       rowEls.set(ev.id, el);
+      activeReviewRows.add(el);
       listEl.appendChild(el);
     });
 
