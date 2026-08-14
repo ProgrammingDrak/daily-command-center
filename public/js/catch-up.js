@@ -80,15 +80,20 @@
   // across row types; the calendar reaches any other day without leaving the modal. Rows here aren't entries
   // in scheduled[], so the picker runs in its date-only "pick" mode and the caller
   // owns the write (see DCC.wireDateButton in core.js).
-  function calBtn(cls, label) { return window.DCC.dateButtonHtml(cls, label); }
+  function calBtn(cls, label, disabled) {
+    const html = window.DCC.dateButtonHtml(cls, label);
+    return disabled ? html.replace("<button ", '<button disabled title="Delegated items stay with their owner" ') : html;
+  }
   function completeBtn(title) {
     return '<button type="button" class="cu-complete" aria-label="' + esc("Mark done: " + title) + '" title="Already done">' +
       '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>' +
     '</button>';
   }
-  function rowActions(scope, detailsClass, title) {
+  function rowActions(scope, detailsClass, title, opts) {
+    opts = opts || {};
+    const todayDisabled = opts.todayDisabled ? ' disabled title="Delegated items stay with their owner"' : "";
     return '<div class="carryover-row-actions">' +
-      '<button type="button" class="carryover-btn carryover-btn-schedule cu-today ' + scope + '-today" aria-label="' + esc("Schedule today: " + title) + '">Today</button>' +
+      '<button type="button" class="carryover-btn carryover-btn-schedule cu-today ' + scope + '-today" aria-label="' + esc("Schedule today: " + title) + '"' + todayDisabled + '>Today</button>' +
       '<button type="button" class="carryover-btn carryover-btn-drop cu-drop ' + scope + '-drop" aria-label="' + esc("Drop: " + title) + '">Drop</button>' +
       '<button type="button" class="carryover-btn cu-details-action ' + detailsClass + '" aria-label="' + esc("Show details for " + title) + '">Details</button>' +
     '</div>';
@@ -406,14 +411,14 @@
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
-            calBtn("cu-cal", "Schedule on a day") +
+            calBtn("cu-cal", "Schedule on a day: " + title) +
           '</div>' +
           '<div class="carryover-row-meta">' + esc(triageMeta(item)) +
             (href ? ' · <a class="cu-tri-link" href="' + esc(href) + '" target="_blank" rel="noopener">Open</a>' : '') +
           '</div>' +
         '</div>' +
         rowActions("cu-tri", "cu-details-toggle cu-tri-details", title) +
-        detailShell(detailId, "Communication item details");
+        detailShell(detailId, "Details for " + title);
       const titleEl = el.querySelector(".carryover-row-title");
       const toggleEl = el.querySelector(".cu-tri-details");
       const detailEl = el.querySelector(".cu-details");
@@ -428,7 +433,7 @@
       const hasDetails = [
         appendDetailSection(detailBody, "Summary", [item.summary, item.snippet, item.excerpt]),
         appendDetailSection(detailBody, "Draft preview", [item.draft_preview]),
-        appendDetailSection(detailBody, "Details", [item.detail, item.description])
+        appendDetailSection(detailBody, "Details", [item.detail, item.description, item.notes])
       ].some(Boolean);
       if (!hasDetails) detailBody.textContent = "No additional details on this item.";
       toggleEl.addEventListener("click", () => {
@@ -509,7 +514,7 @@
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
-            calBtn("cu-cal", "Schedule on a day") +
+            calBtn("cu-cal", "Schedule on a day: " + (item.title || "Meeting follow-up"), !mine) +
           '</div>' +
           '<div class="carryover-row-meta">' + esc(item.meetingTitle || "Meeting") +
             (item.meetingDate ? " · " + esc(prettyDate(item.meetingDate)) : "") +
@@ -517,7 +522,7 @@
             (mine ? "" : " · delegated") +
           '</div>' +
         '</div>' +
-        rowActions("cu-mtg", "cu-mtg-details", item.title || "Meeting follow-up");
+        rowActions("cu-mtg", "cu-mtg-details", item.title || "Meeting follow-up", { todayDisabled: !mine });
       const meetingTitleEl = el.querySelector(".carryover-row-title");
       meetingTitleEl.textContent = item.title || "Meeting follow-up";
       meetingTitleEl.title = item.title || "Meeting follow-up";
@@ -539,8 +544,10 @@
         e.stopPropagation();
         runMeeting(() => completeMeetingAction(item));
       });
-      el.querySelector(".cu-mtg-today").addEventListener("click", () => place(todayStr()));
-      wireCal(el.querySelector(".cu-cal"), item.title || "Meeting follow-up", place);
+      if (mine) {
+        el.querySelector(".cu-mtg-today").addEventListener("click", () => place(todayStr()));
+        wireCal(el.querySelector(".cu-cal"), item.title || "Meeting follow-up", place);
+      }
       el.querySelector(".cu-mtg-details").addEventListener("click", () => {
         if (typeof openPrepModal === "function") openPrepModal({
           id: item.meetingId, meetingBlockId: item.meetingId,
@@ -566,7 +573,7 @@
         '<div class="carryover-row-info">' +
           '<div class="cu-title-line">' +
             '<div class="carryover-row-title"></div>' +
-            calBtn("cu-cal", "Move to a day") +
+            calBtn("cu-cal", "Move to a day: " + title) +
           '</div>' +
           '<div class="carryover-row-meta">' + esc(durLabel) +
             (kids ? " · +" + kids + " nested" : "") +
@@ -574,7 +581,7 @@
           '</div>' +
         '</div>' +
         rowActions("cu-task", "cu-details-toggle", title) +
-        detailShell(detailId, "Task notes and details");
+        detailShell(detailId, "Notes and details for " + title);
       const titleEl = el.querySelector(".carryover-row-title");
       const toggleEl = el.querySelector(".cu-details-toggle");
       const detailEl = el.querySelector(".cu-details");

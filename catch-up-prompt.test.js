@@ -499,7 +499,7 @@ test("meeting Details opens that meeting's recap", async () => {
   assert.equal(row._removed, false, "viewing the recap does not resolve the follow-up");
 });
 
-test("a delegated meeting row can be intentionally scheduled with Today", async () => {
+test("a delegated meeting row keeps the shared layout without stealing the owner's task", async () => {
   const delegated = { ...MTG_ACTION, id: "delegated-1", owner: "other" };
   const scheduled = [];
   const fetch = async (url, opts) => {
@@ -515,11 +515,14 @@ test("a delegated meeting row can be intentionally scheduled with Today", async 
   const { ctx } = triageCtx({ [ymd(1)]: [dayRoot()] }, [ymd(1)], [], { fetch });
   await ctx.window.initCatchUp();
   const row = [...rowsOf(ctx)][0];
-  assert.match(row.innerHTML, /class="btn-schedule cu-cal"/, "delegated rows keep the shared calendar control");
+  assert.match(row.innerHTML, /<button disabled[^>]*class="btn-schedule cu-cal"/,
+    "delegated rows keep the shared calendar control, visibly disabled");
+  assert.match(row.innerHTML, /class="carryover-btn carryover-btn-schedule cu-today cu-mtg-today"[^>]*disabled/,
+    "Today stays in the shared action order without scheduling someone else's commitment");
   row.querySelector(".cu-mtg-today").fire("click");
   await settled();
-  assert.deepEqual(scheduled, [{ date: TODAY }]);
-  assert.equal(row._removed, true);
+  assert.deepEqual(scheduled, []);
+  assert.equal(row._removed, false);
 });
 
 // ───────────────── triage rides along (the sweep's items) ─────────────────
@@ -740,6 +743,16 @@ test("triage Details expands the item context without changing its metadata", as
     ["Summary", "Draft preview"]);
 });
 
+test("triage Details includes notes-only context", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1", { notes: "Use the approved response." })]);
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  row.querySelector(".cu-tri-details").fire("click");
+  assert.equal(row.querySelector(".cu-details-body").children[0].children[1].textContent,
+    "Use the approved response.");
+});
+
 test("triage rows have an already-done checkmark that resolves them", async () => {
   const d = ymd(1);
   const { ctx, calls } = triageCtx({ [d]: [dayRoot()] }, [d], [TRI("m1")]);
@@ -929,8 +942,10 @@ test("the calendar button is really in every row kind's markup", async () => {
   assert.equal(rows.length, 3);
   for (const r of rows) {
     assert.match(r.innerHTML, /<div class="cu-title-line">/, "the name and the button share a line");
-    assert.match(r.innerHTML, /<button class="btn-schedule cu-cal"[^>]*aria-label="/,
+    assert.match(r.innerHTML, /<button[^>]*class="btn-schedule cu-cal"[^>]*aria-label="/,
       "the button is in the row markup, not just in a querySelector stub");
+    assert.match(r.innerHTML, new RegExp('aria-label="[^"]*' + titleOf(r).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      "the calendar label names its row");
   }
 });
 
