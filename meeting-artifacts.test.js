@@ -642,8 +642,11 @@ test("meeting-signals endpoint requires a bounded meeting window", async () => {
 test("meeting retention candidates expose only scoped lifecycle metadata", async () => {
   const rows = [
     { id: "meeting-1", type: "block", date: "2026-08-14", workspace_id: "ws-1", properties: {
-      type: "meeting", title: "Planning", notes: "private notes", recap_status: "ready",
-      dashboard_ref: "planning", recording_artifact: { status: "hot" },
+      type: "meeting", title: "Planning", end: "14:30", notes: "private notes", recap_status: "ready",
+      dashboard_ref: "planning", recording_artifact: { status: "hot", arbitrary: "secret", hot_audio: {
+        provider: "r2", bucket: "warm", key: "meetings/hot/ws-1/planning/audio.m4a",
+        expires_at: "2026-08-20T00:00:00Z", arbitrary: "secret",
+      } },
     } },
     { id: "other-workspace", type: "block", date: "2026-08-14", workspace_id: "ws-2", properties: { type: "meeting" } },
     { id: "task-1", type: "block", date: "2026-08-14", workspace_id: "ws-1", properties: { type: "task" } },
@@ -654,11 +657,20 @@ test("meeting retention candidates expose only scoped lifecycle metadata", async
   assert.equal(json.length, 1);
   assert.equal(json[0].id, "meeting-1");
   assert.equal(json[0].properties.notes, undefined);
+  assert.equal(json[0].properties.end, "14:30");
+  assert.equal(json[0].properties.recording_artifact.arbitrary, undefined);
+  assert.equal(json[0].properties.recording_artifact.hot_audio.arbitrary, undefined);
 });
 
 test("meeting retention candidates reject unbounded ranges", async () => {
   const app = mountApp([], []);
   const { status } = await getPath(app, "/api/dcc/meeting-retention-candidates?start=2024-01-01&end=2026-08-14");
+  assert.equal(status, 400);
+});
+
+test("meeting retention candidates reject impossible calendar dates", async () => {
+  const app = mountApp([], []);
+  const { status } = await getPath(app, "/api/dcc/meeting-retention-candidates?start=2026-02-31&end=2026-03-01");
   assert.equal(status, 400);
 });
 const mtgBlock = (id, sid, title, date) => ({ id, type: "block", parent_id: null, date, properties: { title, type: "meeting", source: "calendar", source_id: sid }, workspace_id: "ws-1", user_id: 1, deleted_at: null });

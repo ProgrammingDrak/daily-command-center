@@ -47,40 +47,78 @@ module.exports = function mount(app, ctx) {
   // exposes only the metadata needed to discover work and retire hot audio, so
   // the scheduler never needs a renewable browser session or the broad blocks API.
   app.get("/api/dcc/meeting-retention-candidates", async (req, res) => {
-    const start = String(req.query.start || "");
-    const end = String(req.query.end || "");
-    if (!isValidDate(start) || !isValidDate(end)) {
-      return res.status(400).json({ error: "Provide valid ?start=&end= dates" });
-    }
-    const startMs = Date.parse(`${start}T00:00:00Z`);
-    const endMs = Date.parse(`${end}T00:00:00Z`);
-    if (endMs < startMs || endMs - startMs > 370 * 24 * 60 * 60 * 1000) {
-      return res.status(400).json({ error: "Meeting retention range must be 370 days or less" });
-    }
-    const rows = await blockDB.getBlocksByDateRange(start, end, req.workspaceId);
-    return rows.filter((block) => {
-      const p = block.properties || {};
-      return [p.type, p.kind, block.type].map((v) => String(v || "").toLowerCase())
-        .some((v) => v === "meeting" || v === "oneone");
-    }).map((block) => {
-      const p = block.properties || {};
-      return {
-        id: block.id,
-        date: block.date,
-        properties: {
-          type: p.type,
-          kind: p.kind,
-          title: p.title,
-          name: p.name,
-          source_id: p.source_id,
-          recording_review: !!p.recording_review,
-          recap_status: p.recap_status,
-          dashboard_ref: p.dashboard_ref,
-          recording_artifact: p.recording_artifact,
-          recording_source: p.recording_source,
-        },
+    try {
+      const start = String(req.query.start || "");
+      const end = String(req.query.end || "");
+      const strictDate = (value) => {
+        if (!isValidDate(value)) return NaN;
+        const parsed = Date.parse(`${value}T00:00:00Z`);
+        return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value ? parsed : NaN;
       };
-    });
+      const startMs = strictDate(start);
+      const endMs = strictDate(end);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+        return res.status(400).json({ error: "Provide valid ?start=&end= calendar dates" });
+      }
+      if (endMs < startMs || endMs - startMs > 370 * 24 * 60 * 60 * 1000) {
+        return res.status(400).json({ error: "Meeting retention range must be 370 days or less" });
+      }
+      const requestedId = String(req.query.id || "").trim();
+      const rows = await blockDB.getBlocksByDateRange(start, end, req.workspaceId);
+      res.set("Cache-Control", "private, no-store");
+      return res.json(rows.filter((block) => {
+        const p = block.properties || {};
+        const meeting = [p.type, p.kind, block.type].map((v) => String(v || "").toLowerCase())
+          .some((v) => v === "meeting" || v === "oneone");
+        const artifact = p.recording_artifact || {};
+        const actionable = p.recording_review || p.recap_status === "ready" || p.dashboard_ref
+          || artifact.status === "hot" || artifact.cleanup_pending;
+        return meeting && (actionable || (requestedId && block.id === requestedId));
+      }).map((block) => {
+        const p = block.properties || {};
+        const artifact = p.recording_artifact || {};
+        const hot = artifact.hot_audio || {};
+        const source = p.recording_source || {};
+        return {
+          id: block.id,
+          date: block.date,
+          properties: {
+            type: p.type,
+            kind: p.kind,
+            title: p.title,
+            name: p.name,
+            end: p.end,
+            source_id: p.source_id,
+            recording_review: !!p.recording_review,
+            recap_status: p.recap_status,
+            dashboard_ref: p.dashboard_ref,
+            recording_artifact: {
+              status: artifact.status,
+              holding_days: artifact.holding_days,
+              expires_at: artifact.expires_at,
+              compacted_at: artifact.compacted_at,
+              cleanup_pending: !!artifact.cleanup_pending,
+              hot_audio: artifact.hot_audio ? {
+                provider: hot.provider,
+                bucket: hot.bucket,
+                key: hot.key,
+                expires_at: hot.expires_at,
+                bytes: hot.bytes,
+              } : null,
+            },
+            recording_source: p.recording_source ? {
+              provider: source.provider,
+              url: source.url,
+              name: source.name,
+              file_id: source.file_id,
+            } : null,
+          },
+        };
+      }));
+    } catch (error) {
+      console.error("[meeting-retention-candidates] failed:", error);
+      return res.status(500).json({ error: "Meeting retention candidates unavailable" });
+    }
   });
 
   // Shared idempotency lookup for the brief's Day-in-Review writes and quick-task:
