@@ -29,6 +29,11 @@
   // double-moving rows and fighting over the button's label. Harmless while openPrompt
   // ran once per load; openArrivals is the second entry that made it reachable.
   let _allHandler = null;
+  let _lastSnapshot = null;
+  let _lastCount = 0;
+  let _returnFocus = null;
+  let _openHasLoadFailure = false;
+  let _retryTimer = null;
 
   function reviewed() {
     if (typeof _bsProp !== "function") return true;   // no day_root yet: don't prompt blind
@@ -122,6 +127,28 @@
       triageAge(item)
     ].filter(Boolean).join(" · ");
   }
+  function triageLane(item) {
+    const haystack = [item && item.source, item && item.type, item && item.channel, item && item.link, item && item.source_url]
+      .filter(Boolean).join(" ").toLowerCase();
+    if (haystack.includes("slack")) return "slack";
+    if (haystack.includes("gmail") || haystack.includes("email") || haystack.includes("mail.google.com")) return "gmail";
+    return "other";
+  }
+
+  function syncIndicator() {
+    const pill = document.getElementById("loose-ends-pill");
+    const count = document.getElementById("loose-ends-pill-count");
+    if (!pill || !count) return;
+    const onToday = typeof viewMode === "undefined" || !viewMode || viewMode === "today";
+    count.textContent = String(_lastCount);
+    pill.hidden = !onToday || _lastCount < 1;
+    pill.setAttribute("aria-label", "Open " + _lastCount + " Loose End" + (_lastCount === 1 ? "" : "s"));
+  }
+
+  function setIndicatorCount(count) {
+    _lastCount = Math.max(0, Number(count) || 0);
+    syncIndicator();
+  }
 
   // ── meeting follow-ups ──
   // Recap actions are durable child blocks, intentionally excluded from ordinary
@@ -129,11 +156,10 @@
   // that approval boundary while making the proposals visible beside Sweep triage.
   async function loadMeetingActions() {
     if (typeof fetch !== "function") return [];
-    try {
-      const res = await fetch("/api/meetings/actions/proposed");
-      const body = await res.json();
-      return res.ok && Array.isArray(body.items) ? body.items : [];
-    } catch (e) { return []; }
+    const res = await fetch("/api/meetings/actions/proposed");
+    const body = await res.json();
+    if (!res.ok || !Array.isArray(body.items)) throw new Error("Meeting follow-ups unavailable");
+    return body.items;
   }
   async function postJson(url, body) {
     const res = await fetch(url, {
@@ -201,22 +227,33 @@
     overlay.className = "carryover-overlay";
     overlay.id = "catchup-overlay";
     overlay.innerHTML =
-      '<div class="carryover">' +
+      '<div class="carryover" role="dialog" aria-modal="true" aria-labelledby="catchup-title">' +
         '<div class="carryover-hdr">' +
           '<h3 id="catchup-title">Loose Ends</h3>' +
-          '<button class="pvb-close" id="catchup-close">&times;</button>' +
+          '<button class="pvb-close" id="catchup-close" aria-label="Close Loose Ends">&times;</button>' +
         '</div>' +
         '<div class="carryover-body">' +
           '<div class="carryover-hint" id="catchup-hint"></div>' +
           '<div class="carryover-list" id="catchup-list"></div>' +
         '</div>' +
         '<div class="carryover-footer">' +
-          '<button class="carryover-btn carryover-btn-schedule" id="catchup-all">Move all to today</button>' +
+          '<button class="carryover-btn carryover-btn-schedule" id="catchup-all">Move schedulable items to today</button>' +
           '<button class="carryover-skip" id="catchup-skip">Leave them</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(overlay);
     overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+    overlay.addEventListener("keydown", e => {
+      if (e.key === "Escape") { e.preventDefault(); close(); return; }
+      if (e.key !== "Tab") return;
+      const focusable = [...overlay.querySelectorAll("button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled])")]
+        .filter(el => !el.hidden && el.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
     overlay.querySelector("#catchup-close").addEventListener("click", close);
     overlay.querySelector("#catchup-skip").addEventListener("click", close);
     return overlay;
@@ -227,19 +264,28 @@
   function close() {
     const overlay = document.getElementById("catchup-overlay");
     if (overlay) overlay.classList.remove("open");
-    markReviewed();
+    if (!_openHasLoadFailure) markReviewed();
     if (typeof invalidateUnfinishedSection === "function") invalidateUnfinishedSection();
     if (typeof render === "function") render();
+    if (_returnFocus && typeof _returnFocus.focus === "function") _returnFocus.focus();
+    _returnFocus = null;
   }
 
   function openPrompt(pool, total, cfg) {
     cfg = cfg || {};
+    _openHasLoadFailure = !!cfg.loadFailed;
     const CO = window.DCC.Carryover;
     const overlay = ensureModal();
     const roots = rootsOf(pool);
     const triage = cfg.triage || [];
+    const slack = triage.filter(item => triageLane(item) === "slack");
+    const gmail = triage.filter(item => triageLane(item) === "gmail");
+    const otherTriage = triage.filter(item => triageLane(item) === "other");
     const olderTriage = cfg.olderTriage || [];
     const meetingActions = cfg.meetingActions || [];
+    const dayReview = cfg.dayReview || null;
+    const reviewApi = window.DCC && window.DCC.DayReview;
+    const reviewCount = dayReview && reviewApi ? reviewApi.pendingCount(dayReview) : 0;
     const hintEl = overlay.querySelector("#catchup-hint");
     const listEl = overlay.querySelector("#catchup-list");
     const allBtn = overlay.querySelector("#catchup-all");
@@ -252,25 +298,37 @@
       " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "");
     const triagePhrase = triage.length + " Sweep item" + (triage.length === 1 ? "" : "s") + " waiting";
     const meetingPhrase = meetingActions.length + " meeting follow-up" + (meetingActions.length === 1 ? "" : "s");
+    const reviewPhrase = reviewCount + " Day in Review decision" + (reviewCount === 1 ? "" : "s");
     const phrases = [];
+    if (roots.length) phrases.push(taskPhrase);
     if (triage.length) phrases.push(triagePhrase);
     if (meetingActions.length) phrases.push(meetingPhrase);
-    if (roots.length) phrases.push(taskPhrase);
+    if (reviewCount) phrases.push(reviewPhrase);
     hintEl.textContent = phrases.join(phrases.length > 2 ? ", " : " and ") +
-      " — move what still matters, drop what doesn't. Anything you leave stays where it is.";
+      ". Handle what matters now, or close this and come back from the reminder above.";
     listEl.innerHTML = "";
 
     const rowEls = new Map();   // unfinished rows, keyed by ev.id
     const triEls = new Map();   // triage rows, keyed by triage item id
     const meetingEls = new Map(); // recap proposals, keyed by proposed-action id
     const activeReviewRows = new Set();
+    const taskRows = [];
+    const slackRows = [];
+    const gmailRows = [];
+    const otherRows = [];
+    const meetingRows = [];
     let detailSeq = 0;
     // Closing on the last row is the same courtesy either list gives: once there is
     // nothing left to answer, the modal has no reason to sit there. An unexpanded
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
-    const closeIfDrained = () => { if (!rowEls.size && !triEls.size && !meetingEls.size && !olderPending) close(); };
+    const pendingDomCount = () => rowEls.size + triEls.size + meetingEls.size + reviewCount + (olderPending ? olderTriage.length : 0);
+    const updateCount = () => setIndicatorCount(pendingDomCount());
+    const closeIfDrained = () => {
+      updateCount();
+      if (!pendingDomCount() && !dayReview) close();
+    };
     const focusAfterRemoval = (orderedRows, removedIndex) => {
       const next = orderedRows.slice(removedIndex + 1).find(row => activeReviewRows.has(row));
       const previous = orderedRows.slice(0, removedIndex).reverse().find(row => activeReviewRows.has(row));
@@ -308,19 +366,13 @@
       }
       return true;
     };
-    // Labels appear when more than one source is present. That preserves the compact
-    // one-lane prompt while giving Sweep triage, meeting actions, and slipped tasks
-    // their own sections whenever they share the modal.
-    const sectionCount = Number(!!triage.length) + Number(!!meetingActions.length) + Number(!!roots.length);
     const label = (text) => {
-      if (sectionCount < 2) return;
-      const el = document.createElement("div");
+      const el = document.createElement("h4");
       el.className = "cu-section-label";
       el.textContent = text;
       listEl.appendChild(el);
     };
 
-    if (triage.length) label("Email and Slack");
     const addTriageRow = (item, before) => {
       const el = document.createElement("div");
       el.className = "carryover-row cu-triage-row";
@@ -381,9 +433,14 @@
       // `before` keeps expanded older items INSIDE the triage group. Appending them
       // instead dropped them below the Slipped section, orphaned from their heading.
       if (before && typeof listEl.insertBefore === "function") listEl.insertBefore(el, before);
-      else listEl.appendChild(el);
+      else {
+        const lane = triageLane(item);
+        (lane === "slack" ? slackRows : (lane === "gmail" ? gmailRows : otherRows)).push(el);
+      }
     };
-    triage.forEach(i => addTriageRow(i));
+    slack.forEach(i => addTriageRow(i));
+    gmail.forEach(i => addTriageRow(i));
+    otherTriage.forEach(i => addTriageRow(i));
 
     // Older triage is deliberately not listed when the pet just delivered: the
     // envelope holds what arrived, not the whole queue. One line says the rest
@@ -398,10 +455,9 @@
         olderTriage.forEach(i => addTriageRow(i, more));   // above the line, then drop it
         more.remove();
       });
-      listEl.appendChild(more);
+      cfg._olderButton = more;
     }
 
-    if (meetingActions.length) label("Meeting follow-ups");
     meetingActions.forEach(item => {
       const el = document.createElement("div");
       const mine = item.owner !== "other";
@@ -457,10 +513,9 @@
       el.querySelector(".cu-mtg-drop").addEventListener("click", () => runMeeting(() => dismissMeetingAction(item)));
       meetingEls.set(item.id, el);
       activeReviewRows.add(el);
-      listEl.appendChild(el);
+      meetingRows.push(el);
     });
 
-    if (roots.length) label("Slipped");
     roots.forEach(ev => {
       const el = document.createElement("div");
       const kids = CO.descendants(ev, pool).length;
@@ -571,8 +626,34 @@
       wireCal(el.querySelector(".cu-cal"), title, (d2) => run(() => CO.moveTo(ev, d2, { pool })));
       rowEls.set(ev.id, el);
       activeReviewRows.add(el);
-      listEl.appendChild(el);
+      taskRows.push(el);
     });
+
+    const appendRows = (title, rows) => {
+      if (!rows.length) return;
+      label(title);
+      rows.forEach(row => listEl.appendChild(row));
+    };
+    appendRows("Slipped tasks", taskRows);
+    appendRows("Slack", slackRows);
+    appendRows("Gmail", gmailRows);
+    appendRows("Other", otherRows);
+    if (cfg._olderButton) listEl.appendChild(cfg._olderButton);
+    appendRows("Meeting follow-ups", meetingRows);
+    if (dayReview && reviewApi) {
+      label("Day in Review");
+      const reviewWrap = document.createElement("div");
+      reviewWrap.className = "cu-review-wrap";
+      reviewWrap.innerHTML = reviewApi.renderPending(dayReview);
+      listEl.appendChild(reviewWrap);
+      const journalWrap = document.createElement("div");
+      journalWrap.className = "cu-journal-wrap";
+      journalWrap.innerHTML = reviewApi.renderJournal(dayReview);
+      listEl.appendChild(journalWrap);
+    }
+    updateCount();
+    const schedulableCount = rowEls.size + triEls.size + meetingActions.filter(item => item.owner !== "other").length;
+    allBtn.style.display = schedulableCount ? "" : "none";
 
 
     // Move all: one row at a time on purpose. Each move is a server transaction and
@@ -623,7 +704,8 @@
       }
       allBtn.textContent = original;
       allBtn.disabled = false;
-      close();
+      if (reviewCount) await refreshReminder({ open: true });
+      else close();
       const parts = [];
       if (moved) parts.push(moved + " unfinished task" + (moved === 1 ? "" : "s"));
       if (placed) parts.push(placed + " triage item" + (placed === 1 ? "" : "s"));
@@ -632,22 +714,93 @@
     };
     allBtn.addEventListener("click", _allHandler, { once: true });
 
+    if (!overlay.classList.contains("open")) _returnFocus = document.activeElement;
     overlay.classList.add("open");
+    if (cfg.focus !== false) {
+      const first = overlay.querySelector(".cu-complete, [data-gb-approve], #catchup-close");
+      if (first && typeof first.focus === "function") first.focus();
+    }
   }
 
   // ── entry points ──
+  function snapshotCount(snapshot) {
+    if (!snapshot) return 0;
+    const reviewApi = window.DCC && window.DCC.DayReview;
+    return rootsOf(snapshot.res.rows).length + snapshot.triage.length + snapshot.meetingActions.length +
+      (snapshot.dayReview && reviewApi ? reviewApi.pendingCount(snapshot.dayReview) : 0);
+  }
+
+  async function collectSnapshot() {
+    const CO = window.DCC && window.DCC.Carryover;
+    if (!CO) return null;
+    const reviewApi = window.DCC && window.DCC.DayReview;
+    const results = await Promise.allSettled([
+      CO.collect(),
+      loadMeetingActions(),
+      reviewApi && typeof reviewApi.load === "function" ? reviewApi.load() : Promise.resolve(null)
+    ]);
+    const failed = results.some(result => result.status === "rejected");
+    const snapshot = {
+      res: results[0].status === "fulfilled" ? results[0].value : (_lastSnapshot ? _lastSnapshot.res : { rows: [], total: 0 }),
+      meetingActions: results[1].status === "fulfilled" ? results[1].value : (_lastSnapshot ? _lastSnapshot.meetingActions : []),
+      dayReview: results[2].status === "fulfilled" ? results[2].value : (_lastSnapshot ? _lastSnapshot.dayReview : null),
+      triage: activeTriage(),
+      failed: failed
+    };
+    _lastSnapshot = snapshot;
+    setIndicatorCount(snapshotCount(snapshot));
+    return snapshot;
+  }
+
+  async function refreshReminder(opts) {
+    opts = opts || {};
+    const wasOpen = !!document.getElementById("catchup-overlay") && document.getElementById("catchup-overlay").classList.contains("open");
+    const preservedFocus = opts.preserveMoodFocus && document.activeElement &&
+      document.activeElement.closest && document.activeElement.closest("[data-gb-open-mood]")
+      ? document.activeElement : null;
+    const snapshot = await collectSnapshot();
+    if (!snapshot) return null;
+    const restoreMoodFocus = !!preservedFocus && document.activeElement === preservedFocus;
+    if ((opts.open || wasOpen) && snapshotCount(snapshot)) {
+      openPrompt(snapshot.res.rows, snapshot.res.total, {
+        triage: snapshot.triage,
+        meetingActions: snapshot.meetingActions,
+        dayReview: snapshot.dayReview,
+        loadFailed: snapshot.failed,
+        focus: opts.focus
+      });
+    } else if (wasOpen && !snapshotCount(snapshot) && snapshot.dayReview) {
+      openPrompt([], 0, { dayReview: snapshot.dayReview, focus: opts.focus });
+    }
+    if (restoreMoodFocus) {
+      const activeOverlay = document.getElementById("catchup-overlay");
+      const replacement = activeOverlay && activeOverlay.querySelector("[data-gb-open-mood]");
+      if (replacement && typeof replacement.focus === "function") replacement.focus();
+    }
+    return snapshot;
+  }
+
+  async function openReminder() {
+    const snapshot = await refreshReminder({ open: true });
+    if (snapshot && !snapshotCount(snapshot) && typeof showToast === "function") showToast("No Loose Ends waiting", "success");
+    return !!(snapshot && snapshotCount(snapshot));
+  }
+
   // The morning prompt. Gated once per DAY on today's day_root, so a second device
   // doesn't re-ask. Everything waiting rides in one pass: what slipped off the last
   // two weeks, plus every triage item still needing a reply.
   async function initCatchUp() {
     if (typeof __todayDate === "undefined" || !__todayDate) return;
     if (typeof viewMode !== "undefined" && viewMode && viewMode !== "today") return;
-    const CO = window.DCC && window.DCC.Carryover;
-    if (!CO || reviewed()) return;
-    let res = { rows: [], total: 0 };
-    let meetingActions = [];
-    try { [res, meetingActions] = await Promise.all([CO.collect(), loadMeetingActions()]); } catch (e) { return; }
-    const triage = activeTriage();
+    const snapshot = await collectSnapshot();
+    if (!snapshot) return;
+    if (snapshot.failed) {
+      if (!_retryTimer && typeof setTimeout === "function") {
+        _retryTimer = setTimeout(() => { _retryTimer = null; initCatchUp(); }, 30000);
+      }
+      return;
+    }
+    const triage = snapshot.triage;
     // Everything already waiting at boot is "the morning recap", not "an arrival" —
     // banking it here is what stops the courier from running the pet at page load
     // for mail Drake has already been shown.
@@ -655,8 +808,16 @@
     if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.map(i => i.id));
     // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
     // nothing to catch up on, and prompting on it opened an empty-feeling modal.
-    if (!rootsOf(res.rows).length && !triage.length && !meetingActions.length) { markReviewed(); return; }
-    openPrompt(res.rows, res.total, { triage: triage, meetingActions: meetingActions });
+    if (!snapshotCount(snapshot) && !snapshot.dayReview) {
+      if (!snapshot.failed) markReviewed();
+      return;
+    }
+    if (reviewed()) return;
+    openPrompt(snapshot.res.rows, snapshot.res.total, {
+      triage: triage,
+      meetingActions: snapshot.meetingActions,
+      dayReview: snapshot.dayReview
+    });
   }
 
   // The courier's prompt: the pet just delivered, so lead with what arrived. Older
@@ -671,13 +832,23 @@
     const fresh = all.filter(i => ids.has(i.id));
     if (!fresh.length) return false;
     let res = { rows: [], total: 0 };
-    try { res = await CO.collect(); } catch (e) { res = { rows: [], total: 0 }; }
+    let loadFailed = false;
+    try { res = await CO.collect(); } catch (e) { loadFailed = true; }
+    let meetingActions = [];
+    try { meetingActions = await loadMeetingActions(); } catch (e) { loadFailed = true; }
+    let dayReview = null;
+    try { dayReview = window.DCC.DayReview ? await window.DCC.DayReview.load() : null; }
+    catch (e) { loadFailed = true; }
     openPrompt(res.rows, res.total, {
       title: "Fresh from the sweep",
       triage: fresh,
       olderTriage: all.filter(i => !ids.has(i.id)),
-      meetingActions: await loadMeetingActions()
+      meetingActions: meetingActions,
+      dayReview: dayReview,
+      loadFailed: loadFailed
     });
+    _lastSnapshot = { res, triage: all, meetingActions, dayReview, failed: loadFailed };
+    setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;
   }
 
@@ -688,19 +859,40 @@
   async function openMeetingActions() {
     const CO = window.DCC && window.DCC.Carryover;
     if (!CO) return false;
-    const meetingActions = await loadMeetingActions();
+    let meetingActions = [];
+    try { meetingActions = await loadMeetingActions(); } catch (e) { return false; }
     if (!meetingActions.length) return false;
     let res = { rows: [], total: 0 };
-    try { res = await CO.collect(); } catch (e) {}
+    let loadFailed = false;
+    try { res = await CO.collect(); } catch (e) { loadFailed = true; }
+    let dayReview = null;
+    try { dayReview = window.DCC.DayReview ? await window.DCC.DayReview.load() : null; }
+    catch (e) { loadFailed = true; }
+    const triage = activeTriage();
     openPrompt(res.rows, res.total, {
       title: "Fresh meeting follow-ups",
-      triage: activeTriage(),
-      meetingActions: meetingActions
+      triage: triage,
+      meetingActions: meetingActions,
+      dayReview: dayReview,
+      loadFailed: loadFailed
     });
+    _lastSnapshot = { res, triage, meetingActions, dayReview, failed: loadFailed };
+    setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;
   }
 
   window.initCatchUp = initCatchUp;
   const DCC = (window.DCC = window.DCC || {});
-  DCC.CatchUp = { openArrivals: openArrivals, openMeetingActions: openMeetingActions };
+  DCC.CatchUp = {
+    open: openReminder,
+    refresh: refreshReminder,
+    syncIndicator: syncIndicator,
+    openArrivals: openArrivals,
+    openMeetingActions: openMeetingActions
+  };
+  const pill = document.getElementById("loose-ends-pill");
+  if (pill) pill.addEventListener("click", openReminder);
+  if (typeof window.addEventListener === "function") {
+    window.addEventListener("dcc:day-review-changed", () => refreshReminder({ focus: false, preserveMoodFocus: true }));
+  }
 })();
