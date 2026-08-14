@@ -213,6 +213,13 @@ app.use(async (req, res, next) => {
     if (req.method === "POST" && req.path === "/api/vault/journal-image-ingest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-artifacts" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-signals" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
+    if (req.path.startsWith("/api/dcc/meeting-audio/")) {
+      if (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep"))) {
+        attachSweepServiceAuth(req);
+        return next();
+      }
+      return res.status(401).json({ error: "Meeting audio service token required" });
+    }
     if (req.method === "GET" && req.path === "/api/waiting-items/attention" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
     if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
@@ -940,6 +947,7 @@ require("./routes/blocks")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
 require("./routes/meeting")(app, ctx);
+require("./routes/meeting-audio")(app, ctx);
 require("./routes/gcal")(app, ctx);
 require("./routes/slots")(app, ctx);
 require("./routes/budget")(app, ctx);

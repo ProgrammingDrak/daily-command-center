@@ -79,7 +79,7 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
     summary: { markdown: "### Recap\nGood chat about Q3." },
     transcript: { text: "Drake: hi. Ben: hi back." },
     proposedActions: [
-      { text: "Send the recap to Ben", owner: "drake" },
+      { text: "Send the recap to Ben", owner: "drake", start: 754.2, quote: "I'll send the recap." },
       { text: "Ops to update the runbook", owner: "others" },
     ],
   });
@@ -91,6 +91,8 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
   assert.equal(actions.every((a) => a.properties.status === "proposed" && a.properties.done === false), true);
   assert.deepEqual(actions.map((a) => a.properties.owner).sort(), ["drake", "other"]);
   assert.equal(actions.every((a) => a.properties.origin === "automated"), true);
+  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.start, 754.2);
+  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.quote, "I'll send the recap.");
   const m1 = await mem.getBlock("m1");
   // The recap now lives ONLY in the meeting_summary artifact (surfaced in the Recap
   // tab), never mirrored into the meeting's notes box.
@@ -148,6 +150,19 @@ test("an explicit signal is stored with provenance and upgrades an automated dup
     excerpt: "Action item: Send the launch brief",
     context: [{ at: "2026-08-14T13:04:30Z", speaker: "participant", excerpt: "Please send the launch brief." }],
   });
+});
+
+test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {
+  seedMeeting("m-retention");
+  const bundle = await automation.applyArtifacts("m-retention", {
+    workspaceId: "ws-1", userId: 1,
+    dashboardRef: "2026-07-09-retention",
+    recordingArtifact: { status: "hot", holding_days: 14, hot_audio: { key: "meetings/hot/x/audio.m4a" } },
+    recordingSource: { provider: "google_drive", url: "https://drive.google.com/open?id=x" },
+  });
+  assert.equal(bundle.meeting.dashboardRef, "2026-07-09-retention");
+  assert.equal(bundle.meeting.recordingArtifact.holding_days, 14);
+  assert.equal(bundle.meeting.recordingSource.url, "https://drive.google.com/open?id=x");
 });
 
 test("a recap leaves the user's own notes untouched (recap lives only in the summary artifact)", async () => {
@@ -282,10 +297,10 @@ test("placeApprovedAction cannot stamp a foreign proposal through forged provena
 });
 
 test("listProposedActions projects only open meeting proposals with meeting context", async () => {
-  seedMeeting("mlist", { title: "Weekly planning", start: "10:00", end: "10:30" });
+  seedMeeting("mlist", { title: "Weekly planning", start: "10:00", end: "10:30", dashboard_ref: "weekly-planning" });
   mem.store.push(
     { id: "plist", type: "block", parent_id: "mlist", date: "2026-07-09", created_at: "2026-07-09T11:00:00Z",
-      properties: { kind: "proposed_action_item", text: "Send the brief", owner: "drake", priority: "High", status: "proposed" }, workspace_id: "ws-1", user_id: 1, deleted_at: null },
+      properties: { kind: "proposed_action_item", text: "Send the brief", owner: "drake", priority: "High", status: "proposed", start: 91.5, quote: "I'll send it." }, workspace_id: "ws-1", user_id: 1, deleted_at: null },
     { id: "placed-list", type: "block", parent_id: "mlist", date: "2026-07-09",
       properties: { kind: "proposed_action_item", text: "Already placed", status: "placed" }, workspace_id: "ws-1", user_id: 1, deleted_at: null }
   );
@@ -294,7 +309,9 @@ test("listProposedActions projects only open meeting proposals with meeting cont
   assert.deepEqual(row, {
     id: "plist", meetingId: "mlist", meetingTitle: "Weekly planning", meetingDate: "2026-07-09",
     meetingStart: "10:00", meetingEnd: "10:30", title: "Send the brief", owner: "drake",
-    priority: "High", origin: "automated", signal: null, approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
+    priority: "High", origin: "automated", signal: null,
+    start: 91.5, quote: "I'll send it.", dashboardRef: "weekly-planning",
+    approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
   });
   assert.equal(rows.some(item => item.id === "placed-list"), false);
 });
@@ -541,10 +558,16 @@ test("endpoint maps snake_case proposed_actions + recap_to_notes into applyArtif
     meeting: { event_id: "evt-7", date: "2026-07-09" },
     proposed_actions: [{ text: "do the thing", owner: "drake" }],
     recap_to_notes: false,
+    dashboard_ref: "sync-review",
+    recording_artifact: { status: "hot", holding_days: 14 },
+    recording_source: { provider: "google_drive", url: "https://drive.google.com/open?id=x" },
   });
   assert.equal(status, 200);
   assert.equal(rec[0].opts.proposedActions.length, 1);
   assert.equal(rec[0].opts.recapToNotes, false);
+  assert.equal(rec[0].opts.dashboardRef, "sync-review");
+  assert.equal(rec[0].opts.recordingArtifact.holding_days, 14);
+  assert.equal(rec[0].opts.recordingSource.provider, "google_drive");
 });
 
 test("endpoint broadcasts recapArrived + meetingTitle only when a recap first lands", async () => {

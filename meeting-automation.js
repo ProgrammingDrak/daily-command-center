@@ -202,6 +202,9 @@ function serializeBundle(meeting, gcalRow, artifacts) {
       end: propsOf(meeting).end || null,
       calUrl: propsOf(meeting).calUrl || (gcalRow && gcalRow.html_link) || null,
       attendees: attendeeEmails(gcalRow),
+      dashboardRef: propsOf(meeting).dashboard_ref || null,
+      recordingArtifact: propsOf(meeting).recording_artifact || null,
+      recordingSource: propsOf(meeting).recording_source || null,
     },
     prep: newestByKind(artifacts, "meeting_prep") ? { id: newestByKind(artifacts, "meeting_prep").id, ...propsOf(newestByKind(artifacts, "meeting_prep")) } : null,
     transcript: newestByKind(artifacts, "meeting_transcript") ? { id: newestByKind(artifacts, "meeting_transcript").id, ...propsOf(newestByKind(artifacts, "meeting_transcript")) } : null,
@@ -566,6 +569,12 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
         created: new Date().toISOString(),
         tags: ["action-item"],
         _sourceTaskId: `mtg-${meeting.id}`,
+        meetingSource: {
+          meetingBlockId: meeting.id,
+          dashboardRef: propsOf(meeting).dashboard_ref || null,
+          start: Number.isFinite(Number(p.start)) ? Number(p.start) : null,
+          quote: p.quote || "",
+        },
         meetingAutomation: {
           meetingBlockId: meeting.id,
           proposedActionId: proposal.id,
@@ -622,6 +631,9 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
       priority: p.priority || "Medium",
       origin: p.origin === "signaled" ? "signaled" : "automated",
       signal: p.signal || null,
+      start: Number.isFinite(Number(p.start)) ? Number(p.start) : null,
+      quote: p.quote || "",
+      dashboardRef: mp.dashboard_ref || null,
       approvedBlockId,
       createdAt: proposal.created_at || null,
     });
@@ -773,7 +785,7 @@ function sanitizeSources(sources) {
 // so automation can attach meeting docs without an interactive session. Idempotent:
 // prep/summary/transcript upsert in place (newest-by-kind), proposed actions dedupe
 // by text, and the recap merge replaces only its own notes region.
-async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true, dashboardRef = null }) {
+async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true, dashboardRef = null, recordingArtifact = null, recordingSource = null }) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const applied = { prep: false, summary: false, transcript: false, proposedActions: 0, recapToNotes: false, recapReady: false, dashboardRef: false };
 
@@ -892,6 +904,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
           status: "proposed",
           done: false,
           sources: sanitizeSources(a.sources),
+          start: Number.isFinite(Number(a.start)) ? Number(a.start) : null,
+          quote: String(a.quote || "").trim().slice(0, 2000),
         },
       });
       existingByText.set(textKey, created);
@@ -900,16 +914,23 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
     }
   }
 
-  if (dashboardRef) {
+  if (dashboardRef || recordingArtifact || recordingSource) {
     // Store the vault slug on the meeting block itself so the itinerary chip and
     // the /meetings/:id/dashboard proxy can find it. Reload first so we don't
     // clobber the recap-to-notes write above.
     const fresh = await loadMeeting(blockId, workspaceId);
     const mp = propsOf(fresh);
-    const ref = String(dashboardRef).trim();
-    if (ref && ref !== mp.dashboard_ref) {
-      await blockDB.updateBlock(fresh.id, { properties: { ...mp, dashboard_ref: ref } });
-      applied.dashboardRef = true;
+    const ref = String(dashboardRef || "").trim();
+    const next = { ...mp };
+    if (ref && ref !== mp.dashboard_ref) { next.dashboard_ref = ref; applied.dashboardRef = true; }
+    if (recordingArtifact) next.recording_artifact = recordingArtifact;
+    if (recordingSource) {
+      const safeSource = { ...recordingSource };
+      if (!isSafeHttpUrl(safeSource.url)) delete safeSource.url;
+      next.recording_source = safeSource;
+    }
+    if (applied.dashboardRef || recordingArtifact || recordingSource) {
+      await blockDB.updateBlock(fresh.id, { properties: next });
     }
   }
 
