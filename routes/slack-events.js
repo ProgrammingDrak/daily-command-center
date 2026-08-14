@@ -181,6 +181,15 @@ module.exports = function mount(app, ctx) {
       slack_thread_ts: String(capture && capture.threadTs || ts),
       slack_author: String(capture && capture.user || "unknown"),
       slack_channel_name: String(capture && capture.channelName || "slack"),
+      // Waiting keeps exact Slack coordinates so a later check-in draft lands
+      // back in the reacted thread without parsing a display URL.
+      contact: {
+        channel: "slack",
+        address: String(channel || ""),
+        sourceRef: permalink,
+        threadTs: String(capture && capture.threadTs || ts),
+        messageTs: String(capture && capture.ts || ts),
+      },
       captured_at: capturedAt,
       capture_status: capture && capture.text ? "captured" : "retry",
       enrichment_status: "pending",
@@ -503,6 +512,7 @@ module.exports = function mount(app, ctx) {
       title: "",
       myTask: captured.captureTitle,
       kind: "delegated_item",
+      waitingReason: "delegated",
       status: "open",
       checkInMode: "date",
       checkInDate: addCalendarDays(getTodayStr(), 1),
@@ -737,6 +747,7 @@ module.exports = function mount(app, ctx) {
     const canReplaceNotes = !props.notes || (!!props.captureNotes && props.notes === props.captureNotes);
     if (!canReplaceNotes || (kind === "delegate" && !untouchedDelegate)) merged.notes = props.notes;
     if (kind === "delegate") merged.title = props.title || "";
+    if (kind === "delegate" && !untouchedDelegate) merged.contact = props.contact;
     merged[displayField] = canReplace && (kind !== "delegate" || untouchedDelegate)
       ? captured.captureTitle
       : currentTitle;

@@ -40,6 +40,7 @@ const petHomeStore = require("./pet-home-store");
 const meetingAutomation = require("./meeting-automation");
 const dccIntelligence = require("./dcc-intelligence");
 const triageSuppressions = require("./triage-suppressions");
+const waitingItems = require("./waiting-items");
 
 // ── Clerk (managed login widget) via the shared drake-auth kit — optional.
 // With no keys, social login is simply hidden and the existing
@@ -209,6 +210,7 @@ app.use(async (req, res, next) => {
     // validated source-backed payload to Mycelium without a browser session.
     if (req.method === "POST" && req.path === "/api/vault/journal-image-ingest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-artifacts" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
+    if (req.method === "GET" && req.path === "/api/waiting-items/attention" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
     if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
     next();
@@ -585,11 +587,23 @@ async function buildDayResponse(dateStr, userId, workspaceId) {
   // hottest read path in the app (both state endpoints, plus the anonymous share poll
   // through buildPublicTodoShare). Both swallow their own errors and resolve to [],
   // so Promise.all adds no rejection path.
-  const [scheduleBlocks, suppressions] = await Promise.all([
+  const [scheduleBlocks, suppressions, waitingRows] = await Promise.all([
     getScheduleBlocks(userId, workspaceId),
     readTriageSuppressionsForWorkspace(ws),
+    typeof blockDB.getDelegatedItems === "function"
+      ? blockDB.getDelegatedItems(ws).catch((e) => { console.error("[waiting] read overlay failed (non-fatal):", e.message); return []; })
+      : Promise.resolve([]),
   ]);
   result.schedule.blocks = scheduleBlocks;
+  // Due Waiting check-ins are a read-time triage overlay. This produces a
+  // copy-ready fallback without mutating state during a GET. Sweep may later
+  // replace the same stable item with a native Gmail or Slack draft.
+  if (waitingRows.length && dateStr === getTodayStr()) {
+    result.triage = waitingItems.mergeTriage(result.triage, waitingRows, dateStr, {
+      timeZone: APP_TIME_ZONE,
+      nowIso: new Date().toISOString(),
+    });
+  }
   // Apply the durable triage suppressions on the way out, so a handled item is gone on
   // every device and every day, not just in the tab that handled it. This is also the
   // half that heals the rows already on prod: state written before suppressions existed
@@ -910,7 +924,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
-  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, writeJSON,
+  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
   ...routeHelpers,

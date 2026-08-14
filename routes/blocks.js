@@ -46,7 +46,8 @@ const completionMetrics = {
 };
 
 module.exports = function mount(app, ctx) {
-  const { blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool } = ctx;
+  const { APP_TIME_ZONE, blockDB, broadcast, crypto, filterLegacyGcalBlocks, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, isValidDate, pool, waitingItems: waitingItemsFromCtx } = ctx;
+  const waitingItems = waitingItemsFromCtx || require("../waiting-items");
 
   // ── Local helpers ──
   function assertBlockOwnership(block, workspaceId) { if (block.workspace_id && workspaceId && block.workspace_id !== workspaceId) { const err = new Error("Block not found"); err.statusCode = 404; throw err; } }
@@ -1541,18 +1542,32 @@ module.exports = function mount(app, ctx) {
     }
   });
 
-  // ── Delegated Items API (PIN 10.A) ──
-  // Wraps blockDB CRUD, stamping properties.kind = "delegated_item" on create.
+  // ── Waiting Items API (legacy discriminator: delegated_item) ──
   // GET list uses a dedicated db query; mutations reuse the generic
   // createBlock/updateBlock/deleteBlock primitives. PATCH and DELETE both
   // verify the target's kind discriminator so these routes can't be used
   // to modify tags or other type:"block" data.
-  app.get("/api/delegated-items", route(async (req) => blockDB.getDelegatedItems(req.workspaceId)));
+  app.get(["/api/delegated-items", "/api/waiting-items"], route(async (req) => blockDB.getDelegatedItems(req.workspaceId)));
 
-  app.post("/api/delegated-items", route(async (req, res) => {
+  app.get("/api/waiting-items/attention", route(async (req) => {
+    const date = isValidDate(req.query.date) ? req.query.date : getTodayStr();
+    const rows = await blockDB.getDelegatedItems(req.workspaceId);
+    const items = waitingItems.attentionItems(rows, date, { timeZone: APP_TIME_ZONE });
+    return {
+      date,
+      items,
+      draft_items: items.filter((item) => item.draftEligible).map((item) => ({
+        ...item,
+        ...waitingItems.triageItem(item, `${item.checkInDate}T12:00:00.000Z`),
+        received_at: `${item.checkInDate}T12:00:00.000Z`,
+      })),
+    };
+  }));
+
+  app.post(["/api/delegated-items", "/api/waiting-items"], route(async (req, res) => {
     const body = req.body || {};
     if (!body.properties || typeof body.properties !== "object") { res.status(400).json({ error: "properties required" }); return; }
-    const props = { ...body.properties, kind: "delegated_item" };
+    const props = waitingItems.normalizeProperties(body.properties);
     // The slimmed modal anchors items on myTask; title survives for legacy items.
     const named = v => typeof v === "string" && v.trim();
     if (!named(props.title) && !named(props.myTask)) { res.status(400).json({ error: "properties.title or properties.myTask required" }); return; }
@@ -1573,20 +1588,91 @@ module.exports = function mount(app, ctx) {
   // Both delegated-item mutations mirror the block PATCH/DELETE contract above:
   // tombstone-inclusive fetch, so authorization cannot be dodged and a repeat delete
   // stays idempotent, with updateBlock raising "Block is deleted" on a dead PATCH.
-  app.patch("/api/delegated-items/:id", route(async (req, res) => {
+  app.patch(["/api/delegated-items/:id", "/api/waiting-items/:id"], route(async (req, res) => {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Delegated item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
     if ((existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Delegated item not found" }); return; }
     const incoming = (req.body && req.body.properties) || {};
     // Preserve kind discriminator — clients cannot unset it via PATCH
-    const merged = { ...existing.properties, ...incoming, kind: "delegated_item" };
+    const merged = waitingItems.normalizeProperties(incoming, existing.properties || {});
     const result = await blockDB.updateBlock(req.params.id, { properties: merged });
     broadcast("blocks-changed", { action: "delegated-update", blockIds: [req.params.id] }, req.workspaceId);
     return result;
   }));
 
-  app.delete("/api/delegated-items/:id", route(async (req, res) => {
+  app.post("/api/waiting-items/:id/snooze", route(async (req, res) => {
+    const until = req.body && req.body.until;
+    if (!isValidDate(until)) { res.status(400).json({ error: "until must be YYYY-MM-DD" }); return; }
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
+    assertBlockOwnership(existing, req.workspaceId);
+    const properties = waitingItems.normalizeProperties({ snoozedUntil: until }, existing.properties || {});
+    const updated = await blockDB.updateBlock(existing.id, { properties });
+    broadcast("blocks-changed", { action: "waiting-snooze", blockIds: [existing.id] }, req.workspaceId);
+    return updated;
+  }));
+
+  app.post("/api/waiting-items/:id/check-ins/schedule", route(async (req, res) => {
+    const date = req.body && req.body.date;
+    const taskBlockId = String(req.body && req.body.taskBlockId || "").trim();
+    if (!isValidDate(date) || !taskBlockId) { res.status(400).json({ error: "date and taskBlockId are required" }); return; }
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
+    assertBlockOwnership(existing, req.workspaceId);
+    const task = await blockDB.getBlock(taskBlockId);
+    if (!task || task.deleted_at || task.date !== date || !["block", "added_task"].includes(task.type)) { res.status(400).json({ error: "Scheduled check-in task not found on the requested date" }); return; }
+    assertBlockOwnership(task, req.workspaceId);
+    const properties = waitingItems.normalizeProperties({
+      checkInDate: date,
+      checkInScheduledFor: date,
+      checkInTaskId: taskBlockId,
+      snoozedUntil: null,
+      status: "open",
+    }, existing.properties || {});
+    const updated = await blockDB.updateBlock(existing.id, { properties });
+    broadcast("blocks-changed", { action: "waiting-check-in-scheduled", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
+    return updated;
+  }));
+
+  app.post("/api/waiting-items/:id/check-ins/complete", route(async (req, res) => {
+    const cycleKey = String(req.body && req.body.cycleKey || "").trim();
+    const completedAt = String(req.body && req.body.completedAt || new Date().toISOString());
+    if (Number.isNaN(new Date(completedAt).getTime())) { res.status(400).json({ error: "completedAt must be a valid timestamp" }); return; }
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
+    assertBlockOwnership(existing, req.workspaceId);
+    const completion = waitingItems.completeCycleProperties(existing, cycleKey, completedAt, APP_TIME_ZONE);
+    if (completion.status !== "completed") return { ok: true, status: completion.status, expectedCycleKey: completion.expectedCycleKey };
+    const updated = await blockDB.updateBlock(existing.id, { properties: completion.properties });
+    broadcast("blocks-changed", { action: "waiting-check-in-complete", blockIds: [existing.id] }, req.workspaceId);
+    return { ok: true, status: "completed", item: updated };
+  }));
+
+  app.post("/api/waiting-items/:id/unblock", route(async (req, res) => {
+    const taskBlockId = String(req.body && req.body.taskBlockId || "").trim();
+    const date = req.body && req.body.date;
+    if (!taskBlockId || !isValidDate(date)) { res.status(400).json({ error: "taskBlockId and date are required" }); return; }
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
+    assertBlockOwnership(existing, req.workspaceId);
+    const task = await blockDB.getBlock(taskBlockId);
+    if (!task || task.deleted_at || task.date !== date) { res.status(400).json({ error: "Underlying task was not scheduled on the requested date" }); return; }
+    assertBlockOwnership(task, req.workspaceId);
+    const now = new Date().toISOString();
+    const properties = waitingItems.normalizeProperties({
+      status: "unblocked",
+      completedAt: now,
+      unblockedAt: now,
+      unblockedTaskId: taskBlockId,
+      snoozedUntil: null,
+    }, existing.properties || {});
+    const updated = await blockDB.updateBlock(existing.id, { properties });
+    broadcast("blocks-changed", { action: "waiting-unblocked", blockIds: [existing.id, taskBlockId], date }, req.workspaceId);
+    return { ok: true, status: "unblocked", item: updated, task };
+  }));
+
+  app.delete(["/api/delegated-items/:id", "/api/waiting-items/:id"], route(async (req, res) => {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Delegated item not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
