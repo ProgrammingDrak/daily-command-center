@@ -345,15 +345,17 @@ test("a failed read with NO mirror throws rather than handing back a base to ful
   await assert.rejects(runReadDcc({ dbThrows: true })(), /Day state unavailable/);
 });
 
-// ★ THE WIRING, not just the helper. Blocker 3 is a property of the six CALL SITES -- the
+// ★ THE WIRING, not just the helper. Blocker 3 is a property of the mutation CALL SITES -- the
 // change was pulled three times precisely because the crux lives there rather than in a
 // function -- and reverting any one of them to `readJSON(getDayFilePath(...))` re-arms the
 // boot-skeleton promotion with every behavioral test above still green. Same shape as
 // push-is-a-move.test.js's source sweep.
-test("all six routes/dcc.js mutation handlers take Postgres as their BASE state (blocker 3)", () => {
+test("every routes/dcc.js mutation handler takes Postgres as its BASE state (blocker 3)", () => {
   const code = DCC_SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-  assert.equal((code.match(/await readDccDayState\(/g) || []).length, 6,
+  assert.equal((code.match(/await readDccDayState\(/g) || []).length, 5,
     "a handler that stopped reading Postgres first re-arms the boot-skeleton promotion");
+  assert.match(code, /await blockDB\.saveDccBriefDecision\(/,
+    "brief decisions use the atomic Postgres read-lock-write primitive instead of a file base");
   assert.deepEqual(code.match(/(?:existing|state|sourceState)\s*=\s*readJSON\(getDayFilePath/g) || [], [],
     "the file is the mirror, never the base");
 });

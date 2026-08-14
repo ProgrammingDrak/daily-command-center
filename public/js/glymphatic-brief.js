@@ -41,6 +41,95 @@
     try{ localStorage.setItem(gbKey(), JSON.stringify(ui || {})); }catch(e){}
   }
 
+  // Loose Ends can review yesterday's packet while today's state is on screen.
+  // Keep the packet date (where decisions are persisted) separate from the review
+  // date (where completed work and the journal belong).
+  var gbLooseEndsReviewContext = null;
+  var gbLooseEndsOwnerScope = null;
+
+  async function gbEnsureReviewOwnerScope(){
+    if(gbLooseEndsOwnerScope)return gbLooseEndsOwnerScope;
+    var res = await fetch("/api/me");
+    if(!res.ok)throw new Error("Could not identify the current workspace");
+    var me = await res.json();
+    if(!me || (!me.workspaceId && !me.userId))throw new Error("Could not identify the current workspace");
+    gbLooseEndsOwnerScope = String(me.workspaceId || "workspace") + ":" + String(me.userId || "user");
+    return gbLooseEndsOwnerScope;
+  }
+
+  function gbUiKeyForDate(date){
+    return LOCAL_PREFIX + "review:" + (gbLooseEndsOwnerScope || "unidentified") + ":" + (date || gbDate());
+  }
+
+  function gbLoadUiForDate(date){
+    try{ return JSON.parse(localStorage.getItem(gbUiKeyForDate(date)) || "{}"); }
+    catch(e){ return {}; }
+  }
+
+  function gbSaveUiForDate(date, ui){
+    try{ localStorage.setItem(gbUiKeyForDate(date), JSON.stringify(ui || {})); }catch(e){}
+  }
+
+  function gbReviewFromState(state, packetDate){
+    if(!state)return null;
+    var source = state.glymphatic_brief || state.glymphaticBrief || {};
+    var current = source.current || source;
+    var pages = current && Array.isArray(current.pages) ? current.pages : [];
+    var page = pages.filter(function(p){ return p && p.id === "day-review"; })[0] || null;
+    if(!page)return null;
+    return {
+      state: state,
+      source: source,
+      current: current,
+      page: page,
+      packetDate: packetDate || state.date || gbDate(),
+      reviewDate: page.review_date || state.date || gbDate(),
+      decisions: source.decisions || (source.decisions = {})
+    };
+  }
+
+  function gbReviewContext(){
+    return gbLooseEndsReviewContext || gbReviewFromState(typeof __state !== "undefined" ? __state : null, gbDate());
+  }
+
+  function gbReviewUi(ctx){
+    ctx = ctx || gbReviewContext();
+    return gbLoadUiForDate(ctx && ctx.reviewDate);
+  }
+
+  function gbSaveReviewUi(ui, ctx){
+    ctx = ctx || gbReviewContext();
+    gbSaveUiForDate(ctx && ctx.reviewDate, ui);
+  }
+
+  function gbAddDays(date, days){
+    var d = new Date(String(date || gbDate()) + "T12:00:00");
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0,10);
+  }
+
+  function gbReviewDecision(ctx, id){
+    var value = ctx && ctx.decisions && ctx.decisions[id];
+    return value && value.action;
+  }
+
+  async function gbPersistReviewDecision(ctx, id, action){
+    var res = await fetch("/api/dcc/brief/decision", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ date: ctx.packetDate, task_id: id, action: action })
+    });
+    var payload = await res.json().catch(function(){ return {}; });
+    if(!res.ok)throw new Error(payload.error || "Decision save failed");
+    if(action === "reset")delete ctx.decisions[id];
+    else ctx.decisions[id] = { action: action, decided_at: new Date().toISOString() };
+    return payload;
+  }
+
+  function gbNotifyReviewChanged(){
+    try{ window.dispatchEvent(new CustomEvent("dcc:day-review-changed")); }catch(e){}
+  }
+
   function gbBrief(){
     var source = (__state && (__state.glymphatic_brief || __state.glymphaticBrief)) || {};
     var current = source.current || source;
@@ -496,7 +585,7 @@
     // Triage moved to the top of the Itinerary (the schedule strip), alongside
     // repeat responsibilities, where the reply drafts now render. Drop any triage
     // page so the brief no longer shows a Triage tab.
-    var pages = current.pages.filter(function(p){ return p.id !== "triage"; });
+    var pages = current.pages.filter(function(p){ return p.id !== "triage" && p.id !== "day-review"; });
     return pages.length ? pages : null;
   }
 
@@ -691,63 +780,77 @@
   }
 
   function gbSetDidStart(id, value){
-    var ui = gbLoadUi();
+    var ctx = gbReviewContext();
+    var ui = gbReviewUi(ctx);
     ui.did_starts = ui.did_starts || {};
     if(value)ui.did_starts[id] = value;
     else delete ui.did_starts[id];
-    gbSaveUi(ui);
-    buildGlymphaticBrief();
+    gbSaveReviewUi(ui, ctx);
   }
 
   function gbSetDidDuration(id, value){
-    var ui = gbLoadUi();
+    var ctx = gbReviewContext();
+    var ui = gbReviewUi(ctx);
     ui.did_durations = ui.did_durations || {};
     ui.did_durations[id] = parseInt(value, 10) || 30;
-    gbSaveUi(ui);
-    buildGlymphaticBrief();
+    gbSaveReviewUi(ui, ctx);
   }
 
-  function gbDidApproved(item, ui){
-    return !!(ui.did_approved && ui.did_approved[item.id]);
+  function gbDidApproved(item, ui, ctx){
+    return !!(ui.did_approved && ui.did_approved[item.id]) || gbReviewDecision(ctx || gbReviewContext(), item.id) === "approve";
   }
 
-  function gbMarkDidApproved(id){
-    var ui = gbLoadUi();
+  function gbMarkDidApproved(id, ctx){
+    ctx = ctx || gbReviewContext();
+    var ui = gbReviewUi(ctx);
     ui.did_approved = ui.did_approved || {};
     ui.did_approved[id] = new Date().toISOString();
-    gbSaveUi(ui);
+    gbSaveReviewUi(ui, ctx);
   }
 
-  function gbDidFollowPushed(followId, ui){
-    return !!(ui.did_pushed && ui.did_pushed[followId]);
+  function gbDidFollowPushed(followId, ui, ctx){
+    return !!(ui.did_pushed && ui.did_pushed[followId]) || gbReviewDecision(ctx || gbReviewContext(), followId) === "push-next";
   }
 
-  function gbMarkDidFollowPushed(followId){
-    var ui = gbLoadUi();
+  function gbMarkDidFollowPushed(followId, ctx){
+    ctx = ctx || gbReviewContext();
+    var ui = gbReviewUi(ctx);
     ui.did_pushed = ui.did_pushed || {};
     ui.did_pushed[followId] = new Date().toISOString();
-    gbSaveUi(ui);
+    gbSaveReviewUi(ui, ctx);
   }
 
-  function gbDidDismissed(item, ui){
-    return !!(ui.did_dismissed && ui.did_dismissed[item.id]);
+  function gbDidDismissed(item, ui, ctx){
+    return !!(ui.did_dismissed && ui.did_dismissed[item.id]) || gbReviewDecision(ctx || gbReviewContext(), item.id) === "dismiss";
+  }
+
+  function gbDidFollowDismissed(followId, ui, ctx){
+    return !!(ui.did_follow_dismissed && ui.did_follow_dismissed[followId]) || gbReviewDecision(ctx || gbReviewContext(), followId) === "dismiss";
   }
 
   // "No, I didn't do this." Mirrors gbRecordDecision: a local flag for instant
   // render plus a server-persisted decision (action:"dismiss") so the rejection
   // is durable across refresh/devices, unlike the localStorage-only Approve.
-  function gbSetDidDismissed(id, dismissed){
-    var ui = gbLoadUi();
-    ui.did_dismissed = ui.did_dismissed || {};
-    if(dismissed)ui.did_dismissed[id] = new Date().toISOString();
-    else delete ui.did_dismissed[id];
-    gbSaveUi(ui);
-    fetch("/api/dcc/brief/decision", {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ date: gbDate(), task_id: id, action: dismissed ? "dismiss" : "reset" })
-    }).catch(function(e){ console.error("[Glymphatic Brief] dismiss save failed:", e); });
-    buildGlymphaticBrief();
+  async function gbSetDidDismissed(id, dismissed){
+    var ctx = gbReviewContext();
+    if(!ctx)return;
+    var btn = document.querySelector('[data-gb-dismiss="'+id+'"]');
+    var card = btn && btn.closest ? btn.closest("[data-gb-did-item]") : null;
+    var parentBtns = card ? card.querySelectorAll("[data-gb-approve],[data-gb-dismiss]") : [];
+    parentBtns.forEach(function(el){ el.disabled = true; });
+    try{
+      await gbPersistReviewDecision(ctx, id, dismissed ? "dismiss" : "reset");
+      var ui = gbReviewUi(ctx);
+      ui.did_dismissed = ui.did_dismissed || {};
+      if(dismissed)ui.did_dismissed[id] = new Date().toISOString();
+      else delete ui.did_dismissed[id];
+      gbSaveReviewUi(ui, ctx);
+      gbNotifyReviewChanged();
+      buildGlymphaticBrief();
+    }catch(e){
+      parentBtns.forEach(function(el){ el.disabled = false; });
+      if(typeof showToast === "function")showToast(e.message || "Could not save review decision", "error");
+    }
   }
 
   // ISO review date -> "Wed, Jul 23". Robust regardless of which day file the
@@ -765,32 +868,36 @@
     return pages.filter(function(p){ return p.id === "day-review"; })[0] || null;
   }
 
-  function gbTomorrowStr(){
-    var d = new Date(gbDate() + "T12:00:00");
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0,10);
+  function gbTomorrowStr(ctx){
+    ctx = ctx || gbReviewContext();
+    return gbAddDays((ctx && ctx.reviewDate) || gbDate(), 1);
   }
 
   async function gbApproveDid(id){
-    var current = gbBrief().current;
-    var items = gbDidItems(gbDayReviewPage(), current);
+    var ctx = gbReviewContext();
+    if(!ctx)return;
+    var current = ctx.current;
+    var items = gbDidItems(ctx.page, current);
     var item = items.filter(function(it){ return it.id === id; })[0];
     if(!item)return;
-    var ui = gbLoadUi();
-    if(gbDidApproved(item, ui)){
+    var ui = gbReviewUi(ctx);
+    if(gbDidApproved(item, ui, ctx)){
       if(typeof showToast === "function")showToast("Already logged","info");
       return;
     }
     var start = gbDidStart(item, ui);
     var duration = gbDidDuration(item, ui);
     var btn = document.querySelector('[data-gb-approve="'+id+'"]');
-    if(btn){ btn.disabled = true; btn.textContent = "Logging..."; }
+    var card = btn && btn.closest ? btn.closest("[data-gb-did-item]") : null;
+    var parentBtns = card ? card.querySelectorAll("[data-gb-approve],[data-gb-dismiss]") : [];
+    parentBtns.forEach(function(el){ el.disabled = true; });
+    if(btn)btn.textContent = "Logging...";
     try{
       var res = await fetch("/api/dcc/brief/log-done", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify({
-          date: gbDate(),
+          date: ctx.reviewDate,
           title: item.title,
           tags: item.tags || [],
           start: start || null,
@@ -798,60 +905,91 @@
           type: item.type || "task",
           notes: item.reason || item.notes || "",
           evidence: item.evidence || [],
-          idempotency_key: item.idempotency_key || ("day-review:" + gbDate() + ":" + id)
+          idempotency_key: item.idempotency_key || ("day-review:" + ctx.reviewDate + ":" + id)
         })
       });
       var payload = await res.json().catch(function(){ return {}; });
       if(!res.ok)throw new Error(payload.error || "Log failed");
-      gbMarkDidApproved(id);
+      await gbPersistReviewDecision(ctx, id, "approve");
+      gbMarkDidApproved(id, ctx);
       var banked = payload.credit && payload.credit.credits ? " (+" + payload.credit.credits + " pts)" : "";
       if(typeof showToast === "function")showToast("Logged: " + item.title + banked, "success");
-      gbRefresh();
+      gbNotifyReviewChanged();
+      buildGlymphaticBrief();
     }catch(e){
       if(typeof showToast === "function")showToast(e.message || "Log failed", "error");
       console.error("[Glymphatic Brief] log-done failed:", e);
-      if(btn){ btn.disabled = false; btn.textContent = "Approve"; }
+      parentBtns.forEach(function(el){ el.disabled = false; });
+      if(btn)btn.textContent = "Approve";
     }
   }
 
   async function gbPushDidNext(followId){
-    var current = gbBrief().current;
-    var items = gbDidItems(gbDayReviewPage(), current);
+    var ctx = gbReviewContext();
+    if(!ctx)return;
+    var current = ctx.current;
+    var items = gbDidItems(ctx.page, current);
     var follow = null;
     items.forEach(function(it){
       (it.followups || []).forEach(function(f){ if(f.id === followId)follow = f; });
     });
     if(!follow)return;
-    var ui = gbLoadUi();
-    if(gbDidFollowPushed(followId, ui)){
-      if(typeof showToast === "function")showToast("Already pushed to tomorrow","info");
+    var ui = gbReviewUi(ctx);
+    if(gbDidFollowPushed(followId, ui, ctx)){
+      if(typeof showToast === "function")showToast("Already pushed","info");
       return;
     }
     var btn = document.querySelector('[data-gb-push-next="'+followId+'"]');
-    if(btn){ btn.disabled = true; btn.textContent = "Pushing..."; }
+    var followRow = btn && btn.closest ? btn.closest(".cu-review-followup") : null;
+    var followBtns = followRow ? followRow.querySelectorAll("[data-gb-push-next],[data-gb-dismiss-follow]") : [];
+    followBtns.forEach(function(el){ el.disabled = true; });
+    if(btn)btn.textContent = "Pushing...";
     try{
       var res = await fetch("/api/dcc/brief/push-next", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify({
-          date: gbTomorrowStr(),
+          date: gbTomorrowStr(ctx),
           title: follow.title,
           tags: follow.tags || [],
           duration: follow.duration || follow.duration_minutes || 30,
           type: follow.type || "task",
           notes: follow.notes || "",
-          idempotency_key: follow.idempotency_key || ("day-review-followup:" + gbDate() + ":" + followId)
+          idempotency_key: follow.idempotency_key || ("day-review-followup:" + ctx.reviewDate + ":" + followId)
         })
       });
       var payload = await res.json().catch(function(){ return {}; });
       if(!res.ok)throw new Error(payload.error || "Push failed");
-      gbMarkDidFollowPushed(followId);
-      if(typeof showToast === "function")showToast("Pushed to tomorrow: " + follow.title, "success");
+      await gbPersistReviewDecision(ctx, followId, "push-next");
+      gbMarkDidFollowPushed(followId, ctx);
+      if(typeof showToast === "function")showToast("Pushed to " + gbFmtReviewDate(gbTomorrowStr(ctx)) + ": " + follow.title, "success");
+      gbNotifyReviewChanged();
       buildGlymphaticBrief();
     }catch(e){
       if(typeof showToast === "function")showToast(e.message || "Push failed", "error");
       console.error("[Glymphatic Brief] push-next failed:", e);
-      if(btn){ btn.disabled = false; btn.textContent = "Push to tomorrow"; }
+      followBtns.forEach(function(el){ el.disabled = false; });
+      if(btn)btn.textContent = "Push to next day";
+    }
+  }
+
+  async function gbDismissDidFollow(followId){
+    var ctx = gbReviewContext();
+    if(!ctx)return;
+    var btn = document.querySelector('[data-gb-dismiss-follow="'+followId+'"]');
+    var followRow = btn && btn.closest ? btn.closest(".cu-review-followup") : null;
+    var followBtns = followRow ? followRow.querySelectorAll("[data-gb-push-next],[data-gb-dismiss-follow]") : [];
+    followBtns.forEach(function(el){ el.disabled = true; });
+    try{
+      await gbPersistReviewDecision(ctx, followId, "dismiss");
+      var ui = gbReviewUi(ctx);
+      ui.did_follow_dismissed = ui.did_follow_dismissed || {};
+      ui.did_follow_dismissed[followId] = new Date().toISOString();
+      gbSaveReviewUi(ui, ctx);
+      gbNotifyReviewChanged();
+    }catch(e){
+      followBtns.forEach(function(el){ el.disabled = false; });
+      if(typeof showToast === "function")showToast(e.message || "Could not dismiss follow-up", "error");
     }
   }
 
@@ -920,21 +1058,96 @@
     '</article>';
   }
 
+  function gbReviewPendingModel(ctx){
+    if(!ctx)return { items: [], count: 0 };
+    var ui = gbReviewUi(ctx);
+    var count = 0;
+    var pendingItems = [];
+    gbDidItems(ctx.page, ctx.current).forEach(function(item){
+      var parentPending = item.approvable !== false && !gbDidApproved(item, ui, ctx) && !gbDidDismissed(item, ui, ctx);
+      var followups = (item.followups || []).filter(function(f){
+        return !gbDidFollowPushed(f.id, ui, ctx) && !gbDidFollowDismissed(f.id, ui, ctx);
+      });
+      if(parentPending)count++;
+      count += followups.length;
+      if(parentPending || followups.length)pendingItems.push({ item: item, parentPending: parentPending, followups: followups });
+    });
+    return { items: pendingItems, count: count };
+  }
+
+  function gbLooseEndsDidCard(model, ctx){
+    var item = model.item;
+    var ui = gbReviewUi(ctx);
+    var start = gbDidStart(item, ui);
+    var duration = gbDidDuration(item, ui);
+    var parentStatus = gbDidApproved(item, ui, ctx) ? "Logged" : (gbDidDismissed(item, ui, ctx) ? "Dismissed" : "");
+    var tags = (item.tags || []).map(function(t){ return '<span class="gb-pill">'+gbEsc(t)+'</span>'; }).join("");
+    var confidence = item.confidence ? '<span class="gb-pill">'+gbEsc(item.confidence)+'</span>' : "";
+    var evidence = (item.evidence || []).slice(0,3).map(function(ev){
+      var ref = gbSafeUrl(ev.ref || ev.url || ev.link || "");
+      var label = ev.label || ev.type || "evidence";
+      return ref ? '<a class="gb-triage-link" href="'+gbEsc(ref)+'" target="_blank" rel="noreferrer">'+gbEsc(label)+'</a>' : '<span class="gb-row-meta">'+gbEsc(label)+'</span>';
+    }).join("");
+    var durOpts = [5,10,15,30,45,60,90,120,180];
+    if(durOpts.indexOf(duration) === -1)durOpts.push(duration);
+    durOpts.sort(function(a,b){ return a-b; });
+    var followups = model.followups.map(function(f){
+      return '<div class="cu-review-followup">'+
+        '<span class="gb-row-title">'+gbEsc(f.title)+'</span>'+
+        '<div class="carryover-row-actions">'+
+          '<button class="carryover-btn carryover-btn-schedule" data-gb-push-next="'+gbEsc(f.id)+'">Push to '+gbEsc(gbFmtReviewDate(gbTomorrowStr(ctx)))+'</button>'+
+          '<button class="carryover-btn carryover-btn-drop" data-gb-dismiss-follow="'+gbEsc(f.id)+'">Dismiss</button>'+
+        '</div>'+
+      '</div>';
+    }).join("");
+    return '<article class="gb-task-card cu-review-card" data-gb-did-item="'+gbEsc(item.id)+'">'+
+      '<div class="gb-task-top">'+
+        '<div class="gb-task-main">'+
+          '<div class="gb-task-title">'+gbEsc(item.title)+'</div>'+
+          '<div class="gb-task-meta">'+tags+confidence+(parentStatus?'<span class="gb-pill gb-decision-accept">'+parentStatus+'</span>':'')+'</div>'+
+          (item.reason ? '<div class="gb-task-reason">'+gbEsc(item.reason)+'</div>' : '')+
+          (evidence ? '<div class="gb-task-meta">'+evidence+'</div>' : '')+
+        '</div>'+
+        (model.parentPending ? '<div class="gb-task-actions">'+
+          '<button class="gb-add-btn" data-gb-approve="'+gbEsc(item.id)+'">Approve</button>'+
+          '<button class="gb-icon-btn" data-gb-dismiss="'+gbEsc(item.id)+'">Didn’t do this</button>'+
+        '</div>' : '')+
+      '</div>'+
+      (model.parentPending ? '<div class="gb-controls">'+
+        '<label>Done at <input type="time" value="'+gbEsc(start)+'" data-gb-did-start="'+gbEsc(item.id)+'"></label>'+
+        '<label>Length <select data-gb-did-duration="'+gbEsc(item.id)+'">'+durOpts.map(function(m){
+          return '<option value="'+m+'" '+(duration===m?'selected':'')+'>'+(typeof ms === "function" ? ms(m) : m + "m")+'</option>';
+        }).join("")+'</select></label>'+
+      '</div>' : '')+
+      (followups ? '<div class="cu-review-followups"><div class="gb-row-sub">Unfinished follow-ups</div>'+followups+'</div>' : '')+
+    '</article>';
+  }
+
+  function gbLooseEndsReviewHtml(ctx){
+    var pending = gbReviewPendingModel(ctx);
+    if(!pending.items.length)return '<div class="cu-caught-up">Day in Review is complete.</div>';
+    return '<div class="gb-task-list cu-review-list">'+pending.items.map(function(model){
+      return gbLooseEndsDidCard(model, ctx);
+    }).join("")+'</div>';
+  }
+
   // Journal entry — local-only for now. FUTURE: wire gbSaveJournal to the
   // Mycelium vault (vault_append to today's journal node). Kept per-date in the
   // brief's localStorage (ui.journal) so it survives the 60s auto-refresh.
   function gbSetJournal(value){
-    var ui = gbLoadUi();
+    var ctx = gbReviewContext();
+    var ui = gbReviewUi(ctx);
     ui.journal = value;
-    gbSaveUi(ui);
+    gbSaveReviewUi(ui, ctx);
   }
 
   function gbSaveJournal(){
     var el = document.querySelector("[data-gb-journal]");
-    var ui = gbLoadUi();
+    var ctx = gbReviewContext();
+    var ui = gbReviewUi(ctx);
     ui.journal = el ? el.value : (ui.journal || "");
     ui.journal_saved_at = new Date().toISOString();
-    gbSaveUi(ui);
+    gbSaveReviewUi(ui, ctx);
     var status = document.querySelector("[data-gb-journal-status]");
     if(status)status.textContent = "Saved " + new Date(ui.journal_saved_at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
     if(typeof showToast === "function")showToast("Journal saved locally (vault wiring pending)", "success");
@@ -948,6 +1161,7 @@
   // rides in the per-date brief ui. All local for now — same future Mycelium hook.
 
   var GB_TAXO_KEY = "dcc-daylio-taxonomy:v1";
+  function gbTaxoKey(){ return GB_TAXO_KEY + ":" + (gbLooseEndsOwnerScope || "unidentified"); }
 
   function gbDefaultTaxonomy(){
     return {
@@ -999,12 +1213,12 @@
 
   function gbLoadTaxo(){
     try{
-      var t = JSON.parse(localStorage.getItem(GB_TAXO_KEY) || "null");
+      var t = JSON.parse(localStorage.getItem(gbTaxoKey()) || "null");
       if(t && Array.isArray(t.moods) && Array.isArray(t.groups))return t;
     }catch(e){}
     return gbDefaultTaxonomy();
   }
-  function gbSaveTaxo(t){ try{ localStorage.setItem(GB_TAXO_KEY, JSON.stringify(t)); }catch(e){} }
+  function gbSaveTaxo(t){ try{ localStorage.setItem(gbTaxoKey(), JSON.stringify(t)); }catch(e){} }
 
   function gbSlug(s){
     return String(s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"") || "item";
@@ -1022,17 +1236,19 @@
     return null;
   }
   function gbToggleActivity(id){
-    var ui = gbLoadUi();
+    var ctx = gbReviewContext();
+    var ui = gbReviewUi(ctx);
     var list = Array.isArray(ui.activities) ? ui.activities.slice() : [];
     var i = list.indexOf(id);
     if(i === -1)list.push(id); else list.splice(i,1);
     ui.activities = list;
-    gbSaveUi(ui);
+    gbSaveReviewUi(ui, ctx);
   }
   function gbSetMood(id){
-    var ui = gbLoadUi();
+    var ctx = gbReviewContext();
+    var ui = gbReviewUi(ctx);
     ui.mood = (ui.mood === id) ? null : id;
-    gbSaveUi(ui);
+    gbSaveReviewUi(ui, ctx);
   }
 
   function gbEnsureDaylioStyles(){
@@ -1042,7 +1258,8 @@
       '.gb-modal{width:100%;max-width:560px;background:var(--surface,#161d29);color:var(--text,#e8edf3);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:18px 18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.5)}'+
       '.gb-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px}'+
       '.gb-mood-row{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap}'+
-      '.gb-mood{position:relative;flex:1 1 0;min-width:62px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 6px;border:2px solid transparent;border-radius:14px;cursor:pointer;background:rgba(255,255,255,.03);transition:transform .08s,border-color .12s,background .12s}'+
+      '.gb-mood-wrap{position:relative;display:flex;flex:1 1 0;min-width:62px}'+
+      '.gb-mood{flex:1;min-width:62px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 6px;border:2px solid transparent;border-radius:14px;cursor:pointer;background:rgba(255,255,255,.03);color:inherit;font:inherit;transition:transform .08s,border-color .12s,background .12s}'+
       '.gb-mood:hover{transform:translateY(-1px)}'+
       '.gb-mood.on{background:color-mix(in srgb, var(--mc,#43A047) 20%, transparent)}'+
       '.gb-mood-emoji{font-size:30px;line-height:1}'+
@@ -1050,7 +1267,8 @@
       '.gb-group{margin-top:16px}'+
       '.gb-group-title{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted,#9fb0c3);margin-bottom:8px}'+
       '.gb-act-grid{display:flex;flex-wrap:wrap;gap:8px}'+
-      '.gb-act{position:relative;display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid rgba(255,255,255,.12);border-radius:999px;cursor:pointer;font-size:13px;background:rgba(255,255,255,.03);transition:border-color .1s,background .1s}'+
+      '.gb-act-wrap{position:relative;display:inline-flex}'+
+      '.gb-act{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid rgba(255,255,255,.12);border-radius:999px;cursor:pointer;color:inherit;font:inherit;font-size:13px;background:rgba(255,255,255,.03);transition:border-color .1s,background .1s}'+
       '.gb-act:hover{border-color:rgba(255,255,255,.28)}'+
       '.gb-act.on{background:rgba(90,150,255,.22);border-color:rgba(120,170,255,.7)}'+
       '.gb-act-emoji{font-size:15px}'+
@@ -1069,19 +1287,19 @@
   }
 
   var GB_MOOD_LEVELS = {5:"Rad", 4:"Good", 3:"Meh", 2:"Bad", 1:"Awful"};
+  var gbMoodReturnFocus = null;
 
   function gbMoodModalHtml(editMode){
     var taxo = gbLoadTaxo();
-    var ui = gbLoadUi();
+    var ui = gbReviewUi(gbReviewContext());
     var selMood = ui.mood;
     var selActs = ui.activities || [];
     var moods = (taxo.moods || []).slice().sort(function(a,b){ return (b.level||0) - (a.level||0); });
     var moodRow = moods.map(function(m){
       var on = m.id === selMood;
-      return '<div class="gb-mood'+(on?' on':'')+'" data-gb-mood="'+gbEsc(m.id)+'"'+(on?' style="--mc:'+gbEsc(m.color)+';border-color:'+gbEsc(m.color)+'"':'')+'>'+
-        (editMode?'<button class="gb-mini-del" data-gb-del-mood="'+gbEsc(m.id)+'" title="Delete mood">&times;</button>':'')+
+      return '<div class="gb-mood-wrap"><button type="button" class="gb-mood'+(on?' on':'')+'" data-gb-mood="'+gbEsc(m.id)+'" aria-pressed="'+(on?'true':'false')+'"'+(on?' style="--mc:'+gbEsc(m.color)+';border-color:'+gbEsc(m.color)+'"':'')+'>'+
         '<div class="gb-mood-emoji">'+gbEsc(m.emoji)+'</div><div class="gb-mood-name">'+gbEsc(m.name)+'</div>'+
-      '</div>';
+      '</button>'+(editMode?'<button type="button" class="gb-mini-del" data-gb-del-mood="'+gbEsc(m.id)+'" aria-label="Delete '+gbEsc(m.name)+' mood">&times;</button>':'')+'</div>';
     }).join("");
     var addMoodRow = editMode ?
       '<div class="gb-add-row">'+
@@ -1093,10 +1311,9 @@
     var groupsHtml = (taxo.groups || []).map(function(g){
       var acts = (g.activities || []).map(function(a){
         var on = selActs.indexOf(a.id) !== -1;
-        return '<div class="gb-act'+(on?' on':'')+'" data-gb-activity="'+gbEsc(a.id)+'">'+
-          (editMode?'<button class="gb-mini-del" data-gb-del-activity="'+gbEsc(g.id)+':'+gbEsc(a.id)+'" title="Delete">&times;</button>':'')+
+        return '<div class="gb-act-wrap"><button type="button" class="gb-act'+(on?' on':'')+'" data-gb-activity="'+gbEsc(a.id)+'" aria-pressed="'+(on?'true':'false')+'">'+
           '<span class="gb-act-emoji">'+gbEsc(a.emoji)+'</span><span>'+gbEsc(a.name)+'</span>'+
-        '</div>';
+        '</button>'+(editMode?'<button type="button" class="gb-mini-del" data-gb-del-activity="'+gbEsc(g.id)+':'+gbEsc(a.id)+'" aria-label="Delete '+gbEsc(a.name)+' activity">&times;</button>':'')+'</div>';
       }).join("");
       var addAct = editMode ?
         '<div class="gb-add-row">'+
@@ -1113,9 +1330,9 @@
         '<input class="gb-inp" data-gb-new-group-name placeholder="new category" style="flex:1;min-width:140px">'+
         '<button class="gb-add-btn" data-gb-add-group>Add category</button>'+
       '</div></div>' : "";
-    return '<div class="gb-modal" role="dialog" aria-modal="true">'+
+    return '<div class="gb-modal" role="dialog" aria-modal="true" aria-labelledby="gb-mood-title">'+
       '<div class="gb-modal-head">'+
-        '<div class="gb-section-title">How was your day?</div>'+
+        '<div class="gb-section-title" id="gb-mood-title">How was your day?</div>'+
         '<div style="display:flex;gap:8px;align-items:center">'+
           '<button class="gb-icon-btn'+(editMode?' on':'')+'" data-gb-modal-edit>'+(editMode?'Done editing':'Edit categories')+'</button>'+
           '<button class="gb-icon-btn" data-gb-modal-close title="Close">Close</button>'+
@@ -1131,40 +1348,60 @@
     var el = document.getElementById("gb-mood-modal");
     if(el)el.remove();
     buildGlymphaticBrief();
+    if(gbMoodReturnFocus && typeof gbMoodReturnFocus.focus === "function")gbMoodReturnFocus.focus();
+    gbMoodReturnFocus = null;
+    gbNotifyReviewChanged();
   }
 
   function gbOpenMoodModal(){
     gbEnsureDaylioStyles();
+    gbMoodReturnFocus = document.activeElement;
     var prev = document.getElementById("gb-mood-modal");
     if(prev)prev.remove();
     var overlay = document.createElement("div");
     overlay.id = "gb-mood-modal";
     overlay.className = "gb-modal-overlay";
     var editMode = false;
-    function rerender(){ overlay.innerHTML = gbMoodModalHtml(editMode); }
+    function focusToken(target){
+      var attrs = ["data-gb-mood","data-gb-activity","data-gb-modal-edit","data-gb-add-mood","data-gb-add-activity","data-gb-add-group"];
+      for(var i=0;i<attrs.length;i++){
+        var found = target && target.closest ? target.closest("["+attrs[i]+"]") : null;
+        if(found)return { attr:attrs[i], value:found.getAttribute(attrs[i]) || "" };
+      }
+      return null;
+    }
+    function rerender(token){
+      overlay.innerHTML = gbMoodModalHtml(editMode);
+      if(!token)return;
+      var candidates = overlay.querySelectorAll("["+token.attr+"]");
+      var target = Array.prototype.slice.call(candidates).filter(function(el){ return (el.getAttribute(token.attr) || "") === token.value; })[0];
+      if(!target)target = overlay.querySelector("[data-gb-modal-edit], [data-gb-modal-close]");
+      if(target && typeof target.focus === "function")target.focus();
+    }
     overlay.addEventListener("click", function(e){
+      var returnToken = focusToken(e.target);
       if(e.target === overlay || e.target.closest("[data-gb-modal-close]")){ gbCloseMoodModal(); return; }
-      if(e.target.closest("[data-gb-modal-edit]")){ editMode = !editMode; rerender(); return; }
+      if(e.target.closest("[data-gb-modal-edit]")){ editMode = !editMode; rerender(returnToken); return; }
 
       var delMood = e.target.closest("[data-gb-del-mood]");
       if(delMood){
         var mid = delMood.dataset.gbDelMood;
         var t = gbLoadTaxo(); t.moods = (t.moods||[]).filter(function(m){ return m.id !== mid; }); gbSaveTaxo(t);
-        var ui = gbLoadUi(); if(ui.mood === mid){ ui.mood = null; gbSaveUi(ui); }
-        rerender(); return;
+        var ctx = gbReviewContext(); var ui = gbReviewUi(ctx); if(ui.mood === mid){ ui.mood = null; gbSaveReviewUi(ui, ctx); }
+        rerender(returnToken); return;
       }
       var moodBtn = e.target.closest("[data-gb-mood]");
-      if(moodBtn && !editMode){ gbSetMood(moodBtn.dataset.gbMood); rerender(); return; }
+      if(moodBtn && !editMode){ gbSetMood(moodBtn.dataset.gbMood); rerender(returnToken); return; }
 
       var delAct = e.target.closest("[data-gb-del-activity]");
       if(delAct){
         var parts = delAct.dataset.gbDelActivity.split(":");
         var t2 = gbLoadTaxo();
         (t2.groups||[]).forEach(function(g){ if(g.id === parts[0])g.activities = (g.activities||[]).filter(function(a){ return a.id !== parts[1]; }); });
-        gbSaveTaxo(t2); rerender(); return;
+        gbSaveTaxo(t2); rerender(returnToken); return;
       }
       var actBtn = e.target.closest("[data-gb-activity]");
-      if(actBtn && !editMode){ gbToggleActivity(actBtn.dataset.gbActivity); rerender(); return; }
+      if(actBtn && !editMode){ gbToggleActivity(actBtn.dataset.gbActivity); rerender(returnToken); return; }
 
       var addAct = e.target.closest("[data-gb-add-activity]");
       if(addAct){
@@ -1175,18 +1412,18 @@
         if(!name)return;
         var t3 = gbLoadTaxo();
         (t3.groups||[]).forEach(function(g){ if(g.id === gid)g.activities = (g.activities||[]).concat([{id:gbNewId(name), name:name, emoji:(emEl && emEl.value.trim()) || "🏷️"}]); });
-        gbSaveTaxo(t3); rerender(); return;
+        gbSaveTaxo(t3); rerender(returnToken); return;
       }
       var delGroup = e.target.closest("[data-gb-del-group]");
       if(delGroup){
-        var t4 = gbLoadTaxo(); t4.groups = (t4.groups||[]).filter(function(g){ return g.id !== delGroup.dataset.gbDelGroup; }); gbSaveTaxo(t4); rerender(); return;
+        var t4 = gbLoadTaxo(); t4.groups = (t4.groups||[]).filter(function(g){ return g.id !== delGroup.dataset.gbDelGroup; }); gbSaveTaxo(t4); rerender(returnToken); return;
       }
       var addGroup = e.target.closest("[data-gb-add-group]");
       if(addGroup){
         var gEl = overlay.querySelector("[data-gb-new-group-name]");
         var gName = gEl ? gEl.value.trim() : "";
         if(!gName)return;
-        var t5 = gbLoadTaxo(); t5.groups = (t5.groups||[]).concat([{id:gbNewId(gName), name:gName, activities:[]}]); gbSaveTaxo(t5); rerender(); return;
+        var t5 = gbLoadTaxo(); t5.groups = (t5.groups||[]).concat([{id:gbNewId(gName), name:gName, activities:[]}]); gbSaveTaxo(t5); rerender(returnToken); return;
       }
       var addMood = e.target.closest("[data-gb-add-mood]");
       if(addMood){
@@ -1197,12 +1434,23 @@
         if(!mName)return;
         var t6 = gbLoadTaxo();
         t6.moods = (t6.moods||[]).concat([{id:gbNewId(mName), name:mName, emoji:(meEl && meEl.value.trim()) || "🙂", level:(mlEl ? parseInt(mlEl.value,10) : 3), color:"#9E9E9E"}]);
-        gbSaveTaxo(t6); rerender(); return;
+        gbSaveTaxo(t6); rerender(returnToken); return;
       }
     });
-    overlay.addEventListener("keydown", function(e){ if(e.key === "Escape")gbCloseMoodModal(); });
+    overlay.addEventListener("keydown", function(e){
+      if(e.key === "Escape"){ e.preventDefault(); gbCloseMoodModal(); return; }
+      if(e.key !== "Tab")return;
+      var focusable = Array.prototype.slice.call(overlay.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+      if(!focusable.length){ e.preventDefault(); return; }
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+    });
     document.body.appendChild(overlay);
     rerender();
+    var firstChoice = overlay.querySelector("[data-gb-mood], [data-gb-modal-close]");
+    if(firstChoice)firstChoice.focus();
   }
 
   function gbDaylioSummary(ui){
@@ -1225,7 +1473,8 @@
     return '<section class="gb-section gb-journal"><div class="gb-section-title">Journal</div>'+
       gbDaylioSummary(ui)+
       '<div class="gb-row-sub" style="margin-bottom:8px">A note on today. Saved locally for now; wiring to the vault comes later.</div>'+
-      '<textarea data-gb-journal placeholder="How did today actually go?" '+
+      '<label class="gb-row-sub" for="gb-review-journal">Journal entry</label>'+
+      '<textarea id="gb-review-journal" data-gb-journal placeholder="How did today actually go?" '+
         'style="width:100%;min-height:120px;resize:vertical;padding:10px;border-radius:10px;'+
         'border:1px solid var(--border,rgba(255,255,255,.14));background:var(--surface-2,rgba(255,255,255,.03));'+
         'color:inherit;font:inherit;line-height:1.5;box-sizing:border-box">'+gbEsc(val)+'</textarea>'+
@@ -1253,6 +1502,66 @@
         '<div class="gb-task-list">'+body+'</div>'+
       '</section>'+
       gbJournalSection(ui);
+  }
+
+  function gbMergeLegacyReviewUi(ctx){
+    if(!ctx || ctx.packetDate === ctx.reviewDate)return;
+    var target = gbLoadUiForDate(ctx.reviewDate);
+    var legacy = gbLoadUiForDate(ctx.packetDate);
+    ["did_starts","did_durations","did_approved","did_pushed","did_dismissed","did_follow_dismissed"].forEach(function(key){
+      target[key] = Object.assign({}, legacy[key] || {}, target[key] || {});
+    });
+    ["journal","journal_saved_at","mood","activities"].forEach(function(key){
+      if(target[key] == null && legacy[key] != null)target[key] = legacy[key];
+    });
+    gbSaveUiForDate(ctx.reviewDate, target);
+  }
+
+  function gbBackfillLegacyReviewDecisions(ctx){
+    if(!ctx)return;
+    var ui = gbReviewUi(ctx);
+    if(ui.review_decisions_backfilled_at)return;
+    var writes = [];
+    Object.keys(ui.did_approved || {}).forEach(function(id){ if(!gbReviewDecision(ctx,id))writes.push([id,"approve"]); });
+    Object.keys(ui.did_pushed || {}).forEach(function(id){ if(!gbReviewDecision(ctx,id))writes.push([id,"push-next"]); });
+    Object.keys(ui.did_dismissed || {}).forEach(function(id){ if(!gbReviewDecision(ctx,id))writes.push([id,"dismiss"]); });
+    Object.keys(ui.did_follow_dismissed || {}).forEach(function(id){ if(!gbReviewDecision(ctx,id))writes.push([id,"dismiss"]); });
+    writes.reduce(function(chain, pair){
+      return chain.then(function(){ return gbPersistReviewDecision(ctx, pair[0], pair[1]); });
+    }, Promise.resolve()).then(function(){
+      var next = gbReviewUi(ctx);
+      next.review_decisions_backfilled_at = new Date().toISOString();
+      gbSaveReviewUi(next, ctx);
+    }).catch(function(e){
+      console.error("[Glymphatic Brief] decision backfill failed:", e);
+    });
+  }
+
+  async function gbLoadLooseEndsReview(){
+    await gbEnsureReviewOwnerScope();
+    var todayState = window.__DCC_STATE__ || (typeof __state !== "undefined" ? __state : null);
+    if(todayState && todayState._unavailable)throw new Error("Day Review state is unavailable");
+    var today = (todayState && todayState.date) || (typeof __todayDate !== "undefined" && __todayDate) || gbDate();
+    var ctx = gbReviewFromState(todayState, today);
+    if(!ctx){
+      var previous = gbAddDays(today, -1);
+      var res = await fetch("/api/state/day?date=" + encodeURIComponent(previous));
+      if(!res.ok)throw new Error("Could not load the previous Day Review");
+      var previousState = await res.json();
+      if(previousState && previousState._unavailable)throw new Error("Previous Day Review state is unavailable");
+      ctx = gbReviewFromState(previousState, previous);
+    }
+    gbLooseEndsReviewContext = ctx;
+    if(ctx){
+      gbMergeLegacyReviewUi(ctx);
+      gbBackfillLegacyReviewDecisions(ctx);
+    }
+    return ctx;
+  }
+
+  function gbLooseEndsJournalHtml(ctx){
+    if(!ctx)return "";
+    return gbJournalSection(gbReviewUi(ctx));
   }
 
   // Agent-authored expressive layer. The HTML is generated fresh each morning
@@ -1469,6 +1778,8 @@
     if(approve){ gbApproveDid(approve.dataset.gbApprove); return; }
     var pushNext = e.target.closest("[data-gb-push-next]");
     if(pushNext){ gbPushDidNext(pushNext.dataset.gbPushNext); return; }
+    var dismissFollow = e.target.closest("[data-gb-dismiss-follow]");
+    if(dismissFollow){ gbDismissDidFollow(dismissFollow.dataset.gbDismissFollow); return; }
     var dismiss = e.target.closest("[data-gb-dismiss]");
     if(dismiss){ gbSetDidDismissed(dismiss.dataset.gbDismiss, true); return; }
     var undismiss = e.target.closest("[data-gb-undismiss]");
@@ -1503,5 +1814,17 @@
     buildGlymphaticBrief();
   }, 60000);
 
+  var DCC = (window.DCC = window.DCC || {});
+  DCC.DayReview = {
+    load: gbLoadLooseEndsReview,
+    context: gbReviewContext,
+    pendingCount: function(ctx){ return gbReviewPendingModel(ctx || gbReviewContext()).count; },
+    renderPending: function(ctx){ return gbLooseEndsReviewHtml(ctx || gbReviewContext()); },
+    renderJournal: function(ctx){ return gbLooseEndsJournalHtml(ctx || gbReviewContext()); },
+    approveItem: gbApproveDid,
+    dismissItem: function(id){ return gbSetDidDismissed(id, true); },
+    pushFollowup: gbPushDidNext,
+    dismissFollowup: gbDismissDidFollow
+  };
   window.buildGlymphaticBrief = buildGlymphaticBrief;
 })();

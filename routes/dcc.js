@@ -662,23 +662,35 @@ module.exports = function mount(app, ctx) {
   app.post("/api/dcc/brief/decision", async (req, res) => {
     try {
       const { date, task_id, action, time } = req.body || {};
-      const VALID = new Set(["accept", "schedule", "backlog", "drop", "dismiss", "reset"]);
-      if (!task_id || !VALID.has(action)) return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|dismiss|reset }" });
+      const VALID = new Set(["accept", "schedule", "backlog", "drop", "dismiss", "reset", "approve", "push-next"]);
+      if (typeof task_id !== "string" || !task_id.trim() || task_id.length > 500 || !VALID.has(action)) {
+        return res.status(400).json({ error: "Expected { task_id, action: accept|schedule|backlog|drop|dismiss|reset|approve|push-next }" });
+      }
+      if (date != null && !isValidDate(date)) return res.status(400).json({ error: "Invalid date" });
+      const normalizedTime = time == null || time === "" ? null : time;
+      if (normalizedTime != null && (typeof normalizedTime !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(normalizedTime))) {
+        return res.status(400).json({ error: "Invalid time; expected HH:MM" });
+      }
       const day = date || new Date().toISOString().slice(0, 10);
-      const state = await readDccDayState(day, req, buildSkeletonState(day));
-      const brief = state.glymphatic_brief || (state.glymphatic_brief = { history: [], current: null });
-      const decisions = brief.decisions || (brief.decisions = {});
-      const at = new Date().toISOString();
-      if (action === "reset") delete decisions[task_id];
-      else decisions[task_id] = { action, time: time || null, decided_at: at };
-      brief.decision_log = [...(brief.decision_log || []), { task_id, action, time: time || null, at }].slice(-200);
-      state.last_updated_at = at;
-      state.last_updated_by = "brief-decision";
-      await persistDccDay(day, state, req, "brief-decision");
-      res.json({ ok: true, date: day, task_id, action });
+      const { userId, workspaceId } = resolveOwnerLenient(req);
+      const result = await blockDB.saveDccBriefDecision(
+        day,
+        { taskId: task_id.trim(), action, time: normalizedTime },
+        userId,
+        workspaceId,
+        buildSkeletonState(day)
+      );
+      try {
+        writeJSON(getDayFilePath(day), result.state);
+        writeJSON(DAY_STATE_FILE, result.state);
+      } catch (mirrorError) {
+        console.error("[brief-decision] file mirror failed (db save succeeded):", mirrorError.message);
+      }
+      broadcast("dcc-state-changed", { source: "brief-decision", date: day }, workspaceId);
+      res.json({ ok: true, date: day, task_id: task_id.trim(), action, changed: result.changed });
     } catch (e) {
       console.error("[brief decision] failed:", e);
-      res.status(500).json({ error: e.message || "decision save failed" });
+      res.status(e.status || 500).json({ error: e.message || "decision save failed" });
     }
   });
 

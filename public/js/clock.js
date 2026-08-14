@@ -79,6 +79,9 @@ function updateDateNav() {
   // Quick buttons
   todayBtn.style.display = (viewMode !== "today") ? "" : "none";
   tomorrowBtn.style.display = (__tomorrowDate && viewMode !== "tomorrow") ? "" : "none";
+  if (window.DCC && window.DCC.CatchUp && typeof window.DCC.CatchUp.syncIndicator === "function") {
+    window.DCC.CatchUp.syncIndicator();
+  }
 }
 
 function navDate(direction) {

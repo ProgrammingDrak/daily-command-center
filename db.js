@@ -1822,9 +1822,92 @@ async function saveDccState(date, stateJson, userId, workspaceId) {
   const stateObj = typeof stateJson === "string" ? JSON.parse(stateJson) : stateJson;
   await pool.query(
     `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT(date, workspace_id) DO UPDATE SET state_json = EXCLUDED.state_json, user_id = EXCLUDED.user_id, updated_at = EXCLUDED.updated_at`,
+     ON CONFLICT(date, workspace_id) DO UPDATE SET
+       state_json = EXCLUDED.state_json || jsonb_build_object(
+         'glymphatic_brief',
+         (COALESCE(dcc_state.state_json->'glymphatic_brief', '{}'::jsonb) ||
+         COALESCE(EXCLUDED.state_json->'glymphatic_brief', '{}'::jsonb)) ||
+         jsonb_build_object(
+           'decisions',
+           COALESCE(dcc_state.state_json#>'{glymphatic_brief,decisions}', '{}'::jsonb),
+           'decision_log',
+           COALESCE(dcc_state.state_json#>'{glymphatic_brief,decision_log}',
+                    EXCLUDED.state_json#>'{glymphatic_brief,decision_log}', '[]'::jsonb)
+         )
+       ),
+       user_id = EXCLUDED.user_id,
+       updated_at = EXCLUDED.updated_at`,
     [date, stateObj, userId || null, wsId, now]
   );
+}
+
+async function saveDccBriefDecision(date, input, userId, workspaceId, emptyState) {
+  const wsId = workspaceId || (userId ? `ws-${userId}` : "ws-1");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `INSERT INTO dcc_state (date, state_json, user_id, workspace_id, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT(date, workspace_id) DO NOTHING`,
+      [date, emptyState || { date }, userId || null, wsId]
+    );
+    const { rows } = await client.query(
+      "SELECT state_json FROM dcc_state WHERE date = $1 AND workspace_id = $2 FOR UPDATE",
+      [date, wsId]
+    );
+    const state = rows[0] && rows[0].state_json ? rows[0].state_json : (emptyState || { date });
+    let briefSource = state.glymphatic_brief || state.glymphaticBrief || null;
+    if (!state.glymphatic_brief && state.glymphaticBrief) {
+      state.glymphatic_brief = state.glymphaticBrief;
+      delete state.glymphaticBrief;
+      briefSource = state.glymphatic_brief;
+    }
+    if (["approve", "push-next", "dismiss"].includes(input.action)) {
+      briefSource = briefSource || {};
+      const current = briefSource.current || briefSource;
+      const pages = current && Array.isArray(current.pages) ? current.pages : [];
+      const page = pages.find(candidate => candidate && candidate.id === "day-review") || {};
+      const items = Array.isArray(page.items) ? page.items : (Array.isArray(current.did_today) ? current.did_today : []);
+      const parent = items.some(item => item && item.id === input.taskId);
+      const followup = items.some(item => Array.isArray(item && item.followups) && item.followups.some(follow => follow && follow.id === input.taskId));
+      const validTarget = input.action === "approve" ? parent
+        : (input.action === "push-next" ? followup : (parent || followup));
+      if (!validTarget) {
+        const error = new Error("Decision target does not belong to this Day in Review packet");
+        error.status = 400;
+        throw error;
+      }
+    }
+    const brief = briefSource || (state.glymphatic_brief = { history: [], current: null });
+    const decisions = brief.decisions || (brief.decisions = {});
+    const prior = decisions[input.taskId] || null;
+    const at = new Date().toISOString();
+    const next = input.action === "reset" ? null : { action: input.action, time: input.time || null, decided_at: at };
+    const changed = input.action === "reset"
+      ? !!prior
+      : !prior || prior.action !== next.action || (prior.time || null) !== next.time;
+    if (next) decisions[input.taskId] = next;
+    else delete decisions[input.taskId];
+    if (changed) {
+      brief.decision_log = [...(brief.decision_log || []), {
+        task_id: input.taskId, action: input.action, time: input.time || null, at
+      }].slice(-200);
+    }
+    state.last_updated_at = at;
+    state.last_updated_by = "brief-decision";
+    await client.query(
+      "UPDATE dcc_state SET state_json = $1, user_id = $2, updated_at = $3 WHERE date = $4 AND workspace_id = $5",
+      [state, userId || null, at, date, wsId]
+    );
+    await client.query("COMMIT");
+    return { state, changed };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function getDccState(date, workspaceId) {
@@ -1978,7 +2061,7 @@ module.exports = {
   getBlocksByDate, getBlocksByDateIncludingDeleted, getCalendarMeetingContextBySourceIds, getRescheduleSubtreePool, getRescheduleTombstone, getBlocksByTypes, getChildren, getBlock,
   getDelegatedItems,
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
-  ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, getDccState, purgeSoftDeleted, getOperations,
+  ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
   findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, getFutureDatesWithBlocks

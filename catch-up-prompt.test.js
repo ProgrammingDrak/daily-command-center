@@ -154,7 +154,8 @@ function listedTitles(ctx) {
   const overlay = ctx.document.getElementById("catchup-overlay");
   if (!overlay) return null;
   return overlay.querySelector("#catchup-list").children
-    .map(r => r.querySelector(".carryover-row-title").textContent);
+    .map(r => r.querySelector(".carryover-row-title").textContent)
+    .filter(Boolean);
 }
 
 test("a done subtask is NOT offered as work that slipped", async () => {
@@ -238,7 +239,7 @@ test("an already-reviewed day never prompts twice", async () => {
 // carryover-review.js's buttons only LOOKED real ("Drop was a single log line -- it
 // deleted NOTHING"), "no test clicks anything" is the gap that matters most.
 const row0 = (ctx) => ctx.document.getElementById("catchup-overlay")
-  .querySelector("#catchup-list").children[0];
+  .querySelector("#catchup-list").children.find(r => r.className && r.className.indexOf("carryover-row") > -1);
 // setTimeout(0) rather than setImmediate: the click handlers are async, so one macro
 // task is enough to let them settle, and it keeps the lint env browser-compatible.
 const settled = () => new Promise(r => setTimeout(r, 0));
@@ -330,7 +331,8 @@ test("completing the focused row moves focus to the next completion control", as
   const d = ymd(1);
   const { ctx } = load({ [d]: [dayRoot(), blk("a", d, { title: "A" }), blk("b", d, { title: "B" })] }, [d]);
   await ctx.window.initCatchUp();
-  const rows = ctx.document.getElementById("catchup-overlay").querySelector("#catchup-list").children;
+  const rows = ctx.document.getElementById("catchup-overlay").querySelector("#catchup-list").children
+    .filter(r => r.className && r.className.indexOf("carryover-row") > -1);
   const firstComplete = rows[0].querySelector(".cu-complete");
   const secondComplete = rows[1].querySelector(".cu-complete");
   ctx.document.activeElement = firstComplete;
@@ -538,21 +540,116 @@ function triageCtx(daysByDate, archiveDates, items, over) {
   h.ctx.window.DCC.TriageCourier = { markSeen: (ids) => { calls.seen.push(...ids); } };
   return Object.assign(h, { calls });
 }
-const rowsOf = (ctx) => ctx.document.getElementById("catchup-overlay")
+const allRowsOf = (ctx) => ctx.document.getElementById("catchup-overlay")
   .querySelector("#catchup-list").children;
+const rowsOf = (ctx) => allRowsOf(ctx)
+  .filter(r => r.className && r.className.indexOf("carryover-row") > -1);
 const titleOf = (r) => r.querySelector(".carryover-row-title").textContent;
+
+function installDayReview(ctx, count) {
+  const packet = { packetDate: TODAY, reviewDate: ymd(1) };
+  ctx.window.DCC.DayReview = {
+    load: async () => packet,
+    pendingCount: () => count,
+    renderPending: () => '<article class="cu-review-card">Review cards</article>',
+    renderJournal: () => '<section class="gb-journal">Journal</section>'
+  };
+  return packet;
+}
+
+test("the unified modal follows the requested section order", async () => {
+  const d = ymd(1);
+  const { ctx } = triageCtx(
+    { [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] },
+    [d],
+    [TRI("s1"), TRI("g1", { source: "gmail" })],
+    { fetch: async () => ({ ok: true, json: async () => ({ items: [MTG_ACTION] }) }) }
+  );
+  installDayReview(ctx, 2);
+  await ctx.window.initCatchUp();
+  assert.deepEqual(
+    [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
+    ["Slipped tasks", "Slack", "Gmail", "Meeting follow-ups", "Day in Review"]
+  );
+  const journal = [...allRowsOf(ctx)].find(r => r.className === "cu-journal-wrap");
+  assert.match(journal.innerHTML, /Journal/);
+});
+
+test("an unaddressed Day in Review keeps the Loose Ends reminder after close", async () => {
+  const d = ymd(1);
+  const { ctx, saved } = load({ [d]: [dayRoot()] }, [d]);
+  const pill = ctx.document.createElement("button"); pill.id = "loose-ends-pill"; pill.hidden = true; ctx.document.body.appendChild(pill);
+  const count = ctx.document.createElement("span"); count.id = "loose-ends-pill-count"; ctx.document.body.appendChild(count);
+  installDayReview(ctx, 3);
+  await ctx.window.initCatchUp();
+  assert.equal(pill.hidden, false);
+  assert.equal(count.textContent, "3");
+  ctx.document.getElementById("catchup-overlay").querySelector("#catchup-close").fire("click");
+  assert.ok(saved._catchUpReviewed, "closing suppresses a second automatic prompt");
+  assert.equal(pill.hidden, false, "the reminder remains until the decisions are handled");
+});
+
+test("a completed Day in Review still opens the morning Journal once", async () => {
+  const d = ymd(1);
+  const { ctx, saved } = load({ [d]: [dayRoot()] }, [d]);
+  installDayReview(ctx, 0);
+  await ctx.window.initCatchUp();
+  const overlay = ctx.document.getElementById("catchup-overlay");
+  assert.equal(overlay.classList.contains("open"), true);
+  assert.ok([...allRowsOf(ctx)].some(row => row.className === "cu-journal-wrap"));
+  assert.equal(saved._catchUpReviewed, undefined);
+});
+
+test("a Day in Review load failure never marks the morning reviewed", async () => {
+  const d = ymd(1);
+  const { ctx, saved } = load({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d]);
+  ctx.window.DCC.DayReview = {
+    load: async () => { throw new Error("temporarily unavailable"); },
+    pendingCount: () => 0
+  };
+  await ctx.window.initCatchUp();
+  assert.equal(saved._catchUpReviewed, undefined);
+  assert.equal(ctx.document.getElementById("catchup-overlay"), null,
+    "a partial first-run modal waits and retries instead of hiding an omitted section");
+});
+
+test("fresh sweep arrivals still open when Day in Review is temporarily unavailable", async () => {
+  const { ctx, saved } = triageCtx({}, [], [TRI("s1")]);
+  ctx.window.DCC.DayReview = {
+    load: async () => { throw new Error("temporarily unavailable"); },
+    pendingCount: () => 0
+  };
+  const opened = await ctx.window.DCC.CatchUp.openArrivals(["s1"]);
+  assert.equal(opened, true);
+  const overlay = ctx.document.getElementById("catchup-overlay");
+  assert.equal(overlay.querySelector("#catchup-title").textContent, "Fresh from the sweep");
+  assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Reply to s1"]);
+  overlay.querySelector("#catchup-close").fire("click");
+  assert.equal(saved._catchUpReviewed, undefined, "closing a partial fresh modal never marks the morning reviewed");
+});
+
+test("fresh arrivals stay unreviewed when slipped tasks or meeting follow-ups fail to load", async () => {
+  for (const failedSource of ["slipped", "meetings"]) {
+    const fetch = failedSource === "meetings"
+      ? async () => { throw new Error("meetings unavailable"); }
+      : async () => ({ ok: true, json: async () => ({ items: [] }) });
+    const { ctx, saved } = triageCtx({}, [], [TRI("s1")], { fetch });
+    installDayReview(ctx, 0);
+    if (failedSource === "slipped") ctx.window.DCC.Carryover.collect = async () => { throw new Error("tasks unavailable"); };
+    assert.equal(await ctx.window.DCC.CatchUp.openArrivals(["s1"]), true);
+    ctx.document.getElementById("catchup-overlay").querySelector("#catchup-close").fire("click");
+    assert.equal(saved._catchUpReviewed, undefined, failedSource + " failure must keep the morning retryable");
+  }
+});
 
 test("triage items ride along with the tasks that slipped, in their own section", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
   await ctx.window.initCatchUp();
-  // Triage leads: something waiting on a reply is more time-sensitive than something
-  // that slipped, and burying it under N slipped rows means scrolling for the thing
-  // the pet just delivered.
+  // The unified morning sequence starts with what slipped, then moves into comms.
   const listed = [...rowsOf(ctx)].map(titleOf).filter(Boolean);
-  assert.deepEqual(listed, ["Reply to m1", "Slipped"]);
-  // Section labels only appear when both kinds are present — two of them here.
-  assert.equal([...rowsOf(ctx)].filter(r => r.className === "cu-section-label").length, 2);
+  assert.deepEqual(listed, ["Slipped", "Reply to m1"]);
+  assert.deepEqual([...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent), ["Slipped tasks", "Slack"]);
 });
 
 test("a triage-only morning still opens the prompt (and does not mark it reviewed)", async () => {
@@ -601,8 +698,8 @@ test("completing focused triage moves focus to the next source's completion cont
   const { ctx } = triageCtx({ [d]: [dayRoot(), blk("t1", d, { title: "Slipped" })] }, [d], [TRI("m1")]);
   await ctx.window.initCatchUp();
   const rows = [...rowsOf(ctx)].filter(row => row.className.includes("carryover-row"));
-  const triageComplete = rows[0].querySelector(".cu-complete");
-  const slippedComplete = rows[1].querySelector(".cu-complete");
+  const triageComplete = rows.find(row => row.className.includes("cu-triage-row")).querySelector(".cu-complete");
+  const slippedComplete = rows.find(row => row.className.includes("cu-task-row")).querySelector(".cu-complete");
   ctx.document.activeElement = triageComplete;
   triageComplete.fire("click", { stopPropagation() {} });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -690,15 +787,15 @@ test("openArrivals leads with what arrived and folds the rest behind one line", 
   const shown = await ctx.window.DCC.CatchUp.openArrivals(["new1"]);
   assert.equal(shown, true);
   const listed = [...rowsOf(ctx)].map(titleOf).filter(Boolean);
-  assert.deepEqual(listed, ["Reply to new1", "Slipped"], "the arrival leads; older items are not listed up front");
-  const older = [...rowsOf(ctx)].find(r => r.className && r.className.indexOf("cu-tri-older") > -1);
+  assert.deepEqual(listed, ["Slipped", "Reply to new1"], "the normal Loose Ends order remains stable; older items are not listed up front");
+  const older = [...allRowsOf(ctx)].find(r => r.className && r.className.indexOf("cu-tri-older") > -1);
   assert.ok(older, "but one line says they exist");
   assert.match(older.textContent, /2 older waiting/);
   // Expanding appends in place rather than re-opening the modal, which would
   // re-bind the footer's "Move all" and run it twice per click.
   older.fire("click");
   assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean),
-    ["Reply to new1", "Reply to old1", "Reply to old2", "Slipped"]);
+    ["Slipped", "Reply to new1", "Reply to old1", "Reply to old2"]);
 });
 
 test("openArrivals ignores ids that are no longer active, and never prompts empty", async () => {
@@ -775,4 +872,20 @@ test("the calendar button is really in both row kinds' markup", async () => {
     assert.match(r.innerHTML, /<button class="btn-schedule cu-cal"[^>]*aria-label="/,
       "the button is in the row markup, not just in a querySelector stub");
   }
+});
+
+test("the modal traps keyboard focus and closes on Escape", () => {
+  assert.match(catchUpSource, /e\.key === "Escape"/);
+  assert.match(catchUpSource, /e\.key !== "Tab"/);
+  assert.match(catchUpSource, /document\.activeElement === first/);
+  assert.match(catchUpSource, /document\.activeElement === last/);
+});
+
+test("the Journal mood dialog uses semantic choices and its own focus trap", () => {
+  const source = require("node:fs").readFileSync(require.resolve("./public/js/glymphatic-brief.js"), "utf8");
+  assert.match(source, /class="gb-mood[^\n]*aria-pressed=/);
+  assert.match(source, /class="gb-act[^\n]*aria-pressed=/);
+  assert.match(source, /aria-labelledby="gb-mood-title"/);
+  assert.match(source, /gbMoodReturnFocus/);
+  assert.match(source, /overlay\.querySelectorAll\('button:not\(\[disabled\]\)/);
 });

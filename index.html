@@ -121,6 +121,9 @@
       <button class="dn-arrow" id="dn-next" onclick="navDate(1)" title="Next day">&rsaquo;</button>
       <button class="dn-quick" id="dn-today-btn" onclick="switchToDate(__todayDate)" style="display:none">Today</button>
       <button class="dn-quick dn-tomorrow" id="dn-tomorrow-btn" onclick="switchToDate(__tomorrowDate)" style="display:none">Tomorrow</button>
+      <button class="loose-ends-pill" id="loose-ends-pill" type="button" aria-controls="catchup-overlay" aria-haspopup="dialog" aria-label="Open Loose Ends" hidden>
+        <span>Loose Ends</span><span class="loose-ends-pill-count" id="loose-ends-pill-count" aria-live="polite">0</span>
+      </button>
     </div>
     <div class="date-picker-drop" id="date-picker-drop" style="display:none"></div>
   </div>
