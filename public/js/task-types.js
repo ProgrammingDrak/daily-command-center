@@ -38,6 +38,8 @@
     dragMovesSubtree: false, // dragging the parent carries nested children
     movable: true,
     fixedTime: false,
+    actualTimeMode: "work_sessions",
+    completionTimeMode: "recorded_at",
   };
 
   const TYPES = {
@@ -68,6 +70,7 @@
       childLayout: "sequential",
       durationFromChildren: true,
       dragMovesSubtree: true,
+      actualTimeMode: "none",
     },
 
     // Wrap = shell's container/drag behavior, MINUS the rollup economics. A wrap
@@ -98,10 +101,10 @@
     // user still drag/re-time them by hand. NOTE: oneone is deliberately NOT
     // non-earning — it has never been in NON_EARNING_TYPES; changing that would
     // change live scoring.
-    meeting: { label: "Meeting", tagCls: "tag-meeting", color: "#f97316", barColor: "#f97316", earnsOwnPoints: false, movable: true, fixedTime: true },
+    meeting: { label: "Meeting", tagCls: "tag-meeting", color: "#f97316", barColor: "#f97316", earnsOwnPoints: false, movable: true, fixedTime: true, actualTimeMode: "planned_window", completionTimeMode: "planned_end" },
     oneone:  { label: "1:1",     tagCls: "tag-oneone",  color: "#f59e0b", barColor: "#f59e0b", movable: true, fixedTime: true },
-    break:   { label: "Break",   tagCls: "tag-break",   color: "#22c55e", earnsOwnPoints: false, movable: false, fixedTime: true },
-    ooo:     { label: "OOO",     tagCls: "tag-ooo",     color: "#64748b", earnsOwnPoints: false, hardZero: true, movable: false, fixedTime: true },
+    break:   { label: "Break",   tagCls: "tag-break",   color: "#22c55e", earnsOwnPoints: false, movable: false, fixedTime: true, actualTimeMode: "none" },
+    ooo:     { label: "OOO",     tagCls: "tag-ooo",     color: "#64748b", earnsOwnPoints: false, hardZero: true, movable: false, fixedTime: true, actualTimeMode: "none" },
   };
 
   function normType(evOrType) {

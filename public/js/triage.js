@@ -255,10 +255,6 @@ function openDoneModal(id, title, onConfirm, ev){
     const sessions=loadSessions();
     if(sessions[id] && sessions[id].length){
       _dmSessions=sessions[id].map(s=>({...s}));
-    } else if(typeof pomoState!=="undefined" && pomoState.taskTime && pomoState.taskTime[title] > 0){
-      const pomoSec=pomoState.taskTime[title];
-      const pomoMin=Math.max(1,Math.round(pomoSec/60));
-      _dmSessions=[{start:ev.start, durationMin:pomoMin, isPlanned:false, isFromTimer:true}];
     } else {
       _dmSessions=[{start:ev.start, durationMin:dur(ev), isPlanned:true}];
     }

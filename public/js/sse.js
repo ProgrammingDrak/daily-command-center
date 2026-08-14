@@ -180,11 +180,9 @@
           consider = JSON.parse(JSON.stringify(INIT_CONSIDER));
           backlog = JSON.parse(JSON.stringify(INIT_BACKLOG));
           if(typeof reloadPersistedEdits === 'function') reloadPersistedEdits();
-          if(typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
         }
 
         if(typeof render === 'function') render();
-        if(typeof paintPivotTasks === 'function') paintPivotTasks();
         if(typeof buildTriage === 'function') buildTriage();
         if(typeof buildNotifications === 'function') buildNotifications();
         if(typeof updateStats === 'function') updateStats();
@@ -297,11 +295,9 @@
     if(typeof refoldTaskStateFromBlockCache === 'function') refoldTaskStateFromBlockCache();
     else if(typeof reloadPersistedEdits === 'function') {
       reloadPersistedEdits();
-      if(typeof normalizePomoStateRefs === 'function') normalizePomoStateRefs();
     }
     if(typeof refreshOpenAddModalDetails === 'function') refreshOpenAddModalDetails({fromBlockStore:true});
     if(typeof render === 'function') render();
-    if(typeof paintPivotTasks === 'function') paintPivotTasks();
     if(typeof updateStats === 'function') updateStats();
     if(typeof loadResponsibilities === 'function') loadResponsibilities();
     if(typeof loadTaskMenus === 'function') loadTaskMenus();

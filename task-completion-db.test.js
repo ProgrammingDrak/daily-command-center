@@ -131,6 +131,57 @@ test("the same mutation id is idempotent and a stale different mutation conflict
   );
 });
 
+test("a duplicate completion returns the full descendant set for timing repair", async () => {
+  const parent = row("parent", { local_id: "p", title: "Parent", status: "open" });
+  const child = row("child", { local_id: "c", subtaskOf: "p", title: "Step", status: "open" });
+  const pool = makePool([parent, child]);
+  const db = loadDb(pool);
+
+  await db.setTaskCompletion(input());
+  const duplicate = await db.setTaskCompletion(input());
+
+  assert.equal(duplicate.duplicate, true);
+  assert.deepEqual(duplicate.affectedTasks.map(item => item.id), ["parent", "child"]);
+  assert.deepEqual(duplicate.broadcastIds, ["parent", "child"]);
+});
+
+test("a completion older than the current work state is rejected", async () => {
+  const parent = row("parent", {
+    local_id: "p", title: "Active", status: "open",
+    startedAt: "2026-08-10T16:00:00.000Z",
+    workStateChangedAt: "2026-08-10T16:00:00.000Z",
+  });
+  const pool = makePool([parent]);
+  const db = loadDb(pool);
+
+  await assert.rejects(
+    db.setTaskCompletion(input({ completedAt: "2026-08-10T15:00:00.000Z" })),
+    error => error.statusCode === 409 && error.publicCode === "COMPLETION_WORK_STATE_CONFLICT"
+  );
+  assert.equal(pool._rows.get("parent").properties.status, "open");
+  assert.equal(pool._rows.get("parent").properties.startedAt, "2026-08-10T16:00:00.000Z");
+});
+
+test("a parent completion older than a descendant work state is rejected atomically", async () => {
+  const parent = row("parent", { local_id: "p", title: "Parent", status: "open" });
+  const child = row("child", {
+    local_id: "c", subtaskOf: "p", title: "Active step", status: "open",
+    startedAt: "2026-08-10T16:00:00.000Z",
+    workStateChangedAt: "2026-08-10T16:00:00.000Z",
+  });
+  const pool = makePool([parent, child]);
+  const db = loadDb(pool);
+
+  await assert.rejects(
+    db.setTaskCompletion(input({ completedAt: "2026-08-10T15:00:00.000Z" })),
+    error => error.statusCode === 409 && error.publicCode === "COMPLETION_WORK_STATE_CONFLICT"
+      && error.currentTask.id === "child"
+  );
+  assert.equal(pool._rows.get("parent").properties.status, "open");
+  assert.equal(pool._rows.get("child").properties.status, "open");
+  assert.equal(pool._rows.get("child").properties.startedAt, "2026-08-10T16:00:00.000Z");
+});
+
 test("reopen clears row completion and the matching legacy overlay in one commit", async () => {
   const task = row("parent", {
     local_id: "p", title: "T", status: "done", done: true,
@@ -163,6 +214,23 @@ test("a dateless backlog completion is reversible", async () => {
   }));
   assert.equal(pool._rows.get("parent").date, null);
   assert.equal(pool._rows.get("parent").properties.kind, "backlog");
+});
+
+test("meeting completion uses the planned end and records when it was checked", async () => {
+  const task = row("parent", {
+    local_id: "p", title: "Weekly meeting", type: "meeting", status: "open",
+    plannedStartAt: "2026-08-10T13:00:00.000Z",
+    plannedEndAt: "2026-08-10T13:30:00.000Z",
+  });
+  const pool = makePool([task]);
+  const db = loadDb(pool);
+
+  await db.setTaskCompletion(input({ completedAt: "2026-08-12T18:45:00.000Z" }));
+
+  const props = pool._rows.get("parent").properties;
+  assert.equal(props.completedAt, "2026-08-10T13:30:00.000Z");
+  assert.equal(props.doneAt, "2026-08-10T13:30:00.000Z");
+  assert.equal(props.completionRecordedAt, "2026-08-12T18:45:00.000Z");
 });
 
 test("a rowless historical task persists through the legacy overlay", async () => {

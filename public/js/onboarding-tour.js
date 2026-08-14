@@ -38,9 +38,9 @@
       selector: "#sn-open-btn"
     },
     {
-      title: "Focus With A Timer",
-      body: "Pick a task, start a focus session, and let the timer keep attention tied to the work in front of you.",
-      selector: "#pomo-task-card"
+      title: "Track Active Work",
+      body: "Start work from any task, then pause or complete it from the active work area.",
+      selector: "#active-work-dock"
     },
     {
       title: "Use The Supporting Tabs",

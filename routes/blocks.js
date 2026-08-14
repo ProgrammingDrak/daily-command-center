@@ -25,6 +25,7 @@ const { collectSubtreeBlockIds } = require("../lib/reschedule");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 const { route } = require("../lib/route-helpers");
 const createTaskTiming = require("../lib/task-timing");
+const TaskModel = require("../public/js/task-model");
 const createMaterializeGuard = require("../lib/materialize-guard");
 const { dedupeStatus } = createMaterializeGuard;
 const createResponsibilityStore = require("../responsibility-store");
@@ -71,7 +72,51 @@ module.exports = function mount(app, ctx) {
   // the close on read: any done row still carrying a startedAt with no
   // actualMinutes gets finalized. In-memory candidate filter first, so a day with
   // no orphaned timer costs zero queries. See lib/task-timing.js.
-  const { reconcileTiming } = createTaskTiming({ pool, blockDB, timeZone: ctx.APP_TIME_ZONE });
+  const taskTiming = createTaskTiming({ pool, blockDB, timeZone: ctx.APP_TIME_ZONE });
+  const { reconcileTiming, startWork, pauseWork, completeWork, reopenWork } = taskTiming;
+
+  async function syncSlack(blockOrId) {
+    if (typeof ctx.syncSlackTaskReactions !== "function") return;
+    try { await ctx.syncSlackTaskReactions(blockOrId); }
+    catch (error) { console.error("[blocks] Slack reaction sync failed (non-fatal):", error.message); }
+  }
+
+  function isWorkTaskRow(block) {
+    const props = (block && block.properties) || {};
+    return !!block && (TaskModel.foldsIntoItinerary(block)
+      || (TaskModel.isTaskRow(block) && props.kind === "backlog"));
+  }
+
+  async function stampSlackDeleteBoundary(block, atMs) {
+    const props = (block && block.properties) || {};
+    if (!block || block.deleted_at || props.source !== "slack-bookmark") return block;
+    const nextProps = { ...props, slackBookmarkChangedAt: new Date(atMs).toISOString() };
+    const written = await blockDB.updateBlock(block.id, { properties: nextProps });
+    block.properties = (written && written.properties) || nextProps;
+    return block;
+  }
+
+  async function normalizeCompletionWork(result, completed, { atMs, actor, mutationId } = {}) {
+    if (!result || result.persistenceTarget !== "task_row") return result;
+    const initial = Array.isArray(result.affectedTasks) && result.affectedTasks.length
+      ? result.affectedTasks
+      : (result.task ? [result.task] : []);
+    const refreshed = [];
+    for (const row of initial) {
+      if (!row || row.type !== "block" || row.deleted_at) continue;
+      const actionId = mutationId ? `${mutationId}:${row.id}` : null;
+      if (completed) await completeWork({ block: row, atMs, actor, actionId, normalizeExisting: true });
+      else await reopenWork({ block: row, atMs, actor, actionId });
+      const fresh = await blockDB.getBlockIncludingDeleted(row.id);
+      if (fresh) refreshed.push(fresh);
+    }
+    if (refreshed.length) {
+      result.affectedTasks = refreshed;
+      const targetId = result.task && result.task.id;
+      result.task = refreshed.find(row => row.id === targetId) || result.task;
+    }
+    return result;
+  }
 
   function isCompleted(block) {
     const props = (block && block.properties) || {};
@@ -337,6 +382,14 @@ module.exports = function mount(app, ctx) {
         userId,
         workspaceId,
       });
+      const recordedMs = Number.isFinite(Date.parse(body.completedAt || ""))
+        ? Date.parse(body.completedAt)
+        : Date.now();
+      await normalizeCompletionWork(result, body.completed, {
+        atMs: recordedMs,
+        actor: userId ? `dcc:${userId}` : "dcc",
+        mutationId: body.mutationId,
+      });
       if (result.duplicate) completionMetrics.duplicate++;
       else if (body._replay) completionMetrics.replayed++;
       else completionMetrics.accepted++;
@@ -349,6 +402,7 @@ module.exports = function mount(app, ctx) {
           mutationId: body.mutationId,
         }, workspaceId);
       }
+      for (const row of result.affectedTasks || []) await syncSlack(row);
       logCompletion(req, {
         requestId, mutationId: body.mutationId || null, taskRef: req.params.taskRef,
         resolvedTaskId: result.task && result.task.id || null, taskDate: body.taskDate || null,
@@ -377,6 +431,56 @@ module.exports = function mount(app, ctx) {
       });
     }
   });
+
+  app.post("/api/blocks/:id/work", route(async (req, res) => {
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!existing || existing.deleted_at) { res.status(404).json({ error: "Block not found" }); return; }
+    assertBlockOwnership(existing, req.workspaceId);
+    if (!isWorkTaskRow(existing)) {
+      res.status(409).json({ error: "This row is not a trackable task", code: "WORK_NOT_TRACKABLE" });
+      return;
+    }
+    const body = req.body || {};
+    if (body.action !== "start" && body.action !== "pause") {
+      res.status(400).json({ error: "action must be start or pause" });
+      return;
+    }
+    if (body.actionId != null && !/^[A-Za-z0-9:_-]{1,160}$/.test(String(body.actionId))) {
+      res.status(400).json({ error: "Invalid work action id" });
+      return;
+    }
+    const atMs = body.at == null ? Date.now() : Date.parse(body.at);
+    if (!Number.isFinite(atMs)) { res.status(400).json({ error: "at must be an ISO timestamp" }); return; }
+    const actor = req.session && req.session.userId ? `dcc:${req.session.userId}` : "dcc";
+    const operation = body.action === "start" ? startWork : pauseWork;
+    const result = await operation({ block: existing, atMs, actor, actionId: body.actionId || null });
+    const block = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (result.reason === "not-trackable") {
+      res.status(409).json({ error: "This task type does not track active work", code: "WORK_NOT_TRACKABLE" });
+      return;
+    }
+    if (result.reason === "completed") {
+      res.status(409).json({ error: "Completed work must be reopened before it can be started", code: "WORK_ALREADY_COMPLETED" });
+      return;
+    }
+    broadcast("blocks-changed", {
+      action: "work", workAction: body.action, blockIds: [req.params.id], clientId: body._clientId,
+    }, req.workspaceId);
+    await syncSlack(block);
+    return { ok: true, changed: !!result.changed, reason: result.reason || null, block };
+  }));
+
+  app.get("/api/blocks/:id/work", route(async (req, res) => {
+    const block = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!block || block.deleted_at) { res.status(404).json({ error: "Block not found" }); return; }
+    assertBlockOwnership(block, req.workspaceId);
+    if (!isWorkTaskRow(block)) {
+      res.status(409).json({ error: "This row is not a trackable task", code: "WORK_NOT_TRACKABLE" });
+      return;
+    }
+    const sessions = await taskTiming.getSessions(block, { workspaceId: req.workspaceId });
+    return { block, sessions };
+  }));
 
   // The mutation routes below fetch TOMBSTONE-INCLUDED on purpose, and say so by
   // calling getBlockIncludingDeleted rather than getBlock. The two db functions behave
@@ -414,17 +518,27 @@ module.exports = function mount(app, ctx) {
         userId,
         workspaceId,
       });
+      const recordedMs = Number.isFinite(Date.parse(props.completedAt || props.doneAt || ""))
+        ? Date.parse(props.completedAt || props.doneAt)
+        : Date.now();
+      await normalizeCompletionWork(result, req.body.completionIntent === "complete", {
+        atMs: recordedMs,
+        actor: userId ? `dcc:${userId}` : "dcc",
+        mutationId,
+      });
       if (result.task) await transitionLinkedTriage(result.task, isCompleted(result.task) ? "done" : "scheduled", Date.parse(props.completedAt || props.doneAt || ""));
       const blockIds = result.broadcastIds || [req.params.id];
       broadcast("blocks-changed", {
         action: "completion", blockIds, clientId: req.body._clientId, mutationId,
       }, workspaceId);
+      for (const row of result.affectedTasks || []) await syncSlack(row);
       return result.task;
     }
     const result = await blockDB.updateBlock(req.params.id, req.body);
     if (!isCompleted(existing) && isCompleted(result)) await transitionLinkedTriage(result, "done", Date.now());
     else if (isCompleted(existing) && !isCompleted(result)) await transitionLinkedTriage(result, "scheduled", Date.now());
     broadcast("blocks-changed", { action: "update", blockIds: [req.params.id], clientId: req.body._clientId }, req.workspaceId);
+    await syncSlack(result);
     return result;
   }));
 
@@ -432,7 +546,12 @@ module.exports = function mount(app, ctx) {
     const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
     if (!existing) { res.status(404).json({ error: "Block not found" }); return; }
     assertBlockOwnership(existing, req.workspaceId);
+    const deleteAt = Date.now();
+    await stampSlackDeleteBoundary(existing, deleteAt);
     const props = existing.properties || {};
+    if (props.startedAt) {
+      await pauseWork({ block: existing, atMs: deleteAt, actor: "dcc:delete", actionId: `delete:${existing.id}:${existing.updated_at || props.startedAt}` });
+    }
     const result = props.kind === "responsibility_item" && props.repeatType === "scheduled"
       ? await respStore.changeScheduledSeries({
           id: req.params.id,
@@ -444,6 +563,7 @@ module.exports = function mount(app, ctx) {
       : await blockDB.deleteBlock(req.params.id);
     await transitionLinkedTriage(existing, "release", Date.now());
     broadcast("blocks-changed", { action: "delete", blockIds: [req.params.id], clientId: req.query._clientId }, req.workspaceId);
+    await syncSlack({ ...existing, deleted_at: result.deleted_at || new Date().toISOString(), properties: existing.properties || props });
     return result;
   }));
 
@@ -476,6 +596,7 @@ module.exports = function mount(app, ctx) {
       undeletedIds: [req.params.id],
       clientId: (req.body && req.body._clientId) || undefined,
     }, req.workspaceId);
+    await syncSlack(result);
     return result;
   }));
 
@@ -537,6 +658,13 @@ module.exports = function mount(app, ctx) {
       if (!op || op.op !== "delete" || !op.id) continue;
       const block = await blockDB.getBlockIncludingDeleted(op.id);
       if (block) deletedBlocks.push(block);
+    }
+    for (const block of deletedBlocks) {
+      const deleteAt = Date.now();
+      await stampSlackDeleteBoundary(block, deleteAt);
+      if ((block.properties || {}).startedAt) {
+        await pauseWork({ block, atMs: deleteAt, actor: "dcc:delete", actionId: `batch-delete:${block.id}:${block.updated_at || (block.properties || {}).startedAt}` });
+      }
     }
 
     // A3 idempotency, resolved BEFORE batchOp opens its transaction. It has to
@@ -619,6 +747,8 @@ module.exports = function mount(app, ctx) {
     for (const block of deletedBlocks) await transitionLinkedTriage(block, "release", Date.now());
 
     broadcast("blocks-changed", { action: "batch", blockIds: result.blocks.map(b => b && (b.id || b.reordered)).filter(Boolean), clientId: _clientId }, req.workspaceId);
+    for (const block of deletedBlocks) await syncSlack({ ...block, deleted_at: new Date().toISOString() });
+    for (const block of result.blocks || []) if (block && block.id && !block.deleted_at) await syncSlack(block);
     return result;
   }));
 

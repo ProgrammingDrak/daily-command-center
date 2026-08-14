@@ -72,7 +72,6 @@ function initKeys() {
   DISMISS_KEY = "pa-dismissed-" + d;
   DONE_KEY = "pa-done-" + d;
   SESSIONS_KEY = "pa-sessions-" + d;
-  POMO_STATE_KEY = "pa-pomo-state-" + d;
   REVIEWED_KEY = "pa-reviewed-" + d;
   ADDED_KEY = "pa-added-tasks-" + d;
   PINNED_KEY = "pa-pinned-starts-" + d;
@@ -547,7 +546,6 @@ function refoldTaskStateFromBlockCache() {
   consider = JSON.parse(JSON.stringify((typeof INIT_CONSIDER !== "undefined" && INIT_CONSIDER) || []));
   backlog = JSON.parse(JSON.stringify((typeof INIT_BACKLOG !== "undefined" && INIT_BACKLOG) || []));
   reloadPersistedEdits();
-  if (typeof normalizePomoStateRefs === "function") normalizePomoStateRefs();
 }
 
 async function switchToDate(dateStr) {
@@ -622,7 +620,6 @@ async function switchToDate(dateStr) {
 
   if (dayBlocksLoaded) {
     reloadPersistedEdits();
-    if (typeof normalizePomoStateRefs === "function") normalizePomoStateRefs();
   } else {
     // Keep the newly selected day's immutable schedule, but never fold the previous
     // day's cache into it when hydration failed or was invalidated by a concurrent write.
@@ -660,7 +657,6 @@ async function switchToDate(dateStr) {
   if (typeof migrateLegacySubtasks === "function") migrateLegacySubtasks();
   // Re-render all tabs
   if (typeof buildSchedule === "function") buildSchedule();
-  if (typeof paintPivotTasks === "function") paintPivotTasks();
   if (schedView === "actual") { if (typeof buildDayReview === "function") buildDayReview(viewDate); else if (typeof buildActualView === "function") buildActualView(); }
   else if (schedView === "list" && typeof buildListView === "function") buildListView();
   else if (schedView === "calendar" && typeof buildItineraryCalendar === "function") buildItineraryCalendar();

@@ -31,7 +31,6 @@ test("refolding twice rebuilds from the immutable baseline instead of accumulati
     consider: [{ id: "stale-consider" }],
     backlog: [{ id: "stale-backlog" }],
     reloadPersistedEdits() { context.scheduled.push({ id: "block-task" }); },
-    normalizePomoStateRefs() { context.normalized = (context.normalized || 0) + 1; },
   };
   vm.createContext(context);
   vm.runInContext(persistenceSource.slice(start, end), context);
@@ -39,7 +38,6 @@ test("refolding twice rebuilds from the immutable baseline instead of accumulati
   assert.deepEqual(context.scheduled.map((x) => x.id), ["base", "block-task"]);
   assert.deepEqual(context.consider.map((x) => x.id), ["consider-base"]);
   assert.deepEqual(context.backlog.map((x) => x.id), ["backlog-base"]);
-  assert.equal(context.normalized, 2);
 });
 
 function coordinatorFactory() {

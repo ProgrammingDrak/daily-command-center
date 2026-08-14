@@ -12,7 +12,7 @@ function mountApp({ setTaskCompletion } = {}) {
     next();
   });
   const broadcasts = [];
-  const existing = {
+  let existing = {
     id: "row-1", type: "block", date: "2026-08-10", workspace_id: "ws-1",
     properties: { local_id: "task-1", title: "Keep", status: "open", _completionRevision: "rev-1" },
   };
@@ -25,7 +25,14 @@ function mountApp({ setTaskCompletion } = {}) {
     getBlockIncludingDeleted: async () => existing,
     getCarryoverPool: async () => ({ rows: [], dayRoots: [], overlays: {}, scanned: 0 }),
     getBlock: async () => null,
-    updateBlock: async () => existing,
+    updateBlock: async (_id, input = {}) => {
+      existing = {
+        ...existing,
+        ...input,
+        properties: input.properties === undefined ? existing.properties : input.properties,
+      };
+      return existing;
+    },
     batchOp: async () => ({ batchId: "b", blocks: [] }),
     reorderBlocks: async () => {},
     getBlocksByDate: async () => [],

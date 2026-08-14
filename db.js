@@ -20,6 +20,7 @@ const recurrence = require("./lib/recurrence");
 // derives its fixed-time skip set from isFixed() so the server and the carryover lane
 // cannot drift apart on which types are never carried over.
 const TaskTypes = require("./public/js/task-types");
+const { plannedWindowOf } = require("./lib/task-timing");
 
 // ── Workspace Bootstrap ──
 
@@ -381,7 +382,7 @@ function completedProps(props, existing, now, mutationId) {
   const next = { ...(props || {}) };
   next.status = "done";
   next.done = true;
-  for (const key of ["completed", "completedAt", "doneAt", "completedBy"]) {
+  for (const key of ["completed", "completedAt", "doneAt", "completionRecordedAt", "completedBy"]) {
     if (prior[key] !== undefined) next[key] = prior[key];
   }
   if (!next.completedAt && !next.doneAt) next.completedAt = now;
@@ -401,6 +402,7 @@ function reopenedProps(props, existing, mutationId) {
   delete next.completed;
   delete next.completedAt;
   delete next.doneAt;
+  delete next.completionRecordedAt;
   delete next.completedBy;
   next._completionRevision = transition ? crypto.randomUUID() : (prior._completionRevision || crypto.randomUUID());
   next._completionMutationId = transition
@@ -409,7 +411,7 @@ function reopenedProps(props, existing, mutationId) {
   return next;
 }
 
-const COMPLETION_PROP_KEYS = ["status", "done", "completed", "completedAt", "doneAt", "completedBy", "_completionRevision", "_completionMutationId"];
+const COMPLETION_PROP_KEYS = ["status", "done", "completed", "completedAt", "doneAt", "completionRecordedAt", "completedBy", "_completionRevision", "_completionMutationId"];
 function preserveCompletionProps(props, existing) {
   if (!isCompletedTaskProps(props) && !isCompletedTaskProps(existing)) {
     const next = { ...(props || {}) };
@@ -612,11 +614,32 @@ async function setTaskCompletion({
         "COMPLETION_CONFLICT", target);
     }
     if (sameMutation) {
+      let duplicateAffected = [target];
+      if (completed) {
+        const { rows } = await q.query(
+          `SELECT * FROM blocks
+            WHERE deleted_at IS NULL AND workspace_id IS NOT DISTINCT FROM $1
+              AND date IS NOT DISTINCT FROM $2::date
+            FOR UPDATE`,
+          [workspaceId, target.date || null]
+        );
+        const poolRows = rows.map(parseBlock).filter(completionWalkableRow);
+        const ids = collectCompletionSubtreeIds(poolRows, target);
+        duplicateAffected = [target, ...poolRows.filter(row => row.id !== target.id && ids.has(row.id))];
+      }
       await q.query("COMMIT");
       return {
-        task: target, affectedTasks: [target], revision: currentRevision,
-        persistenceTarget: "task_row", duplicate: true, broadcastIds: [target.id],
+        task: target, affectedTasks: duplicateAffected, revision: currentRevision,
+        persistenceTarget: "task_row", duplicate: true,
+        broadcastIds: duplicateAffected.map(row => row.id),
       };
+    }
+
+    const requestedMs = Date.parse(at || "");
+    const workChangedMs = Date.parse(currentProps.workStateChangedAt || "");
+    if (completed && Number.isFinite(requestedMs) && Number.isFinite(workChangedMs) && requestedMs < workChangedMs) {
+      throw taskCompletionError("Work state changed after this completion was recorded", 409,
+        "COMPLETION_WORK_STATE_CONFLICT", target);
     }
 
     let rowsToWrite = [target];
@@ -633,16 +656,35 @@ async function setTaskCompletion({
       rowsToWrite = [target, ...poolRows.filter(row => row.id !== target.id && ids.has(row.id))];
     }
 
+    if (completed && Number.isFinite(requestedMs)) {
+      for (const row of rowsToWrite) {
+        const rowWorkChangedMs = Date.parse((row.properties || {}).workStateChangedAt || "");
+        if (Number.isFinite(rowWorkChangedMs) && requestedMs < rowWorkChangedMs) {
+          throw taskCompletionError("Work state changed after this completion was recorded", 409,
+            "COMPLETION_WORK_STATE_CONFLICT", row);
+        }
+      }
+    }
+
     beforeRows = rowsToWrite.map(row => ({ ...row, properties: { ...(row.properties || {}) } }));
     for (const row of rowsToWrite) {
       const before = row.properties || {};
+      const plannedWindow = completed && TaskTypes.rule(before, "completionTimeMode") === "planned_end"
+        ? plannedWindowOf(row, process.env.DCC_TIME_ZONE || process.env.APP_TIME_ZONE || "America/New_York")
+        : null;
+      const completionAt = plannedWindow ? new Date(plannedWindow.endMs).toISOString() : at;
       let props = completed
-        ? completedProps(before, before, at, mutationId)
+        ? completedProps(before, before, completionAt, mutationId)
         : reopenedProps(before, before, mutationId);
       // Idempotency belongs to the request, including a same-state request. The
       // generic completion helpers intentionally preserve the prior mutation on a
       // no-op transition, so the dedicated endpoint stamps its own identity here.
       props._completionMutationId = mutationId;
+      if (completed && plannedWindow) {
+        props.completedAt = completionAt;
+        props.doneAt = completionAt;
+        props.completionRecordedAt = at;
+      }
       if (completed && userId != null) props.completedBy = String(userId);
       let date = row.date || null;
       if (completed && !date && taskDate) {
@@ -785,6 +827,13 @@ async function updateBlock(id, fields, client) {
       validateBlock(existing.type, parsed);
       newProps = applyCompletionIntent(existing.properties, parsed, completionIntent, now,
         isTaskRow({ type: existing.type, properties: existing.properties }), completionMutationId);
+    }
+    const existingProps = existing.properties || {};
+    if (isCompletedTaskProps(existingProps) && newProps && newProps.startedAt && !existingProps.startedAt) {
+      const conflict = new Error("Completed work must be reopened before it can be started");
+      conflict.statusCode = 409;
+      conflict.publicCode = "WORK_ALREADY_COMPLETED";
+      throw conflict;
     }
   // C6c: this is the OTHER day-changing writer, and the most-used one -- PATCH /api/blocks/:id is how
   // every promote/unschedule goes (state.js scheduleRowOnDay / unscheduleRow -> _writeRowDate).
@@ -1925,6 +1974,18 @@ async function purgeSoftDeleted(olderThanDays = 30) {
   return result.rowCount;
 }
 
+async function getTaskTimeEntries(blockId, workspaceId, opts = {}) {
+  const deleted = opts.includeDeleted ? "" : "AND deleted_at IS NULL";
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks WHERE type = 'time_entry'
+       AND properties->>'blockId' = $1
+       AND workspace_id IS NOT DISTINCT FROM $2 ${deleted}
+       ORDER BY date ASC, created_at ASC`,
+    [String(blockId), workspaceId || null]
+  );
+  return rows.map(parseBlock);
+}
+
 async function getOperations(blockId, limit = 50) {
   const { rows } = await pool.query(`SELECT * FROM operations WHERE block_id = $1 ORDER BY id DESC LIMIT $2`, [blockId, limit]);
   return rows;
@@ -2063,6 +2124,7 @@ module.exports = {
   batchOp, rescheduleBlocks, reorderBlocks, ensureDayRoot, createItineraryTask, createItineraryTasks,
   ensureDccStateTable, backfillLegacyTriageSuppressions, saveDccState, saveDccBriefDecision, getDccState, purgeSoftDeleted, getOperations,
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
+  getTaskTimeEntries,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
   findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, getFutureDatesWithBlocks
 };

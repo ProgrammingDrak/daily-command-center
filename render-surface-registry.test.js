@@ -332,7 +332,7 @@ test("★ the `scheduled` derivation guard can actually fail (positive + negativ
     'const ev = (scheduled||[]).find(t => t.id === id);',
     'const i = scheduled.findIndex(e => e.id === movedId);',
     'const has = scheduled.some(e => e.responsibilityId === id);',       // no canonical question in it
-    'const t = scheduled.find(s => s.title === pomoState.title);',
+    'const t = scheduled.find(s => s.title === activeTitle);',
     // ── the ROUTED forms of everything above: the layer answers, the call site chains
     'const open=DCC.TaskModel.selectOpen(childrenOf(id,scheduled)).length;',
     'const kids=DCC.TaskModel.selectNotDeleted(childrenOf(shellEv.id,scheduled));',
@@ -413,15 +413,10 @@ test("★ flattenSchedule stays retired — selectTree is the one tree walker", 
 
 // ── C6a: the "8 unregistered surfaces" the phase brief named, MEASURED ──
 //
-// The brief listed eight builds missing from SURFACES: sidebar.js x3,
-// unfinished-tasks.js, public-todo-share.js, features.js x3. Measured against
+// The brief listed several builds missing from SURFACES. Measured against
 // index.html, NONE of them is a registry surface, and registering them would have made
 // the registry claim coverage it does not have:
 //
-//   • sidebar.js buildMiniSchedule / buildSideDone / buildSideConsider /
-//     buildSideBacklog — every one opens `document.getElementById("pomo-<x>-list")`
-//     and returns early. That markup was deleted from index.html in 598cfca
-//     (2026-04-02); nothing in the codebase creates it. Four no-ops.
 //   • features.js buildTaskQueuePanel — same shape, `tqp-panel-*`, deleted by 781657a
 //     ("replace Task Menu tab + bottom Task Queue with edge-pinned side drawers").
 //   • public-todo-share.js — loads on public-todo.html, the GUEST share page. It has
@@ -435,10 +430,6 @@ test("★ flattenSchedule stays retired — selectTree is the one tree walker", 
 // asserts the dead builds stay UNregistered AND that their containers are still
 // absent. Restore the markup and the test fails, telling you to register the surface.
 const DEAD_BUILD_TARGETS = {
-  buildMiniSchedule: "pomo-mini-list",
-  buildSideDone: "pomo-done-list",
-  buildSideConsider: "pomo-consider-list",
-  buildSideBacklog: "pomo-backlog-list",
   buildTaskQueuePanel: "tqp-panel-triage",
 };
 

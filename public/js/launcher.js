@@ -1,8 +1,7 @@
 // ======== UNIVERSAL "+" LAUNCHER ========
 // The bottom-right "+" circle has two gestures:
 //   - quick tap        -> open the compose popover (add a task)
-//   - press-and-hold   -> open the semicircle radial HUD (Start timer / Add task / Give feedback)
-// Radial actions delegate to window.dccOpenTimer (timer.js) and window.dccOpenFeedback (feedback.js).
+//   - press-and-hold   -> open the radial HUD (Add task / Start work / Feedback / Catch up)
 (function(){
   const HOLD_MS = 450;     // how long a press must last to count as a hold
   const MOVE_CANCEL = 6;   // px of movement that cancels the hold (treated as a stray drag)
@@ -114,8 +113,8 @@
     if (!item) return;
     const action = item.dataset.action;
     closeRadial();
-    if (action === "timer")    { if (typeof window.dccOpenTimer === "function") window.dccOpenTimer(); }
-    else if (action === "task"){ openCompose(); }
+    if (action === "task"){ openCompose(); }
+    else if (action === "work" && window.DCCWorkSessions){ window.DCCWorkSessions.openPicker(); }
     else if (action === "feedback"){ if (typeof window.dccOpenFeedback === "function") window.dccOpenFeedback(); }
     else if (action === "catchup"){ if (typeof window.openUnfinishedTasks === "function") window.openUnfinishedTasks(); }
   });

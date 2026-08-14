@@ -483,7 +483,7 @@
     // "undelete" too: A2's route 404s when the row is gone for real (hard-deleted, or
     // purged by the 30-day purgeSoftDeleted sweep). There is nothing left to revive, so
     // retrying can only fail again.
-    if ((entry.op === "update" || entry.op === "completion" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete") && err.status === 404) return true;
+    if ((entry.op === "update" || entry.op === "completion" || entry.op === "delete" || entry.op === "reschedule" || entry.op === "batch" || entry.op === "undelete" || entry.op === "work") && err.status === 404) return true;
     // 409 is terminal for undelete and reschedule specifically. An undelete
     // db.undeleteBlock raises it when clearing deleted_at would move the row into
     // idx_blocks_idem_unique's predicate while a LIVE row already holds that
@@ -494,6 +494,7 @@
     // source calendar owns placement. That authority will not change on retry.
     if ((entry.op === "undelete" || entry.op === "reschedule") && err.status === 409) return true;
     if ((entry.op === "update" || entry.op === "completion") && err.status === 409) return true;
+    if (entry.op === "work" && err.status === 409) return true;
     return false;
   }
 
@@ -579,6 +580,11 @@
           case "reschedule":
             await apiPost("/api/blocks/" + entry.id + "/reschedule", entry.data);
             break;
+          case "work": {
+            const result = await apiPost("/api/blocks/" + entry.id + "/work", entry.data);
+            if (result && result.block) cacheSet(result.block);
+            break;
+          }
         }
         walRemove(entry._walId);
         succeeded++;
@@ -930,6 +936,53 @@
       });
     },
 
+    // Canonical Start/Pause lifecycle. Timestamp and action id are fixed before
+    // the first request, so an offline replay repeats the same transition.
+    async workAction(id, action, options) {
+      options = options || {};
+      setSaving();
+      const data = {
+        action,
+        at: options.at || new Date().toISOString(),
+        actionId: options.actionId || ((crypto && crypto.randomUUID)
+          ? crypto.randomUUID() : ("work-" + Date.now() + "-" + Math.random().toString(36).slice(2))),
+      };
+      const existing = cacheGet(id);
+      let optimistic = existing;
+      if (existing) {
+        const properties = { ...(existing.properties || {}) };
+        if (action === "start") {
+          properties.startedAt = data.at;
+          properties.everStarted = true;
+        } else if (action === "pause") {
+          delete properties.startedAt;
+          delete properties.activeWorkSessionId;
+          delete properties.startedBy;
+        }
+        optimistic = { ...existing, properties, updated_at: data.at };
+        cacheSet(optimistic);
+      }
+      const walId = walPush({ op: "work", id, data });
+      try {
+        const result = await apiPost("/api/blocks/" + id + "/work", data);
+        if (result && result.block) cacheSet(result.block);
+        walRemove(walId);
+        setSaved();
+        return result;
+      } catch (error) {
+        const permanent = error && (error.status === 400 || error.status === 404 || error.status === 409);
+        if (permanent) {
+          walMoveToDeadLetter(walGet().find(entry => entry && entry._walId === walId),
+            `${error.status || "error"} ${error.message || ""}`.trim());
+          if (existing) cacheSet(existing);
+          setError(error.message || "Work update rejected");
+          throw error;
+        }
+        setError("Work update failed - buffered for retry");
+        return { changed: false, buffered: true, block: optimistic };
+      }
+    },
+
     // Debounced update for content editing (notes, descriptions)
     updateBlockDebounced(id, properties, delay = 300) {
       debouncedUpdate(id, properties, delay);
@@ -1268,7 +1321,7 @@
     // Create one actual time-tracking segment for a task on `date` (default the
     // viewed date). Lives under that day's day_root; loads via date+type query,
     // so parent-id exactness is not required. Returns the created block.
-    async logTimeEntry({ blockId, taskTitle, start, end, durSec, source, pomoType, note, date } = {}) {
+    async logTimeEntry({ blockId, taskTitle, start, end, durSec, source, note, date } = {}) {
       const d = date || _currentDate;
       const parentId = (d === _currentDate) ? this.getDayRootId() : ("day-root-" + d);
       const props = {
@@ -1279,7 +1332,6 @@
         durSec: Math.max(0, Math.round(durSec || 0)),
         source: source || "manual"
       };
-      if (pomoType) props.pomoType = pomoType;
       if (note) props.note = note;
       return this.createBlock("time_entry", props, { parentId, date: d });
     },

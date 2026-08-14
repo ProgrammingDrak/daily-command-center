@@ -16,7 +16,7 @@
 //      open work on every surface, which is worse than the orphan promotion being fixed.
 //   6. isNested reads the real parent edges. `ev.nested` was written as a literal
 //      `false` by data.js and set true by nothing, yet gated the focus banner and the
-//      pomodoro picker, so both could offer a subtask as "your next task".
+//      task selectors, so both could offer a subtask as "your next task".
 //   7. a missing status resolver THROWS instead of quietly answering "nothing is done".
 //
 // Harness: the module is require()d directly — it is pure and dependency-free, which

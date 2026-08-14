@@ -382,6 +382,7 @@ function openAddModal(taskId, taskTitle) {
   document.getElementById('am-trivial-picker').style.display = 'none';
 
   document.getElementById('add-modal-overlay').classList.add('open');
+  if(window.DCCWorkSessions&&typeof window.DCCWorkSessions.renderHistory==='function')window.DCCWorkSessions.renderHistory(_addModalBlockId);
   setTimeout(function() { if(window._amBlockEditor) window._amBlockEditor.focus(); }, 80);
 }
 
@@ -1098,11 +1099,6 @@ function toggleSnCreateTask(){
   titleInp && titleInp.addEventListener("keydown", e=>{ if(e.key==="Enter") collapseIfAdded(); });
 })();
 
-// ======== FOCUS BANNER ========
-function _focusBannerOpenTimerPanel(){
-  if(typeof pomoState!=="undefined")pomoState.collapsedView="mini";
-  if(typeof ftSetView==="function")ftSetView("panel");
-}
 function persistAddModalCommute() {
   if (!_addModalTaskId) return;
   var toInput = document.getElementById('am-commute-to-input');
@@ -1132,88 +1128,6 @@ function updateAddModalCommuteHint() {
   var win = commuteLeaveWindow(preview);
   hint.textContent = win ? (win.label + (pointsText ? ' · ' + pointsText : '')) : (pointsText || 'No leave window');
 }
-function _focusBannerNextItem(){
-  if(typeof scheduled==="undefined"||!Array.isArray(scheduled))return null;
-  // C6a: `ev.nested` is never true (data.js writes the literal `false`; nothing
-  // assigns it), so THE FOCUS BANNER COULD OFFER A SUBTASK AS "YOUR NEXT TASK".
-  // selectActive + selectTopLevel read the real status registries and parent edges.
-  const items=DCC.TaskModel.selectTopLevel(DCC.TaskModel.selectActive(scheduled))
-    .filter(ev=>!["break","ooo","free_time"].includes(ev.type));
-  if(!items.length)return null;
-  const pinnedId=(typeof getPinnedActiveId==="function")?getPinnedActiveId():null;
-  if(pinnedId){
-    const pinned=items.find(ev=>String(ev.id)===String(pinnedId));
-    if(pinned)return pinned;
-  }
-  const active=(typeof isActive==="function")?items.find(isActive):null;
-  if(active)return active;
-  if(typeof pt==="function"&&typeof now==="function"){
-    const upcoming=items.find(ev=>pt(ev.start)>=now());
-    if(upcoming)return upcoming;
-  }
-  return items[0];
-}
-function _focusBannerStartNext(){
-  const next=_focusBannerNextItem();
-  if(!next)return false;
-  if(typeof openPomodoro==="function"){
-    openPomodoro(next.title,typeof dur==="function"?dur(next):(next.durMin||25),{id:next.id,source:"schedule",title:next.title});
-    return true;
-  }
-  return false;
-}
-function _focusBannerWireButton(){
-  const btn=document.getElementById("fb-open-timer");
-  if(!btn||btn.dataset.wired)return;
-  btn.dataset.wired="1";
-  btn.addEventListener("click",()=>{
-    const hasTitle=typeof pomoState!=="undefined"&&pomoState.title&&pomoState.title!=="--";
-    if(!hasTitle&&_focusBannerStartNext())return;
-    _focusBannerOpenTimerPanel();
-  });
-}
-function updateFocusBanner(){
-  const banner=document.getElementById("focus-banner");
-  if(!banner)return;
-  _focusBannerWireButton();
-  const title=(typeof pomoState!=="undefined"&&pomoState.title&&pomoState.title!=="--")?pomoState.title:null;
-  const fbLabel=banner.querySelector(".fb-label");
-  const fbTitle=document.getElementById("fb-title");
-  const fbStatus=document.getElementById("fb-status");
-  const fbBtn=document.getElementById("fb-open-timer");
-  if(!title){
-    const next=_focusBannerNextItem();
-    if(!next){banner.style.display="none";return;}
-    banner.style.display="flex";
-    banner.classList.remove("running");
-    banner.classList.add("ready");
-    if(fbLabel)fbLabel.textContent="Want to start to focus?";
-    if(fbTitle)fbTitle.textContent=next.title;
-    if(fbStatus){
-      const d=typeof dur==="function"?dur(next):(next.durMin||0);
-      const dLabel=(typeof ms==="function")?ms(d):d+"m";
-      fbStatus.textContent=d?"· "+dLabel+" ready":"· Ready";
-    }
-    if(fbBtn)fbBtn.title="Start timer for next item";
-    return;
-  }
-  banner.style.display="flex";
-  const running=(typeof pomoState!=="undefined"&&pomoState.running);
-  banner.classList.remove("ready");
-  banner.classList.toggle("running",running);
-  if(fbLabel)fbLabel.textContent="Now Focusing";
-  if(fbTitle)fbTitle.textContent=title;
-  if(fbStatus){
-    if(running){
-      const rem=(typeof pomoFmt==="function")?pomoFmt(pomoState.remaining):"";
-      fbStatus.textContent=rem?" · "+rem+" left":"";
-    }else{
-      fbStatus.textContent="· Paused";
-    }
-  }
-  if(fbBtn)fbBtn.title="Open timer panel";
-}
-
 // ======== TASK QUEUE PANEL ========
 function buildTaskQueuePanel(){
   const triagePanel=document.getElementById("tqp-panel-triage");
@@ -1351,7 +1265,7 @@ document.addEventListener('DOMContentLoaded',function(){
 
 // ======== SHARED TASK LIST RENDERER ========
 // Builds consistent .completion-item.clickable HTML for a list of tasks.
-// Used by openUntaskedModal, and available for Phase 4 pivot task picker.
+// Used by task selection surfaces that share completion-style rows.
 function buildTaskListHtml(tasks) {
   if (!tasks || !tasks.length) {
     return '<div style="font-size:11px;color:var(--text-muted);padding:8px">No tasks available.</div>';
@@ -1359,7 +1273,7 @@ function buildTaskListHtml(tasks) {
   return tasks.map(function(t) {
     var c = (typeof cfg === 'function') ? cfg(t.type) : {color:'var(--text-muted)',tag:t.type||''};
     var timeStr = (t.start && t.end) ? ('<span>' + (typeof f12==='function'?f12(t.start):t.start) + ' \u2013 ' + (typeof f12==='function'?f12(t.end):t.end) + '</span>') : '';
-    var taskSource = t._pomoSource || (t.start && t.end ? 'schedule' : '');
+    var taskSource = t.start && t.end ? 'schedule' : '';
     return '<div class="completion-item clickable" data-task-id="' + (t.id||'').replace(/"/g,'&quot;') + '" data-task-source="' + taskSource.replace(/"/g,'&quot;') + '" data-task-title="' + (t.title||'').replace(/"/g,'&quot;') + '">' +
       '<span class="ci-bar" style="background:' + c.color + '"></span>' +
       '<div class="ci-body">' +
@@ -1448,8 +1362,6 @@ const SURFACES = {
   taskMenusBadge:  {build:()=>{if(typeof _updateTaskMenusBadge==="function")_updateTaskMenusBadge();},isVisible:()=>true},
   listView:        {build:()=>{if(typeof buildListView==="function")buildListView();},          isVisible:()=>_tabActive("schedule")&&schedView==="list"},
   actualView:      {build:()=>{if(typeof buildActualView==="function")buildActualView();},      isVisible:()=>_tabActive("schedule")&&schedView==="actual"},
-  pivotTasks:      {build:()=>{if(typeof paintPivotTasks==="function")paintPivotTasks();},      isVisible:()=>true},
-  focusBanner:     {build:()=>{if(typeof updateFocusBanner==="function")updateFocusBanner();},  isVisible:()=>_tabActive("schedule")},
 };
 
 // Named scopes let a hot call site mark only the surfaces it can actually change.
