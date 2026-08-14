@@ -577,6 +577,81 @@ function installDayReview(ctx, count) {
   return packet;
 }
 
+function waitingCtx() {
+  const item = {
+    id: "waiting-1",
+    created_at: "2026-07-23T12:00:00Z",
+    properties: {
+      kind: "delegated_item",
+      myTask: "Launch plan",
+      title: "Legal approval",
+      delegatee: { name: "Alex" },
+      checkInDate: TODAY,
+      checkInDays: 7,
+      status: "open"
+    }
+  };
+  const draft = {
+    id: "waiting-checkin:waiting-1:" + TODAY,
+    type: "waiting_checkin",
+    title: "Check in: Launch plan",
+    waiting_item_id: "waiting-1",
+    waiting_cycle_key: "waiting:waiting-1:" + TODAY,
+    draft_type: "internal",
+    draft_preview: "Hi Alex, quick check-in."
+  };
+  const calls = { snoozed: [], scheduled: [], unblocked: [], copied: [] };
+  const h = load({ [ymd(1)]: [dayRoot()] }, [ymd(1)], {
+    getAttentionWaitingItems: () => [item],
+    activeTriageItems: () => [draft]
+  });
+  h.ctx.window.DCC.Waiting = {
+    itemUrgency: () => ({ score: 100 }),
+    blockerLabel: () => "Blocked by Alex: Legal approval",
+    dueLabel: () => "check in today",
+    completeCheckIn: async () => true,
+    snooze: async (id, date) => { calls.snoozed.push({ id, date }); return true; },
+    scheduleCheckIn: (id, _anchor, _done, date) => { calls.scheduled.push({ id, date: date || null }); },
+    unblock: async id => { calls.unblocked.push(id); return true; },
+    copyText: async text => { calls.copied.push(text); return true; }
+  };
+  return Object.assign(h, { calls });
+}
+
+test("Waiting has one Loose Ends row with its internal draft, not a duplicate triage row", async () => {
+  const { ctx } = waitingCtx();
+  await ctx.window.initCatchUp();
+  assert.deepEqual([...rowsOf(ctx)].map(titleOf).filter(Boolean), ["Launch plan"]);
+  assert.deepEqual(
+    [...allRowsOf(ctx)].filter(r => r.className === "cu-section-label").map(r => r.textContent),
+    ["Waiting"]
+  );
+  const row = [...rowsOf(ctx)][0];
+  assert.ok(row.querySelector(".cu-wait-copy"), "the copy-ready fallback stays in Waiting details");
+  const actionHtml = /<div class="carryover-row-actions">([\s\S]*?)<\/div>/.exec(row.innerHTML)[1];
+  assert.deepEqual([...actionHtml.matchAll(/<button[^>]*>([^<]+)<\/button>/g)].map(match => match[1]), ["Today", "Drop", "Details"]);
+});
+
+test("Waiting actions snooze, schedule a check-in, unblock, and copy the fallback", async () => {
+  const { ctx, calls } = waitingCtx();
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  row.querySelector(".cu-wait-details").fire("click");
+  assert.equal(row.querySelector(".cu-details").hidden, false);
+  row.querySelector(".cu-wait-drop").fire("click");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  row.querySelector(".cu-wait-today").fire("click", { currentTarget: row.querySelector(".cu-wait-today") });
+  row.querySelector(".cu-wait-schedule").fire("click", { currentTarget: row.querySelector(".cu-wait-schedule") });
+  row.querySelector(".cu-wait-unblock").fire("click");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  row.querySelector(".cu-wait-copy").fire("click");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls.snoozed, [{ id: "waiting-1", date: "2026-07-30" }]);
+  assert.deepEqual(calls.scheduled, [{ id: "waiting-1", date: TODAY }, { id: "waiting-1", date: null }]);
+  assert.deepEqual(calls.unblocked, ["waiting-1"]);
+  assert.deepEqual(calls.copied, ["Hi Alex, quick check-in."]);
+});
+
 test("the unified modal follows the requested section order", async () => {
   const d = ymd(1);
   const { ctx } = triageCtx(

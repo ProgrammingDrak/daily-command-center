@@ -59,6 +59,11 @@
     if (typeof __todayDate === "string" && __todayDate) return __todayDate;
     return new Date().toISOString().slice(0, 10);
   }
+  function nextDayStr() {
+    const date = new Date(todayStr() + "T12:00:00Z");
+    date.setUTCDate(date.getUTCDate() + 1);
+    return date.toISOString().slice(0, 10);
+  }
   // Both predicates come from DCC.Carryover, the same place the projection and the
   // actions do. They used to be local copies here, which is how "this prompt has to
   // agree with the lane" became a comment instead of an invariant: the lane spelled
@@ -304,6 +309,9 @@
     const overlay = ensureModal();
     const roots = rootsOf(pool);
     const triage = cfg.triage || [];
+    const waiting = cfg.waiting || [];
+    const waitingTriage = cfg.waitingTriage || [];
+    const waitingDraftById = new Map(waitingTriage.map(item => [String(item.waiting_item_id || ""), item]));
     const slack = triage.filter(item => triageLane(item) === "slack");
     const gmail = triage.filter(item => triageLane(item) === "gmail");
     const otherTriage = triage.filter(item => triageLane(item) === "other");
@@ -323,10 +331,12 @@
     const taskPhrase = roots.length + " unfinished task" + (roots.length === 1 ? "" : "s") +
       " from the last two weeks" + (total > openCount ? " (showing " + openCount + " of " + total + ")" : "");
     const triagePhrase = triage.length + " Sweep item" + (triage.length === 1 ? "" : "s") + " waiting";
+    const waitingPhrase = waiting.length + " Waiting item" + (waiting.length === 1 ? "" : "s") + " due for a decision";
     const meetingPhrase = meetingActions.length + " meeting follow-up" + (meetingActions.length === 1 ? "" : "s");
     const reviewPhrase = reviewCount + " Day in Review decision" + (reviewCount === 1 ? "" : "s");
     const phrases = [];
     if (roots.length) phrases.push(taskPhrase);
+    if (waiting.length) phrases.push(waitingPhrase);
     if (triage.length) phrases.push(triagePhrase);
     if (meetingActions.length) phrases.push(meetingPhrase);
     if (reviewCount) phrases.push(reviewPhrase);
@@ -337,8 +347,10 @@
     const rowEls = new Map();   // unfinished rows, keyed by ev.id
     const triEls = new Map();   // triage rows, keyed by triage item id
     const meetingEls = new Map(); // recap proposals, keyed by proposed-action id
+    const waitingEls = new Map(); // Waiting rows, keyed by global item id
     const activeReviewRows = new Set();
     const taskRows = [];
+    const waitingRows = [];
     const slackRows = [];
     const gmailRows = [];
     const otherRows = [];
@@ -349,7 +361,7 @@
     // "older waiting" line still counts as something to answer — closing over it
     // would hide the queue it exists to advertise.
     let olderPending = olderTriage.length > 0;
-    const pendingDomCount = () => rowEls.size + triEls.size + meetingEls.size + reviewCount + (olderPending ? olderTriage.length : 0);
+    const pendingDomCount = () => rowEls.size + waitingEls.size + triEls.size + meetingEls.size + reviewCount + (olderPending ? olderTriage.length : 0);
     const updateCount = () => setIndicatorCount(pendingDomCount());
     const closeIfDrained = () => {
       updateCount();
@@ -505,6 +517,89 @@
       cfg._olderButton = more;
     }
 
+    waiting.forEach(item => {
+      const api = window.DCC && window.DCC.Waiting;
+      if (!api) return;
+      const p = item.properties || {};
+      const task = p.myTask || p.title || "Waiting task";
+      const detailId = "cu-waiting-details-" + (++detailSeq);
+      const draft = waitingDraftById.get(String(item.id));
+      const safe = (window.DCC && window.DCC.safeUrl) || (() => "");
+      const draftHref = draft && (safe(draft.draft_link || draft.draft_url) || safe(draft.link || draft.source_url));
+      const urgency = api.itemUrgency(item);
+      const blocker = api.blockerLabel(item);
+      const el = document.createElement("div");
+      el.className = "carryover-row cu-unified-row cu-waiting-row";
+      el.innerHTML =
+        completeBtn(task) +
+        '<div class="carryover-row-info">' +
+          '<div class="cu-title-line"><div class="carryover-row-title"></div>' +
+            calBtn("cu-cal", "Snooze until another day: " + task) +
+          '</div>' +
+          '<div class="carryover-row-meta"></div>' +
+        '</div>' +
+        rowActions("cu-wait", "cu-wait-details", task) +
+        detailShell(detailId, "Waiting details for " + task);
+      const titleEl = el.querySelector(".carryover-row-title");
+      const detailsToggle = el.querySelector(".cu-wait-details");
+      const details = el.querySelector(".cu-details");
+      const detailBody = el.querySelector(".cu-details-body");
+      titleEl.textContent = task;
+      titleEl.title = task;
+      el.querySelector(".carryover-row-meta").textContent = blocker + " · " + api.dueLabel(item) + " · urgency " + urgency.score;
+      details.hidden = true;
+      detailsToggle.setAttribute("aria-expanded", "false");
+      detailsToggle.setAttribute("aria-controls", detailId);
+      el.querySelector(".cu-details-full-title").textContent = task;
+      appendDetailSection(detailBody, "Waiting on", [blocker]);
+      appendDetailSection(detailBody, "Context", [p.notes]);
+      appendDetailSection(detailBody, "Check-in draft", [draft && draft.draft_preview]);
+      const detailActions = document.createElement("div");
+      detailActions.className = "carryover-row-actions cu-wait-detail-actions";
+      detailActions.innerHTML =
+        (draftHref ? '<a class="carryover-btn carryover-btn-schedule cu-wait-draft" target="_blank" rel="noopener">Review draft</a>' :
+          (draft && draft.draft_preview ? '<button class="carryover-btn carryover-btn-schedule cu-wait-copy">Copy draft</button>' : '')) +
+        '<button class="carryover-btn cu-wait-schedule">Schedule check-in</button>' +
+        '<button class="carryover-btn carryover-btn-schedule cu-wait-unblock">Unblock</button>';
+      detailBody.appendChild(detailActions);
+      detailsToggle.addEventListener("click", () => {
+        const opening = details.hidden;
+        details.hidden = !opening;
+        detailsToggle.setAttribute("aria-expanded", opening ? "true" : "false");
+        detailsToggle.setAttribute("aria-label", (opening ? "Hide" : "Show") + " details for " + task);
+        el.classList[opening ? "add" : "remove"]("details-open");
+      });
+      const busy = on => el.querySelectorAll("button").forEach(button => { button.disabled = !!on; });
+      const forget = () => forgetRow(el, waitingEls, item.id);
+      const runWaiting = async fn => { busy(true); if (await fn()) forget(); else busy(false); };
+      el.querySelector(".cu-complete").addEventListener("click", e => {
+        e.stopPropagation();
+        runWaiting(() => api.completeCheckIn(item.id));
+      });
+      el.querySelector(".cu-wait-drop").setAttribute("title", "Dismiss until tomorrow");
+      el.querySelector(".cu-wait-drop").addEventListener("click", () => {
+        runWaiting(() => api.snooze(item.id, nextDayStr()));
+      });
+      el.querySelector(".cu-wait-today").addEventListener("click", event => api.scheduleCheckIn(item.id, event.currentTarget, forget, todayStr()));
+      window.DCC.wireDateButton(el.querySelector(".cu-cal"), {
+        header: 'Snooze "' + task + '" until…',
+        actionLabel: "Snooze",
+        onPick: date => runWaiting(() => api.snooze(item.id, date))
+      });
+      el.querySelector(".cu-wait-schedule").addEventListener("click", event => api.scheduleCheckIn(item.id, event.currentTarget, forget));
+      el.querySelector(".cu-wait-unblock").addEventListener("click", () => runWaiting(() => api.unblock(item.id)));
+      const draftLink = el.querySelector(".cu-wait-draft");
+      if (draftLink) draftLink.href = draftHref;
+      const copy = el.querySelector(".cu-wait-copy");
+      if (copy) copy.addEventListener("click", async () => {
+        const copied = await api.copyText(draft.draft_preview);
+        if (typeof showToast === "function") showToast(copied ? "Check-in draft copied" : "Could not copy draft", copied ? "success" : "error");
+      });
+      waitingEls.set(item.id, el);
+      activeReviewRows.add(el);
+      waitingRows.push(el);
+    });
+
     meetingActions.forEach(item => {
       const el = document.createElement("div");
       const mine = item.owner !== "other";
@@ -655,6 +750,7 @@
       rows.forEach(row => listEl.appendChild(row));
     };
     appendRows("Slipped tasks", taskRows);
+    appendRows("Waiting", waitingRows);
     appendRows("Slack", slackRows);
     appendRows("Gmail", gmailRows);
     appendRows("Other", otherRows);
@@ -746,7 +842,7 @@
   function snapshotCount(snapshot) {
     if (!snapshot) return 0;
     const reviewApi = window.DCC && window.DCC.DayReview;
-    return rootsOf(snapshot.res.rows).length + snapshot.triage.length + snapshot.meetingActions.length +
+    return rootsOf(snapshot.res.rows).length + snapshot.waiting.length + snapshot.triage.length + snapshot.meetingActions.length +
       (snapshot.dayReview && reviewApi ? reviewApi.pendingCount(snapshot.dayReview) : 0);
   }
 
@@ -760,11 +856,17 @@
       reviewApi && typeof reviewApi.load === "function" ? reviewApi.load() : Promise.resolve(null)
     ]);
     const failed = results.some(result => result.status === "rejected");
+    const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
+    const waitingIds = new Set(waiting.map(item => String(item.id)));
+    const allTriage = activeTriage();
+    const waitingTriage = allTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
     const snapshot = {
       res: results[0].status === "fulfilled" ? results[0].value : (_lastSnapshot ? _lastSnapshot.res : { rows: [], total: 0 }),
       meetingActions: results[1].status === "fulfilled" ? results[1].value : (_lastSnapshot ? _lastSnapshot.meetingActions : []),
       dayReview: results[2].status === "fulfilled" ? results[2].value : (_lastSnapshot ? _lastSnapshot.dayReview : null),
-      triage: activeTriage(),
+      waiting,
+      waitingTriage,
+      triage: allTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || ""))),
       failed: failed
     };
     _lastSnapshot = snapshot;
@@ -784,6 +886,8 @@
     if ((opts.open || wasOpen) && snapshotCount(snapshot)) {
       openPrompt(snapshot.res.rows, snapshot.res.total, {
         triage: snapshot.triage,
+        waiting: snapshot.waiting,
+        waitingTriage: snapshot.waitingTriage,
         meetingActions: snapshot.meetingActions,
         dayReview: snapshot.dayReview,
         loadFailed: snapshot.failed,
@@ -825,7 +929,7 @@
     // banking it here is what stops the courier from running the pet at page load
     // for mail Drake has already been shown.
     const courier = window.DCC && window.DCC.TriageCourier;
-    if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.map(i => i.id));
+    if (courier && typeof courier.markSeen === "function") courier.markSeen(triage.concat(snapshot.waitingTriage).map(i => i.id));
     // Gate on OPEN rows, not raw rows: a pool made up entirely of done children is
     // nothing to catch up on, and prompting on it opened an empty-feeling modal.
     if (!snapshotCount(snapshot) && !snapshot.dayReview) {
@@ -835,6 +939,8 @@
     if (reviewed()) return;
     openPrompt(snapshot.res.rows, snapshot.res.total, {
       triage: triage,
+      waiting: snapshot.waiting,
+      waitingTriage: snapshot.waitingTriage,
       meetingActions: snapshot.meetingActions,
       dayReview: snapshot.dayReview
     });
@@ -848,7 +954,11 @@
     const CO = window.DCC && window.DCC.Carryover;
     if (!CO) return false;
     const ids = new Set(newIds || []);
-    const all = activeTriage();
+    const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
+    const waitingIds = new Set(waiting.map(item => String(item.id)));
+    const rawTriage = activeTriage();
+    const waitingTriage = rawTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
+    const all = rawTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || "")));
     const fresh = all.filter(i => ids.has(i.id));
     if (!fresh.length) return false;
     let res = { rows: [], total: 0 };
@@ -863,11 +973,13 @@
       title: "Fresh from the sweep",
       triage: fresh,
       olderTriage: all.filter(i => !ids.has(i.id)),
+      waiting,
+      waitingTriage,
       meetingActions: meetingActions,
       dayReview: dayReview,
       loadFailed: loadFailed
     });
-    _lastSnapshot = { res, triage: all, meetingActions, dayReview, failed: loadFailed };
+    _lastSnapshot = { res, triage: all, waiting, waitingTriage, meetingActions, dayReview, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;
   }
@@ -888,15 +1000,21 @@
     let dayReview = null;
     try { dayReview = window.DCC.DayReview ? await window.DCC.DayReview.load() : null; }
     catch (e) { loadFailed = true; }
-    const triage = activeTriage();
+    const waiting = typeof window.getAttentionWaitingItems === "function" ? window.getAttentionWaitingItems() : [];
+    const waitingIds = new Set(waiting.map(item => String(item.id)));
+    const rawTriage = activeTriage();
+    const waitingTriage = rawTriage.filter(item => waitingIds.has(String(item.waiting_item_id || "")));
+    const triage = rawTriage.filter(item => !waitingIds.has(String(item.waiting_item_id || "")));
     openPrompt(res.rows, res.total, {
       title: "Fresh meeting follow-ups",
       triage: triage,
+      waiting,
+      waitingTriage,
       meetingActions: meetingActions,
       dayReview: dayReview,
       loadFailed: loadFailed
     });
-    _lastSnapshot = { res, triage, meetingActions, dayReview, failed: loadFailed };
+    _lastSnapshot = { res, triage, waiting, waitingTriage, meetingActions, dayReview, failed: loadFailed };
     setIndicatorCount(snapshotCount(_lastSnapshot));
     return true;
   }

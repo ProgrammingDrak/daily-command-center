@@ -2886,6 +2886,8 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .dm-task-link{margin-bottom:6px}
 /* Check-in: segmented toggle + panes */
 .dm-checkin-toggle{display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:8px}
+.dm-waiting-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:560px){.dm-waiting-grid{grid-template-columns:1fr}}
 .dm-checkin-tab{flex:1;padding:7px 10px;background:var(--card);color:var(--text-muted);border:none;border-right:1px solid var(--border);font-size:12px;font-family:inherit;cursor:pointer}
 .dm-checkin-tab:last-child{border-right:none}
 .dm-checkin-tab:hover{color:var(--text)}

@@ -199,6 +199,13 @@ test("🔖 creates a useful captured task keyed by channel:ts before AI is avail
   assert.equal(p.status, "open");
   // source_id must be an http(s) URL so the DCC row renders the "Slack ↗" pill
   assert.match(p.source_id, /^https:\/\/.*slack\.com\/archives\//);
+  assert.deepEqual(p.contact, {
+    channel: "slack",
+    address: "C1",
+    sourceRef: p.source_id,
+    threadTs: "222.2",
+    messageTs: "222.2",
+  });
 });
 
 test("👥 creates a delegated item with tomorrow's check-in and removes an untouched item", async () => {
@@ -210,9 +217,18 @@ test("👥 creates a delegated item with tomorrow's check-in and removes an unto
   assert.equal(item.properties.kind, "delegated_item");
   assert.equal(item.properties.idempotency_key, "slack-delegate:C1:222.3");
   assert.equal(item.properties.myTask, "Please review the launch checklist with Alex tomorrow");
+  assert.equal(item.properties.waitingReason, "delegated");
   assert.equal(item.properties.checkInMode, "date");
   assert.equal(item.properties.checkInDate, "2026-07-29");
   assert.match(item.properties.source_id, /^https:\/\/.*slack\.com\/archives\//);
+  assert.deepEqual(item.properties.contact, {
+    channel: "slack",
+    address: "C1",
+    sourceRef: item.properties.source_id,
+    threadTs: "222.3",
+    messageTs: "222.3",
+  });
+  assert.deepEqual(item.properties.delegate_auto_snapshot.contact, item.properties.contact);
   assert.ok(calls.broadcast.some((b) => b.payload.action === "slack-delegate-create"));
 
   await post(handler, removal("busts_in_silhouette", "222.3"));
@@ -275,6 +291,13 @@ test("delayed message capture re-reads the row and preserves concurrent user edi
       blocks[0].properties.notes = "Keep this user-authored context.";
       blocks[0].properties.myTask = "Keep this user-authored delegate title";
       blocks[0].properties.delegatee = { name: "Taylor" };
+      blocks[0].properties.contact = {
+        channel: "slack",
+        address: "C-private",
+        sourceRef: "https://example.slack.com/archives/C-private/p-custom",
+        threadTs: "custom-thread",
+        messageTs: "custom-message",
+      };
       return { ok: true, status: 200, json: async () => ({ ok: true, message: {
         ts: "222.43", text: "Please follow up on the renewal packet tomorrow", user: "U1",
       } }) };
@@ -286,6 +309,13 @@ test("delayed message capture re-reads the row and preserves concurrent user edi
   assert.equal(blocks[0].properties.notes, "Keep this user-authored context.");
   assert.equal(blocks[0].properties.myTask, "Keep this user-authored delegate title");
   assert.deepEqual(blocks[0].properties.delegatee, { name: "Taylor" });
+  assert.deepEqual(blocks[0].properties.contact, {
+    channel: "slack",
+    address: "C-private",
+    sourceRef: "https://example.slack.com/archives/C-private/p-custom",
+    threadTs: "custom-thread",
+    messageTs: "custom-message",
+  });
   assert.equal(blocks[0].properties.source_message_preview, "Please follow up on the renewal packet tomorrow");
 });
 
@@ -352,6 +382,13 @@ test("thread enrichment paginates replies and stores Slack's canonical permalink
   });
   await post(handler, reaction("bookmark", "222.55", "222.9"));
   assert.equal(blocks[0].properties.source_id, "https://example.slack.com/archives/C1/p22255?thread_ts=222.50&cid=C1");
+  assert.deepEqual(blocks[0].properties.contact, {
+    channel: "slack",
+    address: "C1",
+    sourceRef: "https://example.slack.com/archives/C1/p22255?thread_ts=222.50&cid=C1",
+    threadTs: "222.50",
+    messageTs: "222.55",
+  });
   const replyCalls = calls.fetch.filter((c) => c.url.includes("conversations.replies"));
   assert.equal(replyCalls.length, 2);
   assert.equal(new URL(replyCalls[1].url).searchParams.get("cursor"), "page-2");
