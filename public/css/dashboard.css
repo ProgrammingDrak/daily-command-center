@@ -4914,7 +4914,6 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .recap-action.is-scheduled .recap-action-text{color:var(--text-muted)}
 /* Pick-mode popover with allowTime: bare time input, right-aligned, no dur stepper */
 .resched-time-only{justify-content:flex-end}
-
 /* Native work sessions */
 .active-work-dock{margin:0 0 12px;border:1px solid rgba(34,211,238,.28);background:rgba(8,145,178,.08);border-radius:12px;padding:10px 12px}
 .active-work-head,.active-work-row{display:flex;align-items:center;gap:10px}
@@ -4956,3 +4955,7 @@ textarea.delegated-modal-input{resize:vertical;min-height:60px}
 .work-picker-row small{color:var(--text-muted);font-weight:400}
 .work-picker-row b{color:var(--cyan,#22d3ee);font-size:11px}
 @media(max-width:600px){.active-work-row{flex-wrap:wrap}.active-work-title{flex:1}.active-work-time{width:100%;margin-left:18px}.active-work-row .work-action-btn:first-of-type{margin-left:18px}}
+.recap-recording-attachment{margin:0 0 16px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.recap-recording-link{display:inline-flex;align-items:center;gap:6px;margin:6px 10px 0 0;font-weight:700;text-decoration:none}
+.recap-recording-link.cold{font-weight:600;opacity:.78}
+.recap-action-source{display:inline-flex;margin-left:8px;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap}

@@ -531,6 +531,8 @@ module.exports = function mount(app, ctx) {
         proposedActions,
         recapToNotes: body.recap_to_notes !== false,
         dashboardRef: body.dashboard_ref || null,
+        recordingArtifact: body.recording_artifact || null,
+        recordingSource: body.recording_source || null,
       });
       // recapArrived (true only on a recap's first landing) lets the client toast
       // "Recap ready" once, so Drake knows to open it even after he's moved on.

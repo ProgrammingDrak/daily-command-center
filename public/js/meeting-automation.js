@@ -235,7 +235,22 @@
   // just-scheduled item shows "Scheduled ✓" instantly; the durable signal is the
   // proposal's own status:"placed"/placedDate (stamped by placeApprovedAction), so
   // it survives a reopen too.
-  function recapActionsHtml(actions,placed){
+  function recapTime(seconds){
+    seconds=Math.max(0,Math.round(Number(seconds)||0));
+    const h=Math.floor(seconds/3600),m=Math.floor((seconds%3600)/60),s=seconds%60;
+    return (h?String(h).padStart(2,"0")+":":"")+String(m).padStart(2,"0")+":"+String(s).padStart(2,"0");
+  }
+
+  function recapAttachmentHtml(data,id){
+    const meeting=data&&data.meeting||{};
+    if(!meeting.dashboardRef&&!meeting.recordingSource)return "";
+    let links="";
+    if(meeting.dashboardRef)links+='<a class="recap-recording-link" href="/meetings/'+encodeURIComponent(id)+'/dashboard" target="_blank" rel="noopener">▶ Full recording &amp; transcript</a>';
+    if(meeting.recordingSource&&meeting.recordingSource.url)links+='<a class="recap-recording-link cold" href="'+esc(meeting.recordingSource.url)+'" target="_blank" rel="noopener">Cold-storage source</a>';
+    return '<div class="recap-recording-attachment"><div class="prep-view-kicker">Meeting record</div>'+links+'</div>';
+  }
+
+  function recapActionsHtml(actions,placed,id,dashboardRef){
     if(!actions.length){
       return '<div class="prep-view-actions recap-actions"><div class="prep-view-empty recap-empty"><span>No action items captured for this meeting.</span></div></div>';
     }
@@ -247,12 +262,14 @@
       const when=(pl&&pl.date)||a.placedDate||"";
       const ownerOther=(a.owner==="other"||a.owner==="others");
       const meta=(a.priority?'<em>'+esc(a.priority)+'</em>':'')+(ownerOther?'<em class="recap-owner">delegated</em>':'');
+      const hasStart=dashboardRef&&a.start!==null&&a.start!==undefined&&isFinite(Number(a.start));
+      const source=hasStart?'<a class="recap-action-source" href="/meetings/'+encodeURIComponent(id)+'/dashboard?t='+encodeURIComponent(a.start)+'" target="_blank" rel="noopener" title="'+esc(a.quote||"Open cited transcript moment")+'">▶ '+recapTime(a.start)+'</a>':'';
       let ctrl;
       if(isPlaced)ctrl='<span class="recap-sched-done">Scheduled'+(when?' '+esc(typeof _prettyDateLabel==="function"?_prettyDateLabel(when):when):'')+' &#10003;</span>';
       else if(ownerOther)ctrl='<span class="recap-owner-note">Owner: other</span>';
       else ctrl='<button class="recap-sched-btn" type="button" data-action-id="'+esc(a.id)+'">Schedule</button>';
       return '<div class="recap-action'+(isPlaced?' is-scheduled':'')+'" data-row-id="'+esc(a.id)+'">'+
-        '<span class="recap-action-text">'+esc(a.text||a.title||"")+meta+'</span>'+ctrl+'</div>';
+        '<span class="recap-action-text">'+esc(a.text||a.title||"")+meta+source+'</span>'+ctrl+'</div>';
       }).join('')+'</div>';
     };
     const signaled=actions.filter(a=>a.origin==="signaled");
@@ -397,7 +414,7 @@
     }
 
     const prepHasContent=d=>!!(d&&d.prep&&(d.prep.html||d.prep.markdown||(d.prep.blocks&&d.prep.blocks.length)));
-    const recapHasContent=d=>!!(d&&((d.summary&&(d.summary.markdown||d.summary.html))||((d.proposedActions||[]).length)))||placed.size>0;
+    const recapHasContent=d=>!!(d&&((d.summary&&(d.summary.markdown||d.summary.html))||((d.proposedActions||[]).length)||(d.meeting&&d.meeting.dashboardRef)))||placed.size>0;
 
     function applyActiveTab(){
       // Deep-linked to Recap but nothing's landed yet? Fall back to Prep if there's
@@ -423,9 +440,10 @@
       if(prep&&prep.sources&&prep.sources.length)html+=artifactSources(prep.sources);
       html+='</div></div>';
       html+='<div class="prep-tab-panel" data-panel="recap">';
+      html+=recapAttachmentHtml(data,id);
       html+='<div class="prep-edit-section"><div class="prep-edit-label">Summary</div>'+
         '<div class="prep-edit-host" data-edit-host="meeting_summary"></div></div>';
-      html+=recapActionsHtml(actions,placed);
+      html+=recapActionsHtml(actions,placed,id,data&&data.meeting&&data.meeting.dashboardRef);
       html+='</div>';
       docEl.innerHTML=html;
       mountEditor("meeting_prep",docEl.querySelector('[data-edit-host="meeting_prep"]'),prep);

@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const { google } = require("googleapis");
 const blockDB = require("./db");
 const gcalAuth = require("./gcal-auth");
+const meetingAudioStore = require("./meeting-audio-store");
 const pool = require("./pg-pool");
 
 const AUTOMATION_KINDS = new Set([
@@ -202,6 +203,9 @@ function serializeBundle(meeting, gcalRow, artifacts) {
       end: propsOf(meeting).end || null,
       calUrl: propsOf(meeting).calUrl || (gcalRow && gcalRow.html_link) || null,
       attendees: attendeeEmails(gcalRow),
+      dashboardRef: propsOf(meeting).dashboard_ref || null,
+      recordingArtifact: propsOf(meeting).recording_artifact || null,
+      recordingSource: propsOf(meeting).recording_source || null,
     },
     prep: newestByKind(artifacts, "meeting_prep") ? { id: newestByKind(artifacts, "meeting_prep").id, ...propsOf(newestByKind(artifacts, "meeting_prep")) } : null,
     transcript: newestByKind(artifacts, "meeting_transcript") ? { id: newestByKind(artifacts, "meeting_transcript").id, ...propsOf(newestByKind(artifacts, "meeting_transcript")) } : null,
@@ -438,6 +442,71 @@ function normalizedActionText(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!?;:]+$/g, "");
 }
 
+function citationStart(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+function sanitizeRecordingArtifact(value, workspaceId, now = Date.now()) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error("Invalid recording artifact"), { statusCode: 400 });
+  }
+  const status = String(value.status || "");
+  if (!["hot", "compacted", "source_only", "transcript_only"].includes(status)) {
+    throw Object.assign(new Error("Invalid recording artifact status"), { statusCode: 400 });
+  }
+  const hot = value.hot_audio;
+  if (status === "hot" && (!hot || typeof hot !== "object")) {
+    throw Object.assign(new Error("Hot recording artifact is missing its private audio reference"), { statusCode: 400 });
+  }
+  if (!["hot", "compacted"].includes(status) && hot) {
+    throw Object.assign(new Error("Non-hot recording artifact cannot carry private audio"), { statusCode: 400 });
+  }
+
+  let cleanHot = null;
+  let expiresAt = null;
+  if (hot) {
+    const prefix = `meetings/hot/${meetingAudioStore.safeSlug(workspaceId)}/`;
+    const key = String(hot.key || "");
+    const bucket = String(hot.bucket || "");
+    const config = meetingAudioStore.configFromEnv(process.env);
+    if (hot.provider !== "r2" || !key.startsWith(prefix) || !bucket || (config && bucket !== config.bucket)) {
+      throw Object.assign(new Error("Recording artifact is outside this workspace or bucket"), { statusCode: 400 });
+    }
+    if (status === "hot") {
+      expiresAt = meetingAudioStore.normalizeExpiry(hot.expires_at, now);
+      const created = Date.parse(String(value.created_at || ""));
+      const expires = Date.parse(expiresAt);
+      if (!Number.isFinite(created) || created > now + (5 * 60 * 1000) ||
+          expires > created + (14 * 24 * 60 * 60 * 1000) + (5 * 60 * 1000)) {
+        throw Object.assign(new Error("Recording artifact exceeds its 14-day holding period"), { statusCode: 400 });
+      }
+    } else {
+      const parsed = Date.parse(String(hot.expires_at || ""));
+      if (!Number.isFinite(parsed) || parsed > now + (5 * 60 * 1000)) {
+        throw Object.assign(new Error("Compacted recording artifact has an invalid hot-audio expiry"), { statusCode: 400 });
+      }
+      expiresAt = new Date(parsed).toISOString();
+    }
+    cleanHot = {
+      ...hot,
+      provider: "r2",
+      bucket: config ? config.bucket : bucket,
+      key,
+      expires_at: expiresAt,
+    };
+  }
+  return {
+    ...value,
+    status,
+    holding_days: 14,
+    expires_at: status === "hot" ? expiresAt : (value.expires_at || null),
+    hot_audio: cleanHot,
+  };
+}
+
 function sanitizeSignal(signal) {
   if (!signal || typeof signal !== "object") return null;
   const source = ["google_chat", "meet_chat_file", "transcript"].includes(signal.source)
@@ -566,6 +635,12 @@ async function approveActions(blockId, { workspaceId, userId, actionIds = [] }) 
         created: new Date().toISOString(),
         tags: ["action-item"],
         _sourceTaskId: `mtg-${meeting.id}`,
+        meetingSource: {
+          meetingBlockId: meeting.id,
+          dashboardRef: propsOf(meeting).dashboard_ref || null,
+          start: citationStart(p.start),
+          quote: p.quote || "",
+        },
         meetingAutomation: {
           meetingBlockId: meeting.id,
           proposedActionId: proposal.id,
@@ -622,6 +697,9 @@ async function listProposedActions({ workspaceId, limit = 50 } = {}) {
       priority: p.priority || "Medium",
       origin: p.origin === "signaled" ? "signaled" : "automated",
       signal: p.signal || null,
+      start: citationStart(p.start),
+      quote: p.quote || "",
+      dashboardRef: mp.dashboard_ref || null,
       approvedBlockId,
       createdAt: proposal.created_at || null,
     });
@@ -773,7 +851,7 @@ function sanitizeSources(sources) {
 // so automation can attach meeting docs without an interactive session. Idempotent:
 // prep/summary/transcript upsert in place (newest-by-kind), proposed actions dedupe
 // by text, and the recap merge replaces only its own notes region.
-async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true, dashboardRef = null }) {
+async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, transcript, proposedActions = [], recapToNotes = true, dashboardRef = null, recordingArtifact = null, recordingSource = null }) {
   const meeting = await loadMeeting(blockId, workspaceId);
   const applied = { prep: false, summary: false, transcript: false, proposedActions: 0, recapToNotes: false, recapReady: false, dashboardRef: false };
 
@@ -863,20 +941,54 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
       const duplicate = existingByText.get(textKey);
       if (duplicate) {
         const prior = propsOf(duplicate);
+        const incomingStart = citationStart(a.start);
+        const incomingQuote = String(a.quote || "").trim().slice(0, 2000);
+        const updated = {
+          ...prior,
+          origin: origin === "signaled" ? "signaled" : prior.origin,
+          signal: origin === "signaled" ? signal : prior.signal,
+          start: incomingStart !== null ? incomingStart : citationStart(prior.start),
+          quote: incomingQuote || prior.quote || "",
+          sources: origin === "signaled" ? sanitizeSources([
+            ...(Array.isArray(prior.sources) ? prior.sources : []),
+            ...(Array.isArray(a && a.sources) ? a.sources : []),
+          ]) : prior.sources,
+        };
         // A later explicit marker upgrades the same extracted task in place. Do
         // not resurrect a dismissed/placed proposal or mint a duplicate task.
-        if (origin === "signaled" && prior.origin !== "signaled") {
+        if ((origin === "signaled" && prior.origin !== "signaled") ||
+            (incomingStart !== null && incomingStart !== prior.start) ||
+            (incomingQuote && incomingQuote !== prior.quote)) {
           await blockDB.updateBlock(duplicate.id, {
-            properties: {
-              ...prior,
-              origin: "signaled",
-              signal,
-              sources: sanitizeSources([
-                ...(Array.isArray(prior.sources) ? prior.sources : []),
-                ...(Array.isArray(a && a.sources) ? a.sources : []),
-              ]),
-            },
+            properties: updated,
           });
+
+          // The proposal is the dedupe anchor, but the approved task is the
+          // durable object Drake works from. Keep its source citation current
+          // even after the task has been placed on the itinerary.
+          if (prior.approvedBlockId) {
+            const approved = await blockDB.getBlock(prior.approvedBlockId);
+            if (approvedActionMatches(approved, duplicate, workspaceId)) {
+              const approvedProps = propsOf(approved);
+              await blockDB.updateBlock(approved.id, {
+                properties: {
+                  ...approvedProps,
+                  meetingSource: {
+                    ...(approvedProps.meetingSource || {}),
+                    meetingBlockId: meeting.id,
+                    dashboardRef: String(dashboardRef || "").trim() || propsOf(meeting).dashboard_ref || null,
+                    start: updated.start,
+                    quote: updated.quote,
+                  },
+                  meetingAutomation: {
+                    ...(approvedProps.meetingAutomation || {}),
+                    origin: updated.origin,
+                    signal: updated.signal || null,
+                  },
+                },
+              });
+            }
+          }
         }
         continue;
       }
@@ -892,6 +1004,8 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
           status: "proposed",
           done: false,
           sources: sanitizeSources(a.sources),
+          start: citationStart(a.start),
+          quote: String(a.quote || "").trim().slice(0, 2000),
         },
       });
       existingByText.set(textKey, created);
@@ -900,16 +1014,23 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
     }
   }
 
-  if (dashboardRef) {
+  if (dashboardRef || recordingArtifact || recordingSource) {
     // Store the vault slug on the meeting block itself so the itinerary chip and
     // the /meetings/:id/dashboard proxy can find it. Reload first so we don't
     // clobber the recap-to-notes write above.
     const fresh = await loadMeeting(blockId, workspaceId);
     const mp = propsOf(fresh);
-    const ref = String(dashboardRef).trim();
-    if (ref && ref !== mp.dashboard_ref) {
-      await blockDB.updateBlock(fresh.id, { properties: { ...mp, dashboard_ref: ref } });
-      applied.dashboardRef = true;
+    const ref = String(dashboardRef || "").trim();
+    const next = { ...mp };
+    if (ref && ref !== mp.dashboard_ref) { next.dashboard_ref = ref; applied.dashboardRef = true; }
+    if (recordingArtifact) next.recording_artifact = sanitizeRecordingArtifact(recordingArtifact, workspaceId);
+    if (recordingSource) {
+      const safeSource = { ...recordingSource };
+      if (!isSafeHttpUrl(safeSource.url)) delete safeSource.url;
+      next.recording_source = safeSource;
+    }
+    if (applied.dashboardRef || recordingArtifact || recordingSource) {
+      await blockDB.updateBlock(fresh.id, { properties: next });
     }
   }
 

@@ -79,7 +79,7 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
     summary: { markdown: "### Recap\nGood chat about Q3." },
     transcript: { text: "Drake: hi. Ben: hi back." },
     proposedActions: [
-      { text: "Send the recap to Ben", owner: "drake" },
+      { text: "Send the recap to Ben", owner: "drake", start: 754.2, quote: "I'll send the recap." },
       { text: "Ops to update the runbook", owner: "others" },
     ],
   });
@@ -91,6 +91,8 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
   assert.equal(actions.every((a) => a.properties.status === "proposed" && a.properties.done === false), true);
   assert.deepEqual(actions.map((a) => a.properties.owner).sort(), ["drake", "other"]);
   assert.equal(actions.every((a) => a.properties.origin === "automated"), true);
+  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.start, 754.2);
+  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.quote, "I'll send the recap.");
   const m1 = await mem.getBlock("m1");
   // The recap now lives ONLY in the meeting_summary artifact (surfaced in the Recap
   // tab), never mirrored into the meeting's notes box.
@@ -148,6 +150,128 @@ test("an explicit signal is stored with provenance and upgrades an automated dup
     excerpt: "Action item: Send the launch brief",
     context: [{ at: "2026-08-14T13:04:30Z", speaker: "participant", excerpt: "Please send the launch brief." }],
   });
+});
+
+test("a duplicate action gains later transcript citation fields without losing provenance", async () => {
+  seedMeeting("mcitation");
+  await automation.applyArtifacts("mcitation", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief", owner: "drake", origin: "signaled",
+      signal: { source: "google_chat", phrase: "action item", excerpt: "Action item: send it" } }],
+  });
+  await automation.applyArtifacts("mcitation", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief.", owner: "drake", start: 91.5, quote: "I'll send it." }],
+  });
+  const action = childrenOf("mcitation", "proposed_action_item")[0].properties;
+  assert.equal(action.origin, "signaled");
+  assert.equal(action.start, 91.5);
+  assert.equal(action.quote, "I'll send it.");
+});
+
+test("missing, blank, negative, and non-finite timestamps never become zero-second citations", async () => {
+  seedMeeting("m-no-fake-citations", { title: "No fake citations", dashboard_ref: "no-fakes" });
+  await automation.applyArtifacts("m-no-fake-citations", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [
+      { text: "Action without timestamp", start: null },
+      { text: "Action with blank timestamp", start: "" },
+      { text: "Action with negative timestamp", start: -1 },
+      { text: "Action with infinite timestamp", start: Infinity },
+    ],
+  });
+  const proposals = childrenOf("m-no-fake-citations", "proposed_action_item");
+  assert.equal(proposals.length, 4);
+  assert.equal(proposals.every(action => action.properties.start === null), true);
+  const projected = (await automation.listProposedActions({ workspaceId: "ws-1" }))
+    .filter(action => action.meetingId === "m-no-fake-citations");
+  assert.equal(projected.every(action => action.start === null), true);
+
+  const approved = await automation.approveActions("m-no-fake-citations", {
+    workspaceId: "ws-1", userId: 1,
+  });
+  assert.equal(approved.approvedBlocks.every(action => action.properties.meetingSource.start === null), true);
+});
+
+test("later citation enrichment follows an action through approval and placement", async () => {
+  seedMeeting("m-citation-sync", { title: "Citation sync", dashboard_ref: "initial-review" });
+  await automation.applyArtifacts("m-citation-sync", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief", owner: "drake" }],
+  });
+  const approved = await automation.approveActions("m-citation-sync", { workspaceId: "ws-1", userId: 1 });
+  const taskId = approved.approvedBlocks[0].id;
+
+  await automation.applyArtifacts("m-citation-sync", {
+    workspaceId: "ws-1", userId: 1, dashboardRef: "updated-review",
+    proposedActions: [{
+      text: "Send the launch brief.", owner: "drake", start: 91.5, quote: "I'll send it.", origin: "signaled",
+      signal: { source: "transcript", phrase: "action item", excerpt: "Action item: send the launch brief" },
+    }],
+  });
+  let task = await mem.getBlock(taskId);
+  assert.deepEqual(task.properties.meetingSource, {
+    meetingBlockId: "m-citation-sync", dashboardRef: "updated-review", start: 91.5, quote: "I'll send it.",
+  });
+  assert.equal(task.properties.meetingAutomation.origin, "signaled");
+
+  await automation.placeApprovedAction("m-citation-sync", taskId, {
+    workspaceId: "ws-1", userId: 1, date: "2026-07-20", start: "14:00",
+  });
+  await automation.applyArtifacts("m-citation-sync", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief", start: 120, quote: "The final quote." }],
+  });
+  task = await mem.getBlock(taskId);
+  assert.equal(task.parent_id, null);
+  assert.equal(task.date, "2026-07-20");
+  assert.equal(task.properties.kind, "task");
+  assert.equal(task.properties.start, "14:00");
+  assert.equal(task.properties.meetingSource.start, 120);
+  assert.equal(task.properties.meetingSource.quote, "The final quote.");
+});
+
+test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {
+  seedMeeting("m-retention");
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + (14 * 24 * 60 * 60 * 1000)).toISOString();
+  const bundle = await automation.applyArtifacts("m-retention", {
+    workspaceId: "ws-1", userId: 1,
+    dashboardRef: "2026-07-09-retention",
+    recordingArtifact: {
+      status: "hot", holding_days: 14, created_at: createdAt,
+      hot_audio: {
+        provider: "r2", bucket: "warm", key: "meetings/hot/ws-1/retention/audio.m4a", expires_at: expiresAt,
+      },
+    },
+    recordingSource: { provider: "google_drive", url: "https://drive.google.com/open?id=x" },
+  });
+  assert.equal(bundle.meeting.dashboardRef, "2026-07-09-retention");
+  assert.equal(bundle.meeting.recordingArtifact.holding_days, 14);
+  assert.equal(bundle.meeting.recordingSource.url, "https://drive.google.com/open?id=x");
+});
+
+test("recording artifact ingestion enforces workspace, bucket, and 14-day retention boundaries", async () => {
+  seedMeeting("m-retention-boundary");
+  const createdAt = new Date().toISOString();
+  const base = {
+    status: "hot", created_at: createdAt,
+    hot_audio: { provider: "r2", bucket: "warm", key: "meetings/hot/ws-1/review/audio.m4a" },
+  };
+  await assert.rejects(
+    () => automation.applyArtifacts("m-retention-boundary", {
+      workspaceId: "ws-1", userId: 1,
+      recordingArtifact: { ...base, hot_audio: { ...base.hot_audio, key: "meetings/hot/ws-2/review/audio.m4a", expires_at: new Date(Date.now() + 60_000).toISOString() } },
+    }),
+    /outside this workspace or bucket/,
+  );
+  await assert.rejects(
+    () => automation.applyArtifacts("m-retention-boundary", {
+      workspaceId: "ws-1", userId: 1,
+      recordingArtifact: { ...base, hot_audio: { ...base.hot_audio, expires_at: new Date(Date.now() + (15 * 24 * 60 * 60 * 1000)).toISOString() } },
+    }),
+    /expiry within 14 days/,
+  );
 });
 
 test("a recap leaves the user's own notes untouched (recap lives only in the summary artifact)", async () => {
@@ -282,10 +406,10 @@ test("placeApprovedAction cannot stamp a foreign proposal through forged provena
 });
 
 test("listProposedActions projects only open meeting proposals with meeting context", async () => {
-  seedMeeting("mlist", { title: "Weekly planning", start: "10:00", end: "10:30" });
+  seedMeeting("mlist", { title: "Weekly planning", start: "10:00", end: "10:30", dashboard_ref: "weekly-planning" });
   mem.store.push(
     { id: "plist", type: "block", parent_id: "mlist", date: "2026-07-09", created_at: "2026-07-09T11:00:00Z",
-      properties: { kind: "proposed_action_item", text: "Send the brief", owner: "drake", priority: "High", status: "proposed" }, workspace_id: "ws-1", user_id: 1, deleted_at: null },
+      properties: { kind: "proposed_action_item", text: "Send the brief", owner: "drake", priority: "High", status: "proposed", start: 91.5, quote: "I'll send it." }, workspace_id: "ws-1", user_id: 1, deleted_at: null },
     { id: "placed-list", type: "block", parent_id: "mlist", date: "2026-07-09",
       properties: { kind: "proposed_action_item", text: "Already placed", status: "placed" }, workspace_id: "ws-1", user_id: 1, deleted_at: null }
   );
@@ -294,7 +418,9 @@ test("listProposedActions projects only open meeting proposals with meeting cont
   assert.deepEqual(row, {
     id: "plist", meetingId: "mlist", meetingTitle: "Weekly planning", meetingDate: "2026-07-09",
     meetingStart: "10:00", meetingEnd: "10:30", title: "Send the brief", owner: "drake",
-    priority: "High", origin: "automated", signal: null, approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
+    priority: "High", origin: "automated", signal: null,
+    start: 91.5, quote: "I'll send it.", dashboardRef: "weekly-planning",
+    approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
   });
   assert.equal(rows.some(item => item.id === "placed-list"), false);
 });
@@ -541,10 +667,16 @@ test("endpoint maps snake_case proposed_actions + recap_to_notes into applyArtif
     meeting: { event_id: "evt-7", date: "2026-07-09" },
     proposed_actions: [{ text: "do the thing", owner: "drake" }],
     recap_to_notes: false,
+    dashboard_ref: "sync-review",
+    recording_artifact: { status: "hot", holding_days: 14 },
+    recording_source: { provider: "google_drive", url: "https://drive.google.com/open?id=x" },
   });
   assert.equal(status, 200);
   assert.equal(rec[0].opts.proposedActions.length, 1);
   assert.equal(rec[0].opts.recapToNotes, false);
+  assert.equal(rec[0].opts.dashboardRef, "sync-review");
+  assert.equal(rec[0].opts.recordingArtifact.holding_days, 14);
+  assert.equal(rec[0].opts.recordingSource.provider, "google_drive");
 });
 
 test("endpoint broadcasts recapArrived + meetingTitle only when a recap first lands", async () => {

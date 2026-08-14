@@ -213,6 +213,13 @@ app.use(async (req, res, next) => {
     if (req.method === "POST" && req.path === "/api/vault/journal-image-ingest" && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-artifacts" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (req.method === "POST" && req.path === "/api/dcc/meeting-signals" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
+    if (req.path.startsWith("/api/dcc/meeting-audio/")) {
+      if (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep"))) {
+        attachSweepServiceAuth(req);
+        return next();
+      }
+      return res.status(401).json({ error: "Meeting audio service token required" });
+    }
     if (req.method === "GET" && req.path === "/api/waiting-items/attention" && (trustLocalhost(req) || (await hasServiceToken(req, "dcc")) || (await hasServiceToken(req, "sweep")))) { attachSweepServiceAuth(req); return next(); }
     if (DCC_ENDPOINTS.has(req.path) && (trustLocalhost(req) || await hasServiceToken(req, "dcc"))) return next();
     if (!req.session.userId) { if (req.path.startsWith("/api/")) return res.status(401).json({ error: "Not authenticated" }); return res.redirect("/login"); }
@@ -241,38 +248,6 @@ function sendAuthPage(req, res) {
 
 app.get("/login", sendAuthPage);
 app.get("/register", sendAuthPage);
-
-// Recording-review dashboard proxy. Streams a meeting's vaulted dashboard.html
-// from the private meeting-vault repo, behind DCC login, so the vault token
-// never reaches the browser. dashboard_ref on the meeting block is the vault
-// slug (set by the recording-review orchestrator via /api/dcc/meeting-artifacts).
-app.get("/meetings/:blockId/dashboard", async (req, res) => {
-  if (!req.session || !req.session.userId) return res.redirect("/login");
-  try {
-    const block = await blockDB.getBlock(req.params.blockId);
-    const ref = block && block.properties && block.properties.dashboard_ref;
-    if (!ref) return res.status(404).type("text/plain").send("No recording-review dashboard is attached to this meeting yet.");
-    const token = process.env.GH_VAULT_TOKEN;
-    if (!token) return res.status(503).type("text/plain").send("Meeting vault not configured (GH_VAULT_TOKEN unset).");
-    const repo = process.env.GH_VAULT_REPO || "ProgrammingDrak/meeting-vault";
-    // Path prefix under which meeting dashboards live in the vault repo. Default
-    // "meetings" preserves the legacy meeting-vault layout exactly. Mycelium's
-    // unified vault nests them under work/meetings, so A4's cutover sets
-    // GH_VAULT_PATH_PREFIX=work/meetings once this deploys (the A4 enabler).
-    const prefix = (process.env.GH_VAULT_PATH_PREFIX || "meetings").replace(/^\/+|\/+$/g, "");
-    const slug = String(ref).replace(/[^A-Za-z0-9._-]/g, "");
-    const url = `https://api.github.com/repos/${repo}/contents/${prefix}/${encodeURIComponent(slug)}/dashboard.html`;
-    const ghResp = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.raw+json", "User-Agent": "dcc-meeting-vault-proxy" } });
-    if (!ghResp.ok) return res.status(502).type("text/plain").send(`Vault fetch failed (${ghResp.status}).`);
-    const html = await ghResp.text();
-    res.set("Content-Type", "text/html; charset=utf-8");
-    res.set("Cache-Control", "private, max-age=300");
-    res.send(html);
-  } catch (e) {
-    console.error("[meeting-dashboard proxy] failed:", e);
-    res.status(500).type("text/plain").send("Dashboard proxy error.");
-  }
-});
 
 app.post("/api/auth/login", validate(schemas.login), async (req, res) => {
   const { username, password } = req.body || {};
@@ -940,6 +915,8 @@ require("./routes/blocks")(app, ctx);
 require("./routes/dcc")(app, ctx);
 require("./routes/evaluation")(app, ctx);
 require("./routes/meeting")(app, ctx);
+require("./routes/meeting-dashboard")(app, ctx);
+require("./routes/meeting-audio")(app, ctx);
 require("./routes/gcal")(app, ctx);
 require("./routes/slots")(app, ctx);
 require("./routes/budget")(app, ctx);
