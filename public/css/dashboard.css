@@ -2592,9 +2592,14 @@
 .delegated-card-actions{display:flex;gap:4px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
 .delegated-card-actions button{font-size:10px;padding:3px 8px;border-radius:5px;background:var(--card);border:1px solid var(--border);color:var(--text-muted);cursor:pointer;transition:border-color 0.12s,color 0.12s}
 .delegated-card-actions button:hover{border-color:var(--accent);color:var(--accent)}
+.delegated-card-actions button[data-delegated-action="complete"]{border-color:rgba(34,197,94,.4);color:var(--green)}
+.delegated-card-actions button[data-delegated-action="complete"]:hover{border-color:var(--green);background:rgba(34,197,94,.1)}
 .delegated-card-actions button[data-delegated-action="delete"]:hover{border-color:var(--red);color:var(--red)}
 .delegated-card-actions .delegated-edit:hover{border-color:var(--accent);color:var(--accent)}
 .delegated-card-actions .delegated-delete:hover{border-color:var(--red);color:var(--red)}
+.delegated-card.delegated-card-target{border-color:var(--accent-light);box-shadow:0 0 0 3px rgba(96,165,250,.18)}
+.tri-open-waiting,.schedule-triage-open-waiting{border:0;background:transparent;color:var(--accent-light);font:inherit;font-weight:700;cursor:pointer;padding:0;text-decoration:none}
+.tri-open-waiting:hover,.schedule-triage-open-waiting:hover{text-decoration:underline}
 
 /* Delegated create/edit modal (PIN 10.A commit 3) */
 .delegated-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1050;align-items:center;justify-content:center}

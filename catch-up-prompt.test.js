@@ -591,7 +591,7 @@ function installDayReview(ctx, count) {
   return packet;
 }
 
-function waitingCtx() {
+function waitingCtx(draftOverrides) {
   const item = {
     id: "waiting-1",
     created_at: "2026-07-23T12:00:00Z",
@@ -605,7 +605,7 @@ function waitingCtx() {
       status: "open"
     }
   };
-  const draft = {
+  const draft = Object.assign({
     id: "waiting-checkin:waiting-1:" + TODAY,
     type: "waiting_checkin",
     title: "Check in: Launch plan",
@@ -613,7 +613,7 @@ function waitingCtx() {
     waiting_cycle_key: "waiting:waiting-1:" + TODAY,
     draft_type: "internal",
     draft_preview: "Hi Alex, quick check-in."
-  };
+  }, draftOverrides || {});
   const calls = { snoozed: [], scheduled: [], unblocked: [], copied: [] };
   const h = load({ [ymd(1)]: [dayRoot()] }, [ymd(1)], {
     getAttentionWaitingItems: () => [item],
@@ -664,6 +664,35 @@ test("Waiting actions snooze, schedule a check-in, unblock, and copy the fallbac
   assert.deepEqual(calls.scheduled, [{ id: "waiting-1", date: TODAY }, { id: "waiting-1", date: null }]);
   assert.deepEqual(calls.unblocked, ["waiting-1"]);
   assert.deepEqual(calls.copied, ["Hi Alex, quick check-in."]);
+});
+
+test("a source-backed Waiting draft offers one Review and Send action", async () => {
+  const { ctx, calls } = waitingCtx({ link: "https://slack.example/thread" });
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  const detailsBody = row.querySelector(".cu-details-body");
+  const actionHtml = detailsBody.children[detailsBody.children.length - 1].innerHTML;
+  assert.match(actionHtml, /cu-wait-draft cu-wait-copy[^>]*>Review and Send<\/a>/);
+  assert.doesNotMatch(actionHtml, />Copy Draft<\/button>/);
+  assert.equal(row.querySelector(".cu-wait-draft").href, "https://slack.example/thread");
+  row.querySelector(".cu-wait-copy").fire("click");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(calls.copied, ["Hi Alex, quick check-in."]);
+});
+
+test("a failed Waiting draft copy closes the reserved source tab", async () => {
+  const { ctx } = waitingCtx({ link: "https://slack.example/thread" });
+  const pending = { opener: {}, location: {}, closed: false, close() { this.closed = true; } };
+  ctx.window.open = () => pending;
+  ctx.window.DCC.Waiting.copyText = async () => false;
+  await ctx.window.initCatchUp();
+  const row = [...rowsOf(ctx)][0];
+  let prevented = false;
+  row.querySelector(".cu-wait-copy").fire("click", { preventDefault() { prevented = true; } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(prevented, true);
+  assert.equal(pending.closed, true);
+  assert.equal(pending.location.href, undefined);
 });
 
 test("the unified modal follows the requested section order", async () => {

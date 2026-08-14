@@ -1779,6 +1779,62 @@ module.exports = function mount(app, ctx) {
     return { ok: true, status: "completed", item: updated };
   }));
 
+  // Finish the work itself, not merely the current check-in cycle. Close the
+  // Waiting record and complete its linked task too when one still exists.
+  app.post("/api/waiting-items/:id/complete", route(async (req, res) => {
+    const existing = await blockDB.getBlockIncludingDeleted(req.params.id);
+    if (!existing || existing.deleted_at || (existing.properties || {}).kind !== "delegated_item") { res.status(404).json({ error: "Waiting item not found" }); return; }
+    assertBlockOwnership(existing, req.workspaceId);
+    const completedAt = String(req.body && req.body.completedAt || new Date().toISOString());
+    if (Number.isNaN(new Date(completedAt).getTime())) { res.status(400).json({ error: "completedAt must be a valid timestamp" }); return; }
+
+    const properties = waitingItems.normalizeProperties({
+      status: "done",
+      completedAt,
+      completedBy: "waiting",
+      snoozedUntil: null,
+      checkInScheduledFor: null,
+      checkInTaskId: null,
+    }, existing.properties || {});
+
+    const linkedBlockId = String((existing.properties || {}).linkedBlockId || "").trim();
+    let linkedTask = linkedBlockId
+      ? await blockDB.findUniqueLiveBlockByReference(linkedBlockId, req.workspaceId)
+      : null;
+    let updated;
+    let blockIds = [existing.id];
+    if (linkedTask && !linkedTask.deleted_at) {
+      assertBlockOwnership(linkedTask, req.workspaceId);
+      if (!isWorkTaskRow(linkedTask)) { res.status(400).json({ error: "Linked block is not a task" }); return; }
+      const { userId, workspaceId } = await resolveOwnerStrict(req);
+      const mutationId = `waiting:${existing.id}:${Date.parse(completedAt)}`;
+      const result = await blockDB.setTaskCompletion({
+        taskRef: linkedTask.id,
+        completed: true,
+        completedAt,
+        taskDate: linkedTask.date || null,
+        mutationId,
+        expectedRevision: (linkedTask.properties || {})._completionRevision || null,
+        userId,
+        workspaceId,
+        companionUpdates: [{ id: existing.id, properties, expectedUpdatedAt: existing.updated_at }],
+      });
+      await normalizeCompletionWork(result, true, {
+        atMs: Date.parse(completedAt), actor: userId ? `dcc:${userId}` : "dcc", mutationId,
+      });
+      linkedTask = result.task;
+      updated = (result.companionBlocks || []).find(row => row.id === existing.id) || existing;
+      blockIds = result.broadcastIds || [existing.id, linkedTask.id];
+      if (linkedTask) await transitionLinkedTriage(linkedTask, "done", Date.parse(completedAt));
+      for (const row of result.affectedTasks || []) await syncSlack(row);
+    } else {
+      linkedTask = null;
+      updated = await blockDB.updateBlock(existing.id, { properties });
+    }
+    broadcast("blocks-changed", { action: "waiting-completed", blockIds, date: linkedTask && linkedTask.date || null }, req.workspaceId);
+    return { ok: true, status: "completed", item: updated, task: linkedTask };
+  }));
+
   app.post("/api/waiting-items/:id/unblock", route(async (req, res) => {
     const taskBlockId = String(req.body && req.body.taskBlockId || "").trim();
     const date = req.body && req.body.date;

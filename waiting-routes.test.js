@@ -39,11 +39,19 @@ function mountApp() {
   };
   const rows = new Map([[waiting.id, waiting], [task.id, task]]);
   const updates = [];
+  const completions = [];
   const ctx = {
     blockDB: {
       getDelegatedItems: async () => [waiting].filter(row => !row.deleted_at),
       getBlockIncludingDeleted: async id => rows.get(id) || null,
       getBlock: async id => rows.get(id) || null,
+      findUniqueLiveBlockByReference: async blockRef => {
+        const direct = rows.get(blockRef);
+        if (direct && !direct.deleted_at) return direct;
+        const matches = [...rows.values()].filter(row => !row.deleted_at && String((row.properties || {}).local_id || "") === String(blockRef));
+        if (matches.length > 1) { const error = new Error("Task reference is ambiguous"); error.statusCode = 409; throw error; }
+        return matches[0] || null;
+      },
       updateBlock: async (id, patch) => {
         const row = rows.get(id);
         if (patch.properties) row.properties = patch.properties;
@@ -52,6 +60,30 @@ function mountApp() {
       },
       createBlock: async () => null,
       deleteBlock: async id => ({ id }),
+      setTaskCompletion: async input => {
+        completions.push(input);
+        const target = rows.get(input.taskRef);
+        target.properties = {
+          ...target.properties,
+          status: "done",
+          done: true,
+          completedAt: input.completedAt,
+          _completionRevision: "rev-complete",
+        };
+        const companionBlocks = (input.companionUpdates || []).map(update => {
+          const row = rows.get(update.id);
+          row.properties = update.properties;
+          updates.push({ id: row.id, patch: { properties: update.properties } });
+          return row;
+        });
+        return {
+          task: target,
+          affectedTasks: [target],
+          companionBlocks,
+          broadcastIds: [target.id, ...companionBlocks.map(row => row.id)],
+          persistenceTarget: "test",
+        };
+      },
       getCarryoverPool: async () => ({ rows: [], dayRoots: [], overlays: {}, scanned: 0 }),
       batchOp: async () => ({ batchId: "b", blocks: [] }),
       reorderBlocks: async () => {},
@@ -74,7 +106,7 @@ function mountApp() {
     waitingItems: require("./waiting-items"),
   };
   require("./routes/blocks.js")(app, ctx);
-  return { app, waiting, task, updates };
+  return { app, waiting, task, rows, updates, completions };
 }
 
 async function request(app, path, method = "GET", body) {
@@ -146,4 +178,89 @@ test("unblock only closes Waiting after its underlying task is on the requested 
   assert.equal(result.status, 200);
   assert.equal(waiting.properties.status, "unblocked");
   assert.equal(waiting.properties.unblockedTaskId, task.id);
+});
+
+test("complete closes Waiting and completes its linked task through the canonical transaction", async () => {
+  const { app, waiting, task, completions } = mountApp();
+  waiting.properties.linkedBlockId = task.id;
+  const completedAt = "2026-08-14T16:00:00.000Z";
+  const result = await request(app, "/api/waiting-items/waiting-1/complete", "POST", { completedAt });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.status, "completed");
+  assert.equal(waiting.properties.status, "done");
+  assert.equal(waiting.properties.completedAt, completedAt);
+  assert.equal(task.properties.status, "done");
+  assert.equal(task.properties.done, true);
+  assert.equal(task.properties.completedAt, completedAt);
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0].taskRef, task.id);
+  assert.equal(completions[0].companionUpdates[0].id, waiting.id);
+});
+
+test("complete rejects a linked row that is not a task", async () => {
+  const { app, waiting, task, completions } = mountApp();
+  task.type = "day_root";
+  task.properties = { date: TODAY };
+  waiting.properties.linkedBlockId = task.id;
+  const result = await request(app, "/api/waiting-items/waiting-1/complete", "POST", {
+    completedAt: "2026-08-14T16:00:00.000Z",
+  });
+  assert.equal(result.status, 400);
+  assert.equal(waiting.properties.status, "open");
+  assert.equal(completions.length, 0);
+});
+
+test("complete resolves a linked task stored by local id", async () => {
+  const { app, waiting, task, completions } = mountApp();
+  waiting.properties.linkedBlockId = task.properties.local_id;
+  const result = await request(app, "/api/waiting-items/waiting-1/complete", "POST", {
+    completedAt: "2026-08-14T16:00:00.000Z",
+  });
+  assert.equal(result.status, 200);
+  assert.equal(waiting.properties.status, "done");
+  assert.equal(task.properties.status, "done");
+  assert.equal(completions[0].taskRef, task.id);
+});
+
+test("complete rejects an ambiguous linked local id without closing Waiting", async () => {
+  const { app, waiting, task, rows, completions } = mountApp();
+  waiting.properties.linkedBlockId = task.properties.local_id;
+  const duplicate = {
+    ...task,
+    id: "task-2",
+    properties: { ...task.properties },
+  };
+  rows.set(duplicate.id, duplicate);
+  const result = await request(app, "/api/waiting-items/waiting-1/complete", "POST", {
+    completedAt: "2026-08-14T16:00:00.000Z",
+  });
+  assert.equal(result.status, 409);
+  assert.equal(waiting.properties.status, "open");
+  assert.equal(completions.length, 0);
+});
+
+test("complete ignores a deleted local-id collision", async () => {
+  const { app, waiting, task, rows, completions } = mountApp();
+  waiting.properties.linkedBlockId = task.properties.local_id;
+  rows.set("task-deleted", {
+    ...task,
+    id: "task-deleted",
+    deleted_at: "2026-08-14T15:00:00.000Z",
+    properties: { ...task.properties },
+  });
+  const result = await request(app, "/api/waiting-items/waiting-1/complete", "POST", {
+    completedAt: "2026-08-14T16:00:00.000Z",
+  });
+  assert.equal(result.status, 200);
+  assert.equal(completions[0].taskRef, task.id);
+});
+
+test("complete also closes a text-only Waiting item", async () => {
+  const { app, waiting } = mountApp();
+  const result = await request(app, "/api/waiting-items/waiting-1/complete", "POST", {
+    completedAt: "2026-08-14T16:00:00.000Z",
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.task, null);
+  assert.equal(waiting.properties.status, "done");
 });

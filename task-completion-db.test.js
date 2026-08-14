@@ -76,10 +76,11 @@ function makePool(initialRows, { failUpdateId = null } = {}) {
           return { rows: [structuredClone(next)] };
         }
         if (text.startsWith("UPDATE blocks SET properties = $1, updated_at = $2")) {
+          if (params[2] === failUpdateId) throw new Error("injected child failure");
           const current = staged.get(params[2]);
           const next = { ...current, properties: structuredClone(params[0]), updated_at: params[1] };
           staged.set(params[2], next);
-          return { rows: [] };
+          return { rows: [structuredClone(next)] };
         }
         if (text.startsWith("INSERT INTO operations")) return { rows: [] };
         throw new Error("Unhandled SQL: " + text);
@@ -251,4 +252,37 @@ test("a child failure rolls the entire completion tree back", async () => {
   await assert.rejects(db.setTaskCompletion(input()), /injected child failure/);
   assert.equal(pool._rows.get("parent").properties.status, "open");
   assert.equal(pool._rows.get("child").properties.status, "open");
+});
+
+test("a companion Waiting update commits and rolls back with task completion", async () => {
+  const parent = row("parent", { local_id: "p", status: "open" });
+  const waiting = row("waiting", { kind: "delegated_item", status: "open", linkedBlockId: "parent" }, { date: null });
+  const completedWaiting = { ...waiting.properties, status: "done", completedAt: "2026-08-10T15:00:00Z" };
+  const pool = makePool([parent, waiting]);
+  const db = loadDb(pool);
+
+  const result = await db.setTaskCompletion(input({
+    companionUpdates: [{ id: waiting.id, properties: completedWaiting, expectedUpdatedAt: waiting.updated_at }],
+  }));
+
+  assert.equal(pool._rows.get("parent").properties.status, "done");
+  assert.equal(pool._rows.get("waiting").properties.status, "done");
+  assert.equal(result.companionBlocks[0].id, "waiting");
+  assert.deepEqual(result.broadcastIds.sort(), ["parent", "waiting"]);
+
+  const failingPool = makePool([parent, waiting], { failUpdateId: "waiting" });
+  const failingDb = loadDb(failingPool);
+  await assert.rejects(failingDb.setTaskCompletion(input({
+    companionUpdates: [{ id: waiting.id, properties: completedWaiting }],
+  })), /injected child failure/);
+  assert.equal(failingPool._rows.get("parent").properties.status, "open");
+  assert.equal(failingPool._rows.get("waiting").properties.status, "open");
+
+  const conflictingPool = makePool([parent, waiting]);
+  const conflictingDb = loadDb(conflictingPool);
+  await assert.rejects(conflictingDb.setTaskCompletion(input({
+    companionUpdates: [{ id: waiting.id, properties: completedWaiting, expectedUpdatedAt: "2026-08-02T00:00:00Z" }],
+  })), error => error.statusCode === 409 && error.publicCode === "COMPLETION_COMPANION_CONFLICT");
+  assert.equal(conflictingPool._rows.get("parent").properties.status, "open");
+  assert.equal(conflictingPool._rows.get("waiting").properties.status, "open");
 });

@@ -526,7 +526,10 @@
       const detailId = "cu-waiting-details-" + (++detailSeq);
       const draft = waitingDraftById.get(String(item.id));
       const safe = (window.DCC && window.DCC.safeUrl) || (() => "");
-      const draftHref = draft && (safe(draft.draft_link || draft.draft_url) || safe(draft.link || draft.source_url));
+      const draftHref = draft && safe(draft.draft_link || draft.draft_url);
+      const sourceHref = draft && safe(draft.link || draft.source_url);
+      const reviewHref = draftHref || sourceHref;
+      const shouldCopyDraft = !!(draft && draft.draft_preview && !draftHref);
       const urgency = api.itemUrgency(item);
       const blocker = api.blockerLabel(item);
       const el = document.createElement("div");
@@ -558,8 +561,8 @@
       const detailActions = document.createElement("div");
       detailActions.className = "carryover-row-actions cu-wait-detail-actions";
       detailActions.innerHTML =
-        (draftHref ? '<a class="carryover-btn carryover-btn-schedule cu-wait-draft" target="_blank" rel="noopener">Review draft</a>' :
-          (draft && draft.draft_preview ? '<button class="carryover-btn carryover-btn-schedule cu-wait-copy">Copy draft</button>' : '')) +
+        (reviewHref ? '<a class="carryover-btn carryover-btn-schedule cu-wait-draft' + (shouldCopyDraft ? ' cu-wait-copy' : '') + '" target="_blank" rel="noopener">Review and Send</a>' :
+          (draft && draft.draft_preview ? '<button class="carryover-btn carryover-btn-schedule cu-wait-copy">Copy Draft</button>' : '')) +
         '<button class="carryover-btn cu-wait-schedule">Schedule check-in</button>' +
         '<button class="carryover-btn carryover-btn-schedule cu-wait-unblock">Unblock</button>';
       detailBody.appendChild(detailActions);
@@ -590,11 +593,24 @@
       el.querySelector(".cu-wait-schedule").addEventListener("click", event => api.scheduleCheckIn(item.id, event.currentTarget, forget));
       el.querySelector(".cu-wait-unblock").addEventListener("click", () => runWaiting(() => api.unblock(item.id)));
       const draftLink = el.querySelector(".cu-wait-draft");
-      if (draftLink) draftLink.href = draftHref;
+      if (draftLink) draftLink.href = reviewHref;
       const copy = el.querySelector(".cu-wait-copy");
-      if (copy) copy.addEventListener("click", async () => {
+      if (copy) copy.addEventListener("click", async event => {
+        const sourceToOpen = sourceHref && !draftHref ? sourceHref : "";
+        if (sourceToOpen && event && typeof event.preventDefault === "function") event.preventDefault();
+        const pending = sourceToOpen && typeof window.open === "function" ? window.open("about:blank", "_blank") : null;
+        if (pending) pending.opener = null;
         const copied = await api.copyText(draft.draft_preview);
         if (typeof showToast === "function") showToast(copied ? "Check-in draft copied" : "Could not copy draft", copied ? "success" : "error");
+        if (!copied) {
+          if (pending && typeof pending.close === "function") pending.close();
+          return;
+        }
+        if (pending) pending.location.href = sourceToOpen;
+        else if (sourceToOpen && typeof window.open === "function") {
+          const opened = window.open(sourceToOpen, "_blank", "noopener");
+          if (!opened && typeof showToast === "function") showToast("Draft copied, but the source could not be opened. Allow popups and try again.", "info");
+        }
       });
       waitingEls.set(item.id, el);
       activeReviewRows.add(el);

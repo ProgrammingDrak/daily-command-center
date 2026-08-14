@@ -291,7 +291,8 @@
       '<button type="button" data-delegated-action="check-in" data-id="' + esc(item.id) + '">Checked in</button>' +
       '<button type="button" data-delegated-action="schedule" data-id="' + esc(item.id) + '">Schedule check-in</button>' +
       '<button type="button" data-delegated-action="edit" data-id="' + esc(item.id) + '">Edit</button>' +
-      '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '">Unblock</button>' +
+      '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '" title="The blocker is gone. Put the actual task on your schedule.">Schedule task</button>' +
+      '<button type="button" data-delegated-action="complete" data-id="' + esc(item.id) + '" title="The actual task is already finished.">Complete task</button>' +
       '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>';
 
     return '<div class="' + cardCls + '" data-id="' + esc(item.id) + '">' +
@@ -324,7 +325,9 @@
         } else if (action === "edit") {
           openDelegatedModal(id);
         } else if (action === "unblock") {
-          unblockWaitingItem(id);
+          unblockWaitingItem(id, btn);
+        } else if (action === "complete") {
+          completeWaitingItem(id);
         } else if (action === "delete") {
           deleteDelegatedItem(id);
         }
@@ -455,6 +458,24 @@
     }
   }
 
+  // Resolve the work itself. This is intentionally separate from "Checked in",
+  // which only advances the reminder cadence and leaves the work open.
+  async function completeWaitingItem(id) {
+    const item = getDelegatedItemById(id);
+    if (!item) return false;
+    if (typeof window.confirm === "function" && !window.confirm("Mark this task complete and close its Waiting item?")) return false;
+    try {
+      await postWaitingAction(id, "complete", { completedAt: new Date().toISOString() });
+      closeDelegatedModal();
+      await afterWaitingAction();
+      toast("Task completed and Waiting item closed.", "success");
+      return true;
+    } catch (e) {
+      toast("Could not complete task: " + (e.message || e), "error");
+      return false;
+    }
+  }
+
   // Schedule a 15-minute check-in task, then move the Waiting due date to match.
   function scheduleDelegatedItem(id, anchorEl, onScheduled, selectedDate) {
     const item = getDelegatedItemById(id);
@@ -526,57 +547,94 @@
     }) || null;
   }
 
-  async function unblockWaitingItem(id) {
+  function unblockWaitingItem(id, anchorEl, selectedDate) {
     const item = getDelegatedItemById(id);
     if (!item || !window.blockStore) return false;
     const p = item.properties || {};
-    const targetDate = todayStr();
     const linked = resolveLinkedBlock(p.linkedBlockId);
-    try {
-      let block = linked && linked.date === targetDate ? linked : null;
-      if (linked && !block && typeof scheduleRowOnDay === "function" && window.DCC && window.DCC.getDayContext && window.DCC.findSlot) {
-        const duration = Math.max(1, Number(linked.properties && (linked.properties.duration || linked.properties.durMin)) || 30);
-        const endHour = Math.floor(duration / 60);
-        const endMinute = duration % 60;
-        const ev = { id: linked.id, title: p.myTask || p.title || "Unblocked task", start: "00:00", end: String(endHour).padStart(2, "0") + ":" + String(endMinute).padStart(2, "0") };
-        const ctx = await window.DCC.getDayContext(targetDate);
-        const slot = ctx && window.DCC.findSlot(ev, ctx, { anchorNow: true });
-        if (slot) block = await scheduleRowOnDay(linked.id, targetDate, { block: linked, start: slot.start, end: slot.end });
-      }
-      if (linked && !block) {
-        toast("No free slot today for the linked task. The Waiting item is still open.", "error");
+    const scheduleOnDate = async (targetDate) => {
+      try {
+        let block = linked && linked.date === targetDate ? linked : null;
+        if (linked && !block && typeof scheduleRowOnDay === "function" && window.DCC && window.DCC.getDayContext && window.DCC.findSlot) {
+          const duration = Math.max(1, Number(linked.properties && (linked.properties.duration || linked.properties.durMin)) || 30);
+          const endHour = Math.floor(duration / 60);
+          const endMinute = duration % 60;
+          const ev = { id: linked.id, title: p.myTask || p.title || "Unblocked task", start: "00:00", end: String(endHour).padStart(2, "0") + ":" + String(endMinute).padStart(2, "0") };
+          const ctx = await window.DCC.getDayContext(targetDate);
+          const slot = ctx && window.DCC.findSlot(ev, ctx, { anchorNow: true });
+          if (slot) block = await scheduleRowOnDay(linked.id, targetDate, { block: linked, start: slot.start, end: slot.end });
+        }
+        if (linked && !block) {
+          toast("No free slot on that day for the linked task. The Waiting item is still open.", "error");
+          return false;
+        }
+        if (!linked && !block) {
+          const ev = {
+            id: "waiting-unblock-task:" + id,
+            title: p.myTask || p.title || "Unblocked task",
+            type: "task",
+            start: "00:00",
+            end: "00:30",
+            priority: p.priority || "Medium",
+            detail: blockerLabel(item) + (p.notes ? "\n\n" + p.notes : ""),
+            source: "waiting-unblock",
+            tags: ["waiting", "unblocked"],
+            delegatedItemId: id
+          };
+          block = await scheduleTaskOnDate(ev, targetDate, { useExisting: true, silent: true });
+        }
+        if (!block) {
+          toast("No free slot on that day. The Waiting item is still open.", "error");
+          return false;
+        }
+        await postWaitingAction(id, "unblock", { taskBlockId: block.id, date: targetDate });
+        await afterWaitingAction();
+        const label = (typeof _prettyDateLabel === "function") ? _prettyDateLabel(targetDate) : targetDate;
+        toast("Task scheduled " + label + " and Waiting item closed.", "success");
+        return true;
+      } catch (e) {
+        toast("Could not schedule task: " + (e.message || e), "error");
         return false;
       }
-      if (!linked && !block) {
-        const ev = {
-          id: "waiting-unblock-task:" + id,
-          title: p.myTask || p.title || "Unblocked task",
-          type: "task",
-          start: "00:00",
-          end: "00:30",
-          priority: p.priority || "Medium",
-          detail: blockerLabel(item) + (p.notes ? "\n\n" + p.notes : ""),
-          source: "waiting-unblock",
-          tags: ["waiting", "unblocked"],
-          delegatedItemId: id
-        };
-        block = await scheduleTaskOnDate(ev, targetDate, { useExisting: true, silent: true });
-      }
-      if (!block) {
-        toast("No free slot today. The Waiting item is still open.", "error");
-        return false;
-      }
-      await postWaitingAction(id, "unblock", { taskBlockId: block.id, date: targetDate });
-      await afterWaitingAction();
-      toast("Unblocked and scheduled for today.", "success");
+    };
+    if (selectedDate) return scheduleOnDate(selectedDate);
+    if (typeof openDatePickPopover === "function" && anchorEl) {
+      openDatePickPopover(anchorEl, {
+        header: 'Schedule "' + (p.myTask || p.title || "task") + '" for…',
+        actionLabel: "Schedule task",
+        onPick: scheduleOnDate
+      });
       return true;
-    } catch (e) {
-      toast("Could not unblock: " + (e.message || e), "error");
-      return false;
     }
+    return scheduleOnDate(todayStr());
   }
 
   function toast(message, type) { return window.DCC.toast(message, type); } // delegates to core.js
+
+  // Generated check-in reminders call this to return to their canonical item.
+  function openWaitingItem(id) {
+    const item = getDelegatedItemById(id);
+    if (!item) {
+      toast("That Waiting item is no longer available.", "info");
+      return false;
+    }
+    _currentFilter = "all";
+    renderDelegatedSidebar();
+    if (typeof window.openTasksToSection === "function") {
+      window.openTasksToSection("tm-delegated-blocked-section", { solo: true });
+    }
+    setTimeout(() => {
+      const card = Array.from(document.querySelectorAll("#delegated-blocked-list .delegated-card"))
+        .find(node => node.dataset.id === String(id));
+      if (!card) return;
+      card.classList.add("delegated-card-target");
+      card.setAttribute("tabindex", "-1");
+      card.focus({ preventScroll: true });
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(() => card.classList.remove("delegated-card-target"), 2200);
+    }, 260);
+    return true;
+  }
 
   function openDelegatedModal(idOrNull, prefill) {
     const overlay = document.getElementById("delegated-modal-overlay");
@@ -892,6 +950,8 @@
   window.snoozeWaitingItem = snoozeWaitingItem;
   window.scheduleWaitingCheckIn = scheduleDelegatedItem;
   window.unblockWaitingItem = unblockWaitingItem;
+  window.completeWaitingItem = completeWaitingItem;
+  window.openWaitingItem = openWaitingItem;
   window.completeWaitingCheckIn = markDelegatedItemCheckedById;
   window.DCC.Waiting = Object.assign(window.DCC.Waiting || {}, {
     all: getAllDelegatedItems,
@@ -903,6 +963,8 @@
     snooze: snoozeWaitingItem,
     scheduleCheckIn: scheduleDelegatedItem,
     unblock: unblockWaitingItem,
+    complete: completeWaitingItem,
+    open: openWaitingItem,
     completeCheckIn: markDelegatedItemCheckedById,
     copyText
   });
