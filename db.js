@@ -512,9 +512,10 @@ function collectCompletionSubtreeIds(rows, parent) {
 // cannot commit while one of its steps remains open.
 async function setTaskCompletion({
   taskRef, completed, completedAt = null, taskDate = null, mutationId,
-  expectedRevision = null, userId = null, workspaceId = null,
+  expectedRevision = null, userId = null, workspaceId = null, companionUpdates = [],
 }) {
   validateTaskCompletionInput({ taskRef, completed, completedAt, taskDate, mutationId, expectedRevision });
+  if (!Array.isArray(companionUpdates)) throw new Error("companionUpdates must be an array");
   const q = await pool.connect();
   const at = completed ? (completedAt || new Date().toISOString()) : null;
   const now = new Date().toISOString();
@@ -522,6 +523,43 @@ async function setTaskCompletion({
   let affected = [];
   let overlayBroadcastId = null;
   let target = null;
+  let companionBlocks = [];
+  const applyCompanionUpdates = async () => {
+    companionBlocks = [];
+    for (const update of companionUpdates) {
+      if (!update || !update.id || !update.properties || typeof update.properties !== "object") {
+        throw new Error("Invalid companion update");
+      }
+      const { rows } = await q.query(
+        `SELECT * FROM blocks
+          WHERE id = $1 AND deleted_at IS NULL
+            AND workspace_id IS NOT DISTINCT FROM $2
+          FOR UPDATE`,
+        [update.id, workspaceId]
+      );
+      const existing = rows[0] ? parseBlock(rows[0]) : null;
+      if (!existing) throw taskCompletionError("Companion block not found", 404, "COMPLETION_COMPANION_NOT_FOUND");
+      if (update.expectedUpdatedAt) {
+        const expectedMs = Date.parse(update.expectedUpdatedAt);
+        const actualMs = Date.parse(existing.updated_at || "");
+        if (!Number.isFinite(expectedMs) || expectedMs !== actualMs) {
+          throw taskCompletionError("Companion block changed during completion", 409, "COMPLETION_COMPANION_CONFLICT", existing);
+        }
+      }
+      validateBlock(existing.type, update.properties);
+      const { rows: written } = await q.query(
+        "UPDATE blocks SET properties = $1, updated_at = $2 WHERE id = $3 RETURNING *",
+        [update.properties, now, update.id]
+      );
+      const parsed = parseBlock(written[0] || { ...existing, properties: update.properties, updated_at: now });
+      companionBlocks.push(parsed);
+      await q.query(
+        `INSERT INTO operations (block_id, op_type, before_data, after_data, timestamp)
+         VALUES ($1, 'update', $2, $3, $4)`,
+        [update.id, existing.properties, update.properties, now]
+      );
+    }
+  };
   try {
     await q.query("BEGIN");
 
@@ -589,6 +627,7 @@ async function setTaskCompletion({
           [root.id, root.properties, rootProps, now]
         );
       }
+      await applyCompanionUpdates();
       await q.query("COMMIT");
       const revision = alreadyApplied ? currentRevision : revisions[key];
       return {
@@ -597,7 +636,7 @@ async function setTaskCompletion({
           _completionRevision: revision, _completionMutationId: mutationId,
         } },
         affectedTasks: [], revision, persistenceTarget: "legacy_overlay",
-        duplicate: alreadyApplied, broadcastIds: [root.id],
+        duplicate: alreadyApplied, broadcastIds: [root.id, ...companionBlocks.map(row => row.id)], companionBlocks,
       };
     }
 
@@ -627,11 +666,12 @@ async function setTaskCompletion({
         const ids = collectCompletionSubtreeIds(poolRows, target);
         duplicateAffected = [target, ...poolRows.filter(row => row.id !== target.id && ids.has(row.id))];
       }
+      await applyCompanionUpdates();
       await q.query("COMMIT");
       return {
         task: target, affectedTasks: duplicateAffected, revision: currentRevision,
         persistenceTarget: "task_row", duplicate: true,
-        broadcastIds: duplicateAffected.map(row => row.id),
+        broadcastIds: [...duplicateAffected.map(row => row.id), ...companionBlocks.map(row => row.id)], companionBlocks,
       };
     }
 
@@ -745,6 +785,7 @@ async function setTaskCompletion({
         }
       }
     }
+    await applyCompanionUpdates();
     await q.query("COMMIT");
   } catch (error) {
     try { await q.query("ROLLBACK"); } catch { /* preserve completion error */ }
@@ -767,7 +808,8 @@ async function setTaskCompletion({
   return {
     task, affectedTasks: affected, revision: task && task.properties && task.properties._completionRevision,
     persistenceTarget: "task_row", duplicate: false,
-    broadcastIds: [...affected.map(row => row.id), ...(overlayBroadcastId ? [overlayBroadcastId] : [])],
+    broadcastIds: [...affected.map(row => row.id), ...(overlayBroadcastId ? [overlayBroadcastId] : []), ...companionBlocks.map(row => row.id)],
+    companionBlocks,
   };
 }
 
@@ -2102,6 +2144,32 @@ async function findBlockByLocalId(localId, workspaceId) {
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
+// Resolve a live block reference without collapsing duplicate legacy local_ids.
+// This is intentionally separate from findBlockByLocalId, whose recurrence
+// callers need to see tombstones and accept newest-wins behavior.
+async function findUniqueLiveBlockByReference(blockRef, workspaceId) {
+  const { rows: directRows } = await pool.query(
+    `SELECT * FROM blocks
+      WHERE id=$1 AND deleted_at IS NULL
+        AND workspace_id IS NOT DISTINCT FROM $2`,
+    [blockRef, workspaceId]
+  );
+  if (directRows[0]) return parseBlock(directRows[0]);
+
+  const { rows } = await pool.query(
+    `SELECT * FROM blocks
+      WHERE properties->>'local_id'=$1 AND deleted_at IS NULL
+        AND workspace_id IS NOT DISTINCT FROM $2
+      ORDER BY updated_at DESC, id ASC
+      LIMIT 2`,
+    [blockRef, workspaceId]
+  );
+  if (rows.length > 1) {
+    throw taskCompletionError("Task reference is ambiguous", 409, "COMPLETION_TARGET_AMBIGUOUS");
+  }
+  return rows[0] ? parseBlock(rows[0]) : null;
+}
+
 // apply-forward: distinct future dates (after fromDate) that still have live
 // blocks in this workspace, ascending. Returns bare YYYY-MM-DD strings.
 async function getFutureDatesWithBlocks(fromDate, workspaceId) {
@@ -2126,5 +2194,5 @@ module.exports = {
   parseBlock, getBlocksByDateRange, getDccStateRange, ensureWorkspacesForAllUsers,
   getTaskTimeEntries,
   getResponsibilityBlocks, findResponsibilityBySlug, getBlocksByKind,
-  findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, getFutureDatesWithBlocks
+  findResponsibilityTriggerBySlug, findResponsibilityTaskByAlertKey, findBlockByLocalId, findUniqueLiveBlockByReference, getFutureDatesWithBlocks
 };

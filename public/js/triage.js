@@ -908,6 +908,56 @@ function triageReceivedDateHtml(item){
   const received=triageReceivedDate(item);
   return received?'<span title="'+DCC.esc(received.title)+'">'+DCC.esc(received.label)+'</span>':'';
 }
+function waitingItemLinkHtml(item, className){
+  if(!item||!item.waiting_item_id)return '';
+  return '<button type="button" class="'+className+'" data-waiting-item="'+DCC.esc(item.waiting_item_id)+'" title="Open the original Waiting item to schedule, complete, edit, or dismiss the task">Open task</button>';
+}
+function triageDraftAction(item){
+  if(!item)return null;
+  const draftHref=window.DCC.safeUrlAttr(item.draft_link||item.draft_url);
+  const sourceHref=window.DCC.safeUrlAttr(item.link||item.source_url);
+  const hasDraft=!!(item.draft_id||item.draft_preview||draftHref);
+  if(!hasDraft)return null;
+  if(draftHref)return {kind:"link",href:draftHref,label:"Review and Send"};
+  if(sourceHref)return {kind:item.draft_preview?"copy-link":"link",href:sourceHref,label:"Review and Send"};
+  if(item.draft_preview)return {kind:"copy",label:"Copy Draft"};
+  return {kind:"status",label:"Draft ready"};
+}
+async function copyTriageDraft(triageId){
+  const item=(INIT_TRIAGE||[]).find(entry=>entry.id===triageId);
+  const text=item&&item.draft_preview;
+  if(!text)return false;
+  let copied=false;
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(text);copied=true;}
+  }catch(e){}
+  if(!copied){
+    try{
+      const ta=document.createElement("textarea");
+      ta.value=text;ta.setAttribute("readonly","");ta.style.position="fixed";ta.style.left="-9999px";
+      document.body.appendChild(ta);ta.select();copied=document.execCommand("copy");document.body.removeChild(ta);
+    }catch(e){}
+  }
+  if(typeof showToast==="function")showToast(copied?"Check-in draft copied":"Could not copy draft",copied?"success":"error");
+  return copied;
+}
+async function activateTriageDraftAction(event, element){
+  if(event)event.stopPropagation();
+  const href=element&&element.getAttribute?window.DCC.safeUrl(element.getAttribute("href")):"";
+  if(!href)return copyTriageDraft(element&&element.dataset.copyDraft);
+  if(event&&typeof event.preventDefault==="function")event.preventDefault();
+  const pending=(typeof window.open==="function")?window.open("about:blank","_blank"):null;
+  if(pending)pending.opener=null;
+  const copied=await copyTriageDraft(element&&element.dataset.copyDraft);
+  if(!copied){
+    if(pending&&typeof pending.close==="function")pending.close();
+    return false;
+  }
+  if(pending){pending.location.href=href;return true;}
+  const opened=(typeof window.open==="function")?window.open(href,"_blank","noopener"):null;
+  if(!opened&&typeof showToast==="function")showToast("Draft copied, but the source could not be opened. Allow popups and try again.","info");
+  return !!opened;
+}
 function buildTriageCard(item) {
   const dismissed = loadDismissed();
   const isDismissed = !!dismissed[item.id];
@@ -922,14 +972,16 @@ function buildTriageCard(item) {
   const priCls = item.priority === "high" ? "pri-hi" : item.priority === "medium" ? "pri-med" : "pri-lo";
   const t = TRI_ICONS[item.type] || {emoji:"\u{2753}"};
   const linkLabel = DCC.esc(item.link_label || item.action_label || "Open");
-  // Sweep-provided hrefs: allowlist the scheme AND escape the attribute.
-  const draftLink = window.DCC.safeUrlAttr(item.draft_link || item.draft_url);
-  const draftLabel = item.draft_type === 'gmail' ? 'DRAFT' : 'MSG';
-  const draftChip = item.draft_id
-    ? (draftLink
-      ? '<a href="' + draftLink + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">REVIEW ' + draftLabel + '</a>'
-      : '<span style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700">' + draftLabel + '</span>')
-    : '';
+  const sourceLink = window.DCC.safeUrlAttr(item.link || item.source_url);
+  const draftAction = triageDraftAction(item);
+  const draftChip = !draftAction ? '' :
+    (draftAction.kind === "copy-link"
+      ? '<a href="' + draftAction.href + '" target="_blank" rel="noreferrer" class="tri-copy-draft" data-copy-draft="' + DCC.esc(item.id) + '" onclick="event.stopPropagation()" style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">Review and Send</a>'
+      : draftAction.kind === "link"
+        ? '<a href="' + draftAction.href + '" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">Review and Send</a>'
+        : draftAction.kind === "copy"
+          ? '<button type="button" class="tri-copy-draft" data-copy-draft="' + DCC.esc(item.id) + '" style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border:0;border-radius:4px;font-size:9px;font-weight:700;cursor:pointer">Copy Draft</button>'
+          : '<span style="background:var(--cyan-bg,rgba(34,211,238,0.1));color:var(--cyan,#22d3ee);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700">Draft ready</span>');
   return '<div class="board-card' + (isDismissed ? ' board-card-done' : '') + '" data-tri-id="' + item.id + '" style="' + (isDismissed ? 'opacity:0.5' : '') + '">' +
     '<div class="bar" style="background:' + barColor + '"></div>' +
     '<div class="body">' +
@@ -940,8 +992,9 @@ function buildTriageCard(item) {
       '<div class="meta">' +
         '<span class="' + priCls + '">' + (item.priority || 'medium') + '</span>' +
         (item.queue_label || item.source_label ? '<span>' + DCC.esc(item.queue_label || item.source_label) + '</span>' : '') +
-        (window.DCC.safeUrlAttr(item.link) ? '<a href="' + window.DCC.safeUrlAttr(item.link) + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">' + linkLabel + '</a>' : '') +
+        (sourceLink && !draftAction ? '<a href="' + sourceLink + '" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none;font-size:10px">' + linkLabel + '</a>' : '') +
         (window.DCC.safeUrlAttr(item.auto_task_url) ? '<a href="' + window.DCC.safeUrlAttr(item.auto_task_url) + '" target="_blank" onclick="event.stopPropagation()" style="background:var(--purple-bg,rgba(168,85,247,0.1));color:var(--purple,#a855f7);padding:1px 6px;border-radius:4px;font-size:9px;font-weight:700;text-decoration:none">TASK</a>' : '') +
+        waitingItemLinkHtml(item,'tri-open-waiting') +
         draftChip +
         triageReceivedDateHtml(item) +
         '<span>' + ageParts.join(' \u00b7 ') + '</span>' +
@@ -1254,15 +1307,24 @@ function buildScheduleTriageCard(item){
   // safeUrlAttr, not safeUrl: these land straight in an href, and the scheme check
   // alone does not stop a swept URL from closing the attribute and opening an
   // event handler. Same helper the catch-up modal's row link uses.
-  const draftHref=window.DCC.safeUrlAttr(item.draft_link||item.draft_url);
-  const srcHref=window.DCC.safeUrlAttr(item.link);
+  const srcHref=window.DCC.safeUrlAttr(item.link||item.source_url);
+  const draftAction=triageDraftAction(item);
+  const scheduleDraftAction=!draftAction?'':
+    (draftAction.kind==="copy-link"
+      ? '<a href="'+draftAction.href+'" target="_blank" rel="noreferrer" class="schedule-triage-copy" data-copy-draft="'+DCC.esc(item.id)+'" onclick="event.stopPropagation()" style="color:var(--green);text-decoration:none;font-weight:600">Review and Send</a>'
+      : draftAction.kind==="link"
+        ? '<a href="'+draftAction.href+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--green);text-decoration:none;font-weight:600">Review and Send</a>'
+        : draftAction.kind==="copy"
+          ? '<button type="button" class="schedule-triage-copy" data-copy-draft="'+DCC.esc(item.id)+'" style="border:0;background:transparent;color:var(--green);font:inherit;font-weight:600;cursor:pointer;padding:0">Copy Draft</button>'
+          : '<span style="color:var(--green);font-weight:600">Draft ready</span>');
   return '<div class="board-card schedule-triage-card" data-schedule-triage-id="'+item.id+'">'+
     '<div class="bar" style="background:'+barColor+'"></div>'+
     '<div class="body">'+
       '<div class="title-row"><span class="ttl" title="'+safeTitle+'">'+DCC.esc(item.title||"Triage item")+'</span>'+triEscBadge(item.escalation)+'</div>'+
       '<div class="meta"><span class="'+priCls+'">'+pri+'</span>'+triagePointsChip(item)+triageReceivedDateHtml(item)+'<span>'+ms(triageDuration(item))+'</span>'+
-        (srcHref?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+DCC.esc(item.link_label||item.action_label||"Open")+'</a>':'')+
-        (draftHref?'<a href="'+draftHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--green);text-decoration:none;font-weight:600">Review draft</a>':(item.draft_id?'<span style="color:var(--green);font-weight:600">Draft ready</span>':''))+
+        (srcHref&&!draftAction?'<a href="'+srcHref+'" target="_blank" rel="noreferrer" onclick="event.stopPropagation()" style="color:var(--accent-light);text-decoration:none">'+DCC.esc(item.link_label||item.action_label||"Open")+'</a>':'')+
+        waitingItemLinkHtml(item,'schedule-triage-open-waiting')+
+        scheduleDraftAction+
       '</div>'+
       (item.summary?'<div class="schedule-triage-summary">'+DCC.esc(item.summary)+'</div>':'')+
       (item.draft_preview?'<div class="schedule-triage-summary" style="border-left:2px solid var(--green);padding-left:8px;opacity:.9">'+DCC.esc(item.draft_preview)+'</div>':'')+
@@ -1349,6 +1411,15 @@ function buildScheduleTriage(){
   });
   el.querySelectorAll(".schedule-triage-quick").forEach(btn=>{
     btn.addEventListener("click",e=>{e.stopPropagation();dismissTriage(btn.dataset.triageId,"",false);});
+  });
+  el.querySelectorAll(".schedule-triage-copy").forEach(btn=>{
+    btn.addEventListener("click",e=>{activateTriageDraftAction(e,btn);});
+  });
+  el.querySelectorAll(".schedule-triage-open-waiting").forEach(btn=>{
+    btn.addEventListener("click",e=>{
+      e.stopPropagation();
+      if(typeof window.openWaitingItem==="function")window.openWaitingItem(btn.dataset.waitingItem);
+    });
   });
   // NOTE: .schedule-triage-delete is wired ONCE, above. A second identical pass
   // used to live here, so one click ran deleteTriageItem twice — two day-state
@@ -1648,6 +1719,19 @@ function buildTriage() {
       const id = btn.dataset.dismissId;
       if (!id) return;
       dismissTriage(id, "", false);
+    });
+  });
+
+  document.querySelectorAll(".tri-copy-draft").forEach(btn => {
+    btn.addEventListener("click", e => {
+      activateTriageDraftAction(e, btn);
+    });
+  });
+
+  document.querySelectorAll(".tri-open-waiting").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      if (typeof window.openWaitingItem === "function") window.openWaitingItem(btn.dataset.waitingItem);
     });
   });
 
