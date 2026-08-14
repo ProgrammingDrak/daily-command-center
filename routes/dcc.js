@@ -43,6 +43,46 @@ module.exports = function mount(app, ctx) {
     }
   });
 
+  // Narrow, service-scoped read for the detached meeting-retention runner. It
+  // exposes only the metadata needed to discover work and retire hot audio, so
+  // the scheduler never needs a renewable browser session or the broad blocks API.
+  app.get("/api/dcc/meeting-retention-candidates", async (req, res) => {
+    const start = String(req.query.start || "");
+    const end = String(req.query.end || "");
+    if (!isValidDate(start) || !isValidDate(end)) {
+      return res.status(400).json({ error: "Provide valid ?start=&end= dates" });
+    }
+    const startMs = Date.parse(`${start}T00:00:00Z`);
+    const endMs = Date.parse(`${end}T00:00:00Z`);
+    if (endMs < startMs || endMs - startMs > 370 * 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ error: "Meeting retention range must be 370 days or less" });
+    }
+    const rows = await blockDB.getBlocksByDateRange(start, end, req.workspaceId);
+    return rows.filter((block) => {
+      const p = block.properties || {};
+      return [p.type, p.kind, block.type].map((v) => String(v || "").toLowerCase())
+        .some((v) => v === "meeting" || v === "oneone");
+    }).map((block) => {
+      const p = block.properties || {};
+      return {
+        id: block.id,
+        date: block.date,
+        properties: {
+          type: p.type,
+          kind: p.kind,
+          title: p.title,
+          name: p.name,
+          source_id: p.source_id,
+          recording_review: !!p.recording_review,
+          recap_status: p.recap_status,
+          dashboard_ref: p.dashboard_ref,
+          recording_artifact: p.recording_artifact,
+          recording_source: p.recording_source,
+        },
+      };
+    });
+  });
+
   // Shared idempotency lookup for the brief's Day-in-Review writes and quick-task:
   // does a block carrying this idempotency_key already exist? Returns the row (live
   // OR tombstoned) or null; callers branch on deleted_at via dedupeStatus.

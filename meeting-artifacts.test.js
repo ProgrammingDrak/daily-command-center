@@ -25,6 +25,9 @@ function makeStore(seed) {
     async getBlocksByDate(date, ws) {
       return store.filter((b) => b.date === date && !b.deleted_at && (!ws || b.workspace_id === ws));
     },
+    async getBlocksByDateRange(start, end, ws) {
+      return store.filter((b) => b.date >= start && b.date <= end && !b.deleted_at && (!ws || b.workspace_id === ws));
+    },
     async getBlocksByKind(kind, ws) {
       return store.filter((b) => (b.properties || {}).kind === kind && !b.deleted_at && (!ws || b.workspace_id === ws));
     },
@@ -580,6 +583,7 @@ test("applyArtifacts ignores client html, escapes markdown, and drops unsafe sou
 function mountApp(seedBlocks, applyRecorder, extra = {}) {
   const app = express();
   app.use(express.json());
+  app.use((req, res, next) => { req.workspaceId = extra.workspaceId || "ws-1"; next(); });
   const store = makeStore(seedBlocks);
   const ctx = {
     blockDB: store, meetingIdentity,
@@ -606,6 +610,15 @@ async function postPath(app, path, body) {
     return { status: resp.status, json: await resp.json() };
   } finally { server.close(); }
 }
+async function getPath(app, path) {
+  const server = http.createServer(app);
+  await new Promise((r) => server.listen(0, r));
+  const { port } = server.address();
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}${path}`);
+    return { status: resp.status, json: await resp.json() };
+  } finally { server.close(); }
+}
 const post = (app, body) => postPath(app, "/api/dcc/meeting-artifacts", body);
 
 test("meeting-signals endpoint passes the service owner and explicit prefixes to the read-only bridge", async () => {
@@ -623,6 +636,29 @@ test("meeting-signals endpoint passes the service owner and explicit prefixes to
 test("meeting-signals endpoint requires a bounded meeting window", async () => {
   const app = mountApp([], [], { meetingSignals: { readSignals: async () => ({ signals: [] }) } });
   const { status } = await postPath(app, "/api/dcc/meeting-signals", { meeting: { start: "2026-08-14T13:00:00Z" } });
+  assert.equal(status, 400);
+});
+
+test("meeting retention candidates expose only scoped lifecycle metadata", async () => {
+  const rows = [
+    { id: "meeting-1", type: "block", date: "2026-08-14", workspace_id: "ws-1", properties: {
+      type: "meeting", title: "Planning", notes: "private notes", recap_status: "ready",
+      dashboard_ref: "planning", recording_artifact: { status: "hot" },
+    } },
+    { id: "other-workspace", type: "block", date: "2026-08-14", workspace_id: "ws-2", properties: { type: "meeting" } },
+    { id: "task-1", type: "block", date: "2026-08-14", workspace_id: "ws-1", properties: { type: "task" } },
+  ];
+  const app = mountApp(rows, []);
+  const { status, json } = await getPath(app, "/api/dcc/meeting-retention-candidates?start=2026-08-01&end=2026-08-14");
+  assert.equal(status, 200);
+  assert.equal(json.length, 1);
+  assert.equal(json[0].id, "meeting-1");
+  assert.equal(json[0].properties.notes, undefined);
+});
+
+test("meeting retention candidates reject unbounded ranges", async () => {
+  const app = mountApp([], []);
+  const { status } = await getPath(app, "/api/dcc/meeting-retention-candidates?start=2024-01-01&end=2026-08-14");
   assert.equal(status, 400);
 });
 const mtgBlock = (id, sid, title, date) => ({ id, type: "block", parent_id: null, date, properties: { title, type: "meeting", source: "calendar", source_id: sid }, workspace_id: "ws-1", user_id: 1, deleted_at: null });
