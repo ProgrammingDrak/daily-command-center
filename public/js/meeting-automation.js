@@ -236,11 +236,12 @@
   // proposal's own status:"placed"/placedDate (stamped by placeApprovedAction), so
   // it survives a reopen too.
   function recapActionsHtml(actions,placed){
-    let html='<div class="prep-view-actions recap-actions"><div class="prep-view-kicker">Action items</div>';
     if(!actions.length){
-      return html+'<div class="prep-view-empty recap-empty"><span>No action items captured for this meeting.</span></div></div>';
+      return '<div class="prep-view-actions recap-actions"><div class="prep-view-empty recap-empty"><span>No action items captured for this meeting.</span></div></div>';
     }
-    html+=actions.map(a=>{
+    const group=(title,items)=>{
+      if(!items.length)return '';
+      return '<div class="recap-action-group"><div class="prep-view-kicker">'+esc(title)+'</div>'+items.map(a=>{
       const pl=placed&&placed.get(a.id);
       const isPlaced=!!pl||a.status==="placed"||!!a.placedDate;
       const when=(pl&&pl.date)||a.placedDate||"";
@@ -252,8 +253,14 @@
       else ctrl='<button class="recap-sched-btn" type="button" data-action-id="'+esc(a.id)+'">Schedule</button>';
       return '<div class="recap-action'+(isPlaced?' is-scheduled':'')+'" data-row-id="'+esc(a.id)+'">'+
         '<span class="recap-action-text">'+esc(a.text||a.title||"")+meta+'</span>'+ctrl+'</div>';
-    }).join('');
-    return html+'</div>';
+      }).join('')+'</div>';
+    };
+    const signaled=actions.filter(a=>a.origin==="signaled");
+    const automated=actions.filter(a=>a.origin!=="signaled");
+    return '<div class="prep-view-actions recap-actions">'+
+      group("Signaled Action Items from Meetings",signaled)+
+      group("Automated Action Items from Meetings",automated)+
+      '</div>';
   }
 
   // One-click schedule of a recap action. Reuses the shared pick-a-day popover
@@ -406,7 +413,7 @@
     function render(data){
       lastData=data;
       const prep=data&&data.prep, summary=data&&data.summary;
-      const actions=((data&&data.proposedActions)||[]);
+      const actions=((data&&data.proposedActions)||[]).filter(a=>a.status!=="dismissed");
       // Tear down prior editors before we wipe the doc HTML (open + each regenerate).
       Object.keys(editors).forEach(k=>{ try{editors[k].destroy()}catch(e){} delete editors[k]; });
       let html='';

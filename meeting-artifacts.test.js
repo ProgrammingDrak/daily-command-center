@@ -90,6 +90,7 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
   assert.equal(actions.length, 2);
   assert.equal(actions.every((a) => a.properties.status === "proposed" && a.properties.done === false), true);
   assert.deepEqual(actions.map((a) => a.properties.owner).sort(), ["drake", "other"]);
+  assert.equal(actions.every((a) => a.properties.origin === "automated"), true);
   const m1 = await mem.getBlock("m1");
   // The recap now lives ONLY in the meeting_summary artifact (surfaced in the Recap
   // tab), never mirrored into the meeting's notes box.
@@ -120,6 +121,33 @@ test("re-post is idempotent: dedupes proposed actions, upserts summary in place,
   assert.equal(childrenOf("m2", "proposed_action_item").length, 2);
   assert.equal(childrenOf("m2", "meeting_summary").length, 1); // upserted, not duplicated
   assert.equal((await mem.getBlock("m2")).properties.notes, undefined); // recap is never written to notes
+});
+
+test("an explicit signal is stored with provenance and upgrades an automated duplicate in place", async () => {
+  seedMeeting("msignal");
+  await automation.applyArtifacts("msignal", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{ text: "Send the launch brief", owner: "drake", origin: "automated" }],
+  });
+  const result = await automation.applyArtifacts("msignal", {
+    workspaceId: "ws-1", userId: 1,
+    proposedActions: [{
+      text: "Send the launch brief.", owner: "drake", origin: "signaled",
+      signal: {
+        source: "google_chat", phrase: "action item", at: "2026-08-14T13:05:00Z", excerpt: "Action item: Send the launch brief",
+        context: [{ at: "2026-08-14T13:04:30Z", speaker: "participant", excerpt: "Please send the launch brief." }],
+      },
+    }],
+  });
+  const actions = childrenOf("msignal", "proposed_action_item");
+  assert.equal(actions.length, 1);
+  assert.equal(result.applied.proposedActions, 0);
+  assert.equal(actions[0].properties.origin, "signaled");
+  assert.deepEqual(actions[0].properties.signal, {
+    source: "google_chat", phrase: "action item", at: "2026-08-14T13:05:00Z",
+    excerpt: "Action item: Send the launch brief",
+    context: [{ at: "2026-08-14T13:04:30Z", speaker: "participant", excerpt: "Please send the launch brief." }],
+  });
 });
 
 test("a recap leaves the user's own notes untouched (recap lives only in the summary artifact)", async () => {
@@ -266,7 +294,7 @@ test("listProposedActions projects only open meeting proposals with meeting cont
   assert.deepEqual(row, {
     id: "plist", meetingId: "mlist", meetingTitle: "Weekly planning", meetingDate: "2026-07-09",
     meetingStart: "10:00", meetingEnd: "10:30", title: "Send the brief", owner: "drake",
-    priority: "High", approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
+    priority: "High", origin: "automated", signal: null, approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
   });
   assert.equal(rows.some(item => item.id === "placed-list"), false);
 });
@@ -436,21 +464,41 @@ function mountApp(seedBlocks, applyRecorder, extra = {}) {
     meetingAutomation: {
       applyArtifacts: async (blockId, opts) => { applyRecorder.push({ blockId, opts }); return { applied: extra.applied || { summary: true }, proposedActions: [] }; },
     },
+    meetingSignals: extra.meetingSignals,
   };
   require("./routes/dcc.js")(app, ctx);
   return app;
 }
-async function post(app, body) {
+async function postPath(app, path, body) {
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, r));
   const { port } = server.address();
   try {
-    const resp = await fetch(`http://127.0.0.1:${port}/api/dcc/meeting-artifacts`, {
+    const resp = await fetch(`http://127.0.0.1:${port}${path}`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     });
     return { status: resp.status, json: await resp.json() };
   } finally { server.close(); }
 }
+const post = (app, body) => postPath(app, "/api/dcc/meeting-artifacts", body);
+
+test("meeting-signals endpoint passes the service owner and explicit prefixes to the read-only bridge", async () => {
+  const calls = [];
+  const app = mountApp([], [], { meetingSignals: {
+    readSignals: async input => { calls.push(input); return { signals: [{ id: "s1" }], diagnostics: [] }; },
+  } });
+  const meeting = { start: "2026-08-14T13:00:00Z", end: "2026-08-14T13:30:00Z", account_key: "work" };
+  const { status, json } = await postPath(app, "/api/dcc/meeting-signals", { meeting, explicit_prefixes: ["action item"] });
+  assert.equal(status, 200);
+  assert.deepEqual(json.signals, [{ id: "s1" }]);
+  assert.deepEqual(calls, [{ userId: 1, meeting, prefixes: ["action item"] }]);
+});
+
+test("meeting-signals endpoint requires a bounded meeting window", async () => {
+  const app = mountApp([], [], { meetingSignals: { readSignals: async () => ({ signals: [] }) } });
+  const { status } = await postPath(app, "/api/dcc/meeting-signals", { meeting: { start: "2026-08-14T13:00:00Z" } });
+  assert.equal(status, 400);
+});
 const mtgBlock = (id, sid, title, date) => ({ id, type: "block", parent_id: null, date, properties: { title, type: "meeting", source: "calendar", source_id: sid }, workspace_id: "ws-1", user_id: 1, deleted_at: null });
 
 test("endpoint resolves the meeting block by identity and calls applyArtifacts", async () => {

@@ -354,7 +354,8 @@
     const slackRows = [];
     const gmailRows = [];
     const otherRows = [];
-    const meetingRows = [];
+    const signaledMeetingRows = [];
+    const automatedMeetingRows = [];
     let detailSeq = 0;
     // Closing on the last row is the same courtesy either list gives: once there is
     // nothing left to answer, the modal has no reason to sit there. An unexpanded
@@ -652,7 +653,7 @@
       el.querySelector(".cu-mtg-drop").addEventListener("click", () => runMeeting(() => dismissMeetingAction(item)));
       meetingEls.set(item.id, el);
       activeReviewRows.add(el);
-      meetingRows.push(el);
+      (item.origin === "signaled" ? signaledMeetingRows : automatedMeetingRows).push(el);
     });
 
     roots.forEach(ev => {
@@ -755,7 +756,8 @@
     appendRows("Gmail", gmailRows);
     appendRows("Other", otherRows);
     if (cfg._olderButton) listEl.appendChild(cfg._olderButton);
-    appendRows("Meeting follow-ups", meetingRows);
+    appendRows("Signaled Action Items from Meetings", signaledMeetingRows);
+    appendRows("Automated Action Items from Meetings", automatedMeetingRows);
     if (dayReview && reviewApi) {
       label("Day in Review");
       const reviewWrap = document.createElement("div");

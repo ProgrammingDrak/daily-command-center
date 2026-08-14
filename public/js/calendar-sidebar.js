@@ -29,6 +29,10 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
           Connect Google Calendar
         </a>
+        <a href="/api/gcal/auth?account=work" class="gcal-connect-btn" style="margin-top:8px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+          Connect Work Calendar and Meet Chat
+        </a>
       </div>`;
     }
 
@@ -47,9 +51,9 @@
     }
 
     const syncInfo = cached.lastSync ? `<span style="font-size:9px;color:var(--text-muted)">Synced ${formatAgo(cached.lastSync)}</span>` : "";
-    const workConnect = hasWork ? "" : `<a href="/api/gcal/auth?account=work" class="gcal-connect-btn" style="margin-top:8px">
+    const workConnect = `<a href="/api/gcal/auth?account=work" class="gcal-connect-btn" style="margin-top:8px">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-      Connect Work Calendar
+      ${hasWork ? "Refresh Work and Meet Chat access" : "Connect Work Calendar and Meet Chat"}
     </a>`;
 
     return `<div class="cal-sidebar-section gcal-sidebar-section">

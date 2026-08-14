@@ -10,12 +10,38 @@ const triageSuppressions = require("../triage-suppressions");
 module.exports = function mount(app, ctx) {
   const {
     DAY_STATE_FILE, DATA_DIR, addMinutesHHMM, blockDB, broadcast, buildSkeletonState,
-    dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity,
+    dccIntelligence, getDayFilePath, getTodayStr, isValidDate, meetingAutomation, meetingIdentity, meetingSignals,
     readDayStateMirror,
     meetingMaterializer, previousDateStr,
     readJSON, readTriageSuppressionsForWorkspace, resolveOwnerLenient, resolveOwnerStrict, slotStore, writeJSON,
   } = ctx;
   const materializeGuard = createMaterializeGuard({ blockDB });
+
+  // Read-only Google Chat bridge used by Sweep Suite before it analyzes a recap.
+  // It returns only explicit markers from the connected user's own messages and
+  // never makes the recap depend on Chat availability.
+  app.post("/api/dcc/meeting-signals", async (req, res) => {
+    try {
+      if (!meetingSignals || typeof meetingSignals.readSignals !== "function") {
+        return res.status(503).json({ signals: [], diagnostics: [{ code: "meeting_signals_unavailable" }] });
+      }
+      const body = req.body || {};
+      const meeting = body.meeting || {};
+      if (!meeting.start || !meeting.end) {
+        return res.status(400).json({ error: "meeting.start and meeting.end are required" });
+      }
+      const { userId } = await resolveOwnerStrict(req);
+      const result = await meetingSignals.readSignals({
+        userId,
+        meeting,
+        prefixes: Array.isArray(body.explicit_prefixes) ? body.explicit_prefixes : [],
+      });
+      return res.json({ ok: true, signals: result.signals || [], diagnostics: result.diagnostics || [] });
+    } catch (error) {
+      console.error("[meeting-signals] failed:", error);
+      return res.status(error.statusCode || 500).json({ error: error.message || "meeting signals failed" });
+    }
+  });
 
   // Shared idempotency lookup for the brief's Day-in-Review writes and quick-task:
   // does a block carrying this idempotency_key already exist? Returns the row (live

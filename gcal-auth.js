@@ -15,6 +15,9 @@ const SCOPES = [
   "https://www.googleapis.com/auth/calendar",
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/chat.spaces.readonly",
+  "https://www.googleapis.com/auth/chat.messages.readonly",
+  "https://www.googleapis.com/auth/chat.memberships.readonly",
 ];
 
 const APP_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:8090";
@@ -69,8 +72,8 @@ function accountEmailFor(accountKey) {
   return normalizeAccountKey(accountKey) === WORK_ACCOUNT_KEY ? WORK_ACCOUNT_EMAIL : null;
 }
 
-function encodeState(userId, accountKey) {
-  return Buffer.from(JSON.stringify({ userId, accountKey: normalizeAccountKey(accountKey) })).toString("base64url");
+function encodeState(userId, accountKey, nonce) {
+  return Buffer.from(JSON.stringify({ userId, accountKey: normalizeAccountKey(accountKey), nonce: String(nonce || "") })).toString("base64url");
 }
 
 function decodeState(state) {
@@ -82,6 +85,10 @@ function decodeState(state) {
 function hasAllScopes(tokens) {
   const granted = new Set(String(tokens && tokens.scope || "").split(/\s+/).filter(Boolean));
   return SCOPES.every((scope) => granted.has(scope));
+}
+
+function mergeOAuthTokens(existing, incoming) {
+  return { ...(existing || {}), ...(incoming || {}) };
 }
 
 async function loadAccountTokens(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
@@ -193,7 +200,7 @@ async function createOAuthClient(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
   return new google.auth.OAuth2(config.client_id, config.client_secret, REDIRECT_URI);
 }
 
-async function getAuthUrl(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
+async function getAuthUrl(userId, accountKey = DEFAULT_ACCOUNT_KEY, nonce = "") {
   const key = normalizeAccountKey(accountKey);
   const client = await createOAuthClient(userId, key);
   if (!client) return null;
@@ -204,7 +211,7 @@ async function getAuthUrl(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
     include_granted_scopes: true,
     prompt: needsConsent ? "consent select_account" : "select_account",
     scope: SCOPES,
-    state: encodeState(userId, key),
+    state: encodeState(userId, key, nonce),
     ...(accountEmailFor(key) ? { login_hint: accountEmailFor(key) } : {}),
   });
 }
@@ -214,8 +221,12 @@ async function handleCallback(code, userId, accountKey = DEFAULT_ACCOUNT_KEY) {
   const client = await createOAuthClient(userId, key);
   if (!client) throw new Error("No credentials configured");
   const { tokens } = await client.getToken(code);
-  await saveAccountTokens(userId, key, tokens);
-  return tokens;
+  // Google can omit refresh_token on a repeat authorization. Preserve the
+  // durable credential while replacing any access token, expiry, and scopes.
+  const existing = await loadAccountTokens(userId, key);
+  const merged = mergeOAuthTokens(existing, tokens);
+  await saveAccountTokens(userId, key, merged);
+  return merged;
 }
 
 async function getAuthClient(userId, accountKey = DEFAULT_ACCOUNT_KEY) {
@@ -244,7 +255,7 @@ async function fetchAndCacheCalendars(auth) {
 }
 
 module.exports = {
-  DEFAULT_ACCOUNT_KEY, WORK_ACCOUNT_KEY, WORK_ACCOUNT_EMAIL,
+  SCOPES, DEFAULT_ACCOUNT_KEY, WORK_ACCOUNT_KEY, WORK_ACCOUNT_EMAIL, accountEmailFor, hasAllScopes, mergeOAuthTokens,
   ensureMultiAccountSchema, normalizeAccountKey, decodeState,
   loadTokens, loadCredentials, saveTokens, deleteTokens, isAuthenticated,
   loadAccountTokens, loadAccountCredentials, saveAccountTokens, deleteAccountTokens, isAccountAuthenticated, listAuthenticatedAccounts,
