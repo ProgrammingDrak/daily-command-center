@@ -233,15 +233,45 @@ test("later citation enrichment follows an action through approval and placement
 
 test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {
   seedMeeting("m-retention");
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + (14 * 24 * 60 * 60 * 1000)).toISOString();
   const bundle = await automation.applyArtifacts("m-retention", {
     workspaceId: "ws-1", userId: 1,
     dashboardRef: "2026-07-09-retention",
-    recordingArtifact: { status: "hot", holding_days: 14, hot_audio: { key: "meetings/hot/x/audio.m4a" } },
+    recordingArtifact: {
+      status: "hot", holding_days: 14, created_at: createdAt,
+      hot_audio: {
+        provider: "r2", bucket: "warm", key: "meetings/hot/ws-1/retention/audio.m4a", expires_at: expiresAt,
+      },
+    },
     recordingSource: { provider: "google_drive", url: "https://drive.google.com/open?id=x" },
   });
   assert.equal(bundle.meeting.dashboardRef, "2026-07-09-retention");
   assert.equal(bundle.meeting.recordingArtifact.holding_days, 14);
   assert.equal(bundle.meeting.recordingSource.url, "https://drive.google.com/open?id=x");
+});
+
+test("recording artifact ingestion enforces workspace, bucket, and 14-day retention boundaries", async () => {
+  seedMeeting("m-retention-boundary");
+  const createdAt = new Date().toISOString();
+  const base = {
+    status: "hot", created_at: createdAt,
+    hot_audio: { provider: "r2", bucket: "warm", key: "meetings/hot/ws-1/review/audio.m4a" },
+  };
+  await assert.rejects(
+    () => automation.applyArtifacts("m-retention-boundary", {
+      workspaceId: "ws-1", userId: 1,
+      recordingArtifact: { ...base, hot_audio: { ...base.hot_audio, key: "meetings/hot/ws-2/review/audio.m4a", expires_at: new Date(Date.now() + 60_000).toISOString() } },
+    }),
+    /outside this workspace or bucket/,
+  );
+  await assert.rejects(
+    () => automation.applyArtifacts("m-retention-boundary", {
+      workspaceId: "ws-1", userId: 1,
+      recordingArtifact: { ...base, hot_audio: { ...base.hot_audio, expires_at: new Date(Date.now() + (15 * 24 * 60 * 60 * 1000)).toISOString() } },
+    }),
+    /expiry within 14 days/,
+  );
 });
 
 test("a recap leaves the user's own notes untouched (recap lives only in the summary artifact)", async () => {

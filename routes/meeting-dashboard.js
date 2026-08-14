@@ -61,19 +61,28 @@ module.exports = function mount(app, ctx) {
         ? remainingAccessSeconds(hotAudio.expires_at)
         : 0;
       if (expiresIn) {
-        const signedAudio = await audioStore.presignHotAudio(hotAudio, {
-          workspaceId: req.workspaceId,
-          expiresIn,
-        });
-        html = html.replace(/<audio\b[^>]*>/i, tag => {
-          if (!/\bid=(['"])audio\1/i.test(tag)) return tag;
-          const escaped = String(signedAudio)
-            .replace(/&/g, "&amp;")
-            .replace(/"/g, "&quot;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-          return tag.replace(/\bsrc=(['"])audio\1/i, `src="${escaped}"`);
-        });
+        try {
+          const signedAudio = await audioStore.presignHotAudio(hotAudio, {
+            workspaceId: req.workspaceId,
+            expiresIn,
+          });
+          html = html.replace(/<audio\b[^>]*>/i, tag => {
+            if (!/\bid=(['"])audio\1/i.test(tag)) return tag;
+            const escaped = String(signedAudio)
+              .replace(/&/g, "&amp;")
+              .replace(/"/g, "&quot;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;");
+            return tag.replace(/\bsrc=(['"])audio\1/i, `src="${escaped}"`);
+          });
+        } catch (error) {
+          console.warn("[meeting-dashboard] hot audio unavailable; serving transcript:", error.message);
+          html = html.replace(/<audio\b[^>]*>/i, tag => {
+            if (!/\bid=(['"])audio\1/i.test(tag)) return tag;
+            return tag.replace(/\s+src=(['"])audio\1/i, "").replace(/>$/, ' data-hot-audio-unavailable="true">');
+          });
+          html = html.replace("<div class=\"player\">", '<div class="audio-toast">Full recording is temporarily unavailable. The transcript and cold-storage link remain available.</div><div class="player">');
+        }
       }
       res.set("Content-Security-Policy", "sandbox allow-scripts allow-downloads allow-popups allow-popups-to-escape-sandbox; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; media-src 'self' https: data:; img-src https: data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'");
       res.set("Content-Type", "text/html; charset=utf-8");

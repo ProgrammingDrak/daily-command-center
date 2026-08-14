@@ -80,3 +80,28 @@ test("sandboxed dashboard replaces authenticated audio with a short-lived privat
   assert.equal(calls[0].options.workspaceId, "ws-1");
   assert.ok(calls[0].options.expiresIn > 0 && calls[0].options.expiresIn <= 60);
 });
+
+test("private-store signing failure still serves the sandboxed transcript", async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    text: async () => '<main>Transcript remains readable</main><div class="player"><audio id="audio" src="audio"></audio></div>',
+  });
+  const audioStore = { presignHotAudio: async () => { throw new Error("R2 unavailable"); } };
+  const block = {
+    workspace_id: "ws-1",
+    properties: {
+      dashboard_ref: "planning",
+      recording_artifact: {
+        status: "hot",
+        hot_audio: { key: "meetings/hot/ws-1/planning/audio.m4a", expires_at: new Date(Date.now() + 60_000).toISOString() },
+      },
+    },
+  };
+  const response = await get(mount(block, fetchImpl, audioStore), "/meetings/m1/dashboard-content");
+  const html = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(html, /Transcript remains readable/);
+  assert.match(html, /Full recording is temporarily unavailable/);
+  assert.match(html, /data-hot-audio-unavailable="true"/);
+  assert.doesNotMatch(html, /src="audio"/);
+});

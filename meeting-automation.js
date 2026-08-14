@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const { google } = require("googleapis");
 const blockDB = require("./db");
 const gcalAuth = require("./gcal-auth");
+const meetingAudioStore = require("./meeting-audio-store");
 const pool = require("./pg-pool");
 
 const AUTOMATION_KINDS = new Set([
@@ -446,6 +447,64 @@ function citationStart(value) {
   if (typeof value === "string" && !value.trim()) return null;
   const seconds = Number(value);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+function sanitizeRecordingArtifact(value, workspaceId, now = Date.now()) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error("Invalid recording artifact"), { statusCode: 400 });
+  }
+  const status = String(value.status || "");
+  if (!["hot", "compacted", "source_only", "transcript_only"].includes(status)) {
+    throw Object.assign(new Error("Invalid recording artifact status"), { statusCode: 400 });
+  }
+  const hot = value.hot_audio;
+  if (status === "hot" && (!hot || typeof hot !== "object")) {
+    throw Object.assign(new Error("Hot recording artifact is missing its private audio reference"), { statusCode: 400 });
+  }
+  if (!["hot", "compacted"].includes(status) && hot) {
+    throw Object.assign(new Error("Non-hot recording artifact cannot carry private audio"), { statusCode: 400 });
+  }
+
+  let cleanHot = null;
+  let expiresAt = null;
+  if (hot) {
+    const prefix = `meetings/hot/${meetingAudioStore.safeSlug(workspaceId)}/`;
+    const key = String(hot.key || "");
+    const bucket = String(hot.bucket || "");
+    const config = meetingAudioStore.configFromEnv(process.env);
+    if (hot.provider !== "r2" || !key.startsWith(prefix) || !bucket || (config && bucket !== config.bucket)) {
+      throw Object.assign(new Error("Recording artifact is outside this workspace or bucket"), { statusCode: 400 });
+    }
+    if (status === "hot") {
+      expiresAt = meetingAudioStore.normalizeExpiry(hot.expires_at, now);
+      const created = Date.parse(String(value.created_at || ""));
+      const expires = Date.parse(expiresAt);
+      if (!Number.isFinite(created) || created > now + (5 * 60 * 1000) ||
+          expires > created + (14 * 24 * 60 * 60 * 1000) + (5 * 60 * 1000)) {
+        throw Object.assign(new Error("Recording artifact exceeds its 14-day holding period"), { statusCode: 400 });
+      }
+    } else {
+      const parsed = Date.parse(String(hot.expires_at || ""));
+      if (!Number.isFinite(parsed) || parsed > now + (5 * 60 * 1000)) {
+        throw Object.assign(new Error("Compacted recording artifact has an invalid hot-audio expiry"), { statusCode: 400 });
+      }
+      expiresAt = new Date(parsed).toISOString();
+    }
+    cleanHot = {
+      ...hot,
+      provider: "r2",
+      bucket: config ? config.bucket : bucket,
+      key,
+      expires_at: expiresAt,
+    };
+  }
+  return {
+    ...value,
+    status,
+    holding_days: 14,
+    expires_at: status === "hot" ? expiresAt : (value.expires_at || null),
+    hot_audio: cleanHot,
+  };
 }
 
 function sanitizeSignal(signal) {
@@ -964,7 +1023,7 @@ async function applyArtifacts(blockId, { workspaceId, userId, prep, summary, tra
     const ref = String(dashboardRef || "").trim();
     const next = { ...mp };
     if (ref && ref !== mp.dashboard_ref) { next.dashboard_ref = ref; applied.dashboardRef = true; }
-    if (recordingArtifact) next.recording_artifact = recordingArtifact;
+    if (recordingArtifact) next.recording_artifact = sanitizeRecordingArtifact(recordingArtifact, workspaceId);
     if (recordingSource) {
       const safeSource = { ...recordingSource };
       if (!isSafeHttpUrl(safeSource.url)) delete safeSource.url;
