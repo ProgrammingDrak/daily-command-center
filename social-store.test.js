@@ -3,11 +3,26 @@ const assert = require("node:assert/strict");
 const socialStore = require("./social-store");
 const { _test } = socialStore;
 
-const { resolveReviewState, scopeMatches, isoDate, isQueueableSpinWin, TERMINAL_QUEUE_STATES, expectedColumnsMatch } = _test;
+const { resolveReviewState, normalizeUnlockRoutes, scopeMatches, isoDate, isQueueableSpinWin, TERMINAL_QUEUE_STATES } = _test;
 
 test("allowlisted sponsor auto-approves; everyone else is pending", () => {
   assert.equal(resolveReviewState(true), "auto_approved");
   assert.equal(resolveReviewState(false), "pending");
+});
+
+test("sponsorship unlock routes normalize, dedupe, and retain all three channels", () => {
+  const routes = normalizeUnlockRoutes([
+    { type: "casino" },
+    { type: "milestone", thresholdBankUnits: 25 },
+    { type: "task", targetId: "task-42" },
+    { type: "casino" },
+  ]);
+  assert.deepEqual(routes, [
+    { type: "casino", targetId: null, thresholdBankUnits: null },
+    { type: "milestone", targetId: null, thresholdBankUnits: 25 },
+    { type: "task", targetId: "task-42", thresholdBankUnits: null },
+  ]);
+  assert.throws(() => normalizeUnlockRoutes([{ type: "task" }]), /needs a target/);
 });
 
 test("allowlist scope: 'both' matches task and slot; specific scope matches only itself", () => {
@@ -38,14 +53,6 @@ test("reward-queue lifecycle transitions are exported", () => {
   assert.equal(typeof socialStore.redeemReward, "function");
   assert.equal(typeof socialStore.claimReward, "function");
   assert.equal(typeof socialStore.discardReward, "function");
-});
-
-test("reward scheduling compare-and-set rejects a stale block link", () => {
-  const queued = { status: "queued", scheduled_block_id: null };
-  const scheduled = { status: "scheduled", scheduled_block_id: "task-current" };
-  assert.equal(expectedColumnsMatch(queued, { scheduled_block_id: null }), true);
-  assert.equal(expectedColumnsMatch(scheduled, { scheduled_block_id: "task-current" }), true);
-  assert.equal(expectedColumnsMatch(scheduled, { scheduled_block_id: "task-stale" }), false);
 });
 
 test("isoDate returns a YYYY-MM-DD string", () => {

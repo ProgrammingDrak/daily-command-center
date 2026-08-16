@@ -613,6 +613,119 @@ ALTER TABLE slot_rewards
   ADD COLUMN IF NOT EXISTS tank_recurring      BOOLEAN NOT NULL DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS tank_claimed_period TEXT;
 
+-- Reward Vault metadata. slot_rewards remains the canonical reward definition;
+-- quick-add and overflow wins clone a definition into a tank row and retain the
+-- source link so templates can be reused without sharing claim state.
+ALTER TABLE slot_rewards
+  ADD COLUMN IF NOT EXISTS vault_enabled       BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS vault_reuse_mode    TEXT NOT NULL DEFAULT 'reusable',
+  ADD COLUMN IF NOT EXISTS vault_min_cents     INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS vault_quick_add     BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS vault_random_draw   BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS vault_milestone     BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS sponsor_visible     BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS vault_archived_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS source_reward_id    INTEGER REFERENCES slot_rewards(id);
+
+CREATE INDEX IF NOT EXISTS idx_slot_rewards_vault
+  ON slot_rewards(workspace_id, vault_enabled, kind)
+  WHERE deleted_at IS NULL AND vault_archived_at IS NULL;
+
+-- Plan instances may repeat a reusable template title. Keep catalog titles
+-- unique while allowing tank clones to carry the human-facing title verbatim.
+ALTER TABLE slot_rewards DROP CONSTRAINT IF EXISTS slot_rewards_workspace_id_title_key;
+DROP INDEX IF EXISTS idx_slot_rewards_catalog_title;
+
+-- Existing casino definitions become vault cards once. Active tank purchases
+-- stay untouched so migration cannot manufacture reusable templates from
+-- ordinary transactions.
+UPDATE slot_rewards
+   SET vault_enabled = TRUE,
+       vault_reuse_mode = CASE WHEN uses_remaining = 1 THEN 'one_off' ELSE 'reusable' END,
+       vault_min_cents = value_cents,
+       vault_quick_add = kind IN ('small_paid', 'bank_gated'),
+       vault_random_draw = TRUE,
+       vault_milestone = kind = 'free',
+       sponsor_visible = public_visibility <> 'private'
+ WHERE tank_position IS NULL
+   AND deleted_at IS NULL
+   AND vault_archived_at IS NULL
+   AND vault_enabled = FALSE
+   AND kind NOT IN ('miss', 'bank_builder');
+
+CREATE TABLE IF NOT EXISTS budget_reward_milestones (
+  id                   SERIAL PRIMARY KEY,
+  workspace_id         TEXT NOT NULL REFERENCES workspaces(id),
+  owner_user_id        INTEGER REFERENCES users(id),
+  threshold_bank_units INTEGER NOT NULL,
+  reward_definition_id INTEGER REFERENCES slot_rewards(id),
+  repeat_each_period   BOOLEAN NOT NULL DEFAULT FALSE,
+  active               BOOLEAN NOT NULL DEFAULT TRUE,
+  claimed_period       TEXT,
+  resolved_reward_id   INTEGER REFERENCES slot_rewards(id),
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_budget_reward_milestones_workspace
+  ON budget_reward_milestones(workspace_id, active, threshold_bank_units);
+
+CREATE TABLE IF NOT EXISTS budget_carryovers (
+  id            SERIAL PRIMARY KEY,
+  workspace_id  TEXT NOT NULL REFERENCES workspaces(id),
+  user_id       INTEGER REFERENCES users(id),
+  from_period   TEXT NOT NULL,
+  to_period     TEXT NOT NULL,
+  amount_cents  INTEGER NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id, from_period)
+);
+
+CREATE INDEX IF NOT EXISTS idx_budget_carryovers_to_period
+  ON budget_carryovers(workspace_id, to_period);
+
+CREATE TABLE IF NOT EXISTS budget_overflow_spins (
+  id                   SERIAL PRIMARY KEY,
+  workspace_id         TEXT NOT NULL REFERENCES workspaces(id),
+  user_id              INTEGER REFERENCES users(id),
+  source_key           TEXT NOT NULL,
+  reward_definition_id INTEGER REFERENCES slot_rewards(id),
+  tank_block_id        INTEGER REFERENCES slot_rewards(id),
+  amount_cents         INTEGER NOT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(workspace_id, source_key)
+);
+
+CREATE TABLE IF NOT EXISTS sponsor_share_links (
+  id            SERIAL PRIMARY KEY,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id),
+  workspace_id  TEXT NOT NULL REFERENCES workspaces(id),
+  token         TEXT NOT NULL UNIQUE,
+  active        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(owner_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS sponsorship_unlock_routes (
+  id                  SERIAL PRIMARY KEY,
+  sponsorship_id      INTEGER NOT NULL REFERENCES todo_sponsorships(id) ON DELETE CASCADE,
+  route_type          TEXT NOT NULL,
+  target_id           TEXT,
+  threshold_bank_units INTEGER,
+  status              TEXT NOT NULL DEFAULT 'armed',
+  won_at              TIMESTAMPTZ,
+  cancelled_at        TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE todo_sponsorships
+  ADD COLUMN IF NOT EXISTS winning_route_id INTEGER REFERENCES sponsorship_unlock_routes(id),
+  ADD COLUMN IF NOT EXISTS earned_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_sponsorship_unlock_routes_armed
+  ON sponsorship_unlock_routes(route_type, status, target_id);
+
 CREATE INDEX IF NOT EXISTS idx_slot_rewards_tank
   ON slot_rewards(workspace_id, tank_position)
   WHERE tank_position IS NOT NULL AND deleted_at IS NULL;

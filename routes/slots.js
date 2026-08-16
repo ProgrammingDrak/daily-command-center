@@ -257,18 +257,19 @@ app.post("/api/slot/spins/:id/confirm", async (req, res) => {
     if (socialStore.isQueueableSpinWin(spin)) {
       const snap = spin.reward_snapshot || {};
       try {
-        const enq = await socialStore.enqueueReward({
-          ownerUserId: req.session.userId,
-          workspaceId: req.workspaceId,
-          rewardDefinitionId: spin.reward_id,
-          titleSnapshot: snap.title || "Reward",
-          sourceType: "slot_spin",
-          sourceId: String(spin.id),
-          valueSnapshot: snap.value_cents || 0,
-          chanceSharesSnapshot: snap.chance_shares || null,
-          tierSnapshot: snap.tier_id || null,
-          durationMinutesSnapshot: snap.duration_minutes ?? snap.durationMinutes ?? null,
-        });
+        const sponsored = await socialStore.earnCasinoSponsorshipByReward(req.session.userId, spin.reward_id);
+        const enq = sponsored && sponsored.reward_queue_item ? { item: sponsored.reward_queue_item } : await socialStore.enqueueReward({
+            ownerUserId: req.session.userId,
+            workspaceId: req.workspaceId,
+            rewardDefinitionId: spin.reward_id,
+            titleSnapshot: snap.title || "Reward",
+            sourceType: "slot_spin",
+            sourceId: String(spin.id),
+            valueSnapshot: snap.value_cents || 0,
+            chanceSharesSnapshot: snap.chance_shares || null,
+            tierSnapshot: snap.tier_id || null,
+            durationMinutesSnapshot: snap.duration_minutes ?? snap.durationMinutes ?? null,
+          });
         // Surface the queue item so the win decision screen can act on it
         // (Go do it now / Bank / Schedule) without a follow-up fetch.
         rewardQueueItem = (enq && enq.item) || null;

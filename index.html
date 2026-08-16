@@ -211,7 +211,6 @@
   <button class="tab active" data-tab="schedule">Itinerary</button>
   <button class="tab" data-tab="glymphatic" id="glymphatic-tab-btn">Brief <span class="badge" id="glymphatic-count" style="display:none">0</span></button>
   <button class="tab" data-tab="pet-home" id="pet-home-tab-btn">Pet Home <span class="badge" id="pet-home-badge" style="display:none">0</span></button>
-  <button class="tab" data-tab="slots" id="slots-tab-btn">Slots <span class="badge" id="slots-credit-badge" style="display:none">0</span></button>
   <button class="tab" data-tab="runway" id="runway-tab-btn">Runway</button>
   <button class="tab" data-tab="budget" id="budget-tab-btn">Budget</button>
   <button class="tab" data-tab="vault" id="vault-tab-btn">Mycelium</button>
@@ -1300,11 +1299,18 @@
   </div>
 </div>
 
-<div class="tab-content" id="tab-slots">
-  <div class="slots-shell">
+<div class="tab-content" id="tab-budget">
+  <div id="budget-home">
+    <div id="budget-root"></div>
+  </div>
+  <section class="budget-casino" id="budget-casino" aria-labelledby="budget-casino-title" hidden>
+    <div class="budget-casino-nav">
+      <button class="budget-casino-back" id="budget-casino-back" type="button">&larr; Back to Money Changer</button>
+    </div>
+    <div class="slots-shell">
     <div class="slots-topline">
       <div>
-        <h2 class="slots-title">Task House Jackpot</h2>
+        <h2 class="slots-title" id="budget-casino-title" tabindex="-1">Task House Jackpot</h2>
         <div class="slots-subtitle">Pull the lever, watch the lights, and let the reels decide.</div>
       </div>
       <div class="slot-section-tabs" role="tablist" aria-label="Slots sections">
@@ -1706,15 +1712,12 @@
         <div class="slot-reward-list" id="punish-list"></div>
       </section>
     </div>
-  </div>
+    </div>
+  </section>
 </div>
 
 <div class="tab-content" id="tab-runway">
   <iframe class="tool-frame" src="/public/tools/quit-runway-simple.html" title="Simple Burn vs Income Runway"></iframe>
-</div>
-
-<div class="tab-content" id="tab-budget">
-  <div id="budget-root"></div>
 </div>
 
 <!-- Mycelium vault tab (Phase B1): read-only markdown viewer over the git-backed vault. -->

@@ -109,9 +109,18 @@ fish tank. Key invariants:
   spendable balance, and it fills only the discretionary zone above the reef.
   Claims and punishments debit `bank_balance_cents` but never lower the
   waterline — hence the real "unlocked but reserve short" state.
+- **Discretionary entries are concrete planned purchases.** The user supplies a
+  description and amount, such as “Dinner for me and Fae” and $100. The server
+  maps it into the canonical consumer-card taxonomy with
+  `categorizePurchase()`. Category totals are read-only rollups, not monthly
+  spending envelopes. Necessities remain the always-covered reef below them.
 - **Money Changer conversions live in `budget_conversions`, never `slot_spins`.**
   They raise the tank waterline but must stay out of `getBankUsage` so Bank
   Builder pacing/shield/head-start are never contaminated (regression-tested).
+- **Bank Unit is the shared conversion contract.** The Money Changer exchanges
+  one task point for one Bank Unit. `budget-store.quoteBankUnit()` turns the
+  discretionary goal and remaining headroom into the unit's cent value; Slots
+  and future games consume that quote instead of owning separate money math.
 - **Goal unification**: an active monthly tank drives the Bank Builder
   `monthly_goal_cents` (= capacity = last period's build) via
   `tankDrivenGoalCents`; `budget_tank.goal_mode='manual'` opts out.
@@ -120,6 +129,6 @@ fish tank. Key invariants:
   invests `min(leftover, spendable)` into the append-only `budget_investments`
   ledger (`UNIQUE(workspace, period)` = idempotent) and drops a real "Transfer
   $X to brokerage" task on today via `blockDB.createBlock`.
-- Config (necessities, income, period, `cents_per_point`, `current_period`)
+- Config (necessities, income, period, legacy `cents_per_point`, `current_period`)
   lives in `slot_accounts.settings.budget_tank`. Mutations broadcast
   `slot-changed` so both the tank and the slots tab refresh.

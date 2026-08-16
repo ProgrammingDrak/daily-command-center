@@ -21,7 +21,7 @@ import { chromium } from "playwright-core";
 const BASE = process.argv[2] || "http://localhost:3987";
 const USER = process.argv[3] || "drake";
 const PASS = process.argv[4] || "clever123";
-const TABS = ["schedule", "glymphatic", "pet-home", "slots", "runway", "budget"];
+const TABS = ["schedule", "glymphatic", "pet-home", "runway", "budget"];
 // Count an error only if it names a real /public/ asset OR looks like a JS
 // exception. HTTP-status/SSE transport errors (the two known pre-existing 404s
 // on /api/brain/recent and /api/runway-state) are backend concerns, out of scope.
@@ -109,10 +109,36 @@ check("budget aquarium renders", (await page.evaluate(() => !!document.querySele
 const budgetState = await page.evaluate(() =>
   fetch("/api/budget/state")
     .then((r) => r.json())
-    .then((j) => !!(j.usage && j.settings && Array.isArray(j.blocks)))
+    .then((j) => !!(j.usage && j.settings && Array.isArray(j.blocks) && j.constants?.bank_units_per_point === 1 && j.constants?.bank_unit_cents >= 1))
     .catch(() => false)
 );
 check("GET /api/budget/state shape", budgetState === true, String(budgetState));
+check("Money Changer uses Bank Units", (await page.evaluate(() => document.querySelector(".bt-changer")?.textContent.includes("1 pt = 1 Bank Unit"))) === true);
+await page.evaluate(() => document.querySelector('[data-act="add-block"]')?.click());
+await page.locator('[data-field="description"]').fill("Dinner for me and Fae");
+check("planned purchase auto-categorizes", (await page.evaluate(() => document.querySelector('[data-role="auto-category"]')?.textContent.includes("Dining"))) === true);
+await page.evaluate(() => document.querySelector('[data-act="cancel-block"]')?.click());
+check("Slots is not a top-level tab", (await page.evaluate(() => !document.querySelector('[data-tab="slots"]'))) === true);
+check("Feeling lucky launcher renders", (await page.evaluate(() => !!document.querySelector('[data-act="open-casino"]'))) === true);
+await page.evaluate(() => document.querySelector('[data-act="open-casino"]')?.click());
+check("casino opens inside Budget", (await page.evaluate(() => {
+  const casino = document.getElementById("budget-casino");
+  const home = document.getElementById("budget-home");
+  return !!(casino && home && !casino.hidden && home.hidden);
+})) === true);
+check("all casino sections remain", (await page.evaluate(() => document.querySelectorAll("#budget-casino .slot-section-tab").length)) === 5);
+check("all casino sections activate", (await page.evaluate(() => [...document.querySelectorAll("#budget-casino .slot-section-tab")].every((button) => {
+  button.click();
+  return document.querySelector(`[data-slot-section-panel="${button.dataset.slotSection}"]`)?.classList.contains("active");
+}))) === true);
+await page.evaluate(() => document.querySelector('[data-slot-section="machine"]')?.click());
+check("casino no h-overflow @375", (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) === false);
+await page.evaluate(() => document.getElementById("budget-casino-back")?.click());
+check("casino returns to Money Changer", (await page.evaluate(() => {
+  const casino = document.getElementById("budget-casino");
+  const home = document.getElementById("budget-home");
+  return !!(casino && home && casino.hidden && !home.hidden);
+})) === true);
 
 // overlay primitives open + close (dispatch Escape on document, matching smoke.mjs)
 await page.evaluate(() => { window.__smk = DCC.modal({ title: "smoke", body: "x", actions: [{ label: "ok", kind: "primary" }] }); });

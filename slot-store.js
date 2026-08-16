@@ -133,22 +133,8 @@ const BANK_SHAPES = [
   { key: "quad",      clusters: [4],    weight: 20 }, // 4-in-a-row boost
   { key: "quint",     clusters: [5],    weight: 10 }, // 5-in-a-row mega boost (full row)
 ];
-const SCREEN_BANK_BUILDER_PERCENT = 0.0015;
-// Bank Builder pacing. Each BANK unit is worth `percent` of a geometric blend
-// between the full monthly goal and the remaining headroom:
-//   base = goal^(1-γ) · remaining^γ
-// γ = 1 is the old pure-remainder curve (steep, huge early hits). γ < 1 flattens
-// the front-load so early hits are gently — not hugely — bigger than late ones.
-const SCREEN_BANK_BUILDER_GAMMA = 0.80;
-// Final week (last 7 days) uses a lower γ: still remainder-based, just more lenient
-// so the finish pays bigger while still tapering as it nears the goal.
-const SCREEN_BANK_FINAL_WEEK_GAMMA = 0.20;
 // No single hit may take more than this fraction of the remaining headroom. 1.0 = off.
 const SCREEN_BANK_MAX_SPIN_DRAIN = 1.00;
-// Shield: once the monthly goal is reached, banking doesn't stop — it overflows into
-// a shield that seeds next month's head start, but valued as if the remainder were
-// only this fraction of the goal (the harshest payout on the board).
-const SCREEN_BANK_SHIELD_REMAINDER_FRAC = 0.020;
 const DEFAULT_POINT_TAG_TIERS = {
   none: [],
   quarter: [],
@@ -534,7 +520,7 @@ function deriveEconomySettings(profile = {}) {
     monthly_goal_cents: normalized.monthly_discretionary_cents,
     bankroll_pacing: {
       target_daily_spins: DEFAULT_TARGET_DAILY_SPINS,
-      bank_builder_base_percent: SCREEN_BANK_BUILDER_PERCENT,
+      bank_builder_base_percent: budgetStore.BANK_UNIT_BUDGET_PERCENT,
     },
     bank_builder_hit_rate: DEFAULT_BANK_BUILDER_HIT_RATE,
     jackpot_hit_rate: DEFAULT_JACKPOT_HIT_RATE,
@@ -731,6 +717,20 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS public_visibility TEXT NOT NULL DEFAULT 'public',
       ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS uses_remaining INTEGER;
+
+    ALTER TABLE slot_rewards
+      ADD COLUMN IF NOT EXISTS vault_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS vault_reuse_mode TEXT NOT NULL DEFAULT 'reusable',
+      ADD COLUMN IF NOT EXISTS vault_min_cents INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS vault_quick_add BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS vault_random_draw BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS vault_milestone BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS sponsor_visible BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS vault_archived_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS source_reward_id INTEGER REFERENCES slot_rewards(id);
+
+    ALTER TABLE slot_rewards DROP CONSTRAINT IF EXISTS slot_rewards_workspace_id_title_key;
+    DROP INDEX IF EXISTS idx_slot_rewards_catalog_title;
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_slot_point_ledger_source
       ON slot_point_ledger(workspace_id, source_type, source_key);
@@ -1152,7 +1152,16 @@ function isBankrollGoalExcluded(row, settings = {}) {
 }
 
 function isJackpotChoiceReward(row) {
-  return !!row && ["small_paid", "bank_gated", "sponsor"].includes(row.kind);
+  return isCasinoVaultDefinition(row) && ["small_paid", "bank_gated", "sponsor"].includes(row.kind);
+}
+
+// Casino cards and jackpot draws are a view of canonical Vault definitions.
+// The !== false checks preserve compatibility with rows created before the
+// additive Vault migration, while explicit false cleanly excludes plan clones,
+// archived one-offs, and items whose Casino/Wheels channel is disabled.
+function isCasinoVaultDefinition(row) {
+  return !!row && row.tank_position == null && row.vault_enabled !== false &&
+    row.vault_random_draw !== false && !row.vault_archived_at;
 }
 
 function jackpotType(row) {
@@ -1453,6 +1462,17 @@ async function getState(workspaceId, userId, options = {}) {
   const spinCostBasis = await learnedSpinCost(workspaceId);
   const spinCost = spinCostBasis.cost;
   const bankUsage = await getBankUsage(workspaceId, account.settings);
+  let sharedTankUsage = null;
+  if (account.settings && account.settings.budget_tank) {
+    const budgetSettings = budgetStore.normalizeBudgetTankSettings(account.settings.budget_tank);
+    sharedTankUsage = await budgetStore.getTankUsage(workspaceId, budgetSettings);
+  }
+  const bankUnit = budgetStore.quoteBankUnitForTank(account.settings, sharedTankUsage, {
+    goalCents: bankUsage.monthlyGoal,
+    bankedCents: bankUsage.month,
+    finalWeek: bankUsage.finalWeek,
+  });
+  bankUsage.bankUnit = bankUnit;
   const winnings = await getWinningsSummary(workspaceId, { sessionFrom: options.sessionFrom || null });
   const pendingBankDeposit = await getPendingBankDeposit(workspaceId);
   const funding = {
@@ -1469,11 +1489,12 @@ async function getState(workspaceId, userId, options = {}) {
   let tankUsage = null;
   if (rewardRows.some(r => r.tank_position != null)) {
     const btSettings = budgetStore.normalizeBudgetTankSettings(account.settings && account.settings.budget_tank);
-    const rawTank = await budgetStore.getTankUsage(workspaceId, btSettings);
+    const rawTank = sharedTankUsage || await budgetStore.getTankUsage(workspaceId, btSettings);
     tankUsage = { ...rawTank, ...budgetStore.resolveTankWaterline(btSettings, rawTank) };
   }
-  const bankrollGoal = buildBankrollGoalState(account, rewardRows, bankUsage, funding, tankUsage);
-  const rewards = rewardRows
+  const casinoRewardRows = rewardRows.filter(isCasinoVaultDefinition);
+  const bankrollGoal = buildBankrollGoalState(account, casinoRewardRows, bankUsage, funding, tankUsage);
+  const rewards = casinoRewardRows
     .filter(r => r.kind !== LEGACY_BANK_BUILDER_KIND)
     .map(r => rowToReward(r, account, bankUsage, funding.total, tankUsage));
   const { rows: spins } = await pool.query(
@@ -1497,6 +1518,9 @@ async function getState(workspaceId, userId, options = {}) {
       pointsFormulaVersion: POINTS_FORMULA_VERSION,
       maxTaskCredits: null,
       monthlyGoalCents: account.settings.monthly_goal_cents,
+      bankUnit,
+      bankUnitCents: bankUnit.cents,
+      bankUnitsPerPoint: 1,
       economyProfile: account.settings.economy_profile,
       customizationUnlocks: account.settings.customization_unlocks,
       pointTagTiers: account.settings.point_tag_tiers,
@@ -3300,7 +3324,8 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   // head start rolled over from last month's shield (see getBankUsage).
   const monthBanked = (bankUsage && bankUsage.month) || 0;
   const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
-  const finalWeek = !!(bankUsage && bankUsage.finalWeek);
+  const sharedBankUnit = bankUsage && bankUsage.bankUnit;
+  const finalWeek = sharedBankUnit ? !!sharedBankUnit.final_week : !!(bankUsage && bankUsage.finalWeek);
   // Once the goal is reached the bar doesn't stop: banking overflows into a SHIELD
   // that seeds next month's head start, but valued as if only a tiny sliver of the
   // goal remained — the harshest payout on the board.
@@ -3309,12 +3334,13 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   // γ < 1 flattens the front-load so the curve reads big-early / low-middle, and
   // the final week drops γ further (more lenient) for a bigger — but still
   // remainder-tapered — finish.
-  const gamma = finalWeek ? SCREEN_BANK_FINAL_WEEK_GAMMA : SCREEN_BANK_BUILDER_GAMMA;
-  const pacingRemaining = inShield
-    ? monthlyGoalCents * SCREEN_BANK_SHIELD_REMAINDER_FRAC
-    : remainingCap;
-  const pacingBaseCents = Math.pow(monthlyGoalCents, 1 - gamma) * Math.pow(pacingRemaining, gamma);
-  const baseCents = Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT);
+  const bankUnit = sharedBankUnit || budgetStore.quoteBankUnit({
+    goalCents: monthlyGoalCents,
+    bankedCents: monthBanked,
+    finalWeek,
+  });
+  const pacingBaseCents = bankUnit.pacing_base_cents;
+  const baseCents = bankUnit.cents;
   const baseUnits = positions.length;
   const horizontalBonusUnits = horizontalGroups.reduce((sum, group) => sum + group.length * (group.length - 1), 0);
   const verticalBonusUnits = verticalGroups.reduce((sum, group) => sum + group.length, 0);
@@ -3322,9 +3348,7 @@ function calculateScreenBankPayout(board, account, bankUsage) {
   // In the shield zone the per-unit base can be a fraction of a cent and would floor
   // to zero, so round the TOTAL instead — that keeps the shield a tiny-but-nonzero
   // trickle. Normal hits floor per unit (baseCents) so the well-tested values hold.
-  const rawCents = units > 0
-    ? (inShield ? Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT * units) : baseCents * units)
-    : 0;
+  const rawCents = units > 0 ? baseCents * units : 0;
   // In the shield zone the overflow is uncapped (but tiny). Otherwise cap a single
   // hit at the remaining headroom and at MAX_SPIN_DRAIN of it.
   const cents = inShield
@@ -3349,7 +3373,8 @@ function calculateScreenBankPayout(board, account, bankUsage) {
     raw_cents: rawCents,
     cents,
     capped: cents < rawCents,
-    percent: SCREEN_BANK_BUILDER_PERCENT,
+    bank_unit: bankUnit,
+    percent: budgetStore.BANK_UNIT_BUDGET_PERCENT,
   };
 }
 
@@ -3363,21 +3388,22 @@ function emptyScreenBankPayout(account, bankUsage) {
   );
   const monthBanked = (bankUsage && bankUsage.month) || 0;
   const remainingCap = Math.max(0, monthlyGoalCents - monthBanked);
-  const finalWeek = !!(bankUsage && bankUsage.finalWeek);
+  const sharedBankUnit = bankUsage && bankUsage.bankUnit;
+  const finalWeek = sharedBankUnit ? !!sharedBankUnit.final_week : !!(bankUsage && bankUsage.finalWeek);
   const inShield = remainingCap <= 0;
-  const gamma = finalWeek ? SCREEN_BANK_FINAL_WEEK_GAMMA : SCREEN_BANK_BUILDER_GAMMA;
-  const pacingRemaining = inShield
-    ? monthlyGoalCents * SCREEN_BANK_SHIELD_REMAINDER_FRAC
-    : remainingCap;
-  const pacingBaseCents = Math.pow(monthlyGoalCents, 1 - gamma) * Math.pow(pacingRemaining, gamma);
+  const bankUnit = sharedBankUnit || budgetStore.quoteBankUnit({
+    goalCents: monthlyGoalCents,
+    bankedCents: monthBanked,
+    finalWeek,
+  });
   return {
     source_type: "slot_screen_bank_builder",
     positions: [],
     horizontal_groups: [],
     vertical_groups: [],
-    base_cents: Math.floor(pacingBaseCents * SCREEN_BANK_BUILDER_PERCENT),
+    base_cents: bankUnit.cents,
     goal_cents: monthlyGoalCents,
-    pacing_base_cents: Math.floor(pacingBaseCents),
+    pacing_base_cents: bankUnit.pacing_base_cents,
     monthly_remaining_cents: remainingCap,
     final_week: finalWeek,
     in_shield: inShield,
@@ -3388,7 +3414,8 @@ function emptyScreenBankPayout(account, bankUsage) {
     raw_cents: 0,
     cents: 0,
     capped: false,
-    percent: SCREEN_BANK_BUILDER_PERCENT,
+    bank_unit: bankUnit,
+    percent: budgetStore.BANK_UNIT_BUDGET_PERCENT,
   };
 }
 
@@ -3484,6 +3511,15 @@ async function spin(workspaceId, userId, options = {}) {
     // cents. This is what makes each spin pace off the current remainder, not a
     // snapshot that only refreshed on a full state reload.
     const liveBankUsage = await getBankUsage(workspaceId, lockedSettings, client);
+    if (lockedSettings && lockedSettings.budget_tank) {
+      const liveBudgetSettings = budgetStore.normalizeBudgetTankSettings(lockedSettings.budget_tank);
+      const liveTankUsage = await budgetStore.getTankUsage(workspaceId, liveBudgetSettings, client);
+      liveBankUsage.bankUnit = budgetStore.quoteBankUnitForTank(lockedSettings, liveTankUsage, {
+        goalCents: liveBankUsage.monthlyGoal,
+        bankedCents: liveBankUsage.month,
+        finalWeek: liveBankUsage.finalWeek,
+      });
+    }
     screen.payout = calculateScreenBankPayout(screen.board, { ...account, settings: lockedSettings }, liveBankUsage);
     const screenJackpot = screen.jackpot || evaluateJackpotBoard(screen.board);
     let effectiveOutcome = outcome;

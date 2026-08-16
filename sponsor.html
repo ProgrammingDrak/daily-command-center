@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sponsor a Reward</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f5f5f5;color:#161e26;font-family:Poppins,sans-serif;letter-spacing:-.02em}
+    main{max-width:980px;margin:0 auto;padding:40px 24px 72px}.eyebrow{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#0075eb}
+    h1{font-size:32px;margin:6px 0}p{color:#6b7280;font-size:14px;line-height:1.55}.layout{display:grid;grid-template-columns:1fr 360px;gap:24px;margin-top:28px}
+    .card,.panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px}.cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .reward{cursor:pointer;transition:.14s}.reward:hover,.reward.selected{border-color:#0075eb;box-shadow:0 2px 8px rgba(0,117,235,.12)}.reward h3{font-size:15px;margin:4px 0}.reward strong{color:#0075eb;font-size:13px}
+    .chip{display:inline-block;font-size:9px;font-weight:700;padding:3px 6px;border-radius:4px;background:#e8f2fe;color:#0075eb;margin:6px 4px 0 0}
+    .panel{position:sticky;top:20px;height:max-content}.panel h2{font-size:18px;margin:0 0 14px}label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;margin:11px 0}
+    input,textarea{width:100%;border:1.5px solid #d1d5db;border-radius:8px;padding:10px 12px;font:inherit;font-size:13px;outline:none}input:focus,textarea:focus{border-color:#0075eb;box-shadow:0 0 0 3px rgba(0,117,235,.08)}
+    textarea{min-height:80px;resize:vertical}.checks label{flex-direction:row;align-items:center;font-weight:500;margin:8px 0}.checks input{width:auto}.conditional{margin-left:24px}
+    button{width:100%;border:0;border-radius:8px;background:#0075eb;color:#fff;padding:11px 16px;font:inherit;font-size:13px;font-weight:700;cursor:pointer}button:hover{background:#005fbf}button:disabled{opacity:.5;cursor:default}
+    .status{margin-top:12px;font-size:12px;font-weight:600}.status.ok{color:#00b373}.status.error{color:#dc2626}.empty{grid-column:1/-1;text-align:center;padding:30px;color:#6b7280}
+    @media(max-width:760px){main{padding:28px 16px 48px}.layout{grid-template-columns:1fr}.cards{grid-template-columns:1fr}.panel{position:static}h1{font-size:26px}}
+  </style>
+</head>
+<body><main><span class="eyebrow">Daily Command Center</span><h1>Sponsor a reward</h1><p>Choose something already in the Reward Vault or propose your own. You will never see balances, private rewards, or financial history.</p><div class="layout"><section><div class="cards" id="cards"><div class="empty">Loading the shared reward shelf…</div></div></section><form class="panel" id="offer"><h2>Make an offer</h2><label>Your name<input name="sponsorName" required></label><label>Reward<input name="rewardTitle" required placeholder="Dinner is on me"></label><label>Value or cap ($)<input name="value" type="number" min="0" step="1"></label><label>Note<textarea name="note" placeholder="A note for when this unlocks"></textarea></label><div class="checks"><strong>Earn it through any of these</strong><label><input type="checkbox" name="casino"> Casino</label><label><input type="checkbox" name="milestone"> Reward Reserve milestone</label><label class="conditional">Bank Units<input name="threshold" type="number" min="1" step="1" placeholder="100"></label><label><input type="checkbox" name="task"> A specific task</label><label class="conditional">Task reference<input name="taskId" placeholder="Task id or shared-task reference"></label></div><button type="submit">Send for approval</button><div class="status" id="status" role="status"></div></form></div></main>
+<script>
+(function(){
+  const token=location.pathname.split("/").filter(Boolean).pop(),cards=document.getElementById("cards"),form=document.getElementById("offer"),status=document.getElementById("status");
+  let selected=null;
+  const money=c=>c?new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(c/100):"Free";
+  const esc=s=>String(s||"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+  fetch("/api/public/sponsor/"+encodeURIComponent(token)).then(async r=>{if(!r.ok)throw new Error((await r.json()).error);return r.json()}).then(data=>{
+    cards.innerHTML=(data.items||[]).map(item=>'<article class="card reward" data-id="'+item.id+'"><span class="eyebrow">'+(item.max_cents?"Purchase":"Self Care")+'</span><h3>'+esc(item.title)+'</h3><strong>'+esc(item.min_cents&&item.min_cents!==item.max_cents?money(item.min_cents)+" to "+money(item.max_cents):money(item.max_cents))+'</strong><div><span class="chip">'+(item.reuse_mode==="one_off"?"One-off":"Reusable")+'</span></div></article>').join("")||'<div class="empty">No sponsor-visible rewards yet. You can still propose one.</div>';
+    cards.addEventListener("click",e=>{const card=e.target.closest("[data-id]");if(!card)return;cards.querySelectorAll(".selected").forEach(x=>x.classList.remove("selected"));card.classList.add("selected");selected=(data.items||[]).find(x=>String(x.id)===card.dataset.id);form.rewardTitle.value=selected.title;form.value.value=Math.round((selected.max_cents||0)/100)});
+  }).catch(err=>cards.innerHTML='<div class="empty">'+esc(err.message||"This link is unavailable")+'</div>');
+  form.addEventListener("submit",async e=>{e.preventDefault();const routes=[];if(form.casino.checked)routes.push({type:"casino"});if(form.milestone.checked)routes.push({type:"milestone",thresholdBankUnits:Number(form.threshold.value)});if(form.task.checked)routes.push({type:"task",targetId:form.taskId.value.trim()});if(!routes.length){status.className="status error";status.textContent="Choose at least one way to earn it.";return}const button=form.querySelector("button");button.disabled=true;status.textContent="";try{const r=await fetch("/api/public/sponsor/"+encodeURIComponent(token)+"/offers",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sponsorName:form.sponsorName.value,rewardTitle:form.rewardTitle.value,rewardDefinitionId:selected&&selected.id,valueCents:Math.round(Number(form.value.value||0)*100),note:form.note.value,routes})});const out=await r.json();if(!r.ok)throw new Error(out.error);status.className="status ok";status.textContent="Offer sent for approval.";form.reset();selected=null;cards.querySelectorAll(".selected").forEach(x=>x.classList.remove("selected"))}catch(err){status.className="status error";status.textContent=err.message||"Could not send the offer"}finally{button.disabled=false}});
+})();
+</script></body></html>

@@ -1089,11 +1089,16 @@ app.post("/api/social/friends/block", route(async (req) => {
 // Offer a sponsorship to another user. The signed-in user is the sponsor.
 app.post("/api/social/sponsorships", route(async (req, res) => {
   const { ownerUserId, targetType, targetId, rewardTitle, rewardDefinitionId = null,
-          valueCents = 0, chanceShares = null, note = "" } = req.body || {};
-  if (!ownerUserId || !targetType || !targetId) throw badRequest("ownerUserId, targetType, targetId required");
+          valueCents = 0, chanceShares = null, note = "", routes = null } = req.body || {};
+  if (!ownerUserId || ((!targetType || !targetId) && !(Array.isArray(routes) && routes.length))) {
+    throw badRequest("ownerUserId and at least one earning route required");
+  }
+  const first = Array.isArray(routes) && routes[0] || {};
   res.status(201).json(await socialStore.requestSponsorship({
     ownerUserId, sponsorUserId: req.session.userId, sponsorName: req.session.username || null,
-    targetType, targetId, rewardTitle, rewardDefinitionId, valueCents, chanceShares, note,
+    targetType: targetType || (first.type === "casino" ? "slot_machine" : "task"),
+    targetId: targetId || first.targetId || (first.thresholdBankUnits ? "bank-units:" + first.thresholdBankUnits : "offer"),
+    rewardTitle, rewardDefinitionId, valueCents, chanceShares, note, routes,
   }));
 }));
 
