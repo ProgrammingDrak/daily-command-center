@@ -45,7 +45,7 @@
     { key:"schedule",   label:"Today", icon:"🗓", action(){ activateTab("schedule"); } },
     { key:"glymphatic", label:"Brief", icon:"📋", action(){ activateTab("glymphatic"); }, badge:"glymphatic-count" },
     { key:"__tasks",    label:"Tasks", icon:"☑",        action(){ closeMoreSheet(); toggleTasksDrawer(); }, center:true },
-    { key:"slots",      label:"Slots", icon:"🎰", action(){ activateTab("slots"); }, badge:"slots-credit-badge" },
+    { key:"budget",     label:"Budget", icon:"💰", action(){ activateTab("budget"); } },
     { key:"__more",     label:"More",  icon:"⋯",        action(){ toggleMoreSheet(); } }
   ];
 

@@ -11,7 +11,7 @@
   let isSpinning = false;
   let lastPendingBankCents = 0;
   let lastShieldCents = 0;
-  // Winnings history card. Session = since the slots tab first loaded this visit.
+  // Winnings history card. Session = since the embedded casino first loaded this visit.
   let slotSessionStart = null;
   let winningsView = "won";   // "won" | "bank" (tap flips)
   let winningsRange = "today"; // session|today|week|month|quarter|customA|customB (hold sets)
@@ -525,7 +525,7 @@
   }
 
   async function loadSlots(){
-    const root = document.getElementById("tab-slots");
+    const root = document.getElementById("budget-casino");
     if(!root) return;
     // Overlapping loads (e.g. a burst of rapid drags each trailing a refetch) can
     // resolve out of order; only the newest issued load may apply its snapshot, so
@@ -590,11 +590,6 @@
     renderReserveGoalCard(false);
     renderWinningsCard();
     renderSettings();
-    const badge = document.getElementById("slots-credit-badge");
-    if(badge){
-      badge.textContent = String(credits);
-      badge.style.display = credits > 0 ? "" : "none";
-    }
     const bu = slotState.bankUsage || {};
     const constants = slotState.constants || {};
     setText("slot-daily-cap", "Bank Building: " + money(bu.today || 0) + " today; " + money(bu.week || 0) + " this week");
@@ -740,6 +735,11 @@
       renderHistory();
     }
     if(activeSlotSection === "review") renderRewardReview();
+  }
+
+  function activateCasino(section){
+    switchSlotSection(section || "machine");
+    return loadSlots();
   }
 
   // ── Reward Review tab (pending sponsorships only) ──
@@ -942,8 +942,9 @@
   }
 
   function isSlotsPageActive(){
-    const root = document.getElementById("tab-slots");
-    return !!(root && root.classList.contains("active"));
+    const casino = document.getElementById("budget-casino");
+    const budget = document.getElementById("tab-budget");
+    return !!(casino && budget && !casino.hidden && budget.classList.contains("active"));
   }
 
   function clearSlotCoinEffects(){
@@ -6109,8 +6110,6 @@
       persistRewardView();
       renderRewards();
     });
-    const tabBtn = document.getElementById("slots-tab-btn");
-    if(tabBtn) tabBtn.addEventListener("click", loadSlots);
     document.addEventListener("click", (event) => {
       if(!pendingDeleteRewardId) return;
       if(event.target.closest && event.target.closest(".slot-delete-confirm, .slot-delete")) return;
@@ -6129,7 +6128,7 @@
     setTimeout(syncCompletedTaskCredits, 1500);
   }
 
-  window.SlotRewards = { load: loadSlots, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits, previewBankAnimationScenario, previewRewardAnimationScenario };
+  window.SlotRewards = { load: loadSlots, activate: activateCasino, earnTaskCredit, queueTaskCredit, flushTaskCreditQueue, reconcileCompletedTaskCredits, syncCompletedTaskCredits, previewBankAnimationScenario, previewRewardAnimationScenario };
   document.addEventListener("slot-changed", handleSlotChanged);
   window.addEventListener("dcc:data-ready", () => {
     setTimeout(syncCompletedTaskCredits, 250);

@@ -34,7 +34,7 @@ DCC.tabs.register("calendar", () => typeof buildCalendar === "function" && build
 
 document.querySelectorAll(".tab").forEach(tab=>{
   tab.addEventListener("click",()=>{
-    if(tab.dataset.tab !== "slots" && typeof window.clearSlotCoinEffects === "function"){
+    if(typeof window.clearSlotCoinEffects === "function"){
       window.clearSlotCoinEffects();
     }
     document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));

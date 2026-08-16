@@ -19,7 +19,7 @@ function loadStoreWithMock(mockPool) {
 // lets atomicity tests assert "no debit/investment persisted", not just that
 // COMMIT wasn't reached. (slot_point_ledger keys are reverted separately, via
 // the txnLedgerKeys mechanism, to preserve the documented convert-retry test.)
-const TX_REVERT_FIELDS = ["bankBalance", "pointBalance", "pendingCents", "debits", "ledgerDeltas", "conversions", "investments", "insertedRewards", "investmentsByPeriod", "savedSettings", "settings", "tankRows"];
+const TX_REVERT_FIELDS = ["bankBalance", "pointBalance", "pendingCents", "debits", "ledgerDeltas", "conversions", "carryovers", "investments", "insertedRewards", "investmentsByPeriod", "savedSettings", "settings", "tankRows"];
 function txClone(v) {
   if (Array.isArray(v)) return v.map(txClone);
   if (v instanceof Set) return new Set([...v].map(txClone));
@@ -41,6 +41,7 @@ function createMockPool(options = {}) {
     convUsage: options.convUsage || { cur_cents: 0, prior_cents: 0 },
     pendingCents: options.pendingCents ?? 0,
     investments: options.investments || [],
+    carryovers: options.carryovers || [],
     insertedRewards: [],
     nextId: options.nextId ?? 100,
     rolledBack: false,
@@ -144,6 +145,16 @@ function createMockPool(options = {}) {
       state.investments.push(row);
       return { rows: [{ ...row }] };
     }
+    if (text.includes("INSERT INTO budget_carryovers")) {
+      if (state.carryovers.some(r => r.workspace_id === params[0] && r.from_period === params[2])) return { rows: [] };
+      const row = {
+        id: state.carryovers.length + 1,
+        workspace_id: params[0], user_id: params[1], from_period: params[2],
+        to_period: params[3], amount_cents: params[4],
+      };
+      state.carryovers.push(row);
+      return { rows: [{ ...row }] };
+    }
     if (text.includes("UPDATE budget_investments") && text.includes("task_block_id")) {
       const row = state.investments.find(r => r.period_key === params[1]);
       if (row) row.task_block_id = params[2];
@@ -216,7 +227,10 @@ function createMockPool(options = {}) {
     }
     if (text.includes("INSERT INTO budget_conversions")) {
       state.conversions = state.conversions || [];
-      const row = { id: state.conversions.length + 1, workspace_id: params[0], points: params[2], cents: params[3], rate_cents_per_point: params[4], source_key: params[5] };
+      const isCarryover = text.includes("VALUES($1,$2,0,$3,0,$4)");
+      const row = isCarryover
+        ? { id: state.conversions.length + 1, workspace_id: params[0], points: 0, cents: params[2], rate_cents_per_point: 0, source_key: params[3] }
+        : { id: state.conversions.length + 1, workspace_id: params[0], points: params[2], cents: params[3], rate_cents_per_point: params[4], source_key: params[5] };
       state.conversions.push(row);
       return { rows: [{ ...row }] };
     }
@@ -275,6 +289,32 @@ test("normalizeBudgetTankSettings applies defaults and clamps", () => {
   assert.equal(store.normalizeBudgetTankSettings({ capacity_source: "prior_period_banked" }).capacity_source, "prior_period_banked");
 });
 
+test("quoteBankUnit turns the budget curve into one shared game currency", () => {
+  const store = loadStoreWithMock(createMockPool());
+  const opening = store.quoteBankUnit({ goalCents: 100000, bankedCents: 0 });
+  assert.equal(opening.units_per_point, 1);
+  assert.equal(opening.cents, 150);
+  assert.equal(opening.budget_percent, 0.0015);
+
+  const late = store.quoteBankUnit({ goalCents: 100000, bankedCents: 80000 });
+  assert.ok(late.cents < opening.cents);
+  assert.equal(late.remaining_cents, 20000);
+
+  const shield = store.quoteBankUnit({ goalCents: 100000, bankedCents: 100000 });
+  assert.equal(shield.in_shield, true);
+  assert.ok(shield.cents >= 1, "one Bank Unit always has a spendable cent value");
+});
+
+test("planned purchases use canonical credit-card categories", () => {
+  const store = loadStoreWithMock(createMockPool());
+  assert.equal(store.categorizePurchase("Dinner for me and Fae").label, "Dining");
+  assert.equal(store.categorizePurchase("Flights and hotel for Japan").label, "Travel");
+  assert.equal(store.categorizePurchase("New leash for the dog").label, "Pets");
+  assert.equal(store.categorizePurchase("Something wonderfully specific").label, "Other");
+  assert.equal(store.categorizePurchase("Dinner", "Travel").label, "Travel", "an explicit correction wins");
+  assert.equal(store.categorizePurchase("Dinner", "Restaurants").label, "Dining", "legacy names normalize");
+});
+
 test("getTankUsage sums spins + conversions and uses the month window by default", async () => {
   const mock = createMockPool({
     spinsUsage: { period_key: "2026-07", cur_cents: 4200, prior_cents: 30000 },
@@ -300,11 +340,12 @@ test("getTankUsage switches to the week window for period_type week", async () =
   assert.ok(spinSql.includes("INTERVAL '1 week'"));
 });
 
-test("addTankBlock places on top (MAX+1000) and recomputes cumulative thresholds", async () => {
+test("addTankBlock auto-categorizes a concrete purchase and recomputes thresholds", async () => {
   const mock = createMockPool({ tankRows: [tankRow(1, 5000, 1000), tankRow(2, 10000, 2000)] });
   const store = loadStoreWithMock(mock);
-  const row = await store.addTankBlock(WS, 7, { category: "Restaurants", item: "Anniversary dinner", amount: 150 });
-  assert.equal(row.title, "Restaurants: Anniversary dinner");
+  const row = await store.addTankBlock(WS, 7, { description: "Anniversary dinner with Fae", amount: 150 });
+  assert.equal(row.title, "Dining: Anniversary dinner with Fae");
+  assert.equal(row.tank_category, "Dining");
   assert.equal(row.value_cents, 15000);
   assert.equal(row.tank_position, 3000);
   assert.equal(row.uses_remaining, 1); // one-shot by default
@@ -318,7 +359,7 @@ test("addTankBlock: recurring envelopes get no uses_remaining; duplicate titles 
   const mock = createMockPool();
   const store = loadStoreWithMock(mock);
   const row = await store.addTankBlock(WS, 7, { category: "Restaurants", amount_cents: 20000, recurring: true });
-  assert.equal(row.title, "Restaurants");
+  assert.equal(row.title, "Dining");
   assert.equal(row.uses_remaining, null);
   assert.equal(row.tank_recurring, true);
   await assert.rejects(
@@ -584,7 +625,7 @@ test("slot-store rowToReward: tank rows gate on the waterline, afford on value_c
   assert.equal(r.eligible, true);
 });
 
-test("convertPointsToBank debits points, credits bank at the configured rate, and logs both ledgers", async () => {
+test("convertPointsToBank exchanges one point for one budget-quoted Bank Unit", async () => {
   const mock = createMockPool({
     pointBalance: 500,
     bankBalance: 1000,
@@ -592,10 +633,14 @@ test("convertPointsToBank debits points, credits bank at the configured rate, an
   });
   const store = loadStoreWithMock(mock);
   const out = await store.convertPointsToBank(WS, 7, { points: 200, source_key: "k-1" });
+  const expectedUnitCents = store.quoteBankUnit({ goalCents: 35000, bankedCents: 0, finalWeek: store.isFinalPeriodWeek("month") }).cents;
   assert.equal(out.converted, true);
   assert.equal(out.point_balance, 300);
-  assert.equal(out.bank_balance_cents, 1400); // 200 pts * 2¢
-  assert.equal(out.conversion.cents, 400);
+  assert.equal(out.bank_units, 200);
+  assert.equal(out.bank_unit.cents, expectedUnitCents);
+  assert.equal(out.bank_balance_cents, 1000 + (200 * expectedUnitCents));
+  assert.equal(out.conversion.cents, 200 * expectedUnitCents);
+  assert.equal(out.conversion.rate_cents_per_point, expectedUnitCents);
   assert.deepEqual(mock.state.ledgerDeltas, [-200]);
   assert.equal(mock.state.conversions.length, 1);
 });
@@ -679,7 +724,7 @@ test("REGRESSION: getBankUsage (Bank Builder pacing) never reads budget_conversi
   assert.ok(usage.monthlyGoal > 0);
 });
 
-test("rolloverPeriod carry: sweep leftover, claimed one-shots leave, unhit sink to the bottom, envelopes persist", async () => {
+test("rolloverPeriod carry: partial progress is not overflow, claimed one-shots leave, unhit sink to the bottom, envelopes persist", async () => {
   const mock = createMockPool({
     bankBalance: 10000,
     // Auto capacity so the new period's budget = last period's build (20000).
@@ -697,10 +742,11 @@ test("rolloverPeriod carry: sweep leftover, claimed one-shots leave, unhit sink 
   assert.equal(out.rolled, true);
   assert.equal(out.closing_period, "2026-06");
   assert.equal(out.new_period, "2026-07");
-  // Closing waterline = min(20000, 30000) = 20000; last funded gate = 15000; leftover 5000 <= balance.
-  assert.equal(out.swept_cents, 5000);
-  assert.deepEqual(mock.state.debits, [5000]);
-  assert.equal(mock.state.investments[0].period_key, "2026-06");
+  // Closing waterline is 20000, but the full plan is 24000. Nothing overflows
+  // until every planned purchase is covered.
+  assert.equal(out.swept_cents, 0);
+  assert.equal(mock.state.debits, undefined);
+  assert.equal(mock.state.investments.length, 0);
   assert.equal(out.new_capacity_cents, 20000); // June's build is July's budget
   assert.equal(mock.state.savedSettings.budget_tank.current_period.key, "2026-07");
 
@@ -760,9 +806,9 @@ test("rolloverPeriod: a throw inside onSwept rolls the whole sweep back (never m
   assert.equal(mock.state.bankBalance, 10000, "the debit was rolled back (balance intact)");
 });
 
-test("rolloverPeriod fresh: unhit one-shots leave too; sweep is bounded by the spendable balance", async () => {
+test("rolloverPeriod fresh: unhit one-shots leave and partial plan progress does not sweep", async () => {
   const mock = createMockPool({
-    bankBalance: 1200, // less than the 5000 leftover
+    bankBalance: 1200,
     settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-06", capacity_cents: 30000 } } },
     spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
     tankRows: [
@@ -772,7 +818,7 @@ test("rolloverPeriod fresh: unhit one-shots leave too; sweep is bounded by the s
   });
   const store = loadStoreWithMock(mock);
   const out = await store.rolloverPeriod(WS, 7, { mode: "fresh" });
-  assert.equal(out.swept_cents, 1200);             // min(leftover 5000, balance 1200)
+  assert.equal(out.swept_cents, 0);
   assert.equal(mock.state.tankRows.find(r => r.id === 3).tank_position, null);
   assert.equal(mock.state.tankRows.find(r => r.id === 2).tank_position, 1000);
 });
@@ -817,6 +863,27 @@ test("rolloverPeriod sweep caps at discretionary (income - necessities), never g
   assert.equal(out.swept_cents, 8000);
 });
 
+test("rolloverPeriod carry seeds the next waterline without debiting the Reward Reserve", async () => {
+  const mock = createMockPool({
+    bankBalance: 10000,
+    settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-06", capacity_cents: 30000 } } },
+    spinsUsage: { period_key: "2026-07", cur_cents: 0, prior_cents: 20000 },
+    tankRows: [tankRow(1, 15000, 1000, { tank_unlock_cents: 15000 })],
+  });
+  const store = loadStoreWithMock(mock);
+  const out = await store.rolloverPeriod(WS, 7, { mode: "fresh", overflowAction: "carry" });
+  assert.equal(out.swept_cents, 0);
+  assert.equal(out.carried_over_cents, 5000);
+  assert.equal(out.already_swept, false);
+  assert.equal(out.overflow_action, "carry");
+  assert.equal(mock.state.bankBalance, 10000);
+  assert.equal(mock.state.debits, undefined);
+  assert.equal(mock.state.carryovers.length, 1);
+  assert.equal(mock.state.conversions[0].points, 0);
+  assert.equal(mock.state.conversions[0].cents, 5000);
+  assert.equal(mock.state.conversions[0].source_key, "carryover:2026-06");
+});
+
 test("getBudgetState surfaces a rollover preview on period mismatch", async () => {
   const mock = createMockPool({
     bankBalance: 10000,
@@ -832,7 +899,7 @@ test("getBudgetState surfaces a rollover preview on period mismatch", async () =
   assert.equal(state.rollover_due, true);
   assert.equal(state.rollover_preview.closing_key, "2026-06");
   assert.equal(state.rollover_preview.closing_waterline_cents, 20000);
-  assert.equal(state.rollover_preview.leftover_cents, 5000);
+  assert.equal(state.rollover_preview.leftover_cents, 0);
   assert.deepEqual(state.rollover_preview.unhit.map(u => u.id), [3]);
 });
 
@@ -858,7 +925,7 @@ test("tank thresholds follow the drag order (tank_position), independent of cate
   assert.equal(byId[4], 18000);
 });
 
-test("buildCategories keeps its own stable order (by creation), divorced from tank order", async () => {
+test("buildCategories uses canonical card order, divorced from tank order", async () => {
   const mock = createMockPool({
     bankBalance: 50000,
     settings: { budget_tank: { capacity_source: "prior_period_banked", necessities: [], current_period: { key: "2026-07", capacity_cents: 100000 } } },
@@ -873,10 +940,10 @@ test("buildCategories keeps its own stable order (by creation), divorced from ta
   });
   const store = loadStoreWithMock(mock);
   const cats = (await store.getBudgetState(WS, 7)).categories;
-  assert.deepEqual(cats.map(c => c.name), ["Restaurants", "Gifts"]); // creation order, not tank order
+  assert.deepEqual(cats.map(c => c.name), ["Dining", "Gifts & Donations"]);
   assert.equal(cats[0].budget_cents, 8000);   // both Restaurants items roll up
   assert.equal(cats[0].count, 2);
-  assert.equal(cats[1].name, "Gifts");
+  assert.equal(cats[1].name, "Gifts & Donations");
 });
 
 test("getBudgetState rolls items up into Monarch-style category groups", async () => {
@@ -893,12 +960,12 @@ test("getBudgetState rolls items up into Monarch-style category groups", async (
   const store = loadStoreWithMock(mock);
   const cats = (await store.getBudgetState(WS, 7)).categories; // waterline = 9000
   assert.equal(cats.length, 2);
-  assert.equal(cats[0].name, "Restaurants");
+  assert.equal(cats[0].name, "Dining");
   assert.equal(cats[0].budget_cents, 8000);     // 5000 + 3000 rolled up
   assert.equal(cats[0].count, 2);
   assert.equal(cats[0].claimable_count, 2);      // both under the 9000 waterline
   assert.equal(cats[0].items[0].item, "Dinner"); // category prefix stripped for nesting
-  assert.equal(cats[1].name, "Gifts");
+  assert.equal(cats[1].name, "Gifts & Donations");
   assert.equal(cats[1].budget_cents, 6000);
   assert.equal(cats[1].unlocked_count, 0);       // 14000 gate is above the waterline
   assert.equal(cats[1].status, "locked");

@@ -24,7 +24,14 @@
 const pool = require("./pg-pool");
 const { badRequest, notFound, upsertSlotAccountRow } = require("./slot-account-common");
 
+// Legacy storage default. `cents_per_point` is retained in saved settings and
+// conversion rows so older data stays readable, but new conversions are quoted
+// in canonical Bank Units instead of taking an independently configured rate.
 const DEFAULT_CENTS_PER_POINT = 1;
+const BANK_UNIT_BUDGET_PERCENT = 0.0015;
+const BANK_UNIT_PACING_GAMMA = 0.80;
+const BANK_UNIT_FINAL_WEEK_GAMMA = 0.20;
+const BANK_UNIT_SHIELD_REMAINDER_FRAC = 0.020;
 const MAX_BLOCK_CENTS = 100000000; // $1M sanity cap
 const TANK_POSITION_STEP = 1000;
 
@@ -39,6 +46,50 @@ const DEFAULT_NECESSITIES = [
 ];
 
 const BLOCK_PALETTE = ["#f59e0b", "#a78bfa", "#ec4899", "#f43f5e", "#6366f1", "#14b8a6", "#84cc16", "#fb923c"];
+
+// Canonical consumer-card taxonomy for discretionary purchases. Categories are
+// rollups, never envelopes: the user enters the concrete thing they want to buy
+// and this classifier places it. Rules are intentionally plain and inspectable
+// so the same contract can be reused by imports from a card feed later.
+const CREDIT_CARD_CATEGORIES = [
+  { id: "dining", label: "Dining", color: "#f97316", aliases: ["restaurant", "restaurants", "food & dining"], keywords: ["dinner", "lunch", "brunch", "breakfast", "restaurant", "cafe", "coffee", "bar", "takeout", "delivery", "doordash", "uber eats", "grubhub", "pizza"] },
+  { id: "groceries", label: "Groceries", color: "#22c55e", aliases: ["grocery"], keywords: ["grocer", "supermarket", "whole foods", "trader joe", "costco", "market", "food shop"] },
+  { id: "travel", label: "Travel", color: "#0ea5e9", aliases: ["vacation"], keywords: ["flight", "airfare", "airline", "hotel", "resort", "airbnb", "vacation", "trip", "cruise", "luggage"] },
+  { id: "transportation", label: "Transportation", color: "#06b6d4", aliases: ["transit", "gas", "fuel"], keywords: ["uber", "lyft", "taxi", "train", "subway", "bus", "parking", "toll", "gas", "fuel", "car", "auto", "vehicle", "bike"] },
+  { id: "entertainment", label: "Entertainment", color: "#a855f7", aliases: ["fun"], keywords: ["movie", "cinema", "concert", "show", "theater", "theatre", "game", "museum", "festival", "ticket", "streaming", "netflix", "spotify"] },
+  { id: "shopping", label: "Shopping", color: "#ec4899", aliases: ["merchandise"], keywords: ["clothes", "clothing", "shoes", "amazon", "electronics", "furniture", "decor", "book", "gear", "shopping"] },
+  { id: "health", label: "Health & Wellness", color: "#10b981", aliases: ["health", "medical", "fitness"], keywords: ["doctor", "dentist", "therapy", "therapist", "pharmacy", "medicine", "medical", "gym", "fitness", "massage", "wellness"] },
+  { id: "personal", label: "Personal Care", color: "#e879f9", aliases: ["beauty"], keywords: ["hair", "haircut", "salon", "spa", "nails", "skincare", "cosmetic", "barber", "personal care"] },
+  { id: "home", label: "Home", color: "#84cc16", aliases: ["home improvement", "household"], keywords: ["home", "house", "appliance", "hardware", "garden", "repair", "cleaning", "household"] },
+  { id: "gifts", label: "Gifts & Donations", color: "#f43f5e", aliases: ["gift", "gifts", "donation", "charity"], keywords: ["gift", "present", "donation", "charity", "birthday", "wedding"] },
+  { id: "pets", label: "Pets", color: "#f59e0b", aliases: ["pet"], keywords: ["pet", "vet", "veterinary", "dog", "cat", "pet food", "grooming"] },
+  { id: "bills", label: "Bills & Utilities", color: "#64748b", aliases: ["utilities", "bills", "subscriptions"], keywords: ["phone", "internet", "utility", "electric", "water bill", "insurance", "subscription", "membership"] },
+  { id: "other", label: "Other", color: "#94a3b8", aliases: ["misc", "miscellaneous"], keywords: [] },
+];
+
+function normalizedCategoryText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9&]+/g, " ").trim();
+}
+
+function categoryByName(value) {
+  const wanted = normalizedCategoryText(value);
+  if (!wanted) return null;
+  return CREDIT_CARD_CATEGORIES.find(category =>
+    normalizedCategoryText(category.id) === wanted ||
+    normalizedCategoryText(category.label) === wanted ||
+    category.aliases.some(alias => normalizedCategoryText(alias) === wanted)
+  ) || null;
+}
+
+function categorizePurchase(description, requestedCategory) {
+  const requested = categoryByName(requestedCategory);
+  if (requested) return requested;
+  const text = normalizedCategoryText(description);
+  const matched = CREDIT_CARD_CATEGORIES.find(category =>
+    category.id !== "other" && category.keywords.some(keyword => text.includes(normalizedCategoryText(keyword)))
+  );
+  return matched || CREDIT_CARD_CATEGORIES[CREDIT_CARD_CATEGORIES.length - 1];
+}
 
 function clampInt(value, min, max) {
   const n = Number.parseInt(value, 10);
@@ -103,6 +154,60 @@ function normalizeBudgetTankSettings(raw) {
     goal_mode: src.goal_mode === "manual" ? "manual" : "tank",
     current_period: normalizeCurrentPeriod(src.current_period),
   };
+}
+
+// Canonical value of one Bank Unit. The Money Changer owns this quote and games
+// consume it rather than inventing their own dollar scale. The curve is the
+// existing budget-aware Bank Builder curve, now promoted to a shared economy
+// primitive: it starts from the discretionary goal, tapers with remaining
+// headroom, and gets the established final-week/shield treatment.
+function quoteBankUnit({ goalCents, bankedCents = 0, finalWeek = false } = {}) {
+  const goal = clampInt(goalCents, 100, MAX_BLOCK_CENTS);
+  const banked = Math.max(0, Math.round(Number(bankedCents) || 0));
+  const remaining = Math.max(0, goal - banked);
+  const inShield = remaining <= 0;
+  const gamma = finalWeek ? BANK_UNIT_FINAL_WEEK_GAMMA : BANK_UNIT_PACING_GAMMA;
+  const pacingRemaining = inShield ? goal * BANK_UNIT_SHIELD_REMAINDER_FRAC : remaining;
+  const pacingBaseCents = Math.pow(goal, 1 - gamma) * Math.pow(pacingRemaining, gamma);
+  const rawUnitCents = pacingBaseCents * BANK_UNIT_BUDGET_PERCENT;
+  return {
+    units_per_point: 1,
+    cents: Math.max(1, Math.floor(rawUnitCents)),
+    raw_cents: rawUnitCents,
+    goal_cents: goal,
+    banked_cents: banked,
+    remaining_cents: remaining,
+    pacing_base_cents: Math.floor(pacingBaseCents),
+    final_week: !!finalWeek,
+    in_shield: inShield,
+    budget_percent: BANK_UNIT_BUDGET_PERCENT,
+  };
+}
+
+function isFinalPeriodWeek(periodType, now = new Date()) {
+  if (periodType === "week") return now.getDay() === 0;
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  return now.getDate() > daysInMonth - 7;
+}
+
+function quoteBankUnitForTank(accountSettings = {}, usage = {}, fallback = {}) {
+  const hasTank = !!(accountSettings && accountSettings.budget_tank);
+  if (!hasTank) {
+    return quoteBankUnit({
+      goalCents: fallback.goalCents,
+      bankedCents: fallback.bankedCents,
+      finalWeek: fallback.finalWeek,
+    });
+  }
+  const settings = normalizeBudgetTankSettings(accountSettings.budget_tank);
+  const tank = resolveTankWaterline(settings, usage);
+  return quoteBankUnit({
+    goalCents: tank.capacityCents || fallback.goalCents,
+    bankedCents: tank.waterlineCents,
+    finalWeek: isFinalPeriodWeek(settings.period_type),
+  });
 }
 
 // The Bank Builder goal the tank drives (0 = don't drive; caller falls back to
@@ -254,15 +359,18 @@ function decorateBlock(row, usage, funding, waterlineCents) {
   const unlocked = waterlineCents >= unlockCents;
   const affordable = (funding.total || 0) >= valueCents;
   const claimable = unlocked && affordable && !claimed && !!row.active;
+  const storedCategory = row.tank_category || "";
+  const cardCategory = categorizePurchase(row.title, storedCategory);
   return {
     id: row.id,
     title: row.title,
-    category: row.tank_category || null,
+    category: cardCategory.label,
+    category_id: cardCategory.id,
     // The item label without the "Category: " prefix, for nesting under a header.
-    item: row.tank_category && String(row.title || "").indexOf(row.tank_category + ": ") === 0
-      ? String(row.title).slice(String(row.tank_category).length + 2)
+    item: storedCategory && String(row.title || "").indexOf(storedCategory + ": ") === 0
+      ? String(row.title).slice(storedCategory.length + 2)
       : row.title,
-    color: row.tank_color || null,
+    color: cardCategory.color,
     shape: row.tank_shape || null,
     value_cents: valueCents,
     tank_position: row.tank_position,
@@ -315,7 +423,11 @@ function buildCategories(blocks, waterlineCents) {
     if (b.claimed) cat.claimed_count++;
     if (!cat.color && b.color) cat.color = b.color;
   }
-  cats.sort((a, b) => a.min_id - b.min_id);          // stable budget order (creation)
+  const categoryOrder = new Map(CREDIT_CARD_CATEGORIES.map((category, index) => [category.label.toLowerCase(), index]));
+  cats.sort((a, b) =>
+    (categoryOrder.get(a.name.toLowerCase()) ?? 999) - (categoryOrder.get(b.name.toLowerCase()) ?? 999) ||
+    a.min_id - b.min_id
+  );
   for (const c of cats) {
     c.items.sort((x, y) => x.id - y.id);
     c.count = c.items.length;
@@ -329,21 +441,27 @@ function buildCategories(blocks, waterlineCents) {
 }
 
 function normalizeBlockInput(body = {}) {
-  const category = String(body.category ?? body.tank_category ?? "").trim().slice(0, 60);
-  const item = String(body.item ?? body.label ?? "").trim().slice(0, 120);
+  const requestedCategory = String(body.category ?? body.tank_category ?? "").trim().slice(0, 60);
+  const item = String(body.item ?? body.description ?? body.label ?? "").trim().slice(0, 120);
   const explicitTitle = String(body.title ?? "").trim().slice(0, 180);
-  const title = explicitTitle || (category && item ? category + ": " + item : category || item);
-  if (!title) throw badRequest("A block needs a category or a label");
+  const description = item || explicitTitle || requestedCategory;
+  if (!description) throw badRequest("A planned purchase needs a description");
+  const cardCategory = categorizePurchase(description, requestedCategory);
+  const titlePrefix = description.match(/^([^:]+):\s*(.+)$/);
+  const cleanDescription = titlePrefix && categoryByName(titlePrefix[1]) ? titlePrefix[2].trim() : description;
+  const legacyCategoryEnvelope = !item && !explicitTitle && !!requestedCategory;
+  const title = legacyCategoryEnvelope ? cardCategory.label : cardCategory.label + ": " + cleanDescription;
   const cents = clampInt(
     body.value_cents ?? body.amount_cents ?? (body.amount != null ? Math.round(Number(body.amount) * 100) : NaN),
     0, MAX_BLOCK_CENTS
   );
-  if (!(cents > 0)) throw badRequest("A block needs a positive amount");
+  if (!(cents > 0)) throw badRequest("A planned purchase needs a positive amount");
   const recurring = body.recurring === true || body.recurring === "true" || body.tank_recurring === true;
   return {
     title,
-    category: category || null,
-    color: isHexColor(body.color) ? String(body.color).trim() : null,
+    category: cardCategory.label,
+    category_id: cardCategory.id,
+    color: isHexColor(body.color) ? String(body.color).trim() : cardCategory.color,
     value_cents: cents,
     recurring,
     duration_minutes: clampInt(body.duration_minutes ?? body.durationMinutes ?? 0, 0, 1440),
@@ -576,8 +694,8 @@ async function claimTankBlock(workspaceId, userId, id, { sweepPendingBankBuilder
 }
 
 // ── Money Changer ────────────────────────────────────────────────────────────
-// Points -> bank at settings.cents_per_point (default 1:1¢). The safe floor to
-// the slot machine's gamble. Idempotency arbiter is the slot_point_ledger
+// One point -> one Bank Unit at the Money Changer's current budget-aware quote.
+// This is the safe floor to the casino. Idempotency arbiter is the slot_point_ledger
 // unique index (workspace, source_type, source_key) — the earnTaskCredit
 // pattern — so a retried POST can never double-debit. Conversions land in
 // budget_conversions (raising the tank waterline), NEVER in slot_spins, so
@@ -588,36 +706,52 @@ async function convertPointsToBank(workspaceId, userId, { points, source_key } =
   if (pts > 1000000) throw badRequest("That's too many points at once");
   const sourceKey = String(source_key || "").trim();
   if (!sourceKey) throw badRequest("source_key is required");
-  const account = await upsertSlotAccountRow(pool, workspaceId, userId);
-  const settings = normalizeBudgetTankSettings(account.settings && account.settings.budget_tank);
-  const rate = settings.cents_per_point;
-  const cents = pts * rate;
+  await upsertSlotAccountRow(pool, workspaceId, userId);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const { rows: [existing] } = await client.query(
+      `SELECT * FROM budget_conversions WHERE workspace_id = $1 AND source_key = $2`,
+      [workspaceId, sourceKey]
+    );
+    if (existing) {
+      await client.query("COMMIT");
+      return { converted: false, duplicate: true, conversion: existing };
+    }
+    const { rows: [fresh] } = await client.query(
+      "SELECT * FROM slot_accounts WHERE workspace_id = $1 FOR UPDATE",
+      [workspaceId]
+    );
+    if (((fresh && fresh.point_balance) || 0) < pts) {
+      throw badRequest("Not enough points: you have " + ((fresh && fresh.point_balance) || 0));
+    }
+    const settings = normalizeBudgetTankSettings(fresh && fresh.settings && fresh.settings.budget_tank);
+    const usage = await getTankUsage(workspaceId, settings, client);
+    const quote = quoteBankUnitForTank({
+      ...(fresh && fresh.settings),
+      budget_tank: settings,
+    }, usage, {
+      goalCents: fresh && fresh.settings && fresh.settings.monthly_goal_cents,
+    });
+    const bankUnits = pts;
+    const rate = quote.cents;
+    const cents = bankUnits * rate;
     const { rows: [ledger] } = await client.query(
       `INSERT INTO slot_point_ledger (workspace_id, user_id, delta, source_type, source_key, description, metadata)
        VALUES ($1, $2, $3, 'bank_conversion', $4, $5, $6)
        ON CONFLICT (workspace_id, source_type, source_key) DO NOTHING
        RETURNING id`,
       [workspaceId, userId || null, -pts, sourceKey,
-       "Money Changer: " + pts + " pts -> $" + (cents / 100).toFixed(2),
-       JSON.stringify({ rate_cents_per_point: rate })]
+       "Money Changer: " + pts + " pts -> " + bankUnits + " Bank Units -> $" + (cents / 100).toFixed(2),
+       JSON.stringify({ bank_units: bankUnits, bank_unit_cents: rate, rate_cents_per_point: rate })]
     );
     if (!ledger) {
-      const { rows: [existing] } = await client.query(
+      const { rows: [racedConversion] } = await client.query(
         `SELECT * FROM budget_conversions WHERE workspace_id = $1 AND source_key = $2`,
         [workspaceId, sourceKey]
       );
       await client.query("COMMIT");
-      return { converted: false, duplicate: true, conversion: existing || null };
-    }
-    const { rows: [fresh] } = await client.query(
-      "SELECT point_balance FROM slot_accounts WHERE workspace_id = $1 FOR UPDATE",
-      [workspaceId]
-    );
-    if (((fresh && fresh.point_balance) || 0) < pts) {
-      throw badRequest("Not enough points — you have " + ((fresh && fresh.point_balance) || 0));
+      return { converted: false, duplicate: true, conversion: racedConversion || null };
     }
     const { rows: [updated] } = await client.query(
       `UPDATE slot_accounts
@@ -639,6 +773,8 @@ async function convertPointsToBank(workspaceId, userId, { points, source_key } =
       converted: true,
       duplicate: false,
       conversion,
+      bank_units: bankUnits,
+      bank_unit: quote,
       point_balance: updated.point_balance,
       bank_balance_cents: updated.bank_balance_cents,
     };
@@ -665,13 +801,12 @@ function sweepPreview(settings, usage, blocks) {
   // invest phantom money above the last funded block (matches resolveTankWaterline).
   const closingCapacity = Math.max(0, (closing.capacity_cents || 0) - necessitiesTotalCents(settings));
   const closingWaterline = Math.min(usage.priorPeriodBanked, closingCapacity);
-  let lastFunded = 0;
-  for (const b of blocks) {
-    if ((b.tank_unlock_cents || 0) <= closingWaterline) lastFunded = Math.max(lastFunded, b.tank_unlock_cents || 0);
-  }
-  const leftover = Math.max(0, closingWaterline - lastFunded);
+  const plannedCents = blocks.reduce((sum, block) => sum + (block.value_cents || 0), 0);
+  // Overflow exists only after every planned purchase is covered. Partial
+  // progress toward the next planned purchase is never swept away.
+  const leftover = Math.max(0, closingWaterline - plannedCents);
   const unhit = blocks.filter(b => !b.tank_recurring && !b.tank_claimed_period && (b.tank_unlock_cents || 0) > closingWaterline);
-  return { closing_key: closing.key, closing_capacity_cents: closingCapacity, closing_waterline_cents: closingWaterline, leftover_cents: leftover, unhit: unhit.map(b => ({ id: b.id, title: b.title, value_cents: b.value_cents })) };
+  return { closing_key: closing.key, closing_capacity_cents: closingCapacity, closing_waterline_cents: closingWaterline, planned_cents: plannedCents, leftover_cents: leftover, unhit: unhit.map(b => ({ id: b.id, title: b.title, value_cents: b.value_cents })) };
 }
 
 // `onSwept` (optional) runs INSIDE the rollover transaction, right before
@@ -682,8 +817,9 @@ function sweepPreview(settings, usage, blocks) {
 // rolls back. Injected via the options object, mirroring claimTankBlock's
 // sweepPendingBankBuilders. onSwept(client, { swept_cents, closing_period }) ->
 // any; whatever it returns is surfaced on result.task.
-async function rolloverPeriod(workspaceId, userId, { mode, onSwept } = {}) {
+async function rolloverPeriod(workspaceId, userId, { mode, overflow_action, overflowAction, onSwept } = {}) {
   const rolloverMode = mode === "fresh" ? "fresh" : "carry";
+  const overflowMode = (overflow_action || overflowAction) === "carry" ? "carry" : "invest";
   await upsertSlotAccountRow(pool, workspaceId, userId);
   const client = await pool.connect();
   try {
@@ -708,9 +844,12 @@ async function rolloverPeriod(workspaceId, userId, { mode, onSwept } = {}) {
     const preview = sweepPreview(settings, usage, blocks);
     const sweep = Math.min(preview.leftover_cents, (account && account.bank_balance_cents) || 0);
 
-    // Idempotent sweep: the unique (workspace, period) row is the arbiter.
+    // Idempotent overflow disposition. Investing debits the reserve and creates
+    // the existing transfer task. Carrying keeps the reserve intact and seeds
+    // the new period's waterline through a zero-point conversion entry.
     let sweptCents = 0;
-    if (sweep > 0) {
+    let carriedOverCents = 0;
+    if (sweep > 0 && overflowMode === "invest") {
       const { rows: [inv] } = await client.query(
         `INSERT INTO budget_investments (workspace_id, user_id, period_key, amount_cents, details)
          VALUES ($1, $2, $3, $4, $5)
@@ -725,6 +864,24 @@ async function rolloverPeriod(workspaceId, userId, { mode, onSwept } = {}) {
           `UPDATE slot_accounts SET bank_balance_cents = GREATEST(0, bank_balance_cents - $2), updated_at = NOW()
             WHERE workspace_id = $1`,
           [workspaceId, sweep]
+        );
+      }
+    }
+    if (sweep > 0 && overflowMode === "carry") {
+      const { rows: [carry] } = await client.query(
+        `INSERT INTO budget_carryovers(workspace_id,user_id,from_period,to_period,amount_cents)
+         VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(workspace_id,from_period) DO NOTHING
+         RETURNING *`,
+        [workspaceId, userId || null, preview.closing_key, usage.periodKey, sweep]
+      );
+      if (carry) {
+        carriedOverCents = sweep;
+        await client.query(
+          `INSERT INTO budget_conversions(workspace_id,user_id,points,cents,rate_cents_per_point,source_key)
+           VALUES($1,$2,0,$3,0,$4)
+           ON CONFLICT(workspace_id,source_key) DO NOTHING`,
+          [workspaceId, userId || null, sweep, "carryover:" + preview.closing_key]
         );
       }
     }
@@ -782,7 +939,9 @@ async function rolloverPeriod(workspaceId, userId, { mode, onSwept } = {}) {
       closing_period: preview.closing_key,
       new_period: usage.periodKey,
       swept_cents: sweptCents,
-      already_swept: sweep > 0 && sweptCents === 0,
+      carried_over_cents: carriedOverCents,
+      overflow_action: overflowMode,
+      already_swept: sweep > 0 && sweptCents === 0 && carriedOverCents === 0,
       new_capacity_cents: nextSettings.current_period.capacity_cents,
       carried: unhitOneShots.map(b => b.title),
       left_tank: leaving.map(b => b.title),
@@ -872,10 +1031,17 @@ async function getBudgetState(workspaceId, userId) {
   }
 
   const { grossCents, necessitiesCents, capacityCents, waterlineCents } = resolveTankWaterline(settings, usage);
+  const bankUnit = quoteBankUnitForTank({
+    ...(account.settings || {}),
+    budget_tank: settings,
+  }, usage, {
+    goalCents: capacityCents || (account.settings && account.settings.monthly_goal_cents),
+  });
   const funding = await getFunding(workspaceId, account);
   const rows = await getTankBlockRows(workspaceId);
   const blocks = rows.map(r => decorateBlock(r, usage, funding, waterlineCents));
   const allocatedCents = blocks.reduce((sum, b) => sum + b.value_cents, 0);
+  const overflowCents = Math.max(0, Math.min(waterlineCents - allocatedCents, funding.total || 0));
   const categories = buildCategories(blocks, waterlineCents);
   const investments = await getInvestments(workspaceId);
 
@@ -893,6 +1059,7 @@ async function getBudgetState(workspaceId, userId) {
       waterline_cents: waterlineCents,
       allocated_cents: allocatedCents,
       unallocated_cents: Math.max(0, capacityCents - allocatedCents),
+      overflow_cents: overflowCents,
     },
     funding,
     investments,
@@ -900,13 +1067,26 @@ async function getBudgetState(workspaceId, userId) {
     rollover_due: rolloverDue,
     rollover_preview: rolloverDue ? sweepPreview(settings, usage, rows) : null,
     constants: {
-      cents_per_point: settings.cents_per_point,
+      credit_card_categories: CREDIT_CARD_CATEGORIES.map(({ id, label, color, keywords }) => ({ id, label, color, keywords })),
+      bank_unit: bankUnit,
+      bank_unit_cents: bankUnit.cents,
+      bank_units_per_point: 1,
+      // Compatibility alias for older clients. This is a live Bank Unit quote,
+      // not the retired independently configurable rate.
+      cents_per_point: bankUnit.cents,
     },
   };
 }
 
 module.exports = {
   DEFAULT_CENTS_PER_POINT,
+  CREDIT_CARD_CATEGORIES,
+  categorizePurchase,
+  normalizeBlockInput,
+  BANK_UNIT_BUDGET_PERCENT,
+  quoteBankUnit,
+  quoteBankUnitForTank,
+  isFinalPeriodWeek,
   normalizeBudgetTankSettings,
   necessitiesTotalCents,
   tankDrivenGoalCents,

@@ -16,7 +16,25 @@ const { route } = require("../lib/route-helpers");
 const { resolveOwnerStrict } = require("../middleware/resolve-owner");
 
 module.exports = function mount(app, ctx) {
-  const { broadcast, budgetStore, slotStore, socialStore, blockDB, crypto, getTodayStr } = ctx;
+  const { broadcast, budgetStore, rewardVaultStore, slotStore, socialStore, blockDB, crypto, getTodayStr } = ctx;
+
+  async function enqueueResolvedReward({ userId, workspaceId, reward, sourceType, sourceId }) {
+    if (!reward) return null;
+    const enqueued = await socialStore.enqueueReward({
+      ownerUserId: userId,
+      workspaceId,
+      rewardDefinitionId: reward.id || null,
+      titleSnapshot: reward.title || "Reward",
+      sourceType,
+      sourceId,
+      sponsorUserId: null,
+      valueSnapshot: reward.value_cents || 0,
+      chanceSharesSnapshot: reward.chance_shares || reward.weight || null,
+      tierSnapshot: reward.tier_id || null,
+      durationMinutesSnapshot: reward.duration_minutes ?? null,
+    });
+    return enqueued && enqueued.item || null;
+  }
 
   app.get("/api/budget/state", route(async (req) => {
     const { userId, workspaceId } = await resolveOwnerStrict(req);
@@ -140,7 +158,7 @@ module.exports = function mount(app, ctx) {
     return result;
   }));
 
-  // Money Changer: points -> bank at the configured rate. Client sends a
+  // Money Changer: one point -> one canonical Bank Unit. Client sends a
   // per-attempt source_key (reused on retry) — the ledger index dedupes.
   app.post("/api/budget/convert", route(async (req) => {
     const { userId, workspaceId } = await resolveOwnerStrict(req);
@@ -153,5 +171,152 @@ module.exports = function mount(app, ctx) {
     const result = await budgetStore.reorderTank(req.workspaceId, (req.body || {}).items);
     broadcast("slot-changed", { action: "budget-reorder" }, req.workspaceId);
     return result;
+  }));
+
+  // Reward Vault: one catalog shared by quick-add, checkpoints, wheels, and the
+  // casino. Definitions remain separate from the tank instances they create.
+  app.get("/api/budget/vault", route(async (req) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const state = await rewardVaultStore.listVault(workspaceId, userId);
+    const earned = await socialStore.earnMilestoneSponsorships(userId, state.milestones && state.milestones.progress.total || 0);
+    if (earned.length) broadcast("slot-changed", { action: "sponsorship-earned" }, workspaceId);
+    return { ...state, sponsored_milestones_earned: earned.length };
+  }));
+
+  app.post("/api/budget/vault", route(async (req, res) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const item = await rewardVaultStore.createVaultItem(workspaceId, userId, req.body || {});
+    broadcast("slot-changed", { action: "reward-vault-create" }, workspaceId);
+    res.status(201).json({ item });
+  }));
+
+  app.put("/api/budget/vault/:id", route(async (req) => {
+    const { workspaceId } = await resolveOwnerStrict(req);
+    const item = await rewardVaultStore.updateVaultItem(workspaceId, req.params.id, req.body || {});
+    broadcast("slot-changed", { action: "reward-vault-update" }, workspaceId);
+    return { item };
+  }));
+
+  app.delete("/api/budget/vault/:id", route(async (req) => {
+    const { workspaceId } = await resolveOwnerStrict(req);
+    const result = await rewardVaultStore.archiveVaultItem(workspaceId, req.params.id);
+    broadcast("slot-changed", { action: "reward-vault-archive" }, workspaceId);
+    return result;
+  }));
+
+  app.post("/api/budget/vault/:id/quick-add", route(async (req) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const result = await rewardVaultStore.quickAdd(workspaceId, userId, req.params.id);
+    broadcast("slot-changed", { action: "reward-vault-quick-add" }, workspaceId);
+    return result;
+  }));
+
+  app.post("/api/budget/milestones", route(async (req, res) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const milestone = await rewardVaultStore.createMilestone(workspaceId, userId, req.body || {});
+    broadcast("slot-changed", { action: "reward-milestone-create" }, workspaceId);
+    res.status(201).json({ milestone });
+  }));
+
+  app.put("/api/budget/milestones/:id", route(async (req) => {
+    const { workspaceId } = await resolveOwnerStrict(req);
+    const milestone = await rewardVaultStore.updateMilestone(workspaceId, req.params.id, req.body || {});
+    broadcast("slot-changed", { action: "reward-milestone-update" }, workspaceId);
+    return { milestone };
+  }));
+
+  app.delete("/api/budget/milestones/:id", route(async (req) => {
+    const { workspaceId } = await resolveOwnerStrict(req);
+    const result = await rewardVaultStore.deleteMilestone(workspaceId, req.params.id);
+    broadcast("slot-changed", { action: "reward-milestone-delete" }, workspaceId);
+    return result;
+  }));
+
+  app.post("/api/budget/milestones/:id/resolve", route(async (req) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const result = await rewardVaultStore.resolveMilestone(workspaceId, userId, req.params.id, req.body || {});
+    const queueItem = await enqueueResolvedReward({
+      userId, workspaceId, reward: result.reward, sourceType: "self_care",
+      sourceId: "self-care-" + result.period_key + "-" + req.params.id,
+    });
+    broadcast("slot-changed", { action: "reward-milestone-resolve" }, workspaceId);
+    return { ...result, reward_queue_item: queueItem };
+  }));
+
+  app.post("/api/budget/overflow/spin", route(async (req) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const result = await rewardVaultStore.overflowSpin(workspaceId, userId, {
+      ...(req.body || {}), sweepPendingBankBuilders: slotStore.sweepPendingBankBuildersInTx,
+    });
+    let queueItem = null;
+    if (result.spin) {
+      const reward = result.reward || { id: result.spin.reward_definition_id, title: result.spin.title, value_cents: result.spin.amount_cents };
+      queueItem = await enqueueResolvedReward({
+        userId, workspaceId, reward, sourceType: "overflow_wheel",
+        sourceId: "overflow-" + result.spin.id,
+      });
+    }
+    broadcast("slot-changed", { action: "budget-overflow-spin" }, workspaceId);
+    return { ...result, reward_queue_item: queueItem };
+  }));
+
+  app.get("/api/budget/sponsor-link", route(async (req) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const link = await rewardVaultStore.getSponsorLink(workspaceId, userId);
+    return { link };
+  }));
+
+  app.post("/api/budget/sponsor-link/rotate", route(async (req) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    const link = await rewardVaultStore.rotateSponsorLink(workspaceId, userId);
+    return { link, url: req.protocol + "://" + req.get("host") + "/sponsor/" + link.token };
+  }));
+
+  app.delete("/api/budget/sponsor-link", route(async (req) => {
+    const { userId, workspaceId } = await resolveOwnerStrict(req);
+    return rewardVaultStore.revokeSponsorLink(workspaceId, userId);
+  }));
+
+  // Signed-in friends see sponsor-visible cards only.
+  app.get("/api/social/users/:ownerUserId/reward-vault", route(async (req) => {
+    const ownerUserId = Number.parseInt(req.params.ownerUserId, 10);
+    if (!await socialStore.areFriends(req.session.userId, ownerUserId)) {
+      const err = new Error("Friendship required"); err.statusCode = 403; throw err;
+    }
+    const workspaceId = await socialStore.resolveWorkspaceId(ownerUserId);
+    return rewardVaultStore.listVault(workspaceId, ownerUserId, { sponsorView: true });
+  }));
+
+  app.get("/api/public/sponsor/:token", route(async (req) => {
+    const link = await rewardVaultStore.resolveSponsorToken(req.params.token);
+    return rewardVaultStore.listVault(link.workspace_id, link.owner_user_id, { sponsorView: true });
+  }));
+
+  app.post("/api/public/sponsor/:token/offers", route(async (req, res) => {
+    const link = await rewardVaultStore.resolveSponsorToken(req.params.token);
+    const body = req.body || {};
+    if (!String(body.sponsorName || "").trim()) {
+      const err = new Error("sponsorName required"); err.statusCode = 400; throw err;
+    }
+    const routes = Array.isArray(body.routes) ? body.routes : [];
+    if (!routes.length) {
+      const err = new Error("Choose at least one earning route"); err.statusCode = 400; throw err;
+    }
+    const first = routes[0] || {};
+    const result = await socialStore.requestSponsorship({
+      ownerUserId: link.owner_user_id,
+      sponsorUserId: null,
+      sponsorName: String(body.sponsorName).trim().slice(0, 120),
+      targetType: first.type === "casino" ? "slot_machine" : "task",
+      targetId: first.targetId || (first.thresholdBankUnits ? "bank-units:" + first.thresholdBankUnits : "guest-offer"),
+      rewardDefinitionId: body.rewardDefinitionId || null,
+      rewardTitle: body.rewardTitle,
+      valueCents: body.valueCents || 0,
+      chanceShares: body.chanceShares || 1,
+      note: body.note || "",
+      workspaceId: link.workspace_id,
+      routes,
+    });
+    res.status(201).json(result);
   }));
 };

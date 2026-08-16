@@ -27,6 +27,7 @@ const slotStore = require("./slot-store");
 const punishmentStore = require("./punishment-store");
 const socialStore = require("./social-store");
 const budgetStore = require("./budget-store");
+const rewardVaultStore = require("./reward-vault-store");
 const { badRequest, notFound } = require("./slot-account-common");
 const routeHelpers = require("./lib/route-helpers");
 const tokenStore = require("./token-store");
@@ -150,7 +151,7 @@ app.use(session(sessionOptions));
 // ── Auth Middleware ──
 const AUTH_PUBLIC = new Set(["/login", "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/auth/config", "/api/auth/clerk-sync", "/api/gcal/callback", "/vendor/drake-auth/browser.js", "/api/slack/events"]);
 const DCC_ENDPOINTS = new Set(["/api/dcc-state/ingest", "/api/ingest/day-state", "/api/dcc/refresh", "/api/dcc/deep-sweep/ingest", "/api/dcc/triage-check/ingest", "/api/dcc/brief/materialize", "/api/dcc/quick-task", "/api/dcc/meeting-artifacts", "/api/dcc/meeting-signals", "/api/dcc/slack-reconcile"]);
-function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
+function isPublicRoute(req) { return req.path.startsWith("/pet/") || req.path.startsWith("/todo/") || req.path.startsWith("/sponsor/") || req.path.startsWith("/api/public/") || req.path.startsWith("/public/"); }
 function isLocalhost(req) { const addr = req.socket.remoteAddress; return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1"; }
 // On Render the app runs behind a same-host reverse proxy, so EVERY request's
 // socket peer is 127.0.0.1 — trusting localhost there would open the DCC service
@@ -201,6 +202,8 @@ function requireAdmin(req, res, next) {
   if (req.path.startsWith("/api/")) return res.status(403).json({ error: "Admin access required" });
   return res.status(403).send("Admin access required");
 }
+
+app.get("/sponsor/:token", (req, res) => res.sendFile(path.join(PROJECT_DIR, "sponsor.html")));
 
 app.use(async (req, res, next) => {
   try {
@@ -915,7 +918,7 @@ const meetingMaterializer = require("./meeting-materializer")({
 // value (they never change); vault/syncMgr are getters because startup
 // initializes them after routes mount.
 const ctx = {
-  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
+  APP_TIME_ZONE, DAY_STATE_FILE, DCC_ENDPOINTS, REALTIME_GCAL_SYNC_ENABLED, SyncManager, VAULT_REPO_URL, VaultStore, auth, badRequest, blockDB, broadcast, buildDayResponse, buildSkeletonState, capabilities, crypto, filterLegacyGcalBlocks, gcalAuth, getDayFilePath, getRequestOrigin, getScheduleBlocks, getTodayStr, isAllowedSweepBlockItem, meetingAutomation, meetingSignals, notFound, path, petHomeStore, pool, punishmentStore, budgetStore, rewardVaultStore, readDayStateMirror, readJSON, readTriageSuppressionsForWorkspace, requireAdmin, scoreTaskPoints, session, slotStore, socialStore, updateManifest, waitingItems, writeJSON,
   dccIntelligence, resolveOwnerStrict, resolveOwnerLenient, previousDateStr, DATA_DIR,
   meetingMaterializer, meetingIdentity, VAULT_SENSITIVE_PIN,
   ...routeHelpers,

@@ -9,13 +9,24 @@
   "use strict";
 
   let _state = null;        // last /api/budget/state payload
-  let _form = null;         // add-block form: { id|null, category, item, amount, recurring, color }
+  let _form = null;         // planned purchase form: { id|null, description, amount, category, recurring }
   let _dragId = null;
   let _confirmDeleteId = null;
   let _loadSeq = 0;
   let _convertKey = null;   // per-attempt idempotency key; reused on retry
   let _convertBusy = false;
   let _rolloverSnoozed = false;
+  let _vault = { items: [], milestones: { items: [], progress: { total: 0 } } };
+  let _vaultOpen = false;
+  let _vaultTypes = new Set(["purchase", "free", "sponsored"]);
+  let _vaultCardCategories = null;
+  let _vaultFilterOpen = null;
+  let _vaultSearch = "";
+  let _vaultForm = null;
+  let _milestoneForm = null;
+  let _overflowKey = null;
+  let _autoResolving = false;
+  let _sponsorLink = null;
   const _collapsed = new Set();  // collapsed category keys
 
   // Shell-to-tank tie-in (Phase 11): a shell's 10% all-done bonus banks POINTS
@@ -43,11 +54,14 @@
   async function loadBudget() {
     const seq = ++_loadSeq;
     try {
-      const res = await fetch("/api/budget/state");
+      const [res, vaultRes, sponsorRes] = await Promise.all([fetch("/api/budget/state"), fetch("/api/budget/vault"), fetch("/api/budget/sponsor-link")]);
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      const data = await res.json();
+      if (!vaultRes.ok) throw new Error((await vaultRes.json().catch(() => ({}))).error || vaultRes.statusText);
+      const [data, vault] = await Promise.all([res.json(), vaultRes.json()]);
       if (seq !== _loadSeq) return; // a newer load superseded this one
       _state = data;
+      _vault = vault;
+      _sponsorLink = sponsorRes.ok ? (await sponsorRes.json()).link : null;
     } catch (e) {
       if (seq !== _loadSeq) return;
       _state = { error: e.message || "Could not load the Budget Tank" };
@@ -72,6 +86,7 @@
       _lastPoints = _state.points;
     }
     render();
+    autoResolveSpecificMilestones();
   }
 
   async function api(method, url, body) {
@@ -242,26 +257,71 @@
   }
 
   // ---- money changer ---------------------------------------------------------
-  // The coin slot feeding the tank: points -> bank at the configured rate, the
-  // safe 1:1 floor to gambling those points at the slot machine.
+  // The coin slot feeding the tank: one point buys one canonical Bank Unit.
+  // Its dollar quote comes from the budget model and is shared by games.
   function moneyChangerMarkup(s) {
-    const rate = s.constants.cents_per_point;
-    const rateLabel = "1 pt = " + (rate === 100 ? "$1.00" : rate + "¢");
+    const unit = s.constants.bank_unit || {};
+    const rate = s.constants.bank_unit_cents || s.constants.cents_per_point;
+    const rateLabel = "1 pt = 1 Bank Unit";
+    const quoteDetail = money(rate) + " today · budget-aware safe exchange";
     return '<div class="bt-group bt-changer">' +
-      '<div class="bt-group-head"><span class="bt-group-title">🪙 Money Changer</span>' +
-        '<span class="bt-group-sub">' + esc(rateLabel) + " · safe exchange</span></div>" +
+      '<div class="bt-group-head"><span class="bt-group-title" id="budget-money-changer-title" tabindex="-1">🪙 Money Changer</span>' +
+        '<span class="bt-group-sub">' + esc(rateLabel) + " · " + esc(quoteDetail) + "</span></div>" +
       '<div class="bt-changer-row">' +
         '<span class="bt-changer-balance">' + esc(String(s.points)) + " pts</span>" +
         '<input type="number" class="bt-changer-input" data-role="convert-amt" min="1" max="' + s.points + '" placeholder="points">' +
         '<button class="bt-btn bt-changer-max" data-act="convert-max">max</button>' +
       "</div>" +
       '<div class="bt-changer-row">' +
-        '<span class="bt-changer-preview" data-role="convert-preview">→ $0.00 into the tank</span>' +
+        '<span class="bt-changer-preview" data-role="convert-preview">0 Bank Units → $0.00 into the tank</span>' +
         '<button class="bt-btn bt-btn--primary" data-act="convert"' + (s.points < 1 ? " disabled" : "") + ">Convert</button>" +
       "</div>" +
-      '<div class="bt-changer-row bt-changer-admin"><label>Rate (¢ per point)' +
-        '<input type="number" class="bt-changer-input" data-role="rate-input" min="1" max="1000" value="' + rate + '"></label></div>' +
+      '<div class="bt-changer-row bt-changer-admin"><span>One Bank Unit is ' + money(rate) +
+        '. Its value follows your ' + money(unit.goal_cents || 0) + ' discretionary budget and remaining headroom. Games use this same unit.</span></div>' +
+      '<div class="bt-changer-choice" aria-hidden="true"><span>or</span></div>' +
+      '<div class="bt-casino-choice">' +
+        '<div><strong>Go for broke in the casino</strong>' +
+          '<span>Use the same task-point balance for a shot at a bigger payoff.</span></div>' +
+        '<button class="bt-btn bt-btn--casino" data-act="open-casino" type="button">🎰 Feeling lucky??</button>' +
+      '</div>' +
     "</div>";
+  }
+
+  // Budget owns the top-level destination. The casino is a focused subview,
+  // while Slots continues to own its machine state and internal sections.
+  function showBudgetHome(options) {
+    const opts = options || {};
+    const home = document.getElementById("budget-home");
+    const casino = document.getElementById("budget-casino");
+    if (home) home.hidden = false;
+    if (casino) casino.hidden = true;
+    if (typeof window.clearSlotCoinEffects === "function") window.clearSlotCoinEffects();
+    if (!opts.focus) return;
+    requestAnimationFrame(() => {
+      const title = document.getElementById("budget-money-changer-title");
+      if (!title) return;
+      title.scrollIntoView({ behavior: prefersReduced() ? "auto" : "smooth", block: "center" });
+      title.focus({ preventScroll: true });
+    });
+  }
+
+  function showCasino() {
+    const home = document.getElementById("budget-home");
+    const casino = document.getElementById("budget-casino");
+    if (!home || !casino) return;
+    home.hidden = true;
+    casino.hidden = false;
+    if (window.SlotRewards && typeof window.SlotRewards.activate === "function") {
+      window.SlotRewards.activate("machine");
+    } else if (window.SlotRewards && typeof window.SlotRewards.load === "function") {
+      window.SlotRewards.load();
+    }
+    requestAnimationFrame(() => {
+      const title = document.getElementById("budget-casino-title");
+      if (!title) return;
+      title.scrollIntoView({ behavior: prefersReduced() ? "auto" : "smooth", block: "start" });
+      title.focus({ preventScroll: true });
+    });
   }
 
   // ---- rollover modal + investments -------------------------------------------
@@ -274,13 +334,15 @@
       '<p class="bt-modal-text">' + esc(p.closing_key || "Last period") + " closed at " +
         money(p.closing_waterline_cents || 0) + " banked. " +
         (estSweep > 0
-          ? money(estSweep) + " above your last funded block sweeps to investments, and a transfer task lands on today."
+          ? money(estSweep) + " remains after every planned purchase. Choose where it goes before starting the new period."
           : "Nothing left over to sweep this time.") +
       "</p>" +
       (unhit.length
         ? '<p class="bt-modal-text">Didn\'t reach: ' + esc(unhit.map(u => u.title).join(", ")) + "</p>"
         : "") +
-      '<div class="bt-form-actions">' +
+      (estSweep > 0 ? '<label class="bt-rollover-overflow">Unused overflow<select data-role="rollover-overflow"><option value="invest">Invest it and create a transfer task</option><option value="carry">Carry it into the new period</option></select></label>' : '') +
+      (estSweep > 0 && (s.usage.overflow_cents || 0) > 0 ? '<button class="bt-btn bt-rollover-spin" data-act="overflow-spin">Spin the Overflow Wheel first</button>' : '') +
+      '<div class="bt-form-actions"><span class="bt-rollover-label">Planned purchases:</span>' +
         '<button class="bt-btn bt-btn--primary" data-act="rollover-carry">Carry unhit to the bottom</button>' +
         '<button class="bt-btn" data-act="rollover-fresh">Start fresh</button>' +
         '<button class="bt-btn bt-modal-later" data-act="rollover-later">later</button>' +
@@ -325,56 +387,58 @@
       "</div>";
   }
 
-  // A Monarch/Mint-style category group. The header name is editable in place
-  // (renames the whole group); its amount is the read-only rollup. A lone
-  // generic envelope (single item labeled like the category) becomes the
-  // editable header row itself, with its own amount + claim + delete.
+  // Card-style categories are automatic rollups, never editable envelopes.
+  // Even a one-item category renders as a concrete purchase under its header.
   function categoryGroupMarkup(cat, u) {
     const collapsed = _collapsed.has(cat.key);
-    const lone = cat.count === 1 && (cat.items[0].item || "").trim().toLowerCase() === cat.name.trim().toLowerCase();
     const fillPct = Math.round((cat.fill_frac || 0) * 100);
     const statusText = cat.status === "claimed" ? "all claimed"
       : cat.status === "claimable" ? cat.claimable_count + " ready"
       : cat.status === "partial" ? cat.unlocked_count + "/" + cat.count + " unlocked"
       : "locked";
-    const one = cat.items[0];
-    const confirmingLone = lone && _confirmDeleteId === one.id;
     const head =
-      '<div class="bt-cat-head" data-cat="' + esc(cat.key) + '"' + (lone ? ' data-id="' + one.id + '"' : "") + ">" +
-        (lone ? '<span class="bt-cat-caret bt-cat-caret--none"></span>'
-              : '<span class="bt-cat-caret" data-act="toggle-cat" data-cat="' + esc(cat.key) + '">' + (collapsed ? "▸" : "▾") + "</span>") +
+      '<div class="bt-cat-head" data-cat="' + esc(cat.key) + '">' +
+        '<button class="bt-cat-caret" type="button" data-act="toggle-cat" data-cat="' + esc(cat.key) + '" aria-label="Toggle ' + esc(cat.name) + '">' + (collapsed ? "▸" : "▾") + "</button>" +
         '<span class="bt-row-dot" style="background:' + esc(cat.color || "#f59e0b") + '"></span>' +
-        '<input class="bt-name-in bt-cat-name-in" data-role="cat-name" data-cat="' + esc(cat.key) + '" value="' + esc(cat.name) + '">' +
+        '<span class="bt-cat-name">' + esc(cat.name) + "</span>" +
+        '<span class="bt-row-tag">' + cat.count + " purchase" + (cat.count === 1 ? "" : "s") + "</span>" +
         '<span class="bt-cat-status bt--' + cat.status + '">' + statusText + "</span>" +
-        (lone ? amtInput("item-amt", one.value_cents)
-              : '<span class="bt-cat-amt">' + money(cat.budget_cents) + "</span>") +
+        '<span class="bt-cat-amt">' + money(cat.budget_cents) + "</span>" +
         '<span class="bt-cat-bar"><i style="width:' + fillPct + '%"></i></span>' +
-        (lone && one.claimable ? '<button class="bt-claim-btn" data-act="claim" data-id="' + one.id + '">Claim</button>' : "") +
-        (lone ? '<button class="bt-row-btn bt-row-btn--danger" data-act="del-block" data-id="' + one.id + '">' + (confirmingLone ? "Sure?" : "×") + "</button>" : "") +
       "</div>";
-    if (lone) return '<div class="bt-cat" data-cat="' + esc(cat.key) + '">' + head + "</div>";
     const items = collapsed ? "" :
       '<div class="bt-cat-items">' +
         [...cat.items].reverse().map(b => blockRow(b, u)).join("") +
-        '<button class="bt-add bt-add--sub" data-act="add-block" data-cat="' + esc(cat.name) + '">+ add to ' + esc(cat.name) + "</button>" +
       "</div>";
     return '<div class="bt-cat" data-cat="' + esc(cat.key) + '">' + head + items + "</div>";
   }
 
+  function classifyPurchase(description, s) {
+    const text = String(description || "").toLowerCase().replace(/[^a-z0-9&]+/g, " ").trim();
+    const categories = (s.constants && s.constants.credit_card_categories) || [];
+    return categories.find(category => category.id !== "other" &&
+      (category.keywords || []).some(keyword => text.includes(String(keyword).toLowerCase()))) ||
+      categories.find(category => category.id === "other") ||
+      { id: "other", label: "Other", color: "#94a3b8" };
+  }
+
   function blockFormMarkup(s) {
     const f = _form;
-    const catList = Array.from(new Set(s.blocks.map(b => b.category).filter(Boolean)));
+    const categories = (s.constants && s.constants.credit_card_categories) || [];
+    const suggestion = classifyPurchase(f.description, s);
     return '<div class="bt-form" data-role="block-form">' +
-      '<div class="bt-form-title">' + (f.id ? "Edit block" : "New block") + "</div>" +
+      '<div class="bt-form-title">' + (f.id ? "Edit planned purchase" : "Add a planned purchase") + "</div>" +
       '<div class="bt-form-grid">' +
-        '<label>Category<input type="text" data-field="category" list="bt-cat-list" placeholder="Restaurants" value="' + esc(f.category) + '"></label>' +
-        '<datalist id="bt-cat-list">' + catList.map(c => '<option value="' + esc(c) + '">').join("") + "</datalist>" +
-        '<label>What exactly? <span class="bt-form-hint">(optional)</span><input type="text" data-field="item" placeholder="Anniversary dinner at Coral with Fae" value="' + esc(f.item) + '"></label>' +
+        '<label class="bt-form-wide">What do you want to buy?<input type="text" data-field="description" placeholder="Dinner for me and Fae" value="' + esc(f.description) + '"></label>' +
         '<label>Amount ($)<input type="number" data-field="amount" min="1" step="1" value="' + esc(f.amount) + '"></label>' +
-        '<label class="bt-form-check"><input type="checkbox" data-field="recurring"' + (f.recurring ? " checked" : "") + "> Refills every period (envelope)</label>" +
+        '<label>Card category<select data-field="category">' +
+          '<option value="">Auto: ' + esc(suggestion.label) + "</option>" +
+          categories.map(category => '<option value="' + esc(category.label) + '"' + (f.category === category.label ? " selected" : "") + '>' + esc(category.label) + "</option>").join("") +
+        "</select></label>" +
       "</div>" +
+      '<div class="bt-auto-category" data-role="auto-category"><span class="bt-auto-dot" style="background:' + esc(suggestion.color) + '"></span><span class="bt-auto-copy">Will file under <strong>' + esc(f.category || suggestion.label) + "</strong>. You can override it if the guess is off.</span></div>" +
       '<div class="bt-form-actions">' +
-        '<button class="bt-btn bt-btn--primary" data-act="save-block">' + (f.id ? "Save" : "Drop it in the tank") + "</button>" +
+        '<button class="bt-btn bt-btn--primary" data-act="save-block">' + (f.id ? "Save purchase" : "Add purchase") + "</button>" +
         '<button class="bt-btn" data-act="cancel-block">Cancel</button>' +
       "</div>" +
     "</div>";
@@ -402,6 +466,170 @@
         shapePicker(n.shape) +
       "</div>").join("");
     return rows + '<button class="bt-add" data-act="add-nec">+ add bill</button>';
+  }
+
+  function vaultKind(item) {
+    if (item.payment_source === "sponsored") return "sponsored";
+    return item.max_cents > 0 ? "purchase" : "free";
+  }
+
+  function vaultPrice(item) {
+    if (!item.max_cents) return "Free";
+    if ((item.min_cents || 0) > 0 && item.min_cents !== item.max_cents) {
+      return money(item.min_cents) + " to " + money(item.max_cents);
+    }
+    return money(item.max_cents);
+  }
+
+  function vaultCardCategory(item) {
+    return classifyPurchase(item && item.title, _state || { constants: {} });
+  }
+
+  function vaultCard(item) {
+    const kind = vaultKind(item);
+    const cardCategory = vaultCardCategory(item);
+    const channels = [item.quick_add && "Quick Add", item.random_draw && "Casino/Wheels", item.milestone && "Milestone"].filter(Boolean);
+    const progress = _vault.milestones && _vault.milestones.progress && _vault.milestones.progress.total || 0;
+    const checkpoints = ((_vault.milestones && _vault.milestones.items) || []).filter(marker => String(marker.reward_definition_id || "") === String(item.id));
+    const checkpointMarkup = checkpoints.map(marker => {
+      const state = marker.claimed ? "Claimed" : marker.claimable ? "Ready" : progress + "/" + marker.threshold_bank_units + " BU";
+      return '<div class="rv-card-checkpoint" data-milestone-id="' + marker.id + '"><span><strong>' + marker.threshold_bank_units + ' BU checkpoint</strong>' + (marker.repeat_each_period ? ' · repeats' : '') + '</span><span class="rv-card-checkpoint-state">' + state + '</span><button data-act="milestone-delete" aria-label="Remove checkpoint">×</button></div>';
+    }).join("");
+    return '<article class="rv-card rv-card--' + kind + '" data-vault-id="' + item.id + '">' +
+      '<div class="rv-card-top"><div><span class="rv-kind">' + (kind === "purchase" ? "Purchase" : kind === "free" ? "Self Care" : "Sponsored") + '</span>' +
+        '<h4>' + esc(item.title) + '</h4></div><strong class="rv-price">' + esc(vaultPrice(item)) + '</strong></div>' +
+      '<div class="rv-chips"><span class="rv-card-category"><i style="background:' + esc(cardCategory.color) + '"></i>' + esc(cardCategory.label) + '</span>' + channels.map(channel => '<span>' + esc(channel) + '</span>').join("") +
+        '<span>' + (item.reuse_mode === "one_off" ? "One-off" : "Reusable") + '</span>' +
+        (item.private ? '<span class="rv-private">Private</span>' : '<span>Sponsor-visible</span>') + '</div>' +
+      checkpointMarkup +
+      (item.notes ? '<p>' + esc(item.notes) + '</p>' : '') +
+      '<div class="rv-actions">' +
+        (item.quick_add && item.max_cents > 0 ? '<button class="bt-btn bt-btn--primary" data-act="vault-quick-add">Add ' + esc(money(item.max_cents)) + '</button>' : '') +
+        (item.max_cents === 0 && item.milestone ? '<button class="bt-btn" data-act="milestone-from-item">Add checkpoint</button>' : '') +
+        '<button class="bt-linkbtn" data-act="vault-edit">Edit</button>' +
+        '<button class="bt-linkbtn rv-danger" data-act="vault-archive">Archive</button>' +
+      '</div></article>';
+  }
+
+  function vaultFormMarkup() {
+    if (!_vaultForm) return "";
+    const f = _vaultForm;
+    return '<form class="rv-form" data-role="vault-form">' +
+      '<div class="rv-form-head"><strong>' + (f.id ? "Edit vault item" : "New vault item") + '</strong><button type="button" data-act="vault-form-cancel" aria-label="Close">×</button></div>' +
+      '<label>Reward or purchase<input data-vf="title" value="' + esc(f.title || "") + '" placeholder="Nice dinner with Fae"></label>' +
+      '<div class="rv-form-grid"><label>Type<select data-vf="type"><option value="paid"' + (f.type === "paid" ? " selected" : "") + '>Paid purchase</option><option value="free"' + (f.type === "free" ? " selected" : "") + '>Free self care</option></select></label>' +
+      '<label>Reuse<select data-vf="reuse"><option value="reusable"' + (f.reuse === "reusable" ? " selected" : "") + '>Reusable</option><option value="one_off"' + (f.reuse === "one_off" ? " selected" : "") + '>One-off</option></select></label></div>' +
+      '<div class="rv-form-grid rv-price-fields"><label>Minimum ($)<input type="number" min="0" step="1" data-vf="min" value="' + esc(f.min) + '"></label>' +
+      '<label>Maximum reserved ($)<input type="number" min="0" step="1" data-vf="max" value="' + esc(f.max) + '"></label></div>' +
+      '<label>Notes<textarea data-vf="notes" placeholder="What would make this feel rewarding?">' + esc(f.notes || "") + '</textarea></label>' +
+      '<fieldset><legend>Where it can appear</legend>' +
+        '<label><input type="checkbox" data-vf="quick"' + (f.quick ? " checked" : "") + '> Quick Add</label>' +
+        '<label><input type="checkbox" data-vf="random"' + (f.random ? " checked" : "") + '> Casino and wheels</label>' +
+        '<label><input type="checkbox" data-vf="milestone"' + (f.milestone ? " checked" : "") + '> Self-care checkpoints</label>' +
+        '<label><input type="checkbox" data-vf="private"' + (f.private ? " checked" : "") + '> Private from sponsors</label>' +
+      '</fieldset><button type="button" class="bt-btn bt-btn--primary" data-act="vault-form-save">Save item</button></form>';
+  }
+
+  function milestoneFormMarkup() {
+    if (!_milestoneForm) return "";
+    const free = (_vault.items || []).filter(item => item.max_cents === 0 && item.milestone);
+    return '<form class="rv-form rv-milestone-form" data-role="milestone-form">' +
+      '<div class="rv-form-head"><strong>Add self-care checkpoint</strong><button type="button" data-act="milestone-form-cancel" aria-label="Close">×</button></div>' +
+      '<label>At how many Bank Units?<input type="number" min="1" step="1" data-mf="threshold" value="' + esc(_milestoneForm.threshold || "") + '" placeholder="75"></label>' +
+      '<label>Reward<select data-mf="reward"><option value="">Mystery: choose or spin when reached</option>' +
+        free.map(item => '<option value="' + item.id + '"' + (String(_milestoneForm.rewardId || "") === String(item.id) ? " selected" : "") + '>' + esc(item.title) + '</option>').join("") + '</select></label>' +
+      '<label class="rv-check"><input type="checkbox" data-mf="repeat"' + (_milestoneForm.repeat ? " checked" : "") + '> Repeat every budget period</label>' +
+      '<button type="button" class="bt-btn bt-btn--primary" data-act="milestone-form-save">Add checkpoint</button></form>';
+  }
+
+  function mysteryCheckpointCard(marker) {
+    const milestones = _vault.milestones || { items: [], progress: { total: 0 } };
+    const free = (_vault.items || []).filter(item => item.max_cents === 0 && item.milestone);
+    const state = marker.claimed ? "Claimed" : marker.claimable ? "Ready" : milestones.progress.total + "/" + marker.threshold_bank_units + " BU";
+    const choice = marker.claimable && !marker.claimed ? '<div class="rv-mystery-actions"><select data-role="mystery-choice"><option value="">Choose a free reward</option>' + free.map(item => '<option value="' + item.id + '">' + esc(item.title) + '</option>').join("") + '</select><button class="bt-btn" data-act="milestone-choose">Choose</button><button class="bt-btn bt-btn--primary" data-act="milestone-spin">Spin</button></div>' : '';
+    return '<article class="rv-card rv-card--free rv-card--mystery" data-milestone-id="' + marker.id + '"><div class="rv-card-top"><div><span class="rv-kind">Mystery checkpoint</span><h4>' + marker.threshold_bank_units + ' Bank Units</h4></div><strong class="rv-price">' + state + '</strong></div><div class="rv-chips"><span>Free Self Care</span>' + (marker.repeat_each_period ? '<span>Repeats</span>' : '<span>One-time</span>') + '</div>' + choice + '<div class="rv-actions"><button class="bt-linkbtn rv-danger" data-act="milestone-delete">Remove</button></div></article>';
+  }
+
+  function vaultFilterMarkup({ id, label, plural, options, selected }) {
+    const chosen = options.filter(option => selected.has(option.id));
+    const only = chosen.length === 1 ? chosen[0] : null;
+    const summary = chosen.length === options.length ? "All " + plural :
+      chosen.length === 0 ? "No " + plural :
+      only ? only.label : chosen.length + " " + plural;
+    const total = options.reduce((sum, option) => sum + option.count, 0);
+    const open = _vaultFilterOpen === id;
+    return '<div class="rv-filter-wrap" data-role="vault-filter" data-filter-id="' + id + '">' +
+      '<button type="button" class="rv-filter-trigger' + (chosen.length !== options.length ? ' selected' : '') + '" data-act="vault-filter-menu" data-filter-id="' + id + '" aria-haspopup="true" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="rv-' + id + '-menu"><strong>' + esc(label) + '</strong><span class="rv-filter-summary">' + esc(summary) + '</span><span aria-hidden="true">⌄</span></button>' +
+      (open ? '<div class="rv-filter-menu" id="rv-' + id + '-menu" role="group" aria-label="Filter rewards by ' + esc(label.toLowerCase()) + '">' +
+        '<label class="rv-filter-option rv-filter-option--all"><input type="checkbox" data-role="vault-filter-all" data-filter-id="' + id + '"' + (chosen.length === options.length ? ' checked' : '') + '><span><strong>All ' + esc(plural) + '</strong><small>' + total + '</small></span></label>' +
+        options.map(option => '<label class="rv-filter-option"><input type="checkbox" data-role="vault-filter-option" data-filter-id="' + id + '" value="' + option.id + '"' + (selected.has(option.id) ? ' checked' : '') + '><span><strong>' + esc(option.label) + '</strong><small>' + option.count + '</small></span></label>').join("") +
+      '</div>' : '') + '</div>';
+  }
+
+  function vaultDrawerMarkup() {
+    if (!_vaultOpen) return "";
+    const query = _vaultSearch.toLowerCase();
+    const allItems = _vault.items || [];
+    const allMysteryMarkers = ((_vault.milestones && _vault.milestones.items) || []).filter(marker => marker.mystery);
+    const cardCategories = (((_state || {}).constants || {}).credit_card_categories || []).map(category => ({
+      id: category.id,
+      label: category.label,
+      count: allItems.filter(item => vaultCardCategory(item).id === category.id).length + (category.id === "other" ? allMysteryMarkers.length : 0),
+    }));
+    if (_vaultCardCategories === null) _vaultCardCategories = new Set(cardCategories.map(category => category.id));
+    const items = allItems.filter(item =>
+      _vaultCardCategories.has(vaultCardCategory(item).id) &&
+      (!query || String(item.title || "").toLowerCase().includes(query))
+    );
+    const mysteryMarkers = allMysteryMarkers.filter(marker =>
+      _vaultCardCategories.has("other") && (!query || "mystery checkpoint".includes(query))
+    );
+    const types = [
+      { id: "purchase", label: "Purchases", description: "Paid rewards and reusable things to buy", count: allItems.filter(item => vaultKind(item) === "purchase").length },
+      { id: "free", label: "Free Self Care", description: "No-cost moments and Bank Unit checkpoints", count: allItems.filter(item => vaultKind(item) === "free").length + allMysteryMarkers.length },
+      { id: "sponsored", label: "Sponsored", description: "Rewards offered or funded by sponsors", count: allItems.filter(item => vaultKind(item) === "sponsored").length },
+    ];
+    const typeSections = types.filter(type => _vaultTypes.has(type.id)).map(type => {
+      const typeItems = items.filter(item => vaultKind(item) === type.id);
+      const cards = typeItems.map(vaultCard).concat(type.id === "free" ? mysteryMarkers.map(mysteryCheckpointCard) : []);
+      if (query && !cards.length) return "";
+      const action = type.id === "free" ? '<button class="bt-linkbtn" data-act="milestone-new">+ Mystery checkpoint</button>' : '';
+      return '<section class="rv-category-section rv-category-section--' + type.id + '"><div class="rv-category-head"><div class="rv-category-title"><span class="rv-category-dot" aria-hidden="true"></span><div><h3>' + esc(type.label) + ' <span>' + cards.length + '</span></h3><p>' + esc(type.description) + '</p></div></div>' + action + '</div><div class="rv-grid">' + (cards.join("") || '<div class="rv-empty">No items match this category filter.</div>') + '</div></section>';
+    }).join("");
+    const progress = _vault.milestones && _vault.milestones.progress && _vault.milestones.progress.total || 0;
+    return '<div class="rv-backdrop" data-role="vault-backdrop"><aside class="rv-drawer" role="dialog" aria-modal="true" aria-labelledby="rv-title" data-role="vault-drawer">' +
+      '<header class="rv-head"><div><span class="rv-eyebrow">Budget rewards</span><h2 id="rv-title">Reward Vault</h2><p>One library for your plan, checkpoints, casino, and sponsors.</p></div><button class="rv-close" data-act="vault-close" aria-label="Close Reward Vault">×</button></header>' +
+      '<div class="rv-toolbar"><input type="search" data-role="vault-search" value="' + esc(_vaultSearch) + '" placeholder="Search rewards"><button class="bt-btn bt-btn--primary" data-act="vault-new">+ New item</button></div>' +
+      '<div class="rv-filterbar">' +
+        vaultFilterMarkup({ id: "type", label: "Type", plural: "types", options: types, selected: _vaultTypes }) +
+        vaultFilterMarkup({ id: "category", label: "Category", plural: "categories", options: cardCategories, selected: _vaultCardCategories }) +
+      '</div>' +
+      '<div class="rv-scroll">' + vaultFormMarkup() + milestoneFormMarkup() + '<section class="rv-sponsor-share"><div class="rv-sponsor-copy"><h3>Sponsor link</h3><p>Shows shared rewards only. Private cards and balances stay hidden.</p></div>' +
+        (_sponsorLink && _sponsorLink.active ? '<div class="rv-share-row"><input readonly value="' + esc(location.origin + "/sponsor/" + _sponsorLink.token) + '" data-role="sponsor-url" aria-label="Guest sponsor link"><button class="bt-btn" data-act="sponsor-copy">Copy</button><button class="bt-linkbtn rv-danger" data-act="sponsor-revoke">Revoke</button></div>' : '<button class="bt-btn rv-sponsor-create" data-act="sponsor-create">Create link</button>') + '</section>' +
+        '<div class="rv-vault-heading"><h3>Vault items</h3><p>Paid ranges reserve the maximum · ' + progress + ' Bank Units this period</p></div>' +
+        (typeSections || '<div class="rv-empty rv-empty--categories">No rewards match the selected filters.</div>') + '</div>' +
+      '</aside></div>';
+  }
+
+  function overflowMarkup(s) {
+    const overflow = s.usage.overflow_cents || 0;
+    if (overflow <= 0) return "";
+    const affordable = (_vault.items || []).filter(item => item.random_draw && item.payment_source === "self" && item.max_cents > 0 && item.max_cents <= overflow);
+    return '<div class="bt-group bt-overflow"><div class="bt-group-head"><span class="bt-group-title">Overflow Pool</span><span class="bt-group-sub">all planned purchases are covered</span></div><div class="bt-overflow-main"><div><strong>' + money(overflow) + '</strong><span>available for an affordable Vault prize</span></div><button class="bt-btn bt-btn--primary" data-act="overflow-spin"' + (!affordable.length ? " disabled" : "") + '>Spin the prize wheel</button></div>' + (!affordable.length ? '<p class="bt-overflow-note">Add a paid Casino/Wheels item priced at ' + money(overflow) + ' or less.</p>' : '<p class="bt-overflow-note">' + affordable.length + ' affordable prize' + (affordable.length === 1 ? '' : 's') + ' in the draw.</p>') + '</div>';
+  }
+
+  async function autoResolveSpecificMilestones() {
+    if (_autoResolving || !_vault || !_vault.milestones) return;
+    const marker = (_vault.milestones.items || []).find(item => item.claimable && item.reward_definition_id);
+    if (!marker) return;
+    _autoResolving = true;
+    try {
+      const out = await api("POST", "/api/budget/milestones/" + marker.id + "/resolve", { mode: "specific" });
+      toast("Self care unlocked: " + (out.reward && out.reward.title || marker.reward_title), "success");
+      if (typeof window.loadRewardsQueue === "function") window.loadRewardsQueue();
+      await loadBudget();
+    } catch (err) { toast(err.message || "Could not unlock self care", "error"); }
+    finally { _autoResolving = false; }
   }
 
   // ---- main render -------------------------------------------------------------
@@ -436,6 +664,7 @@
       (u.income_cents > 0 && u.necessities_total_cents >= u.income_cents
         ? chip("warn", "Necessities use the whole income") : "") +
       (u.allocated_cents > u.capacity_cents ? chip("warn", "Over budget by " + money(u.allocated_cents - u.capacity_cents)) : "") +
+      (u.overflow_cents > 0 ? chip("ok", "Overflow " + money(u.overflow_cents)) : "") +
       (s.investments.total_cents > 0 ? chip("ok", "Invested " + money(s.investments.total_cents)) : "") +
       (s.rollover_due ? chip("warn", "New " + period + " — rollover pending") : "");
 
@@ -447,8 +676,7 @@
       '<div class="bt-wrap">' +
         '<div class="bt-head">' +
           '<h2 class="bt-title">Budget Tank</h2>' +
-          '<p class="bt-sub">Bank builds fill the water. Blocks unlock bottom-to-top in your priority order — ' +
-            "drag them to decide what gets topped up first.</p>" +
+          '<p class="bt-sub">Add the actual things you want to buy. Bank builds fund them bottom-to-top, and each purchase automatically rolls into a card-style category.</p>' +
         "</div>" +
         '<div class="bt-controls">' +
           '<div class="bt-income">' +
@@ -469,21 +697,23 @@
           '<div class="bt-tank-col">' + tankMarkup(s) + moneyChangerMarkup(s) + "</div>" +
           '<div class="bt-breakdown">' +
             '<div class="bt-group">' +
-              '<div class="bt-group-head"><span class="bt-group-title">Priority stack</span>' +
-                '<span class="bt-group-sub">categories roll up · bottom fills first</span></div>' +
-              (catGroups || '<div class="bt-empty-note">Nothing in the tank yet. Add a category and drop in what you want to buy — a dinner, a gift, a trip.</div>') +
-              (!_form ? '<button class="bt-add" data-act="add-block">+ add category / item</button>' : "") +
+              '<div class="bt-group-head"><span class="bt-group-title">Planned purchases</span>' +
+                '<span class="bt-group-sub">concrete items · auto-categorized · bottom fills first</span></div>' +
+              (catGroups || '<div class="bt-empty-note">Nothing planned yet. Add the actual purchase, like “Dinner for me and Fae” for $100, and the category will take care of itself.</div>') +
+              (!_form ? '<button class="bt-add" data-act="add-block">+ add planned purchase</button>' : "") +
               (_form ? blockFormMarkup(s) : "") +
             "</div>" +
             '<div class="bt-group">' +
               '<div class="bt-group-head"><span class="bt-group-title">Necessities</span>' +
                 '<span class="bt-group-sub">the reef floor · always covered</span></div>' +
               necessitiesMarkup(s) +
+              '<button class="bt-vault-launch" data-act="vault-open"><span>Reward Vault</span><small>' + (_vault.items || []).length + ' rewards · self care · sponsor prizes</small><b>Open →</b></button>' +
             "</div>" +
+            overflowMarkup(s) +
             investmentsMarkup(s) +
           "</div>" +
         "</div>" +
-        (s.rollover_due && !_rolloverSnoozed ? rolloverModalMarkup(s) : "") +
+        (s.rollover_due && !_rolloverSnoozed ? rolloverModalMarkup(s) : "") + vaultDrawerMarkup() +
       "</div>";
 
     maybeCelebrate();
@@ -494,40 +724,39 @@
   }
 
   // ---- block form helpers ----------------------------------------------------
-  function openForm(block, presetCategory) {
+  function openForm(block) {
     if (block) {
-      let item = "";
-      let category = block.category || "";
-      if (category && block.title.indexOf(category + ": ") === 0) item = block.title.slice(category.length + 2);
-      else if (!category) category = block.title;
-      else if (block.title !== category) item = block.title;
-      _form = { id: block.id, category, item, amount: Math.round(block.value_cents / 100), recurring: !!block.tank_recurring, color: block.color };
+      _form = {
+        id: block.id,
+        description: block.item || block.title,
+        amount: Math.round(block.value_cents / 100),
+        category: block.category || "",
+        recurring: !!block.tank_recurring,
+      };
     } else {
-      _form = { id: null, category: presetCategory || "", item: "", amount: "", recurring: false, color: null };
+      _form = { id: null, description: "", amount: "", category: "", recurring: false };
     }
     render();
-    // Land focus on the item field when the category is already chosen.
-    const focusSel = presetCategory ? '[data-field="item"]' : '[data-field="category"]';
-    const first = document.querySelector("#budget-root " + focusSel);
+    const first = document.querySelector('#budget-root [data-field="description"]');
     if (first) first.focus();
   }
 
   function readForm(root) {
     const get = f => root.querySelector('[data-field="' + f + '"]');
     return {
+      description: get("description").value.trim(),
       category: get("category").value.trim(),
-      item: get("item").value.trim(),
       amount: Number(get("amount").value),
-      recurring: get("recurring").checked,
+      recurring: !!(_form && _form.recurring),
     };
   }
 
   async function saveForm() {
     const root = document.getElementById("budget-root");
     const f = readForm(root);
-    if (!f.category && !f.item) { toast("Give the block a category or a label", "error"); return; }
-    if (!(f.amount > 0)) { toast("Give the block a positive amount", "error"); return; }
-    const body = { category: f.category, item: f.item, amount: f.amount, recurring: f.recurring };
+    if (!f.description) { toast("What are you planning to buy?", "error"); return; }
+    if (!(f.amount > 0)) { toast("Give the purchase a positive amount", "error"); return; }
+    const body = { category: f.category, description: f.description, amount: f.amount, recurring: f.recurring };
     try {
       if (_form.id) await api("PUT", "/api/budget/blocks/" + _form.id, body);
       else await api("POST", "/api/budget/blocks", body);
@@ -570,6 +799,68 @@
     return e.target.closest(".bt-zone[data-id], .bt-row[data-id]");
   }
 
+  function openVaultForm(item) {
+    _vaultForm = item ? {
+      id: item.id, title: item.title, type: item.max_cents > 0 ? "paid" : "free",
+      min: Math.round((item.min_cents || 0) / 100), max: Math.round((item.max_cents || 0) / 100),
+      reuse: item.reuse_mode, quick: item.quick_add, random: item.random_draw,
+      milestone: item.milestone, private: item.private, notes: item.notes || "",
+    } : { id: null, title: "", type: "paid", min: "", max: "", reuse: "reusable", quick: true, random: true, milestone: false, private: false, notes: "" };
+    render();
+    requestAnimationFrame(() => document.querySelector('[data-vf="title"]')?.focus());
+  }
+
+  async function saveVaultForm(root) {
+    const form = root.querySelector('[data-role="vault-form"]');
+    if (!form) return;
+    const get = key => form.querySelector('[data-vf="' + key + '"]');
+    const type = get("type").value;
+    const max = type === "free" ? 0 : Math.max(0, Number(get("max").value) || 0);
+    const min = type === "free" ? 0 : Math.max(0, Number(get("min").value) || 0);
+    const body = {
+      title: get("title").value.trim(), min_cents: Math.round(min * 100), max_cents: Math.round(max * 100),
+      kind: type === "free" ? "free" : "bank_gated", payment_source: type === "free" ? "free" : "self",
+      reuse_mode: get("reuse").value, quick_add: type === "paid" && get("quick").checked,
+      random_draw: get("random").checked, milestone: type === "free" && get("milestone").checked,
+      private: get("private").checked, notes: get("notes").value,
+    };
+    if (!body.title) { toast("Give the vault item a name", "error"); return; }
+    if (type === "paid" && !(max > 0)) { toast("Paid rewards need a maximum amount", "error"); return; }
+    try {
+      if (_vaultForm.id) await api("PUT", "/api/budget/vault/" + _vaultForm.id, body);
+      else await api("POST", "/api/budget/vault", body);
+      _vaultForm = null;
+      toast("Vault item saved", "success");
+      await loadBudget();
+    } catch (err) { toast(err.message || "Could not save vault item", "error"); }
+  }
+
+  async function saveMilestoneForm(root) {
+    const form = root.querySelector('[data-role="milestone-form"]');
+    if (!form) return;
+    const threshold = Math.floor(Number(form.querySelector('[data-mf="threshold"]').value));
+    if (!(threshold > 0)) { toast("Set a positive Bank Unit threshold", "error"); return; }
+    try {
+      await api("POST", "/api/budget/milestones", {
+        threshold_bank_units: threshold,
+        reward_definition_id: form.querySelector('[data-mf="reward"]').value || null,
+        repeat_each_period: form.querySelector('[data-mf="repeat"]').checked,
+      });
+      _milestoneForm = null;
+      toast("Self-care checkpoint added", "success");
+      await loadBudget();
+    } catch (err) { toast(err.message || "Could not add checkpoint", "error"); }
+  }
+
+  function closeVault(root) {
+    _vaultOpen = false;
+    _vaultFilterOpen = null;
+    _vaultForm = null;
+    _milestoneForm = null;
+    render();
+    requestAnimationFrame(() => root.querySelector('[data-act="vault-open"]')?.focus());
+  }
+
   // ---- events (delegated, bound once) --------------------------------------------
   function bind() {
     const root = document.getElementById("budget-root");
@@ -577,6 +868,15 @@
     root.dataset.bound = "1";
 
     root.addEventListener("click", async e => {
+      if (_vaultFilterOpen && !e.target.closest('[data-role="vault-filter"]')) {
+        _vaultFilterOpen = null;
+        root.querySelector(".rv-filter-menu")?.remove();
+        const trigger = root.querySelector('[data-act="vault-filter-menu"][aria-expanded="true"]');
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+      }
+      if (e.target && e.target.dataset && e.target.dataset.role === "vault-backdrop") {
+        closeVault(root); return;
+      }
       const btn = e.target.closest("[data-act]");
       if (!btn) return;
       const act = btn.dataset.act;
@@ -592,9 +892,14 @@
       if (act === "rollover-carry" || act === "rollover-fresh") {
         btn.disabled = true;
         try {
-          const out = await api("POST", "/api/budget/rollover", { mode: act === "rollover-carry" ? "carry" : "fresh" });
+          const overflowSelect = root.querySelector('[data-role="rollover-overflow"]');
+          const out = await api("POST", "/api/budget/rollover", {
+            mode: act === "rollover-carry" ? "carry" : "fresh",
+            overflow_action: overflowSelect ? overflowSelect.value : "invest",
+          });
           const bits = [];
           if (out.swept_cents > 0) bits.push(money(out.swept_cents) + " swept to investments" + (out.task_block_id ? " (transfer task on today)" : ""));
+          if (out.carried_over_cents > 0) bits.push(money(out.carried_over_cents) + " carried into the new period");
           bits.push("new budget " + money(out.new_capacity_cents));
           toast("Tank rolled into " + out.new_period + " — " + bits.join(" · "), "success");
           _rolloverSnoozed = false;
@@ -605,9 +910,101 @@
         }
         return;
       }
+      if (act === "vault-open") { _vaultOpen = true; render(); requestAnimationFrame(() => root.querySelector('[data-role="vault-search"]')?.focus()); return; }
+      if (act === "vault-close") { closeVault(root); return; }
+      if (act === "vault-filter-menu") {
+        const filterId = btn.dataset.filterId;
+        _vaultFilterOpen = _vaultFilterOpen === filterId ? null : filterId;
+        render();
+        requestAnimationFrame(() => (_vaultFilterOpen ? root.querySelector('[data-role="vault-filter-all"][data-filter-id="' + filterId + '"]') : root.querySelector('[data-act="vault-filter-menu"][data-filter-id="' + filterId + '"]'))?.focus());
+        return;
+      }
+      if (act === "vault-new") { openVaultForm(null); return; }
+      if (act === "vault-form-cancel") { _vaultForm = null; render(); return; }
+      if (act === "vault-form-save") { await saveVaultForm(root); return; }
+      if (act === "vault-edit") {
+        const card = btn.closest("[data-vault-id]");
+        const item = (_vault.items || []).find(entry => String(entry.id) === card.dataset.vaultId);
+        if (item) openVaultForm(item);
+        return;
+      }
+      if (act === "vault-archive") {
+        const card = btn.closest("[data-vault-id]");
+        try { await api("DELETE", "/api/budget/vault/" + card.dataset.vaultId); toast("Vault item archived", "success"); await loadBudget(); }
+        catch (err) { toast(err.message || "Could not archive item", "error"); }
+        return;
+      }
+      if (act === "vault-quick-add") {
+        const card = btn.closest("[data-vault-id]");
+        btn.disabled = true;
+        try { await api("POST", "/api/budget/vault/" + card.dataset.vaultId + "/quick-add"); toast("Added to planned purchases at the maximum amount", "success"); await loadBudget(); }
+        catch (err) { toast(err.message || "Could not add purchase", "error"); btn.disabled = false; }
+        return;
+      }
+      if (act === "sponsor-create") {
+        try { const out = await api("POST", "/api/budget/sponsor-link/rotate"); _sponsorLink = out.link; render(); toast("Guest sponsor link created", "success"); }
+        catch (err) { toast(err.message || "Could not create sponsor link", "error"); }
+        return;
+      }
+      if (act === "sponsor-copy") {
+        const input = root.querySelector('[data-role="sponsor-url"]');
+        try { await navigator.clipboard.writeText(input.value); toast("Sponsor link copied", "success"); }
+        catch (err) { input.select(); document.execCommand("copy"); toast("Sponsor link copied", "success"); }
+        return;
+      }
+      if (act === "sponsor-revoke") {
+        try { await api("DELETE", "/api/budget/sponsor-link"); _sponsorLink = null; render(); toast("Sponsor link revoked", "success"); }
+        catch (err) { toast(err.message || "Could not revoke link", "error"); }
+        return;
+      }
+      if (act === "milestone-new") { _milestoneForm = { rewardId: null, threshold: "", repeat: false }; render(); return; }
+      if (act === "milestone-from-item") {
+        const card = btn.closest("[data-vault-id]");
+        _milestoneForm = { rewardId: card.dataset.vaultId, threshold: "", repeat: false }; render(); return;
+      }
+      if (act === "milestone-form-cancel") { _milestoneForm = null; render(); return; }
+      if (act === "milestone-form-save") { await saveMilestoneForm(root); return; }
+      if (act === "milestone-delete") {
+        const marker = btn.closest("[data-milestone-id]");
+        try { await api("DELETE", "/api/budget/milestones/" + marker.dataset.milestoneId); await loadBudget(); }
+        catch (err) { toast(err.message || "Could not remove checkpoint", "error"); }
+        return;
+      }
+      if (act === "milestone-spin" || act === "milestone-choose") {
+        const marker = btn.closest("[data-milestone-id]");
+        const choice = marker.querySelector('[data-role="mystery-choice"]');
+        if (act === "milestone-choose" && !(choice && choice.value)) { toast("Choose a free reward first", "error"); return; }
+        btn.disabled = true;
+        try {
+          const out = await api("POST", "/api/budget/milestones/" + marker.dataset.milestoneId + "/resolve", {
+            mode: act === "milestone-choose" ? "choose" : "spin", reward_id: choice && choice.value || null,
+          });
+          toast("Self care unlocked: " + (out.reward && out.reward.title || "Reward"), "success");
+          if (typeof window.loadRewardsQueue === "function") window.loadRewardsQueue();
+          await loadBudget();
+        } catch (err) { toast(err.message || "Could not resolve checkpoint", "error"); btn.disabled = false; }
+        return;
+      }
+      if (act === "overflow-spin") {
+        if (!_overflowKey) _overflowKey = (crypto.randomUUID ? crypto.randomUUID() : "overflow-" + Date.now() + "-" + Math.random().toString(36).slice(2));
+        btn.disabled = true;
+        try {
+          const out = await api("POST", "/api/budget/overflow/spin", { source_key: _overflowKey });
+          _overflowKey = null;
+          const title = out.reward && out.reward.title || out.spin && out.spin.title || "Vault reward";
+          toast("Overflow Wheel landed on “" + title + "”", "success");
+          if (typeof window.loadRewardsQueue === "function") window.loadRewardsQueue();
+          await loadBudget();
+        } catch (err) { toast(err.message || "Overflow Wheel could not spin", "error"); btn.disabled = false; }
+        return;
+      }
       if (act === "convert-max") {
         const input = root.querySelector('[data-role="convert-amt"]');
         if (input) { input.value = _state.points; updateConvertPreview(root); }
+        return;
+      }
+      if (act === "open-casino") {
+        showCasino();
         return;
       }
       if (act === "convert") {
@@ -623,7 +1020,8 @@
           const out = await api("POST", "/api/budget/convert", { points: pts, source_key: _convertKey });
           _convertKey = null;
           const cents = out.conversion ? out.conversion.cents : 0;
-          toast(out.duplicate ? "Already converted that batch" : "Clink — " + money(cents) + " into the tank", "success");
+          const units = out.bank_units || (out.conversion && out.conversion.points) || pts;
+          toast(out.duplicate ? "Already converted that batch" : "Clink: " + units + " Bank Units (" + money(cents) + ") into the tank", "success");
           await loadBudget();
         } catch (err) {
           toast(err.message || "Conversion failed", "error"); // key kept: retry can't double-spend
@@ -662,7 +1060,7 @@
         render();
         return;
       }
-      if (act === "add-block") { openForm(null, btn.dataset.cat || ""); return; }
+      if (act === "add-block") { openForm(null); return; }
       if (act === "cancel-block") { _form = null; render(); return; }
       if (act === "save-block") { saveForm(); return; }
       if (act === "del-block") {
@@ -704,31 +1102,92 @@
     });
 
     root.addEventListener("input", e => {
+      if (e.target.dataset.role === "vault-search") {
+        _vaultSearch = e.target.value;
+        const caret = e.target.selectionStart;
+        render();
+        requestAnimationFrame(() => { const input = root.querySelector('[data-role="vault-search"]'); if (input) { input.focus(); input.setSelectionRange(caret, caret); } });
+        return;
+      }
       if (e.target.dataset.role === "convert-amt") updateConvertPreview(root);
+      if (e.target.dataset.field === "description" && _state) {
+        const category = classifyPurchase(e.target.value, _state);
+        const preview = root.querySelector('[data-role="auto-category"]');
+        const select = root.querySelector('[data-field="category"]');
+        if (preview && (!select || !select.value)) {
+          preview.innerHTML = '<span class="bt-auto-dot" style="background:' + esc(category.color) + '"></span><span class="bt-auto-copy">Will file under <strong>' + esc(category.label) + '</strong>. You can override it if the guess is off.</span>';
+        }
+        const autoOption = select && select.querySelector('option[value=""]');
+        if (autoOption) autoOption.textContent = "Auto: " + category.label;
+      }
     });
 
     // Everything editable in place commits on blur/Enter (change), never per
     // keystroke — so a full re-render after save can't eat what you're typing.
     root.addEventListener("change", async e => {
       const role = e.target.dataset.role;
-      if (role === "income-input") {
+      if (role === "vault-filter-all") {
+        const filterId = e.target.dataset.filterId;
+        const optionIds = filterId === "type" ? ["purchase", "free", "sponsored"] :
+          (((_state || {}).constants || {}).credit_card_categories || []).map(category => category.id);
+        const next = e.target.checked ? new Set(optionIds) : new Set();
+        if (filterId === "type") _vaultTypes = next;
+        else _vaultCardCategories = next;
+        _vaultFilterOpen = filterId;
+        render();
+        requestAnimationFrame(() => root.querySelector('[data-role="vault-filter-all"][data-filter-id="' + filterId + '"]')?.focus());
+      } else if (role === "vault-filter-option") {
+        const filterId = e.target.dataset.filterId;
+        const option = e.target.value;
+        const next = new Set(filterId === "type" ? _vaultTypes : _vaultCardCategories);
+        if (e.target.checked) next.add(option);
+        else next.delete(option);
+        if (filterId === "type") _vaultTypes = next;
+        else _vaultCardCategories = next;
+        _vaultFilterOpen = filterId;
+        render();
+        requestAnimationFrame(() => root.querySelector('[data-role="vault-filter-option"][data-filter-id="' + filterId + '"][value="' + option + '"]')?.focus());
+      } else if (e.target.dataset.field === "category") {
+        const description = root.querySelector('[data-field="description"]');
+        const automatic = classifyPurchase(description && description.value, _state);
+        const chosen = ((e.target.value && ((_state.constants.credit_card_categories || []).find(category => category.label === e.target.value))) || automatic);
+        const preview = root.querySelector('[data-role="auto-category"]');
+        if (preview) preview.innerHTML = '<span class="bt-auto-dot" style="background:' + esc(chosen.color) + '"></span><span class="bt-auto-copy">Will file under <strong>' + esc(chosen.label) + '</strong>. You can override it if the guess is off.</span>';
+      } else if (role === "income-input") {
         const dollars = Math.max(0, Math.round(Number(e.target.value) || 0));
         try { await api("PUT", "/api/budget/config", { income_cents: dollars * 100, capacity_source: "last_income" }); await loadBudget(); }
         catch (err) { toast(err.message || "Could not save income", "error"); }
-      } else if (role === "rate-input") {
-        const rate = Math.max(1, Math.floor(Number(e.target.value) || 1));
-        try { await api("PUT", "/api/budget/config", { cents_per_point: rate }); await loadBudget(); }
-        catch (err) { toast(err.message || "Could not set rate", "error"); }
       } else if (role === "nec") {
         saveNecessities(gatherNecessities(root));
       } else if (role === "item-name" || role === "item-amt") {
         saveBlockInline(e.target);
-      } else if (role === "cat-name") {
-        renameCategory(e.target.dataset.cat, e.target.value);
       }
     });
 
     root.addEventListener("keydown", e => {
+      if (e.key === "Escape" && _vaultFilterOpen) {
+        e.preventDefault();
+        const filterId = _vaultFilterOpen;
+        _vaultFilterOpen = null;
+        render();
+        requestAnimationFrame(() => root.querySelector('[data-act="vault-filter-menu"][data-filter-id="' + filterId + '"]')?.focus());
+        return;
+      }
+      if (e.key === "Escape" && _vaultOpen) { e.preventDefault(); closeVault(root); return; }
+      if (e.key === "Tab" && _vaultOpen) {
+        const drawer = root.querySelector('[data-role="vault-drawer"]');
+        if (!drawer) return;
+        const focusable = Array.from(drawer.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])'))
+          .filter(el => el.offsetParent !== null);
+        if (!focusable.length) { e.preventDefault(); drawer.focus(); return; }
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (e.shiftKey && (document.activeElement === first || !drawer.contains(document.activeElement))) {
+          e.preventDefault(); last.focus(); return;
+        }
+        if (!e.shiftKey && (document.activeElement === last || !drawer.contains(document.activeElement))) {
+          e.preventDefault(); first.focus(); return;
+        }
+      }
       if (e.key !== "Enter") return;
       if (e.target.closest('[data-role="block-form"]') && e.target.tagName === "INPUT" && e.target.type !== "checkbox") {
         e.preventDefault(); saveForm();
@@ -796,6 +1255,15 @@
       }
       loadBudget();
     });
+
+    const casinoBack = document.getElementById("budget-casino-back");
+    if (casinoBack && !casinoBack.dataset.bound) {
+      casinoBack.dataset.bound = "1";
+      casinoBack.addEventListener("click", () => {
+        showBudgetHome({ focus: true });
+        loadBudget();
+      });
+    }
   }
 
   function updateConvertPreview(root) {
@@ -803,7 +1271,8 @@
     const preview = root.querySelector('[data-role="convert-preview"]');
     if (!input || !preview || !_state) return;
     const pts = Math.max(0, Math.floor(Number(input.value)) || 0);
-    preview.textContent = "→ " + money(pts * _state.constants.cents_per_point) + " into the tank";
+    const rate = _state.constants.bank_unit_cents || _state.constants.cents_per_point;
+    preview.textContent = pts + " Bank Unit" + (pts === 1 ? "" : "s") + " → " + money(pts * rate) + " into the tank";
   }
 
   // ---- inline save helpers ----------------------------------------------------
@@ -833,34 +1302,11 @@
     if (!block) return;
     const nameEl = rowEl.querySelector('[data-role="item-name"]');
     const amtEl = rowEl.querySelector('[data-role="item-amt"]');
-    const category = block.category || "";
-    const curItem = block.item && block.item !== block.category ? block.item : "";
-    const name = nameEl ? nameEl.value.trim() : curItem;
+    const name = nameEl ? nameEl.value.trim() : (block.item || block.title);
     const amount = amtEl ? Math.max(0, Math.round(Number(amtEl.value) || 0)) : Math.round(block.value_cents / 100);
-    // A lone envelope (name == category) keeps category==title; a real item
-    // nests under its category.
-    const body = curItem || category
-      ? { category, item: (name === category ? "" : name), amount, recurring: block.tank_recurring }
-      : { title: name, amount, recurring: block.tank_recurring };
+    const body = { description: name, amount, recurring: block.tank_recurring };
     try { await api("PUT", "/api/budget/blocks/" + block.id, body); await loadBudget(); }
     catch (err) { toast(err.message || "Could not save", "error"); }
-  }
-
-  // Rename a whole category in place — recategorize every item under it.
-  async function renameCategory(key, newName) {
-    const name = (newName || "").trim();
-    if (!name) { loadBudget(); return; }
-    const cat = (_state.categories || []).find(c => c.key === key);
-    if (!cat || name.toLowerCase() === cat.name.toLowerCase()) return;
-    try {
-      for (const it of cat.items) {
-        const curItem = it.item && it.item !== it.category ? it.item : "";
-        await api("PUT", "/api/budget/blocks/" + it.id, {
-          category: name, item: curItem, amount: Math.round(it.value_cents / 100), recurring: it.tank_recurring,
-        });
-      }
-      await loadBudget();
-    } catch (err) { toast(err.message || "Could not rename category", "error"); }
   }
 
   // ---- shell-to-tank tie-in (bank feed) ---------------------------------------
@@ -963,6 +1409,7 @@
   // ---- public entry -------------------------------------------------------------
   function renderBudget() {
     ensureBankFeedCss();
+    showBudgetHome();
     render();  // paint cached state immediately on tab switch
     bind();
     loadBudget();

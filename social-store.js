@@ -507,6 +507,28 @@ function resolveReviewState(allowlisted) {
   return allowlisted ? "auto_approved" : "pending";
 }
 
+function normalizeUnlockRoutes(routes, targetType, targetId) {
+  const source = Array.isArray(routes) && routes.length
+    ? routes
+    : [{ type: targetType === "slot_machine" ? "casino" : "task", targetId }];
+  const seen = new Set();
+  return source.map(route => {
+    const type = String(route && (route.type || route.routeType) || "").trim().toLowerCase();
+    if (!["task", "milestone", "casino"].includes(type)) {
+      const err = new Error("invalid sponsorship route"); err.statusCode = 400; throw err;
+    }
+    const threshold = type === "milestone"
+      ? Math.max(1, Math.min(1000000, parseInt(route.thresholdBankUnits ?? route.threshold_bank_units, 10) || 0))
+      : null;
+    const target = type === "task" ? String(route.targetId ?? route.target_id ?? "").trim() : null;
+    if (type === "task" && !target) { const err = new Error("task route needs a target"); err.statusCode = 400; throw err; }
+    const key = `${type}:${target || threshold || "casino"}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    return { type, targetId: target, thresholdBankUnits: threshold };
+  }).filter(Boolean);
+}
+
 /**
  * Create a sponsorship offer. Allowlisted (and not blocked) sponsors activate
  * immediately; everyone else lands `pending` for the owner's Reward Review.
@@ -523,8 +545,10 @@ async function requestSponsorship({
   chanceShares = null,
   note = "",
   workspaceId = null,
+  routes = null,
 }) {
-  const scope = targetType === "slot_machine" ? "slot" : "task";
+  const unlockRoutes = normalizeUnlockRoutes(routes, targetType, targetId);
+  const scope = unlockRoutes.some(route => route.type === "casino") ? "slot" : "task";
   // The target owner must be a real user — never create an orphan offer against a
   // guessed id.
   const ownerExists = (await pool.query("SELECT 1 FROM users WHERE id=$1", [ownerUserId])).rows[0];
@@ -562,6 +586,14 @@ async function requestSponsorship({
        active ? "active" : "pending", reviewState, active ? new Date().toISOString() : null]
     );
     let row = rows[0];
+    for (const unlockRoute of unlockRoutes) {
+      await client.query(
+        `INSERT INTO sponsorship_unlock_routes
+         (sponsorship_id,route_type,target_id,threshold_bank_units,status)
+         VALUES($1,$2,$3,$4,'armed')`,
+        [row.id, unlockRoute.type, unlockRoute.targetId, unlockRoute.thresholdBankUnits]
+      );
+    }
     if (active) row = await _activateSponsorship(client, row);
     await client.query("COMMIT");
     return { sponsorship: row, pending: !active };
@@ -578,24 +610,43 @@ async function requestSponsorship({
  *  sponsorships are marked active here; the reward is queued when the task is
  *  completed (Phase 3 completion hook). Runs inside the caller's transaction. */
 async function _activateSponsorship(client, row) {
-  if (row.target_type === "slot_machine") {
-    // Lazy require avoids any load-order coupling; slot-store does not import us.
-    const slotStore = require("./slot-store");
-    const reward = await slotStore.createReward(row.workspace_id, {
-      title: row.reward_title,
-      kind: "sponsor",
-      payment_source: "sponsored",
-      chance_shares: row.chance_shares || 1,
-      value_cents: row.value_cents || 0,
-      notes: row.note || "",
-    });
-    const upd = await client.query(
-      `UPDATE todo_sponsorships SET reward_definition_id=$2, activated_at=NOW() WHERE id=$1 RETURNING *`,
-      [row.id, reward.id]
+  const { rows: routes } = await client.query(
+    "SELECT * FROM sponsorship_unlock_routes WHERE sponsorship_id=$1 ORDER BY id",
+    [row.id]
+  );
+  const hasCasinoRoute = routes.some(route => route.route_type === "casino");
+  // The submitted definition is a template reference, never the sponsored
+  // instance itself. Clone it so funding an owner's reusable item cannot turn
+  // the canonical template into a sponsored, one-off reward.
+  let source = null;
+  if (row.reward_definition_id) {
+    const found = await client.query(
+      "SELECT * FROM slot_rewards WHERE id=$1 AND workspace_id=$2",
+      [row.reward_definition_id, row.workspace_id]
     );
-    return upd.rows[0];
+    source = found.rows[0] || null;
   }
-  return row;
+  // Lazy require avoids any load-order coupling; slot-store does not import us.
+  const slotStore = require("./slot-store");
+  const reward = await slotStore.createReward(row.workspace_id, {
+    title: row.reward_title || (source && source.title) || "Sponsored reward",
+    kind: "sponsor",
+    payment_source: "sponsored",
+    chance_shares: row.chance_shares || (source && source.chance_shares) || 1,
+    value_cents: row.value_cents || (source && source.value_cents) || 0,
+    notes: row.note || (source && source.notes) || "",
+  });
+  await client.query(
+    `UPDATE slot_rewards SET vault_enabled=TRUE,vault_reuse_mode='one_off',vault_min_cents=value_cents,
+     vault_quick_add=FALSE,vault_random_draw=$2,vault_milestone=FALSE,sponsor_visible=TRUE,
+     owner_user_id=$3,created_by_user_id=$4,source_reward_id=$5 WHERE id=$1`,
+    [reward.id, hasCasinoRoute, row.owner_user_id, row.sponsor_user_id, source && source.id]
+  );
+  const upd = await client.query(
+    `UPDATE todo_sponsorships SET reward_definition_id=$2, activated_at=NOW() WHERE id=$1 RETURNING *`,
+    [row.id, reward.id]
+  );
+  return upd.rows[0];
 }
 
 async function listPendingSponsorships(ownerUserId) {
@@ -605,7 +656,130 @@ async function listPendingSponsorships(ownerUserId) {
       ORDER BY created_at DESC`,
     [ownerUserId]
   );
-  return rows;
+  if (!rows.length) return rows;
+  const { rows: routes } = await pool.query(
+    "SELECT * FROM sponsorship_unlock_routes WHERE sponsorship_id = ANY($1::int[]) ORDER BY id",
+    [rows.map(row => row.id)]
+  );
+  return rows.map(row => ({ ...row, routes: routes.filter(route => route.sponsorship_id === row.id) }));
+}
+
+/** First-route-wins arbiter. The sponsorship row lock serializes task,
+ * milestone, and casino hooks so exactly one can enqueue the funded promise. */
+async function earnSponsorshipRoute({ sponsorshipId, ownerUserId, routeType, targetId = null } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: [sponsorship] } = await client.query(
+      "SELECT * FROM todo_sponsorships WHERE id=$1 AND owner_user_id=$2 FOR UPDATE",
+      [sponsorshipId, ownerUserId]
+    );
+    if (!sponsorship) { const e = new Error("sponsorship not found"); e.statusCode = 404; throw e; }
+    if (sponsorship.earned_at || sponsorship.status === "earned") {
+      await client.query("COMMIT");
+      return { sponsorship, duplicate: true, reward_definition_id: sponsorship.reward_definition_id };
+    }
+    if (sponsorship.status !== "active") { const e = new Error("sponsorship is not active"); e.statusCode = 400; throw e; }
+    const { rows: candidates } = await client.query(
+      `SELECT * FROM sponsorship_unlock_routes WHERE sponsorship_id=$1 AND status='armed'
+        AND route_type=$2 AND ($3::text IS NULL OR target_id=$3) ORDER BY id FOR UPDATE`,
+      [sponsorshipId, routeType, targetId == null ? null : String(targetId)]
+    );
+    const winner = candidates[0];
+    if (!winner) { const e = new Error("matching sponsorship route not found"); e.statusCode = 404; throw e; }
+    await client.query("UPDATE sponsorship_unlock_routes SET status='won',won_at=NOW() WHERE id=$1", [winner.id]);
+    await client.query(
+      "UPDATE sponsorship_unlock_routes SET status='cancelled',cancelled_at=NOW() WHERE sponsorship_id=$1 AND id<>$2 AND status='armed'",
+      [sponsorshipId, winner.id]
+    );
+    const { rows: [updated] } = await client.query(
+      "UPDATE todo_sponsorships SET status='earned',earned_at=NOW(),winning_route_id=$2 WHERE id=$1 RETURNING *",
+      [sponsorshipId, winner.id]
+    );
+    if (updated.reward_definition_id) {
+      await client.query(
+        "UPDATE slot_rewards SET active=FALSE,sponsor_active=FALSE,vault_enabled=FALSE,vault_archived_at=NOW() WHERE id=$1",
+        [updated.reward_definition_id]
+      );
+    }
+    await client.query("COMMIT");
+    return { sponsorship: updated, route: winner, duplicate: false, reward_definition_id: updated.reward_definition_id };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally { client.release(); }
+}
+
+async function enqueueEarnedSponsorship(result, ownerUserId) {
+  if (!result || result.duplicate || !result.reward_definition_id) return null;
+  const { rows: [reward] } = await pool.query("SELECT * FROM slot_rewards WHERE id=$1", [result.reward_definition_id]);
+  if (!reward) return null;
+  const enqueued = await enqueueReward({
+    ownerUserId,
+    workspaceId: result.sponsorship.workspace_id,
+    rewardDefinitionId: reward.id,
+    titleSnapshot: reward.title,
+    sourceType: "sponsorship",
+    sourceId: String(result.sponsorship.id),
+    sponsorUserId: result.sponsorship.sponsor_user_id,
+    valueSnapshot: reward.value_cents || 0,
+    chanceSharesSnapshot: reward.chance_shares || null,
+    tierSnapshot: reward.tier_id || null,
+    durationMinutesSnapshot: reward.duration_minutes || null,
+  });
+  return enqueued && enqueued.item || null;
+}
+
+async function earnTaskSponsorships(ownerUserId, taskId) {
+  const { rows } = await pool.query(
+    `SELECT s.id FROM todo_sponsorships s
+       JOIN sponsorship_unlock_routes r ON r.sponsorship_id=s.id
+      WHERE s.owner_user_id=$1 AND s.status='active' AND r.status='armed'
+        AND r.route_type='task' AND r.target_id=$2`,
+    [ownerUserId, String(taskId)]
+  );
+  const earned = [];
+  for (const row of rows) {
+    const result = await earnSponsorshipRoute({ sponsorshipId: row.id, ownerUserId, routeType: "task", targetId: taskId });
+    const queueItem = await enqueueEarnedSponsorship(result, ownerUserId);
+    earned.push({ ...result, reward_queue_item: queueItem });
+  }
+  return earned;
+}
+
+async function earnMilestoneSponsorships(ownerUserId, bankUnits) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT s.id FROM todo_sponsorships s
+       JOIN sponsorship_unlock_routes r ON r.sponsorship_id=s.id
+      WHERE s.owner_user_id=$1 AND s.status='active' AND r.status='armed'
+        AND r.route_type='milestone' AND r.threshold_bank_units <= $2`,
+    [ownerUserId, intSafe(bankUnits)]
+  );
+  const earned = [];
+  for (const row of rows) {
+    const result = await earnSponsorshipRoute({ sponsorshipId: row.id, ownerUserId, routeType: "milestone" });
+    const queueItem = await enqueueEarnedSponsorship(result, ownerUserId);
+    earned.push({ ...result, reward_queue_item: queueItem });
+  }
+  return earned;
+}
+
+async function earnCasinoSponsorshipByReward(ownerUserId, rewardDefinitionId) {
+  const { rows: [sponsorship] } = await pool.query(
+    `SELECT s.id FROM todo_sponsorships s
+       JOIN sponsorship_unlock_routes r ON r.sponsorship_id=s.id
+      WHERE s.owner_user_id=$1 AND s.reward_definition_id=$2 AND s.status='active'
+        AND r.route_type='casino' AND r.status='armed' LIMIT 1`,
+    [ownerUserId, rewardDefinitionId]
+  );
+  if (!sponsorship) return null;
+  const result = await earnSponsorshipRoute({ sponsorshipId: sponsorship.id, ownerUserId, routeType: "casino" });
+  return { ...result, reward_queue_item: await enqueueEarnedSponsorship(result, ownerUserId) };
+}
+
+function intSafe(value) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
 async function approveSponsorship(sponsorshipId, reviewerUserId) {
@@ -794,6 +968,10 @@ module.exports = {
   approveSponsorship,
   rejectSponsorship,
   removeSponsorship,
+  earnSponsorshipRoute,
+  earnTaskSponsorships,
+  earnMilestoneSponsorships,
+  earnCasinoSponsorshipByReward,
   // feed
   createCompletionPost,
   publishPost,
@@ -802,6 +980,7 @@ module.exports = {
   // pure helpers (unit-testable without a DB)
   _test: {
     resolveReviewState,
+    normalizeUnlockRoutes,
     scopeMatches,
     isoDate,
     isQueueableSpinWin,
