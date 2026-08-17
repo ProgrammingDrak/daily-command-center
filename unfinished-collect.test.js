@@ -162,6 +162,22 @@ test("descendants() walks the whole subtree and survives a parent cycle", async 
   assert.deepEqual(plain(CO.descendants(pool[4], pool).map(x => x.id)), []);
 });
 
+test("a rejected carryover move shows the server reason instead of looking random", async () => {
+  const d = ymd(1);
+  const loaded = load({ [d]: [dayRoot(), blk("bad-time", d, { title: "Transcript proposal" })] }, [d]);
+  const toasts = [];
+  loaded.ctx.showToast = (message, type) => toasts.push({ message, type });
+  loaded.ctx.window.blockStore.rescheduleBlock = async () => {
+    throw new Error("Placement end must be after start");
+  };
+  const ev = (await loaded.CO.collect()).rows[0];
+  assert.equal(await loaded.CO.moveTo(ev, TODAY), null);
+  assert.deepEqual(plain(toasts), [{
+    message: "Could not move Transcript proposal: Placement end must be after start",
+    type: "error",
+  }]);
+});
+
 test("lookback is bounded to SCAN_DAYS; {days:null} lifts it", async () => {
   const recent = ymd(3), old = ymd(40);
   const days = { [recent]: [dayRoot(), blk("recent", recent, {})], [old]: [dayRoot(), blk("old", old, {})] };

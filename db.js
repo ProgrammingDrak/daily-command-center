@@ -134,8 +134,10 @@ function parseBlock(row) {
 // Exclusions: containers (day_root), time-tracking segments (time_entry), standing
 // lists (delegated_item), responsibility scaffolding (responsibility* except the
 // dated responsibility_task instance), group
-// templates (task_group), move tombstones (reschedule_tombstone), and Slack
-// reaction-order tombstones (slack_reaction_tombstone).
+// templates (task_group), move tombstones (reschedule_tombstone), Slack
+// reaction-order tombstones (slack_reaction_tombstone), and meeting automation
+// artifacts. A proposed action becomes a task only after approval creates a distinct
+// action row; its proposal remains meeting evidence.
 // Shells and meetings ARE task rows.
 // `triage_suppression` joins the list for the same reason `reschedule_tombstone` is
 // on it: it is a dateless bookkeeping row, not work. Left off, `isTaskRow` would be
@@ -145,7 +147,10 @@ function parseBlock(row) {
 // It stays out of the client's Unscheduled list either way (TaskModel.selectUnscheduled
 // requires a `title`, and suppressions deliberately store theirs as `itemTitle`), so
 // this is about not polluting the task space rather than about a visible bug.
-const NON_TASK_KINDS = new Set(["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"]);
+const NON_TASK_KINDS = new Set([
+  "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone",
+  "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item",
+]);
 function isTaskRow(block) {
   if (!block) return false;
   const type = block.type;

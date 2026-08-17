@@ -82,7 +82,7 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
     summary: { markdown: "### Recap\nGood chat about Q3." },
     transcript: { text: "Drake: hi. Ben: hi back." },
     proposedActions: [
-      { text: "Send the recap to Ben", owner: "drake", start: 754.2, quote: "I'll send the recap." },
+      { text: "Send the recap to Ben", owner: "drake", citation: { startOffset: 754.2, quote: "I'll send the recap." } },
       { text: "Ops to update the runbook", owner: "others" },
     ],
   });
@@ -94,8 +94,10 @@ test("applyArtifacts stores summary/transcript + owner-tagged proposed actions, 
   assert.equal(actions.every((a) => a.properties.status === "proposed" && a.properties.done === false), true);
   assert.deepEqual(actions.map((a) => a.properties.owner).sort(), ["drake", "other"]);
   assert.equal(actions.every((a) => a.properties.origin === "automated"), true);
-  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.start, 754.2);
-  assert.equal(actions.find((a) => a.properties.owner === "drake").properties.quote, "I'll send the recap.");
+  const cited = actions.find((a) => a.properties.owner === "drake").properties;
+  assert.deepEqual(cited.citation, { startOffset: 754.2, quote: "I'll send the recap." });
+  assert.equal(cited.start, undefined, "a transcript offset must never occupy the task timing field");
+  assert.equal(cited.quote, undefined, "citation evidence stays in one namespace");
   const m1 = await mem.getBlock("m1");
   // The recap now lives ONLY in the meeting_summary artifact (surfaced in the Recap
   // tab), never mirrored into the meeting's notes box.
@@ -168,8 +170,9 @@ test("a duplicate action gains later transcript citation fields without losing p
   });
   const action = childrenOf("mcitation", "proposed_action_item")[0].properties;
   assert.equal(action.origin, "signaled");
-  assert.equal(action.start, 91.5);
-  assert.equal(action.quote, "I'll send it.");
+  assert.deepEqual(action.citation, { startOffset: 91.5, quote: "I'll send it." });
+  assert.equal(action.start, undefined);
+  assert.equal(action.quote, undefined);
 });
 
 test("missing, blank, negative, and non-finite timestamps never become zero-second citations", async () => {
@@ -185,15 +188,16 @@ test("missing, blank, negative, and non-finite timestamps never become zero-seco
   });
   const proposals = childrenOf("m-no-fake-citations", "proposed_action_item");
   assert.equal(proposals.length, 4);
-  assert.equal(proposals.every(action => action.properties.start === null), true);
+  assert.equal(proposals.every(action => action.properties.citation.startOffset === null), true);
+  assert.equal(proposals.every(action => action.properties.start === undefined), true);
   const projected = (await automation.listProposedActions({ workspaceId: "ws-1" }))
     .filter(action => action.meetingId === "m-no-fake-citations");
-  assert.equal(projected.every(action => action.start === null), true);
+  assert.equal(projected.every(action => action.citation.startOffset === null), true);
 
   const approved = await automation.approveActions("m-no-fake-citations", {
     workspaceId: "ws-1", userId: 1,
   });
-  assert.equal(approved.approvedBlocks.every(action => action.properties.meetingSource.start === null), true);
+  assert.equal(approved.approvedBlocks.every(action => action.properties.meetingSource.citation.startOffset === null), true);
 });
 
 test("later citation enrichment follows an action through approval and placement", async () => {
@@ -214,7 +218,8 @@ test("later citation enrichment follows an action through approval and placement
   });
   let task = await mem.getBlock(taskId);
   assert.deepEqual(task.properties.meetingSource, {
-    meetingBlockId: "m-citation-sync", dashboardRef: "updated-review", start: 91.5, quote: "I'll send it.",
+    meetingBlockId: "m-citation-sync", dashboardRef: "updated-review",
+    citation: { startOffset: 91.5, quote: "I'll send it." },
   });
   assert.equal(task.properties.meetingAutomation.origin, "signaled");
 
@@ -230,8 +235,9 @@ test("later citation enrichment follows an action through approval and placement
   assert.equal(task.date, "2026-07-20");
   assert.equal(task.properties.kind, "task");
   assert.equal(task.properties.start, "14:00");
-  assert.equal(task.properties.meetingSource.start, 120);
-  assert.equal(task.properties.meetingSource.quote, "The final quote.");
+  assert.deepEqual(task.properties.meetingSource.citation, { startOffset: 120, quote: "The final quote." });
+  assert.equal(task.properties.meetingSource.start, undefined);
+  assert.equal(task.properties.meetingSource.quote, undefined);
 });
 
 test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {
@@ -422,7 +428,7 @@ test("listProposedActions projects only open meeting proposals with meeting cont
     id: "plist", meetingId: "mlist", meetingTitle: "Weekly planning", meetingDate: "2026-07-09",
     meetingStart: "10:00", meetingEnd: "10:30", title: "Send the brief", owner: "drake",
     priority: "High", origin: "automated", signal: null,
-    start: 91.5, quote: "I'll send it.", dashboardRef: "weekly-planning",
+    citation: { startOffset: 91.5, quote: "I'll send it." }, dashboardRef: "weekly-planning",
     approvedBlockId: null, createdAt: "2026-07-09T11:00:00Z",
   });
   assert.equal(rows.some(item => item.id === "placed-list"), false);

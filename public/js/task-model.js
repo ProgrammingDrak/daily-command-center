@@ -216,7 +216,13 @@
   // admitting its `subtaskOf` children promotes every child to a standalone task and
   // makes the responsibility itself disappear. Keep this exception aligned with
   // db.js and dcc_is_task_row in pg-schema.js.
-  const NON_TASK_KINDS = ["delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone"];
+  // Meeting automation artifacts are evidence owned by their meeting. In particular,
+  // proposed_action_item.citation.startOffset is not an itinerary start time; approval
+  // creates a separate action row that can later become a real scheduled task.
+  const NON_TASK_KINDS = [
+    "delegated_item", "task_group", "reschedule_tombstone", "triage_suppression", "slack_reaction_tombstone",
+    "meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item"
+  ];
   const NON_TASK_TYPES = ["day_root", "time_entry"];
   function isTaskRow(block) {
     block = block || {};

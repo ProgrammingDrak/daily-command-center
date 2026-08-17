@@ -160,6 +160,10 @@ test("isTaskRow's exclusion list is READ from the SQL definition, not restated h
   assert.ok(/responsibility_task/.test(body), "the SQL must exempt dated responsibility task instances");
   assert.equal(TaskModel.isTaskRow(row("x", null, { kind: "responsibility_item", local_id: "l" })), false);
   assert.equal(TaskModel.isTaskRow(row("x", "2026-08-03", { kind: "responsibility_task", local_id: "l" })), true);
+  for (const kind of ["meeting_prep", "meeting_transcript", "meeting_summary", "proposed_action_item"]) {
+    assert.equal(TaskModel.isTaskRow(row("x", "2026-08-03", { kind, local_id: "l", start: 1465 })), false,
+      kind + " must never become a task because it carries transcript evidence");
+  }
   // types, not kinds
   assert.equal(TaskModel.isTaskRow({ type: "day_root", properties: {} }), false);
   assert.equal(TaskModel.isTaskRow({ type: "time_entry", properties: {} }), false);
