@@ -37,12 +37,17 @@ function mountApp() {
     id: "task-1", type: "block", date: TODAY, workspace_id: MINE, user_id: 1,
     properties: { kind: "task", title: "Launch plan", local_id: "launch-plan" },
   };
-  const rows = new Map([[waiting.id, waiting], [task.id, task]]);
+  const prerequisite = {
+    id: "task-2", type: "block", date: null, workspace_id: MINE, user_id: 1,
+    properties: { kind: "backlog", title: "Get legal approval", local_id: "get-legal-approval" },
+  };
+  const rows = new Map([[waiting.id, waiting], [task.id, task], [prerequisite.id, prerequisite]]);
   const updates = [];
   const completions = [];
+  const batches = [];
   const ctx = {
     blockDB: {
-      getDelegatedItems: async () => [waiting].filter(row => !row.deleted_at),
+      getDelegatedItems: async () => [...rows.values()].filter(row => !row.deleted_at && (row.properties || {}).kind === "delegated_item"),
       getBlockIncludingDeleted: async id => rows.get(id) || null,
       getBlock: async id => rows.get(id) || null,
       findUniqueLiveBlockByReference: async blockRef => {
@@ -55,11 +60,36 @@ function mountApp() {
       updateBlock: async (id, patch) => {
         const row = rows.get(id);
         if (patch.properties) row.properties = patch.properties;
+        if (Object.prototype.hasOwnProperty.call(patch, "date")) row.date = patch.date;
         updates.push({ id, patch });
         return row;
       },
-      createBlock: async () => null,
-      deleteBlock: async id => ({ id }),
+      createBlock: async input => {
+        const created = { id: "dependency-" + rows.size, created_at: new Date().toISOString(), deleted_at: null, ...input };
+        rows.set(created.id, created);
+        return created;
+      },
+      deleteBlock: async id => {
+        const row = rows.get(id);
+        if (row) row.deleted_at = new Date().toISOString();
+        return row || { id };
+      },
+      getSubtree: async ids => {
+        const wanted = new Set(ids.map(String));
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const row of rows.values()) {
+            if (!row.deleted_at && row.parent_id && wanted.has(String(row.parent_id)) && !wanted.has(String(row.id))) {
+              wanted.add(String(row.id));
+              changed = true;
+            }
+          }
+        }
+        return [...rows.values()].filter(row => wanted.has(String(row.id)) && !row.deleted_at);
+      },
+      isTaskRow: row => !!row && ["block", "added_task"].includes(row.type)
+        && !["delegated_item", "tag", "day_root"].includes((row.properties || {}).kind),
       setTaskCompletion: async input => {
         completions.push(input);
         const target = rows.get(input.taskRef);
@@ -85,7 +115,16 @@ function mountApp() {
         };
       },
       getCarryoverPool: async () => ({ rows: [], dayRoots: [], overlays: {}, scanned: 0 }),
-      batchOp: async () => ({ batchId: "b", blocks: [] }),
+      batchOp: async operations => {
+        batches.push(operations);
+        const blocks = [];
+        for (const op of operations) {
+          if (op.op === "update") blocks.push(await ctx.blockDB.updateBlock(op.id, op));
+          else if (op.op === "delete") blocks.push(await ctx.blockDB.deleteBlock(op.id));
+          else blocks.push({ id: op.id || "created" });
+        }
+        return { batchId: "b", blocks };
+      },
       reorderBlocks: async () => {},
       getBlocksByDate: async () => [],
       getBlocksByTypes: async () => [],
@@ -101,12 +140,15 @@ function mountApp() {
     getTodayStr: () => TODAY,
     isAllowedSweepBlockItem: () => true,
     isValidDate: value => /^\d{4}-\d{2}-\d{2}$/.test(String(value)),
-    pool: { query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }) },
+    pool: {
+      query: async () => ({ rows: [{ workspace_id: MINE, user_id: 1 }] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release() {} }),
+    },
     APP_TIME_ZONE: "America/New_York",
     waitingItems: require("./waiting-items"),
   };
   require("./routes/blocks.js")(app, ctx);
-  return { app, waiting, task, rows, updates, completions };
+  return { app, waiting, task, prerequisite, rows, updates, completions, batches };
 }
 
 async function request(app, path, method = "GET", body) {
@@ -263,4 +305,201 @@ test("complete also closes a text-only Waiting item", async () => {
   assert.equal(result.status, 200);
   assert.equal(result.body.task, null);
   assert.equal(waiting.properties.status, "done");
+});
+
+test("creating a task dependency moves the blocked task to Waiting", async () => {
+  const { app, task, prerequisite, rows } = mountApp();
+  const result = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item",
+    blockerType: "task",
+    blockerBlockId: prerequisite.id,
+    linkedBlockId: task.id,
+    title: prerequisite.properties.title,
+    myTask: task.properties.title,
+  } });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.properties.status, "open");
+  assert.equal(result.body.properties.blockerBlockId, prerequisite.id);
+  assert.equal(task.date, null);
+  assert.equal(task.properties.dependencyWaitingItemId, result.body.id);
+  assert.equal(rows.get(result.body.id).properties.linkedBlockId, task.id);
+});
+
+test("task dependency validation rejects a cycle", async () => {
+  const { app, task, prerequisite } = mountApp();
+  const first = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: prerequisite.id, linkedBlockId: task.id,
+    title: prerequisite.properties.title, myTask: task.properties.title,
+  } });
+  assert.equal(first.status, 200);
+  const cycle = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: task.id, linkedBlockId: prerequisite.id,
+    title: task.properties.title, myTask: prerequisite.properties.title,
+  } });
+  assert.equal(cycle.status, 409);
+  assert.match(cycle.body.error, /cycle/i);
+});
+
+test("a ready dependency can release its task to Backlog", async () => {
+  const { app, task, prerequisite, rows } = mountApp();
+  const created = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: prerequisite.id, linkedBlockId: task.id,
+    title: prerequisite.properties.title, myTask: task.properties.title,
+  } });
+  rows.get(created.body.id).properties.status = "ready";
+  const released = await request(app, `/api/waiting-items/${created.body.id}/unblock`, "POST", {
+    destination: "backlog", taskBlockId: task.id,
+  });
+  assert.equal(released.status, 200);
+  assert.equal(released.body.item.properties.status, "unblocked");
+  assert.equal(task.date, null);
+  assert.equal("dependencyWaitingItemId" in task.properties, false);
+});
+
+test("a dependency release cannot target an unrelated task", async () => {
+  const { app, task, prerequisite, rows } = mountApp();
+  const created = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: prerequisite.id, linkedBlockId: task.id,
+    title: prerequisite.properties.title, myTask: task.properties.title,
+  } });
+  const unrelated = {
+    id: "task-unrelated", type: "block", date: null, workspace_id: MINE, user_id: 1,
+    properties: { kind: "backlog", title: "Unrelated", local_id: "unrelated" },
+  };
+  rows.set(unrelated.id, unrelated);
+  const result = await request(app, `/api/waiting-items/${created.body.id}/unblock`, "POST", {
+    destination: "backlog", taskBlockId: unrelated.id,
+  });
+  assert.equal(result.status, 400);
+  assert.equal(rows.get(created.body.id).properties.status, "open");
+  assert.equal(task.properties.dependencyWaitingItemId, created.body.id);
+});
+
+test("a descendant cannot be chosen as its parent task's prerequisite", async () => {
+  const { app, task, rows } = mountApp();
+  const child = {
+    id: "task-child", type: "block", parent_id: task.id, date: TODAY, workspace_id: MINE, user_id: 1,
+    properties: { kind: "task", title: "Child step", local_id: "child-step" },
+  };
+  rows.set(child.id, child);
+  const result = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: child.id, linkedBlockId: task.id,
+    title: child.properties.title, myTask: task.properties.title,
+  } });
+  assert.equal(result.status, 409);
+  assert.match(result.body.error, /inside the blocked task/i);
+  assert.equal(task.properties.dependencyWaitingItemId, undefined);
+});
+
+test("creating a prerequisite and dependency is one canonical server transaction", async () => {
+  const { app, task, rows } = mountApp();
+  const result = await request(app, "/api/waiting-items", "POST", {
+    properties: {
+      kind: "delegated_item", blockerType: "task", linkedBlockId: task.id,
+      myTask: task.properties.title, title: "Buy fixture",
+    },
+    newBlocker: { title: "Buy fixture", duration: 45, priority: "High" },
+  });
+  assert.equal(result.status, 200);
+  const blocker = rows.get(result.body.properties.blockerBlockId);
+  assert.ok(blocker);
+  assert.equal(blocker.properties.kind, "backlog");
+  assert.match(blocker.properties.local_id, /^dependency-prerequisite-/);
+  assert.equal(blocker.properties.duration, 45);
+  assert.equal(blocker.properties.durMin, 45);
+  assert.equal(task.properties.dependencyWaitingItemId, result.body.id);
+});
+
+test("an active dependency prevents deleting its prerequisite", async () => {
+  const { app, task, prerequisite } = mountApp();
+  const created = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: prerequisite.id, linkedBlockId: task.id,
+    title: prerequisite.properties.title, myTask: task.properties.title,
+  } });
+  assert.equal(created.status, 200);
+  const deleted = await request(app, `/api/blocks/${prerequisite.id}`, "DELETE");
+  assert.equal(deleted.status, 409);
+  assert.match(deleted.body.error, /unlocks/i);
+});
+
+test("deleting a blocked task closes its dependency and clears the restore marker", async () => {
+  const { app, task, prerequisite, rows } = mountApp();
+  const created = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: prerequisite.id, linkedBlockId: task.id,
+    title: prerequisite.properties.title, myTask: task.properties.title,
+  } });
+  assert.equal(created.status, 200);
+  const deleted = await request(app, `/api/blocks/${task.id}`, "DELETE");
+  assert.equal(deleted.status, 200);
+  assert.equal(rows.get(created.body.id).properties.status, "done");
+  assert.equal(rows.get(created.body.id).properties.closureReason, "dependent-deleted");
+  assert.equal("dependencyWaitingItemId" in task.properties, false);
+});
+
+test("batch deletion enforces prerequisite protection and dependent cleanup", async () => {
+  const { app, task, prerequisite, rows, batches } = mountApp();
+  const created = await request(app, "/api/waiting-items", "POST", { properties: {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: prerequisite.id, linkedBlockId: task.id,
+    title: prerequisite.properties.title, myTask: task.properties.title,
+  } });
+  assert.equal(created.status, 200);
+
+  const refused = await request(app, "/api/blocks/batch", "POST", {
+    operations: [{ op: "delete", id: prerequisite.id }],
+  });
+  assert.equal(refused.status, 409);
+  assert.equal(prerequisite.deleted_at, undefined);
+
+  const deleted = await request(app, "/api/blocks/batch", "POST", {
+    operations: [{ op: "delete", id: task.id }],
+  });
+  assert.equal(deleted.status, 200);
+  assert.equal(rows.get(created.body.id).properties.status, "done");
+  assert.equal("dependencyWaitingItemId" in task.properties, false);
+  assert.ok(batches[0].some(op => op.op === "update" && op.id === created.body.id));
+  assert.ok(batches[0].some(op => op.op === "delete" && op.id === task.id));
+});
+
+test("generic block surfaces cannot bypass task dependency validation", async () => {
+  const { app, task, prerequisite } = mountApp();
+  const properties = {
+    kind: "delegated_item", blockerType: "task",
+    blockerBlockId: prerequisite.id, linkedBlockId: task.id,
+    title: prerequisite.properties.title, myTask: task.properties.title,
+  };
+  const rawCreate = await request(app, "/api/blocks", "POST", {
+    type: "block", date: null, properties,
+  });
+  assert.equal(rawCreate.status, 409);
+  const stringCreate = await request(app, "/api/blocks", "POST", {
+    type: "block", date: null, properties: JSON.stringify(properties),
+  });
+  assert.equal(stringCreate.status, 409);
+
+  const created = await request(app, "/api/waiting-items", "POST", { properties });
+  assert.equal(created.status, 200);
+  const rawPatch = await request(app, `/api/blocks/${created.body.id}`, "PATCH", {
+    properties: { ...created.body.properties, title: "Bypassed" },
+  });
+  assert.equal(rawPatch.status, 409);
+  const stringPatch = await request(app, `/api/blocks/${task.id}`, "PATCH", {
+    properties: JSON.stringify(properties),
+  });
+  assert.equal(stringPatch.status, 409);
+  const stringBatch = await request(app, "/api/blocks/batch", "POST", {
+    operations: [{ op: "update", id: task.id, properties: JSON.stringify(properties) }],
+  });
+  assert.equal(stringBatch.status, 409);
+  const rawBatch = await request(app, "/api/blocks/batch", "POST", {
+    operations: [{ op: "delete", id: created.body.id }],
+  });
+  assert.equal(rawBatch.status, 409);
 });

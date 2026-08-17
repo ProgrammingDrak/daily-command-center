@@ -254,6 +254,7 @@ test("selectUnscheduled is date IS NULL, and closed/titleless rows are not unsch
     row("e", null, { local_id: "e", title: "archived", status: "archived" }),
     row("f", null, { local_id: "f", title: null }),
     row("g", null, { local_id: "g", title: "delegated", kind: "delegated_item" }),
+    row("blocked", null, { local_id: "blocked", title: "parked in Waiting", dependencyWaitingItemId: "dependency-1" }),
     Object.assign(row("h", null, { local_id: "h", title: "tombstoned" }), { deleted_at: "2026-08-01" }),
   ];
   const got = TaskModel.selectUnscheduled(rows).map((r) => r.id);

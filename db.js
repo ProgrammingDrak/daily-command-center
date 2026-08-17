@@ -524,6 +524,7 @@ async function setTaskCompletion({
   let overlayBroadcastId = null;
   let target = null;
   let companionBlocks = [];
+  let dependencyTransitions = [];
   const applyCompanionUpdates = async () => {
     companionBlocks = [];
     for (const update of companionUpdates) {
@@ -645,6 +646,29 @@ async function setTaskCompletion({
     }
 
     const currentProps = target.properties || {};
+    let releasedDependencyId = null;
+    if (completed && currentProps.dependencyWaitingItemId) {
+      const dependencyId = String(currentProps.dependencyWaitingItemId);
+      const companionReleases = companionUpdates.some(update => update && String(update.id) === dependencyId
+        && !["open", "ready"].includes(String((update.properties || {}).status || "open")));
+      if (companionReleases) releasedDependencyId = dependencyId;
+      if (!companionReleases) {
+        const { rows: dependencyRows } = await q.query(
+          `SELECT * FROM blocks
+            WHERE id = $1 AND deleted_at IS NULL
+              AND properties->>'kind' = 'delegated_item'
+              AND properties->>'blockerType' = 'task'
+              AND COALESCE(properties->>'status', 'open') IN ('open', 'ready')
+              AND workspace_id IS NOT DISTINCT FROM $2
+            FOR UPDATE`,
+          [dependencyId, workspaceId]
+        );
+        if (dependencyRows[0]) {
+          throw taskCompletionError("Release this task from Waiting before completing it", 409,
+            "TASK_DEPENDENCY_BLOCKED", target);
+        }
+      }
+    }
     const currentRevision = currentProps._completionRevision || null;
     const sameMutation = currentProps._completionMutationId === mutationId
       && isCompletedTaskProps(currentProps) === completed;
@@ -716,6 +740,9 @@ async function setTaskCompletion({
       let props = completed
         ? completedProps(before, before, completionAt, mutationId)
         : reopenedProps(before, before, mutationId);
+      if (releasedDependencyId && String(props.dependencyWaitingItemId || "") === releasedDependencyId) {
+        delete props.dependencyWaitingItemId;
+      }
       // Idempotency belongs to the request, including a same-state request. The
       // generic completion helpers intentionally preserve the prior mutation on a
       // no-op transition, so the dedicated endpoint stamps its own identity here.
@@ -786,6 +813,18 @@ async function setTaskCompletion({
       }
     }
     await applyCompanionUpdates();
+    for (let i = 0; i < affected.length; i++) {
+      const row = affected[i];
+      const before = beforeRows.find(item => item.id === row.id);
+      dependencyTransitions.push(...await propagateTaskDependencies({
+        id: row.id,
+        before: before && before.properties,
+        after: row.properties,
+        at: now,
+        workspaceId,
+        client: q,
+      }));
+    }
     await q.query("COMMIT");
   } catch (error) {
     try { await q.query("ROLLBACK"); } catch { /* preserve completion error */ }
@@ -808,8 +847,10 @@ async function setTaskCompletion({
   return {
     task, affectedTasks: affected, revision: task && task.properties && task.properties._completionRevision,
     persistenceTarget: "task_row", duplicate: false,
-    broadcastIds: [...affected.map(row => row.id), ...(overlayBroadcastId ? [overlayBroadcastId] : []), ...companionBlocks.map(row => row.id)],
-    companionBlocks,
+    broadcastIds: [...affected.map(row => row.id), ...(overlayBroadcastId ? [overlayBroadcastId] : []),
+      ...companionBlocks.map(row => row.id),
+      ...dependencyTransitions.flatMap(item => [item.id, item.linkedBlockId]).filter(Boolean)],
+    companionBlocks, dependencyTransitions,
   };
 }
 
@@ -918,6 +959,53 @@ async function updateBlock(id, fields, client) {
     completionRevision: writtenProps && writtenProps._completionRevision,
   });
   return result;
+}
+
+// Task dependencies reuse Waiting rows, but resolve from the prerequisite's
+// canonical completion transition. It runs inside the completion transaction so
+// the task and every dependency relation always cross the boundary together.
+async function propagateTaskDependencies({ id, before, after, at, workspaceId, client }) {
+  const beforeProps = typeof before === "string" ? JSON.parse(before) : (before || {});
+  const afterProps = typeof after === "string" ? JSON.parse(after) : (after || {});
+  const wasDone = isCompletedTaskProps(beforeProps);
+  const nowDone = isCompletedTaskProps(afterProps);
+  if (wasDone === nowDone) return [];
+
+  const q = client;
+  if (!q) throw new Error("Task dependency propagation requires a transaction client");
+  const fromStatus = nowDone ? "open" : "ready";
+  const { rows } = await q.query(
+      `SELECT * FROM blocks
+         WHERE type = 'block' AND deleted_at IS NULL
+           AND properties->>'kind' = 'delegated_item'
+           AND properties->>'blockerType' = 'task'
+           AND properties->>'blockerBlockId' = $1
+           AND COALESCE(properties->>'status', 'open') = $2
+           AND workspace_id IS NOT DISTINCT FROM $3
+         FOR UPDATE`,
+      [id, fromStatus, workspaceId || null]
+    );
+  const transitions = [];
+  for (const raw of rows) {
+    const relation = parseBlock(raw);
+    const props = { ...(relation.properties || {}) };
+    if (nowDone) {
+      props.status = "ready";
+      props.readyAt = afterProps.completionRecordedAt || afterProps.completedAt || at;
+    } else {
+      props.status = "open";
+      delete props.readyAt;
+    }
+    const updated = await updateBlock(relation.id, { properties: props }, q);
+    transitions.push({
+      id: updated.id,
+      linkedBlockId: props.linkedBlockId || null,
+      blockerBlockId: id,
+      title: props.myTask || props.title || "Blocked task",
+      status: props.status,
+    });
+  }
+  return transitions;
 }
 
 // ── Recurrence completion propagation (dcc-canonical-task-model D1) ──
@@ -1093,8 +1181,11 @@ async function undeleteBlock(id, client) {
 // GET /api/blocks/:id starts 404-ing on a tombstone, while getBlock stays the
 // ownership pre-check for PATCH/DELETE/reschedule — where seeing the deleted row is
 // the correct behavior. Call this one when you mean "I want it even if deleted."
-async function getBlockIncludingDeleted(id) {
-  const { rows } = await pool.query("SELECT * FROM blocks WHERE id = $1", [id]);
+async function getBlockIncludingDeleted(id, client, forUpdate = false) {
+  const { rows } = await (client || pool).query(
+    `SELECT * FROM blocks WHERE id = $1${forUpdate ? " FOR UPDATE" : ""}`,
+    [id]
+  );
   return rows[0] ? parseBlock(rows[0]) : null;
 }
 
@@ -1320,10 +1411,10 @@ async function getCarryoverPool(workspaceId, beforeDate, opts = {}) {
 // walking through one would drag in every unrelated task on that date.
 // depth-capped because a cycle that slipped in after the migration's scrub must not
 // spin this forever.
-async function getSubtree(rootIds, workspaceId) {
+async function getSubtree(rootIds, workspaceId, client) {
   const ids = (Array.isArray(rootIds) ? rootIds : [rootIds]).filter(Boolean);
   if (ids.length === 0) return [];
-  const { rows } = await pool.query(
+  const { rows } = await (client || pool).query(
     `WITH RECURSIVE tree AS (
        SELECT b.*, 0 AS depth FROM blocks b
         WHERE b.id = ANY($1::text[])
@@ -1490,9 +1581,10 @@ async function getBlocksByTypes(types, workspaceId) {
 
 // PIN 10.A: delegated items are type="block" with properties.kind="delegated_item".
 // Sorted by checkInAt ascending (nulls last) so upcoming check-ins surface first.
-async function getDelegatedItems(workspaceId) {
+async function getDelegatedItems(workspaceId, client) {
+  const q = client || pool;
   const { rows } = workspaceId
-    ? await pool.query(
+    ? await q.query(
         `SELECT * FROM blocks
          WHERE type = 'block'
            AND properties->>'kind' = 'delegated_item'
@@ -1501,7 +1593,7 @@ async function getDelegatedItems(workspaceId) {
          ORDER BY (properties->>'checkInAt') ASC NULLS LAST, created_at DESC`,
         [workspaceId]
       )
-    : await pool.query(
+    : await q.query(
         `SELECT * FROM blocks
          WHERE type = 'block'
            AND properties->>'kind' = 'delegated_item'
@@ -2147,21 +2239,23 @@ async function findBlockByLocalId(localId, workspaceId) {
 // Resolve a live block reference without collapsing duplicate legacy local_ids.
 // This is intentionally separate from findBlockByLocalId, whose recurrence
 // callers need to see tombstones and accept newest-wins behavior.
-async function findUniqueLiveBlockByReference(blockRef, workspaceId) {
-  const { rows: directRows } = await pool.query(
+async function findUniqueLiveBlockByReference(blockRef, workspaceId, client, forUpdate = false) {
+  const q = client || pool;
+  const lock = forUpdate ? " FOR UPDATE" : "";
+  const { rows: directRows } = await q.query(
     `SELECT * FROM blocks
       WHERE id=$1 AND deleted_at IS NULL
-        AND workspace_id IS NOT DISTINCT FROM $2`,
+        AND workspace_id IS NOT DISTINCT FROM $2${lock}`,
     [blockRef, workspaceId]
   );
   if (directRows[0]) return parseBlock(directRows[0]);
 
-  const { rows } = await pool.query(
+  const { rows } = await q.query(
     `SELECT * FROM blocks
       WHERE properties->>'local_id'=$1 AND deleted_at IS NULL
         AND workspace_id IS NOT DISTINCT FROM $2
       ORDER BY updated_at DESC, id ASC
-      LIMIT 2`,
+      LIMIT 2${lock}`,
     [blockRef, workspaceId]
   );
   if (rows.length > 1) {

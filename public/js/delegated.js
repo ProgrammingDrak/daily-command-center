@@ -29,6 +29,42 @@
     return getAllDelegatedItems().find(i => i.id === id) || null;
   }
 
+  function isTaskDependency(item) {
+    const p = (item && item.properties) || {};
+    return p.blockerType === "task" && !!p.blockerBlockId && !!p.linkedBlockId;
+  }
+
+  function isActiveTaskDependency(item) {
+    const p = (item && item.properties) || {};
+    return isTaskDependency(item) && !item.deleted_at && ["open", "ready"].includes(p.status || "open");
+  }
+
+  function blockTitle(id, fallback) {
+    const block = resolveLinkedBlock(id);
+    return String((block && block.properties && block.properties.title) || fallback || "Task");
+  }
+
+  function taskIdentityIds(task) {
+    const p = (task && task.properties) || {};
+    return new Set([task && task.id, p.local_id].filter(Boolean).map(String));
+  }
+
+  function outgoingTaskDependencies(task) {
+    const ids = taskIdentityIds(task);
+    return getAllDelegatedItems().filter(item => {
+      const p = item.properties || {};
+      return isActiveTaskDependency(item) && ids.has(String(p.blockerBlockId || ""));
+    });
+  }
+
+  function taskDependencyChipHtml(task) {
+    const rows = outgoingTaskDependencies(task);
+    if (!rows.length) return "";
+    const titles = rows.map(row => blockTitle((row.properties || {}).linkedBlockId, (row.properties || {}).myTask));
+    const label = rows.length === 1 ? "Unlocks " + truncate(titles[0], 34) : "Unlocks " + rows.length + " tasks";
+    return '<button type="button" class="task-dependency-pill unlocks" data-task-dependency-open="' + esc(rows[0].id) + '" title="' + esc("Unlocks: " + titles.join(", ")) + '">&#8594; ' + esc(label) + '</button>';
+  }
+
   // ── Urgency model ──
   // How many days between check-ins. Prefers the explicit checkInDays; falls back
   // to mapping the legacy checkInCadence so pre-existing items still render. No
@@ -96,6 +132,10 @@
     const doneA = isDoneDelegated(a);
     const doneB = isDoneDelegated(b);
     if (doneA !== doneB) return doneA ? 1 : -1;
+    const readyA = isTaskDependency(a) && (a.properties || {}).status === "ready";
+    const readyB = isTaskDependency(b) && (b.properties || {}).status === "ready";
+    if (readyA !== readyB) return readyA ? -1 : 1;
+    if (isTaskDependency(a) !== isTaskDependency(b)) return isTaskDependency(a) ? -1 : 1;
     const sa = itemUrgency(a).score;
     const sb = itemUrgency(b).score;
     if (sb !== sa) return sb - sa;
@@ -105,7 +145,7 @@
   function isDoneDelegated(item) {
     if (!item) return false;
     const p = item.properties || {};
-    return !!p.completedAt || p.status === "done";
+    return !!p.completedAt || p.status === "done" || p.status === "unblocked";
   }
 
   function isOpenDelegated(item) {
@@ -153,7 +193,7 @@
   // Waiting enters Loose Ends as soon as its urgency reaches 70 percent.
   function attentionItems(items) {
     return items.filter(item => {
-      if (!isOpenDelegated(item) || isSnoozed(item)) return false;
+      if (!isOpenDelegated(item) || isSnoozed(item) || isTaskDependency(item)) return false;
       const p = item.properties || {};
       // Once a real check-in task owns this cycle, Loose Ends no longer needs a
       // second decision row. The triage draft remains available for review/send.
@@ -186,7 +226,7 @@
   function filterItems(items, filter) {
     switch (filter) {
       case "upcoming":
-        return items.filter(i => isOpenDelegated(i) && itemUrgency(i).timing.remaining >= 0);
+        return items.filter(i => isOpenDelegated(i) && (isTaskDependency(i) || itemUrgency(i).timing.remaining >= 0));
       case "overdue":
         return items.filter(isOverdue);
       case "done":
@@ -249,8 +289,36 @@
     return '<div class="delegated-empty">No check-ins need attention.</div>';
   }
 
+  function renderTaskDependencyCard(item) {
+    const p = item.properties || {};
+    const closed = isDoneDelegated(item);
+    const ready = p.status === "ready";
+    const dependent = blockTitle(p.linkedBlockId, p.myTask);
+    const blocker = blockTitle(p.blockerBlockId, p.title);
+    const icon = (ready || closed) ? "&#10003;" : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+    const statePill = closed
+      ? '<span class="task-dependency-pill ready">&#10003; Released</span>'
+      : '<button type="button" class="task-dependency-pill ' + (ready ? "ready" : "blocked") + '" data-delegated-action="dependency-edit" data-id="' + esc(item.id) + '" title="Change prerequisite">' + (ready ? "&#10003; Ready" : "&#128274; Blocked by " + esc(truncate(blocker, 44))) + "</button>";
+    let actions = "";
+    if (closed) {
+      actions += '<button type="button" data-delegated-action="delete" data-id="' + esc(item.id) + '">Delete</button>';
+    } else if (ready) {
+      actions += '<button type="button" data-delegated-action="unblock" data-id="' + esc(item.id) + '">Schedule task</button>';
+      actions += '<button type="button" data-delegated-action="dependency-backlog" data-id="' + esc(item.id) + '">Move to Backlog</button>';
+    }
+    if (!closed) {
+      actions += '<button type="button" data-delegated-action="dependency-edit" data-id="' + esc(item.id) + '">Change prerequisite</button>';
+      actions += '<button type="button" data-delegated-action="dependency-remove" data-id="' + esc(item.id) + '">' + (ready ? "Remove dependency" : "Unblock to Backlog") + "</button>";
+    }
+    return '<div class="delegated-card delegated-itinerary-card task-dependency-card' + ((ready || closed) ? " dependency-ready" : "") + '" data-id="' + esc(item.id) + '">' +
+      '<div class="delegated-card-score dependency' + ((ready || closed) ? " ready" : "") + '">' + icon + "</div>" +
+      '<div class="delegated-card-body"><div class="delegated-card-title">' + esc(dependent) + '</div><div class="delegated-card-meta">' + statePill + "</div></div>" +
+      '<div class="delegated-card-actions">' + actions + "</div></div>";
+  }
+
   function renderCard(item) {
     const p = item.properties || {};
+    if (isTaskDependency(item)) return renderTaskDependencyCard(item);
     const done = isDoneDelegated(item);
     const u = itemUrgency(item);
     const cls = done ? "" : u.cls;
@@ -328,6 +396,12 @@
           unblockWaitingItem(id, btn);
         } else if (action === "complete") {
           completeWaitingItem(id);
+        } else if (action === "dependency-backlog") {
+          releaseTaskDependencyToBacklog(id);
+        } else if (action === "dependency-edit") {
+          openTaskDependencyModal(null, id);
+        } else if (action === "dependency-remove") {
+          removeTaskDependency(id);
         } else if (action === "delete") {
           deleteDelegatedItem(id);
         }
@@ -338,6 +412,12 @@
         e.stopPropagation();
         _currentFilter = btn.dataset.filter || "all";
         renderDelegatedSidebar();
+      });
+    });
+    mount.querySelectorAll("[data-task-dependency-open]").forEach(btn => {
+      btn.addEventListener("click", e => {
+        e.stopPropagation();
+        openWaitingItem(btn.dataset.taskDependencyOpen);
       });
     });
   }
@@ -422,9 +502,33 @@
 
   async function afterWaitingAction() {
     await refreshDelegatedItems();
+    if (typeof refoldTaskStateFromBlockCache === "function") refoldTaskStateFromBlockCache();
+    if (typeof render === "function") render();
     if (window.DCC && window.DCC.CatchUp && typeof window.DCC.CatchUp.refresh === "function") {
       window.DCC.CatchUp.refresh();
     }
+  }
+
+  async function releaseTaskDependencyToBacklog(id, options) {
+    const item = getDelegatedItemById(id);
+    if (!item || !isTaskDependency(item)) return false;
+    options = options || {};
+    try {
+      await postWaitingAction(id, "unblock", {
+        destination: "backlog",
+        taskBlockId: (item.properties || {}).linkedBlockId,
+      });
+      await afterWaitingAction();
+      toast(options.removed ? "Dependency removed. Task moved to Backlog." : "Task moved to Backlog.", "success");
+      return true;
+    } catch (e) {
+      toast("Could not release task: " + (e.message || e), "error");
+      return false;
+    }
+  }
+
+  function removeTaskDependency(id) {
+    return releaseTaskDependencyToBacklog(id, { removed: true });
   }
 
   // Completing a check-in advances the recurring cadence exactly once.
@@ -636,6 +740,21 @@
     return true;
   }
 
+  function notifyReadyTaskDependencies(transitions) {
+    const ready = (Array.isArray(transitions) ? transitions : []).filter(item => item && item.status === "ready");
+    if (!ready.length) return false;
+    const message = ready.length === 1
+      ? (ready[0].title || "A blocked task") + " is ready"
+      : ready.length + " blocked tasks are ready";
+    Promise.resolve(afterWaitingAction()).catch(() => {}).finally(() => {
+      window.DCC.toast(message, "success", 12000, {
+        label: "Review",
+        onClick: () => openWaitingItem(ready[0].id),
+      });
+    });
+    return true;
+  }
+
   function openDelegatedModal(idOrNull, prefill) {
     const overlay = document.getElementById("delegated-modal-overlay");
     if (!overlay) return;
@@ -731,6 +850,99 @@
     if (typeof scheduled !== "undefined" && Array.isArray(scheduled)) scheduled.forEach(push);
     if (typeof backlog !== "undefined" && Array.isArray(backlog)) backlog.forEach(push);
     return out;
+  }
+
+  function closeTaskDependencyModal() {
+    const overlay = document.getElementById("task-dependency-modal-overlay");
+    if (overlay) overlay.classList.remove("open");
+  }
+
+  function openTaskDependencyModal(blockedTaskId, waitingId) {
+    const overlay = document.getElementById("task-dependency-modal-overlay");
+    if (!overlay) return false;
+    const item = waitingId ? getDelegatedItemById(waitingId) : null;
+    const p = (item && item.properties) || {};
+    const dependent = resolveLinkedBlock(p.linkedBlockId || blockedTaskId);
+    if (!dependent) { toast("That task is no longer available.", "error"); return false; }
+    const dependentTitle = String((dependent.properties || {}).title || p.myTask || "this task");
+    setVal("td-waiting-id", item ? item.id : "");
+    setVal("td-dependent-id", dependent.id);
+    setVal("td-new-title", "");
+    setVal("td-new-duration", "30");
+    setVal("td-new-priority", "Medium");
+    const label = document.getElementById("td-dependent-label");
+    if (label) label.textContent = '“' + dependentTitle + '” will move to Waiting until its prerequisite is complete.';
+    const select = document.getElementById("td-blocker-task");
+    if (select) {
+      const dependentIds = taskIdentityIds(dependent);
+      const tasks = getLinkableTasks().filter(task => !dependentIds.has(String(task.id)));
+      const selectedId = String(p.blockerBlockId || "");
+      if (selectedId && !tasks.some(task => String(task.id) === selectedId)) {
+        tasks.unshift({ id: selectedId, title: blockTitle(selectedId, p.title) });
+      }
+      select.innerHTML = '<option value="">Choose a task…</option>' + tasks.map(task =>
+        '<option value="' + esc(task.id) + '">' + esc(truncate(task.title, 90)) + "</option>"
+      ).join("");
+      select.value = selectedId;
+    }
+    overlay.classList.add("open");
+    setTimeout(() => { if (select) select.focus(); }, 20);
+    return true;
+  }
+
+  async function saveTaskDependency() {
+    const waitingId = valueOf("td-waiting-id");
+    const dependentId = valueOf("td-dependent-id");
+    const newTitle = valueOf("td-new-title").trim();
+    let blockerId = valueOf("td-blocker-task");
+    let blockerTitle = "";
+    let newBlocker = null;
+    const save = document.getElementById("td-save");
+    if (save) save.disabled = true;
+    try {
+      if (newTitle) {
+        newBlocker = {
+          title: newTitle,
+          duration: Math.max(1, Number(valueOf("td-new-duration")) || 30),
+          priority: valueOf("td-new-priority") || "Medium",
+        };
+        blockerId = null;
+        blockerTitle = newTitle;
+      } else if (blockerId) {
+        blockerTitle = blockTitle(blockerId, "Prerequisite");
+      }
+      if (!blockerId && !newBlocker) throw new Error("Choose an open task or create a prerequisite");
+      const dependent = resolveLinkedBlock(dependentId);
+      if (!dependent) throw new Error("The blocked task is no longer available");
+      const prior = waitingId ? getDelegatedItemById(waitingId) : null;
+      const properties = {
+        blockerType: "task", blockerBlockId: blockerId, linkedBlockId: dependent.id,
+        waitingReason: "blocked", title: blockerTitle,
+        myTask: String((dependent.properties || {}).title || "Blocked task"),
+        delegatee: { name: null, kind: "task" },
+        contact: { channel: "other", address: "", sourceRef: "" },
+        checkInDate: null, snoozedUntil: null,
+        status: prior ? ((prior.properties || {}).status || "open") : "open",
+      };
+      const resp = await fetch(waitingId ? "/api/waiting-items/" + encodeURIComponent(waitingId) : "/api/waiting-items", {
+        method: waitingId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties, ...(newBlocker ? { newBlocker } : {}) }),
+      });
+      if (!resp.ok) {
+        let message = resp.statusText || "Could not link tasks";
+        try { message = (await resp.json()).error || message; } catch (e) {}
+        throw new Error(message);
+      }
+      closeTaskDependencyModal();
+      await afterWaitingAction();
+      toast(waitingId ? "Prerequisite updated." : "Task moved to Waiting until its prerequisite is complete.", "success");
+      return true;
+    } catch (e) {
+      toast("Could not link tasks: " + (e.message || e), "error");
+      return false;
+    } finally {
+      if (save) save.disabled = false;
+    }
   }
 
   function populateTaskLinkSelect(selectedId) {
@@ -890,11 +1102,33 @@
     const saveBtn = document.getElementById("dm-save");
     const checkBtn = document.getElementById("dm-mark-checked");
     const overlay = document.getElementById("delegated-modal-overlay");
+    const dependencyOverlay = document.getElementById("task-dependency-modal-overlay");
     if (cancelBtn) cancelBtn.addEventListener("click", closeDelegatedModal);
     if (saveBtn) saveBtn.addEventListener("click", saveDelegatedItem);
     if (checkBtn) checkBtn.addEventListener("click", () => markDelegatedItemCheckedById(valueOf("dm-id")));
     if (overlay) overlay.addEventListener("click", e => {
       if (e.target === overlay) closeDelegatedModal();
+    });
+    const dependencyCancel = document.getElementById("td-cancel");
+    const dependencySave = document.getElementById("td-save");
+    const dependencySelect = document.getElementById("td-blocker-task");
+    const dependencyNewTitle = document.getElementById("td-new-title");
+    if (dependencyCancel) dependencyCancel.addEventListener("click", closeTaskDependencyModal);
+    if (dependencySave) dependencySave.addEventListener("click", saveTaskDependency);
+    if (dependencyOverlay) dependencyOverlay.addEventListener("click", e => {
+      if (e.target === dependencyOverlay) closeTaskDependencyModal();
+    });
+    if (dependencySelect) dependencySelect.addEventListener("change", () => {
+      if (dependencySelect.value) setVal("td-new-title", "");
+    });
+    if (dependencyNewTitle) dependencyNewTitle.addEventListener("input", () => {
+      if (dependencyNewTitle.value.trim() && dependencySelect) dependencySelect.value = "";
+    });
+    document.addEventListener("click", e => {
+      const pill = e.target.closest && e.target.closest("[data-task-dependency-open]");
+      if (!pill) return;
+      e.stopPropagation();
+      openWaitingItem(pill.dataset.taskDependencyOpen);
     });
 
     // Task-link picker: selecting an existing task fills the working-task text and
@@ -943,6 +1177,9 @@
   window.refreshDelegatedItems = refreshDelegatedItems;
   window.openDelegatedModal = openDelegatedModal;
   window.openDelegatedFromTask = openDelegatedFromTask;
+  window.openTaskDependencyModal = openTaskDependencyModal;
+  window.taskDependencyChipHtml = taskDependencyChipHtml;
+  window.notifyReadyTaskDependencies = notifyReadyTaskDependencies;
   window.deleteDelegatedItem = deleteDelegatedItem;
   window.getAllDelegatedItems = getAllDelegatedItems;
   window.getDelegatedItemById = getDelegatedItemById;

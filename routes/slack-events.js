@@ -668,7 +668,12 @@ module.exports = function mount(app, ctx) {
       });
     } catch (e) { console.error("[slack-events] credit failed (non-fatal):", e.message); }
 
-    broadcast("blocks-changed", { action: "slack-done", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
+    broadcast("blocks-changed", {
+      action: "slack-done",
+      blockIds: durable.broadcastIds || [task.id],
+      dependencyTransitions: durable.dependencyTransitions || [],
+      date: task.date,
+    }, OWNER_WORKSPACE_ID);
   }
 
   // ── ✅ removed → un-complete ──────────────────────────────────────────────
@@ -728,7 +733,12 @@ module.exports = function mount(app, ctx) {
     // Back into the active queue on the Slack side too (E2 reads 🔖 as the queue).
     await addSlackReaction(channel, ts, R_BOOKMARK);
 
-    broadcast("blocks-changed", { action: "slack-undone", blockIds: [task.id], date: task.date }, OWNER_WORKSPACE_ID);
+    broadcast("blocks-changed", {
+      action: "slack-undone",
+      blockIds: durable.broadcastIds || [task.id],
+      dependencyTransitions: durable.dependencyTransitions || [],
+      date: task.date,
+    }, OWNER_WORKSPACE_ID);
   }
 
   async function searchSlack(query) {

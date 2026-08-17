@@ -48,6 +48,13 @@ function isOpen(item) {
   return !props.completedAt && props.status !== "done" && props.status !== "unblocked";
 }
 
+function isTaskDependency(itemOrProps) {
+  const props = itemOrProps && itemOrProps.properties
+    ? itemOrProps.properties
+    : (itemOrProps || {});
+  return props.blockerType === "task" && !!props.blockerBlockId && !!props.linkedBlockId;
+}
+
 function inferReason(props) {
   if (["blocked", "delegated", "both"].includes(props.waitingReason)) return props.waitingReason;
   if ((props.delegatee && props.delegatee.name) || props.source === "slack-delegate") return "delegated";
@@ -75,6 +82,9 @@ function normalizeProperties(input, existing = {}) {
       }
     : { channel: "other", address: "", sourceRef: "", threadTs: "", messageTs: "" };
   props.checkInDays = checkInDays(props);
+  props.blockerType = props.blockerType === "task" ? "task" : (props.blockerType || null);
+  props.blockerBlockId = String(props.blockerBlockId || "").trim().slice(0, 200) || null;
+  props.linkedBlockId = String(props.linkedBlockId || "").trim().slice(0, 200) || null;
   if (props.checkInDate != null && !validDate(props.checkInDate)) props.checkInDate = null;
   if (props.snoozedUntil != null && !validDate(props.snoozedUntil)) props.snoozedUntil = null;
   props.status = props.status || "open";
@@ -101,6 +111,9 @@ function blockerText(item) {
 function attentionFor(item, asOfDate, opts = {}) {
   if (!item || !isOpen(item) || !validDate(asOfDate)) return null;
   const props = normalizeProperties(item.properties || {});
+  // Task dependencies resolve from the prerequisite task's completion event.
+  // They never produce person-style cadence reminders or message drafts.
+  if (isTaskDependency(props)) return null;
   const due = dueDate({ ...item, properties: props }, opts.timeZone);
   if (!due) return null;
   if (validDate(props.snoozedUntil) && props.snoozedUntil > asOfDate) return null;
@@ -257,10 +270,10 @@ module.exports = {
   inferReason,
   internalDraft,
   isOpen,
+  isTaskDependency,
   mergeTriage,
   normalizeProperties,
   triageId,
   triageItem,
   validDate,
 };
-
