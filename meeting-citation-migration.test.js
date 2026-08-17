@@ -39,6 +39,13 @@ test("migration 005 rewrites legacy citations idempotently without touching task
         kind: "proposed_action_item", start: 999, quote: "Stale legacy quote",
         citation: { startOffset: 22, quote: "Canonical quote" },
       }],
+      ["nested-task-wins", {
+        kind: "task", start: "15:00",
+        meetingSource: {
+          meetingBlockId: "meeting-2", start: 999, quote: "Stale task quote",
+          citation: { startOffset: 33, quote: "Canonical task quote" },
+        },
+      }],
       ["unrelated", { kind: "task", start: "09:00", quote: "ordinary field" }],
     ];
     for (const [id, properties] of fixtures) {
@@ -64,11 +71,22 @@ test("migration 005 rewrites legacy citations idempotently without touching task
     assert.deepEqual(byId.get("nested-wins").citation, {
       startOffset: 22, quote: "Canonical quote",
     });
+    assert.equal(byId.get("nested-task-wins").start, "15:00");
+    assert.deepEqual(byId.get("nested-task-wins").meetingSource, {
+      meetingBlockId: "meeting-2",
+      citation: { startOffset: 33, quote: "Canonical task quote" },
+    });
     assert.deepEqual(byId.get("unrelated"), {
       kind: "task", start: "09:00", quote: "ordinary field",
     });
 
+    const rerunNotices = [];
+    const captureNotice = (notice) => rerunNotices.push(String(notice.message || ""));
+    client.on("notice", captureNotice);
     await client.query(migration);
+    client.removeListener("notice", captureNotice);
+    assert.ok(rerunNotices.includes("citation.proposals_migrated=0"));
+    assert.ok(rerunNotices.includes("citation.approved_tasks_migrated=0"));
     const second = await client.query("SELECT id, properties FROM blocks ORDER BY id");
     assert.deepEqual(second.rows, first.rows, "a rerun must not rewrite canonical rows");
   } finally {
