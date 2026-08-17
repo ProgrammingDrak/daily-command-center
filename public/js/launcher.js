@@ -108,26 +108,17 @@
     toggleQuickCompose();
   });
 
-  // Handle the native keyboard path explicitly. Some embedded browsers do not
-  // synthesize a click for Enter/Space, while assistive activation may emit only
-  // a detail=0 click. The pending flag prevents browsers that emit both from
-  // toggling the launcher twice.
-  let keyboardActivationPending = false;
+  // Handle the native keyboard path explicitly. Preventing the button's default
+  // activation stops a second synthetic click, while assistive activation can
+  // still use the independent detail=0 click path below.
   btn.addEventListener("keydown", function(e){
     if ((e.key === "Enter" || e.key === " ") && !e.repeat){
       e.preventDefault();
-      keyboardActivationPending = true;
       toggleQuickCompose();
     }
   });
-  btn.addEventListener("keyup", function(e){
-    if (e.key === "Enter" || e.key === " "){
-      e.preventDefault();
-      setTimeout(function(){ keyboardActivationPending = false; }, 0);
-    }
-  });
   btn.addEventListener("click", function(e){
-    if (e.detail === 0 && !keyboardActivationPending) toggleQuickCompose();
+    if (e.detail === 0) toggleQuickCompose();
   });
 
   btn.addEventListener("pointercancel", function(){

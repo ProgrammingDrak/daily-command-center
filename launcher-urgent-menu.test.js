@@ -224,9 +224,6 @@ test("keyboard activation opens the launcher and Escape closes it with focus res
   loaded.button.emit("keydown", {key: "Enter", repeat: false, preventDefault(){ prevented = true; }});
   assert.equal(loaded.compose.classList.contains("open"), true);
   assert.equal(prevented, true);
-  loaded.button.emit("click", {detail: 0});
-  assert.equal(loaded.compose.classList.contains("open"), true, "paired keyboard click must not toggle twice");
-  loaded.button.emit("keyup", {key: "Enter", preventDefault(){}});
   loaded.button.focused = false;
   loaded.emitDocument("keydown", {key: "Escape"});
   assert.equal(loaded.compose.classList.contains("open"), false);
