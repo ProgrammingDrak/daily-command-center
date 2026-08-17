@@ -108,10 +108,26 @@
     toggleQuickCompose();
   });
 
-  // Pointer gestures are handled above so a hold remains distinct from a tap.
-  // Keyboard-generated button clicks have detail=0 and use the same toggle path.
+  // Handle the native keyboard path explicitly. Some embedded browsers do not
+  // synthesize a click for Enter/Space, while assistive activation may emit only
+  // a detail=0 click. The pending flag prevents browsers that emit both from
+  // toggling the launcher twice.
+  let keyboardActivationPending = false;
+  btn.addEventListener("keydown", function(e){
+    if ((e.key === "Enter" || e.key === " ") && !e.repeat){
+      e.preventDefault();
+      keyboardActivationPending = true;
+      toggleQuickCompose();
+    }
+  });
+  btn.addEventListener("keyup", function(e){
+    if (e.key === "Enter" || e.key === " "){
+      e.preventDefault();
+      setTimeout(function(){ keyboardActivationPending = false; }, 0);
+    }
+  });
   btn.addEventListener("click", function(e){
-    if (e.detail === 0) toggleQuickCompose();
+    if (e.detail === 0 && !keyboardActivationPending) toggleQuickCompose();
   });
 
   btn.addEventListener("pointercancel", function(){

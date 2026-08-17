@@ -220,12 +220,20 @@ test("quick tap opens Urgent compose and its quick radial, then toggles both clo
 
 test("keyboard activation opens the launcher and Escape closes it with focus restored", () => {
   const loaded = loadLauncher();
-  loaded.button.emit("click", {detail: 0});
+  let prevented = false;
+  loaded.button.emit("keydown", {key: "Enter", repeat: false, preventDefault(){ prevented = true; }});
   assert.equal(loaded.compose.classList.contains("open"), true);
+  assert.equal(prevented, true);
+  loaded.button.emit("click", {detail: 0});
+  assert.equal(loaded.compose.classList.contains("open"), true, "paired keyboard click must not toggle twice");
+  loaded.button.emit("keyup", {key: "Enter", preventDefault(){}});
   loaded.button.focused = false;
   loaded.emitDocument("keydown", {key: "Escape"});
   assert.equal(loaded.compose.classList.contains("open"), false);
   assert.equal(loaded.button.focused, true);
+
+  loaded.button.emit("click", {detail: 0});
+  assert.equal(loaded.compose.classList.contains("open"), true, "direct assistive click still activates the launcher");
 });
 
 test("press and hold still opens the utility radial instead of the task-type fan", () => {
