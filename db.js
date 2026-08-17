@@ -1507,14 +1507,13 @@ async function getCalendarMeetingContextBySourceIds(sourceIds, workspaceId) {
 // The task test is `local_id IS NOT NULL OR kind = 'task'`. It is deliberately NOT
 // `dcc_is_task_row`, and not the fold's `isFoldableTask` either, so do not "unify" it
 // without re-measuring:
-//   - `dcc_is_task_row` is LOOSER here in the one way that matters: it admits meeting
-//     artifacts (meeting_prep / meeting_summary / meeting_transcript /
-//     proposed_action_item), which are genuine parent_id children of a meeting. Now that
-//     the walk reads parent_id, admitting them would let a task move re-date a meeting's
-//     prep doc. Neither half of this OR matches them, and that exclusion is the only thing
-//     preventing it.
-//   - `isFoldableTask` (public/js/persistence.js) has four branches; this is two of them.
-//     It drops shells and materialized meetings, which is correct here: a meeting has no
+//   - `dcc_is_task_row` now rejects meeting artifacts too, but still admits shells and
+//     materialized meetings. This pool deliberately drops both while also excluding
+//     meeting_prep / meeting_summary / meeting_transcript / proposed_action_item, which
+//     are genuine parent_id children of a meeting. Admitting an artifact would let a
+//     task move re-date a meeting's prep doc.
+//   - `isFoldableTask` (public/js/persistence.js) has four branches; this pool is two of
+//     them. It drops shells and materialized meetings, which is correct here: a meeting has no
 //     local_id, so nothing can be nested under it by local-id link, and its parent_id
 //     children are exactly the artifacts above. A meeting can still BE the moved row —
 //     the route passes the parent in separately, it does not come from this pool.

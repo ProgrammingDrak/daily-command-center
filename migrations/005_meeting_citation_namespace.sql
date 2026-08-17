@@ -20,10 +20,6 @@ BEGIN
      SET properties = (properties - 'start' - 'quote') ||
        jsonb_build_object(
          'citation',
-         (CASE
-            WHEN jsonb_typeof(properties -> 'citation') = 'object' THEN properties -> 'citation'
-            ELSE '{}'::jsonb
-          END) ||
          jsonb_strip_nulls(jsonb_build_object(
            'startOffset', CASE
              WHEN jsonb_typeof(properties -> 'start') = 'number'
@@ -32,7 +28,11 @@ BEGIN
              ELSE NULL
            END,
            'quote', NULLIF(btrim(properties ->> 'quote'), '')
-         ))
+         )) ||
+         (CASE
+            WHEN jsonb_typeof(properties -> 'citation') = 'object' THEN properties -> 'citation'
+            ELSE '{}'::jsonb
+          END)
        ),
        updated_at = now()
    WHERE properties ->> 'kind' = 'proposed_action_item'
@@ -50,11 +50,6 @@ BEGIN
        ((properties -> 'meetingSource') - 'start' - 'quote') ||
        jsonb_build_object(
          'citation',
-         (CASE
-            WHEN jsonb_typeof(properties -> 'meetingSource' -> 'citation') = 'object'
-              THEN properties -> 'meetingSource' -> 'citation'
-            ELSE '{}'::jsonb
-          END) ||
          jsonb_strip_nulls(jsonb_build_object(
            'startOffset', CASE
              WHEN jsonb_typeof(properties -> 'meetingSource' -> 'start') = 'number'
@@ -63,7 +58,12 @@ BEGIN
              ELSE NULL
            END,
            'quote', NULLIF(btrim(properties -> 'meetingSource' ->> 'quote'), '')
-         ))
+         )) ||
+         (CASE
+            WHEN jsonb_typeof(properties -> 'meetingSource' -> 'citation') = 'object'
+              THEN properties -> 'meetingSource' -> 'citation'
+            ELSE '{}'::jsonb
+          END)
        )
      ),
      updated_at = now()

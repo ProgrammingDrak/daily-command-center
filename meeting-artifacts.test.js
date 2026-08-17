@@ -164,6 +164,10 @@ test("a duplicate action gains later transcript citation fields without losing p
     proposedActions: [{ text: "Send the launch brief", owner: "drake", origin: "signaled",
       signal: { source: "google_chat", phrase: "action item", excerpt: "Action item: send it" } }],
   });
+  const legacy = childrenOf("mcitation", "proposed_action_item")[0];
+  legacy.properties.start = 45;
+  legacy.properties.quote = "Legacy transcript quote";
+  delete legacy.properties.citation;
   await automation.applyArtifacts("mcitation", {
     workspaceId: "ws-1", userId: 1,
     proposedActions: [{ text: "Send the launch brief.", owner: "drake", start: 91.5, quote: "I'll send it." }],
@@ -208,6 +212,14 @@ test("later citation enrichment follows an action through approval and placement
   });
   const approved = await automation.approveActions("m-citation-sync", { workspaceId: "ws-1", userId: 1 });
   const taskId = approved.approvedBlocks[0].id;
+  const proposal = childrenOf("m-citation-sync", "proposed_action_item")[0];
+  proposal.properties.start = 45;
+  proposal.properties.quote = "Legacy proposal quote";
+  delete proposal.properties.citation;
+  const legacyTask = await mem.getBlock(taskId);
+  legacyTask.properties.meetingSource.start = 45;
+  legacyTask.properties.meetingSource.quote = "Legacy task quote";
+  delete legacyTask.properties.meetingSource.citation;
 
   await automation.applyArtifacts("m-citation-sync", {
     workspaceId: "ws-1", userId: 1, dashboardRef: "updated-review",
@@ -217,6 +229,9 @@ test("later citation enrichment follows an action through approval and placement
     }],
   });
   let task = await mem.getBlock(taskId);
+  assert.equal(proposal.properties.start, undefined);
+  assert.equal(proposal.properties.quote, undefined);
+  assert.deepEqual(proposal.properties.citation, { startOffset: 91.5, quote: "I'll send it." });
   assert.deepEqual(task.properties.meetingSource, {
     meetingBlockId: "m-citation-sync", dashboardRef: "updated-review",
     citation: { startOffset: 91.5, quote: "I'll send it." },
@@ -238,6 +253,15 @@ test("later citation enrichment follows an action through approval and placement
   assert.deepEqual(task.properties.meetingSource.citation, { startOffset: 120, quote: "The final quote." });
   assert.equal(task.properties.meetingSource.start, undefined);
   assert.equal(task.properties.meetingSource.quote, undefined);
+});
+
+test("Recap citation links read the citation namespace with a legacy fallback", () => {
+  const source = require("node:fs").readFileSync(require.resolve("./public/js/meeting-automation.js"), "utf8");
+  const body = source.slice(source.indexOf("function recapActionsHtml"), source.indexOf("async function scheduleRecapAction"));
+  assert.match(body, /const citation=a\.citation&&typeof a\.citation==="object"\?a\.citation:\{\}/);
+  assert.match(body, /const offset=citation\.startOffset!==undefined\?citation\.startOffset:a\.start/);
+  assert.match(body, /const quote=citation\.quote!==undefined\?citation\.quote:a\.quote/);
+  assert.match(body, /dashboard\?t='\+encodeURIComponent\(offset\)/);
 });
 
 test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {
