@@ -1614,10 +1614,6 @@
   .dest-radial-mini{width:28px;height:28px;font-size:12px;z-index:19999;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.35);opacity:0}
   .dest-radial-mini.out{opacity:0.92}
   .dest-radial-mini.out:hover{transform:scale(1.15)}
-  /* Armed compose chip: the type chosen at the FAB, click to switch */
-  .dest-armed-chip{display:inline-flex;align-items:center;gap:5px;padding:6px 9px;border:1px solid var(--accent);border-radius:6px;background:rgba(59,130,246,0.12);color:var(--accent-light);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
-  .dest-armed-chip:hover{background:rgba(59,130,246,0.22)}
-  .dest-armed-chip .dac-icon{font-size:13px;line-height:1}
   /* Placement mode: the one-tap auto-slot chip */
   .sched-chip-earliest{border-color:var(--accent);color:var(--accent-light);background:rgba(59,130,246,0.12)}
   .task-add-bar .tab-add{background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:white;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
@@ -2248,12 +2244,13 @@
   .dcc-radial.open{pointer-events:auto}
   .dcc-radial.open .dcc-radial-item{transform:rotate(var(--angle)) translate(var(--radius)) rotate(calc(-1 * var(--angle))) scale(1);opacity:1;pointer-events:auto}
 
-  /* Compose popover (quick tap): anchored above the launcher */
-  .dcc-compose{position:absolute;bottom:64px;right:0;width:min(360px,86vw);background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.5);padding:12px 14px;display:none;transform-origin:bottom right}
+  /* Compose sits above the quick-type fan so both remain readable and usable. */
+  .dcc-compose{position:absolute;bottom:174px;right:0;width:min(360px,86vw);background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.5);padding:12px 14px;display:none;transform-origin:bottom right}
   .dcc-compose.open{display:block;animation:dccComposeIn 0.16s ease}
   @keyframes dccComposeIn{from{opacity:0;transform:translateY(6px) scale(0.98)}to{opacity:1;transform:none}}
   .dcc-compose .task-add-bar{flex-wrap:wrap;gap:8px;padding:0;margin:0;border-bottom:none}
   .dcc-compose .task-add-bar .tab-title{flex:1 1 100%}
+  .dcc-compose .task-add-bar .tab-dest{display:block;min-width:128px;max-width:160px}
 
   /* Shared dismiss scrim for radial + compose */
   .dcc-scrim{position:fixed;inset:0;z-index:1400;background:transparent;display:none}

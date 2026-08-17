@@ -1,6 +1,6 @@
 // ======== UNIVERSAL "+" LAUNCHER ========
 // The bottom-right "+" circle has two gestures:
-//   - quick tap        -> open the compose popover (add a task)
+//   - quick tap        -> open an Urgent-first compose + three-type quick fan
 //   - press-and-hold   -> open the radial HUD (Add task / Start work / Feedback / Catch up)
 (function(){
   const HOLD_MS = 450;     // how long a press must last to count as a hold
@@ -39,10 +39,13 @@
   function openCompose(){
     if (composeOpen) return;
     closeRadial();
+    const typeSelect = bar && bar.querySelector(".tab-dest");
+    if (typeSelect) typeSelect.value = "urgent";
     composeOpen = true;
     compose.classList.add("open");
     compose.setAttribute("aria-hidden", "false");
     showScrim();
+    if (typeof window.openLauncherTaskTypeRadial === "function") window.openLauncherTaskTypeRadial(btn);
     const input = bar && bar.querySelector(".tab-title");
     if (input) setTimeout(function(){ input.focus(); }, 0);
   }
@@ -51,15 +54,25 @@
     composeOpen = false;
     compose.classList.remove("open");
     compose.setAttribute("aria-hidden", "true");
-    // Disarm the choose-type-first state so the next open starts fresh.
-    if (typeof window._clearDestArm === "function") window._clearDestArm(bar);
+    if (typeof window.closeRadialMenu === "function") window.closeRadialMenu();
     maybeHideScrim();
   }
 
   // ---- shared scrim ----
   function showScrim(){ if (scrim) scrim.classList.add("open"); }
   function maybeHideScrim(){ if (scrim && !radialOpen && !composeOpen) scrim.classList.remove("open"); }
-  function closeAll(){ closeRadial(); closeCompose(); }
+  function closeAll(restoreFocus){
+    const wasOpen = radialOpen || composeOpen;
+    closeRadial();
+    closeCompose();
+    if (restoreFocus && wasOpen) btn.focus();
+  }
+
+  function toggleQuickCompose(){
+    if (radialOpen) { closeRadial(); return; }
+    if (composeOpen) { closeCompose(); btn.focus(); return; }
+    openCompose();
+  }
 
   // ---- gesture detection on the "+" circle ----
   let holdTimer = null, startX = 0, startY = 0, didHold = false, activePointer = null;
@@ -91,12 +104,14 @@
     try { if (btn.hasPointerCapture && btn.hasPointerCapture(activePointer)) btn.releasePointerCapture(activePointer); } catch(_){}
     activePointer = null;
     if (wasHold) return;        // hold already opened the radial; do nothing on release
-    // short tap: choose the task TYPE first (destination fan), then compose
-    // opens armed with it. Falls back to plain compose if the fan isn't loaded.
-    if (radialOpen) { closeRadial(); return; }
-    if (composeOpen) { closeCompose(); return; }
-    if (typeof window.openDestRadialForLauncher === "function") window.openDestRadialForLauncher(btn, openCompose);
-    else openCompose();
+    // Short tap opens the Urgent-first form and its three quick alternatives.
+    toggleQuickCompose();
+  });
+
+  // Pointer gestures are handled above so a hold remains distinct from a tap.
+  // Keyboard-generated button clicks have detail=0 and use the same toggle path.
+  btn.addEventListener("click", function(e){
+    if (e.detail === 0) toggleQuickCompose();
   });
 
   btn.addEventListener("pointercancel", function(){
@@ -120,28 +135,19 @@
   });
 
   // ---- dismissal ----
-  if (scrim) scrim.addEventListener("click", closeAll);
+  if (scrim) scrim.addEventListener("click", function(){ closeAll(true); });
   document.addEventListener("keydown", function(e){
-    if (e.key === "Escape") closeAll();
+    if (e.key === "Escape") closeAll(true);
   });
 
   // ---- compose: close after a successful add ----
-  // schedule.js already binds every .task-add-bar's "+ Add" click and Enter key to
-  // addTaskUniversal(), which clears .tab-title on success and keeps it (+ .tab-error)
-  // on an empty submit. We ride on top: close only if the input ended up empty.
+  // schedule.js emits this only after a non-empty launcher submission, including
+  // the deferred Schedule path. Blank validation therefore keeps the form open.
   if (bar){
-    const closeIfAdded = function(){
-      setTimeout(function(){
-        const input = bar.querySelector(".tab-title");
-        if (input && !input.value) closeCompose();
-      }, 0);
-    };
-    const addBtn = bar.querySelector(".tab-add");
     const titleInput = bar.querySelector(".tab-title");
-    if (addBtn) addBtn.addEventListener("click", closeIfAdded);
+    bar.addEventListener("dcc:launcher-submit-success", closeCompose);
     if (titleInput) titleInput.addEventListener("keydown", function(e){
-      if (e.key === "Enter") closeIfAdded();
-      if (e.key === "Escape") closeCompose();
+      if (e.key === "Escape") { closeCompose(); btn.focus(); }
     });
   }
 })();
