@@ -34,6 +34,28 @@
   let _returnFocus = null;
   let _openHasLoadFailure = false;
   let _retryTimer = null;
+  let _activeCarryoverSettlement = null;
+
+  function pruneSettledCarryover(ids) {
+    if (!_lastSnapshot || !_lastSnapshot.res || !Array.isArray(_lastSnapshot.res.rows)) return;
+    const gone = new Set(ids || []);
+    if (!gone.size) return;
+    const rows = _lastSnapshot.res.rows;
+    const removedOpen = rows.filter(row => gone.has(row.id) && !(row.__unf && row.__unf.done)).length;
+    _lastSnapshot.res = Object.assign({}, _lastSnapshot.res, {
+      rows: rows.filter(row => !gone.has(row.id)),
+      total: Math.max(0, (_lastSnapshot.res.total || 0) - removedOpen)
+    });
+  }
+
+  function handleCarryoverSettlement(event) {
+    const ids = event && event.detail && event.detail.removed;
+    if (!Array.isArray(ids) || !ids.length) return;
+    pruneSettledCarryover(ids);
+    if (typeof _activeCarryoverSettlement === "function") _activeCarryoverSettlement(ids);
+    if (_lastSnapshot) setIndicatorCount(snapshotCount(_lastSnapshot));
+  }
+  if (typeof window.addEventListener === "function") window.addEventListener("dcc:carryover-settled", handleCarryoverSettlement);
 
   function reviewed() {
     if (typeof _bsProp !== "function") return true;   // no day_root yet: don't prompt blind
@@ -405,6 +427,7 @@
       }
       return true;
     };
+    _activeCarryoverSettlement = ids => settle({ removed: ids });
     const label = (text) => {
       const el = document.createElement("h4");
       el.className = "cu-section-label";

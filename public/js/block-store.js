@@ -1009,9 +1009,16 @@
         cacheDelete(id);
         walRemove(walId);
         setSaved();
+        return { ok: true, buffered: false, walId };
       } catch (e) {
         setError("Delete failed — buffered for retry");
         cacheDelete(id);
+        return {
+          ok: false,
+          buffered: true,
+          walId,
+          error: { message: (e && e.message) || "Delete failed", status: (e && e.status) || null }
+        };
       }
     },
 
@@ -1105,7 +1112,7 @@
         }
         walRemove(walId);
         setSaved();
-        return { ...result, walId, buffered: false };
+        return { ...result, ok: true, walId, buffered: false };
       } catch (e) {
         setError("Batch save failed — buffered for retry");
         // `buffered: true` says the write did NOT land and is still in the WAL. Callers
@@ -1114,7 +1121,13 @@
         // guess from an empty array. state.js undoDeleteTask genuinely needs to know --
         // undoing a delete that never landed must cancel the queued delete, not revive a
         // row that was never deleted and then let the batch replay over the top of it.
-        return { blocks: [], walId, buffered: true };
+        return {
+          blocks: [],
+          ok: false,
+          walId,
+          buffered: true,
+          error: { message: (e && e.message) || "Batch save failed", status: (e && e.status) || null }
+        };
       }
     },
 

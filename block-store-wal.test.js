@@ -918,11 +918,14 @@ test("batchOp reports whether the write landed, and cancelBufferedWrite abandons
   // that landed from one still sitting in the WAL.
   const ok = makeStore({ fetchBody: { blocks: [{ id: "b1", deleted_at: "2026-07-08T00:00:00.000Z" }] } });
   const landed = await ok.store.batchOp([{ op: "delete", id: "b1" }]);
+  assert.equal(landed.ok, true, "an acknowledged batch exposes an explicit success verdict");
   assert.equal(landed.buffered, false, "a write that acked is not buffered");
   assert.equal(wal(ok.storage).length, 0);
 
   const down = makeStore({ fetchReject: true });
   const held = await down.store.batchOp([{ op: "delete", id: "b1" }]);
+  assert.equal(held.ok, false, "a buffered batch exposes an explicit failure verdict");
+  assert.match(held.error.message, /network down/);
   assert.equal(held.buffered, true, "a write that failed IS still buffered");
   assert.ok(held.walId, "and it names its own WAL entry so a caller can abandon it");
   assert.equal(wal(down.storage).length, 1);
