@@ -24,6 +24,40 @@ test("Clerk card is constrained to the DCC card at every width", () => {
   assert.doesNotMatch(source, /querySelector\("\.logo"\)\.style\.display\s*=\s*"none"/);
 });
 
+test("managed and credential login methods share one visible card", () => {
+  assert.match(source, /<section id="managedAuth"[\s\S]*?<div id="clerkSignIn"/);
+  assert.match(source, /or use your username or email/);
+  assert.match(source, /<form id="authForm">/);
+  assert.doesNotMatch(source, /legacyForm\.style\.display\s*=\s*"none"/);
+  assert.doesNotMatch(source, /tabsEl\.style\.display\s*=\s*"none"/);
+});
+
+test("register mode returns the shared credential field to username-only copy", () => {
+  assert.match(source, /usernameLabel\.textContent = isRegister \? "Username" : "Username or email"/);
+  assert.match(source, /usernameInput\.placeholder = isRegister \? "drake" : "drake or you@example\.com"/);
+  assert.match(source, /clerkDividerText\.textContent = isRegister \? "or create with a username" : "or use your username or email"/);
+});
+
+test("Clerk contributes only the provider row", () => {
+  assert.match(source, /form: \{ display: "none" \}/);
+  assert.match(source, /dividerRow: \{ display: "none" \}/);
+  assert.match(source, /footer: \{ display: "none" \}/);
+  assert.match(source, /socialButtonsBlockButton: \{ width: "100%"/);
+});
+
+test("unavailable managed auth preserves the credential fallback", () => {
+  assert.match(source, /reason === "no-key"/);
+  assert.match(source, /managedAuthEl\.hidden = true/);
+  assert.match(source, /Google sign-in is temporarily unavailable\. Use your username or email below\./);
+});
+
+test("dynamic auth controls expose accessible state", () => {
+  assert.match(source, /id="error" role="alert" aria-live="assertive"/);
+  assert.match(source, /id="loginTab" aria-pressed="true"/);
+  assert.match(source, /togglePw\.setAttribute\("aria-label", isHidden \? "Hide password" : "Show password"\)/);
+  assert.match(source, /\.auth-provider-status \{\s*background: #0f1117;\s*border: 1px solid #2d3148;\s*border-radius: 8px;\s*color: #94a3b8;/);
+});
+
 test("OAuth returns directly into the pre-paint verification state", () => {
   const headEnd = source.indexOf("</head>");
   const prePaintMarker = source.indexOf("markOAuthReturnBeforePaint");

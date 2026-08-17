@@ -267,7 +267,7 @@ app.get("/register", sendAuthPage);
 
 app.post("/api/auth/login", validate(schemas.login), async (req, res) => {
   const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: "Username and password required" });
+  if (!username || !password) return res.status(400).json({ error: "Username or email and password required" });
   if (LOCAL_AUTH_ENABLED && username === LOCAL_AUTH_USERNAME && password === LOCAL_AUTH_PASSWORD) {
     req.session.userId = LOCAL_AUTH_USER_ID;
     req.session.username = LOCAL_AUTH_USERNAME;
@@ -276,8 +276,8 @@ app.post("/api/auth/login", validate(schemas.login), async (req, res) => {
     return res.json({ ok: true, username: LOCAL_AUTH_USERNAME, workspaceId: LOCAL_AUTH_WORKSPACE_ID, local: true });
   }
   try {
-    const user = await auth.findUserByUsername(username);
-    if (!user || !auth.verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid username or password" });
+    const user = await auth.findUserByLogin(username);
+    if (!user || !user.password_hash || !auth.verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Invalid sign-in credentials" });
     req.session.userId = user.id; req.session.username = user.username; req.session.workspaceId = null;
     const { rows } = await pool.query("SELECT workspace_id FROM workspace_members WHERE user_id = $1 AND role = 'owner' LIMIT 1", [user.id]);
     await recordLoginEvent(req, { userId: user.id, username: user.username, workspaceId: rows[0]?.workspace_id || null });
