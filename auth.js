@@ -26,6 +26,18 @@ async function findUserByUsername(username) {
   return rows[0] || null;
 }
 
+async function findUserByLogin(identifier) {
+  const value = String(identifier || "").trim();
+  const { rows } = await pool.query(
+    `SELECT * FROM users
+     WHERE username = $1 OR lower(email) = lower($1)
+     ORDER BY CASE WHEN username = $1 THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [value]
+  );
+  return rows[0] || null;
+}
+
 function verifyPassword(password, hash) {
   return bcrypt.compareSync(password, hash);
 }
@@ -153,4 +165,4 @@ async function findOrCreateExternalUser({ externalId, email, displayName, avatar
   }
 }
 
-module.exports = { createUser, findUserByUsername, verifyPassword, ensureDefaultUser, registerUser, findOrCreateExternalUser };
+module.exports = { createUser, findUserByUsername, findUserByLogin, verifyPassword, ensureDefaultUser, registerUser, findOrCreateExternalUser };

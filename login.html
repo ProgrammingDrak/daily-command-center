@@ -60,7 +60,7 @@
 
     .logo p {
       font-size: 13px;
-      color: #64748b;
+      color: #94a3b8;
       margin-top: 4px;
     }
 
@@ -185,28 +185,52 @@
 
     .error.visible { display: block; }
 
-    .clerk-mount { display: none; width: 100%; min-width: 0; margin-bottom: 18px; }
+    .managed-auth { margin-bottom: 18px; }
+    .managed-auth[hidden] { display: none; }
+
+    .auth-option-label {
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      margin-bottom: 10px;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .auth-provider-status {
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      color: #94a3b8;
+      font-size: 13px;
+      padding: 11px 14px;
+      text-align: center;
+    }
+
+    .auth-provider-status.unavailable { color: #94a3b8; }
+
+    .clerk-mount { display: none; width: 100%; min-width: 0; }
     .clerk-mount.visible { display: block; }
     .clerk-mount :where(.cl-rootBox, .cl-cardBox, .cl-card, .cl-main) {
       width: 100% !important;
       max-width: 100% !important;
       min-width: 0 !important;
     }
-    .clerk-mount :where(.cl-form, .cl-formFieldRow, .cl-formFieldInput, .cl-formButtonPrimary, .cl-socialButtonsBlockButton) {
+    .clerk-mount :where(.cl-socialButtonsBlockButton) {
       width: 100% !important;
       max-width: 100% !important;
       min-width: 0 !important;
     }
 
     .divider {
-      display: none;
+      display: flex;
       align-items: center;
       text-align: center;
       color: #64748b;
       font-size: 12px;
-      margin: 4px 0 18px;
+      margin: 18px 0 0;
     }
-    .divider.visible { display: flex; }
     .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #2d3148; }
     .divider span { padding: 0 12px; }
 
@@ -334,20 +358,24 @@
       <p id="authSubtitle">Sign in to continue</p>
     </div>
 
-    <div class="error" id="error"></div>
+    <div class="error" id="error" role="alert" aria-live="assertive"></div>
 
-    <div id="clerkSignIn" class="clerk-mount"></div>
-    <div id="clerkDivider" class="divider"><span>or continue with a username</span></div>
+    <section id="managedAuth" class="managed-auth" aria-label="Single sign-on options">
+      <p class="auth-option-label">Fast sign in</p>
+      <div id="authProviderStatus" class="auth-provider-status" role="status">Loading secure sign-in options...</div>
+      <div id="clerkSignIn" class="clerk-mount"></div>
+      <div id="clerkDivider" class="divider"><span id="clerkDividerText">or use your username or email</span></div>
+    </section>
 
-    <div class="auth-tabs" role="tablist" aria-label="Account access">
-      <button type="button" class="auth-tab active" id="loginTab" role="tab" aria-selected="true">Sign in</button>
-      <button type="button" class="auth-tab" id="registerTab" role="tab" aria-selected="false">Register</button>
+    <div class="auth-tabs" aria-label="Account access">
+      <button type="button" class="auth-tab active" id="loginTab" aria-pressed="true">Sign in</button>
+      <button type="button" class="auth-tab" id="registerTab" aria-pressed="false">Register</button>
     </div>
 
     <form id="authForm">
       <div class="form-group">
-        <label for="username">Username</label>
-        <input type="text" id="username" name="username" placeholder="drake" autocomplete="username" autofocus>
+        <label for="username" id="usernameLabel">Username or email</label>
+        <input type="text" id="username" name="username" placeholder="drake or you@example.com" autocomplete="username">
       </div>
       <div class="form-group">
         <label for="password">Password</label>
@@ -383,17 +411,22 @@
     const passwordInput = document.getElementById("password");
     const eyeIcon = document.getElementById("eyeIcon");
     const usernameInput = document.getElementById("username");
+    const usernameLabel = document.getElementById("usernameLabel");
+    const clerkDividerText = document.getElementById("clerkDividerText");
 
     function setMode(nextMode, pushState = true) {
       mode = nextMode;
       const isRegister = mode === "register";
       loginTab.classList.toggle("active", !isRegister);
       registerTab.classList.toggle("active", isRegister);
-      loginTab.setAttribute("aria-selected", String(!isRegister));
-      registerTab.setAttribute("aria-selected", String(isRegister));
+      loginTab.setAttribute("aria-pressed", String(!isRegister));
+      registerTab.setAttribute("aria-pressed", String(isRegister));
       subtitle.textContent = isRegister ? "Create an account to continue" : "Sign in to continue";
       confirmGroup.classList.toggle("hidden", !isRegister);
       confirmInput.required = isRegister;
+      usernameLabel.textContent = isRegister ? "Username" : "Username or email";
+      usernameInput.placeholder = isRegister ? "drake" : "drake or you@example.com";
+      clerkDividerText.textContent = isRegister ? "or create with a username" : "or use your username or email";
       passwordInput.autocomplete = isRegister ? "new-password" : "current-password";
       document.title = isRegister ? "Daily Command Center — Register" : "Daily Command Center — Sign In";
       btn.textContent = isRegister ? "Create Account" : "Sign in";
@@ -408,6 +441,7 @@
     togglePw.addEventListener("click", () => {
       const isHidden = passwordInput.type === "password";
       passwordInput.type = isHidden ? "text" : "password";
+      togglePw.setAttribute("aria-label", isHidden ? "Hide password" : "Show password");
       eyeIcon.innerHTML = isHidden
         ? `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
            <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
@@ -484,13 +518,15 @@
     // ── Managed login widget via the shared drake-auth kit ──
     // The config fetch, publishable-key decode, clerk.browser.js load, widget
     // mount, and token→dcc_session sync all live in the package (identical
-    // across Drake's apps). This page only supplies DCC's appearance and the
-    // legacy-form collapse. If no Clerk keys are configured server-side the
+    // across Drake's apps). This page supplies DCC's appearance and keeps the
+    // app-owned credential fallback visible. If no Clerk keys are configured server-side the
     // module reports "no-key" and the username/password form stays as-is.
     import { initClerkAuth } from "/vendor/drake-auth/browser.js";
 
     const errorEl = document.getElementById("error");
+    const managedAuthEl = document.getElementById("managedAuth");
     const mountEl = document.getElementById("clerkSignIn");
+    const providerStatusEl = document.getElementById("authProviderStatus");
     const progressTitle = document.getElementById("authProgressTitle");
     const progressCopy = document.getElementById("authProgressCopy");
     const CLERK_PENDING_KEY = "dcc-clerk-pending";
@@ -547,11 +583,10 @@
         card: { width: "100%", maxWidth: "100%", minWidth: "0", boxShadow: "none", border: "none", backgroundColor: "transparent", padding: "0" },
         main: { width: "100%", maxWidth: "100%", minWidth: "0" },
         header: { display: "none" },
-        form: { width: "100%", maxWidth: "100%", minWidth: "0" },
-        formFieldRow: { width: "100%", maxWidth: "100%", minWidth: "0" },
-        formFieldInput: { width: "100%", maxWidth: "100%", minWidth: "0" },
-        formButtonPrimary: { width: "100%", maxWidth: "100%" },
-        socialButtonsBlockButton: { width: "100%", maxWidth: "100%" },
+        form: { display: "none" },
+        dividerRow: { display: "none" },
+        footer: { display: "none" },
+        socialButtonsBlockButton: { width: "100%", maxWidth: "100%", minWidth: "0" },
       },
     };
 
@@ -575,18 +610,23 @@
         failClerkReturn(e.message || "Sign-in could not be completed.");
       },
       onUnavailable: (reason) => {
-        if (reason === "load-failed") console.warn("Social login unavailable");
+        if (reason === "no-key") {
+          managedAuthEl.hidden = true;
+          return;
+        }
+        providerStatusEl.textContent = "Google sign-in is temporarily unavailable. Use your username or email below.";
+        providerStatusEl.classList.add("unavailable");
+        console.warn("Social login unavailable");
         if (document.documentElement.classList.contains("auth-verifying")) {
           failClerkReturn("We could not reconnect to Google sign-in. Please try again.");
         }
       },
     });
 
-    // Widget actually mounted (returning Clerk visitors sync + redirect
-    // instead, so leave the page untouched for them). Clerk now provides the
-    // primary title + card, so hide our duplicate logo and collapse the
-    // legacy username/password form behind a toggle.
+    // Keep every sign-in method in one card. Clerk owns only the social-provider
+    // row; DCC's username/email and password form remains visible underneath.
     if (ctrl.clerk && !ctrl.clerk.user) {
+      providerStatusEl.hidden = true;
       mountEl.classList.add("visible");
       mountEl.addEventListener("pointerdown", (event) => {
         const button = event.target.closest && event.target.closest("button");
@@ -594,22 +634,6 @@
           rememberClerkHandoff();
         }
       }, true);
-      const tabsEl = document.querySelector(".auth-tabs");
-      const legacyForm = document.getElementById("authForm");
-      tabsEl.style.display = "none";
-      legacyForm.style.display = "none";
-      const divider = document.getElementById("clerkDivider");
-      divider.querySelector("span").textContent = "or sign in with a username";
-      divider.classList.add("visible");
-      divider.style.cursor = "pointer";
-      divider.title = "Use a username and password instead";
-      divider.addEventListener("click", () => {
-        tabsEl.style.display = "";
-        legacyForm.style.display = "";
-        divider.style.cursor = "default";
-        divider.querySelector("span").textContent = "or continue with a username";
-        divider.replaceWith(divider.cloneNode(true)); // drop the listener
-      });
     }
 
     if (document.documentElement.classList.contains("auth-verifying") && (!ctrl.clerk || !ctrl.clerk.user)) {

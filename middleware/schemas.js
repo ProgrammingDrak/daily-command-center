@@ -7,7 +7,7 @@ const HHMM = /^\d{1,2}:\d{2}$/;
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
 const login = z.object({
-  username: z.string().min(1, "username required"),
+  username: z.string().min(1, "username or email required"),
   password: z.string().min(1, "password required"),
 }).passthrough();
 
