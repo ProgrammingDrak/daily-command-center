@@ -1909,9 +1909,9 @@ function closeSchedDefaults(){const ov=document.getElementById("sched-defaults-o
 })();
 // ======== TASK DESTINATIONS (shared registry + radial menu) ========
 // One list drives every task-add bar, so new destinations (like Shell) show up
-// everywhere at once instead of drifting per-bar. The old <select> stays in
-// the DOM (hidden) as the value store addTaskUniversal reads; the radial menu
-// just sets it.
+// everywhere at once instead of drifting per-bar. Regular add bars keep the
+// select hidden behind their radial. The launcher exposes it as a conventional
+// task-type dropdown and uses the same registry for both surfaces.
 const TASK_DESTINATIONS=[
   {value:"urgent",  icon:"⚡", label:"Urgent"},
   {value:"done",    icon:"✅", label:"Completed"},
@@ -1943,7 +1943,8 @@ function _flashBlankTitle(barEl,onProceed){
 // the destination semantics — map TASK_DESTINATIONS to items whose default
 // pick commits the add through the hidden select + addTaskUniversal.
 function _destItems(bar,sel,opts){
-  return TASK_DESTINATIONS.map(d=>({icon:d.icon,label:d.label,
+  const destinations=(opts&&opts.destinations)||TASK_DESTINATIONS;
+  return destinations.map(d=>({icon:d.icon,label:d.label,
     onPick:()=>{
       if(opts&&typeof opts.onPick==="function"){opts.onPick(d);return}
       sel.value=d.value;
@@ -1960,12 +1961,31 @@ function initDestRadial(bar){
       const o=document.createElement("option");o.value=d.value;o.textContent=d.label;sel.appendChild(o);
     }
   });
-  sel.style.display="none";
-  // "+ Add" is the ONE button: click fans out the destinations, and picking a
-  // destination commits the add in the same gesture (no separate submit).
   const addBtn=bar.querySelector(".tab-add");
   const inp=bar.querySelector(".tab-title");
   if(!addBtn)return;
+  // The floating launcher is a conventional compose form. It starts on Urgent,
+  // exposes every type in the select, and submits the currently selected type.
+  // Its three quick alternatives are opened separately from the FAB.
+  if(bar.id==="task-add-launcher"){
+    sel.style.removeProperty("display");
+    const submitLauncher=()=>{
+      _hideDestPreview();
+      closeRadialMenu();
+      const title=inp?inp.value.trim():"";
+      if(!title){_flashBlankTitle(bar,submitLauncher);return}
+      addTaskUniversal(bar);
+      if(typeof Event==="function"&&typeof bar.dispatchEvent==="function"){
+        bar.dispatchEvent(new Event("dcc:launcher-submit-success"));
+      }
+    };
+    addBtn.addEventListener("click",e=>{e.stopPropagation();submitLauncher()});
+    if(inp)inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();submitLauncher()}});
+    return;
+  }
+  sel.style.display="none";
+  // "+ Add" is the ONE button: click fans out the destinations, and picking a
+  // destination commits the add in the same gesture (no separate submit).
   const openOrFlash=()=>{
     _hideDestPreview();
     if(document.querySelector(".dest-radial-backdrop")){_closeDestRadial();return}
@@ -2020,50 +2040,30 @@ function _openDestRadial(bar,sel,trig,opts){
   opts=opts||{};
   // Picking a destination IS the submit — one gesture, committed — unless the
   // caller intercepts (e.g. the FAB arms the compose bar via opts.onPick).
-  openRadialMenu(trig,_destItems(bar,sel,opts),{a0:opts.a0,a1:opts.a1});
+  openRadialMenu(trig,_destItems(bar,sel,opts),{
+    a0:opts.a0,a1:opts.a1,r:opts.r,labelGap:opts.labelGap,
+    labelStagger:opts.labelStagger,clampY:opts.clampY,backdrop:opts.backdrop
+  });
 }
-// ── Armed compose (FAB choose-type-first flow) ──
-// The launcher FAB fans out the destinations BEFORE the compose bar opens;
-// the pick "arms" the bar: a chip shows the chosen type, and + Add / Enter
-// commits straight to it. Clicking the chip re-opens the fan to switch type.
-function _setDestArm(bar,destValue){
-  bar.dataset.armedDest=destValue;
-  const sel=bar.querySelector(".tab-dest");
-  if(sel)sel.value=destValue;
-  let chip=bar.querySelector(".dest-armed-chip");
-  if(!chip){
-    chip=document.createElement("button");
-    chip.type="button";chip.className="dest-armed-chip";chip.title="Change task type";
-    const inp=bar.querySelector(".tab-title");
-    bar.insertBefore(chip,inp||bar.firstChild);
-    chip.addEventListener("click",e=>{
-      e.stopPropagation();
-      _openDestRadial(bar,sel,chip,{onPick:d=>_setDestArm(bar,d.value)});
-    });
-  }
-  const m=_destMeta(destValue);
-  chip.innerHTML='<span class="dac-icon">'+m.icon+'</span><span class="dac-label">'+m.label+'</span>';
-}
-function _clearDestArm(bar){
-  if(!bar)return;
-  delete bar.dataset.armedDest;
-  const chip=bar.querySelector(".dest-armed-chip");
-  if(chip)chip.remove();
-}
-// Called by launcher.js on a quick FAB tap: destinations fan out from the FAB
-// (up-left arc, it lives in the corner); the pick arms the bar then opens
-// the compose. Dismissing the fan opens nothing.
-function openDestRadialForLauncher(anchorBtn,onOpenCompose){
+// The launcher form is already open when this non-modal fan appears. It keeps
+// the frequent Urgent path immediate while putting the three richer task types
+// one tap away. Picking one updates the visible dropdown without submitting.
+function openLauncherTaskTypeRadial(anchorBtn){
   const bar=document.getElementById("task-add-launcher");
   const sel=bar&&bar.querySelector(".tab-dest");
-  if(!bar||!sel){if(typeof onOpenCompose==="function")onOpenCompose();return}
-  _openDestRadial(bar,sel,anchorBtn,{a0:185,a1:268,onPick:d=>{
-    _setDestArm(bar,d.value);
-    if(typeof onOpenCompose==="function")onOpenCompose();
-  }});
+  if(!bar||!sel)return;
+  const quickTypes=TASK_DESTINATIONS.filter(d=>d.value==="wrap"||d.value==="habit"||d.value==="meeting");
+  _openDestRadial(bar,sel,anchorBtn,{
+    destinations:quickTypes,a0:188,a1:268,r:88,labelGap:34,backdrop:false,
+    onPick:d=>{
+      sel.value=d.value;
+      if(typeof sel.dispatchEvent==="function"&&typeof Event==="function")sel.dispatchEvent(new Event("change",{bubbles:true}));
+      const inp=bar.querySelector(".tab-title");
+      if(inp)inp.focus();
+    }
+  });
 }
-window.openDestRadialForLauncher=openDestRadialForLauncher;
-window._clearDestArm=_clearDestArm;
+window.openLauncherTaskTypeRadial=openLauncherTaskTypeRadial;
 
 // Wire up all task-add bars ("+ Add" opens the radial; Enter in the title too)
 document.querySelectorAll(".task-add-bar").forEach(bar=>initDestRadial(bar));

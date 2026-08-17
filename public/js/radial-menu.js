@@ -20,6 +20,8 @@
 //                    pass true to force it below that.
 //     clampY,        clamp the fan's virtual center vertically so a trigger
 //                    near the screen edge still shows the whole fan
+//     backdrop,       false keeps the fan non-modal so a nearby form remains
+//                    interactive. Defaults to true.
 //     onClose
 //   }
 
@@ -59,10 +61,12 @@ function openRadialMenu(anchorEl,items,opts){
   _radialTrigger=anchorEl;
   _radialOnClose=typeof opts.onClose==="function"?opts.onClose:null;
   anchorEl.classList.add("open");
-  const backdrop=document.createElement("div");
-  backdrop.className="dest-radial-backdrop";
-  backdrop.addEventListener("click",closeRadialMenu);
-  document.body.appendChild(backdrop);
+  if(opts.backdrop!==false){
+    const backdrop=document.createElement("div");
+    backdrop.className="dest-radial-backdrop";
+    backdrop.addEventListener("click",closeRadialMenu);
+    document.body.appendChild(backdrop);
+  }
   const rect=anchorEl.getBoundingClientRect();
   const cx=rect.left+rect.width/2;
   let cy=rect.top+rect.height/2;
@@ -87,6 +91,7 @@ function openRadialMenu(anchorEl,items,opts){
     const item=document.createElement("button");
     item.type="button";item.className="dest-radial-item";
     if(d.title)item.title=d.title;
+    if(d.label)item.setAttribute("aria-label",d.label);
     item.innerHTML='<span class="dri-icon">'+d.icon+'</span>';
     item.style.left=(cx-22)+"px";item.style.top=(cy-22)+"px";
     // Label rides just past its item along the same spoke, so labels fan with
