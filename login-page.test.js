@@ -20,7 +20,7 @@ test("login page scripts remain syntactically valid", () => {
 test("Clerk card is constrained to the DCC card at every width", () => {
   assert.match(source, /\.clerk-mount :where\(\.cl-rootBox, \.cl-cardBox, \.cl-card, \.cl-main\)/);
   assert.match(source, /cardBox: \{ width: "100%", maxWidth: "100%", minWidth: "0"/);
-  assert.match(source, /\.clerk-mount \.cl-signIn-start :where\(\.cl-header, \.cl-form, \.cl-dividerRow, \.cl-footer\)/);
+  assert.match(source, /#clerkSignIn \.cl-signIn-start :where\(\.cl-header, \.cl-form, \.cl-dividerRow, \.cl-footer\)/);
   assert.doesNotMatch(source, /querySelector\("\.logo"\)\.style\.display\s*=\s*"none"/);
 });
 
@@ -39,7 +39,7 @@ test("register mode returns the shared credential field to username-only copy", 
 });
 
 test("Clerk contributes only the provider row at start and preserves continuation forms", () => {
-  assert.match(source, /\.cl-signIn-start :where\(\.cl-header, \.cl-form, \.cl-dividerRow, \.cl-footer\)/);
+  assert.match(source, /#clerkSignIn \.cl-signIn-start :where\(\.cl-header, \.cl-form, \.cl-dividerRow, \.cl-footer\)/);
   assert.doesNotMatch(source, /form: \{ display: "none" \}/);
   assert.doesNotMatch(source, /dividerRow: \{ display: "none" \}/);
   assert.doesNotMatch(source, /footer: \{ display: "none" \}/);
