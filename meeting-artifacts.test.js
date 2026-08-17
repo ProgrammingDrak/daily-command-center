@@ -9,6 +9,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("node:http");
+const fs = require("node:fs");
+const vm = require("node:vm");
 const express = require("express");
 const meetingIdentity = require("./meeting-identity.js");
 
@@ -255,13 +257,73 @@ test("later citation enrichment follows an action through approval and placement
   assert.equal(task.properties.meetingSource.quote, undefined);
 });
 
+test("approveActions normalizes a stored legacy citation before the migration runs", async () => {
+  seedMeeting("m-legacy-approval", { title: "Legacy approval", dashboard_ref: "legacy-review" });
+  mem.store.push({
+    id: "legacy-proposal", type: "block", parent_id: "m-legacy-approval", date: "2026-07-09",
+    properties: {
+      kind: "proposed_action_item", text: "Send the legacy brief", owner: "drake",
+      priority: "High", status: "proposed", start: 91.5, quote: "I'll send it.",
+    },
+    workspace_id: "ws-1", user_id: 1, deleted_at: null,
+  });
+
+  const approved = await automation.approveActions("m-legacy-approval", {
+    workspaceId: "ws-1", userId: 1, actionIds: ["legacy-proposal"],
+  });
+  assert.equal(approved.approvedCount, 1);
+  assert.deepEqual(approved.approvedBlocks[0].properties.meetingSource, {
+    meetingBlockId: "m-legacy-approval", dashboardRef: "legacy-review",
+    citation: { startOffset: 91.5, quote: "I'll send it." },
+  });
+  const proposal = await mem.getBlock("legacy-proposal");
+  assert.deepEqual(proposal.properties.citation, { startOffset: 91.5, quote: "I'll send it." });
+  assert.equal(proposal.properties.start, undefined);
+  assert.equal(proposal.properties.quote, undefined);
+});
+
 test("Recap citation links read the citation namespace with a legacy fallback", () => {
-  const source = require("node:fs").readFileSync(require.resolve("./public/js/meeting-automation.js"), "utf8");
-  const body = source.slice(source.indexOf("function recapActionsHtml"), source.indexOf("async function scheduleRecapAction"));
-  assert.match(body, /const citation=a\.citation&&typeof a\.citation==="object"\?a\.citation:\{\}/);
-  assert.match(body, /const offset=citation\.startOffset!==undefined\?citation\.startOffset:a\.start/);
-  assert.match(body, /const quote=citation\.quote!==undefined\?citation\.quote:a\.quote/);
-  assert.match(body, /dashboard\?t='\+encodeURIComponent\(offset\)/);
+  const source = fs.readFileSync(require.resolve("./public/js/meeting-automation.js"), "utf8");
+  const extractFunction = (name) => {
+    const start = source.indexOf(`function ${name}`);
+    assert.notEqual(start, -1, `${name} exists`);
+    const open = source.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < source.length; i += 1) {
+      if (source[i] === "{") depth += 1;
+      if (source[i] === "}") depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+    throw new Error(`Could not extract ${name}`);
+  };
+  const context = {
+    esc: (value) => String(value || "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;"),
+  };
+  vm.createContext(context);
+  vm.runInContext(
+    `${extractFunction("recapTime")}\n${extractFunction("recapActionsHtml")}\nglobalThis.renderRecapActions = recapActionsHtml;`,
+    context,
+  );
+
+  const nested = context.renderRecapActions([{
+    id: "action-1", text: "Send it", citation: { startOffset: 91.5, quote: 'I said "send it"' },
+  }], new Map(), "meeting-1", "review-1");
+  assert.match(nested, /dashboard\?t=91\.5/);
+  assert.match(nested, /title="I said &quot;send it&quot;"/);
+  assert.match(nested, /▶ 01:32/);
+
+  const legacy = context.renderRecapActions([{
+    id: "action-2", text: "Legacy", start: 61, quote: "Legacy quote",
+  }], new Map(), "meeting-1", "review-1");
+  assert.match(legacy, /dashboard\?t=61/);
+  assert.match(legacy, /▶ 01:01/);
+
+  const missing = context.renderRecapActions([{
+    id: "action-3", text: "No citation", citation: { startOffset: null, quote: "" },
+  }], new Map(), "meeting-1", "review-1");
+  assert.doesNotMatch(missing, /recap-action-source/);
 });
 
 test("applyArtifacts attaches the playable review, hot retention metadata, and safe cold source", async () => {

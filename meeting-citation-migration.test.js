@@ -9,13 +9,13 @@ const migration = fs.readFileSync(
 );
 
 test("migration 005 rewrites legacy citations idempotently without touching task time", async (t) => {
-  const client = new Client({ connectionString: "postgres://localhost/daily_command_center" });
-  try {
-    await client.connect();
-  } catch (error) {
-    t.skip(`local Postgres unavailable: ${error.code || error.message}`);
+  const databaseUrl = process.env.DCC_TEST_DATABASE_URL;
+  if (!databaseUrl) {
+    t.skip("DCC_TEST_DATABASE_URL not set");
     return;
   }
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
 
   try {
     await client.query("BEGIN");

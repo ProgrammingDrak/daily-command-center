@@ -14,6 +14,7 @@
     "sweep:check": "node scripts/sweep-suite-check.js",
     "ship": "node scripts/ship-pr.js",
     "test": "node --test",
+    "test:postgres": "node --test meeting-citation-migration.test.js",
     "lint": "eslint .",
     "format": "prettier --write .",
     "start": "npm run check:db && node pg-schema.js && node server.js",
