@@ -83,15 +83,16 @@ const dayRoot = (props) => ({ id: "root", type: "day_root", properties: props ||
 // is the REAL behavior for a past-day carryover block, since loadDateRange populates
 // only _rangeCache and _dayCache is cleared on every date switch.
 function load(daysByDate, archiveDates) {
-  const calls = { batchOp: [], deleteBlock: [], updateBlock: [], reschedule: [], commitDone: [], loadDay: [] };
+  const calls = { batchOp: [], deleteBlock: [], updateBlock: [], reschedule: [], commitDone: [], loadDay: [], cancelled: [], settled: [] };
   const store = {
     async loadDateRange() {},
     getRangeCache(date) { return daysByDate[date] ? { blocks: daysByDate[date] } : null; },
     get() { return null; },                       // _dayCache/_globalCache miss, as in prod
     invalidateRangeCache() {},
     async loadDay(d) { calls.loadDay.push(d); },
-    async batchOp(ops) { calls.batchOp.push(...ops); },
-    async deleteBlock(id) { calls.deleteBlock.push(id); },
+    async batchOp(ops) { calls.batchOp.push(...ops); return { ok: true, buffered: false, walId: "batch-wal" }; },
+    async deleteBlock(id) { calls.deleteBlock.push(id); return { ok: true, buffered: false, walId: "delete-wal" }; },
+    cancelBufferedWrite(walId, ids) { calls.cancelled.push({ walId, ids }); return true; },
     async updateBlock(id, props, opts) { calls.updateBlock.push({ id, props, opts }); },
     async rescheduleBlock(id, date, opts) { calls.reschedule.push({ id, date, opts }); }
   };
@@ -114,6 +115,11 @@ function load(daysByDate, archiveDates) {
   };
   ctx.window = ctx;
   ctx.self = ctx;
+  const listeners = new Map();
+  ctx.CustomEvent = class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } };
+  ctx.addEventListener = (type, fn) => { const list = listeners.get(type) || []; list.push(fn); listeners.set(type, list); };
+  ctx.dispatchEvent = (event) => { (listeners.get(event.type) || []).forEach(fn => fn(event)); return true; };
+  ctx.addEventListener("dcc:carryover-settled", event => calls.settled.push(event.detail));
   ctx.URLSearchParams = URLSearchParams;
   // No `fetch` in this context ON PURPOSE. _rowForDateWrite's fallback would need one,
   // and its absence is what proves toBacklog resolves the row through _originBlock (the
@@ -217,6 +223,58 @@ test("drop of a childless row falls back to a single deleteBlock", async () => {
   await h.CO.drop(rows[0], rows);
   assert.deepEqual(plain(h.calls.deleteBlock), ["solo"]);
   assert.equal(h.calls.batchOp.length, 0);
+});
+
+test("drop stays retryable and cancels its WAL entry when persistence fails", async () => {
+  const { d, days } = parentAndKid();
+  const h = load(days, [d]);
+  const { rows } = await h.CO.collect();
+  h.store.batchOp = async () => ({
+    ok: false,
+    buffered: true,
+    walId: "failed-drop",
+    error: { message: "network down", status: 503 }
+  });
+
+  assert.equal(await h.CO.drop(rows.find(r => r.id === "p"), rows), null);
+  assert.deepEqual(plain(h.calls.cancelled), [{ walId: "failed-drop", ids: ["p", "k"] }]);
+  assert.equal(h.calls.settled.length, 0);
+  assert.match(h.calls.toast.msg, /network down/);
+});
+
+test("a permanent Drop rejection is cancelled instead of left queued", async () => {
+  const d = ymd(1);
+  const h = load({ [d]: [dayRoot(), blk("solo", d, { title: "Protected" })] }, [d]);
+  const { rows } = await h.CO.collect();
+  h.store.deleteBlock = async () => ({
+    ok: false,
+    buffered: true,
+    walId: "rejected-drop",
+    error: { message: "Task has an active dependency", status: 409 }
+  });
+
+  assert.equal(await h.CO.drop(rows[0], rows), null);
+  assert.deepEqual(plain(h.calls.cancelled), [{ walId: "rejected-drop", ids: ["solo"] }]);
+  assert.equal(h.calls.settled.length, 0);
+  assert.match(h.calls.toast.msg, /active dependency/);
+});
+
+test("every acknowledged carryover action emits one shared settlement", async () => {
+  const { d, days } = parentAndKid();
+  const h = load(days, [d]);
+  const { rows } = await h.CO.collect();
+  const parent = rows.find(r => r.id === "p");
+
+  await h.CO.complete(parent, rows);
+  await h.CO.moveTo(parent, TODAY, { pool: rows, deferRefold: true });
+  await h.CO.toBacklog(parent, rows);
+  await h.CO.drop(parent, rows);
+
+  assert.deepEqual(plain(h.calls.settled.map(event => event.action)), ["complete", "move", "backlog", "drop"]);
+  h.calls.settled.forEach(event => {
+    assert.deepEqual(plain(event.removed.slice().sort()), ["k", "p"]);
+    assert.equal(event.sourceDate, d);
+  });
 });
 
 // ───────────────────────────── complete ─────────────────────────────
@@ -327,7 +385,7 @@ test("openRows / rootsOf are exported and are the ONE definition every surface u
 });
 
 // Every action ends with invalidateRangeCache(sourceDate), and the itinerary lane
-// never re-collects afterwards (_unfSettle only drops the settled rows and renders;
+// never re-collects afterwards (the settlement event only drops the rows and renders;
 // _ensureUnfinished short-circuits on _unfinishedFetchedFor). So the FIRST action on
 // an origin day evicts that day from _rangeCache, and any later resolution for it
 // misses. Two unfinished tasks from yesterday is the ordinary case, so without a

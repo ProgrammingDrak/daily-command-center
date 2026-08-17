@@ -136,6 +136,10 @@ function load(daysByDate, archiveDates, extra) {
   Object.assign(ctx, extra || {});
   ctx.window = ctx;
   ctx.self = ctx;
+  const listeners = new Map();
+  ctx.CustomEvent = class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } };
+  ctx.addEventListener = (type, fn) => { const list = listeners.get(type) || []; list.push(fn); listeners.set(type, list); };
+  ctx.dispatchEvent = (event) => { (listeners.get(event.type) || []).forEach(fn => fn(event)); return true; };
   ctx.URLSearchParams = URLSearchParams;
   vm.createContext(ctx);
   vm.runInContext(coreSource, ctx);
@@ -259,6 +263,24 @@ test("Drop routes the listed ROOT through DCC.Carryover.drop and clears its row"
   assert.equal(got.id, "p", "the root, not the child");
   assert.equal(got.pool, 2, "the FULL pool goes through so the subtree travels with it");
   assert.equal(r._removed, true, "the settled row is removed from the list");
+});
+
+test("a settled task is pruned from the Loose Ends fallback snapshot", async () => {
+  const d = ymd(1);
+  const { ctx } = load({ [d]: [
+    dayRoot(), blk("p", d, { title: "Slipped" }), blk("k", d, { title: "Kid", subtaskOf: "p" })
+  ] }, [d]);
+  await ctx.window.initCatchUp();
+
+  ctx.dispatchEvent(new ctx.CustomEvent("dcc:carryover-settled", {
+    detail: { action: "drop", removed: ["p", "k"], sourceDate: d }
+  }));
+  ctx.window.DCC.Carryover.collect = async () => { throw new Error("collector unavailable"); };
+  const snapshot = await ctx.window.DCC.CatchUp.refresh();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot.res.rows)), []);
+  assert.equal(snapshot.res.total, 0);
+  assert.equal(row0(ctx)._removed, true);
 });
 
 test("Today moves the root to the current day", async () => {

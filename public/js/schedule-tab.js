@@ -452,6 +452,14 @@ function _unfDropRows(ids){
   _unfinishedCache.rows=_unfinishedCache.rows.filter(ev=>!gone.has(ev.id));
   _unfinishedCache.total=Math.max(0,(_unfinishedCache.total||0)-removedOpen);
 }
+function _unfHandleSettlement(event){
+  const ids=event&&event.detail&&event.detail.removed;
+  if(!Array.isArray(ids)||!ids.length)return;
+  _unfDropRows(ids);
+  if(typeof render==="function")render();
+  else if(typeof buildListView==="function")buildListView();
+}
+if(typeof window.addEventListener==="function")window.addEventListener("dcc:carryover-settled",_unfHandleSettlement);
 function _unfPrettyDate(iso){
   const d=new Date(iso+"T00:00:00");
   if(isNaN(d.getTime()))return iso;
@@ -1026,9 +1034,7 @@ function buildListView(){
   // drift between the three surfaces. Every one carries the subtree.
   function _unfBusy(el,on){el.querySelectorAll("button,input").forEach(x=>{x.disabled=!!on;});}
   function _unfSettle(el,res){
-    if(!res){_unfBusy(el,false);return;}
-    _unfDropRows(res.removed);
-    render();
+    if(!res)_unfBusy(el,false);
   }
   function _CO(){return window.DCC&&window.DCC.Carryover;}
   async function _unfComplete(ev,el){const C=_CO();if(!C)return;_unfBusy(el,true);_unfSettle(el,await C.complete(ev,unfPool));}

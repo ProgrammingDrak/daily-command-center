@@ -211,13 +211,26 @@
   function originOf(ev) { return (ev && ev.__unf) || {}; }
   function writeId(ev) { const u = originOf(ev); return u.sourceLocalId || u.sourceId; }
 
+  // Publish one acknowledged carryover settlement to every surface that may still
+  // hold a copy of the slipped row. Keeping this beside the writes means the action
+  // behaves the same whether it started in Loose Ends or the itinerary.
+  function settle(action, ev, removed) {
+    const result = { removed: Array.isArray(removed) ? removed : [] };
+    if (typeof window.dispatchEvent === "function" && typeof window.CustomEvent === "function") {
+      window.dispatchEvent(new window.CustomEvent("dcc:carryover-settled", {
+        detail: { action, removed: result.removed.slice(), sourceDate: originOf(ev).sourceDate || null }
+      }));
+    }
+    return result;
+  }
+
   // The origin row, from the cache a carryover actually lives in. _rangeCache is
   // where loadDateRange puts it; blockStore.get (_dayCache/_globalCache) is the
   // fallback for the rare row that is also in today's cache. Any write that
   // REPLACES properties must go through this, never bare get().
   // Async because it may have to REFILL the range cache. Every action below ends with
-  // invalidateRangeCache(sourceDate), and the itinerary lane's _unfSettle only drops
-  // the settled rows and re-renders -- it never calls invalidateUnfinishedSection, so
+  // invalidateRangeCache(sourceDate), and the shared settlement event only drops the
+  // settled rows and re-renders -- it never calls invalidateUnfinishedSection, so
   // _ensureUnfinished short-circuits on _unfinishedFetchedFor and nothing re-collects.
   // Without the refill, the FIRST action on a given origin day evicted that day and
   // every later resolution for it returned null, so Backlog on a second row from the
@@ -347,7 +360,7 @@
     if (typeof window.invalidateHabitStreaks === "function") window.invalidateHabitStreaks();
     if (typeof log === "function") log("checked-on", u.sourceId, "Done on " + u.sourceDate + ": " + ev.title);
     if (typeof showToast === "function") showToast("Done on " + prettyDate(u.sourceDate) + ": " + ev.title + (kids.length ? " (+" + kids.length + " nested)" : ""), "success");
-    return { removed };
+    return settle("complete", ev, removed);
   }
 
   // True cross-day move: POST /reschedule moves the block AND its subtree in one
@@ -389,7 +402,7 @@
     // local scheduled[], so skipping the local rebuild cannot change the next slot.
     const viewing = (typeof viewDate !== "undefined" && viewDate) ? viewDate : todayStr();
     if (targetDate === viewing && !opts.deferRefold) await refoldViewedDay(viewing);
-    return { removed };
+    return settle("move", ev, removed);
   }
 
   // Drop = a real soft-delete of the origin block AND its subtree, in one atomic
@@ -399,18 +412,33 @@
     const u = originOf(ev);
     const kids = descendants(ev, pool);
     const ids = [u.sourceId].concat(kids.map(t => originOf(t).sourceId).filter(Boolean));
+    let writeResult = null;
     try {
       if (ids.length > 1 && window.blockStore && typeof window.blockStore.batchOp === "function") {
-        await window.blockStore.batchOp(ids.map(id => ({ op: "delete", id })));
+        writeResult = await window.blockStore.batchOp(ids.map(id => ({ op: "delete", id })));
       } else {
-        await window.blockStore.deleteBlock(u.sourceId);
+        if (!window.blockStore || typeof window.blockStore.deleteBlock !== "function") throw new Error("Delete writer unavailable");
+        writeResult = await window.blockStore.deleteBlock(u.sourceId);
       }
-    } catch (e) {}
+    } catch (e) {
+      if (typeof showToast === "function") showToast("Could not drop " + ev.title + ": " + ((e && e.message) || "Delete failed"), "error");
+      return null;
+    }
+    // A Drop is settled only after the server acknowledges it. Cancel a buffered
+    // attempt immediately so replay cannot delete a row the UI restored for retry.
+    if (!writeResult || writeResult.ok !== true || writeResult.buffered) {
+      if (writeResult && writeResult.walId && window.blockStore && typeof window.blockStore.cancelBufferedWrite === "function") {
+        window.blockStore.cancelBufferedWrite(writeResult.walId, ids);
+      }
+      const detail = writeResult && writeResult.error && writeResult.error.message;
+      if (typeof showToast === "function") showToast("Could not drop " + ev.title + (detail ? ": " + detail : ""), "error");
+      return null;
+    }
     if (window.blockStore && typeof window.blockStore.invalidateRangeCache === "function") window.blockStore.invalidateRangeCache(u.sourceDate);
     if (typeof window.invalidateHabitStreaks === "function") window.invalidateHabitStreaks();
     if (typeof log === "function") log("dropped", u.sourceId, "Dropped unfinished: " + ev.title);
     if (typeof showToast === "function") showToast("Dropped: " + ev.title + (kids.length ? " (+" + kids.length + " nested)" : ""), "info");
-    return { removed: [ev.id].concat(kids.map(t => t.id)) };
+    return settle("drop", ev, [ev.id].concat(kids.map(t => t.id)));
   }
 
   // Unschedule to the backlog: an in-place date=null UPDATE, no new id, no delete.
@@ -461,7 +489,7 @@
     if (typeof log === "function") log("created", u.sourceId, "Unfinished to backlog: " + ev.title);
     if (typeof showToast === "function") showToast("Moved to the backlog: " + ev.title, "success");
     // Children keep their parent edge and follow it as nested backlog rows.
-    return { removed: [ev.id].concat(descendants(ev, pool).map(t => t.id)) };
+    return settle("backlog", ev, [ev.id].concat(descendants(ev, pool).map(t => t.id)));
   }
 
   // Re-collect the lane after a write ADDED a row to one of its origin days (C4).
@@ -469,7 +497,7 @@
   // Both halves are needed and neither is sufficient: invalidateRangeCache alone leaves
   // _unfinishedCache holding the pre-write answer, and invalidateUnfinishedSection alone
   // leaves the range cache holding the pre-write day. The four actions above inline only
-  // the range half because they REMOVE rows and _unfDropRows handles the section locally;
+  // the range half because they REMOVE rows and the settlement event updates the section;
   // an add needs both. Lives here rather than in the caller so the next verb that adds to
   // an origin day (a drag onto a carryover parent, the bounty once its scoring is settled)
   // finds it instead of hand-rolling a fifth copy.

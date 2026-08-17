@@ -61,6 +61,8 @@ const SRC = {
   enqueueRowProps: mustSlice(stateSource, /^function enqueueRowPropsWrite\([^)]*\)\{[\s\S]*?\n\}/m, "enqueueRowPropsWrite"),
   taskAnchorById: mustSlice(tabSource, /^function taskAnchorById\(id\)\{[\s\S]*?\n\}/m, "taskAnchorById"),
   unfRecById: mustSlice(tabSource, /^function _unfRecById\(id\)\{[\s\S]*?\n\}/m, "_unfRecById"),
+  unfDropRows: mustSlice(tabSource, /^function _unfDropRows\(ids\)\{[\s\S]*?\n\}/m, "_unfDropRows"),
+  unfHandleSettlement: mustSlice(tabSource, /^function _unfHandleSettlement\(event\)\{[\s\S]*?\n\}/m, "_unfHandleSettlement"),
 };
 
 // The full set of state.js pieces the date primitives depend on. Bundled so a new shared
@@ -881,6 +883,22 @@ test("taskAnchorById resolves BOTH pools and returns the ORIGIN day for a carryo
   assert.equal(past.ev, carry, "the ev comes from the carryover pool");
 
   assert.equal(ctx.taskAnchorById("nope"), null, "an unknown id resolves to nothing rather than a wrong day");
+});
+
+test("a carryover settlement evicts the itinerary cache and renders once", () => {
+  let renders = 0;
+  const source = [
+    "let _unfinishedCache={rows:[{id:'p',__unf:{done:false}},{id:'k',__unf:{done:false}},{id:'other',__unf:{done:false}}],total:3};",
+    SRC.unfDropRows,
+    SRC.unfHandleSettlement,
+    "this.readUnfinished=()=>_unfinishedCache;"
+  ];
+  const ctx = ctxWith(source, { render: () => { renders++; } });
+  ctx._unfHandleSettlement({ detail: { action: "drop", removed: ["p", "k"] } });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.readUnfinished().rows.map(row => row.id))), ["other"]);
+  assert.equal(ctx.readUnfinished().total, 1);
+  assert.equal(renders, 1);
 });
 
 test("the row + and the row click are no longer gated on isUnfRow, and the bounty still is", () => {
